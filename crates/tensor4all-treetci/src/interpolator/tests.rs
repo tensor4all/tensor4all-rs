@@ -1,28 +1,17 @@
 use super::*;
 use std::collections::BTreeMap;
-use tenferro_cpu::CpuBackend;
-use tensor4all_tensorbackend::{
-    explicit::{HeldSession, Session},
-    CpuExecutionContext,
-};
+use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 use tensor4all_treetn::interpolation::Parallelism;
 use tensor4all_treetn::NodeNameNetwork;
 
-/// Run `f` with an execution context over one held session, so unit tests of
+/// Run `f` with an evaluation context over one caller-owned engine, so unit tests of
 /// evaluator handling use the same explicit capability production runs use.
 fn with_context<R>(f: impl FnOnce(&mut EvalContext<'_>) -> R) -> R {
-    let context =
-        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
-    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    let mut held = HeldSession::open(&backend).expect("held session");
-    let result = held.with_session(|view| {
-        f(&mut EvalContext::new(
-            Session::from_backend_session(view.backend()),
-            Parallelism::Serial,
-        ))
-    });
-    held.close().expect("affinity restores");
-    result
+    let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    f(&mut EvalContext::new(
+        Session::new(backend.engine_mut()),
+        Parallelism::Serial,
+    ))
 }
 
 #[test]

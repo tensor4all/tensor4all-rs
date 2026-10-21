@@ -17,7 +17,6 @@ use std::fmt::Debug;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{
     ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor, IndexLike, TensorElement,
 };
@@ -27,10 +26,7 @@ use tensor4all_partitionedtreetn::adaptive_interpolation::{
     GLOBAL_ROUNDING_MARGIN,
 };
 use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference, Projector};
-use tensor4all_tensorbackend::{
-    explicit::{HeldSession, Session},
-    CpuExecutionContext,
-};
+use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 use tensor4all_treetn::interpolation::{
     EvalContext, InterpolationError, InterpolationProblem, Parallelism, TreeInterpolator,
 };
@@ -423,24 +419,16 @@ pub(crate) fn tree_peak(p: &[usize]) -> f64 {
 // Evaluation bookkeeping and the generic run helper
 // ---------------------------------------------------------------------------
 
-/// Run `body` with one explicit execution capability over a held session.
+/// Run `body` with one explicit execution capability over one caller-owned engine.
 ///
 /// Every test enters its runs the way the production entries do: one session
-/// the caller opened and serial application parallelism.
+/// over the caller's engine and serial application parallelism.
 pub(crate) fn with_eval_context<R>(body: impl FnOnce(&mut EvalContext<'_>) -> R) -> R {
-    let context =
-        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
-    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    let mut held = HeldSession::open(&backend).expect("held session");
-    let result = held.with_session(|view| {
-        let mut ctx = EvalContext::new(
-            Session::from_backend_session(view.backend()),
-            Parallelism::Serial,
-        );
-        body(&mut ctx)
-    });
-    held.close().expect("affinity restores");
-    result
+    let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    body(&mut EvalContext::new(
+        Session::new(backend.engine_mut()),
+        Parallelism::Serial,
+    ))
 }
 
 /// An evaluator that must never be called.

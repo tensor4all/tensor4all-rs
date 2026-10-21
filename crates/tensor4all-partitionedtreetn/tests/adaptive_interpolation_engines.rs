@@ -12,12 +12,12 @@ use tensor4all_partitionedtreetn::adaptive_interpolation::{
     PatchedInterpolationOptions, PatchedInterpolationResult,
 };
 use tensor4all_partitionedtreetn::ErrorNorm;
-use tensor4all_tensorbackend::explicit::{HeldSession, Session};
+use tensor4all_tensorbackend::explicit::Session;
 use tensor4all_tensorbackend::{default_cpu_execution_context, CpuExecutionContext};
 use tensor4all_treetci::TreeTciInterpolator;
 use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 
-/// Run the driver on a held session over `context`, the canonical execution
+/// Run the driver on one session over `context`, the canonical execution
 /// capability of one run.
 fn run_on(
     context: &CpuExecutionContext,
@@ -29,28 +29,23 @@ fn run_on(
     PatchedInterpolationResult<Name>,
     tensor4all_partitionedtreetn::adaptive_interpolation::PatchedInterpolationError,
 > {
-    let backend: tenferro_cpu::CpuBackend = context.with_backend(|backend| backend.clone());
-    let mut held = HeldSession::open(&backend).expect("held session");
     let n_sites = problem.sites.len();
-    let result = held.with_session(|view| {
-        let mut ctx = EvalContext::new(
-            Session::from_backend_session(view.backend()),
-            Parallelism::Serial,
-        );
-        tensor4all_partitionedtreetn::adaptive_interpolation::patched_interpolate(
-            &TreeTciInterpolator::default(),
-            problem.topology.clone(),
-            problem.node_sites.clone(),
-            problem.pivots(pivots),
-            &mut ctx,
-            |batch: ColMajorArrayRef<'_, usize>, _ctx| -> anyhow::Result<Vec<f64>> {
-                Ok(batch.data().chunks(n_sites).map(f).collect())
-            },
-            options,
-        )
-    });
-    held.close().expect("affinity restores");
-    result
+    context
+        .with_session(|engine| {
+            let mut ctx = EvalContext::new(Session::new(engine), Parallelism::Serial);
+            tensor4all_partitionedtreetn::adaptive_interpolation::patched_interpolate(
+                &TreeTciInterpolator::default(),
+                problem.topology.clone(),
+                problem.node_sites.clone(),
+                problem.pivots(pivots),
+                &mut ctx,
+                |batch: ColMajorArrayRef<'_, usize>, _ctx| -> anyhow::Result<Vec<f64>> {
+                    Ok(batch.data().chunks(n_sites).map(f).collect())
+                },
+                options,
+            )
+        })
+        .expect("context session")
 }
 
 // ---------------------------------------------------------------------------
@@ -172,8 +167,7 @@ fn the_cache_supports_domains_wider_than_128_bits() {
 /// `patched_interpolate` gives the same result on a caller-owned CPU context
 /// and on the process-global backend: same seed, same patches, dense values
 /// equal up to tight tolerance, and the same accuracy contract. Both runs take
-/// the canonical execution capability; only the backend behind the held
-/// session differs.
+/// the canonical execution capability; only the context differs.
 #[test]
 fn caller_owned_context_engine_matches_plain_engine_end_to_end() {
     let problem = chain("q", 7, 2);
@@ -190,8 +184,9 @@ fn caller_owned_context_engine_matches_plain_engine_end_to_end() {
     let plain_context = default_cpu_execution_context();
     let plain = run_on(&plain_context, &problem, &f, &pivots, &options).unwrap();
 
-    let caller_owned =
-        CpuExecutionContext::from_backend(tenferro_cpu::CpuBackend::with_threads(1).unwrap());
+    let caller_owned = CpuExecutionContext::from_backend(
+        tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+    );
     let contextual = run_on(&caller_owned, &problem, &f, &pivots, &options).unwrap();
 
     // Same patch structure on the same seed.

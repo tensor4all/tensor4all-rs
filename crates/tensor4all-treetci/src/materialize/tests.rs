@@ -36,13 +36,14 @@ fn materialize_in_context(
     context: &tensor4all_tensorbackend::CpuExecutionContext,
 ) -> crate::TreeTciResult<TreeTN<IdxTensor, usize>> {
     context
-        .with_concrete_session(|session| {
+        .with_session(|engine| {
             let mut contextual =
                 |batch: GlobalIndexBatch<'_>,
                  _ctx: &mut tensor4all_treetn::interpolation::EvalContext<'_>| {
                     evaluate(batch)
                 };
-            let mut ctx = crate::evaluation::serial_context(session);
+            let mut session = tensor4all_tensorbackend::explicit::Session::new(engine);
+            let mut ctx = crate::evaluation::serial_context(&mut session);
             let mut execution = crate::evaluation::Explicit::new(&mut ctx, &mut contextual);
             to_treetn_chunked(state, &mut execution, center, chunk_points)
         })
@@ -702,10 +703,7 @@ fn to_named_treetn_rejects_mismatched_names_and_site_dimensions() {
 mod materialization_context {
     use super::*;
     use std::time::Duration;
-    use tenferro_cpu::CpuBackend;
-    use tensor4all_tensorbackend::{
-        with_default_backend, CpuExecutionContext, CpuExecutionContextError,
-    };
+    use tensor4all_tensorbackend::{with_default_backend, CpuBackend, CpuExecutionContext};
 
     /// A 4-site chain whose nonzero, nonsingular pivot data really reaches the
     /// solve (`site_tensor_with_parent`), so the fixtures below exercise the
@@ -871,68 +869,5 @@ mod materialization_context {
         let tn = crate::to_treetn_in(&state, zero, Some(0), &context)
             .expect("a zero pivot matrix takes the early return");
         assert_eq!(tn.to_dense().unwrap().maxabs().unwrap(), 0.0);
-    }
-
-    #[test]
-    fn a_worker_cannot_enter_the_context_route_even_for_zero_pivots() {
-        // The context-taking entry enters one session for the whole materialization, so
-        // the refusal happens up front instead of at the first nonzero solve: a worker is
-        // refused typed even when the zero-pivot shortcut would have avoided the solve.
-        let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
-        state.add_global_pivots(&[vec![0, 0]]).unwrap();
-        let zero =
-            |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![0.0; batch.n_points()]) };
-        let context = one_worker_context();
-        let pool = ::rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .unwrap();
-
-        let error = pool
-            .install(|| crate::to_treetn_in(&state, zero, Some(0), &context))
-            .expect_err("a worker may not enter the caller's concrete session");
-        assert!(
-            format!("{error}").contains("explicit concrete session"),
-            "the refusal must stay visible: {error}"
-        );
-    }
-
-    #[test]
-    fn a_nonzero_solve_from_a_rayon_worker_is_refused_typed() {
-        // The counterpart of the previous test: once a nonzero solve is
-        // reached, the concrete session entry is entered and a worker is
-        // refused rather than silently rerouted.
-        let state = nonzero_state();
-        let context = one_worker_context();
-        let pool = ::rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .unwrap();
-
-        let error = pool
-            .install(|| {
-                materialize_in_context(&state, smooth, Some(1), EVALUATION_CHUNK_POINTS, &context)
-            })
-            .expect_err("a worker may not enter the caller's concrete session");
-
-        // The refusal must survive as a typed entry error rather than as text:
-        // walk the source chain to the concrete-session error.
-        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
-        let mut found = false;
-        while let Some(candidate) = source {
-            if let Some(refusal) = candidate.downcast_ref::<CpuExecutionContextError>() {
-                found = matches!(refusal, CpuExecutionContextError::SessionEntry { .. });
-                break;
-            }
-            source = candidate.source();
-        }
-        assert!(
-            found,
-            "the entry refusal must stay in the source chain: {error}"
-        );
-        assert!(
-            format!("{error}").contains("explicit concrete session"),
-            "the refusal must stay visible: {error}"
-        );
     }
 }

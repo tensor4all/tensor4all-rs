@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 
 use hataori_tenferro::TenferroLanes;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_partitionedtreetn::adaptive_interpolation::{
     patched_interpolate_mpi, GlobalL2Error, PatchedInterpolationOptions,
@@ -72,8 +72,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         Ok::<Vec<f64>, anyhow::Error>(batch.data().chunks(3).map(f).collect())
     };
 
-    let backend = CpuBackend::with_threads(2)?;
-    let mut lanes = TenferroLanes::open(&backend)?;
+    let mut lanes = TenferroLanes::new(vec![CpuEngine::serial(), CpuEngine::serial()])?;
     let result = patched_interpolate_mpi(
         &world,
         &mut lanes,
@@ -85,7 +84,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         evaluate,
         &options,
     )?;
-    lanes.close()?;
 
     match (rank, result) {
         (0, Some(result)) => {

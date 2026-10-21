@@ -20,7 +20,7 @@ use crate::g0;
 use num_complex::Complex64;
 use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tenferro_cpu::CpuBackend;
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 use tensor4all_treeaci::{
     tree_elementwise_batched_with_rng, tree_elementwise_batched_with_rng_in, TreeAciOptions,

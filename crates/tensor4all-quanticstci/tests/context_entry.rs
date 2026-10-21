@@ -6,12 +6,12 @@
 
 use std::time::Instant;
 
-use tenferro_cpu::CpuBackend;
 use tensor4all_quanticstci::{
     pointwise_coordinate_batch, pointwise_index_batch, quanticscrossinterpolate_batch,
     quanticscrossinterpolate_batch_in, quanticscrossinterpolate_discrete_batch,
     quanticscrossinterpolate_discrete_batch_in, DiscretizedGrid, QtciOptions,
 };
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;

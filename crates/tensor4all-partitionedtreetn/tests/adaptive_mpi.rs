@@ -19,7 +19,7 @@ mod adaptive_common;
 use adaptive_common::*;
 use hataori_tenferro::TenferroLanes;
 use std::collections::BTreeMap;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 use tensor4all_partitionedtreetn::adaptive_interpolation::{
     patched_interpolate_mpi, PatchedInterpolationOptions,
@@ -83,8 +83,8 @@ fn world_size_one_reproduces_the_serial_report() {
     let evaluate = |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| {
         Ok::<Vec<f64>, anyhow::Error>(batch.data().chunks(3).map(chain_f).collect())
     };
-    let backend = CpuBackend::with_threads(2).expect("CPU backend");
-    let mut lanes = TenferroLanes::open(&backend).expect("held session");
+    let mut lanes = TenferroLanes::new(vec![CpuEngine::serial(), CpuEngine::serial()])
+        .expect("one engine per lane");
     let distributed = patched_interpolate_mpi(
         &world,
         &mut lanes,
@@ -97,7 +97,6 @@ fn world_size_one_reproduces_the_serial_report() {
         &options(),
     )
     .expect("distributed run");
-    lanes.close().expect("affinity restores");
     if rank != 0 {
         assert!(
             distributed.is_none(),

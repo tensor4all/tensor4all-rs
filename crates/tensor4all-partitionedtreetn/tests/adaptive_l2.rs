@@ -1694,10 +1694,9 @@ fn a_capped_rerun_after_a_failed_verification_keeps_no_split_index_left() {
 /// of the empty side, without entering the process-global eager runtime.
 #[test]
 fn treetn_log_norm_on_session_of_a_site_free_leaf_with_a_wide_bond() {
-    use tenferro_cpu::CpuBackend;
     use tensor4all_core::{DynIndex, IdxTensor};
-    use tensor4all_tensorbackend::explicit::{HeldSession, Session};
-    use tensor4all_tensorbackend::CpuExecutionContext;
+    use tensor4all_tensorbackend::explicit::Session;
+    use tensor4all_tensorbackend::CpuBackend;
     use tensor4all_treetn::TreeTN;
     let (sa, sb) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
     let (ab, be) = (DynIndex::new_dyn(1), DynIndex::new_dyn(2));
@@ -1709,16 +1708,9 @@ fn treetn_log_norm_on_session_of_a_site_free_leaf_with_a_wide_bond() {
         vec!["a".to_string(), "b".to_string(), "e".to_string()],
     )
     .unwrap();
-    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
-    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    let mut held = HeldSession::open(&backend).unwrap();
-    let log_norm = held
-        .with_session(|view| {
-            let mut session = Session::from_backend_session(view.backend());
-            network.log_norm_on_session(&mut session)
-        })
-        .unwrap();
-    held.close().unwrap();
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut session = Session::new(backend.engine_mut());
+    let log_norm = network.log_norm_on_session(&mut session).unwrap();
     assert!(
         (log_norm.exp() - 5.0).abs() < 1e-12,
         "log_norm.exp() = {}",

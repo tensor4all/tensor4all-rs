@@ -7,7 +7,7 @@
 
 use std::time::Instant;
 
-use tenferro_cpu::CpuBackend;
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 use tensor4all_treetci::{
     optimize_with_proposer, optimize_with_proposer_in, AllEdges, DefaultProposer, GlobalIndexBatch,

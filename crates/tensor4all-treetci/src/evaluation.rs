@@ -78,7 +78,7 @@ pub(crate) trait BatchExecution<T: FullPivLuScalar> {
     /// The compatibility route has no session and returns `None`; the explicit
     /// route returns its caller-owned session so a readout reached from the same
     /// run can evaluate on it instead of the process-global backend.
-    fn session(&mut self) -> Option<&mut dyn tenferro_tensor::BackendSession>;
+    fn session(&mut self) -> Option<&mut dyn tenferro_tensor::Engine>;
 }
 
 /// The context-free route: a batch evaluator and the process-global solve.
@@ -122,7 +122,7 @@ impl<T: FullPivLuScalar> BatchExecution<T> for Compatibility<'_, T> {
         )
     }
 
-    fn session(&mut self) -> Option<&mut dyn tenferro_tensor::BackendSession> {
+    fn session(&mut self) -> Option<&mut dyn tenferro_tensor::Engine> {
         None
     }
 }
@@ -152,7 +152,7 @@ pub(crate) fn serial_context<'a>(
     session: &'a mut tensor4all_tensorbackend::explicit::Session<'_>,
 ) -> EvalContext<'a> {
     EvalContext::new(
-        tensor4all_tensorbackend::explicit::Session::from_backend_session(session.backend()),
+        tensor4all_tensorbackend::explicit::Session::new(session.engine()),
         tensor4all_treetn::interpolation::Parallelism::Serial,
     )
 }
@@ -179,7 +179,7 @@ where
         pivot_cols: usize,
     ) -> std::result::Result<Vec<T>, BackendLinalgError> {
         T::solve_right_full_piv_lu_on_session(
-            self.context.session().backend(),
+            self.context.session().engine(),
             lhs_values,
             lhs_rows,
             lhs_cols,
@@ -189,8 +189,8 @@ where
         )
     }
 
-    fn session(&mut self) -> Option<&mut dyn tenferro_tensor::BackendSession> {
-        Some(self.context.session().backend())
+    fn session(&mut self) -> Option<&mut dyn tenferro_tensor::Engine> {
+        Some(self.context.session().engine())
     }
 }
 
@@ -303,7 +303,7 @@ where
         )
     }
 
-    fn session(&mut self) -> Option<&mut dyn tenferro_tensor::BackendSession> {
+    fn session(&mut self) -> Option<&mut dyn tenferro_tensor::Engine> {
         self.source.session()
     }
 }

@@ -62,16 +62,12 @@ use crate::{
 /// ```
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
-/// use tensor4all_tensorbackend::{
-///     explicit::{HeldSession, Session},
-///     CpuExecutionContext,
-/// };
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 /// use tensor4all_treetci::TreeTciInterpolator;
 /// use tensor4all_treetn::interpolation::{
 ///     EvalContext, InterpolationProblem, InterpolationTermination, Parallelism, TreeInterpolator,
 /// };
 /// use tensor4all_treetn::NodeNameNetwork;
-/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// // Node "x" carries two sites (fused into one vertex), node "y" one site.
 /// let (x0, x1, y) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2), DynIndex::new_dyn(3));
@@ -93,17 +89,9 @@ use crate::{
 ///  -> anyhow::Result<Vec<f64>> {
 ///     Ok(batch.data().chunks(batch.shape()[0]).map(f).collect())
 /// };
-/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-/// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-/// let mut held = HeldSession::open(&backend)?;
-/// let outcome = held.with_session(|view| {
-///     let mut ctx = EvalContext::new(
-///         Session::from_backend_session(view.backend()),
-///         Parallelism::Serial,
-///     );
-///     TreeTciInterpolator::default().interpolate(&problem, &mut ctx, evaluate)
-/// })?;
-/// held.close()?;
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+/// let outcome = TreeTciInterpolator::default().interpolate(&problem, &mut ctx, evaluate)?;
 ///
 /// assert_eq!(outcome.termination, InterpolationTermination::Converged);
 /// assert!(outcome.error_estimate <= 1e-12);
@@ -248,32 +236,20 @@ where
     /// let pivots = ColMajorArray::new(vec![0, 0], vec![2, 1])?;
     /// let problem = InterpolationProblem::new(topology, node_sites, pivots, 1e-10, None, 0)?;
     ///
-    /// use tensor4all_tensorbackend::{
-    ///     explicit::{HeldSession, Session},
-    ///     CpuExecutionContext,
-    /// };
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
     /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let failing = |_: ColMajorArrayRef<'_, usize>, _: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///     anyhow::bail!("out of domain")
     /// };
-    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-    /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    /// let mut held = HeldSession::open(&backend)?;
-    /// let error = held
-    ///     .with_session(|view| {
-    ///         TreeTciInterpolator::default().interpolate(
-    ///             &problem,
-    ///             &mut EvalContext::new(
-    ///                 Session::from_backend_session(view.backend()),
-    ///                 Parallelism::Serial,
-    ///             ),
-    ///             failing,
-    ///         )
-    ///     })
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let error = TreeTciInterpolator::default()
+    ///     .interpolate(
+    ///         &problem,
+    ///         &mut EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial),
+    ///         failing,
+    ///     )
     ///     .unwrap_err();
-    /// held.close()?;
     /// assert!(matches!(error, InterpolationError::Evaluator { .. }));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```

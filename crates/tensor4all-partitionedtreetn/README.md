@@ -21,9 +21,9 @@ entered, together with the caller's parallelism budget), and the evaluator
 receives that same context. Every numerical stage - the engine call, the
 re-embedding of fixed sites, the measurement of a stored patch, and the norm
 readout - runs on that session, so a run completes inside a caller-held
-session such as a scheduler lane and needs no process-global warm-up. The
-returned partition and report are published as compact host storage and stay
-usable after the session closes.
+engine, such as a scheduler lane's engine, and needs no process-global
+warm-up. The returned partition and report are published as compact host
+storage and stay usable after the session closes.
 
 ### Entries
 
@@ -34,7 +34,7 @@ splits form the next one.
 | Entry | Where a patch runs | Evaluator |
 |---|---|---|
 | `patched_interpolate` | the caller's `EvalContext`, one patch after another | `FnMut` |
-| `patched_interpolate_on_lanes` | the child session of the `hataori_tenferro::TenferroLanes` lane that pulled it; the root wave and waves smaller than the lane count run one patch at a time | `Fn + Sync` |
+| `patched_interpolate_on_lanes` | the engine of the `hataori_tenferro::TenferroLanes` lane that pulled it; every wave runs one patch per lane, and the caller sizes each lane's engine | `Fn + Sync` |
 | `patched_interpolate_mpi` (features `hataori-mpi` / `hataori-mpi-rsmpi-rt`) | the lane of the rank that `hataori::pmap_lanes` assigns the patch to; the root orchestrates waves and owns the result | `Fn + Sync` |
 
 The schedule never changes the result contract: random sub-seeds come from the

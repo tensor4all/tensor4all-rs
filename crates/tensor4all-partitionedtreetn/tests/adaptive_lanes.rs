@@ -10,10 +10,9 @@
 use crate::adaptive_common;
 
 use adaptive_common::*;
-use hataori::Lanes;
 use hataori_tenferro::TenferroLanes;
 use std::sync::Mutex;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tensor4all_core::{
     contract_pair_on_session, ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor,
     PairwiseContractionOptions, TensorElement,
@@ -25,7 +24,7 @@ use tensor4all_partitionedtreetn::adaptive_interpolation::{
 use tensor4all_partitionedtreetn::ErrorNorm;
 use tensor4all_treetn::interpolation::{EvalContext, Parallelism, TreeInterpolator};
 
-/// Run the lanes entry on a backend with `threads` workers.
+/// Run the lanes entry on `threads` lanes, each with its own serial engine.
 fn run_on_lanes<T, E, F>(
     threads: usize,
     engine: &E,
@@ -44,14 +43,14 @@ where
     } else {
         problem.pivots(pivots)
     };
-    let backend = CpuBackend::with_threads(threads).expect("CPU backend");
-    let mut lanes = TenferroLanes::open(&backend).expect("held session");
+    let engines = (0..threads).map(|_| CpuEngine::serial()).collect();
+    let mut lanes = TenferroLanes::new(engines).expect("one engine per lane");
     assert_eq!(
         lanes.lane_count(),
         threads,
         "the executor reports its lanes"
     );
-    let result = patched_interpolate_on_lanes(
+    patched_interpolate_on_lanes(
         &mut lanes,
         engine,
         problem.topology.clone(),
@@ -59,9 +58,7 @@ where
         initial,
         evaluate,
         options,
-    );
-    lanes.close().expect("affinity restores");
-    result
+    )
 }
 
 /// The plain evaluator of a host function, callable from several lanes.

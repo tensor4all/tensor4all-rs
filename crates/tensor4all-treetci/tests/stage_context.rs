@@ -5,8 +5,8 @@
 //! promises: a rank cap, an all-zero sample, and the same results for real and complex scalars.
 
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::col_major_array::ColMajorArrayRef;
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 use tensor4all_treetci::{
     crossinterpolate2, crossinterpolate2_in, DefaultProposer, GlobalIndexBatch, TreeTciGraph,

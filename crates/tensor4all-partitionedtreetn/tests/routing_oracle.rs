@@ -1,15 +1,15 @@
-//! Routing oracle: the patched tree driver runs inside held-session phase
-//! lanes while another thread holds the process-global backend.
+//! Routing oracle: the patched tree driver runs inside `TenferroLanes` lanes
+//! while another thread holds the process-global backend.
 //!
 //! This is the tree counterpart of the removed `tensor4all-partitionedtt`
 //! crate's `phase_execution` test
 //! `the_phase_entry_completes_while_the_process_global_backend_is_held`. The
 //! hataori scheduler arrives in a later slice; here the test drives the
-//! driver's work items directly on `HeldSession::phase` lanes, one patch
-//! pipeline per work item.
+//! driver's work items directly on `TenferroLanes` lanes, one patch pipeline
+//! per work item.
 //!
 //! The test is its own binary (see the `routing_oracle` test target) so the
-//! process-global eager runtime is genuinely cold when the phase starts: a
+//! process-global eager runtime is genuinely cold when the lanes start: a
 //! lane that published or evaluated through the process-global route would
 //! block on the holder's reservation, and the timing assertion fails instead
 //! of hanging the rest of the suite.
@@ -28,7 +28,9 @@ use std::collections::BTreeMap;
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 
-use tenferro_cpu::CpuBackend;
+use hataori::Lanes;
+use hataori_tenferro::TenferroLanes;
+use tenferro_cpu::CpuEngine;
 use tensor4all_core::{
     sum_on_session, ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor,
     MatrixLuciScalar, TensorElement,
@@ -38,11 +40,9 @@ use tensor4all_partitionedtreetn::adaptive_interpolation::{
     PatchedInterpolationOptions, PatchedInterpolationResult,
 };
 use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
-use tensor4all_tensorbackend::explicit::{HeldSession, Session};
+use tensor4all_tensorbackend::explicit::Session;
 use tensor4all_tensorbackend::FullPivLuScalar;
-use tensor4all_tensorbackend::{
-    default_cpu_execution_context, with_default_backend, CpuExecutionContext,
-};
+use tensor4all_tensorbackend::{default_cpu_execution_context, with_default_backend, CpuBackend};
 use tensor4all_treetci::globalpivot::ScalarParts;
 use tensor4all_treetci::TreeTciInterpolator;
 use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
@@ -228,18 +228,9 @@ fn run_serial<T>(variant: usize, rtol: f64) -> Digest
 where
     T: CommonScalar + TensorElement + FullPivLuScalar + MatrixLuciScalar + ScalarParts,
 {
-    let context =
-        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
-    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    let mut held = HeldSession::open(&backend).expect("held session");
-    let result = held.with_session(|view| {
-        let mut ctx = EvalContext::new(
-            Session::from_backend_session(view.backend()),
-            Parallelism::Serial,
-        );
-        run_item::<T>(variant, rtol, &mut ctx)
-    });
-    held.close().expect("affinity restores");
+    let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+    let result = run_item::<T>(variant, rtol, &mut ctx);
     digest::<T>(&result.expect("serial run"))
 }
 
@@ -275,9 +266,9 @@ fn assert_same(label: &str, serial: &Digest, phase: &Digest, tolerance: f64) {
     }
 }
 
-/// The phase itself: the fixture's work items on the lane session, while the
+/// The lanes themselves: the fixture's work items on the lane engines, while the
 /// holder owns the process-global backend.
-fn run_phase<T>(rtol: f64) -> Vec<Digest>
+fn run_lanes<T>(rtol: f64) -> Vec<Digest>
 where
     T: CommonScalar
         + TensorElement
@@ -288,12 +279,10 @@ where
         + Sync
         + 'static,
 {
-    let context =
-        CpuExecutionContext::from_backend(CpuBackend::with_threads(2).expect("2T CPU backend"));
-    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    let mut held = HeldSession::open(&backend).expect("held session");
+    let mut lanes = TenferroLanes::new(vec![CpuEngine::serial(), CpuEngine::serial()])
+        .expect("one engine per lane");
 
-    // Holder-ready handshake: the phase starts only once the holder has the
+    // Holder-ready handshake: the lanes start only once the holder has the
     // process-global backend, so a lane that entered it would block.
     let (ready_tx, ready_rx) = mpsc::channel::<()>();
     let (release_tx, release_rx) = mpsc::channel::<()>();
@@ -308,34 +297,34 @@ where
     let queue: Mutex<Vec<usize>> = Mutex::new(VARIANTS.iter().rev().copied().collect());
     let results: Mutex<Vec<LaneOutcome>> = Mutex::new(Vec::new());
     let started = Instant::now();
-    held.phase(|_lane, lane| -> Result<(), String> {
-        loop {
-            if lane.cancelled() {
-                break;
+    lanes
+        .run(|_lane, engine, control| -> Result<(), String> {
+            loop {
+                if control.cancelled() {
+                    break;
+                }
+                let Some(variant) = queue.lock().expect("queue lock").pop() else {
+                    break;
+                };
+                let mut ctx = EvalContext::new(Session::new(engine), Parallelism::Serial);
+                let outcome = run_item::<T>(variant, rtol, &mut ctx);
+                results
+                    .lock()
+                    .expect("results lock")
+                    .push((variant, outcome));
             }
-            let Some(variant) = queue.lock().expect("queue lock").pop() else {
-                break;
-            };
-            let mut ctx = EvalContext::new(lane.session(), Parallelism::Serial);
-            let outcome = run_item::<T>(variant, rtol, &mut ctx);
-            results
-                .lock()
-                .expect("results lock")
-                .push((variant, outcome));
-        }
-        Ok(())
-    })
-    .map_err(|error| format!("phase failed: {error:?}"))
-    .expect("the phase completes while the process-global backend is held");
+            Ok(())
+        })
+        .map_err(|error| format!("lanes failed: {error:?}"))
+        .expect("the lanes complete while the process-global backend is held");
     let elapsed = started.elapsed();
     // Release the holder before touching any process-global route below.
     let _ = release_tx.send(());
     holder.join().expect("holder thread");
-    held.close().expect("affinity restores");
 
     assert!(
         elapsed < BUDGET,
-        "the phase took {elapsed:?} while the process-global backend was held for up to {HOLD:?}: \
+        "the lanes took {elapsed:?} while the process-global backend was held for up to {HOLD:?}: \
          a pipeline stage still consulted the process-global route"
     );
 
@@ -371,8 +360,8 @@ where
         + Sync
         + 'static,
 {
-    let phase = run_phase::<T>(rtol);
-    for (variant, phase) in VARIANTS.iter().zip(&phase) {
+    let lanes = run_lanes::<T>(rtol);
+    for (variant, phase) in VARIANTS.iter().zip(&lanes) {
         let serial = run_serial::<T>(*variant, rtol);
         assert_same(
             &format!("{label} variant {variant}"),
@@ -395,7 +384,7 @@ fn assert_cold_default_eager_runtime() {
 }
 
 #[test]
-fn the_patch_pipeline_completes_in_phase_lanes_while_the_process_global_backend_is_held() {
+fn the_patch_pipeline_completes_in_lanes_while_the_process_global_backend_is_held() {
     // The first case is the cold-runtime oracle; it also warms the
     // process-global eager runtime for the materialization of the serial
     // baseline, so this is the only case that can assert coldness.

@@ -269,14 +269,10 @@
 //!     patched_interpolate, GlobalL2Error, PatchedInterpolationOptions,
 //! };
 //! use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
-//! use tensor4all_tensorbackend::{
-//!     explicit::{HeldSession, Session},
-//!     CpuExecutionContext,
-//! };
+//! use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 //! use tensor4all_treetci::TreeTciInterpolator;
 //! use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 //! use tensor4all_treetn::NodeNameNetwork;
-//! use tensor4all_tensorbackend::CpuBackend;
 //!
 //! let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
 //! let mut topology = NodeNameNetwork::new();
@@ -299,16 +295,8 @@
 //!     .with_tolerance(ErrorTolerance { rtol: 1e-12, atol: 0.0 });
 //! let pivots = ColMajorArray::new(vec![0, 0, 0], vec![3, 1])?;
 //! let result = {
-//!     let context = CpuExecutionContext::from_backend(
-//!         CpuBackend::with_threads(1).expect("1T CPU backend"),
-//!     );
-//!     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-//!     let mut held = HeldSession::open(&backend).expect("held session");
-//!     let outcome = held.with_session(|view| {
-//!         let mut ctx = EvalContext::new(
-//!             Session::from_backend_session(view.backend()),
-//!             Parallelism::Serial,
-//!         );
+//!     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+//!     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
 //!         patched_interpolate(
 //!             &TreeTciInterpolator::default(),
 //!             topology,
@@ -318,9 +306,6 @@
 //!             evaluate,
 //!             &options,
 //!         )
-//!     });
-//!     held.close().expect("affinity restores");
-//!     outcome
 //! }?;
 //!
 //! // The splits fix sites 0 and 1; every patch then has one active site.
@@ -395,12 +380,8 @@ pub use report::{
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tensorbackend::{
-///     explicit::{HeldSession, Session},
-///     CpuExecutionContext,
-/// };
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-/// use tensor4all_tensorbackend::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -416,16 +397,8 @@ pub use report::{
 ///     let mut topology = NodeNameNetwork::new();
 ///     topology.add_node(0usize).unwrap();
 ///     {
-///     let context = CpuExecutionContext::from_backend(
-///         CpuBackend::with_threads(1).expect("1T CPU backend"),
-///     );
-///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-///     let mut held = HeldSession::open(&backend).expect("held session");
-///     let outcome = held.with_session(|view| {
-///         let mut ctx = EvalContext::new(
-///             Session::from_backend_session(view.backend()),
-///             Parallelism::Serial,
-///         );
+///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
 ///         patched_interpolate(
 ///         &TreeTciInterpolator::default(),
 ///         topology,
@@ -436,9 +409,6 @@ pub use report::{
 ///         },
 ///         options,
 ///     )
-///     });
-///     held.close().expect("affinity restores");
-///     outcome
 /// }
 /// };
 /// // A cap of one could only accept patches nonzero on a single node.
@@ -650,12 +620,8 @@ impl From<PartitionedTreeTNError> for PatchedInterpolationError {
 /// so the run is certified.
 ///
 /// ```
-/// use tensor4all_tensorbackend::{
-///     explicit::{HeldSession, Session},
-///     CpuExecutionContext,
-/// };
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
-/// use tensor4all_tensorbackend::CpuBackend;
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -688,16 +654,8 @@ impl From<PartitionedTreeTNError> for PatchedInterpolationError {
 ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
 ///     .with_patch_order(vec![x.clone(), y.clone()]);
 /// let result = {
-///     let context = CpuExecutionContext::from_backend(
-///         CpuBackend::with_threads(1).expect("1T CPU backend"),
-///     );
-///     let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-///     let mut held = HeldSession::open(&backend).expect("held session");
-///     let outcome = held.with_session(|view| {
-///         let mut ctx = EvalContext::new(
-///             Session::from_backend_session(view.backend()),
-///             Parallelism::Serial,
-///         );
+///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
 ///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
@@ -708,9 +666,6 @@ impl From<PartitionedTreeTNError> for PatchedInterpolationError {
 ///     },
 ///     &options,
 /// )
-///     });
-///     held.close().expect("affinity restores");
-///     outcome
 /// }?;
 /// let zero = &result.report.zero_patches[0];
 /// assert_eq!(zero.projector.get(&x), Some(0));

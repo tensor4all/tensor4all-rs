@@ -38,8 +38,7 @@
 //!
 //! The root wave is one patch, so it is one `pmap_lanes` item: it runs on one
 //! rank's lane, and the references it pins travel back to the root in its
-//! outcome. Running it on the root's held session instead would need a session
-//! accessor that `hataori-tenferro` does not expose.
+//! outcome.
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -868,16 +867,16 @@ where
 // ---------------------------------------------------------------------------
 
 /// The MPI driver: the root orchestrates waves, every rank runs its share.
-struct MpiWaves<'a, 'lane, 'world, C, F> {
+struct MpiWaves<'a, 'world, C, F> {
     world: &'world C,
-    lanes: &'a mut TenferroLanes<'lane>,
+    lanes: &'a mut TenferroLanes,
     evaluate: F,
     root: i32,
     rank: i32,
     options: PmapOptions,
 }
 
-impl<T, V, E, C, F> Waves<T, V, E> for MpiWaves<'_, '_, '_, C, F>
+impl<T, V, E, C, F> Waves<T, V, E> for MpiWaves<'_, '_, C, F>
 where
     T: CommonScalar + TensorElement + Send + Serialize + for<'de> Deserialize<'de> + Copy,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
@@ -919,7 +918,7 @@ where
                 Pins::Later(&local)
             };
             let mut ctx = EvalContext::new(
-                tensor4all_tensorbackend::explicit::Session::from_backend_session(lane.session()),
+                tensor4all_tensorbackend::explicit::Session::new(lane),
                 Parallelism::Serial,
             );
             match super::patch_outcome(plan, pins, &shared, patch, &mut ctx)
@@ -1078,9 +1077,9 @@ fn agree_on_validation<C: Communicator>(
 ///   in the same order, with the same problem and options; MPI must provide
 ///   `MPI_THREAD_FUNNELED` or stronger, because the progress loop stays on the
 ///   initialization thread while the lanes compute.
-/// * `lanes` - The rank's lane executor
-///   ([`TenferroLanes::open`](hataori_tenferro::TenferroLanes::open) over a
-///   backend the rank owns).
+/// * `lanes` - The rank's lane executor, built from one
+///   [`CpuEngine`](tenferro_cpu::CpuEngine) per lane
+///   ([`TenferroLanes::new`](hataori_tenferro::TenferroLanes::new)).
 /// * `root` - The rank that owns the queue and receives the result. It must be
 ///   in `[0, world.size())`.
 /// * `engine`, `topology`, `node_sites`, `initial_pivots`, `evaluate`,
@@ -1119,7 +1118,7 @@ fn agree_on_validation<C: Communicator>(
 #[allow(clippy::too_many_arguments)]
 pub fn patched_interpolate_mpi<T, V, E, F, C>(
     world: &C,
-    lanes: &mut TenferroLanes<'_>,
+    lanes: &mut TenferroLanes,
     root: i32,
     engine: &E,
     topology: NodeNameNetwork<V>,

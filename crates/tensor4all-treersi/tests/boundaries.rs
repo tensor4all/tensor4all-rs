@@ -119,7 +119,7 @@ fn empty_inputs_limits_scalar_and_physical_index_mismatches_are_errors() {
 #[test]
 fn context_mismatch_is_rejected_before_rng_advances() {
     let context = ExecutionContext::Cpu(
-        CpuExecutionContext::from_backend(tenferro_cpu::CpuBackend::new()).into(),
+        CpuExecutionContext::from_backend(tensor4all_tensorbackend::CpuBackend::new()).into(),
     );
     let mut rng = ChaCha8Rng::seed_from_u64(2);
     let mut before = rng.clone();

@@ -4,35 +4,22 @@
 //! [`patched_interpolate`](super::patched_interpolate): the same validation,
 //! the same per-patch body and the same wave merge, with each wave of patches
 //! spread over the lanes of a caller-owned
-//! [`TenferroLanes`](hataori_tenferro::TenferroLanes). Every patch runs in the
-//! child session of the lane that pulled it, so the patch body - engine,
+//! [`TenferroLanes`](hataori_tenferro::TenferroLanes). Every patch runs on the
+//! engine of the lane that pulled it, so the patch body - engine,
 //! re-embedding, measurement, readout, norm contribution and publication -
 //! stays on one execution owner, and no stage enters the process-global
 //! runtime.
 //!
-//! # Which waves fan out
+//! # One engine per lane
 //!
-//! The root wave (one patch) and every wave with fewer patches than the
-//! executor has lanes run one patch at a time; a larger wave spreads over the
-//! lanes, one patch per lane. One patch at a time is the shape that gives a
-//! single item the backend's whole team: the lane's child session selects
-//! tenferro's inner execution mode with the full domain budget, so the item's
-//! own kernels may use every worker of the pool. Application code - the
-//! evaluator - always stays on its lane thread, which
+//! Every wave runs one patch per lane, whatever its size: a lane owns one
+//! fixed [`CpuEngine`](tenferro_cpu::CpuEngine) that the caller built and
+//! sized, and a patch runs on the engine of the lane that pulled it. A wave
+//! with fewer patches than lanes leaves the remaining lanes idle. The driver
+//! opens no child sessions and does not divide a pool between items, so the
+//! caller decides each lane's thread count when it builds the engines.
+//! Application code - the evaluator - always stays on its lane thread, which
 //! [`Parallelism::Serial`](tensor4all_treetn::interpolation::Parallelism) states.
-//!
-//! The threshold is the lane count, recorded as a smoke-level default: the
-//! patch fixtures here are too small to time a crossing, so no measurement
-//! backs it yet.
-//!
-//! ponytail: the design put the root and small waves on the held session with
-//! [`Parallelism::Pool`](tensor4all_treetn::interpolation::Parallelism), which
-//! needs a session accessor on the lane executor; `hataori-tenferro` at
-//! `e105c490` exposes only [`Lanes`](hataori::Lanes), and tenferro admits one
-//! held session per backend. Small waves therefore run on a lane, one patch at
-//! a time: their tenferro operations still use the whole pool through the
-//! child session's inner mode, while the caller's own evaluator code is
-//! `Serial` and gets no pool budget.
 //!
 //! # Determinism
 //!
@@ -51,7 +38,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Mutex;
 
-use hataori::{map_in_lanes, Lanes, MapInError};
+use hataori::{map_in_lanes, MapInError};
 use hataori_tenferro::TenferroLanes;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, TensorElement};
 use tensor4all_tensorbackend::explicit::Session;
@@ -66,14 +53,14 @@ use super::{
 };
 
 /// The lanes driver: one caller-owned lane executor runs every wave.
-struct LanesWaves<'a, 'lane, F> {
-    lanes: &'a mut TenferroLanes<'lane>,
+struct LanesWaves<'a, F> {
+    lanes: &'a mut TenferroLanes,
     /// The caller's evaluator, shared by the lanes. It is `Fn + Sync` because
     /// several lanes call it at the same time.
     evaluate: F,
 }
 
-impl<T, V, E, F> Waves<T, V, E> for LanesWaves<'_, '_, F>
+impl<T, V, E, F> Waves<T, V, E> for LanesWaves<'_, F>
 where
     T: CommonScalar + TensorElement + Send,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
@@ -88,25 +75,7 @@ where
     ) -> Result<Vec<PatchRun<T, V>>, PatchedInterpolationError> {
         let start = pins.start();
         let root_wave = pins.writable();
-        let lane_count = self.lanes.lane_count().max(1);
         let wave: Vec<(usize, Patch<T>)> = patches.into_iter().enumerate().collect();
-        if root_wave || wave.len() < lane_count {
-            // One patch at a time: a small wave would otherwise occupy fewer
-            // lanes than the pool has workers while each of its items may
-            // already use the whole team.
-            let mut runs = Vec::with_capacity(wave.len());
-            for item in wave {
-                runs.extend(map_wave(
-                    self.lanes,
-                    plan,
-                    &self.evaluate,
-                    vec![item],
-                    start,
-                    root_wave,
-                )?);
-            }
-            return Ok(runs);
-        }
         map_wave(self.lanes, plan, &self.evaluate, wave, start, root_wave)
     }
 
@@ -126,28 +95,29 @@ where
 /// [`patched_interpolate`](super::patched_interpolate): it takes the same
 /// engine, problem, pivots, evaluator and options, and produces the same
 /// result. Instead of running every patch on the caller's session, each wave
-/// runs on the lanes of `lanes`: a lane is one worker of tenferro's pool
-/// together with its child session, so a patch body runs in the execution that
-/// owns it and no stage enters the process-global runtime.
+/// runs on the lanes of `lanes`: a lane is one thread with its own engine, so a
+/// patch body runs on the execution that owns it and no stage enters the
+/// process-global runtime.
 ///
 /// # Arguments
 ///
-/// * `lanes` - The caller's lane executor
-///   ([`TenferroLanes::open`](hataori_tenferro::TenferroLanes::open) over a
-///   backend the caller owns and closes). Its lane count is the fan-out width;
-///   a one-lane executor runs every patch on that lane.
+/// * `lanes` - The caller's lane executor, built from one
+///   [`CpuEngine`](tenferro_cpu::CpuEngine) per lane
+///   ([`TenferroLanes::new`](hataori_tenferro::TenferroLanes::new)). Its lane
+///   count is the fan-out width; the caller sizes each lane's engine, and a
+///   one-lane executor runs every patch on that lane.
 /// * `engine` - Tree interpolation engine run on every patch with at least
 ///   two active sites, for example `tensor4all_treetci::TreeTciInterpolator`.
 /// * `topology` - Tree topology with named nodes.
 /// * `node_sites` - Site indices of every node, possibly none for a node.
 /// * `initial_pivots` - Column-major `[n_sites, n_pivots]` full-domain points.
 /// * `evaluate` - Batch evaluator. It receives the full-domain points and the
-///   executing lane's [`EvalContext`], whose session is that lane's child
-///   session and whose parallelism is
+///   executing lane's [`EvalContext`], whose session borrows that lane's
+///   engine and whose parallelism is
 ///   [`Parallelism::Serial`](tensor4all_treetn::interpolation::Parallelism):
 ///   the evaluator runs on the lane's thread and may not fan out, while the
-///   tenferro operations it issues through the session follow the lane's own
-///   policy. It must be `Fn + Sync`, because several lanes call it at once.
+///   tenferro operations it issues through the session run on the lane's
+///   engine. It must be `Fn + Sync`, because several lanes call it at once.
 /// * `options` - See [`PatchedInterpolationOptions`].
 ///
 /// # Returns
@@ -167,7 +137,7 @@ where
 ///
 /// Three binary sites, one per node of a chain, on two lanes. The cap of two
 /// only accepts rank-one patches, so the domain splits twice; each patch is
-/// evaluated and measured in the child session of a lane.
+/// evaluated and measured on the engine of a lane.
 ///
 /// ```
 /// use std::collections::BTreeMap;
@@ -180,7 +150,7 @@ where
 /// use tensor4all_treetn::interpolation::EvalContext;
 /// use tensor4all_treetn::NodeNameNetwork;
 /// use hataori_tenferro::TenferroLanes;
-/// use tensor4all_tensorbackend::CpuBackend;
+/// use tenferro_cpu::CpuEngine;
 ///
 /// let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
 /// let mut topology = NodeNameNetwork::new();
@@ -210,8 +180,7 @@ where
 ///     .with_tolerance(ErrorTolerance { rtol: 1e-12, atol: 0.0 });
 /// let pivots = ColMajorArray::new(vec![0, 0, 0], vec![3, 1])?;
 ///
-/// let backend = CpuBackend::with_threads(2)?;
-/// let mut lanes = TenferroLanes::open(&backend)?;
+/// let mut lanes = TenferroLanes::new(vec![CpuEngine::serial(), CpuEngine::serial()])?;
 /// let result = patched_interpolate_on_lanes(
 ///     &mut lanes,
 ///     &TreeTciInterpolator::default(),
@@ -221,7 +190,6 @@ where
 ///     evaluate,
 ///     &options,
 /// )?;
-/// lanes.close()?;
 ///
 /// assert_eq!(result.report.splits, 3);
 /// assert_eq!(result.partition.len(), 4);
@@ -234,7 +202,7 @@ where
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn patched_interpolate_on_lanes<T, V, E, F>(
-    lanes: &mut TenferroLanes<'_>,
+    lanes: &mut TenferroLanes,
     engine: &E,
     topology: NodeNameNetwork<V>,
     node_sites: BTreeMap<V, Vec<DynIndex>>,
@@ -256,10 +224,10 @@ where
 
 /// Run one patch per lane and keep each patch's typed error.
 ///
-/// The evaluator stays behind a shared reference: every lane enters its own
-/// child session and calls it on its own thread.
+/// The evaluator stays behind a shared reference: every lane builds a session
+/// over its own engine and calls the evaluator on its own thread.
 fn map_wave<T, V, E, F>(
-    lanes: &mut TenferroLanes<'_>,
+    lanes: &mut TenferroLanes,
     plan: &Plan<'_, T, V, E>,
     evaluate: &F,
     wave: Vec<(usize, Patch<T>)>,
@@ -285,12 +253,8 @@ where
         } else {
             Pins::Later(&references)
         };
-        // The bridge of #859: the lane's child session *is* this frontend's
-        // session, borrowed for the patch.
-        let mut ctx = EvalContext::new(
-            Session::from_backend_session(lane.session()),
-            Parallelism::Serial,
-        );
+        // The lane's engine runs this patch: the session borrows it for the patch.
+        let mut ctx = EvalContext::new(Session::new(lane), Parallelism::Serial);
         match patch_outcome(plan, pins, &shared, patch, &mut ctx) {
             Ok(run) => Ok(run),
             Err(error) => {

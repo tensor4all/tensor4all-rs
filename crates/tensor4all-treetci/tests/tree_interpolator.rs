@@ -9,15 +9,11 @@ use std::hash::Hash;
 use std::num::NonZeroUsize;
 
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{
     ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, FactorizeOptions, IdxTensor, Index,
     IndexLike, TagSet, TensorElement,
 };
-use tensor4all_tensorbackend::{
-    explicit::{HeldSession, Session},
-    CpuExecutionContext,
-};
+use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 use tensor4all_treetci::{TreeTciInterpolator, TreeTciOptions};
 use tensor4all_treetn::interpolation::{
     EvalContext, InterpolationError, InterpolationOutcome, InterpolationProblem,
@@ -76,7 +72,7 @@ fn site_dims(problem: &InterpolationProblem<Name>) -> Vec<usize> {
     problem.site_order().iter().map(|site| site.dim()).collect()
 }
 
-/// Run one engine on one problem with an execution context over one held session.
+/// Run one engine on one problem with an evaluation context over one caller-owned engine.
 ///
 /// Every test runs the engine through the same explicit capability the production
 /// entries use: one session the caller entered, and serial application parallelism.
@@ -90,22 +86,12 @@ where
     E: TreeInterpolator<T>,
     F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
-    let context =
-        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
-    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    let mut held = HeldSession::open(&backend).expect("held session");
-    let outcome = held.with_session(|view| {
-        engine.interpolate(
-            problem,
-            &mut EvalContext::new(
-                Session::from_backend_session(view.backend()),
-                Parallelism::Serial,
-            ),
-            evaluate,
-        )
-    });
-    held.close().expect("affinity restores");
-    outcome
+    let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    engine.interpolate(
+        problem,
+        &mut EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial),
+        evaluate,
+    )
 }
 
 /// Batch evaluator for a point function; rejects malformed batches so an

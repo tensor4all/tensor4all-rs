@@ -2,10 +2,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
-use tensor4all_tensorbackend::explicit::{HeldSession, Session};
-use tensor4all_tensorbackend::CpuExecutionContext;
+use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 use tensor4all_treetci::TreeTciInterpolator;
 use tensor4all_treetn::interpolation::{EvalContext, InterpolationProblem, Parallelism};
 use tensor4all_treetn::{NodeNameNetwork, TreeTN};
@@ -22,33 +20,20 @@ use crate::adaptive_interpolation::{
 use crate::{ErrorNorm, ErrorTolerance};
 use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTNCachedEvaluator};
 
-/// Run `body` on one held session, the execution capability of the production
+/// Run `body` on one caller-owned engine, the execution capability of the production
 /// entries.
 fn with_test_session<R>(body: impl FnOnce(&mut Session<'_>) -> R) -> R {
-    let context =
-        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
-    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    let mut held = HeldSession::open(&backend).expect("held session");
-    let result = held.with_session(|view| body(&mut Session::from_backend_session(view.backend())));
-    held.close().expect("affinity restores");
-    result
+    let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    body(&mut Session::new(backend.engine_mut()))
 }
 
-/// Run `body` with an explicit execution capability over a held session.
+/// Run `body` with an explicit execution capability over one caller-owned engine.
 fn with_eval_context<R>(body: impl FnOnce(&mut EvalContext<'_>) -> R) -> R {
-    let context =
-        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
-    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    let mut held = HeldSession::open(&backend).expect("held session");
-    let result = held.with_session(|view| {
-        let mut ctx = EvalContext::new(
-            Session::from_backend_session(view.backend()),
-            Parallelism::Serial,
-        );
-        body(&mut ctx)
-    });
-    held.close().expect("affinity restores");
-    result
+    let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    body(&mut EvalContext::new(
+        Session::new(backend.engine_mut()),
+        Parallelism::Serial,
+    ))
 }
 
 /// A named tree with its sites in the derived site order.

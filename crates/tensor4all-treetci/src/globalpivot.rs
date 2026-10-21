@@ -385,11 +385,8 @@ where
                     anyhow::anyhow!("failed to build candidate index array: {error}")
                 })?;
                 let errors: Vec<f64> = match execution.session() {
-                    Some(backend) => {
-                        let mut session =
-                            tensor4all_tensorbackend::explicit::Session::from_backend_session(
-                                backend,
-                            );
+                    Some(engine) => {
+                        let mut session = tensor4all_tensorbackend::explicit::Session::new(engine);
                         let tt_values: Vec<T> = readout_on_session(
                             &mut cache,
                             &treetn,
