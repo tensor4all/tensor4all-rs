@@ -191,10 +191,13 @@ fn plain_tensor_construction_does_not_accumulate_runtime_records() {
     let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
         CpuBackend::new(),
     )));
-    // CpuBackend::new() creates and drops a temporary worker context, whose
-    // workers can finish cleanup asynchronously. Construct the explicit backend
-    // before tagging tensor-owned allocations; keep eager runtime initialization
-    // and tensor warmup tagged so metadata reallocations have a balanced baseline.
+    // CpuBackend::new() builds a Rayon pool whose workers free their start-up
+    // data asynchronously. Build both pools - the explicit backend above and the
+    // process-global default context's - before tagging tensor-owned
+    // allocations; the global context's eager runtime stays lazy, so its
+    // initialization and the tensor warmup remain tagged and metadata
+    // reallocations keep a balanced baseline.
+    drop(tensor4all_tensorbackend::default_cpu_execution_context());
     let _measurement = Measurement::start();
     macro_rules! check_dtype {
         ($ty:ty, $data:expr) => {{
