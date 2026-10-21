@@ -611,25 +611,19 @@ fn factorize_svd_with_eager_options_in(
 ///
 /// The context-scoped factorization assembles `S * V^H` (or `U * S`) after the
 /// decomposition returns, so the assembly must run on the same context engine
-/// instead of the process-global default one. A non-CPU context keeps the
-/// existing global contraction route.
+/// instead of the process-global default one. The result keeps the factors' own
+/// eager runtime; only the executing engine is selected by `context`.
 fn context_svd_factor_contraction(
     lhs: &IdxTensor,
     rhs: &IdxTensor,
     context: &ExecutionContext,
 ) -> Result<IdxTensor, FactorizeError> {
-    #[cfg(feature = "tenferro-cuda")]
-    let cpu = match context {
-        ExecutionContext::Cpu(cpu) => cpu,
-        ExecutionContext::Cuda(_) => return global_svd_factor_contraction(lhs, rhs),
-    };
-    #[cfg(not(feature = "tenferro-cuda"))]
-    let ExecutionContext::Cpu(cpu) = context;
-    cpu.with_concrete_session(|session| {
-        crate::contract_pair_on_session(session, lhs, rhs, crate::PairwiseContractionOptions::new())
-    })
-    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?
-    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))
+    lhs.try_contract_pairwise_default_with_options_in(
+        rhs,
+        crate::PairwiseContractionOptions::new(),
+        context,
+    )
+    .map_err(FactorizeError::ComputationError)
 }
 
 fn factorize_qr_with_options_in(

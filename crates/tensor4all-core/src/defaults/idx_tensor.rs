@@ -4123,6 +4123,28 @@ impl IdxTensor {
         other: &Self,
         options: PairwiseContractionOptions,
     ) -> Result<Self> {
+        self.try_contract_pairwise_default_with_options_scoped(other, options, None)
+    }
+
+    /// Contract a pair on the engine selected by `context`.
+    ///
+    /// The result keeps the operands' own eager runtime; only the engine that
+    /// executes the contraction is selected by the caller.
+    pub(crate) fn try_contract_pairwise_default_with_options_in(
+        &self,
+        other: &Self,
+        options: PairwiseContractionOptions,
+        context: &ExecutionContext,
+    ) -> Result<Self> {
+        self.try_contract_pairwise_default_with_options_scoped(other, options, Some(context))
+    }
+
+    fn try_contract_pairwise_default_with_options_scoped(
+        &self,
+        other: &Self,
+        options: PairwiseContractionOptions,
+        context: Option<&ExecutionContext>,
+    ) -> Result<Self> {
         // Device-resident structured/diagonal operands cannot enter the native
         // host session used below; route them through the owning-runtime eager
         // plan executor (which also serves N-ary resident contraction).
@@ -4205,7 +4227,7 @@ impl IdxTensor {
             let result = profile_pairwise_contract_section("scalar_mul", || {
                 let lhs = self.try_materialized_inner()?;
                 let rhs = other.try_materialized_inner()?;
-                Ok::<_, anyhow::Error>(with_eager_session(lhs.runtime(), None, |session| {
+                Ok::<_, anyhow::Error>(with_eager_session(lhs.runtime(), context, |session| {
                     session.mul(lhs, rhs)
                 })?)
             })?;
@@ -4252,7 +4274,7 @@ impl IdxTensor {
         })?;
         let result = profile_pairwise_contract_section("dot_general_with_conj", || {
             profile_pairwise_contract_section("dot_general_execute", || {
-                with_eager_session(lhs.runtime(), None, |session| {
+                with_eager_session(lhs.runtime(), context, |session| {
                     session.dot_general_with_conj(
                         lhs,
                         rhs,
