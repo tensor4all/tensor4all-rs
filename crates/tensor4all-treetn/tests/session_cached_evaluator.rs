@@ -10,11 +10,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, IndexLike, TensorElement};
 use tensor4all_tensorbackend::{
-    explicit::{HeldSession, Session},
-    with_default_backend, CpuExecutionContext,
+    explicit::Session, with_default_backend, CpuBackend, CpuExecutionContext,
 };
 use tensor4all_treetn::{CachedEvaluatorOptions, TreeTN, TreeTNCachedEvaluator};
 
@@ -223,28 +221,21 @@ fn session_evaluation_completes_while_the_global_backend_is_held() {
 
         let worker = std::thread::spawn(move || {
             let outcome = (|| -> Result<Vec<f64>, String> {
-                let context = CpuExecutionContext::from_backend(
-                    CpuBackend::with_threads(1).map_err(|error| error.to_string())?,
-                );
-                let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-                let mut held = HeldSession::open(&backend).map_err(|error| error.to_string())?;
+                let mut backend = CpuBackend::with_threads(1).map_err(|error| error.to_string())?;
                 ready_tx.send(()).expect("signal session ready");
                 go_rx.recv().expect("start the session work");
-                let values = held
-                    .with_session(|view| {
-                        let mut session = Session::from_backend_session(view.backend());
-                        let points = ColMajorArrayRef::new(&flat, &shape).expect("points");
-                        let mut evaluator =
-                            TreeTNCachedEvaluator::new(&tree, &sites, options.clone())
-                                .expect("evaluator");
-                        evaluator.evaluate_batched_typed_on_session::<f64>(
-                            &mut session,
-                            points,
-                            Default::default(),
-                        )
-                    })
-                    .map_err(|error| error.to_string())?;
-                held.close().map_err(|error| error.to_string())?;
+                let mut session = Session::new(backend.engine_mut());
+                let values = {
+                    let points = ColMajorArrayRef::new(&flat, &shape).expect("points");
+                    let mut evaluator = TreeTNCachedEvaluator::new(&tree, &sites, options.clone())
+                        .expect("evaluator");
+                    evaluator.evaluate_batched_typed_on_session::<f64>(
+                        &mut session,
+                        points,
+                        Default::default(),
+                    )
+                }
+                .map_err(|error| error.to_string())?;
                 Ok(values)
             })();
             let _ = done_tx.send(outcome);

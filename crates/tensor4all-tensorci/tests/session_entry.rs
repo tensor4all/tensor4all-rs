@@ -10,7 +10,7 @@ use std::time::Duration;
 use rand::SeedableRng;
 
 use tensor4all_core::MultiIndex;
-use tensor4all_tensorbackend::{with_default_backend, CpuExecutionContext};
+use tensor4all_tensorbackend::{with_default_backend, CpuBackend, CpuExecutionContext};
 use tensor4all_tensorci::{
     crossinterpolate2_with_rng, crossinterpolate2_with_rng_on_session, TCI2Options,
 };
@@ -74,9 +74,7 @@ fn run_on_session(
 }
 
 fn context() -> CpuExecutionContext {
-    CpuExecutionContext::from_backend(
-        tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend"),
-    )
+    CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"))
 }
 
 #[test]

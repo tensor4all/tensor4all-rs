@@ -202,7 +202,7 @@ type ParentMap<V> = HashMap<V, Option<V>>;
 type DirectedComponentLayouts<V> = HashMap<(V, V), Arc<DirectedComponentLayout<V>>>;
 
 /// Execution route for one cached-evaluation call: the process-global route or
-/// a caller-held explicit session.
+/// a caller-owned explicit `Session`.
 ///
 /// Every numerical leaf of the evaluator (grouped GEMMs, retained-index
 /// contractions, selection, stacking, gathering and permutation) goes through
@@ -2094,7 +2094,7 @@ where
             .map_err(|error| TreeTNOperationError::from(anyhow::Error::new(error)))
     }
 
-    /// Evaluates a hinted batch and returns typed scalars on a caller-held explicit session.
+    /// Evaluates a hinted batch and returns typed scalars on a caller-owned explicit `Session`.
     ///
     /// The session counterpart of [`Self::evaluate_batched_typed`], with the same
     /// precision conversion rules. Every numerical leaf (grouped GEMMs,

@@ -2,11 +2,11 @@ use super::*;
 use std::sync::Arc;
 
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{
     DynIndex, FactorizeResult, IdxTensor, TensorConstructionLike, TensorContractionLike,
     TensorFactorizationLike, TensorIndex,
 };
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::{CpuExecutionContext, ExecutionContext};
 
 #[test]

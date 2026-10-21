@@ -432,7 +432,7 @@ impl TciLinalg<'_, '_> {
         match self {
             Self::Global => solve_matrix(a, b),
             Self::Session(session) => {
-                T::solve_matrix_in_impl(session.backend(), a, b).map_err(BackendLinalgError::from)
+                T::solve_matrix_in_impl(session.engine(), a, b).map_err(BackendLinalgError::from)
             }
         }
     }

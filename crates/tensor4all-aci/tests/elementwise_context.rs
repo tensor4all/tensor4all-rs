@@ -9,11 +9,11 @@ use std::time::Instant;
 
 use rand::SeedableRng;
 
-use tenferro_cpu::CpuBackend;
 use tensor4all_aci::{
     elementwise_batched_with_rng, elementwise_batched_with_rng_in, AciOptions, ElementwiseBatch,
 };
 use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;

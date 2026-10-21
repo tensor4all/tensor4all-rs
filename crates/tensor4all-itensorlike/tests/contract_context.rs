@@ -20,9 +20,9 @@
 //! - Fit and Naive: the same caller-owned route through treetn's
 //!   `contract_in` dispatch, agreeing with the plain route.
 
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_itensorlike::{contract, contract_in, ContractOptions, TensorTrain};
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::{CpuExecutionContext, ExecutionContext};
 
 use std::sync::Arc;

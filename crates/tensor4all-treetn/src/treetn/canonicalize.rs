@@ -267,14 +267,14 @@ impl<V> TreeTN<tensor4all_core::IdxTensor, V>
 where
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
 {
-    /// Canonicalize a dense [`tensor4all_core::IdxTensor`] network on a caller-held explicit session.
+    /// Canonicalize a dense [`tensor4all_core::IdxTensor`] network on a caller-owned explicit `Session`.
     ///
     /// The runtime-free counterpart of [`TreeTN::canonicalize`]: the sweep order,
     /// the region validation, the full-rank factorization and the dst absorption
     /// are the shared code paths, while every numerical leaf runs on `session`
     /// and publishes plain host-storage tensors. Nothing here enters another
     /// session or the process-global eager runtime, so a caller that already owns
-    /// a held session can call it directly.
+    /// a caller with a live `Session` can call it directly.
     ///
     /// Only [`CanonicalForm::Unitary`] (QR) has an explicit-session path; the
     /// LU and CI forms return a typed error instead of running on another
@@ -291,9 +291,8 @@ where
     ///
     /// ```
     /// use tensor4all_core::{DynIndex, IdxTensor};
-    /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
     /// use tensor4all_treetn::{CanonicalizationOptions, TreeTN};
-    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let left = DynIndex::new_dyn(2);
     /// let bond = DynIndex::new_dyn(2);
@@ -306,17 +305,11 @@ where
     ///     vec![0, 1],
     /// )?;
     ///
-    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-    /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    /// let mut held = HeldSession::open(&backend)?;
-    /// let (tree, norm) = held.with_session(|view| {
-    ///     let mut session = Session::from_backend_session(view.backend());
-    ///     let mut tree =
-    ///         tree.canonicalize_on_session([0], CanonicalizationOptions::default(), &mut session)?;
-    ///     let norm = tree.norm_on_session(&mut session)?;
-    ///     Ok::<_, Box<dyn std::error::Error>>((tree, norm))
-    /// })?;
-    /// held.close()?;
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let mut session = Session::new(backend.engine_mut());
+    /// let mut tree =
+    ///     tree.canonicalize_on_session([0], CanonicalizationOptions::default(), &mut session)?;
+    /// let norm = tree.norm_on_session(&mut session)?;
     /// assert_eq!(tree.canonical_region().iter().copied().collect::<Vec<_>>(), vec![0]);
     /// // The two contraction identities represent one 2x2 identity, norm sqrt(2).
     /// assert!((norm - 2.0_f64.sqrt()).abs() < 1e-12);
@@ -358,7 +351,7 @@ where
         Ok(self)
     }
 
-    /// Canonicalize in place on a caller-held explicit session.
+    /// Canonicalize in place on a caller-owned explicit `Session`.
     ///
     /// The `&mut self` version of [`Self::canonicalize_on_session`]. Like
     /// [`TreeTN::canonicalize_mut`], the network is left unchanged when an error

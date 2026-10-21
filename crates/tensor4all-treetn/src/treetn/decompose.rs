@@ -178,7 +178,7 @@ where
     .map_err(TreeTNOperationError::from)
 }
 
-/// Factorize a dense [`IdxTensor`] into a `TreeTN` on a caller-held explicit session.
+/// Factorize a dense [`IdxTensor`] into a `TreeTN` on a caller-owned explicit `Session`.
 ///
 /// The runtime-free counterpart of [`factorize_tensor_to_treetn_with`]: the topology validation, the
 /// traversal, the factorization placement and the network construction are the same code paths, while
@@ -204,9 +204,8 @@ where
 ///
 /// ```
 /// use tensor4all_core::{DynIndex, FactorizeOptions, IdxTensor};
-/// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 /// use tensor4all_treetn::{factorize_tensor_to_treetn_with_on_session, TreeTopology};
-/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let left = DynIndex::new_dyn(2);
 /// let right = DynIndex::new_dyn(2);
@@ -219,20 +218,15 @@ where
 ///     vec![(0, 1)],
 /// );
 ///
-/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-/// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-/// let mut held = HeldSession::open(&backend)?;
-/// let tree = held.with_session(|view| {
-///     let mut session = Session::from_backend_session(view.backend());
-///     factorize_tensor_to_treetn_with_on_session(
-///         &tensor,
-///         &topology,
-///         FactorizeOptions::svd(),
-///         &0usize,
-///         &mut session,
-///     )
-/// })?;
-/// held.close()?;
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let mut session = Session::new(backend.engine_mut());
+/// let tree = factorize_tensor_to_treetn_with_on_session(
+///     &tensor,
+///     &topology,
+///     FactorizeOptions::svd(),
+///     &0usize,
+///     &mut session,
+/// )?;
 /// let dense = tree.contract_to_tensor()?;
 /// assert!(dense.sub(&tensor)?.maxabs()? < 1.0e-12);
 /// # Ok::<(), Box<dyn std::error::Error>>(())

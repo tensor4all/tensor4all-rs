@@ -384,7 +384,7 @@ fn dense_bilinear<T: Scalar + Copy>(a: &[T], b: &[T]) -> T {
 }
 
 fn session_context() -> tensor4all_tensorbackend::CpuExecutionContext {
-    let backend = tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend");
+    let backend = tensor4all_tensorbackend::CpuBackend::with_threads(1).expect("1T CPU backend");
     tensor4all_tensorbackend::CpuExecutionContext::from_backend(backend)
 }
 
@@ -527,7 +527,7 @@ fn single_precision_and_refusals_survive_the_session_route() {
                 .expect_err("site dimension mismatch at a later site");
             assert!(error.to_string().contains("site 1"), "{error}");
 
-            // The held session stays usable after each refusal.
+            // The session stays usable after each refusal.
             let value = long
                 .inner_product_with_session(&long, session)
                 .expect("session inner product after refusals");
@@ -711,7 +711,7 @@ fn frontend_refusals_match_the_compatibility_route_exactly_and_keep_the_session(
                 }
             }
 
-            // Several successes inside one held region equal the separate calls.
+            // Several successes on one session equal the separate calls.
             let first = long
                 .inner_product_with_session(&long, session)
                 .expect("first");
@@ -749,7 +749,7 @@ fn a_malformed_final_environment_is_refused_instead_of_silently_differing() {
     );
 
     // A core whose left bond no longer matches the running environment is a backend shape failure, and the
-    // held session stays usable afterwards.
+    // session stays usable afterwards.
     let mut broken = asymmetric_train_f64(&[2, 3], &[1, 2, 1], 0.0);
     let mut mismatched_bond: Tensor3<f64> = tensor3_zeros(3, 3, 1).unwrap();
     for l in 0..3 {
@@ -759,7 +759,7 @@ fn a_malformed_final_environment_is_refused_instead_of_silently_differing() {
     }
     broken.site_tensors_mut()[1] = mismatched_bond;
     let other = asymmetric_train_f64(&[2, 3], &[1, 2, 1], 0.0);
-    // Compatibility runs outside any held session.
+    // Compatibility runs without a live session.
     let compatibility_other = other.inner_product(&other).expect("compatibility");
 
     context

@@ -7,12 +7,8 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{DynIndex, FactorizeOptions, IdxTensor, IndexLike};
-use tensor4all_tensorbackend::{
-    explicit::{HeldSession, Session},
-    with_default_backend, CpuExecutionContext,
-};
+use tensor4all_tensorbackend::{explicit::Session, with_default_backend, CpuBackend};
 use tensor4all_treetn::{
     factorize_tensor_to_treetn_with_on_session, CanonicalizationOptions, TreeTopology,
 };
@@ -61,40 +57,34 @@ fn factorization_canonicalization_and_norm_complete_while_the_global_backend_is_
 
         let worker = std::thread::spawn(move || {
             let outcome = (|| -> Result<(f64, usize, usize), String> {
-                let context = CpuExecutionContext::from_backend(
-                    CpuBackend::with_threads(1).map_err(|error| error.to_string())?,
-                );
-                let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-                let mut held = HeldSession::open(&backend).map_err(|error| error.to_string())?;
+                let mut backend = CpuBackend::with_threads(1).map_err(|error| error.to_string())?;
                 // The holder is ready as soon as its own session exists; the
                 // process-global backend is already held by the caller.
                 ready_tx.send(()).expect("signal session ready");
                 go_rx.recv().expect("start the session work");
-                let (norm, centers, nodes) = held
-                    .with_session(|view| {
-                        let mut session = Session::from_backend_session(view.backend());
-                        let mut tree = factorize_tensor_to_treetn_with_on_session(
-                            &dense,
-                            &topology,
-                            FactorizeOptions::qr(),
-                            &1usize,
-                            &mut session,
-                        )?;
-                        tree.canonicalize_mut_on_session(
-                            [1usize],
-                            CanonicalizationOptions::default(),
-                            &mut session,
-                        )?;
-                        let norm = tree.norm_on_session(&mut session)?;
-                        let centers = tree.canonical_region().len();
-                        Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
-                            norm,
-                            centers,
-                            tree.node_count(),
-                        ))
-                    })
-                    .map_err(|error| error.to_string())?;
-                held.close().map_err(|error| error.to_string())?;
+                let mut session = Session::new(backend.engine_mut());
+                let (norm, centers, nodes) = (|| {
+                    let mut tree = factorize_tensor_to_treetn_with_on_session(
+                        &dense,
+                        &topology,
+                        FactorizeOptions::qr(),
+                        &1usize,
+                        &mut session,
+                    )?;
+                    tree.canonicalize_mut_on_session(
+                        [1usize],
+                        CanonicalizationOptions::default(),
+                        &mut session,
+                    )?;
+                    let norm = tree.norm_on_session(&mut session)?;
+                    let centers = tree.canonical_region().len();
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
+                        norm,
+                        centers,
+                        tree.node_count(),
+                    ))
+                })()
+                .map_err(|error| error.to_string())?;
                 Ok((norm, centers, nodes))
             })();
             let _ = done_tx.send(outcome);

@@ -31,9 +31,9 @@ use std::sync::{Arc, Once};
 use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_itensorlike::{contract, contract_in, ContractOptions, TensorTrain};
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::{CpuExecutionContext, ExecutionContext};
 
 /// Pin every BLAS/Rayon/OMP backend the two routes may touch to one thread

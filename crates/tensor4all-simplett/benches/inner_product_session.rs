@@ -1,11 +1,11 @@
-//! F2 (#859 / #510): the TT inner product of `tensor4all-simplett` on a held explicit session.
+//! F2 (#859 / #510): the TT inner product of `tensor4all-simplett` on a `Session` over a caller-owned engine.
 //!
 //! Three arms, and the boundary each one times:
 //!
 //! | arm | what it runs | timed boundary |
 //! | --- | --- | --- |
 //! | `compatibility` | `SimpleTensorTrain::inner_product` | the whole call: the compatibility route, which traces and runs a compiled graph on the process-global context, plus the crate's per-site matrix/tensor conversions and per-operand duplication |
-//! | `held_session` | `inner_product_with_session` with the session opened once by the caller | the whole call inside an already held session; session entry is not repeated |
+//! | `held_session` | `inner_product_with_session` with the session built once by the caller | the whole call on an existing `Session`; session construction is not repeated |
 //! | `direct_session` | the same site loop, inlined here, calling `Session::einsum_reads` directly | the loop itself, without the TT-level method |
 //!
 //! Both explicit arms run on a context built with one worker; the compatibility arm runs on the
@@ -14,7 +14,7 @@
 //! are already concrete `TypedTensor` values inside the train.
 //!
 //! Two further groups answer the rest of F2's recorded identity. `simplett_inner_product_threads` repeats
-//! the held arm on explicit contexts with 1, 2 and 4 workers: the compatibility arm cannot join it, because
+//! the session arm on explicit contexts with 1, 2 and 4 workers: the compatibility arm cannot join it, because
 //! the process-global context fixes its worker count when it first initializes. `simplett_inner_product_
 //! first_call` reports the very first call on a freshly built context next to the steady-state number for
 //! the same size, so "cold" is a measured first call rather than a criterion label.
@@ -28,12 +28,12 @@
 
 use criterion::{black_box, criterion_group, BenchmarkId, Criterion, Throughput};
 use std::time::Duration;
-use tenferro_cpu::CpuBackend;
 use tenferro_tensor::TensorRead;
 use tensor4all_simplett::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar};
 use tensor4all_tensorbackend::default_cpu_execution_context;
-use tensor4all_tensorbackend::explicit::{HeldSession, Session};
+use tensor4all_tensorbackend::explicit::Session;
+use tensor4all_tensorbackend::CpuBackend;
 
 /// One train: `sites` sites of physical dimension 4 with bond dimension `bond` (unit boundary bonds).
 fn train(sites: usize, bond: usize, offset: usize) -> SimpleTensorTrain<f64> {
@@ -97,7 +97,7 @@ fn direct_session<T: TTScalar>(
 fn bench_inner_product(c: &mut Criterion) {
     // The worker count was forced in `main` before the process-global context initialized; this arm verifies
     // both counts rather than setting them, and measures one backend directly.
-    let backend = CpuBackend::with_threads(1).expect("one-worker CPU backend");
+    let mut backend = CpuBackend::with_threads(1).expect("one-worker CPU backend");
     let explicit_threads = backend.num_threads();
     let compatibility_threads = default_cpu_execution_context()
         .with_backend(|context_backend| context_backend.num_threads());
@@ -112,8 +112,8 @@ fn bench_inner_product(c: &mut Criterion) {
 
     let cases = [(4usize, 4usize), (8, 4), (16, 4)];
 
-    // The compatibility arm runs with no explicit session held: the explicit routes own admission for the
-    // duration of a held session, and entering the compatibility route from inside one is rejected by
+    // The compatibility arm runs without any explicit `Session` borrowing the engine: the explicit routes take the
+    // context's engine for as long as a session is live, and entering the compatibility route while one is live is rejected by
     // design ("an execution is already active on this thread"). The two families are therefore measured in
     // separate groups rather than interleaved.
     {
@@ -133,8 +133,8 @@ fn bench_inner_product(c: &mut Criterion) {
         group.finish();
     }
 
-    // Every arm is validated outside the timed region, and compatibility is validated before the held
-    // session opens: entering the compatibility route from inside a held session is rejected by design.
+    // Every arm is validated outside the timed region, and compatibility is validated before the
+    // session is built: entering the compatibility route while a session is live is rejected by design.
     let expected: Vec<f64> = cases
         .iter()
         .map(|&(sites, bond)| {
@@ -144,8 +144,8 @@ fn bench_inner_product(c: &mut Criterion) {
         })
         .collect();
 
-    // One session held across the explicit group's arms, so they measure the computation, not entry.
-    let mut held = HeldSession::open(&backend).expect("held explicit session");
+    // One session shared across the explicit group's arms, so they measure the computation, not entry.
+    let mut session = Session::new(backend.engine_mut());
     {
         let mut group = c.benchmark_group("simplett_inner_product_session");
         for (case, (sites, bond)) in cases.iter().enumerate() {
@@ -156,10 +156,10 @@ fn bench_inner_product(c: &mut Criterion) {
 
             // Outside the timed region: the explicit arms must agree with the compatibility value computed
             // before the session opened, so a wrong direct loop cannot pass as an attractive timing.
-            let held_value = held
-                .with_session(|session| a.inner_product_with_session(&b, session))
+            let held_value = a
+                .inner_product_with_session(&b, &mut session)
                 .expect("session inner product");
-            let direct_value = held.with_session(|session| direct_session(&a, &b, session));
+            let direct_value = direct_session(&a, &b, &mut session);
             assert!(
                 (held_value - expected).abs() <= 1e-9 * expected.abs().max(1.0),
                 "{sites}x4_bond{bond}: held {held_value} != compatibility {expected}"
@@ -175,7 +175,7 @@ fn bench_inner_product(c: &mut Criterion) {
                 |bencher, (a, b)| {
                     bencher.iter(|| {
                         black_box(
-                            held.with_session(|session| a.inner_product_with_session(b, session))
+                            a.inner_product_with_session(b, &mut session)
                                 .expect("session inner product"),
                         )
                     })
@@ -185,19 +185,14 @@ fn bench_inner_product(c: &mut Criterion) {
             group.bench_with_input(
                 BenchmarkId::new("direct_session", format!("{sites}x4_bond{bond}")),
                 &(&a, &b),
-                |bencher, (a, b)| {
-                    bencher.iter(|| {
-                        black_box(held.with_session(|session| direct_session(a, b, session)))
-                    })
-                },
+                |bencher, (a, b)| bencher.iter(|| black_box(direct_session(a, b, &mut session))),
             );
         }
         group.finish();
     }
-    held.close().expect("close the held session");
 }
 
-/// Repeat the held arm on explicit contexts with different worker counts.
+/// Repeat the session arm on explicit contexts with different worker counts.
 ///
 /// The compatibility arm is absent by construction: the process-global context takes its worker count when
 /// it first initializes, so a multi-thread comparison against it is not available in this bench.
@@ -210,12 +205,12 @@ fn bench_threads(c: &mut Criterion) {
     group.throughput(Throughput::Elements((sites * 4) as u64));
 
     for workers in [1usize, 2, 4] {
-        let backend = CpuBackend::with_threads(workers).expect("CPU backend");
+        let mut backend = CpuBackend::with_threads(workers).expect("CPU backend");
         assert_eq!(backend.num_threads(), workers, "the measured worker count");
-        let mut held = HeldSession::open(&backend).expect("held explicit session");
+        let mut session = Session::new(backend.engine_mut());
         // Validate outside timing, then measure the same trains at this worker count.
-        let value = held
-            .with_session(|session| a.inner_product_with_session(&b, session))
+        let value = a
+            .inner_product_with_session(&b, &mut session)
             .expect("session inner product");
         assert!(
             (value - expected).abs() <= 1e-9 * expected.abs().max(1.0),
@@ -227,13 +222,12 @@ fn bench_threads(c: &mut Criterion) {
             |bencher, (a, b)| {
                 bencher.iter(|| {
                     black_box(
-                        held.with_session(|session| a.inner_product_with_session(b, session))
+                        a.inner_product_with_session(b, &mut session)
                             .expect("session inner product"),
                     )
                 })
             },
         );
-        held.close().expect("close the held session");
     }
     group.finish();
 }
@@ -251,11 +245,11 @@ fn bench_first_call() {
         let b = train(sites, bond, 5);
         let expected = a.inner_product(&b).expect("compatibility");
 
-        let backend = CpuBackend::with_threads(1).expect("one-worker CPU backend");
-        let mut held = HeldSession::open(&backend).expect("held explicit session");
+        let mut backend = CpuBackend::with_threads(1).expect("one-worker CPU backend");
+        let mut session = Session::new(backend.engine_mut());
         let start = std::time::Instant::now();
-        let first = held
-            .with_session(|session| a.inner_product_with_session(&b, session))
+        let first = a
+            .inner_product_with_session(&b, &mut session)
             .expect("first session inner product");
         let first_elapsed = start.elapsed();
         black_box(first);
@@ -266,19 +260,17 @@ fn bench_first_call() {
         // Warm the same context, then time the same call again.
         for _ in 0..3 {
             black_box(
-                held.with_session(|session| a.inner_product_with_session(&b, session))
+                a.inner_product_with_session(&b, &mut session)
                     .expect("warm-up inner product"),
             );
         }
         let start = std::time::Instant::now();
-        let warm = held
-            .with_session(|session| a.inner_product_with_session(&b, session))
+        let warm = a
+            .inner_product_with_session(&b, &mut session)
             .expect("warm session inner product");
         let warm_elapsed = start.elapsed();
         black_box(warm);
         assert!((warm - expected).abs() <= 1e-9 * expected.abs().max(1.0));
-        held.close().expect("close the held session");
-
         println!(
             "inner_product_first_call: {sites}x4_bond{bond} first={first_elapsed:?} warm={warm_elapsed:?}"
         );

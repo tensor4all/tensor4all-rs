@@ -852,13 +852,13 @@ impl<V> TreeTN<tensor4all_core::IdxTensor, V>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    /// Compute `log(||TreeTN||_F)` on a caller-held explicit session.
+    /// Compute `log(||TreeTN||_F)` on a caller-owned explicit `Session`.
     ///
     /// The runtime-free counterpart of [`TreeTN::log_norm`]: the same single
     /// center selection and the same center-norm computation, while any
     /// canonicalization sweep runs on `session` and publishes plain host-storage
     /// tensors. Nothing here enters another session or the process-global eager
-    /// runtime, so a caller that already owns a held session can call it
+    /// runtime, so a caller that already owns a `Session` can call it
     /// directly.
     ///
     /// The overflow and underflow limits of [`TreeTN::log_norm`] apply
@@ -874,22 +874,16 @@ where
     ///
     /// ```
     /// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
-    /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
     /// use tensor4all_treetn::TreeTN;
-    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let site = DynIndex::new_dyn(2);
     /// let tensor = IdxTensor::from_dense(vec![site], vec![3.0_f64, 4.0])?;
     /// let mut tree = TreeTN::<_, usize>::from_tensors(vec![tensor], vec![0])?;
     ///
-    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-    /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    /// let mut held = HeldSession::open(&backend)?;
-    /// let log_norm = held.with_session(|view| {
-    ///     let mut session = Session::from_backend_session(view.backend());
-    ///     tree.log_norm_on_session(&mut session)
-    /// })?;
-    /// held.close()?;
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let mut session = Session::new(backend.engine_mut());
+    /// let log_norm = tree.log_norm_on_session(&mut session)?;
     /// assert!((log_norm - 5.0_f64.ln()).abs() < 1e-12);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -961,7 +955,7 @@ where
         Ok(norm_sq.sqrt().ln())
     }
 
-    /// Compute the Frobenius norm of the TreeTN on a caller-held explicit session.
+    /// Compute the Frobenius norm of the TreeTN on a caller-owned explicit `Session`.
     ///
     /// `norm = exp(log_norm_on_session)`, with the same overflow limit and the
     /// same canonicalization side effects as [`TreeTN::norm`].
@@ -975,22 +969,16 @@ where
     ///
     /// ```
     /// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
-    /// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
     /// use tensor4all_treetn::TreeTN;
-    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let site = DynIndex::new_dyn(2);
     /// let tensor = IdxTensor::from_dense(vec![site], vec![3.0_f64, 4.0])?;
     /// let mut tree = TreeTN::<_, usize>::from_tensors(vec![tensor], vec![0])?;
     ///
-    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-    /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    /// let mut held = HeldSession::open(&backend)?;
-    /// let norm = held.with_session(|view| {
-    ///     let mut session = Session::from_backend_session(view.backend());
-    ///     tree.norm_on_session(&mut session)
-    /// })?;
-    /// held.close()?;
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let mut session = Session::new(backend.engine_mut());
+    /// let norm = tree.norm_on_session(&mut session)?;
     /// assert!((norm - 5.0).abs() < 1e-12);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -1004,7 +992,7 @@ where
         Ok(log_n.exp())
     }
 
-    /// Compute the squared Frobenius norm on a caller-held explicit session.
+    /// Compute the squared Frobenius norm on a caller-owned explicit `Session`.
     ///
     /// Returns `||self||^2 = norm_on_session()^2`.
     ///

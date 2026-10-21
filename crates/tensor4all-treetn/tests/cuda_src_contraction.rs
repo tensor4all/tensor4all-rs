@@ -12,11 +12,11 @@ use std::sync::Arc;
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{
     CudaExecutionContext, DynIndex, ExecutionContext, IdxTensor, TensorConstructionLike,
     TensorContractionLike,
 };
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 use tensor4all_treetn::contraction::{
     contract, contract_src_with_rng_in, ContractionOptions, SrcOptions,

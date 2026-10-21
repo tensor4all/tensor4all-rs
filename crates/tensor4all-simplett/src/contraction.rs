@@ -175,7 +175,7 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
         Ok(result[[0, 0]])
     }
 
-    /// Compute the inner product with another train on a caller-held explicit session.
+    /// Compute the inner product with another train on a caller-owned explicit `Session`.
     ///
     /// The same site-by-site computation as [`SimpleTensorTrain::inner_product`], with every contraction
     /// running on the caller's session: the operands are read through borrowed views instead of being

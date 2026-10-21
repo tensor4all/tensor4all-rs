@@ -20,8 +20,8 @@
 
 use std::sync::Arc;
 
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor, IndexLike, SvdTruncationPolicy};
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 use tensor4all_treetn::{CanonicalForm, TreeTN};
 

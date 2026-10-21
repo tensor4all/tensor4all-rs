@@ -24,7 +24,7 @@
 //! pool or thread-local selector chooses where the work runs
 //! ([`EvalContext::parallelism`]). A caller that owns a lane session - a
 //! scheduler worker, for example - passes it directly; a caller that runs on
-//! its own thread passes its held session.
+//! its own thread passes a `Session` over its own engine.
 //!
 //! # Site order
 //!
@@ -99,7 +99,7 @@ pub enum Parallelism<'a> {
     /// work items, and the item's own thread keeps the backend's session.
     Serial,
     /// The application's code may parallelize on `pool` with at most `budget`
-    /// workers. This is what a full-budget held session hands out, so a single item
+    /// workers. This is what a full-budget session hands out, so a single item
     /// can use the whole team for its own host work.
     Pool {
         /// The pool the application's own code may use.
@@ -119,32 +119,23 @@ pub enum Parallelism<'a> {
 /// and is never captured by a callback.
 ///
 /// Nothing here selects an execution context: the session is the one the caller
-/// opened (a held session, or the session of a scheduler-owned lane), and no route
+/// built (a session over a caller-owned engine, or the session of a scheduler-owned lane), and no route
 /// consults a process-global or thread-local default.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 /// use tenferro::Tensor;
-/// use tensor4all_tensorbackend::CpuBackend;
 ///
-/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-/// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
+/// let mut backend = CpuBackend::with_threads(1)?;
 /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
 ///
-/// let mut held = HeldSession::open(&backend)?;
-/// let total = held.with_session(|view| {
-///     let mut ctx = EvalContext::new(
-///         Session::from_backend_session(view.backend()),
-///         Parallelism::Serial,
-///     );
-///     assert!(matches!(ctx.parallelism(), Parallelism::Serial));
-///     let sum = ctx.session().sum(&x)?;
-///     sum.as_slice::<f64>().map(<[f64]>::to_vec)
-/// })?;
-/// held.close()?;
+/// let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+/// assert!(matches!(ctx.parallelism(), Parallelism::Serial));
+/// let sum = ctx.session().sum(&x)?;
+/// let total = sum.as_slice::<f64>()?.to_vec();
 /// assert_eq!(total, vec![4.0]);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -160,7 +151,7 @@ impl<'a> EvalContext<'a> {
     ///
     /// * `session` - The session every numerical operation of the run uses. It is
     ///   borrowed, never entered or replaced here; the caller has already entered
-    ///   it (a held session, or a scheduler-owned lane's session).
+    ///   it (a session over a caller-owned engine, or a scheduler-owned lane's session).
     /// * `parallelism` - The budget of the application's own code. Pass
     ///   [`Parallelism::Serial`] inside a lane, where parallelism is across work
     ///   items, and a full-budget [`Parallelism::Pool`] when one item may use the
@@ -867,13 +858,12 @@ pub enum InterpolationError {
 /// use std::fmt::Debug;
 /// use std::hash::Hash;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
-/// use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 /// use tensor4all_treetn::interpolation::{
 ///     EvalContext, InterpolationError, InterpolationOutcome, InterpolationProblem,
 ///     InterpolationTermination, Parallelism, TreeInterpolator,
 /// };
 /// use tensor4all_treetn::{NodeNameNetwork, TreeTN};
-/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// struct DenseSingleNode;
 ///
@@ -947,17 +937,9 @@ pub enum InterpolationError {
 /// let pivots = ColMajorArray::new(vec![1, 2], vec![2, 1])?;
 /// let problem = InterpolationProblem::new(topology, node_sites, pivots, 1e-12, None, 0)?;
 ///
-/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-/// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-/// let mut held = HeldSession::open(&backend)?;
-/// let outcome = held.with_session(|view| {
-///     let mut ctx = EvalContext::new(
-///         Session::from_backend_session(view.backend()),
-///         Parallelism::Serial,
-///     );
-///     DenseSingleNode.interpolate(&problem, &mut ctx, f)
-/// })?;
-/// held.close()?;
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+/// let outcome = DenseSingleNode.interpolate(&problem, &mut ctx, f)?;
 /// assert_eq!(outcome.termination, InterpolationTermination::Converged);
 /// assert_eq!(outcome.max_sample_magnitude, 21.0);
 /// assert_eq!(outcome.network.evaluate_point(&[x, y], &[1, 2])?.real(), 21.0);
