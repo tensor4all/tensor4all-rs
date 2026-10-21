@@ -40,8 +40,8 @@ use tensor4all_partitionedtreetn::adaptive_interpolation::{
     patched_interpolate, PatchedInterpolationOptions, PatchedInterpolationResult,
 };
 use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, Projector};
-use tensor4all_tensorbackend::explicit::{HeldSession, Session};
-use tensor4all_tensorbackend::CpuExecutionContext;
+use tensor4all_tensorbackend::explicit::Session;
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_treetci::TreeTciInterpolator;
 use tensor4all_treetn::interpolation::{
     EvalContext, InterpolationProblem, Parallelism, TreeInterpolator,
@@ -55,22 +55,11 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 type Name = String;
 type Network = TreeTN<IdxTensor, Name>;
 
-/// Run `body` with one explicit execution capability over a held session.
+/// Run `body` with one explicit execution capability over a single-thread backend.
 fn with_eval_context<R>(body: impl FnOnce(&mut EvalContext<'_>) -> R) -> R {
-    let context = CpuExecutionContext::from_backend(
-        tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend"),
-    );
-    let backend: tenferro_cpu::CpuBackend = context.with_backend(|backend| backend.clone());
-    let mut held = HeldSession::open(&backend).expect("held session");
-    let result = held.with_session(|view| {
-        let mut ctx = EvalContext::new(
-            Session::from_backend_session(view.backend()),
-            Parallelism::Serial,
-        );
-        body(&mut ctx)
-    });
-    held.close().expect("affinity restores");
-    result
+    let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+    body(&mut ctx)
 }
 
 /// Relative tolerance of every interpolation (sampled max norm).

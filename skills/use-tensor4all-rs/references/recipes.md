@@ -281,14 +281,10 @@ use tensor4all_partitionedtreetn::adaptive_interpolation::{
     patched_interpolate, GlobalL2Error, PatchedInterpolationOptions,
 };
 use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
-use tensor4all_tensorbackend::{
-    explicit::{HeldSession, Session},
-    CpuExecutionContext,
-};
+use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 use tensor4all_treetci::TreeTciInterpolator;
 use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 use tensor4all_treetn::NodeNameNetwork;
-use tenferro_cpu::CpuBackend;
 
 // One binary site per node of a three-node chain; x = b0 + 2 b1 + 4 b2.
 let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
@@ -316,29 +312,17 @@ let options = PatchedInterpolationOptions::new(2) // bond cap per patch
     .with_seed(0);
 let pivots = ColMajorArray::new(vec![0, 0, 0], vec![3, 1])?; // one initial pivot
 
-let result = {
-    let context =
-        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"));
-    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    let mut held = HeldSession::open(&backend).expect("held session");
-    let outcome = held.with_session(|view| {
-        let mut ctx = EvalContext::new(
-            Session::from_backend_session(view.backend()),
-            Parallelism::Serial,
-        );
-        patched_interpolate(
-            &TreeTciInterpolator::default(),
-            topology,
-            node_sites,
-            pivots,
-            &mut ctx,
-            evaluate,
-            &options,
-        )
-    });
-    held.close().expect("affinity restores");
-    outcome
-}?;
+let mut backend = CpuBackend::with_threads(1)?;
+let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+let result = patched_interpolate(
+    &TreeTciInterpolator::default(),
+    topology,
+    node_sites,
+    pivots,
+    &mut ctx,
+    evaluate,
+    &options,
+)?;
 assert_eq!(result.report.splits, 3); // the cap of 2 forced three splits
 assert_eq!(result.partition.len(), 4); // every patch is exact on one active site
 let error = result.report.norm.l2_error().unwrap();
@@ -347,7 +331,9 @@ assert!(matches!(error.global, GlobalL2Error::Certified { .. }));
 ```
 
 Fan-out entries run the same driver: `patched_interpolate_on_lanes(&mut lanes,
-...)` takes a `hataori_tenferro::TenferroLanes` and an `Fn + Sync` evaluator,
+...)` takes a `hataori_tenferro::TenferroLanes` (built from one engine per lane,
+for example `TenferroLanes::new(vec![CpuEngine::serial(), CpuEngine::serial()])`)
+and an `Fn + Sync` evaluator,
 and `patched_interpolate_mpi(&world, &mut lanes, root, ...)` (features
 `hataori-mpi` / `hataori-mpi-rsmpi-rt`) distributes waves over ranks and returns
 `Option<result>` (`Some` on the root only). Under the L2 norm give a known

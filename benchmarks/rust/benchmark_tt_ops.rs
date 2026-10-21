@@ -21,13 +21,14 @@ use anyhow::{bail, Context, Result};
 use num_complex::Complex64;
 use tenferro::{DotGeneralConfig, Tensor};
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
 use tensor4all_core::{
     contract, contract_pair, print_and_reset_pairwise_contract_profile,
     reset_pairwise_contract_profile, AnyScalar, DynIndex, IdxTensor, SvdTruncationPolicy,
     TensorContractionLike,
 };
 use tensor4all_itensorlike::{CanonicalForm, ContractOptions, TensorTrain};
+use tensor4all_tensorbackend::CpuBackend;
 
 #[derive(Debug, Clone)]
 struct Options {
@@ -254,9 +255,13 @@ impl RawEagerInnerConfigs {
     }
 }
 
-fn maybe_snapshot_output(tensor: &EagerTensor, snapshot_outputs: bool) -> Result<()> {
+fn maybe_snapshot_output(
+    tensor: &EagerTensor,
+    engine: &mut CpuEngine,
+    snapshot_outputs: bool,
+) -> Result<()> {
     if snapshot_outputs {
-        black_box(tensor.duplicate_value()?);
+        black_box(tensor.duplicate_value(engine)?);
     }
     Ok(())
 }
@@ -265,6 +270,7 @@ fn raw_eager_inner_t4a_shapes(
     bra: &[EagerTensor],
     ket: &[EagerTensor],
     configs: &RawEagerInnerConfigs,
+    engine: &mut CpuEngine,
     snapshot_outputs: bool,
 ) -> Result<Complex64> {
     if bra.len() != ket.len() {
@@ -280,16 +286,16 @@ fn raw_eager_inner_t4a_shapes(
 
     let mut env = bra[0]
         .runtime()
-        .with_eager_session(|session| {
+        .with_eager_session(engine, |session| {
             session.dot_general_with_conj(&bra[0], &ket[0], configs.first_site.clone(), true, false)
         })
         .context("failed raw eager first-site contraction")?;
-    maybe_snapshot_output(&env, snapshot_outputs)?;
+    maybe_snapshot_output(&env, engine, snapshot_outputs)?;
 
     for site in 1..bra.len() {
         env = env
             .runtime()
-            .with_eager_session(|session| {
+            .with_eager_session(engine, |session| {
                 session.dot_general_with_conj(
                     &env,
                     &bra[site],
@@ -299,11 +305,11 @@ fn raw_eager_inner_t4a_shapes(
                 )
             })
             .with_context(|| format!("failed raw eager env-bra contraction at site {site}"))?;
-        maybe_snapshot_output(&env, snapshot_outputs)?;
+        maybe_snapshot_output(&env, engine, snapshot_outputs)?;
 
         env = env
             .runtime()
-            .with_eager_session(|session| {
+            .with_eager_session(engine, |session| {
                 session.dot_general_with_conj(
                     &env,
                     &ket[site],
@@ -313,7 +319,7 @@ fn raw_eager_inner_t4a_shapes(
                 )
             })
             .with_context(|| format!("failed raw eager tmp-ket contraction at site {site}"))?;
-        maybe_snapshot_output(&env, snapshot_outputs)?;
+        maybe_snapshot_output(&env, engine, snapshot_outputs)?;
     }
 
     let scalar = env
@@ -692,7 +698,8 @@ fn main() -> Result<()> {
         let bra = make_mps(&sites, chi, 0)?;
         let ket = make_mps(&sites, chi, opts.length)?;
         let bra_conj = preconjugate_sites(&bra)?;
-        let raw_ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1)?)?;
+        let mut backend = CpuBackend::with_threads(1)?;
+        let raw_ctx = EagerRuntime::new()?;
         let raw_bra = eager_mps_tensors(
             &raw_ctx,
             make_native_mps_t4a_shapes(opts.length, opts.phys_dim, chi, 0)?,
@@ -750,6 +757,7 @@ fn main() -> Result<()> {
                     black_box(&raw_bra),
                     black_box(&raw_ket),
                     black_box(&raw_configs),
+                    backend.engine_mut(),
                     false,
                 )
             },
@@ -771,6 +779,7 @@ fn main() -> Result<()> {
                     black_box(&raw_bra),
                     black_box(&raw_ket),
                     black_box(&raw_configs),
+                    backend.engine_mut(),
                     true,
                 )
             },

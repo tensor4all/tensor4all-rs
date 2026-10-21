@@ -26,8 +26,8 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use serde_json::json;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
-use tensor4all_tensorbackend::explicit::{HeldSession, Session};
-use tensor4all_tensorbackend::CpuExecutionContext;
+use tensor4all_tensorbackend::explicit::Session;
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_treetci::{TreeTciInterpolator, TreeTciOptions};
 use tensor4all_treetn::interpolation::{
     EvalContext, InterpolationError, InterpolationProblem, Parallelism, TreeInterpolator,
@@ -37,22 +37,11 @@ use tensor4all_treetn::{NodeNameNetwork, TreeTN};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 type Name = String;
 
-/// Run `body` with one explicit execution capability over a held session.
+/// Run `body` with one explicit execution capability over a single-thread backend.
 fn with_eval_context<R>(body: impl FnOnce(&mut EvalContext<'_>) -> R) -> R {
-    let context = CpuExecutionContext::from_backend(
-        tenferro_cpu::CpuBackend::with_threads(1).expect("1T CPU backend"),
-    );
-    let backend: tenferro_cpu::CpuBackend = context.with_backend(|backend| backend.clone());
-    let mut held = HeldSession::open(&backend).expect("held session");
-    let result = held.with_session(|view| {
-        let mut ctx = EvalContext::new(
-            Session::from_backend_session(view.backend()),
-            Parallelism::Serial,
-        );
-        body(&mut ctx)
-    });
-    held.close().expect("affinity restores");
-    result
+    let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+    body(&mut ctx)
 }
 type Network = TreeTN<tensor4all_core::IdxTensor, Name>;
 

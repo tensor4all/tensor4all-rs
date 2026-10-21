@@ -120,9 +120,10 @@ The evaluator receives a column-major `[n_sites, n_points]` batch of
 zero-based full-domain points in the derived site order (nodes in ascending
 name order, each node's sites in the given order) and the run's
 `EvalContext`. Every numerical stage of the run - the engine, re-embedding,
-measurement, and the norm readout - uses that context's session; nothing
-enters the process-global session, so a run completes inside a caller-held
-session (for example a scheduler lane) and needs no process-global warm-up.
+measurement, and the norm readout - runs on the engine behind that context;
+nothing enters the process-global session, so a run completes on the engine
+you pass in (for example one lane's engine) and needs no process-global
+warm-up.
 The returned partition and report are published as compact host storage and
 stay usable after the session closes. Each patch caches its
 samples and hands them to its children, so no point is evaluated twice, and a
@@ -155,11 +156,10 @@ measures every accepted and zero patch itself.
 #     patched_interpolate, GlobalL2Error, PatchedInterpolationOptions,
 # };
 # use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
-# use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
+# use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 # use tensor4all_treetci::TreeTciInterpolator;
 # use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 # use tensor4all_treetn::NodeNameNetwork;
-# use tensor4all_tensorbackend::CpuBackend;
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 // A junction "c" of degree three without a site, and three leaves.
 let (x, y, z) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3), DynIndex::new_dyn(3));
@@ -185,29 +185,19 @@ let options = PatchedInterpolationOptions::new(3)
     .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
     .with_patch_order(vec![x.clone(), y.clone()]);
-let result = {
-    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    let mut held = HeldSession::open(&backend)?;
-    let outcome = held.with_session(|view| {
-        patched_interpolate(
-            &TreeTciInterpolator::default(),
-            topology,
-            node_sites,
-            ColMajorArray::new(vec![1, 2, 2], vec![3, 1]).expect("2D pivots"),
-            &mut EvalContext::new(
-                Session::from_backend_session(view.backend()),
-                Parallelism::Serial,
-            ),
-            |batch: ColMajorArrayRef<'_, usize>,
-             _ctx: &mut EvalContext<'_>|
-             -> anyhow::Result<Vec<f64>> { Ok(batch.data().chunks(3).map(f).collect()) },
-            &options,
-        )
-    });
-    held.close()?;
-    outcome?
-};
+let mut backend = CpuBackend::with_threads(1)?;
+let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+let result = patched_interpolate(
+    &TreeTciInterpolator::default(),
+    topology,
+    node_sites,
+    ColMajorArray::new(vec![1, 2, 2], vec![3, 1]).expect("2D pivots"),
+    &mut ctx,
+    |batch: ColMajorArrayRef<'_, usize>,
+     _ctx: &mut EvalContext<'_>|
+     -> anyhow::Result<Vec<f64>> { Ok(batch.data().chunks(3).map(f).collect()) },
+    &options,
+)?;
 
 // The x = 0 half is a measured zero patch; the rest is split at y.
 assert_eq!(result.report.zero_patches.len(), 1);
@@ -288,11 +278,10 @@ capped acceptance exhaustively measured.
 #     ToleranceNotMetBasis,
 # };
 # use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
-# use tensor4all_tensorbackend::{explicit::{HeldSession, Session}, CpuExecutionContext};
+# use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 # use tensor4all_treetci::TreeTciInterpolator;
 # use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 # use tensor4all_treetn::NodeNameNetwork;
-# use tensor4all_tensorbackend::CpuBackend;
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 // f(x, y) = 1 + [x == y] on two sites of dimension 3 has rank three, which
 // a cap of two cannot represent. A minimum of two bits retains the root.
@@ -309,29 +298,19 @@ let options = PatchedInterpolationOptions::new(2)
     .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
     .with_min_patch_bits(2);
-let result = {
-    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-    let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    let mut held = HeldSession::open(&backend)?;
-    let outcome = held.with_session(|view| {
-        patched_interpolate(
-            &TreeTciInterpolator::default(),
-            topology,
-            node_sites,
-            ColMajorArray::new(vec![0, 0], vec![2, 1]).expect("2D pivots"),
-            &mut EvalContext::new(
-                Session::from_backend_session(view.backend()),
-                Parallelism::Serial,
-            ),
-            |batch: ColMajorArrayRef<'_, usize>,
-             _ctx: &mut EvalContext<'_>|
-             -> anyhow::Result<Vec<f64>> { Ok(batch.data().chunks(2).map(f).collect()) },
-            &options,
-        )
-    });
-    held.close()?;
-    outcome?
-};
+let mut backend = CpuBackend::with_threads(1)?;
+let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+let result = patched_interpolate(
+    &TreeTciInterpolator::default(),
+    topology,
+    node_sites,
+    ColMajorArray::new(vec![0, 0], vec![2, 1]).expect("2D pivots"),
+    &mut ctx,
+    |batch: ColMajorArrayRef<'_, usize>,
+     _ctx: &mut EvalContext<'_>|
+     -> anyhow::Result<Vec<f64>> { Ok(batch.data().chunks(2).map(f).collect()) },
+    &options,
+)?;
 
 assert_eq!(result.report.splits, 0);
 assert_eq!(result.report.accepted[0].status, PatchStatus::ToleranceNotMet);
