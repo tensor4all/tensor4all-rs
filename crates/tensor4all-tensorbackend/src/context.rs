@@ -68,8 +68,9 @@ static DEFAULT_CPU_THREADS: OnceLock<usize> = OnceLock::new();
 ///
 /// # Errors
 ///
-/// Returns [`AlreadyInitialized`] when the default was already fixed, either by
-/// an earlier call or by the first [`CpuBackend::new`].
+/// Returns [`AlreadyInitialized`] when the default thread configuration was
+/// already fixed, so a change is unsupported: either an earlier call or the
+/// first [`CpuBackend::new`] fixed it.
 ///
 /// # Examples
 ///

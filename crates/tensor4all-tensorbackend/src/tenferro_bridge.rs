@@ -1199,9 +1199,9 @@ pub fn native_tensor_primal_to_diag<T: TensorElement>(
 /// Reshape a native tensor without changing its column-major linearization.
 /// # Errors
 ///
-/// Returns an error when the context rejects the entry or when
-/// `logical_dims` has a different element count than `tensor` or is otherwise
-/// rejected by the backend reshape.
+/// Fails with a `CpuExecutionContextError` when the default context's engine is
+/// already borrowed on this thread, or when the shape `logical_dims` and the
+/// element count of `tensor` do not match.
 pub fn reshape_col_major_native_tensor(
     tensor: &NativeTensor,
     logical_dims: &[usize],
@@ -1226,8 +1226,9 @@ pub fn qr_native_tensor(
 /// Compute an SVD on a native tensor.
 /// # Errors
 ///
-/// Returns an error when the context rejects the entry or when the SVD
-/// fails.
+/// Fails with a `CpuExecutionContextError` when the default context's engine is
+/// already borrowed on this thread, or when the backend SVD reports a
+/// non-convergence failure.
 pub fn svd_native_tensor(
     tensor: &NativeTensor,
 ) -> Result<(NativeTensor, NativeTensor, NativeTensor)> {
