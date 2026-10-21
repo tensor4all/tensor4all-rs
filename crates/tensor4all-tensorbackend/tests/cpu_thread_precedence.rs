@@ -80,16 +80,15 @@ fn setter_wins_over_rayon_num_threads() {
 /// `RAYON_NUM_THREADS` wins over the CPUs in the main thread's mask.
 #[cfg(target_os = "linux")]
 #[test]
-fn rayon_num_threads_wins_over_the_affinity_count() {
-    let allowed = CpuBackend::allowed_cpus().expect("the Linux affinity snapshot");
-    // Pick a Rayon count that differs from the affinity count, whichever way
-    // this host is provisioned: a value above one needs a pool; one resolves
-    // to the serial engine.
-    let expected = if allowed.len() == 1 { "2" } else { "1" };
-    child(
-        "env",
-        &[("RAYON_NUM_THREADS", expected), (EXPECT, expected)],
-    );
+fn rayon_num_threads_wins_over_affinity() {
+    // One resolves to the serial engine, three to a pool. Whatever the mask or
+    // cgroup quota allows, at least one of these differs from Rayon's fallback.
+    for expected in ["1", "3"] {
+        child(
+            "env",
+            &[("RAYON_NUM_THREADS", expected), (EXPECT, expected)],
+        );
+    }
 }
 
 /// With neither variable set, the count is the affinity count that Rayon's

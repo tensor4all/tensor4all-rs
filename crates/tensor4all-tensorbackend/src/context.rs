@@ -31,22 +31,6 @@ mod affinity {
 
     use super::CpuThreadError;
 
-    // Declared here rather than through `libc`, whose Linux binding for
-    // `sched_getaffinity` is not present in every supported version. The
-    // signatures use the kernel's raw byte-buffer contract, not `cpu_set_t`.
-    unsafe extern "C" {
-        fn sched_getaffinity(
-            pid: libc::pid_t,
-            cpusetsize: libc::size_t,
-            cpuset: *mut libc::c_void,
-        ) -> libc::c_int;
-        fn sched_setaffinity(
-            pid: libc::pid_t,
-            cpusetsize: libc::size_t,
-            cpuset: *const libc::c_void,
-        ) -> libc::c_int;
-    }
-
     const BITS_PER_WORD: usize = libc::c_ulong::BITS as usize;
     const INITIAL_WORDS: usize = 1;
     /// 512 KiB of mask on a 64-bit host, far beyond any current CPU count.
@@ -120,7 +104,7 @@ mod affinity {
             let bytes = std::mem::size_of_val(words.as_slice());
             // SAFETY: `words` is an owned, word-aligned buffer and `bytes` is
             // its exact byte length; the kernel writes at most that many bytes.
-            let result = unsafe { sched_getaffinity(pid, bytes, words.as_mut_ptr().cast()) };
+            let result = unsafe { libc::sched_getaffinity(pid, bytes, words.as_mut_ptr().cast()) };
             if result == 0 {
                 // Keep the successful kernel buffer size: `sched_setaffinity`
                 // requires at least that many bytes even when the high words
@@ -146,7 +130,7 @@ mod affinity {
     fn set_mask(pid: libc::pid_t, mask: &CpuMask) -> io::Result<()> {
         // SAFETY: `mask` owns a word-aligned buffer and `as_bytes` is its exact
         // byte length; the kernel reads at most that many bytes.
-        let result = unsafe { sched_setaffinity(pid, mask.as_bytes(), mask.as_ptr()) };
+        let result = unsafe { libc::sched_setaffinity(pid, mask.as_bytes(), mask.as_ptr().cast()) };
         if result == 0 {
             Ok(())
         } else {
@@ -167,9 +151,26 @@ mod affinity {
         })
     }
 
+    /// Set the calling thread's mask and verify the kernel kept all of it.
+    fn set_and_verify_current_thread(mask: &CpuMask) -> io::Result<()> {
+        set_mask(0, mask)?;
+        let actual = get_mask(0)?;
+        if actual.equals(mask) {
+            Ok(())
+        } else {
+            Err(io::Error::other(
+                "the effective CPU mask differs from the requested mask",
+            ))
+        }
+    }
+
     /// Set the calling thread's mask to `mask`.
+    ///
+    /// A threaded cgroup may silently intersect the request with a narrower
+    /// cpuset, so the read-back is what turns a partially applied mask into a
+    /// typed failure before Rayon builds any worker.
     pub(super) fn set_current_thread_to(mask: &CpuMask) -> Result<(), CpuThreadError> {
-        set_mask(0, mask).map_err(|source| CpuThreadError::Affinity {
+        set_and_verify_current_thread(mask).map_err(|source| CpuThreadError::Affinity {
             operation: "sched_setaffinity",
             source,
         })
@@ -179,15 +180,7 @@ mod affinity {
     pub(super) fn pin_current_thread(cpu: usize) -> io::Result<()> {
         let min_words = get_mask(0)?.words_len();
         let expected = CpuMask::single(cpu, min_words);
-        set_mask(0, &expected)?;
-        let actual = get_mask(0)?;
-        if actual.equals(&expected) {
-            Ok(())
-        } else {
-            Err(io::Error::other(format!(
-                "worker mask is not exactly CPU {cpu}"
-            )))
-        }
+        set_and_verify_current_thread(&expected)
     }
 
     /// The calling thread's effective CPU ids; used by the affinity tests.
@@ -267,21 +260,15 @@ pub enum CpuThreadError {
     /// The CPU pool construction thread panicked before returning the pool.
     #[error("the CPU pool construction thread panicked")]
     ConstructionThreadPanic,
-    /// A pinned worker could not be confined to its CPU.
-    #[error("failed to pin CPU worker {worker} to its CPU: {source}")]
+    /// A pinned worker could not be confined to its CPU, or its startup
+    /// handshake failed.
+    #[error("CPU worker {worker} failed its affinity handshake: {source}")]
     WorkerAffinity {
-        /// Rayon worker index.
+        /// Rayon worker index, or zero for a closed startup channel.
         worker: usize,
         /// Original operating-system or verification diagnostic.
         #[source]
         source: std::io::Error,
-    },
-    /// A pinned worker terminated before reporting its affinity result.
-    #[error("a pinned CPU worker did not report its affinity: {source}")]
-    WorkerStartupClosed {
-        /// Channel receive failure from the worker startup handshake.
-        #[source]
-        source: std::sync::mpsc::RecvError,
     },
 }
 
@@ -306,15 +293,18 @@ static DEFAULT_CPU_THREADS: OnceLock<usize> = OnceLock::new();
 
 /// Fix the worker count [`CpuBackend::new`] uses for the rest of the process.
 ///
-/// The value is read once, by the first [`CpuBackend::new`] call; a backend
-/// built later keeps whatever policy it was built with. Call this before any
-/// other thread can construct a default backend.
+/// The value is read once, by the first [`CpuBackend::new`] call that resolves a
+/// count; a backend built later keeps whatever policy it was built with. A
+/// first [`CpuBackend::new`] that cannot build its pool falls back to serial for
+/// that backend only and does not fix the default, so a later call tries again.
+/// Call this before any other thread can construct a default backend.
 ///
 /// # Errors
 ///
 /// Returns [`AlreadyInitialized`] when the default thread configuration was
-/// already fixed, so a change is unsupported: either an earlier call or the
-/// first [`CpuBackend::new`] fixed it.
+/// already fixed successfully, so a change is unsupported: either an earlier
+/// call or a [`CpuBackend::new`] that resolved a count fixed it. A failed first
+/// construction does not fix it.
 ///
 /// # Examples
 ///
@@ -393,11 +383,13 @@ fn build_pool_here(threads: Option<usize>) -> Result<rayon::ThreadPool, CpuThrea
 ///
 /// [`CpuBackend::new`] resolves its worker count in this order: the value
 /// [`set_default_cpu_threads`] fixed, else Rayon's own default (`RAYON_NUM_THREADS`,
-/// see Rayon's documentation), else the CPUs in the main thread's mask. A
+/// see Rayon's documentation), which is evaluated under the main thread's mask
+/// and may be lower than that mask's CPU count because of cgroup quotas. A
 /// resolved count of one uses [`CpuEngine::serial`] and owns no pool. The count
-/// is fixed by the first [`CpuBackend::new`] of the process, or by the setter.
-/// If the pool cannot be built, [`CpuBackend::new`] falls back to
-/// [`CpuEngine::serial`] instead of panicking.
+/// is fixed by the first successful [`CpuBackend::new`] of the process, or by the
+/// setter. If the pool or the Linux mask snapshot cannot be used,
+/// [`CpuBackend::new`] falls back to [`CpuEngine::serial`] for that backend only
+/// instead of panicking, and a later call retries.
 ///
 /// Every pool this type builds on Linux confines its workers to the main
 /// thread's allowed CPU set, captured as a snapshot when the pool is built.
@@ -444,11 +436,12 @@ impl CpuBackend {
     /// Build a backend with the default thread policy.
     ///
     /// The worker count is [`set_default_cpu_threads`] if it was called; else
-    /// Rayon's default (`RAYON_NUM_THREADS`, see Rayon's documentation), which
-    /// falls back to the CPUs in the main thread's mask; else one per CPU in
-    /// that mask. A worker stack of
+    /// Rayon's default (`RAYON_NUM_THREADS`, see Rayon's documentation), which is
+    /// evaluated under the main thread's mask and may be lower than that mask's
+    /// CPU count because of cgroup quotas. A worker stack of
     /// [`tenferro_cpu::DEFAULT_WORKER_STACK_BYTES`] is reserved for each worker,
-    /// as the CPU providers require. The count is fixed by the first call.
+    /// as the CPU providers require. The count is fixed by the first successful
+    /// call, or by the setter.
     ///
     /// On Linux the pool is built on a short-lived construction thread whose
     /// mask is first set to the main thread's mask snapshot, so building from a
@@ -458,8 +451,9 @@ impl CpuBackend {
     ///
     /// The pool build and the Linux affinity snapshot are the fallible steps,
     /// and this constructor does not report them: if either cannot be used,
-    /// the backend is [`CpuEngine::serial`] instead, which is correct but uses
-    /// no worker threads. Use [`CpuBackend::with_threads`] or
+    /// this backend is [`CpuEngine::serial`] instead, which is correct but uses
+    /// no worker threads, and the failure is not stored as the default. A later
+    /// call retries the construction. Use [`CpuBackend::with_threads`] or
     /// [`CpuBackend::pinned`] when that difference matters.
     ///
     /// # Examples
@@ -494,12 +488,9 @@ impl CpuBackend {
                     }
                 }
             }
-            Err(_) => {
-                let _ = DEFAULT_CPU_THREADS.set(1);
-                Self {
-                    engine: CpuEngine::serial(),
-                }
-            }
+            Err(_) => Self {
+                engine: CpuEngine::serial(),
+            },
         }
     }
 
@@ -577,9 +568,8 @@ impl CpuBackend {
     /// [`CpuThreadError::UnsupportedPlatform`] off Linux,
     /// [`CpuThreadError::Affinity`] when the snapshot or a worker's mask fails,
     /// [`CpuThreadError::WorkerAffinity`] when a worker cannot be pinned to
-    /// exactly its CPU, and [`CpuThreadError::Pool`] or
-    /// [`CpuThreadError::WorkerStartupClosed`] when the pool cannot be built or
-    /// a worker does not report.
+    /// exactly its CPU, and [`CpuThreadError::Pool`] when Rayon cannot build the
+    /// pool.
     ///
     /// # Examples
     ///
@@ -640,15 +630,22 @@ impl CpuBackend {
                     source: Box::new(source),
                 })?;
 
+            // Every worker of a successfully built pool runs the start handler,
+            // which sends exactly one report, and the registry keeps its sender
+            // alive while the pool is alive. The loop therefore receives one
+            // report per worker. A closed channel is not expected, but it is
+            // still a worker affinity-handshake failure rather than a separate
+            // unreachable error case.
             for _ in 0..cpus.len() {
-                match receiver.recv() {
-                    Ok((_, Ok(()))) => {}
-                    Ok((worker, Err(source))) => {
-                        return Err(CpuThreadError::WorkerAffinity { worker, source });
-                    }
-                    Err(source) => {
-                        return Err(CpuThreadError::WorkerStartupClosed { source });
-                    }
+                let (worker, outcome) =
+                    receiver
+                        .recv()
+                        .map_err(|source| CpuThreadError::WorkerAffinity {
+                            worker: 0,
+                            source: std::io::Error::other(source),
+                        })?;
+                if let Err(source) = outcome {
+                    return Err(CpuThreadError::WorkerAffinity { worker, source });
                 }
             }
             Ok(Self {

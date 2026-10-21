@@ -24,8 +24,9 @@ runner body into `benchmarks/rust/` and keep the crate-local entry point thin.
 
 A tensor4all-built CPU pool takes its worker count from
 `set_default_cpu_threads` if the caller set it, else Rayon's own default
-(`RAYON_NUM_THREADS`, see Rayon's documentation), else the CPUs in the main
-thread's allowed mask. The `RAYON_NUM_THREADS=1` commands below therefore pin
+(`RAYON_NUM_THREADS`, see Rayon's documentation), which is evaluated under the
+main thread's allowed CPU mask and may be lower than that mask's CPU count
+because of cgroup quotas. The `RAYON_NUM_THREADS=1` commands below therefore pin
 the pool again. The pool's workers are confined to the main thread's allowed
 CPU set snapshot on Linux; inline operations and scheduler lane threads are
 not moved.
