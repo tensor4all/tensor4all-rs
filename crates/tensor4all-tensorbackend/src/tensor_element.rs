@@ -93,6 +93,41 @@ pub trait TensorElement: TensorScalar + Copy + Send + Sync + 'static {
     ///
     fn dense_values_from_native_col_major(tensor: &NativeTensor) -> Result<Vec<Self>>;
 
+    /// Materialize dense column-major values while consuming the native tensor.
+    ///
+    /// This is the ownership-preserving counterpart of
+    /// [`Self::dense_values_from_native_col_major`]: a compact column-major host
+    /// result hands its buffer over instead of being copied, so a caller that
+    /// built the tensor only to read it back pays no extra full-size
+    /// allocation.
+    ///
+    /// # Arguments
+    ///
+    /// * `tensor` - Consumed native tensor whose logical values are returned.
+    ///
+    /// # Returns
+    ///
+    /// The tensor's values in column-major order, in `Self`'s scalar type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on a dtype mismatch between `tensor` and `Self`, and when
+    /// `tensor`'s storage cannot hand over a compact column-major host buffer
+    /// because it is backend-resident or its layout is not compact, instead of
+    /// copying or silently reordering it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::TensorElement;
+    ///
+    /// let tensor =
+    ///     f64::dense_native_tensor_from_col_major(&[1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+    /// let values = f64::into_dense_values_from_native_col_major(tensor).unwrap();
+    /// assert_eq!(values, vec![1.0, 3.0, 2.0, 4.0]);
+    /// ```
+    fn into_dense_values_from_native_col_major(tensor: NativeTensor) -> Result<Vec<Self>>;
+
     /// Materialize diagonal values from a dense native tensor.
     /// # Errors
     ///
@@ -202,6 +237,31 @@ macro_rules! impl_tensor_element {
                             "tensor dtype mismatch: expected {}, got {}",
                             tensor_dtype_name($dtype),
                             tensor_dtype_name(tensor.dtype())
+                        )
+                    })
+            }
+
+            fn into_dense_values_from_native_col_major(tensor: NativeTensor) -> Result<Vec<Self>> {
+                let actual = tensor.dtype();
+                let typed = Self::into_typed(tensor).map_err(|failure| {
+                    let (_, error) = failure.into_parts();
+                    anyhow!(
+                        "tensor dtype mismatch: expected {}, got {}: {error}",
+                        tensor_dtype_name($dtype),
+                        tensor_dtype_name(actual)
+                    )
+                })?;
+                // `into_vec_col_major` moves a compact column-major host buffer
+                // and rejects a backend-resident or strided one typed, so this
+                // route never copies and never silently reorders a layout.
+                typed
+                    .into_vec_col_major()
+                    .map(|(_shape, values)| values)
+                    .map_err(|failure| {
+                        let (_, error) = failure.into_parts();
+                        anyhow!(
+                            "native {} tensor buffer cannot be transferred: {error}",
+                            tensor_dtype_name($dtype)
                         )
                     })
             }

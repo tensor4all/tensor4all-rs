@@ -902,6 +902,61 @@ pub fn dense_native_tensor_from_col_major_owned<T: TensorElement>(
     T::dense_native_tensor_from_col_major_owned(data, logical_dims)
 }
 
+/// Borrow column-major data as a read-only native operand without copying.
+///
+/// The returned input owns nothing: it is a [`TensorRead`] view over `data`, so
+/// a shared operand (a frame matrix, a weight matrix) reaches an einsum as a
+/// borrowed read instead of a full-size copy. Use it with
+/// [`einsum_native_tensor_reads`] on the compatibility frontend, or
+/// [`NativeTensorReadInput::as_read`] to feed an explicit session's read route.
+///
+/// # Arguments
+///
+/// * `data` - Borrowed column-major values whose length equals the product of
+///   `logical_dims`.
+/// * `logical_dims` - Logical tensor dimensions in column-major axis order.
+///
+/// # Returns
+///
+/// A borrowed read input that stays valid for `data`'s lifetime.
+///
+/// # Errors
+///
+/// Returns an error when the shape product overflows `usize`, when `data.len()`
+/// does not match the expected shape, or when the view is rejected as invalid.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{
+///     dense_native_tensor_read_input_from_col_major, einsum_native_tensor_reads,
+/// };
+///
+/// let lhs = [1.0_f64, 2.0, 3.0, 4.0];
+/// let rhs = [5.0_f64, 6.0];
+/// let lhs = dense_native_tensor_read_input_from_col_major(&lhs, &[2, 2])?;
+/// let rhs = dense_native_tensor_read_input_from_col_major(&rhs, &[2, 1])?;
+/// let product = einsum_native_tensor_reads(
+///     &[(&lhs, &[0, 1]), (&rhs, &[1, 2])],
+///     &[0, 2],
+/// )?;
+/// assert_eq!(product.as_slice::<f64>()?, &[23.0, 34.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn dense_native_tensor_read_input_from_col_major<'a, T>(
+    data: &'a [T],
+    logical_dims: &[usize],
+) -> Result<NativeTensorReadInput<'a>>
+where
+    T: TensorElement,
+{
+    let view = tenferro::TypedTensorView::from_col_major(logical_dims, data)
+        .map_err(|error| anyhow!("native tensor view rejected: {error}"))?;
+    Ok(NativeTensorReadInput::Borrowed(TensorRead::from_view(
+        <T as TensorScalar>::tensor_view(view),
+    )))
+}
+
 /// Build a dense native tensor whose logical values are diagonal.
 /// # Errors
 ///

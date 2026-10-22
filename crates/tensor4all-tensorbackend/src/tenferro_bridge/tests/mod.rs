@@ -594,6 +594,62 @@ fn einsum_native_subscripts_rejects_operand_count_mismatch_and_parse_errors() {
 }
 
 #[test]
+fn dense_native_tensor_read_input_from_col_major_borrows_the_caller_slice() {
+    reset_concrete_einsum_plan_cache();
+    let stage = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let frame = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let stage_read = dense_native_tensor_read_input_from_col_major(&stage, &[3, 2, 1]).unwrap();
+    let frame_read = dense_native_tensor_read_input_from_col_major(&frame, &[2, 3]).unwrap();
+    assert!(matches!(stage_read, NativeTensorReadInput::Borrowed(_)));
+    assert_eq!(stage_read.shape(), &[3, 2, 1]);
+    assert_eq!(frame_read.shape(), &[2, 3]);
+    assert_eq!(stage_read.dtype(), tenferro::DType::F64);
+
+    // The view borrows the slice: a shared operand reaches the contraction
+    // without an allocation of its own.
+    let stage_pointer = stage.as_ptr();
+    let borrowed_pointer = match &stage_read {
+        NativeTensorReadInput::Borrowed(TensorRead::View(TensorView::F64(view))) => {
+            view.host_storage().expect("host slice").as_ptr()
+        }
+        _ => panic!("a slice-backed input must be a borrowed view"),
+    };
+    assert_eq!(stage_pointer, borrowed_pointer);
+
+    // `rkb,kc->rcb` over the borrowed views matches the same contraction over
+    // owned operands, so the borrow route is numerically identical.
+    let stage_owned = f64::dense_native_tensor_from_col_major(&stage, &[3, 2, 1]).unwrap();
+    let frame_owned = f64::dense_native_tensor_from_col_major(&frame, &[2, 3]).unwrap();
+    let expected = einsum_native_tensors_owned(
+        vec![(stage_owned, vec![0, 1, 2]), (frame_owned, vec![1, 3])],
+        &[0, 3, 2],
+    )
+    .unwrap();
+    let contracted = einsum_native_tensor_reads(
+        &[(&stage_read, &[0, 1, 2]), (&frame_read, &[1, 3])],
+        &[0, 3, 2],
+    )
+    .unwrap();
+    assert_eq!(contracted.shape(), &[3, 3, 1]);
+    assert_eq!(
+        f64::into_dense_values_from_native_col_major(contracted).unwrap(),
+        f64::into_dense_values_from_native_col_major(expected).unwrap()
+    );
+}
+
+#[test]
+fn dense_native_tensor_read_input_from_col_major_rejects_a_shape_mismatch() {
+    let data = [1.0_f64, 2.0, 3.0];
+    match dense_native_tensor_read_input_from_col_major(&data, &[2, 2]) {
+        Err(error) => assert!(
+            error.to_string().contains("native tensor view rejected"),
+            "unexpected error: {error}"
+        ),
+        Ok(_) => panic!("a 3-element payload must not become a 2x2 view"),
+    }
+}
+
+#[test]
 fn einsum_native_tensor_reads_accepts_non_contiguous_borrowed_view() {
     reset_concrete_einsum_plan_cache();
     let backing = [1.0_f64, 2.0, 3.0, 4.0];

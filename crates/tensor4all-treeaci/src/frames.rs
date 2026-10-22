@@ -3491,8 +3491,9 @@ fn incoming_batch_matrix<T: TreeAciScalar>(
 /// materialized. Each later step contracts the next component out of the whole
 /// running buffer through one backend einsum: the running buffer is
 /// `rows x contracted x blocks` and the frame matrix is shared by every block,
-/// so `rkb,kc->rcb` contracts all blocks in one call without copying a block
-/// into its own matrix and without duplicating an intermediate.
+/// so `rkb,kc->rcb` contracts all blocks in one call, with both operands
+/// borrowed from the existing buffers and the result buffer moved into the next
+/// stage.
 ///
 /// Contraction proceeds in incoming-edge order, the same order and the same
 /// association the exactly-two-incoming kernel already uses, so degree three
@@ -3560,44 +3561,43 @@ fn generalized_incoming_batch<T: TreeAciScalar>(
         // `stage` is `rows x contracted x blocks` in column-major order and every
         // block multiplies the same `contracted x counts` frame matrix, so the
         // whole stage is one `rkb,kc->rcb` einsum: its `rcb` output is already
-        // the column-major `next` buffer. The stage buffer is moved into the
-        // operand tensor. `ponytail:` the frame matrix is copied into a native
-        // tensor because this crate does not depend on `tenferro_tensor` and
-        // cannot build a borrowed read view; it is `rows` times smaller than the
-        // stage buffer it is contracted with.
+        // the column-major `next` buffer. Both operands arrive as borrowed read
+        // views over the existing buffers and the result's native buffer is
+        // transferred into the next stage, so the step copies neither operand
+        // nor its output.
         let next = if !stage.is_empty() && next_elements > 0 {
-            let operands = vec![
-                (
-                    tensor4all_tensorbackend::dense_native_tensor_from_col_major_owned(
-                        std::mem::take(&mut stage),
-                        &[rows, contracted, remaining],
-                    )
-                    .map_err(|error| TreeAciError::Numerical {
-                        message: error.to_string(),
-                    })?,
-                    vec![0, 1, 2],
-                ),
-                (
-                    tensor4all_tensorbackend::dense_native_tensor_from_col_major(
-                        frame_matrices[axis_index].as_col_major_slice(),
-                        &[contracted, counts[axis_index]],
-                    )
-                    .map_err(|error| TreeAciError::Numerical {
-                        message: error.to_string(),
-                    })?,
-                    vec![1, 3],
-                ),
+            let stage_read =
+                tensor4all_tensorbackend::dense_native_tensor_read_input_from_col_major(
+                    &stage,
+                    &[rows, contracted, remaining],
+                )
+                .map_err(|error| TreeAciError::Numerical {
+                    message: error.to_string(),
+                })?;
+            let frame_read =
+                tensor4all_tensorbackend::dense_native_tensor_read_input_from_col_major(
+                    frame_matrices[axis_index].as_col_major_slice(),
+                    &[contracted, counts[axis_index]],
+                )
+                .map_err(|error| TreeAciError::Numerical {
+                    message: error.to_string(),
+                })?;
+            let stage_ids = [0usize, 1, 2];
+            let frame_ids = [1usize, 3];
+            let operands = [
+                (&stage_read, stage_ids.as_slice()),
+                (&frame_read, frame_ids.as_slice()),
             ];
             #[cfg(feature = "diagnostics")]
             let kernel_started = std::time::Instant::now();
             let contracted =
-                tensor4all_tensorbackend::einsum_native_tensors_owned(operands, &[0, 3, 2])
+                tensor4all_tensorbackend::einsum_native_tensor_reads(&operands, &[0, 3, 2])
                     .map_err(|error| TreeAciError::Numerical {
                         message: error.to_string(),
                     })?;
             #[cfg(feature = "diagnostics")]
             diagnostics_record_matmul(kernel_started.elapsed(), 1);
-            T::dense_values_from_native_col_major(&contracted).map_err(|error| {
+            T::into_dense_values_from_native_col_major(contracted).map_err(|error| {
                 TreeAciError::Numerical {
                     message: error.to_string(),
                 }

@@ -1,8 +1,7 @@
 //! Column-major layout adapters around context-scoped backend matrix products.
 
 use tensor4all_tensorbackend::{
-    dense_native_tensor_from_col_major, dense_native_tensor_from_col_major_owned,
-    CpuExecutionContext, Matrix,
+    dense_native_tensor_read_input_from_col_major, CpuExecutionContext, Matrix,
 };
 
 use crate::{
@@ -241,11 +240,11 @@ pub(crate) fn contract_axis_diag_probe<T: TreeRsiScalar>(
         )?;
     }
     // One einsum for every probe label: the input is `rows x n x k` and each
-    // probe label has its own weight column, so `r...,ak,al->r...,l` is the
-    // whole diag-probe contraction. `ponytail:` the `n x k` weights are copied
-    // into a native tensor because this crate does not depend on
-    // `tenferro_tensor` and cannot build a borrowed read view; the large input
-    // buffer is moved instead of copied.
+    // probe label has its own weight column, so the input read `r...,a,l`
+    // against the weight read `a,l` gives `r...,l` for the whole diag-probe
+    // contraction. Both operands are borrowed read views over the existing
+    // buffers and the result buffer is transferred, so the step copies neither
+    // the input nor the weights.
     let rank = input.dims.len();
     let contracted_label = rank - 2;
     let probe_label = rank - 1;
@@ -253,19 +252,18 @@ pub(crate) fn contract_axis_diag_probe<T: TreeRsiScalar>(
     let weight_ids = [contracted_label, probe_label];
     let mut output_ids = (0..contracted_label).collect::<Vec<usize>>();
     output_ids.push(probe_label);
-    let input_tensor = dense_native_tensor_from_col_major_owned(input.data, &input.dims)
+    let input_read = dense_native_tensor_read_input_from_col_major(&input.data, &input.dims)
         .map_err(TreeRsiError::numerical)?;
-    let weight_tensor =
-        dense_native_tensor_from_col_major(weights, &[n, k]).map_err(TreeRsiError::numerical)?;
+    let weight_read = dense_native_tensor_read_input_from_col_major(weights, &[n, k])
+        .map_err(TreeRsiError::numerical)?;
+    let reads = [input_read.as_read(), weight_read.as_read()];
     let labels = [input_ids.as_slice(), weight_ids.as_slice()];
     let contracted = context
-        .with_concrete_session(|session| {
-            session.einsum(&[&input_tensor, &weight_tensor], &labels, &output_ids)
-        })
+        .with_concrete_session(|session| session.einsum_reads(&reads, &labels, &output_ids))
         .map_err(TreeRsiError::numerical)?
         .map_err(TreeRsiError::numerical)?;
     let data =
-        T::dense_values_from_native_col_major(&contracted).map_err(TreeRsiError::numerical)?;
+        T::into_dense_values_from_native_col_major(contracted).map_err(TreeRsiError::numerical)?;
     Ok(Dense { dims, data })
 }
 

@@ -52,70 +52,74 @@ fn naive_contract_axis_diag_probe<T: TreeRsiScalar>(
 
 fn assert_contract_axis_diag_probe_matches_naive<T: Fixture>() {
     let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
-    // Rank-4 input `[a, b, n, k]`; the probe axis is last, so every `axis`
-    // below yields a multi-probe (`k > 1`) call with a non-trivial rest shape
-    // except for `axis == 0`, which covers the `rows == 1` rank-2 corner.
-    let dims = [2usize, 3, 4, 5];
-    let k = dims[3];
-    for axis in 0..dims.len() - 1 {
-        let n = dims[axis];
-        let total: usize = dims.iter().product();
-        let data = (0..total).map(T::fixture).collect::<Vec<_>>();
-        let weights = (0..n * k)
-            .map(|index| T::fixture(10_000 + index))
-            .collect::<Vec<_>>();
-        let mut expected_dims = dims[..dims.len() - 1]
-            .iter()
-            .enumerate()
-            .filter(|&(position, _)| position != axis)
-            .map(|(_, &dim)| dim)
-            .collect::<Vec<_>>();
-        expected_dims.push(k);
-        let rows: usize = expected_dims[..expected_dims.len() - 1].iter().product();
+    // Every case is `rest.. x n x k`: the probe axis is last and `axis` is the
+    // contracted one, so each case exercises a multi-probe (`k > 1`) call. The
+    // rank-2 case has an empty rest prefix (`rows == 1`, one scalar per probe),
+    // the rank-3 case a single retained axis of extent 1, and the rank-4 case two
+    // non-trivial retained axes of unequal extent.
+    let cases: [&[usize]; 3] = [&[4, 5], &[1, 4, 5], &[2, 3, 4, 5]];
+    for dims in cases {
+        let k = dims[dims.len() - 1];
+        for axis in 0..dims.len() - 1 {
+            let n = dims[axis];
+            let total: usize = dims.iter().product();
+            let data = (0..total).map(T::fixture).collect::<Vec<_>>();
+            let weights = (0..n * k)
+                .map(|index| T::fixture(10_000 + index))
+                .collect::<Vec<_>>();
+            let mut expected_dims = dims[..dims.len() - 1]
+                .iter()
+                .enumerate()
+                .filter(|&(position, _)| position != axis)
+                .map(|(_, &dim)| dim)
+                .collect::<Vec<_>>();
+            expected_dims.push(k);
+            let rows: usize = expected_dims[..expected_dims.len() - 1].iter().product();
 
-        let actual = contract_axis_diag_probe(
-            &context,
-            Dense {
-                dims: dims.to_vec(),
-                data: data.clone(),
-            },
-            axis,
-            &weights,
-        )
-        .unwrap();
+            let actual = contract_axis_diag_probe(
+                &context,
+                Dense {
+                    dims: dims.to_vec(),
+                    data: data.clone(),
+                },
+                axis,
+                &weights,
+            )
+            .unwrap();
 
-        // Rebuild the permuted `rest.. x n x k` reference buffer with the same
-        // axis order the kernel applies.
-        let mut order = (0..dims.len() - 1)
-            .filter(|&position| position != axis)
-            .collect::<Vec<_>>();
-        order.extend([axis, dims.len() - 1]);
-        let permuted = permute(
-            &Dense {
-                dims: dims.to_vec(),
-                data,
-            },
-            &order,
-        );
-        let expected = naive_contract_axis_diag_probe(rows, n, k, &permuted.data, &weights);
+            // Rebuild the permuted `rest.. x n x k` reference buffer with the
+            // same axis order the kernel applies.
+            let mut order = (0..dims.len() - 1)
+                .filter(|&position| position != axis)
+                .collect::<Vec<_>>();
+            order.extend([axis, dims.len() - 1]);
+            let permuted = permute(
+                &Dense {
+                    dims: dims.to_vec(),
+                    data,
+                },
+                &order,
+            );
+            let expected = naive_contract_axis_diag_probe(rows, n, k, &permuted.data, &weights);
 
-        assert_eq!(actual.dims, expected_dims);
-        let scale = expected
-            .iter()
-            .map(|value| tensor4all_core::Scalar::abs_val(*value))
-            .fold(0.0f64, f64::max);
-        assert!(scale > 1.0e-3, "fixture must not be degenerate");
-        let residual = actual
-            .data
-            .iter()
-            .zip(&expected)
-            .map(|(actual, expected)| (*actual - *expected).abs_val())
-            .fold(0.0f64, f64::max);
-        assert!(
-            residual <= 1.0e-13 * scale,
-            "diag-probe einsum disagrees with the naive loop: \
-             residual {residual:.3e}, scale {scale:.3e}, axis {axis}"
-        );
+            assert_eq!(actual.dims, expected_dims);
+            let scale = expected
+                .iter()
+                .map(|value| tensor4all_core::Scalar::abs_val(*value))
+                .fold(0.0f64, f64::max);
+            assert!(scale > 1.0e-3, "fixture must not be degenerate");
+            let residual = actual
+                .data
+                .iter()
+                .zip(&expected)
+                .map(|(actual, expected)| (*actual - *expected).abs_val())
+                .fold(0.0f64, f64::max);
+            assert!(
+                residual <= 1.0e-13 * scale,
+                "diag-probe einsum disagrees with the naive loop: \
+                 residual {residual:.3e}, scale {scale:.3e}, dims {dims:?}, axis {axis}"
+            );
+        }
     }
 }
 
