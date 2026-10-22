@@ -157,8 +157,8 @@ where
 /// every MatrixLUCI factorization of this workload goes through `context`.
 ///
 /// Both kinds of session-bound work follow the context: the MatrixLUCI factorizations and the frame products that
-/// update the input frames during a sweep. The batched frame updates - the grouped-GEMM path - and the caller's own
-/// operator are unchanged and keep their existing routes, which is recorded in
+/// update the input frames during a sweep. The batched frame updates and the caller's own operator are unchanged and
+/// keep their existing routes, which is recorded in
 /// `docs/design/859-f7-consumer-inventory.md`.
 ///
 /// # Errors

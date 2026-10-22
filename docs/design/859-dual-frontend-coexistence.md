@@ -272,7 +272,7 @@ detach.
 | primitive | `axpby`/`scale`/`conj`/`sum`/`outer_product`, `permute`, `reshape`, dense/diagonal construction |
 | einsum | binary `contract`, N-ary `einsum` over owned values and over borrowed `TensorRead` inputs, output-ids and cached plan reuse |
 | linalg | `qr`, `svd`, `full_piv_lu`, `solve`, `triangular_solve`, `src_error_estimate`, `hermitian_eigendecomposition`, `hermitian_exponential_first_column`, `lowest_hermitian_eigenpair` |
-| structured/matrix | `Storage`-level `contract`/`permute`/`axpby`/`to_dense`, `Matrix` `mat_mul`/`batched_mat_mul_same_shape`/`grouped_mat_mul_shared`/`submatrix`/`swap_rows`/`swap_cols`/`transpose` |
+| structured/matrix | `Storage`-level `contract`/`permute`/`axpby`/`to_dense`, `Matrix` `mat_mul`/`batched_mat_mul_same_shape`/`submatrix`/`swap_rows`/`swap_cols`/`transpose` |
 
 Two clarifications the pinned API forces on this table:
 
@@ -344,7 +344,7 @@ exactly what is delivered, and §5c lists what is not.
 | Primitive routes | `reshape`, `permute`, `sum`, `conj` (allocation-returning) |
 | Einsum routes | `contraction` (binary, by axes), `einsum` (N-ary, by integer labels) and `einsum_reads` (borrowed `TensorRead` operands), evaluated session-direct, all promoting heterogeneous operands to the same common dtype the compatibility frontend uses, plus `contraction_into` writing a caller-provided destination |
 | Linalg routes | `qr`, `svd`, `solve`, `triangular_solve`, `full_piv_lu` (allocation-returning) |
-| Matrix routes | `mat_mul` through the shared `Matrix` container and `grouped_mat_mul_shared`, both available where the compatibility frontend is (`global-defaults`) |
+| Matrix routes | `mat_mul` through the shared `Matrix` container, available where the compatibility frontend is (`global-defaults`) |
 | Shared implementation | the label validation and the axis-to-label construction are one implementation (`src/einsum_ids.rs`) used by both frontends; the evaluation is tenferro-einsum's session-direct `einsum_subscripts`, which compiles no semantic graph and starts no runtime worker |
 | No legacy entry | the module never names `with_default_session`, the default context or the eager runtime; the label helpers live outside the compatibility-only module so the explicit-only build compiles |
 | No eager/AD | the routes reach only concrete `Tensor`/`BackendSession` operations; no `EagerTensor`, semantic node or gradient slot is constructed and no eager owner lock is taken |
@@ -358,7 +358,7 @@ exactly what is delivered, and §5c lists what is not.
 | Read/write/output routes | the read route, the binary output-into route and the N-ary output route (`PreparedEinsum::execute_into`) are delivered |
 | Remaining linalg operations | the Hermitian eigen routes and `src_error_estimate`; the Hermitian routes currently enter the process-global *eager* runtime, so they need the optional AD adapter rather than a concrete route, and `src_error_estimate` is session-free |
 | `Matrix`-level linalg routes | delivered: `solve_matrix`, `triangular_solve_matrix`, `full_piv_lu_matrix`, `qr_backend` and `svd_backend` on the session, through `solve_matrix_in`/`triangular_solve_matrix_in`/`full_piv_lu_matrix_in`/`qr_backend_in`/`svd_backend_in`, sharing the compatibility paths' kernels, conversion and validation |
-| Remaining batched GEMM route | `batched_mat_mul_same_shape` builds its jobs and then enters the compatibility session; `grouped_mat_mul_shared` now has a session entry (`Session::grouped_mat_mul_shared` via `grouped_mat_mul_shared_in`) |
+| Remaining batched GEMM route | `batched_mat_mul_same_shape` builds its jobs and then enters the compatibility session. The grouped facade was deleted: tenferro removed its grouped GEMM (tenferro-rs #2198/#2206), and its two callers are now one tenferro einsum each (`rkb,kc->rcb` in `tensor4all-treeaci` and `ral,al->rl` in `tensor4all-treersi`) |
 | Session-free operations (no explicit route needed) | `scale`, `axpby`, `conj` on the structured paths, the `Storage`-level contraction/permutation kernels, and `Matrix` `submatrix`/`swap_rows`/`swap_cols`/`transpose` are pure host code that names no session, so an explicit caller uses them as they are. `outer_product` is already expressible as `contraction(lhs, &[], rhs, &[])` |
 | Structured representation parity | structured/diagonal storage preservation on the explicit route (dtype promotion is delivered and shared) |
 | Compatibility bridges | `LogicalTensor` for host snapshots, plus `explicit::lift` and `explicit::detach` as the named plain/AD boundary: adoption moves the value into the context's own eager runtime, materialization is a separate named call, and neither is implicit |

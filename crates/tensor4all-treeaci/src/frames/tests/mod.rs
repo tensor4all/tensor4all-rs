@@ -3844,10 +3844,6 @@ fn multi_incoming_scratch_rejects_overflowing_or_inconsistent_shapes() {
         mismatch,
         crate::TreeAciError::InternalInvariant { .. }
     ));
-
-    // Degrees below three build no grouped-GEMM job list at all.
-    assert_eq!(super::grouped_gemm_descriptor_bytes(&[4, 5]).unwrap(), 0);
-    assert!(super::grouped_gemm_descriptor_bytes(&[4, 5, 6]).unwrap() > 0);
 }
 
 /// [AI Supplied] #713 paired release measurement: how much of the

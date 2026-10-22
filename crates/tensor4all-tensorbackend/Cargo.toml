@@ -88,11 +88,6 @@ harness = false
 required-features = ["global-defaults"]
 
 [[bench]]
-name = "grouped_gemm"
-harness = false
-required-features = ["global-defaults"]
-
-[[bench]]
 name = "concrete_einsum_plan_cache"
 harness = false
 required-features = ["global-defaults"]
