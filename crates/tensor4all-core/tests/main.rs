@@ -23,6 +23,7 @@ mod f1_session_sum;
 mod index_suite;
 mod linalg_eigh;
 mod linalg_factorize;
+mod linalg_multithreaded;
 mod linalg_qr;
 mod prepared_contraction;
 mod random_rng_stream;
