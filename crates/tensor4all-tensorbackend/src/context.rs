@@ -16,7 +16,7 @@ use tenferro::{
 #[cfg(feature = "global-defaults")]
 use tenferro_ad::ContextId;
 use tenferro_ad::{AdContext, EagerRuntime};
-use tenferro_cpu::{BufferPoolStats, CpuEngine};
+use tenferro_cpu::{BufferPoolStats, CpuEngine, Pool};
 
 /// Linux CPU-affinity FFI, kept in one place so every `unsafe` block has one
 /// auditable owner.
@@ -183,8 +183,7 @@ mod affinity {
         set_and_verify_current_thread(&expected)
     }
 
-    /// The calling thread's effective CPU ids; used by the affinity tests.
-    #[cfg(test)]
+    /// The calling thread's effective CPU ids.
     pub(super) fn current_thread_cpus() -> Result<Vec<usize>, CpuThreadError> {
         get_mask(0)
             .map(|mask| mask.cpus())
@@ -216,12 +215,12 @@ pub enum CpuThreadError {
     /// A [`CpuBackend`] was asked for zero workers.
     #[error("a CPU backend needs at least one worker thread")]
     ZeroThreads,
-    /// The Rayon pool for the requested worker count could not be built.
+    /// The worker pool for the requested worker count could not be built.
     #[error("failed to build the CPU worker pool: {source}")]
     Pool {
-        /// Original Rayon diagnostic.
+        /// Original pool diagnostic.
         #[source]
-        source: Box<rayon::ThreadPoolBuildError>,
+        source: Box<tenferro_cpu::strided_exec::Error>,
     },
     /// [`CpuBackend::pinned`] was given an empty CPU list.
     #[error("a pinned CPU backend needs at least one CPU")]
@@ -326,17 +325,32 @@ pub fn set_default_cpu_threads(threads: NonZeroUsize) -> Result<(), AlreadyIniti
         .map_err(|_| AlreadyInitialized)
 }
 
-/// Build one Rayon pool with `threads` (or Rayon's own default when `None`).
+/// The CPU set each worker of a pool reported when it started, by worker index.
+type WorkerCpus = Vec<Vec<usize>>;
+
+/// The calling thread's CPU set, empty off Linux.
+#[cfg(target_os = "linux")]
+fn current_worker_cpus() -> Vec<usize> {
+    affinity::current_thread_cpus().unwrap_or_default()
+}
+
+/// The calling thread's CPU set, empty off Linux.
+#[cfg(not(target_os = "linux"))]
+fn current_worker_cpus() -> Vec<usize> {
+    Vec::new()
+}
+
+/// Build one worker pool with `threads` (or the environment's count when
+/// `None`), recording the CPU set each worker starts on.
 ///
 /// On Linux the build runs on a short-lived construction thread whose mask is
-/// first set to the main thread's mask snapshot. Rayon resolves its default
-/// worker count (`available_parallelism`) before the workers start, so this
-/// ordering keeps a pool built from a singly pinned worker from inheriting that
-/// worker's single CPU. The workers inherit the construction thread's mask.
+/// first set to the main thread's mask snapshot, so a pool built from a singly
+/// pinned worker still spans the main thread's CPUs. The workers inherit the
+/// construction thread's mask.
 ///
 /// Off Linux the pool is built on the calling thread and no affinity call is
 /// made.
-fn build_pool(threads: Option<usize>) -> Result<rayon::ThreadPool, CpuThreadError> {
+fn build_pool(threads: Option<usize>) -> Result<(Pool, WorkerCpus), CpuThreadError> {
     #[cfg(target_os = "linux")]
     {
         let mask = affinity::main_thread_mask()?;
@@ -356,15 +370,64 @@ fn build_pool(threads: Option<usize>) -> Result<rayon::ThreadPool, CpuThreadErro
     }
 }
 
-/// Build one Rayon pool on the calling thread.
-fn build_pool_here(threads: Option<usize>) -> Result<rayon::ThreadPool, CpuThreadError> {
-    let mut builder = tenferro_cpu::thread_pool_builder();
-    if let Some(threads) = threads {
-        builder = builder.num_threads(threads);
+/// The worker count Rayon itself resolves from the environment, in Rayon's
+/// order: `RAYON_NUM_THREADS`, the deprecated `RAYON_RS_NUM_CPUS`, then
+/// [`std::thread::available_parallelism`] (which already accounts for the
+/// process affinity mask and cgroup quotas). `RAYON_NUM_THREADS=0` or a
+/// malformed value means "use the platform default", as in Rayon.
+///
+/// The pool builder this type uses does not read the environment, so the
+/// precedence of [`set_default_cpu_threads`] → `RAYON_NUM_THREADS` → affinity
+/// is resolved here (R-performance-61).
+fn rayon_env_worker_count() -> usize {
+    let platform_default = || std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+    match std::env::var("RAYON_NUM_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        Some(count) if count >= 1 => return count,
+        Some(_) => return platform_default(),
+        None => {}
     }
-    builder.build().map_err(|source| CpuThreadError::Pool {
-        source: Box::new(source),
-    })
+    match std::env::var("RAYON_RS_NUM_CPUS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        Some(count) if count >= 1 => count,
+        _ => platform_default(),
+    }
+}
+
+/// Build one worker pool on the calling thread.
+fn build_pool_here(threads: Option<usize>) -> Result<(Pool, WorkerCpus), CpuThreadError> {
+    let threads = threads.unwrap_or_else(rayon_env_worker_count);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let pool = Pool::builder()
+        .threads(threads)
+        .on_start(move |worker| {
+            let _ = sender.send((worker, current_worker_cpus()));
+        })
+        .build()
+        .map_err(|source| CpuThreadError::Pool {
+            source: Box::new(source),
+        })?;
+    // A worker runs its start hook in its own thread, so the reports arrive
+    // while and after the pool is built; collect one per worker before the
+    // backend exposes them.
+    let mut worker_cpus: WorkerCpus = vec![Vec::new(); pool.width().get()];
+    for _ in 0..worker_cpus.len() {
+        match receiver.recv_timeout(std::time::Duration::from_secs(1)) {
+            Ok((worker, cpus)) => {
+                if let Some(slot) = worker_cpus.get_mut(worker) {
+                    *slot = cpus;
+                }
+            }
+            // A worker that never reports leaves its entry empty rather than
+            // blocking the pool build.
+            Err(_) => break,
+        }
+    }
+    Ok((pool, worker_cpus))
 }
 
 /// tensor4all's owned CPU execution handle: one [`CpuEngine`].
@@ -382,9 +445,10 @@ fn build_pool_here(threads: Option<usize>) -> Result<rayon::ThreadPool, CpuThrea
 /// backend.
 ///
 /// [`CpuBackend::new`] resolves its worker count in this order: the value
-/// [`set_default_cpu_threads`] fixed, else Rayon's own default (`RAYON_NUM_THREADS`,
-/// see Rayon's documentation), which is evaluated under the main thread's mask
-/// and may be lower than that mask's CPU count because of cgroup quotas. A
+/// [`set_default_cpu_threads`] fixed, else the Rayon environment
+/// (`RAYON_NUM_THREADS`, then the deprecated `RAYON_RS_NUM_CPUS`), else the
+/// platform's parallelism, which is evaluated under the main thread's mask and
+/// may be lower than that mask's CPU count because of cgroup quotas. A
 /// resolved count of one uses [`CpuEngine::serial`] and owns no pool. The count
 /// is fixed by the first successful [`CpuBackend::new`] of the process, or by the
 /// setter. If the pool or the Linux mask snapshot cannot be used,
@@ -410,10 +474,9 @@ fn build_pool_here(threads: Option<usize>) -> Result<rayon::ThreadPool, CpuThrea
 /// use tensor4all_tensorbackend::CpuBackend;
 /// use tenferro_cpu::CpuEngine;
 ///
-/// // A serial backend owns no pool and runs every operation on the caller's thread.
+/// // A serial backend runs every operation on the caller's thread.
 /// let backend = CpuBackend::with_threads(1)?;
 /// assert_eq!(backend.num_threads(), 1);
-/// assert!(backend.engine().pool().is_none());
 ///
 /// // A caller that already owns an engine can hand it in unchanged.
 /// let backend = CpuBackend::from(CpuEngine::serial());
@@ -422,12 +485,16 @@ fn build_pool_here(threads: Option<usize>) -> Result<rayon::ThreadPool, CpuThrea
 /// ```
 pub struct CpuBackend {
     engine: CpuEngine,
+    /// The CPU set each pool worker reported at start, by worker index; empty
+    /// for a serial engine or a caller-supplied engine.
+    worker_cpus: WorkerCpus,
 }
 
 impl std::fmt::Debug for CpuBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CpuBackend")
             .field("engine", &self.engine)
+            .field("worker_cpus", &self.worker_cpus())
             .finish()
     }
 }
@@ -436,12 +503,11 @@ impl CpuBackend {
     /// Build a backend with the default thread policy.
     ///
     /// The worker count is [`set_default_cpu_threads`] if it was called; else
-    /// Rayon's default (`RAYON_NUM_THREADS`, see Rayon's documentation), which is
-    /// evaluated under the main thread's mask and may be lower than that mask's
-    /// CPU count because of cgroup quotas. A worker stack of
-    /// [`tenferro_cpu::DEFAULT_WORKER_STACK_BYTES`] is reserved for each worker,
-    /// as the CPU providers require. The count is fixed by the first successful
-    /// call, or by the setter.
+    /// `RAYON_NUM_THREADS` (then the deprecated `RAYON_RS_NUM_CPUS`); else the
+    /// platform's parallelism, evaluated under the main thread's mask, which may
+    /// be lower than that mask's CPU count because of cgroup quotas. The pool's
+    /// default 16 MiB worker stack, which the CPU providers need, is kept. The
+    /// count is fixed by the first successful call, or by the setter.
     ///
     /// On Linux the pool is built on a short-lived construction thread whose
     /// mask is first set to the main thread's mask snapshot, so building from a
@@ -469,8 +535,8 @@ impl CpuBackend {
             return Self::with_threads_or_serial(threads);
         }
         match build_pool(None) {
-            Ok(pool) => {
-                let resolved = pool.current_num_threads();
+            Ok((pool, worker_cpus)) => {
+                let resolved = pool.width().get();
                 let fixed = match DEFAULT_CPU_THREADS.set(resolved) {
                     Ok(()) => resolved,
                     Err(_) => *DEFAULT_CPU_THREADS.get().unwrap_or(&resolved),
@@ -479,17 +545,22 @@ impl CpuBackend {
                     return Self::with_threads_or_serial(fixed);
                 }
                 if resolved == 1 {
+                    // The pool is dropped with this branch: the backend is serial
+                    // and owns no workers, so it records none.
                     Self {
                         engine: CpuEngine::serial(),
+                        worker_cpus: WorkerCpus::default(),
                     }
                 } else {
                     Self {
                         engine: CpuEngine::new(pool),
+                        worker_cpus,
                     }
                 }
             }
             Err(_) => Self {
                 engine: CpuEngine::serial(),
+                worker_cpus: WorkerCpus::default(),
             },
         }
     }
@@ -498,6 +569,7 @@ impl CpuBackend {
     fn with_threads_or_serial(threads: usize) -> Self {
         Self::with_threads(threads).unwrap_or_else(|_| Self {
             engine: CpuEngine::serial(),
+            worker_cpus: WorkerCpus::default(),
         })
     }
 
@@ -505,7 +577,7 @@ impl CpuBackend {
     ///
     /// One worker builds a [`CpuEngine::serial`] engine, which owns no pool, so
     /// it stays usable from inside another pool. Larger counts build a Rayon
-    /// pool with [`tenferro_cpu::thread_pool_builder`], so provider code gets the
+    /// pool with [`tenferro_cpu::Pool::builder`], so provider code gets the
     /// worker stack it needs; the pool's workers are confined to the main
     /// thread's allowed CPU set snapshot on Linux.
     ///
@@ -514,8 +586,8 @@ impl CpuBackend {
     /// Returns [`CpuThreadError::ZeroThreads`] for zero,
     /// [`CpuThreadError::Affinity`] when the mask snapshot or its application
     /// fails, [`CpuThreadError::ConstructionThread`] when the construction
-    /// thread cannot start, and [`CpuThreadError::Pool`] when Rayon cannot build
-    /// the pool.
+    /// thread cannot start, and [`CpuThreadError::Pool`] when the pool cannot be
+    /// built.
     ///
     /// # Examples
     ///
@@ -537,11 +609,13 @@ impl CpuBackend {
         if threads == 1 {
             return Ok(Self {
                 engine: CpuEngine::serial(),
+                worker_cpus: WorkerCpus::default(),
             });
         }
-        let pool = build_pool(Some(threads))?;
+        let (pool, worker_cpus) = build_pool(Some(threads))?;
         Ok(Self {
             engine: CpuEngine::new(pool),
+            worker_cpus,
         })
     }
 
@@ -568,8 +642,8 @@ impl CpuBackend {
     /// [`CpuThreadError::UnsupportedPlatform`] off Linux,
     /// [`CpuThreadError::Affinity`] when the snapshot or a worker's mask fails,
     /// [`CpuThreadError::WorkerAffinity`] when a worker cannot be pinned to
-    /// exactly its CPU, and [`CpuThreadError::Pool`] when Rayon cannot build the
-    /// pool.
+    /// exactly its CPU, and [`CpuThreadError::Pool`] when the pool cannot be
+    /// built.
     ///
     /// # Examples
     ///
@@ -585,7 +659,6 @@ impl CpuBackend {
     /// let allowed = CpuBackend::allowed_cpus()?;
     /// let backend = CpuBackend::pinned(&allowed[..1])?;
     /// assert_eq!(backend.num_threads(), 1);
-    /// assert!(backend.engine().pool().is_some());
     /// # }
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -613,17 +686,17 @@ impl CpuBackend {
 
             let workers = cpus.to_vec();
             let (sender, receiver) = std::sync::mpsc::channel();
-            let pool = tenferro_cpu::thread_pool_builder()
-                .num_threads(workers.len())
-                .start_handler(move |worker| {
+            let pool = Pool::builder()
+                .threads(workers.len())
+                .on_start(move |worker| {
                     let outcome = workers
                         .get(worker)
                         .copied()
                         .ok_or_else(|| {
-                            std::io::Error::other("Rayon worker index outside the pinned CPU list")
+                            std::io::Error::other("worker index outside the pinned CPU list")
                         })
                         .and_then(affinity::pin_current_thread);
-                    let _ = sender.send((worker, outcome));
+                    let _ = sender.send((worker, outcome, current_worker_cpus()));
                 })
                 .build()
                 .map_err(|source| CpuThreadError::Pool {
@@ -636,20 +709,25 @@ impl CpuBackend {
             // report per worker. A closed channel is not expected, but it is
             // still a worker affinity-handshake failure rather than a separate
             // unreachable error case.
+            let mut worker_cpus: WorkerCpus = vec![Vec::new(); cpus.len()];
             for _ in 0..cpus.len() {
-                let (worker, outcome) =
+                let (worker, outcome, own_cpus) =
                     receiver
                         .recv()
                         .map_err(|source| CpuThreadError::WorkerAffinity {
                             worker: 0,
                             source: std::io::Error::other(source),
                         })?;
+                if let Some(slot) = worker_cpus.get_mut(worker) {
+                    *slot = own_cpus;
+                }
                 if let Err(source) = outcome {
                     return Err(CpuThreadError::WorkerAffinity { worker, source });
                 }
             }
             Ok(Self {
                 engine: CpuEngine::new(pool),
+                worker_cpus,
             })
         }
     }
@@ -705,6 +783,29 @@ impl CpuBackend {
         self.engine.num_threads()
     }
 
+    /// The CPU set each worker of this backend's pool reported when it started,
+    /// by worker index.
+    ///
+    /// Empty for a serial engine, for a caller-supplied engine
+    /// ([`CpuBackend::from`]) and off Linux. It is a snapshot taken at pool
+    /// build time, so it shows what the workers actually inherited — the main
+    /// thread's allowed set for [`CpuBackend::new`] and
+    /// [`CpuBackend::with_threads`], and its one CPU for
+    /// [`CpuBackend::pinned`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuBackend;
+    ///
+    /// let backend = CpuBackend::with_threads(1)?;
+    /// assert!(backend.worker_cpus().is_empty());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn worker_cpus(&self) -> Vec<Vec<usize>> {
+        self.worker_cpus.clone()
+    }
+
     /// Borrow the engine this backend owns.
     ///
     /// # Examples
@@ -749,7 +850,6 @@ impl CpuBackend {
     ///
     /// let engine = CpuBackend::with_threads(1)?.into_engine();
     /// assert_eq!(engine.num_threads(), 1);
-    /// assert!(engine.pool().is_none());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn into_engine(self) -> CpuEngine {
@@ -779,7 +879,10 @@ impl DerefMut for CpuBackend {
 
 impl From<CpuEngine> for CpuBackend {
     fn from(engine: CpuEngine) -> Self {
-        Self { engine }
+        Self {
+            engine,
+            worker_cpus: WorkerCpus::default(),
+        }
     }
 }
 

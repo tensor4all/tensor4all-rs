@@ -236,6 +236,9 @@ jobs:
       - name: Generate and verify public API inventory
         run: cargo run --locked -p xtask --release -- api-dump
 
+      - name: Check one version per dependency identity
+        run: ./scripts/check-single-versions.sh
+
       - name: Test the repository-rules review script
         run: python3 scripts/test-repository-rules-review.py
 

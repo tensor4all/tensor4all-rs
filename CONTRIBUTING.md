@@ -137,7 +137,15 @@ Also run maintenance checks relevant to changed public APIs or crate boundaries:
 python3 scripts/audit-library-panics.py
 python3 scripts/check-public-error-docs.py
 python3 scripts/check-crate-boundaries.py
+./scripts/check-single-versions.sh
 ```
+
+`check-single-versions.sh` fails when a crate whose types cross a boundary (the
+CPU provider stack, the one faer identity, tenferro and hataori) resolves to two
+versions. The manifests use compatible ranges rather than exact `=version`
+pins so a dependency's patch fix can be locked with `cargo update` instead of a
+pin bump through the whole chain; this check is the guard that keeps a range
+from silently splitting an identity.
 
 ### Supported feature configurations
 

@@ -14,5 +14,9 @@ fn default_cpu_threads_apply_to_new_backends() {
         .expect("the first set wins");
     let backend = CpuBackend::new();
     assert_eq!(backend.num_threads(), 2);
-    assert!(backend.engine().pool().is_some());
+    assert_eq!(
+        backend.worker_cpus().len(),
+        2,
+        "two workers start and record their CPU sets"
+    );
 }

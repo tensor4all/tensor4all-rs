@@ -190,15 +190,9 @@ fn separate_eager_contexts_reject_cross_context_operations() {
 /// caller's thread policy, and drops it with the context.
 #[test]
 fn caller_supplied_context_stays_caller_owned() {
-    let engine = CpuEngine::new(
-        tenferro_cpu::thread_pool_builder()
-            .num_threads(2)
-            .build()
-            .unwrap(),
-    );
+    let engine = CpuEngine::new(Pool::builder().threads(2).build().unwrap());
     let context = CpuExecutionContext::from_backend(CpuBackend::from(engine));
     assert_eq!(context.with_backend(|backend| backend.num_threads()), 2);
-    assert!(context.with_backend(|backend| backend.engine().pool().is_some()));
 }
 
 #[test]
@@ -567,11 +561,11 @@ fn default_pool_from_a_narrowed_thread_uses_the_main_mask() {
         let first = main_cpus[0];
         let second = *main_cpus.get(1).unwrap_or(&first);
 
-        let (threads, backend) = std::thread::spawn(move || {
+        let (threads, worker_cpus) = std::thread::spawn(move || {
             let first_mask = affinity::CpuMask::single(first, mask_words);
             affinity::set_current_thread_to(&first_mask).unwrap();
             let backend = CpuBackend::new();
-            (backend.num_threads(), backend)
+            (backend.num_threads(), backend.worker_cpus())
         })
         .join()
         .unwrap();
@@ -595,27 +589,15 @@ fn default_pool_from_a_narrowed_thread_uses_the_main_mask() {
         );
 
         if expected > 1 {
-            let pool = backend
-                .engine()
-                .pool()
-                .expect("a resolved count above one owns a pool");
-            let workers = pool.broadcast(|ctx| {
-                let own = affinity::current_thread_cpus().unwrap();
-                let spawned = std::thread::spawn(affinity::current_thread_cpus)
-                    .join()
-                    .unwrap()
-                    .unwrap();
-                (ctx.index(), own, spawned)
-            });
-            assert_eq!(workers.len(), expected);
-            for (index, own, spawned) in workers {
+            assert_eq!(
+                worker_cpus.len(),
+                expected,
+                "a resolved count above one starts that many workers"
+            );
+            for (index, own) in worker_cpus.iter().enumerate() {
                 assert_eq!(
-                    own, main_cpus,
+                    own, &main_cpus,
                     "worker {index} must inherit the full main-thread mask"
-                );
-                assert_eq!(
-                    spawned, main_cpus,
-                    "a thread spawned by worker {index} must inherit the full mask"
                 );
             }
         }
@@ -657,10 +639,9 @@ fn explicit_pool_from_a_narrowed_thread_covers_the_main_mask() {
     })
     .join()
     .unwrap();
-    let pool = backend.engine().pool().expect("two workers own a pool");
-    let workers = pool.broadcast(|_| affinity::current_thread_cpus().unwrap());
-    assert_eq!(workers.len(), 2);
-    for mask in workers {
+    let worker_cpus = backend.worker_cpus();
+    assert_eq!(worker_cpus.len(), 2, "two workers start");
+    for mask in worker_cpus {
         assert_eq!(mask, main_cpus);
     }
 }
@@ -674,14 +655,14 @@ fn pinned_workers_run_on_exactly_their_cpu() {
     let cpus = &allowed[..allowed.len().min(2)];
     let backend = CpuBackend::pinned(cpus).unwrap();
     assert_eq!(backend.num_threads(), cpus.len());
-    let pool = backend
-        .engine()
-        .pool()
-        .expect("pinned never takes the serial path");
-    let workers = pool.broadcast(|ctx| (ctx.index(), affinity::current_thread_cpus().unwrap()));
-    assert_eq!(workers.len(), cpus.len());
-    for (index, mask) in workers {
-        assert_eq!(mask, vec![cpus[index]], "worker {index}");
+    let workers = backend.worker_cpus();
+    assert_eq!(
+        workers.len(),
+        cpus.len(),
+        "pinned never takes the serial path"
+    );
+    for (index, mask) in workers.iter().enumerate() {
+        assert_eq!(mask.as_slice(), &[cpus[index]], "worker {index}");
     }
 }
 

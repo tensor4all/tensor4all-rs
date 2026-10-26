@@ -57,9 +57,12 @@ fn cpu_threads_child() {
                 .expect("the expected count is a number");
             let backend = CpuBackend::new();
             assert_eq!(backend.num_threads(), expected);
-            if expected == 1 {
-                assert!(backend.engine().pool().is_none());
-            }
+            // A resolved count above one starts that many pool workers; one
+            // stays serial and records none.
+            assert_eq!(
+                backend.worker_cpus().len(),
+                if expected > 1 { expected } else { 0 }
+            );
         }
         "affinity" => {
             let expected = std::thread::available_parallelism()
