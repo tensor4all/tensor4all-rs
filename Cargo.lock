@@ -1230,7 +1230,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1472,7 +1472,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2006,7 +2006,7 @@ dependencies = [
 [[package]]
 name = "hataori"
 version = "0.1.0"
-source = "git+https://github.com/tensor4all/hataori-rs.git?rev=0a7d89a9f31a819b3c78332e754b260946730de2#0a7d89a9f31a819b3c78332e754b260946730de2"
+source = "git+https://github.com/tensor4all/hataori-rs.git?rev=eecc924617a87d5679ac248ba229ee79315acbc2#eecc924617a87d5679ac248ba229ee79315acbc2"
 dependencies = [
  "bincode",
  "libc",
@@ -2019,7 +2019,7 @@ dependencies = [
 [[package]]
 name = "hataori-tenferro"
 version = "0.1.0"
-source = "git+https://github.com/tensor4all/hataori-rs.git?rev=0a7d89a9f31a819b3c78332e754b260946730de2#0a7d89a9f31a819b3c78332e754b260946730de2"
+source = "git+https://github.com/tensor4all/hataori-rs.git?rev=eecc924617a87d5679ac248ba229ee79315acbc2#eecc924617a87d5679ac248ba229ee79315acbc2"
 dependencies = [
  "hataori",
  "tenferro-cpu",
@@ -2436,7 +2436,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3047,7 +3047,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4092,7 +4092,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5115,9 +5115,9 @@ dependencies = [
 
 [[package]]
 name = "t4a-faer"
-version = "0.24.7"
+version = "0.24.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7442ea342f37c81922d0dc68ae424b3d5d5229b516756718bd3b52dc133cc45"
+checksum = "27493e13b4102a34c25e63775ebdefe44cf3d15476e88371dc46f38c2cae82be"
 dependencies = [
  "bytemuck",
  "dyn-stack",
@@ -5233,13 +5233,13 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "tenferro-ad"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30#5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=06229851913c81721f29faea6893ad0a6da9ee8d#06229851913c81721f29faea6893ad0a6da9ee8d"
 dependencies = [
  "computegraph",
  "lru",
@@ -5257,12 +5257,12 @@ dependencies = [
 [[package]]
 name = "tenferro-core-ops"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30#5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=06229851913c81721f29faea6893ad0a6da9ee8d#06229851913c81721f29faea6893ad0a6da9ee8d"
 
 [[package]]
 name = "tenferro-cpu"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30#5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=06229851913c81721f29faea6893ad0a6da9ee8d#06229851913c81721f29faea6893ad0a6da9ee8d"
 dependencies = [
  "cblas-inject",
  "cblas-sys",
@@ -5293,7 +5293,7 @@ dependencies = [
 [[package]]
 name = "tenferro-cpu-basic"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30#5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=06229851913c81721f29faea6893ad0a6da9ee8d#06229851913c81721f29faea6893ad0a6da9ee8d"
 dependencies = [
  "num-complex 0.4.6",
  "num-traits",
@@ -5305,7 +5305,7 @@ dependencies = [
 [[package]]
 name = "tenferro-cpu-fused"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30#5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=06229851913c81721f29faea6893ad0a6da9ee8d#06229851913c81721f29faea6893ad0a6da9ee8d"
 dependencies = [
  "num-complex 0.4.6",
  "num-traits",
@@ -5319,7 +5319,7 @@ dependencies = [
 [[package]]
 name = "tenferro-einsum"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30#5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=06229851913c81721f29faea6893ad0a6da9ee8d#06229851913c81721f29faea6893ad0a6da9ee8d"
 dependencies = [
  "computegraph",
  "cpueinsum",
@@ -5341,7 +5341,7 @@ dependencies = [
 [[package]]
 name = "tenferro-gpu"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30#5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=06229851913c81721f29faea6893ad0a6da9ee8d#06229851913c81721f29faea6893ad0a6da9ee8d"
 dependencies = [
  "cudarc",
  "libloading 0.8.9",
@@ -5365,7 +5365,7 @@ dependencies = [
 [[package]]
 name = "tenferro-internal-cpu-kernels"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30#5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=06229851913c81721f29faea6893ad0a6da9ee8d#06229851913c81721f29faea6893ad0a6da9ee8d"
 dependencies = [
  "num-complex 0.4.6",
  "num-traits",
@@ -5380,7 +5380,7 @@ dependencies = [
 [[package]]
 name = "tenferro-internal-extension-macros"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30#5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=06229851913c81721f29faea6893ad0a6da9ee8d#06229851913c81721f29faea6893ad0a6da9ee8d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5390,7 +5390,7 @@ dependencies = [
 [[package]]
 name = "tenferro-internal-ops"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30#5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=06229851913c81721f29faea6893ad0a6da9ee8d#06229851913c81721f29faea6893ad0a6da9ee8d"
 dependencies = [
  "computegraph",
  "num-complex 0.4.6",
@@ -5403,7 +5403,7 @@ dependencies = [
 [[package]]
 name = "tenferro-linalg"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30#5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=06229851913c81721f29faea6893ad0a6da9ee8d#06229851913c81721f29faea6893ad0a6da9ee8d"
 dependencies = [
  "cblas-inject",
  "cblas-sys",
@@ -5436,7 +5436,7 @@ dependencies = [
 [[package]]
 name = "tenferro-runtime"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30#5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=06229851913c81721f29faea6893ad0a6da9ee8d#06229851913c81721f29faea6893ad0a6da9ee8d"
 dependencies = [
  "computegraph",
  "lru",
@@ -5454,7 +5454,7 @@ dependencies = [
 [[package]]
 name = "tenferro-tensor"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30#5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=06229851913c81721f29faea6893ad0a6da9ee8d#06229851913c81721f29faea6893ad0a6da9ee8d"
 dependencies = [
  "num-complex 0.4.6",
  "num-traits",
@@ -5467,7 +5467,7 @@ dependencies = [
 [[package]]
 name = "tenferro-tensor-core"
 version = "0.7.1"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30#5f0ae0a3e58b38ff45c25efff577a7d2a6a95b30"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=06229851913c81721f29faea6893ad0a6da9ee8d#06229851913c81721f29faea6893ad0a6da9ee8d"
 dependencies = [
  "num-complex 0.4.6",
  "thiserror 2.0.20",
@@ -5937,9 +5937,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tlinalg"
-version = "0.4.3"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa983ef57238f170e051e982e47827c6b07beac63c33eb6d34410a62d93bcaf6"
+checksum = "44da41c88e4c0c59429e59fc1f6c6aa4b01d0eeb35a66780ae4b3756324b822b"
 dependencies = [
  "num-complex 0.4.6",
  "rayon",
@@ -6910,7 +6910,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7203,7 +7203,7 @@ checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
  "serde",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
