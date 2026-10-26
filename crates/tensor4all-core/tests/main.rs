@@ -7,6 +7,7 @@ mod ad_integration;
 mod bench_contract_fit_patterns;
 mod bug_qr_after_permute;
 mod bug_qr_retained_rows;
+mod bug_zero_block_threads;
 mod ci_single_precision;
 mod context_foundation;
 mod cuda_context_factorization;
