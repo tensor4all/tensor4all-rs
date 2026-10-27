@@ -220,7 +220,7 @@ pub enum CpuThreadError {
     Pool {
         /// Original pool diagnostic.
         #[source]
-        source: Box<tenferro_cpu::strided_exec::Error>,
+        source: Box<tenferro_cpu::threadteam::Error>,
     },
     /// [`CpuBackend::pinned`] was given an empty CPU list.
     #[error("a pinned CPU backend needs at least one CPU")]
