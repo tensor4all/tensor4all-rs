@@ -12,10 +12,10 @@ use crate::adaptive_common;
 
 use adaptive_common::*;
 use tensor4all_partitionedtreetn::adaptive_interpolation::{
-    CappedPatches, GlobalL2Error, MeasurementMethod, NormReport, PatchRecord, PatchStatus,
-    PatchedInterpolationError, PatchedInterpolationOptions, PatchedInterpolationReport,
-    PatchedInterpolationResult, ToleranceNotMetBasis, VerificationOptions, GLOBAL_ROUNDING_MARGIN,
-    MEASUREMENT_ROUNDING_FACTOR,
+    CappedPatches, GlobalL2Error, L2Estimator, MeasurementMethod, NormReport, PatchRecord,
+    PatchStatus, PatchedInterpolationError, PatchedInterpolationOptions,
+    PatchedInterpolationReport, PatchedInterpolationResult, ToleranceNotMetBasis,
+    VerificationOptions, GLOBAL_ROUNDING_MARGIN, MEASUREMENT_ROUNDING_FACTOR,
 };
 use tensor4all_partitionedtreetn::ErrorNorm;
 use tensor4all_treetci::TreeTciInterpolator;
@@ -379,6 +379,7 @@ fn a_failed_capped_measurement_at_an_exhausted_patch_order_is_a_verification_fai
         Err(PatchedInterpolationError::VerificationFailed {
             projector,
             measurement,
+            ..
         }) => {
             assert_eq!(projector.get(&problem.site("s0", 0)), Some(0));
             assert!(close(measurement.rms, 85.0_f64.sqrt()));
@@ -475,11 +476,15 @@ fn a_network_above_the_cap_or_malformed_is_an_engine_error() {
 fn sampled_six() -> (Problem, PatchedInterpolationOptions) {
     let problem = chain("s", 6, 2);
     let (_, norm) = dense_reference(&problem, &binary_ramp);
+    // The tests below reconstruct the Monte Carlo verification and audit
+    // streams, and the scripted engine returns a fixed sequence of outcomes,
+    // so they run the uniform Monte Carlo estimator.
     let options = l2_given(3, norm, 1e-12).with_verification(
         VerificationOptions::new()
             .with_samples(4)
             .with_max_exhaustive_points(0)
-            .with_retries(0),
+            .with_retries(0)
+            .with_estimator(L2Estimator::UniformMonteCarlo),
     );
     (problem, options)
 }

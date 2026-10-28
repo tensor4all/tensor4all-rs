@@ -54,6 +54,7 @@ where
         let dims: Vec<usize> = sites.iter().map(IndexLike::dim).collect();
         let split_order = resolve_patch_order(&options.patch_order, &sites)?;
         validate_options(options)?;
+        validate_variables(&options.variables, &sites)?;
         if point_list_capacity(dims.len(), options.verification.samples).is_none() {
             return Err(invalid(format!(
                 "verification.samples ({}) times the number of sites ({}) exceeds the \
@@ -230,6 +231,53 @@ fn validate_options(
             "verification.samples must be at least 2, got {}",
             options.verification.samples
         )));
+    }
+    let ratio = options.verification.residual_bond_ratio;
+    if !ratio.is_finite() || ratio <= 0.0 {
+        return Err(invalid(format!(
+            "verification.residual_bond_ratio must be finite and positive, got {ratio}"
+        )));
+    }
+    if options.verification.residual_bond_floor == 0 {
+        return Err(invalid(
+            "verification.residual_bond_floor must be at least 1",
+        ));
+    }
+    Ok(())
+}
+
+/// Every `variables` entry must be a site of the problem and appear at most
+/// once across all groups.
+fn validate_variables(
+    variables: &[Vec<DynIndex>],
+    sites: &[DynIndex],
+) -> Result<(), PatchedInterpolationError> {
+    let positions: HashMap<&DynIndex, usize> = sites
+        .iter()
+        .enumerate()
+        .map(|(position, site)| (site, position))
+        .collect();
+    let mut listed = HashSet::new();
+    for variable in variables {
+        for entry in variable {
+            let Some(&position) = positions.get(entry) else {
+                return Err(invalid(format!(
+                    "variables entry {entry:?} is not a site index of the problem"
+                )));
+            };
+            if entry.dim != sites[position].dim {
+                return Err(invalid(format!(
+                    "variables entry {entry:?} has dimension {}, but the problem site has \
+                     dimension {}",
+                    entry.dim, sites[position].dim
+                )));
+            }
+            if !listed.insert(position) {
+                return Err(invalid(format!(
+                    "variables entry {entry:?} appears more than once"
+                )));
+            }
+        }
     }
     Ok(())
 }

@@ -29,13 +29,12 @@ decided by the user on 2026-10-03; each decision is recorded under its
 question in [Open questions for the user](#open-questions-for-the-user). The
 others remain with the user.
 
-A known limitation of the sampled side of the contract was found by an
-independent review after implementation: uniform-sample acceptance and the
-audit can miss a localized feature that enters a patch only through a corner
-or an edge, and the audited estimate can then be orders of magnitude too
-small without any warning from its standard error. Only certified results are
-guarantees. The fix is deferred to a global review after M9; see
-[Known limitation: corner-localized misses](#known-limitation-corner-localized-misses).
+Sampled patches are estimated by one of two selectable estimators
+([Patch L2 estimators](#patch-l2-estimators)): the default residual TT,
+which interpolates the residual from the patch corners and edges, and the
+uniform Monte Carlo estimate of M3, which can miss a localized feature that
+enters a patch only through a corner or an edge without any warning from its
+standard error. Only certified results are guarantees.
 
 Amended on 2026-10-04 by the M5 patch-size bounds: a minimum patch size can
 retain a patch that misses its allowance, reported as `ToleranceNotMet`, and
@@ -358,14 +357,16 @@ too, so it misses a residual on a fraction `rho` of the patch with the same
 probability `(1 - rho)^n`, and its standard error, computed from the same
 points, is then small or zero. Unbiasedness is a statement about the average
 over draws; a single audited run can underestimate a concentrated residual by
-orders of magnitude, as measured in
-[Known limitation: corner-localized misses](#known-limitation-corner-localized-misses).
+orders of magnitude. This is a property of the uniform Monte Carlo estimator;
+the default residual-TT estimator starts from the patch corners and edges
+instead ([Patch L2 estimators](#patch-l2-estimators)).
 
 ### Definition
 
 A patch error is **measured** when it has been computed from values of `f` at
-points chosen independently of the approximation, by one of three methods,
-which the report names per patch:
+points chosen independently of the approximation, by one of the methods
+below, which the report names per patch (`ResidualTt` is an estimate from a
+residual interpolation, not an evaluation at points of the patch):
 
 - **Exact**: the patch was built from all its values (the M2 exact small-patch
   path); its error is zero.
@@ -393,10 +394,10 @@ of the domain, or, without a complete audit, an **acceptance-only** sum of
 acceptance statistics, which is neither a bound nor an estimate of `E`. The
 report distinguishes the three cases by type.
 
-Exact and exhaustive measurements are **certified**. A sampled measurement
-is measured, not certified: the acceptance measurement is a decision
-statistic and the audit measurement an estimate, and neither is a guarantee
-([Known limitation](#known-limitation-corner-localized-misses)). The word
+Exact and exhaustive measurements are **certified**. `Sampled` and
+`ResidualTt` measurements are measured or estimated, not certified, and
+neither the acceptance nor the audit is a guarantee
+([Patch L2 estimators](#patch-l2-estimators)). The word
 "verified" is not used for results
 ([open question 1](#open-questions-for-the-user), decided).
 
@@ -620,6 +621,8 @@ pub struct ErrorTolerance { pub rtol: f64, pub atol: f64 }
 #[non_exhaustive]
 pub struct VerificationOptions {
     /// Fresh uniform points per sampled measurement, at least 2. Default 64.
+    /// Under ResidualTt they seed the residual run's starts and serve as its
+    /// saturation fallback; under UniformMonteCarlo they decide it.
     pub samples: usize,
     /// A patch with at most max(max_exhaustive_points, samples) points is
     /// measured exhaustively. Bounds the exhaustive work and cache growth per
@@ -629,12 +632,29 @@ pub struct VerificationOptions {
     /// Engine reruns of one patch after a failed verification, before the
     /// patch splits. Default 1.
     pub retries: usize,
-    /// Draw an independent audit sample for every sampled contribution after
-    /// its acceptance decision. Default true.
+    /// Draw an independent audit measurement for every non-exact
+    /// contribution after its acceptance decision. Default true.
     pub audit: bool,
+    /// The estimator of a sampled patch measurement. Default ResidualTt;
+    /// UniformMonteCarlo reproduces the M3 behavior.
+    pub estimator: L2Estimator,
+    /// Factor of the residual TT's bond cap: the cap is
+    /// max(ceil(chi_patch * residual_bond_ratio), residual_bond_floor) with
+    /// chi_patch the largest bond dimension of the measured patch (zero for
+    /// the zero approximation). Default 0.25.
+    pub residual_bond_ratio: f64,
+    /// Floor of the residual TT's bond cap, at least 1. Default 4.
+    pub residual_bond_floor: usize,
 }
 // Default, VerificationOptions::new() (same values), and with_samples,
-// with_max_exhaustive_points, with_retries, with_audit builders.
+// with_max_exhaustive_points, with_retries, with_audit, with_estimator,
+// with_residual_bond_ratio, with_residual_bond_floor builders.
+
+/// The estimator of a sampled patch measurement; exact and exhaustive
+/// measurements ignore it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum L2Estimator { ResidualTt, UniformMonteCarlo }
 ```
 
 `ErrorNorm` and `ErrorTolerance` are crate-level types because the
@@ -664,6 +684,11 @@ does.
 | (new) | `error_norm: ErrorNorm` | default `L2 { reference: Required }` |
 | (new) | `tolerance.atol` | absolute floor of the allowance, default `0` |
 | (new) | `verification: VerificationOptions` | used only by `L2`; validated under every norm |
+| (new) | `verification.estimator` | `ResidualTt` (default) or `UniformMonteCarlo`; exact and exhaustive measurements ignore it |
+| (new) | `verification.residual_bond_ratio`, `verification.residual_bond_floor` | bond cap of the residual run; defaults `0.25` and `4` |
+| (new) | `min_patch_bits`, `capped_patches` | patch-size bounds; the defaults keep the M3 behavior |
+| (new) | `cache_candidates` | opt-in start points from the largest cached values of the patch |
+| (new) | `variables` | groups whose corners and edges start the residual run |
 | `max_bond_dim`, `patch_order`, `n_initial_pivots`, `recycle_pivots`, `seed`, `max_patches` | unchanged | unchanged |
 
 Builders: `with_error_norm`, `with_tolerance`, and `with_verification` are
@@ -683,7 +708,7 @@ L2-unit values are accessors returning `Option<f64>` (`None` on overflow).
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum MeasurementMethod { Exact, Exhaustive, Sampled }
+pub enum MeasurementMethod { Exact, Exhaustive, Sampled, ResidualTt }
 
 /// One L2 measurement of a patch residual (under ErrorNorm::L2 only).
 #[derive(Debug, Clone, PartialEq)]
@@ -691,17 +716,33 @@ pub enum MeasurementMethod { Exact, Exhaustive, Sampled }
 pub struct L2Measurement {
     pub method: MeasurementMethod,
     /// Points measured: |P| for Exact and Exhaustive, the drawn sample count
-    /// (duplicates included) for Sampled.
+    /// (duplicates included) for Sampled, and for ResidualTt the size of the
+    /// uniform seed sample, whose points are not the residual run's.
     pub points: usize,
     /// |P| as f64 (inexact above 2^53).
     pub patch_points: f64,
-    /// rms_P(f - f~_P) over the measured points; exact for Exact/Exhaustive.
+    /// rms_P(f - f~_P): exact for Exact and Exhaustive, the sampled RMS for
+    /// Sampled, and the deciding estimate of the residual run for ResidualTt
+    /// (Algorithm, step 7).
     pub rms: f64,
     /// Standard error of the mean square divided by the mean square; 0 unless
-    /// Sampled, and 0 when the mean square is 0 (no information).
+    /// Sampled, and 0 when the mean square is 0 (no information). A ResidualTt
+    /// measurement carries the seed sample's standard error only when that
+    /// sample co-decided the value (`residual_saturated`).
     pub mean_square_rel_std_error: f64,
-    /// Largest |f - f~_P| over the measured points.
+    /// Largest |f - f~_P| over the measured points (the seed sample for
+    /// ResidualTt, which does not evaluate the residual TT at these points).
     pub max_residual: f64,
+    /// ||TT_r||_2 / sqrt(|P|) of the residual TT, when a residual run produced
+    /// the measurement; None otherwise. Some(0.0) when every initial pivot of
+    /// the run was exactly zero.
+    pub residual_rms: Option<f64>,
+    /// Whether the deciding residual run did not converge, so `rms` is the
+    /// larger of `residual_rms` and `sample_rms`.
+    pub residual_saturated: bool,
+    /// RMS of the uniform seed sample (the deciding value for Sampled). None
+    /// when no uniform sample was drawn.
+    pub sample_rms: Option<f64>,
 }
 // error_norm() -> Option<f64> = sqrt(patch_points) * rms.
 
@@ -714,7 +755,7 @@ pub struct PatchRecord {                  // #[non_exhaustive], as in M2
     pub max_bond_dim: usize,
     pub retries_used: usize,              // new: engine reruns, 0 if none
     pub acceptance: Option<L2Measurement>,// new: the measurement that decided
-    pub audit: Option<L2Measurement>,     // new: independent, Sampled only
+    pub audit: Option<L2Measurement>,     // new: independent, non-exact only
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -765,7 +806,7 @@ pub enum GlobalL2Error {
         /// ||f~|| <= E_up or approximation_rms is None.
         relative_error_bound: Option<f64>,
     },
-    /// Every Sampled contribution has an audit: an estimate, not a bound.
+    /// Every non-exact contribution has an audit: an estimate, not a bound.
     #[non_exhaustive]
     Audited {
         rms_error_estimate: f64,
@@ -777,7 +818,7 @@ pub enum GlobalL2Error {
         /// approximation_rms is None.
         relative_bound_estimate: Option<f64>,
     },
-    /// Some Sampled contribution has no audit: the combined acceptance
+    /// Some non-exact contribution has no audit: the combined acceptance
     /// statistics, which are neither a bound nor an estimate of E. No
     /// relative statement exists.
     #[non_exhaustive]
@@ -831,6 +872,9 @@ pub struct PatchedInterpolationReport {   // #[non_exhaustive], as in M2
     pub cache_hits: usize,
     pub measurement_evaluations: usize,   // new: part of function_evaluations
     pub audit_evaluations: usize,         // new: part of the above
+    pub residual_evaluations: usize,      // new: part of the above, residual runs
+    pub residual_saturations: usize,      // new: patches whose deciding run
+                                          // reached its bond cap
     pub verification_failures: usize,     // new
     pub engine_retries: usize,            // new
 }
@@ -840,6 +884,15 @@ Every acceptance measurement satisfies `rms <= tau`, so a certified
 `rms_error` and the `acceptance_statistic_rms` never exceed `tau` (up to
 `GLOBAL_ROUNDING_MARGIN`). The audited estimate can exceed `tau`; it is
 reported as measured, because that is its purpose.
+
+The counters partition the work: `measurement_evaluations` is the part of
+`function_evaluations` made by zero screens, verifications, audits, and the
+Monte Carlo reference; `audit_evaluations` and `residual_evaluations` are the
+parts of `measurement_evaluations` made by audits and by the residual-TT
+estimator (the residual run itself and the evaluation of its pivots).
+`residual_saturations` counts the patches whose deciding residual run reached
+its bond cap, once per patch. Both residual counters stay zero under
+`L2Estimator::UniformMonteCarlo`.
 
 `approximation_rms` is computed without forming `||f~||^2` in L2 units: for
 each accepted patch the driver takes `TreeTN::log_norm` of the patch data (a
@@ -901,10 +954,12 @@ No field or variant keeps its name with a different meaning.
 ## Semantics
 
 - **L2** (default): acceptance requires the M2 conditions (`Converged`,
-  strictly below the cap, layout checks) and an acceptance measurement with
-  `rms <= tau`; the 2026-10-04 amendment adds capped acceptance and retained
-  patches. Zero patches require the same of the zero approximation. A
-  certified run has
+  strictly below the cap, layout checks), or a capped outcome or a retained
+  patch within the [patch-size bounds](#amendment-2026-10-04-patch-size-bounds),
+  and an acceptance measurement with `rms <= tau`, decided by the selected
+  estimator for a sampled patch
+  ([Patch L2 estimators](#patch-l2-estimators)). Zero patches require the
+  same of the zero approximation. A certified run has
   `E <= delta * (1 + GLOBAL_ROUNDING_MARGIN) + MEASUREMENT_ROUNDING_FACTOR *
   eps * ||f~||`, up to the rounding model of
   [Measurement rounding](#measurement-rounding), with `rounding_limited`
@@ -912,9 +967,9 @@ No field or variant keeps its name with a different meaning.
   `tau`); when `(1 - GLOBAL_ROUNDING_MARGIN) * ||f~|| > E_up`, also
   `E / ||f|| <= relative_error_bound`. An audited run gives an estimate
   of `E` with the reported standard error and a plug-in estimate of the
-  relative bound; neither is a guarantee, and both can be far too small when
-  a concentrated residual is missed
-  ([Known limitation](#known-limitation-corner-localized-misses)). An acceptance-only run gives neither; its reported number is
+  relative bound; neither is a guarantee, and both can be too small when a
+  concentrated residual is missed
+  ([Patch L2 estimators](#patch-l2-estimators)). An acceptance-only run gives neither; its reported number is
   only the combined acceptance statistic. When the relative denominator is
   not positive (`(1 - GLOBAL_ROUNDING_MARGIN) * ||f~|| <= E_up` if
   certified, `||f~|| <= E` with the estimate if audited), or `||f~||` is not
@@ -944,9 +999,10 @@ Changes to the M2 steps
    verification runs and no evaluation is added. An exact all-zero patch is a
    zero patch with an `Exact` measurement.
 4. **Zero screening.** If every candidate sample is exactly zero, the zero
-   approximation is measured on the zero-screen stream (exhaustively if the
-   patch is small enough). If it passes, the patch is a zero patch, audited if
-   the measurement was sampled. If it fails, the measured points with
+   approximation is measured on the zero-screen stream with the selected
+   estimator (exhaustively if the patch is small enough). If it passes, the
+   patch is a zero patch, audited if the measurement was not exact or
+   exhaustive. If it fails, the measured points with
    `f != 0`, largest `|f|` first and at most `max_bond_dim - 1` of them, are
    appended to the candidates (they are cached, so no evaluation is added),
    and the patch proceeds to the engine. An exhaustive zero screen leaves every
@@ -955,33 +1011,51 @@ Changes to the M2 steps
 5. **Interpolate** (engine run `a = 0`) with the absolute tolerance `tau` and
    the M2 engine seed.
 6. **Not converged** (`BondCapReached`, `IterationLimit`, or any future
-   variant): split as in M2. No measurement runs on a patch that is not
-   accepted anyway ([open question 4](#open-questions-for-the-user)).
-   Superseded on 2026-10-04: capped-eligible and retained runs are measured
-   ([amendment](#amendment-2026-10-04-patch-size-bounds)).
-7. **Verify** the `Converged` outcome of run `a` after the M2 layout and cap
+   variant): a capped run of a patch with at most `capped_patches.bits` active
+   sites is checked like a converged one and measured, and a run whose split
+   the minimum blocks is measured once on the verification stream of its
+   attempt before it is retained ([patch-size bounds](#amendment-2026-10-04-patch-size-bounds)).
+   Any other non-converged run splits as in M2 without a measurement
+   ([open question 4](#open-questions-for-the-user)).
+7. **Verify** the measured outcome of run `a` after the M2 layout and cap
    checks, on the re-embedded patch that would be stored, so the measured
    network is the returned one:
    - if `|P| <= max(max_exhaustive_points, samples)`, evaluate every point of
      the patch in column-major order (first active site fastest), in chunks of
      a fixed size `MEASUREMENT_CHUNK`: `Exhaustive`;
    - otherwise draw `samples` points uniformly with replacement from the
-     verification stream `a`: `Sampled`.
+     verification stream `a`. That sample is the measurement itself under
+     `L2Estimator::UniformMonteCarlo` (`Sampled`); under the default
+     `L2Estimator::ResidualTt` it is only the residual run's seed sample, and
+     the measurement (`ResidualTt`) is the residual TT's RMS
+     `exp(log ||TT_r||) / sqrt(|P|)`, or the larger of that and the seed
+     sample's RMS when the residual run did not converge: a capped residual TT
+     captures the largest components first, so its norm is a lower bound, and
+     the sample takes over at the cap or the iteration limit. The run's start
+     points, tolerance, and bond cap are in
+     [Patch L2 estimators](#patch-l2-estimators).
 
-   Values of `f` come through the patch cache; values of the network come
-   from one fresh evaluator per measurement, as specified under
-   [Determinism](#determinism). Sums of squared magnitudes use scaled
-   accumulation, so finite residuals cannot overflow.
+   Values of `f` come through the patch cache, for the seed sample and for the
+   residual run alike; values of the network come from one fresh evaluator per
+   measurement, as specified under [Determinism](#determinism). Sums of
+   squared magnitudes use scaled accumulation, so finite residuals cannot
+   overflow.
 8. **Accept.** `rms <= tau` accepts the patch with this acceptance
-   measurement. For a sampled acceptance with `audit` on, draw the audit
-   sample from the audit stream, measure it the same way, and record it; audit
-   points never become pivots.
+   measurement, whatever its method. For a non-exact acceptance with `audit`
+   on, draw the audit sample from the audit stream, measure it with the same
+   estimator and the residual run's audit stream, and record it; audit points
+   never become pivots, and an audit never changes the decision. A
+   residual-TT contribution is never certified: the global error is `Audited`
+   when every non-exact contribution has an audit and `AcceptanceOnly`
+   otherwise, and `certified_fraction` counts only exact and exhaustive
+   contributions.
 9. **Retry.** Otherwise, while `a < retries`, rerun the engine as run
    `a + 1`. Its initial pivots are the patch's **base candidates** (those of
    run 0: the M2 candidates plus any zero-screen points of step 4), followed
    by an **added list** built from the failed run `a` only:
-   1. the measured points with `|r| > tau`, in descending order of `|r|`
-      (ties in measurement order);
+   1. the measured points with `|r| > tau`, i.e. the seed sample's under
+      `ResidualTt`, in descending order of `|r|` (ties in measurement order),
+      followed by that run's pivots with a nonzero residual, ranked by `|r|`;
    2. then the pivots returned by the failed outcome, in their returned
       order.
 
@@ -997,14 +1071,15 @@ Changes to the M2 steps
 10. **Split** when the retries are exhausted, as for a non-converged patch
     (M2 step 10), with one addition: the **worst points** of the most recent
     failed measurement of the patch, meaning its measured points with
-    `|r| > tau`, largest `|r|` first (ties in measurement order), truncated to
-    `max_bond_dim - 1` points for the whole patch, are passed to the
-    children, because they locate what the approximation missed and are
-    already cached. Each child keeps the worst points inside its region (each
-    is a full-domain point, so it belongs to exactly one child). This applies
-    whenever a patch splits after at least one failed verification, whether
-    the last engine run failed verification or did not converge. The worst
-    points are independent of `recycle_pivots`.
+    `|r| > tau`, largest `|r|` first (ties in measurement order), followed by
+    the residual run's pivots with a nonzero residual ranked by `|r|` under
+    `ResidualTt`, truncated to `max_bond_dim - 1` points for the whole patch,
+    are passed to the children, because they locate what the approximation
+    missed and are already cached. Each child keeps the worst points inside
+    its region (each is a full-domain point, so it belongs to exactly one
+    child). This applies whenever a patch splits after at least one failed
+    verification, whether the last engine run failed verification or did not
+    converge. The worst points are independent of `recycle_pivots`.
 
     A child's candidates are then built by the M2 rule with one more source,
     in this order, each point kept only at its first occurrence: the
@@ -1024,10 +1099,12 @@ Changes to the M2 steps
 
 Failure handling in one line: a failed verification first reruns the engine
 with the worst points as pivots (a missed feature that fits under the cap),
-then splits (a feature that needs more rank). The same path applies when the
-requested tolerance is below an apparent rounding scale; an exhausted
-`patch_order` or `max_patches` is reported as `VerificationFailed` or
-`ResourceLimit`.
+then splits (a feature that needs more rank). Under the residual estimator the
+worst list also carries the failed residual run's pivots, so a feature the
+residual TT found at a corner or an edge reaches the rerun and the children.
+The same path applies when the requested tolerance is below an apparent
+rounding scale; an exhausted `patch_order` or `max_patches` is reported as
+`VerificationFailed` or `ResourceLimit`.
 
 Whether the retry pivots help is a measurement: `add_global_pivots` puts every
 added point into the pivot sets of every edge, so they raise the starting rank
@@ -1046,13 +1123,18 @@ New stream selectors next to `CANDIDATE_STREAM` and `ENGINE_STREAM` in
 | zero screen (only if every candidate is zero) | none | `mix(s ^ ZERO_SCREEN_STREAM)` | `R` |
 | engine run 0 | the M2 engine seed | `mix(mix(s ^ VERIFY_STREAM) ^ 0)` | `R` |
 | engine run `a`, `1 <= a <= R` | `mix(M2 engine seed ^ a)` | `mix(mix(s ^ VERIFY_STREAM) ^ a)` | `R - a` |
+| residual run of the zero screen | `mix(s ^ RESIDUAL_ZERO_SCREEN_STREAM)` | none | `R` |
+| residual run of verification `a` | `mix(mix(s ^ RESIDUAL_STREAM) ^ a)` | none | `R - a` |
+| residual run of the audit | `mix(s ^ RESIDUAL_AUDIT_STREAM)` | none | none |
 | audit of an accepted or zero patch | none | `mix(s ^ AUDIT_STREAM)` | none |
 | reference estimate (root, opt-in) | none | `mix(s_root ^ SCALE_STREAM)` | none |
 
 The engine run and its verification stream share the index `a`, so they stay
-aligned whatever happens at the zero screen. Exhaustive measurements use no
-stream. Each coordinate of a sampled point is drawn in active-site order with
-the existing Lemire draw. The streams depend only on the root seed, the patch
+aligned whatever happens at the zero screen; the residual run of verification
+`a` shares that index too, so the seed sample, the residual run, and the
+retry it seeds stay on one attempt. Exhaustive measurements use no stream.
+Each coordinate of a sampled point is drawn in active-site order with the
+existing Lemire draw. The streams depend only on the root seed, the patch
 path, and the stage, so a patch's measurements are independent of processing
 order and of the engine's randomness. Unit tests pin the new streams against
 an independent implementation, as for M2.
@@ -1061,8 +1143,11 @@ an independent implementation, as for M2.
 
 - Measurement points go through the patch cache: cached values are reused,
   new values are cached, counted in `function_evaluations` and
-  `measurement_evaluations` (audits also in `audit_evaluations`), and checked
-  for finiteness like every other value.
+  `measurement_evaluations` (audits also in `audit_evaluations`, residual
+  runs and their pivot evaluations also in `residual_evaluations`), and
+  checked for finiteness like every other value. The residual run reads `f`
+  through the same cache, so points the seed sample already evaluated are not
+  evaluated again.
 - On a split the cache, including measured values, is partitioned among the
   children in the existing single pass; the children reuse those values
   without re-evaluation, and their own streams are independent of them.
@@ -1112,15 +1197,28 @@ positional legs of the stored node tensors, and the batch contents only.**
 The driver's part of the argument is fixed by this design:
 
 - one fresh `TreeTNCachedEvaluator` per measurement, so no message cache
-  carries values from another measurement;
+  carries values from another measurement; the residual run builds its own
+  evaluator the same way over the measured patch;
 - a fixed center (`CachedEvaluatorOptions::center` set to the smallest node
   name, so no greedy center search runs) and `EvaluationHint::default()` for
   every batch;
 - points in a deterministic order (the stream order, or column-major for
   exhaustive), evaluated in chunks of the fixed size `MEASUREMENT_CHUNK`, so
   batch composition and call history are functions of the patch path and the
-  seed. The BLAS or scalar choice of the chain kernel and the message-cache
-  history then depend only on that fixed call sequence.
+  seed. The residual run's calls are functions of its engine seed and its
+  ordered start-point list, so also of the patch path and the seed. The BLAS
+  or scalar choice of the chain kernel and the message-cache history then
+  depend only on that fixed call sequence.
+
+The residual-TT estimator is covered by the same controls: its run uses its
+own fresh evaluator, fixed center, and default hint over the measured patch,
+and its streams are derived from the seed and the patch path like every other
+stream (`residual_zero_screen()` for the zero screen, `residual(attempt)` for
+a verification, `residual_audit()` for an audit). An audit is measured with
+the acceptance's estimator on its own stream. So for a fixed seed, a
+deterministic evaluator and engine, and a reproducible network evaluation the
+report is bitwise identical within the scope below; `approximation_rms` and
+the fields derived from it remain outside that claim.
 
 Under these controls the separate investigation found the raw-kernel trees
 bitwise reproducible across rebuilds, threads, processes, and thread counts;
@@ -1408,12 +1506,14 @@ or more, checked in the test.
     is not compared. On the branched tree with the dense engine and with
     TreeTCI, after the prerequisite fix. Plus the fresh-thread, fresh-ID
     measurement test of [Determinism](#determinism) on a generic-path tree
-    and a raw-kernel tree.
+    and a raw-kernel tree, and a sampled multi-node TreeTCI run under the
+    default estimator in two fresh threads: identical reports, a `ResidualTt`
+    measurement, and nonzero `residual_evaluations`.
 15. **Cache.** Measurement points reuse cached values, a point is never
     evaluated twice, measured values reach the children, and audit points
     never appear among pivots.
-16. **Streams.** The zero-screen, verification, audit, and reference streams
-    follow the documented SplitMix64 and Lemire mapping.
+16. **Streams.** The zero-screen, verification, audit, reference, and residual
+    streams follow the documented SplitMix64 and Lemire mapping.
 17. **Errors.** `UnsupportedNorm` for each placeholder, ordered before every
     `InvalidInput` check (a placeholder together with an invalid `rtol`
     reports `UnsupportedNorm`), with an evaluator that fails the test if
@@ -1449,10 +1549,10 @@ reference. After the corner-miss finding, the module documentation,
 `GlobalL2Error::Audited`, `MeasurementMethod::Sampled`, `L2Measurement`,
 `VerificationOptions`, the crate root and README, the guide, the skill
 reference, and `llms.txt` also state the
-[known limitation](#known-limitation-corner-localized-misses): sampled
-acceptance and the audit can miss localized features that enter a patch
-through a corner or an edge, the audit's standard error does not reveal such
-a miss, and only certified results are guarantees.
+[estimator contract](#patch-l2-estimators): the residual-TT estimator is the
+default, the uniform Monte Carlo estimator can miss localized features that
+enter a patch through a corner or an edge with a standard error that does not
+reveal the miss, and only certified results are guarantees.
 
 ## Measurements needed later
 
@@ -1538,9 +1638,9 @@ defaults reproduce M3 exactly.
    **Decided (user, 2026-10-03): "verified" is not used as an adjective for
    results or guarantees.** Exact and exhaustive results are "certified", the
    existing type name (`GlobalL2Error::Certified`), up to the rounding model
-   above. Sampled results are "measured" or "estimated" and are not
-   guarantees; see
-   [Known limitation](#known-limitation-corner-localized-misses). The wording
+   above. Sampled and residual-TT results are "measured" or "estimated" and
+   are not guarantees; see
+   [Patch L2 estimators](#patch-l2-estimators). The wording
    was changed accordingly in the rustdoc, the crate README, the Partitioned
    TreeTN guide, the skill reference, the roadmap, and this record (`llms.txt`
    already used "certified" and "estimated"). Process nouns such as
@@ -1604,10 +1704,9 @@ defaults reproduce M3 exactly.
    - the saturated sweeps, 29% to 42% of the cost, run before the accept or
      split decision, so accepting afterwards does not save them; only an
      early exit at the first saturated sweep does;
-   - the misses of the
-     [known limitation](#known-limitation-corner-localized-misses) were all
-     `Converged` patches, so selection bias is not the reason for the
-     deferral.
+   - the corner-localized misses listed under
+     [Patch L2 estimators](#patch-l2-estimators) were all `Converged`
+     patches, so selection bias is not the reason for the deferral.
 
    **Implemented in M5 (2026-10-04), without the early exit:** capped
    patches are accepted on their measurement only up to a size bound in
@@ -1625,12 +1724,13 @@ defaults reproduce M3 exactly.
 
    **Decided (user, 2026-10-03): keep both as implemented.** The audit stays
    on by default, and no confidence-bound acceptance is offered. This is
-   consistent with the
-   [known limitation](#known-limitation-corner-localized-misses): the audit
-   removes the selection bias of the acceptance measurement but not a miss,
-   so an audited result is an estimate, not a guarantee; an upper confidence
-   bound `m + z * SE` does not help against a missed concentrated residual,
-   whose sampled standard error is small or zero.
+   consistent with the estimator contract
+   ([Patch L2 estimators](#patch-l2-estimators)): under the uniform Monte
+   Carlo estimator the audit removes the selection bias of the acceptance
+   measurement but not a miss, so an audited result is an estimate, not a
+   guarantee; an upper confidence bound `m + z * SE` does not help against a
+   missed concentrated residual, whose sampled standard error is small or
+   zero.
 6. **Scope of M3.** Proposed: this record (interpolation) is implemented as
    M3; the patched-algebra global-budget mode gets its own record (M3b),
    designed after M6 so that it can use the contraction outcome API. Or
@@ -1711,12 +1811,16 @@ text left open.
 - `GLOBAL_ROUNDING_MARGIN = 1e-8` and `MEASUREMENT_ROUNDING_FACTOR` are public
   constants of `adaptive_interpolation`; `MEASUREMENT_CHUNK = 256` is private.
 - The new stream selectors are `ZERO_SCREEN_STREAM = "zeroscrn"`,
-  `VERIFY_STREAM = "verifyst"`, `AUDIT_STREAM = "auditstr"`, and
-  `SCALE_STREAM = "scalestr"` (ASCII as big-endian `u64`), pinned by a unit
-  test against an independent Python implementation.
+  `VERIFY_STREAM = "verifyst"`, `AUDIT_STREAM = "auditstr"`,
+  `SCALE_STREAM = "scalestr"`, and the residual run's
+  `RESIDUAL_STREAM = "residttr"`, `RESIDUAL_AUDIT_STREAM = "rsdtaudt"`, and
+  `RESIDUAL_ZERO_SCREEN_STREAM = "rsdtzscr"` (ASCII as big-endian `u64`),
+  pinned by a unit test against an independent Python implementation.
 - `measurement_evaluations` counts the new evaluations of zero screens,
   verifications, audits, and the Monte Carlo reference estimate (the text did
-  not classify the latter).
+  not classify the latter); `residual_evaluations` counts the part made by
+  residual runs and their pivot evaluations, and `residual_saturations` the
+  patches whose deciding residual run reached its bond cap.
 
 ### Validation and pinning
 
@@ -1750,8 +1854,11 @@ text left open.
   measured points with `f != 0`, largest `|f|` first (ties in measurement
   order), at most `max_bond_dim - 1`. They cannot duplicate a candidate,
   whose samples are all zero.
-- **Worst points.** Duplicates (a sampled measurement draws with
-  replacement) are removed before the truncation to `max_bond_dim - 1`.
+- **Worst points.** The list is the measured points above `tau` followed by
+  the residual run's nonzero pivots ranked by `|r|` (`ResidualTt` only).
+  Duplicates (a sampled measurement draws with replacement, and a pivot can
+  repeat a measured point) are removed before the truncation to
+  `max_bond_dim - 1`.
 - **Outcome pivots in a rerun.** They are checked for shape and range
   whenever a rerun uses them, independently of `recycle_pivots`; a malformed
   list is `Interpolation { source: Engine }`, as it is for recycling in M2.
@@ -1942,8 +2049,8 @@ record evaluation counts and approximation errors, not elapsed time.
   were `3.2e-5` and `1.5e-6` in RMS units. The agreement holds for these two
   runs only and does not make the audited estimate reliable in general: on a
   function whose feature enters some patches only through a corner, the
-  audited estimate was `10^4` to `10^6` times too small
-  ([Known limitation](#known-limitation-corner-localized-misses)).
+  uniform audited estimate was `10^4` to `10^6` times too small
+  ([Patch L2 estimators](#patch-l2-estimators)).
 - **OQ8 and OQ9 (determinism).** The stage-1 tests, six fresh threads per
   process, three processes: on the raw-kernel tree, all 128 measured values
   were bitwise identical across threads, and every thread of every process
@@ -1964,90 +2071,56 @@ record evaluation counts and approximation errors, not elapsed time.
   residual lies within the evaluation's rounding (about `eps` times the
   network values) of `tau`.
 
-### Known limitation: corner-localized misses
+### Patch L2 estimators
 
-Found on 2026-10-03 by an independent review of the implemented driver, after
-the evidence above was gathered. It is recorded here, not fixed.
+A patch with more than `max(max_exhaustive_points, samples)` points is
+estimated by the estimator `VerificationOptions::estimator` selects, as step 7
+of the [Algorithm](#algorithm) describes; it does not affect exact or
+exhaustive measurements. This section holds only the details of the two runs.
 
-- **Setup.** A three-dimensional Gaussian ridge along the diagonal of the unit
-  cube, `f = exp(-d^2 / (2 w^2))` with `d` the distance from the line
-  `x = y = z` and `w = 0.02`. Each variable has `R = 7` bits (`2^21` points);
-  the three variables lie on the three branches of a site-free root of degree
-  three, one binary site per node. `patch_order` is MSB-first and interleaved
-  (`x0, y0, z0, x1, ...`). TreeTCI, cap 16, `rtol = 1e-4`, `ErrorNorm::L2`
-  with `L2Reference::Given` (the dense norm), default verification
-  (`samples = 64`, `max_exhaustive_points = 1024`, `retries = 1`, audit on),
-  seeds 1 to 12. Every accepted patch was measured by sampling, and every run
-  was reported as `GlobalL2Error::Audited`.
-- **Result.** 8 of 12 seeds (1, 5, 6, 8, 9, 10, 11, 12) missed parts of the
-  feature. Their true `E / ||f||` was `6.3e-2` to `10.8` (635 to `1.1e5`
-  times `delta`), while the audited estimate of `E / ||f||` was `2.6e-6` to
-  `8.3e-6`: an underestimate by `10^4` to `10^6`. The relative standard error
-  of the audited mean square was 0.17 to 0.60, so the report gave no warning.
-  In each of these runs one or two patches carried essentially all of `E^2`.
-  The other four seeds reached `E / ||f||` of `4.9e-6` to `8.7e-6`, within the
-  allowance.
-- **Which patches were missed.** Patches with 2 or 3 fixed sites (a quarter or
-  an eighth of the cube along the first bit levels), which the ridge enters
-  only near a corner or an edge. There were two kinds:
-  - (a) the engine never sampled the feature and converged at rank 1: the
-    largest sampled magnitude was `1e-25` to `1.5e-11` times `tau`, and the
-    true RMS residual about `1.8e3 tau`;
-  - (b) the engine saw the feature (largest sample about `5e4` to `2e5`
-    times `tau`, rank 4 to 7) and its own error estimate was below `tau`
-    (0.4 to 0.9 `tau`), but the true RMS residual was `1.3e3` to `2.2e5`
-    times `tau` (one further patch `3.4e2 tau`).
+#### `L2Estimator::ResidualTt` (default)
 
-  In both kinds the acceptance and audit measurements were at most about
-  `0.1 tau` in RMS: the 64 uniform points of each did not hit the small region
-  where the residual sits. This is the concentrated-residual case of
-  [What it does not guarantee after selection](#what-it-does-not-guarantee-after-selection);
-  the audit removes the selection bias but not the miss.
-- **What only partly helps.** `samples = 1024` reduced the misses to 2 of 12
-  seeds (5 and 12, both kind (b), true residual `1.3e3 tau`); in seed 12 the
-  audited estimate rose to `1.4e-3` against a true `6.35e-2`, still 45 times
-  too small. `recycle_pivots = true` did not fix it: 6 of 12 seeds still
-  exceeded `delta` (5 of them by 11 to 267 times), with audited estimates of
-  `3.6e-6` to `4.4e-5`.
-- **Opt-in cache candidates (M5 question 5, 2026-10-04).** With
-  `cache_candidates = true`, every child patch also starts from the largest
-  values of its inherited evaluation cache. On the reproduction below (seeds
-  2, 3, 4) the true `E / delta` fell from 680, 880, and 880 to 51, 230, and
-  16. No rank-1 patch of kind (a) was accepted any more, and the effect is
-  not limited to kind (a): seed 2, which had none, improved because its
-  kind (b) patches with true RMS `1.4e3 tau` and `2.6e2 tau` were no longer
-  accepted. Other kind (b)
-  patches, whose feature the engine saw but did not resolve and whose
-  residual the 64-point acceptance sample and the audit missed, remained, so
-  every seed still exceeds `10 delta`. These are three seeds of one
-  workload, not a general guarantee. The option changes the start of the
-  engine, not the measurement; the measurement-side remedies stay with the
-  M9 review. The ignored test
-  `cache_candidates_against_corner_localized_misses` records this.
-- **What is not affected.** `Certified` results, in which every contribution
-  is exact or exhaustive, are not affected: the limitation concerns only the
-  sampled acceptance and the audit. `SampledMax` makes no L2 claim.
-- **Reproduction.** The ignored test
-  `corner_localized_ridge_is_not_missed_by_sampled_acceptance` in
-  `crates/tensor4all-partitionedtreetn/tests/adaptive_l2_corner_miss.rs`,
-  adapted from the review's scratch source, runs the M3 driver on the same
-  ridge at the smallest size that shows both kinds of miss: `R = 6` (`2^18`
-  points), `w = 0.02`, cap 16, `rtol = 1e-4`, default verification, seeds 2,
-  3, and 4. It materializes the partition once against the dense reference
-  and fails when the true `E` exceeds `10 delta`. Observed: true `E / ||f||`
-  of `6.85e-2`, `8.79e-2`, and `8.80e-2` (680 to 880 times `delta`) against
-  audited estimates of `4.3e-5`, `3.3e-5`, and `4.0e-4`; seeds 3 and 4 each
-  accept a rank-1 patch with 2 fixed sites whose largest sample is at most
-  `1.6e-15 tau` (kind (a)), and seeds 2 and 4 accept patches with 2 or 3 fixed
-  sites that the engine resolved partly (kind (b)). It took 8.5 s in release
-  on one core. At this size the audited relative standard errors were large
-  (0.86 to 1.00); the 7-bit runs above show that a small one is no
-  reassurance either. At `R = 6`, 11 of seeds 1 to 12 exceeded `delta`, 10 of
-  them by more than ten times.
-- **Decision.** The fix is deferred to a global review after M9 (user
-  decision, 2026-10-03). Until then the public documentation states the
-  limitation. The candidate remedies are listed under M9 in
-  [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md).
-  Open question 1 (the naming of "verified") was not decided by this
-  finding; it was decided afterwards by the user (see
-  [open question 1](#open-questions-for-the-user)).
+The residual run is a normal interpolation problem on the patch topology and
+the patch's active node sites, so its site order is the patch's active site
+order. Its inputs:
+
+- **Start points.** The initial pivots are the distinct nonzero residuals of
+  the uniform seed sample (at most four, largest first) followed by the patch
+  corners and edges; the global-search starts are the corners and edges
+  followed by those residual points. A corner puts every site of a variable
+  group at `0` or `dim - 1`. The groups are
+  `PatchedInterpolationOptions::variables` restricted to the active sites,
+  plus one group of the active sites in no group; an empty option is one
+  group of all active sites. All `2^groups` corners are used up to 64; beyond
+  that 64 are drawn, and four edge points (a random corner with one group set
+  uniformly) follow. A corner-localized residual is a flat zero fiber from a
+  random start but a nonzero value at a corner, so the run reaches it even
+  when every uniform point misses it.
+- **Tolerance and bond cap.** The run's absolute tolerance is `0.1 * tau`
+  (`RESIDUAL_TOLERANCE_FACTOR`). Its bond cap is
+  `max(ceil(chi_patch * residual_bond_ratio), residual_bond_floor)`, with
+  `chi_patch` the largest bond dimension of the measured patch (zero for the
+  zero approximation; defaults `ratio = 0.25`, `floor = 4`). The cap keeps
+  the run cheap when the patch has converged: the residual's rank is at most
+  about the target's plus the patch TT's.
+- **Limits.** If every initial pivot is exactly zero, the engine returns
+  `InterpolationError::AllSamplesZero` before its global pivot search and the
+  estimate is zero; the corners and the seed sample make this happen only
+  when they are all zero too. `residual_rms` is read with
+  `TreeTN::log_norm_on_session`, so a residual norm above about `1.34e154`
+  overflows the estimate and one below about `1e-154` underflows it to zero;
+  the same range limits `approximation_rms`.
+
+#### `L2Estimator::UniformMonteCarlo`
+
+The M3 estimator: the seed sample's RMS is the deciding measurement, and an
+independently seeded uniform audit gives the estimate. It reproduces the M3
+decisions and report fields (`residual_rms = None`, `sample_rms = None`, no
+residual counters). Both its sample and its audit are uniform, so both can
+miss a residual concentrated on a small part of the patch, such as a
+localized feature that enters it only through a corner or an edge. The audit
+removes the selection bias of the acceptance sample but not the miss, and its
+standard error, computed from the same points, does not reveal it; the
+audited estimate can then be orders of magnitude too small. More `samples`
+make a miss less likely but do not exclude it. Only exhaustive or exact
+measurement rules it out, and only `Certified` results are guarantees.

@@ -217,29 +217,43 @@ Under `ErrorNorm::L2` the allowance is split by patch volume: every accepted
 or zero patch must have a root-mean-square residual of at most
 `tau = delta / sqrt(|X|)`, which is also the engine's absolute tolerance. A
 patch with at most `max(max_exhaustive_points, samples)` points (see
-`VerificationOptions`) is measured at every point; a larger patch on fresh
-uniform samples, followed by an independent audit sample. A failed
-measurement of a converged run reruns the engine with the worst measured
-points added to its pivots, then splits the patch. What a run can claim is
+`VerificationOptions`) is measured at every point; a larger patch is
+estimated by `VerificationOptions::estimator`, followed by an independent
+audit with the same estimator. The default `L2Estimator::ResidualTt`
+interpolates the residual `f - f~` with the same engine, starting from the
+largest residuals of a small uniform seed sample and from the patch corners
+and edges (grouped by `with_variables`), and uses the exact norm of that
+residual TT; its bond cap is
+`max(ceil(chi_patch * residual_bond_ratio), residual_bond_floor)`, and a run
+that reaches the cap falls back to the larger of the residual norm and the
+seed sample's RMS. `L2Estimator::UniformMonteCarlo` reproduces the M3
+uniform sample. The report's `residual_evaluations` and
+`residual_saturations` count the residual runs and the patches whose residual
+run reached its cap. A failed measurement of a converged run reruns the
+engine with the worst measured points (and the residual run's nonzero
+pivots) added to its pivots, then splits the patch. What a run can claim is
 the report's `GlobalL2Error`:
 
 - `Certified`: every contribution is exact or exhaustive, and the absolute
   error is at most `delta` up to a small relative margin and a rounding term
   from a calibrated, not proven, model (`rounding_limited` says when that term is not below `tau`);
   `relative_error_bound` bounds `E / ||f||` when `||f~||` exceeds `E`.
-- `Audited`: some contribution was sampled, and every sampled one was
-  audited. The audited mean square is an unbiased estimate (its square root
-  is not) with a standard error, never a bound and not a guarantee: a
-  residual concentrated on unsampled points is missed by the acceptance
-  sample and the audit alike, and the standard error, computed from the same
-  points, does not reveal it. A localized feature that enters a patch only
-  through a corner or an edge is such a case; the audited error can then be
-  orders of magnitude too small. More `samples` make a miss less likely but
-  do not exclude it. The opt-in `with_cache_candidates(true)` (child
-  patches also start from the largest values the parent already evaluated
-  in them) can prevent a miss where the parent sampled the feature, but not
-  one where the parent never sampled it or where the engine saw the feature
-  without resolving it and the acceptance sample misses the residual.
+- `Audited`: some contribution is non-exact, and every such one was
+  audited. It is an estimate with a standard error, never a bound and not a
+  guarantee. Under `L2Estimator::UniformMonteCarlo` the audited mean square
+  is unbiased (its square root is not), but a residual concentrated on
+  unsampled points is missed by the acceptance sample and the audit alike,
+  and the standard error, computed from the same points, does not reveal it.
+  A localized feature that enters a patch only through a corner or an edge is
+  such a case; the audited error can then be orders of magnitude too small.
+  More `samples` make a miss less likely but do not exclude it. The opt-in
+  `with_cache_candidates(true)` (child patches also start from the largest
+  values the parent already evaluated in them) can prevent a miss where the
+  parent sampled the feature, but not one where the parent never sampled it
+  or where the engine saw the feature without resolving it and the
+  acceptance sample misses the residual. `L2Estimator::ResidualTt`, the
+  default, starts from the patch corners and edges and does not rely on
+  uniform points alone, but its capped residual TT is still an estimate.
 - `AcceptanceOnly`: audits were disabled. The combined acceptance statistics
   are neither a bound nor an estimate.
 - `ToleranceNotMet`: some patch was retained by the minimum patch size

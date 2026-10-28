@@ -1,14 +1,15 @@
-//! Reproduction of a known limitation of the L2 error contract of
-//! `patched_interpolate`: uniform-sample acceptance and the audit can miss a
-//! localized feature that enters a patch only through a corner or an edge.
-//! See "Known limitation: corner-localized misses" in
-//! `docs/design/tree-patching-error-contract.md`. The test fails while the
-//! limitation exists. Run it with
+//! Regression tests of the patch L2 estimator on a feature that enters some
+//! patches only through a corner or an edge.
 //!
-//! ```text
-//! cargo test --release -p tensor4all-partitionedtreetn --test integration \
-//!     -- --ignored --nocapture adaptive_l2_corner_miss::
-//! ```
+//! A three-variable Gaussian ridge along the diagonal of the unit cube is
+//! interpolated with the default L2 verification
+//! ([`L2Estimator::ResidualTt`]). The ridge sits in a small part of the
+//! large patches, so a uniform acceptance sample and a uniform audit miss it;
+//! the residual-TT estimator starts its residual run from the patch corners
+//! and edges and does not. The third test repeats the run with TreeTCI's own
+//! global pivot search disabled, where every patch is built from its initial
+//! pivots only, and with the three variables grouped so that the corner
+//! starts mix whole variables.
 
 use crate::adaptive_common;
 
@@ -18,19 +19,16 @@ use tensor4all_partitionedtreetn::adaptive_interpolation::{
     GlobalL2Error, MeasurementMethod, NormReport, PatchedInterpolationOptions,
 };
 use tensor4all_partitionedtreetn::{ErrorNorm, L2Reference};
-use tensor4all_treetci::TreeTciInterpolator;
+use tensor4all_treetci::{TreeTciInterpolator, TreeTciOptions};
 
-/// Bits per variable: 2^18 points. The review that found the limitation used
-/// 7 bits; 6 is the smallest size that shows both kinds of miss.
+/// Bits per variable: 2^18 points. The review that found the original miss
+/// used 7 bits; 6 is the smallest size that shows both kinds of miss.
 const BITS: usize = 6;
 /// Width of the ridge, about 1.3 grid spacings at 6 bits.
 const WIDTH: f64 = 0.02;
 const CAP: usize = 16;
 const RTOL: f64 = 1e-4;
-/// Seeds that miss at this configuration. Seeds 3 and 4 each accept a patch
-/// in which the engine never sampled the feature (rank 1); seeds 2 and 4
-/// accept patches in which the engine saw it and its own estimate was below
-/// `tau`.
+/// Seeds that miss at this configuration with the uniform estimator.
 const SEEDS: [u64; 3] = [2, 3, 4];
 
 /// Three quantics variables `x`, `y`, `z` of `bits` bits each on the three
@@ -71,10 +69,33 @@ fn msb_order(problem: &Problem, bits: usize) -> Vec<DynIndex> {
     order
 }
 
-/// Run the ridge at every seed of [`SEEDS`] and return the seeds whose true
-/// error exceeds ten times the allowance, with what the run reported.
-fn corner_failures(cache_candidates: bool) -> Vec<(u64, f64, String)> {
+/// The sites of each variable, most significant bit first.
+fn variable_groups(problem: &Problem, bits: usize) -> Vec<Vec<DynIndex>> {
+    ["x", "y", "z"]
+        .iter()
+        .map(|v| {
+            (0..bits)
+                .map(|k| problem.site(&format!("{v}{k}"), 0))
+                .collect()
+        })
+        .collect()
+}
+
+/// Run the ridge at every seed and return the seeds whose true error exceeds
+/// ten times the allowance, with what the run reported. Prints the per-seed
+/// cost of the estimator.
+fn corner_failures(
+    engine: &TreeTciInterpolator,
+    group_variables: bool,
+    cache_candidates: bool,
+    seeds: &[u64],
+) -> Vec<(u64, f64, String)> {
     let problem = ridge_tree(BITS);
+    let variables = if group_variables {
+        variable_groups(&problem, BITS)
+    } else {
+        Vec::new()
+    };
     let positions: Vec<[usize; 3]> = (0..BITS)
         .map(|k| ["x", "y", "z"].map(|v| problem.position(&problem.site(&format!("{v}{k}"), 0))))
         .collect();
@@ -94,16 +115,17 @@ fn corner_failures(cache_candidates: bool) -> Vec<(u64, f64, String)> {
     let (reference, norm) = dense_reference(&problem, &f);
     let points = full_domain(&problem.dims());
     let mut failures = Vec::new();
-    for seed in SEEDS {
+    for &seed in seeds {
         // Default verification: 64 samples, audit on.
         let options = PatchedInterpolationOptions::new(CAP)
             .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
             .with_tolerance(tol(RTOL))
             .with_patch_order(msb_order(&problem, BITS))
             .with_cache_candidates(cache_candidates)
+            .with_variables(variables.clone())
             .with_seed(seed);
         let start = std::time::Instant::now();
-        let result = run(&TreeTciInterpolator::default(), &problem, &f, &[], &options).unwrap();
+        let result = run(engine, &problem, &f, &[], &options).unwrap();
         let elapsed = start.elapsed().as_secs_f64();
         let report = &result.report;
         let NormReport::L2 { tau, ref error, .. } = report.norm else {
@@ -137,16 +159,23 @@ fn corner_failures(cache_candidates: bool) -> Vec<(u64, f64, String)> {
             .unwrap();
         let true_error = residual.iter().map(|r| r * r).sum::<f64>().sqrt();
         eprintln!(
-            "seed {seed}: {elapsed:.1}s, {} patches, \
+            "seed {seed}: {elapsed:.1}s, {} patches, residual evaluations {}, residual \
+             saturations {}, measurement evaluations {}, \
              true E/||f|| {:.2e} (E/delta {:.1e}), {reported}",
             report.accepted.len(),
+            report.residual_evaluations,
+            report.residual_saturations,
+            report.measurement_evaluations,
             true_error / norm,
             true_error / delta,
         );
         // The sampled patches whose true RMS residual exceeds tau.
         for record in &report.accepted {
             let acceptance = record.acceptance.as_ref().unwrap();
-            if acceptance.method != MeasurementMethod::Sampled {
+            if !matches!(
+                acceptance.method,
+                MeasurementMethod::Sampled | MeasurementMethod::ResidualTt
+            ) {
                 continue;
             }
             let fixed: Vec<(usize, usize)> = record
@@ -182,8 +211,7 @@ fn corner_failures(cache_candidates: bool) -> Vec<(u64, f64, String)> {
             }
         }
         // A sampled run is an estimate, not a bound, so allow a factor of 10
-        // over the allowance; the misses at these seeds exceed it about
-        // 700-900 times.
+        // over the allowance.
         if true_error > 10.0 * delta {
             failures.push((seed, true_error / norm, reported));
         }
@@ -192,9 +220,8 @@ fn corner_failures(cache_candidates: bool) -> Vec<(u64, f64, String)> {
 }
 
 #[test]
-#[ignore = "known limitation: corner-localized features missed by sampled acceptance; fix deferred to post-M9 global review"]
 fn corner_localized_ridge_is_not_missed_by_sampled_acceptance() {
-    let failures = corner_failures(false);
+    let failures = corner_failures(&TreeTciInterpolator::default(), false, false, &SEEDS);
     assert!(
         failures.is_empty(),
         "corner-localized misses (seed, true E/||f||, reported): {failures:?}"
@@ -202,12 +229,29 @@ fn corner_localized_ridge_is_not_missed_by_sampled_acceptance() {
 }
 
 #[test]
-#[ignore = "measurement: cache candidates remove the never-sampled misses but not the sampled-acceptance misses; fails while those exist (release build)"]
 fn cache_candidates_against_corner_localized_misses() {
-    let failures = corner_failures(true);
+    let failures = corner_failures(&TreeTciInterpolator::default(), false, true, &SEEDS);
     assert!(
         failures.is_empty(),
         "corner-localized misses with cache candidates (seed, true E/||f||, reported): \
          {failures:?}"
+    );
+}
+
+#[test]
+fn the_residual_estimator_needs_no_engine_global_pivot_search() {
+    // Without the engine's own global pivot search every patch is built from
+    // its initial pivots; the residual estimator's corner and edge starts and
+    // its seed sample still reach the ridge.
+    let engine = TreeTciInterpolator::new(TreeTciOptions {
+        enable_global_pivots: false,
+        ..Default::default()
+    })
+    .unwrap();
+    let failures = corner_failures(&engine, true, false, &[1, 2, 3, 4]);
+    assert!(
+        failures.is_empty(),
+        "corner-localized misses without the engine global pivot search (seed, true E/||f||, \
+         reported): {failures:?}"
     );
 }

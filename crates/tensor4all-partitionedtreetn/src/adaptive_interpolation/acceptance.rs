@@ -122,8 +122,18 @@ where
                     .measurement
             } else {
                 let plan = self.plan(context.patch_count, context.seeds.verify(attempt));
-                let measured =
-                    self.measure(tally, sampler, &target, plan, false, projector, ctx)?;
+                let measured = self.estimate(
+                    tally,
+                    sampler,
+                    &target,
+                    plan,
+                    context.active,
+                    context.tolerance,
+                    context.seeds.residual(attempt),
+                    true,
+                    projector,
+                    ctx,
+                )?;
                 if measured.measurement.rms > context.tolerance {
                     Tally::add(&tally.verification_failures, 1);
                 }
@@ -136,6 +146,8 @@ where
                 sampler,
                 &target,
                 &measurement,
+                context.active,
+                context.tolerance,
                 context.seeds,
                 projector,
                 ctx,

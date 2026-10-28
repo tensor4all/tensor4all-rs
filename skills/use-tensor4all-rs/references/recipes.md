@@ -339,9 +339,10 @@ and `patched_interpolate_mpi(&world, &mut lanes, root, ...)` (features
 `Option<result>` (`Some` on the root only). Under the L2 norm give a known
 reference norm (`ErrorNorm::l2(L2Reference::Given(..))`, an L2 norm, not
 `max |f|`) or use `rtol = 0` with `atol`; `ErrorNorm::sampled_max()` keeps the
-engine's max-norm criterion. The audit cannot see a feature that enters a patch
-only through a corner or an edge, so only `GlobalL2Error::Certified` bounds the
-error.
+engine's max-norm criterion. The default `L2Estimator::ResidualTt` starts its
+residual run from the patch corners and edges; under `L2Estimator::UniformMonteCarlo`
+the audit cannot see a feature that enters a patch only through a corner or an
+edge. Only `GlobalL2Error::Certified` bounds the error.
 
 ## Elementwise op on TTs (ACI)
 

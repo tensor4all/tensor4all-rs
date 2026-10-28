@@ -61,6 +61,7 @@ use crate::{ErrorNorm, ErrorTolerance};
 /// assert_eq!(options.max_patches, None);
 /// assert_eq!(options.min_patch_bits, None);
 /// assert_eq!(options.capped_patches, CappedPatches::Split);
+/// assert!(options.variables.is_empty());
 /// ```
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -110,11 +111,11 @@ pub struct PatchedInterpolationOptions {
     /// the patch, so this adds no evaluations. A child with at least
     /// `n_initial_pivots` such points gets no random start points: random
     /// exploration is traded for points where `|f|` is known to be large.
-    /// An opt-in mitigation of the corner-localized misses (see "Known
-    /// limitation" in the [module documentation](super)): a child then starts
-    /// on a feature the parent sampled inside it. It cannot help with a
-    /// feature the parent never sampled, nor with a miss of the acceptance
-    /// sample. Default `false`.
+    /// An opt-in mitigation of corner-localized misses under
+    /// [`L2Estimator::UniformMonteCarlo`]: a child then starts on a feature
+    /// the parent sampled inside it. It cannot help with a feature the parent
+    /// never sampled, nor with a miss of the acceptance sample. Default
+    /// `false`.
     pub cache_candidates: bool,
     /// Root seed of every per-patch sub-seed and measurement stream. Default
     /// `0`.
@@ -142,6 +143,15 @@ pub struct PatchedInterpolationOptions {
     /// [`CappedPatches::Split`], which splits every capped patch. Patches
     /// that converge below the cap are never split for their size.
     pub capped_patches: CappedPatches,
+    /// Sites of each variable, used only to choose the corner and edge start
+    /// points of the residual-TT estimator
+    /// ([`L2Estimator::ResidualTt`]). Default empty, which treats every active
+    /// site of a patch as one variable. On a quantics problem, list each
+    /// variable's bits so that the corners mix whole variables rather than
+    /// cutting through a variable's bits. Every index must be a site of the
+    /// problem and appear at most once; active sites in no group form one
+    /// further group. See [`VerificationOptions::estimator`].
+    pub variables: Vec<Vec<DynIndex>>,
 }
 
 /// Acceptance of patches whose engine run reaches the bond cap
@@ -190,7 +200,7 @@ impl PatchedInterpolationOptions {
     /// `rtol = 1e-8`, `atol = 0`, default verification, the derived site
     /// order, five initial pivots, no recycling, no cache candidates, seed
     /// `0`, no patch limit,
-    /// no minimum patch size, and capped patches split.
+    /// no minimum patch size, capped patches split, and no variable groups.
     ///
     /// # Arguments
     ///
@@ -219,6 +229,7 @@ impl PatchedInterpolationOptions {
     /// assert_eq!(options.max_patches, None);
     /// assert_eq!(options.min_patch_bits, None);
     /// assert_eq!(options.capped_patches, CappedPatches::Split);
+    /// assert!(options.variables.is_empty());
     /// ```
     pub fn new(max_bond_dim: usize) -> Self {
         Self {
@@ -234,6 +245,7 @@ impl PatchedInterpolationOptions {
             max_patches: None,
             min_patch_bits: None,
             capped_patches: CappedPatches::Split,
+            variables: Vec::new(),
         }
     }
 
@@ -411,6 +423,95 @@ impl PatchedInterpolationOptions {
         self.capped_patches = capped_patches;
         self
     }
+
+    /// Set the sites of each variable for the residual-TT estimator's corner
+    /// and edge start points.
+    ///
+    /// The groups only affect [`L2Estimator::ResidualTt`]; a
+    /// [`L2Estimator::UniformMonteCarlo`] run does not use them. An empty
+    /// list (the default) treats every active site of a patch as one
+    /// variable. Every index must be a site of the problem and appear at
+    /// most once;
+    /// [`patched_interpolate`](super::patched_interpolate) validates the
+    /// groups before any evaluation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::DynIndex;
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::PatchedInterpolationOptions;
+    ///
+    /// let (x, y) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    /// let options = PatchedInterpolationOptions::new(4)
+    ///     .with_variables(vec![vec![x.clone()], vec![y.clone()]]);
+    /// assert_eq!(options.variables, vec![vec![x], vec![y]]);
+    /// ```
+    pub fn with_variables(mut self, variables: Vec<Vec<DynIndex>>) -> Self {
+        self.variables = variables;
+        self
+    }
+}
+
+/// How a sampled patch measurement estimates the patch's L2 error.
+///
+/// The estimator applies to sampled measurements only: a patch with at most
+/// `max(verification.max_exhaustive_points, verification.samples)` points is
+/// measured exhaustively (or exactly), and those methods are unchanged.
+/// [`VerificationOptions::estimator`] chooses between the two sampled
+/// estimators.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+///     L2Estimator, VerificationOptions,
+/// };
+///
+/// assert_eq!(L2Estimator::default(), L2Estimator::ResidualTt);
+/// let options = VerificationOptions::new();
+/// assert_eq!(options.estimator, L2Estimator::ResidualTt);
+/// let options = options.with_estimator(L2Estimator::UniformMonteCarlo);
+/// assert_eq!(options.estimator, L2Estimator::UniformMonteCarlo);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum L2Estimator {
+    /// Approximate the patch residual `r = f - f~` itself with the same
+    /// interpolation engine and use the exact contraction `||TT_r||_2`
+    /// (divided by `sqrt(|P|)`) as the patch's L2 estimate. The default.
+    ///
+    /// The residual run starts from the largest residuals of the uniform
+    /// sample together with the patch's corners and edges, so a feature that
+    /// enters the patch only through a corner or an edge is reached even
+    /// when the uniform sample misses it. The residual TT is capped at
+    /// `max(ceil(chi_patch * verification.residual_bond_ratio),
+    /// verification.residual_bond_floor)` with `chi_patch` the largest bond
+    /// dimension of the measured patch; when it reaches that cap without
+    /// converging, the estimate is the larger of the residual norm and the
+    /// uniform sample's RMS. A converged residual estimate is not an
+    /// unbiased estimate, so a run with such a contribution is never
+    /// certified: [`GlobalL2Error`](super::GlobalL2Error) reports
+    /// `Audited` (with an audit) or `AcceptanceOnly` (without one).
+    ///
+    /// Limits: if every initial pivot of the residual run is exactly zero
+    /// the engine returns
+    /// [`InterpolationError::AllSamplesZero`](tensor4all_treetn::interpolation::InterpolationError::AllSamplesZero)
+    /// before its global pivot search, and the residual estimate is taken as
+    /// zero. The norm is read with `TreeTN::log_norm`, so a residual norm
+    /// above about `1.34e154` overflows the estimate and a norm below about
+    /// `1e-154` underflows it to zero.
+    #[default]
+    ResidualTt,
+    /// Estimate the error from the mean square of the residual at fresh
+    /// uniform points of the patch, as in the M3 driver. The estimate is a
+    /// decision statistic conditioned on the acceptance it decided, with the
+    /// standard error of [`L2Measurement::mean_square_rel_std_error`](super::L2Measurement::mean_square_rel_std_error);
+    /// the independent audit sample makes it an unbiased estimate of the mean
+    /// square (its RMS is not). Uniform points can miss a residual
+    /// concentrated on a small part of the patch, for example a localized
+    /// feature that enters it only through a corner or an edge; neither more
+    /// samples nor the audit's standard error exclude such a miss.
+    UniformMonteCarlo,
 }
 
 /// How [`patched_interpolate`](super::patched_interpolate) measures accepted
@@ -418,47 +519,64 @@ impl PatchedInterpolationOptions {
 ///
 /// A patch with at most `max(max_exhaustive_points, samples)` points is
 /// measured exhaustively, exact up to rounding (a certificate when the patch
-/// meets its allowance, otherwise a bound on its error); a larger one on
-/// `samples` fresh uniform points, a decision statistic. With `audit`, every
-/// sampled acceptance gets an independent audit sample after the decision,
-/// whose mean square is an unbiased estimate (its RMS is not; neither is a
-/// bound).
+/// meets its allowance, otherwise a bound on its error); a larger one is
+/// estimated by [`VerificationOptions::estimator`]. With `audit`, every
+/// sampled acceptance gets an independent audit after the decision, which is
+/// reported next to the acceptance and used by the audited global error. The
+/// audit never changes the acceptance decision.
 ///
-/// Both samples are uniform, so both can miss a localized feature that
-/// enters a patch only through a corner or an edge, and the audit's standard
-/// error does not reveal such a miss. Only exhaustive (or exact) measurement
-/// rules it out; see "Known limitation" in the
-/// [module documentation](super).
+/// The two estimators answer the concentrated-residual case differently.
+/// [`L2Estimator::ResidualTt`] (the default) interpolates the residual itself
+/// and takes its exact norm, using corner and edge starts so that a localized
+/// feature is represented even when uniform points miss it; its bond cap and
+/// the saturation fallback are documented on
+/// [`L2Estimator::ResidualTt`]. [`L2Estimator::UniformMonteCarlo`] reproduces
+/// the M3 behaviour: both its sample and its audit are uniform, so both can
+/// miss a localized feature, and the audit's standard error does not reveal
+/// such a miss. Only exhaustive (or exact) measurement rules it out.
 ///
 /// The defaults are provisional; their measured cost is a later milestone.
 /// When in doubt keep them: `samples = 64`, `max_exhaustive_points = 1024`,
-/// `retries = 1`, `audit = true`. Raising `samples` lowers the variance of a
-/// sampled measurement and the chance of missing a localized residual, at
-/// proportional cost, but does not exclude a miss; `max_exhaustive_points`
-/// bounds the exhaustive work and cache growth per patch.
+/// `retries = 1`, `audit = true`, `estimator = ResidualTt`,
+/// `residual_bond_ratio = 0.25`, `residual_bond_floor = 4`. Raising `samples`
+/// lowers the variance of a uniform measurement and the chance of missing a
+/// localized residual, at proportional cost, but does not exclude a miss;
+/// `max_exhaustive_points` bounds the exhaustive work and cache growth per
+/// patch.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_partitionedtreetn::adaptive_interpolation::VerificationOptions;
+/// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+///     L2Estimator, VerificationOptions,
+/// };
 ///
 /// let options = VerificationOptions::new()
 ///     .with_samples(16)
 ///     .with_max_exhaustive_points(0)
 ///     .with_retries(0)
-///     .with_audit(false);
+///     .with_audit(false)
+///     .with_estimator(L2Estimator::UniformMonteCarlo)
+///     .with_residual_bond_ratio(0.5)
+///     .with_residual_bond_floor(8);
 /// assert_eq!(
 ///     (options.samples, options.max_exhaustive_points, options.retries, options.audit),
 ///     (16, 0, 0, false)
 /// );
+/// assert_eq!(options.estimator, L2Estimator::UniformMonteCarlo);
+/// assert_eq!(options.residual_bond_ratio, 0.5);
+/// assert_eq!(options.residual_bond_floor, 8);
 /// assert_eq!(VerificationOptions::default(), VerificationOptions::new());
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct VerificationOptions {
     /// Fresh uniform points per sampled measurement, at least 2. Default 64.
-    /// More points make a missed localized residual less likely; no finite
-    /// number excludes one.
+    /// Under [`L2Estimator::ResidualTt`] they seed the residual run's start
+    /// points and serve as its saturation fallback; under
+    /// [`L2Estimator::UniformMonteCarlo`] they decide the measurement. More
+    /// points make a missed localized residual less likely; no finite number
+    /// excludes one.
     pub samples: usize,
     /// A patch with at most `max(max_exhaustive_points, samples)` points is
     /// measured exhaustively. Bounds the exhaustive work and cache growth per
@@ -470,30 +588,54 @@ pub struct VerificationOptions {
     /// size blocks the split, is retained). A failed capped run is not
     /// rerun. Default 1.
     pub retries: usize,
-    /// Draw an independent audit sample for every sampled contribution after
-    /// its acceptance decision. Default `true`; without it a run with a
+    /// Draw an independent audit measurement for every sampled contribution
+    /// after its acceptance decision. Default `true`; without it a run with a
     /// sampled contribution is reported as
     /// [`GlobalL2Error::AcceptanceOnly`](super::GlobalL2Error::AcceptanceOnly).
-    /// The audit is uniform like the acceptance sample: it detects a missed
-    /// residual only if it draws points of it, and its standard error does
-    /// not reveal one it did not draw.
+    /// The audit uses the same estimator as the acceptance and its own
+    /// streams; it is never a gate.
     pub audit: bool,
+    /// The estimator of a sampled patch measurement. Default
+    /// [`L2Estimator::ResidualTt`]; [`L2Estimator::UniformMonteCarlo`]
+    /// reproduces the M3 behaviour.
+    pub estimator: L2Estimator,
+    /// Factor of the residual TT's bond cap under
+    /// [`L2Estimator::ResidualTt`]: the cap is
+    /// `max(ceil(chi_patch * residual_bond_ratio), residual_bond_floor)` with
+    /// `chi_patch` the largest bond dimension of the measured patch (zero
+    /// for the zero approximation). Finite and positive. Default `0.25`: the
+    /// residual's rank is at most about the target's plus the patch TT's,
+    /// and small when the patch has converged. A larger ratio captures more
+    /// of a localized residual at a higher cost; a capped residual run falls
+    /// back to the larger of its own norm and the uniform sample's RMS.
+    pub residual_bond_ratio: f64,
+    /// Floor of the residual TT's bond cap under
+    /// [`L2Estimator::ResidualTt`], at least 1. Default `4`, which keeps a
+    /// small patch (`chi_patch` 1 to 8) able to hold more than one localized
+    /// feature. It applies to the zero approximation as well.
+    pub residual_bond_floor: usize,
 }
 
 impl VerificationOptions {
     /// The defaults: 64 samples, exhaustive up to 1024 points, one retry,
-    /// audit on.
+    /// audit on, [`L2Estimator::ResidualTt`], residual bond ratio `0.25`, and
+    /// residual bond floor `4`.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tensor4all_partitionedtreetn::adaptive_interpolation::VerificationOptions;
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+    ///     L2Estimator, VerificationOptions,
+    /// };
     ///
     /// let options = VerificationOptions::new();
     /// assert_eq!(options.samples, 64);
     /// assert_eq!(options.max_exhaustive_points, 1024);
     /// assert_eq!(options.retries, 1);
     /// assert!(options.audit);
+    /// assert_eq!(options.estimator, L2Estimator::ResidualTt);
+    /// assert_eq!(options.residual_bond_ratio, 0.25);
+    /// assert_eq!(options.residual_bond_floor, 4);
     /// ```
     pub fn new() -> Self {
         Self {
@@ -501,6 +643,9 @@ impl VerificationOptions {
             max_exhaustive_points: 1024,
             retries: 1,
             audit: true,
+            estimator: L2Estimator::ResidualTt,
+            residual_bond_ratio: 0.25,
+            residual_bond_floor: 4,
         }
     }
 
@@ -547,7 +692,7 @@ impl VerificationOptions {
         self
     }
 
-    /// Enable or disable the audit sample.
+    /// Enable or disable the audit measurement.
     ///
     /// # Examples
     ///
@@ -558,6 +703,53 @@ impl VerificationOptions {
     /// ```
     pub fn with_audit(mut self, audit: bool) -> Self {
         self.audit = audit;
+        self
+    }
+
+    /// Set the estimator of a sampled patch measurement.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+    ///     L2Estimator, VerificationOptions,
+    /// };
+    ///
+    /// let options = VerificationOptions::new().with_estimator(L2Estimator::UniformMonteCarlo);
+    /// assert_eq!(options.estimator, L2Estimator::UniformMonteCarlo);
+    /// ```
+    pub fn with_estimator(mut self, estimator: L2Estimator) -> Self {
+        self.estimator = estimator;
+        self
+    }
+
+    /// Set the factor of the residual TT's bond cap (finite and positive).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::VerificationOptions;
+    ///
+    /// let options = VerificationOptions::new().with_residual_bond_ratio(0.5);
+    /// assert_eq!(options.residual_bond_ratio, 0.5);
+    /// ```
+    pub fn with_residual_bond_ratio(mut self, residual_bond_ratio: f64) -> Self {
+        self.residual_bond_ratio = residual_bond_ratio;
+        self
+    }
+
+    /// Set the floor of the residual TT's bond cap (at least 1).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_partitionedtreetn::adaptive_interpolation::VerificationOptions;
+    ///
+    /// let options = VerificationOptions::new().with_residual_bond_floor(8);
+    /// assert_eq!(options.residual_bond_floor, 8);
+    /// ```
+    pub fn with_residual_bond_floor(mut self, residual_bond_floor: usize) -> Self {
+        self.residual_bond_floor = residual_bond_floor;
         self
     }
 }

@@ -8,8 +8,9 @@ use std::sync::OnceLock;
 use adaptive_common::*;
 use tensor4all_core::IdxTensor;
 use tensor4all_partitionedtreetn::adaptive_interpolation::{
-    GlobalL2Error, MeasurementMethod, PatchedInterpolationOptions, PatchedInterpolationResult,
-    VerificationOptions, GLOBAL_ROUNDING_MARGIN, MEASUREMENT_ROUNDING_FACTOR,
+    GlobalL2Error, L2Estimator, MeasurementMethod, PatchedInterpolationOptions,
+    PatchedInterpolationResult, VerificationOptions, GLOBAL_ROUNDING_MARGIN,
+    MEASUREMENT_ROUNDING_FACTOR,
 };
 use tensor4all_partitionedtreetn::{ErrorNorm, L2Reference};
 use tensor4all_treetci::TreeTciInterpolator;
@@ -141,9 +142,12 @@ const SAMPLED_STANDARD_ERRORS: f64 = 4.0;
 fn sampled_l2_error_is_audited_or_acceptance_only() {
     let problem = extended_quantics_tree();
     let (reference, norm) = dense_reference(&problem, &extended_peak);
+    // The test pins the sampled method and the Monte Carlo standard error,
+    // so it runs the uniform Monte Carlo estimator.
     let sampled = VerificationOptions::new()
         .with_samples(16)
-        .with_max_exhaustive_points(0);
+        .with_max_exhaustive_points(0)
+        .with_estimator(L2Estimator::UniformMonteCarlo);
     let options = l2_options(&problem, norm).with_verification(sampled);
     let engine = TreeTciInterpolator::default();
     let result = run(&engine, &problem, &extended_peak, &[], &options).unwrap();

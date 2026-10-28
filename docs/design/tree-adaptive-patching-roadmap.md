@@ -158,10 +158,10 @@ Outcome: one accuracy requirement with a reported, measured error for
 interpolation and patched algebra; the measured L2 error is the default
 (Decision 3). The measured error is certified (a bound) where it is exact or
 exhaustive (and for patched algebra), and a statistical estimate, not a
-guarantee, where it is sampled. A sampled estimate,
-audited or not, can miss a localized feature that enters a patch only through
-a corner or an edge
-([known limitation](./tree-patching-error-contract.md#known-limitation-corner-localized-misses); fix deferred to M9).
+guarantee, where it is sampled. The default residual-TT estimator searches
+patch corners and edges for a localized residual; the uniform Monte Carlo
+estimator can miss a feature that enters a patch only through a corner or an
+edge ([estimator contract](./tree-patching-error-contract.md#patch-l2-estimators)).
 
 Scope:
 
@@ -278,7 +278,7 @@ Scope:
 
 Note: split-site selection and the candidate rules for child patches must
 take the M3 corner-localized misses into account
-([known limitation](./tree-patching-error-contract.md#known-limitation-corner-localized-misses)): a split that cuts through a feature can leave
+([estimator contract](./tree-patching-error-contract.md#patch-l2-estimators)): a split that cuts through a feature can leave
 children that the feature enters only through a corner or an edge, which
 uniform sampling and the engine can miss. The fix itself is decided in the
 M9 global review.
@@ -322,7 +322,7 @@ commit:
   `skills/audit-performance/`;
 - one list of the recorded but unresolved issues, each with its owner
   milestone, distinguishing closed tracking history (#795, #791) from
-  remaining work (#797, #670, upstream tenferro-rs#1963, and corner misses).
+  remaining work (#797, #670, upstream tenferro-rs#1963).
 
 Process: independent review, a fix round if needed, and a re-review; if the
 re-review finds new problems, stop and report instead of starting another
@@ -421,26 +421,15 @@ Exit: an MPI smoke test and a multi-rank benchmark.
 - Known risk to track: downstream TreeTCI runs on topologies with junction
   nodes have been observed to be much slower than on chains at low
   temperature; this affects tree pQTCI and must be profiled once M2 exists.
-- Corner-localized misses: global review and fix decision. Uniform-sample
-  acceptance and the audit of M3 can miss a localized feature that enters a
-  patch only through a corner or an edge, underestimating the error by orders
-  of magnitude without a warning
-  ([record](./tree-patching-error-contract.md#known-limitation-corner-localized-misses); reproduction: the ignored test
-  `corner_localized_ridge_is_not_missed_by_sampled_acceptance`). The fix was
-  deferred to this review by user decision on 2026-10-03. Candidate remedies:
-  - a reject-only screen on points already in the patch cache: no new
-    evaluations of `f`; it may only reject a patch, never contribute to an
-    estimate;
-  - a larger default `samples`;
-  - boundary-aware or recycled candidates for child patches: the parent's
-    feature points just across the split face. The opt-in
-    `cache_candidates` of M5 (largest values of the inherited cache) lowered
-    the true `E / delta` of the reproduction from 680–880 to 16–230 and
-    removed its rank-1 never-sampled misses, but not the misses of the
-    sampled acceptance;
-  - split-site rules that avoid cutting through a feature at a corner (the
-    optional selector study, deferred from M5);
-  - stratified or importance verification.
+- Corner-localized misses: addressed by the patch L2 estimator. The default
+  `L2Estimator::ResidualTt` approximates the residual `f - TT` with the patch
+  engine, starting its global pivot search from the patch corners and edges
+  and from the largest residuals of a uniform sample, and accepts on the
+  residual TT's norm (with the uniform Monte Carlo estimate as well when the
+  residual run saturates); `L2Estimator::UniformMonteCarlo` keeps the uniform
+  estimate, which can miss such a feature
+  ([estimator contract](./tree-patching-error-contract.md#patch-l2-estimators);
+  regressions in `tests/adaptive_l2_corner_miss.rs`).
 
 ### M10. Bindings (deferred)
 

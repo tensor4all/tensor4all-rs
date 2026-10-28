@@ -5,7 +5,11 @@ use std::collections::{BTreeMap, HashSet};
 
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
 use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
-use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+use tensor4all_treetci::TreeTciInterpolator;
+use tensor4all_treetn::interpolation::{
+    EvalContext, InterpolationError, InterpolationOutcome, InterpolationTermination, Parallelism,
+    TreeInterpolator,
+};
 use tensor4all_treetn::{NodeNameNetwork, TreeTN};
 
 use super::cache::{
@@ -18,8 +22,15 @@ use super::sampling::{
     all_points, build_candidates, mix64, patch_candidates, patch_seeds, point_list_capacity,
     uniform_points, PatchDomain, SplitMix64,
 };
-use super::{active_pivots, added_pivots, complete_points, Exclusive, PatchedInterpolationOptions};
-use crate::{PartitionedTreeTN, PartitionedTreeTNError, Projector, SubDomainTreeTN};
+use super::verify;
+use super::{
+    active_pivots, added_pivots, complete_points, patched_interpolate, residual, Exclusive,
+    L2Estimator, MeasurementMethod, PatchStatus, PatchedInterpolationOptions, VerificationOptions,
+};
+use crate::{
+    ErrorNorm, ErrorTolerance, L2Reference, PartitionedTreeTN, PartitionedTreeTNError, Projector,
+    SubDomainTreeTN,
+};
 
 /// Run `body` on one caller-owned engine, the execution capability of the production
 /// entries.
@@ -118,6 +129,20 @@ fn measurement_streams_follow_the_documented_mapping() {
     assert_eq!(root.audit(), 3_965_753_011_800_562_021);
     assert_eq!(root.scale(), 11_195_191_274_241_726_103);
     assert_eq!(root.engine_run(0), root.engine);
+    // The residual-estimator streams are distinct per stage and deterministic.
+    let residual = [
+        root.residual(0),
+        root.residual(1),
+        root.residual_audit(),
+        root.residual_zero_screen(),
+    ];
+    assert_eq!(residual[0], patch_seeds(0, &[]).residual(0));
+    let distinct: HashSet<u64> = residual
+        .iter()
+        .copied()
+        .chain([root.verify(0), root.audit(), root.zero_screen()])
+        .collect();
+    assert_eq!(distinct.len(), 7);
     assert_eq!(root.engine_run(1), 14_625_715_455_650_629_719);
     let child = patch_seeds(0, &[(2, 1), (0, 3)]);
     assert_eq!(child.zero_screen(), 1_272_130_066_354_424_498);
@@ -1260,4 +1285,750 @@ fn disjoint_assembly_asserts_disjointness_in_debug_builds() {
         one_site_patch(&site, vec![1.0_f64, 0.0], 0),
         one_site_patch(&site, vec![1.0_f64, 0.0], 0),
     ]);
+}
+
+// ---------------------------------------------------------------------------
+// The residual-TT estimator.
+// ---------------------------------------------------------------------------
+
+/// Equality up to a relative tolerance.
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-12 * a.abs().max(b.abs())
+}
+
+/// A test engine that interpolates a single-node problem exactly: it
+/// evaluates the whole active domain and returns one tensor. `scale`
+/// multiplies the returned network, which lets a test leave a known residual;
+/// the reported termination is the caller's.
+#[derive(Clone, Copy)]
+struct DenseNodeEngine {
+    scale: f64,
+    termination: InterpolationTermination,
+}
+
+impl DenseNodeEngine {
+    fn new(scale: f64, termination: InterpolationTermination) -> Self {
+        Self { scale, termination }
+    }
+}
+
+impl TreeInterpolator<f64> for DenseNodeEngine {
+    fn interpolate<V, F>(
+        &self,
+        problem: &tensor4all_treetn::interpolation::InterpolationProblem<V>,
+        ctx: &mut EvalContext<'_>,
+        mut evaluate: F,
+    ) -> Result<InterpolationOutcome<V>, InterpolationError>
+    where
+        V: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>>,
+    {
+        let evaluator = |source: anyhow::Error| InterpolationError::Evaluator { source };
+        let initial = problem.initial_pivots();
+        let initial_batch = ColMajorArrayRef::new(initial.data(), initial.shape())
+            .map_err(|error| evaluator(anyhow::anyhow!("{error}")))?;
+        let initial_values = evaluate(initial_batch, ctx).map_err(evaluator)?;
+        if initial_values.iter().all(|&value| value == 0.0) {
+            return Err(InterpolationError::AllSamplesZero);
+        }
+        let node_sites = problem.node_sites();
+        if node_sites.len() != 1 {
+            return Err(InterpolationError::Engine {
+                source: anyhow::anyhow!("the test engine needs a single-node problem"),
+            });
+        }
+        let (node, sites) = node_sites
+            .iter()
+            .next()
+            .map(|(node, sites)| (node.clone(), sites.clone()))
+            .ok_or_else(|| InterpolationError::Engine {
+                source: anyhow::anyhow!("the test engine needs a node"),
+            })?;
+        let dims: Vec<usize> = sites.iter().map(IndexLike::dim).collect();
+        let n_points: usize = dims.iter().product();
+        let points = all_points(&dims, n_points).map_err(|message| InterpolationError::Engine {
+            source: anyhow::anyhow!("{message}"),
+        })?;
+        let shape = [dims.len(), n_points];
+        let batch = ColMajorArrayRef::new(&points, &shape)
+            .map_err(|error| evaluator(anyhow::anyhow!("{error}")))?;
+        let values = evaluate(batch, ctx).map_err(evaluator)?;
+        let scaled: Vec<f64> = values.iter().map(|&value| self.scale * value).collect();
+        let max_sample_magnitude = scaled.iter().fold(0.0_f64, |m, value| m.max(value.abs()));
+        let tensor =
+            IdxTensor::from_dense(sites, scaled).map_err(|source| InterpolationError::Engine {
+                source: anyhow::Error::new(source),
+            })?;
+        let network = TreeTN::from_tensors(vec![tensor], vec![node]).map_err(|source| {
+            InterpolationError::Engine {
+                source: anyhow::anyhow!("{source}"),
+            }
+        })?;
+        let pivots = ColMajorArray::new(points[..dims.len()].to_vec(), vec![dims.len(), 1])
+            .map_err(|error| InterpolationError::Engine {
+                source: anyhow::anyhow!("{error}"),
+            })?;
+        Ok(InterpolationOutcome {
+            network,
+            termination: self.termination,
+            error_estimate: 0.0,
+            max_sample_magnitude,
+            pivots: Some(pivots),
+        })
+    }
+}
+
+/// A test engine that approximates a single-node problem by a constant taken
+/// from its first nonzero initial pivot, without evaluating the whole domain.
+/// It is the cheapest way to leave a known residual at unknown points.
+#[derive(Clone, Copy)]
+struct ConstantNodeEngine {
+    scale: f64,
+    termination: InterpolationTermination,
+}
+
+impl TreeInterpolator<f64> for ConstantNodeEngine {
+    fn interpolate<V, F>(
+        &self,
+        problem: &tensor4all_treetn::interpolation::InterpolationProblem<V>,
+        ctx: &mut EvalContext<'_>,
+        mut evaluate: F,
+    ) -> Result<InterpolationOutcome<V>, InterpolationError>
+    where
+        V: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+        F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>>,
+    {
+        let evaluator = |source: anyhow::Error| InterpolationError::Evaluator { source };
+        let initial = problem.initial_pivots();
+        let initial_batch = ColMajorArrayRef::new(initial.data(), initial.shape())
+            .map_err(|error| evaluator(anyhow::anyhow!("{error}")))?;
+        let initial_values = evaluate(initial_batch, ctx).map_err(evaluator)?;
+        let Some(&first) = initial_values.iter().find(|&&value| value != 0.0) else {
+            return Err(InterpolationError::AllSamplesZero);
+        };
+        let node_sites = problem.node_sites();
+        let (node, sites) = node_sites
+            .iter()
+            .next()
+            .map(|(node, sites)| (node.clone(), sites.clone()))
+            .ok_or_else(|| InterpolationError::Engine {
+                source: anyhow::anyhow!("the test engine needs a node"),
+            })?;
+        let n_points: usize = sites.iter().map(IndexLike::dim).product();
+        let value = self.scale * first;
+        let tensor = IdxTensor::from_dense(sites, vec![value; n_points]).map_err(|source| {
+            InterpolationError::Engine {
+                source: anyhow::Error::new(source),
+            }
+        })?;
+        let network = TreeTN::from_tensors(vec![tensor], vec![node]).map_err(|source| {
+            InterpolationError::Engine {
+                source: anyhow::anyhow!("{source}"),
+            }
+        })?;
+        Ok(InterpolationOutcome {
+            network,
+            termination: self.termination,
+            error_estimate: 0.0,
+            max_sample_magnitude: value.abs(),
+            pivots: Some(initial.clone()),
+        })
+    }
+}
+
+/// Run `patched_interpolate` on one single-node problem.
+fn run_single_node<E>(
+    engine: &E,
+    dims: &[usize],
+    f: fn(&[usize]) -> f64,
+    options: &PatchedInterpolationOptions,
+) -> Result<super::PatchedInterpolationResult<usize>, super::PatchedInterpolationError>
+where
+    E: TreeInterpolator<f64> + Sync,
+{
+    let sites: Vec<DynIndex> = dims.iter().map(|&dim| DynIndex::new_dyn(dim)).collect();
+    let mut topology = NodeNameNetwork::new();
+    topology.add_node(0usize).unwrap();
+    let node_sites = BTreeMap::from([(0usize, sites.clone())]);
+    let pivots = ColMajorArray::new(vec![], vec![sites.len(), 0]).unwrap();
+    with_eval_context(|ctx| {
+        patched_interpolate(
+            engine,
+            topology,
+            node_sites,
+            pivots,
+            ctx,
+            |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| {
+                Ok(batch.data().chunks(dims.len()).map(f).collect())
+            },
+            options,
+        )
+    })
+}
+
+/// L2 options on 4 samples with no exhaustive measurement.
+fn sampled_options(norm: f64, rtol: f64) -> PatchedInterpolationOptions {
+    PatchedInterpolationOptions::new(2)
+        .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
+        .with_tolerance(ErrorTolerance { rtol, atol: 0.0 })
+        .with_verification(
+            VerificationOptions::new()
+                .with_samples(4)
+                .with_max_exhaustive_points(0),
+        )
+}
+
+#[test]
+fn the_residual_estimator_catches_a_corner_the_uniform_sample_misses() {
+    let corner = [1usize, 2usize];
+    let evaluate: BoxedEvaluator = Box::new(move |batch, _ctx| {
+        Ok(batch
+            .data()
+            .chunks(3)
+            .map(|point| {
+                if point[0] == corner[0] && point[2] == corner[1] {
+                    1.0
+                } else {
+                    0.0
+                }
+            })
+            .collect())
+    });
+    let sites = [
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(3),
+    ];
+    let fixed = [None, Some(1), None];
+    let active_dims = [2usize, 3];
+    // A uniform seed whose two points miss the corner.
+    let seed = (0u64..)
+        .find(|&seed| {
+            let points = uniform_points(&active_dims, 2, seed).unwrap();
+            !points.chunks(2).any(|point| point == corner)
+        })
+        .unwrap();
+    let problem = {
+        let mut topology = NodeNameNetwork::new();
+        topology.add_node(0usize).unwrap();
+        let node_sites = BTreeMap::from([(0usize, vec![sites[0].clone(), sites[2].clone()])]);
+        let corners = super::corners::corner_and_edge_starts(&sites, &[0, 2], &active_dims, &[], 0);
+        let initial = ColMajorArray::new(corners.concat(), vec![2, corners.len()]).unwrap();
+        tensor4all_treetn::interpolation::InterpolationProblem::new(
+            topology,
+            node_sites,
+            initial,
+            0.1 * 0.5,
+            std::num::NonZeroUsize::new(4),
+            0,
+        )
+        .unwrap()
+    };
+    let ((sample_rms, estimate), _, _) = with_sampler(evaluate, |sampler, ctx| {
+        let target = verify::MeasureTarget {
+            network: None,
+            sites: &sites,
+            fixed: &fixed,
+            active_dims: &active_dims,
+            patch_points: 6.0,
+        };
+        let plan = verify::PointPlan::Sampled { count: 2, seed };
+        let measured = verify::measure(sampler, &target, plan, ctx).unwrap();
+        let estimate = residual::estimate(
+            &DenseNodeEngine::new(1.0, InterpolationTermination::Converged),
+            &problem,
+            sampler,
+            &target,
+            6.0,
+            ctx,
+        )
+        .unwrap();
+        (measured.measurement.rms, estimate)
+    });
+    // The uniform sample misses the spike entirely.
+    assert_eq!(sample_rms, 0.0);
+    // The residual TT, started from the corners, sees it: ||f|| = 1 on six
+    // points.
+    assert!(close(estimate.rms, 1.0 / 6.0_f64.sqrt()));
+    assert!(!estimate.saturated);
+}
+
+#[test]
+fn an_all_zero_residual_run_estimates_zero_without_a_search() {
+    let evaluate: BoxedEvaluator = Box::new(|batch, _ctx| Ok(vec![0.0; batch.shape()[1]]));
+    let sites = [
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(3),
+    ];
+    let fixed = [None, Some(1), None];
+    let active_dims = [2usize, 3];
+    let problem = {
+        let mut topology = NodeNameNetwork::new();
+        topology.add_node(0usize).unwrap();
+        let node_sites = BTreeMap::from([(0usize, vec![sites[0].clone(), sites[2].clone()])]);
+        let initial = ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap();
+        tensor4all_treetn::interpolation::InterpolationProblem::new(
+            topology,
+            node_sites,
+            initial,
+            1e-3,
+            std::num::NonZeroUsize::new(4),
+            0,
+        )
+        .unwrap()
+    };
+    let (estimate, _, _) = with_sampler(evaluate, |sampler, ctx| {
+        let target = verify::MeasureTarget {
+            network: None,
+            sites: &sites,
+            fixed: &fixed,
+            active_dims: &active_dims,
+            patch_points: 6.0,
+        };
+        residual::estimate(
+            &DenseNodeEngine::new(1.0, InterpolationTermination::Converged),
+            &problem,
+            sampler,
+            &target,
+            6.0,
+            ctx,
+        )
+        .unwrap()
+    });
+    assert_eq!(estimate.rms, 0.0);
+    assert!(!estimate.saturated);
+    assert!(estimate.pivots.is_empty());
+}
+
+/// The inputs of the residual-failure tests.
+struct ResidualErrorSetup {
+    /// Three sites, the middle one fixed to `1`.
+    sites: [DynIndex; 3],
+    /// Fixed coordinates of the three sites.
+    fixed: [Option<usize>; 3],
+    /// Dimensions of the two active sites.
+    active_dims: [usize; 2],
+    /// A uniform-sample seed whose two points avoid the corner `[1, 2]`.
+    seed: u64,
+    /// The residual problem, started from the patch corners.
+    problem: tensor4all_treetn::interpolation::InterpolationProblem<usize>,
+}
+
+fn residual_error_setup() -> ResidualErrorSetup {
+    let sites = [
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(3),
+    ];
+    let fixed = [None, Some(1), None];
+    let active_dims = [2usize, 3];
+    let corner = [1usize, 2usize];
+    let seed = (0u64..)
+        .find(|&seed| {
+            let points = uniform_points(&active_dims, 2, seed).unwrap();
+            !points.chunks(2).any(|point| point == corner)
+        })
+        .unwrap();
+    let problem = {
+        let mut topology = NodeNameNetwork::new();
+        topology.add_node(0usize).unwrap();
+        let node_sites = BTreeMap::from([(0usize, vec![sites[0].clone(), sites[2].clone()])]);
+        let corners = super::corners::corner_and_edge_starts(&sites, &[0, 2], &active_dims, &[], 0);
+        let initial = ColMajorArray::new(corners.concat(), vec![2, corners.len()]).unwrap();
+        tensor4all_treetn::interpolation::InterpolationProblem::new(
+            topology,
+            node_sites,
+            initial,
+            1e-3,
+            std::num::NonZeroUsize::new(4),
+            0,
+        )
+        .unwrap()
+    };
+    ResidualErrorSetup {
+        sites,
+        fixed,
+        active_dims,
+        seed,
+        problem,
+    }
+}
+
+#[test]
+fn a_residual_network_readout_failure_keeps_its_kind() {
+    // The stored patch is finite on the uniform sample but non-finite at a
+    // corner, so only the residual run reads that point. The failure is a
+    // network failure, not the caller's evaluator.
+    let ResidualErrorSetup {
+        sites,
+        fixed,
+        active_dims,
+        seed,
+        problem,
+    } = residual_error_setup();
+    let dims: Vec<usize> = sites.iter().map(IndexLike::dim).collect();
+    let corner_full = [1usize, 1, 2];
+    let mut corner_flat = 0;
+    let mut stride = 1;
+    for (&value, &dim) in corner_full.iter().zip(&dims) {
+        corner_flat += value * stride;
+        stride *= dim;
+    }
+    let mut values: Vec<f64> = (0..dims.iter().product::<usize>())
+        .map(|index| 1.0 + index as f64)
+        .collect();
+    values[corner_flat] = f64::INFINITY;
+    let network = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(sites.to_vec(), values).unwrap()],
+        vec![0usize],
+    )
+    .unwrap();
+    let evaluate: BoxedEvaluator = Box::new(|batch, _ctx| Ok(vec![1.0; batch.shape()[1]]));
+    let ((measured, estimate), _, _) = with_sampler(evaluate, |sampler, ctx| {
+        let target = verify::MeasureTarget {
+            network: Some(&network),
+            sites: &sites,
+            fixed: &fixed,
+            active_dims: &active_dims,
+            patch_points: 6.0,
+        };
+        let plan = verify::PointPlan::Sampled { count: 2, seed };
+        let measured = verify::measure(sampler, &target, plan, ctx).unwrap();
+        let estimate = residual::estimate(
+            &ConstantNodeEngine {
+                scale: 1.0,
+                termination: InterpolationTermination::Converged,
+            },
+            &problem,
+            sampler,
+            &target,
+            6.0,
+            ctx,
+        );
+        (measured, estimate)
+    });
+    // The ordinary measurement never reached the corner.
+    assert_eq!(measured.points.len(), 2);
+    let error = estimate.unwrap_err();
+    let verify::MeasureError::Network(message) = &error else {
+        panic!("expected a network failure, got {error:?}");
+    };
+    assert!(message.contains("non-finite"), "{message}");
+    // The driver reports it as an engine failure, exactly like a non-finite
+    // value found by an ordinary verification.
+    assert!(matches!(
+        super::measure_error(&Projector::new(), error),
+        super::PatchedInterpolationError::Interpolation {
+            source: InterpolationError::Engine { .. },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn a_user_evaluator_failure_in_a_residual_run_stays_an_evaluator_error() {
+    let ResidualErrorSetup {
+        sites,
+        fixed,
+        active_dims,
+        seed,
+        problem,
+    } = residual_error_setup();
+    let corner = [1usize, 2usize];
+    let full_corner = [1usize, 1, 2];
+    let evaluate: BoxedEvaluator = Box::new(move |batch, _ctx| {
+        let mut values = Vec::new();
+        // The evaluator sees full-domain points: the fixed site is included.
+        for point in batch.data().chunks(3) {
+            if point == full_corner {
+                anyhow::bail!("user failure at {point:?}");
+            }
+            values.push(1.0);
+        }
+        Ok(values)
+    });
+    let ((measured, estimate), _, _) = with_sampler(evaluate, |sampler, ctx| {
+        let target = verify::MeasureTarget {
+            network: None,
+            sites: &sites,
+            fixed: &fixed,
+            active_dims: &active_dims,
+            patch_points: 6.0,
+        };
+        let plan = verify::PointPlan::Sampled { count: 2, seed };
+        let measured = verify::measure(sampler, &target, plan, ctx).unwrap();
+        let estimate = residual::estimate(
+            &ConstantNodeEngine {
+                scale: 1.0,
+                termination: InterpolationTermination::Converged,
+            },
+            &problem,
+            sampler,
+            &target,
+            6.0,
+            ctx,
+        );
+        (measured, estimate)
+    });
+    // The ordinary measurement never reached the corner.
+    assert_eq!(measured.points.len(), 2);
+    assert!(measured.points.iter().all(|point| point != &corner));
+    let error = estimate.unwrap_err();
+    assert_eq!(error.to_string(), "user failure at [1, 1, 2]");
+    let super::PatchedInterpolationError::Interpolation {
+        source: InterpolationError::Evaluator { source },
+        ..
+    } = super::measure_error(&Projector::new(), error)
+    else {
+        panic!("expected an evaluator failure");
+    };
+    assert!(source.to_string().contains("user failure"), "{source}");
+}
+
+#[test]
+fn a_saturated_residual_run_takes_the_larger_sample_rms_and_counts_once() {
+    // f = 1 on sixteen points, ||f|| = 4. The engine returns half of the
+    // function it is given and reports the bond cap: the patch is 0.5, the
+    // residual 0.5, and the residual run returns 0.5 * 0.5 = 0.25. The seed
+    // sample's RMS of the residual is 0.5, so the larger value decides.
+    let engine = ConstantNodeEngine {
+        scale: 0.5,
+        termination: InterpolationTermination::BondCapReached,
+    };
+    let options = sampled_options(8.0, 1e-3).with_min_patch_bits(6);
+    let result = run_single_node(&engine, &[2, 2, 2, 2, 2, 2], |_| 1.0, &options).unwrap();
+    let record = &result.report.accepted[0];
+    let measurement = record.acceptance.as_ref().unwrap();
+    assert_eq!(record.status, PatchStatus::ToleranceNotMet);
+    assert_eq!(measurement.method, MeasurementMethod::ResidualTt);
+    assert!(close(measurement.rms, 0.5));
+    assert!(close(measurement.residual_rms.unwrap(), 0.25));
+    assert!(close(measurement.sample_rms.unwrap(), 0.5));
+    assert!(measurement.residual_saturated);
+    // The audit also saturates, but only a decisive run counts.
+    assert_eq!(result.report.residual_saturations, 1);
+    assert!(result.report.residual_evaluations > 0);
+    assert!(result.report.residual_evaluations <= result.report.measurement_evaluations);
+}
+
+#[test]
+fn uniform_monte_carlo_keeps_the_uniform_decision_and_touches_no_residual_run() {
+    let engine = DenseNodeEngine::new(0.5, InterpolationTermination::Converged);
+    let options = sampled_options(4.0, 1.0).with_verification(
+        VerificationOptions::new()
+            .with_samples(4)
+            .with_max_exhaustive_points(0)
+            .with_estimator(L2Estimator::UniformMonteCarlo),
+    );
+    let result = run_single_node(&engine, &[2, 2, 2, 2], |_| 1.0, &options).unwrap();
+    let record = &result.report.accepted[0];
+    let measurement = record.acceptance.as_ref().unwrap();
+    // The uniform residual of the 0.5 patch is 0.5 at every point, and the
+    // patch is accepted exactly when that value is at most tau.
+    assert_eq!(record.status, PatchStatus::WithinTolerance);
+    assert_eq!(measurement.method, MeasurementMethod::Sampled);
+    assert_eq!(measurement.rms, 0.5);
+    assert_eq!(measurement.residual_rms, None);
+    assert_eq!(measurement.sample_rms, None);
+    assert!(!measurement.residual_saturated);
+    assert_eq!(
+        record.audit.as_ref().unwrap().method,
+        MeasurementMethod::Sampled
+    );
+    assert_eq!(result.report.residual_evaluations, 0);
+    assert_eq!(result.report.residual_saturations, 0);
+}
+
+#[test]
+fn the_audit_carries_the_acceptance_estimator() {
+    // f = 1, the engine returns half of it: the patch is 0.5, the residual
+    // 0.5, and the residual TT is 0.25. tau = 0.5 accepts it.
+    let engine = ConstantNodeEngine {
+        scale: 0.5,
+        termination: InterpolationTermination::Converged,
+    };
+    let options = sampled_options(8.0, 0.5);
+    let result = run_single_node(&engine, &[2, 2, 2, 2, 2, 2], |_| 1.0, &options).unwrap();
+    let record = &result.report.accepted[0];
+    let acceptance = record.acceptance.as_ref().unwrap();
+    let audit = record.audit.as_ref().unwrap();
+    assert_eq!(acceptance.method, MeasurementMethod::ResidualTt);
+    assert_eq!(audit.method, MeasurementMethod::ResidualTt);
+    assert!(close(acceptance.residual_rms.unwrap(), 0.25));
+    assert!(close(audit.residual_rms.unwrap(), 0.25));
+    assert!(close(acceptance.sample_rms.unwrap(), 0.5));
+    assert!(!acceptance.residual_saturated);
+    assert_eq!(result.report.residual_saturations, 0);
+    assert!(result.report.audit_evaluations > 0);
+}
+
+#[test]
+fn a_blocked_judged_patch_keeps_its_residual_estimate_and_status() {
+    // The engine returns half of f = 1 and converges. The residual estimate
+    // 0.25 exceeds tau = 0.025; with retries off the patch fails, and the
+    // minimum patch size retains it with the deciding measurement.
+    let engine = DenseNodeEngine::new(0.5, InterpolationTermination::Converged);
+    let options = sampled_options(4.0, 0.025)
+        .with_min_patch_bits(4)
+        .with_verification(
+            VerificationOptions::new()
+                .with_samples(4)
+                .with_max_exhaustive_points(0)
+                .with_retries(0),
+        );
+    let result = run_single_node(&engine, &[2, 2, 2, 2], |_| 1.0, &options).unwrap();
+    let record = &result.report.accepted[0];
+    assert_eq!(record.status, PatchStatus::ToleranceNotMet);
+    assert_eq!(record.retries_used, 0);
+    let acceptance = record.acceptance.as_ref().unwrap();
+    assert_eq!(acceptance.method, MeasurementMethod::ResidualTt);
+    assert!(close(acceptance.rms, 0.25));
+    assert_eq!(result.report.verification_failures, 1);
+    assert!(!result.report.tolerance_met());
+}
+
+#[test]
+fn residual_estimator_options_are_validated_before_evaluation() {
+    let sites = vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+    let run = |options: &PatchedInterpolationOptions| {
+        let mut topology = NodeNameNetwork::new();
+        topology.add_node(0usize).unwrap();
+        let node_sites = BTreeMap::from([(0usize, sites.clone())]);
+        let pivots = ColMajorArray::new(vec![], vec![2, 0]).unwrap();
+        with_eval_context(|ctx| {
+            patched_interpolate(
+                &DenseNodeEngine::new(1.0, InterpolationTermination::Converged),
+                topology,
+                node_sites,
+                pivots,
+                ctx,
+                |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| {
+                    panic!("the evaluator was called with {:?}", batch.shape())
+                },
+                options,
+            )
+        })
+    };
+    for (ratio, needle) in [
+        (0.0, "residual_bond_ratio"),
+        (-1.0, "residual_bond_ratio"),
+        (f64::NAN, "residual_bond_ratio"),
+        (f64::INFINITY, "residual_bond_ratio"),
+    ] {
+        let options = sampled_options(1.0, 1e-3)
+            .with_verification(VerificationOptions::new().with_residual_bond_ratio(ratio));
+        let error = run(&options).unwrap_err().to_string();
+        assert!(error.contains(needle), "{error}");
+    }
+    let options = sampled_options(1.0, 1e-3)
+        .with_verification(VerificationOptions::new().with_residual_bond_floor(0));
+    let error = run(&options).unwrap_err().to_string();
+    assert!(error.contains("residual_bond_floor"), "{error}");
+    // A variables entry that is not a site of the problem.
+    let stray = DynIndex::new_dyn(2);
+    let options = sampled_options(1.0, 1e-3).with_variables(vec![vec![stray]]);
+    let error = run(&options).unwrap_err().to_string();
+    assert!(error.contains("variables"), "{error}");
+    // The same site in two groups.
+    let options = sampled_options(1.0, 1e-3)
+        .with_variables(vec![vec![sites[0].clone()], vec![sites[0].clone()]]);
+    let error = run(&options).unwrap_err().to_string();
+    assert!(error.contains("more than once"), "{error}");
+}
+
+#[test]
+fn default_estimator_runs_are_identical_on_two_fresh_threads() {
+    let run = || {
+        std::thread::spawn(|| {
+            let engine = DenseNodeEngine::new(0.5, InterpolationTermination::Converged);
+            let options = sampled_options(4.0, 0.5);
+            let result = run_single_node(&engine, &[2, 2, 2, 2], |_| 1.0, &options).unwrap();
+            format!("{:?}", result.report)
+        })
+        .join()
+        .unwrap()
+    };
+    let first = run();
+    let second = run();
+    assert_eq!(first, second);
+    assert!(first.contains("ResidualTt"));
+}
+
+/// Run `patched_interpolate` on a chain of `nodes` nodes with one binary site
+/// each; the derived site order is the node order.
+fn run_binary_chain<E>(
+    engine: &E,
+    nodes: usize,
+    f: fn(&[usize]) -> f64,
+    options: &PatchedInterpolationOptions,
+) -> Result<super::PatchedInterpolationResult<usize>, super::PatchedInterpolationError>
+where
+    E: TreeInterpolator<f64> + Sync,
+{
+    let sites: Vec<DynIndex> = (0..nodes).map(|_| DynIndex::new_dyn(2)).collect();
+    let mut topology = NodeNameNetwork::new();
+    for node in 0..nodes {
+        topology.add_node(node).unwrap();
+    }
+    for node in 1..nodes {
+        topology.add_edge(&(node - 1), &node).unwrap();
+    }
+    let node_sites: BTreeMap<usize, Vec<DynIndex>> = (0..nodes)
+        .map(|node| (node, vec![sites[node].clone()]))
+        .collect();
+    let pivots = ColMajorArray::new(vec![], vec![sites.len(), 0]).unwrap();
+    with_eval_context(|ctx| {
+        patched_interpolate(
+            engine,
+            topology,
+            node_sites,
+            pivots,
+            ctx,
+            |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| {
+                Ok(batch.data().chunks(nodes).map(f).collect())
+            },
+            options,
+        )
+    })
+}
+
+#[test]
+fn a_sampled_multi_node_tree_tci_run_is_identical_on_two_fresh_threads() {
+    let run = || {
+        std::thread::spawn(|| {
+            let engine = TreeTciInterpolator::default();
+            // 2^12 points, four samples: the engine caches only a small part
+            // of the patch, so the residual run evaluates fresh points.
+            let options = sampled_options((3.25 * 2048.0_f64).sqrt(), 1e-8);
+            let result =
+                run_binary_chain(&engine, 12, |point| 1.0 + 0.5 * point[0] as f64, &options)
+                    .unwrap();
+            let report = &result.report;
+            // The residual estimator decides the sampled patch, and its run is
+            // part of the measurement evaluations.
+            assert!(report.accepted.iter().any(|record| {
+                record.acceptance.as_ref().unwrap().method == MeasurementMethod::ResidualTt
+            }));
+            assert!(report.residual_evaluations > 0);
+            // Everything the determinism claim covers; approximation_rms and
+            // the fields derived from it are outside it.
+            format!(
+                "{:?}|{:?}|{}|{}|{}|{}|{}|{}",
+                report.accepted,
+                report.zero_patches,
+                report.splits,
+                report.function_evaluations,
+                report.measurement_evaluations,
+                report.audit_evaluations,
+                report.residual_evaluations,
+                report.residual_saturations,
+            )
+        })
+        .join()
+        .unwrap()
+    };
+    let first = run();
+    let second = run();
+    assert_eq!(first, second);
 }

@@ -158,6 +158,7 @@ enum WireMethod {
     Exact,
     Exhaustive,
     Sampled,
+    ResidualTt,
 }
 
 /// One L2 measurement.
@@ -169,6 +170,9 @@ struct WireMeasurement {
     rms: f64,
     mean_square_rel_std_error: f64,
     max_residual: f64,
+    residual_rms: Option<f64>,
+    residual_saturated: bool,
+    sample_rms: Option<f64>,
 }
 
 /// The engine's verdict of one kept run.
@@ -258,6 +262,8 @@ struct WireTotals {
     cache_hits: usize,
     measurement_evaluations: usize,
     audit_evaluations: usize,
+    residual_evaluations: usize,
+    residual_saturations: usize,
     verification_failures: usize,
     engine_retries: usize,
 }
@@ -297,6 +303,7 @@ fn encode_method(method: MeasurementMethod) -> WireMethod {
         MeasurementMethod::Exact => WireMethod::Exact,
         MeasurementMethod::Exhaustive => WireMethod::Exhaustive,
         MeasurementMethod::Sampled => WireMethod::Sampled,
+        MeasurementMethod::ResidualTt => WireMethod::ResidualTt,
     }
 }
 
@@ -305,6 +312,7 @@ fn decode_method(method: WireMethod) -> MeasurementMethod {
         WireMethod::Exact => MeasurementMethod::Exact,
         WireMethod::Exhaustive => MeasurementMethod::Exhaustive,
         WireMethod::Sampled => MeasurementMethod::Sampled,
+        WireMethod::ResidualTt => MeasurementMethod::ResidualTt,
     }
 }
 
@@ -316,6 +324,9 @@ fn encode_measurement(measurement: &L2Measurement) -> WireMeasurement {
         rms: measurement.rms,
         mean_square_rel_std_error: measurement.mean_square_rel_std_error,
         max_residual: measurement.max_residual,
+        residual_rms: measurement.residual_rms,
+        residual_saturated: measurement.residual_saturated,
+        sample_rms: measurement.sample_rms,
     }
 }
 
@@ -327,6 +338,9 @@ fn decode_measurement(measurement: WireMeasurement) -> L2Measurement {
         rms: measurement.rms,
         mean_square_rel_std_error: measurement.mean_square_rel_std_error,
         max_residual: measurement.max_residual,
+        residual_rms: measurement.residual_rms,
+        residual_saturated: measurement.residual_saturated,
+        sample_rms: measurement.sample_rms,
     }
 }
 
@@ -474,6 +488,8 @@ fn encode_totals(totals: Totals) -> WireTotals {
         cache_hits: totals.cache_hits,
         measurement_evaluations: totals.measurement_evaluations,
         audit_evaluations: totals.audit_evaluations,
+        residual_evaluations: totals.residual_evaluations,
+        residual_saturations: totals.residual_saturations,
         verification_failures: totals.verification_failures,
         engine_retries: totals.engine_retries,
     }
@@ -485,6 +501,8 @@ fn decode_totals(totals: WireTotals) -> Totals {
         cache_hits: totals.cache_hits,
         measurement_evaluations: totals.measurement_evaluations,
         audit_evaluations: totals.audit_evaluations,
+        residual_evaluations: totals.residual_evaluations,
+        residual_saturations: totals.residual_saturations,
         verification_failures: totals.verification_failures,
         engine_retries: totals.engine_retries,
     }
@@ -1396,6 +1414,9 @@ mod tests {
                         rms: 0.0,
                         mean_square_rel_std_error: 0.0,
                         max_residual: 0.0,
+                        residual_rms: None,
+                        residual_saturated: false,
+                        sample_rms: None,
                     }),
                     audit: None,
                     status: WireStatus::WithinTolerance,
@@ -1407,8 +1428,10 @@ mod tests {
             totals: WireTotals {
                 evaluations: 9,
                 cache_hits: 2,
-                measurement_evaluations: 4,
+                measurement_evaluations: 7,
                 audit_evaluations: 0,
+                residual_evaluations: 3,
+                residual_saturations: 1,
                 verification_failures: 0,
                 engine_retries: 1,
             },
@@ -1432,6 +1455,46 @@ mod tests {
             other => panic!("expected an accepted outcome, got {other:?}"),
         }
         assert_eq!(back.totals.evaluations, 9);
+    }
+
+    #[test]
+    fn a_residual_tt_measurement_and_its_counters_cross_the_wire() {
+        let measurement = WireMeasurement {
+            method: WireMethod::ResidualTt,
+            points: 8,
+            patch_points: 64.0,
+            rms: 0.25,
+            mean_square_rel_std_error: 0.5,
+            max_residual: 0.75,
+            residual_rms: Some(0.25),
+            residual_saturated: true,
+            sample_rms: Some(0.125),
+        };
+        let json = serde_json::to_string(&measurement).unwrap();
+        let back: WireMeasurement = serde_json::from_str(&json).unwrap();
+        assert_eq!(format!("{back:?}"), format!("{measurement:?}"));
+        assert!(matches!(
+            decode_method(back.method),
+            MeasurementMethod::ResidualTt
+        ));
+
+        let totals = WireTotals {
+            evaluations: 21,
+            cache_hits: 3,
+            measurement_evaluations: 11,
+            audit_evaluations: 2,
+            residual_evaluations: 9,
+            residual_saturations: 2,
+            verification_failures: 1,
+            engine_retries: 1,
+        };
+        let json = serde_json::to_string(&totals).unwrap();
+        let back: WireTotals = serde_json::from_str(&json).unwrap();
+        assert_eq!(format!("{back:?}"), format!("{totals:?}"));
+        let decoded = decode_totals(back);
+        assert_eq!(decoded.residual_evaluations, 9);
+        assert_eq!(decoded.residual_saturations, 2);
+        assert_eq!(decoded.measurement_evaluations, 11);
     }
 
     /// A root-only result converges through the agreed control: a failure the root alone observed fails

@@ -56,9 +56,13 @@ The accuracy requirement is `PatchedInterpolationOptions::error_norm` with
   functions. The allowance is split by patch volume (`rms_P(f - f~) <= tau`
   with `tau = delta / sqrt(|X|)`), and the driver measures every accepted and
   zero patch itself: exhaustively up to
-  `VerificationOptions::max_exhaustive_points`, otherwise on fresh uniform
-  samples with an independent audit. A failed measurement of a converged run
-  reruns the engine with the worst points as pivots, then splits.
+  `VerificationOptions::max_exhaustive_points`, otherwise with the selected
+  estimator `VerificationOptions::estimator` and an independent audit. The
+  default `L2Estimator::ResidualTt` interpolates the residual from the patch
+  corners and edges and takes its exact norm;
+  `L2Estimator::UniformMonteCarlo` reproduces the M3 uniform sample. A failed
+  measurement of a converged run reruns the engine with the worst points as
+  pivots, then splits.
 - `ErrorNorm::SampledMax` is the M2 criterion: the engine's sampled error
   estimate against `max(atol, rtol * max_reference)`. It is **neither** a
   certified bound nor a measured error, and makes no L2 claim.
@@ -77,8 +81,8 @@ for their size. Both default to the M3 behavior.
 
 The opt-in `cache_candidates` starts every child patch from the largest
 values of its inherited evaluation cache as well (no new evaluations). It
-mitigates the corner-localized misses described below without excluding
-them.
+mitigates uniform-sampling misses of the `UniformMonteCarlo` estimator
+without excluding them.
 
 The report's `GlobalL2Error` states what an L2 run can claim. `Certified`
 (every contribution exact or exhaustive, every patch within its allowance)
@@ -92,14 +96,17 @@ patch was retained without meeting its allowance; its `basis` says which of
 the three applies to its measured value. Sampled measurements cannot bound
 the L2 error of a black-box function.
 
-Known limitation: the acceptance sample and the audit are both uniform, so
-both can miss a localized feature that enters a patch only through a corner
-or an edge, and the audit's standard error does not reveal such a miss (it is
-computed from the same points). An `Audited` result can then underestimate
-the error by orders of magnitude. Raising `VerificationOptions::samples`
-makes this less likely but does not exclude it; only `Certified` results
-(every contribution exact or exhaustive) are guarantees. See "Known
-limitation: corner-localized misses" in
+Neither sampled estimator is a guarantee. Under
+`L2Estimator::UniformMonteCarlo` both the acceptance sample and the audit are
+uniform, so both can miss a localized feature that enters a patch only
+through a corner or an edge, and the audit's standard error does not reveal
+such a miss (it is computed from the same points); an `Audited` result can
+then underestimate the error by orders of magnitude. Raising
+`VerificationOptions::samples` makes this less likely but does not exclude
+it. `L2Estimator::ResidualTt` starts its residual run from the patch corners
+and edges instead, but its capped residual TT is still an estimate. Only
+`Certified` results (every contribution exact or exhaustive) are guarantees.
+See "Patch L2 estimators" in
 [`docs/design/tree-patching-error-contract.md`](../../docs/design/tree-patching-error-contract.md).
 
 - Patches are processed sequentially in FIFO order; each has an evaluation

@@ -454,6 +454,7 @@ fn worst_points_are_distinct_and_sorted_with_ties_in_measurement_order() {
         measurement: statistics(&[], MeasurementMethod::Sampled, 1.0),
         points: vec![vec![0], vec![1], vec![2], vec![1], vec![3], vec![4]],
         residuals: vec![0.5, 2.0, 3.0, 2.0, 2.0, 0.1],
+        residual_pivots: Vec::new(),
     };
     assert_eq!(measured.worst_points(1.0, 10), [vec![2], vec![1], vec![3]]);
     assert_eq!(measured.worst_points(1.0, 2), [vec![2], vec![1]]);
@@ -792,6 +793,93 @@ fn unmet_contributions_keep_the_m3_classification_as_basis() {
     assert!(close(measured_rms, (0.5_f64 * 0.01 + 0.5 * 0.09).sqrt()));
     assert_eq!(unmet_fraction, 0.5);
     assert_eq!(global.rms_value(), measured_rms);
+}
+
+/// A residual-TT measurement with the fields the estimator sets.
+fn residual_measurement(
+    patch_points: f64,
+    rms: f64,
+    sample_rms: f64,
+    rel: f64,
+    saturated: bool,
+) -> L2Measurement {
+    let mut measurement = statistics(&[], MeasurementMethod::ResidualTt, patch_points);
+    measurement.rms = rms;
+    measurement.residual_rms = Some(rms);
+    measurement.sample_rms = Some(sample_rms);
+    measurement.mean_square_rel_std_error = rel;
+    measurement.residual_saturated = saturated;
+    measurement
+}
+
+#[test]
+fn residual_contributions_are_estimated_and_reduce_the_certified_fraction() {
+    // A quarter of the domain is exact; the rest is a residual-TT estimate
+    // with (0.4) and without (0.2) saturation.
+    let exact = measurement(MeasurementMethod::Exact, 1.0, 0.0, 0.0);
+    let converged = residual_measurement(1.0, 0.2, 0.5, 0.0, false);
+    let saturated = residual_measurement(2.0, 0.4, 0.2, 0.3, true);
+    let saturated_audit = residual_measurement(2.0, 0.4, 0.2, 0.3, true);
+    let contributions = [
+        Contribution {
+            patch_points: 1.0,
+            acceptance: &exact,
+            audit: None,
+            within_tolerance: true,
+        },
+        Contribution {
+            patch_points: 1.0,
+            acceptance: &converged,
+            audit: Some(&converged),
+            within_tolerance: true,
+        },
+        Contribution {
+            patch_points: 2.0,
+            acceptance: &saturated,
+            audit: Some(&saturated_audit),
+            within_tolerance: true,
+        },
+    ];
+    let (global, certified) = global_error(&contributions, 4.0, 0.5, None, f64::EPSILON);
+    // Only the exact contribution is certified: a residual-TT estimate is
+    // never exact.
+    assert_eq!(certified, 0.25);
+    let GlobalL2Error::Audited {
+        rms_error_estimate,
+        mean_square_rel_std_error,
+        ..
+    } = global
+    else {
+        panic!("expected an audited error, got {global:?}");
+    };
+    // Mean square 0.25 * 0.04 + 0.5 * 0.16 = 0.09; the saturated audit term
+    // contributes the only Monte-Carlo variance.
+    assert!(close(rms_error_estimate, 0.09_f64.sqrt()));
+    // The converged residual term contributes no Monte-Carlo variance. The
+    // saturated one is weighted by its sampled part (0.2, half of the
+    // deciding 0.4) against the total mean square 0.09 plus the converged
+    // term's 0.01.
+    assert!(close(mean_square_rel_std_error, 0.3 * 0.25 / 1.125));
+
+    // Without an audit of the residual contribution the run is
+    // acceptance-only, and the exact quarter is still certified.
+    let unaudited = [
+        Contribution {
+            patch_points: 1.0,
+            acceptance: &exact,
+            audit: None,
+            within_tolerance: true,
+        },
+        Contribution {
+            patch_points: 3.0,
+            acceptance: &saturated,
+            audit: None,
+            within_tolerance: true,
+        },
+    ];
+    let (global, certified) = global_error(&unaudited, 4.0, 0.5, None, f64::EPSILON);
+    assert_eq!(certified, 0.25);
+    assert!(matches!(global, GlobalL2Error::AcceptanceOnly { .. }));
 }
 
 #[test]

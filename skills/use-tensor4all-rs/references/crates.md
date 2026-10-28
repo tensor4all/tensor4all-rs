@@ -205,9 +205,13 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   default `ErrorNorm::L2 { reference: L2Reference::Required }`), `tolerance`
   (`ErrorTolerance { rtol, atol }`, default `1e-8`, `0`), `verification`
   (`VerificationOptions`: `samples` 64, `max_exhaustive_points` 1024,
-  `retries` 1, `audit` true), `n_initial_pivots` (5), `recycle_pivots`
+  `retries` 1, `audit` true, `estimator`
+  (`L2Estimator::ResidualTt` by default, or `UniformMonteCarlo`),
+  `residual_bond_ratio` 0.25, `residual_bond_floor` 4), `variables` (empty;
+  sites of each variable for the residual estimator's corner and edge
+  starts), `n_initial_pivots` (5), `recycle_pivots`
   (false), `cache_candidates` (false; children also start from their
-  largest cached values, a partial corner-miss mitigation), `seed` (0;
+  largest cached values, a partial uniform-sampling mitigation), `seed` (0;
   per-patch streams, no `&mut R` API), `max_patches`,
   `min_patch_bits` (`None`; generalized bits = active sites, any dimension;
   a blocked failing patch is retained as `PatchStatus::ToleranceNotMet`),
@@ -216,19 +220,22 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   Under L2 pass `ErrorNorm::l2(L2Reference::Given(l2_norm_of_f))` (an L2 norm,
   not `max |f|`), or `rtol = 0` with `atol`; `L2Reference::MonteCarlo` is an
   opt-in estimate. The driver measures every accepted and zero patch
-  (exhaustive up to `max_exhaustive_points`, else sampled plus audit) and
+  (exhaustive up to `max_exhaustive_points`, else estimated with
+  `verification.estimator` and audited) and
   reports `report.norm` (`NormReport::L2 { tau, error: L2ErrorReport { global:
   GlobalL2Error::{Certified, Audited, AcceptanceOnly, ToleranceNotMet}, ..
   }, .. }`): `Certified` bounds the error and states that every patch met
   its allowance, only up to a calibrated (not proven) rounding model;
   `ToleranceNotMet` (a retained patch missed its allowance; check
   `report.tolerance_met()`) still bounds the error with an
-  `ExactOrExhaustive` basis but is never certified; a sampled run is an estimate only with the audit on, otherwise
-  acceptance-only (neither a bound nor an estimate). Known limitation:
-  sampled acceptance and the audit can both miss a localized feature that
-  enters a patch only through a corner or an edge, and the audit's standard
-  error does not reveal it, so an `Audited` error can be orders of magnitude
-  too small; only `Certified` (exact or exhaustive) is a guarantee. `ErrorNorm::sampled_max()` /
+  `ExactOrExhaustive` basis but is never certified; a non-exact run is an estimate only with the audit on, otherwise
+  acceptance-only (neither a bound nor an estimate). The default
+  `ResidualTt` estimator interpolates the residual from the patch corners and
+  edges; `UniformMonteCarlo` samples uniformly and can miss a localized
+  feature that enters a patch only through a corner or an edge, with an audit
+  standard error that does not reveal it, so an `Audited` error can be orders
+  of magnitude too small. Only `Certified` (exact or exhaustive) is a
+  guarantee. `ErrorNorm::sampled_max()` /
   `sampled_max_with_reference(max_abs)` keep the M2 engine criterion (no
   certified bound, no measured error, no L2 claim). `MaxAbs`/`WeightedL2` are placeholders
   (`UnsupportedNorm`). Zero patches are in `report.zero_patches` (absent from

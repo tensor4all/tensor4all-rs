@@ -101,38 +101,50 @@
 //!
 //! **Certified, measured, and estimated errors.** Under L2 the driver
 //! measures every patch error from values of `f` at points chosen
-//! independently of the approximation, by one of three methods
-//! ([`MeasurementMethod`]): `Exact` (the patch was built from all its
-//! values) and `Exhaustive` (the residual was evaluated at every point: exact
-//! up to rounding) are certified; `Sampled` (fresh uniform points) is
-//! measured, not certified, and never a guarantee. A sampled acceptance
-//! measurement is only a decision statistic: it is conditioned on the
-//! acceptance it decided, and a residual concentrated on unsampled points is
-//! missed. With [`VerificationOptions::audit`], an independent audit sample
-//! drawn after the decision gives an unbiased estimate of the mean square
-//! residual (its square root, the reported RMS, is not unbiased) with a
-//! standard error; it is never a bound. No finite sample bounds the L2 error
-//! of a black-box function.
+//! independently of the approximation, by one of the methods of
+//! [`MeasurementMethod`]: `Exact` (the patch was built from all its values)
+//! and `Exhaustive` (the residual was evaluated at every point: exact up to
+//! rounding) are certified; `Sampled` (fresh uniform points) and
+//! `ResidualTt` (a residual TT) are estimates, not certified, and never a
+//! guarantee. A uniform acceptance measurement is only a decision statistic:
+//! it is conditioned on the acceptance it decided, and a residual concentrated
+//! on unsampled points is missed. With [`VerificationOptions::audit`], an
+//! independent audit measurement drawn after the decision gives a second
+//! estimate; under `Sampled` its mean square is unbiased and carries a
+//! standard error, but it is never a bound. No finite sample bounds the L2
+//! error of a black-box function.
 //!
-//! **Known limitation: localized features.** The acceptance sample and the
-//! audit are both uniform, so both can miss a localized feature that enters
-//! a patch only through a corner or an edge; the engine may also never
-//! sample it there and converge at a low rank. The audit's standard error is
-//! computed from the same points and says nothing about a residual
-//! concentrated on a small set it did not draw: the audited estimate can then
-//! be orders of magnitude below the true error with a small standard error.
-//! More [`VerificationOptions::samples`] make such a miss less likely but do
-//! not exclude it. The opt-in
-//! [`PatchedInterpolationOptions::cache_candidates`] starts child patches on
-//! values the parent already evaluated in them, so it can prevent a miss
-//! where the parent sampled the feature but the child's engine would not; it
-//! does not help when the parent never sampled the feature, nor when the
-//! acceptance sample and the audit miss a feature the engine saw but did not
-//! resolve. Only a `Certified` result (every contribution exact or
-//! exhaustive) is a guarantee. The limitation is recorded, with a
-//! reproduction and the measured effect of the option, under "Known
-//! limitation: corner-localized misses" in
-//! `docs/design/tree-patching-error-contract.md`.
+//! **Estimating a sampled patch error.** A patch too large for exhaustive
+//! measurement is estimated by
+//! [`VerificationOptions::estimator`]:
+//!
+//! - [`L2Estimator::ResidualTt`] (the default) interpolates the residual
+//!   `r = f - f~` with the same engine and takes
+//!   `||TT_r||_2 / sqrt(|P|)` from an exact contraction. The residual run
+//!   starts from the largest residuals of a small uniform seed sample
+//!   together with the patch corners and edges (grouped by
+//!   [`PatchedInterpolationOptions::variables`]), so a feature that enters
+//!   the patch only through a corner or an edge is reached even when the
+//!   uniform points miss it. Its bond cap is
+//!   `max(ceil(chi_patch * residual_bond_ratio), residual_bond_floor)` with
+//!   `chi_patch` the largest bond dimension of the measured patch. A run that
+//!   does not converge makes the estimate the larger of the residual norm and
+//!   the seed sample's RMS, because a capped residual TT captures the largest
+//!   components first.
+//! - [`L2Estimator::UniformMonteCarlo`] reproduces the M3 behaviour: the
+//!   uniform sample alone decides.
+//!
+//! The `ResidualTt` estimate is not an unbiased sample statistic, so a run
+//! with such a contribution is never certified: it is `Audited` with an audit
+//! and `AcceptanceOnly` without one. Its limits: if every initial pivot of the
+//! residual run is exactly zero the engine returns
+//! `InterpolationError::AllSamplesZero` before its global pivot search and the
+//! estimate is taken as zero; and the norm is read from `TreeTN::log_norm`, so
+//! a residual norm above about `1.34e154` overflows the estimate and one
+//! below about `1e-154` underflows it to zero. Under `UniformMonteCarlo`, the
+//! acceptance sample and the audit are both uniform and can both miss a
+//! localized feature, and their standard error does not reveal the miss. Only
+//! a `Certified` result is a guarantee.
 //!
 //! The report's [`GlobalL2Error`] says what the run can claim:
 //!
@@ -148,10 +160,10 @@
 //!   `relative_error_bound` bounds `E / ||f||` from the computable side,
 //!   `E / ||f|| <= E / (||f~|| - E)`, with conservative margins; it is `None`
 //!   when the denominator is not positive.
-//! - `Audited` when every sampled contribution has an audit: an estimate of
-//!   `E` with its standard error, and a plug-in estimate of the relative
-//!   bound. Neither is a guarantee: both can be far too small when a
-//!   localized feature was missed (see above).
+//! - `Audited` when every non-exact contribution has an audit: an estimate
+//!   of `E` with its standard error, and a plug-in estimate of the relative
+//!   bound. Neither is a guarantee: the residual TT is capped, and a uniform
+//!   sample can miss a localized feature (see above).
 //! - `AcceptanceOnly` otherwise: the combined acceptance statistics, neither a
 //!   bound nor an estimate; no relative statement exists.
 //!
@@ -191,14 +203,16 @@
 //!    cap is re-embedded (every fixed site re-attached by a one-hot factor)
 //!    and, under L2, measured on the stored network: exhaustively when the
 //!    patch has at most `max(max_exhaustive_points, samples)` points,
-//!    otherwise on `samples` fresh uniform points. It is accepted when
-//!    `rms <= tau`. With [`CappedPatches::AcceptUpTo`], a
+//!    otherwise by [`VerificationOptions::estimator`] - the residual TT, or
+//!    the uniform Monte Carlo sample. It is accepted when the estimate is at
+//!    most `tau`. With [`CappedPatches::AcceptUpTo`], a
 //!    [`InterpolationTermination::BondCapReached`] outcome of a patch with at
 //!    most that many active sites (generalized bits) is checked against the
 //!    cap and judged the same way (by the engine estimate under
 //!    `SampledMax`).
 //! 6. A failed verification of a converged run reruns the engine (up to
 //!    [`VerificationOptions::retries`] times) with the worst measured points
+//!    (under the residual estimator also its pivots with a nonzero residual)
 //!    and the outcome's pivots added to the initial pivots; a failed capped
 //!    run is not rerun. Then the patch splits at the next unfixed site of
 //!    [`PatchedInterpolationOptions::patch_order`], passing the worst points
@@ -217,8 +231,9 @@
 //! Every patch derives its sub-seeds from [`PatchedInterpolationOptions::seed`]
 //! and its path, the (position in the derived site order, coordinate) pairs
 //! of its fixed sites: one for its random candidate pivots, one per engine
-//! run, and one stream each for the zero screen, every verification, the
-//! audit, and (at the root) the Monte Carlo reference. The generator is
+//! run, one stream each for the zero screen, every verification, the audit,
+//! and (at the root) the Monte Carlo reference, and one stream each for the
+//! zero screen's, every verification's, and the audit's residual-TT run. The generator is
 //! SplitMix64, and a coordinate in `0..d` is drawn with Lemire's unbiased
 //! multiply-shift method with rejection. Unlike other randomized algorithms
 //! of this workspace, the driver offers no API taking a caller-owned
@@ -324,6 +339,7 @@
 
 mod acceptance;
 mod cache;
+mod corners;
 mod embed;
 mod fan_out;
 mod layout;
@@ -331,6 +347,7 @@ mod layout;
 mod mpi;
 mod options;
 mod report;
+mod residual;
 mod sampling;
 #[cfg(test)]
 mod tests;
@@ -367,7 +384,7 @@ use verify::{Contribution, MeasureError, MeasureTarget, Measured, PointPlan};
 pub use fan_out::patched_interpolate_on_lanes;
 #[cfg(any(feature = "hataori-mpi", feature = "hataori-mpi-rsmpi-rt"))]
 pub use mpi::patched_interpolate_mpi;
-pub use options::{CappedPatches, PatchedInterpolationOptions, VerificationOptions};
+pub use options::{CappedPatches, L2Estimator, PatchedInterpolationOptions, VerificationOptions};
 pub use report::{
     GlobalL2Error, L2ErrorReport, L2Measurement, L2ReferenceSource, MaxReferenceSource,
     MeasurementMethod, NormReport, PatchRecord, PatchStatus, PatchedInterpolationReport,
@@ -483,20 +500,24 @@ pub enum PatchedInterpolationError {
     },
     /// The last engine run of a patch was measured (it converged below the
     /// cap, or reached the cap within [`CappedPatches::AcceptUpTo`]), its L2
-    /// error exceeded its allowance after the retries, and every site of
+    /// estimate exceeded its allowance after the retries, and every site of
     /// `patch_order` is already fixed in it. The minimum patch size never
     /// turns this into an acceptance.
     #[error(
-        "the measured L2 error of the patch {projector:?} (rms {}) exceeds its allowance and \
-         every site of patch_order is fixed; list more sites in patch_order, raise rtol or atol, \
-         or check the reference norm",
-        measurement.rms
+        "the L2 verification of the patch {projector:?} failed with measurement method \
+         {measurement_method:?}: estimate {} (residual {}, seed-sample {}) exceeds its \
+         allowance, and every site of patch_order is fixed; list more sites in patch_order, \
+         raise rtol or atol, or check the reference norm",
+        measurement.rms,
+        measurement.residual_text(),
+        measurement.sample_text(),
+        measurement_method = measurement.method
     )]
     VerificationFailed {
         /// Projector of the patch.
         projector: Projector,
-        /// Its last failed measurement.
-        measurement: L2Measurement,
+        /// Its last failed measurement, boxed to keep the error small.
+        measurement: Box<L2Measurement>,
     },
     /// A resource limit of the options was exceeded.
     #[error(
@@ -972,6 +993,8 @@ struct Totals {
     cache_hits: usize,
     measurement_evaluations: usize,
     audit_evaluations: usize,
+    residual_evaluations: usize,
+    residual_saturations: usize,
     verification_failures: usize,
     engine_retries: usize,
 }
@@ -986,6 +1009,12 @@ impl Totals {
         self.audit_evaluations = self
             .audit_evaluations
             .saturating_add(other.audit_evaluations);
+        self.residual_evaluations = self
+            .residual_evaluations
+            .saturating_add(other.residual_evaluations);
+        self.residual_saturations = self
+            .residual_saturations
+            .saturating_add(other.residual_saturations);
         self.verification_failures = self
             .verification_failures
             .saturating_add(other.verification_failures);
@@ -1004,6 +1033,9 @@ struct Tally {
     counters: Counters,
     measurement_evaluations: Cell<usize>,
     audit_evaluations: Cell<usize>,
+    residual_evaluations: Cell<usize>,
+    /// `1` once any decisive residual run of the patch saturated.
+    residual_saturations: Cell<usize>,
     verification_failures: Cell<usize>,
     engine_retries: Cell<usize>,
 }
@@ -1019,6 +1051,8 @@ impl Tally {
             cache_hits: self.counters.cache_hits.get(),
             measurement_evaluations: self.measurement_evaluations.get(),
             audit_evaluations: self.audit_evaluations.get(),
+            residual_evaluations: self.residual_evaluations.get(),
+            residual_saturations: self.residual_saturations.get(),
             verification_failures: self.verification_failures.get(),
             engine_retries: self.engine_retries.get(),
         }
@@ -1076,6 +1110,35 @@ where
 struct Failure {
     measurement: L2Measurement,
     worst: Vec<Vec<usize>>,
+}
+
+/// Largest distinct nonzero residuals of a uniform sample used as residual-run
+/// initial pivots.
+const RESIDUAL_PIVOTS: usize = 4;
+
+/// The distinct measured points with a nonzero residual, in residual order
+/// (measurement order among ties), at most `limit`.
+fn largest_residual_points(measured: &Measured, limit: usize) -> Vec<Vec<usize>> {
+    let mut order: Vec<usize> = (0..measured.points.len())
+        .filter(|&index| measured.residuals[index] > 0.0)
+        .collect();
+    order.sort_by(|&left, &right| measured.residuals[right].total_cmp(&measured.residuals[left]));
+    let mut seen = HashSet::new();
+    order
+        .into_iter()
+        .filter(|&index| seen.insert(measured.points[index].clone()))
+        .take(limit)
+        .map(|index| measured.points[index].clone())
+        .collect()
+}
+
+/// The points of `points` without duplicates, in first-occurrence order.
+fn merged_points<'a>(points: impl Iterator<Item = &'a Vec<usize>>) -> Vec<Vec<usize>> {
+    let mut seen = HashSet::new();
+    points
+        .filter(|point| seen.insert((*point).clone()))
+        .cloned()
+        .collect()
 }
 
 fn max_magnitude<T: CommonScalar>(values: &[T]) -> f64 {
@@ -1333,7 +1396,7 @@ where
     }
 
     /// Measure `f - f~` (or `f` for the zero approximation) on a patch and
-    /// count its new evaluations as measurement (and audit) evaluations.
+    /// count its new evaluations as measurement evaluations.
     #[allow(clippy::too_many_arguments)]
     fn measure(
         &self,
@@ -1341,22 +1404,126 @@ where
         sampler: &PatchSampler<'_, T>,
         target: &MeasureTarget<'_, V>,
         plan: PointPlan,
-        audit: bool,
         projector: &Projector,
         ctx: &mut EvalContext<'_>,
     ) -> Result<Measured, PatchedInterpolationError> {
         let before = tally.counters.evaluations.get();
         let measured = verify::measure(sampler, target, plan, ctx);
-        let added = tally.counters.evaluations.get() - before;
+        let added = tally.counters.evaluations.get().saturating_sub(before);
         Tally::add(&tally.measurement_evaluations, added);
-        if audit {
-            Tally::add(&tally.audit_evaluations, added);
-        }
         measured.map_err(|error| measure_error(projector, error))
     }
 
+    /// Estimate the error of one patch with the selected estimator.
+    ///
+    /// An exhaustive plan and
+    /// [`L2Estimator::UniformMonteCarlo`] measure as before. Under
+    /// [`L2Estimator::ResidualTt`] the uniform sample is only the seed of a
+    /// residual run and the saturation fallback; the deciding value is the
+    /// residual TT's RMS (or the larger of the two when the run did not
+    /// converge). `residual_seed` is the residual run's stream; `decisive`
+    /// says whether this measurement decides the patch (`true` for a zero
+    /// screen or a verification, `false` for an audit).
+    #[allow(clippy::too_many_arguments)]
+    fn estimate(
+        &self,
+        tally: &Tally,
+        sampler: &PatchSampler<'_, T>,
+        target: &MeasureTarget<'_, V>,
+        plan: PointPlan,
+        active: &[usize],
+        tolerance: f64,
+        residual_seed: u64,
+        decisive: bool,
+        projector: &Projector,
+        ctx: &mut EvalContext<'_>,
+    ) -> Result<Measured, PatchedInterpolationError> {
+        let sampled = matches!(plan, PointPlan::Sampled { .. });
+        if !sampled || self.options.verification.estimator != L2Estimator::ResidualTt {
+            return self.measure(tally, sampler, target, plan, projector, ctx);
+        }
+        let sample = self.measure(tally, sampler, target, plan, projector, ctx)?;
+        let before = tally.counters.evaluations.get();
+        let estimate = residual::estimate(
+            self.engine,
+            &self.residual_problem(target, active, &sample, tolerance, residual_seed, projector)?,
+            sampler,
+            target,
+            target.patch_points,
+            ctx,
+        );
+        let added = tally.counters.evaluations.get().saturating_sub(before);
+        Tally::add(&tally.measurement_evaluations, added);
+        Tally::add(&tally.residual_evaluations, added);
+        let estimate = estimate.map_err(|error| measure_error(projector, error))?;
+        if decisive && estimate.bond_capped {
+            tally.residual_saturations.set(1);
+        }
+        let mut measured = sample;
+        measured.measurement =
+            verify::residual_statistics(measured.measurement, estimate.rms, estimate.saturated);
+        measured.residual_pivots = estimate.pivots;
+        Ok(measured)
+    }
+
+    /// The residual run's problem: the patch topology and active node sites,
+    /// the sample's largest residuals followed by the patch corners and
+    /// edges as initial pivots, the corners and edges followed by those
+    /// residual points as global-search starts, a tenth of `tau` as its
+    /// absolute tolerance, and the residual bond cap.
+    #[allow(clippy::too_many_arguments)]
+    fn residual_problem(
+        &self,
+        target: &MeasureTarget<'_, V>,
+        active: &[usize],
+        sample: &Measured,
+        tolerance: f64,
+        seed: u64,
+        projector: &Projector,
+    ) -> Result<InterpolationProblem<V>, PatchedInterpolationError> {
+        let starts = corners::corner_and_edge_starts(
+            &self.layout.sites,
+            active,
+            target.active_dims,
+            &self.options.variables,
+            seed,
+        );
+        let residuals = largest_residual_points(sample, RESIDUAL_PIVOTS);
+        let initial = merged_points(residuals.iter().chain(&starts));
+        let search = merged_points(starts.iter().chain(&residuals));
+        let n_active = active.len();
+        let initial = ColMajorArray::new(initial.concat(), vec![n_active, initial.len()])
+            .map_err(internal)?;
+        let search =
+            ColMajorArray::new(search.concat(), vec![n_active, search.len()]).map_err(internal)?;
+        let chi_patch = target
+            .network
+            .map(|network| network.link_dims().into_iter().fold(1, usize::max))
+            .unwrap_or(0);
+        let ratio = self.options.verification.residual_bond_ratio;
+        let floor = self.options.verification.residual_bond_floor;
+        let cap = NonZeroUsize::new(residual::bond_cap(chi_patch, ratio, floor))
+            .unwrap_or(NonZeroUsize::MIN);
+        let problem = InterpolationProblem::new(
+            self.layout.topology.clone(),
+            self.layout.active_node_sites(target.fixed),
+            initial,
+            residual::RESIDUAL_TOLERANCE_FACTOR * tolerance,
+            Some(cap),
+            seed,
+        )
+        .and_then(|problem| problem.with_global_search_starts(search))
+        .map_err(|source| PatchedInterpolationError::Interpolation {
+            projector: projector.clone(),
+            source,
+        })?;
+        Ok(problem)
+    }
+
     /// The audit of a sampled acceptance, if enabled. Audit points never
-    /// become pivots: the patch is accepted, and its cache is dropped.
+    /// become pivots: the patch is accepted, and its cache is dropped. The
+    /// audit uses the acceptance's estimator on its own streams and never
+    /// decides the patch.
     #[allow(clippy::too_many_arguments)]
     fn audit(
         &self,
@@ -1364,18 +1531,38 @@ where
         sampler: &PatchSampler<'_, T>,
         target: &MeasureTarget<'_, V>,
         acceptance: &L2Measurement,
+        active: &[usize],
+        tolerance: f64,
         seeds: &PatchSeeds,
         projector: &Projector,
         ctx: &mut EvalContext<'_>,
     ) -> Result<Option<L2Measurement>, PatchedInterpolationError> {
-        if acceptance.method != MeasurementMethod::Sampled || !self.options.verification.audit {
+        if matches!(
+            acceptance.method,
+            MeasurementMethod::Exact | MeasurementMethod::Exhaustive
+        ) || !self.options.verification.audit
+        {
             return Ok(None);
         }
         let plan = PointPlan::Sampled {
             count: self.options.verification.samples,
             seed: seeds.audit(),
         };
-        let audit = self.measure(tally, sampler, target, plan, true, projector, ctx)?;
+        let before = tally.counters.evaluations.get();
+        let audit = self.estimate(
+            tally,
+            sampler,
+            target,
+            plan,
+            active,
+            tolerance,
+            seeds.residual_audit(),
+            false,
+            projector,
+            ctx,
+        )?;
+        let added = tally.counters.evaluations.get().saturating_sub(before);
+        Tally::add(&tally.audit_evaluations, added);
         Ok(Some(audit.measurement))
     }
 
@@ -1409,7 +1596,7 @@ where
             seed: seeds.scale(),
         };
         // The residual of the zero approximation is |f|.
-        let estimate = self.measure(tally, sampler, zero_target, plan, false, projector, ctx)?;
+        let estimate = self.measure(tally, sampler, zero_target, plan, projector, ctx)?;
         let reference_rms = estimate.measurement.rms;
         if reference_rms == 0.0 && self.options.tolerance.atol == 0.0 {
             return Err(invalid(format!(
@@ -1518,14 +1705,26 @@ where
             if largest == 0.0 {
                 // Zero screen: measure the zero approximation.
                 let plan = self.plan(patch_count, seeds.zero_screen());
-                let screen =
-                    self.measure(tally, &sampler, &zero_target, plan, false, projector, ctx)?;
+                let screen = self.estimate(
+                    tally,
+                    &sampler,
+                    &zero_target,
+                    plan,
+                    &active,
+                    tau,
+                    seeds.residual_zero_screen(),
+                    true,
+                    projector,
+                    ctx,
+                )?;
                 if screen.measurement.rms <= tau {
                     let audit = self.audit(
                         tally,
                         &sampler,
                         &zero_target,
                         &screen.measurement,
+                        &active,
+                        tau,
                         &seeds,
                         projector,
                         ctx,
@@ -1623,13 +1822,26 @@ where
                 patch_points,
             };
             let plan = self.plan(patch_count, seeds.verify(attempt));
-            let measured = self.measure(tally, &sampler, &target, plan, false, projector, ctx)?;
+            let measured = self.estimate(
+                tally,
+                &sampler,
+                &target,
+                plan,
+                &active,
+                tolerance,
+                seeds.residual(attempt),
+                true,
+                projector,
+                ctx,
+            )?;
             if measured.measurement.rms <= tolerance {
                 record.audit = self.audit(
                     tally,
                     &sampler,
                     &target,
                     &measured.measurement,
+                    &active,
+                    tolerance,
                     &seeds,
                     projector,
                     ctx,
@@ -1762,7 +1974,7 @@ where
             return Err(match (last.rejected, last.failure) {
                 (Some(_), Some(failure)) => PatchedInterpolationError::VerificationFailed {
                     projector: projector.clone(),
-                    measurement: failure.measurement,
+                    measurement: Box::new(failure.measurement),
                 },
                 _ => PatchedInterpolationError::NoSplitIndexLeft {
                     projector: projector.clone(),
@@ -1858,6 +2070,9 @@ where
                 rms: 0.0,
                 mean_square_rel_std_error: 0.0,
                 max_residual: 0.0,
+                residual_rms: None,
+                residual_saturated: false,
+                sample_rms: None,
             })
         } else {
             if pins.max_reference().is_none() {
@@ -2212,6 +2427,8 @@ where
             cache_hits: totals.cache_hits,
             measurement_evaluations: totals.measurement_evaluations,
             audit_evaluations: totals.audit_evaluations,
+            residual_evaluations: totals.residual_evaluations,
+            residual_saturations: totals.residual_saturations,
             verification_failures: totals.verification_failures,
             engine_retries: totals.engine_retries,
         },
