@@ -601,7 +601,7 @@ where
     /// #     Ok((0..batch.n_points()).map(|p| batch.get(0, p).unwrap() as f64).collect())
     /// # };
     /// # let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
-    /// #     &[4], f, None, QtciOptions::default()).unwrap();
+    /// #     &[4], f, None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() }).unwrap();
     /// let stats = qtci.cache_stats();
     /// assert!(stats.num_evals > 0);
     /// assert!(stats.num_cache_hits + stats.num_cache_misses >= stats.num_evals);
@@ -620,7 +620,7 @@ where
     /// #     Ok((0..batch.n_points()).map(|p| batch.get(0, p).unwrap() as f64).collect())
     /// # };
     /// # let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
-    /// #     &[4], f, None, QtciOptions::default()).unwrap();
+    /// #     &[4], f, None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() }).unwrap();
     /// assert!(qtci.num_evals() > 0);
     /// ```
     pub fn num_evals(&self) -> usize {
@@ -637,7 +637,7 @@ where
     /// #     Ok((0..batch.n_points()).map(|p| batch.get(0, p).unwrap() as f64).collect())
     /// # };
     /// # let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
-    /// #     &[4], f, None, QtciOptions::default()).unwrap();
+    /// #     &[4], f, None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() }).unwrap();
     /// assert_eq!(qtci.num_cache_hits(), qtci.cache_stats().num_cache_hits);
     /// ```
     pub fn num_cache_hits(&self) -> usize {
@@ -654,7 +654,7 @@ where
     /// #     Ok((0..batch.n_points()).map(|p| batch.get(0, p).unwrap() as f64).collect())
     /// # };
     /// # let (qtci, _, _) = quanticscrossinterpolate_discrete_batch::<f64, _>(
-    /// #     &[4], f, None, QtciOptions::default()).unwrap();
+    /// #     &[4], f, None, QtciOptions { rng_seed: Some(0), ..QtciOptions::default() }).unwrap();
     /// assert!((0.0..=1.0).contains(&qtci.cache_hit_ratio()));
     /// ```
     pub fn cache_hit_ratio(&self) -> f64 {
