@@ -352,3 +352,107 @@ fn call_evaluator_rejects_non_finite_complex_components_and_magnitudes() {
         }
     });
 }
+
+// ---------------------------------------------------------------------------
+// Problem-supplied global search starts (issue #1033).
+// ---------------------------------------------------------------------------
+
+/// Chain of six binary nodes, one binary site per node.
+const CORNER_NODES: usize = 6;
+
+/// f = 1 + 10 * delta at the all-ones corner: a flat field except one corner.
+fn corner_function(point: &[usize]) -> f64 {
+    if point.iter().all(|&coordinate| coordinate == 1) {
+        11.0
+    } else {
+        1.0
+    }
+}
+
+fn corner_evaluate(
+    batch: ColMajorArrayRef<'_, usize>,
+    _ctx: &mut EvalContext<'_>,
+) -> anyhow::Result<Vec<f64>> {
+    Ok(batch
+        .data()
+        .chunks(batch.shape()[0])
+        .map(corner_function)
+        .collect())
+}
+
+/// The chain problem with its only initial pivot at the all-zero corner and,
+/// when given, extra global search starts in site order.
+fn corner_chain_problem(starts: Option<ColMajorArray<usize>>) -> InterpolationProblem<usize> {
+    let mut topology = NodeNameNetwork::new();
+    for node in 0..CORNER_NODES {
+        topology.add_node(node).unwrap();
+    }
+    for node in 0..CORNER_NODES - 1 {
+        topology.add_edge(&node, &(node + 1)).unwrap();
+    }
+    let node_sites = (0..CORNER_NODES)
+        .map(|node| (node, vec![DynIndex::new_dyn(2)]))
+        .collect();
+    let pivots = ColMajorArray::new(vec![0; CORNER_NODES], vec![CORNER_NODES, 1]).unwrap();
+    // Seed 34: the ten random starts of each of the first three searches keep
+    // at least two zero coordinates, so the corner stays unreachable for the
+    // unstarted run below.
+    let problem = InterpolationProblem::new(topology, node_sites, pivots, 1e-10, None, 34).unwrap();
+    match starts {
+        Some(starts) => problem.with_global_search_starts(starts).unwrap(),
+        None => problem,
+    }
+}
+
+#[test]
+fn interpolator_forwards_problem_global_search_starts() {
+    let corner = vec![1usize; CORNER_NODES];
+    with_context(|ctx| {
+        // Without a start, the seeded random search misses the corner and the
+        // run converges to the constant field 1, which is the initial pivot's
+        // cross-section everywhere.
+        let problem = corner_chain_problem(None);
+        let without = TreeTciInterpolator::default()
+            .interpolate(&problem, &mut *ctx, corner_evaluate)
+            .unwrap();
+        assert_eq!(without.termination, InterpolationTermination::Converged);
+        let value = without
+            .network
+            .evaluate_point(problem.site_order(), &corner)
+            .unwrap()
+            .real();
+        assert!(
+            (value - 1.0).abs() < 1e-12,
+            "the corner feature should be missed without a start, got {value}"
+        );
+
+        // Forwarding the problem's start through the run options lets the
+        // engine's global search find the corner, and the rank-2 result is
+        // exact.
+        let starts = ColMajorArray::new(corner.clone(), vec![CORNER_NODES, 1]).unwrap();
+        let problem = corner_chain_problem(Some(starts));
+        let with = TreeTciInterpolator::default()
+            .interpolate(&problem, &mut *ctx, corner_evaluate)
+            .unwrap();
+        assert_eq!(with.termination, InterpolationTermination::Converged);
+        let value = with
+            .network
+            .evaluate_point(problem.site_order(), &corner)
+            .unwrap()
+            .real();
+        assert!(
+            (value - 11.0).abs() < 1e-8,
+            "the forwarded start should recover the corner, got {value}"
+        );
+        let interior = [0, 1, 0, 1, 0, 1];
+        let value = with
+            .network
+            .evaluate_point(problem.site_order(), &interior)
+            .unwrap()
+            .real();
+        assert!(
+            (value - 1.0).abs() < 1e-8,
+            "a non-corner point should stay at 1, got {value}"
+        );
+    });
+}

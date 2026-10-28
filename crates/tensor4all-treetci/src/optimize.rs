@@ -3,7 +3,8 @@ use crate::evaluation::{BatchExecution, CachedExecution, Compatibility, Explicit
 use crate::{
     globalpivot::{find_global_pivots_erased, ScalarParts},
     update::update_edge,
-    AllEdges, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer, TreeTCI2, TreeTciEdge,
+    AllEdges, EdgeVisitor, GlobalIndexBatch, MultiIndex, PivotCandidateProposer, TreeTCI2,
+    TreeTciEdge,
 };
 use anyhow::Result;
 use rand::SeedableRng;
@@ -106,6 +107,7 @@ pub struct TreeTciOptimizationResult {
 /// | `scale_tolerance`         | `true`        | Scale tolerance by running max sample magnitude      |
 /// | `enable_global_pivots`    | `true`        | Run automatic global pivot search after each sweep   |
 /// | `nsearch`                 | `5`           | Random starting points for the global pivot search   |
+/// | `global_search_starts`    | empty         | Extra caller-supplied starting points, walked first  |
 /// | `max_nglobal_pivot`       | `5`           | Global pivots added per iteration                    |
 /// | `tol_margin_global_search`| `10.0`        | Global pivot acceptance margin over `abs_tol`        |
 /// | `seed`                    | `None`        | RNG seed for the global pivot search                 |
@@ -122,6 +124,7 @@ pub struct TreeTciOptimizationResult {
 /// assert_eq!(opts.max_bond_dim, None);
 /// assert!(opts.scale_tolerance);
 /// assert!(opts.enable_global_pivots);
+/// assert!(opts.global_search_starts.is_empty());
 ///
 /// // Custom options for high-precision work
 /// let opts = TreeTciOptions {
@@ -131,6 +134,7 @@ pub struct TreeTciOptimizationResult {
 ///     scale_tolerance: true,
 ///     enable_global_pivots: true,
 ///     nsearch: 20,
+///     global_search_starts: vec![vec![1, 1]],
 ///     max_nglobal_pivot: 10,
 ///     tol_margin_global_search: 5.0,
 ///     seed: Some(42),
@@ -140,6 +144,7 @@ pub struct TreeTciOptimizationResult {
 /// assert_eq!(opts.max_iter, 50);
 /// assert_eq!(opts.max_bond_dim, Some(100));
 /// assert!(opts.enable_global_pivots);
+/// assert_eq!(opts.global_search_starts, vec![vec![1, 1]]);
 /// assert_eq!(opts.seed, Some(42));
 /// ```
 #[derive(Clone, Debug)]
@@ -196,9 +201,25 @@ pub struct TreeTciOptions {
     ///
     /// Each starting point is locally optimized over all site coordinates.
     /// Larger values explore the index space more thoroughly at the cost of
-    /// more evaluations. Ignored when `enable_global_pivots` is `false`.
-    /// Default: `5`.
+    /// more evaluations. Drawn after [`Self::global_search_starts`]. Ignored
+    /// when `enable_global_pivots` is `false`. Default: `5`.
     pub nsearch: usize,
+
+    /// Extra starting points for the global pivot search, walked before the
+    /// `nsearch` random ones.
+    ///
+    /// Each entry is a full-site multi-index in the state's site order: one
+    /// coordinate per site, each below that site's local dimension. Use them
+    /// to aim the search at a region the local pivot updates miss, such as a
+    /// corner or edge of a patch; from a random start such a feature can look
+    /// like a flat zero fiber, where the greedy walk stalls. A supplied start
+    /// is walked even when `nsearch` is zero. Invalid entries are rejected
+    /// before any evaluation: a wrong length or an out-of-range coordinate is
+    /// a [`crate::TreeTciError::InvalidConfiguration`] from the optimizer and
+    /// a [`crate::TreeTciError::Operation`] from a direct search call.
+    /// Ignored (but still validated) when `enable_global_pivots` is `false`.
+    /// Default: empty.
+    pub global_search_starts: Vec<MultiIndex>,
 
     /// Maximum number of global pivots added per iteration.
     ///
@@ -270,6 +291,7 @@ impl Default for TreeTciOptions {
             scale_tolerance: true,
             enable_global_pivots: true,
             nsearch: 5,
+            global_search_starts: Vec::new(),
             max_nglobal_pivot: 5,
             tol_margin_global_search: 10.0,
             seed: None,
@@ -654,6 +676,39 @@ impl RandomStreams<'_> {
     }
 }
 
+/// Check the caller-supplied global search starts against the state.
+///
+/// `TreeTciOptions::validate` is shape-independent; this check needs the
+/// state's local dimensions. It runs before any sweep, so an invalid start
+/// fails without evaluating the target.
+fn validate_global_search_starts(
+    options: &TreeTciOptions,
+    local_dims: &[usize],
+) -> TreeTciResult<()> {
+    for (index, start) in options.global_search_starts.iter().enumerate() {
+        if start.len() != local_dims.len() {
+            return Err(crate::TreeTciError::InvalidConfiguration {
+                message: format!(
+                    "global_search_starts[{index}] has {} coordinates but the state has {} sites",
+                    start.len(),
+                    local_dims.len()
+                ),
+            });
+        }
+        for (site, (&coordinate, &dimension)) in start.iter().zip(local_dims).enumerate() {
+            if coordinate >= dimension {
+                return Err(crate::TreeTciError::InvalidConfiguration {
+                    message: format!(
+                        "global_search_starts[{index}] has coordinate {coordinate} at site \
+                         {site}, out of range for local dimension {dimension}"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Check that `order` is a permutation of the tree's edges.
 ///
 /// The truncated proposer relies on each edge's kept pivots matching a
@@ -702,6 +757,7 @@ where
     V: EdgeVisitor,
 {
     options.validate()?;
+    validate_global_search_starts(options, &state.local_dims)?;
 
     let mut ranks = Vec::new();
     let mut errors = Vec::new();
@@ -806,6 +862,7 @@ where
                 state,
                 execution,
                 options.nsearch,
+                &options.global_search_starts,
                 options.max_nglobal_pivot,
                 options.tol_margin_global_search,
                 abs_tol,

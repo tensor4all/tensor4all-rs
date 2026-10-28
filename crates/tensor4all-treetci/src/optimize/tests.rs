@@ -831,3 +831,51 @@ fn invalid_edge_order_is_rejected_before_mutation() {
         assert_eq!(state.max_bond_error(), before, "{name}: state mutated");
     }
 }
+
+#[test]
+fn optimize_rejects_invalid_global_search_starts_before_callback() {
+    let cases = [
+        (
+            vec![vec![0]],
+            false,
+            "global_search_starts[0] has 1 coordinates but the state has 2 sites",
+        ),
+        (
+            vec![vec![0, 0, 0]],
+            true,
+            "global_search_starts[0] has 3 coordinates but the state has 2 sites",
+        ),
+        (
+            vec![vec![0, 0], vec![0, 2]],
+            true,
+            "global_search_starts[1] has coordinate 2 at site 1, out of range for local dimension 2",
+        ),
+    ];
+    for (starts, enable_global_pivots, needle) in cases {
+        let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+        tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+        let calls = std::cell::Cell::new(0);
+        let options = TreeTciOptions {
+            enable_global_pivots,
+            global_search_starts: starts,
+            ..TreeTciOptions::default()
+        };
+        let error = optimize_default(
+            &mut tci,
+            |_| {
+                calls.set(calls.get() + 1);
+                Ok(vec![1.0])
+            },
+            &options,
+        )
+        .unwrap_err();
+        // The start set is checked against the state before any sweep, so the
+        // message names the offending entry and the target was never called.
+        assert!(error.to_string().contains(needle), "{error}");
+        assert!(matches!(
+            error,
+            crate::TreeTciError::InvalidConfiguration { .. }
+        ));
+        assert_eq!(calls.get(), 0);
+    }
+}

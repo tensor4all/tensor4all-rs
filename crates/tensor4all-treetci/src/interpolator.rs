@@ -48,11 +48,13 @@ use crate::{
 ///
 /// - `tolerance` (set to the problem's absolute tolerance),
 /// - `max_bond_dim` (the problem's cap),
-/// - `scale_tolerance` (always `false`: the tolerance is absolute), and
-/// - `seed` (the problem's seed, the only source of randomness).
+/// - `scale_tolerance` (always `false`: the tolerance is absolute),
+/// - `seed` (the problem's seed, the only source of randomness), and
+/// - `global_search_starts` (the problem's extra global pivot search starts,
+///   replacing the engine's).
 ///
-/// The remaining options (`max_iter`, the global pivot search settings, and
-/// `evaluation_cache_bytes`) come from the engine. The optional target memo
+/// The remaining options (`max_iter`, the global pivot search budget settings,
+/// and `evaluation_cache_bytes`) come from the engine. The optional target memo
 /// covers optimization; named network materialization calls the evaluator
 /// separately. A single-node problem is evaluated exactly on its full
 /// index set, which costs the product of its site dimensions.
@@ -280,6 +282,14 @@ where
             problem.max_bond_dim(),
             problem.seed(),
         );
+        // The problem owns the per-run global search starts, like its pivots
+        // and seed. Site-order columns fuse into one coordinate per vertex.
+        let options = TreeTciOptions {
+            global_search_starts: layout
+                .site_columns_to_vertices(problem.global_search_starts())
+                .map_err(|source| InterpolationError::Engine { source })?,
+            ..options
+        };
         // The one mutable owner of the run: the caller's context plus the vertex-order
         // adapter around the caller's evaluator. Every numerical step the engine reaches
         // through this owner reborrows the same session.

@@ -273,6 +273,7 @@ impl QtciOptions {
             scale_tolerance: self.scale_tolerance,
             enable_global_pivots: false,
             nsearch: 0,
+            global_search_starts: Vec::new(),
             max_nglobal_pivot: 0,
             tol_margin_global_search: 10.0,
             seed: self.rng_seed,

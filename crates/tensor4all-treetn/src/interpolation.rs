@@ -2,8 +2,9 @@
 //!
 //! A caller describes one interpolation problem with an
 //! [`InterpolationProblem`]: a tree topology with named nodes, the active site
-//! indices of every node, initial pivots, an absolute tolerance, an optional
-//! bond cap, and a seed. An engine implementing [`TreeInterpolator`] samples
+//! indices of every node, initial pivots, optional extra starting points for
+//! the engine's global pivot search, an absolute tolerance, an optional bond
+//! cap, and a seed. An engine implementing [`TreeInterpolator`] samples
 //! the function through a batch evaluator and returns an
 //! [`InterpolationOutcome`]: a [`TreeTN`] with the caller's node names and
 //! site indices, an [`InterpolationTermination`] verdict, the unnormalized
@@ -189,7 +190,10 @@ impl<'a> EvalContext<'a> {
 /// the keys of `node_sites`, every active site index appears once with a
 /// positive dimension, at least one active site exists, the initial pivots
 /// are in-range points in site order, and the tolerance is finite and
-/// nonnegative. Fields are private; use the accessors.
+/// nonnegative. [`InterpolationProblem::with_global_search_starts`] adds
+/// optional extra starts for an engine's global pivot search under the same
+/// checks, except that the set may be empty. Fields are private; use the
+/// accessors.
 ///
 /// # Examples
 ///
@@ -237,6 +241,7 @@ where
     node_sites: BTreeMap<V, Vec<DynIndex>>,
     site_order: Vec<DynIndex>,
     initial_pivots: ColMajorArray<usize>,
+    global_search_starts: ColMajorArray<usize>,
     absolute_tolerance: f64,
     max_bond_dim: Option<NonZeroUsize>,
     seed: u64,
@@ -319,11 +324,16 @@ where
                 "absolute_tolerance must be finite and nonnegative, got {absolute_tolerance}"
             )));
         }
+        // No global search starts unless the caller adds them. The shape keeps
+        // one row per active site, like `initial_pivots`, with zero columns.
+        let global_search_starts = ColMajorArray::zeros(vec![site_order.len(), 0])
+            .map_err(|error| invalid(format!("could not build the empty start set: {error}")))?;
         Ok(Self {
             topology,
             node_sites,
             site_order,
             initial_pivots,
+            global_search_starts,
             absolute_tolerance,
             max_bond_dim,
             seed,
@@ -450,6 +460,105 @@ where
     /// ```
     pub fn initial_pivots(&self) -> &ColMajorArray<usize> {
         &self.initial_pivots
+    }
+
+    /// Add extra starting points for an engine's global pivot search.
+    ///
+    /// A global pivot search (TreeTCI's, for example) otherwise starts from
+    /// its own random points. These caller-supplied points are walked in
+    /// addition to those random starts, which lets a caller aim the search at
+    /// a region it already suspects, such as a corner or edge of a patch. An
+    /// engine without a global pivot search ignores them.
+    ///
+    /// They are per-run inputs like the initial pivots, so they belong to the
+    /// problem rather than to an engine's configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `starts` - Column-major `[n_active_sites, n_starts]` array in site
+    ///   order ([`Self::derive_site_order`]). Zero columns are allowed and
+    ///   mean no extra starts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InterpolationError::InvalidProblem`] when `starts` is not a
+    /// 2D array with one row per active site, or when a coordinate is out of
+    /// range for its site. The checks are those of the initial pivots, except
+    /// that an empty array is accepted.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use tensor4all_core::{ColMajorArray, DynIndex};
+    /// use tensor4all_treetn::interpolation::{InterpolationError, InterpolationProblem};
+    /// use tensor4all_treetn::NodeNameNetwork;
+    ///
+    /// let site = DynIndex::new_dyn(3);
+    /// let mut topology = NodeNameNetwork::new();
+    /// topology.add_node(0usize)?;
+    /// let node_sites = BTreeMap::from([(0usize, vec![site])]);
+    /// let pivots = ColMajorArray::new(vec![0], vec![1, 1])?;
+    /// let problem = InterpolationProblem::new(topology, node_sites, pivots, 0.0, None, 0)?;
+    /// assert_eq!(problem.global_search_starts().shape(), &[1, 0]);
+    ///
+    /// // Two starts: the high corner and its neighbour.
+    /// let starts = ColMajorArray::new(vec![2, 0], vec![1, 2])?;
+    /// let problem = problem.with_global_search_starts(starts)?;
+    /// assert_eq!(problem.global_search_starts().column(0), Some(&[2][..]));
+    /// assert_eq!(problem.global_search_starts().column(1), Some(&[0][..]));
+    ///
+    /// // Zero columns are allowed; an out-of-range coordinate is not.
+    /// assert!(problem
+    ///     .clone()
+    ///     .with_global_search_starts(ColMajorArray::new(vec![], vec![1, 0])?)
+    ///     .is_ok());
+    /// let bad = ColMajorArray::new(vec![3], vec![1, 1])?;
+    /// let error = problem.with_global_search_starts(bad).unwrap_err();
+    /// assert!(matches!(error, InterpolationError::InvalidProblem { .. }));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_global_search_starts(
+        mut self,
+        starts: ColMajorArray<usize>,
+    ) -> Result<Self, InterpolationError> {
+        validate_point_columns(
+            &starts,
+            &self.site_order,
+            "global_search_starts",
+            "global search start",
+            "start",
+            true,
+        )?;
+        self.global_search_starts = starts;
+        Ok(self)
+    }
+
+    /// Borrow the extra starting points for the engine's global pivot search.
+    ///
+    /// Shape `[n_active_sites, n_starts]` in site order. Empty (zero columns)
+    /// unless [`Self::with_global_search_starts`] supplied points.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use tensor4all_core::{ColMajorArray, DynIndex};
+    /// use tensor4all_treetn::interpolation::InterpolationProblem;
+    /// use tensor4all_treetn::NodeNameNetwork;
+    ///
+    /// let mut topology = NodeNameNetwork::new();
+    /// topology.add_node(0usize)?;
+    /// let node_sites = BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]);
+    /// let pivots = ColMajorArray::new(vec![0], vec![1, 1])?;
+    /// let problem = InterpolationProblem::new(topology, node_sites, pivots, 0.0, None, 0)?
+    ///     .with_global_search_starts(ColMajorArray::new(vec![1], vec![1, 1])?)?;
+    /// assert_eq!(problem.global_search_starts().shape(), &[1, 1]);
+    /// assert_eq!(problem.global_search_starts().column(0), Some(&[1][..]));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn global_search_starts(&self) -> &ColMajorArray<usize> {
+        &self.global_search_starts
     }
 
     /// Return the absolute tolerance compared with the engine's raw error
@@ -654,34 +763,58 @@ fn validate_pivots(
     pivots: &ColMajorArray<usize>,
     site_order: &[DynIndex],
 ) -> Result<(), InterpolationError> {
-    let (Some(n_rows), Some(n_cols)) = (pivots.nrows(), pivots.ncols()) else {
+    validate_point_columns(
+        pivots,
+        site_order,
+        "initial_pivots",
+        "initial pivot",
+        "pivot",
+        false,
+    )
+}
+
+/// Check a column-major point set in site order.
+///
+/// `array_name` names the array in shape and row messages, `column_name`
+/// starts coordinate messages, and `empty_noun` names one point when
+/// `allow_empty` is false. Initial pivots and global search starts share
+/// these checks; only the empty set differs.
+fn validate_point_columns(
+    points: &ColMajorArray<usize>,
+    site_order: &[DynIndex],
+    array_name: &str,
+    column_name: &str,
+    empty_noun: &str,
+    allow_empty: bool,
+) -> Result<(), InterpolationError> {
+    let (Some(n_rows), Some(n_cols)) = (points.nrows(), points.ncols()) else {
         return Err(invalid(format!(
-            "initial_pivots must be a 2D array, got shape {:?}",
-            pivots.shape()
+            "{array_name} must be a 2D array, got shape {:?}",
+            points.shape()
         )));
     };
     if n_rows != site_order.len() {
         return Err(invalid(format!(
-            "initial_pivots has {n_rows} rows but the problem has {} active sites",
+            "{array_name} has {n_rows} rows but the problem has {} active sites",
             site_order.len()
         )));
     }
-    if n_cols == 0 {
-        return Err(invalid(
-            "initial_pivots must contain at least one pivot".to_string(),
-        ));
+    if n_cols == 0 && !allow_empty {
+        return Err(invalid(format!(
+            "{array_name} must contain at least one {empty_noun}"
+        )));
     }
     for column in 0..n_cols {
-        let point = pivots.column(column).ok_or_else(|| {
+        let point = points.column(column).ok_or_else(|| {
             invalid(format!(
-                "initial_pivots column {column} is out of range for shape {:?}",
-                pivots.shape()
+                "{array_name} column {column} is out of range for shape {:?}",
+                points.shape()
             ))
         })?;
         for (row, (&value, site)) in point.iter().zip(site_order).enumerate() {
             if value >= site.dim() {
                 return Err(invalid(format!(
-                    "initial pivot {column} has coordinate {value} at row {row}, out of range for site dimension {}",
+                    "{column_name} {column} has coordinate {value} at row {row}, out of range for site dimension {}",
                     site.dim()
                 )));
             }
@@ -840,6 +973,9 @@ pub enum InterpolationError {
 ///   [`InterpolationTermination::BondCapReached`].
 /// - [`InterpolationProblem::seed`] overrides any seed in the engine's own
 ///   configuration.
+/// - [`InterpolationProblem::global_search_starts`] are extra starting points
+///   for an engine's global pivot search; an engine without one ignores them.
+///   They never replace the engine's own random starts.
 /// - If every initial pivot evaluates to exactly zero, the engine returns
 ///   [`InterpolationError::AllSamplesZero`]; a non-finite initial sample is an
 ///   invalid evaluator value and is reported as

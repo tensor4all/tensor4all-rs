@@ -370,3 +370,72 @@ fn error_displays_and_sources_are_stable() {
         "inner"
     );
 }
+
+#[test]
+fn global_search_starts_default_to_zero_columns_and_accept_points() {
+    let (topology, node_sites, _) = chain_parts();
+    let problem = InterpolationProblem::new(
+        topology,
+        node_sites,
+        pivots(vec![0, 0, 0], vec![3, 1]),
+        0.0,
+        None,
+        0,
+    )
+    .unwrap();
+    // The default has one row per active site and no columns.
+    assert_eq!(problem.global_search_starts().shape(), &[3, 0]);
+
+    let problem = problem
+        .with_global_search_starts(pivots(vec![1, 2, 0, 0, 0, 1], vec![3, 2]))
+        .unwrap();
+    assert_eq!(problem.global_search_starts().shape(), &[3, 2]);
+    assert_eq!(
+        problem.global_search_starts().column(0),
+        Some(&[1, 2, 0][..])
+    );
+    assert_eq!(
+        problem.global_search_starts().column(1),
+        Some(&[0, 0, 1][..])
+    );
+    // The initial pivots are untouched.
+    assert_eq!(problem.initial_pivots().shape(), &[3, 1]);
+    assert_eq!(problem.initial_pivots().column(0), Some(&[0, 0, 0][..]));
+
+    // Zero columns are allowed and clear a previous set.
+    let problem = problem
+        .with_global_search_starts(pivots(vec![], vec![3, 0]))
+        .unwrap();
+    assert_eq!(problem.global_search_starts().shape(), &[3, 0]);
+}
+
+#[test]
+fn with_global_search_starts_rejects_malformed_points() {
+    let cases = [
+        (pivots(vec![0, 0, 0], vec![3]), "must be a 2D array"),
+        (pivots(vec![0, 0], vec![2, 1]), "has 2 rows"),
+        // Row 1 has dimension 3; coordinate 3 is out of range.
+        (
+            pivots(vec![0, 1, 0, 0, 3, 0], vec![3, 2]),
+            "coordinate 3 at row 1",
+        ),
+    ];
+    for (starts, needle) in cases {
+        let (topology, node_sites, _) = chain_parts();
+        let problem = InterpolationProblem::new(
+            topology,
+            node_sites,
+            pivots(vec![0, 0, 0], vec![3, 1]),
+            0.0,
+            None,
+            0,
+        )
+        .unwrap();
+        match problem.with_global_search_starts(starts) {
+            Err(InterpolationError::InvalidProblem { message }) => {
+                assert!(message.contains(needle), "{message:?} lacks {needle:?}")
+            }
+            other => panic!("expected InvalidProblem mentioning {needle:?}, got {other:?}"),
+        }
+    }
+}

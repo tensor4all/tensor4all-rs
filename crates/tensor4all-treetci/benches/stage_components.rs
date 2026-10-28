@@ -157,6 +157,7 @@ fn main() {
             &state,
             counting,
             search_options.nsearch,
+            &search_options.global_search_starts,
             search_options.max_nglobal_pivot,
             search_options.tol_margin_global_search,
             search_options.tolerance,

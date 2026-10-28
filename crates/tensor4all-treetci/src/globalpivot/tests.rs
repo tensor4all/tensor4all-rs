@@ -25,6 +25,7 @@ fn run_search<T, E, R>(
     state: &TreeTCI2<T>,
     mut evaluate: E,
     params: SearchParams,
+    starts: &[crate::MultiIndex],
     rng: &mut dyn rand::RngCore,
     readout: R,
 ) -> crate::error::Result<Vec<crate::MultiIndex>>
@@ -44,6 +45,7 @@ where
         state,
         &mut execution,
         params,
+        starts,
         rng,
         readout,
         cached_walk_readout_on_session,
@@ -100,6 +102,7 @@ fn options(enable_global_pivots: bool) -> TreeTciOptions {
         scale_tolerance: true,
         enable_global_pivots,
         nsearch: 10,
+        global_search_starts: Vec::new(),
         max_nglobal_pivot: 5,
         tol_margin_global_search: 1.0,
         seed: Some(42),
@@ -148,8 +151,17 @@ fn global_pivot_search_finds_pivots_with_large_error() {
     // Direct finder check: with a rank-1 state seeded only at peak A, the
     // search must escape the A basin and return points near peak B.
     let tci = seeded_state();
-    let pivots =
-        find_global_pivots(&tci, evaluate, 10, 5, 1.0, 1e-8 * tci.max_sample_value, 42).unwrap();
+    let pivots = find_global_pivots(
+        &tci,
+        evaluate,
+        10,
+        &[],
+        5,
+        1.0,
+        1e-8 * tci.max_sample_value,
+        42,
+    )
+    .unwrap();
 
     let closer_to_b = |pivot: &Vec<usize>| {
         let d2 = |peak: &[usize; N]| {
@@ -212,14 +224,14 @@ fn without_global_pivots_second_basin_is_lost() {
 fn find_global_pivots_rejects_invalid_parameters() {
     let tci = seeded_state();
     // Non-finite or negative tolerances are rejected.
-    assert!(find_global_pivots(&tci, evaluate, 5, 5, 1.0, f64::NAN, 1).is_err());
-    assert!(find_global_pivots(&tci, evaluate, 5, 5, -1.0, 1e-8, 1).is_err());
-    assert!(find_global_pivots(&tci, evaluate, 5, 5, 1.0, -1.0, 1).is_err());
+    assert!(find_global_pivots(&tci, evaluate, 5, &[], 5, 1.0, f64::NAN, 1).is_err());
+    assert!(find_global_pivots(&tci, evaluate, 5, &[], 5, -1.0, 1e-8, 1).is_err());
+    assert!(find_global_pivots(&tci, evaluate, 5, &[], 5, 1.0, -1.0, 1).is_err());
     // A disabled search (no starting points or no pivot budget) is a no-op.
-    assert!(find_global_pivots(&tci, evaluate, 0, 5, 1.0, 1e-8, 1)
+    assert!(find_global_pivots(&tci, evaluate, 0, &[], 5, 1.0, 1e-8, 1)
         .unwrap()
         .is_empty());
-    assert!(find_global_pivots(&tci, evaluate, 5, 0, 1.0, 1e-8, 1)
+    assert!(find_global_pivots(&tci, evaluate, 5, &[], 0, 1.0, 1e-8, 1)
         .unwrap()
         .is_empty());
 }
@@ -229,18 +241,27 @@ fn find_global_pivots_rejects_bad_batch_length() {
     let tci = seeded_state();
     // Evaluator returns one value regardless of the requested batch size.
     let bad = |_batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![0.0]) };
-    assert!(find_global_pivots(&tci, bad, 5, 5, 1.0, 1e-8, 1).is_err());
+    assert!(find_global_pivots(&tci, bad, 5, &[], 5, 1.0, 1e-8, 1).is_err());
 }
 
 #[test]
 fn find_global_pivots_respects_threshold_and_limit() {
     let tci = seeded_state();
     // A huge absolute tolerance rejects every candidate.
-    let none = find_global_pivots(&tci, evaluate, 10, 5, 1.0, 1e10, 1).unwrap();
+    let none = find_global_pivots(&tci, evaluate, 10, &[], 5, 1.0, 1e10, 1).unwrap();
     assert!(none.is_empty());
     // A strict pivot budget truncates the found candidates.
-    let few =
-        find_global_pivots(&tci, evaluate, 10, 2, 1.0, 1e-8 * tci.max_sample_value, 1).unwrap();
+    let few = find_global_pivots(
+        &tci,
+        evaluate,
+        10,
+        &[],
+        2,
+        1.0,
+        1e-8 * tci.max_sample_value,
+        1,
+    )
+    .unwrap();
     assert!(!few.is_empty());
     assert!(few.len() <= 2);
 }
@@ -301,7 +322,8 @@ where
             // Original-start axis scans reach at most 3 (i*j) or 4 (table),
             // below these thresholds for every scalar variant below.
             let threshold = if repeat_sweep { 8.0 } else { 4.0 };
-            let pivots = find_global_pivots(&state, evaluate, 1, 1, 1.0, threshold, seed).unwrap();
+            let pivots =
+                find_global_pivots(&state, evaluate, 1, &[], 1, 1.0, threshold, seed).unwrap();
             let mut expected = vec![0; n_sites];
             expected[a] = 3;
             expected[b] = 3;
@@ -338,7 +360,7 @@ fn find_global_pivots_supports_complex_scalars() {
         Ok(values)
     };
 
-    let pivots = find_global_pivots(&tci, complex_eval, 10, 5, 1.0, 1e-8, 1).unwrap();
+    let pivots = find_global_pivots(&tci, complex_eval, 10, &[], 5, 1.0, 1e-8, 1).unwrap();
     assert!(!pivots.is_empty());
 }
 
@@ -674,6 +696,7 @@ where
         &state,
         evaluate,
         params.nsearch,
+        &[],
         params.max_nglobal_pivot,
         params.tol_margin,
         params.abs_tol,
@@ -681,7 +704,7 @@ where
     )
     .unwrap();
     let mut rng = seeded_rng(3);
-    let pointwise = run_search(&state, evaluate, params, &mut rng, pointwise_readout).unwrap();
+    let pointwise = run_search(&state, evaluate, params, &[], &mut rng, pointwise_readout).unwrap();
     assert!(
         !cached.is_empty(),
         "the swept 32-bit state must leave errors above the threshold"
@@ -768,6 +791,7 @@ fn global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree() {
                 &state,
                 fixture.evaluate(),
                 params.nsearch,
+                &[],
                 params.max_nglobal_pivot,
                 params.tol_margin,
                 params.abs_tol,
@@ -779,6 +803,7 @@ fn global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree() {
                 &state,
                 fixture.evaluate(),
                 params,
+                &[],
                 &mut rng,
                 pointwise_readout,
             )
@@ -904,7 +929,7 @@ fn equal_errors_keep_generation_order_and_duplicates_collapse() {
             abs_tol: 0.5,
         };
         let mut rng = seeded_rng(5);
-        run_search(&state, constant, params, &mut rng, leveled_readout).unwrap()
+        run_search(&state, constant, params, &[], &mut rng, leveled_readout).unwrap()
     };
     let pivots = search(nsearch);
     let candidates = seen.borrow().clone();
@@ -951,7 +976,7 @@ fn search_rejects_failing_or_short_readouts() {
                    _: Option<usize>|
      -> Result<Vec<AnyScalar>> { Err(anyhow::anyhow!("readout failed")) };
     let mut rng = seeded_rng(3);
-    let error = run_search(&state, fixture.evaluate(), params, &mut rng, failing).unwrap_err();
+    let error = run_search(&state, fixture.evaluate(), params, &[], &mut rng, failing).unwrap_err();
     assert!(error.to_string().contains("readout failed"), "{error}");
 
     let short = |_: &mut TreeTNCachedEvaluator<'_, usize>,
@@ -961,7 +986,7 @@ fn search_rejects_failing_or_short_readouts() {
                  _: Option<usize>|
      -> Result<Vec<AnyScalar>> { Ok(Vec::new()) };
     let mut rng = seeded_rng(3);
-    let error = run_search(&state, fixture.evaluate(), params, &mut rng, short).unwrap_err();
+    let error = run_search(&state, fixture.evaluate(), params, &[], &mut rng, short).unwrap_err();
     assert!(
         error
             .to_string()
@@ -1001,7 +1026,8 @@ fn coordinate_scans_propagate_evaluator_and_readout_failures() {
             started.set(true);
             cached_walk_readout(cache, tree, indices, points, site)
         };
-        let error = run_search(&state, evaluate, params, &mut seeded_rng(1), readout).unwrap_err();
+        let error =
+            run_search(&state, evaluate, params, &[], &mut seeded_rng(1), readout).unwrap_err();
         let message = if wrong_length {
             "batch evaluator returned 3 values for 2"
         } else {
@@ -1022,6 +1048,7 @@ fn coordinate_scans_propagate_evaluator_and_readout_failures() {
             &state,
             fixture.evaluate(),
             params,
+            &[],
             &mut seeded_rng(1),
             readout,
         )
@@ -1048,6 +1075,7 @@ fn coordinate_scans_propagate_evaluator_and_readout_failures() {
         &state,
         fixture.evaluate(),
         params,
+        &[],
         &mut seeded_rng(1),
         short,
     )
@@ -1093,11 +1121,152 @@ fn coordinate_walk_honors_early_stop_and_sweep_bound() {
             &state,
             fixture.evaluate(),
             params,
+            &[],
             &mut seeded_rng(1),
             readout,
         )
         .unwrap();
         assert_eq!(calls, expected_calls);
         assert_eq!(pivots.len(), usize::from(threshold == 2.0));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Caller-supplied starts (issue #1033).
+// ---------------------------------------------------------------------------
+
+/// Six binary sites, so a corner is one point of 64.
+const CORNER_SITES: usize = 6;
+
+/// f = 1 + 10 * delta at the all-ones corner: a flat field except one corner.
+fn corner_value(point: &[usize]) -> f64 {
+    if point.iter().all(|&coordinate| coordinate == 1) {
+        11.0
+    } else {
+        1.0
+    }
+}
+
+fn corner_evaluate(batch: GlobalIndexBatch<'_>) -> Result<Vec<f64>> {
+    Ok(batch
+        .data()
+        .chunks(batch.n_sites())
+        .map(corner_value)
+        .collect())
+}
+
+/// Rank-one state with its only pivot at the all-zero corner. Its
+/// approximation is 1 everywhere, so the residual is 10 at the all-ones
+/// corner and zero elsewhere.
+fn corner_state() -> TreeTCI2<f64> {
+    let mut state = TreeTCI2::<f64>::new(
+        vec![2; CORNER_SITES],
+        TreeTciGraph::linear_chain(CORNER_SITES).unwrap(),
+    )
+    .unwrap();
+    state.add_global_pivots(&[vec![0; CORNER_SITES]]).unwrap();
+    state.max_sample_value = 1.0;
+    state
+}
+
+#[test]
+fn caller_supplied_starts_reach_a_corner_feature_random_starts_miss() {
+    let state = corner_state();
+    let corner = vec![1; CORNER_SITES];
+    // Seed 34: the ten random starts this search draws each keep at least two
+    // zero coordinates. The residual is then a flat zero fiber at every
+    // visited point and each scan stalls, so the random search alone never
+    // reaches the corner.
+    let random_only =
+        find_global_pivots(&state, corner_evaluate, 10, &[], 5, 1.0, 1.0, 34).unwrap();
+    assert!(
+        random_only.is_empty(),
+        "the random starts unexpectedly reached the corner: {random_only:?}"
+    );
+
+    // The corner itself, and a point one bit away, both reach it. The walk
+    // needs only one non-flat coordinate scan to find the feature.
+    let found = find_global_pivots(
+        &state,
+        corner_evaluate,
+        10,
+        std::slice::from_ref(&corner),
+        5,
+        1.0,
+        1.0,
+        34,
+    )
+    .unwrap();
+    assert_eq!(found, vec![corner.clone()]);
+
+    let mut neighbour = corner.clone();
+    neighbour[0] = 0;
+    let from_neighbour = find_global_pivots(
+        &state,
+        corner_evaluate,
+        0,
+        std::slice::from_ref(&neighbour),
+        5,
+        1.0,
+        1.0,
+        34,
+    )
+    .unwrap();
+    assert_eq!(from_neighbour, vec![corner]);
+}
+
+#[test]
+fn global_search_rejects_malformed_starts_before_evaluation() {
+    use std::cell::Cell;
+    let state = corner_state();
+    let calls = Cell::new(0usize);
+    let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        calls.set(calls.get() + 1);
+        Ok(vec![1.0; batch.n_points()])
+    };
+    // A wrong length is rejected before the state is materialized or the
+    // evaluator runs.
+    let error = find_global_pivots(&state, evaluate, 1, &[vec![1, 1]], 5, 1.0, 1.0, 1).unwrap_err();
+    assert!(
+        error.to_string().contains("has 2 coordinates, expected 6"),
+        "{error}"
+    );
+    assert!(matches!(error, crate::TreeTciError::Operation { .. }));
+    assert_eq!(calls.get(), 0);
+
+    let error = find_global_pivots(
+        &state,
+        evaluate,
+        1,
+        &[vec![2, 1, 1, 1, 1, 1]],
+        5,
+        1.0,
+        1.0,
+        1,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("coordinate 2 at site 0, out of range for local dimension 2"),
+        "{error}"
+    );
+    assert_eq!(calls.get(), 0);
+
+    // The start set is validated even when the search would walk nothing.
+    for (nsearch, budget) in [(0usize, 5usize), (1, 0)] {
+        let error = find_global_pivots(
+            &state,
+            evaluate,
+            nsearch,
+            &[vec![2, 1, 1, 1, 1, 1]],
+            budget,
+            1.0,
+            1.0,
+            1,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("out of range"), "{error}");
+        assert_eq!(calls.get(), 0);
     }
 }
