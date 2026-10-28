@@ -31,11 +31,32 @@ fn one_site_patch(site: &DynIndex, values: [f64; 2], coordinate: usize) -> SubDo
     .unwrap()
 }
 
+/// Branched complex tree whose split count is fixed by exact rank, not rounding.
+///
+/// `center[c0, c1, b0, b1] = (1 + i)` exactly when `b0 = c1 % 2` and
+/// `b1 = min(c1, 1)`, and both leaves are `(1 + i) [[1, 1], [1, -1]]`. With
+/// only `c0` fixed, `c1` still selects both leaf-0 rows (`b0 = 0, 1, 0`), so
+/// the center/leaf-0 bond has exact rank 2 and the patch must split on `c1`
+/// too; with both fixed, every bond has exact rank 1. A bond cap of 1 therefore
+/// requires exactly the 2 x 3 = 6 patches, each of squared norm
+/// `4 * |1 + i|^6 = 32`, whatever the SVD's rounding. An all-equal product
+/// state has exact rank 1 everywhere, so with `cutoff = 0` its split count
+/// would only follow whether the SVD returns its zero singular values as 0 or
+/// as `O(eps)` noise.
 fn branched_complex_tree() -> (TreeTN<IdxTensor, String>, Vec<DynIndex>) {
     let center_sites = vec![DynIndex::new_dyn(2), DynIndex::new_dyn(3)];
     let leaf_sites = vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
-    let bonds = vec![DynIndex::new_dyn(1), DynIndex::new_dyn(1)];
+    let bonds = vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
     let one = Complex64::new(1.0, 1.0);
+    let zero = Complex64::new(0.0, 0.0);
+    // Column-major over (c0, c1, b0, b1).
+    let mut center_values = vec![zero; 2 * 3 * 2 * 2];
+    for c0 in 0..2 {
+        for c1 in 0..3 {
+            let (b0, b1) = (c1 % 2, c1.min(1));
+            center_values[c0 + 2 * c1 + 6 * b0 + 12 * b1] = one;
+        }
+    }
     let center = IdxTensor::from_dense(
         vec![
             center_sites[0].clone(),
@@ -43,14 +64,16 @@ fn branched_complex_tree() -> (TreeTN<IdxTensor, String>, Vec<DynIndex>) {
             bonds[0].clone(),
             bonds[1].clone(),
         ],
-        vec![one; 6],
+        center_values,
     )
     .unwrap();
+    // Column-major over (bond, site): rows (1, 1) and (1, -1).
+    let leaf_values = vec![one, one, one, -one];
     let leaves = leaf_sites
         .iter()
         .zip(&bonds)
         .map(|(site, bond)| {
-            IdxTensor::from_dense(vec![bond.clone(), site.clone()], vec![one; 2]).unwrap()
+            IdxTensor::from_dense(vec![bond.clone(), site.clone()], leaf_values.clone()).unwrap()
         })
         .collect::<Vec<_>>();
     let mut tensors = vec![center];
