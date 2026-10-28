@@ -202,6 +202,14 @@ fn factorize_svd<T: SVDScalar>(
     let u = typed_tensor_to_matrix2(u, "svd.u")?;
     let vt = typed_tensor_to_matrix2(vt, "svd.vt")?;
     let singular_values = typed_col_major_values(&s, "svd.s")?;
+    // The prefix truncation below needs nonincreasing singular values; the backend may return
+    // them out of order (tensor4all/faer#82), so read them and their vectors through `order`.
+    let order = crate::compression::descending_order(&singular_values, T::linalg_real_to_f64);
+    let singular_values: Vec<_> = match &order {
+        Some(order) => order.iter().map(|&p| singular_values[p]).collect(),
+        None => singular_values,
+    };
+    let col = |j: usize| order.as_ref().map_or(j, |order| order[j]);
 
     // Determine rank based on tolerance and max_bond_dim
     let min_dim = m.min(n);
@@ -219,8 +227,6 @@ fn factorize_svd<T: SVDScalar>(
     // rank does not change when the input matrix is globally rescaled. An
     // absolute cutoff would keep near-noise singular values for large-norm
     // inputs and over-truncate small-norm ones.
-    // `svd_backend` returns singular values in non-increasing order, so the
-    // first entry is the largest; fall back to a scan to stay robust.
     let s_max = singular_values
         .iter()
         .take(min_dim)
@@ -267,14 +273,14 @@ fn factorize_svd<T: SVDScalar>(
         // (V^T for real and V^H for complex), which is used directly here.
         for i in 0..m {
             for j in 0..rank {
-                left[[i, j]] = u[[i, j]];
+                left[[i, j]] = u[[i, col(j)]];
             }
         }
         for i in 0..rank {
             // Singular values are stored in first row: s[[0, i]] (LAPACK-style convention)
             let sv = T::from_linalg_real(singular_values[i]);
             for j in 0..n {
-                right[[i, j]] = sv * vt[[i, j]];
+                right[[i, j]] = sv * vt[[col(i), j]];
             }
         }
     } else {
@@ -283,12 +289,12 @@ fn factorize_svd<T: SVDScalar>(
             for j in 0..rank {
                 // Singular values are stored in first row: s[[0, j]] (LAPACK-style convention)
                 let sv = T::from_linalg_real(singular_values[j]);
-                left[[i, j]] = u[[i, j]] * sv;
+                left[[i, j]] = u[[i, col(j)]] * sv;
             }
         }
         for i in 0..rank {
             for j in 0..n {
-                right[[i, j]] = vt[[i, j]];
+                right[[i, j]] = vt[[col(i), j]];
             }
         }
     }

@@ -158,6 +158,9 @@ fn singular_value_measure(value: f64, measure: SingularValueMeasure) -> f64 {
 }
 
 /// Compute the retained rank based on an explicit SVD truncation policy.
+///
+/// `s_vec` must be nonincreasing: the rank is a count of leading values. The SVD wrappers sort the
+/// backend output with [`descending_order`] first.
 pub(crate) fn compute_retained_rank(s_vec: &[f64], policy: &SvdTruncationPolicy) -> usize {
     if s_vec.is_empty() {
         return 1;
@@ -372,10 +375,18 @@ fn svd_truncated_inner_scoped(
         let _ = context;
         singular_values_from_eager(&s_inner)?
     };
+    let order = descending_order(&s_full);
+    let s_full = match &order {
+        Some(order) => order.iter().map(|&i| s_full[i]).collect(),
+        None => s_full,
+    };
     let mut r = retained_svd_rank(&s_full, k, options)?;
     r = r.min(s_full.len());
-    if r < k {
-        let keep: Vec<usize> = (0..r).collect();
+    if r < k || order.is_some() {
+        let keep: Vec<usize> = match &order {
+            Some(order) => order[..r].to_vec(),
+            None => (0..r).collect(),
+        };
         u_inner = with_eager_session(u_inner.runtime(), context, |session| {
             session.take_axis(&u_inner, 1, &keep)
         })
@@ -620,6 +631,22 @@ pub(crate) struct SvdFactorizeResult {
     pub rank: usize,
 }
 
+/// The permutation that sorts `singular_values` in nonincreasing order, or `None` when they
+/// already are.
+///
+/// The truncation rule and the prefix slicing of the factors assume nonincreasing singular values,
+/// as the Gram route guarantees by sorting its eigenpairs. A backend may return them out of order
+/// (tensor4all/faer#82), so the SVD wrappers reorder the values and the matching factor columns
+/// before the rule runs. The ordered case costs one pass and no allocation.
+fn descending_order(singular_values: &[f64]) -> Option<Vec<usize>> {
+    if singular_values.windows(2).all(|pair| pair[0] >= pair[1]) {
+        return None;
+    }
+    let mut order: Vec<usize> = (0..singular_values.len()).collect();
+    order.sort_by(|&left, &right| singular_values[right].total_cmp(&singular_values[left]));
+    Some(order)
+}
+
 /// The retained rank of one SVD, from its singular values.
 ///
 /// This is the one place the SVD truncation policy is applied: the eager, context-scoped and
@@ -711,6 +738,13 @@ where
         .iter()
         .map(|&value| value.into())
         .collect();
+    let order = descending_order(&s_full);
+    let s_full = match &order {
+        Some(order) => order.iter().map(|&i| s_full[i]).collect(),
+        None => s_full,
+    };
+    // Source column of `U` (and row of `V^H`) for each kept bond position.
+    let source = |position: usize| order.as_ref().map_or(position, |order| order[position]);
     let rank = retained_svd_rank(&s_full, k, options)?;
     let u_payload = u_value
         .as_slice::<T>()
@@ -722,7 +756,7 @@ where
     // `U` is column-major `[m, k]`: kept columns are the bond axis of the left factor.
     let mut u_data = Vec::with_capacity(m * rank);
     for column in 0..rank {
-        let start = column.checked_mul(m).ok_or_else(|| {
+        let start = source(column).checked_mul(m).ok_or_else(|| {
             SvdError::ComputationError(anyhow::anyhow!("SVD U column offset overflows usize"))
         })?;
         let end = start.checked_add(m).ok_or_else(|| {
@@ -748,7 +782,7 @@ where
             SvdError::ComputationError(anyhow::anyhow!("SVD V^H column offset overflows usize"))
         })?;
         for row in 0..rank {
-            let value = vt_payload.get(base + row).ok_or_else(|| {
+            let value = vt_payload.get(base + source(row)).ok_or_else(|| {
                 SvdError::ComputationError(anyhow::anyhow!("SVD V^H row {row} is out of bounds"))
             })?;
             vt_data.push(*value);

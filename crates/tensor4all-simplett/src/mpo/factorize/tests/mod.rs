@@ -211,3 +211,42 @@ fn test_factorize_svd_complex64() {
         max_error
     );
 }
+
+/// Regression for #1028: MPO SVD factorization keeps a larger singular value that the backend
+/// returns after smaller ones, together with its vectors.
+#[test]
+fn factorize_svd_keeps_a_larger_value_that_follows_a_smaller_one() {
+    use num_complex::Complex64;
+
+    let n = 128;
+    let mut matrix: Matrix2<Complex64> = matrix2_zeros(n, n).unwrap();
+    for (row, col, value) in crate::compression::tests::unsorted_spectrum_entries() {
+        matrix[[row, col]] = value;
+    }
+    for left_orthogonal in [true, false] {
+        let options = FactorizeOptions {
+            method: FactorizeMethod::SVD,
+            tolerance: 1e-12,
+            max_bond_dim: None,
+            left_orthogonal,
+            ..Default::default()
+        };
+        let result = factorize(&matrix, &options).unwrap();
+        assert_eq!(result.rank, 2, "left_orthogonal = {left_orthogonal}");
+        let mut error = 0.0;
+        for i in 0..n {
+            for j in 0..n {
+                let mut value = Complex64::new(0.0, 0.0);
+                for k in 0..result.rank {
+                    value += result.left[[i, k]] * result.right[[k, j]];
+                }
+                error += (value - matrix[[i, j]]).norm_sqr();
+            }
+        }
+        assert!(
+            error.sqrt() <= 1e-12 * 0.6,
+            "left_orthogonal = {left_orthogonal}: reconstruction error {:e}",
+            error.sqrt()
+        );
+    }
+}

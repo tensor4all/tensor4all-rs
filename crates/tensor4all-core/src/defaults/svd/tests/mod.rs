@@ -318,3 +318,129 @@ fn svd_for_factorize_on_session_refuses_a_tracked_operand() {
         "the refusal must not detach the graph"
     );
 }
+
+#[test]
+fn descending_order_is_none_for_ordered_values_and_sorts_the_rest() {
+    assert_eq!(descending_order(&[]), None);
+    assert_eq!(descending_order(&[3.0, 3.0, 1.0, 0.0]), None);
+    assert_eq!(descending_order(&[0.5, 0.0, 1.0e-3]), Some(vec![0, 2, 1]));
+    // Ties keep their backend order.
+    assert_eq!(
+        descending_order(&[0.0, 2.0, 1.0, 2.0]),
+        Some(vec![1, 3, 2, 0])
+    );
+}
+
+/// The #1028 input: a 128 x 128 complex matrix with three nonzero entries, whose only nonzero
+/// singular values are 0.5968 and 6.3e-4. t4a-faer 0.25.0/0.25.1 return 6.3e-4 after a run of
+/// zeros (tensor4all/faer#82).
+fn unsorted_spectrum_matrix() -> (DynIndex, DynIndex, IdxTensor) {
+    let n = 128;
+    let entries = [
+        (41, 80, -1.3368711811580607e-64, 3.48452997681476e-64),
+        (67, 80, -5.871970588424443e-1, -1.065196368760547e-1),
+        (5, 112, -2.8153454475366503e-4, 5.652970997533713e-4),
+    ];
+    let mut data = vec![Complex64::new(0.0, 0.0); n * n];
+    for (row, col, re, im) in entries {
+        data[row + n * col] = Complex64::new(re, im);
+    }
+    let (rows, cols) = (Index::new_dyn(n), Index::new_dyn(n));
+    let tensor = IdxTensor::from_dense(vec![rows.clone(), cols.clone()], data).unwrap();
+    (rows, cols, tensor)
+}
+
+fn unsorted_spectrum_policies() -> [SvdOptions; 2] {
+    [
+        SvdOptions::new(),
+        SvdOptions::new().with_policy(
+            SvdTruncationPolicy::new(1.0e-12)
+                .with_squared_values()
+                .with_discarded_tail_sum(),
+        ),
+    ]
+}
+
+/// Regression for #1028: the truncation keeps the two largest singular values and their vectors,
+/// whatever order the backend returns them in.
+#[test]
+fn svd_with_keeps_a_larger_value_that_follows_a_smaller_one() {
+    let (rows, _, tensor) = unsorted_spectrum_matrix();
+    for options in unsorted_spectrum_policies() {
+        let (u, s, v) =
+            svd_with::<Complex64>(&tensor, std::slice::from_ref(&rows), &options).unwrap();
+        assert_eq!(s.dims()[0], 2, "{options:?}");
+        let vh = v.conj().permute(&[1, 0]).unwrap();
+        let back = crate::contract(&[&u, &s, &vh]).unwrap();
+        let error = back.sub(&tensor).unwrap().norm().unwrap();
+        assert!(
+            error <= 1e-12 * tensor.norm().unwrap(),
+            "{options:?}: reconstruction error {error:e}"
+        );
+    }
+}
+
+/// The truncation cases of the #1028 input with their correct rank. The untruncated case keeps every
+/// value, so it checks that the factors are reordered even when no value is dropped.
+fn unsorted_spectrum_cases() -> Vec<(SvdOptions, usize)> {
+    let [default, tail] = unsorted_spectrum_policies();
+    vec![(default, 2), (tail, 2), (SvdOptions::full_rank(), 128)]
+}
+
+/// `result` holds the nonincreasing singular values in its `S` factor and reconstructs `tensor`.
+fn assert_sorted_factorization(result: &SvdFactorizeResult, tensor: &IdxTensor, rank: usize) {
+    assert_eq!(result.rank, rank);
+    let s_dense: Vec<Complex64> = result.s.to_vec().unwrap();
+    let diagonal: Vec<f64> = (0..rank).map(|p| s_dense[p * (rank + 1)].re).collect();
+    assert_eq!(diagonal, result.singular_values, "rank {rank}");
+    assert!(
+        diagonal.windows(2).all(|pair| pair[0] >= pair[1]),
+        "rank {rank}: S is not nonincreasing"
+    );
+    // `V^H` shares the bond leg with `U`; move it onto the `sim` leg of `S` to contract.
+    let vh = result
+        .vh
+        .replaceind(&result.bond_index, &result.s.indices[1])
+        .unwrap();
+    let back = crate::contract(&[&result.u, &result.s, &vh]).unwrap();
+    let error = back.sub(tensor).unwrap().norm().unwrap();
+    assert!(
+        error <= 1e-12 * tensor.norm().unwrap(),
+        "rank {rank}: reconstruction error {error:e}"
+    );
+}
+
+/// Regression for #1028 on the eager factorization route.
+#[test]
+fn svd_for_factorize_orders_an_unsorted_spectrum() {
+    let (rows, _, tensor) = unsorted_spectrum_matrix();
+    for (options, rank) in unsorted_spectrum_cases() {
+        let result = svd_for_factorize(&tensor, std::slice::from_ref(&rows), &options).unwrap();
+        assert_sorted_factorization(&result, &tensor, rank);
+    }
+}
+
+/// Regression for #1028 on the explicit-session factorization route.
+#[test]
+fn svd_for_factorize_on_session_orders_an_unsorted_spectrum() {
+    use tensor4all_tensorbackend::CpuExecutionContext;
+
+    let context = CpuExecutionContext::from_backend(
+        tensor4all_tensorbackend::CpuBackend::with_threads(1).expect("1T CPU backend"),
+    );
+    let (rows, _, tensor) = unsorted_spectrum_matrix();
+    for (options, rank) in unsorted_spectrum_cases() {
+        let result = context
+            .with_concrete_session(|session| {
+                svd_for_factorize_on_session::<Complex64>(
+                    session,
+                    &tensor,
+                    std::slice::from_ref(&rows),
+                    &options,
+                )
+            })
+            .unwrap()
+            .unwrap();
+        assert_sorted_factorization(&result, &tensor, rank);
+    }
+}

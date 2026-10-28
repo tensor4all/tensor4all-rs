@@ -289,3 +289,70 @@ fn normalize_error_selects_relative_or_absolute_threshold_f64() {
 fn normalize_error_selects_relative_or_absolute_threshold_c64() {
     test_normalize_error_selects_relative_or_absolute_threshold_generic::<Complex64>();
 }
+
+/// The #1028 input: a 128 x 128 complex matrix whose only nonzero singular values are 0.5968 and
+/// 6.3e-4. t4a-faer 0.25.0/0.25.1 return 6.3e-4 after a run of zeros (tensor4all/faer#82).
+pub(crate) fn unsorted_spectrum_entries() -> [(usize, usize, Complex64); 3] {
+    [
+        (
+            41,
+            80,
+            Complex64::new(-1.3368711811580607e-64, 3.48452997681476e-64),
+        ),
+        (
+            67,
+            80,
+            Complex64::new(-5.871970588424443e-1, -1.065196368760547e-1),
+        ),
+        (
+            5,
+            112,
+            Complex64::new(-2.8153454475366503e-4, 5.652970997533713e-4),
+        ),
+    ]
+}
+
+#[test]
+fn descending_order_is_none_for_ordered_values_and_sorts_the_rest() {
+    assert_eq!(descending_order::<f64>(&[], |value| value), None);
+    assert_eq!(descending_order(&[3.0, 3.0, 1.0, 0.0], |value| value), None);
+    assert_eq!(
+        descending_order(&[0.5, 0.0, 1.0e-3], |value| value),
+        Some(vec![0, 2, 1])
+    );
+    assert_eq!(
+        descending_order(&[0.0, 2.0, 1.0, 2.0], |value| value),
+        Some(vec![1, 3, 2, 0])
+    );
+}
+
+/// Regression for #1028: SVD compression keeps a larger singular value that the backend returns
+/// after smaller ones, together with its vectors.
+#[test]
+fn factorize_svd_keeps_a_larger_value_that_follows_a_smaller_one() {
+    let n = 128;
+    let mut matrix = Matrix::<Complex64>::zeros(n, n);
+    for (row, col, value) in unsorted_spectrum_entries() {
+        matrix[[row, col]] = value;
+    }
+    for left_orthogonal in [true, false] {
+        let (left, right, rank) =
+            factorize_svd(&matrix, 1e-12, true, None, left_orthogonal).unwrap();
+        assert_eq!(rank, 2, "left_orthogonal = {left_orthogonal}");
+        let mut error = 0.0;
+        for i in 0..n {
+            for j in 0..n {
+                let mut value = Complex64::new(0.0, 0.0);
+                for k in 0..rank {
+                    value += left[[i, k]] * right[[k, j]];
+                }
+                error += (value - matrix[[i, j]]).norm_sqr();
+            }
+        }
+        assert!(
+            error.sqrt() <= 1e-12 * 0.6,
+            "left_orthogonal = {left_orthogonal}: reconstruction error {:e}",
+            error.sqrt()
+        );
+    }
+}
