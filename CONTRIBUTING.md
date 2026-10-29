@@ -151,7 +151,8 @@ not in the root `Cargo.lock`, so a pin bump must regenerate those locks too.
 
 ### Supported feature configurations
 
-Cargo features here are not additive: `tenferro-cpu-faer` and
+Cargo features here are not additive: `tenferro-cpu-platform` (the default:
+Apple Accelerate on macOS, faer elsewhere), `tenferro-cpu-faer` and
 `tenferro-system-blas` are mutually exclusive CPU backends (tenferro-rs #2004),
 so `--all-features` is not a valid build target. The repository declares the
 configurations below and builds or audits exactly these. A configuration selects
@@ -161,7 +162,8 @@ with their default features.
 
 | Configuration | Cargo selection | Verified by |
 |---|---|---|
-| default | Each crate's default features | PR CI Test, Doctests, and Lint (`cargo clippy --workspace --all-targets`); PR CI panic audit; nightly heavy-tests |
+| default | Each crate's default features (faer on Linux) | PR CI Test, Doctests, and Lint (`cargo clippy --workspace --all-targets`); PR CI panic audit; nightly heavy-tests |
+| default on macOS | Each crate's default features (Apple Accelerate) | PR CI `macOS (Accelerate)`: workspace tests and doctests |
 | explicit-context | `-p tensor4all-tensorbackend --no-default-features --features explicit-context,tenferro-cpu-faer` | PR CI Lint (`Check explicit-context-only build`) |
 | system-blas | Every compute crate with `--no-default-features --features tenferro-system-blas` (plus `tensor4all-treetn/simplett-bridge` and `tensor4all-treersi/global-defaults`, which their test targets need); HDF5 with `link,tenferro-system-blas` | Nightly `.github/workflows/feature-matrix.yml`, including a panic audit |
 | provider-inject | Every compute crate with `--no-default-features --features tenferro-provider-inject` (plus `tensor4all-treetn/simplett-bridge` and `tensor4all-treersi/global-defaults`, which their test targets need); HDF5 with `link,tenferro-provider-inject` | Nightly feature matrix, including a panic audit |

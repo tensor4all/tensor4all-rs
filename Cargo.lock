@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "accelerate-src"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "415ed64958754dbe991900f3940677e6a7eefb4d7367afd70d642677b0c7d19d"
+
+[[package]]
 name = "addr2line"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -497,6 +503,15 @@ dependencies = [
  "radium",
  "tap",
  "wyz",
+]
+
+[[package]]
+name = "blas-src"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bd439b48f5425c9f4597141b52476358e05e08471bc30f4d1c2a1f4084d7c9f"
+dependencies = [
+ "accelerate-src",
 ]
 
 [[package]]
@@ -2515,6 +2530,15 @@ checksum = "7578ad56e0ef44c334983a5f296698770c1a7887395803e3ddc3263e608fe015"
 dependencies = [
  "num-complex 0.4.6",
  "paste",
+]
+
+[[package]]
+name = "lapack-src"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1bcb4a410d9e39126db6ef1b71814618d9f9c3db128e6db674a449cf6a8b668"
+dependencies = [
+ "accelerate-src",
 ]
 
 [[package]]
@@ -5220,6 +5244,7 @@ name = "tenferro-cpu"
 version = "0.7.1"
 source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=8fec1ca70852b930c092e7177c30bb8af7594a57#8fec1ca70852b930c092e7177c30bb8af7594a57"
 dependencies = [
+ "blas-src",
  "cblas-inject",
  "cblas-sys",
  "cpueinsum",
@@ -5227,6 +5252,7 @@ dependencies = [
  "elem-simd-math",
  "lapack",
  "lapack-inject",
+ "lapack-src",
  "libm",
  "lru",
  "num-complex 0.4.6",
@@ -5518,6 +5544,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tensor4all-cpu-platform"
+version = "0.2.0"
+dependencies = [
+ "tenferro-einsum",
+ "tenferro-linalg",
+]
+
+[[package]]
 name = "tensor4all-hdf5"
 version = "0.2.0"
 dependencies = [
@@ -5669,6 +5703,7 @@ dependencies = [
  "tenferro-linalg",
  "tenferro-runtime",
  "tenferro-tensor",
+ "tensor4all-cpu-platform",
  "thiserror 2.0.20",
 ]
 

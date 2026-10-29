@@ -8,6 +8,7 @@ members = [
     "crates/tensor4all-treeaci",
     "crates/tensor4all-treersi",
     "crates/tensor4all-tensorbackend",
+    "crates/tensor4all-cpu-platform",
     "crates/tensor4all-core",
     "crates/tensor4all-treetn",
     "crates/tensor4all-itensorlike",
@@ -109,4 +110,5 @@ tenferro-cpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "8
 tenferro-einsum = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "8fec1ca70852b930c092e7177c30bb8af7594a57", default-features = false }
 tenferro-linalg = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "8fec1ca70852b930c092e7177c30bb8af7594a57", default-features = false }
 tenferro-tensor = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "8fec1ca70852b930c092e7177c30bb8af7594a57", default-features = false }
+tensor4all-cpu-platform = { path = "crates/tensor4all-cpu-platform" }
 tenferro-gpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "8fec1ca70852b930c092e7177c30bb8af7594a57", default-features = false }

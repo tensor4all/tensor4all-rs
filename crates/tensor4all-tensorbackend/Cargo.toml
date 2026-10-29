@@ -10,7 +10,7 @@ keywords = ["tensor", "storage", "backend", "linear-algebra"]
 categories = ["science", "mathematics"]
 
 [features]
-default = ["backend-tenferro", "tenferro-cpu-faer"]
+default = ["backend-tenferro", "tenferro-cpu-platform"]
 # Compatibility alias for the legacy process-global operation surface.
 backend-tenferro = ["global-defaults"]
 # Canonical caller-supplied CPU context without process-global fallbacks.
@@ -27,6 +27,13 @@ tenferro-cuda = [
     "tenferro-einsum/cuda",
     "tenferro-linalg/autodiff",
     "tenferro-linalg/cuda",
+]
+# The platform default: Apple Accelerate on macOS, faer elsewhere
+# (see the `tensor4all-cpu-platform` crate).
+tenferro-cpu-platform = [
+    "dep:tensor4all-cpu-platform",
+    "tenferro-einsum/autodiff",
+    "tenferro-linalg/autodiff",
 ]
 tenferro-cpu-faer = [
     "tenferro/native",
@@ -73,6 +80,7 @@ tenferro-einsum.workspace = true
 tenferro-linalg.workspace = true
 tenferro-tensor.workspace = true
 tenferro-gpu = { workspace = true, optional = true }
+tensor4all-cpu-platform = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true

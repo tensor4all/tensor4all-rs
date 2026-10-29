@@ -9,7 +9,7 @@ description = "Core tensor types, indices, and operations (SVD, QR, contraction)
 autotests = false
 
 [features]
-default = ["backend-tenferro", "tenferro-cpu-faer"]
+default = ["backend-tenferro", "tenferro-cpu-platform"]
 backend-tenferro = ["tensor4all-tensorbackend/backend-tenferro"]
 tenferro-cuda = [
     "backend-tenferro",
@@ -18,6 +18,13 @@ tenferro-cuda = [
     "tenferro-ad/cuda",
     "tenferro-einsum/cuda",
     "tenferro-linalg/cuda",
+]
+# The platform default: Apple Accelerate on macOS, faer elsewhere
+# (see the `tensor4all-cpu-platform` crate).
+tenferro-cpu-platform = [
+    "tensor4all-tensorbackend/tenferro-cpu-platform",
+    "tenferro-einsum/autodiff",
+    "tenferro-linalg/autodiff",
 ]
 tenferro-cpu-faer = [
     "tensor4all-tensorbackend/tenferro-cpu-faer",

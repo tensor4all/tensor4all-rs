@@ -12,8 +12,16 @@ categories = ["science", "mathematics"]
 autotests = false
 
 [features]
-default = ["tenferro-cpu-faer"]
+default = ["tenferro-cpu-platform"]
 backend-tenferro = ["tensor4all-tensorbackend/backend-tenferro"]
+# The platform default: Apple Accelerate on macOS, faer elsewhere
+# (see the `tensor4all-cpu-platform` crate).
+tenferro-cpu-platform = [
+    "backend-tenferro",
+    "tensor4all-tensorbackend/tenferro-cpu-platform",
+    "tensor4all-core/tenferro-cpu-platform",
+    "tensor4all-treetn/tenferro-cpu-platform",
+]
 tenferro-cpu-faer = [
     "backend-tenferro",
     "tensor4all-tensorbackend/tenferro-cpu-faer",

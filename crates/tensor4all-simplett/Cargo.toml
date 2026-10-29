@@ -12,8 +12,14 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["backend-tenferro", "tenferro-cpu-faer"]
+default = ["backend-tenferro", "tenferro-cpu-platform"]
 backend-tenferro = ["tensor4all-tensorbackend/backend-tenferro"]
+# The platform default: Apple Accelerate on macOS, faer elsewhere
+# (see the `tensor4all-cpu-platform` crate).
+tenferro-cpu-platform = [
+    "tensor4all-core/tenferro-cpu-platform",
+    "tensor4all-tensorbackend/tenferro-cpu-platform",
+]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
     "tensor4all-tensorbackend/tenferro-cpu-faer",

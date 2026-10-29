@@ -31,6 +31,11 @@ the pool again. The pool's workers are confined to the main thread's allowed
 CPU set snapshot on Linux; inline operations and scheduler lane threads are
 not moved.
 
+The default CPU backend is faer on Linux and Windows and Apple Accelerate on
+macOS. Accelerate schedules its own threads, outside the tensor4all pool, and
+takes its thread limit from `VECLIB_MAXIMUM_THREADS`, so single-thread runs on
+macOS also set `VECLIB_MAXIMUM_THREADS=1`.
+
 ### Rust
 
 #### Merge-refine schedule (#752)
@@ -46,7 +51,7 @@ body lives in `rust/benchmark_merge_refine.rs`.
 ```bash
 T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
   cargo build --release -p tensor4all-benchmarks --example benchmark_merge_refine
-RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_merge_refine
 ```
 
@@ -169,7 +174,7 @@ T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
   cargo build --release -p tensor4all-benchmarks \
     --example benchmark_tree_patch_representation
 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
-MKL_NUM_THREADS=1 BLAS_NUM_THREADS=1 \
+MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 BLAS_NUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_tree_patch_representation \
     measure chain 12 1.2 128 run-a
 ```
@@ -220,7 +225,7 @@ uses this protocol; it does not attribute timing differences solely to readout.
 ```bash
 T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
   cargo build --release -p tensor4all-benchmarks --example benchmark_global_search
-RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_global_search [case]
 ```
 
@@ -242,7 +247,7 @@ correctness checks, confidence intervals and acceptance gates.
 
 ```bash
 cargo build --release -p tensor4all-benchmarks --example benchmark_memo
-RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_memo memo
 ```
 
@@ -266,7 +271,7 @@ product perform different final work even when they return identical values.
 
 ```bash
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 TENFERRO_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 TENFERRO_NUM_THREADS=1 \
   taskset -c 2 cargo bench -p tensor4all-treetn --bench cached_evaluator -- \
   hiroshi_chain_evaluator_parity --warm-up-time 1 --measurement-time 1
 ```
@@ -312,7 +317,7 @@ T4A_BENCH_GIT_COMMIT=$commit \
 python3 scripts/run-src-benchmark-gates.py \
   --candidate target/release/examples/benchmark_src \
   --candidate-commit "$commit" --suite quick --pairs 1 --reps 1 \
-  --expected-backend tenferro --expected-features tenferro-cpu-faer \
+  --expected-backend tenferro --expected-features tenferro-cpu-platform \
   --output /tmp/src-quick.json
 ```
 
@@ -329,7 +334,10 @@ thread counts are fixed to one. `T4A_BENCH_MAX_INPUT_BYTES` and
 `--max-rss-mib` and `--max-virtual-mib` separately control measured RSS and
 `RLIMIT_AS`.
 
-The required CPU lane uses the default tenferro/faer backend. Provider-injected
+The required CPU lane uses the default CPU backend (faer on Linux). A paired
+comparison against a commit that predates `tenferro-cpu-platform` builds both
+binaries with `--no-default-features --features tenferro-cpu-faer` and passes
+`--expected-features tenferro-cpu-faer`, so both report the same feature set. Provider-injected
 and CUDA SRC are currently unsupported because the high-level SRC API does not
 own an execution context and constructs CPU probes. Do not infer SRC support
 from unrelated backend tests. On a CUDA host, verify the existing resident
@@ -403,7 +411,7 @@ RAYON_NUM_THREADS=1 cargo bench -p tensor4all-aci --bench elementwise_scaling --
 ```
 
 For Julia parity runs on macOS/Homebrew, build Rust against the same system
-OpenBLAS backend instead of the default faer backend:
+OpenBLAS backend instead of the default backend (Accelerate on macOS):
 
 ```bash
 OPENBLAS_ROOT=${OPENBLAS_ROOT:-$(brew --prefix openblas)}
@@ -411,7 +419,7 @@ env \
 RUSTFLAGS="-L native=${OPENBLAS_ROOT}/lib -l dylib=openblas" \
 DYLD_LIBRARY_PATH="${OPENBLAS_ROOT}/lib:${DYLD_LIBRARY_PATH:-}" \
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
 cargo bench -p tensor4all-aci \
   --no-default-features --features tenferro-system-blas \
   --bench elementwise_scaling -- --sample-size 10
@@ -425,7 +433,7 @@ env \
 RUSTFLAGS="-L native=${OPENBLAS_ROOT}/lib -l dylib=openblas" \
 DYLD_LIBRARY_PATH="${OPENBLAS_ROOT}/lib:${DYLD_LIBRARY_PATH:-}" \
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
 T4A_STEP_TIMING_REPEATS=50 T4A_STEP_TIMING_N_SITES=16 \
 T4A_STEP_TIMING_FIXED_SWEEPS=3 \
 T4A_STEP_TIMING_CHIS=16,32,64,128 \
@@ -452,7 +460,7 @@ env \
 RUSTFLAGS="-L native=${OPENBLAS_ROOT}/lib -l dylib=openblas" \
 DYLD_LIBRARY_PATH="${OPENBLAS_ROOT}/lib:${DYLD_LIBRARY_PATH:-}" \
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
 T4A_MATRIX_LUCI_REPEATS=20 T4A_MATRIX_LUCI_SIZES=16,32,64 \
 cargo test --release -p tensor4all-core \
   --no-default-features --features tenferro-system-blas \
@@ -464,7 +472,7 @@ MatrixLU standalone Hilbert timing:
 ```bash
 env \
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
 T4A_MATRIX_LU_REPEATS=20 T4A_MATRIX_LU_SIZES=16,32,64,128 \
 cargo run --release -p tensor4all-benchmarks --example benchmark_matrix_lu
 ```

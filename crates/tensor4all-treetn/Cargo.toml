@@ -9,11 +9,20 @@ description = "Tree tensor networks with arbitrary graph topology for tensor4all
 autotests = false
 
 [features]
-default = ["tenferro-cpu-faer", "simplett-bridge"]
+default = ["tenferro-cpu-platform", "simplett-bridge"]
 simplett-bridge = ["dep:tensor4all-simplett"]
 tenferro-cuda = [
     "tensor4all-core/tenferro-cuda",
     "tensor4all-tensorbackend/tenferro-cuda",
+]
+# The platform default: Apple Accelerate on macOS, faer elsewhere
+# (see the `tensor4all-cpu-platform` crate).
+tenferro-cpu-platform = [
+    "tensor4all-core/backend-tenferro",
+    "tensor4all-core/tenferro-cpu-platform",
+    "tensor4all-simplett?/tenferro-cpu-platform",
+    "tensor4all-tensorbackend/backend-tenferro",
+    "tensor4all-tensorbackend/tenferro-cpu-platform",
 ]
 tenferro-cpu-faer = [
     "tensor4all-core/backend-tenferro",

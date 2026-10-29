@@ -1,0 +1,20 @@
+[package]
+name = "tensor4all-cpu-platform"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Selects the platform's default tenferro CPU backend for tensor4all: Apple Accelerate on macOS, faer elsewhere"
+
+# Cargo features cannot depend on the target, but target-specific dependency
+# tables can enable features. The tensor4all crates reach this crate through
+# their `tenferro-cpu-platform` feature. tenferro-linalg and tenferro-einsum
+# forward the provider choice to tenferro-cpu and tenferro-ad.
+[target.'cfg(target_os = "macos")'.dependencies]
+tenferro-einsum = { workspace = true, features = ["blas-accelerate"] }
+tenferro-linalg = { workspace = true, features = ["blas-accelerate"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+tenferro-einsum = { workspace = true, features = ["native"] }
+tenferro-linalg = { workspace = true, features = ["native"] }

@@ -100,10 +100,23 @@ provider in a build, so `--all-features` is not a supported configuration.
 
 | feature | meaning |
 | --- | --- |
-| `tenferro-cpu-faer` | pure-Rust faer CPU kernels; the default for every compute crate |
+| `tenferro-cpu-platform` | the default for every compute crate: Apple Accelerate (tenferro `blas-accelerate`) on macOS, faer elsewhere |
+| `tenferro-cpu-faer` | pure-Rust faer CPU kernels |
 | `tenferro-system-blas` | system BLAS/LAPACK (OpenBLAS, MKL, Apple Accelerate) |
 | `tenferro-provider-inject` | caller-provided provider on the BLAS-linked tenferro surface |
 | `tenferro-cuda` | CUDA where exposed (currently `tensor4all-core` and `tensor4all-treetn`); implies `tenferro-cpu-faer` for host work |
+
+`tenferro-cpu-platform` is resolved by target in the wiring-only crate
+`tensor4all-cpu-platform`: Cargo features cannot depend on the target, but its
+target-specific dependency tables enable `blas-accelerate` or `native` on
+`tenferro-linalg` and `tenferro-einsum`, which forward the choice to
+`tenferro-cpu` and `tenferro-ad`. Accelerate is linked through `accelerate-src`
+(`-framework Accelerate`), so the macOS default needs no link flags. It binds
+Accelerate's LAPACK 3.2.1 Fortran interface (LP64). tenferro calls only
+subroutines there (results through arguments) and reaches BLAS only through
+CBLAS, so the f2c return convention for scalar-valued functions does not apply.
+Accelerate schedules its own threads outside the tensor4all pool; its limit is
+`VECLIB_MAXIMUM_THREADS`.
 
 Convention:
 
@@ -118,9 +131,12 @@ not switch the optional dependency on by itself.
 example `tensor4all-core/backend-tenferro`), the new `tenferro-system-blas`
 feature forwards it identically. Provider selection does not change route
 selection.
-- A downstream user chooses exactly one CPU provider with
-`default-features = false` and enables that provider on every directly imported
-compute crate. Enabling two CPU providers in one build is not supported.
+- A downstream user who wants a provider other than the platform default
+chooses exactly one CPU provider with `default-features = false` and enables
+that provider on every directly imported compute crate. Enabling two CPU
+providers in one build is not supported. On macOS this includes
+`tenferro-cpu-faer`: with the default features still on, it would combine faer
+with Accelerate.
 `tenferro-cuda` is not combined with `tenferro-system-blas` or
 `tenferro-provider-inject`.
 - `tenferro-system-blas` selects the BLAS/LAPACK-linked tenferro kernels but

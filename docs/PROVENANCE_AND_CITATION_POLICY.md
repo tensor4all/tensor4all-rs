@@ -36,7 +36,8 @@ addition to, not in place of, the upstream citations.
     faer, S. Quiñones El Kazdadi, *J. Open Source Softw.* 11(123), 6099
     (2026), [doi:10.21105/joss.06099](https://doi.org/10.21105/joss.06099),
     when the faer backend runs your dense CPU linear algebra (the default CPU
-    configuration), and it recurses to strided-rs.
+    configuration on Linux and Windows; on macOS the default is Apple
+    Accelerate), and it recurses to strided-rs.
   - [strided-rs](https://github.com/tensor4all/strided-rs/blob/main/docs/PROVENANCE_AND_CITATION_POLICY.md)
     (strided CPU kernels and permutations used by tenferro-rs). Its algorithm
     table asks for the HPTT paper, P. Springer, T. Su, P. Bientinesi,
@@ -66,7 +67,8 @@ tensor network contraction, truncation or fitting on the default CPU backend:
 - the TCI paper ([SciPost Phys. 18, 104 (2025)](https://doi.org/10.21468/SciPostPhys.18.3.104))
   if you use the TCI components;
 - the original papers of the algorithms you use (table "Algorithm origins");
-- tenferro-rs (repository URL and version or commit) and faer (above);
+- tenferro-rs (repository URL and version or commit) and faer (above) when
+  faer is the backend that ran (the default outside macOS);
 - strided-rs (repository URL and version or commit), the HPTT paper and the
   Strided.jl repository, through strided-rs's permutation and kernel ports.
 

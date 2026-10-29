@@ -392,6 +392,34 @@ def test_tenferro_route_allows_tensorbackend() -> None:
     assert findings == []
 
 
+def test_tenferro_route_allows_wiring_crate() -> None:
+    mod = load_module()
+    path = "crates/tensor4all-cpu-platform/Cargo.toml"
+    manifest = (
+        '[package]\nname = "tensor4all-cpu-platform"\n\n'
+        "[target.'cfg(target_os = \"macos\")'.dependencies]\n"
+        'tenferro-linalg = { workspace = true, features = ["blas-accelerate"] }\n'
+    )
+    original = mod.file_text_at
+    mod.file_text_at = lambda p, *, ref, worktree: manifest
+    try:
+        findings = mod.deterministic_checks(
+            [path],
+            added={
+                path: [
+                    (
+                        5,
+                        'tenferro-linalg = { workspace = true, features = ["blas-accelerate"] }',
+                    )
+                ]
+            },
+            ref="head",
+        )
+    finally:
+        mod.file_text_at = original
+    assert findings == []
+
+
 def test_tenferro_route_ignores_untouched_existing_dependency() -> None:
     mod = load_module()
     path = "crates/tensor4all-core/Cargo.toml"

@@ -163,10 +163,8 @@ fn process_crate(crate_path: &Path, output_dir: &Path) -> Result<(), Box<dyn std
         }
     }
 
-    if files.is_empty() {
-        return Ok(());
-    }
-
+    // A crate with no public functions still gets its header-only file: the
+    // inventory has one file per crate under `crates/`.
     // Generate markdown
     let mut md = String::new();
     md.push_str(&format!("# {}\n\n", crate_name));

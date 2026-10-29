@@ -2291,6 +2291,9 @@ mod tests {
             fs::create_dir_all(path.join("crates/demo/src")).expect("create fixture root");
             fs::write(path.join("crates/demo/src/lib.rs"), "pub fn demo() {}\n")
                 .expect("write fixture source");
+            // The audit compares canonical paths, and the temporary directory
+            // can sit behind a symlink (macOS: /var -> /private/var).
+            let path = fs::canonicalize(&path).expect("canonicalize fixture root");
             Self { path }
         }
     }

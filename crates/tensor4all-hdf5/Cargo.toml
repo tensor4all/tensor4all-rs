@@ -7,9 +7,17 @@ license.workspace = true
 description = "HDF5 serialization for tensor4all-rs (ITensors.jl compatible format)"
 
 [features]
-default = ["link", "tenferro-cpu-faer"]
+default = ["link", "tenferro-cpu-platform"]
 link = ["dep:hdf5-metno", "dep:hdf5-metno-sys"]
 runtime-loading = ["dep:hdf5-rt"]
+# The platform default: Apple Accelerate on macOS, faer elsewhere
+# (see the `tensor4all-cpu-platform` crate).
+tenferro-cpu-platform = [
+    "tensor4all-core/backend-tenferro",
+    "tensor4all-core/tenferro-cpu-platform",
+    "tensor4all-itensorlike/tenferro-cpu-platform",
+    "tensor4all-treetn/tenferro-cpu-platform",
+]
 tenferro-cpu-faer = [
     "tensor4all-core/backend-tenferro",
     "tensor4all-core/tenferro-cpu-faer",

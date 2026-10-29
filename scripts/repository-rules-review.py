@@ -56,6 +56,9 @@ HUNK_HEADER = re.compile(
 # the rule is about the runtime route, and test code may reach for tenferro
 # fixtures directly.
 TENFERRO_ROUTE_CRATE = "tensor4all-tensorbackend"
+# Wiring-only crates: no code, only dependency tables that select tenferro
+# features. tensor4all-cpu-platform picks the CPU backend by target.
+TENFERRO_WIRING_CRATES = frozenset({"tensor4all-cpu-platform"})
 TENFERRO_DEP_TABLES = frozenset({"dependencies", "build-dependencies"})
 CARGO_TABLE = re.compile(r"^\[([^\]]+)\]\s*$")
 # `tenferro-linalg = ...`, `"tenferro-linalg" = ...`, `tenferro-linalg.workspace`
@@ -1392,7 +1395,8 @@ def tenferro_route_violations(
         # its package name rather than its directory. Skipping every manifest
         # outside `crates/` would exempt the workspace members that live
         # elsewhere -- xtask, tools/api-dump, docs/tutorial-code, docs/book-tests.
-        if (package_name_of(text) or crate_of(path)) == TENFERRO_ROUTE_CRATE:
+        package = package_name_of(text) or crate_of(path)
+        if package == TENFERRO_ROUTE_CRATE or package in TENFERRO_WIRING_CRATES:
             continue
         declared = tenferro_dependency_lines(text)
         for line_no in sorted(added_numbers & declared.keys()):

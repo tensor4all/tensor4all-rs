@@ -431,6 +431,10 @@ fn run_case(
 
 fn enabled_features() -> String {
     [
+        (
+            "tenferro-cpu-platform",
+            cfg!(feature = "tenferro-cpu-platform"),
+        ),
         ("tenferro-cpu-faer", cfg!(feature = "tenferro-cpu-faer")),
         (
             "tenferro-provider-inject",

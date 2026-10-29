@@ -3,7 +3,8 @@ name: Feature matrix
 # Builds and audits the declared non-default Cargo feature configurations
 # (issue #915 D6). The CPU backend features are mutually exclusive
 # (tenferro-rs #2004), so `--all-features` is not a buildable target and PR CI
-# only builds each crate's default features plus the explicit-context Lint step.
+# only builds each crate's default features (faer on Linux, Apple Accelerate in
+# the macOS job) plus the explicit-context Lint step.
 #
 # This workflow owns the rest, nightly, one job per configuration. Each matrix
 # entry lists its own packages explicitly: `--workspace --no-default-features`
