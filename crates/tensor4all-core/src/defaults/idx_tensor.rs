@@ -1469,11 +1469,8 @@ impl IdxTensor {
     }
 
     fn validate_indices(indices: &[DynIndex]) -> Result<()> {
-        let mut seen = HashSet::new();
-        for idx in indices {
-            if !(seen.insert(idx.clone())) {
-                return Err(anyhow::anyhow!("Tensor indices must all be unique"));
-            };
+        if !Self::indices_are_unique(indices) {
+            return Err(anyhow::anyhow!("Tensor indices must all be unique"));
         }
         Ok(())
     }
@@ -9192,8 +9189,25 @@ impl IdxTensor {
     /// underflow, and the public API can produce one (`replace_indices`) without validating. The
     /// explicit-session route refuses such an operand before planning instead.
     pub(crate) fn has_unique_indices(&self) -> bool {
-        let mut seen = HashSet::with_capacity(self.indices.len());
-        self.indices.iter().all(|index| seen.insert(index))
+        Self::indices_are_unique(&self.indices)
+    }
+
+    /// Whether every index in `indices` is distinct.
+    ///
+    /// Tensors of a few indices (every contraction operand in practice) are checked by a
+    /// quadratic scan, which needs no allocation and no hashing; longer lists fall back to a
+    /// hash set. Both answer with the same `Eq` the hash set would use.
+    fn indices_are_unique(indices: &[DynIndex]) -> bool {
+        const QUADRATIC_SCAN_MAX: usize = 16;
+        if indices.len() <= QUADRATIC_SCAN_MAX {
+            indices
+                .iter()
+                .enumerate()
+                .all(|(position, index)| !indices[..position].contains(index))
+        } else {
+            let mut seen = HashSet::with_capacity(indices.len());
+            indices.iter().all(|index| seen.insert(index))
+        }
     }
 
     /// Publish a host dense payload without entering a runtime.
@@ -9247,7 +9261,7 @@ impl IdxTensor {
         Self::validate_dense_payload_len(data.len(), &dims)?;
         let native = T::dense_native_tensor_from_col_major_owned(data, &dims)
             .map_err(|error| IdxTensorError::operation("host publication", error))?;
-        Self::publish_dense_session_result(indices, &native)
+        Self::publish_dense_session_result_owned(indices, native)
     }
 
     /// Gather positions along one axis on the host, keeping compact storage.
@@ -9361,18 +9375,71 @@ impl IdxTensor {
             DType::C64 => value
                 .as_slice::<Complex64>()
                 .map(|data| Storage::from_dense_col_major(data.to_vec(), &dims)),
-            other => {
-                return Err(IdxTensorError::operation(
-                    "contract_pair_on_session",
-                    anyhow::anyhow!(format!(
-                        "the explicit-session route publishes floating-point results, not {other:?}"
-                    )),
-                ));
-            }
+            other => return Err(Self::unsupported_session_dtype(other)),
         }
         .map_err(|error| IdxTensorError::operation("host read", anyhow::Error::new(error)))?
         .map_err(IdxTensorError::from)?;
         Self::from_storage(indices, Arc::new(storage))
+    }
+
+    fn unsupported_session_dtype(dtype: DType) -> IdxTensorError {
+        IdxTensorError::operation(
+            "contract_pair_on_session",
+            anyhow::anyhow!(format!(
+                "the explicit-session route publishes floating-point results, not {dtype:?}"
+            )),
+        )
+    }
+
+    /// Publish a concrete dense result, taking over its buffer instead of copying it.
+    ///
+    /// Same contract and errors as [`Self::publish_dense_session_result`]. The result's own
+    /// column-major `Vec` becomes the storage payload when the tensor owns plain host values; a
+    /// tensor that cannot hand its buffer over (shared, or not host-resident) is published through
+    /// the copying path. The payload length follows from the result shape, so the checks repeated
+    /// here are the allocation-free ones (distinct indices, shape equals index dims); a violation
+    /// is reported by the same error as before, through [`Self::from_storage`].
+    pub(crate) fn publish_dense_session_result_owned(
+        indices: Vec<DynIndex>,
+        value: NativeTensor,
+    ) -> std::result::Result<Self, IdxTensorError> {
+        macro_rules! take_storage {
+            ($scalar:ty) => {
+                match value.into_vec_col_major::<$scalar>() {
+                    Ok((dims, data)) => {
+                        let storage = Storage::from_dense_col_major(data, &dims)
+                            .map_err(IdxTensorError::from)?;
+                        (dims, storage)
+                    }
+                    Err(failure) => {
+                        return Self::publish_dense_session_result(indices, &failure.into_owner());
+                    }
+                }
+            };
+        }
+        let (dims, storage) = match value.dtype() {
+            DType::F32 => take_storage!(f32),
+            DType::F64 => take_storage!(f64),
+            DType::C32 => take_storage!(Complex32),
+            DType::C64 => take_storage!(Complex64),
+            other => return Err(Self::unsupported_session_dtype(other)),
+        };
+        let shape_matches = dims.len() == indices.len()
+            && indices
+                .iter()
+                .zip(&dims)
+                .all(|(index, &dim)| index.dim() == dim);
+        if !shape_matches || !Self::indices_are_unique(&indices) {
+            // Reuse the validating constructor so a violation reports exactly the same error.
+            return Self::from_storage(indices, Arc::new(storage));
+        }
+        debug_assert!(Self::validate_indices(&indices).is_ok());
+        debug_assert!(Self::validate_storage_matches_indices(&indices, &storage).is_ok());
+        Ok(Self {
+            indices,
+            storage: IdxTensorStorage::from_storage(Arc::new(storage)),
+            eager_cache: Self::empty_eager_cache(),
+        })
     }
 }
 

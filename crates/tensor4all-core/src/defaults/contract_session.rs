@@ -116,7 +116,7 @@ pub fn contract_pair_on_session(
     }
     .map_err(|error| session_error(OP, error))?;
 
-    IdxTensor::publish_dense_session_result(spec.result_indices, &value)
+    IdxTensor::publish_dense_session_result_owned(spec.result_indices, value)
 }
 
 /// Compute the inner product of two dense host tensors on a caller-held explicit session.
@@ -458,7 +458,7 @@ pub fn permute_on_session(
         .iter()
         .map(|&axis| tensor.indices()[axis].clone())
         .collect();
-    IdxTensor::publish_dense_session_result(new_indices, &permuted)
+    IdxTensor::publish_dense_session_result_owned(new_indices, permuted)
 }
 
 /// Align a dense host tensor to a caller-supplied index order on a caller-held explicit session.
@@ -696,7 +696,7 @@ fn compact_on_session(
 ) -> Result<IdxTensor, IdxTensorError> {
     let operand = tensor.session_dense_operand(op)?;
     let value = materialize_on_session(op, session, operand)?;
-    IdxTensor::publish_dense_session_result(tensor.indices().to_vec(), &value)
+    IdxTensor::publish_dense_session_result_owned(tensor.indices().to_vec(), value)
 }
 
 /// Contract a connected tensor network on a caller-held explicit session.
@@ -781,7 +781,7 @@ pub fn contract_with_options_on_session(
     let contracted = session
         .einsum(&value_refs, &input_ids, &plan.output_ids)
         .map_err(|error| session_error(OP, error))?;
-    IdxTensor::publish_dense_session_result(plan.result_indices, &contracted)
+    IdxTensor::publish_dense_session_result_owned(plan.result_indices, contracted)
 }
 
 /// Select fixed coordinates of a dense host tensor on a caller-held explicit session.

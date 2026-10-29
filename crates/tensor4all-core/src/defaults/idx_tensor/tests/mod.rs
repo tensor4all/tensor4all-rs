@@ -857,3 +857,67 @@ fn with_dense_host_slice_rejects_a_dtype_mismatch() {
         .with_dense_host_slice::<Complex64, _>(<[Complex64]>::to_vec)
         .is_err());
 }
+
+#[test]
+fn indices_are_unique_agrees_with_a_hash_set_across_the_scan_threshold() {
+    for len in [0usize, 1, 2, 16, 17, 40] {
+        let indices: Vec<DynIndex> = (0..len).map(|_| DynIndex::new_dyn(2)).collect();
+        assert!(
+            IdxTensor::indices_are_unique(&indices),
+            "len {len} distinct"
+        );
+        if len >= 2 {
+            // Repeat the first index in the last slot, then in the middle.
+            let mut last = indices.clone();
+            last[len - 1] = indices[0].clone();
+            assert!(!IdxTensor::indices_are_unique(&last), "len {len} last");
+            let mut middle = indices.clone();
+            middle[len / 2] = indices[len / 2 - 1].clone();
+            assert!(!IdxTensor::indices_are_unique(&middle), "len {len} middle");
+        }
+    }
+}
+
+#[test]
+fn owned_session_publication_matches_the_copying_publication() {
+    use tenferro::Tensor as NativeTensor;
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let data = vec![1.5_f64, -2.0, 3.25, 4.0, 5.0, 6.0];
+    let native = NativeTensor::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
+    let copied =
+        IdxTensor::publish_dense_session_result(vec![i.clone(), j.clone()], &native).unwrap();
+    let owned =
+        IdxTensor::publish_dense_session_result_owned(vec![i.clone(), j.clone()], native).unwrap();
+    assert_eq!(owned.indices(), copied.indices());
+    assert_eq!(owned.to_vec::<f64>().unwrap(), data);
+    assert_eq!(
+        owned.to_vec::<f64>().unwrap(),
+        copied.to_vec::<f64>().unwrap()
+    );
+}
+
+#[test]
+fn owned_session_publication_reports_the_validating_constructor_errors() {
+    use tenferro::Tensor as NativeTensor;
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    // Dimension mismatch.
+    let native = NativeTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]).unwrap();
+    let owned_error =
+        IdxTensor::publish_dense_session_result_owned(vec![i.clone(), i.clone()], native)
+            .unwrap_err();
+    let native = NativeTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]).unwrap();
+    let copied_error =
+        IdxTensor::publish_dense_session_result(vec![i.clone(), i.clone()], &native).unwrap_err();
+    assert_eq!(owned_error.to_string(), copied_error.to_string());
+    // Repeated index with matching dims.
+    let native = NativeTensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4]).unwrap();
+    let owned_error =
+        IdxTensor::publish_dense_session_result_owned(vec![i.clone(), i.clone()], native)
+            .unwrap_err();
+    assert!(owned_error.to_string().contains("unique"), "{owned_error}");
+    // Rank mismatch.
+    let native = NativeTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]).unwrap();
+    assert!(IdxTensor::publish_dense_session_result_owned(vec![i, j.clone(), j], native).is_err());
+}
