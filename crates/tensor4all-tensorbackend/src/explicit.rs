@@ -52,7 +52,7 @@ use tenferro::TensorSessionOpsExt;
 use tenferro_einsum::{ConcreteEinsumPlan, EinsumSubscripts, TensorEinsumExt};
 use tenferro_linalg::TensorLinalgExt;
 
-use tenferro_tensor::Engine;
+use tenferro_tensor::{DotGeneralConfig, Engine, TensorRead};
 
 use crate::context::{CpuExecutionContext, CpuExecutionContextError};
 use crate::einsum_ids::{
@@ -474,6 +474,11 @@ impl<'session> Session<'session> {
     /// promotes them: a heterogeneous set contracts in the promoted dtype, and a set
     /// that already shares one dtype is used as is.
     ///
+    /// Operands that share a dtype (the common case) are contracted by a single
+    /// `dot_general` call on the engine, the same kernel and plan cache the global
+    /// route uses, without planning an einsum; only a dtype mismatch, which needs
+    /// promotion first, goes through the einsum route. Neither route conjugates.
+    ///
     /// # Examples
     ///
     /// ```
@@ -496,6 +501,14 @@ impl<'session> Session<'session> {
         rhs: &NativeTensor,
         rhs_axes: &[usize],
     ) -> tenferro_einsum::Result<NativeTensor> {
+        if lhs.dtype() == rhs.dtype() {
+            return self.contraction_reads(
+                TensorRead::from_tensor(lhs),
+                lhs_axes,
+                TensorRead::from_tensor(rhs),
+                rhs_axes,
+            );
+        }
         let (lhs_ids, rhs_ids, output_ids) =
             build_binary_einsum_ids(lhs.shape().len(), lhs_axes, rhs.shape().len(), rhs_axes)
                 .map_err(|error| tenferro_einsum::Error::InvalidSubscripts {
@@ -513,6 +526,67 @@ impl<'session> Session<'session> {
             promoted.iter().collect::<Vec<_>>()
         };
         operands.einsum_subscripts(&subscripts, self.engine)
+    }
+
+    /// Binary contraction of two borrowed reads that share a dtype, as one `dot_general`.
+    ///
+    /// Same axis semantics and output order as [`Session::contraction`] (the left
+    /// operand's free axes, then the right operand's), but the operands stay
+    /// borrowed, so a caller holding a non-owned read does not copy it first. Nothing
+    /// is conjugated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_einsum::Error::InvalidSubscripts`] when the axis lists are
+    /// malformed or of different length, and [`tenferro_einsum::Error::Tensor`] when the
+    /// operands' dtypes differ (this route does not promote; use
+    /// [`Session::contraction`]) or the backend rejects the contraction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro::Tensor;
+    /// use tensor4all_tensorbackend::CpuBackend;
+    /// use tenferro_tensor::TensorRead;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0])?;
+    /// let product = context.with_concrete_session(|session| {
+    ///     session.contraction_reads(
+    ///         TensorRead::from_tensor(&a),
+    ///         &[1],
+    ///         TensorRead::from_tensor(&b),
+    ///         &[0],
+    ///     )
+    /// })??;
+    /// assert_eq!(product.as_slice::<f64>()?, &[23.0, 34.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn contraction_reads(
+        &mut self,
+        lhs: TensorRead<'_>,
+        lhs_axes: &[usize],
+        rhs: TensorRead<'_>,
+        rhs_axes: &[usize],
+    ) -> tenferro_einsum::Result<NativeTensor> {
+        // The axis validation is the einsum route's own, so both routes refuse the
+        // same malformed input.
+        build_binary_einsum_ids(lhs.shape().len(), lhs_axes, rhs.shape().len(), rhs_axes).map_err(
+            |error| tenferro_einsum::Error::InvalidSubscripts {
+                message: format!("{error}"),
+            },
+        )?;
+        let config = DotGeneralConfig {
+            lhs_contracting_dims: lhs_axes.into(),
+            rhs_contracting_dims: rhs_axes.into(),
+            lhs_batch_dims: Default::default(),
+            rhs_batch_dims: Default::default(),
+        };
+        self.engine
+            .dot_general_read(lhs, rhs, &config)
+            .map_err(tenferro_einsum::Error::from)
     }
 
     /// N-ary einsum from integer labels, evaluated on this session.

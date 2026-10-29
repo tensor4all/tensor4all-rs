@@ -14,6 +14,7 @@ mod cuda_context_factorization;
 mod cuda_transfer;
 mod error_paths;
 mod f1_session_contraction;
+mod f1_session_dot_general_bitwise;
 mod f1_session_inner_product;
 mod f1_session_narrow_factors;
 mod f1_session_narrow_floats;

@@ -96,22 +96,25 @@ pub fn contract_pair_on_session(
     let lhs_operand = lhs.session_dense_operand(OP)?;
     let rhs_operand = rhs.session_dense_operand(OP)?;
 
-    let mut lhs_value = materialize_on_session(OP, session, lhs_operand)?;
-    let mut rhs_value = materialize_on_session(OP, session, rhs_operand)?;
-    if options.lhs_conj {
-        lhs_value = session
-            .conj(&lhs_value)
-            .map_err(|error| session_error(OP, error))?;
+    // An Eager (read) operand that is not conjugated goes straight into the contraction instead of
+    // through an identity einsum; storage operands are converted as before. A dtype mismatch needs
+    // promotion, which `Session::contraction` does on owned tensors, so a mismatched pair is
+    // materialized first.
+    let lhs_held = hold_operand(session, lhs_operand, options.lhs_conj)?;
+    let rhs_held = hold_operand(session, rhs_operand, options.rhs_conj)?;
+    let value = if lhs_held.dtype() == rhs_held.dtype() {
+        session.contraction_reads(
+            lhs_held.as_read(),
+            &spec.axes_a,
+            rhs_held.as_read(),
+            &spec.axes_b,
+        )
+    } else {
+        let lhs_value = owned_operand(session, lhs_held)?;
+        let rhs_value = owned_operand(session, rhs_held)?;
+        session.contraction(&lhs_value, &spec.axes_a, &rhs_value, &spec.axes_b)
     }
-    if options.rhs_conj {
-        rhs_value = session
-            .conj(&rhs_value)
-            .map_err(|error| session_error(OP, error))?;
-    }
-
-    let value = session
-        .contraction(&lhs_value, &spec.axes_a, &rhs_value, &spec.axes_b)
-        .map_err(|error| session_error(OP, error))?;
+    .map_err(|error| session_error(OP, error))?;
 
     IdxTensor::publish_dense_session_result(spec.result_indices, &value)
 }
@@ -942,6 +945,68 @@ pub fn index_select_on_session(
     }
     let compact = compact_on_session(OP, session, tensor)?;
     compact.gather_dense_host(axis, positions, target_index)
+}
+
+/// A contraction operand held for one session call: an owned value or a borrowed read.
+// Stack-only and per call: boxing the owned tensor would add an allocation to the hot path.
+#[allow(clippy::large_enum_variant)]
+enum HeldOperand<'a> {
+    Owned(tenferro::Tensor),
+    Read(Box<tenferro_tensor::TensorRead<'a>>),
+}
+
+impl<'a> HeldOperand<'a> {
+    fn dtype(&self) -> tenferro_tensor::DType {
+        match self {
+            Self::Owned(tensor) => tensor.dtype(),
+            Self::Read(read) => read.dtype(),
+        }
+    }
+
+    fn as_read(&self) -> tenferro_tensor::TensorRead<'_> {
+        match self {
+            Self::Owned(tensor) => tenferro_tensor::TensorRead::from_tensor(tensor),
+            Self::Read(read) => (**read).clone(),
+        }
+    }
+}
+
+/// Prepare one operand for contraction: a read stays borrowed unless it must be conjugated.
+fn hold_operand<'a>(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    operand: SessionDenseOperand<'a>,
+    conj: bool,
+) -> Result<HeldOperand<'a>, IdxTensorError> {
+    match operand {
+        SessionDenseOperand::Read(read, _) if !conj => Ok(HeldOperand::Read(read)),
+        operand => {
+            let value = materialize_on_session(OP, session, operand)?;
+            if conj {
+                session
+                    .conj(&value)
+                    .map(HeldOperand::Owned)
+                    .map_err(|error| session_error(OP, error))
+            } else {
+                Ok(HeldOperand::Owned(value))
+            }
+        }
+    }
+}
+
+/// Turn a held operand into an owned tensor (copying a borrowed read on the session).
+fn owned_operand(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    held: HeldOperand<'_>,
+) -> Result<tenferro::Tensor, IdxTensorError> {
+    match held {
+        HeldOperand::Owned(tensor) => Ok(tensor),
+        HeldOperand::Read(read) => {
+            let ids: Vec<usize> = (0..read.shape().len()).collect();
+            session
+                .einsum_reads(&[*read], &[&ids], &ids)
+                .map_err(|error| session_error(OP, error))
+        }
+    }
 }
 
 /// Materialize one operand as an owned concrete host value of the caller's session.
