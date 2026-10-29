@@ -348,7 +348,9 @@ pub fn load_itensor(filepath: &str, name: &str) -> std::result::Result<IdxTensor
 ///
 /// Metadata preserved:
 /// - `length`: number of sites
-/// - `llim`, `rlim`: orthogonality center bounds
+/// - `llim`, `rlim`: the orthogonality center, in ITensorMPS.jl's 1-based
+///   convention (a center at 0-based site `c` is written as `llim = c`,
+///   `rlim = c + 2`; no center as `llim = 0`, `rlim = length + 1`)
 /// - `canonical_form` (if set): tensor4all-rs extension attribute
 /// - Per-site tensor data and index metadata
 ///

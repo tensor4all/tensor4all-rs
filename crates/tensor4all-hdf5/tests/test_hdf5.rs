@@ -589,10 +589,11 @@ fn mps_i32_max_limits_are_rejected() {
 #[test]
 fn mps_in_range_invalid_orthogonality_limits_are_rejected() {
     for (name, llim, rlim) in [
-        ("below_left_boundary", -2_i64, 4_i64),
-        ("past_right_boundary", -1, 5),
-        ("wrong_gap", 0, 3),
-        ("center_past_end", 2, 4),
+        // ITensorMPS 1-based limits for length 3: valid iff 0 <= llim < rlim <= 4
+        ("negative_llim", -1_i64, 2_i64),
+        ("past_right_boundary", 0, 5),
+        ("empty_range", 2, 2),
+        ("reversed", 3, 1),
     ] {
         let name = format!("mps_invalid_ortho_{name}");
         let error = mps_error(&name, |group| {
@@ -614,6 +615,112 @@ fn mps_in_range_invalid_orthogonality_limits_are_rejected() {
         assert!(error.contains(&llim.to_string()), "{llim}, {rlim}: {error}");
         assert!(error.contains(&rlim.to_string()), "{llim}, {rlim}: {error}");
         assert!(error.contains("length"), "{llim}, {rlim}: {error}");
+    }
+}
+
+/// Read the `(llim, rlim)` datasets of an MPS group as written to the file.
+fn file_limits(path: &str, name: &str) -> (i64, i64) {
+    let file = File::open(path).unwrap();
+    let group = file.group(name).unwrap();
+    let read = |field: &str| -> i64 {
+        group
+            .dataset(field)
+            .unwrap()
+            .as_reader()
+            .read_scalar()
+            .unwrap()
+    };
+    (read("llim"), read("rlim"))
+}
+
+/// Load the test MPS after overwriting its file limits with ITensorMPS values.
+fn load_with_file_limits(name: &str, llim: i64, rlim: i64) -> TensorTrain {
+    let path = temp_path(name);
+    save_mps(&path, "mps", &make_test_mps()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    let group = file.group("mps").unwrap();
+    for (field, value) in [("llim", llim), ("rlim", rlim)] {
+        group
+            .dataset(field)
+            .unwrap()
+            .as_writer()
+            .write_scalar(&value)
+            .unwrap();
+    }
+    drop(file);
+    let loaded = load_mps(&path, "mps").unwrap();
+    std::fs::remove_file(path).ok();
+    loaded
+}
+
+// tensor4all-rs#1041: the file holds ITensorMPS's 1-based limits, the TensorTrain a
+// 0-based center. Length 3 throughout.
+#[test]
+fn itensormps_limits_load_as_zero_based_center() {
+    for (llim, rlim, center) in [
+        (0_i64, 4_i64, None), // ITensorMPS without a center: llim = 0, rlim = length + 1
+        (0, 2, Some(0)),      // 1-based site 1
+        (1, 3, Some(1)),      // 1-based site 2
+        (2, 4, Some(2)),      // 1-based site 3, the last site
+        (0, 3, None),         // sites 1..=2 may be non-orthogonal: no single center
+        (1, 4, None),
+    ] {
+        let name = format!("mps_itensor_limits_{llim}_{rlim}");
+        let loaded = load_with_file_limits(&name, llim, rlim);
+        assert_eq!(loaded.ortho_center(), center, "llim={llim}, rlim={rlim}");
+    }
+}
+
+#[test]
+fn zero_based_center_is_written_as_itensormps_limits() {
+    let source = make_test_mps();
+    for (center, limits) in [
+        (None, (0_i64, 4_i64)),
+        (Some(0_usize), (0, 2)),
+        (Some(1), (1, 3)),
+        (Some(2), (2, 4)),
+    ] {
+        let tensors = source.tensors().into_iter().cloned().collect();
+        let (llim, rlim) = match center {
+            Some(c) => (c as i32 - 1, c as i32 + 1),
+            None => (-1, 4),
+        };
+        let mps = TensorTrain::with_ortho(tensors, llim, rlim, None).unwrap();
+        assert_eq!(mps.ortho_center(), center);
+
+        let path = temp_path(&format!("mps_write_limits_{center:?}"));
+        save_mps(&path, "mps", &mps).unwrap();
+        assert_eq!(file_limits(&path, "mps"), limits, "center {center:?}");
+        // and back: tensor4all -> HDF5 -> tensor4all keeps the center
+        assert_eq!(load_mps(&path, "mps").unwrap().ortho_center(), center);
+        std::fs::remove_file(path).ok();
+    }
+}
+
+/// MPS groups written by ITensorMPS.jl 0.3.45 (ITensors 0.9.30) through
+/// `tests/fixtures/itensormps_ortho_lims.jl`: 4 sites.
+#[test]
+fn itensormps_written_file_loads_with_its_center() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/itensormps_ortho_lims.h5"
+    );
+    for (name, limits, center) in [
+        ("noortho", (0_i64, 5_i64), None),
+        ("center1", (0, 2), Some(0_usize)),
+        ("center3", (2, 4), Some(2)),
+        ("center4", (3, 5), Some(3)),
+    ] {
+        assert_eq!(file_limits(path, name), limits, "{name}");
+        let loaded = load_mps(path, name).unwrap();
+        assert_eq!(loaded.len(), 4, "{name}");
+        assert_eq!(loaded.ortho_center(), center, "{name}");
+
+        // written back, the limits are the ones ITensorMPS wrote
+        let out = temp_path(&format!("mps_itensormps_rewrite_{name}"));
+        save_mps(&out, name, &loaded).unwrap();
+        assert_eq!(file_limits(&out, name), limits, "{name}");
+        std::fs::remove_file(out).ok();
     }
 }
 
