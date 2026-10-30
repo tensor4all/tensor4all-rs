@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tenferro::{ExecutionEngine, Tensor};
 use tenferro_ad::{ContextId, EagerRuntime};
 use tenferro_gpu::cuda::{
-    cuda_devices, download_pending, upload_pending, CompletionUnproven, CudaEngine,
-    PendingDownload, PendingUpload, PinnedHostBuffer,
+    cuda_devices, download_pending, upload_pending, CudaEngine, PendingDownload, PendingUpload,
+    PinnedHostBuffer,
 };
 use tenferro_tensor::{
     AllocationDomainId, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
@@ -289,15 +289,16 @@ impl PendingCudaDownload {
     ///
     /// # Errors
     ///
-    /// Returns [`CudaExecutionContextError::Transfer`] when the copy reports an unproven completion; the filled
+    /// Returns [`CudaExecutionContextError::Transfer`] when the copy fails or its completion cannot be proven; the filled
     /// buffer must then be discarded rather than read.
     pub fn wait(self) -> Result<(Tensor, CudaPinnedBuffer), CudaExecutionContextError> {
-        let (tensor, buffer) = self.inner.wait().map_err(|source: CompletionUnproven| {
-            CudaExecutionContextError::Transfer {
-                operation: "download wait",
-                source: Arc::new(source),
-            }
-        })?;
+        let (tensor, buffer) =
+            self.inner
+                .wait()
+                .map_err(|source| CudaExecutionContextError::Transfer {
+                    operation: "download wait",
+                    source: Arc::new(source),
+                })?;
         Ok((tensor, CudaPinnedBuffer { buffer }))
     }
 }
@@ -354,7 +355,7 @@ impl PendingCudaUpload {
     ///
     /// # Errors
     ///
-    /// Returns [`CudaExecutionContextError::Transfer`] when the copy reports an unproven completion; the device
+    /// Returns [`CudaExecutionContextError::Transfer`] when the copy fails or its completion cannot be proven; the device
     /// tensor must then be discarded rather than read.
     /// # Examples
     ///
@@ -367,12 +368,13 @@ impl PendingCudaUpload {
     /// assert!(std::mem::size_of_val(&wait) > 0);
     /// ```
     pub fn wait(self) -> Result<(Tensor, CudaPinnedBuffer), CudaExecutionContextError> {
-        let (tensor, buffer) = self.inner.wait().map_err(|source: CompletionUnproven| {
-            CudaExecutionContextError::Transfer {
-                operation: "upload wait",
-                source: Arc::new(source),
-            }
-        })?;
+        let (tensor, buffer) =
+            self.inner
+                .wait()
+                .map_err(|source| CudaExecutionContextError::Transfer {
+                    operation: "upload wait",
+                    source: Arc::new(source),
+                })?;
         Ok((tensor, CudaPinnedBuffer { buffer }))
     }
 }
@@ -758,7 +760,7 @@ impl CudaExecutionContext {
                 operation: "validate CUDA placement",
             });
         }
-        let expected = self.with_session(|engine| engine.runtime().allocation_domain())?;
+        let expected = self.with_session(|engine| engine.runtime().allocation_domain_id())?;
         if allocation_domain != Some(expected) {
             return Err(CudaExecutionContextError::ForeignAllocation {
                 operation: "validate CUDA placement",
