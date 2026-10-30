@@ -452,32 +452,98 @@ impl<T: TTScalar> MPO<T> {
             return Ok((Vec::new(), shape));
         }
 
-        // Build full tensor by iterating over all indices
-        let mut result = Vec::with_capacity(total_size);
-        let mut indices = vec![0usize; shape.len()];
-
-        loop {
-            // Evaluate at current indices
-            result.push(self.evaluate(&indices)?);
-
-            // Increment indices in column-major order, leftmost index fastest.
-            let mut carry = true;
-            for i in 0..shape.len() {
-                if carry {
-                    indices[i] += 1;
-                    if indices[i] >= shape[i] {
-                        indices[i] = 0;
-                    } else {
-                        carry = false;
+        // Physical strides fit the checked positive total_size; bond extents need separate checks.
+        let first = &self.tensors[0];
+        let mut bond_dim = first
+            .left_dim()
+            .checked_mul(first.right_dim())
+            .ok_or_else(|| MPOError::InvalidOperation {
+                message: "full tensor environment element count overflowed usize".to_string(),
+            })?;
+        let mut stride = first.site_dim_1() * first.site_dim_2();
+        let first_size =
+            stride
+                .checked_mul(bond_dim)
+                .ok_or_else(|| MPOError::InvalidOperation {
+                    message: "full tensor environment element count overflowed usize".to_string(),
+                })?;
+        let mut result = Vec::with_capacity(total_size.max(first_size));
+        for r in 0..first.right_dim() {
+            for l in 0..first.left_dim() {
+                for s in 0..stride {
+                    result.push(*first.get4(l, s % first.site_dim_1(), s / first.site_dim_1(), r));
+                }
+            }
+        }
+        let mut scratch = Vec::new();
+        for (site, tensor) in self.tensors.iter().enumerate().skip(1) {
+            let left = tensor.left_dim();
+            let right = tensor.right_dim();
+            if left != bond_dim {
+                return Err(MPOError::InvalidOperation {
+                    message: format!(
+                        "Failed to evaluate MPO at site {site}: bond dimension mismatch"
+                    ),
+                });
+            }
+            let dim = tensor.site_dim_1() * tensor.site_dim_2();
+            let next_stride = stride * dim;
+            let next_size =
+                next_stride
+                    .checked_mul(right)
+                    .ok_or_else(|| MPOError::InvalidOperation {
+                        message: "full tensor environment element count overflowed usize"
+                            .to_string(),
+                    })?;
+            if left == 1 && bond_dim == 1 && right == 1 {
+                // Append the other physical slices before overwriting the first.
+                for s in 1..dim {
+                    let factor =
+                        *tensor.get4(0, s % tensor.site_dim_1(), s / tensor.site_dim_1(), 0);
+                    for p in 0..stride {
+                        let value = result[p] * factor;
+                        result.push(value);
+                    }
+                }
+                let factor = *tensor.get4(0, 0, 0, 0);
+                for value in &mut result[..stride] {
+                    *value = *value * factor;
+                }
+            } else {
+                // Non-unit bonds need disjoint input, including when the prefix exceeds the output.
+                scratch.clear();
+                scratch.extend_from_slice(&result);
+                result.clear();
+                result.resize(next_size, T::zero());
+                for r in 0..right {
+                    for s in 0..dim {
+                        let start = stride * s + next_stride * r;
+                        let output = &mut result[start..start + stride];
+                        for l in 0..left {
+                            let factor = *tensor.get4(
+                                l,
+                                s % tensor.site_dim_1(),
+                                s / tensor.site_dim_1(),
+                                r,
+                            );
+                            let input = &scratch[stride * l..stride * (l + 1)];
+                            for (value, &previous) in output.iter_mut().zip(input) {
+                                *value = *value + previous * factor;
+                            }
+                        }
                     }
                 }
             }
-
-            if carry {
-                break; // All indices wrapped around
-            }
+            stride = next_stride;
+            bond_dim = right;
+        }
+        if bond_dim != 1 {
+            return Err(MPOError::InvalidOperation {
+                message: format!("Final contraction resulted in {bond_dim} elements, expected 1"),
+            });
         }
 
+        result.shrink_to_fit();
         Ok((result, shape))
     }
 }

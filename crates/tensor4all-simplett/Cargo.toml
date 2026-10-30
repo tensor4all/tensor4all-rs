@@ -53,6 +53,10 @@ criterion.workspace = true
 tenferro-cpu.workspace = true
 
 [[bench]]
+name = "full_tensor"
+harness = false
+
+[[bench]]
 name = "cache_overhead"
 harness = false
 
