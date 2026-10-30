@@ -25,3 +25,32 @@ if [[ -n "$duplicates" ]]; then
     exit 1
 fi
 echo "check-single-versions: one version per dependency identity"
+
+# The feature-configuration packages under tests/feature-configurations/ are
+# separate workspaces with their own committed lock, which the tree check above
+# never sees. Each must resolve every registry and git package to an entry of
+# the root lock (same name, version and source), so a pin bump that refreshes
+# only the root lock fails here instead of leaving a nested lock on the old
+# graph (#1017).
+lock_entries() {
+    awk '/^\[\[package\]\]/ { name = ""; version = "" }
+         /^name = /    { name = $3 }
+         /^version = / { version = $3 }
+         /^source = /  { print name, version, $3 }' "$1" | sort -u
+}
+root_entries=$(lock_entries Cargo.lock)
+stale=0
+for lock in tests/feature-configurations/*/Cargo.lock; do
+    [[ -e "$lock" ]] || continue
+    missing=$(comm -23 <(lock_entries "$lock") <(printf '%s\n' "$root_entries"))
+    if [[ -n "$missing" ]]; then
+        printf '%s: not in the root Cargo.lock:\n%s\n' "$lock" "$missing" >&2
+        stale=1
+    fi
+done
+if (( stale )); then
+    echo "check-single-versions: a feature-configuration lock has drifted from the root lock" >&2
+    exit 1
+fi
+echo "check-single-versions: feature-configuration locks match the root lock"
+

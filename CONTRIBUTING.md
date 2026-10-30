@@ -145,7 +145,9 @@ CPU provider stack, the one faer identity, tenferro and hataori) resolves to two
 versions. The manifests use compatible ranges rather than exact `=version`
 pins so a dependency's patch fix can be locked with `cargo update` instead of a
 pin bump through the whole chain; this check is the guard that keeps a range
-from silently splitting an identity.
+from silently splitting an identity. It also fails when a committed lock under
+`tests/feature-configurations/` resolves a registry or git package to anything
+not in the root `Cargo.lock`, so a pin bump must regenerate those locks too.
 
 ### Supported feature configurations
 
