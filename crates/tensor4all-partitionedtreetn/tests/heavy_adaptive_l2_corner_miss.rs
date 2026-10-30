@@ -10,6 +10,12 @@
 //! global pivot search disabled, where every patch is built from its initial
 //! pivots only, and with the three variables grouped so that the corner
 //! starts mix whole variables.
+//!
+//! Heavy: scheduled instead of running on every push. Under coverage instrumentation
+//! on the 4-vCPU CI runner the three tests take 271, 269 and 225 s (run 41112076766,
+//! Xeon 8573C) and 142, 139 and 109 s (run 40936622639, EPYC 7763), so together they
+//! put the coverage suite over its 300 s budget (#1059). CONTRIBUTING.md, "CI time
+//! budget", has the selection command and the budgets this file stays outside of.
 
 use crate::adaptive_common;
 
@@ -220,6 +226,7 @@ fn corner_failures(
 }
 
 #[test]
+#[ignore = "heavy: runs in the scheduled heavy-tests workflow (see CONTRIBUTING.md)"]
 fn corner_localized_ridge_is_not_missed_by_sampled_acceptance() {
     let failures = corner_failures(&TreeTciInterpolator::default(), false, false, &SEEDS);
     assert!(
@@ -229,6 +236,7 @@ fn corner_localized_ridge_is_not_missed_by_sampled_acceptance() {
 }
 
 #[test]
+#[ignore = "heavy: runs in the scheduled heavy-tests workflow (see CONTRIBUTING.md)"]
 fn cache_candidates_against_corner_localized_misses() {
     let failures = corner_failures(&TreeTciInterpolator::default(), false, true, &SEEDS);
     assert!(
@@ -239,6 +247,7 @@ fn cache_candidates_against_corner_localized_misses() {
 }
 
 #[test]
+#[ignore = "heavy: runs in the scheduled heavy-tests workflow (see CONTRIBUTING.md)"]
 fn the_residual_estimator_needs_no_engine_global_pivot_search() {
     // Without the engine's own global pivot search every patch is built from
     // its initial pivots; the residual estimator's corner and edge starts and

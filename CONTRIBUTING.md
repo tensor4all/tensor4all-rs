@@ -53,7 +53,7 @@ Run the heavy suite locally with:
 
 ```bash
 cargo build --locked --profile ci --workspace --all-targets
-cargo nextest run --locked --cargo-profile ci -p tensor4all-treeaci \
+cargo nextest run --locked --cargo-profile ci --workspace \
     --run-ignored ignored-only -E 'test(/^heavy_/)'
 ```
 

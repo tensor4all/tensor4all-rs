@@ -429,7 +429,7 @@ Exit: an MPI smoke test and a multi-rank benchmark.
   residual run saturates); `L2Estimator::UniformMonteCarlo` keeps the uniform
   estimate, which can miss such a feature
   ([estimator contract](./tree-patching-error-contract.md#patch-l2-estimators);
-  regressions in `tests/adaptive_l2_corner_miss.rs`).
+  regressions in `tests/heavy_adaptive_l2_corner_miss.rs`, scheduled heavy tests).
 
 ### M10. Bindings (deferred)
 
