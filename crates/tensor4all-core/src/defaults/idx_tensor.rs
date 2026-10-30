@@ -498,8 +498,13 @@ pub enum IdxTensorError {
 }
 
 impl From<anyhow::Error> for IdxTensorError {
+    /// Recovers an `IdxTensorError` raised inside an `anyhow` helper, so a
+    /// typed rejection keeps its variant; any other error becomes
+    /// [`IdxTensorError::Operation`].
     fn from(source: anyhow::Error) -> Self {
-        Self::operation("IdxTensor", source)
+        source
+            .downcast::<Self>()
+            .unwrap_or_else(|source| Self::operation("IdxTensor", source))
     }
 }
 

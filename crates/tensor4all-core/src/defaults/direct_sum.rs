@@ -36,8 +36,11 @@ use tensor4all_tensorbackend::TensorElement;
 ///
 /// # Errors
 ///
-/// Returns [`IdxTensorError::Operation`] when `pairs` is empty, when a paired
-/// or common index does not match between the operands, when the operands have
+/// Returns [`IdxTensorError::ShapeMismatch`] when a non-paired index of either
+/// operand is not a non-paired index of the other one (an index present on one
+/// side only, or matching only in id but not in prime level or tags), and
+/// [`IdxTensorError::Operation`] when `pairs` is empty, when a paired index is
+/// missing or a common index differs in dimension, when the operands have
 /// different dense scalar types, or when the backend construction fails.
 ///
 /// # Example
@@ -142,31 +145,48 @@ fn setup_direct_sum(
         b_paired_indices.insert(b_idx);
     }
 
-    // Identify common (non-paired) indices
-    // Iterate over a.indices (Vec) to preserve deterministic order,
-    // using b_idx_map only for lookups.
+    // Identify common (non-paired) indices. Every non-paired index of either
+    // operand must be a non-paired index of the other one: an index left on
+    // one side only has no axis in the result, so accepting it would silently
+    // read that operand at coordinate 0 (tensor4all/tensor4all-rs#1018).
+    // Iterate over a.indices (Vec) to preserve deterministic order, using
+    // b_idx_map only for lookups.
+    let unpaired_mismatch = |side: &str, idx: &DynIndex| {
+        anyhow::Error::new(IdxTensorError::ShapeMismatch {
+            operation: "direct_sum",
+            expected: format!(
+                "every non-paired index of the {side} operand to be a non-paired index of the other operand"
+            ),
+            actual: format!("{idx:?} has no non-paired counterpart"),
+        })
+    };
     let mut common_a_positions: Vec<usize> = Vec::new();
     let mut common_b_positions: Vec<usize> = Vec::new();
     for (a_pos, a_idx) in a.indices.iter().enumerate() {
         if a_paired_indices.contains(a_idx) {
             continue;
         }
-        if let Some(&b_pos) = b_idx_map.get(a_idx) {
-            if b_paired_indices.contains(a_idx) {
-                continue;
-            }
-            let a_dims = a.dims();
-            let b_dims = b.dims();
-            if a_dims[a_pos] != b_dims[b_pos] {
-                return Err(anyhow::anyhow!(
-                    "Dimension mismatch for common index: {} vs {}",
-                    a_dims[a_pos],
-                    b_dims[b_pos]
-                ));
-            }
-            common_a_positions.push(a_pos);
-            common_b_positions.push(b_pos);
+        let b_pos = match b_idx_map.get(a_idx) {
+            Some(&b_pos) if !b_paired_indices.contains(a_idx) => b_pos,
+            _ => return Err(unpaired_mismatch("first", a_idx)),
+        };
+        let a_dims = a.dims();
+        let b_dims = b.dims();
+        if a_dims[a_pos] != b_dims[b_pos] {
+            return Err(anyhow::anyhow!(
+                "Dimension mismatch for common index: {} vs {}",
+                a_dims[a_pos],
+                b_dims[b_pos]
+            ));
         }
+        common_a_positions.push(a_pos);
+        common_b_positions.push(b_pos);
+    }
+    if let Some(b_idx) = b.indices.iter().find(|&b_idx| {
+        !b_paired_indices.contains(b_idx)
+            && !(a_idx_map.contains_key(b_idx) && !a_paired_indices.contains(b_idx))
+    }) {
+        return Err(unpaired_mismatch("second", b_idx));
     }
 
     // Build paired positions and dimensions

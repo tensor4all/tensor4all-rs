@@ -1,4 +1,5 @@
 use super::*;
+use crate::tagset::TagSetLike;
 use num_complex::Complex64;
 
 #[test]
@@ -242,25 +243,88 @@ fn test_direct_sum_index_not_in_second_tensor_error() {
 
 #[test]
 fn test_direct_sum_common_index_dimension_mismatch_error() {
-    // Common indices must have matching dimensions
+    // Index identity ignores the dimension, so the same id and tags with a
+    // different dimension is a common index whose extents disagree.
+    let i = DynIndex::new_dyn(2);
+    let i_wide = DynIndex::new_with_tags(*i.id(), 3, i.tags().clone());
+    let j = DynIndex::new_dyn(3);
+    let k = DynIndex::new_dyn(4);
+    let a = IdxTensor::from_dense(vec![i, j.clone()], vec![1.0_f64; 6]).unwrap();
+    let b = IdxTensor::from_dense(vec![i_wide, k.clone()], vec![2.0_f64; 12]).unwrap();
+
+    let err = direct_sum(&a, &b, &[(j, k)]).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("Dimension mismatch for common index: 2 vs 3"),
+        "{err:#}"
+    );
+}
+
+#[test]
+fn test_direct_sum_rejects_distinct_unpaired_indices() {
+    // Formerly accepted: i_a and i_b are different indices, so each is
+    // unpaired on one side only and would be read at coordinate 0.
     let i_a = DynIndex::new_dyn(2);
     let i_b = DynIndex::new_dyn(2);
     let j = DynIndex::new_dyn(3);
     let k = DynIndex::new_dyn(4);
+    let a = IdxTensor::from_dense(vec![i_a, j.clone()], vec![1.0_f64; 6]).unwrap();
+    let b = IdxTensor::from_dense(vec![i_b, k.clone()], vec![2.0_f64; 8]).unwrap();
+    assert_unpaired_index_rejected(&a, &b, &[(j, k)]);
+}
 
-    // We need a common index (same id) with different dimensions.
-    // Since new_dyn creates unique ids, we need to share the same index
-    // but that means same dimension. Instead, test by creating tensors
-    // where a non-paired common index has mismatching dims.
-    // This requires indices that share the same ID but different dims,
-    // which is not directly possible with DynIndex::new_dyn.
-    // We'll just verify the happy path with matching common indices works.
-    let a = IdxTensor::from_dense(vec![i_a.clone(), j.clone()], vec![1.0_f64; 6]).unwrap();
-    let b = IdxTensor::from_dense(vec![i_b.clone(), k.clone()], vec![2.0_f64; 8]).unwrap();
+/// Asserts that `direct_sum` rejects the operands with the typed index-space
+/// mismatch (tensor4all/tensor4all-rs#1018).
+fn assert_unpaired_index_rejected(a: &IdxTensor, b: &IdxTensor, pairs: &[(DynIndex, DynIndex)]) {
+    match direct_sum(a, b, pairs) {
+        Err(IdxTensorError::ShapeMismatch { operation, .. }) => {
+            assert_eq!(operation, "direct_sum");
+        }
+        other => panic!("expected ShapeMismatch, got {other:?}"),
+    }
+}
 
-    // No common indices (i_a and i_b have different ids), so no mismatch possible
-    // Both indices are paired
-    let result = direct_sum(&a, &b, &[(j.clone(), k.clone())]);
-    // This should work - a has [i_a, j], b has [i_b, k], no common indices
-    assert!(result.is_ok());
+#[test]
+fn test_direct_sum_rejects_right_only_unpaired_index() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let a = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    let b = IdxTensor::from_dense(vec![i.clone(), j], vec![3.0, 4.0, 5.0, 6.0, 7.0, 8.0]).unwrap();
+    assert_unpaired_index_rejected(&a, &b, &[(i.clone(), i)]);
+}
+
+#[test]
+fn test_direct_sum_rejects_left_only_unpaired_index() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let a = IdxTensor::from_dense(vec![j, i.clone()], vec![1.0; 6]).unwrap();
+    let b = IdxTensor::from_dense(vec![i.clone()], vec![3.0, 4.0]).unwrap();
+    assert_unpaired_index_rejected(&a, &b, &[(i.clone(), i)]);
+}
+
+#[test]
+fn test_direct_sum_rejects_unpaired_indices_differing_in_identity() {
+    // Same id, but a different prime level or tag set is a different index,
+    // so neither operand's unpaired index has a counterpart.
+    let i = DynIndex::new_dyn(2);
+    let k = DynIndex::new_dyn(2);
+    let a = IdxTensor::from_dense(vec![i.clone(), k.clone()], vec![1.0; 4]).unwrap();
+    let primed = IdxTensor::from_dense(vec![i.prime(), k.clone()], vec![1.0; 4]).unwrap();
+    assert_unpaired_index_rejected(&a, &primed, &[(k.clone(), k.clone())]);
+
+    let mut tags = i.tags().clone();
+    tags.add_tag("other").unwrap();
+    let tagged_i = DynIndex::new_with_tags(*i.id(), 2, tags);
+    let tagged = IdxTensor::from_dense(vec![tagged_i, k.clone()], vec![1.0; 4]).unwrap();
+    assert_unpaired_index_rejected(&a, &tagged, &[(k.clone(), k)]);
+}
+
+#[test]
+fn test_direct_sum_rejects_index_paired_on_one_side_only() {
+    // `i` is common to both operands but paired only as a's side of (i, j):
+    // b's copy of `i` is then unpaired with no unpaired counterpart in a.
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+    let a = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    let b = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0; 4]).unwrap();
+    assert_unpaired_index_rejected(&a, &b, &[(i, j)]);
 }
