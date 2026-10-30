@@ -246,6 +246,19 @@ fn broken_bonds_do_not_index_past_the_environment() {
 }
 
 #[test]
+fn a_narrower_left_bond_is_rejected() {
+    // A trailing tensor with a left bond narrower than its predecessor's right bond would
+    // silently ignore the remaining environment states, so it has to be reported instead.
+    let mut tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
+    tt.site_tensors_mut()[0] = tensor3_zeros(1, 2, 2).unwrap();
+    tt.site_tensors_mut()[1] = tensor3_zeros(1, 3, 1).unwrap();
+    assert!(matches!(
+        tt.full_tensor(),
+        Err(SimpleTensorTrainError::DimensionMismatch { site: 0 })
+    ));
+}
+
+#[test]
 fn a_non_scalar_final_environment_is_still_an_error() {
     let mut tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     tt.site_tensors_mut()[1] = tensor3_zeros(1, 3, 2).unwrap();

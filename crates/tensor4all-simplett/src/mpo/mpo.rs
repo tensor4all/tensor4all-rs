@@ -543,7 +543,6 @@ impl<T: TTScalar> MPO<T> {
             });
         }
 
-        result.shrink_to_fit();
         Ok((result, shape))
     }
 }

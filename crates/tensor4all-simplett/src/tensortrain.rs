@@ -436,7 +436,9 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         for (site, tensor) in self.tensors.iter().enumerate().skip(1) {
             let left = tensor.left_dim();
             let right = tensor.right_dim();
-            if left > bond_dim {
+            // Every environment state of the predecessor has to be consumed: a narrower
+            // left bond would silently drop the rest instead of reading past it.
+            if left != bond_dim {
                 return Err(SimpleTensorTrainError::DimensionMismatch { site: site - 1 });
             }
             let dim = tensor.site_dim();
@@ -488,7 +490,6 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
             });
         }
 
-        result.shrink_to_fit();
         Ok((result, site_dims))
     }
 }
