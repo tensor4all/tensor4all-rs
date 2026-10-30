@@ -83,6 +83,49 @@ transform layer, and MPS conversion belongs in the bridge.
 - While a feature still needs both stacks, it crosses through
   `treetn::simplett_bridge`; it is not duplicated in both.
 
+## Where tensor4all-rs sits in the tensor4all stack
+
+This workspace is the algorithm layer of a five-layer stack. Every dense
+operation eventually executes in one of the layers below, and that layering is
+what keeps the public API stable while the kernels underneath are replaced.
+
+| Layer | Repositories and crates | Entry point from this workspace |
+| --- | --- | --- |
+| Frontends | [`Tensor4all.jl`](https://github.com/tensor4all/Tensor4all.jl); the `tensor4all-capi` (C FFI) and `tensor4all-py` crates in this workspace | this workspace is what they build on |
+| Algorithms | this repository; [`quanticsgrids-rs`](https://github.com/tensor4all/quanticsgrids-rs); [`hataori-rs`](https://github.com/tensor4all/hataori-rs) | `quanticsgrids` through `tensor4all-quanticstci`, `tensor4all-quanticstransform`, `tensor4all-treetci` and `tensor4all-interpolativeqtt`; `hataori` / `hataori-tenferro` through `tensor4all-partitionedtreetn` |
+| Tensor runtime | [`tenferro-rs`](https://github.com/tensor4all/tenferro-rs) (caller-owned engines); [`computegraph-rs`](https://github.com/tensor4all/computegraph-rs) | `tensor4all-tensorbackend` |
+| Kernel providers | [`cpueinsum-rs`](https://github.com/tensor4all/cpueinsum-rs), [`tcontract-rs`](https://github.com/tensor4all/tcontract-rs), [`tlinalg-rs`](https://github.com/tensor4all/tlinalg-rs) | none: reached inside tenferro-rs |
+| Foundation | [`strided-rs`](https://github.com/tensor4all/strided-rs), `t4a-faer` ([`faer` fork](https://github.com/tensor4all/faer)), BLAS/LAPACK | none: reached inside the kernel providers and t4a-faer |
+
+The GPU path is the same picture one layer lower: `tenferro-gpu` pulls
+`t4a-cuda-kernels` and `t4a-cuda-runtime`, which call cuBLAS and cuTENSOR. No
+CubeCL package remains in the lock, which is why the
+[CUDA tutorial](tutorials/gpu/cuda-tree-contraction.md) names the tenferro GPU
+stack instead.
+
+Since late August the dense kernels were split out of tenferro into the
+kernel-provider crates, and tenferro's `BackendSession` was replaced by the
+caller-owned `CpuEngine` that `CpuBackend` in `tensor4all-tensorbackend` wraps.
+Two rules follow:
+
+- **No workspace crate depends directly on a kernel-provider or foundation
+  crate.** `cpueinsum`, `tcontract`, `tlinalg`, `t4a-faer`, `gemm`,
+  `t4a-private-gemm-x86` and the `strided-*` crates appear in `Cargo.lock` only
+  as dependencies of tenferro and of each other.
+- **Tensor operations enter the runtime through `tensor4all-tensorbackend`.** It
+  owns the engine objects and the backend feature switches
+  (`tenferro-cpu-platform`, `tenferro-cpu-faer`, `tenferro-system-blas`,
+  `tenferro-cuda`, `tenferro-provider-inject`). A crate that only needs
+  tenferro's value types may name `tenferro-tensor` or `tenferro-cpu`, but a new
+  *operation* belongs in `tensor4all-tensorbackend`, not in the algorithm crate
+  that calls it.
+
+`tensor4all-hdf5` additionally takes [`hdf5-rt`](https://github.com/tensor4all/hdf5-rt)
+for runtime HDF5 loading; that is an I/O helper, not part of the numeric stack.
+
+The interactive layered map is at
+[tensor4all.org/tensor4all-meta/stack](https://tensor4all.org/tensor4all-meta/stack/).
+
 ## Vocabulary conventions
 
 Beyond the naming-policy suffixes (`_mut`, `_into`, `_batched`), the following

@@ -5,7 +5,7 @@ This experimental path contracts a small dense `TreeTN<IdxTensor>` on one NVIDIA
 ## Prerequisites
 
 - A stable Rust toolchain; see [Getting Started](../../getting-started.md).
-- An NVIDIA GPU and CUDA driver/toolkit compatible with the CUDA versions used by the pinned tenferro/cubecl dependencies. No wider version or compute-capability support matrix is currently promised.
+- An NVIDIA GPU and CUDA driver/toolkit compatible with the CUDA versions used by the pinned tenferro GPU stack: `tenferro-gpu` drives `t4a-cuda-kernels` and `t4a-cuda-runtime` (cuBLAS / cuTENSOR). No wider version or compute-capability support matrix is currently promised.
 - The intended device must be visible as CUDA ordinal 0.
 - Build with the non-default `tenferro-cuda` feature. The commands also name the `tenferro-cpu-faer` feature explicitly because the quickstart computes a CPU reference alongside the CUDA contraction.
 
