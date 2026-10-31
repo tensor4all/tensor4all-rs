@@ -1,17 +1,31 @@
 //! Collections of eagerly projected [`SubDomainTreeTN`] patches.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 
 use crate::error::{PartitionedTreeTNError, Result};
 use crate::projector::Projector;
 use crate::subdomain_tree_tn::{
-    ensure_center, ensure_same_dtype, ensure_same_topology, ensure_same_tree_structure,
-    validate_contraction_options, validate_contraction_site_assignment,
+    contraction_output_site_indices, ensure_center, ensure_same_dtype, ensure_same_topology,
+    ensure_same_tree_structure, validate_contraction_options, validate_contraction_site_assignment,
     validate_truncation_options, SubDomainTreeTN,
 };
 use tensor4all_treetn::{contraction::ContractionOptions, TreeTN, TruncationOptions};
+
+/// A patch pair of a partition contraction with its contracted contribution.
+pub(crate) type ContractedPair<'a, V> = (
+    &'a SubDomainTreeTN<V>,
+    &'a SubDomainTreeTN<V>,
+    SubDomainTreeTN<V>,
+);
+
+#[cfg(test)]
+thread_local! {
+    /// Top-level patch pairs passed to `SubDomainTreeTN::contract` by
+    /// `PartitionedTreeTN::contract_pairs`.
+    pub(crate) static CONTRACTED_PAIRS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// A collection of pairwise-disjoint, eagerly masked TreeTN patches.
 ///
@@ -409,6 +423,8 @@ where
     /// directly from their eager stored data. Projector entries absent from the
     /// output site space are pruned, and duplicate output keys are combined by
     /// strict subdomain addition followed by the requested bond truncation.
+    /// To form only some output keys, use [`Self::contract_selected`], which
+    /// skips the pairs of every other key.
     ///
     /// # Known limitation: no output-region refinement
     ///
@@ -436,39 +452,116 @@ where
     /// typed TreeTN/backend error. The operation returns a new partition, so
     /// failure cannot mutate either input.
     pub fn contract(&self, other: &Self, center: &V, options: ContractionOptions) -> Result<Self> {
+        self.contract_with_selection(other, center, options, None)
+    }
+
+    /// Contract two partitions, forming only the output patches whose
+    /// projector is in `wanted`.
+    ///
+    /// The output projector of a patch pair is known before the pair is
+    /// contracted: it is the intersection of the two projectors without the
+    /// entries on contracted site indices. A pair whose output projector is not
+    /// in `wanted` is skipped and never contracted, so the cost follows the
+    /// number of pairs that reach a wanted output rather than all compatible
+    /// pairs. Every returned patch equals the patch [`Self::contract`] returns
+    /// under the same key: the same pairs are summed in the same order.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Second operand, with the same named topology.
+    /// * `center` - Existing node used as the contraction and truncation center.
+    /// * `options` - Non-dense TreeTN contraction method and rank policy.
+    /// * `wanted` - Exact output projector keys to form. They are compared by
+    ///   equality with the output keys, which carry only uncontracted site
+    ///   indices. Duplicates are ignored. A key that no pair produces has no
+    ///   output patch; an empty slice returns an empty partition.
+    ///
+    /// # Returns
+    ///
+    /// A new partition holding at most one patch per wanted key.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`Self::contract`]:
+    /// [`PartitionedTreeTNError::Empty`] for an empty operand,
+    /// [`PartitionedTreeTNError::TopologyMismatch`],
+    /// [`PartitionedTreeTNError::SiteIndexMismatch`], or
+    /// [`PartitionedTreeTNError::DTypeMismatch`] before pair iteration,
+    /// [`PartitionedTreeTNError::InvalidCenter`],
+    /// [`PartitionedTreeTNError::InvalidOptions`],
+    /// [`PartitionedTreeTNError::OverlappingProjectors`] for overlapping wanted
+    /// output layouts, or a typed TreeTN/backend error. These checks run even
+    /// when no pair is selected. Neither input is mutated.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN};
+    /// use tensor4all_treetn::{contraction::ContractionOptions, TreeTN};
+    ///
+    /// // Left is a 2x2 matrix over (x, k) split into its two rows; right is
+    /// // the all-ones vector over k. Contracting k gives the row sums.
+    /// let x = DynIndex::new_dyn(2);
+    /// let k = DynIndex::new_dyn(2);
+    /// let matrix = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense(vec![x.clone(), k.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])?],
+    ///     vec![0usize],
+    /// )?;
+    /// let rows = PartitionedTreeTN::from_subdomains(vec![
+    ///     SubDomainTreeTN::new(matrix.clone(), Projector::from_pairs([(x.clone(), 0)])?)?,
+    ///     SubDomainTreeTN::new(matrix, Projector::from_pairs([(x.clone(), 1)])?)?,
+    /// ])?;
+    /// let ones = PartitionedTreeTN::from_subdomain(SubDomainTreeTN::from_treetn(
+    ///     TreeTN::from_tensors(vec![IdxTensor::from_dense(vec![k], vec![1.0_f64, 1.0])?], vec![0usize])?,
+    /// )?)?;
+    ///
+    /// let row1 = Projector::from_pairs([(x, 1)])?;
+    /// let selected =
+    ///     rows.contract_selected(&ones, &0, ContractionOptions::default(), &[row1.clone()])?;
+    /// assert_eq!(selected.len(), 1);
+    /// // Row 1 of the column-major matrix [[1, 3], [2, 4]] sums to 6; the
+    /// // patch is masked to x = 1, so its x = 0 entry is zero.
+    /// let patch = selected.get(&row1).ok_or("missing row 1")?;
+    /// assert_eq!(patch.data().to_dense()?.to_vec::<f64>()?, vec![0.0, 6.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn contract_selected(
+        &self,
+        other: &Self,
+        center: &V,
+        options: ContractionOptions,
+        wanted: &[Projector],
+    ) -> Result<Self> {
+        let wanted: HashSet<Projector> = wanted.iter().cloned().collect();
+        self.contract_with_selection(other, center, options, Some(&wanted))
+    }
+
+    fn contract_with_selection(
+        &self,
+        other: &Self,
+        center: &V,
+        options: ContractionOptions,
+        wanted: Option<&HashSet<Projector>>,
+    ) -> Result<Self> {
         validate_contraction_options(&options)?;
         self.validate_contents()?;
         other.validate_contents()?;
-        let (left_template, right_template) = nonempty_templates(self, other)?;
-        ensure_same_topology(left_template.data(), right_template.data())?;
-        ensure_same_dtype(left_template.scalar_kind()?, right_template.scalar_kind()?)?;
-        validate_contraction_site_assignment(left_template.data(), right_template.data())?;
-        ensure_center(left_template.data(), center)?;
-        ensure_center(right_template.data(), center)?;
+        nonempty_templates(self, other)?;
 
-        // Collect pairwise contraction contributions grouped by output
-        // projector. Left/right patches are visited in canonical projector
-        // order and groups are sorted, so the within-group exact-add order (and
-        // therefore the result) is independent of the input HashMap iteration
-        // order.
-        let mut left_patches: Vec<_> = self.data.values().collect();
-        let mut right_patches: Vec<_> = other.data.values().collect();
-        left_patches.sort_by(|a, b| a.projector().canonical_cmp(b.projector()));
-        right_patches.sort_by(|a, b| a.projector().canonical_cmp(b.projector()));
+        // Group the pairwise contributions by output projector. Pairs come in
+        // canonical projector order and groups are sorted, so the within-group
+        // exact-add order (and therefore the result) is independent of the
+        // input HashMap iteration order.
         let mut groups: Vec<(Projector, Vec<SubDomainTreeTN<V>>)> = Vec::new();
         let mut positions: HashMap<Projector, usize> = HashMap::new();
-        for left in left_patches {
-            for right in &right_patches {
-                let Some(contracted) = left.contract(right, center, options.clone())? else {
-                    continue;
-                };
-                let projector = contracted.projector().clone();
-                match positions.get(&projector) {
-                    Some(&position) => groups[position].1.push(contracted),
-                    None => {
-                        positions.insert(projector.clone(), groups.len());
-                        groups.push((projector, vec![contracted]));
-                    }
+        for (_, _, contracted) in self.contract_pairs(other, center, &options, wanted)? {
+            let projector = contracted.projector().clone();
+            match positions.get(&projector) {
+                Some(&position) => groups[position].1.push(contracted),
+                None => {
+                    positions.insert(projector.clone(), groups.len());
+                    groups.push((projector, vec![contracted]));
                 }
             }
         }
@@ -500,6 +593,67 @@ where
         // overlapping non-identical output projectors are rejected here with
         // the documented `OverlappingProjectors` limitation.
         PartitionedTreeTN::from_subdomains(subdomains)
+    }
+
+    /// Contract the compatible patch pairs of `self` and `other` whose output
+    /// projector is in `wanted` (every compatible pair when `wanted` is
+    /// `None`), in canonical left-then-right projector order.
+    ///
+    /// Each pair's output projector is predicted before contraction from the
+    /// projector intersection and the output site space, which is shared by
+    /// every pair because all patches of a partition have the same site
+    /// indices. Returns each contracted pair with its contribution; an empty
+    /// operand gives no pairs. The operand checks of [`Self::contract`] run
+    /// once on the patch templates, so a selection that skips every pair
+    /// still reports an invalid center, topology, dtype, or site assignment.
+    pub(crate) fn contract_pairs<'a>(
+        &'a self,
+        other: &'a Self,
+        center: &V,
+        options: &ContractionOptions,
+        wanted: Option<&HashSet<Projector>>,
+    ) -> Result<Vec<ContractedPair<'a, V>>> {
+        let (Some(left_template), Some(right_template)) =
+            (self.data.values().next(), other.data.values().next())
+        else {
+            return Ok(Vec::new());
+        };
+        ensure_same_topology(left_template.data(), right_template.data())?;
+        ensure_same_dtype(left_template.scalar_kind()?, right_template.scalar_kind()?)?;
+        validate_contraction_site_assignment(left_template.data(), right_template.data())?;
+        ensure_center(left_template.data(), center)?;
+        ensure_center(right_template.data(), center)?;
+        let output_sites =
+            contraction_output_site_indices(left_template.data(), right_template.data())?;
+
+        let mut left_patches: Vec<_> = self.data.values().collect();
+        let mut right_patches: Vec<_> = other.data.values().collect();
+        left_patches.sort_by(|a, b| a.projector().canonical_cmp(b.projector()));
+        right_patches.sort_by(|a, b| a.projector().canonical_cmp(b.projector()));
+        let mut contracted = Vec::new();
+        for left in left_patches {
+            for &right in &right_patches {
+                let Some(merged) = left.projector().intersection(right.projector()) else {
+                    continue;
+                };
+                let output = merged.filter_indices(&output_sites);
+                if wanted.is_some_and(|wanted| !wanted.contains(&output)) {
+                    continue;
+                }
+                #[cfg(test)]
+                CONTRACTED_PAIRS.with(|count| count.set(count.get() + 1));
+                let Some(contribution) = left.contract(right, center, options.clone())? else {
+                    continue;
+                };
+                debug_assert_eq!(
+                    contribution.projector(),
+                    &output,
+                    "predicted output projector differs from the contracted pair's"
+                );
+                contracted.push((left, right, contribution));
+            }
+        }
+        Ok(contracted)
     }
 
     /// Sum eager patches in deterministic canonical projector order.
@@ -637,3 +791,6 @@ where
         self.data.iter()
     }
 }
+
+#[cfg(test)]
+mod tests;

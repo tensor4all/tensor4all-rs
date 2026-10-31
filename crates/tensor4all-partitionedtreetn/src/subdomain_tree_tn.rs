@@ -788,6 +788,38 @@ where
     Ok(())
 }
 
+/// Site indices that survive the contraction of `left` with `right`: those
+/// without a contractable partner on the other side.
+///
+/// This is the output-index rule of TreeTN contraction, which pairs indices by
+/// [`IndexLike::is_contractable`] rather than by equality. Site indices are
+/// unique within one TreeTN, so testing each index against the whole other side
+/// gives the same pairing as the contraction's one-to-one matching.
+pub(crate) fn contraction_output_site_indices<V>(
+    left: &TreeTN<IdxTensor, V>,
+    right: &TreeTN<IdxTensor, V>,
+) -> Result<Vec<DynIndex>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let (left_indices, _) = left
+        .all_site_indices()
+        .map_err(PartitionedTreeTNError::from)?;
+    let (right_indices, _) = right
+        .all_site_indices()
+        .map_err(PartitionedTreeTNError::from)?;
+    let unpaired = |indices: &[DynIndex], others: &[DynIndex]| {
+        indices
+            .iter()
+            .filter(|index| !others.iter().any(|other| index.is_contractable(other)))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let mut output = unpaired(&left_indices, &right_indices);
+    output.extend(unpaired(&right_indices, &left_indices));
+    Ok(output)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ScalarKind {
     F32,

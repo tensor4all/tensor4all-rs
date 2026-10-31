@@ -171,6 +171,9 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
 - `Projector` — maps full `DynIndex` identities to zero-based coordinates.
 - `SubDomainTreeTN<V>` — eagerly masked TreeTN plus its projector.
 - `PartitionedTreeTN<V>` — homogeneous, pairwise-disjoint patches.
+  `contract_selected(&other, &center, options, &wanted)` forms only the output
+  projectors in `wanted` and never contracts the pairs of other outputs; each
+  returned patch equals the one `contract` returns under that key.
 - `PatchingOptions { cutoff, allocation, max_bond_dim, patch_order,
   split_strategy }` — `cutoff` is a non-negative discarded-weight budget shared
   across patches (ITensorMPS `cutoff` convention), not an SVD truncation-policy
@@ -247,6 +250,10 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   relative to itself.
 - `contract_adaptive(&left, &right, &center, &contract_options, &patching_options)` —
   contract and retruncate against the corrected output norm.
+  `contract_adaptive_selected(..., &wanted)` forms only the wanted output
+  projectors (split outputs refine a wanted key); its `Volume` budget uses the
+  totals of the selected outputs, so a block can be truncated differently than
+  in the full call.
 - `reconstruction::ReconstructionTarget::from_partition(&partition)` — immutable
   disjoint-patch target with a pinned L2 norm. `from_tensor_products(pairs)`
   accepts independent factor pairs on the same named topology, keeps them
