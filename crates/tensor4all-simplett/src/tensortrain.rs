@@ -3,7 +3,10 @@
 use crate::error::{Result, SimpleTensorTrainError};
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
-use tensor4all_tensorbackend::invariant_violated;
+use tenferro_tensor::TensorValue;
+use tensor4all_tensorbackend::{
+    einsum_native_tensor_reads, invariant_violated, NativeEinsumPlan, NativeTensorReadInput,
+};
 
 /// A `(1, d, 1)` core cannot overflow and its strides are representable; only
 /// out-of-memory remains, which std also treats as fatal.
@@ -419,20 +422,22 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
                 message: "full tensor environment element count overflowed usize".to_string(),
             })?;
         let mut stride = first.site_dim();
-        let first_size = stride.checked_mul(bond_dim).ok_or_else(|| {
-            SimpleTensorTrainError::InvalidOperation {
+        stride
+            .checked_mul(bond_dim)
+            .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
                 message: "full tensor environment element count overflowed usize".to_string(),
-            }
-        })?;
-        let mut result = Vec::with_capacity(total_size.max(first_size));
-        for r in 0..first.right_dim() {
-            for l in 0..first.left_dim() {
-                for s in 0..stride {
-                    result.push(*first.get3(l, s, r));
-                }
-            }
-        }
-        let mut scratch = Vec::new();
+            })?;
+        let backend_error = |message: String| SimpleTensorTrainError::InvalidOperation { message };
+        // Seed lsr->lrs, then fold (l,r) into the bond, preserving the existing
+        // first-left-bond behavior even for cores replaced through the mutable API.
+        let first_read = NativeTensorReadInput::Borrowed(T::tensor_read(first.as_inner()));
+        let mut environment = einsum_native_tensor_reads(&[(&first_read, &[0, 1, 2])], &[0, 2, 1])
+            .map(TensorValue::from_tensor)
+            .map_err(|error| backend_error(error.to_string()))?;
+        // E[l,p] * A[l,s,r] -> E'[r,p,s]; folding (p,s) keeps the earlier
+        // prefix fastest, so the final dense buffer is first-site-fastest column-major.
+        let plan = NativeEinsumPlan::new("lp,lsr->rps")
+            .map_err(|error| backend_error(error.to_string()))?;
         for (site, tensor) in self.tensors.iter().enumerate().skip(1) {
             let left = tensor.left_dim();
             let right = tensor.right_dim();
@@ -443,44 +448,18 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
             }
             let dim = tensor.site_dim();
             let next_stride = stride * dim;
-            let next_size = next_stride.checked_mul(right).ok_or_else(|| {
+            next_stride.checked_mul(right).ok_or_else(|| {
                 SimpleTensorTrainError::InvalidOperation {
                     message: "full tensor environment element count overflowed usize".to_string(),
                 }
             })?;
-            if left == 1 && bond_dim == 1 && right == 1 {
-                // Append the other physical slices before overwriting the first.
-                for s in 1..dim {
-                    let factor = *tensor.get3(0, s, 0);
-                    for p in 0..stride {
-                        let value = result[p] * factor;
-                        result.push(value);
-                    }
-                }
-                let factor = *tensor.get3(0, 0, 0);
-                for value in &mut result[..stride] {
-                    *value = *value * factor;
-                }
-            } else {
-                // Non-unit bonds need disjoint input, including when the prefix exceeds the output.
-                scratch.clear();
-                scratch.extend_from_slice(&result);
-                result.clear();
-                result.resize(next_size, T::zero());
-                for r in 0..right {
-                    for s in 0..dim {
-                        let start = stride * s + next_stride * r;
-                        let output = &mut result[start..start + stride];
-                        for l in 0..left {
-                            let factor = *tensor.get3(l, s, r);
-                            let input = &scratch[stride * l..stride * (l + 1)];
-                            for (value, &previous) in output.iter_mut().zip(input) {
-                                *value = *value + previous * factor;
-                            }
-                        }
-                    }
-                }
-            }
+            let prefix = environment
+                .reshape_view([bond_dim, stride])
+                .map_err(|error| backend_error(error.to_string()))?;
+            environment = plan
+                .execute_reads(&[prefix.tensor_read(), T::tensor_read(tensor.as_inner())])
+                .map(TensorValue::from_tensor)
+                .map_err(|error| backend_error(error.to_string()))?;
             stride = next_stride;
             bond_dim = right;
         }
@@ -490,6 +469,11 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
             });
         }
 
+        let result = environment
+            .tensor_read()
+            .as_slice::<T>()
+            .map_err(|error| backend_error(error.to_string()))?
+            .to_vec();
         Ok((result, site_dims))
     }
 }

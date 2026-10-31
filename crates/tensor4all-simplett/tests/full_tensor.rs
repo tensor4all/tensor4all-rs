@@ -91,6 +91,77 @@ fn random_complex_matches_every_point_without_conjugating() {
     random_cases(|rng| Complex64::new(rng.random_range(-0.5..0.5), rng.random_range(-0.5..0.5)));
 }
 
+fn nonuniform_bonds<T: TTScalar + EinsumScalar>(mut sample: impl FnMut(&mut ChaCha8Rng) -> T) {
+    let mut rng = ChaCha8Rng::seed_from_u64(1065);
+    let bonds = [1, 3, 2, 1];
+    let tt_dims = [2, 3, 2];
+    let tt = SimpleTensorTrain::new(
+        tt_dims
+            .iter()
+            .zip(bonds.windows(2))
+            .map(|(&dim, pair)| {
+                let data = (0..pair[0] * dim * pair[1])
+                    .map(|_| sample(&mut rng))
+                    .collect();
+                tensor3_from_data(data, pair[0], dim, pair[1]).unwrap()
+            })
+            .collect(),
+    )
+    .unwrap();
+    let (data, shape) = tt.full_tensor().unwrap();
+    assert_eq!(shape, tt_dims);
+    compare(&data, &shape, |indices| tt.evaluate(indices).unwrap());
+
+    let mpo_dims = [(2, 3), (3, 2), (2, 2)];
+    let mpo = MPO::new(
+        mpo_dims
+            .iter()
+            .zip(bonds.windows(2))
+            .map(|(&(d1, d2), pair)| {
+                let data = (0..pair[0] * d1 * d2 * pair[1])
+                    .map(|_| sample(&mut rng))
+                    .collect();
+                tensor4_from_data(data, pair[0], d1, d2, pair[1]).unwrap()
+            })
+            .collect(),
+    )
+    .unwrap();
+    let (data, shape) = mpo.full_tensor().unwrap();
+    assert_eq!(shape, [2, 3, 3, 2, 2, 2]);
+    compare(&data, &shape, |indices| mpo.evaluate(indices).unwrap());
+}
+
+#[test]
+fn nonuniform_f64_bonds_match_tt_and_mpo_every_point() {
+    nonuniform_bonds(|rng| rng.random_range(-0.5..0.5));
+}
+
+#[test]
+fn nonuniform_complex_bonds_match_tt_and_mpo_every_point() {
+    nonuniform_bonds(|rng| {
+        Complex64::new(rng.random_range(-0.5..0.5), rng.random_range(-0.5..0.5))
+    });
+}
+
+#[test]
+fn mutable_first_left_bond_keeps_legacy_folding_order() {
+    let core: Vec<_> = (1..=8).map(f64::from).collect();
+    let mut tt = SimpleTensorTrain::<f64>::constant(&[2, 2], 1.0);
+    tt.site_tensors_mut()[0] = tensor3_from_data(core.clone(), 2, 2, 2).unwrap();
+    tt.site_tensors_mut()[1] = tensor3_from_data(core.clone(), 4, 2, 1).unwrap();
+    assert_eq!(
+        tt.full_tensor().unwrap(),
+        (vec![44.0, 64.0, 100.0, 152.0], vec![2, 2])
+    );
+    let mut mpo = MPO::<f64>::constant(&[(2, 1), (2, 1)], 1.0).unwrap();
+    mpo.site_tensors_mut()[0] = tensor4_from_data(core.clone(), 2, 2, 1, 2).unwrap();
+    mpo.site_tensors_mut()[1] = tensor4_from_data(core, 4, 2, 1, 1).unwrap();
+    assert_eq!(
+        mpo.full_tensor().unwrap(),
+        (vec![44.0, 64.0, 100.0, 152.0], vec![2, 1, 2, 1])
+    );
+}
+
 #[test]
 fn empty_and_zero_physical_dimensions_preserve_shape() {
     assert_eq!(

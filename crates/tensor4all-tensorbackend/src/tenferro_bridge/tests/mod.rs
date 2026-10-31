@@ -572,6 +572,69 @@ fn einsum_native_subscripts_matches_known_complex_matmul_and_trace() {
 }
 
 #[test]
+fn parsed_einsum_plan_reuses_spec_across_prefix_shapes() {
+    reset_concrete_einsum_plan_cache();
+    let plan = NativeEinsumPlan::new("lp,lsr->rps").unwrap();
+    let core_data: Vec<_> = (1..=12).map(f64::from).collect();
+    let core = NativeTensor::from_vec_col_major(vec![2, 3, 2], core_data.clone()).unwrap();
+    for prefix in [2, 3, 2, 3] {
+        let data: Vec<_> = (0..2 * prefix).map(|i| i as f64 + 1.0).collect();
+        let environment = NativeTensor::from_vec_col_major(vec![2, prefix], data.clone()).unwrap();
+        let output = plan
+            .execute_reads(&[
+                TensorRead::from_tensor(&environment),
+                TensorRead::from_tensor(&core),
+            ])
+            .unwrap();
+        assert_eq!(output.shape(), &[2, prefix, 3]);
+        for s in 0..3 {
+            for p in 0..prefix {
+                for r in 0..2 {
+                    let expected: f64 = (0..2)
+                        .map(|l| data[l + 2 * p] * core_data[l + 2 * (s + 3 * r)])
+                        .sum();
+                    assert_eq!(
+                        output.as_slice::<f64>().unwrap()[r + 2 * (p + prefix * s)],
+                        expected
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(concrete_einsum_plan_cache_len(), 2);
+}
+
+#[test]
+fn parsed_einsum_plan_preserves_promotion_and_rejects_invalid_inputs() {
+    let plan = NativeEinsumPlan::new("ij,jk->ik").unwrap();
+    let lhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 3.0, 2.0, 4.0]).unwrap();
+    let rhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]).unwrap();
+    let output = plan
+        .execute_reads(&[TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)])
+        .unwrap();
+    assert_eq!(output.dtype(), DType::F64);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[19.0, 43.0, 22.0, 50.0]);
+    assert!(plan.execute_reads(&[]).is_err());
+    assert!(plan
+        .execute_reads(&[TensorRead::from_tensor(&lhs)])
+        .is_err());
+    let vector = NativeTensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
+    assert!(plan
+        .execute_reads(&[
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&vector)
+        ])
+        .is_err());
+    let wrong_extent = NativeTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
+    assert!(plan
+        .execute_reads(&[
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&wrong_extent)
+        ])
+        .is_err());
+}
+
+#[test]
 fn einsum_native_subscripts_rejects_operand_count_mismatch_and_parse_errors() {
     let lhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])
         .expect("valid lhs");

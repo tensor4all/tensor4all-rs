@@ -106,7 +106,7 @@ fn the_session_entry_runs_while_the_process_global_backend_is_held() {
 
     // The worker thread lets a wrong route fail this test instead of hanging the suite; the panic releases the
     // lock. Both the dense factor assembly inside the sweeps and the site solves are inside the run.
-    let values = with_default_backend(|_global| {
+    let result = with_default_backend(|_global| {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
             let result = run_on_session(&context());
@@ -114,13 +114,15 @@ fn the_session_entry_runs_while_the_process_global_backend_is_held() {
             result
         });
         match done_rx.recv_timeout(Duration::from_secs(120)) {
-            Ok(()) => dense_values(&worker.join().expect("worker thread")),
+            Ok(()) => worker.join().expect("worker thread"),
             Err(_) => panic!(
                 "the session entry did not finish while the process-global backend was held: a numerical path \
                  on this route still consulted the global session"
             ),
         }
     });
+    // Dense readout uses the owning backend too, but is not part of the TCI session route.
+    let values = dense_values(&result);
 
     assert_eq!(values.len(), reference.len());
     for (index, (left, right)) in values.iter().zip(&reference).enumerate() {

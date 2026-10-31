@@ -109,7 +109,7 @@ pub use tenferro_bridge::{
     reshape_col_major_native_tensor, scale_native_tensor, scale_storage_native,
     storage_from_payload_native, storage_payload_native, storage_payload_native_read_input,
     storage_to_native_tensor, sum_native_tensor, svd_native_tensor, tangent_native_tensor,
-    BridgeError, NativeTensorReadInput,
+    BridgeError, NativeEinsumPlan, NativeTensorReadInput,
 };
 #[cfg(feature = "global-defaults")]
 pub use tensor_element::TensorElement;
