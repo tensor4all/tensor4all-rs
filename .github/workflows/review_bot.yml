@@ -89,7 +89,6 @@ jobs:
   review-bot-waived:
     name: repository rules review (waived)
     if: |
-      github.event.pull_request.head.repo.full_name == github.repository &&
       contains(github.event.pull_request.labels.*.name, 'rules-review:waive')
     runs-on: ubuntu-latest
     permissions:
