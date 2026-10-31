@@ -16,7 +16,7 @@ use tenferro::{
 #[cfg(feature = "global-defaults")]
 use tenferro_ad::ContextId;
 use tenferro_ad::{AdContext, EagerRuntime};
-use tenferro_cpu::{BufferPoolStats, CpuEngine, Pool};
+use tenferro_cpu::{BufferPoolStats, CpuEngine, Pool, PoolBuilder};
 
 /// Linux CPU-affinity FFI, kept in one place so every `unsafe` block has one
 /// auditable owner.
@@ -325,6 +325,132 @@ pub fn set_default_cpu_threads(threads: NonZeroUsize) -> Result<(), AlreadyIniti
         .map_err(|_| AlreadyInitialized)
 }
 
+/// How the idle workers of a CPU pool wait for the next parallel section.
+///
+/// A worker that has nothing to do polls for a while before it sleeps. With the
+/// default budget it keeps polling through a serial phase of the caller that is
+/// shorter than that budget, so a pool of `N` workers can use `N` times the wall
+/// time in CPU time. A smaller budget trades that CPU time for a longer wake-up
+/// of the next parallel section. The names follow OpenMP's `OMP_WAIT_POLICY`.
+///
+/// The budget is threadteam's `PoolBuilder::spin_polls`, a count of polls and
+/// not a duration, so how long it lasts depends on the CPU.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::CpuWaitPolicy;
+///
+/// assert_eq!(CpuWaitPolicy::default(), CpuWaitPolicy::Active);
+/// assert_eq!(CpuWaitPolicy::Passive.spin_polls(), Some(0));
+/// assert_eq!(CpuWaitPolicy::SpinPolls(4096).spin_polls(), Some(4096));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CpuWaitPolicy {
+    /// Keep the pool's default spin budget (the behaviour before this type
+    /// existed).
+    #[default]
+    Active,
+    /// Do not spin: a waiting worker yields a few times and then sleeps, for a
+    /// shared machine or parallel test processes.
+    Passive,
+    /// Spin for this many polls before the yields and the sleep.
+    SpinPolls(u32),
+}
+
+impl CpuWaitPolicy {
+    /// The spin budget this policy sets on the pool, or `None` for the pool's
+    /// default.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuWaitPolicy;
+    ///
+    /// assert_eq!(CpuWaitPolicy::Active.spin_polls(), None);
+    /// assert_eq!(CpuWaitPolicy::SpinPolls(7).spin_polls(), Some(7));
+    /// ```
+    pub fn spin_polls(self) -> Option<u32> {
+        match self {
+            Self::Active => None,
+            Self::Passive => Some(0),
+            Self::SpinPolls(polls) => Some(polls),
+        }
+    }
+}
+
+/// Failure reported by [`set_default_cpu_wait_policy`] when the default is fixed.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::WaitPolicyAlreadyInitialized;
+///
+/// assert_eq!(
+///     WaitPolicyAlreadyInitialized.to_string(),
+///     "the process-wide default CPU wait policy is already initialized"
+/// );
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the process-wide default CPU wait policy is already initialized")]
+pub struct WaitPolicyAlreadyInitialized;
+
+static DEFAULT_CPU_WAIT_POLICY: OnceLock<CpuWaitPolicy> = OnceLock::new();
+
+/// Fix the [`CpuWaitPolicy`] of the pools that [`CpuBackend::new`] and
+/// [`CpuBackend::with_threads`] build for the rest of the process.
+///
+/// Only pools built after the call use it; a backend that already exists keeps
+/// the policy it was built with. Call it before any other thread can construct a
+/// backend. Without a call the policy is [`CpuWaitPolicy::Active`].
+///
+/// # Errors
+///
+/// Returns [`WaitPolicyAlreadyInitialized`] when the process-wide wait-policy
+/// configuration was already fixed by an earlier call, so a change is
+/// unsupported and the first value stays. Build a backend with
+/// [`CpuBackend::with_threads_and_wait_policy`] to use another policy for one
+/// backend.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{
+///     default_cpu_wait_policy, set_default_cpu_wait_policy, CpuWaitPolicy,
+///     WaitPolicyAlreadyInitialized,
+/// };
+///
+/// // Whichever call sets the default first wins; a later one is rejected typed.
+/// let _ = set_default_cpu_wait_policy(CpuWaitPolicy::Passive);
+/// assert_eq!(
+///     set_default_cpu_wait_policy(CpuWaitPolicy::SpinPolls(1)),
+///     Err(WaitPolicyAlreadyInitialized)
+/// );
+/// assert_eq!(default_cpu_wait_policy(), CpuWaitPolicy::Passive);
+/// ```
+pub fn set_default_cpu_wait_policy(
+    policy: CpuWaitPolicy,
+) -> Result<(), WaitPolicyAlreadyInitialized> {
+    DEFAULT_CPU_WAIT_POLICY
+        .set(policy)
+        .map_err(|_| WaitPolicyAlreadyInitialized)
+}
+
+/// The [`CpuWaitPolicy`] new default pools use: the one
+/// [`set_default_cpu_wait_policy`] fixed, else [`CpuWaitPolicy::Active`].
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{default_cpu_wait_policy, CpuWaitPolicy};
+///
+/// // A process that never set it keeps today's behaviour.
+/// assert_eq!(default_cpu_wait_policy(), CpuWaitPolicy::Active);
+/// ```
+pub fn default_cpu_wait_policy() -> CpuWaitPolicy {
+    DEFAULT_CPU_WAIT_POLICY.get().copied().unwrap_or_default()
+}
+
 /// The CPU set each worker of a pool reported when it started, by worker index.
 type WorkerCpus = Vec<Vec<usize>>;
 
@@ -350,7 +476,10 @@ fn current_worker_cpus() -> Vec<usize> {
 ///
 /// Off Linux the pool is built on the calling thread and no affinity call is
 /// made.
-fn build_pool(threads: Option<usize>) -> Result<(Pool, WorkerCpus), CpuThreadError> {
+fn build_pool(
+    threads: Option<usize>,
+    wait: CpuWaitPolicy,
+) -> Result<(Pool, WorkerCpus), CpuThreadError> {
     #[cfg(target_os = "linux")]
     {
         let mask = affinity::main_thread_mask()?;
@@ -358,7 +487,7 @@ fn build_pool(threads: Option<usize>) -> Result<(Pool, WorkerCpus), CpuThreadErr
             .name("tensor4all-cpu-pool".to_owned())
             .spawn(move || {
                 affinity::set_current_thread_to(&mask)?;
-                build_pool_here(threads)
+                build_pool_here(threads, wait)
             })
             .map_err(|source| CpuThreadError::ConstructionThread { source })?
             .join()
@@ -366,7 +495,7 @@ fn build_pool(threads: Option<usize>) -> Result<(Pool, WorkerCpus), CpuThreadErr
     }
     #[cfg(not(target_os = "linux"))]
     {
-        build_pool_here(threads)
+        build_pool_here(threads, wait)
     }
 }
 
@@ -398,15 +527,25 @@ fn rayon_env_worker_count() -> usize {
     }
 }
 
+/// `builder` with the spin budget of `wait`; the pool's default for [`CpuWaitPolicy::Active`].
+fn with_wait_policy(builder: PoolBuilder, wait: CpuWaitPolicy) -> PoolBuilder {
+    match wait.spin_polls() {
+        Some(polls) => builder.spin_polls(polls),
+        None => builder,
+    }
+}
+
 /// Build one worker pool on the calling thread.
-fn build_pool_here(threads: Option<usize>) -> Result<(Pool, WorkerCpus), CpuThreadError> {
+fn build_pool_here(
+    threads: Option<usize>,
+    wait: CpuWaitPolicy,
+) -> Result<(Pool, WorkerCpus), CpuThreadError> {
     let threads = threads.unwrap_or_else(rayon_env_worker_count);
     let (sender, receiver) = std::sync::mpsc::channel();
-    let pool = Pool::builder()
-        .threads(threads)
-        .on_start(move |worker| {
-            let _ = sender.send((worker, current_worker_cpus()));
-        })
+    let builder = Pool::builder().threads(threads).on_start(move |worker| {
+        let _ = sender.send((worker, current_worker_cpus()));
+    });
+    let pool = with_wait_policy(builder, wait)
         .build()
         .map_err(|source| CpuThreadError::Pool {
             source: Box::new(source),
@@ -534,7 +673,7 @@ impl CpuBackend {
         if let Some(&threads) = DEFAULT_CPU_THREADS.get() {
             return Self::with_threads_or_serial(threads);
         }
-        match build_pool(None) {
+        match build_pool(None, default_cpu_wait_policy()) {
             Ok((pool, worker_cpus)) => {
                 let resolved = pool.width().get();
                 let fixed = match DEFAULT_CPU_THREADS.set(resolved) {
@@ -603,6 +742,33 @@ impl CpuBackend {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn with_threads(threads: usize) -> Result<Self, CpuThreadError> {
+        Self::with_threads_and_wait_policy(threads, default_cpu_wait_policy())
+    }
+
+    /// Build a backend that may use `threads` workers, whose idle workers wait
+    /// as `wait` says.
+    ///
+    /// [`CpuBackend::with_threads`] is this with [`default_cpu_wait_policy`].
+    /// One worker builds a [`CpuEngine::serial`] engine, which owns no pool and
+    /// so has nothing to wait for; `wait` is then unused.
+    ///
+    /// # Errors
+    ///
+    /// The same errors as [`CpuBackend::with_threads`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{CpuBackend, CpuWaitPolicy};
+    ///
+    /// let backend = CpuBackend::with_threads_and_wait_policy(2, CpuWaitPolicy::Passive)?;
+    /// assert_eq!(backend.num_threads(), 2);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_threads_and_wait_policy(
+        threads: usize,
+        wait: CpuWaitPolicy,
+    ) -> Result<Self, CpuThreadError> {
         if threads == 0 {
             return Err(CpuThreadError::ZeroThreads);
         }
@@ -612,7 +778,7 @@ impl CpuBackend {
                 worker_cpus: WorkerCpus::default(),
             });
         }
-        let (pool, worker_cpus) = build_pool(Some(threads))?;
+        let (pool, worker_cpus) = build_pool(Some(threads), wait)?;
         Ok(Self {
             engine: CpuEngine::new(pool),
             worker_cpus,
@@ -686,7 +852,7 @@ impl CpuBackend {
 
             let workers = cpus.to_vec();
             let (sender, receiver) = std::sync::mpsc::channel();
-            let pool = Pool::builder()
+            let builder = Pool::builder()
                 .threads(workers.len())
                 .on_start(move |worker| {
                     let outcome = workers
@@ -697,7 +863,8 @@ impl CpuBackend {
                         })
                         .and_then(affinity::pin_current_thread);
                     let _ = sender.send((worker, outcome, current_worker_cpus()));
-                })
+                });
+            let pool = with_wait_policy(builder, default_cpu_wait_policy())
                 .build()
                 .map_err(|source| CpuThreadError::Pool {
                     source: Box::new(source),

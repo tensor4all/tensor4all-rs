@@ -707,3 +707,48 @@ fn affinity_is_unsupported_off_linux() {
         Err(CpuThreadError::UnsupportedPlatform)
     ));
 }
+
+/// The wait policy reaches the pool's spin budget: `Active` keeps threadteam's
+/// default, `Passive` sleeps after the yields, `SpinPolls(n)` is `n`.
+#[test]
+fn wait_policy_sets_the_pools_spin_budget() {
+    let default_polls = Pool::builder()
+        .threads(2)
+        .build()
+        .expect("default pool")
+        .spin_polls();
+    assert!(default_polls > 0, "the reference default spins");
+    for (policy, expected) in [
+        (CpuWaitPolicy::Active, default_polls),
+        (CpuWaitPolicy::Passive, 0),
+        (CpuWaitPolicy::SpinPolls(0), 0),
+        (CpuWaitPolicy::SpinPolls(7), 7),
+    ] {
+        let (pool, _) = build_pool(Some(2), policy).expect("pool");
+        assert_eq!(pool.spin_polls(), expected, "{policy:?}");
+    }
+}
+
+#[test]
+fn wait_policy_defaults_to_active_and_names_its_budget() {
+    assert_eq!(CpuWaitPolicy::default(), CpuWaitPolicy::Active);
+    assert_eq!(CpuWaitPolicy::Active.spin_polls(), None);
+    assert_eq!(CpuWaitPolicy::Passive.spin_polls(), Some(0));
+    assert_eq!(CpuWaitPolicy::SpinPolls(5).spin_polls(), Some(5));
+}
+
+#[test]
+fn backend_with_a_wait_policy_keeps_its_thread_count() {
+    for policy in [
+        CpuWaitPolicy::Active,
+        CpuWaitPolicy::Passive,
+        CpuWaitPolicy::SpinPolls(100),
+    ] {
+        let backend = CpuBackend::with_threads_and_wait_policy(2, policy).expect("backend");
+        assert_eq!(backend.num_threads(), 2, "{policy:?}");
+    }
+    assert!(matches!(
+        CpuBackend::with_threads_and_wait_policy(0, CpuWaitPolicy::Passive),
+        Err(CpuThreadError::ZeroThreads)
+    ));
+}
