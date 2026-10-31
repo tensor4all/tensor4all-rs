@@ -14,11 +14,11 @@ use tensor4all_treetn::interpolation::EvalContext;
 /// # Examples
 /// ```
 /// use tensor4all_treetci::{crossinterpolate2, DefaultProposer, TreeTciGraph, TreeTciOptions};
-/// let result = crossinterpolate2::<f64, _, _>(
+/// let result = crossinterpolate2::<f64, _, _, _>(
 ///     |batch| Ok(vec![2.0; batch.n_points()]), vec![2, 2],
 ///     TreeTciGraph::linear_chain(2)?, vec![vec![0, 0]],
 ///     TreeTciOptions { evaluation_cache_bytes: Some(1024), seed: Some(0),
-///         ..Default::default() }, None, &DefaultProposer)?;
+///         ..Default::default() }, None, &DefaultProposer, &mut ())?;
 /// assert_eq!(result.evaluation.cached_entries, 4);
 /// assert_eq!(result.evaluation.evaluated_points, 4);
 /// assert!(result.evaluation.cache_hits > 0);
@@ -79,6 +79,14 @@ pub(crate) trait BatchExecution<T: FullPivLuScalar> {
     /// route returns its caller-owned session so a readout reached from the same
     /// run can evaluate on it instead of the process-global backend.
     fn session(&mut self) -> Option<&mut dyn tenferro_tensor::Engine>;
+
+    /// The evaluation accounting of this owner so far.
+    ///
+    /// Only the memoizing owner counts; the others return the default, which is
+    /// what a run without a memo reports.
+    fn stats(&self) -> TreeTciEvaluationStats {
+        TreeTciEvaluationStats::default()
+    }
 }
 
 /// The context-free route: a batch evaluator and the process-global solve.
@@ -229,23 +237,6 @@ where
             evaluated: 0,
         })
     }
-
-    pub(crate) fn stats(&self) -> TreeTciEvaluationStats {
-        let mut stats = TreeTciEvaluationStats {
-            requested_points: self.requested,
-            evaluated_points: self.evaluated,
-            ..Default::default()
-        };
-        if let Some(cache) = &self.cache {
-            stats.cache_hits = cache.hits();
-            stats.cache_misses = cache.misses();
-            stats.cached_entries = cache.len();
-            stats.retained_bytes = cache.retained_bytes();
-            stats.dropped_inserts = cache.dropped_inserts();
-            stats.retained_byte_limit = Some(cache.retained_byte_limit());
-        }
-        stats
-    }
 }
 
 impl<T> BatchExecution<T> for CachedExecution<'_, T>
@@ -305,6 +296,23 @@ where
 
     fn session(&mut self) -> Option<&mut dyn tenferro_tensor::Engine> {
         self.source.session()
+    }
+
+    fn stats(&self) -> TreeTciEvaluationStats {
+        let mut stats = TreeTciEvaluationStats {
+            requested_points: self.requested,
+            evaluated_points: self.evaluated,
+            ..Default::default()
+        };
+        if let Some(cache) = &self.cache {
+            stats.cache_hits = cache.hits();
+            stats.cache_misses = cache.misses();
+            stats.cached_entries = cache.len();
+            stats.retained_bytes = cache.retained_bytes();
+            stats.dropped_inserts = cache.dropped_inserts();
+            stats.retained_byte_limit = Some(cache.retained_byte_limit());
+        }
+        stats
     }
 }
 

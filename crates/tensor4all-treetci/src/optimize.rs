@@ -4,7 +4,7 @@ use crate::{
     globalpivot::{find_global_pivots_erased, ScalarParts},
     update::update_edge,
     AllEdges, EdgeVisitor, GlobalIndexBatch, MultiIndex, PivotCandidateProposer, TreeTCI2,
-    TreeTciEdge,
+    TreeTciEdge, TreeTciIteration, TreeTciObserver,
 };
 use anyhow::Result;
 use rand::SeedableRng;
@@ -371,7 +371,14 @@ where
     F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     options.validate()?;
-    optimize_with_proposer(state, evaluate, options, &crate::DefaultProposer, &AllEdges)
+    optimize_with_proposer(
+        state,
+        evaluate,
+        options,
+        &crate::DefaultProposer,
+        &AllEdges,
+        &mut (),
+    )
 }
 
 /// Optimize a TreeTCI state with a caller-supplied pivot candidate proposer
@@ -396,6 +403,15 @@ where
 /// Different valid orders generally reach different approximations; the
 /// documented sequence is exactly the order returned by the visitor's
 /// [`EdgeVisitor::visit_order`] on each pass.
+///
+/// # Observing iterations
+///
+/// `observer` receives a [`TreeTciIteration`] after each completed iteration,
+/// including the last, with the bond dimension and error the result records for
+/// it and the evaluation accounting so far; pass `&mut ()` to observe nothing.
+/// An observer cannot change the run and adds no evaluation of the target
+/// function. The error is the one recorded before that iteration's global pivot
+/// injection.
 ///
 /// The evaluator may be called several times per edge update; see
 /// [`GlobalIndexBatch`](crate::GlobalIndexBatch#batch-sizes) for the batch
@@ -449,7 +465,7 @@ where
 /// let proposer = SimpleProposer::seeded(42);
 /// let options = TreeTciOptions { tolerance: 1e-10, max_iter: 3, ..Default::default() };
 /// let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } = optimize_with_proposer(
-///     &mut state, evaluate, &options, &proposer, &AllEdges,
+///     &mut state, evaluate, &options, &proposer, &AllEdges, &mut (),
 /// ).unwrap();
 ///
 /// // One entry per sweep actually run; the loop stops early once converged,
@@ -457,47 +473,66 @@ where
 /// assert_eq!(ranks, vec![2; 3]);
 /// assert_eq!(ranks.len(), errors.len());
 /// ```
-pub fn optimize_with_proposer<T, F, P, V>(
+pub fn optimize_with_proposer<T, F, P, V, O>(
     state: &mut TreeTCI2<T>,
     evaluate: F,
     options: &TreeTciOptions,
     proposer: &P,
     visitor: &V,
+    observer: &mut O,
 ) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
     F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
     V: EdgeVisitor,
+    O: TreeTciObserver,
 {
     options.validate()?;
     // The public optimizer keeps the process-global route: no caller-owned session.
     let mut evaluate = evaluate;
     let mut execution = Compatibility::new(&mut evaluate);
     with_seeded_streams(options, proposer, |streams| {
-        optimize_memoized(state, &mut execution, options, proposer, visitor, streams)
+        optimize_memoized(
+            state,
+            &mut execution,
+            options,
+            proposer,
+            visitor,
+            observer,
+            streams,
+        )
     })
 }
 
 /// The single optimization body for every frontend: one memoizing owner around the
 /// caller's execution route, then the sweep loop.
-pub(crate) fn optimize_memoized<T, P, V>(
+pub(crate) fn optimize_memoized<T, P, V, O>(
     state: &mut TreeTCI2<T>,
     execution: &mut dyn BatchExecution<T>,
     options: &TreeTciOptions,
     proposer: &P,
     visitor: &V,
+    observer: &mut O,
     streams: &mut RandomStreams<'_>,
 ) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
     P: PivotCandidateProposer,
     V: EdgeVisitor,
+    O: TreeTciObserver,
 {
     let mut cached =
         CachedExecution::new(execution, &state.local_dims, options.evaluation_cache_bytes)?;
-    let mut result =
-        optimize_with_streams(state, &mut cached, options, proposer, visitor, streams)?;
+    let mut result = optimize_with_streams(
+        state,
+        &mut cached,
+        options,
+        proposer,
+        visitor,
+        observer,
+        streams,
+    )?;
     result.evaluation = cached.stats();
     Ok(result)
 }
@@ -519,17 +554,19 @@ where
 /// [`crate::TreeTciError::IndexOutOfBounds`] for an out-of-range candidate, and
 /// [`crate::TreeTciError::Operation`] when the evaluator or the pivot search's materialization solve fails.
 /// A failing evaluator can leave a partially updated state.
-pub fn optimize_with_proposer_in<T, F, P>(
+pub fn optimize_with_proposer_in<T, F, P, O>(
     state: &mut TreeTCI2<T>,
     evaluate: F,
     options: &TreeTciOptions,
     proposer: &P,
+    observer: &mut O,
     context: &tensor4all_tensorbackend::CpuExecutionContext,
 ) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
     F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
+    O: TreeTciObserver,
 {
     options.validate()?;
     let mut evaluate = evaluate;
@@ -540,7 +577,15 @@ where
             let mut context = crate::evaluation::serial_context(session);
             let mut execution = Explicit::new(&mut context, &mut contextual);
             with_seeded_streams(options, proposer, |streams| {
-                optimize_memoized(state, &mut execution, options, proposer, &AllEdges, streams)
+                optimize_memoized(
+                    state,
+                    &mut execution,
+                    options,
+                    proposer,
+                    &AllEdges,
+                    observer,
+                    streams,
+                )
             })
         })
         .map_err(|error| crate::TreeTciError::from(anyhow::Error::new(error)))?
@@ -597,21 +642,23 @@ where
 /// let mut rng = ChaCha8Rng::seed_from_u64(3);
 /// let options = TreeTciOptions { tolerance: 1e-10, max_iter: 1, ..Default::default() };
 /// let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } = optimize_with_proposer_with_rng(
-///     &mut state, evaluate, &options, &SimpleProposer::default(), &mut rng,
+///     &mut state, evaluate, &options, &SimpleProposer::default(), &mut (), &mut rng,
 /// ).unwrap();
 /// assert_eq!(ranks.len(), errors.len());
 /// ```
-pub fn optimize_with_proposer_with_rng<T, F, P, R>(
+pub fn optimize_with_proposer_with_rng<T, F, P, R, O>(
     state: &mut TreeTCI2<T>,
     evaluate: F,
     options: &TreeTciOptions,
     proposer: &P,
+    observer: &mut O,
     rng: &mut R,
 ) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
     F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
+    O: TreeTciObserver,
     R: rand::Rng + ?Sized,
 {
     // Erase the caller's RNG type once so the run below is instantiated once
@@ -627,6 +674,7 @@ where
         options,
         proposer,
         &AllEdges,
+        observer,
         &mut streams,
     )
 }
@@ -743,18 +791,20 @@ fn validate_edge_order<T>(state: &TreeTCI2<T>, order: &[TreeTciEdge]) -> TreeTci
     Ok(())
 }
 
-pub(crate) fn optimize_with_streams<T, P, V>(
+pub(crate) fn optimize_with_streams<T, P, V, O>(
     state: &mut TreeTCI2<T>,
     execution: &mut dyn BatchExecution<T>,
     options: &TreeTciOptions,
     proposer: &P,
     visitor: &V,
+    observer: &mut O,
     streams: &mut RandomStreams<'_>,
 ) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
     P: PivotCandidateProposer,
     V: EdgeVisitor,
+    O: TreeTciObserver,
 {
     options.validate()?;
     validate_global_search_starts(options, &state.local_dims)?;
@@ -773,7 +823,7 @@ where
     // so its error estimate is stale with respect to those pivots.
     const NCHECK_HISTORY: usize = 3;
 
-    for _iter in 0..options.max_iter {
+    for iteration in 0..options.max_iter {
         for _pass in 0..INNER_EDGE_PASSES {
             let error_scale = if options.scale_tolerance && state.max_sample_value > 0.0 {
                 state.max_sample_value
@@ -809,13 +859,23 @@ where
             }
         }
 
-        ranks.push(state.max_bond_dim());
+        let max_bond_dim = state.max_bond_dim();
+        ranks.push(max_bond_dim);
         let normalized_error = if options.scale_tolerance && state.max_sample_value > 0.0 {
             state.max_bond_error() / state.max_sample_value
         } else {
             state.max_bond_error()
         };
         errors.push(normalized_error);
+
+        // The observer sees exactly what the run just recorded, before any
+        // stopping check, so the last iteration is reported too.
+        observer.iteration(&TreeTciIteration {
+            iteration,
+            max_bond_dim,
+            error: normalized_error,
+            evaluation: &execution.stats(),
+        });
 
         // Mirrors `TreeTCI.jl`'s `convergencecriterion` third disjunct
         // (branch `local-fix-convergence`, commit 06563dd): once the rank has
@@ -851,7 +911,7 @@ where
         // never be processed by a subsequent sweep, so the recorded error
         // and termination reason would not reflect it, and the unswept state
         // would not be materializable (see above).
-        if options.enable_global_pivots && _iter + 1 < options.max_iter {
+        if options.enable_global_pivots && iteration + 1 < options.max_iter {
             let error_scale = if options.scale_tolerance && state.max_sample_value > 0.0 {
                 state.max_sample_value
             } else {

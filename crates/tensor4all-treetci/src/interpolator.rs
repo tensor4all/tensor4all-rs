@@ -320,6 +320,7 @@ where
                 &options,
                 &DefaultProposer,
                 &AllEdges,
+                &mut (),
                 streams,
             )
         })

@@ -98,6 +98,7 @@ fn quantics_grid_polynomial_matches_all_points_on_branching_tree() {
         },
         Some(1),
         &SimpleProposer::seeded(0),
+        &mut (),
     )
     .unwrap();
 
@@ -161,6 +162,7 @@ fn quantics_grid_batch_evaluator_matches_point_evaluator() {
         options.clone(),
         Some(1),
         &SimpleProposer::seeded(0),
+        &mut (),
     )
     .unwrap();
 
@@ -188,6 +190,7 @@ fn quantics_grid_batch_evaluator_matches_point_evaluator() {
         options,
         Some(1),
         &SimpleProposer::seeded(0),
+        &mut (),
     )
     .unwrap();
 

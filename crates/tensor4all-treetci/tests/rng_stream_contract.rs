@@ -46,6 +46,7 @@ fn a_run_without_a_global_search_leaves_the_supplied_stream_untouched() {
             evaluate,
             &options,
             &DefaultProposer,
+            &mut (),
             &mut stream,
         )
         .unwrap();
@@ -74,6 +75,7 @@ fn a_run_with_a_global_search_consumes_the_supplied_stream() {
         evaluate,
         &options,
         &SimpleProposer::default(),
+        &mut (),
         &mut stream,
     )
     .unwrap();
@@ -104,6 +106,7 @@ fn the_low_level_entry_point_accepts_an_erased_stream() {
             evaluate,
             &options,
             &SimpleProposer::default(),
+            &mut (),
             erased,
         )
         .unwrap();
@@ -124,6 +127,7 @@ fn randomized_candidates_consume_the_stream_without_global_search() {
         evaluate,
         &options,
         &SimpleProposer::seeded(999),
+        &mut (),
         &mut stream,
     )
     .unwrap();

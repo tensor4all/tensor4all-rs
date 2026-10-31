@@ -42,8 +42,8 @@
 //! };
 //!
 //! let options = TreeTciOptions { tolerance: 1e-10, max_iter: 5, ..Default::default() };
-//! let result = crossinterpolate2::<f64, _, _>(
-//!     evaluate, vec![2, 2], graph, vec![], options, None, &DefaultProposer,
+//! let result = crossinterpolate2::<f64, _, _, _>(
+//!     evaluate, vec![2, 2], graph, vec![], options, None, &DefaultProposer, &mut (),
 //! ).unwrap();
 //!
 //! assert_eq!(result.termination, tensor4all_treetci::TreeTciTermination::Converged);
@@ -88,6 +88,7 @@ mod interpolator;
 pub mod key;
 /// TreeTN materialization from converged TreeTCI pivots.
 pub mod materialize;
+mod observer;
 /// Optimization loop and options for TreeTCI.
 pub mod optimize;
 /// Pivot candidate generation strategies.
@@ -115,6 +116,7 @@ pub use graph::{TreeTciEdge, TreeTciGraph};
 pub use interpolator::TreeTciInterpolator;
 pub use key::SubtreeKey;
 pub use materialize::{to_treetn, to_treetn_in};
+pub use observer::{TreeTciIteration, TreeTciObserver};
 pub use optimize::{
     optimize_default, optimize_with_proposer, optimize_with_proposer_in,
     optimize_with_proposer_with_rng, TreeTciOptimizationResult, TreeTciOptions, TreeTciTermination,

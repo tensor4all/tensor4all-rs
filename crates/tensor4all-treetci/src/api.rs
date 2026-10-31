@@ -4,7 +4,8 @@ use crate::evaluation::{BatchExecution, CachedExecution, Compatibility, Explicit
 use crate::optimize::{with_seeded_streams, RandomStreams};
 use crate::{
     materialize::to_treetn_chunked, optimize::optimize_with_streams, AllEdges, GlobalIndexBatch,
-    MultiIndex, PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciOptions, TreeTciTermination,
+    MultiIndex, PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciObserver, TreeTciOptions,
+    TreeTciTermination,
 };
 use anyhow::Result;
 use tensor4all_core::CommonScalar;
@@ -25,10 +26,10 @@ use tensor4all_treetn::TreeTN;
 ///     crossinterpolate2, DefaultProposer, TreeTciGraph, TreeTciOptions, TreeTciTermination,
 /// };
 ///
-/// let result = crossinterpolate2::<f64, _, _>(
+/// let result = crossinterpolate2::<f64, _, _, _>(
 ///     |batch| Ok(vec![2.0; batch.n_points()]), vec![2, 2],
 ///     TreeTciGraph::linear_chain(2)?, vec![vec![0, 0]],
-///     TreeTciOptions { seed: Some(0), ..Default::default() }, None, &DefaultProposer,
+///     TreeTciOptions { seed: Some(0), ..Default::default() }, None, &DefaultProposer, &mut (),
 /// )?;
 /// assert_eq!(result.termination, TreeTciTermination::Converged);
 /// let dense = result.treetn.contract_to_tensor()?;
@@ -100,14 +101,14 @@ pub struct TreeTciRunResult {
 /// };
 ///
 /// let proposer = DefaultProposer;
-/// let result = crossinterpolate2::<f64, _, _>(
+/// let result = crossinterpolate2::<f64, _, _, _>(
 ///     evaluate,
 ///     local_dims,
 ///     graph,
 ///     vec![],
 ///     options,
 ///     None,
-///     &proposer,
+///     &proposer, &mut (),
 /// ).unwrap();
 ///
 /// // The identity on a 2x2 space has rank 2
@@ -124,7 +125,7 @@ pub struct TreeTciRunResult {
 /// callback failures, and materialization/backend failures return
 /// [`crate::TreeTciError::Operation`] with the underlying diagnostic.
 ///
-pub fn crossinterpolate2<T, F, P>(
+pub fn crossinterpolate2<T, F, P, O>(
     evaluate: F,
     local_dims: Vec<usize>,
     graph: TreeTciGraph,
@@ -132,6 +133,7 @@ pub fn crossinterpolate2<T, F, P>(
     options: TreeTciOptions,
     center_site: Option<usize>,
     proposer: &P,
+    observer: &mut O,
 ) -> TreeTciResult<TreeTciRunResult>
 where
     T: FullPivLuScalar
@@ -141,6 +143,7 @@ where
         + crate::globalpivot::ScalarParts,
     F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
+    O: TreeTciObserver,
 {
     options.validate()?;
     let mut evaluate = evaluate;
@@ -154,6 +157,7 @@ where
             &options,
             center_site,
             proposer,
+            observer,
             streams,
         )
     })
@@ -193,16 +197,16 @@ where
 /// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-/// let result = crossinterpolate2_in::<f64, _, _>(
+/// let result = crossinterpolate2_in::<f64, _, _, _>(
 ///     |batch| Ok(vec![2.0; batch.n_points()]), vec![2, 2],
 ///     TreeTciGraph::linear_chain(2)?, vec![vec![0, 0]],
-///     TreeTciOptions::default(), None, &DefaultProposer, &context,
+///     TreeTciOptions::default(), None, &DefaultProposer, &mut (), &context,
 /// )?;
 /// assert_eq!(result.ranks, vec![1; 3]);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[allow(clippy::too_many_arguments)]
-pub fn crossinterpolate2_in<T, F, P>(
+pub fn crossinterpolate2_in<T, F, P, O>(
     evaluate: F,
     local_dims: Vec<usize>,
     graph: TreeTciGraph,
@@ -210,6 +214,7 @@ pub fn crossinterpolate2_in<T, F, P>(
     options: TreeTciOptions,
     center_site: Option<usize>,
     proposer: &P,
+    observer: &mut O,
     context: &tensor4all_tensorbackend::CpuExecutionContext,
 ) -> TreeTciResult<TreeTciRunResult>
 where
@@ -220,6 +225,7 @@ where
         + crate::globalpivot::ScalarParts,
     F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
+    O: TreeTciObserver,
 {
     options.validate()?;
     let mut evaluate = evaluate;
@@ -238,6 +244,7 @@ where
                     &options,
                     center_site,
                     proposer,
+                    observer,
                     streams,
                 )
             })
@@ -270,16 +277,16 @@ where
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let mut rng = ChaCha8Rng::seed_from_u64(0);
-/// let result = crossinterpolate2_with_rng_in::<f64, _, _, _>(
+/// let result = crossinterpolate2_with_rng_in::<f64, _, _, _, _>(
 ///     |batch| Ok(vec![2.0; batch.n_points()]), vec![2, 2],
 ///     TreeTciGraph::linear_chain(2)?, vec![vec![0, 0]],
-///     TreeTciOptions::default(), None, &DefaultProposer, &mut rng, &context,
+///     TreeTciOptions::default(), None, &DefaultProposer, &mut (), &mut rng, &context,
 /// )?;
 /// assert_eq!(result.ranks, vec![1; 3]);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[allow(clippy::too_many_arguments)]
-pub fn crossinterpolate2_with_rng_in<T, F, P, R>(
+pub fn crossinterpolate2_with_rng_in<T, F, P, R, O>(
     evaluate: F,
     local_dims: Vec<usize>,
     graph: TreeTciGraph,
@@ -287,6 +294,7 @@ pub fn crossinterpolate2_with_rng_in<T, F, P, R>(
     options: TreeTciOptions,
     center_site: Option<usize>,
     proposer: &P,
+    observer: &mut O,
     rng: &mut R,
     context: &tensor4all_tensorbackend::CpuExecutionContext,
 ) -> TreeTciResult<TreeTciRunResult>
@@ -298,6 +306,7 @@ where
         + crate::globalpivot::ScalarParts,
     F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
+    O: TreeTciObserver,
     R: rand::Rng + ?Sized,
 {
     let mut stream: &mut R = rng;
@@ -317,6 +326,7 @@ where
                 &options,
                 center_site,
                 proposer,
+                observer,
                 &mut streams,
             )
         })
@@ -351,10 +361,10 @@ where
 /// };
 ///
 /// let mut rng = ChaCha8Rng::seed_from_u64(0);
-/// let result = crossinterpolate2_with_rng::<f64, _, _, _>(
+/// let result = crossinterpolate2_with_rng::<f64, _, _, _, _>(
 ///     |batch| Ok(vec![2.0; batch.n_points()]), vec![2, 2],
 ///     TreeTciGraph::linear_chain(2)?, vec![vec![0, 0]],
-///     TreeTciOptions::default(), None, &DefaultProposer, &mut rng,
+///     TreeTciOptions::default(), None, &DefaultProposer, &mut (), &mut rng,
 /// )?;
 /// assert_eq!(result.termination, TreeTciTermination::Converged);
 /// assert_eq!(result.ranks, vec![1; 3]);
@@ -362,7 +372,7 @@ where
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[allow(clippy::too_many_arguments)]
-pub fn crossinterpolate2_with_rng<T, F, P, R>(
+pub fn crossinterpolate2_with_rng<T, F, P, R, O>(
     evaluate: F,
     local_dims: Vec<usize>,
     graph: TreeTciGraph,
@@ -370,6 +380,7 @@ pub fn crossinterpolate2_with_rng<T, F, P, R>(
     options: TreeTciOptions,
     center_site: Option<usize>,
     proposer: &P,
+    observer: &mut O,
     rng: &mut R,
 ) -> TreeTciResult<TreeTciRunResult>
 where
@@ -380,6 +391,7 @@ where
         + crate::globalpivot::ScalarParts,
     F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
+    O: TreeTciObserver,
     R: rand::Rng + ?Sized,
 {
     let mut stream: &mut R = rng;
@@ -394,6 +406,7 @@ where
         &options,
         center_site,
         proposer,
+        observer,
         &mut streams,
     )
 }
@@ -401,7 +414,7 @@ where
 // INVARIANT: This shared run boundary preserves the eight explicit parameters
 // of the public caller-stream entry point without bundling unrelated options.
 #[allow(clippy::too_many_arguments)]
-fn crossinterpolate2_with_streams<T, P>(
+fn crossinterpolate2_with_streams<T, P, O>(
     execution: &mut dyn BatchExecution<T>,
     local_dims: Vec<usize>,
     graph: TreeTciGraph,
@@ -409,6 +422,7 @@ fn crossinterpolate2_with_streams<T, P>(
     options: &TreeTciOptions,
     center_site: Option<usize>,
     proposer: &P,
+    observer: &mut O,
     streams: &mut RandomStreams<'_>,
 ) -> TreeTciResult<TreeTciRunResult>
 where
@@ -418,6 +432,7 @@ where
         + tensor4all_core::TensorElement
         + crate::globalpivot::ScalarParts,
     P: PivotCandidateProposer,
+    O: TreeTciObserver,
 {
     options.validate()?;
     if !(local_dims.len() == graph.n_sites()) {
@@ -475,6 +490,7 @@ where
         options,
         proposer,
         &AllEdges,
+        observer,
         streams,
     )?;
     let treetn = to_treetn_chunked(&tci, &mut evaluator, center_site, EVALUATION_CHUNK_POINTS)?;

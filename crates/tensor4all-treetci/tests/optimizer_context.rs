@@ -52,12 +52,22 @@ fn run(context: Option<&CpuExecutionContext>) -> TestResult<(Vec<usize>, Vec<f64
     let mut state = state()?;
     let options = options();
     let result = match context {
-        Some(context) => {
-            optimize_with_proposer_in(&mut state, evaluate, &options, &DefaultProposer, context)?
-        }
-        None => {
-            optimize_with_proposer(&mut state, evaluate, &options, &DefaultProposer, &AllEdges)?
-        }
+        Some(context) => optimize_with_proposer_in(
+            &mut state,
+            evaluate,
+            &options,
+            &DefaultProposer,
+            &mut (),
+            context,
+        )?,
+        None => optimize_with_proposer(
+            &mut state,
+            evaluate,
+            &options,
+            &DefaultProposer,
+            &AllEdges,
+            &mut (),
+        )?,
     };
     Ok((result.ranks, result.errors))
 }

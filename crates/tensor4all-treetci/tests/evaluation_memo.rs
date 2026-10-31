@@ -49,7 +49,7 @@ where
                     })
                     .collect())
             };
-            let result = crossinterpolate2::<T, _, _>(
+            let result = crossinterpolate2::<T, _, _, _>(
                 evaluate,
                 dims.clone(),
                 TreeTciGraph::new(dims.len(), &edges).unwrap(),
@@ -62,6 +62,7 @@ where
                 },
                 None,
                 &DefaultProposer,
+                &mut (),
             )
             .unwrap();
             assert_eq!(result.evaluation.evaluated_points, evaluated);
@@ -210,13 +211,21 @@ fn continued_optimization_and_caller_rng_each_own_a_fresh_cache() {
             Ok(vec![2.0; batch.n_points()])
         };
         let result = if seeded {
-            optimize_with_proposer(&mut state, evaluate, &options, &DefaultProposer, &AllEdges)
+            optimize_with_proposer(
+                &mut state,
+                evaluate,
+                &options,
+                &DefaultProposer,
+                &AllEdges,
+                &mut (),
+            )
         } else {
             optimize_with_proposer_with_rng(
                 &mut state,
                 evaluate,
                 &options,
                 &DefaultProposer,
+                &mut (),
                 &mut rng,
             )
         }
@@ -233,7 +242,7 @@ fn memo_accepts_a_borrowed_mutable_tree_evaluator() {
     use tensor4all_core::ColMajorArrayRef;
     use tensor4all_treetn::TreeTNCachedEvaluator;
     let graph = TreeTciGraph::linear_chain(2).unwrap();
-    let source = crossinterpolate2::<f64, _, _>(
+    let source = crossinterpolate2::<f64, _, _, _>(
         |batch| {
             Ok(batch
                 .data()
@@ -252,6 +261,7 @@ fn memo_accepts_a_borrowed_mutable_tree_evaluator() {
         },
         None,
         &DefaultProposer,
+        &mut (),
     )
     .unwrap()
     .treetn;
@@ -266,7 +276,7 @@ fn memo_accepts_a_borrowed_mutable_tree_evaluator() {
         .collect::<Vec<_>>();
     let mut oracle =
         TreeTNCachedEvaluator::<usize>::new(&source, &indices, Default::default()).unwrap();
-    let result = crossinterpolate2::<f64, _, _>(
+    let result = crossinterpolate2::<f64, _, _, _>(
         |batch: GlobalIndexBatch<'_>| {
             let shape = [batch.n_sites(), batch.n_points()];
             Ok(oracle
@@ -285,6 +295,7 @@ fn memo_accepts_a_borrowed_mutable_tree_evaluator() {
         },
         None,
         &DefaultProposer,
+        &mut (),
     )
     .unwrap();
     assert_eq!(result.evaluation.evaluated_points, 4);

@@ -56,6 +56,7 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
             &options,
             &InitialCrossOnly,
             &crate::AllEdges,
+            &mut (),
         )
         .unwrap();
         let (reason, iterations) = if enable_global_pivots {
@@ -142,7 +143,7 @@ fn optimize_rejects_invalid_options_before_callback() {
 #[test]
 fn api_crossinterpolate2_rejects_invalid_options_before_callback() {
     let calls = std::cell::Cell::new(0);
-    let error = crate::crossinterpolate2::<f64, _, _>(
+    let error = crate::crossinterpolate2::<f64, _, _, _>(
         |_| {
             calls.set(calls.get() + 1);
             Ok(vec![1.0])
@@ -156,6 +157,7 @@ fn api_crossinterpolate2_rejects_invalid_options_before_callback() {
         },
         None,
         &crate::DefaultProposer,
+        &mut (),
     )
     .unwrap_err();
     assert!(matches!(
@@ -505,7 +507,7 @@ fn capped_sparse_chain_with_global_pivots_stops_on_swept_state() {
     );
 
     // The public entry point from the issue report succeeds as well.
-    let crate::TreeTciRunResult { treetn, ranks, .. } = crate::crossinterpolate2::<f64, _, _>(
+    let crate::TreeTciRunResult { treetn, ranks, .. } = crate::crossinterpolate2::<f64, _, _, _>(
         evaluate,
         vec![4; N_SITES],
         TreeTciGraph::linear_chain(N_SITES).unwrap(),
@@ -513,6 +515,7 @@ fn capped_sparse_chain_with_global_pivots_stops_on_swept_state() {
         options,
         None,
         &crate::DefaultProposer,
+        &mut (),
     )
     .unwrap();
     assert!(ranks.iter().all(|&rank| rank <= 8));
@@ -595,8 +598,15 @@ fn optimizer_threads_the_caller_stream_through_each_edge_pass() {
     let evaluate = |batch: GlobalIndexBatch<'_>| Ok(vec![1.0; batch.n_points()]);
     let mut rng = ChaCha8Rng::seed_from_u64(73);
     let mut reference = rng.clone();
-    super::optimize_with_proposer_with_rng(&mut state, evaluate, &options, &proposer, &mut rng)
-        .unwrap();
+    super::optimize_with_proposer_with_rng(
+        &mut state,
+        evaluate,
+        &options,
+        &proposer,
+        &mut (),
+        &mut rng,
+    )
+    .unwrap();
     assert_eq!(
         *proposer.0.borrow(),
         (0..4).map(|_| reference.next_u64()).collect::<Vec<_>>()
@@ -715,6 +725,7 @@ fn explicit_all_edges_matches_the_default_optimizer() {
         &TreeTciOptions::default(),
         &DefaultProposer,
         &AllEdges,
+        &mut (),
     )
     .unwrap();
 
@@ -748,6 +759,7 @@ fn custom_edge_order_is_visited_and_converges() {
         &branching_options(),
         &proposer,
         &FixedOrder(custom.clone()),
+        &mut (),
     )
     .unwrap();
 
@@ -820,6 +832,7 @@ fn invalid_edge_order_is_rejected_before_mutation() {
             &branching_options(),
             &DefaultProposer,
             &FixedOrder(order),
+            &mut (),
         )
         .unwrap_err();
 

@@ -32,7 +32,7 @@ fn main() -> Result<()> {
                     vec![2; n_sites]
                 };
                 let started = Instant::now();
-                let result = crossinterpolate2::<f64, _, _>(
+                let result = crossinterpolate2::<f64, _, _, _>(
                     |batch: GlobalIndexBatch<'_>| {
                         Ok(batch
                             .data()
@@ -66,6 +66,7 @@ fn main() -> Result<()> {
                     },
                     None,
                     &DefaultProposer,
+                    &mut (),
                 )?;
                 let seconds = started.elapsed().as_secs_f64();
                 let stats = result.evaluation;
