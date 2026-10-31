@@ -148,6 +148,7 @@ fn assert_truncated_proposer_converges(tree: &JunctionTree) {
         &options,
         &TruncatedDefaultProposer::seeded(3),
         &AllEdges,
+        &mut (),
     )
     .unwrap();
 

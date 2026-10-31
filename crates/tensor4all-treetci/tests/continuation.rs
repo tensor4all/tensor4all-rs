@@ -87,6 +87,7 @@ macro_rules! continued_schedule {
                     evaluate,
                     &options,
                     &DefaultProposer,
+                    &mut (),
                     &mut rng,
                 )
                 .unwrap();
@@ -118,6 +119,7 @@ macro_rules! continued_schedule {
                     evaluate,
                     &options,
                     &DefaultProposer,
+                    &mut (),
                     &mut rng,
                 )
                 .unwrap();
@@ -139,6 +141,7 @@ macro_rules! continued_schedule {
                     evaluate,
                     &options,
                     &DefaultProposer,
+                    &mut (),
                     &mut fresh_rng,
                 )
                 .unwrap();

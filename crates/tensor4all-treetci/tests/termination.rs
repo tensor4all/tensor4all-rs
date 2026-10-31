@@ -76,6 +76,7 @@ where
             options,
             None,
             &DefaultProposer,
+            &mut (),
         )
         .unwrap(),
         EntryPoint::CrossInterpolateWithRng => crossinterpolate2_with_rng(
@@ -86,6 +87,7 @@ where
             options,
             None,
             &DefaultProposer,
+            &mut (),
             &mut rng,
         )
         .unwrap(),
@@ -101,12 +103,14 @@ where
                     &options,
                     &DefaultProposer,
                     &AllEdges,
+                    &mut (),
                 ),
                 EntryPoint::ProposerWithRng => optimize_with_proposer_with_rng(
                     &mut state,
                     evaluate,
                     &options,
                     &DefaultProposer,
+                    &mut (),
                     &mut rng,
                 ),
                 _ => unreachable!("high-level entries handled above"),
@@ -228,6 +232,7 @@ fn iteration_limit_on_a_function_requiring_more_sweeps() {
             },
             None,
             &DefaultProposer,
+            &mut (),
         )
         .unwrap();
         let expected = dense_reference(&result, N_SITES, values.clone());

@@ -50,7 +50,7 @@ fn oracle(
 fn run_in_context(context: &CpuExecutionContext) -> TreeTciRunResult {
     let sites = 6;
     let graph = TreeTciGraph::linear_chain(sites).expect("graph");
-    let result = crossinterpolate2_in::<f64, _, _>(
+    let result = crossinterpolate2_in::<f64, _, _, _>(
         oracle(sites),
         vec![3; sites],
         graph,
@@ -58,6 +58,7 @@ fn run_in_context(context: &CpuExecutionContext) -> TreeTciRunResult {
         options(),
         None,
         &DefaultProposer,
+        &mut (),
         context,
     )
     .expect("context run");
@@ -98,7 +99,7 @@ fn a_run_completes_with_the_process_global_backend_held() {
     let warm = dense_maxabs(&run_in_context(&context));
     assert!(warm > 0.0);
 
-    let reference = crossinterpolate2::<f64, _, _>(
+    let reference = crossinterpolate2::<f64, _, _, _>(
         oracle(6),
         vec![3; 6],
         TreeTciGraph::linear_chain(6).expect("graph"),
@@ -106,6 +107,7 @@ fn a_run_completes_with_the_process_global_backend_held() {
         options(),
         None,
         &DefaultProposer,
+        &mut (),
     )
     .expect("plain run");
 

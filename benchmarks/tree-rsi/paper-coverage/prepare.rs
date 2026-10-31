@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             (0..n).map(|i| ((k >> (n - i - 1)) & 1) as usize).collect()
         })
         .collect();
-    let (tree, ranks, errors) = crossinterpolate2::<f64, _, _>(
+    let (tree, ranks, errors) = crossinterpolate2::<f64, _, _, _>(
         eval,
         vec![2; n],
         TreeTciGraph::linear_chain(n)?,
@@ -70,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         },
         Some(n - 1),
-        &DefaultProposer,
+        &DefaultProposer, &mut (),
     )?;
     let output = Path::new(&args[2]);
     let mut data = BufWriter::new(fs::File::create(output)?);

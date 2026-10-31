@@ -208,12 +208,22 @@ where
     // Both session-bound parts of the run carry the context: the optimizer (the search's materialization
     // solves) and the final materialization below. The caller's function and the readout are unchanged.
     let result = match context {
-        Some(context) => {
-            optimize_with_proposer_in(&mut tci, &evaluate, &tree_opts, &DefaultProposer, context)?
-        }
-        None => {
-            optimize_with_proposer(&mut tci, &evaluate, &tree_opts, &DefaultProposer, &AllEdges)?
-        }
+        Some(context) => optimize_with_proposer_in(
+            &mut tci,
+            &evaluate,
+            &tree_opts,
+            &DefaultProposer,
+            &mut (),
+            context,
+        )?,
+        None => optimize_with_proposer(
+            &mut tci,
+            &evaluate,
+            &tree_opts,
+            &DefaultProposer,
+            &AllEdges,
+            &mut (),
+        )?,
     };
     let treetn = match context {
         Some(context) => to_treetn_in(&tci, &evaluate, Some(0), context)?,

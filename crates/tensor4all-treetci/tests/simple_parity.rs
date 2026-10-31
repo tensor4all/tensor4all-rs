@@ -66,6 +66,7 @@ fn simple_tree_parity_matches_reference_points() {
         },
         Some(0),
         &SimpleProposer::seeded(0),
+        &mut (),
     )
     .unwrap();
 
@@ -128,6 +129,7 @@ fn simple_tree_product_function_is_exact_on_branching_tree() {
         },
         Some(0),
         &DefaultProposer,
+        &mut (),
     )
     .unwrap();
 
@@ -193,6 +195,7 @@ fn simple_tree_complex_product_function_is_exact_on_branching_tree() {
         },
         Some(0),
         &DefaultProposer,
+        &mut (),
     )
     .unwrap();
 
@@ -266,6 +269,7 @@ fn simple_tree_complex_product_function_is_exact_on_two_site_tree() {
         },
         Some(0),
         &DefaultProposer,
+        &mut (),
     )
     .unwrap();
 

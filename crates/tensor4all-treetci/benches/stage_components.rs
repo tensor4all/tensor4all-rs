@@ -195,7 +195,7 @@ fn main() {
                 ..TreeTciOptions::default()
             };
             let started = Instant::now();
-            let result = crossinterpolate2::<f64, _, _>(
+            let result = crossinterpolate2::<f64, _, _, _>(
                 counting,
                 vec![local_dim; sites],
                 graph.clone(),
@@ -203,6 +203,7 @@ fn main() {
                 options,
                 None,
                 &DefaultProposer,
+                &mut (),
             )
             .expect("run");
             let elapsed = started.elapsed();
