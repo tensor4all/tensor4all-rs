@@ -1,6 +1,7 @@
 use super::*;
 use std::sync::Arc;
 
+use crate::options::TruncationOptions;
 use num_complex::Complex64;
 use tensor4all_core::{
     DynIndex, FactorizeResult, IdxTensor, TensorConstructionLike, TensorContractionLike,
@@ -408,4 +409,147 @@ fn swap_on_edge_between_two_site_free_nodes_keeps_scalar() {
         tree.to_dense().unwrap().to_vec::<f64>().unwrap(),
         vec![32.0]
     );
+}
+
+// ------------------------------------------------------------------------
+// Truncation on a caller-owned context
+// ------------------------------------------------------------------------
+
+/// A 4-site chain (site dimension 2, bonds of dimension 4) with fixed
+/// pseudo-random entries; the cuts after the first and before the last site
+/// have rank at most 2, so a bond cap of 3 changes the outer bonds.
+fn random_chain(context: Option<&ExecutionContext>) -> TreeTN<IdxTensor, usize> {
+    let mut state = 12_345u64;
+    let mut next = move |len: usize| -> Vec<f64> {
+        (0..len)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                (state >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+            })
+            .collect()
+    };
+    let sites: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
+    let bonds: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(4)).collect();
+    let tensors = vec![
+        sample_tensor(
+            vec![sites[0].clone(), bonds[0].clone()],
+            &next(8),
+            None,
+            context,
+        ),
+        sample_tensor(
+            vec![bonds[0].clone(), sites[1].clone(), bonds[1].clone()],
+            &next(32),
+            None,
+            context,
+        ),
+        sample_tensor(
+            vec![bonds[1].clone(), sites[2].clone(), bonds[2].clone()],
+            &next(32),
+            None,
+            context,
+        ),
+        sample_tensor(
+            vec![bonds[2].clone(), sites[3].clone()],
+            &next(8),
+            None,
+            context,
+        ),
+    ];
+    TreeTN::from_tensors(tensors, vec![0, 1, 2, 3]).unwrap()
+}
+
+fn dense_values(tree: &TreeTN<IdxTensor, usize>) -> Vec<f64> {
+    tree.to_dense().unwrap().to_vec::<f64>().unwrap()
+}
+
+fn max_abs_diff(a: &[f64], b: &[f64]) -> f64 {
+    assert_eq!(a.len(), b.len());
+    a.iter().zip(b).fold(0.0, |m, (x, y)| m.max((x - y).abs()))
+}
+
+#[test]
+fn truncate_in_matches_truncate() {
+    let context = cpu_context();
+    let options = || TruncationOptions::default().with_max_bond_dim(3);
+    let plain = random_chain(None).truncate([1], options()).unwrap();
+    let scoped = random_chain(Some(&context))
+        .truncate_in([1], options(), &context)
+        .unwrap();
+    scoped.verify_internal_consistency().unwrap();
+    assert_in_context(&scoped, &context);
+    assert_eq!(scoped.link_dims(), plain.link_dims());
+    assert!(
+        scoped.link_dims().iter().all(|&d| d <= 3),
+        "{:?}",
+        scoped.link_dims()
+    );
+    assert_eq!(
+        scoped
+            .canonical_region()
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
+    let (a, b) = (dense_values(&plain), dense_values(&scoped));
+    let scale = a.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+    assert!(max_abs_diff(&a, &b) <= 1e-12 * scale);
+}
+
+#[test]
+fn truncate_mut_in_is_truncate_in_bitwise() {
+    let context = cpu_context();
+    let options = || TruncationOptions::default().with_max_bond_dim(3);
+    let by_value = random_chain(Some(&context))
+        .truncate_in([2], options(), &context)
+        .unwrap();
+    let mut in_place = random_chain(Some(&context));
+    in_place.truncate_mut_in([2], options(), &context).unwrap();
+    assert_in_context(&in_place, &context);
+    assert_eq!(in_place.link_dims(), by_value.link_dims());
+    assert_eq!(dense_values(&in_place), dense_values(&by_value));
+}
+
+/// The numerics run on the context's own two workers, not the process default.
+#[test]
+fn truncate_in_runs_on_the_context_it_is_given() {
+    let cpu = Arc::new(CpuExecutionContext::from_backend(
+        CpuBackend::with_threads(2).unwrap(),
+    ));
+    assert_eq!(cpu.with_backend(|backend| backend.num_threads()), 2);
+    let context = ExecutionContext::Cpu(Arc::clone(&cpu));
+    let plain = random_chain(None)
+        .truncate([0], TruncationOptions::default().with_max_bond_dim(3))
+        .unwrap();
+    let scoped = random_chain(Some(&context))
+        .truncate_in(
+            [0],
+            TruncationOptions::default().with_max_bond_dim(3),
+            &context,
+        )
+        .unwrap();
+    assert_in_context(&scoped, &context);
+    assert_eq!(scoped.link_dims(), plain.link_dims());
+    let (a, b) = (dense_values(&plain), dense_values(&scoped));
+    let scale = a.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+    assert!(max_abs_diff(&a, &b) <= 1e-12 * scale);
+}
+
+#[test]
+fn truncate_in_rejects_invalid_options_and_multi_node_centers() {
+    let context = cpu_context();
+    let zero = TruncationOptions::default().with_max_bond_dim(0);
+    assert!(random_chain(Some(&context))
+        .truncate_in([1], zero, &context)
+        .is_err());
+    assert!(random_chain(Some(&context))
+        .truncate_in(
+            [1, 2],
+            TruncationOptions::default().with_max_bond_dim(3),
+            &context
+        )
+        .is_err());
 }
