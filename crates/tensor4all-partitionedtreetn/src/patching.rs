@@ -10,7 +10,7 @@
 //! module does not implement adaptive interpolation or copy TCIAlgorithms.jl
 //! code.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -439,26 +439,162 @@ pub fn contract_adaptive<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
+    contract_adaptive_with_selection(
+        left,
+        right,
+        center,
+        contract_options,
+        patching_options,
+        None,
+    )
+}
+
+/// Contract two partitions and adaptively truncate the output, forming only
+/// the outputs whose projector is in `wanted`.
+///
+/// This is [`contract_adaptive`] restricted to a selection, as
+/// [`PartitionedTreeTN::contract_selected`] restricts
+/// [`PartitionedTreeTN::contract`]. A patch pair whose output projector is not
+/// in `wanted` is skipped and never contracted. A selected output group is
+/// split as in [`contract_adaptive`], so each returned patch has a wanted
+/// projector or, after a split, a refinement of one
+/// ([`Projector::is_subset_of`] a wanted key).
+///
+/// # Budget rule
+///
+/// The adaptive truncation budget is taken over the selected output only.
+/// Under [`BudgetAllocation::Volume`], `||F||²` and the total volume in
+/// `cutoff * ||F||² * volume_p / total_volume` are the totals of the selected
+/// patches. A wanted block can therefore be truncated, or dropped, differently
+/// from the same block in a [`contract_adaptive`] call over all outputs, and
+/// differently from a call that selects it together with other blocks.
+/// [`BudgetAllocation::Norm`] uses a per-patch relative policy and has no
+/// totals, so its budgets do not depend on the selection.
+///
+/// # Arguments
+///
+/// * `left` - First validated partition.
+/// * `right` - Second validated partition.
+/// * `center` - Existing node used by contraction and adaptive truncation.
+/// * `contract_options` - Non-dense TreeTN contraction method and rank policy.
+/// * `patching_options` - Output discarded-weight budget and its allocation,
+///   bond cap, and split options.
+/// * `wanted` - Exact output projector keys, compared by equality with the
+///   pre-split output key of each pair. Duplicates are ignored. A key that no
+///   pair produces has no output; an empty slice returns an empty partition.
+///
+/// # Returns
+///
+/// A new partition containing the retained, truncated patches of the selected
+/// outputs. The whole-network error is best effort and is not bounded by
+/// `patching_options.cutoff`.
+///
+/// # Errors
+///
+/// Returns the errors of [`contract_adaptive`]:
+/// [`PartitionedTreeTNError::InvalidOptions`] for invalid contraction or
+/// patching options or a forbidden contraction method,
+/// [`PartitionedTreeTNError::TopologyMismatch`] or
+/// [`PartitionedTreeTNError::SiteIndexMismatch`] for incompatible patches,
+/// [`PartitionedTreeTNError::DTypeMismatch`] for mixed dtypes,
+/// [`PartitionedTreeTNError::InvalidCenter`] when `center` is absent,
+/// [`PartitionedTreeTNError::OverlappingProjectors`] when output patches
+/// overlap, and [`PartitionedTreeTNError::TreeTN`],
+/// [`PartitionedTreeTNError::VolumeOverflow`], or
+/// [`PartitionedTreeTNError::NonFiniteAdaptiveValue`] from contraction or
+/// output truncation. The operand checks run even when no pair is selected.
+/// Neither input is mutated.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, IdxTensor};
+/// use tensor4all_partitionedtreetn::{
+///     contract_adaptive_selected, PatchingOptions, PartitionedTreeTN, Projector,
+///     SubDomainTreeTN,
+/// };
+/// use tensor4all_treetn::{contraction::ContractionOptions, TreeTN};
+///
+/// // Row sums of the column-major matrix [[1, 3], [2, 4]] over (x, k).
+/// let x = DynIndex::new_dyn(2);
+/// let k = DynIndex::new_dyn(2);
+/// let matrix = TreeTN::from_tensors(
+///     vec![IdxTensor::from_dense(vec![x.clone(), k.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])?],
+///     vec![0usize],
+/// )?;
+/// let rows = PartitionedTreeTN::from_subdomains(vec![
+///     SubDomainTreeTN::new(matrix.clone(), Projector::from_pairs([(x.clone(), 0)])?)?,
+///     SubDomainTreeTN::new(matrix, Projector::from_pairs([(x.clone(), 1)])?)?,
+/// ])?;
+/// let ones = PartitionedTreeTN::from_subdomain(SubDomainTreeTN::from_treetn(
+///     TreeTN::from_tensors(vec![IdxTensor::from_dense(vec![k], vec![1.0_f64, 1.0])?], vec![0usize])?,
+/// )?)?;
+///
+/// let row0 = Projector::from_pairs([(x, 0)])?;
+/// let result = contract_adaptive_selected(
+///     &rows,
+///     &ones,
+///     &0,
+///     &ContractionOptions::default(),
+///     &PatchingOptions {
+///         cutoff: 0.0,
+///         ..PatchingOptions::default()
+///     },
+///     &[row0.clone()],
+/// )?;
+/// assert_eq!(result.len(), 1);
+/// let patch = result.get(&row0).ok_or("missing row 0")?;
+/// assert_eq!(patch.data().to_dense()?.to_vec::<f64>()?, vec![4.0, 0.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn contract_adaptive_selected<V>(
+    left: &PartitionedTreeTN<V>,
+    right: &PartitionedTreeTN<V>,
+    center: &V,
+    contract_options: &ContractionOptions,
+    patching_options: &PatchingOptions,
+    wanted: &[Projector],
+) -> Result<PartitionedTreeTN<V>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let wanted: HashSet<Projector> = wanted.iter().cloned().collect();
+    contract_adaptive_with_selection(
+        left,
+        right,
+        center,
+        contract_options,
+        patching_options,
+        Some(&wanted),
+    )
+}
+
+fn contract_adaptive_with_selection<V>(
+    left: &PartitionedTreeTN<V>,
+    right: &PartitionedTreeTN<V>,
+    center: &V,
+    contract_options: &ContractionOptions,
+    patching_options: &PatchingOptions,
+    wanted: Option<&HashSet<Projector>>,
+) -> Result<PartitionedTreeTN<V>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
     // Reject invalid contraction options before the empty-operand shortcut so
     // a bad policy or `max_bond_dim == 0` cannot pass through a no-op path.
     validate_contraction_options(contract_options)?;
     validate_patching_options(patching_options)?;
-    let mut left_patches: Vec<_> = left.values().collect();
-    let mut right_patches: Vec<_> = right.values().collect();
-    left_patches.sort_by(|a, b| a.projector().canonical_cmp(b.projector()));
-    right_patches.sort_by(|a, b| a.projector().canonical_cmp(b.projector()));
 
+    // The selection applies to the top-level pairs only. The child pairs of a
+    // split group refine that group's projector, so they all lie in the
+    // selected output and need no filter.
     let mut groups: HashMap<Projector, ContractGroup<V>> = HashMap::new();
-    for left_patch in left_patches {
-        for right_patch in &right_patches {
-            if let Some(contribution) =
-                left_patch.contract(right_patch, center, contract_options.clone())?
-            {
-                let entry = groups.entry(contribution.projector().clone()).or_default();
-                entry.0.push((left_patch.clone(), (*right_patch).clone()));
-                entry.1.push(contribution);
-            }
-        }
+    for (left_patch, right_patch, contribution) in
+        left.contract_pairs(right, center, contract_options, wanted)?
+    {
+        let entry = groups.entry(contribution.projector().clone()).or_default();
+        entry.0.push((left_patch.clone(), right_patch.clone()));
+        entry.1.push(contribution);
     }
 
     let mut grouped: Vec<_> = groups.into_iter().collect();

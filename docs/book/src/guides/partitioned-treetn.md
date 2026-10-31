@@ -106,6 +106,19 @@ assert!(result.values().all(|patch| patch.max_bond_dim() <= 1));
 then compares checked sums of logical local tensor element counts. Structured
 storage payload length and AD state are not used as the metric.
 
+### Contracting selected outputs
+
+`PartitionedTreeTN::contract` contracts every compatible patch pair and returns
+every output projector. When only some outputs are needed, such as a few blocks
+of a block product over a branch-like index, `PartitionedTreeTN::contract_selected`
+takes the wanted output projectors and skips every pair whose output projector
+is not among them, so its cost follows the pairs of the wanted outputs. Each
+returned patch equals the one `contract` returns under the same key.
+`contract_adaptive_selected` is the adaptive counterpart. Its `Volume` budget
+uses the norm and volume totals of the selected outputs, so a wanted block can
+be truncated, or dropped, differently from the same block in a call over all
+outputs.
+
 ## Adaptive patched interpolation
 
 `adaptive_interpolation::patched_interpolate` interpolates a function on an
