@@ -432,3 +432,57 @@ fn zero_local_sketch_has_a_well_defined_zero_product_convention() {
     assert_eq!(out.diagnostics.edges[0].rank, 1);
     assert_eq!(out.diagnostics.edges[0].relative_pivot, 0.0);
 }
+
+/// Regression matrix for a root of degree one, the topology behind
+/// tensor4all-rs#1074. The root-side environment of its only child has no
+/// sibling message and no parent downward message, and the non-rank-one branch
+/// of `sketch_environments` would build an empty factor list.
+///
+/// That branch is never reached: `plan.exact[v]` compares the complement size
+/// `D_v`, the product of the siblings' subtrees and the assignments outside the
+/// parent *without* the parent's physical dimension. For the only child of the
+/// root that product is 1, so `D_v <= k` holds for every admitted `k` and the
+/// child takes the exact path at both rank-one and non-rank-one bond
+/// dimensions. These four cells pin that: a single-input Hadamard product must
+/// return the input exactly instead of reporting an internal invariant.
+#[test]
+fn root_of_degree_one_returns_the_input_at_both_bond_ranks() {
+    let sites = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+    let bond = DynIndex::new_dyn(2);
+    let blocks = [vec![1.0, 2.0, 3.0, 4.0], vec![2.0, 1.0, 1.0, 3.0]];
+    let tree = TreeTN::from_tensors(
+        vec![
+            IdxTensor::from_dense(vec![sites[0].clone(), bond.clone()], blocks[0].clone()).unwrap(),
+            IdxTensor::from_dense(vec![bond, sites[1].clone()], blocks[1].clone()).unwrap(),
+        ],
+        vec![0usize, 1],
+    )
+    .unwrap();
+    let expected = tree
+        .to_dense()
+        .unwrap()
+        .permute_indices(&sites)
+        .unwrap()
+        .to_vec::<f64>()
+        .unwrap();
+    for sketch_dim in [1, 2] {
+        for root in [None, Some(0usize)] {
+            let options = TreeRsiOptions {
+                sketch_dim: Some(sketch_dim),
+                root,
+                ..Default::default()
+            };
+            let out = hadamard_many::<f64, _>(std::slice::from_ref(&tree), &options)
+                .unwrap_or_else(|error| panic!("sketch_dim={sketch_dim} root={root:?}: {error:?}"));
+            let actual = out
+                .tree
+                .to_dense()
+                .unwrap()
+                .permute_indices(&sites)
+                .unwrap()
+                .to_vec::<f64>()
+                .unwrap();
+            assert_eq!(actual, expected, "sketch_dim={sketch_dim} root={root:?}");
+        }
+    }
+}
