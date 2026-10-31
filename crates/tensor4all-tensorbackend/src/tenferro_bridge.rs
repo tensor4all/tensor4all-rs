@@ -1782,6 +1782,23 @@ pub fn einsum_native_subscripts(
 /// The specification is parsed once; shape-specific owning execution plans are
 /// prepared and cached by the backend. This is the minimal parsed-plan bridge
 /// for <https://github.com/tensor4all/tensor4all-rs/issues/1065>.
+/// Unlike an operand-bound concrete plan, this specification accepts new shapes.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::NativeEinsumPlan;
+/// use tenferro_tensor::{Tensor, TensorRead};
+/// # fn main() -> anyhow::Result<()> {
+/// let plan = NativeEinsumPlan::new("i->")?;
+/// for (data, expected) in [(vec![1.0_f64, 2.0], 3.0), (vec![1.0, 2.0, 3.0], 6.0)] {
+///     let operand = Tensor::from_vec_col_major([data.len()], data)?;
+///     let sum = plan.execute_reads(&[TensorRead::from_tensor(&operand)])?;
+///     assert_eq!(sum.as_slice::<f64>()?, &[expected]);
+/// }
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug)]
 pub struct NativeEinsumPlan {
     subscripts: Subscripts,
@@ -1794,6 +1811,14 @@ impl NativeEinsumPlan {
     /// # Errors
     ///
     /// Returns an error for invalid subscripts, such as a missing explicit output term.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::NativeEinsumPlan;
+    /// let error = NativeEinsumPlan::new("ij,jk").unwrap_err();
+    /// assert!(error.to_string().contains("invalid einsum subscripts"));
+    /// ```
     pub fn new(subscripts: &str) -> Result<Self> {
         let parsed = Subscripts::parse(subscripts)
             .map_err(|error| anyhow!("invalid einsum subscripts '{subscripts}': {error}"))?;
@@ -1811,6 +1836,21 @@ impl NativeEinsumPlan {
     /// Returns an error for empty inputs, operand-count or rank mismatches,
     /// incompatible label extents, or a backend execution failure. Mixed dtypes
     /// retain the promotion performed by the native einsum graph.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::NativeEinsumPlan;
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    /// # fn main() -> anyhow::Result<()> {
+    /// let plan = NativeEinsumPlan::new("i,i->")?;
+    /// let lhs = Tensor::from_vec_col_major([2], vec![1.0_f64, 2.0])?;
+    /// let rhs = Tensor::from_vec_col_major([2], vec![3.0_f64, 4.0])?;
+    /// let dot = plan.execute_reads(&[TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)])?;
+    /// assert_eq!(dot.as_slice::<f64>()?, &[11.0]);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn execute_reads(&self, inputs: &[TensorRead<'_>]) -> Result<NativeTensor> {
         ensure!(
             self.subscripts.inputs.len() == inputs.len(),
