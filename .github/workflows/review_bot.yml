@@ -156,13 +156,13 @@ jobs:
           REVIEW_WAIVE_LABEL: ${{ env.REVIEW_WAIVE_LABEL }}
         run: |
           set -euo pipefail
-          if [ "${IS_EXTERNAL_PR}" = "true" ]; then
-            echo "External PRs are not accepted for repository rules review."
-            exit 1
-          fi
           if [ "${WAIVED_RESULT}" = "success" ]; then
             echo "Review waived via label ${REVIEW_WAIVE_LABEL}."
             exit 0
+          fi
+          if [ "${IS_EXTERNAL_PR}" = "true" ]; then
+            echo "External PRs are not accepted for repository rules review; apply ${REVIEW_WAIVE_LABEL} to accept one."
+            exit 1
           fi
           if [ "${REVIEW_RESULT}" = "success" ]; then
             exit 0
