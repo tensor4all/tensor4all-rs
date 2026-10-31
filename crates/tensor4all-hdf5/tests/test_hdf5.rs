@@ -591,6 +591,7 @@ fn mps_in_range_invalid_orthogonality_limits_are_rejected() {
     for (name, llim, rlim) in [
         // ITensorMPS 1-based limits for length 3: valid iff 0 <= llim < rlim <= 4
         ("negative_llim", -1_i64, 2_i64),
+        ("negative_llim_with_range", -1_i64, 3_i64),
         ("past_right_boundary", 0, 5),
         ("empty_range", 2, 2),
         ("reversed", 3, 1),
@@ -659,6 +660,7 @@ fn load_with_file_limits(name: &str, llim: i64, rlim: i64) -> TensorTrain {
 fn itensormps_limits_load_as_zero_based_center() {
     for (llim, rlim, center) in [
         (0_i64, 4_i64, None), // ITensorMPS without a center: llim = 0, rlim = length + 1
+        (-1_i64, 4_i64, None), // no center spelled llim = -1, rlim = length + 1
         (0, 2, Some(0)),      // 1-based site 1
         (1, 3, Some(1)),      // 1-based site 2
         (2, 4, Some(2)),      // 1-based site 3, the last site

@@ -25,6 +25,9 @@ fn read_i32(name: &'static str, value: i64, length: usize) -> Result<i32> {
 /// single such site at 1-based `c` (`llim = c - 1`, `rlim = c + 1`) is the
 /// center `c - 1` here. Any other valid range (no center, or a range of several
 /// sites) loads as no center, which claims no orthogonality.
+///
+/// `llim = -1` together with `rlim = length + 1` is a second spelling of "no
+/// center" that some writers emit; it also loads as no center.
 fn center_from_itensor_limits(llim: i32, rlim: i32, length: usize) -> Result<Option<usize>> {
     let length_i32 = i32::try_from(length).map_err(|_| {
         anyhow::anyhow!(
@@ -36,6 +39,13 @@ fn center_from_itensor_limits(llim: i32, rlim: i32, length: usize) -> Result<Opt
             "invalid HDF5 MPS orthogonality limits: llim={llim}, rlim={rlim}, length={length}; length + 1 overflows i32"
         )
     })?;
+    // Some writers spell "no orthogonality center" as `llim = -1` with
+    // `rlim = length + 1`; the fixed inputs of tensor4all-benchmark case 4
+    // (release `vertex-bse-inputs-v1`) do. ITensorMPS.jl writes `llim = 0` for
+    // the same state, so accept both spellings and claim no center.
+    if llim == -1 && rlim == max_rlim {
+        return Ok(None);
+    }
     if !(0 <= llim && llim < rlim && rlim <= max_rlim) {
         anyhow::bail!(
             "invalid HDF5 MPS orthogonality limits: llim={llim}, rlim={rlim}, length={length}; expected 0 <= llim < rlim <= {max_rlim} (ITensorMPS 1-based limits)"
