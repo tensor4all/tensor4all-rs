@@ -1457,6 +1457,26 @@ pub trait TensorConstructionLike: TensorContractionLike {
         Err(anyhow::anyhow!("context validation is not supported for this tensor type").into())
     }
 
+    /// Re-publish this tensor in a caller-owned execution context.
+    ///
+    /// Context-scoped algorithms that take a whole tensor network adopt every
+    /// input tensor this way; the context-scoped truncation entry does, so a
+    /// network loaded from disk or materialised by TCI works without a
+    /// caller-side rebuild.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` with an `UnsupportedStorage` failure when adoption
+    /// is unsupported for this tensor type, and a backend failure when the
+    /// stored payload cannot be re-published or the tensor already belongs to a
+    /// *different* execution context than `context`.
+    fn adopt_into(
+        &self,
+        _context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<Self, Self::Error> {
+        Err(anyhow::anyhow!("context adoption is not supported for this tensor type").into())
+    }
+
     /// Construct a tensor from a column-major dense payload.
     ///
     /// Implementations with a native dense storage path should override this

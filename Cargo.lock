@@ -2603,6 +2603,7 @@ dependencies = [
  "tempfile",
  "tensor4all-core",
  "tensor4all-itensorlike",
+ "tensor4all-tensorbackend",
  "tensor4all-treetn",
  "thiserror 2.0.20",
 ]

@@ -10,6 +10,7 @@ mod assembly_error_paths;
 mod continuation;
 mod evaluation_memo;
 mod external_proposer;
+mod issue1078_context_adoption;
 mod iteration_visitor;
 mod materialize_context;
 mod optimizer_context;

@@ -10,6 +10,7 @@
 mod addition;
 mod cached_evaluator;
 mod canonicalize;
+mod context;
 pub mod contraction;
 mod decompose;
 #[cfg(feature = "diagnostics")]
