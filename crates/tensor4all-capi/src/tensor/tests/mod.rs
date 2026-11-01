@@ -193,12 +193,12 @@ fn reconstruct_svd(
 ) -> InternalTensor {
     let v = unsafe { (*v).inner() };
     let s = unsafe { (*s).inner() };
-    let mut perm = vec![v.indices.len() - 1];
-    perm.extend(0..(v.indices.len() - 1));
+    let mut perm = vec![v.indices().len() - 1];
+    perm.extend(0..(v.indices().len() - 1));
     let vh = v.conj().permute(&perm).unwrap();
     let svh = s.contract_pair(&vh).unwrap();
-    let sim_bond = s.indices[1].clone();
-    let bond = v.indices[v.indices.len() - 1].clone();
+    let sim_bond = s.indices()[1].clone();
+    let bond = v.indices()[v.indices().len() - 1].clone();
     let svh = svh.replaceind(&sim_bond, &bond).unwrap();
     unsafe { (*u).inner().contract_pair(&svh).unwrap() }
 }

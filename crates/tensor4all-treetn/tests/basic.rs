@@ -703,7 +703,7 @@ fn test_contract_two_nodes() {
 
     // Result should have physical indices [i, k] with dims [2, 4]
     assert_eq!(result.dims(), vec![2, 4]);
-    assert_eq!(result.indices.len(), 2);
+    assert_eq!(result.indices().len(), 2);
 }
 
 #[test]
@@ -1085,21 +1085,21 @@ fn test_sim_internal_inds() {
     let tensor2 = tn_sim.tensor(node2).unwrap();
 
     // Find physical indices (those with size 2 and 4)
-    let has_phys1 = tensor1.indices.iter().any(|idx| idx.same_id(&phys1));
-    let has_phys2 = tensor2.indices.iter().any(|idx| idx.same_id(&phys2));
+    let has_phys1 = tensor1.indices().iter().any(|idx| idx.same_id(&phys1));
+    let has_phys2 = tensor2.indices().iter().any(|idx| idx.same_id(&phys2));
     assert!(has_phys1, "Physical index 1 should be preserved");
     assert!(has_phys2, "Physical index 2 should be preserved");
 
     // Check that tensors contain the new bond index
-    let has_new_bond_in_t1 = tensor1.indices.iter().any(|idx| idx.same_id(new_bond));
-    let has_new_bond_in_t2 = tensor2.indices.iter().any(|idx| idx.same_id(new_bond));
+    let has_new_bond_in_t1 = tensor1.indices().iter().any(|idx| idx.same_id(new_bond));
+    let has_new_bond_in_t2 = tensor2.indices().iter().any(|idx| idx.same_id(new_bond));
     assert!(has_new_bond_in_t1, "Tensor 1 should have new bond index");
     assert!(has_new_bond_in_t2, "Tensor 2 should have new bond index");
 
     // Original tensors should still have old bond
     let orig_tensor1 = tn.tensor(node1).unwrap();
     let has_old_bond = orig_tensor1
-        .indices
+        .indices()
         .iter()
         .any(|idx| *idx.id() == original_bond_id);
     assert!(
@@ -1139,21 +1139,21 @@ fn test_sim_link_indices() {
     let tensor1 = tn_sim.tensor(node1).unwrap();
     let tensor2 = tn_sim.tensor(node2).unwrap();
     assert!(
-        tensor1.indices.iter().any(|idx| idx.same_id(&phys1)),
+        tensor1.indices().iter().any(|idx| idx.same_id(&phys1)),
         "Physical index 1 should be preserved"
     );
     assert!(
-        tensor2.indices.iter().any(|idx| idx.same_id(&phys2)),
+        tensor2.indices().iter().any(|idx| idx.same_id(&phys2)),
         "Physical index 2 should be preserved"
     );
 
     // Tensors contain the new bond index
     assert!(
-        tensor1.indices.iter().any(|idx| idx.same_id(new_bond)),
+        tensor1.indices().iter().any(|idx| idx.same_id(new_bond)),
         "Tensor 1 should have new bond index"
     );
     assert!(
-        tensor2.indices.iter().any(|idx| idx.same_id(new_bond)),
+        tensor2.indices().iter().any(|idx| idx.same_id(new_bond)),
         "Tensor 2 should have new bond index"
     );
 }
@@ -1175,10 +1175,10 @@ fn test_sim_link_indices_mut_in_place() {
 
     let tensor1 = tn.tensor(node1).unwrap();
     let tensor2 = tn.tensor(node2).unwrap();
-    assert!(tensor1.indices.iter().any(|idx| idx.same_id(&phys1)));
-    assert!(tensor2.indices.iter().any(|idx| idx.same_id(&phys2)));
-    assert!(tensor1.indices.iter().any(|idx| idx.same_id(new_bond)));
-    assert!(tensor2.indices.iter().any(|idx| idx.same_id(new_bond)));
+    assert!(tensor1.indices().iter().any(|idx| idx.same_id(&phys1)));
+    assert!(tensor2.indices().iter().any(|idx| idx.same_id(&phys2)));
+    assert!(tensor1.indices().iter().any(|idx| idx.same_id(new_bond)));
+    assert!(tensor2.indices().iter().any(|idx| idx.same_id(new_bond)));
 }
 
 // ============================================================================
@@ -1386,7 +1386,7 @@ fn test_contract_zipup_partial_contraction() {
     let node_a = result.node_index(&"A".to_string()).unwrap();
     let tensor_a = result.tensor(node_a).unwrap();
     assert!(tensor_a
-        .indices
+        .indices()
         .iter()
         .any(|idx| idx.same_id(&site_external_a)));
 
@@ -1394,7 +1394,7 @@ fn test_contract_zipup_partial_contraction() {
     let node_b = result.node_index(&"B".to_string()).unwrap();
     let tensor_b = result.tensor(node_b).unwrap();
     assert!(tensor_b
-        .indices
+        .indices()
         .iter()
         .any(|idx| idx.same_id(&site_external_b)));
 }

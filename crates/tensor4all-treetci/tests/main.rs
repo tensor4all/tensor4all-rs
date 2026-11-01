@@ -9,6 +9,7 @@ mod advanced_quantics;
 mod assembly_error_paths;
 mod continuation;
 mod evaluation_memo;
+mod external_proposer;
 mod iteration_visitor;
 mod materialize_context;
 mod optimizer_context;

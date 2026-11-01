@@ -138,13 +138,13 @@ fn reconstruction_error(t: &IdxTensor, left_inds: &[DynIndex], opts: &FactorizeO
 
 fn svd_reconstruction_error(t: &IdxTensor, left_inds: &[DynIndex]) -> f64 {
     let (u, s, v) = svd::<Complex64>(t, left_inds).unwrap();
-    let mut perm = vec![v.indices.len() - 1];
-    perm.extend(0..v.indices.len() - 1);
+    let mut perm = vec![v.indices().len() - 1];
+    perm.extend(0..v.indices().len() - 1);
     let vh = v.conj().permute(&perm).unwrap();
     let svh = s
         .contract_pair(&vh)
         .unwrap()
-        .replaceind(&s.indices[1], &u.indices[u.indices.len() - 1])
+        .replaceind(&s.indices()[1], &u.indices()[u.indices().len() - 1])
         .unwrap();
     let recon = u.contract_pair(&svh).unwrap();
     let neg = recon
@@ -158,8 +158,8 @@ fn svd_reconstruction_error(t: &IdxTensor, left_inds: &[DynIndex]) -> f64 {
 #[test]
 fn test_qr_reconstruction_regression() {
     let t = make_buggy_tensor(); // [a(5), b(2), c(2), d(5)]
-    let a = t.indices[0].clone();
-    let b = t.indices[1].clone();
+    let a = t.indices()[0].clone();
+    let b = t.indices()[1].clone();
     let left_inds = [a, b];
 
     let matrix_i = DynIndex::new_dyn_with_tag(10, "row").unwrap();

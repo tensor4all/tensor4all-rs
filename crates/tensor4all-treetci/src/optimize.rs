@@ -340,7 +340,7 @@ impl Default for TreeTciOptions {
 /// let local_dims = vec![2, 2];
 /// let mut state = TreeTCI2::<f64>::new(local_dims, graph).unwrap();
 /// state.add_global_pivots(&[vec![0, 0]]).unwrap();
-/// state.max_sample_value = 1.0;
+/// state.set_max_sample_value(1.0);
 ///
 /// let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
 ///     let mut vals = Vec::with_capacity(batch.n_points());
@@ -450,7 +450,7 @@ where
 /// let graph = TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap();
 /// let mut state = TreeTCI2::<f64>::new(vec![2, 2], graph).unwrap();
 /// state.add_global_pivots(&[vec![0, 0]]).unwrap();
-/// state.max_sample_value = 1.0;
+/// state.set_max_sample_value(1.0);
 ///
 /// let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
 ///     let mut vals = Vec::with_capacity(batch.n_points());
@@ -627,7 +627,7 @@ where
 /// let graph = TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap();
 /// let mut state = TreeTCI2::<f64>::new(vec![2, 2], graph).unwrap();
 /// state.add_global_pivots(&[vec![0, 0]]).unwrap();
-/// state.max_sample_value = 1.0;
+/// state.set_max_sample_value(1.0);
 ///
 /// let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
 ///     let mut vals = Vec::with_capacity(batch.n_points());

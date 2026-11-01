@@ -180,8 +180,8 @@ fn test_zipup_zero_masked_root_nary_matches_sequential_binary_contract() {
     let svh = s.contract_pair(&vh).unwrap();
     let svh = svh
         .replaceind(
-            &s.indices[1].clone(),
-            &v.indices[v.indices.len() - 1].clone(),
+            &s.indices()[1].clone(),
+            &v.indices()[v.indices().len() - 1].clone(),
         )
         .unwrap();
     let svd_reconstructed = u.contract_pair(&svh).unwrap();

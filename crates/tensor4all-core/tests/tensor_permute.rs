@@ -113,8 +113,8 @@ fn test_permute_dyn_f64_2d() {
     let permuted = tensor.permute(&[1, 0]).unwrap();
 
     assert_eq!(permuted.dims(), vec![3, 2]);
-    assert_eq!(permuted.indices[0].id, j.id);
-    assert_eq!(permuted.indices[1].id, i.id);
+    assert_eq!(permuted.indices()[0].id, j.id);
+    assert_eq!(permuted.indices()[1].id, i.id);
     assert_eq!(
         permuted.to_vec::<f64>().unwrap(),
         permute_col_major(&data, &dims, &[1, 0])
@@ -140,8 +140,8 @@ fn test_permute_dyn_c64_2d() {
     let permuted = tensor.permute(&[1, 0]).unwrap();
 
     assert_eq!(permuted.dims(), vec![3, 2]);
-    assert_eq!(permuted.indices[0].id, j.id);
-    assert_eq!(permuted.indices[1].id, i.id);
+    assert_eq!(permuted.indices()[0].id, j.id);
+    assert_eq!(permuted.indices()[1].id, i.id);
     assert_eq!(
         permuted.to_vec::<Complex64>().unwrap(),
         permute_col_major(&data, &dims, &[1, 0])
@@ -162,9 +162,9 @@ fn test_permute_dyn_f64_3d() {
     let permuted = tensor.permute(&[2, 0, 1]).unwrap();
 
     assert_eq!(permuted.dims(), vec![4, 2, 3]);
-    assert_eq!(permuted.indices[0].id, k.id);
-    assert_eq!(permuted.indices[1].id, i.id);
-    assert_eq!(permuted.indices[2].id, j.id);
+    assert_eq!(permuted.indices()[0].id, k.id);
+    assert_eq!(permuted.indices()[1].id, i.id);
+    assert_eq!(permuted.indices()[2].id, j.id);
     assert_eq!(
         permuted.to_vec::<f64>().unwrap(),
         permute_col_major(&data, &dims, &[2, 0, 1])
@@ -182,8 +182,8 @@ fn test_permute_identity() {
     let permuted = tensor.permute(&[0, 1]).unwrap();
 
     assert_eq!(permuted.dims(), vec![2, 3]);
-    assert_eq!(permuted.indices[0].id, i.id);
-    assert_eq!(permuted.indices[1].id, j.id);
+    assert_eq!(permuted.indices()[0].id, i.id);
+    assert_eq!(permuted.indices()[1].id, j.id);
     assert_eq!(permuted.to_vec::<f64>().unwrap(), data);
 }
 
@@ -199,8 +199,8 @@ fn test_permute_indices_dyn_f64_2d() {
     let permuted = tensor.permute_indices(&[j.clone(), i.clone()]).unwrap();
 
     assert_eq!(permuted.dims(), vec![3, 2]);
-    assert_eq!(permuted.indices[0].id, j.id);
-    assert_eq!(permuted.indices[1].id, i.id);
+    assert_eq!(permuted.indices()[0].id, j.id);
+    assert_eq!(permuted.indices()[1].id, i.id);
     assert_eq!(
         permuted.to_vec::<f64>().unwrap(),
         permute_col_major(&data, &dims, &[1, 0])
@@ -226,8 +226,8 @@ fn test_permute_indices_c64() {
     let permuted = tensor.permute_indices(&[j.clone(), i.clone()]).unwrap();
 
     assert_eq!(permuted.dims(), vec![3, 2]);
-    assert_eq!(permuted.indices[0].id, j.id);
-    assert_eq!(permuted.indices[1].id, i.id);
+    assert_eq!(permuted.indices()[0].id, j.id);
+    assert_eq!(permuted.indices()[1].id, i.id);
     assert_eq!(
         permuted.to_vec::<Complex64>().unwrap(),
         permute_col_major(&data, &dims, &[1, 0])

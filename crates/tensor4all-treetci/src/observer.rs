@@ -54,7 +54,7 @@ pub struct TreeTciIteration<'a> {
 /// let graph = TreeTciGraph::linear_chain(3)?;
 /// let mut state = TreeTCI2::<f64>::new(vec![2, 2, 2], graph)?;
 /// state.add_global_pivots(&[vec![0, 0, 0]])?;
-/// state.max_sample_value = 2.0;
+/// state.set_max_sample_value(2.0);
 /// let mut progress = Progress::default();
 /// let result = optimize_with_proposer(
 ///     &mut state,

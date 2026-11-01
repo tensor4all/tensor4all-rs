@@ -223,7 +223,7 @@ fn test_idx_tensor_creation() {
     let storage = Arc::new(Storage::from_dense_col_major(vec![0.0; 6], &[2, 3]).unwrap());
 
     let tensor: IdxTensor = IdxTensor::new(indices, storage).unwrap();
-    assert_eq!(tensor.indices.len(), 2);
+    assert_eq!(tensor.indices().len(), 2);
     let dims = tensor.dims();
     assert_eq!(dims.len(), 2);
     assert_eq!(dims[0], 2);
@@ -542,9 +542,9 @@ fn test_replaceind_basic() {
     let replaced = tensor.replaceind(&i, &new_i).unwrap();
 
     // Check that the first index was replaced
-    assert_eq!(replaced.indices[0].id, new_i.id);
+    assert_eq!(replaced.indices()[0].id, new_i.id);
     // Check that the second index was not affected
-    assert_eq!(replaced.indices[1].id, j.id);
+    assert_eq!(replaced.indices()[1].id, j.id);
     // Check that dimensions are unchanged
     assert_eq!(replaced.dims(), vec![2, 3]);
     assert_eq!(
@@ -568,8 +568,8 @@ fn test_replaceind_no_match() {
     let replaced = tensor.replaceind(&k, &new_k).unwrap();
 
     // Check that indices are unchanged
-    assert_eq!(replaced.indices[0].id, i.id);
-    assert_eq!(replaced.indices[1].id, j.id);
+    assert_eq!(replaced.indices()[0].id, i.id);
+    assert_eq!(replaced.indices()[1].id, j.id);
 }
 
 #[test]
@@ -594,9 +594,9 @@ fn test_replace_indices_basic() {
         .unwrap();
 
     // Check that all indices were replaced
-    assert_eq!(replaced.indices[0].id, new_i.id);
-    assert_eq!(replaced.indices[1].id, new_j.id);
-    assert_eq!(replaced.indices[2].id, new_k.id);
+    assert_eq!(replaced.indices()[0].id, new_i.id);
+    assert_eq!(replaced.indices()[1].id, new_j.id);
+    assert_eq!(replaced.indices()[2].id, new_k.id);
     // Check that dimensions are unchanged
     assert_eq!(replaced.dims(), vec![2, 3, 4]);
 }
@@ -619,10 +619,10 @@ fn test_replace_indices_partial() {
         .unwrap();
 
     // Check that i was replaced
-    assert_eq!(replaced.indices[0].id, new_i.id);
+    assert_eq!(replaced.indices()[0].id, new_i.id);
     // Check that j and k are unchanged
-    assert_eq!(replaced.indices[1].id, j.id);
-    assert_eq!(replaced.indices[2].id, k.id);
+    assert_eq!(replaced.indices()[1].id, j.id);
+    assert_eq!(replaced.indices()[2].id, k.id);
 }
 
 #[test]
@@ -698,8 +698,8 @@ fn test_replace_indices_does_not_reorder_data() {
         .unwrap();
 
     // Check indices were replaced
-    assert_eq!(replaced.indices[0].id, new_i.id);
-    assert_eq!(replaced.indices[1].id, new_j.id);
+    assert_eq!(replaced.indices()[0].id, new_i.id);
+    assert_eq!(replaced.indices()[1].id, new_j.id);
     assert_eq!(replaced.dims(), vec![2, 3]);
 
     // CRITICAL: replace_indices does NOT reorder data
@@ -737,8 +737,8 @@ fn test_replace_indices_with_different_order_does_not_reorder_data() {
         .unwrap();
 
     // Check indices were replaced (order unchanged, just IDs changed)
-    assert_eq!(replaced.indices[0].id, new_i.id);
-    assert_eq!(replaced.indices[1].id, new_j.id);
+    assert_eq!(replaced.indices()[0].id, new_i.id);
+    assert_eq!(replaced.indices()[1].id, new_j.id);
     // Dimensions remain the same: [2, 3]
     assert_eq!(replaced.dims(), vec![2, 3]);
 
@@ -768,8 +768,8 @@ fn test_permuteinds_reorders_data() {
     let permuted = tensor.permute_indices(&[j.clone(), i.clone()]).unwrap();
 
     // Check indices were permuted
-    assert_eq!(permuted.indices[0].id, j.id);
-    assert_eq!(permuted.indices[1].id, i.id);
+    assert_eq!(permuted.indices()[0].id, j.id);
+    assert_eq!(permuted.indices()[1].id, i.id);
     assert_eq!(permuted.dims(), vec![3, 2]);
 
     // CRITICAL: permuteinds DOES reorder data
@@ -894,7 +894,7 @@ fn test_tensor_conj_f64() {
     let conj_tensor = tensor.conj();
 
     // Indices should be the same
-    assert_eq!(conj_tensor.indices[0].id, i.id);
+    assert_eq!(conj_tensor.indices()[0].id, i.id);
     // Dims should be the same
     assert_eq!(conj_tensor.dims(), vec![2]);
     // Data should be the same (real conj is identity)
@@ -918,8 +918,8 @@ fn test_tensor_conj_c64() {
     let conj_tensor = tensor.conj();
 
     // Indices should be preserved
-    assert_eq!(conj_tensor.indices[0].id, i.id);
-    assert_eq!(conj_tensor.indices[1].id, j.id);
+    assert_eq!(conj_tensor.indices()[0].id, i.id);
+    assert_eq!(conj_tensor.indices()[1].id, j.id);
     // Dims should be preserved
     assert_eq!(conj_tensor.dims(), vec![2, 3]);
     // Data should be conjugated

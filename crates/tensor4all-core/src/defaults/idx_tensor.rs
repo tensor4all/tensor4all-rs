@@ -1166,7 +1166,10 @@ pub enum StructuredSelectorError {
 #[derive(Clone)]
 pub struct IdxTensor {
     /// Full index information (includes tags and other metadata).
-    pub indices: Vec<DynIndex>,
+    ///
+    /// Private to the crate: the indices must match the payload's dimensions, so they are read through
+    /// [`IdxTensor::indices`] and changed only through operations that keep that invariant.
+    pub(crate) indices: Vec<DynIndex>,
     /// Authoritative payload representation. Compact storage is used when the
     /// dtype is supported by [`Storage`]; otherwise this retains an eager
     /// payload without promotion.
@@ -5127,8 +5130,8 @@ impl IdxTensor {
     ///
     /// // Replace index i with new_i
     /// let replaced = tensor.replaceind(&i, &new_i).unwrap();
-    /// assert_eq!(replaced.indices[0].id, new_i.id);
-    /// assert_eq!(replaced.indices[1].id, j.id);
+    /// assert_eq!(replaced.indices()[0].id, new_i.id);
+    /// assert_eq!(replaced.indices()[1].id, j.id);
     /// ```
     pub fn replaceind(
         &self,
@@ -5198,8 +5201,8 @@ impl IdxTensor {
     /// let replaced = tensor
     ///     .replace_indices(&[i.clone(), j.clone()], &[new_i.clone(), new_j.clone()])
     ///     .unwrap();
-    /// assert_eq!(replaced.indices[0].id, new_i.id);
-    /// assert_eq!(replaced.indices[1].id, new_j.id);
+    /// assert_eq!(replaced.indices()[0].id, new_i.id);
+    /// assert_eq!(replaced.indices()[1].id, new_j.id);
     /// ```
     pub fn replace_indices(
         &self,

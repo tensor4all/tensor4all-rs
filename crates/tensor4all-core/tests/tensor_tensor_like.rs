@@ -85,7 +85,7 @@ fn tensor_contraction_and_construction_default_methods_cover_paths() {
     let b = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0; 6]).unwrap();
 
     let contracted = a.contract_pair(&b).unwrap();
-    assert_eq!(contracted.indices, vec![j.clone()]);
+    assert_eq!(contracted.indices(), vec![j.clone()]);
     assert_eq!(contracted.to_vec::<f64>().unwrap(), vec![7.0, 7.0, 7.0]);
     TensorContractionLike::validate(&contracted).unwrap();
 
@@ -94,7 +94,7 @@ fn tensor_contraction_and_construction_default_methods_cover_paths() {
 
     let selected =
         TensorConstructionLike::select_indices(&b, std::slice::from_ref(&i), &[1]).unwrap();
-    assert_eq!(selected.indices, vec![j.clone()]);
+    assert_eq!(selected.indices(), vec![j.clone()]);
     assert_eq!(selected.to_vec::<f64>().unwrap(), vec![1.0, 1.0, 1.0]);
 
     let err =
@@ -210,9 +210,9 @@ fn test_outer_product_preserves_input_component_order() {
 
     let result = outer_product(&a, &b).unwrap();
 
-    assert_eq!(result.indices, vec![i, j]);
+    assert_eq!(result.indices(), vec![i, j]);
     let expected = IdxTensor::from_dense(
-        result.indices.clone(),
+        result.indices().to_vec(),
         vec![
             6.0, -3.0, 8.0, //
             -4.0, -4.0, 2.0,
