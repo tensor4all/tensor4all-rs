@@ -118,6 +118,34 @@ Every public type, trait, and function **must** have doc comments:
 - `anyhow` for internal errors and context; `thiserror` for public API error
   types.
 
+### Public error migration
+
+The rule above predates the code: public functions returning `anyhow::Result`
+exist across `tensor4all-core`, `treetci`, `treetn`, `quanticstci`,
+`quanticstransform`, `hdf5` and `partitionedtreetn`. Treat this as a migration,
+not a cleanup.
+
+1. New public API returns a typed error. No new `anyhow::Result` in a `pub fn`,
+   in any crate.
+2. Existing public `anyhow::Result` is converted crate by crate, and only when
+   that crate takes a breaking change anyway, so the conversion never forces a
+   release on its own.
+3. `anyhow` stays allowed inside a function body, and in tests and benchmarks.
+4. The conversion order starts with the crates that already have a real error
+   enum, so the change is mechanical rather than a redesign.
+
+### Documented exceptions
+
+Two public shapes stay on `anyhow` for now; a reviewer should not ask for them
+to change without reopening this policy.
+
+- The cross-interpolation callback (`crossinterpolate2*`,
+  `MultiIndexCache::evaluate_batched`). The error type belongs to the caller, so
+  a typed error would force every callback author to adopt our enum.
+- `pub source: anyhow::Error` on the existing operation errors (`Hdf5Error`,
+  `AnyScalarError`, `TreeTNOperationError`). Replacing it with a typed source is
+  part of each crate conversion in item 2 above, not a separate change.
+
 ### C API Error Handling
 
 `tensor4all-capi` preserves error details through `t4a_last_error_message`; ABI
