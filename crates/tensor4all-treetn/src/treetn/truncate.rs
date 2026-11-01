@@ -130,8 +130,26 @@ where
     /// The same algorithm and result as [`Self::truncate`], except that the
     /// pre-canonicalization and the two-site SVD sweep run in `context`, so the
     /// caller chooses the thread width of the numerics and no process-wide
-    /// default context is entered. The tensors of the network are expected to
-    /// belong to `context`.
+    /// default context is entered.
+    ///
+    /// # Tensors that do not belong to `context` yet
+    ///
+    /// The tree is adopted into `context` first, through
+    /// [`Self::adopt_into_in`], so a tree that has no context of its own works
+    /// here without a caller-side rebuild: a TCI materialisation (which
+    /// publishes runtime-free compact host storage), a tree loaded from disk and
+    /// a tree built by the context-free constructors (both bound to the
+    /// process-global implicit runtime). Adoption keeps the index objects and
+    /// the ranks.
+    ///
+    /// A tensor whose eager runtime is already bound to a *different*
+    /// execution context is an error: re-binding it means reading it back and
+    /// re-publishing it, i.e. a copy, so it is refused instead of performed
+    /// silently. The same holds for structured storage, which adoption would
+    /// have to expand densely, and for a tensor that tracks gradients. Build
+    /// such a tensor with
+    /// [`IdxTensor::from_dense_in`](tensor4all_core::IdxTensor::from_dense_in) in
+    /// `context` instead.
     ///
     /// # Arguments
     /// * `canonical_region` - The single center node to truncate towards
@@ -142,7 +160,8 @@ where
     ///
     /// Returns [`TreeTNOperationError`] under the same conditions as
     /// [`Self::truncate`]: invalid options, a center of more than one node, or a
-    /// failed canonicalization or factorization step in `context`.
+    /// failed canonicalization or factorization step in `context`. It also
+    /// fails when a tensor cannot be adopted into `context` (see above).
     ///
     /// # Examples
     ///
@@ -335,6 +354,21 @@ where
         // Step 1: Canonicalize towards the center (required before truncation sweep)
         let canonicalize_options =
             CanonicalizationOptions::default().with_form(CanonicalForm::Unitary);
+        if let Some(execution) = context {
+            // A tree loaded from disk or materialised by TCI carries no eager
+            // runtime of its own, so the sweeps below would combine factors
+            // from two runtimes. Adopt the whole tree first, exactly as the
+            // context-scoped unfold adopts a host tensor.
+            if let Err(error) = self.adopt_into_in(execution) {
+                // Name the root cause in the top-level message: it is all that
+                // `TreeTNOperationError`'s `Display` shows.
+                let error = anyhow::Error::new(error);
+                let cause = error.root_cause().to_string();
+                return Err(
+                    error.context(format!("{context_name}: context adoption failed: {cause}"))
+                );
+            }
+        }
         match context {
             Some(execution) => self.canonicalize_impl_in(
                 [center_node.clone()],

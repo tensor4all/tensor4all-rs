@@ -7439,6 +7439,13 @@ impl TensorConstructionLike for IdxTensor {
         IdxTensor::validate_context(self, context)
     }
 
+    fn adopt_into(
+        &self,
+        context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<Self, Self::Error> {
+        IdxTensor::adopt_into(self, context)
+    }
+
     fn from_dense_any(
         indices: Vec<DynIndex>,
         data: Vec<AnyScalar>,
@@ -8665,6 +8672,113 @@ impl IdxTensor {
             _ => return Err(unsupported_execution_context_error()),
         }
         Ok(())
+    }
+
+    /// Re-publish this tensor in `context`.
+    ///
+    /// Use this to bind a tensor that carries no context of its own to a
+    /// caller-owned context: a TCI materialisation publishes runtime-free
+    /// compact host storage, and a disk load or the context-free constructors
+    /// bind the process-global implicit runtime. A tensor that already belongs
+    /// to `context` is returned unchanged.
+    ///
+    /// # Rules
+    ///
+    /// - Host storage (no eager runtime) is read back and published through
+    ///   [`IdxTensor::from_dense_in`], exactly as the context-scoped unfold
+    ///   does it.
+    /// - A tensor bound to the process-global implicit runtime (what
+    ///   [`IdxTensor::from_dense`] produces) is re-published the same way. That
+    ///   is a copy, and it is the only way to use such a tensor in an explicit
+    ///   context.
+    /// - A tensor whose eager runtime belongs to a *different* execution
+    ///   context cannot be re-bound without a full readback and re-publish, so
+    ///   it is an error here, never a silent copy. Build it in the target
+    ///   context instead.
+    /// - Both re-publishing branches read the payload back as dense values, so
+    ///   structured (for example diagonal) storage and a recorded gradient
+    ///   graph are refused instead of being silently densified or detached.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor, TensorLike};
+    /// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
+    ///
+    /// let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
+    ///     CpuBackend::new(),
+    /// )));
+    /// let index = DynIndex::new_dyn(2);
+    /// let host = IdxTensor::from_dense_compact(vec![index.clone()], vec![1.0_f64, 2.0])?;
+    ///
+    /// let adopted = host.adopt_into(&context)?;
+    /// adopted.validate_context(&context)?;
+    /// assert_eq!(adopted.indices(), vec![index]);
+    /// assert_eq!(adopted.to_vec::<f64>()?, vec![1.0, 2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError`] when the stored payload is neither dense
+    /// `f64` nor dense `Complex64`, when `context` refuses the publication,
+    /// when the storage is structured rather than dense, when the tensor tracks
+    /// gradients, or when the tensor's eager runtime already belongs to a
+    /// different execution context.
+    pub fn adopt_into(
+        &self,
+        context: &ExecutionContext,
+    ) -> std::result::Result<Self, IdxTensorError> {
+        #[cfg(not(feature = "tenferro-cuda"))]
+        ensure_supported_execution_context(context)?;
+        let runtime = self.eager_runtime();
+        if let Some(runtime) = &runtime {
+            if runtime.id() == Self::context_eager_runtime(context)?.id() {
+                return Ok(self.clone());
+            }
+        }
+        // Everything below reads the payload back as dense values, so state
+        // what that would cost instead of paying it silently.
+        if self
+            .axis_classes()
+            .iter()
+            .copied()
+            .enumerate()
+            .any(|(axis, class)| axis != class)
+        {
+            return Err(IdxTensorError::operation(
+                "context adoption",
+                anyhow::anyhow!(
+                    "structured storage cannot be adopted; reading it back would expand it \
+                     densely, so publish a dense payload with IdxTensor::from_dense_in"
+                ),
+            ));
+        }
+        if self.tracks_grad() {
+            return Err(IdxTensorError::operation(
+                "context adoption",
+                anyhow::anyhow!(
+                    "tensor tracks gradients; re-publishing it in another context would drop \
+                     the recorded graph, so rebuild it there instead"
+                ),
+            ));
+        }
+        match &runtime {
+            // Runtime-free storage: publish it in the caller's context.
+            None => Self::adopt_host_into_context(self, context),
+            // Implicit-frontend storage: re-publish it in the explicit context.
+            Some(runtime) if runtime.id() == default_eager_ctx()?.id() => {
+                Self::adopt_host_into_context(self, context)
+            }
+            Some(_) => Err(IdxTensorError::operation(
+                "context adoption",
+                anyhow::anyhow!(
+                    "tensor belongs to a different execution context; re-binding it would copy \
+                     its storage into the target context"
+                ),
+            )),
+        }
     }
 
     /// Read back a small algorithm-decision tensor through its owning context.

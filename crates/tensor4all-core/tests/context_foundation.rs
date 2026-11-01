@@ -39,6 +39,96 @@ fn context_validation_rejects_a_different_cpu_runtime() {
 }
 
 #[test]
+fn adoption_publishes_host_storage_in_the_supplied_cpu_runtime() {
+    let context = cpu_context();
+    let index = DynIndex::new_dyn(2);
+    // Host storage with no eager runtime: what a disk load or a TCI
+    // materialisation writes.
+    let host = IdxTensor::from_dense_compact(vec![index.clone()], vec![1.0_f64, 2.0]).unwrap();
+
+    let adopted = host.adopt_into(&context).unwrap();
+
+    adopted.validate_context(&context).unwrap();
+    assert_eq!(adopted.indices(), vec![index]);
+    assert_eq!(adopted.to_vec::<f64>().unwrap(), vec![1.0, 2.0]);
+}
+
+#[test]
+fn adoption_keeps_an_implicitly_built_tensor_usable_in_a_caller_context() {
+    let context = cpu_context();
+    let index = DynIndex::new_dyn(3);
+    // `from_dense` binds the process-global implicit runtime, which is a
+    // different runtime, so validation against an explicit context fails.
+    let implicit = IdxTensor::from_dense(vec![index.clone()], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    assert!(implicit.validate_context(&context).is_err());
+
+    let adopted = implicit.adopt_into(&context).unwrap();
+
+    adopted.validate_context(&context).unwrap();
+    assert_eq!(adopted.indices(), vec![index]);
+    assert_eq!(adopted.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0]);
+}
+
+#[test]
+fn adoption_returns_an_already_bound_tensor_unchanged() {
+    let context = cpu_context();
+    let bound =
+        IdxTensor::from_dense_in(&context, vec![DynIndex::new_dyn(2)], vec![1.0_f64, 2.0]).unwrap();
+
+    let adopted = bound.adopt_into(&context).unwrap();
+
+    adopted.validate_context(&context).unwrap();
+    assert_eq!(adopted.to_vec::<f64>().unwrap(), vec![1.0, 2.0]);
+}
+
+#[test]
+fn adoption_rejects_structured_storage_instead_of_densifying_it() {
+    let context = cpu_context();
+    let (row, column) = (DynIndex::new_dyn(3), DynIndex::new_dyn(3));
+    let diagonal =
+        IdxTensor::from_diag(vec![row, column], vec![1.0_f64, 2.0, 3.0]).expect("diagonal tensor");
+    assert_eq!(diagonal.dims(), vec![3, 3]);
+
+    let error = diagonal.adopt_into(&context).unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("structured storage"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
+fn adoption_rejects_a_tensor_that_tracks_gradients() {
+    let context = cpu_context();
+    let tracked = IdxTensor::from_dense(vec![DynIndex::new_dyn(2)], vec![1.0_f64, 2.0])
+        .expect("tensor")
+        .enable_grad()
+        .expect("grad tracking");
+
+    let error = tracked.adopt_into(&context).unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("tracks gradients"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
+fn adoption_rejects_a_tensor_bound_to_a_different_cpu_runtime() {
+    let first = cpu_context();
+    let second = cpu_context();
+    let bound =
+        IdxTensor::from_dense_in(&first, vec![DynIndex::new_dyn(1)], vec![3.0_f64]).unwrap();
+
+    let error = bound.adopt_into(&second).unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("different execution context"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
 fn decision_readback_returns_values_in_the_supplied_cpu_runtime() {
     let context = cpu_context();
     let tensor = IdxTensor::from_dense_in(
