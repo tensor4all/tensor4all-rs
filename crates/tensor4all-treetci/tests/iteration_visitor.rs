@@ -89,7 +89,7 @@ struct Run {
 fn state() -> TreeTCI2<f64> {
     let mut state = TreeTCI2::<f64>::new(vec![2; N_SITES], graph()).unwrap();
     state.add_global_pivots(&[vec![0; N_SITES]]).unwrap();
-    state.max_sample_value = 1.0;
+    state.set_max_sample_value(1.0);
     state
 }
 

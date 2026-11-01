@@ -67,17 +67,17 @@ use tensor4all_core::ColMajorArray;
 pub struct TreeTCI2<T> {
     /// Pivot sets keyed by canonical subtree keys.
     /// Shape of each entry: [n_subtree_sites, n_pivots].
-    pub ijset: HashMap<SubtreeKey, ColMajorArray<usize>>,
+    pub(crate) ijset: HashMap<SubtreeKey, ColMajorArray<usize>>,
     /// Local dimensions for each site.
-    pub local_dims: Vec<usize>,
+    pub(crate) local_dims: Vec<usize>,
     /// Tree graph metadata.
-    pub graph: TreeTciGraph,
+    pub(crate) graph: TreeTciGraph,
     /// Error estimate per edge bipartition.
-    pub bond_errors: BTreeMap<TreeTciEdge, f64>,
+    pub(crate) bond_errors: BTreeMap<TreeTciEdge, f64>,
     /// Back-truncation style pivot errors.
-    pub pivot_errors: Vec<f64>,
+    pub(crate) pivot_errors: Vec<f64>,
     /// Maximum observed sample magnitude for normalization.
-    pub max_sample_value: f64,
+    pub(crate) max_sample_value: f64,
     marker: PhantomData<T>,
 }
 
@@ -228,6 +228,131 @@ impl<T> TreeTCI2<T> {
             .filter_map(|arr| arr.ncols())
             .max()
             .unwrap_or(0)
+    }
+
+    /// Tree graph metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::{TreeTCI2, TreeTciGraph};
+    ///
+    /// let state = TreeTCI2::<f64>::new(vec![2, 2, 2], TreeTciGraph::linear_chain(3)?)?;
+    /// assert_eq!(state.graph().n_sites(), 3);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn graph(&self) -> &TreeTciGraph {
+        &self.graph
+    }
+
+    /// Local dimension of each site.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::{TreeTCI2, TreeTciGraph};
+    ///
+    /// let state = TreeTCI2::<f64>::new(vec![2, 3], TreeTciGraph::linear_chain(2)?)?;
+    /// assert_eq!(state.local_dims(), &[2, 3]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn local_dims(&self) -> &[usize] {
+        &self.local_dims
+    }
+
+    /// The pivot set stored for the subtree `key`, if any.
+    ///
+    /// The array has shape `[n_subtree_sites, n_pivots]`: one column per pivot, one row per site of the subtree in
+    /// the key's order. The keys of an edge come from
+    /// [`TreeTciGraph::subregion_vertices`](crate::TreeTciGraph::subregion_vertices).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::{TreeTCI2, TreeTciEdge, TreeTciGraph};
+    ///
+    /// let edge = TreeTciEdge::new(0, 1);
+    /// let mut state = TreeTCI2::<f64>::new(vec![2, 2], TreeTciGraph::new(2, &[edge])?)?;
+    /// let (left, _right) = state.graph().subregion_vertices(edge)?;
+    /// assert!(state.pivot_set(&left).is_none());
+    /// state.add_global_pivots(&[vec![0, 1]])?;
+    /// let pivots = state.pivot_set(&left).expect("a pivot set after seeding");
+    /// assert_eq!(pivots.ncols(), Some(1));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn pivot_set(&self, key: &SubtreeKey) -> Option<&ColMajorArray<usize>> {
+        self.ijset.get(key)
+    }
+
+    /// Error estimate per edge bipartition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::{TreeTCI2, TreeTciEdge, TreeTciGraph};
+    ///
+    /// let edge = TreeTciEdge::new(0, 1);
+    /// let mut state = TreeTCI2::<f64>::new(vec![2, 2], TreeTciGraph::new(2, &[edge])?)?;
+    /// assert_eq!(state.bond_errors().get(&edge), Some(&0.0));
+    /// state.update_bond_error(edge, 0.25);
+    /// assert_eq!(state.bond_errors().get(&edge), Some(&0.25));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn bond_errors(&self) -> &BTreeMap<TreeTciEdge, f64> {
+        &self.bond_errors
+    }
+
+    /// Back-truncation style pivot errors of the current sweep.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::{TreeTCI2, TreeTciGraph};
+    ///
+    /// let mut state = TreeTCI2::<f64>::new(vec![2, 2], TreeTciGraph::linear_chain(2)?)?;
+    /// assert!(state.pivot_errors().is_empty());
+    /// state.update_pivot_errors(&[0.5, 0.1]);
+    /// assert_eq!(state.pivot_errors(), &[0.5, 0.1]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn pivot_errors(&self) -> &[f64] {
+        &self.pivot_errors
+    }
+
+    /// Maximum observed sample magnitude, the scale of the relative tolerance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::{TreeTCI2, TreeTciGraph};
+    ///
+    /// let state = TreeTCI2::<f64>::new(vec![2, 2], TreeTciGraph::linear_chain(2)?)?;
+    /// assert_eq!(state.max_sample_value(), 0.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn max_sample_value(&self) -> f64 {
+        self.max_sample_value
+    }
+
+    /// Set the maximum sample magnitude that normalizes the error when
+    /// [`TreeTciOptions::scale_tolerance`](crate::TreeTciOptions::scale_tolerance) is on.
+    ///
+    /// Call it before optimizing a state built by hand, with the largest absolute value of the target seen so far;
+    /// the high-level entry points do this themselves. Pass a finite positive value: zero, a negative value and NaN
+    /// leave the error unscaled, and an infinite value would scale every error to zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treetci::{TreeTCI2, TreeTciGraph};
+    ///
+    /// let mut state = TreeTCI2::<f64>::new(vec![2, 2], TreeTciGraph::linear_chain(2)?)?;
+    /// state.set_max_sample_value(4.0);
+    /// assert_eq!(state.max_sample_value(), 4.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn set_max_sample_value(&mut self, value: f64) {
+        self.max_sample_value = value;
     }
 }
 

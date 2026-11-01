@@ -194,11 +194,13 @@ where
         .collect();
     let init_batch = GlobalIndexBatch::new(&flat, n_sites, pivots.len())?;
     let init_vals = evaluate(init_batch)?;
-    tci.max_sample_value = init_vals
-        .iter()
-        .map(|value| <V as tensor4all_core::Scalar>::abs_val(*value))
-        .fold(0.0f64, f64::max);
-    if tci.max_sample_value <= 0.0 {
+    tci.set_max_sample_value(
+        init_vals
+            .iter()
+            .map(|value| <V as tensor4all_core::Scalar>::abs_val(*value))
+            .fold(0.0f64, f64::max),
+    );
+    if tci.max_sample_value() <= 0.0 {
         return Err(QuanticsTCIError::InvalidConfiguration {
             message: "initial pivots must not all evaluate to zero".to_string(),
         });

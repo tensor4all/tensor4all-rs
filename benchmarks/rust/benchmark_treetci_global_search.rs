@@ -19,10 +19,10 @@ use std::time::Instant;
 use anyhow::{anyhow, Result};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+use tensor4all_core::{ColMajorArrayRef, DynIndex};
 use tensor4all_treetci::{
-    optimize_with_proposer, to_treetn, AllEdges, DefaultProposer, GlobalIndexBatch, SubtreeKey,
-    TreeTCI2, TreeTciEdge, TreeTciGraph, TreeTciOptions,
+    optimize_with_proposer, to_treetn, AllEdges, DefaultProposer, GlobalIndexBatch, TreeTCI2,
+    TreeTciEdge, TreeTciGraph, TreeTciOptions,
 };
 use tensor4all_treetn::{CachedEvaluatorOptions, TreeTNCachedEvaluator};
 
@@ -113,17 +113,24 @@ fn branched_tree() -> Case {
     }
 }
 
-fn hash_pivot_sets(
-    hasher: &mut DefaultHasher,
-    ijset: &std::collections::HashMap<SubtreeKey, ColMajorArray<usize>>,
-) {
-    let mut entries: Vec<_> = ijset.iter().collect();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-    for (key, pivots) in entries {
+/// Hashes every stored pivot set: each belongs to one side of an edge, so the keys come from the graph.
+fn hash_pivot_sets(hasher: &mut DefaultHasher, state: &TreeTCI2<f64>) -> Result<()> {
+    let mut keys = Vec::new();
+    for edge in state.graph().edges() {
+        let (left, right) = state.graph().subregion_vertices(edge)?;
+        keys.extend([left, right]);
+    }
+    keys.sort();
+    keys.dedup();
+    for key in keys {
+        let pivots = state
+            .pivot_set(&key)
+            .ok_or_else(|| anyhow!("no pivot set stored for {:?}", key.as_slice()))?;
         key.as_slice().hash(hasher);
         pivots.shape().hash(hasher);
         pivots.data().hash(hasher);
     }
+    Ok(())
 }
 
 struct RunResult {
@@ -156,7 +163,7 @@ fn run_case(case: &Case, samples: &[usize], exact: &[f64]) -> Result<RunResult> 
     let mut state = TreeTCI2::<f64>::new(case.local_dims.clone(), graph)?;
     let initial = vec![0usize; n_sites];
     state.add_global_pivots(std::slice::from_ref(&initial))?;
-    state.max_sample_value = f(&initial).abs();
+    state.set_max_sample_value(f(&initial).abs());
     let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } =
         optimize_with_proposer(
             &mut state,
@@ -172,7 +179,7 @@ fn run_case(case: &Case, samples: &[usize], exact: &[f64]) -> Result<RunResult> 
     let mut hasher = DefaultHasher::new();
     // Since #833, only current pivot sets exist. Historical result files
     // included pass snapshots and their fingerprints are not comparable.
-    hash_pivot_sets(&mut hasher, &state.ijset);
+    hash_pivot_sets(&mut hasher, &state)?;
     let pivot_fingerprint = hasher.finish();
 
     let site_indices: Vec<DynIndex> = (0..n_sites)

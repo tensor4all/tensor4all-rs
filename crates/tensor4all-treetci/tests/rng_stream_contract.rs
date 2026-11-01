@@ -16,7 +16,7 @@ fn two_site_state() -> TreeTCI2<f64> {
     let graph = TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap();
     let mut state = TreeTCI2::<f64>::new(vec![2, 2], graph).unwrap();
     state.add_global_pivots(&[vec![0, 0]]).unwrap();
-    state.max_sample_value = 1.0;
+    state.set_max_sample_value(1.0);
     state
 }
 

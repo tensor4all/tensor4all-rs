@@ -94,7 +94,7 @@ where
         _ => {
             let mut state = TreeTCI2::<T>::new(vec![3, 3, 2], graph).unwrap();
             state.add_global_pivots(&[vec![0; 3]]).unwrap();
-            state.max_sample_value = CommonScalar::abs_val(scale);
+            state.set_max_sample_value(CommonScalar::abs_val(scale));
             let result = match entry {
                 EntryPoint::Default => optimize_default(&mut state, evaluate, &options),
                 EntryPoint::Proposer => optimize_with_proposer(

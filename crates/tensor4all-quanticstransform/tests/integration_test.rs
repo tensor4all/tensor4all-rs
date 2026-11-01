@@ -96,7 +96,7 @@ fn contract_treetn_to_vector(
 
     // Extract data from the tensor
     // The tensor has indices ordered by the indices field
-    let ext_indices = &full_tensor.indices;
+    let ext_indices = &full_tensor.indices();
 
     // Build mapping from site index ID to position in external indices
     let mut idx_to_pos: HashMap<DynId, usize> = HashMap::new();
@@ -259,7 +259,7 @@ fn contract_operator_to_dense_matrix(
         .contract_to_tensor()
         .expect("Failed to contract MPO");
 
-    let ext_indices = &dense_tensor.indices;
+    let ext_indices = &dense_tensor.indices();
     let data = dense_tensor
         .to_vec::<Complex64>()
         .expect("Expected DenseC64 storage");

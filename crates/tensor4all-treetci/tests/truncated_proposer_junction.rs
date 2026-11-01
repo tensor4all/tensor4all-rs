@@ -123,12 +123,15 @@ fn assert_truncated_proposer_converges(tree: &JunctionTree) {
     let evaluate = |batch: GlobalIndexBatch<'_>| tree.evaluate(batch);
     let mut state = TreeTCI2::<f64>::new(local_dims, tree.graph.clone()).unwrap();
     state.add_global_pivots(&[vec![0; n_sites]]).unwrap();
-    state.max_sample_value = tree.value(&vec![0; n_sites]).abs();
-    let junction_edges = state.graph.adjacent_edges(0, &[]);
+    state.set_max_sample_value(tree.value(&vec![0; n_sites]).abs());
+    let junction_edges = state.graph().adjacent_edges(0, &[]);
     assert_eq!(junction_edges.len(), 3);
     let junction_rank = |state: &TreeTCI2<f64>, edge: TreeTciEdge| {
-        let (key, _) = state.graph.subregion_vertices(edge).unwrap();
-        state.ijset[&key].ncols().unwrap()
+        let (key, _) = state.graph().subregion_vertices(edge).unwrap();
+        state
+            .pivot_set(&key)
+            .and_then(|pivots| pivots.ncols())
+            .expect("a pivot set after seeding")
     };
     for &edge in &junction_edges {
         assert_eq!(junction_rank(&state, edge), 1);

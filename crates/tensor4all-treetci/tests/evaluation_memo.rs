@@ -153,7 +153,7 @@ fn public_edge_updates_cross_default_chunk_boundary_in_column_major_order() {
     let mut state =
         TreeTCI2::<f64>::new(vec![257, 257], TreeTciGraph::linear_chain(2).unwrap()).unwrap();
     state.add_global_pivots(&[vec![0, 0]]).unwrap();
-    state.max_sample_value = 1.0;
+    state.set_max_sample_value(1.0);
     let mut calls = Vec::new();
     optimize_default(
         &mut state,
@@ -197,7 +197,7 @@ fn continued_optimization_and_caller_rng_each_own_a_fresh_cache() {
     let mut state =
         TreeTCI2::<f64>::new(vec![2, 2], TreeTciGraph::linear_chain(2).unwrap()).unwrap();
     state.add_global_pivots(&[vec![0, 0]]).unwrap();
-    state.max_sample_value = 2.0;
+    state.set_max_sample_value(2.0);
     let options = TreeTciOptions {
         evaluation_cache_bytes: Some(1024),
         max_iter: 1,
