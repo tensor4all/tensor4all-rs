@@ -13,8 +13,9 @@
 //! evaluation cached.
 
 use super::error;
-use super::{CacheBackend, IndexInt};
+use super::{cache_key::CacheKey, flat_index, IndexInt, InnerCache};
 use crate::ColMajorArrayRef;
+use std::collections::{hash_map::Entry, HashMap};
 
 /// Failure while evaluating a batch through [`MultiIndexCache`].
 ///
@@ -111,7 +112,7 @@ where
     I: IndexInt,
     V: Clone + Send + Sync + 'static,
 {
-    backend: CacheBackend<V>,
+    backend: InnerCache<V>,
     local_dims: Vec<usize>,
     key_bytes: usize,
     hits: usize,
@@ -200,7 +201,7 @@ where
         local_dims: &[usize],
         retained_byte_limit: usize,
     ) -> Result<Self, error::CacheKeyError> {
-        let backend = CacheBackend::Auto(super::InnerCache::<V>::new(local_dims)?);
+        let backend = InnerCache::<V>::new(local_dims)?;
         let key_bytes = backend.key_bytes();
         Ok(Self {
             backend,
@@ -304,7 +305,6 @@ where
             .into());
         }
         let n_sites = indices.shape()[0];
-        let n_points = indices.shape()[1];
         if n_sites != self.local_dims.len() {
             return Err(error::CacheKeyError::InvalidIndexLength {
                 expected: self.local_dims.len(),
@@ -312,56 +312,30 @@ where
             }
             .into());
         }
-        let pending =
-            MultiIndexCache::<usize, I>::with_retained_byte_limit(&self.local_dims, usize::MAX)?;
-        let mut miss_data = Vec::new();
-        let mut slots = Vec::with_capacity(n_points);
-        for position in 0..n_points {
-            // INVARIANT: The checked 2D view contains exactly n_sites*n_points
-            // elements, including empty columns for a zero-site scalar batch.
-            let point = &indices.data()[position * n_sites..(position + 1) * n_sites];
-            if let Some(value) = self.get(point)? {
-                slots.push(Ok(value));
-            } else {
-                let slot = match pending.backend.get(point) {
-                    Some(slot) => slot,
-                    None => {
-                        let slot = pending.len();
-                        pending.backend.insert(point, slot);
-                        miss_data.extend_from_slice(point);
-                        slot
-                    }
-                };
-                slots.push(Err(slot));
-            }
+        macro_rules! evaluate_with {
+            ($cache:expr, $coeffs:expr) => {
+                evaluate_encoded_batch(
+                    $cache
+                        .get_mut()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                    $coeffs,
+                    &self.local_dims,
+                    self.retained_byte_limit,
+                    &mut self.hits,
+                    &mut self.misses,
+                    &mut self.dropped_inserts,
+                    indices,
+                    evaluate,
+                )
+            };
         }
-        let n_misses = pending.len();
-        let values = if n_misses == 0 {
-            Vec::new()
-        } else {
-            let shape = [n_sites, n_misses];
-            let values = evaluate(ColMajorArrayRef::new(&miss_data, &shape)?)
-                .map_err(CachedBatchError::Evaluation)?;
-            if values.len() != n_misses {
-                return Err(error::CacheKeyError::BatchResultLength {
-                    expected: n_misses,
-                    got: values.len(),
-                }
-                .into());
-            }
-            for (position, value) in values.iter().enumerate() {
-                let point = &miss_data[position * n_sites..(position + 1) * n_sites];
-                self.insert(point, value.clone())?;
-            }
-            values
-        };
-        Ok(slots
-            .into_iter()
-            .map(|slot| match slot {
-                Ok(value) => value,
-                Err(position) => values[position].clone(),
-            })
-            .collect())
+        match &mut self.backend {
+            InnerCache::U64 { cache, coeffs } => evaluate_with!(cache, coeffs),
+            InnerCache::U128 { cache, coeffs } => evaluate_with!(cache, coeffs),
+            InnerCache::U256 { cache, coeffs } => evaluate_with!(cache, coeffs),
+            InnerCache::U512 { cache, coeffs } => evaluate_with!(cache, coeffs),
+            InnerCache::U1024 { cache, coeffs } => evaluate_with!(cache, coeffs),
+        }
     }
 
     /// Store one successfully evaluated value.
@@ -637,22 +611,142 @@ where
     }
 
     fn validate(&self, idx: &[I]) -> Result<(), error::CacheKeyError> {
-        if idx.len() != self.local_dims.len() {
-            return Err(error::CacheKeyError::InvalidIndexLength {
-                expected: self.local_dims.len(),
-                got: idx.len(),
+        validate_index(&self.local_dims, idx)
+    }
+}
+
+fn validate_index<I: IndexInt>(
+    local_dims: &[usize],
+    idx: &[I],
+) -> Result<(), error::CacheKeyError> {
+    if idx.len() != local_dims.len() {
+        return Err(error::CacheKeyError::InvalidIndexLength {
+            expected: local_dims.len(),
+            got: idx.len(),
+        });
+    }
+    for (axis, (&value, &dim)) in idx.iter().zip(local_dims).enumerate() {
+        let value = value.to_usize();
+        if value >= dim {
+            return Err(error::CacheKeyError::IndexOutOfBounds {
+                axis,
+                index: value,
+                dim,
             });
         }
-        for (axis, (&value, &dim)) in idx.iter().zip(&self.local_dims).enumerate() {
-            let value = value.to_usize();
-            if value >= dim {
-                return Err(error::CacheKeyError::IndexOutOfBounds {
-                    axis,
-                    index: value,
-                    dim,
-                });
+    }
+    Ok(())
+}
+
+// INVARIANT: These are disjoint fields of one cache plus its batch and callback;
+// grouping the borrowed fields would add an otherwise unused state type.
+#[allow(clippy::too_many_arguments)]
+fn evaluate_encoded_batch<K, V, I, F>(
+    cache: &mut HashMap<K, V>,
+    coeffs: &[K],
+    local_dims: &[usize],
+    retained_byte_limit: usize,
+    hits: &mut usize,
+    misses: &mut usize,
+    dropped_inserts: &mut usize,
+    indices: ColMajorArrayRef<'_, I>,
+    evaluate: F,
+) -> Result<Vec<V>, CachedBatchError>
+where
+    K: CacheKey,
+    V: Clone,
+    I: IndexInt,
+    F: FnOnce(ColMajorArrayRef<'_, I>) -> anyhow::Result<Vec<V>>,
+{
+    let n_sites = local_dims.len();
+    let n_points = indices.shape()[1];
+    let mut pending = HashMap::new();
+    let mut miss_keys = Vec::new();
+    let mut miss_data = Vec::new();
+    let mut slots = Vec::with_capacity(n_points);
+    for position in 0..n_points {
+        // INVARIANT: The checked 2D view contains exactly n_sites*n_points
+        // elements, including empty columns for a zero-site scalar batch.
+        let point = &indices.data()[position * n_sites..(position + 1) * n_sites];
+        validate_index(local_dims, point)?;
+        let key = flat_index(point, coeffs);
+        if let Some(value) = cache.get(&key) {
+            *hits += 1;
+            slots.push(Ok(value.clone()));
+        } else {
+            *misses += 1;
+            let slot = match pending.entry(key.clone()) {
+                Entry::Occupied(entry) => *entry.get(),
+                Entry::Vacant(entry) => {
+                    let slot = miss_keys.len();
+                    entry.insert(slot);
+                    miss_keys.push(key);
+                    miss_data.extend_from_slice(point);
+                    slot
+                }
+            };
+            slots.push(Err(slot));
+        }
+    }
+    let n_misses = miss_keys.len();
+    let values = if n_misses == 0 {
+        Vec::new()
+    } else {
+        let shape = [n_sites, n_misses];
+        let values = evaluate(ColMajorArrayRef::new(&miss_data, &shape)?)
+            .map_err(CachedBatchError::Evaluation)?;
+        if values.len() != n_misses {
+            return Err(error::CacheKeyError::BatchResultLength {
+                expected: n_misses,
+                got: values.len(),
+            }
+            .into());
+        }
+        let entry_bytes = std::mem::size_of::<K>() + std::mem::size_of::<V>();
+        for (key, value) in miss_keys.into_iter().zip(&values) {
+            if (cache.len() * entry_bytes).saturating_add(entry_bytes) > retained_byte_limit {
+                *dropped_inserts += 1;
+            } else {
+                cache.insert(key, value.clone());
             }
         }
-        Ok(())
+        values
+    };
+    Ok(slots
+        .into_iter()
+        .map(|slot| match slot {
+            Ok(value) => value,
+            Err(position) => values[position].clone(),
+        })
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_cache_batch_does_not_grow_persistent_capacity() {
+        let mut cache = MultiIndexCache::<f64>::with_retained_byte_limit(&[128], 16).unwrap();
+        cache.insert(&[0], 7.0).unwrap();
+        let capacity = match &cache.backend {
+            InnerCache::U64 { cache, .. } => super::super::read_lock(cache).capacity(),
+            _ => unreachable!(),
+        };
+        let points: Vec<usize> = (1..128).collect();
+        let out = cache
+            .evaluate_batched(
+                ColMajorArrayRef::new(&points, &[1, 127]).unwrap(),
+                |misses| Ok(misses.data().iter().map(|&i| i as f64).collect()),
+            )
+            .unwrap();
+        assert_eq!(out, points.iter().map(|&i| i as f64).collect::<Vec<_>>());
+        assert_eq!((cache.len(), cache.dropped_inserts()), (1, 127));
+        match &cache.backend {
+            InnerCache::U64 { cache, .. } => {
+                assert_eq!(super::super::read_lock(cache).capacity(), capacity);
+            }
+            _ => unreachable!(),
+        }
     }
 }

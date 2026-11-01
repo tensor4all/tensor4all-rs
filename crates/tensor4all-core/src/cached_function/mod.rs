@@ -363,14 +363,6 @@ impl<V: Clone + Send + Sync + 'static> CacheBackend<V> {
         }
     }
 
-    /// Size in bytes of one key; the type-erased custom backend does not report one.
-    fn key_bytes(&self) -> usize {
-        match self {
-            Self::Auto(inner) => inner.key_bytes(),
-            Self::Custom(_) => 0,
-        }
-    }
-
     fn key_type_name(&self) -> &'static str {
         match self {
             Self::Auto(inner) => inner.key_type_name(),
