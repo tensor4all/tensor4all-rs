@@ -6640,6 +6640,14 @@ where
     grouped_multi_branch_message_contraction(route, spec, raw, physical_values, child_columns)
 }
 
+/// The chain message of every point, one point at a time: `output[point][parent] = sum over child of
+/// raw[physical, parent, child] * child_columns[point][child]`.
+///
+/// This serves the calls too small for the grouped matrix product, among them every one-point readout. Each output
+/// value is the sum over the child values in ascending order, started from zero, so the rounding does not depend on
+/// how the loops below are arranged. The child values are the outer loop: the `parent_dim` running sums are
+/// independent, which lets the adds overlap (a single sum is a chain of dependent adds), and a contiguous parent
+/// axis is read as a slice.
 fn scalar_chain_message_contraction<T>(
     spec: ChainContractionSpec,
     raw: &[T],
@@ -6661,36 +6669,55 @@ where
     let output_len = point_count
         .checked_mul(parent_dim)
         .ok_or_else(|| anyhow::anyhow!("chain parent-message shape overflows usize"))?;
+    let child_len = point_count
+        .checked_mul(child_dim)
+        .ok_or_else(|| anyhow::anyhow!("chain child-message shape overflows usize"))?;
+    anyhow::ensure!(
+        child_columns.len() >= child_len,
+        "chain child-message has {} values, {point_count} points x {child_dim} child values need {child_len}",
+        child_columns.len()
+    );
+    let (physical_stride, parent_stride, child_stride) = (
+        strides[physical_axis],
+        strides[parent_axis],
+        strides[child_axis],
+    );
     let mut output = vec![T::default(); output_len];
+    if parent_dim == 0 || child_dim == 0 {
+        return Ok(output);
+    }
+    // The offset of the last value this call reads for a physical value; the strides are non-negative, so it is
+    // the largest.
+    let span = (parent_dim - 1)
+        .checked_mul(parent_stride)
+        .and_then(|parent| parent.checked_add((child_dim - 1).checked_mul(child_stride)?))
+        .ok_or_else(|| anyhow::anyhow!("chain tensor offset overflows usize"))?;
     for (point, &physical_value) in physical_values.iter().enumerate() {
-        for parent_value in 0..parent_dim {
-            let mut sum = T::default();
-            for child_value in 0..child_dim {
-                let mut axis_values = [0usize; 3];
-                axis_values[physical_axis] = physical_value;
-                axis_values[parent_axis] = parent_value;
-                axis_values[child_axis] = child_value;
-                let flat = axis_values[0]
-                    .checked_mul(strides[0])
-                    .and_then(|value| value.checked_add(axis_values[1].checked_mul(strides[1])?))
-                    .and_then(|value| value.checked_add(axis_values[2].checked_mul(strides[2])?))
-                    .ok_or_else(|| anyhow::anyhow!("chain tensor offset overflows usize"))?;
-                let child_offset = point
-                    .checked_mul(child_dim)
-                    .and_then(|value| value.checked_add(child_value))
-                    .ok_or_else(|| anyhow::anyhow!("chain child offset overflows usize"))?;
-                sum += *raw
-                    .get(flat)
-                    .ok_or_else(|| anyhow::anyhow!("chain tensor offset is out of bounds"))?
-                    * *child_columns.get(child_offset).ok_or_else(|| {
-                        anyhow::anyhow!("chain child column offset is out of bounds")
-                    })?;
+        let base = physical_value
+            .checked_mul(physical_stride)
+            .ok_or_else(|| anyhow::anyhow!("chain tensor offset overflows usize"))?;
+        let last = base
+            .checked_add(span)
+            .ok_or_else(|| anyhow::anyhow!("chain tensor offset overflows usize"))?;
+        anyhow::ensure!(
+            last < raw.len(),
+            "chain tensor offset {last} is out of bounds"
+        );
+        // INVARIANT: every offset below is `base + parent * parent_stride + child * child_stride` with
+        // `parent < parent_dim` and `child < child_dim`, so it is at most `last`, which is checked above.
+        let columns = &child_columns[point * child_dim..(point + 1) * child_dim];
+        let sums = &mut output[point * parent_dim..(point + 1) * parent_dim];
+        for (child, &child_value) in columns.iter().enumerate() {
+            let start = base + child * child_stride;
+            if parent_stride == 1 {
+                for (sum, &value) in sums.iter_mut().zip(&raw[start..start + parent_dim]) {
+                    *sum += value * child_value;
+                }
+            } else {
+                for (parent, sum) in sums.iter_mut().enumerate() {
+                    *sum += raw[start + parent * parent_stride] * child_value;
+                }
             }
-            let destination = point
-                .checked_mul(parent_dim)
-                .and_then(|value| value.checked_add(parent_value))
-                .ok_or_else(|| anyhow::anyhow!("chain output offset overflows usize"))?;
-            output[destination] = sum;
         }
     }
     Ok(output)
