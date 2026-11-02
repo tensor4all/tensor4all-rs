@@ -8,7 +8,6 @@ use super::{
     ReconstructionOptions, ReconstructionReport, ReconstructionTarget, ReconstructionTolerance,
     Region,
 };
-use crate::projector::canonical_index_cmp;
 use crate::{
     DynIndex, PartitionedTreeTNError, PatchSplitStrategy, Projector, Result, SubDomainTreeTN,
 };
@@ -210,18 +209,12 @@ fn validate<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
         return Err(invalid("target_bond_dim and max_regions must be positive"));
     }
     validate_tolerance(tolerance)?;
-    let mut all = Vec::new();
     if let Some(network) = &target.network {
         if network.node_index(center).is_none() {
             return Err(PartitionedTreeTNError::InvalidCenter);
         }
-        for node in network.node_names() {
-            if let Some(indices) = network.site_space(node) {
-                all.extend(indices.iter().cloned());
-            }
-        }
     }
-    all.sort_by(canonical_index_cmp);
+    let all = target.logical_site_indices();
     let mut seen = HashSet::new();
     for requested in &options.patch_order {
         if !seen.insert(requested) {
@@ -268,7 +261,7 @@ fn reduce<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
         b.projector()
             .len()
             .cmp(&a.projector().len())
-            .then_with(|| a.projector().canonical_cmp(b.projector()))
+            .then_with(|| a.patch_order_key().cmp(b.patch_order_key()))
     });
     for source in ordered {
         // INVARIANT: source has already been restricted to this region. Forget

@@ -16,7 +16,7 @@ use std::hash::Hash;
 
 use crate::error::{PartitionedTreeTNError, Result};
 use crate::partitioned_tree_tn::PartitionedTreeTN;
-use crate::projector::{canonical_index_cmp, Projector};
+use crate::projector::Projector;
 use crate::subdomain_tree_tn::{
     ensure_center, validate_contraction_options, ScalarKind, SubDomainTreeTN,
 };
@@ -598,7 +598,11 @@ where
     }
 
     let mut grouped: Vec<_> = groups.into_iter().collect();
-    grouped.sort_by(|(a, _), (b, _)| a.canonical_cmp(b));
+    grouped.sort_by(|(_, (_, left)), (_, (_, right))| {
+        left.first()
+            .map(SubDomainTreeTN::patch_order_key)
+            .cmp(&right.first().map(SubDomainTreeTN::patch_order_key))
+    });
     let mut subdomains = Vec::new();
     for (_, (pairs, contributions)) in grouped {
         subdomains.extend(contract_group_project_first(
@@ -1248,7 +1252,9 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     let mut stats = Vec::with_capacity(partitioned.len());
-    for subdomain in partitioned.values() {
+    let mut patches: Vec<_> = partitioned.values().collect();
+    patches.sort_by(|left, right| left.patch_order_key().cmp(right.patch_order_key()));
+    for subdomain in patches {
         let volume = subdomain_volume(subdomain)?;
         let norm_squared = subdomain.norm_squared()?;
         if !norm_squared.is_finite() {
@@ -1434,8 +1440,12 @@ fn split_candidates<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    let mut all_indices = subdomain.all_indices();
-    all_indices.sort_by(canonical_index_cmp);
+    let mut names = subdomain.data().node_names();
+    names.sort();
+    let all_indices: Vec<_> = names
+        .iter()
+        .flat_map(|name| subdomain.data().node_site_indices(name).unwrap_or_default())
+        .collect();
     let raw_candidates: Vec<_> = if options.patch_order.is_empty() {
         all_indices.clone()
     } else {

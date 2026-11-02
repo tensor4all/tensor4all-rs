@@ -14,6 +14,7 @@ use tensor4all_treetn::{
 use super::{finite, invalid, SubsetOperatorOptions};
 use crate::subdomain_tree_tn::{
     ensure_center, ensure_same_dtype, ensure_same_topology, ensure_same_tree_structure,
+    PatchOrderKey,
 };
 use crate::{
     DynIndex, PartitionedTreeTN, PartitionedTreeTNError, Projector, Result, SubDomainTreeTN,
@@ -23,6 +24,15 @@ use crate::{
 enum Patch<V: Clone + Hash + Eq + Send + Sync + Debug> {
     Stored(Box<SubDomainTreeTN<V>>),
     Product(Box<(SubDomainTreeTN<V>, SubDomainTreeTN<V>)>),
+}
+
+impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> Patch<V> {
+    fn order_key(&self) -> (&PatchOrderKey<V>, Option<&PatchOrderKey<V>>) {
+        match self {
+            Self::Stored(patch) => (patch.patch_order_key(), None),
+            Self::Product(pair) => (pair.0.patch_order_key(), Some(pair.1.patch_order_key())),
+        }
+    }
 }
 
 /// One transformed image together with the preimage support it came from.
@@ -106,7 +116,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     pub fn from_partition(partition: &PartitionedTreeTN<V>) -> Result<Self> {
         partition.validate_contents()?;
         let mut patches: Vec<_> = partition.values().collect();
-        patches.sort_by(|a, b| a.projector().canonical_cmp(b.projector()));
+        patches.sort_by(|a, b| a.patch_order_key().cmp(b.patch_order_key()));
         let network = patches.first().map(|p| p.site_index_network().clone());
         let mut scale = 0.0_f64;
         let mut stored = Vec::with_capacity(patches.len());
@@ -160,8 +170,12 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn from_tensor_products(
-        pairs: Vec<(SubDomainTreeTN<V>, SubDomainTreeTN<V>)>,
+        mut pairs: Vec<(SubDomainTreeTN<V>, SubDomainTreeTN<V>)>,
     ) -> Result<Self> {
+        pairs.sort_by(|a, b| {
+            (a.0.patch_order_key(), a.1.patch_order_key())
+                .cmp(&(b.0.patch_order_key(), b.1.patch_order_key()))
+        });
         let mut projectors = Vec::with_capacity(pairs.len());
         let mut network = None;
         for (left, right) in &pairs {
@@ -209,7 +223,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             scale = finite(scale.hypot(patch_norm))?;
             patches.push((projector, Patch::Product(Box::new((left, right)))));
         }
-        patches.sort_by(|a, b| a.0.canonical_cmp(&b.0));
+        patches.sort_by(|a, b| a.1.order_key().cmp(&b.1.order_key()));
         Ok(Self {
             patches,
             network,
@@ -357,7 +371,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
                 (projector, Patch::Stored(Box::new(prepared.image)))
             })
             .collect();
-        patches.sort_by(|a, b| a.0.canonical_cmp(&b.0));
+        patches.sort_by(|a, b| a.1.order_key().cmp(&b.1.order_key()));
 
         Ok(Self {
             patches,
@@ -569,6 +583,26 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// operator application.
     pub(super) fn patch_projectors(&self) -> impl Iterator<Item = &Projector> {
         self.patches.iter().map(|(projector, _)| projector)
+    }
+
+    pub(super) fn logical_site_indices(&self) -> Vec<DynIndex> {
+        let Some((_, patch)) = self.patches.first() else {
+            return Vec::new();
+        };
+        let factors: Vec<&SubDomainTreeTN<V>> = match patch {
+            Patch::Stored(patch) => vec![patch],
+            Patch::Product(pair) => vec![&pair.0, &pair.1],
+        };
+        let mut nodes = factors[0].data().node_names();
+        nodes.sort();
+        nodes
+            .into_iter()
+            .flat_map(|node| {
+                factors.iter().flat_map(move |patch| {
+                    patch.data().node_site_indices(&node).unwrap_or_default()
+                })
+            })
+            .collect()
     }
 
     pub(super) fn materialize_terms(&self, center: &V) -> Result<Vec<SubDomainTreeTN<V>>> {

@@ -7,6 +7,7 @@ use crate::error::{PartitionedTreeTNError, Result};
 use crate::projector::Projector;
 use tensor4all_core::{
     validate_svd_truncation_options, DynIndex, IdxTensor, IndexLike, SvdTruncationOptionsError,
+    TagSetLike,
 };
 use tensor4all_treetn::{
     contraction::{self, ContractionMethod, ContractionOptions},
@@ -51,7 +52,15 @@ where
     data: TreeTN<IdxTensor, V>,
     projector: Projector,
     budget_squared: Option<f64>,
+    order_key: PatchOrderKey<V>,
 }
+
+// This type cannot contain a DynIndex or its allocation ID.
+pub(crate) type PatchOrderKey<V> = (
+    Vec<(V, usize, Vec<String>, usize, i64)>,
+    Vec<(V, usize)>,
+    Vec<(V, usize, usize)>,
+);
 
 impl<V> SubDomainTreeTN<V>
 where
@@ -132,6 +141,12 @@ where
         Ok(())
     }
 
+    /// Equal keys can contain different payloads; their order, including content-identical ties, is unspecified.
+    /// A content digest needs a non-materializing storage accessor.
+    pub(crate) fn patch_order_key(&self) -> &PatchOrderKey<V> {
+        &self.order_key
+    }
+
     pub(crate) fn budget_squared(&self) -> Option<f64> {
         self.budget_squared
     }
@@ -165,10 +180,41 @@ where
         if let Some(budget_squared) = budget_squared {
             validate_budget_squared(budget_squared)?;
         }
+        let mut signature = Vec::new();
+        let mut labels = Vec::new();
+        let mut coordinates = Vec::new();
+        let mut names = data.node_names();
+        names.sort();
+        for name in names {
+            for (axis, index) in data
+                .node_site_indices(&name)
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+            {
+                let mut tags: Vec<_> = index.tags.iter().collect();
+                tags.sort();
+                signature.push((name.clone(), axis, tags, index.dim, index.plev));
+                labels.push((name.clone(), axis));
+                if let Some(value) = projector.get(index) {
+                    coordinates.push((name.clone(), axis, value));
+                }
+            }
+        }
+        let order_key = (signature, labels, coordinates);
+        debug_assert!(
+            !std::any::type_name::<PatchOrderKey<()>>().contains(std::any::type_name::<DynIndex>())
+        );
+        debug_assert_eq!(
+            order_key.2.len(),
+            projector.len(),
+            "key must use logical coordinates, never DynIndex IDs"
+        );
         Ok(Self {
             data,
             projector,
             budget_squared,
+            order_key,
         })
     }
 
@@ -219,11 +265,7 @@ where
         let _ = validate_data(&data)?;
         validate_projector_against_data(&data, &projector)?;
         let data = rebuild_masked_tree(&data, &projector)?;
-        Ok(Self {
-            data,
-            projector,
-            budget_squared: None,
-        })
+        Self::from_masked_data(data, projector, None)
     }
 
     /// Construct an eagerly rebuilt subdomain with an empty projector.
@@ -314,11 +356,7 @@ where
         }
 
         let data = rebuild_masked_tree(&self.data, &additions)?;
-        Ok(Some(Self {
-            data,
-            projector: merged_projector,
-            budget_squared: self.budget_squared,
-        }))
+        Self::from_masked_data(data, merged_projector, self.budget_squared).map(Some)
     }
 
     /// Add two subdomains with the same projector using strict TreeTN addition.
