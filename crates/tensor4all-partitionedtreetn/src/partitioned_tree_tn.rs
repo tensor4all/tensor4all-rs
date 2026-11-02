@@ -550,9 +550,8 @@ where
         nonempty_templates(self, other)?;
 
         // Group the pairwise contributions by output projector. Pairs come in
-        // canonical projector order and groups are sorted, so the within-group
-        // exact-add order (and therefore the result) is independent of the
-        // input HashMap iteration order.
+        // logical patch-key order, independent of the input HashMap iteration
+        // order except when patch keys compare equal.
         let mut groups: Vec<(Projector, Vec<SubDomainTreeTN<V>>)> = Vec::new();
         let mut positions: HashMap<Projector, usize> = HashMap::new();
         for (_, _, contracted) in self.contract_pairs(other, center, &options, wanted)? {
@@ -571,7 +570,11 @@ where
         // per-pair contraction result). This replaces repeated
         // add-and-truncate, which was order dependent and re-approximated the
         // sum at every contribution.
-        groups.sort_by(|(left, _), (right, _)| left.canonical_cmp(right));
+        groups.sort_by(|(_, left), (_, right)| {
+            left.first()
+                .map(SubDomainTreeTN::patch_order_key)
+                .cmp(&right.first().map(SubDomainTreeTN::patch_order_key))
+        });
         let duplicate_options = truncation_options_from_contraction(&options);
         let mut subdomains = Vec::with_capacity(groups.len());
         for (_, contributions) in groups {
@@ -597,7 +600,7 @@ where
 
     /// Contract the compatible patch pairs of `self` and `other` whose output
     /// projector is in `wanted` (every compatible pair when `wanted` is
-    /// `None`), in canonical left-then-right projector order.
+    /// `None`), in logical left-then-right patch-key order.
     ///
     /// Each pair's output projector is predicted before contraction from the
     /// projector intersection and the output site space, which is shared by
@@ -628,8 +631,8 @@ where
 
         let mut left_patches: Vec<_> = self.data.values().collect();
         let mut right_patches: Vec<_> = other.data.values().collect();
-        left_patches.sort_by(|a, b| a.projector().canonical_cmp(b.projector()));
-        right_patches.sort_by(|a, b| a.projector().canonical_cmp(b.projector()));
+        left_patches.sort_by(|a, b| a.patch_order_key().cmp(b.patch_order_key()));
+        right_patches.sort_by(|a, b| a.patch_order_key().cmp(b.patch_order_key()));
         let mut contracted = Vec::new();
         for left in left_patches {
             for &right in &right_patches {
@@ -656,11 +659,14 @@ where
         Ok(contracted)
     }
 
-    /// Sum eager patches in deterministic canonical projector order.
+    /// Sum eager patches in logical patch-key order.
     ///
     /// The result uses strict high-level [`TreeTN::add`] and never materializes
-    /// the full tensor densely. Equal numerical inputs therefore have stable
-    /// patch traversal and direct-sum construction order.
+    /// the full tensor densely. Distinct patch keys have stable traversal and
+    /// direct-sum construction order. Patches with equal
+    /// logical index and projector keys have unspecified relative order, even
+    /// when their contents differ. A content digest requires a non-materializing
+    /// storage accessor.
     ///
     /// # Errors
     ///
@@ -674,7 +680,8 @@ where
         }
 
         let mut patches: Vec<_> = self.data.iter().collect();
-        patches.sort_by(|(left, _), (right, _)| left.canonical_cmp(right));
+        patches
+            .sort_by(|(_, left), (_, right)| left.patch_order_key().cmp(right.patch_order_key()));
         let (_, first) = patches.first().ok_or(PartitionedTreeTNError::Empty)?;
         let mut result = first.data().clone();
         for (_, patch) in patches.into_iter().skip(1) {
