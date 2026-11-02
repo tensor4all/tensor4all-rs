@@ -268,14 +268,12 @@ fn checked_strides(dims: &[usize], name: &str) -> Result<Vec<usize>> {
     Ok(strides)
 }
 
-fn linear_to_multi(linear: usize, dims: &[usize]) -> Vec<usize> {
-    let mut multi = vec![0; dims.len()];
+fn linear_to_multi_into(linear: usize, dims: &[usize], multi: &mut [usize]) {
     let mut remaining = linear;
     for i in 0..dims.len() {
         multi[i] = remaining % dims[i];
         remaining /= dims[i];
     }
-    multi
 }
 
 fn multi_to_linear(multi: &[usize], strides: &[usize]) -> Result<usize> {
@@ -304,11 +302,19 @@ fn direct_sum_typed<T: TensorElement + Zero>(
 
     let mut result_data: Vec<T> = vec![T::zero(); setup.result_total];
 
+    // The dims and the multi-index buffers are constant for the whole call, so
+    // they are sized once here instead of once per result element.
+    let a_ndim = a.dims().len();
+    let b_ndim = b.dims().len();
+    let mut result_multi = vec![0usize; setup.result_dims.len()];
+    let mut a_multi = vec![0usize; a_ndim];
+    let mut b_multi = vec![0usize; b_ndim];
+
     #[allow(clippy::needless_range_loop)]
     for result_linear in 0..setup.result_total {
-        let result_multi = linear_to_multi(result_linear, &setup.result_dims);
-        let common_multi: Vec<usize> = result_multi[..setup.n_common].to_vec();
-        let paired_multi: Vec<usize> = result_multi[setup.n_common..].to_vec();
+        linear_to_multi_into(result_linear, &setup.result_dims, &mut result_multi);
+        let common_multi = &result_multi[..setup.n_common];
+        let paired_multi = &result_multi[setup.n_common..];
 
         let all_from_a = paired_multi
             .iter()
@@ -320,8 +326,7 @@ fn direct_sum_typed<T: TensorElement + Zero>(
             .all(|(i, &pm)| pm >= setup.paired_dims_a[i]);
 
         if all_from_a {
-            let a_dims = a.dims();
-            let mut a_multi = vec![0usize; a_dims.len()];
+            a_multi.fill(0);
             for (i, &cp) in setup.common_a_positions.iter().enumerate() {
                 a_multi[cp] = common_multi[i];
             }
@@ -331,8 +336,7 @@ fn direct_sum_typed<T: TensorElement + Zero>(
             let a_linear = multi_to_linear(&a_multi, &setup.a_strides)?;
             result_data[result_linear] = a_data[a_linear];
         } else if all_from_b {
-            let b_dims = b.dims();
-            let mut b_multi = vec![0usize; b_dims.len()];
+            b_multi.fill(0);
             for (i, &cp) in setup.common_b_positions.iter().enumerate() {
                 b_multi[cp] = common_multi[i];
             }
