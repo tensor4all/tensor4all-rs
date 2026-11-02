@@ -153,6 +153,12 @@ pub struct MatrixLuciFactors<T> {
     /// Selected column indices.
     pub col_indices: Vec<usize>,
     /// Pivot error history, or one measured maximum residual for fixed pivots.
+    ///
+    /// One entry per accepted pivot, then a trailing entry holding the largest
+    /// magnitude of the remaining residual (`0.0` once the full rank is
+    /// reached). Both kernels report that same quantity for the pivots they
+    /// selected, so the trailing entry is a residual and never a lower or upper
+    /// bound standing in for one.
     pub pivot_errors: Vec<f64>,
     /// Selected rank.
     pub rank: usize,
@@ -754,7 +760,10 @@ pub fn matrix_luci_factors_working_bytes<T: Scalar>(
 /// # Returns
 ///
 /// A [`MatrixLuciFactors`] value containing the pivot metadata and
-/// factors.
+/// factors. Its trailing `pivot_errors` entry is the largest magnitude of the
+/// remaining residual, so a rank cap reports a residual instead of the last
+/// accepted pivot. Measuring it exactly evaluates every unselected entry, in
+/// column chunks, so a rank cap costs one extra pass over that block.
 ///
 /// # Errors
 ///
@@ -781,6 +790,24 @@ pub fn matrix_luci_factors_working_bytes<T: Scalar>(
 ///     RrLUOptions::default(),
 /// ).unwrap();
 /// assert_eq!(factors.rank, 2);
+///
+/// // A = [[4, 2, 0], [2, 4, 0], [0, 0, 1]] in column-major order. A rank cap
+/// // reports the residual pivot the search rejects next, here the largest
+/// // entry of the Schur complement [[3, 0], [0, 1]].
+/// let capped = matrix_luci_factors_from_blocks(
+///     3,
+///     3,
+///     |rows, cols, out| {
+///         let data = [4.0_f64, 2.0, 0.0, 2.0, 4.0, 0.0, 0.0, 0.0, 1.0];
+///         for (j, &col) in cols.iter().enumerate() {
+///             for (i, &row) in rows.iter().enumerate() {
+///                 out[i + rows.len() * j] = data[row + 3 * col];
+///             }
+///         }
+///     },
+///     RrLUOptions { max_bond_dim: 1, ..Default::default() },
+/// ).unwrap();
+/// assert_eq!(capped.pivot_errors, vec![4.0, 3.0]);
 /// ```
 pub fn matrix_luci_factors_from_blocks<T, F>(
     nrows: usize,
