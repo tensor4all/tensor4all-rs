@@ -8,7 +8,7 @@
 
 use super::super::*;
 use crate::index_like::IndexLike;
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 
 trait TestScalar: TensorElement + Zero + Copy + PartialEq + std::fmt::Debug {
     fn make(k: usize) -> Self;
@@ -17,6 +17,18 @@ trait TestScalar: TensorElement + Zero + Copy + PartialEq + std::fmt::Debug {
 impl TestScalar for f64 {
     fn make(k: usize) -> Self {
         1.0 + k as f64
+    }
+}
+
+impl TestScalar for f32 {
+    fn make(k: usize) -> Self {
+        1.0 + k as f32
+    }
+}
+
+impl TestScalar for Complex32 {
+    fn make(k: usize) -> Self {
+        Complex32::new(1.0 + k as f32, -(k as f32) - 0.5)
     }
 }
 
@@ -110,6 +122,16 @@ fn direct_sum_of_permuted_operands_matches_reference_c64() {
     check_permuted_operands::<Complex64>();
 }
 
+#[test]
+fn direct_sum_of_permuted_operands_matches_reference_f32() {
+    check_permuted_operands::<f32>();
+}
+
+#[test]
+fn direct_sum_of_permuted_operands_matches_reference_c32() {
+    check_permuted_operands::<Complex32>();
+}
+
 /// A chain core `(left, site, right)`: the site is the common axis, so in
 /// result order `(site, left, right)` neither operand is contiguous along the
 /// first axis.
@@ -139,4 +161,23 @@ fn direct_sum_keeps_result_strides_for_operands_in_result_order() {
     let b = filled::<f64>(vec![l1.clone(), r1.clone()], 10);
 
     assert_matches_reference::<f64>(&a, &b, &[(l0, l1), (r0, r1)]);
+}
+
+/// Operands of the same kind but different precision are rejected.
+#[test]
+fn direct_sum_rejects_mixed_precision() {
+    let (l0, l1) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let pairs = [(l0.clone(), l1.clone())];
+    let f64_tensor = filled::<f64>(vec![l0.clone()], 0);
+    let f32_tensor = filled::<f32>(vec![l1.clone()], 0);
+    let c64_tensor = filled::<Complex64>(vec![l0.clone()], 0);
+    let c32_tensor = filled::<Complex32>(vec![l1.clone()], 0);
+
+    for (a, b) in [(&f64_tensor, &f32_tensor), (&c64_tensor, &c32_tensor)] {
+        let err = direct_sum(a, b, &pairs).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("same dense scalar type"),
+            "{err:#}"
+        );
+    }
 }

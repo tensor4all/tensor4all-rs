@@ -42,8 +42,9 @@ use tensor4all_tensorbackend::TensorElement;
 /// operand is not a non-paired index of the other one (an index present on one
 /// side only, or matching only in id but not in prime level or tags), and
 /// [`IdxTensorError::Operation`] when `pairs` is empty, when a paired index is
-/// missing or a common index differs in dimension, when the operands have
-/// different dense scalar types, or when the backend construction fails.
+/// missing or a common index differs in dimension, when the operands do not
+/// share one dense scalar type (`f32`, `f64`, `Complex32` or `Complex64`), or
+/// when the backend construction fails.
 ///
 /// # Example
 ///
@@ -68,20 +69,20 @@ pub fn direct_sum(
     b: &IdxTensor,
     pairs: &[(DynIndex, DynIndex)],
 ) -> std::result::Result<(IdxTensor, Vec<DynIndex>), IdxTensorError> {
-    if !(a.is_f64() && b.is_f64() || a.is_complex() && b.is_complex()) {
+    let Some(kind) = DenseKind::common(&[a, b]) else {
         return Err(IdxTensorError::Operation {
             operation: "direct_sum",
             source: std::sync::Arc::new(std::io::Error::other(
-                "direct_sum requires both tensors to have the same dense scalar type (f64 or Complex64)",
+                "direct_sum requires both tensors to have the same dense scalar type (f32, f64, Complex32 or Complex64)",
             )),
         });
-    }
+    };
     if pairs.is_empty() {
         return Err(IdxTensorError::from(anyhow::anyhow!(
             "direct_sum requires at least one index pair"
         )));
     }
-    direct_sum_dispatch(&[a, b], Groups::Pairs(pairs))
+    direct_sum_dispatch(kind, &[a, b], Groups::Pairs(pairs))
 }
 
 /// Compute the direct sum of any number of tensors in one pass.
@@ -100,7 +101,7 @@ pub fn direct_sum(
 /// # Arguments
 ///
 /// * `operands` - The tensors to combine; at least one. They must share one
-///   dense scalar type, `f64` or `Complex64`.
+///   dense scalar type: `f32`, `f64`, `Complex32` or `Complex64`.
 /// * `groups` - The grouped indices; at least one group, each with exactly
 ///   `operands.len()` entries, entry `i` an index of operand `i`. An index of
 ///   an operand may appear in at most one group.
@@ -152,31 +153,68 @@ pub fn direct_sum_many(
             "direct_sum requires at least one operand"
         )));
     }
-    let all = |is: fn(&IdxTensor) -> bool| operands.iter().all(|operand| is(operand));
-    if !(all(IdxTensor::is_f64) || all(IdxTensor::is_complex)) {
+    let Some(kind) = DenseKind::common(operands) else {
         return Err(IdxTensorError::from(anyhow::anyhow!(
-            "direct_sum requires every operand to have the same dense scalar type (f64 or Complex64)"
+            "direct_sum requires every operand to have the same dense scalar type (f32, f64, Complex32 or Complex64)"
         )));
-    }
+    };
     if groups.is_empty() {
         return Err(IdxTensorError::from(anyhow::anyhow!(
             "direct_sum requires at least one index group"
         )));
     }
-    direct_sum_dispatch(operands, Groups::Lists(groups))
+    direct_sum_dispatch(kind, operands, Groups::Lists(groups))
 }
 
-/// Run the typed kernel for operands already checked to share `f64` or
-/// `Complex64` storage, with non-empty `operands` and `groups`.
+/// The dense scalar types `direct_sum` supports.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DenseKind {
+    F32,
+    F64,
+    C32,
+    C64,
+}
+
+impl DenseKind {
+    fn of(tensor: &IdxTensor) -> Option<Self> {
+        if tensor.is_f64() {
+            Some(Self::F64)
+        } else if tensor.is_c64() {
+            Some(Self::C64)
+        } else if tensor.is_f32() {
+            Some(Self::F32)
+        } else if tensor.is_c32() {
+            Some(Self::C32)
+        } else {
+            None
+        }
+    }
+
+    /// The type every operand shares, or `None` when they differ (or one is
+    /// not a supported dense type). `operands` is non-empty.
+    fn common(operands: &[&IdxTensor]) -> Option<Self> {
+        let kind = Self::of(operands[0])?;
+        operands[1..]
+            .iter()
+            .all(|operand| Self::of(operand) == Some(kind))
+            .then_some(kind)
+    }
+}
+
+/// Run the typed kernel for operands that share the dense type `kind`, with
+/// non-empty `operands` and `groups`.
 fn direct_sum_dispatch(
+    kind: DenseKind,
     operands: &[&IdxTensor],
     groups: Groups<'_>,
 ) -> std::result::Result<(IdxTensor, Vec<DynIndex>), IdxTensorError> {
-    if operands[0].is_f64() {
-        direct_sum_typed::<f64>(operands, groups).map_err(IdxTensorError::from)
-    } else {
-        direct_sum_typed::<num_complex::Complex64>(operands, groups).map_err(IdxTensorError::from)
+    match kind {
+        DenseKind::F32 => direct_sum_typed::<f32>(operands, groups),
+        DenseKind::F64 => direct_sum_typed::<f64>(operands, groups),
+        DenseKind::C32 => direct_sum_typed::<num_complex::Complex32>(operands, groups),
+        DenseKind::C64 => direct_sum_typed::<num_complex::Complex64>(operands, groups),
     }
+    .map_err(IdxTensorError::from)
 }
 
 /// "first", "second", ... for operand `i` in error messages.
