@@ -268,24 +268,6 @@ fn checked_strides(dims: &[usize], name: &str) -> Result<Vec<usize>> {
     Ok(strides)
 }
 
-fn linear_to_multi_into(linear: usize, dims: &[usize], multi: &mut [usize]) {
-    let mut remaining = linear;
-    for i in 0..dims.len() {
-        multi[i] = remaining % dims[i];
-        remaining /= dims[i];
-    }
-}
-
-fn multi_to_linear(multi: &[usize], strides: &[usize]) -> Result<usize> {
-    multi.iter().zip(strides).try_fold(0usize, |acc, (&m, &s)| {
-        let offset = m
-            .checked_mul(s)
-            .ok_or_else(|| anyhow::anyhow!("direct_sum flat offset overflowed usize"))?;
-        acc.checked_add(offset)
-            .ok_or_else(|| anyhow::anyhow!("direct_sum flat offset overflowed usize"))
-    })
-}
-
 fn direct_sum_typed<T: TensorElement + Zero>(
     a: &IdxTensor,
     b: &IdxTensor,
@@ -297,60 +279,123 @@ fn direct_sum_typed<T: TensorElement + Zero>(
         ));
     }
     let setup = setup_direct_sum(a, b, pairs)?;
-    let a_data = a.to_vec::<T>()?;
-    let b_data = b.to_vec::<T>()?;
-
+    let result_strides = checked_strides(&setup.result_dims, "direct_sum result")?;
+    // INVARIANT: the zero fill is semantic: every entry outside the two
+    // diagonal blocks is zero.
     let mut result_data: Vec<T> = vec![T::zero(); setup.result_total];
+    let mut cursor = vec![0usize; setup.result_dims.len()];
 
-    // The dims and the multi-index buffers are constant for the whole call, so
-    // they are sized once here instead of once per result element.
-    let a_ndim = a.dims().len();
-    let b_ndim = b.dims().len();
-    let mut result_multi = vec![0usize; setup.result_dims.len()];
-    let mut a_multi = vec![0usize; a_ndim];
-    let mut b_multi = vec![0usize; b_ndim];
-
-    #[allow(clippy::needless_range_loop)]
-    for result_linear in 0..setup.result_total {
-        linear_to_multi_into(result_linear, &setup.result_dims, &mut result_multi);
-        let common_multi = &result_multi[..setup.n_common];
-        let paired_multi = &result_multi[setup.n_common..];
-
-        let all_from_a = paired_multi
-            .iter()
-            .enumerate()
-            .all(|(i, &pm)| pm < setup.paired_dims_a[i]);
-        let all_from_b = paired_multi
-            .iter()
-            .enumerate()
-            .all(|(i, &pm)| pm >= setup.paired_dims_a[i]);
-
-        if all_from_a {
-            a_multi.fill(0);
-            for (i, &cp) in setup.common_a_positions.iter().enumerate() {
-                a_multi[cp] = common_multi[i];
-            }
-            for (i, &pp) in setup.paired_a_positions.iter().enumerate() {
-                a_multi[pp] = paired_multi[i];
-            }
-            let a_linear = multi_to_linear(&a_multi, &setup.a_strides)?;
-            result_data[result_linear] = a_data[a_linear];
-        } else if all_from_b {
-            b_multi.fill(0);
-            for (i, &cp) in setup.common_b_positions.iter().enumerate() {
-                b_multi[cp] = common_multi[i];
-            }
-            for (i, &pp) in setup.paired_b_positions.iter().enumerate() {
-                b_multi[pp] = paired_multi[i] - setup.paired_dims_a[i];
-            }
-            let b_linear = multi_to_linear(&b_multi, &setup.b_strides)?;
-            result_data[result_linear] = b_data[b_linear];
-        }
-        // else: mixed case stays T::zero()
+    // `a` fills the leading block of every paired axis; `b` starts after it.
+    let b_start = setup
+        .paired_dims_a
+        .iter()
+        .zip(&result_strides[setup.n_common..])
+        .map(|(dim, stride)| dim * stride)
+        .sum();
+    for (operand, common, paired, strides, dst_start) in [
+        (
+            a,
+            &setup.common_a_positions,
+            &setup.paired_a_positions,
+            &setup.a_strides,
+            0,
+        ),
+        (
+            b,
+            &setup.common_b_positions,
+            &setup.paired_b_positions,
+            &setup.b_strides,
+            b_start,
+        ),
+    ] {
+        let dims = operand.dims();
+        let axes = common.iter().chain(paired);
+        let layout = BlockLayout {
+            dims: axes.clone().map(|&axis| dims[axis]).collect(),
+            src_strides: axes.map(|&axis| strides[axis]).collect(),
+            dst_strides: &result_strides,
+            dst_start,
+        };
+        operand.with_dense_slice::<T, _>(|values| {
+            copy_block(values, &mut result_data, &layout, &mut cursor)
+        })?;
     }
 
     let result = IdxTensor::from_dense(setup.result_indices, result_data)?;
     Ok((result, setup.new_indices))
+}
+
+/// Where one operand's block goes: its extents in result axis order, the
+/// operand's own (column-major) stride of each result axis, the result's
+/// strides, and the result offset of the block's first element.
+struct BlockLayout<'a> {
+    dims: Vec<usize>,
+    src_strides: Vec<usize>,
+    dst_strides: &'a [usize],
+    dst_start: usize,
+}
+
+/// Copy one operand, read in its own layout, into its diagonal block of the
+/// result.
+///
+/// The leading result axes along which both layouts are contiguous are merged
+/// into one run moved with `copy_from_slice`. When not even the first axis is
+/// contiguous in the operand, the inner loop walks that axis with its operand
+/// stride. An odometer steps the remaining axes once per run, not once per
+/// element, so no multi-index is decoded per element.
+fn copy_block<T: Copy>(
+    values: &[T],
+    result: &mut [T],
+    layout: &BlockLayout<'_>,
+    cursor: &mut [usize],
+) {
+    let rank = layout.dims.len();
+    let mut merged = 0;
+    let mut run = 1usize;
+    while merged < rank && layout.src_strides[merged] == run && layout.dst_strides[merged] == run {
+        run *= layout.dims[merged];
+        merged += 1;
+    }
+    // With no merged axis, axis 0 is walked element by element (its result
+    // stride is 1, its operand stride `src_strides[0]`).
+    let (inner_len, inner_stride, first_outer) = if merged == 0 {
+        (layout.dims[0], layout.src_strides[0], 1)
+    } else {
+        (run, 1, merged)
+    };
+    cursor.fill(0);
+    let mut src = 0usize;
+    let mut dst = layout.dst_start;
+    // INVARIANT: `cursor[a] < dims[a]` on every axis, so `src` stays inside the
+    // operand's `prod(dims)` elements and `dst` inside the operand's block,
+    // which `setup_direct_sum` sized to lie inside the result. `rank >= 1`
+    // (at least one pair) and `inner_len > 0`, because an `IdxTensor` has no
+    // zero dimension (`checked_total_size` rejects one at construction).
+    loop {
+        if inner_stride == 1 {
+            result[dst..dst + inner_len].copy_from_slice(&values[src..src + inner_len]);
+        } else {
+            for (k, slot) in result[dst..dst + inner_len].iter_mut().enumerate() {
+                *slot = values[src + k * inner_stride];
+            }
+        }
+        let mut axis = first_outer;
+        loop {
+            if axis == rank {
+                return;
+            }
+            cursor[axis] += 1;
+            src += layout.src_strides[axis];
+            dst += layout.dst_strides[axis];
+            if cursor[axis] < layout.dims[axis] {
+                break;
+            }
+            src -= layout.src_strides[axis] * layout.dims[axis];
+            dst -= layout.dst_strides[axis] * layout.dims[axis];
+            cursor[axis] = 0;
+            axis += 1;
+        }
+    }
 }
 
 #[cfg(test)]
