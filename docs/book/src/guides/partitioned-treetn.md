@@ -51,14 +51,16 @@ knob, and `PatchingOptions::allocation` selects how it is spread.
 `BudgetAllocation::Volume` (the default,
 [arXiv:2602.22372](https://arxiv.org/abs/2602.22372)) assigns the absolute local
 threshold `cutoff * ||F||^2 * volume_p / total_volume`, applies each whole
-threshold at the patch's local SVD truncations, drops a patch whose squared norm
-is at most its threshold, and then splits patches that remain above the bond
-cap. `BudgetAllocation::Norm` instead applies the relative squared tail-sum
-cutoff `cutoff` at every local SVD — the same rule as an ITensor-style relative
-cutoff in `TreeTN::truncate` — so each patch is accurate relative to itself, no
-patch is dropped, and projected children inherit no absolute budget. The same
-choice applies to `add_with_patching`, `contract_adaptive`, and
-`truncate_adaptive`. `cutoff` is best effort for the final whole-network error;
+threshold at the patch's local SVD truncations, and drops a patch whose squared
+norm is at most its threshold. Splitting is project-first: a patch whose
+budget-truncated probe is still above the bond cap is split, and its children
+are projections of the exact patch, so the threshold and the cap are spent
+once, on the final leaves. `BudgetAllocation::Norm` instead applies the
+relative squared tail-sum cutoff `cutoff` at every local SVD — the same rule as
+an ITensor-style relative cutoff in `TreeTN::truncate` — so each patch is
+accurate relative to itself, no patch is dropped, and projected children
+inherit no absolute budget. The same choice applies to `add_with_patching`,
+`contract_adaptive`, and `truncate_adaptive`. `cutoff` is best effort for the final whole-network error;
 `max_bond_dim` is a hard cap.
 
 When several patches are summed exactly (contributions to one output projector in

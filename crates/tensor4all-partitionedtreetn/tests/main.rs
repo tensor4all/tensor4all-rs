@@ -19,6 +19,7 @@ mod heavy_adaptive_l2_corner_miss;
 mod partitioned_tree_tn;
 mod patch_order_determinism;
 mod patching;
+mod project_first_add;
 mod qft_reconstruction;
 mod reconstruction;
 mod subdomain_tree_tn;

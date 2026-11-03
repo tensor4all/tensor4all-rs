@@ -199,6 +199,20 @@ projection-created null bond space without spending the caller's truncation
 budget; user-requested approximation remains confined to contraction and
 post-addition truncation.
 
+`add_with_patching` follows the same rule (#1131). Its split decision uses a
+probe: the patch with its cutoff budget applied and no bond cap. That probe is
+discarded; the children of a split are projections of the exact addend patch,
+compressed at the same `64 * epsilon` numerical-rank threshold. The cutoff
+budget and `max_bond_dim` are therefore spent once, on the final leaves, by the
+closing `truncate_adaptive` pass, instead of once per split level with each
+level's loss inherited by every leaf below it. The budget keeps its meaning:
+`cutoff` is a fraction of the operation's input `||F||^2` under `Volume` and a
+per-factorization relative cutoff under `Norm`. Every exact leaf, including one
+that is already below its budget, reaches the closing pass, so that pass
+re-derives each local threshold from the whole input weight; it is also what
+drops a below-budget leaf. Dropping such a leaf earlier would enlarge the
+survivors' shares.
+
 `SubDomainTreeTN::inner` uses the eagerly masked stored data directly. No
 projector-compatible region may be inferred or lazily remasked during inner
 product evaluation.
