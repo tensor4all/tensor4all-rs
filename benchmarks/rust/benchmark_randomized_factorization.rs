@@ -38,6 +38,17 @@ fn pair(
 }
 
 fn main() -> anyhow::Result<()> {
+    let requested: usize = std::env::var("RAYON_NUM_THREADS")
+        .map_err(|_| anyhow::anyhow!("set RAYON_NUM_THREADS explicitly for this benchmark"))?
+        .parse()?;
+    let context = tensor4all_tensorbackend::default_cpu_execution_context();
+    let (actual, workers) =
+        context.with_backend(|backend| (backend.num_threads(), backend.worker_cpus()));
+    anyhow::ensure!(
+        actual == requested,
+        "requested {requested} workers, backend has {actual}"
+    );
+    eprintln!("THREAD_BUDGET requested={requested} actual={actual} workers={workers:?}");
     if std::env::args().any(|arg| arg == "--contractions") {
         return contractions();
     }

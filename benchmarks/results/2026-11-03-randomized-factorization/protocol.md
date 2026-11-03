@@ -42,3 +42,6 @@ it to be strictly smaller. That attempt is invalid and supplies no performance
 conclusion. Revision 2 doubles the entire chi grid, before measurement, to fit
 the existing driver's supported projection dimensions. It repeats every method
 and thread budget with the same error gates; no favorable cell is substituted.
+
+Both executables check their actual backend/Par worker budget before timing;
+the core harness also prints each worker CPU mask. A clamped budget is an error.

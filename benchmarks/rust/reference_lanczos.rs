@@ -42,6 +42,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let params = PartialEigenParams::default();
     let requested_threads: usize = std::env::var("RAYON_NUM_THREADS")?.parse()?;
     let run = |mut par: Par<'_>| -> Result<(), Box<dyn Error>> {
+        if par.degree() != requested_threads {
+            return Err("Lanczos thread budget was clamped".into());
+        }
         let req = partial_svd_scratch::<f64>(&a.as_ref(), k, par.shape(), params);
         // Identical time-based CPU priming in both decomposition executables.
         let prime = Instant::now();

@@ -49,7 +49,8 @@ Build the reference with `python3 scripts/build-rsvd-reference.py`. It identifie
 the exact transitive faer artifacts from Cargo JSON and compiles a standalone
 reference executable, adding no library dependency. Set `T4A_LANCZOS_REFERENCE`
 to the printed binary, pin Rayon/BLAS thread variables and CPU affinity as above,
-then run `benchmark_randomized_factorization --decompositions`.
+then run `benchmark_randomized_factorization --decompositions`. Its
+`--contractions` mode compares Fit/Zipup against small bounded dense oracles.
 The [declared protocol](results/2026-11-03-randomized-factorization/protocol.md)
 records the fixture, repetitions, accuracy gates and limits of these diagnostics.
 

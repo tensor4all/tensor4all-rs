@@ -20,3 +20,6 @@ performance promotion or parallel scaling claim.
   be large; matched error here does not establish scientific usefulness.
 - Retain all raw samples and resolved source/binary hashes. Report medians
   and errors for the entire grid. No concurrent local build/test during timing.
+
+Both executables check their actual backend/Par worker budget before timing;
+the core harness also prints each worker CPU mask. A clamped budget is an error.
