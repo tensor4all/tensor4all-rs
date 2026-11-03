@@ -7573,6 +7573,18 @@ impl TensorContractionLike for IdxTensor {
         })
     }
 
+    /// One-pass construction instead of the provided left fold.
+    fn direct_sum_many(
+        operands: &[&Self],
+        groups: &[Vec<DynIndex>],
+    ) -> std::result::Result<crate::tensor_like::DirectSumResult<Self>, Self::Error> {
+        let (tensor, new_indices) = crate::direct_sum::direct_sum_many(operands, groups)?;
+        Ok(crate::tensor_like::DirectSumResult {
+            tensor,
+            new_indices,
+        })
+    }
+
     fn outer_product(&self, other: &Self) -> std::result::Result<Self, Self::Error> {
         super::contract::outer_product(self, other)
     }

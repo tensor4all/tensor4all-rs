@@ -3,6 +3,8 @@ use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorIndex};
 
 use crate::treetn::TreeTN;
 
+mod add_many;
+
 /// Create two TreeTNs with the same topology for testing addition.
 /// Both are 2-node chains: A -- bond -- B
 fn make_two_matching_treetns() -> (

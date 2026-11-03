@@ -56,7 +56,7 @@ pub use idx_tensor::{
 pub use index::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet};
 
 // Re-export linear algebra functions and types
-pub use direct_sum::direct_sum;
+pub use direct_sum::{direct_sum, direct_sum_many};
 pub use factorize::{
     factorize, Canonical, FactorizeAlg, FactorizeError, FactorizeOptions, FactorizeResult,
 };

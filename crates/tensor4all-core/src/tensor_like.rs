@@ -838,6 +838,11 @@ pub trait TensorContractionLike: TensorIndex {
 
     /// Direct sum of two tensors along specified index pairs.
     ///
+    /// Each pair `(a_index, b_index)` becomes one new index of dimension
+    /// `dim(a_index) + dim(b_index)`; `self` occupies the first block and
+    /// `other` the second. For more than two operands use
+    /// [`direct_sum_many`](Self::direct_sum_many).
+    ///
     /// # Errors
     ///
     /// Returns `Self::Error` when the summed index spaces are incompatible
@@ -848,6 +853,108 @@ pub trait TensorContractionLike: TensorIndex {
         other: &Self,
         pairs: &[(<Self as TensorIndex>::Index, <Self as TensorIndex>::Index)],
     ) -> std::result::Result<DirectSumResult<Self>, Self::Error>;
+
+    /// Direct sum of any number of tensors.
+    ///
+    /// Each entry of `groups` lists one index per operand, in operand order,
+    /// and becomes one new index whose dimension is the sum of the group's
+    /// dimensions. Operand `i` occupies its own diagonal block, after the
+    /// blocks of operands `0..i`; all other entries are zero. The indices that
+    /// belong to no group must be the same for every operand. The result
+    /// lists those common indices in `operands[0]`'s order, followed by the
+    /// new indices in `groups` order.
+    ///
+    /// The provided implementation folds [`direct_sum`](Self::direct_sum)
+    /// from the left, `((t0 (+) t1) (+) t2) ...`, which copies the growing
+    /// partial result at every step. Implementors with a dense layout should
+    /// override it with a one-pass construction, as `IdxTensor` does.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when `operands` or `groups` is empty, when a
+    /// group does not have one index per operand, when the index spaces are
+    /// incompatible (an index-space mismatch), or when the underlying
+    /// construction reports a failure. Types without a block construction
+    /// return an unsupported-operation error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorContractionLike};
+    ///
+    /// let (b0, b1, b2) = (DynIndex::new_dyn(1), DynIndex::new_dyn(1), DynIndex::new_dyn(2));
+    /// let t0 = IdxTensor::from_dense(vec![b0.clone()], vec![1.0_f64]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![b1.clone()], vec![2.0_f64]).unwrap();
+    /// let t2 = IdxTensor::from_dense(vec![b2.clone()], vec![3.0_f64, 4.0]).unwrap();
+    ///
+    /// let result = IdxTensor::direct_sum_many(&[&t0, &t1, &t2], &[vec![b0, b1, b2]]).unwrap();
+    ///
+    /// assert_eq!(result.new_indices[0].dim(), 4);
+    /// assert_eq!(result.tensor.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
+    /// ```
+    fn direct_sum_many(
+        operands: &[&Self],
+        groups: &[Vec<<Self as TensorIndex>::Index>],
+    ) -> std::result::Result<DirectSumResult<Self>, Self::Error> {
+        let (first, rest) = operands
+            .split_first()
+            .ok_or_else(|| anyhow::anyhow!("direct_sum_many requires at least one operand"))?;
+        if groups.is_empty() {
+            return Err(
+                anyhow::anyhow!("direct_sum_many requires at least one index group").into(),
+            );
+        }
+        if let Some((g, group)) = groups
+            .iter()
+            .enumerate()
+            .find(|(_, group)| group.len() != operands.len())
+        {
+            return Err(anyhow::anyhow!(
+                "index group {g} has {} entries, expected one per operand ({})",
+                group.len(),
+                operands.len()
+            )
+            .into());
+        }
+        let Some((second, later)) = rest.split_first() else {
+            // One operand: rename each grouped index to a fresh link and move
+            // the new indices after the common ones.
+            let old: Vec<<Self as TensorIndex>::Index> =
+                groups.iter().map(|group| group[0].clone()).collect();
+            let new_indices = old
+                .iter()
+                .map(|index| <<Self as TensorIndex>::Index as IndexLike>::new_link(index.dim()))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            let mut order: Vec<<Self as TensorIndex>::Index> = first
+                .external_indices()
+                .into_iter()
+                .filter(|index| !old.contains(index))
+                .collect();
+            order.extend(new_indices.iter().cloned());
+            let tensor = first
+                .replace_indices(&old, &new_indices)?
+                .permuteinds(&order)?;
+            return Ok(DirectSumResult {
+                tensor,
+                new_indices,
+            });
+        };
+        let pairs: Vec<_> = groups
+            .iter()
+            .map(|group| (group[0].clone(), group[1].clone()))
+            .collect();
+        let mut sum = first.direct_sum(second, &pairs)?;
+        for (offset, operand) in later.iter().enumerate() {
+            let pairs: Vec<_> = sum
+                .new_indices
+                .iter()
+                .cloned()
+                .zip(groups.iter().map(|group| group[offset + 2].clone()))
+                .collect();
+            sum = sum.tensor.direct_sum(operand, &pairs)?;
+        }
+        Ok(sum)
+    }
 
     /// Outer product (tensor product) of two tensors.
     ///

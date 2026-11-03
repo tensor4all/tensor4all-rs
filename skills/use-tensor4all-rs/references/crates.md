@@ -119,7 +119,7 @@ Every constructor returns a `LinearOperator` (from `tensor4all-treetn`). All use
 Generic `TreeTN` over arbitrary tree topology (TT/MPS is the path-graph special case).
 
 - `TreeTN::<IdxTensor, V>::from_tensors(tensors, labels) -> Result` — topology inferred from shared bond indices; site indices appear once, bond indices appear twice. `V: Eq + Hash` labels vertices.
-- `.node_count()`, `.edge_count()`, `ttn[v]` access, `.norm()`, `.to_dense()` (test/small only), `.add(&b)` (same topology + matching site indices; bonds grow as direct sum), `.replaceind(&old, &new)`.
+- `.node_count()`, `.edge_count()`, `ttn[v]` access, `.norm()`, `.to_dense()` (test/small only), `.add(&b)` (same topology + matching site indices; bonds grow as direct sum), `TreeTN::exact_sum(&[&a, &b, &c], SumEngine)` (exact sum of many networks; default `Binary` add chain, opt-in `Nary` / `NaryWithin { limit_bytes }` one-pass direct sum, result reports `used_nary`), `TreeTN::add_many(&[&a, &b, &c])` (the N-ary pass itself), `.replaceind(&old, &new)`.
 - `.canonicalize([root], CanonicalizationOptions)`, `.truncate([root], TruncationOptions::default().with_max_bond_dim(n).with_rtol(t))`.
 - `apply_linear_operator(&op, &state, ApplyOptions)`:
   - `ApplyOptions::naive()` — local exact, no truncation; bond dims grow as products. Small/debug only.
