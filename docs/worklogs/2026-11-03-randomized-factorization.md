@@ -22,7 +22,7 @@
   expected squared-error bound gives an RMS factor `1.0086405662` on its
   fixture; this does not guarantee an individual draw. Add rotated slow/fast
   spectra at several ranks and compare with dense SVD in both gauges.
-- Separate raw benchmark evidence into its own branch. Keep the harness,
+- Separate raw benchmark evidence into [PR #1118](https://github.com/tensor4all/tensor4all-rs/pull/1118). Keep the harness,
   experiment summary, validation conclusions and links in this implementation.
 
 ## Verification conclusions and constraints

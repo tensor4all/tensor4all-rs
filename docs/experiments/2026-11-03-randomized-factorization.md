@@ -1,10 +1,10 @@
 # Randomized factorization diagnostics
 
 This summary accompanies the harness in PR #1116. Complete raw data, manifests
-and failed attempts are preserved separately on `bench/1108-rsvd-evidence`;
-the evidence links below reference the original public snapshot until the
-separate data PR is published. Raw measurement files are excluded from the
-implementation diff.
+and failed attempts are preserved separately in
+[PR #1118](https://github.com/tensor4all/tensor4all-rs/pull/1118).
+The evidence links below pin its archive commit. Raw measurement files are
+excluded from the implementation diff.
 
 The current runs contain 72 decomposition samples and 96 Fit/Zipup samples;
 all passed their predeclared accuracy gates. Actual worker budgets were read
@@ -17,8 +17,8 @@ Every timed result is checked against a whole-result oracle outside its timer.
 The library default is one power iteration. The contraction comparison uses
 two; its one-iteration attempt failed the error gate and is retained.
 
-Decomposition source: `46d878a359e3a5f85f1673a3ecd9c9a3b65055c4`; [manifest](https://github.com/tensor4all/tensor4all-rs/blob/b3bc9a24c870f89bea00906e8cdcb338e8adf31f/benchmarks/results/2026-11-03-randomized-factorization/decomposition-manifest.json).
-The [protocol](https://github.com/tensor4all/tensor4all-rs/blob/b3bc9a24c870f89bea00906e8cdcb338e8adf31f/benchmarks/results/2026-11-03-randomized-factorization/protocol.md) records shapes, seeds, thread settings, repetitions
+Decomposition source: `46d878a359e3a5f85f1673a3ecd9c9a3b65055c4`; [manifest](https://github.com/tensor4all/tensor4all-rs/blob/23e36d3b65b7c67b2519b2565834790c170f98eb/benchmarks/results/2026-11-03-randomized-factorization/decomposition-manifest.json).
+The [protocol](https://github.com/tensor4all/tensor4all-rs/blob/23e36d3b65b7c67b2519b2565834790c170f98eb/benchmarks/results/2026-11-03-randomized-factorization/protocol.md) records shapes, seeds, thread settings, repetitions
 and error gates. RSVD uses oversampling 8 and one power iteration.
 
 ## Decomposition, 1 thread(s)
@@ -60,8 +60,8 @@ deterministic SVD. Projected singular values are not used as an error estimate.
 
 ## Fit and Zipup, two power iterations
 
-Contraction source: `5c7369e4685c216fe7504b556412f6a286f60ce6`; [manifest](https://github.com/tensor4all/tensor4all-rs/blob/b3bc9a24c870f89bea00906e8cdcb338e8adf31f/benchmarks/results/2026-11-03-randomized-factorization/contraction-manifest.json).
-The [contraction protocol](https://github.com/tensor4all/tensor4all-rs/blob/b3bc9a24c870f89bea00906e8cdcb338e8adf31f/benchmarks/results/2026-11-03-randomized-factorization/contraction-protocol.md) uses small bounded exact
+Contraction source: `5c7369e4685c216fe7504b556412f6a286f60ce6`; [manifest](https://github.com/tensor4all/tensor4all-rs/blob/23e36d3b65b7c67b2519b2565834790c170f98eb/benchmarks/results/2026-11-03-randomized-factorization/contraction-manifest.json).
+The [contraction protocol](https://github.com/tensor4all/tensor4all-rs/blob/23e36d3b65b7c67b2519b2565834790c170f98eb/benchmarks/results/2026-11-03-randomized-factorization/contraction-protocol.md) uses small bounded exact
 dense oracles. Random MPO residuals can be large even at matched accuracy.
 These timings compare two strategies in the same library; no winner is
 promoted from these shared-host diagnostics.
@@ -90,6 +90,6 @@ does not establish an application speedup. The d=4 cases benefit on this grid.
 The GEMM/QR share gives a quantitative reference before reconsidering placement
 in tenferro-linalg, not evidence that moving the composite would improve it.
 
-Retained earlier runs: [unsupported 64x64 Lanczos case](https://github.com/tensor4all/tensor4all-rs/blob/b3bc9a24c870f89bea00906e8cdcb338e8adf31f/benchmarks/results/2026-11-03-randomized-factorization/failed-lanczos-64/manifest.json),
-[supported grid before budget readback](https://github.com/tensor4all/tensor4all-rs/blob/b3bc9a24c870f89bea00906e8cdcb338e8adf31f/benchmarks/results/2026-11-03-randomized-factorization/prior-without-budget-readback/README.md),
-and [one-iteration contraction accuracy failure](https://github.com/tensor4all/tensor4all-rs/blob/b3bc9a24c870f89bea00906e8cdcb338e8adf31f/benchmarks/results/2026-11-03-randomized-factorization/contraction-power1/manifest.json).
+Retained earlier runs: [unsupported 64x64 Lanczos case](https://github.com/tensor4all/tensor4all-rs/blob/23e36d3b65b7c67b2519b2565834790c170f98eb/benchmarks/results/2026-11-03-randomized-factorization/failed-lanczos-64/manifest.json),
+[supported grid before budget readback](https://github.com/tensor4all/tensor4all-rs/blob/23e36d3b65b7c67b2519b2565834790c170f98eb/benchmarks/results/2026-11-03-randomized-factorization/prior-without-budget-readback/README.md),
+and [one-iteration contraction accuracy failure](https://github.com/tensor4all/tensor4all-rs/blob/23e36d3b65b7c67b2519b2565834790c170f98eb/benchmarks/results/2026-11-03-randomized-factorization/contraction-power1/manifest.json).

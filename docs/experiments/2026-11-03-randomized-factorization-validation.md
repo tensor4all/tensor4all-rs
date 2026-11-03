@@ -30,7 +30,8 @@ is unchanged. The derivation is in the
 - The new rank/error curve test also passed with `cargo test --locked
   --release -p tensor4all-core slow_and_fast_spectra_follow_dense_svd_rank_error_curves`.
 
-The benchmark raw data is retained on the separate evidence branch, with
+The benchmark raw data is retained in separate
+[PR #1118](https://github.com/tensor4all/tensor4all-rs/pull/1118), with
 measurement and protocol files verified byte-for-byte against the original
 snapshot. This PR retains the harness, summary and validation conclusions.
 The previous implementation head `b3bc9a24` passed all hosted checks, including
