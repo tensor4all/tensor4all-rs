@@ -114,9 +114,11 @@ fn assert_bitwise(label: &str, scalar: Scalar, actual: &IdxTensor, expected: &Id
 
 /// Run every dtype/representation combination of one index layout against the global route.
 fn check_layout(name: &str, lhs_indices: &[Index<DynId>], rhs_indices: &[Index<DynId>]) {
-    let context = Arc::new(CpuExecutionContext::from_backend(
-        CpuBackend::with_threads(1).unwrap(),
-    ));
+    // The plan key includes the thread budget (tenferro #2415): above the packed bound a serial
+    // c64 engine takes faer while a wider one keeps tcontract's packed driver, and the two
+    // legitimately differ in their last bits. The oracle is the global route, so the session
+    // resolves the same budget instead of choosing one of its own.
+    let context = Arc::new(CpuExecutionContext::from_backend(CpuBackend::new()));
     let handle = ExecutionContext::Cpu(Arc::clone(&context));
     for scalar in [Scalar::F64, Scalar::C64] {
         for (lhs_repr, rhs_repr, repr_name) in [
@@ -215,9 +217,8 @@ fn larger_sizes_match_the_global_route_bitwise() {
 
 #[test]
 fn conjugated_and_mixed_dtype_operands_still_match_the_global_route() {
-    let context = Arc::new(CpuExecutionContext::from_backend(
-        CpuBackend::with_threads(1).unwrap(),
-    ));
+    // Same budget as the global-route oracle; see `check_layout`.
+    let context = Arc::new(CpuExecutionContext::from_backend(CpuBackend::new()));
     let handle = ExecutionContext::Cpu(Arc::clone(&context));
     let (i, k, j) = (Index::new_dyn(4), Index::new_dyn(3), Index::new_dyn(5));
     let lhs_c = operand(
