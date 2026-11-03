@@ -534,6 +534,74 @@ fn mat_mul_owned_matches_borrowed_multiplication() {
     assert_eq!(c.as_col_major_slice(), &[19.0, 43.0, 22.0, 50.0]);
 }
 
+/// The borrowed entry reads the matrix buffers in place, so it must return
+/// bit-for-bit the same values as the owned entry (#1096).
+#[test]
+fn mat_mul_matches_mat_mul_owned_bit_for_bit() {
+    fn check<T>(mk: impl Fn(f64, f64) -> T)
+    where
+        T: BlasMul + Copy + PartialEq + std::fmt::Debug,
+    {
+        let a = Matrix::from_col_major_vec(
+            2,
+            3,
+            [
+                mk(1.0, 1.0),
+                mk(4.0, -1.0),
+                mk(2.0, 0.5),
+                mk(5.0, 2.0),
+                mk(3.0, -2.0),
+                mk(6.0, 0.25),
+            ]
+            .to_vec(),
+        );
+        let b = Matrix::from_col_major_vec(
+            3,
+            2,
+            [
+                mk(7.0, 0.5),
+                mk(9.0, -3.0),
+                mk(8.0, 1.5),
+                mk(10.0, 0.0),
+                mk(11.0, -0.5),
+                mk(12.0, 2.0),
+            ]
+            .to_vec(),
+        );
+        let borrowed = mat_mul(&a, &b).unwrap();
+        let owned = mat_mul_owned(a, b).unwrap();
+        assert_eq!(
+            borrowed.as_col_major_slice(),
+            owned.as_col_major_slice(),
+            "borrowed and owned multiplication disagree"
+        );
+    }
+
+    check(|re, _im| re);
+    check(Complex64::new);
+}
+
+/// Empty dimensions must stay valid on the borrowed path: a zero-length slice
+/// still forms a rank-2 view.
+#[test]
+fn mat_mul_handles_empty_dimensions() {
+    let a = Matrix::<f64>::from_col_major_vec(0, 3, Vec::new());
+    let b = Matrix::from_col_major_vec(3, 2, vec![1.0, 3.0, 2.0, 4.0, 5.0, 6.0]);
+    let c = mat_mul(&a, &b).unwrap();
+    assert_eq!((c.nrows(), c.ncols()), (0, 2));
+
+    let a = Matrix::from_col_major_vec(2, 3, vec![1.0, 3.0, 2.0, 4.0, 5.0, 6.0]);
+    let b = Matrix::<f64>::from_col_major_vec(3, 0, Vec::new());
+    let c = mat_mul(&a, &b).unwrap();
+    assert_eq!((c.nrows(), c.ncols()), (2, 0));
+
+    let a = Matrix::from_col_major_vec(2, 0, Vec::new());
+    let b = Matrix::<f64>::from_col_major_vec(0, 4, Vec::new());
+    let c = mat_mul(&a, &b).unwrap();
+    assert_eq!((c.nrows(), c.ncols()), (2, 4));
+    assert_eq!(c.as_col_major_slice(), &[0.0; 8]);
+}
+
 #[test]
 fn test_mat_mul_rectangular_preserves_column_major_layout() {
     let a = from_vec2d(vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]]);

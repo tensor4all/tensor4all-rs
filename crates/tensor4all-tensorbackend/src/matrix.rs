@@ -1546,6 +1546,7 @@ pub trait BlasMul: Sized {
     ) -> Result<Matrix<Self>>;
 }
 
+/// Multiply an owned operand pair on the process-global context.
 fn dot_general_matrices<T>(
     a_tensor: Tensor,
     b_tensor: Tensor,
@@ -1564,29 +1565,38 @@ where
     dot_general_matrices_from::<T>(c, m, n, expected_len)
 }
 
-/// Matrix multiplication `A * B` on `session`.
+/// Dispatch `a * b` from borrowed operands without copying either buffer.
 ///
-/// # Errors
-///
-/// Returns an error when the multiplication fails on the engine, returns the wrong
-/// dtype, or has a shape other than `m x n`.
-fn dot_general_matrices_in<T>(
+/// Both operands enter the engine as [`TensorRead::View`] over the matrix
+/// buffers, so the engine reads them in place instead of staging an owned copy.
+fn dot_general_borrowed<T>(
     session: &mut dyn tenferro_tensor::Engine,
-    a_tensor: Tensor,
-    b_tensor: Tensor,
+    a: &Matrix<T>,
+    b: &Matrix<T>,
     m: usize,
     n: usize,
-    expected_len: usize,
-) -> Result<Matrix<T>>
+) -> tenferro_tensor::Result<Tensor>
 where
     T: TensorScalar,
 {
-    use tenferro::TensorSessionOpsExt;
+    use tenferro_tensor::validate::matmul_config_for_shapes;
+    use tenferro_tensor::{TensorRead, TypedTensorView};
 
-    let c = a_tensor
-        .matmul(&b_tensor, session)
-        .context("matrix multiplication failed")?;
-    dot_general_matrices_from::<T>(c, m, n, expected_len)
+    let k = a.ncols();
+    let config = matmul_config_for_shapes("matmul", &[m, k], &[b.nrows(), n])?;
+    let lhs = T::tensor_view(TypedTensorView::from_col_major(
+        &[m, k],
+        a.as_col_major_slice(),
+    )?);
+    let rhs = T::tensor_view(TypedTensorView::from_col_major(
+        &[b.nrows(), n],
+        b.as_col_major_slice(),
+    )?);
+    session.dot_general_read(
+        TensorRead::from_view(lhs),
+        TensorRead::from_view(rhs),
+        &config,
+    )
 }
 
 /// Validate and adopt one multiplication result, shared by both entries.
@@ -1644,9 +1654,11 @@ macro_rules! impl_blas_mul {
                     )
                 })?;
 
-                let a_tensor: Tensor = a.to_typed_tensor().into();
-                let b_tensor: Tensor = b.to_typed_tensor().into();
-                dot_general_matrices::<$t>(a_tensor, b_tensor, m, n, expected_len)
+                use crate::context::with_default_session;
+
+                let c = with_default_session(|session| dot_general_borrowed(session, a, b, m, n))
+                    .context("matrix multiplication failed")?;
+                dot_general_matrices_from::<$t>(c, m, n, expected_len)
             }
 
             fn blas_mat_mul_owned(a: Matrix<Self>, b: Matrix<Self>) -> Result<Matrix<Self>> {
@@ -1694,9 +1706,9 @@ macro_rules! impl_blas_mul {
                     )
                 })?;
 
-                let a_tensor: Tensor = a.to_typed_tensor().into();
-                let b_tensor: Tensor = b.to_typed_tensor().into();
-                dot_general_matrices_in(session, a_tensor, b_tensor, m, n, expected_len)
+                let c = dot_general_borrowed(session, a, b, m, n)
+                    .context("matrix multiplication failed")?;
+                dot_general_matrices_from::<$t>(c, m, n, expected_len)
             }
         }
         )*
@@ -1756,7 +1768,10 @@ impl MatrixScalar for Complex32 {
 
 /// Matrix multiplication: A * B.
 ///
-/// Uses BLAS-backed einsum via tenferro for high performance.
+/// Uses BLAS-backed einsum via tenferro for high performance. Both operands are
+/// read in place: they enter the engine as borrowed views, so no operand buffer
+/// is copied (#1096). Use [`mat_mul_owned`] only when the caller owns the
+/// matrices and prefers to hand over their buffers.
 ///
 /// # Errors
 ///
@@ -1783,8 +1798,9 @@ pub fn mat_mul<T: BlasMul>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>, Ma
 
 /// Matrix multiplication: consume `A` and `B`, returning `A * B`.
 ///
-/// Uses BLAS-backed einsum via tenferro. Compared with [`mat_mul`], this
-/// reuses the input matrix buffers when building tenferro tensors.
+/// Uses BLAS-backed einsum via tenferro. Compared with [`mat_mul`], this hands
+/// the input matrix buffers to tenferro instead of borrowing them; neither
+/// entry copies an operand, so ownership is the only difference.
 ///
 /// # Errors
 ///
