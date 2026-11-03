@@ -205,7 +205,7 @@ fn decompositions() -> anyhow::Result<()> {
 
 fn contractions() -> anyhow::Result<()> {
     use tensor4all_core::FactorizeAlg;
-    println!("chi,d,length,rank,method,algorithm,repeat,seconds,relative_error");
+    println!("chi,d,length,rank,method,algorithm,power_iterations,repeat,seconds,relative_error");
     for (chi, d, length) in [
         (16_usize, 2_usize, 6_u32),
         (32, 2, 6),
@@ -242,6 +242,7 @@ fn contractions() -> anyhow::Result<()> {
                         .with_max_bond_dim(chi)
                         .with_factorize_alg(algorithm);
                     options.rsvd_seed = 1108;
+                    options.randomized.power_iterations = 2;
                     let start = Instant::now();
                     let result = black_box(contract(black_box(&a), black_box(&b), &0, options)?);
                     let seconds = start.elapsed().as_secs_f64();
@@ -260,7 +261,7 @@ fn contractions() -> anyhow::Result<()> {
                         );
                     }
                     if repeat > 0 {
-                        println!("{chi},{d},{length},{chi},{method},{algorithm:?},{},{seconds},{residual}",repeat-1);
+                        println!("{chi},{d},{length},{chi},{method},{algorithm:?},2,{},{seconds},{residual}",repeat-1);
                     }
                 }
             }

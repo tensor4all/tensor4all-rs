@@ -42,5 +42,11 @@
   The failed attempt is retained in the experiment evidence. Revision 2
   predeclares a complete doubled-chi grid with unchanged accuracy gates.
   No upstream report or patch was prepared; that needs separate authorization.
+- One power iteration did not meet the declared 5% end-to-end error gate on
+  a flat-spectrum random Zipup case (0.68160 vs deterministic 0.63757).
+  The complete failed attempt is retained. A separate complete comparison
+  predeclares two power iterations in every RSVD cell, without changing the
+  gate or the library default. A local SVD speedup alone is not an application
+  accuracy result.
 - R2 environment projection remains deferred until inverse-canonical parallel
   Fit. Adaptive error-certified rank selection is also out of scope.
