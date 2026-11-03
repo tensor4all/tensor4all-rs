@@ -126,6 +126,7 @@ fn adaptive_add_projects_original_addends_before_retrying() {
         max_bond_dim: Some(1),
         patch_order: vec![site0.clone()],
         split_strategy: PatchSplitStrategy::Sequential,
+        sum_engine: SumEngine::Binary,
     };
 
     let result = add_project_first(contributions, &0, &contraction, &patching).unwrap();
@@ -173,6 +174,7 @@ fn exact_parameter_gain_can_choose_a_later_candidate() {
         max_bond_dim: Some(1),
         patch_order: vec![site0.clone(), site1.clone()],
         split_strategy: PatchSplitStrategy::ExactParameterGain,
+        sum_engine: SumEngine::Binary,
     };
 
     assert_eq!(
@@ -387,6 +389,7 @@ fn run_group(
         max_bond_dim: Some(2),
         patch_order,
         split_strategy,
+        sum_engine: SumEngine::Binary,
     };
     let result = contract_group_project_first(
         group.pairs.clone(),

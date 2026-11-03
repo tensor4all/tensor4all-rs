@@ -12,7 +12,73 @@ use crate::subdomain_tree_tn::{
     validate_contraction_site_assignment, validate_truncation_options, SubDomainTreeTN,
 };
 use tensor4all_core::DynIndex;
-use tensor4all_treetn::{contraction::ContractionOptions, TreeTN, TruncationOptions};
+use tensor4all_treetn::{
+    contraction::ContractionOptions, ExactSum, SumEngine, TreeTN, TruncationOptions,
+};
+
+/// Options of [`PartitionedTreeTN::contract`] and
+/// [`PartitionedTreeTN::contract_selected`]: how each patch pair is
+/// contracted, and how the contributions to one output projector are summed.
+///
+/// A plain [`ContractionOptions`] converts into this type with
+/// [`SumEngine::Binary`], so `contract(&other, &center, contraction_options)`
+/// keeps its meaning.
+///
+/// # Summing contributions
+///
+/// Several patch pairs can contribute to the same output projector. Their
+/// exact sum is built with `sum_engine` and then truncated once with the
+/// truncation settings of `contraction`. The default, [`SumEngine::Binary`],
+/// adds the contributions one by one; it assumes few contributions per output
+/// projector, where the add chain is cheap. [`SumEngine::Nary`] builds the sum
+/// in one pass, which is much faster for many contributions, and
+/// [`SumEngine::NaryWithin`] does so only while the estimated size of the
+/// built sum fits `limit_bytes`. The estimate is
+/// [`ExactSum::estimated_nary_bytes`](tensor4all_treetn::ExactSum::estimated_nary_bytes):
+/// for every node, the product of its site dimensions and of its summed bond
+/// dimensions, times 16 bytes.
+///
+/// A `NaryWithin` fallback to the add chain is not reported by the
+/// contraction routines. To see which method a given sum takes, measure it
+/// with [`TreeTN::exact_sum`] or [`PartitionedTreeTN::to_treetn_with`]. A
+/// reporting variant of the routines may be added when a caller needs it.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtreetn::PartitionedContractionOptions;
+/// use tensor4all_treetn::{contraction::ContractionOptions, SumEngine};
+///
+/// let default = PartitionedContractionOptions::default();
+/// assert_eq!(default.sum_engine, SumEngine::Binary);
+/// // A plain `ContractionOptions` means `Binary` as well.
+/// let plain = PartitionedContractionOptions::from(ContractionOptions::default());
+/// assert_eq!(plain.sum_engine, SumEngine::Binary);
+///
+/// let nary = PartitionedContractionOptions {
+///     sum_engine: SumEngine::Nary,
+///     ..ContractionOptions::default().into()
+/// };
+/// assert_eq!(nary.sum_engine, SumEngine::Nary);
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct PartitionedContractionOptions {
+    /// How each compatible patch pair is contracted, and the truncation of
+    /// every summed output projector.
+    pub contraction: ContractionOptions,
+    /// How the contributions to one output projector are summed. Default:
+    /// [`SumEngine::Binary`].
+    pub sum_engine: SumEngine,
+}
+
+impl From<ContractionOptions> for PartitionedContractionOptions {
+    fn from(contraction: ContractionOptions) -> Self {
+        Self {
+            contraction,
+            sum_engine: SumEngine::Binary,
+        }
+    }
+}
 
 /// A patch pair of a partition contraction with its contracted contribution.
 pub(crate) type ContractedPair<'a, V> = (
@@ -609,6 +675,12 @@ where
     /// and truncated with `options`. A key present on only one side is copied as
     /// the other side's zero contribution.
     ///
+    /// Every sum here has exactly two terms, one per operand, so this method
+    /// takes no [`SumEngine`]: for two terms the binary add and the N-ary
+    /// direct sum do the same work. To sum many partitions at once, collect
+    /// their patches and use [`Self::to_treetn_with`] or the routines that take
+    /// a [`SumEngine`].
+    ///
     /// # Different patch layouts
     ///
     /// The operands may have different patch layouts. When a key of one side
@@ -706,8 +778,14 @@ where
     /// [`PartitionedTreeTNError::OverlappingProjectors`] for an operand whose own
     /// stored layout is invalid, or a typed TreeTN/backend error. The operation
     /// returns a new partition, so failure cannot mutate either input.
-    pub fn contract(&self, other: &Self, center: &V, options: ContractionOptions) -> Result<Self> {
-        validate_contraction_options(&options)?;
+    pub fn contract(
+        &self,
+        other: &Self,
+        center: &V,
+        options: impl Into<PartitionedContractionOptions>,
+    ) -> Result<Self> {
+        let options = options.into();
+        validate_contraction_options(&options.contraction)?;
         self.validate_contents()?;
         other.validate_contents()?;
         if let Some((left, right)) = self.refined_for_contract(other, center)? {
@@ -859,20 +937,24 @@ where
         &self,
         other: &Self,
         center: &V,
-        options: ContractionOptions,
+        options: impl Into<PartitionedContractionOptions>,
         wanted: &[Projector],
     ) -> Result<Self> {
         let wanted: HashSet<Projector> = wanted.iter().cloned().collect();
-        self.contract_with_selection(other, center, options, Some(&wanted))
+        self.contract_with_selection(other, center, options.into(), Some(&wanted))
     }
 
     fn contract_with_selection(
         &self,
         other: &Self,
         center: &V,
-        options: ContractionOptions,
+        options: PartitionedContractionOptions,
         wanted: Option<&HashSet<Projector>>,
     ) -> Result<Self> {
+        let PartitionedContractionOptions {
+            contraction: options,
+            sum_engine,
+        } = options;
         validate_contraction_options(&options)?;
         self.validate_contents()?;
         other.validate_contents()?;
@@ -914,18 +996,14 @@ where
         );
         let duplicate_options = truncation_options_from_contraction(&options);
         let mut subdomains = Vec::with_capacity(groups.len());
-        for (_, contributions) in groups {
-            let mut contributions = contributions.into_iter();
-            let first = contributions.next().ok_or(PartitionedTreeTNError::Empty)?;
-            let mut combined = first;
-            let mut contribution_count = 1usize;
-            for contribution in contributions {
-                combined = combined.add(&contribution)?;
-                contribution_count += 1;
+        for (_, mut contributions) in groups {
+            if contributions.len() == 1 {
+                subdomains.extend(contributions.pop());
+                continue;
             }
-            if contribution_count > 1 {
-                combined.truncate(center, duplicate_options)?;
-            }
+            let terms: Vec<_> = contributions.iter().collect();
+            let mut combined = SubDomainTreeTN::exact_sum(&terms, sum_engine)?;
+            combined.truncate(center, duplicate_options)?;
             subdomains.push(combined);
         }
 
@@ -998,17 +1076,9 @@ where
 
     /// Sum eager patches in logical patch-key order.
     ///
-    /// The result uses strict high-level [`TreeTN::add`] and never materializes
-    /// the full tensor densely. Distinct patch keys have stable traversal and
-    /// direct-sum construction order. Patches that share the logical index and
-    /// projector key are then ordered by a content digest of their payloads,
-    /// computed without materializing them and only for such a tie, so an input
-    /// without metadata ties pays no linear payload pass. Patches that also tie
-    /// on content have unspecified relative order: either their payloads are
-    /// numerically identical, so any order gives the same bits, or a payload
-    /// could not be fingerprinted without materializing it, or two payloads
-    /// collided in the 64-bit digest; the last two leave reproducibility to the
-    /// structural key components.
+    /// This is [`Self::to_treetn_with`] with [`SumEngine::Binary`]: the patches
+    /// are added one by one with strict [`TreeTN::add`]. The full tensor is
+    /// never materialized densely.
     ///
     /// # Errors
     ///
@@ -1016,6 +1086,71 @@ where
     /// typed invariant errors for invalid metadata, or [`PartitionedTreeTNError::TreeTN`]
     /// when strict TreeTN addition fails.
     pub fn to_treetn(&self) -> Result<TreeTN<tensor4all_core::IdxTensor, V>> {
+        Ok(self.to_treetn_with(SumEngine::Binary)?.network)
+    }
+
+    /// Sum eager patches in logical patch-key order, building the sum with the
+    /// method `engine` chooses, and report which method ran.
+    ///
+    /// The sum is exact; its bond dimensions are the sums of the patches' bond
+    /// dimensions. Distinct patch keys have stable traversal and direct-sum
+    /// construction order. Patches that share the logical index and projector
+    /// key are then ordered by a content digest of their payloads, computed
+    /// without materializing them and only for such a tie, so an input without
+    /// metadata ties pays no linear payload pass. Patches that also tie on
+    /// content have unspecified relative order: either their payloads are
+    /// numerically identical, so any order gives the same bits, or a payload
+    /// could not be fingerprinted without materializing it, or two payloads
+    /// collided in the 64-bit digest; the last two leave reproducibility to the
+    /// structural key components.
+    ///
+    /// # Arguments
+    /// * `engine` - How the sum is built ([`SumEngine`]). [`SumEngine::Binary`]
+    ///   adds the patches one by one, which [`Self::to_treetn`] uses; it assumes
+    ///   few patches. [`SumEngine::Nary`] builds the sum in one pass, much
+    ///   faster for many patches, and [`SumEngine::NaryWithin`] does so only
+    ///   while the estimated size of the sum fits its limit.
+    ///
+    /// # Returns
+    /// The sum ([`ExactSum::network`]), whether the N-ary method built it
+    /// ([`ExactSum::used_nary`]), and the size estimate that a
+    /// `NaryWithin` limit is compared with ([`ExactSum::estimated_nary_bytes`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartitionedTreeTNError::Empty`] when there are no patches,
+    /// typed invariant errors for invalid metadata, or [`PartitionedTreeTNError::TreeTN`]
+    /// when building the sum fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN};
+    /// use tensor4all_treetn::{SumEngine, TreeTN};
+    ///
+    /// // A vector over x split into its two entries.
+    /// let x = DynIndex::new_dyn(2);
+    /// let vector = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense(vec![x.clone()], vec![3.0_f64, 4.0])?],
+    ///     vec![0usize],
+    /// )?;
+    /// let parts = PartitionedTreeTN::from_subdomains(vec![
+    ///     SubDomainTreeTN::new(vector.clone(), Projector::from_pairs([(x.clone(), 0)])?)?,
+    ///     SubDomainTreeTN::new(vector, Projector::from_pairs([(x, 1)])?)?,
+    /// ])?;
+    ///
+    /// let sum = parts.to_treetn_with(SumEngine::Nary)?;
+    /// assert!(sum.used_nary);
+    /// // One node of 2 elements, 16 bytes each.
+    /// assert_eq!(sum.estimated_nary_bytes, 2 * 16);
+    /// assert_eq!(sum.network.to_dense()?.to_vec::<f64>()?, vec![3.0, 4.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn to_treetn_with(
+        &self,
+        engine: SumEngine,
+    ) -> Result<ExactSum<tensor4all_core::IdxTensor, V>> {
         self.validate_contents()?;
         if self.is_empty() {
             return Err(PartitionedTreeTNError::Empty);
@@ -1027,14 +1162,8 @@ where
             |(_, left), (_, right)| left.patch_order_key().cmp(right.patch_order_key()),
             |(_, patch)| patch.content_digest(),
         );
-        let (_, first) = patches.first().ok_or(PartitionedTreeTNError::Empty)?;
-        let mut result = first.data().clone();
-        for (_, patch) in patches.into_iter().skip(1) {
-            result = result
-                .add(patch.data())
-                .map_err(PartitionedTreeTNError::from)?;
-        }
-        Ok(result)
+        let data: Vec<_> = patches.into_iter().map(|(_, patch)| patch.data()).collect();
+        TreeTN::exact_sum(&data, engine).map_err(PartitionedTreeTNError::from)
     }
 
     pub(crate) fn validate_contents(&self) -> Result<()> {

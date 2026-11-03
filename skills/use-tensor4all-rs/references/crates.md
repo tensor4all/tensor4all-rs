@@ -174,8 +174,16 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   `contract_selected(&other, &center, options, &wanted)` forms only the output
   projectors in `wanted` and never contracts the pairs of other outputs; each
   returned patch equals the one `contract` returns under that key.
+  `contract`/`contract_selected` take `impl Into<PartitionedContractionOptions>`
+  (a plain treetn `ContractionOptions` works and means `SumEngine::Binary`);
+  `PartitionedContractionOptions::sum_engine` chooses how contributions to one
+  output projector are summed (`Binary` default, opt-in `Nary` /
+  `NaryWithin { limit_bytes }`). `to_treetn_with(engine) -> ExactSum` reports
+  `used_nary` and `estimated_nary_bytes`; `to_treetn()` is `Binary`.
 - `PatchingOptions { cutoff, allocation, max_bond_dim, patch_order,
-  split_strategy }` — `cutoff` is a non-negative discarded-weight budget shared
+  split_strategy, sum_engine }` — `sum_engine` (default `Binary`) builds the
+  equal-key and contribution sums of `add_with_patching` / `contract_adaptive`;
+  `cutoff` is a non-negative discarded-weight budget shared
   across patches (ITensorMPS `cutoff` convention), not an SVD truncation-policy
   knob, and best effort (no global error bound). `allocation:
   BudgetAllocation` selects how it is spread: `Volume` (default) gives each

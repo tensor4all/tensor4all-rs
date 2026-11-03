@@ -4,7 +4,7 @@ use tensor4all_partitionedtreetn::{
     add_with_patching, contract_adaptive, truncate_adaptive, BudgetAllocation, PartitionedTreeTN,
     PartitionedTreeTNError, PatchSplitStrategy, PatchingOptions, Projector, SubDomainTreeTN,
 };
-use tensor4all_treetn::{contraction::ContractionOptions, TreeTN, TruncationOptions};
+use tensor4all_treetn::{contraction::ContractionOptions, SumEngine, TreeTN, TruncationOptions};
 
 fn rank_two_chain() -> (SubDomainTreeTN, DynIndex, DynIndex) {
     let site0 = DynIndex::new_dyn(2);
@@ -372,6 +372,7 @@ fn adaptive_patching_preserves_branched_complex_multisite_tree() {
         max_bond_dim: Some(1),
         patch_order: sites[..2].to_vec(),
         split_strategy: PatchSplitStrategy::Sequential,
+        sum_engine: SumEngine::Binary,
     };
 
     let patched = add_with_patching(vec![patch], &center, &options).unwrap();
@@ -391,6 +392,7 @@ fn add_with_patching_splits_at_explicit_center() {
         max_bond_dim: Some(1),
         patch_order: vec![site0.clone()],
         split_strategy: PatchSplitStrategy::Sequential,
+        sum_engine: SumEngine::Binary,
     };
 
     let result = add_with_patching(vec![subdomain], &0, &options).unwrap();
@@ -568,6 +570,7 @@ fn add_with_patching_norm_splits_only_the_patch_that_stays_over_cap() {
         max_bond_dim: Some(1),
         patch_order: Vec::new(),
         split_strategy: PatchSplitStrategy::ExactParameterGain,
+        sum_engine: SumEngine::Binary,
     };
 
     let norm = add_with_patching(vec![heavy.clone(), light.clone()], &0, &options).unwrap();

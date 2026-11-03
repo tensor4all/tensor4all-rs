@@ -1087,6 +1087,12 @@ fn input_prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// selected index that carried `k_(d+1-j)`, so a contiguous output prefix fixes
 /// the most significant frequency bits without an extra reversal.
 ///
+/// Sibling terms are merged pairwise at every level, and each merge decides on
+/// its own whether to keep the pair combined. No sum of more than two terms is
+/// formed, so this routine takes no
+/// [`SumEngine`](tensor4all_treetn::SumEngine): for two terms the binary add
+/// and the N-ary direct sum do the same work.
+///
 /// # Errors
 /// Returns [`PartitionedTreeTNError::InvalidOptions`] for a non-binary or empty
 /// selection, an `output_depth` above the selection depth, a `max_work_items`

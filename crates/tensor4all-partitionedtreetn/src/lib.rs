@@ -45,7 +45,7 @@ mod subdomain_tree_tn;
 
 pub use error::{PartitionedTreeTNError, Result};
 pub use error_norm::{ErrorNorm, ErrorTolerance, L2Reference};
-pub use partitioned_tree_tn::PartitionedTreeTN;
+pub use partitioned_tree_tn::{PartitionedContractionOptions, PartitionedTreeTN};
 pub use patching::{
     add_with_patching, contract_adaptive, contract_adaptive_selected, truncate_adaptive,
     BudgetAllocation, PatchSplitStrategy, PatchingOptions,
@@ -54,4 +54,4 @@ pub use projector::Projector;
 pub use subdomain_tree_tn::SubDomainTreeTN;
 
 pub use tensor4all_core::{DynIndex, IdxTensor};
-pub use tensor4all_treetn::{SiteIndexNetwork, TreeTN};
+pub use tensor4all_treetn::{ExactSum, SiteIndexNetwork, SumEngine, TreeTN};
