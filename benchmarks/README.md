@@ -4,7 +4,7 @@ This directory contains benchmark code for comparing Rust and Julia implementati
 
 ## Structure
 
-- `rust/`: the `tensor4all-benchmarks` package. Every Rust performance
+- `rust/`: the `tensor4all-benchmarks` package. Every workspace Rust performance
   harness is an `[[example]]` target of that package; add new harnesses there
   as examples instead of including them from a library crate's `examples/`.
   Two features are opt-in: `diagnostics` (TreeACI branch counters, used by

@@ -26,15 +26,25 @@
   probe, not a guarded performance comparison or a speedup claim.
 - Real/complex reconstruction, both canonical directions, seeded streams,
   projected two-site contractions, context/session routing, and a partial-rank
-  finite-difference AD oracle pass. The existing core/treetn/simplett suite and
-  affected doctests passed before the final main synchronization; final checks
-  are recorded below when complete.
+  finite-difference AD oracle pass. After synchronizing with main at `ca4819ca`,
+  the four affected crates pass 2,467 unit/integration tests (four existing
+  ignored tests), Clippy, and all 13 directly affected core doctests. Full
+  core/treetn doctests and focused release regressions also pass.
 - The retired simplett stub and unused C enum reverse conversion were reviewed
   for coverage impact. No shared helper loses its sole exerciser; C-to-Rust
   enum coverage remains. The C ABI is unchanged.
-- C header regeneration is unavailable locally because cbindgen is absent.
-- [Baseline samples and the declared comparison protocol](../../benchmarks/results/2026-11-03-randomized-factorization/protocol.md)
-  retain the attribution evidence and measurement constraints.
+- Header regeneration matches the checked-in header, which compiles as C11
+  and C++17. The mdBook tests and API inventory also pass after synchronization.
+  No GPU or hosted CI validation is claimed.
+  [Validation details](../../benchmarks/results/2026-11-03-randomized-factorization/validation.md)
+  record the checks and local tooling limitations.
+- [Diagnostic results and declared protocols](../../benchmarks/results/2026-11-03-randomized-factorization/README.md)
+  retain the baseline, Lanczos comparison, and complete experiment evidence.
+  The final grids contain 72 decomposition and 96 contraction samples, all
+  within their predeclared accuracy gates. GEMM/QR accounts for 50.9–78.0% of
+  RSVD time on this grid. With two power iterations, RSVD is slower on the
+  tested d=2 contractions and faster on d=4. These shared-host diagnostics do
+  not establish a general speedup, scaling benefit, or upstream placement win.
 - The first Lanczos comparison is invalid: the pinned public driver clamps
   its default maximum subspace to 64 for a 64x64 matrix, while its private
   driver asserts that maximum is strictly smaller than the matrix dimension.
@@ -48,5 +58,9 @@
   predeclares two power iterations in every RSVD cell, without changing the
   gate or the library default. A local SVD speedup alone is not an application
   accuracy result.
+- Repository rules review passes with three advisory file-growth findings.
+  The algorithms live in dedicated randomized modules. The additions to the
+  existing tensor trait, contraction dispatch, and Fit updater keep their
+  owning API/configuration and execution responsibilities together.
 - R2 environment projection remains deferred until inverse-canonical parallel
   Fit. Adaptive error-certified rank selection is also out of scope.
