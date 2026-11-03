@@ -24,5 +24,6 @@
     4.28076171875,
     6.888671875,
     5.2470703125
-  ]
+  ],
+  "harness_state": "uncommitted default-mode diagnostic driver; executable SHA-256 identifies the measured binary"
 }

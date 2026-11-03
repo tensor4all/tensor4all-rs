@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorContractionLike};
+use tensor4all_core::{DynIndex, IdxTensor, TensorContractionLike};
 use tensor4all_treetn::contraction::{contract, ContractionOptions};
 use tensor4all_treetn::TreeTN;
 
