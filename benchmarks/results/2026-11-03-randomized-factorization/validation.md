@@ -22,10 +22,16 @@ exercises the new numerical regressions under optimization.
 | `cargo doc --no-deps -p tensor4all-core -p tensor4all-treetn` | Passed with four existing rustdoc link warnings; see limitations below. |
 | `cargo run -p xtask --release -- api-dump` | After synchronization: public crate inventory generated and verified. |
 | `python3 scripts/check-public-error-docs.py`, `check-crate-boundaries.py`, and `check-test-targets.py` | Passed. |
+| `python3 scripts/audit-library-panics.py` | Passed; no unbaselined findings or stale entries. |
 | `python3 scripts/repository-rules-review.py --base origin/main --worktree --dry-run --file-growth` | Passed; advisory growth findings in the tensor trait, contraction dispatch, and Fit updater. |
 | `python3 scripts/test-repository-rules-review.py` | 114 passed; retry/error messages are mocked test cases. |
 | `./scripts/check-capi-header.sh` with cbindgen 0.29.2 | Three helper tests passed; regenerated header matches; C11 and C++17 compile checks passed. |
 | `cargo fmt --all -- --check` and `git diff --check` | Passed. |
+
+The panic baseline tracks an existing `fuse_indices` debug assertion at line
+8285 instead of 8255 after the additions to `idx_tensor.rs`. The assertion and
+surrounding code are unchanged; only its reviewed location was updated. No
+additional panic path was accepted into the baseline.
 
 ## Tooling limitations
 
