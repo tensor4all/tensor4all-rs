@@ -177,8 +177,10 @@ numerical regression is impractically slow without optimization, run that test
 in release mode and record why. Do not run both `release` and `ci` by default.
 See the [local validation table](CONTRIBUTING.md#validate-locally).
 
-- Private functions: `#[cfg(test)]` module in the source file. Integration
-  tests: `tests/`.
+- Private functions: `#[cfg(test)] mod tests;` in the source file, the suite in
+  `src/<module>/tests.rs`. See the shared rule
+  [Unit Test Organization](https://github.com/tensor4all/tensor4all-agent-rules/blob/main/rules/rust/index.md#unit-test-organization).
+  Integration tests: `tests/`.
 - **Dense whole-result comparisons**: do not recompute contractions
   element-by-element. Materialize once to a dense tensor/matrix, then compare
   via tensor subtraction and `maxabs()`. `IdxTensor` subtraction aligns indices
