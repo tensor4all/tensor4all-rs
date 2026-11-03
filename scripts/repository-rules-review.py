@@ -3,13 +3,16 @@
 
 Ported from ``tenferro-rs/scripts/repository-rules-review.py`` by way of
 strided-rs, and adapted to this workspace: the rule sections and their path
-routing differ, and the deterministic checks enforce the two rules from
-https://github.com/tensor4all/tensor4all-rs/issues/566 that are exactly
-machine-checkable, rather than tenferro's AD boundary.
+routing differ, and the deterministic checks enforce the rules that are exactly
+machine-checkable -- the two from
+https://github.com/tensor4all/tensor4all-rs/issues/566 and the shared
+"Unit Test Organization" rule -- rather than tenferro's AD boundary.
 
-Both deterministic checks are delta-scoped on purpose. #566 records existing
-violations of each; a repo-wide gate would fail on the backlog, so these stop
+All rule checks are delta-scoped on purpose. #566 records existing violations of
+both of its rules, so a repo-wide gate would fail on that backlog; these stop
 new violations from landing while the backlog burns down separately.
+tensor4all-rs#1105 moved the last inline `mod tests {` block out, so the inline
+unit-test check has no backlog and is exact.
 
 The #917 file-size experiment is separately opt-in with ``--file-growth`` and
 ``--dry-run``. It produces advisory warnings and is not enabled in hosted CI.
@@ -76,6 +79,14 @@ PROHIBITED_DOCTEST_FENCE = re.compile(
     r"^\s*(?://[/!]|\*)?\s*(?:`{3,}|~{3,})\s*([\w,\s-]*)$"
 )
 PROHIBITED_DOCTEST_ATTRS = frozenset({"ignore", "no_run"})
+
+# Inline unit-test blocks belong in their own file (shared rules
+# `rules/rust/index.md`, "Unit Test Organization"): the module keeps only
+# `#[cfg(test)] mod tests;` and the suite lives in `src/<module>/tests.rs`.
+# The `pub(crate)` forms are covered too. tensor4all-rs#1105 moved the last
+# inline block out, so this rejects every new one instead of a backlog; a
+# genuinely tiny leaf module is handled by the maintainer waiver label.
+INLINE_TEST_MODULE = re.compile(r"^\s*(?:pub(?:\(crate\))?\s+)?mod tests\s*\{")
 
 SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
@@ -1433,6 +1444,20 @@ def prohibited_doctest_violations(
     return violations
 
 
+def inline_test_module_violations(
+    added: dict[str, list[tuple[int, str]]],
+) -> list[str]:
+    """Report added inline `mod tests { ... }` blocks."""
+    violations: list[str] = []
+    for path in sorted(added):
+        if not path.endswith(".rs"):
+            continue
+        for line_no, text in added[path]:
+            if INLINE_TEST_MODULE.match(text):
+                violations.append(f"{path}:{line_no}: {text.strip()}")
+    return violations
+
+
 def deterministic_checks(
     files: list[str],
     *,
@@ -1481,6 +1506,28 @@ def deterministic_checks(
                     "and `no_run` are prohibited without explicit approval. "
                     "Use the maintainer waiver label when a fence is "
                     "genuinely approved.\n" + "\n".join(doctests)
+                ),
+            )
+        )
+
+    inline_tests = inline_test_module_violations(added)
+    if inline_tests:
+        findings.append(
+            Finding(
+                id="inline-unit-tests",
+                severity="block",
+                rule_section="Unit Test Organization",
+                file=inline_tests[0].split(":")[0],
+                line=None,
+                summary="New inline `mod tests {` block in a source file",
+                detail=(
+                    "Keep unit tests out of production source files. Leave "
+                    "`#[cfg(test)] mod tests;` in the module and put the suite "
+                    "in `src/<module>/tests.rs` (shared rule "
+                    "tensor4all/tensor4all-agent-rules `rules/rust/index.md`, "
+                    "Unit Test Organization). A genuinely tiny leaf module can "
+                    "be waived with the maintainer waiver label.\n"
+                    + "\n".join(inline_tests)
                 ),
             )
         )

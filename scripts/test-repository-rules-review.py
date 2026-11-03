@@ -480,6 +480,61 @@ def test_prohibited_doctest_covers_markdown_and_comma_lists() -> None:
     assert "ignore" in findings[0].detail
 
 
+def test_inline_test_module_blocks_new_inline_block() -> None:
+    mod = load_module()
+    path = "crates/tensor4all-core/src/tensor_like.rs"
+    diff = make_diff(path, ["#[cfg(test)]", "mod tests {", "    #[test]"])
+    findings = mod.deterministic_checks(
+        [path], added=mod.added_lines_with_text(diff)
+    )
+    assert len(findings) == 1
+    assert findings[0].id == "inline-unit-tests"
+    assert findings[0].rule_section == "Unit Test Organization"
+    assert f"{path}:3:" in findings[0].detail
+
+
+def test_inline_test_module_covers_pub_crate_and_indented_forms() -> None:
+    mod = load_module()
+    path = "crates/tensor4all-core/src/lib.rs"
+    diff = make_diff(
+        path, ["pub(crate) mod tests {", "pub mod tests{", "    mod tests {"]
+    )
+    findings = mod.deterministic_checks(
+        [path], added=mod.added_lines_with_text(diff)
+    )
+    assert len(findings) == 1
+    assert findings[0].detail.count(".rs:") == 3
+
+
+def test_inline_test_module_accepts_separate_file_declaration() -> None:
+    mod = load_module()
+    path = "crates/tensor4all-core/src/tensor_like.rs"
+    diff = make_diff(
+        path,
+        [
+            "#[cfg(test)]",
+            "mod tests;",
+            '#[path = "tests.rs"]',
+            "mod tests;",
+            "mod tests_helper;",
+        ],
+    )
+    findings = mod.deterministic_checks(
+        [path], added=mod.added_lines_with_text(diff)
+    )
+    assert findings == []
+
+
+def test_inline_test_module_ignores_non_rust_files() -> None:
+    mod = load_module()
+    path = "docs/book/src/guide.md"
+    diff = make_diff(path, ["mod tests {"])
+    findings = mod.deterministic_checks(
+        [path], added=mod.added_lines_with_text(diff)
+    )
+    assert findings == []
+
+
 # --- model response handling -------------------------------------------------
 
 
