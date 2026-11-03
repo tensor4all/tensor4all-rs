@@ -141,3 +141,32 @@ jobs:
           else
             gh issue create --repo "$GITHUB_REPOSITORY" --label "$label" --title "$title" --body "$body"
           fi
+
+  # The failure issue must not outlive the failure: a green night closes it.
+  close-on-success:
+    name: Close the failure issue after a good night
+    needs: coverage
+    if: ${{ needs.coverage.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Close the open failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          label=ci-nightly
+          title="Scheduled coverage is failing"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$label" --state open \
+            --search "in:title \"$title\"" --limit 1 --json number --jq '.[0].number // empty')
+          if [ -z "$number" ]; then
+            echo "no open \`$title\` issue; nothing to close"
+            exit 0
+          fi
+          gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body \
+            "The scheduled coverage run passed in [run ${GITHUB_RUN_ID}](${run_url}) on \`${GITHUB_SHA:0:8}\`. Closing."
+          gh issue close "$number" --repo "$GITHUB_REPOSITORY"
