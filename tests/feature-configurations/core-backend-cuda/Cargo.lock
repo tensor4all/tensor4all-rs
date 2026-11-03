@@ -104,9 +104,9 @@ dependencies = [
 
 [[package]]
 name = "cpueinsum"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5016c6725d28688983ea1e2090d69ad9afc2343d67d25b0710d7e4b9a2df292"
+checksum = "c7d68fd2a53a48217331c633318609b39a00f71858aeb84407acfd4ed633e2a9"
 dependencies = [
  "num-complex",
  "strided-view",
@@ -325,125 +325,6 @@ name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
-
-[[package]]
-name = "gemm"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa0673db364b12263d103b68337a68fbecc541d6f6b61ba72fe438654709eacb"
-dependencies = [
- "dyn-stack",
- "gemm-c32",
- "gemm-c64",
- "gemm-common",
- "gemm-f16",
- "gemm-f32",
- "gemm-f64",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid",
- "seq-macro",
-]
-
-[[package]]
-name = "gemm-c32"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "086936dbdcb99e37aad81d320f98f670e53c1e55a98bee70573e83f95beb128c"
-dependencies = [
- "dyn-stack",
- "gemm-common",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid",
- "seq-macro",
-]
-
-[[package]]
-name = "gemm-c64"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20c8aeeeec425959bda4d9827664029ba1501a90a0d1e6228e48bef741db3a3f"
-dependencies = [
- "dyn-stack",
- "gemm-common",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid",
- "seq-macro",
-]
-
-[[package]]
-name = "gemm-common"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88027625910cc9b1085aaaa1c4bc46bb3a36aad323452b33c25b5e4e7c8e2a3e"
-dependencies = [
- "bytemuck",
- "dyn-stack",
- "half",
- "libm",
- "num-complex",
- "num-traits",
- "once_cell",
- "paste",
- "pulp",
- "raw-cpuid",
- "rayon",
- "seq-macro",
- "sysctl",
-]
-
-[[package]]
-name = "gemm-f16"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3df7a55202e6cd6739d82ae3399c8e0c7e1402859b30e4cb780e61525d9486e"
-dependencies = [
- "dyn-stack",
- "gemm-common",
- "gemm-f32",
- "half",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid",
- "rayon",
- "seq-macro",
-]
-
-[[package]]
-name = "gemm-f32"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02e0b8c9da1fbec6e3e3ab2ce6bc259ef18eb5f6f0d3e4edf54b75f9fd41a81c"
-dependencies = [
- "dyn-stack",
- "gemm-common",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid",
- "seq-macro",
-]
-
-[[package]]
-name = "gemm-f64"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "056131e8f2a521bfab322f804ccd652520c79700d81209e9d9275bbdecaadc6a"
-dependencies = [
- "dyn-stack",
- "gemm-common",
- "num-complex",
- "num-traits",
- "paste",
- "raw-cpuid",
- "seq-macro",
-]
 
 [[package]]
 name = "generativity"
@@ -696,7 +577,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1047,9 +928,9 @@ dependencies = [
 
 [[package]]
 name = "strided-basic"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a24edd822609d545e18bd6231c55d0bc4aa6c0fdbf41fcc5f9b0f9e087fcc76b"
+checksum = "4b5dbf2bd4f822b653ceba8752dc236c3063c65ec153fc143575c163d4188d5f"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1062,9 +943,9 @@ dependencies = [
 
 [[package]]
 name = "strided-fused"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ae44b6b21f86bcc63d9b2539e915cefe19c28885ce701bcf1d6e58aec57818a"
+checksum = "9a644a7cd2cc5eed46b8d6cab1f7f1d26dde1dcd08ed1527d2f8bab3374da7a6"
 dependencies = [
  "elem-simd-math",
  "num-complex",
@@ -1074,9 +955,9 @@ dependencies = [
 
 [[package]]
 name = "strided-kernel"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca5215fb5c3940bcae828ee6fd632c13191c4fb52dc0c6d2ef91a845b76b48f0"
+checksum = "139ea2255b562d6aea0a53bc322fd04b4bd01c65013684e6616765af028f22ae"
 dependencies = [
  "num-complex",
  "strided-basic",
@@ -1085,9 +966,9 @@ dependencies = [
 
 [[package]]
 name = "strided-nn"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "995637948ed05f1d8f246866b99c8405f4449380104ef607c3e658811e00a293"
+checksum = "4a2710aa0f7d41a3a899e00612c091c8643fdfd129611d80f0633341c737946c"
 dependencies = [
  "elem-simd-math",
  "pulp",
@@ -1097,9 +978,9 @@ dependencies = [
 
 [[package]]
 name = "strided-perm"
-version = "0.9.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "688230ee9c90d2c3e9abf0d9eaf246efa42713ba1a25ed0c3c086344941fc4b6"
+checksum = "29d57af4cfbea685bcadf2f8877891a7f7af005946afab20157f5d23495c67c4"
 dependencies = [
  "strided-view",
  "thiserror 1.0.69",
@@ -1193,14 +1074,13 @@ dependencies = [
 
 [[package]]
 name = "t4a-faer"
-version = "0.27.0"
+version = "0.28.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e18d24747a84703dfb2bb759d19660ad03fd46859d01f4178f89bd041a208fe2"
+checksum = "e3e9fae9f2bf9071fe13f095c903e05e004200e8d243c1f393d2e8964b532af1"
 dependencies = [
  "bytemuck",
  "dyn-stack",
  "equator 0.6.0",
- "gemm",
  "generativity",
  "libm",
  "nano-gemm",
@@ -1210,6 +1090,7 @@ dependencies = [
  "rayon",
  "reborrow",
  "t4a-faer-traits",
+ "t4a-gemm",
  "t4a-private-gemm-x86",
  "threadteam",
 ]
@@ -1232,6 +1113,125 @@ dependencies = [
 ]
 
 [[package]]
+name = "t4a-gemm"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f59ad637f7982e2197eb1550929b8cdaba0f7f5911af3c2a00ea242918419985"
+dependencies = [
+ "dyn-stack",
+ "num-complex",
+ "num-traits",
+ "paste",
+ "raw-cpuid",
+ "seq-macro",
+ "t4a-gemm-c32",
+ "t4a-gemm-c64",
+ "t4a-gemm-common",
+ "t4a-gemm-f16",
+ "t4a-gemm-f32",
+ "t4a-gemm-f64",
+]
+
+[[package]]
+name = "t4a-gemm-c32"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a948134ee5d958a52277201643452742b8d37f608bab1604252121f3d31a081"
+dependencies = [
+ "dyn-stack",
+ "num-complex",
+ "num-traits",
+ "paste",
+ "raw-cpuid",
+ "seq-macro",
+ "t4a-gemm-common",
+]
+
+[[package]]
+name = "t4a-gemm-c64"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01efdf71d74a61ebdf6199abbdb458d8e2f35c27463ef2d60eabf329ffd214ca"
+dependencies = [
+ "dyn-stack",
+ "num-complex",
+ "num-traits",
+ "paste",
+ "raw-cpuid",
+ "seq-macro",
+ "t4a-gemm-common",
+]
+
+[[package]]
+name = "t4a-gemm-common"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6dbad9458f210b5bca543162b78d574db1b6599dfc29869b0f266c1de4400caf"
+dependencies = [
+ "bytemuck",
+ "dyn-stack",
+ "half",
+ "libm",
+ "num-complex",
+ "num-traits",
+ "once_cell",
+ "paste",
+ "pulp",
+ "raw-cpuid",
+ "rayon",
+ "seq-macro",
+ "sysctl",
+]
+
+[[package]]
+name = "t4a-gemm-f16"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d804c3cd6c64a7104fca770bbc8a6b1d51d9bba4a4c52ff489b53f6b25c9d6"
+dependencies = [
+ "dyn-stack",
+ "half",
+ "num-complex",
+ "num-traits",
+ "paste",
+ "raw-cpuid",
+ "rayon",
+ "seq-macro",
+ "t4a-gemm-common",
+ "t4a-gemm-f32",
+]
+
+[[package]]
+name = "t4a-gemm-f32"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "905030a831256754168b3df6d9f29638fde37f6cce6ba60b47f0437841602217"
+dependencies = [
+ "dyn-stack",
+ "num-complex",
+ "num-traits",
+ "paste",
+ "raw-cpuid",
+ "seq-macro",
+ "t4a-gemm-common",
+]
+
+[[package]]
+name = "t4a-gemm-f64"
+version = "0.20.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff81c96e4e16a37d797d07a7926274cd24ee12a9efaab9535c65b43a8a9cd97a"
+dependencies = [
+ "dyn-stack",
+ "num-complex",
+ "num-traits",
+ "paste",
+ "raw-cpuid",
+ "seq-macro",
+ "t4a-gemm-common",
+]
+
+[[package]]
 name = "t4a-private-gemm-x86"
 version = "0.1.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1249,9 +1249,9 @@ dependencies = [
 
 [[package]]
 name = "tcontract"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "368f497288746835d1e4d65948a9f6045358d6b4b673992985eaf5a0582a312e"
+checksum = "f4bfc0cace3acfb58c540d9e97725887e4188853b722efa4c2bca21eda64f9d8"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1267,9 +1267,9 @@ dependencies = [
 
 [[package]]
 name = "tcontract-exec"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cb5032a1c0e785160cfc5d4f51a37400ce87c95e82336aa94d97819a4c1f876"
+checksum = "e9582710f3bd710d535d673014054f6b9057bf0e8f5bf5fddcab6ad423911ccb"
 dependencies = [
  "t4a-faer",
  "thiserror 1.0.69",
@@ -1278,17 +1278,17 @@ dependencies = [
 
 [[package]]
 name = "tcontract-kernel"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ca7f3b0f6c0c1e4e03b9ee51ab4b4e77ba75b17a6b5f2a8c6f7a6176394f248"
+checksum = "9bc965f60442d295dad23199f770640babcac61b792a4c351b81b3d4bb09c3e6"
 dependencies = [
  "num-complex",
 ]
 
 [[package]]
 name = "tenferro-ad"
-version = "0.8.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=a9f494cc4679387c75af698b299c316fd2295fe4#a9f494cc4679387c75af698b299c316fd2295fe4"
+version = "0.9.0"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=bdde3f2b6e82f0c9991f4170a642ad80dca7b707#bdde3f2b6e82f0c9991f4170a642ad80dca7b707"
 dependencies = [
  "computegraph",
  "lru",
@@ -1304,13 +1304,13 @@ dependencies = [
 
 [[package]]
 name = "tenferro-core-ops"
-version = "0.8.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=a9f494cc4679387c75af698b299c316fd2295fe4#a9f494cc4679387c75af698b299c316fd2295fe4"
+version = "0.9.0"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=bdde3f2b6e82f0c9991f4170a642ad80dca7b707#bdde3f2b6e82f0c9991f4170a642ad80dca7b707"
 
 [[package]]
 name = "tenferro-cpu"
-version = "0.8.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=a9f494cc4679387c75af698b299c316fd2295fe4#a9f494cc4679387c75af698b299c316fd2295fe4"
+version = "0.9.0"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=bdde3f2b6e82f0c9991f4170a642ad80dca7b707#bdde3f2b6e82f0c9991f4170a642ad80dca7b707"
 dependencies = [
  "cpueinsum",
  "elem-simd-math",
@@ -1336,8 +1336,8 @@ dependencies = [
 
 [[package]]
 name = "tenferro-cpu-basic"
-version = "0.8.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=a9f494cc4679387c75af698b299c316fd2295fe4#a9f494cc4679387c75af698b299c316fd2295fe4"
+version = "0.9.0"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=bdde3f2b6e82f0c9991f4170a642ad80dca7b707#bdde3f2b6e82f0c9991f4170a642ad80dca7b707"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1348,8 +1348,8 @@ dependencies = [
 
 [[package]]
 name = "tenferro-cpu-fused"
-version = "0.8.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=a9f494cc4679387c75af698b299c316fd2295fe4#a9f494cc4679387c75af698b299c316fd2295fe4"
+version = "0.9.0"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=bdde3f2b6e82f0c9991f4170a642ad80dca7b707#bdde3f2b6e82f0c9991f4170a642ad80dca7b707"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1362,8 +1362,8 @@ dependencies = [
 
 [[package]]
 name = "tenferro-einsum"
-version = "0.8.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=a9f494cc4679387c75af698b299c316fd2295fe4#a9f494cc4679387c75af698b299c316fd2295fe4"
+version = "0.9.0"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=bdde3f2b6e82f0c9991f4170a642ad80dca7b707#bdde3f2b6e82f0c9991f4170a642ad80dca7b707"
 dependencies = [
  "computegraph",
  "cpueinsum",
@@ -1383,8 +1383,8 @@ dependencies = [
 
 [[package]]
 name = "tenferro-gpu"
-version = "0.8.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=a9f494cc4679387c75af698b299c316fd2295fe4#a9f494cc4679387c75af698b299c316fd2295fe4"
+version = "0.9.0"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=bdde3f2b6e82f0c9991f4170a642ad80dca7b707#bdde3f2b6e82f0c9991f4170a642ad80dca7b707"
 dependencies = [
  "cudarc",
  "libloading 0.8.9",
@@ -1404,8 +1404,8 @@ dependencies = [
 
 [[package]]
 name = "tenferro-internal-cpu-kernels"
-version = "0.8.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=a9f494cc4679387c75af698b299c316fd2295fe4#a9f494cc4679387c75af698b299c316fd2295fe4"
+version = "0.9.0"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=bdde3f2b6e82f0c9991f4170a642ad80dca7b707#bdde3f2b6e82f0c9991f4170a642ad80dca7b707"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1419,8 +1419,8 @@ dependencies = [
 
 [[package]]
 name = "tenferro-internal-extension-macros"
-version = "0.8.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=a9f494cc4679387c75af698b299c316fd2295fe4#a9f494cc4679387c75af698b299c316fd2295fe4"
+version = "0.9.0"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=bdde3f2b6e82f0c9991f4170a642ad80dca7b707#bdde3f2b6e82f0c9991f4170a642ad80dca7b707"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1429,8 +1429,8 @@ dependencies = [
 
 [[package]]
 name = "tenferro-internal-ops"
-version = "0.8.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=a9f494cc4679387c75af698b299c316fd2295fe4#a9f494cc4679387c75af698b299c316fd2295fe4"
+version = "0.9.0"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=bdde3f2b6e82f0c9991f4170a642ad80dca7b707#bdde3f2b6e82f0c9991f4170a642ad80dca7b707"
 dependencies = [
  "computegraph",
  "num-complex",
@@ -1442,8 +1442,8 @@ dependencies = [
 
 [[package]]
 name = "tenferro-linalg"
-version = "0.8.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=a9f494cc4679387c75af698b299c316fd2295fe4#a9f494cc4679387c75af698b299c316fd2295fe4"
+version = "0.9.0"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=bdde3f2b6e82f0c9991f4170a642ad80dca7b707#bdde3f2b6e82f0c9991f4170a642ad80dca7b707"
 dependencies = [
  "computegraph",
  "cudarc",
@@ -1466,8 +1466,8 @@ dependencies = [
 
 [[package]]
 name = "tenferro-runtime"
-version = "0.8.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=a9f494cc4679387c75af698b299c316fd2295fe4#a9f494cc4679387c75af698b299c316fd2295fe4"
+version = "0.9.0"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=bdde3f2b6e82f0c9991f4170a642ad80dca7b707#bdde3f2b6e82f0c9991f4170a642ad80dca7b707"
 dependencies = [
  "computegraph",
  "lru",
@@ -1484,8 +1484,8 @@ dependencies = [
 
 [[package]]
 name = "tenferro-tensor"
-version = "0.8.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=a9f494cc4679387c75af698b299c316fd2295fe4#a9f494cc4679387c75af698b299c316fd2295fe4"
+version = "0.9.0"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=bdde3f2b6e82f0c9991f4170a642ad80dca7b707#bdde3f2b6e82f0c9991f4170a642ad80dca7b707"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1497,8 +1497,8 @@ dependencies = [
 
 [[package]]
 name = "tenferro-tensor-core"
-version = "0.8.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=a9f494cc4679387c75af698b299c316fd2295fe4#a9f494cc4679387c75af698b299c316fd2295fe4"
+version = "0.9.0"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=bdde3f2b6e82f0c9991f4170a642ad80dca7b707#bdde3f2b6e82f0c9991f4170a642ad80dca7b707"
 dependencies = [
  "num-complex",
  "thiserror 2.0.20",
@@ -1602,9 +1602,9 @@ dependencies = [
 
 [[package]]
 name = "threadteam"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23210e76b7702020e91c6b39b1ea83e3e207153d866b261f354eed71f5dcefa3"
+checksum = "d5dd6b40e18f897d036c79963512a194e6f8dbe76e29386ca4ccf6c9d1663f5c"
 dependencies = [
  "libc",
  "loom",
@@ -1620,9 +1620,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tlinalg"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "540c3d6d219aaf95226bcbbf37e3fbb7c85c069defeb66601399696648dc6cb0"
+checksum = "28db4ec533b9ff9c90df170527f3e45cd21cfe3630e74d8123fafa6014af2b5a"
 dependencies = [
  "num-complex",
  "strided-view",
@@ -1724,7 +1724,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1748,47 +1748,22 @@ version = "0.42.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a3e1820f08b8513f676f7ab6c1f99ff312fb97b553d30ff4dd86f9f15728aa7"
 dependencies = [
- "windows_aarch64_gnullvm 0.42.2",
- "windows_aarch64_msvc 0.42.2",
- "windows_i686_gnu 0.42.2",
- "windows_i686_msvc 0.42.2",
- "windows_x86_64_gnu 0.42.2",
- "windows_x86_64_gnullvm 0.42.2",
- "windows_x86_64_msvc 0.42.2",
+ "windows_aarch64_gnullvm",
+ "windows_aarch64_msvc",
+ "windows_i686_gnu",
+ "windows_i686_msvc",
+ "windows_x86_64_gnu",
+ "windows_x86_64_gnullvm",
+ "windows_x86_64_msvc",
 ]
 
 [[package]]
 name = "windows-sys"
-version = "0.52.0"
+version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
+checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
- "windows-targets",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.59.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
-dependencies = [
- "windows-targets",
-]
-
-[[package]]
-name = "windows-targets"
-version = "0.52.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b724f72796e036ab90c1021d4780d4d3d648aca59e491e6b98e725b84e99973"
-dependencies = [
- "windows_aarch64_gnullvm 0.52.6",
- "windows_aarch64_msvc 0.52.6",
- "windows_i686_gnu 0.52.6",
- "windows_i686_gnullvm",
- "windows_i686_msvc 0.52.6",
- "windows_x86_64_gnu 0.52.6",
- "windows_x86_64_gnullvm 0.52.6",
- "windows_x86_64_msvc 0.52.6",
+ "windows-link",
 ]
 
 [[package]]
@@ -1798,22 +1773,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "597a5118570b68bc08d8d59125332c54f1ba9d9adeedeef5b99b02ba2b0698f8"
 
 [[package]]
-name = "windows_aarch64_gnullvm"
-version = "0.52.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32a4622180e7a0ec044bb555404c800bc9fd9ec262ec147edd5989ccd0c02cd3"
-
-[[package]]
 name = "windows_aarch64_msvc"
 version = "0.42.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e08e8864a60f06ef0d0ff4ba04124db8b0fb3be5776a5cd47641e942e58c4d43"
-
-[[package]]
-name = "windows_aarch64_msvc"
-version = "0.52.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09ec2a7bb152e2252b53fa7803150007879548bc709c039df7627cabbd05d469"
 
 [[package]]
 name = "windows_i686_gnu"
@@ -1822,28 +1785,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c61d927d8da41da96a81f029489353e68739737d3beca43145c8afec9a31a84f"
 
 [[package]]
-name = "windows_i686_gnu"
-version = "0.52.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e9b5ad5ab802e97eb8e295ac6720e509ee4c243f69d781394014ebfe8bbfa0b"
-
-[[package]]
-name = "windows_i686_gnullvm"
-version = "0.52.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0eee52d38c090b3caa76c563b86c3a4bd71ef1a819287c19d586d7334ae8ed66"
-
-[[package]]
 name = "windows_i686_msvc"
 version = "0.42.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44d840b6ec649f480a41c8d80f9c65108b92d89345dd94027bfe06ac444d1060"
-
-[[package]]
-name = "windows_i686_msvc"
-version = "0.52.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "240948bc05c5e7c6dabba28bf89d89ffce3e303022809e73deaefe4f6ec56c66"
 
 [[package]]
 name = "windows_x86_64_gnu"
@@ -1852,34 +1797,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8de912b8b8feb55c064867cf047dda097f92d51efad5b491dfb98f6bbb70cb36"
 
 [[package]]
-name = "windows_x86_64_gnu"
-version = "0.52.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "147a5c80aabfbf0c7d901cb5895d1de30ef2907eb21fbbab29ca94c5b08b1a78"
-
-[[package]]
 name = "windows_x86_64_gnullvm"
 version = "0.42.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26d41b46a36d453748aedef1486d5c7a85db22e56aff34643984ea85514e94a3"
 
 [[package]]
-name = "windows_x86_64_gnullvm"
-version = "0.52.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24d5b23dc417412679681396f2b49f3de8c1473deb516bd34410872eff51ed0d"
-
-[[package]]
 name = "windows_x86_64_msvc"
 version = "0.42.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9aec5da331524158c6d1a4ac0ab1541149c0b9505fde06423b02f5ef0106b9f0"
-
-[[package]]
-name = "windows_x86_64_msvc"
-version = "0.52.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "wit-bindgen"
