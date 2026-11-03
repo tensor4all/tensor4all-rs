@@ -220,3 +220,42 @@ fn add_many_rejects_mixed_scalar_types() {
         "{err:#}"
     );
 }
+
+/// Networks with bonds in `f32` and `Complex32` add, pairwise and N-ary:
+/// the direct sum of every node supports the single-precision types.
+#[test]
+fn add_and_add_many_support_single_precision() {
+    fn check<T>(make: impl Fn(f32) -> T)
+    where
+        T: tensor4all_core::TensorElement + Copy,
+    {
+        let (s0, s1) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+        let term = |scale: f32| {
+            let bond = DynIndex::new_dyn(1);
+            let t0 = IdxTensor::from_dense(
+                vec![s0.clone(), bond.clone()],
+                vec![make(scale), make(2.0 * scale)],
+            )
+            .unwrap();
+            let t1 =
+                IdxTensor::from_dense(vec![bond, s1.clone()], vec![make(1.0), make(3.0)]).unwrap();
+            TreeTN::<IdxTensor, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap()
+        };
+        let (a, b, c) = (term(1.0), term(2.0), term(4.0));
+        let expected = IdxTensor::from_dense(
+            vec![s0.clone(), s1.clone()],
+            vec![make(7.0), make(14.0), make(21.0), make(42.0)],
+        )
+        .unwrap();
+
+        let pairwise = a.add(&b).unwrap().add(&c).unwrap();
+        let many = TreeTN::add_many(&[&a, &b, &c]).unwrap();
+
+        for sum in [pairwise, many] {
+            assert_eq!(sum.link_dims(), vec![3]);
+            assert!(sum.to_dense().unwrap().distance(&expected).unwrap() < 1e-5);
+        }
+    }
+    check(|x: f32| x);
+    check(|x: f32| num_complex::Complex32::new(x, 0.0));
+}
