@@ -605,6 +605,31 @@ fn parsed_einsum_plan_reuses_spec_across_prefix_shapes() {
 }
 
 #[test]
+fn plan_reused_over_sites_matches_repeated_string_calls() {
+    // #1065 acceptance: one plan built outside the loop and reused over N sites
+    // must produce exactly what N string calls produce.
+    let plan = NativeEinsumPlan::new("lp,lsr->rps").unwrap();
+    let core_data: Vec<f64> = (1..=12).map(f64::from).collect();
+    let core = NativeTensor::from_vec_col_major(vec![2, 3, 2], core_data).unwrap();
+    for prefix in [1usize, 2, 3, 4, 2, 1] {
+        let data: Vec<f64> = (0..2 * prefix).map(|i| i as f64 * 0.5 - 1.0).collect();
+        let environment = NativeTensor::from_vec_col_major(vec![2, prefix], data).unwrap();
+        let reads = [
+            TensorRead::from_tensor(&environment),
+            TensorRead::from_tensor(&core),
+        ];
+        let from_plan = plan.execute_reads(&reads).unwrap();
+        let from_string = einsum_native_subscripts("lp,lsr->rps", &[&environment, &core]).unwrap();
+        assert_eq!(from_plan.shape(), from_string.shape());
+        assert_eq!(
+            from_plan.as_slice::<f64>().unwrap(),
+            from_string.as_slice::<f64>().unwrap(),
+            "prefix {prefix} differs between the reused plan and the string call"
+        );
+    }
+}
+
+#[test]
 fn parsed_einsum_plan_parses_each_expression_once() {
     // The string form is the convenience form; it must not re-parse a literal
     // expression on every call.
