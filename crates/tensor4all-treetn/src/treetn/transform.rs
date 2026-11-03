@@ -914,6 +914,7 @@ where
                 max_bond_dim: None,
                 svd_policy: None,
                 qr_rtol: Some(0.0),
+                ..FactorizeOptions::default()
             };
 
             let factorize_result = remaining_tensor
@@ -988,6 +989,7 @@ where
                 max_bond_dim: None,
                 svd_policy: None,
                 qr_rtol: Some(0.0),
+                ..FactorizeOptions::default()
             };
 
             let factorize_result = remaining_tensor

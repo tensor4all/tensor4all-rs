@@ -156,6 +156,7 @@ fn test_factorize_reconstruction_all_algorithms() {
                 max_bond_dim: None,
                 svd_policy: None,
                 qr_rtol: None,
+                ..FactorizeOptions::default()
             };
             test_factorize_reconstruction(&options);
         }
@@ -179,6 +180,7 @@ fn test_factorize_shared_bond_index_all_algorithms() {
             max_bond_dim: None,
             svd_policy: None,
             qr_rtol: None,
+            ..FactorizeOptions::default()
         };
         test_shared_bond_index(&options);
     }
@@ -562,6 +564,7 @@ fn test_factorize_lu_ci_no_singular_values() {
                 max_bond_dim: None,
                 svd_policy: None,
                 qr_rtol: None,
+                ..FactorizeOptions::default()
             };
             let result = factorize(&tensor, &left_inds, &options).unwrap();
 
@@ -582,6 +585,7 @@ fn test_factorize_lu_ci_reconstruction_with_unit_dim_axis() {
             max_bond_dim: None,
             svd_policy: None,
             qr_rtol: None,
+            ..FactorizeOptions::default()
         };
         let result = factorize(&tensor, &left_inds, &options).unwrap();
         let reconstructed = result.left.contract_pair(&result.right).unwrap();
@@ -601,6 +605,7 @@ fn test_factorize_lu_ci_reconstruction_with_col_major_matrix_input() {
             max_bond_dim: None,
             svd_policy: None,
             qr_rtol: None,
+            ..FactorizeOptions::default()
         };
         let result = factorize(&tensor, &left_inds, &options).unwrap();
         let reconstructed = result.left.contract_pair(&result.right).unwrap();

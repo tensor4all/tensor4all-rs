@@ -54,6 +54,12 @@ use thiserror::Error;
 /// ```
 #[derive(Debug, Error)]
 pub enum FactorizeError {
+    /// RSVD cannot certify a threshold-based truncation policy.
+    #[error("RSVD does not support truncation policy {0:?}; specify a fixed max_bond_dim, or select deterministic SVD for rtol/cutoff")]
+    UnsupportedTruncationPolicy(
+        /// The rejected policy; no deterministic fallback was attempted.
+        SvdTruncationPolicy,
+    ),
     /// Factorization computation failed.
     ///
     /// The underlying error is preserved as an `anyhow` source, so a typed
@@ -130,6 +136,9 @@ pub enum FactorizeAlg {
     /// Singular Value Decomposition.
     #[default]
     SVD,
+    /// Fixed-rank randomized SVD; requires a positive rank cap and dense
+    /// `f64`/`Complex64`. `f32`/`Complex32` are unsupported.
+    RSVD,
     /// QR decomposition.
     QR,
     /// Rank-revealing LU decomposition.
@@ -239,14 +248,20 @@ pub struct FactorizeOptions {
     /// Canonical direction.
     pub canonical: Canonical,
     /// Maximum rank for truncation.
-    /// If `None`, no rank limit is applied.
+    /// If `None`, no rank limit is applied to deterministic methods; RSVD
+    /// requires a positive rank cap.
     pub max_bond_dim: Option<usize>,
     /// SVD truncation policy.
-    /// If `None`, uses the SVD global default.
+    /// If `None`, deterministic SVD uses its global default. RSVD ignores
+    /// global defaults and rejects every explicit threshold policy.
     pub svd_policy: Option<SvdTruncationPolicy>,
     /// QR-specific relative tolerance.
     /// If `None`, uses the QR global default.
     pub qr_rtol: Option<f64>,
+    /// Gaussian sketch options for RSVD; ignored by deterministic algorithms.
+    pub randomized: crate::RangeOptions,
+    /// Seed for convenience RSVD calls. Caller-RNG entries ignore this field.
+    pub rsvd_seed: u64,
 }
 
 impl Default for FactorizeOptions {
@@ -257,11 +272,34 @@ impl Default for FactorizeOptions {
             max_bond_dim: None,
             svd_policy: None,
             qr_rtol: None,
+            randomized: crate::RangeOptions::default(),
+            rsvd_seed: 0,
         }
     }
 }
 
 impl FactorizeOptions {
+    /// Create fixed-rank RSVD options with the default sketch and seed zero.
+    ///
+    /// `max_bond_dim` must be positive. Global truncation defaults are ignored;
+    /// an explicit `svd_policy` or `qr_rtol` is rejected.
+    /// Only dense `f64`/`Complex64` inputs are supported, not `f32`/`Complex32`.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{FactorizeAlg, FactorizeOptions};
+    /// let options = FactorizeOptions::rsvd(3);
+    /// assert_eq!(options.alg, FactorizeAlg::RSVD);
+    /// assert_eq!(options.max_bond_dim, Some(3));
+    /// ```
+    pub fn rsvd(max_bond_dim: usize) -> Self {
+        Self {
+            alg: FactorizeAlg::RSVD,
+            max_bond_dim: Some(max_bond_dim),
+            ..Self::default()
+        }
+    }
+
     /// Create options for SVD factorization.
     ///
     /// # Examples
@@ -400,8 +438,15 @@ impl FactorizeOptions {
     ///
     /// Returns [`FactorizeError::InvalidOptions`] if an algorithm is paired with
     /// unsupported algorithm-specific truncation settings, or if `max_bond_dim`
-    /// is zero or an SVD policy threshold is non-finite/negative.
+    /// is zero or an SVD policy threshold is non-finite/negative. Returns
+    /// [`FactorizeError::UnsupportedTruncationPolicy`] for every RSVD threshold
+    /// policy; specify a fixed rank or select deterministic SVD instead.
     pub fn validate(&self) -> std::result::Result<(), FactorizeError> {
+        if self.alg == FactorizeAlg::RSVD {
+            if let Some(policy) = self.svd_policy {
+                return Err(FactorizeError::UnsupportedTruncationPolicy(policy));
+            }
+        }
         validate_svd_truncation_options(self.max_bond_dim, self.svd_policy).map_err(|error| {
             FactorizeError::InvalidOptions(match error {
                 SvdTruncationOptionsError::ZeroMaxBondDim => "max_bond_dim must be at least 1",
@@ -412,6 +457,21 @@ impl FactorizeOptions {
         })?;
 
         match self.alg {
+            FactorizeAlg::RSVD => {
+                if self.max_bond_dim.is_none() {
+                    return Err(FactorizeError::InvalidOptions("RSVD requires max_bond_dim"));
+                }
+                if self.qr_rtol.is_some() {
+                    return Err(FactorizeError::InvalidOptions(
+                        "RSVD does not accept qr_rtol; specify a fixed max_bond_dim",
+                    ));
+                }
+                self.max_bond_dim
+                    .and_then(|rank| rank.checked_add(self.randomized.oversampling))
+                    .ok_or(FactorizeError::InvalidOptions(
+                        "rank + oversampling overflows usize",
+                    ))?;
+            }
             FactorizeAlg::SVD => {
                 if self.qr_rtol.is_some() {
                     return Err(FactorizeError::InvalidOptions(
@@ -486,7 +546,7 @@ pub struct FactorizeResult<T: TensorIndex> {
     pub right: T,
     /// Bond index connecting left and right factors.
     pub bond_index: T::Index,
-    /// Singular values (only for SVD).
+    /// Retained singular values (SVD or the projected matrix for RSVD).
     pub singular_values: Option<Vec<f64>>,
     /// Retained bond dimension of the factorization.
     ///
@@ -1098,6 +1158,43 @@ pub trait TensorFactorizationLike: TensorIndex {
         left_inds: &[<Self as TensorIndex>::Index],
         options: &FactorizeOptions,
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
+
+    /// Factorize using a caller-owned RNG consumed directly by randomized algorithms.
+    ///
+    /// Deterministic algorithms leave `rng` untouched. The default refuses RSVD;
+    /// concrete tensor implementations can override it without exposing storage.
+    ///
+    /// # Errors
+    /// Returns [`FactorizeError`] for unsupported randomized factorization,
+    /// invalid options, or an underlying factorization failure.
+    ///
+    /// # Examples
+    /// ```
+    /// use rand::SeedableRng;
+    /// use rand_chacha::ChaCha8Rng;
+    /// use tensor4all_core::{DynIndex, FactorizeOptions, IdxTensor, TensorContractionLike, TensorFactorizationLike};
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(2);
+    /// let a = IdxTensor::from_dense(vec![i.clone(), j], vec![3., 0., 0., 0.])?;
+    /// let mut rng = ChaCha8Rng::seed_from_u64(11);
+    /// let result = a.factorize_with_rng(&[i], &FactorizeOptions::rsvd(1), &mut rng)?;
+    /// assert!(a.sub(&result.left.contract_pair(&result.right)?)?.maxabs()? < 1e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn factorize_with_rng(
+        &self,
+        left_inds: &[<Self as TensorIndex>::Index],
+        options: &FactorizeOptions,
+        rng: &mut dyn rand::RngCore,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        let _ = rng;
+        if options.alg == FactorizeAlg::RSVD {
+            return Err(FactorizeError::UnsupportedStorage(
+                "this tensor type does not support randomized factorization",
+            ));
+        }
+        self.factorize(left_inds, options)
+    }
 
     /// Factorize this tensor in a caller-owned execution context.
     ///

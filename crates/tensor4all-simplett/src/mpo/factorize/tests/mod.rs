@@ -14,7 +14,6 @@ fn test_factorize_svd() {
         tolerance: 1e-12,
         max_bond_dim: Some(10),
         left_orthogonal: true,
-        ..Default::default()
     };
 
     let result = factorize(&matrix, &options).unwrap();
@@ -57,7 +56,6 @@ fn test_factorize_lu() {
         tolerance: 1e-12,
         max_bond_dim: Some(10),
         left_orthogonal: true,
-        ..Default::default()
     };
 
     let result = factorize_lu(&matrix, &options).unwrap();
@@ -81,7 +79,6 @@ fn test_factorize_with_truncation() {
         tolerance: 1e-10,
         max_bond_dim: Some(2),
         left_orthogonal: true,
-        ..Default::default()
     };
 
     let result = factorize(&matrix, &options).unwrap();
@@ -124,7 +121,6 @@ fn test_factorize_svd_truncation_is_scale_invariant() {
         tolerance: 1e-7,
         max_bond_dim: Some(10),
         left_orthogonal: true,
-        ..Default::default()
     };
 
     let unscaled = factorize(&decaying_spectrum_matrix(1.0), &options).unwrap();
@@ -183,7 +179,6 @@ fn test_factorize_svd_complex64() {
         tolerance: 1e-12,
         max_bond_dim: Some(10),
         left_orthogonal: true,
-        ..Default::default()
     };
 
     let result = factorize(&matrix, &options).unwrap();
@@ -229,7 +224,6 @@ fn factorize_svd_keeps_a_larger_value_that_follows_a_smaller_one() {
             tolerance: 1e-12,
             max_bond_dim: None,
             left_orthogonal,
-            ..Default::default()
         };
         let result = factorize(&matrix, &options).unwrap();
         assert_eq!(result.rank, 2, "left_orthogonal = {left_orthogonal}");

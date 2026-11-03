@@ -67,6 +67,7 @@ bnum.workspace = true
 paste.workspace = true
 dyn-clone.workspace = true
 rand.workspace = true
+rand_chacha.workspace = true
 rand_distr.workspace = true
 omeco.workspace = true
 petgraph.workspace = true
@@ -78,7 +79,6 @@ tenferro-linalg.workspace = true
 tenferro-tensor.workspace = true
 
 [dev-dependencies]
-rand_chacha.workspace = true
 tenferro-tensor.workspace = true
 tenferro-cpu.workspace = true
 approx.workspace = true

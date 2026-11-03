@@ -4,7 +4,7 @@ This directory contains benchmark code for comparing Rust and Julia implementati
 
 ## Structure
 
-- `rust/`: the `tensor4all-benchmarks` package. Every Rust performance
+- `rust/`: the `tensor4all-benchmarks` package. Every workspace Rust performance
   harness is an `[[example]]` target of that package; add new harnesses there
   as examples instead of including them from a library crate's `examples/`.
   Two features are opt-in: `diagnostics` (TreeACI branch counters, used by
@@ -37,6 +37,22 @@ takes its thread limit from `VECLIB_MAXIMUM_THREADS`, so single-thread runs on
 macOS also set `VECLIB_MAXIMUM_THREADS=1`.
 
 ### Rust
+
+#### Fixed-rank RSVD and Lanczos (#1108)
+
+`benchmark_randomized_factorization` diagnoses Fit/Zipup costs; its
+`--decompositions` mode compares SVD, RSVD and the existing faer Lanczos driver
+on identical column-major inputs at matched accuracy. It prints the GEMM/QR
+share of RSVD's total time. This is an internal algorithm comparison.
+
+Build the reference with `python3 scripts/build-rsvd-reference.py`. It identifies
+the exact transitive faer artifacts from Cargo JSON and compiles a standalone
+reference executable, adding no library dependency. Set `T4A_LANCZOS_REFERENCE`
+to the printed binary, pin Rayon/BLAS thread variables and CPU affinity as above,
+then run `benchmark_randomized_factorization --decompositions`. Its
+`--contractions` mode compares Fit/Zipup against small bounded dense oracles.
+See the [experiment summary](../docs/experiments/2026-11-03-randomized-factorization.md)
+for results, archived protocols, and the limits of these diagnostics.
 
 #### Merge-refine schedule (#752)
 

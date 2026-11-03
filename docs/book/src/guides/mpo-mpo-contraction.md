@@ -16,6 +16,11 @@ the reference implementations in `tensor4all-treetn`:
 The treetn crate handles general tree topologies. Here we specialize to a chain
 (tensor train) so that the counting stays explicit.
 
+The SVD costs below describe the deterministic path. Fit and Zipup can also
+select fixed-rank RSVD; see [Randomized Factorization](randomized-factorization.md).
+This replaces the local decomposition and does not project environments or
+remove the local two-site contraction cost.
+
 ## 1. Setup and notation
 
 Consider two MPOs \\(A\\) and \\(B\\) of length \\(L\\) and their compressed

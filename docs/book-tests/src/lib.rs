@@ -23,6 +23,9 @@ mod getting_started {}
 #[doc = include_str!("../../book/src/guides/tensor-basics.md")]
 mod tensor_basics {}
 
+#[doc = concat!("```rust\n", include_str!("../../../crates/tensor4all-treetn/examples/randomized_factorization.rs"), "\n```")]
+mod randomized_factorization {}
+
 #[doc = include_str!("../../book/src/guides/tensor-train.md")]
 mod tensor_train {}
 

@@ -6,6 +6,7 @@
 - [Architecture & Crate Guide](architecture.md)
 - [Guides]()
   - [Tensor Basics](guides/tensor-basics.md)
+  - [Fixed-rank Randomized Factorization](guides/randomized-factorization.md)
   - [Tensor Train](guides/tensor-train.md)
   - [Dense Tensor to Tensor Train with TT-SVD](guides/dense-tt-svd.md)
   - [Tensor Cross Interpolation](guides/tci.md)

@@ -680,16 +680,19 @@ struct FitFactorizeConfig {
     svd_policy: Option<SvdTruncationPolicy>,
     qr_rtol: Option<f64>,
     factorize_alg: FactorizeAlg,
+    randomized: tensor4all_core::RangeOptions,
 }
 
 fn fit_factorize_options(config: FitFactorizeConfig) -> Result<FactorizeOptions> {
     let mut options = match config.factorize_alg {
+        FactorizeAlg::RSVD => FactorizeOptions::rsvd(config.max_bond_dim.unwrap_or(0)),
         FactorizeAlg::SVD => FactorizeOptions::svd(),
         FactorizeAlg::QR => FactorizeOptions::qr(),
         FactorizeAlg::LU => FactorizeOptions::lu(),
         FactorizeAlg::CI => FactorizeOptions::ci(),
     }
     .with_canonical(Canonical::Left);
+    options.randomized = config.randomized;
     if let Some(max_bond_dim) = config.max_bond_dim {
         options = options.with_max_bond_dim(max_bond_dim);
     }
@@ -699,10 +702,13 @@ fn fit_factorize_options(config: FitFactorizeConfig) -> Result<FactorizeOptions>
     if let Some(qr_rtol) = config.qr_rtol {
         options = options.with_qr_rtol(qr_rtol);
     }
-    options
-        .validate()
-        .map_err(|e| anyhow::anyhow!("invalid fit factorization options: {e}"))?;
+    options.validate()?;
     Ok(options)
+}
+
+struct FitExecution<'a, T: TensorLike> {
+    leaves: &'a dyn LeafOps<T>,
+    rng: &'a mut dyn rand::RngCore,
 }
 
 fn fit_two_site_update<T, V>(
@@ -712,7 +718,7 @@ fn fit_two_site_update<T, V>(
     local_optimum: T,
     left_bond_indices: &[T::Index],
     config: FitFactorizeConfig,
-    leaves: &dyn LeafOps<T>,
+    execution: FitExecution<'_, T>,
 ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
@@ -769,9 +775,14 @@ where
     // norm ends up on `node_v` together with the canonical center.
     let factorize_result =
         super::factorize_allowing_empty_side(&local_optimum, &left_inds, |tensor, left| {
-            leaves
-                .factorize(tensor, left, &options)
-                .map_err(|e| anyhow::anyhow!("factorization failed: {e}"))
+            let result = if options.alg == FactorizeAlg::RSVD {
+                execution
+                    .leaves
+                    .factorize_with_rng(tensor, left, &options, execution.rng)
+            } else {
+                execution.leaves.factorize(tensor, left, &options)
+            };
+            result.map_err(|e| anyhow::anyhow!("factorization failed: {e}"))
         })?;
     if let Some(factorize_started) = factorize_started {
         with_fit_profile(|profile| {
@@ -900,7 +911,7 @@ where
 /// Implements the `LocalUpdater` trait to perform 2-site updates
 /// that optimize `C ≈ A * B`.
 #[derive(Debug)]
-pub struct FitUpdater<T, V>
+pub struct FitUpdater<'a, T, V>
 where
     T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
@@ -919,13 +930,16 @@ where
     pub qr_rtol: Option<f64>,
     /// Factorization algorithm
     pub factorize_alg: FactorizeAlg,
+    pub(crate) randomized: tensor4all_core::RangeOptions,
+    rng: rand_chacha::ChaCha8Rng,
+
     /// Leaf execution strategy for this updater's numeric leaves
     /// (`GlobalLeaves` by default; the caller-owned context route installs
     /// `SessionLeaves` through [`Self::with_leaves`]).
-    pub(crate) leaves: Box<dyn LeafOps<T>>,
+    pub(crate) leaves: Box<dyn LeafOps<T> + 'a>,
 }
 
-impl<T, V> FitUpdater<T, V>
+impl<'a, T, V> FitUpdater<'a, T, V>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + std::fmt::Debug + Send + Sync,
@@ -939,7 +953,7 @@ where
     /// * `max_bond_dim` - Maximum bond dimension for truncation
     /// * `svd_policy` - Explicit SVD truncation policy; `None` leaves the SVD
     ///   factorization at its default behavior unless a bond cap applies.
-    pub(crate) fn with_leaves(mut self, leaves: Box<dyn LeafOps<T>>) -> Self {
+    pub(crate) fn with_leaves(mut self, leaves: Box<dyn LeafOps<T> + 'a>) -> Self {
         self.leaves = leaves;
         self
     }
@@ -958,6 +972,9 @@ where
             svd_policy,
             qr_rtol: None,
             factorize_alg: FactorizeAlg::SVD,
+            randomized: tensor4all_core::RangeOptions::default(),
+            rng: <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0),
+
             leaves: Box::new(GlobalLeaves),
         }
     }
@@ -975,7 +992,7 @@ where
     }
 }
 
-impl<T, V> LocalUpdater<T, V> for FitUpdater<T, V>
+impl<T, V> LocalUpdater<T, V> for FitUpdater<'_, T, V>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -1092,8 +1109,12 @@ where
                 svd_policy: self.svd_policy,
                 qr_rtol: self.qr_rtol,
                 factorize_alg: self.factorize_alg,
+                randomized: self.randomized,
             },
-            self.leaves.as_ref(),
+            FitExecution {
+                leaves: self.leaves.as_ref(),
+                rng: &mut self.rng,
+            },
         )
     }
 
@@ -1189,6 +1210,7 @@ where
     targets: Vec<TreeTN<T, V>>,
     envs: Vec<SumFitEnvironment<T, V>>,
     factorize_config: FitFactorizeConfig,
+    rng: rand_chacha::ChaCha8Rng,
 }
 
 impl<T, V> SumFitUpdater<T, V>
@@ -1206,6 +1228,7 @@ where
     ) -> Self {
         let envs = targets.iter().map(|_| SumFitEnvironment::new()).collect();
         Self {
+            rng: <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0),
             targets,
             envs,
             factorize_config: FitFactorizeConfig {
@@ -1213,6 +1236,7 @@ where
                 svd_policy,
                 qr_rtol,
                 factorize_alg,
+                randomized: tensor4all_core::RangeOptions::default(),
             },
         }
     }
@@ -1360,7 +1384,10 @@ where
             local_sum,
             &left_bond_indices,
             self.factorize_config,
-            &GlobalLeaves,
+            FitExecution {
+                leaves: &GlobalLeaves,
+                rng: &mut self.rng,
+            },
         )
         .map_err(|error| anyhow::anyhow!("fit_sum: two-site update failed: {error}"))
         .map_err(TreeTNOperationError::from)
@@ -1427,6 +1454,11 @@ pub struct FitContractionOptions {
     pub qr_rtol: Option<f64>,
     /// Factorization algorithm used for local two-site updates.
     pub factorize_alg: FactorizeAlg,
+    /// RSVD sketch options; deterministic algorithms ignore these.
+    pub randomized: tensor4all_core::RangeOptions,
+    /// Seed for one continuous convenience RSVD stream across initialization and sweeps.
+    pub rsvd_seed: u64,
+
     /// Tolerance for early termination based on relative change.
     /// If `None`, run exactly `nfullsweeps` sweeps. If `Some(tol)`, `tol` must
     /// be finite and non-negative; fitting stops when the relative change in
@@ -1451,6 +1483,9 @@ impl Default for FitContractionOptions {
             svd_policy: None,
             qr_rtol: None,
             factorize_alg: FactorizeAlg::SVD,
+            randomized: tensor4all_core::RangeOptions::default(),
+            rsvd_seed: 0,
+
             convergence_tol: None,
             initial_max_bond_dim: None,
         }
@@ -1547,6 +1582,7 @@ fn validate_fit_sum_options(options: &FitContractionOptions) -> Result<()> {
         svd_policy: options.svd_policy,
         qr_rtol: options.qr_rtol,
         factorize_alg: options.factorize_alg,
+        randomized: options.randomized,
     })?;
     Ok(())
 }
@@ -1706,6 +1742,8 @@ where
         options.qr_rtol,
         options.factorize_alg,
     );
+    updater.factorize_config.randomized = options.randomized;
+    updater.rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(options.rsvd_seed);
     updater
         .prepare(&psi)
         .context("fit_sum: failed to build initial target environments")?;
@@ -1752,6 +1790,17 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
+    if options.factorize_alg == FactorizeAlg::RSVD {
+        use rand::SeedableRng;
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rsvd_seed);
+        let leaves = super::contraction::randomized::leaves(
+            Box::new(GlobalLeaves),
+            options.randomized,
+            &mut rng,
+        );
+        validate_fit_sum_options(&options)?;
+        return contract_fit_with_leaves(tn_a, tn_b, center, options, leaves);
+    }
     contract_fit_with_leaves(tn_a, tn_b, center, options, Box::new(GlobalLeaves))
 }
 
@@ -1807,8 +1856,22 @@ where
     <tensor4all_core::DynIndex as IndexLike>::Id:
         Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
 {
+    if options.factorize_alg == FactorizeAlg::RSVD {
+        super::contraction::randomized::validate_untracked_context_inputs(tn_a, tn_b)?;
+    }
     tn_a.validate_context(context)?;
     tn_b.validate_context(context)?;
+    if options.factorize_alg == FactorizeAlg::RSVD {
+        use rand::SeedableRng;
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rsvd_seed);
+        let leaves = super::contraction::randomized::leaves(
+            Box::new(SessionLeaves(context.clone())),
+            options.randomized,
+            &mut rng,
+        );
+        validate_fit_sum_options(&options)?;
+        return contract_fit_with_leaves(tn_a, tn_b, center, options, leaves);
+    }
     contract_fit_with_leaves(
         tn_a,
         tn_b,
@@ -1819,12 +1882,12 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn contract_fit_with_leaves<T, V>(
+pub(super) fn contract_fit_with_leaves<'a, T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
     center: &V,
     options: FitContractionOptions,
-    leaves: Box<dyn LeafOps<T>>,
+    leaves: Box<dyn LeafOps<T> + 'a>,
 ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
@@ -1876,13 +1939,13 @@ where
 /// The same sweep engine as [`contract_fit_with_leaves`]; what differs is that `C₀` is supplied rather than built
 /// from the zip-up contraction. That is what lets a caller start from a small-rank network instead of the exact
 /// product bond - see [`contract_fit_from_initial`] and [`low_rank_initializer_tree_tn`].
-fn contract_fit_from_initial_with_leaves<T, V>(
+pub(super) fn contract_fit_from_initial_with_leaves<'a, T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
     center: &V,
     options: FitContractionOptions,
     tn_c: TreeTN<T, V>,
-    leaves: Box<dyn LeafOps<T>>,
+    leaves: Box<dyn LeafOps<T> + 'a>,
 ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
@@ -1914,13 +1977,13 @@ where
 ///
 /// One sweep engine for both entries: the initialization is the only difference between them, so the sweeps, the
 /// zero-sweep shortcut, the convergence handling and the profile bookkeeping stay in one place.
-fn run_fit_from_state_with_leaves<T, V>(
+pub(super) fn run_fit_from_state_with_leaves<'a, T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
     center: &V,
     options: FitContractionOptions,
     mut tn_c: TreeTN<T, V>,
-    leaves: Box<dyn LeafOps<T>>,
+    leaves: Box<dyn LeafOps<T> + 'a>,
 ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
@@ -1948,6 +2011,7 @@ where
     .with_qr_rtol(options.qr_rtol)
     .with_factorize_alg(options.factorize_alg);
 
+    updater.randomized = options.randomized;
     // Create sweep plan
     let plan = LocalUpdateSweepPlan::from_treetn(&tn_c, center, 2)
         .ok_or_else(|| anyhow::anyhow!("Failed to create sweep plan"))?;
@@ -2025,6 +2089,17 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
+    if options.factorize_alg == FactorizeAlg::RSVD {
+        use rand::SeedableRng;
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rsvd_seed);
+        let leaves = super::contraction::randomized::leaves(
+            Box::new(GlobalLeaves),
+            options.randomized,
+            &mut rng,
+        );
+        validate_fit_sum_options(&options)?;
+        return contract_fit_from_initial_with_leaves(tn_a, tn_b, center, options, tn_c, leaves);
+    }
     contract_fit_from_initial_with_leaves(tn_a, tn_b, center, options, tn_c, Box::new(GlobalLeaves))
 }
 

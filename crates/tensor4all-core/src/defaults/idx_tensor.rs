@@ -4972,6 +4972,27 @@ impl IdxTensor {
         let data: Vec<T> = (0..size).map(|_| T::random_value(rng)).collect();
         Self::from_dense(indices, data)
     }
+
+    /// Construct a constant dense host tensor in this operand's eager runtime.
+    /// The randomized composite uses it to keep sketches in the operand's AD
+    /// context without reading or detaching the operand itself.
+    pub(crate) fn constant_dense_like<T: TensorElement>(
+        &self,
+        indices: Vec<DynIndex>,
+        data: Vec<T>,
+    ) -> std::result::Result<Self, IdxTensorError> {
+        let Some(runtime) = self.eager_runtime() else {
+            return Self::from_dense(indices, data);
+        };
+        let dims = Self::expected_dims_from_indices(&indices);
+        Self::validate_indices(&indices)?;
+        Self::validate_dense_payload_len(data.len(), &dims)?;
+        let native = dense_native_tensor_from_col_major(&data, &dims)
+            .map_err(|error| IdxTensorError::operation("constant sketch construction", error))?;
+        let inner = Self::untracked_inner(native, runtime)
+            .map_err(|error| IdxTensorError::operation("constant sketch wrapping", error.into()))?;
+        Self::from_inner(indices, inner).map_err(IdxTensorError::from)
+    }
 }
 
 impl IdxTensor {
@@ -6723,6 +6744,15 @@ impl TensorFactorizationLike for IdxTensor {
         options: &FactorizeOptions,
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
         crate::factorize::factorize(self, left_inds, options)
+    }
+
+    fn factorize_with_rng(
+        &self,
+        left_inds: &[DynIndex],
+        options: &FactorizeOptions,
+        rng: &mut dyn rand::RngCore,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        crate::factorize::factorize_with_rng(self, left_inds, options, rng)
     }
 
     fn factorize_in(

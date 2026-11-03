@@ -1,6 +1,6 @@
 //! Factorization methods for MPO tensors
 //!
-//! This module provides various factorization methods (SVD, RSVD, LU, CI)
+//! This module provides various factorization methods (SVD, LU, CI)
 //! for compressing and reshaping MPO tensors.
 
 use super::error::{MPOError, Result};
@@ -16,8 +16,6 @@ pub enum FactorizeMethod {
     /// Singular Value Decomposition
     #[default]
     SVD,
-    /// Randomized SVD (faster for large matrices)
-    RSVD,
     /// LU decomposition with rank-revealing pivoting
     LU,
     /// Cross Interpolation
@@ -44,10 +42,6 @@ pub struct FactorizeOptions {
     pub max_bond_dim: Option<usize>,
     /// Whether to return the left factor as left-orthogonal
     pub left_orthogonal: bool,
-    /// Number of random projections for RSVD (parameter q)
-    pub rsvd_q: usize,
-    /// Oversampling parameter for RSVD (parameter p)
-    pub rsvd_p: usize,
 }
 
 impl Default for FactorizeOptions {
@@ -57,8 +51,6 @@ impl Default for FactorizeOptions {
             tolerance: 1e-12,
             max_bond_dim: None,
             left_orthogonal: true,
-            rsvd_q: 2,
-            rsvd_p: 10,
         }
     }
 }
@@ -129,7 +121,6 @@ pub fn factorize<T: SVDScalar>(
 ) -> Result<FactorizeResult<T>> {
     match options.method {
         FactorizeMethod::SVD => factorize_svd(matrix, options),
-        FactorizeMethod::RSVD => factorize_rsvd(matrix, options),
         FactorizeMethod::LU | FactorizeMethod::CI => {
             // For LU/CI, fall back to SVD for now
             // Full LU/CI support requires tensor4all_core::Scalar trait
@@ -304,17 +295,6 @@ fn factorize_svd<T: SVDScalar>(
         right,
         rank,
         discarded,
-    })
-}
-
-/// Factorize using randomized SVD
-fn factorize_rsvd<T: SVDScalar>(
-    _matrix: &Matrix2<T>,
-    _options: &FactorizeOptions,
-) -> Result<FactorizeResult<T>> {
-    // TODO: Implement RSVD-based factorization
-    Err(MPOError::FactorizationError {
-        message: "RSVD factorization not yet implemented".to_string(),
     })
 }
 

@@ -3,6 +3,9 @@
 This guide covers the `tensor4all-core` crate, which provides the foundation for
 all tensor operations: indices, tensors, contraction, and factorization.
 
+For fixed-rank RSVD and explicit Gaussian bond projectors, see
+[Randomized Factorization](randomized-factorization.md).
+
 If you have not set up a dependency yet, add `tensor4all-core` to your
 `Cargo.toml`. Use a git dependency from an external project:
 

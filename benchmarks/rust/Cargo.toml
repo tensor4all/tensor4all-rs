@@ -39,6 +39,10 @@ tenferro-ad.workspace = true
 tenferro-cpu.workspace = true
 
 [[example]]
+name = "benchmark_randomized_factorization"
+path = "benchmark_randomized_factorization.rs"
+
+[[example]]
 name = "benchmark_cached_batch_memory"
 path = "benchmark_cached_batch_memory.rs"
 

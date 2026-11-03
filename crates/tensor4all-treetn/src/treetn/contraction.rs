@@ -57,11 +57,13 @@ use tensor4all_tensorbackend::{default_cpu_execution_context, ExecutionContext};
 use super::TreeTN;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ZipupTopologyMode {
+pub(super) enum ZipupTopologyMode {
     PruneScalarSubtrees,
     PreserveInputTopology,
 }
 
+pub(super) mod randomized;
+pub use randomized::{contract_with_rng, contract_with_rng_in};
 mod src_chain;
 mod src_probe;
 mod src_tree;
@@ -77,6 +79,7 @@ fn zipup_factorize_options(
     max_bond_dim: Option<usize>,
 ) -> Result<FactorizeOptions> {
     let mut options = match alg {
+        FactorizeAlg::RSVD => FactorizeOptions::rsvd(max_bond_dim.unwrap_or(0)),
         FactorizeAlg::SVD => FactorizeOptions::svd(),
         FactorizeAlg::QR => FactorizeOptions::qr(),
         FactorizeAlg::LU => FactorizeOptions::lu(),
@@ -133,6 +136,19 @@ where
         options: &FactorizeOptions,
     ) -> Result<tensor4all_core::FactorizeResult<T>>;
 
+    /// Factorize using a continuous caller-owned stream.
+    fn factorize_with_rng(
+        &self,
+        tensor: &T,
+        left_inds: &[T::Index],
+        options: &FactorizeOptions,
+        rng: &mut dyn rand::RngCore,
+    ) -> Result<tensor4all_core::FactorizeResult<T>> {
+        tensor
+            .factorize_with_rng(left_inds, options, rng)
+            .map_err(anyhow::Error::from)
+    }
+
     /// Factorize `tensor` against `left_inds` with the automatic Gram
     /// shortcut (the chain path's call).
     fn factorize_auto(
@@ -143,7 +159,7 @@ where
     ) -> Result<tensor4all_core::FactorizeResult<T>>;
 }
 
-impl<T> std::fmt::Debug for dyn LeafOps<T>
+impl<T> std::fmt::Debug for dyn LeafOps<T> + '_
 where
     T: TensorLike,
 {
@@ -349,6 +365,19 @@ impl LeafOps<tensor4all_core::IdxTensor> for SessionViewLeaves<'_, '_> {
 
     /// The Gram shortcut has no session twin, so the session route factorizes directly with the
     /// same options.
+    fn factorize_with_rng(
+        &self,
+        tensor: &tensor4all_core::IdxTensor,
+        left_inds: &[tensor4all_core::DynIndex],
+        options: &FactorizeOptions,
+        rng: &mut dyn rand::RngCore,
+    ) -> Result<tensor4all_core::FactorizeResult<tensor4all_core::IdxTensor>> {
+        self.with_session(|session| {
+            tensor4all_core::factorize_with_rng_on_session(session, tensor, left_inds, options, rng)
+                .map_err(anyhow::Error::from)
+        })
+    }
+
     fn factorize_auto(
         &self,
         tensor: &tensor4all_core::IdxTensor,
@@ -438,6 +467,18 @@ impl LeafOps<tensor4all_core::IdxTensor> for SessionLeaves {
 
     /// The Gram shortcut has no context-scoped twin, so the session route
     /// factorizes directly with the same options.
+    fn factorize_with_rng(
+        &self,
+        tensor: &tensor4all_core::IdxTensor,
+        left_inds: &[tensor4all_core::DynIndex],
+        options: &FactorizeOptions,
+        rng: &mut dyn rand::RngCore,
+    ) -> Result<tensor4all_core::FactorizeResult<tensor4all_core::IdxTensor>> {
+        let tensor = self.adopt_dense_readback(tensor)?;
+        tensor4all_core::factorize_with_rng_in(&tensor, left_inds, options, rng, &self.0)
+            .map_err(anyhow::Error::from)
+    }
+
     fn factorize_auto(
         &self,
         tensor: &tensor4all_core::IdxTensor,
@@ -1303,7 +1344,7 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn contract_zipup_impl(
+    pub(super) fn contract_zipup_impl(
         &self,
         other: &Self,
         center: &V,
@@ -2288,6 +2329,11 @@ pub struct ContractionOptions {
     pub convergence_tol: Option<f64>,
     /// Factorization algorithm for Fit method.
     pub factorize_alg: FactorizeAlg,
+    /// RSVD oversampling and power iterations; deterministic methods ignore these.
+    pub randomized: tensor4all_core::RangeOptions,
+    /// Seed for RSVD convenience calls; caller-RNG entries ignore this field.
+    pub rsvd_seed: u64,
+
     /// Maximum dense elements allowed for generic Naive dense/reference
     /// contraction.
     ///
@@ -2320,6 +2366,9 @@ impl Default for ContractionOptions {
             nfullsweeps: 1,
             convergence_tol: None,
             factorize_alg: FactorizeAlg::default(),
+            randomized: tensor4all_core::RangeOptions::default(),
+            rsvd_seed: 0,
+
             dense_reference_limit: None,
             mismatched_topology_dense_limit: None,
             src_options: SrcOptions::default(),
@@ -2433,7 +2482,7 @@ impl ContractionOptions {
         self
     }
 
-    /// Set factorization algorithm for Fit method.
+    /// Set the Fit factorization algorithm, or select RSVD for Fit and Zipup.
     pub fn with_factorize_alg(mut self, alg: FactorizeAlg) -> Self {
         self.factorize_alg = alg;
         self
@@ -2569,6 +2618,19 @@ where
 /// configuration are rejected on every method, including the single-node and
 /// zero-sweep short-cuts, so the sibling entries cannot drift.
 pub(crate) fn validate_contract_options(options: &ContractionOptions) -> Result<()> {
+    if options.factorize_alg == FactorizeAlg::RSVD {
+        if !matches!(
+            options.method,
+            ContractionMethod::Fit | ContractionMethod::Zipup
+        ) {
+            anyhow::bail!("RSVD factorization is supported by Fit and Zipup only");
+        }
+        let mut factorization = FactorizeOptions::rsvd(options.max_bond_dim.unwrap_or(0));
+        factorization.svd_policy = options.svd_policy;
+        factorization.qr_rtol = options.qr_rtol;
+        factorization.randomized = options.randomized;
+        factorization.validate()?;
+    }
     validate_svd_truncation_options(options.max_bond_dim, options.svd_policy)
         .context("invalid contraction options")?;
     validate_svd_truncation_options(options.initial_max_bond_dim, None)
@@ -2586,6 +2648,8 @@ pub(crate) fn validate_contract_options(options: &ContractionOptions) -> Result<
 fn fit_options_from(options: &ContractionOptions) -> FitContractionOptions {
     let mut fit_options =
         FitContractionOptions::new(options.nfullsweeps).with_factorize_alg(options.factorize_alg);
+    fit_options.randomized = options.randomized;
+    fit_options.rsvd_seed = options.rsvd_seed;
     if let Some(max_bond_dim) = options.max_bond_dim {
         fit_options = fit_options.with_max_bond_dim(max_bond_dim);
     }
@@ -2644,6 +2708,11 @@ where
         Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
 {
     validate_contract_options(&options)?;
+    if options.factorize_alg == FactorizeAlg::RSVD {
+        let mut rng = ChaCha8Rng::seed_from_u64(options.rsvd_seed);
+        return contract_with_rng_in(tn_a, tn_b, center, options, &mut rng, context);
+    }
+
     tn_a.validate_context(context)?;
     tn_b.validate_context(context)?;
 
@@ -2699,6 +2768,10 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     validate_contract_options(&options)?;
+    if options.factorize_alg == FactorizeAlg::RSVD {
+        let mut rng = ChaCha8Rng::seed_from_u64(options.rsvd_seed);
+        return contract_with_rng(tn_a, tn_b, center, options, &mut rng);
+    }
 
     match options.method {
         ContractionMethod::Zipup => {
