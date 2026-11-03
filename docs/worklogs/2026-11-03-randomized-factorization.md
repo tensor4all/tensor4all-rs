@@ -62,5 +62,9 @@
   The algorithms live in dedicated randomized modules. The additions to the
   existing tensor trait, contraction dispatch, and Fit updater keep their
   owning API/configuration and execution responsibilities together.
+- A trial merge with #1115 at `cb6f711e` has no text conflicts and passes
+  workspace compilation, partitioned TreeTN tests/doctests/Clippy, and all
+  RSVD regressions. The branch remains independent of #1115; the pinned
+  compatibility check is recorded in the validation details.
 - R2 environment projection remains deferred until inverse-canonical parallel
   Fit. Adaptive error-certified rank selection is also out of scope.

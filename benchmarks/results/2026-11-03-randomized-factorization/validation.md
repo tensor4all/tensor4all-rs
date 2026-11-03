@@ -41,5 +41,32 @@ TreeTN decomposition module. A warnings-as-errors documentation build is
 therefore unavailable without unrelated fixes. The new API examples are
 compiled and asserted.
 
-The repository rules check here is the deterministic dry run, not the hosted
-LLM review. Hosted review and CI remain required before merging.
+The local repository rules check is the deterministic dry run. Hosted rules
+review and CI remain required before merging; the hosted workflow permanently
+disables its external LLM pass.
+
+## Compatibility with PR #1115
+
+An uncommitted trial merge combined this branch at `a668d4a9` with
+[#1115](https://github.com/tensor4all/tensor4all-rs/pull/1115) at
+`cb6f711e5f62a0a7d48de4528a33c16aefd3b816`, using main at `ca4819ca`.
+There were no merge conflicts. The only overlapping file was
+`skills/use-tensor4all-rs/references/crates.md`; its independent additions
+merged automatically. The combined tree was
+`ac2bcc9cad9623687ecc2958d822808751b02711`.
+
+Checks on that combined tree:
+
+- `cargo check --locked --workspace --all-targets --exclude tensor4all-hdf5`
+  passed. HDF5 can still compile transitively; its test targets were excluded.
+- `RAYON_NUM_THREADS=1 cargo test --locked -p tensor4all-partitionedtreetn --lib --tests -- --test-threads=2`
+  passed 369 tests with 13 existing ignored tests.
+- `cargo test --locked -p tensor4all-core -p tensor4all-treetn randomized_factorization`
+  passed all 24 RSVD regressions.
+- `cargo clippy --locked -p tensor4all-partitionedtreetn --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc`
+  passed.
+- `cargo test --locked --doc -p tensor4all-partitionedtreetn` passed 121 examples.
+
+The trial merge was discarded after validation; this branch does not include
+#1115. These conclusions apply to the two pinned revisions, not future changes
+to either branch.
