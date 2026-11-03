@@ -1,47 +1,57 @@
 //! Direct sum operations for tensors.
 //!
 //! This module provides functionality to compute the direct sum of tensors
-//! along specified index pairs. The direct sum concatenates tensor data along
-//! the paired indices, creating new indices with combined dimensions.
+//! along specified index groups. The direct sum concatenates tensor data along
+//! the grouped indices, creating new indices with combined dimensions, and
+//! fills every off-diagonal block with zeros.
+//!
+//! [`direct_sum_many`] stacks any number of operands in one pass;
+//! [`direct_sum`] is its two-operand form.
 //!
 //! This module works with concrete types (`DynIndex`, `IdxTensor`) only.
 
+use std::collections::HashMap;
+
 use crate::defaults::DynIndex;
 use crate::defaults::IdxTensorError;
-use crate::index_like::IndexLike;
 use crate::tensor::IdxTensor;
-use anyhow::Result;
+use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
 use tensor4all_tensorbackend::TensorElement;
+
+const OP: &str = "direct_sum";
 
 /// Compute the direct sum of two tensors along specified index pairs.
 ///
 /// For tensors A and B with indices to be summed specified as pairs,
 /// creates a new tensor C where each paired index has dimension = dim_A + dim_B.
-/// Non-paired indices must match exactly between A and B.
+/// Non-paired indices must match exactly between A and B. This is the
+/// two-operand form of [`direct_sum_many`].
 ///
 /// # Arguments
 ///
 /// * `a` - First tensor
 /// * `b` - Second tensor
 /// * `pairs` - Pairs of (a_index, b_index) to be summed. Each pair creates
-///
 ///   a new index in the result with dimension = dim(a_index) + dim(b_index).
 ///
 /// # Returns
 ///
 /// A tuple of:
-/// - The direct sum tensor
+/// - The direct sum tensor: the non-paired indices of `a` in `a`'s order,
+///   followed by the new indices in `pairs` order (column-major payload).
 /// - The new indices created for the summed dimensions (one per pair)
 ///
 /// # Errors
 ///
-/// Returns [`IdxTensorError::ShapeMismatch`] when a non-paired index of either
-/// operand is not a non-paired index of the other one (an index present on one
-/// side only, or matching only in id but not in prime level or tags), and
+/// Same as [`direct_sum_many`] with the operands `[a, b]`:
+/// [`IdxTensorError::ShapeMismatch`] when a non-paired index of either operand
+/// is not a non-paired index of the other one (an index present on one side
+/// only, or matching only in id but not in prime level or tags), and
 /// [`IdxTensorError::Operation`] when `pairs` is empty, when a paired index is
-/// missing or a common index differs in dimension, when the operands have
-/// different dense scalar types, or when the backend construction fails.
+/// missing or used twice, when a common index differs in dimension, when the
+/// operands have different dense scalar types, when an operand tracks
+/// gradients, or when the backend construction fails.
 ///
 /// # Example
 ///
@@ -66,291 +76,336 @@ pub fn direct_sum(
     b: &IdxTensor,
     pairs: &[(DynIndex, DynIndex)],
 ) -> std::result::Result<(IdxTensor, Vec<DynIndex>), IdxTensorError> {
-    if a.is_f64() && b.is_f64() {
-        direct_sum_typed::<f64>(a, b, pairs).map_err(IdxTensorError::from)
-    } else if a.is_complex() && b.is_complex() {
-        direct_sum_typed::<num_complex::Complex64>(a, b, pairs).map_err(IdxTensorError::from)
-    } else {
-        Err(IdxTensorError::Operation {
-            operation: "direct_sum",
-            source: std::sync::Arc::new(std::io::Error::other(
-                "direct_sum requires both tensors to have the same dense scalar type (f64 or Complex64)",
-            )),
-        })
+    let groups: Vec<Vec<DynIndex>> = pairs
+        .iter()
+        .map(|(a_index, b_index)| vec![a_index.clone(), b_index.clone()])
+        .collect();
+    direct_sum_many(&[a, b], &groups)
+}
+
+/// Compute the direct sum of any number of tensors in one pass.
+///
+/// Each entry of `groups` lists one index per operand, in operand order. The
+/// result replaces each group by one new index whose dimension is the sum of
+/// the group's dimensions, and places operand `i` in its own diagonal block:
+/// along every new index, operand `i` occupies the coordinates after those of
+/// operands `0..i`. All entries outside the diagonal blocks are zero. The
+/// indices of an operand that belong to no group (its common indices) must be
+/// the same set, with the same dimensions, for every operand.
+///
+/// Summing `N` operands this way writes every result element once. Chaining
+/// [`direct_sum`] instead copies the growing partial result at every step.
+///
+/// # Arguments
+///
+/// * `operands` - The tensors to stack; at least one. They must share one
+///   dense scalar type (`f32`, `f64`, `Complex32` or `Complex64`).
+/// * `groups` - The grouped indices; at least one group, each with exactly
+///   `operands.len()` entries, entry `i` an index of operand `i`. An index of
+///   an operand may appear in at most one group.
+///
+/// # Returns
+///
+/// A tuple of the direct-sum tensor and the new indices (one per group, in
+/// `groups` order). The result's indices are the common indices in
+/// `operands[0]`'s order, followed by the new indices; its payload is
+/// column-major.
+///
+/// # Errors
+///
+/// Returns [`IdxTensorError::ShapeMismatch`] when a common index of one
+/// operand is not a common index of another one (an index left on one side
+/// only, or matching only in id but not in prime level or tags), and
+/// [`IdxTensorError::Operation`] when `operands` or `groups` is empty, when a
+/// group does not have one entry per operand, when a grouped index is missing
+/// from its operand or used twice, when a common index differs in dimension,
+/// when the operands have different dense scalar types, when an operand
+/// tracks gradients, or when the backend construction fails.
+///
+/// # Example
+///
+/// ```
+/// use tensor4all_core::{direct_sum_many, DynIndex, IdxTensor, IndexLike};
+///
+/// # fn main() -> anyhow::Result<()> {
+/// let site = DynIndex::new_dyn(2);
+/// let (b0, b1, b2) = (DynIndex::new_dyn(1), DynIndex::new_dyn(2), DynIndex::new_dyn(1));
+///
+/// let t0 = IdxTensor::from_dense(vec![site.clone(), b0.clone()], vec![1.0, 2.0])?;
+/// let t1 = IdxTensor::from_dense(vec![site.clone(), b1.clone()], vec![3.0, 4.0, 5.0, 6.0])?;
+/// let t2 = IdxTensor::from_dense(vec![b2.clone(), site.clone()], vec![7.0, 8.0])?;
+/// let (result, new_indices) = direct_sum_many(&[&t0, &t1, &t2], &[vec![b0, b1, b2]])?;
+///
+/// // The common `site` index comes first, then the new bond of dimension 1 + 2 + 1.
+/// assert_eq!(result.indices(), &[site, new_indices[0].clone()]);
+/// assert_eq!(new_indices[0].dim(), 4);
+/// assert_eq!(
+///     result.to_vec::<f64>()?,
+///     vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+/// );
+/// # Ok(())
+/// # }
+/// ```
+pub fn direct_sum_many(
+    operands: &[&IdxTensor],
+    groups: &[Vec<DynIndex>],
+) -> std::result::Result<(IdxTensor, Vec<DynIndex>), IdxTensorError> {
+    if operands.is_empty() {
+        return Err(operation_error("direct_sum requires at least one operand"));
     }
-}
-
-/// Setup data for direct sum computation
-struct DirectSumSetup {
-    common_a_positions: Vec<usize>,
-    common_b_positions: Vec<usize>,
-    paired_a_positions: Vec<usize>,
-    paired_b_positions: Vec<usize>,
-    paired_dims_a: Vec<usize>,
-    result_indices: Vec<DynIndex>,
-    result_dims: Vec<usize>,
-    result_total: usize,
-    a_strides: Vec<usize>,
-    b_strides: Vec<usize>,
-    new_indices: Vec<DynIndex>,
-    n_common: usize,
-}
-
-fn setup_direct_sum(
-    a: &IdxTensor,
-    b: &IdxTensor,
-    pairs: &[(DynIndex, DynIndex)],
-) -> Result<DirectSumSetup> {
-    use std::collections::HashMap;
-
-    if pairs.is_empty() {
-        return Err(anyhow::anyhow!(
-            "direct_sum requires at least one index pair"
+    if groups.is_empty() {
+        return Err(operation_error(
+            "direct_sum requires at least one index group",
         ));
     }
+    if operands.iter().any(|operand| operand.tracks_grad()) {
+        return Err(operation_error(
+            "direct_sum does not support tracked tensors until an AD-preserving block path is available",
+        ));
+    }
+    let plan = plan_direct_sum(operands, groups)?;
+    let all = |is: fn(&IdxTensor) -> bool| operands.iter().all(|operand| is(operand));
+    if all(IdxTensor::is_f64) {
+        direct_sum_typed::<f64>(operands, plan)
+    } else if all(IdxTensor::is_c64) {
+        direct_sum_typed::<Complex64>(operands, plan)
+    } else if all(IdxTensor::is_f32) {
+        direct_sum_typed::<f32>(operands, plan)
+    } else if all(IdxTensor::is_c32) {
+        direct_sum_typed::<Complex32>(operands, plan)
+    } else {
+        Err(operation_error(
+            "direct_sum requires every operand to have the same dense scalar type (f32, f64, Complex32 or Complex64)",
+        ))
+    }
+}
 
-    // Build maps from full index metadata to positions. Same-id indices that
-    // differ by prime level or tags are distinct axes.
-    let a_idx_map: HashMap<&DynIndex, usize> = a
-        .indices
-        .iter()
-        .enumerate()
-        .map(|(i, idx)| (idx, i))
-        .collect();
-    let b_idx_map: HashMap<&DynIndex, usize> = b
-        .indices
-        .iter()
-        .enumerate()
-        .map(|(i, idx)| (idx, i))
-        .collect();
+fn operation_error(message: &'static str) -> IdxTensorError {
+    IdxTensorError::operation(OP, anyhow::anyhow!(message))
+}
 
-    // Build set of paired indices.
-    let mut a_paired_indices: std::collections::HashSet<&DynIndex> =
-        std::collections::HashSet::new();
-    let mut b_paired_indices: std::collections::HashSet<&DynIndex> =
-        std::collections::HashSet::new();
+/// Validated layout of an N-ary direct sum.
+struct DirectSumPlan {
+    /// Per operand: its indices in result order (common indices, then its
+    /// grouped index of each group), the permutation applied before copying.
+    operand_orders: Vec<Vec<DynIndex>>,
+    /// `group_dims[g][i]`: dimension of operand `i`'s index in group `g`.
+    group_dims: Vec<Vec<usize>>,
+    /// Product of the common dimensions.
+    common_len: usize,
+    result_indices: Vec<DynIndex>,
+    result_dims: Vec<usize>,
+    new_indices: Vec<DynIndex>,
+}
 
-    for (a_idx, b_idx) in pairs {
-        if !a_idx_map.contains_key(a_idx) {
-            return Err(anyhow::anyhow!(
-                "Index not found in first tensor (direct_sum)"
+fn plan_direct_sum(
+    operands: &[&IdxTensor],
+    groups: &[Vec<DynIndex>],
+) -> std::result::Result<DirectSumPlan, IdxTensorError> {
+    let n = operands.len();
+    let mut grouped: Vec<HashMap<&DynIndex, usize>> = vec![HashMap::new(); n];
+    let mut group_dims = Vec::with_capacity(groups.len());
+    for (g, group) in groups.iter().enumerate() {
+        if group.len() != n {
+            return Err(IdxTensorError::operation(
+                OP,
+                anyhow::anyhow!(
+                    "index group {g} has {} entries, expected one per operand ({n})",
+                    group.len()
+                ),
             ));
         }
-        if !b_idx_map.contains_key(b_idx) {
-            return Err(anyhow::anyhow!(
-                "Index not found in second tensor (direct_sum)"
-            ));
+        let mut dims = Vec::with_capacity(n);
+        for (i, index) in group.iter().enumerate() {
+            let Some(position) = operands[i].indices.iter().position(|own| own == index) else {
+                return Err(IdxTensorError::operation(
+                    OP,
+                    anyhow::anyhow!(
+                        "index {index:?} of group {g} not found in operand {i} (direct_sum)"
+                    ),
+                ));
+            };
+            if grouped[i].insert(index, g).is_some() {
+                return Err(IdxTensorError::operation(
+                    OP,
+                    anyhow::anyhow!("index {index:?} of operand {i} appears in two groups"),
+                ));
+            }
+            dims.push(operands[i].dims()[position]);
         }
-        a_paired_indices.insert(a_idx);
-        b_paired_indices.insert(b_idx);
+        group_dims.push(dims);
     }
 
-    // Identify common (non-paired) indices. Every non-paired index of either
-    // operand must be a non-paired index of the other one: an index left on
-    // one side only has no axis in the result, so accepting it would silently
-    // read that operand at coordinate 0 (tensor4all/tensor4all-rs#1018).
-    // Iterate over a.indices (Vec) to preserve deterministic order, using
-    // b_idx_map only for lookups.
-    let unpaired_mismatch = |side: &str, idx: &DynIndex| {
-        anyhow::Error::new(IdxTensorError::ShapeMismatch {
-            operation: "direct_sum",
-            expected: format!(
-                "every non-paired index of the {side} operand to be a non-paired index of the other operand"
-            ),
-            actual: format!("{idx:?} has no non-paired counterpart"),
-        })
+    // Common (non-grouped) indices, in operands[0]'s order. Every common index
+    // of each operand must be a common index of every other one: an index left
+    // on one side only has no axis in the result, so accepting it would
+    // silently read that operand at coordinate 0
+    // (tensor4all/tensor4all-rs#1018).
+    let common_mismatch = |i: usize, index: &DynIndex| IdxTensorError::ShapeMismatch {
+        operation: OP,
+        expected: format!(
+            "every non-paired index of operand {i} to be a non-paired index of every other operand"
+        ),
+        actual: format!("{index:?} has no non-paired counterpart"),
     };
-    let mut common_a_positions: Vec<usize> = Vec::new();
-    let mut common_b_positions: Vec<usize> = Vec::new();
-    for (a_pos, a_idx) in a.indices.iter().enumerate() {
-        if a_paired_indices.contains(a_idx) {
-            continue;
+    let first = operands[0];
+    let common: Vec<(&DynIndex, usize)> = first
+        .indices
+        .iter()
+        .zip(first.dims())
+        .filter(|(index, _)| !grouped[0].contains_key(index))
+        .collect();
+    let mut operand_orders = Vec::with_capacity(n);
+    for (i, operand) in operands.iter().enumerate() {
+        let dims = operand.dims();
+        let mut order = Vec::with_capacity(operand.indices.len());
+        for &(index, dim) in &common {
+            let position = operand
+                .indices
+                .iter()
+                .position(|own| own == index)
+                .filter(|_| !grouped[i].contains_key(index))
+                .ok_or_else(|| common_mismatch(0, index))?;
+            if dims[position] != dim {
+                return Err(IdxTensorError::operation(
+                    OP,
+                    anyhow::anyhow!(
+                        "Dimension mismatch for common index: {dim} vs {}",
+                        dims[position]
+                    ),
+                ));
+            }
+            order.push(operand.indices[position].clone());
         }
-        let b_pos = match b_idx_map.get(a_idx) {
-            Some(&b_pos) if !b_paired_indices.contains(a_idx) => b_pos,
-            _ => return Err(unpaired_mismatch("first", a_idx)),
-        };
-        let a_dims = a.dims();
-        let b_dims = b.dims();
-        if a_dims[a_pos] != b_dims[b_pos] {
-            return Err(anyhow::anyhow!(
-                "Dimension mismatch for common index: {} vs {}",
-                a_dims[a_pos],
-                b_dims[b_pos]
-            ));
+        if let Some(extra) = operand.indices.iter().find(|index| {
+            !grouped[i].contains_key(index) && !common.iter().any(|(c, _)| c == index)
+        }) {
+            return Err(common_mismatch(i, extra));
         }
-        common_a_positions.push(a_pos);
-        common_b_positions.push(b_pos);
-    }
-    if let Some(b_idx) = b.indices.iter().find(|&b_idx| {
-        !b_paired_indices.contains(b_idx)
-            && !(a_idx_map.contains_key(b_idx) && !a_paired_indices.contains(b_idx))
-    }) {
-        return Err(unpaired_mismatch("second", b_idx));
+        order.extend(groups.iter().map(|group| group[i].clone()));
+        operand_orders.push(order);
     }
 
-    // Build paired positions and dimensions
-    let paired_a_positions: Vec<usize> = pairs.iter().map(|(a_idx, _)| a_idx_map[a_idx]).collect();
-    let paired_b_positions: Vec<usize> = pairs.iter().map(|(_, b_idx)| b_idx_map[b_idx]).collect();
-    let a_dims = a.dims();
-    let b_dims = b.dims();
-    let paired_dims_a: Vec<usize> = paired_a_positions.iter().map(|&p| a_dims[p]).collect();
-    let paired_dims_b: Vec<usize> = paired_b_positions.iter().map(|&p| b_dims[p]).collect();
-
-    // Create new indices for paired dimensions
-    let mut new_indices: Vec<DynIndex> = Vec::new();
-    for (&dim_a, &dim_b) in paired_dims_a.iter().zip(&paired_dims_b) {
-        let new_dim = dim_a
-            .checked_add(dim_b)
-            .ok_or_else(|| anyhow::anyhow!("direct_sum index dimension overflowed usize"))?;
-        let new_index = DynIndex::new_link(new_dim)
-            .map_err(|e| anyhow::anyhow!("Failed to create index: {:?}", e))?;
-        new_indices.push(new_index);
+    let mut result_indices: Vec<DynIndex> =
+        common.iter().map(|(index, _)| (*index).clone()).collect();
+    let mut result_dims: Vec<usize> = common.iter().map(|&(_, dim)| dim).collect();
+    let common_len = checked_product(&result_dims)?;
+    let mut new_indices = Vec::with_capacity(groups.len());
+    for dims in &group_dims {
+        let total = dims.iter().try_fold(0usize, |acc, &dim| {
+            acc.checked_add(dim)
+                .ok_or_else(|| operation_error("direct_sum index dimension overflowed usize"))
+        })?;
+        let index = DynIndex::new_link(total)
+            .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
+        result_indices.push(index.clone());
+        result_dims.push(total);
+        new_indices.push(index);
     }
+    checked_product(&result_dims)?;
 
-    // Build result indices and dimensions
-    let mut result_indices: Vec<DynIndex> = Vec::new();
-    let mut result_dims: Vec<usize> = Vec::new();
-
-    // Common indices first.
-    let a_dims = a.dims();
-    for &a_pos in &common_a_positions {
-        result_indices.push(a.indices[a_pos].clone());
-        result_dims.push(a_dims[a_pos]);
-    }
-
-    // New indices from pairs preserve the full index identity semantics (id + plev + tags).
-    for new_idx in &new_indices {
-        result_indices.push(new_idx.clone());
-        result_dims.push(new_idx.dim());
-    }
-
-    // Compute column-major strides (leftmost index fastest).
-    let result_total = checked_product(&result_dims, "direct_sum result")?;
-
-    let a_dims = a.dims();
-    let b_dims = b.dims();
-    let a_strides = checked_strides(&a_dims, "direct_sum lhs")?;
-    let b_strides = checked_strides(&b_dims, "direct_sum rhs")?;
-
-    let n_common = common_a_positions.len();
-
-    Ok(DirectSumSetup {
-        common_a_positions,
-        common_b_positions,
-        paired_a_positions,
-        paired_b_positions,
-        paired_dims_a,
+    Ok(DirectSumPlan {
+        operand_orders,
+        group_dims,
+        common_len,
         result_indices,
         result_dims,
-        result_total,
-        a_strides,
-        b_strides,
         new_indices,
-        n_common,
     })
 }
 
-fn checked_product(dims: &[usize], name: &str) -> Result<usize> {
+fn checked_product(dims: &[usize]) -> std::result::Result<usize, IdxTensorError> {
     dims.iter().try_fold(1usize, |acc, &dim| {
         acc.checked_mul(dim)
-            .ok_or_else(|| anyhow::anyhow!("{name} shape product overflowed usize"))
-    })
-}
-
-fn checked_strides(dims: &[usize], name: &str) -> Result<Vec<usize>> {
-    let mut strides = vec![1usize; dims.len()];
-    for i in 1..dims.len() {
-        strides[i] = strides[i - 1]
-            .checked_mul(dims[i - 1])
-            .ok_or_else(|| anyhow::anyhow!("{name} stride overflowed usize"))?;
-    }
-    Ok(strides)
-}
-
-fn linear_to_multi_into(linear: usize, dims: &[usize], multi: &mut [usize]) {
-    let mut remaining = linear;
-    for i in 0..dims.len() {
-        multi[i] = remaining % dims[i];
-        remaining /= dims[i];
-    }
-}
-
-fn multi_to_linear(multi: &[usize], strides: &[usize]) -> Result<usize> {
-    multi.iter().zip(strides).try_fold(0usize, |acc, (&m, &s)| {
-        let offset = m
-            .checked_mul(s)
-            .ok_or_else(|| anyhow::anyhow!("direct_sum flat offset overflowed usize"))?;
-        acc.checked_add(offset)
-            .ok_or_else(|| anyhow::anyhow!("direct_sum flat offset overflowed usize"))
+            .ok_or_else(|| operation_error("direct_sum shape product overflowed usize"))
     })
 }
 
 fn direct_sum_typed<T: TensorElement + Zero>(
-    a: &IdxTensor,
-    b: &IdxTensor,
-    pairs: &[(DynIndex, DynIndex)],
-) -> Result<(IdxTensor, Vec<DynIndex>)> {
-    if a.tracks_grad() || b.tracks_grad() {
-        return Err(anyhow::anyhow!(
-            "direct_sum does not support tracked tensors until an AD-preserving block path is available"
-        ));
+    operands: &[&IdxTensor],
+    plan: DirectSumPlan,
+) -> std::result::Result<(IdxTensor, Vec<DynIndex>), IdxTensorError> {
+    let n_common = plan.result_dims.len() - plan.group_dims.len();
+    // Column-major stride of each new axis, in units of one common block.
+    // INVARIANT: the products are bounded by the result size that
+    // `plan_direct_sum` checked for overflow.
+    let mut group_strides = Vec::with_capacity(plan.group_dims.len());
+    let mut stride = 1usize;
+    for &extent in &plan.result_dims[n_common..] {
+        group_strides.push(stride);
+        stride *= extent;
     }
-    let setup = setup_direct_sum(a, b, pairs)?;
-    let a_data = a.to_vec::<T>()?;
-    let b_data = b.to_vec::<T>()?;
+    // INVARIANT: the zero fill is semantic: every entry outside the diagonal
+    // blocks is zero.
+    let mut result: Vec<T> = vec![T::zero(); plan.common_len * stride];
 
-    let mut result_data: Vec<T> = vec![T::zero(); setup.result_total];
-
-    // The dims and the multi-index buffers are constant for the whole call, so
-    // they are sized once here instead of once per result element.
-    let a_ndim = a.dims().len();
-    let b_ndim = b.dims().len();
-    let mut result_multi = vec![0usize; setup.result_dims.len()];
-    let mut a_multi = vec![0usize; a_ndim];
-    let mut b_multi = vec![0usize; b_ndim];
-
-    #[allow(clippy::needless_range_loop)]
-    for result_linear in 0..setup.result_total {
-        linear_to_multi_into(result_linear, &setup.result_dims, &mut result_multi);
-        let common_multi = &result_multi[..setup.n_common];
-        let paired_multi = &result_multi[setup.n_common..];
-
-        let all_from_a = paired_multi
-            .iter()
-            .enumerate()
-            .all(|(i, &pm)| pm < setup.paired_dims_a[i]);
-        let all_from_b = paired_multi
-            .iter()
-            .enumerate()
-            .all(|(i, &pm)| pm >= setup.paired_dims_a[i]);
-
-        if all_from_a {
-            a_multi.fill(0);
-            for (i, &cp) in setup.common_a_positions.iter().enumerate() {
-                a_multi[cp] = common_multi[i];
-            }
-            for (i, &pp) in setup.paired_a_positions.iter().enumerate() {
-                a_multi[pp] = paired_multi[i];
-            }
-            let a_linear = multi_to_linear(&a_multi, &setup.a_strides)?;
-            result_data[result_linear] = a_data[a_linear];
-        } else if all_from_b {
-            b_multi.fill(0);
-            for (i, &cp) in setup.common_b_positions.iter().enumerate() {
-                b_multi[cp] = common_multi[i];
-            }
-            for (i, &pp) in setup.paired_b_positions.iter().enumerate() {
-                b_multi[pp] = paired_multi[i] - setup.paired_dims_a[i];
-            }
-            let b_linear = multi_to_linear(&b_multi, &setup.b_strides)?;
-            result_data[result_linear] = b_data[b_linear];
+    let mut offsets = vec![0usize; plan.group_dims.len()];
+    let mut coordinates = vec![0usize; plan.group_dims.len()];
+    let mut dims = vec![0usize; plan.group_dims.len()];
+    for (i, operand) in operands.iter().enumerate() {
+        for (dim, group) in dims.iter_mut().zip(&plan.group_dims) {
+            *dim = group[i];
         }
-        // else: mixed case stays T::zero()
+        let aligned = operand.permute_indices(&plan.operand_orders[i])?;
+        aligned.with_dense_slice::<T, _>(|values| {
+            copy_block(
+                values,
+                &mut result,
+                plan.common_len,
+                &dims,
+                &offsets,
+                &group_strides,
+                &mut coordinates,
+            )
+        })?;
+        for (offset, dim) in offsets.iter_mut().zip(&dims) {
+            *offset += dim;
+        }
     }
 
-    let result = IdxTensor::from_dense(setup.result_indices, result_data)?;
-    Ok((result, setup.new_indices))
+    let tensor = IdxTensor::from_dense(plan.result_indices, result)?;
+    Ok((tensor, plan.new_indices))
+}
+
+/// Copy one operand, laid out as `[common..., group axes...]` column-major,
+/// into its diagonal block of the result.
+///
+/// The common axes and the first group axis are contiguous in both layouts,
+/// so the copy moves runs of `common_len * dims[0]` elements and steps an
+/// odometer over the remaining group axes once per run, not once per element.
+fn copy_block<T: Copy>(
+    values: &[T],
+    result: &mut [T],
+    common_len: usize,
+    dims: &[usize],
+    offsets: &[usize],
+    group_strides: &[usize],
+    coordinates: &mut [usize],
+) {
+    // INVARIANT: `run > 0`, as `chunks_exact` requires: an `IdxTensor` has no
+    // zero dimension (`checked_total_size` rejects one at construction).
+    let run = common_len * dims[0];
+    coordinates.fill(0);
+    // INVARIANT: `values` holds `common_len * prod(dims)` elements (the
+    // operand's own shape), and every destination run lies inside the result
+    // because `offsets[g] + dims[g]` is at most the extent of new axis `g`.
+    for chunk in values.chunks_exact(run) {
+        let block: usize = offsets
+            .iter()
+            .zip(coordinates.iter())
+            .zip(group_strides)
+            .map(|((&offset, &coordinate), &stride)| (offset + coordinate) * stride)
+            .sum();
+        let start = block * common_len;
+        result[start..start + run].copy_from_slice(chunk);
+        for axis in 1..dims.len() {
+            coordinates[axis] += 1;
+            if coordinates[axis] < dims[axis] {
+                break;
+            }
+            coordinates[axis] = 0;
+        }
+    }
 }
 
 #[cfg(test)]

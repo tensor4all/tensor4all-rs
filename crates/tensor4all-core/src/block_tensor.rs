@@ -548,10 +548,9 @@ impl<T: TensorLike> TensorContractionLike for BlockTensor<T> {
         }
     }
 
-    fn direct_sum(
-        &self,
-        _other: &Self,
-        _pairs: &[(<Self as TensorIndex>::Index, <Self as TensorIndex>::Index)],
+    fn direct_sum_many(
+        _operands: &[&Self],
+        _groups: &[Vec<<Self as TensorIndex>::Index>],
     ) -> std::result::Result<DirectSumResult<Self>, Self::Error> {
         Err(TensorVectorSpaceError::from(anyhow::anyhow!(
             "BlockTensor does not support direct_sum"

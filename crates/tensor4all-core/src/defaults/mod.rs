@@ -12,7 +12,7 @@
 //! - [`svd::svd`]: Singular Value Decomposition
 //! - [`qr::qr`]: QR decomposition
 //! - [`factorize::factorize`]: Unified factorization interface
-//! - [`direct_sum::direct_sum`]: Direct sum of tensors
+//! - [`direct_sum::direct_sum`] / [`direct_sum::direct_sum_many`]: Direct sum of two or more tensors
 //!
 //! These types are suitable for most tensor network applications and provide
 //! a good balance of flexibility and performance.
@@ -56,7 +56,7 @@ pub use idx_tensor::{
 pub use index::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet};
 
 // Re-export linear algebra functions and types
-pub use direct_sum::direct_sum;
+pub use direct_sum::{direct_sum, direct_sum_many};
 pub use factorize::{
     factorize, Canonical, FactorizeAlg, FactorizeError, FactorizeOptions, FactorizeResult,
 };
