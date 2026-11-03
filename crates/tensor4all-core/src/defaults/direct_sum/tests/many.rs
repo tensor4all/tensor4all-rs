@@ -2,7 +2,7 @@
 
 use super::super::*;
 use crate::index_like::IndexLike;
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 
 /// Deterministic, distinct, nonzero test values for every supported dtype.
 trait TestScalar: TensorElement + Zero + Copy + PartialEq + std::fmt::Debug {
@@ -12,6 +12,18 @@ trait TestScalar: TensorElement + Zero + Copy + PartialEq + std::fmt::Debug {
 impl TestScalar for f64 {
     fn make(k: usize) -> Self {
         1.0 + k as f64
+    }
+}
+
+impl TestScalar for f32 {
+    fn make(k: usize) -> Self {
+        1.0 + k as f32
+    }
+}
+
+impl TestScalar for Complex32 {
+    fn make(k: usize) -> Self {
+        Complex32::new(1.0 + k as f32, -(k as f32) - 0.5)
     }
 }
 
@@ -107,6 +119,16 @@ fn direct_sum_many_matches_reference_f64() {
 #[test]
 fn direct_sum_many_matches_reference_c64() {
     check_three_operands_match_reference::<Complex64>();
+}
+
+#[test]
+fn direct_sum_many_matches_reference_f32() {
+    check_three_operands_match_reference::<f32>();
+}
+
+#[test]
+fn direct_sum_many_matches_reference_c32() {
+    check_three_operands_match_reference::<Complex32>();
 }
 
 #[test]
@@ -287,5 +309,20 @@ fn direct_sum_many_equals_repeated_binary_direct_sum() {
     assert_eq!(
         many.to_vec::<Complex64>().unwrap(),
         abc.to_vec::<Complex64>().unwrap()
+    );
+}
+
+#[test]
+fn direct_sum_many_rejects_mixed_complex_precision_in_a_later_operand() {
+    let s = DynIndex::new_dyn(2);
+    let l: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(1)).collect();
+    let a = filled::<Complex32>(vec![s.clone(), l[0].clone()], 0);
+    let b = filled::<Complex32>(vec![s.clone(), l[1].clone()], 10);
+    let c = filled::<Complex64>(vec![s, l[2].clone()], 20);
+
+    let err = direct_sum_many(&[&a, &b, &c], &[l]).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("same dense scalar type"),
+        "{err:#}"
     );
 }
