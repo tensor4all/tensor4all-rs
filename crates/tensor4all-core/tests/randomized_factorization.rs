@@ -446,3 +446,34 @@ fn range_context_and_session_projectors() {
         assert!((values[0].norm() - 1.).abs() < 1e-12 && values[1].norm() < 1e-12);
     }
 }
+
+#[test]
+fn unsupported_storage_and_algorithm_options_leave_rng_untouched() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+    let inputs = [
+        IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1_f32, 0., 0., 1.]).unwrap(),
+        IdxTensor::from_diag(vec![i.clone(), j.clone()], vec![1_f64, 2.]).unwrap(),
+    ];
+    let mut rng = ChaCha8Rng::seed_from_u64(17);
+    for input in inputs {
+        let error = randomized_svd(
+            &input,
+            std::slice::from_ref(&i),
+            &RsvdOptions::new(1),
+            &mut rng,
+        )
+        .unwrap_err();
+        assert!(matches!(error, FactorizeError::UnsupportedStorage(_)));
+    }
+    let a = IdxTensor::from_dense(vec![i.clone(), j], vec![1_f64, 0., 0., 1.]).unwrap();
+    let mut missing_rank = FactorizeOptions::rsvd(1);
+    missing_rank.max_bond_dim = None;
+    for options in [missing_rank, FactorizeOptions::rsvd(1).with_qr_rtol(1e-8)] {
+        assert!(matches!(
+            factorize_with_rng(&a, std::slice::from_ref(&i), &options, &mut rng),
+            Err(FactorizeError::InvalidOptions(_))
+        ));
+    }
+    assert_eq!(rng.get_word_pos(), 0);
+}
