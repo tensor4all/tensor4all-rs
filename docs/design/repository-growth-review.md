@@ -1,9 +1,9 @@
 # Repository growth review
 
-The first implementation of [#917](https://github.com/tensor4all/tensor4all-rs/issues/917)
-is a manual file-size experiment in the existing repository-rules reviewer.
-It supplies evidence for a threshold decision; hosted automatic comments remain
-disabled for this check. The canonical policy and scope are in
+The file-size check from [#917](https://github.com/tensor4all/tensor4all-rs/issues/917)
+runs in the existing repository-rules reviewer. The hosted workflow explicitly
+enables it for same-repo PRs without a maintainer waiver, and appends advisory
+findings to the existing updating review comment. The canonical policy and scope are in
 [File Growth Dry Run](../../REPOSITORY_RULES.md#file-growth-dry-run).
 
 The check combines NUL-delimited Git numstat with the destination file's physical
@@ -23,10 +23,20 @@ both squash commits and merge commits. This is an offline analysis of what lande
 not a reconstruction of each original pre-merge PR head. Nonstandard PR landing
 messages and PRs into other base branches are outside this sampling convention.
 
-Before enabling hosted comments, maintainers must assess the
-[20-PR evidence](../experiments/2026-11-03-file-growth-dry-run.md), choose thresholds
-and confirm rollout. The maintainer's review selected a configurable minimum net
-growth of 50 lines for the already-large case, avoiding reminders on tiny edits.
-First crossings retain their original semantics. Reuse matching,
-removal-attestation reminders, per-crate growth
-summaries and scheduled reporting are separate follow-ups to this first slice.
+The rollout uses the maintainer-reviewed 1000/2000-line triggers and 50-line net
+growth floor. The [first sample](../experiments/2026-11-03-file-growth-dry-run.md)
+produces 5 reminders in 5/20 PRs; a
+[second, disjoint sample](../experiments/2026-11-03-file-growth-rollout.md) produces
+4 in 4/20. These observations support a monitored rollout, not a universal
+optimality or false-positive-rate claim for the defaults.
+
+The workflow still checks out only the trusted base and uses the PR head solely
+as Git data. No new job, permission or comment-posting mechanism is needed.
+Warnings leave the review passing; existing blocking checks retain their exit
+status through the shell pipeline. Workflow changes take effect after they land
+in the trusted base, not by executing this PR's workflow or scripts from its head.
+
+Reuse matching, removal-attestation reminders, per-crate growth summaries and
+scheduled reporting remain separate scope decisions. Unit-test extraction and
+the inline-test gate are owned by #1104 / PRs #1105 and #1106; this rollout does
+not duplicate their behavior or change the file-size counting algorithm.

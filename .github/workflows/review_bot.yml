@@ -72,6 +72,7 @@ jobs:
             --head "${{ steps.refs.outputs.head }}" \
             --no-dotenv \
             --dry-run \
+            --file-growth \
             --llm-skipped-reason "External LLM review is permanently disabled in this repository; deterministic rule checks run instead." \
             | tee review-report.txt
 

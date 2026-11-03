@@ -1684,6 +1684,56 @@ def test_growth_backtest_cli_forwards_configurable_minimum_delta() -> None:
             assert f"at least {floor} net added lines" in text.getvalue()
 
 
+def test_hosted_growth_command_uses_trusted_base_and_preserves_blocking_checks() -> None:
+    """Replay the actual workflow shell step on untrusted head data, without checkout."""
+    workflow = (ROOT / ".github/workflows/review_bot.yml").read_text()
+    step = workflow.split(
+        "      - name: Run repository rules review (deterministic)\n", 1,
+    )[1].split("      - name:", 1)[0]
+    shell = step.split("        run: |\n", 1)[1]
+    shell = "\n".join(line[10:] for line in shell.splitlines() if line.startswith("          "))
+    with growth_repository() as (mod, root, git):
+        # Reproduce the trusted-base checkout; every reviewed head replaces its
+        # script with one that would fail if it were executed instead of diffed.
+        for relative in ["scripts/repository-rules-review.py", "REPOSITORY_RULES.md",
+                         "PERFORMANCE_TIPS.md", "ai/prompts/repository-rules-review.md"]:
+            dest = root / relative
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text((ROOT / relative).read_text())
+        file = write_growth_file(root, "crates/a/src/lib.rs", 1000)
+        git("add", ".")
+        git("commit", "-m", "trusted base")
+        base = git("rev-parse", "HEAD")
+        file.write_text(file.read_text() + "// first crossing\n")
+        (root / "scripts/repository-rules-review.py").write_text(
+            "raise SystemExit('PR head code must not execute')\n",
+        )
+        git("add", ".")
+        git("commit", "-m", "untrusted head with growth")
+        warn_head = git("rev-parse", "HEAD")
+        file.write_text(file.read_text() + "/// ```ignore\n")
+        git("add", ".")
+        git("commit", "-m", "untrusted head with prohibited doctest")
+        block_head = git("rev-parse", "HEAD")
+        git("checkout", "--detach", base)
+        for head, expected_status, after in [(warn_head, 0, 1001), (block_head, 1, 1002)]:
+            command = shell.replace("${{ steps.refs.outputs.base }}", base).replace(
+                "${{ steps.refs.outputs.head }}", head,
+            )
+            result = subprocess.run(
+                ["bash", "-c", command], cwd=root, capture_output=True, text=True,
+            )
+            assert result.returncode == expected_status, result.stdout + result.stderr
+            report = (root / "review-report.txt").read_text()
+            assert "[warn] file-growth:crates/a/src/lib.rs" in report
+            assert f"1000 -> {after} lines (+{after - 1000}/-0)" in report
+            if expected_status:
+                assert "Verdict: fail" in report and "[block] prohibited-doctest" in report
+            else:
+                assert "Verdict: pass" in report and "[block]" not in report
+            assert git("rev-parse", "HEAD") == base
+
+
 # --- prompt and rules files --------------------------------------------------
 
 

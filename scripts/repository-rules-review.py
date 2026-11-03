@@ -14,8 +14,8 @@ new violations from landing while the backlog burns down separately.
 tensor4all-rs#1105 moved the last inline `mod tests {` block out, so the inline
 unit-test check has no backlog and is exact.
 
-The #917 file-size experiment is separately opt-in with ``--file-growth`` and
-``--dry-run``. It produces advisory warnings and is not enabled in hosted CI.
+The #917 file-size check is selected with ``--file-growth`` and ``--dry-run``.
+Hosted CI enables it; it produces advisory warnings only.
 
 Local API key loading uses the ``python-dotenv`` library. Install dev helpers with:
 
