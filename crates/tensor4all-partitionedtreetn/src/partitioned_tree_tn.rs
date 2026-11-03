@@ -5,12 +5,13 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use crate::error::{PartitionedTreeTNError, Result};
-use crate::projector::Projector;
+use crate::projector::{canonical_index_cmp, Projector};
 use crate::subdomain_tree_tn::{
     contraction_output_site_indices, ensure_center, ensure_same_dtype, ensure_same_topology,
     ensure_same_tree_structure, validate_contraction_options, validate_contraction_site_assignment,
     validate_truncation_options, SubDomainTreeTN,
 };
+use tensor4all_core::DynIndex;
 use tensor4all_treetn::{contraction::ContractionOptions, TreeTN, TruncationOptions};
 
 /// A patch pair of a partition contraction with its contracted contribution.
@@ -18,6 +19,13 @@ pub(crate) type ContractedPair<'a, V> = (
     &'a SubDomainTreeTN<V>,
     &'a SubDomainTreeTN<V>,
     SubDomainTreeTN<V>,
+);
+
+/// The patch templates of a contraction with its output site space.
+pub(crate) type ContractionPreparation<'a, V> = (
+    &'a SubDomainTreeTN<V>,
+    &'a SubDomainTreeTN<V>,
+    Vec<DynIndex>,
 );
 
 #[cfg(test)]
@@ -369,12 +377,247 @@ where
         Ok(self.norm_squared()?.sqrt())
     }
 
+    /// Refine every patch onto the layout projectors it is compatible with.
+    ///
+    /// Each patch is replaced by its exact projections onto the compatible layout
+    /// projectors, merged with the restrictions the patch already carries, so a
+    /// patch region is covered by the sub-patches of the layout projectors inside
+    /// it and no value is truncated. This lets a caller combine partitions with
+    /// different patch layouts without projecting patches by hand.
+    ///
+    /// # Arguments
+    ///
+    /// * `layout` - Pairwise-disjoint projectors to refine onto, normally a common
+    ///   refinement of the operands' layouts as returned by
+    ///   [`Self::common_refinement`]. Coordinates are zero-based.
+    ///
+    /// # Returns
+    ///
+    /// A new partition whose keys are the layout projectors merged with the
+    /// restrictions of the patch they were projected from. A layout projector that
+    /// conflicts with every patch contributes nothing, a patch region that no
+    /// layout projector covers is dropped, and an empty `layout` returns an empty
+    /// partition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartitionedTreeTNError::OverlappingProjectors`] when `layout` is
+    /// not pairwise disjoint (duplicate projectors included),
+    /// [`PartitionedTreeTNError::ProjectorIndexNotFound`] when a layout projector
+    /// fixes an index this partition's tree does not carry,
+    /// [`PartitionedTreeTNError::SiteIndexMismatch`] when a layout index matches a
+    /// site identity with a different dimension,
+    /// [`PartitionedTreeTNError::ProjectorCoordinateOutOfBounds`] for a coordinate
+    /// beyond that index's dimension, and the patch, topology, dtype, and TreeTN
+    /// validation errors documented by [`Self::from_subdomain`]. The receiver is
+    /// unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// // One patch over (k1, k2), refined on k2 into its two sub-patches.
+    /// let k1 = DynIndex::new_dyn(2);
+    /// let k2 = DynIndex::new_dyn(2);
+    /// let tree = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense(
+    ///         vec![k1.clone(), k2.clone()],
+    ///         vec![1.0_f64, 2.0, 3.0, 4.0],
+    ///     )?],
+    ///     vec![0usize],
+    /// )?;
+    /// let coarse = PartitionedTreeTN::from_subdomain(SubDomainTreeTN::new(
+    ///     tree,
+    ///     Projector::from_pairs([(k1.clone(), 0)])?,
+    /// )?)?;
+    /// let layout = vec![
+    ///     Projector::from_pairs([(k1.clone(), 0), (k2.clone(), 0)])?,
+    ///     Projector::from_pairs([(k1.clone(), 0), (k2, 1)])?,
+    /// ];
+    /// let refined = coarse.refine_to(&layout)?;
+    /// assert_eq!(refined.len(), 2);
+    /// assert!(refined.contains(&layout[1]));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn refine_to(&self, layout: &[Projector]) -> Result<Self> {
+        self.validate_contents()?;
+        if !Projector::are_disjoint(layout) {
+            return Err(PartitionedTreeTNError::OverlappingProjectors);
+        }
+        let mut patches = Vec::new();
+        for patch in self.data.values() {
+            for projector in layout {
+                let Some(projected) = patch.project(projector)? else {
+                    continue;
+                };
+                patches.push(projected);
+            }
+        }
+        Self::from_subdomains(patches)
+    }
+
+    /// Return the common refinement of the operands' patch layouts.
+    ///
+    /// The result is a pairwise-disjoint projector list such that every patch
+    /// projector of every operand is exactly a union of atoms, including the part
+    /// of one operand's region that the other operands do not cover. Refining each
+    /// operand onto these atoms with [`Self::refine_to`] gives operand layouts
+    /// that [`Self::add`] can sum patch by patch.
+    ///
+    /// # Arguments
+    ///
+    /// * `operands` - Partitions whose layouts are refined. They need not share a
+    ///   site space; only their projector entries are combined.
+    ///
+    /// # Returns
+    ///
+    /// Atoms in canonical projector order, so the result depends neither on the
+    /// operand order nor on hash-map iteration order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartitionedTreeTNError::OverlappingProjectors`] when one
+    /// operand's own stored layout is not pairwise disjoint,
+    /// [`PartitionedTreeTNError::SiteIndexMismatch`] when two operands' projectors
+    /// fix the same index identity to coordinates of different dimensions, plus
+    /// the patch, dtype, and topology validation errors documented by
+    /// [`Self::from_subdomain`]. Only projector entries are combined, so an index
+    /// that just one operand projects is not compared with the other operands'
+    /// site spaces; [`Self::refine_to`] rejects a layout index that conflicts with
+    /// a receiving tree.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let k1 = DynIndex::new_dyn(2);
+    /// let k2 = DynIndex::new_dyn(2);
+    /// let tree = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense(
+    ///         vec![k1.clone(), k2.clone()],
+    ///         vec![1.0_f64; 4],
+    ///     )?],
+    ///     vec![0usize],
+    /// )?;
+    /// let patch = |pairs: Vec<(DynIndex, usize)>|
+    ///     -> Result<_, Box<dyn std::error::Error>> {
+    ///     Ok(SubDomainTreeTN::new(tree.clone(), Projector::from_pairs(pairs)?)?)
+    /// };
+    /// let coarse = PartitionedTreeTN::from_subdomains(vec![
+    ///     patch(vec![(k1.clone(), 0)])?,
+    ///     patch(vec![(k1.clone(), 1)])?,
+    /// ])?;
+    /// let fine = PartitionedTreeTN::from_subdomains(vec![
+    ///     patch(vec![(k1.clone(), 0), (k2.clone(), 0)])?,
+    ///     patch(vec![(k1.clone(), 0), (k2.clone(), 1)])?,
+    ///     patch(vec![(k1.clone(), 1)])?,
+    /// ])?;
+    /// let atoms = PartitionedTreeTN::common_refinement(&[&coarse, &fine])?;
+    /// // The fine layout already is the common refinement.
+    /// assert_eq!(atoms.len(), 3);
+    /// assert_eq!(fine.refine_to(&atoms)?.len(), 3);
+    /// assert_eq!(coarse.refine_to(&atoms)?.len(), 3);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn common_refinement(operands: &[&Self]) -> Result<Vec<Projector>> {
+        for operand in operands {
+            operand.validate_contents()?;
+        }
+        // A fixed, canonical patch order makes the result a function of the
+        // projector sets rather than of the operand or hash-map iteration order.
+        let mut patches: Vec<Projector> = operands
+            .iter()
+            .flat_map(|operand| operand.data.keys().cloned())
+            .collect();
+        patches.sort_by(Projector::canonical_cmp);
+
+        // `DynIndex` equality excludes the dimension, so an identity-matching
+        // index with two dimensions would otherwise enumerate different
+        // complements depending on which operand came first.
+        let mut dimensions: HashMap<DynIndex, usize> = HashMap::new();
+        for patch in &patches {
+            for (index, _) in patch.iter() {
+                match dimensions.get(index) {
+                    Some(dim) if *dim != index.dim => {
+                        return Err(PartitionedTreeTNError::SiteIndexMismatch);
+                    }
+                    Some(_) => {}
+                    None => {
+                        dimensions.insert(index.clone(), index.dim);
+                    }
+                }
+            }
+        }
+
+        // Accumulate every patch's uncovered part, so the cells always hold a
+        // disjoint cover of all operands' regions and no part is added twice.
+        let mut cells: Vec<Projector> = Vec::new();
+        for patch in &patches {
+            let mut pending = vec![patch.clone()];
+            for cell in &cells {
+                pending = pending
+                    .into_iter()
+                    .flat_map(|piece| match piece.split_by(cell) {
+                        Some(pieces) => pieces.into_iter().skip(1).collect(),
+                        None => vec![piece],
+                    })
+                    .collect();
+            }
+            cells.extend(pending);
+        }
+
+        // Split until every cell lies inside or outside every patch. Splitting
+        // fixes at least one more index per cell, so this terminates, and a split
+        // keeps the cells disjoint.
+        loop {
+            let mut split = false;
+            let mut next = Vec::with_capacity(cells.len());
+            for cell in cells {
+                // A split can also change the cell without producing a second
+                // piece, when the newly fixed index has dimension one.
+                let refinement = patches.iter().find_map(|patch| {
+                    let pieces = cell.split_by(patch)?;
+                    (pieces.first() != Some(&cell)).then_some(pieces)
+                });
+                match refinement {
+                    Some(pieces) => {
+                        split = true;
+                        next.extend(pieces);
+                    }
+                    None => next.push(cell),
+                }
+            }
+            cells = next;
+            if !split {
+                break;
+            }
+        }
+
+        cells.sort_by(Projector::canonical_cmp);
+        Ok(cells)
+    }
+
     /// Add two partitions patch-wise at an explicit truncation center.
     ///
     /// Identical projector keys are added with strict [`TreeTN::add`] semantics
     /// and truncated with `options`. A key present on only one side is copied as
-    /// the other side's zero contribution. Different overlapping layouts are
-    /// rejected; no projector refinement is performed.
+    /// the other side's zero contribution.
+    ///
+    /// # Different patch layouts
+    ///
+    /// The operands may have different patch layouts. When a key of one side
+    /// overlaps a different key of the other, both operands are first refined
+    /// onto [`Self::common_refinement`], which keeps the part of every patch
+    /// that the other operand does not cover, so the sum is exact rather than
+    /// clipped to the overlap. The refinement masks sites and truncates nothing;
+    /// it can increase the patch count. When the layouts are already
+    /// equal or disjoint, no refinement runs and the result is unchanged.
     ///
     /// # Errors
     ///
@@ -384,8 +627,9 @@ where
     /// [`PartitionedTreeTNError::DTypeMismatch`] before patch shortcuts,
     /// [`PartitionedTreeTNError::InvalidCenter`] for an absent center,
     /// [`PartitionedTreeTNError::InvalidOptions`] for an invalid truncation
-    /// option, [`PartitionedTreeTNError::OverlappingProjectors`] for a different
-    /// overlapping layout, or a typed TreeTN error for addition/truncation.
+    /// option, [`PartitionedTreeTNError::OverlappingProjectors`] for an operand
+    /// whose own stored layout is invalid, or a typed TreeTN error for
+    /// addition/truncation.
     pub fn add(&self, other: &Self, center: &V, options: TruncationOptions) -> Result<Self> {
         validate_truncation_options(&options)?;
         self.validate_contents()?;
@@ -395,6 +639,17 @@ where
         ensure_same_dtype(left_template.scalar_kind()?, right_template.scalar_kind()?)?;
         ensure_center(left_template.data(), center)?;
         ensure_center(right_template.data(), center)?;
+
+        if ensure_union_disjoint(&self.data, &other.data).is_ok() {
+            return self.add_patchwise(other, center, options);
+        }
+        let atoms = Self::common_refinement(&[self, other])?;
+        let left = self.refine_to(&atoms)?;
+        let right = other.refine_to(&atoms)?;
+        left.add_patchwise(&right, center, options)
+    }
+
+    fn add_patchwise(&self, other: &Self, center: &V, options: TruncationOptions) -> Result<Self> {
         ensure_union_disjoint(&self.data, &other.data)?;
 
         let mut result = Self::new();
@@ -426,18 +681,19 @@ where
     /// To form only some output keys, use [`Self::contract_selected`], which
     /// skips the pairs of every other key.
     ///
-    /// # Known limitation: no output-region refinement
+    /// # Different patch layouts
     ///
-    /// Output regions are the projector intersections of each contracted pair,
-    /// with contracted site indices removed. Two individually valid, internally
-    /// disjoint input partitions can contract into output regions that are not
-    /// mutually disjoint (for example `{i=0}, {i=1,a=0}, {i=1,a=1}` contracted
-    /// with `{i=0,b=0}, {i=0,b=1}, {i=1}`), because a patch such as `{a=0}` and
-    /// `{b=0}` are distinct keys that still intersect in the full site space.
-    /// Such outputs are rejected with
-    /// [`PartitionedTreeTNError::OverlappingProjectors`] rather than silently
-    /// corrupted; combine over a refined disjoint partition of the output
-    /// space before contracting if overlapping outputs are possible.
+    /// The operands may have different patch layouts. Overlapping output
+    /// projectors without equal keys can arise from individually valid, internally
+    /// disjoint input partitions, because regions such as `{a=0}` and `{b=0}` are
+    /// distinct keys that still intersect in the full site space. When that
+    /// happens, both operands are first refined on every uncontracted external
+    /// index that any patch of either operand fixes, so every output projector
+    /// fixes the same indices and any two are equal or disjoint. A patch count can
+    /// grow with the product of those indices' dimensions, and the refinement is
+    /// exact: it masks sites and truncates nothing. When the predicted output
+    /// projectors are already equal or disjoint, no refinement runs and the result
+    /// is unchanged.
     ///
     /// # Errors
     ///
@@ -447,12 +703,82 @@ where
     /// [`PartitionedTreeTNError::DTypeMismatch`] before pair iteration,
     /// [`PartitionedTreeTNError::InvalidCenter`],
     /// [`PartitionedTreeTNError::InvalidOptions`],
-    /// [`PartitionedTreeTNError::OverlappingProjectors`] for incompatible
-    /// non-identical output layouts (see the limitation note above), or a
-    /// typed TreeTN/backend error. The operation returns a new partition, so
-    /// failure cannot mutate either input.
+    /// [`PartitionedTreeTNError::OverlappingProjectors`] for an operand whose own
+    /// stored layout is invalid, or a typed TreeTN/backend error. The operation
+    /// returns a new partition, so failure cannot mutate either input.
     pub fn contract(&self, other: &Self, center: &V, options: ContractionOptions) -> Result<Self> {
+        validate_contraction_options(&options)?;
+        self.validate_contents()?;
+        other.validate_contents()?;
+        if let Some((left, right)) = self.refined_for_contract(other, center)? {
+            return left.contract_with_selection(&right, center, options, None);
+        }
         self.contract_with_selection(other, center, options, None)
+    }
+
+    /// Refine both operands if some pair output projector overlaps another
+    /// without being equal, and return `None` when refining is unnecessary.
+    ///
+    /// The predicted output projectors are the patch intersections restricted to
+    /// the contraction's output site space, so this decides exactly what the
+    /// final output partition validation would reject, without contracting a
+    /// pair. The operands are then refined on the uncontracted output indices that
+    /// any patch of either operand fixes, each operand restricted to the indices
+    /// its own tree carries, which makes every pair output projector fix that same
+    /// index set.
+    fn refined_for_contract(&self, other: &Self, center: &V) -> Result<Option<(Self, Self)>> {
+        let Some((left_template, right_template, output_sites)) =
+            prepare_contraction(self, other, center)?
+        else {
+            return Ok(None);
+        };
+
+        let mut outputs: Vec<Projector> = Vec::new();
+        let mut overlaps = false;
+        for left in self.data.values() {
+            for right in other.data.values() {
+                let Some(merged) = left.projector().intersection(right.projector()) else {
+                    continue;
+                };
+                let output = merged.filter_indices(&output_sites);
+                overlaps |= outputs
+                    .iter()
+                    .any(|seen| seen != &output && seen.is_compatible_with(&output));
+                outputs.push(output);
+            }
+        }
+        if !overlaps {
+            return Ok(None);
+        }
+
+        let mut fixed: Vec<DynIndex> = Vec::new();
+        for output in &outputs {
+            for index in output.projected_indices() {
+                if !fixed.contains(index) {
+                    fixed.push(index.clone());
+                }
+            }
+        }
+        fixed.sort_by(canonical_index_cmp);
+        let (left_sites, _) = left_template
+            .data()
+            .all_site_indices()
+            .map_err(PartitionedTreeTNError::from)?;
+        let (right_sites, _) = right_template
+            .data()
+            .all_site_indices()
+            .map_err(PartitionedTreeTNError::from)?;
+        let on = |sites: &[DynIndex]| -> Vec<DynIndex> {
+            fixed
+                .iter()
+                .filter(|index| sites.contains(index))
+                .cloned()
+                .collect()
+        };
+        Ok(Some((
+            self.refine_to(&value_grid(&on(&left_sites)))?,
+            other.refine_to(&value_grid(&on(&right_sites)))?,
+        )))
     }
 
     /// Contract two partitions, forming only the output patches whose
@@ -464,7 +790,10 @@ where
     /// in `wanted` is skipped and never contracted, so the cost follows the
     /// number of pairs that reach a wanted output rather than all compatible
     /// pairs. Every returned patch equals the patch [`Self::contract`] returns
-    /// under the same key: the same pairs are summed in the same order.
+    /// under the same key when both operate on the same patch pairs: the same
+    /// pairs are summed in the same order. Unlike [`Self::contract`], this method
+    /// never refines the operands, so for different patch layouts its keys are the
+    /// unrefined pair output keys.
     ///
     /// # Arguments
     ///
@@ -592,9 +921,10 @@ where
             subdomains.push(combined);
         }
 
-        // Build and validate the complete result partition once at the end;
-        // overlapping non-identical output projectors are rejected here with
-        // the documented `OverlappingProjectors` limitation.
+        // Build and validate the complete result partition once at the end. An
+        // overlapping non-identical output projector is rejected here;
+        // `contract` avoids that by refining its operands first, and
+        // `contract_selected` reports it.
         PartitionedTreeTN::from_subdomains(subdomains)
     }
 
@@ -616,18 +946,9 @@ where
         options: &ContractionOptions,
         wanted: Option<&HashSet<Projector>>,
     ) -> Result<Vec<ContractedPair<'a, V>>> {
-        let (Some(left_template), Some(right_template)) =
-            (self.data.values().next(), other.data.values().next())
-        else {
+        let Some((_, _, output_sites)) = prepare_contraction(self, other, center)? else {
             return Ok(Vec::new());
         };
-        ensure_same_topology(left_template.data(), right_template.data())?;
-        ensure_same_dtype(left_template.scalar_kind()?, right_template.scalar_kind()?)?;
-        validate_contraction_site_assignment(left_template.data(), right_template.data())?;
-        ensure_center(left_template.data(), center)?;
-        ensure_center(right_template.data(), center)?;
-        let output_sites =
-            contraction_output_site_indices(left_template.data(), right_template.data())?;
 
         let mut left_patches: Vec<_> = self.data.values().collect();
         let mut right_patches: Vec<_> = other.data.values().collect();
@@ -743,6 +1064,51 @@ where
         .next()
         .ok_or(PartitionedTreeTNError::Empty)?;
     Ok((left_template, right_template))
+}
+
+/// Run the pair-independent contraction checks and return the patch templates
+/// with the contraction's output site space, or `None` for an empty operand.
+fn prepare_contraction<'a, V>(
+    left: &'a PartitionedTreeTN<V>,
+    right: &'a PartitionedTreeTN<V>,
+    center: &V,
+) -> Result<Option<ContractionPreparation<'a, V>>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let (Some(left_template), Some(right_template)) =
+        (left.data.values().next(), right.data.values().next())
+    else {
+        return Ok(None);
+    };
+    ensure_same_topology(left_template.data(), right_template.data())?;
+    ensure_same_dtype(left_template.scalar_kind()?, right_template.scalar_kind()?)?;
+    validate_contraction_site_assignment(left_template.data(), right_template.data())?;
+    ensure_center(left_template.data(), center)?;
+    ensure_center(right_template.data(), center)?;
+    let output_sites =
+        contraction_output_site_indices(left_template.data(), right_template.data())?;
+    Ok(Some((left_template, right_template, output_sites)))
+}
+
+/// Every projector that fixes each index of `indices` to every coordinate.
+fn value_grid(indices: &[DynIndex]) -> Vec<Projector> {
+    let mut grid = vec![Projector::new()];
+    for index in indices {
+        let mut next = Vec::with_capacity(grid.len() * index.dim);
+        for projector in &grid {
+            for value in 0..index.dim {
+                next.push(Projector::from_entries(
+                    projector
+                        .iter()
+                        .map(|(fixed, &coordinate)| (fixed.clone(), coordinate))
+                        .chain([(index.clone(), value)]),
+                ));
+            }
+        }
+        grid = next;
+    }
+    grid
 }
 
 fn ensure_union_disjoint<V>(

@@ -132,7 +132,9 @@ Patch-wise addition preserves the TT predecessor's restricted contract:
 
 - identical projector keys may be added;
 - a patch absent from one operand is treated as zero; and
-- different overlapping projector layouts are rejected rather than refined.
+- different overlapping projector layouts are refined onto their common
+  refinement before the sum (see [Common refinement](#common-refinement)), which
+  keeps the part of every patch that the other operand does not cover.
 
 Matching patches use strict `TreeTN::add` and are truncated at the caller's
 explicit center. Addition requires exact named topology, site-index assignment,
@@ -168,6 +170,39 @@ product evaluation.
 No production path may call `to_dense`, `contract_to_tensor`, or a dense
 reference contraction unless the caller explicitly selected and bounded a
 TreeTN dense-reference method.
+
+## Common refinement
+
+Two operations accept operands whose patch layouts differ, instead of the v1
+`OverlappingProjectors` rejection (#1088):
+
+- `PartitionedTreeTN::common_refinement(&[&PartitionedTreeTN<V>]) ->
+  Result<Vec<Projector>>` returns a pairwise-disjoint atom list such that every
+  patch projector of every operand is exactly a union of atoms, including the
+  part of one operand's region that the others do not cover. Every patch
+  projector, in canonical order, first subtracts the cells accumulated so far and
+  contributes its uncovered remainder, so a region is never added twice; the
+  cells are then split until each lies inside or outside every patch. A split
+  keeps the cells disjoint and fixes at least one more index, so this terminates,
+  and the result is a function of the projector sets, not of operand or map order.
+- `PartitionedTreeTN::refine_to(&[Projector]) -> Result<PartitionedTreeTN<V>>`
+  replaces every patch by its exact projections onto the compatible layout
+  projectors. Projection masks sites and truncates nothing, so it can increase
+  the patch count without changing values; a patch region that no layout
+  projector covers is dropped, and an empty layout returns an empty partition.
+
+`add` refines both operands onto their common refinement and then runs the
+unchanged patch-wise sum, which keeps each operand's part that the other does not
+cover. `contract` first predicts each pair's output projector; only when two of
+them overlap without being equal does it refine both operands, on the
+uncontracted external indices that any patch of either operand fixes, restricted
+to the indices each operand's tree carries. Every output projector then fixes
+that same index set, so any two are equal or disjoint. When the layouts are
+already equal or disjoint, neither operation refines and the result is unchanged.
+A patch count can grow with the product of the refined indices' dimensions;
+refinement is not recompressed here. `contract_selected`, `contract_adaptive`,
+`contract_adaptive_selected`, and `add_with_patching` keep their exact-key
+behavior and do not refine.
 
 ## Adaptive patching
 
@@ -358,7 +393,9 @@ Minimum focused matrix:
 - same-ID/different-metadata projectors used successfully as `HashMap` keys;
 - invalid center, topology, projector index, coordinate, and options;
 - transactional construction, insertion, and append failures;
-- identical-layout addition plus rejection of different overlapping layouts;
+- identical-layout addition plus refinement of different overlapping layouts;
+- refinement, common refinement, and contraction across different layouts,
+  including a contracted index that only one operand carries;
 - strict same-topology contraction and deterministic `to_treetn`;
 - explicit-center truncate, contract, and patching paths, including invalid
   centers;
@@ -383,6 +420,9 @@ impact attestation in the worklog/PR body.
   [Adaptive interpolation ownership](#adaptive-interpolation-ownership)).
   Implemented in M2 ([tree-pqtci-driver.md](tree-pqtci-driver.md)).
 - Common-refinement addition for different overlapping projector layouts.
+  Delivered for `add` and `contract` by #1088 (`refine_to` and
+  `common_refinement`); `contract_selected`, `contract_adaptive*`, and
+  `add_with_patching` keep their exact-key behavior.
 - Contraction between different named topologies.
 - Generic tensor storage beyond `IdxTensor`.
 - Removing `tensor4all-partitionedtt` after a separate maintainer decision.
@@ -396,7 +436,8 @@ Maintainer decisions recorded in this revision:
 - adaptive interpolation is excluded; TreeTN-general adaptive patching remains;
 - subdomain construction eagerly masks stored data;
 - center is not stored and is passed explicitly to operations that require it;
-- addition rejects different overlapping projector layouts;
+- addition refines different overlapping projector layouts onto their common
+  refinement (superseding the v1 rejection of #648/#661);
 - `ExactParameterGain` counts logical tensor elements;
 - deprecation is documentation-only with no fixed removal date;
 - node names are generic, tensor storage is `IdxTensor`, dtype is homogeneous,
@@ -448,8 +489,9 @@ Recorded final decisions:
   are rejected before every shortcut by one shared core validator
   (`validate_svd_truncation_options`) reused by TreeTN, partition, and
   adaptive entry points;
-- contraction output regions are not refined; overlapping outputs remain a
-  rejected, documented limitation (see Deferred work below);
+- contraction output regions are refined on the uncontracted indices the input
+  patches fix, so overlapping output regions are no longer a rejected
+  limitation (see [Common refinement](#common-refinement));
 - internal result construction collects, groups, and sorts duplicate projector
   contributions, exact-adds each group, truncates it once, and validates the
   full partition once;

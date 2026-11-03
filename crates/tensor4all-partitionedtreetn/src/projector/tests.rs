@@ -285,3 +285,121 @@ fn test_projector_filter_indices() {
     assert!(!filtered.is_projected_at(&idx1));
     assert!(filtered.is_projected_at(&idx2));
 }
+
+/// Every projector fixing all of `indices` to the given coordinates, in
+/// column-major order with the first index fastest.
+fn points(indices: &[DynIndex]) -> Vec<Projector> {
+    let total: usize = indices.iter().map(|index| index.dim).product();
+    (0..total)
+        .map(|mut position| {
+            Projector::from_entries(indices.iter().map(|index| {
+                let value = position % index.dim;
+                position /= index.dim;
+                (index.clone(), value)
+            }))
+        })
+        .collect()
+}
+
+/// Return whether `cells` are pairwise disjoint and cover exactly `region`.
+fn cells_are_exact_cover(cells: &[Projector], region: &Projector, indices: &[DynIndex]) -> bool {
+    points(indices).iter().all(|point| {
+        let inside = cells.iter().filter(|cell| point.is_subset_of(cell)).count();
+        let expected = usize::from(point.is_subset_of(region));
+        inside == expected
+    })
+}
+
+#[test]
+fn split_by_decomposes_a_region_exactly() {
+    let small = make_index(2);
+    let large = make_index(3);
+    let narrow = make_index(3);
+    let indices = vec![small.clone(), large.clone(), narrow.clone()];
+    let cases = [
+        // region, cut, compatible?
+        (projector([]), projector([]), true),
+        (
+            projector([(small.clone(), 0)]),
+            projector([(small.clone(), 0)]),
+            true,
+        ),
+        (
+            projector([(small.clone(), 0), (large.clone(), 2)]),
+            projector([(small.clone(), 0)]),
+            true,
+        ),
+        (
+            projector([(small.clone(), 0)]),
+            projector([(small.clone(), 0), (large.clone(), 1), (narrow.clone(), 2)]),
+            true,
+        ),
+        (
+            projector([]),
+            projector([(large.clone(), 1), (narrow.clone(), 2)]),
+            true,
+        ),
+        (
+            projector([(small.clone(), 0), (narrow.clone(), 1)]),
+            projector([(large.clone(), 0), (narrow.clone(), 1)]),
+            true,
+        ),
+        (
+            projector([(small.clone(), 1)]),
+            projector([(small.clone(), 0)]),
+            false,
+        ),
+        (
+            projector([]),
+            projector([(small.clone(), 0), (large.clone(), 2)]),
+            true,
+        ),
+    ];
+
+    for (region, cut, compatible) in cases {
+        let cells = region.split_by(&cut);
+        assert_eq!(cells.is_some(), compatible, "{region:?} vs {cut:?}");
+        let Some(cells) = cells else {
+            continue;
+        };
+        assert!(!cells.is_empty());
+        let mut seen = std::collections::HashSet::new();
+        for cell in &cells {
+            assert!(
+                seen.insert(cell.clone()),
+                "{region:?} vs {cut:?}: duplicate cell"
+            );
+        }
+        assert!(
+            cells_are_exact_cover(&cells, &region, &indices),
+            "{region:?} vs {cut:?}: cells {cells:?} are not an exact cover"
+        );
+        // The first cell is the intersection, and every cell stays in the region.
+        assert_eq!(cells[0], region.intersection(&cut).unwrap());
+        assert!(cells.iter().all(|cell| cell.is_subset_of(&region)));
+    }
+}
+
+#[test]
+fn split_by_uses_every_coordinate_of_finer_indices() {
+    let index = make_index(3);
+    let region = projector([]);
+    let cut = projector([(index.clone(), 1)]);
+    let cells = region.split_by(&cut).unwrap();
+    assert_eq!(cells.len(), 3);
+    assert_eq!(cells[0], cut);
+    assert!(cells_are_exact_cover(&cells, &region, &[index]));
+}
+
+#[test]
+fn split_by_changes_a_cell_without_adding_one_for_dimension_one() {
+    // `{x=0}` with `x` of dimension one is a strict restriction of `{}`, but it
+    // has no alternative coordinate, so the decomposition is a single cell.
+    let single = make_index(1);
+    let region = projector([]);
+    let cut = projector([(single.clone(), 0)]);
+    let cells = region.split_by(&cut).unwrap();
+    assert_eq!(cells, vec![cut.clone()]);
+    assert_ne!(cells, vec![region]);
+    assert!(cells_are_exact_cover(&cells, &projector([]), &[single]));
+}
