@@ -11,6 +11,9 @@ Both deterministic checks are delta-scoped on purpose. #566 records existing
 violations of each; a repo-wide gate would fail on the backlog, so these stop
 new violations from landing while the backlog burns down separately.
 
+The #917 file-size experiment is separately opt-in with ``--file-growth`` and
+``--dry-run``. It produces advisory warnings and is not enabled in hosted CI.
+
 Local API key loading uses the ``python-dotenv`` library. Install dev helpers with:
 
     python3 -m pip install -r scripts/requirements-dev.txt
@@ -184,6 +187,10 @@ PERFORMANCE_SECTIONS = (
 )
 
 SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
+    (
+        re.compile(r"^crates/[^/]+/src/.*\.rs$"),
+        frozenset({"File Growth Dry Run"}),
+    ),
     (
         re.compile(r"tensor4all-capi|/capi|\.h$|cbindgen|_capi"),
         frozenset(
@@ -1480,6 +1487,107 @@ def deterministic_checks(
     return findings
 
 
+def numstat_entries(output: str) -> list[tuple[str, int, int]]:
+    """Read NUL-delimited numstat, retaining rename destinations and binary skips."""
+    fields = iter(output.split("\0"))
+    entries = []
+    for field in fields:
+        if not field:
+            continue
+        added, deleted, path = field.split("\t", 2)
+        if not path:
+            next(fields)  # Rename source; counts describe the source-to-target delta.
+            path = next(fields)
+        if added != "-" and deleted != "-":
+            entries.append((path, int(added), int(deleted)))
+    return entries
+
+
+def file_growth_path(path: str) -> bool:
+    """Select crate source files, excluding conventional test/generated paths."""
+    parts = path.split("/")
+    if len(parts) < 4 or parts[0] != "crates" or parts[2] != "src":
+        return False
+    name = parts[-1]
+    return (
+        name.endswith(".rs")
+        and not {"tests", "test", "generated"}.intersection(parts[3:-1])
+        and name not in {"tests.rs", "test.rs", "generated.rs"}
+        and not name.startswith(("test_", "generated_"))
+        and not name.endswith(("_test.rs", "_tests.rs", "_generated.rs", ".generated.rs"))
+    )
+
+
+def file_line_count(text: str) -> int:
+    """Count physical lines, including an unterminated final line, as Git does."""
+    return text.count("\n") + int(bool(text) and not text.endswith("\n"))
+
+
+def file_growth_findings(
+    base: str,
+    head: str,
+    *,
+    worktree: bool = False,
+    soft_limit: int = 1000,
+    large_limit: int = 2000,
+    large_min_delta: int = 50,
+) -> list[Finding]:
+    """Preview advisory whole-file growth against the merge base, never a hard cap.
+
+    Numstat supplies the delta; reading the destination supplies its total size.
+    Renames preserve the original size, so moving a large file alone is silent.
+    No reviewed code is executed, and no historical file-size baseline is needed.
+    The net-growth floor applies only to already-large files, not first crossings.
+    """
+    comparison = [base] if worktree else [f"{base}...{head}"]
+    entries = numstat_entries(run_git([
+        "diff", "--numstat", "-z", "--find-renames", "--no-ext-diff",
+        "--no-textconv", *comparison, "--", "crates/",
+    ]))
+    if worktree:
+        for path in untracked_files():
+            if file_growth_path(path):
+                entries.extend(numstat_entries(run_git([
+                    "diff", "--numstat", "-z", "--no-index", "--no-ext-diff",
+                    "--no-textconv", "--", "/dev/null", path,
+                ], check=False)))
+
+    findings = []
+    for path, added, deleted in sorted(entries):
+        if added <= deleted or not file_growth_path(path):
+            continue
+        text = file_text_at(path, ref=head, worktree=worktree)
+        header = "\n".join(text.split("\n", 20)[:20])
+        if re.search(r"@generated\b|\bDO NOT EDIT\b", header, re.IGNORECASE):
+            continue
+        after = file_line_count(text)
+        before = after - added + deleted
+        if before <= soft_limit < after:
+            trigger = f"crosses the {soft_limit}-line soft review trigger"
+        elif before > large_limit and added - deleted >= large_min_delta:
+            trigger = (
+                f"grows a file already above {large_limit} lines "
+                f"by at least {large_min_delta} net lines"
+            )
+        else:
+            continue
+        findings.append(Finding(
+            id=f"file-growth:{path}",
+            severity="warn",
+            rule_section="File Growth Dry Run",
+            file=path,
+            line=None,
+            summary=f"{before} -> {after} lines (+{added}/-{deleted}); {trigger}",
+            detail=(
+                "Experimental, advisory only; counts include comments, blank lines "
+                "and inline tests. Explain the coherent responsibility in the PR "
+                "body, or split at a meaningful responsibility boundary. Never "
+                "split solely to lower the count. Thresholds remain provisional (#917)."
+            ),
+        ))
+    return findings
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True, help="Merge base ref")
@@ -1493,6 +1601,23 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run",
         action="store_true",
         help="Skip LLM call; run diff/section selection and deterministic checks only",
+    )
+    parser.add_argument(
+        "--file-growth", action="store_true",
+        help="Opt into the experimental advisory file-size check (requires --dry-run)",
+    )
+    parser.add_argument(
+        "--file-growth-soft-limit", type=int, default=1000,
+        help="Provisional crossing threshold in whole-file lines (default: 1000)",
+    )
+    parser.add_argument(
+        "--file-growth-large-limit", type=int, default=2000,
+        help="Provisional already-large threshold, at least the soft limit (default: 2000)",
+    )
+    parser.add_argument(
+        "--file-growth-large-min-delta", type=int, default=50,
+        help="Minimum net added lines for already-large files; 0 allows any growth "
+        "(default: 50). First crossings are unaffected.",
     )
     parser.add_argument(
         "--waived",
@@ -1536,6 +1661,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.file_growth and not args.dry_run:
+        parser.error("--file-growth requires --dry-run during the #917 experiment")
+    if not 0 < args.file_growth_soft_limit <= args.file_growth_large_limit:
+        parser.error("file-growth limits must satisfy 0 < soft <= large")
+    if args.file_growth_large_min_delta < 0:
+        parser.error("--file-growth-large-min-delta must be nonnegative")
+
     if args.llm_skipped_reason and not args.dry_run:
         print("--llm-skipped-reason requires --dry-run", file=sys.stderr)
         return 1
@@ -1571,6 +1703,13 @@ def main(argv: list[str] | None = None) -> int:
     findings = deterministic_checks(
         files, added=added_text, ref=args.head, worktree=args.worktree
     )
+    if args.file_growth:
+        findings.extend(file_growth_findings(
+            args.base, args.head, worktree=args.worktree,
+            soft_limit=args.file_growth_soft_limit,
+            large_limit=args.file_growth_large_limit,
+            large_min_delta=args.file_growth_large_min_delta,
+        ))
     sensitive_finding = sensitive_diff_finding(diff_text)
     if sensitive_finding:
         findings.append(sensitive_finding)

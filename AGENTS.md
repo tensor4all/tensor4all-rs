@@ -348,6 +348,10 @@ python3 scripts/repository-rules-review.py --base main --worktree --dry-run
 python3 scripts/test-repository-rules-review.py   # the script's own tests
 ```
 
+For the opt-in #917 file-size experiment, add `--file-growth` to the dry run.
+Scope, provisional thresholds and rollout are documented only in
+[File Growth Dry Run](REPOSITORY_RULES.md#file-growth-dry-run).
+
 Drop `--dry-run` for the LLM pass; it needs `DEEPSEEK_API_KEY` in the
 environment or a repo-root `.env` (`pip install -r scripts/requirements-dev.txt`).
 System prompt: `ai/prompts/repository-rules-review.md`. Three deterministic

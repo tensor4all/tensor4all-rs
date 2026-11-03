@@ -60,6 +60,36 @@
 - After any `origin/main` synchronization, rerun or re-monitor CI; earlier
   green checks are insufficient.
 
+## File Growth Dry Run
+
+- Issue [#917](https://github.com/tensor4all/tensor4all-rs/issues/917) starts
+  with an opt-in file-size experiment. Run the existing reviewer with
+  `--dry-run --file-growth`; the hosted workflow does not enable it yet.
+- It warns when a crate source `.rs` file grows from at most 1000 lines to
+  more than 1000, or grows by at least 50 net lines while already above 2000
+  lines. The 50-line floor applies only to the already-large reminder; first
+  crossings still remind on any positive growth. These are provisional
+  defaults, adjustable with `--file-growth-soft-limit` and
+  `--file-growth-large-limit`, plus `--file-growth-large-min-delta` for the
+  nonnegative net-growth floor (0 allows any positive growth). The diff's merge
+  base is the per-file baseline;
+  unchanged, shrinking and rename-only files produce no growth finding.
+- Counts are whole-file physical lines, including inline tests, comments and
+  blanks, not a Rust parser's production-line estimate. Conventional `test`,
+  `tests` and `generated` directories, `test.rs`/`tests.rs`/`generated.rs`,
+  `test_*`/`*_test.rs`/`*_tests.rs` and
+  `generated_*`/`*_generated.rs`/`*.generated.rs` filenames are excluded.
+  A generated marker (`@generated` or `DO NOT EDIT`, case-insensitive) in the
+  first 20 lines also excludes a file. Unmarked generated files can still warn.
+- All growth findings are advisory `warn` findings. Explain a file's coherent
+  responsibility in the PR body, or split at a meaningful boundary; the shared
+  File Organization rule forbids splitting solely to lower line counts.
+  No PR-body attestation is enforced by this first experiment.
+- Review the last 20 merged PRs' dry-run findings before enabling automated
+  comments or settling thresholds. A warning rate alone is not a false-positive
+  rate: reviewers must assess whether each reminder is useful. Reuse hints and
+  removal-attestation reminders remain follow-up work.
+
 ## No Hidden Dense Materialization In Production Paths
 
 - Production algorithms never silently materialize a full dense tensor whose
