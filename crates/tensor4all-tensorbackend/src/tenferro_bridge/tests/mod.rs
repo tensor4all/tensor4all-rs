@@ -605,6 +605,36 @@ fn parsed_einsum_plan_reuses_spec_across_prefix_shapes() {
 }
 
 #[test]
+fn parsed_einsum_plan_parses_each_expression_once() {
+    // The string form is the convenience form; it must not re-parse a literal
+    // expression on every call.
+    let before = native_einsum_spec_cache_len();
+    let first = NativeEinsumPlan::new("ab,bc->ac").unwrap();
+    let after_first = native_einsum_spec_cache_len();
+    let second = NativeEinsumPlan::new("ab,bc->ac").unwrap();
+    assert_eq!(native_einsum_spec_cache_len(), after_first);
+    assert_eq!(after_first, before + 1);
+    assert!(Arc::ptr_eq(&first.spec, &second.spec));
+
+    // Two plans built from the same string execute identically.
+    let lhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
+    let rhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]).unwrap();
+    let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
+    let from_first = first.execute_reads(&reads).unwrap();
+    let from_second = second.execute_reads(&reads).unwrap();
+    assert_eq!(
+        from_first.as_slice::<f64>().unwrap(),
+        from_second.as_slice::<f64>().unwrap()
+    );
+
+    // A different expression is a different entry, and an invalid one is not cached.
+    let _ = NativeEinsumPlan::new("ab,bc->ca").unwrap();
+    assert_eq!(native_einsum_spec_cache_len(), after_first + 1);
+    assert!(NativeEinsumPlan::new("ab,bc").is_err());
+    assert_eq!(native_einsum_spec_cache_len(), after_first + 1);
+}
+
+#[test]
 fn parsed_einsum_plan_preserves_promotion_and_rejects_invalid_inputs() {
     let plan = NativeEinsumPlan::new("ij,jk->ik").unwrap();
     let lhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 3.0, 2.0, 4.0]).unwrap();

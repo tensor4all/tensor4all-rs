@@ -140,7 +140,20 @@ struct NativeEinsumProfileEntry {
 /// that working set while still capping the per-thread cache.
 const CONCRETE_EINSUM_PLAN_CACHE_CAPACITY: usize = 4096;
 
+/// One parsed einsum expression, shared by every plan built from the same string.
+#[derive(Debug)]
+struct NativeEinsumSpec {
+    subscripts: Subscripts,
+    einsum_subscripts: EinsumSubscripts,
+}
+
+/// Distinct expression strings kept before the cache is cleared. The string form is used with
+/// literal expressions, so the working set is a few dozen entries.
+const NATIVE_EINSUM_SPEC_CACHE_CAPACITY: usize = 1024;
+
 thread_local! {
+    static NATIVE_EINSUM_SPEC_CACHE: RefCell<HashMap<String, Arc<NativeEinsumSpec>>> =
+        RefCell::new(HashMap::new());
     static NATIVE_EINSUM_PROFILE_STATE: RefCell<HashMap<NativeEinsumSignature, NativeEinsumProfileEntry>> =
         RefCell::new(HashMap::new());
     static NATIVE_EINSUM_TRACE_STATE: RefCell<HashSet<NativeEinsumSignature>> =
@@ -259,6 +272,29 @@ fn concrete_einsum_signature(
     }
 }
 
+/// Parse an einsum expression once per distinct string on this thread.
+fn cached_native_einsum_spec(subscripts: &str) -> Result<Arc<NativeEinsumSpec>> {
+    if let Some(spec) =
+        NATIVE_EINSUM_SPEC_CACHE.with(|cache| cache.borrow().get(subscripts).cloned())
+    {
+        return Ok(spec);
+    }
+    let parsed = Subscripts::parse(subscripts)
+        .map_err(|error| anyhow!("invalid einsum subscripts '{subscripts}': {error}"))?;
+    let spec = Arc::new(NativeEinsumSpec {
+        einsum_subscripts: EinsumSubscripts::from(&parsed),
+        subscripts: parsed,
+    });
+    NATIVE_EINSUM_SPEC_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= NATIVE_EINSUM_SPEC_CACHE_CAPACITY {
+            cache.clear();
+        }
+        cache.insert(subscripts.to_string(), Arc::clone(&spec));
+    });
+    Ok(spec)
+}
+
 fn cached_concrete_einsum_plan(
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
@@ -289,6 +325,11 @@ fn cached_concrete_einsum_plan(
 #[cfg(test)]
 fn reset_concrete_einsum_plan_cache() {
     CONCRETE_EINSUM_PLAN_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+#[cfg(test)]
+fn native_einsum_spec_cache_len() -> usize {
+    NATIVE_EINSUM_SPEC_CACHE.with(|cache| cache.borrow().len())
 }
 
 #[cfg(test)]
@@ -1801,12 +1842,15 @@ pub fn einsum_native_subscripts(
 /// ```
 #[derive(Debug)]
 pub struct NativeEinsumPlan {
-    subscripts: Subscripts,
-    einsum_subscripts: EinsumSubscripts,
+    spec: Arc<NativeEinsumSpec>,
 }
 
 impl NativeEinsumPlan {
     /// Parse a fixed einsum expression without binding operand shapes or storage.
+    ///
+    /// The parse is shared per thread: a repeated call with the same expression string returns a
+    /// plan over the already parsed specification instead of re-parsing it, so the string form can
+    /// be called inside a loop.
     ///
     /// # Errors
     ///
@@ -1820,12 +1864,8 @@ impl NativeEinsumPlan {
     /// assert!(error.to_string().contains("invalid einsum subscripts"));
     /// ```
     pub fn new(subscripts: &str) -> Result<Self> {
-        let parsed = Subscripts::parse(subscripts)
-            .map_err(|error| anyhow!("invalid einsum subscripts '{subscripts}': {error}"))?;
-        let einsum_subscripts = EinsumSubscripts::from(&parsed);
         Ok(Self {
-            subscripts: parsed,
-            einsum_subscripts,
+            spec: cached_native_einsum_spec(subscripts)?,
         })
     }
 
@@ -1853,16 +1893,16 @@ impl NativeEinsumPlan {
     /// ```
     pub fn execute_reads(&self, inputs: &[TensorRead<'_>]) -> Result<NativeTensor> {
         ensure!(
-            self.subscripts.inputs.len() == inputs.len(),
+            self.spec.subscripts.inputs.len() == inputs.len(),
             "einsum subscripts describe {} input term(s) but {} operand(s) were given",
-            self.subscripts.inputs.len(),
+            self.spec.subscripts.inputs.len(),
             inputs.len()
         );
         ensure!(
             !inputs.is_empty(),
             "native einsum requires at least one operand"
         );
-        for (tensor, ids) in inputs.iter().zip(&self.subscripts.inputs) {
+        for (tensor, ids) in inputs.iter().zip(&self.spec.subscripts.inputs) {
             ensure!(
                 tensor.shape().len() == ids.len(),
                 "einsum id list {:?} does not match tensor shape {:?}",
@@ -1870,7 +1910,7 @@ impl NativeEinsumPlan {
                 tensor.shape()
             );
         }
-        execute_native_einsum_reads(inputs, &self.subscripts, &self.einsum_subscripts)
+        execute_native_einsum_reads(inputs, &self.spec.subscripts, &self.spec.einsum_subscripts)
     }
 }
 
