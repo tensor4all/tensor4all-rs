@@ -14,8 +14,6 @@ use tensor4all_tensorbackend::StructuredStorage;
 use tensor4all_treetn::{TreeTN, TruncationOptions};
 
 use crate::projector::Projector;
-
-mod add_many;
 use crate::subdomain_tree_tn::{
     sort_by_patch_order, tree_content_digest, SubDomainTreeTN, CONTENT_DIGEST_CALLS,
 };

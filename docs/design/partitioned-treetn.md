@@ -147,9 +147,8 @@ For each compatible projector pair it:
 1. contracts the already masked TreeTNs with
    `tensor4all_treetn::contraction::contract` at the explicit center;
 2. keeps projector entries only for surviving external full indices; and
-3. combines duplicate output projectors with one exact N-ary direct sum
-   (`TreeTN::add_many`, never a chain of pairwise adds) and the requested
-   truncation policy.
+3. combines duplicate output projectors with strict TreeTN addition and the
+   requested truncation policy.
 
 `contract_adaptive` adds the stronger project-first rule inherited from
 `PartitionedMPSs.jl`. A contraction or duplicate-projector sum that reaches the
@@ -494,8 +493,8 @@ Recorded final decisions:
   patches fix, so overlapping output regions are no longer a rejected
   limitation (see [Common refinement](#common-refinement));
 - internal result construction collects, groups, and sorts duplicate projector
-  contributions, exact-adds each group in one N-ary direct sum, truncates it
-  once, and validates the full partition once;
+  contributions, exact-adds each group, truncates it once, and validates the
+  full partition once;
 - the deprecated `tensor4all-partitionedtt` crate keeps its frozen `rtol`
   surface; only the same-identity/different-dimension correctness fix applies
   to it.

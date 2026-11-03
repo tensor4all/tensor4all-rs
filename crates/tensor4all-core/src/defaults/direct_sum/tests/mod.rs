@@ -1,14 +1,12 @@
 use super::*;
-use crate::index_like::IndexLike;
 use crate::tagset::TagSetLike;
 use num_complex::Complex64;
 
-mod many;
-
 #[test]
 fn checked_direct_sum_shapes_reject_overflow() {
-    assert!(checked_product(&[usize::MAX, 2]).is_err());
-    assert!(checked_product(&[usize::MAX, 1]).is_ok());
+    assert!(checked_product(&[usize::MAX, 2], "test").is_err());
+    assert!(checked_strides(&[2, usize::MAX, 2], "test").is_err());
+    assert!(multi_to_linear(&[usize::MAX], &[2]).is_err());
 }
 
 #[test]
@@ -206,7 +204,7 @@ fn test_direct_sum_empty_pairs_error() {
     let result = direct_sum(&a, &b, &[]);
     assert!(result.is_err());
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("at least one index group"));
+    assert!(err_msg.contains("at least one index pair"));
 }
 
 #[test]
@@ -223,7 +221,7 @@ fn test_direct_sum_index_not_in_first_tensor_error() {
     let result = direct_sum(&a, &b, &[(phantom.clone(), k.clone())]);
     assert!(result.is_err());
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("not found in operand 0"));
+    assert!(err_msg.contains("not found in first tensor"));
 }
 
 #[test]
@@ -240,7 +238,7 @@ fn test_direct_sum_index_not_in_second_tensor_error() {
     let result = direct_sum(&a, &b, &[(j.clone(), phantom.clone())]);
     assert!(result.is_err());
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("not found in operand 1"));
+    assert!(err_msg.contains("not found in second tensor"));
 }
 
 #[test]
