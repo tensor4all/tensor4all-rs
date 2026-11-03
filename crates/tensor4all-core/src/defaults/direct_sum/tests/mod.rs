@@ -3,6 +3,7 @@ use crate::tagset::TagSetLike;
 use num_complex::Complex64;
 
 mod layouts;
+mod many;
 
 #[test]
 fn checked_direct_sum_shapes_reject_overflow() {

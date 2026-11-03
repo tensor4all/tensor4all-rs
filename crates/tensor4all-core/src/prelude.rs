@@ -14,9 +14,9 @@
 //! ```
 
 pub use crate::{
-    contract, contract_pair, direct_sum, factorize, outer_product, qr, svd, tensordot, Canonical,
-    CommonScalar, ContractionOptions, DecompositionAlg, DirectSumResult, DynId, DynIndex,
-    FactorizeAlg, FactorizeOptions, FactorizeResult, IdxTensor, Index, IndexLike,
+    contract, contract_pair, direct_sum, direct_sum_many, factorize, outer_product, qr, svd,
+    tensordot, Canonical, CommonScalar, ContractionOptions, DecompositionAlg, DirectSumResult,
+    DynId, DynIndex, FactorizeAlg, FactorizeOptions, FactorizeResult, IdxTensor, Index, IndexLike,
     LinearizationOrder, PairwiseContractionOptions, SingularValueMeasure, SvdOptions,
     SvdTruncationPolicy, Tag, TagSet, TagSetLike, TensorConstructionLike, TensorContractionLike,
     TensorElement, TensorFactorizationLike, TensorIndex, TensorLike, TensorVectorSpace,
