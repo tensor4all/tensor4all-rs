@@ -78,7 +78,7 @@ fn decompositions() -> anyhow::Result<()> {
         )
     })?;
     println!("chi,d,rows,cols,rank,method,repeat,seconds,relative_error,gemm_qr_fraction");
-    for (chi, d) in [(16, 2), (32, 2), (64, 2), (16, 4)] {
+    for (chi, d) in [(32, 2), (64, 2), (128, 2), (32, 4)] {
         let n = chi * d * d;
         let i = DynIndex::new_dyn(n);
         let j = DynIndex::new_dyn(n);

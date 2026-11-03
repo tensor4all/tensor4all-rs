@@ -35,5 +35,12 @@
 - C header regeneration is unavailable locally because cbindgen is absent.
 - [Baseline samples and the declared comparison protocol](../../benchmarks/results/2026-11-03-randomized-factorization/protocol.md)
   retain the attribution evidence and measurement constraints.
+- The first Lanczos comparison is invalid: the pinned public driver clamps
+  its default maximum subspace to 64 for a 64x64 matrix, while its private
+  driver asserts that maximum is strictly smaller than the matrix dimension.
+  Both public `partial_svd` and its scratch planner use this clamping rule.
+  The failed attempt is retained in the experiment evidence. Revision 2
+  predeclares a complete doubled-chi grid with unchanged accuracy gates.
+  No upstream report or patch was prepared; that needs separate authorization.
 - R2 environment projection remains deferred until inverse-canonical parallel
   Fit. Adaptive error-certified rank selection is also out of scope.

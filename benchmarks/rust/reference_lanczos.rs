@@ -3,6 +3,9 @@
 //! Linked by scripts/build-rsvd-reference.py to the exact faer artifacts of the
 //! benchmark build. This does not add a faer dependency to any tensor4all crate.
 //! Uses the public faer Lanczos partial-SVD API; no upstream source is copied.
+//! API reference: t4a-faer 0.28.2, src/operator/eigen/mod.rs::{partial_svd,
+//! partial_svd_scratch}; its private src/operator/svd/mod.rs driver requires
+//! max_dim < min(m,n), so the comparison protocol uses matrices of at least 128.
 use std::{error::Error, fs, time::Instant};
 
 use dyn_stack::{MemBuffer, MemStack};
