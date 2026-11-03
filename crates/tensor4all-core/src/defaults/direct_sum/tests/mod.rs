@@ -2,11 +2,12 @@ use super::*;
 use crate::tagset::TagSetLike;
 use num_complex::Complex64;
 
+mod layouts;
+
 #[test]
 fn checked_direct_sum_shapes_reject_overflow() {
     assert!(checked_product(&[usize::MAX, 2], "test").is_err());
     assert!(checked_strides(&[2, usize::MAX, 2], "test").is_err());
-    assert!(multi_to_linear(&[usize::MAX], &[2]).is_err());
 }
 
 #[test]
