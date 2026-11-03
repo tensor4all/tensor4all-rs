@@ -1,10 +1,11 @@
 # Local validation
 
-The final branch incorporates `origin/main` at `ca4819ca`. Benchmark manifests
-pin the measured commits separately; both remain ancestors of the branch.
-The synchronization adds the opt-in N-ary sum and does not change the RSVD
-algorithm or benchmark protocols. No push, PR, hosted checks, or GPU execution
-is included in this evidence.
+The final branch incorporates `origin/main` at `67583479`, including #1115.
+Benchmark manifests pin the measured commits separately; both remain ancestors
+of the branch. Synchronization does not change the RSVD algorithm or benchmark
+protocols. This document records local checks; hosted checks are reported on
+[PR #1116](https://github.com/tensor4all/tensor4all-rs/pull/1116). No GPU execution
+is included in the local evidence.
 
 Commands below use the existing shared Cargo target via `CARGO_TARGET_DIR`.
 Ordinary checks use the default development/test profiles. The release check
@@ -12,13 +13,13 @@ exercises the new numerical regressions under optimization.
 
 | Check | Result |
 |---|---|
-| `RAYON_NUM_THREADS=1 cargo test --locked -p tensor4all-core -p tensor4all-treetn -p tensor4all-simplett -p tensor4all-capi --lib --tests -- --test-threads=2` | After synchronization: 2,467 passed, zero failed, four existing ignored tests. |
-| `cargo clippy --locked -p tensor4all-core -p tensor4all-treetn -p tensor4all-simplett -p tensor4all-capi --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc` | After synchronization: passed. |
+| `RAYON_NUM_THREADS=1 cargo test --locked -p tensor4all-core -p tensor4all-treetn -p tensor4all-simplett -p tensor4all-capi --lib --tests -- --test-threads=2` | At main `ca4819ca`: 2,467 passed, zero failed, four existing ignored tests. |
+| `cargo clippy --locked -p tensor4all-core -p tensor4all-treetn -p tensor4all-simplett -p tensor4all-capi --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc` | At main `ca4819ca`: passed. |
 | `cargo clippy --locked -p tensor4all-benchmarks --example benchmark_randomized_factorization -- -D warnings` | Passed for the final benchmark harness. |
 | `cargo test --locked --release -p tensor4all-core randomized_factorization` and the corresponding `tensor4all-treetn` command | 17 core and seven TreeTN regressions passed. |
 | `cargo test --doc -p tensor4all-core -p tensor4all-treetn` | 385 core and 194 TreeTN examples passed before the final main synchronization. |
-| `cargo test --locked --doc -p tensor4all-core randomized` and the `factorize_with_rng` filter | After synchronization: nine randomized and four caller-RNG examples passed. |
-| `TENSOR4ALL_CARGO_PROFILE=dev ./scripts/test-mdbook.sh` | After synchronization: guide chapter tests and the shared randomized example passed. |
+| `cargo test --locked --doc -p tensor4all-core randomized` and the `factorize_with_rng` filter | At main `ca4819ca`: nine randomized and four caller-RNG examples passed. |
+| `TENSOR4ALL_CARGO_PROFILE=dev ./scripts/test-mdbook.sh` | At main `ca4819ca`: guide chapter tests and the shared randomized example passed. |
 | `cargo doc --no-deps -p tensor4all-core -p tensor4all-treetn` | Passed with four existing rustdoc link warnings; see limitations below. |
 | `cargo run -p xtask --release -- api-dump` | After synchronization: public crate inventory generated and verified. |
 | `python3 scripts/check-public-error-docs.py`, `check-crate-boundaries.py`, and `check-test-targets.py` | Passed. |
@@ -73,6 +74,9 @@ Checks on that combined tree:
   passed.
 - `cargo test --locked --doc -p tensor4all-partitionedtreetn` passed 121 examples.
 
-The trial merge was discarded after validation; this branch does not include
-#1115. These conclusions apply to the two pinned revisions, not future changes
-to either branch.
+The trial merge was discarded after validation. Subsequently #1115 was merged
+into main at `67583479a6c67441fd56beeaecb530bb3a0699a8`, and this branch merged
+that main revision without conflicts. The actual combined production tree is
+byte-identical to the trial tree: only this validation document, the worklog,
+and the relocated panic baseline differ. The compatibility results therefore
+also cover the final integration. Hosted CI is rerun on the synchronized head.

@@ -21,7 +21,7 @@ use crate::subdomain_tree_tn::{
     ensure_center, sort_by_patch_order, validate_contraction_options, ScalarKind, SubDomainTreeTN,
 };
 use tensor4all_core::{validate_svd_truncation_options, SvdTruncationPolicy};
-use tensor4all_treetn::{contraction::ContractionOptions, TruncationOptions};
+use tensor4all_treetn::{contraction::ContractionOptions, SumEngine, TruncationOptions};
 
 type ContractGroup<V> = (
     Vec<(SubDomainTreeTN<V>, SubDomainTreeTN<V>)>,
@@ -123,7 +123,7 @@ pub enum BudgetAllocation {
 ///
 /// ```
 /// use tensor4all_partitionedtreetn::{
-///     BudgetAllocation, PatchSplitStrategy, PatchingOptions,
+///     BudgetAllocation, PatchSplitStrategy, PatchingOptions, SumEngine,
 /// };
 ///
 /// let options = PatchingOptions::default();
@@ -132,6 +132,7 @@ pub enum BudgetAllocation {
 /// assert_eq!(options.max_bond_dim, Some(100));
 /// assert!(options.patch_order.is_empty());
 /// assert_eq!(options.split_strategy, PatchSplitStrategy::ExactParameterGain);
+/// assert_eq!(options.sum_engine, SumEngine::Binary);
 /// ```
 #[derive(Debug, Clone)]
 pub struct PatchingOptions {
@@ -172,6 +173,27 @@ pub struct PatchingOptions {
 
     /// Candidate-selection strategy used for over-cap patches.
     pub split_strategy: PatchSplitStrategy,
+
+    /// How exact sums of several patches are built: the equal-key patches
+    /// [`add_with_patching`] combines, and the contributions to one output
+    /// projector that [`contract_adaptive`] sums before its probe truncation.
+    ///
+    /// Defaults to [`SumEngine::Binary`], which adds the patches one by one and
+    /// assumes few patches per sum. [`SumEngine::Nary`] builds each sum in one
+    /// pass, much faster for many patches, and [`SumEngine::NaryWithin`] does
+    /// so only while the estimated size of the built sum fits `limit_bytes`.
+    /// The estimate is
+    /// [`ExactSum::estimated_nary_bytes`](tensor4all_treetn::ExactSum::estimated_nary_bytes):
+    /// for every node, the product of its site dimensions and of its summed
+    /// bond dimensions, times 16 bytes. The engine changes only how a sum is
+    /// built, not its value, the truncation that follows, or the split rule.
+    ///
+    /// A `NaryWithin` fallback to the add chain is not reported by these
+    /// routines. To see which method a given sum takes, measure it with
+    /// [`TreeTN::exact_sum`](tensor4all_treetn::TreeTN::exact_sum) or
+    /// [`PartitionedTreeTN::to_treetn_with`]. A reporting variant of the
+    /// routines may be added when a caller needs it.
+    pub sum_engine: SumEngine,
 }
 
 impl Default for PatchingOptions {
@@ -184,6 +206,7 @@ impl Default for PatchingOptions {
             max_bond_dim: Some(100),
             patch_order: Vec::new(),
             split_strategy: PatchSplitStrategy::default(),
+            sum_engine: SumEngine::Binary,
         }
     }
 }
@@ -271,7 +294,7 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     validate_patching_options(options)?;
-    let subdomains = combine_equal_key_subdomains(subdomains)?;
+    let subdomains = combine_equal_key_subdomains(subdomains, options.sum_engine)?;
     let partitioned = PartitionedTreeTN::from_subdomains(subdomains)?;
     if partitioned.is_empty() {
         return Ok(partitioned);
@@ -682,10 +705,8 @@ where
     // addition), then truncate the completed group exactly once. Repeated
     // add-and-truncate was hash-order dependent and re-approximated the sum at
     // every contribution; the single post-add truncation caps the group once.
-    let mut probe = first.clone();
-    for contribution in contributions.iter().skip(1) {
-        probe = probe.add(contribution)?;
-    }
+    let terms: Vec<_> = contributions.iter().collect();
+    let mut probe = SubDomainTreeTN::exact_sum(&terms, patching_options.sum_engine)?;
     let truncation = truncation_options_from_contract(contract_options);
     probe.truncate(center, truncation)?;
 
@@ -807,17 +828,14 @@ fn add_project_first<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    let mut iter = contributions.iter();
-    let Some(first) = iter.next() else {
+    if contributions.is_empty() {
         return Ok(Vec::new());
-    };
+    }
     // Same collect-group-exact-add-then-truncate-once pattern as the
     // contraction helper: no hash-order-dependent intermediate truncation.
-    let mut probe = first.clone();
+    let terms: Vec<_> = contributions.iter().collect();
+    let mut probe = SubDomainTreeTN::exact_sum(&terms, patching_options.sum_engine)?;
     let truncation = truncation_options_from_contract(contract_options);
-    for contribution in iter {
-        probe = probe.add(contribution)?;
-    }
     probe.truncate(center, truncation)?;
 
     let Some(cap) = patching_options.max_bond_dim else {
@@ -1098,24 +1116,30 @@ where
 /// each other through `from_subdomains`' last-write-wins key semantics.
 fn combine_equal_key_subdomains<V>(
     subdomains: Vec<SubDomainTreeTN<V>>,
+    engine: SumEngine,
 ) -> Result<Vec<SubDomainTreeTN<V>>>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    let mut combined: HashMap<Projector, SubDomainTreeTN<V>> = HashMap::new();
+    // Patches with one key are summed in input order, as the former running
+    // `add` did.
+    let mut groups: HashMap<Projector, Vec<SubDomainTreeTN<V>>> = HashMap::new();
     for subdomain in subdomains {
-        let projector = subdomain.projector().clone();
-        match combined.remove(&projector) {
-            Some(existing) => {
-                let summed = existing.add(&subdomain)?;
-                combined.insert(projector, summed);
-            }
-            None => {
-                combined.insert(projector, subdomain);
-            }
-        }
+        groups
+            .entry(subdomain.projector().clone())
+            .or_default()
+            .push(subdomain);
     }
-    Ok(combined.into_values().collect())
+    groups
+        .into_values()
+        .map(|mut group| {
+            if group.len() == 1 {
+                return group.pop().ok_or(PartitionedTreeTNError::Empty);
+            }
+            let terms: Vec<_> = group.iter().collect();
+            SubDomainTreeTN::exact_sum(&terms, engine)
+        })
+        .collect()
 }
 
 fn validate_patching_options(options: &PatchingOptions) -> Result<()> {

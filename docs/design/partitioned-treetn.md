@@ -125,6 +125,8 @@ mutation. Failure leaves the original partition unchanged.
 
 `to_treetn` deterministically sums the already projected patches with strict
 TreeTN direct-sum addition. It is the replacement for `to_tensor_train`.
+`to_treetn_with(engine)` builds the same sum with a chosen
+[sum engine](#sum-engine) and reports which method ran.
 
 ## Addition and contraction
 
@@ -149,6 +151,40 @@ For each compatible projector pair it:
 2. keeps projector entries only for surviving external full indices; and
 3. combines duplicate output projectors with strict TreeTN addition and the
    requested truncation policy.
+
+### Sum engine
+
+Where a routine forms an exact sum of more than two patches, the method that
+builds it is a `tensor4all_treetn::SumEngine` (tensor4all/tensor4all-rs#1107):
+`Binary` adds the terms one by one, `Nary` builds the sum in one direct-sum
+pass, and `NaryWithin { limit_bytes }` uses the N-ary pass only while the
+estimated size of the built sum fits the limit. Every engine gives the same
+sum; they differ in time and peak memory. The default is `Binary` everywhere,
+and `Nary` is opt-in; changing a default needs measurements on real data
+first.
+
+| routine | sum | engine from |
+|---|---|---|
+| `contract`, `contract_selected` | contributions to one output projector, before the group truncation | `PartitionedContractionOptions::sum_engine` |
+| `contract_adaptive`, `contract_adaptive_selected` | contributions to one output projector, before the probe truncation | `PatchingOptions::sum_engine` |
+| `add_with_patching` | input patches with an equal projector key | `PatchingOptions::sum_engine` |
+| `to_treetn_with` | every patch | its argument; `to_treetn` uses `Binary` |
+
+`PartitionedContractionOptions` wraps treetn's `ContractionOptions`, which
+gains no field: a single treetn contraction never sums. A plain
+`ContractionOptions` converts into it with `Binary`. The engine changes only
+how a sum is built; truncation and the split rule are unaffected.
+
+The routines that return a partition do not report a `NaryWithin` fallback;
+`to_treetn_with` and `TreeTN::exact_sum` do, through `ExactSum::used_nary`
+and `ExactSum::estimated_nary_bytes`. A reporting variant of the partition
+routines can be added when a caller needs one; a statistics type was not added
+ahead of that need.
+
+`PartitionedTreeTN::add`, `reconstruct` and `schedule_merge_refine` take no
+engine: every sum they form has two terms (two operands per key, or a pairwise
+merge that decides on its own whether to keep the pair combined), and for two
+terms the binary add and the N-ary pass do the same work.
 
 `contract_adaptive` adds the stronger project-first rule inherited from
 `PartitionedMPSs.jl`. A contraction or duplicate-projector sum that reaches the
