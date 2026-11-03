@@ -177,8 +177,10 @@ numerical regression is impractically slow without optimization, run that test
 in release mode and record why. Do not run both `release` and `ci` by default.
 See the [local validation table](CONTRIBUTING.md#validate-locally).
 
-- Private functions: `#[cfg(test)]` module in the source file. Integration
-  tests: `tests/`.
+- Private functions: `#[cfg(test)] mod tests;` in the source file, the suite in
+  `src/<module>/tests.rs`. See the shared rule
+  [Unit Test Organization](https://github.com/tensor4all/tensor4all-agent-rules/blob/main/rules/rust/index.md#unit-test-organization).
+  Integration tests: `tests/`.
 - **Dense whole-result comparisons**: do not recompute contractions
   element-by-element. Materialize once to a dense tensor/matrix, then compare
   via tensor subtraction and `maxabs()`. `IdxTensor` subtraction aligns indices
@@ -348,13 +350,13 @@ python3 scripts/repository-rules-review.py --base main --worktree --dry-run
 python3 scripts/test-repository-rules-review.py   # the script's own tests
 ```
 
-For the opt-in #917 file-size experiment, add `--file-growth` to the dry run.
-Scope, provisional thresholds and rollout are documented only in
+The hosted reviewer enables #917 file-size reminders. Add `--file-growth` to
+the local dry run to include them. Scope, defaults and rollout are documented in
 [File Growth Dry Run](REPOSITORY_RULES.md#file-growth-dry-run).
 
 Drop `--dry-run` for the LLM pass; it needs `DEEPSEEK_API_KEY` in the
 environment or a repo-root `.env` (`pip install -r scripts/requirements-dev.txt`).
-System prompt: `ai/prompts/repository-rules-review.md`. Three deterministic
+System prompt: `ai/prompts/repository-rules-review.md`. Four deterministic
 checks run before and independently of the LLM:
 
 | Check | Rule | Baseline |
@@ -362,8 +364,9 @@ checks run before and independently of the LLM:
 | Secret-shaped text in added lines | (none) | Blocks the upload before anything reaches the API |
 | New direct `tenferro-*` dependency outside `tensor4all-tensorbackend` | Dense Layout And Linear Algebra | #566 Phase 3 backlog: core, tcicore, simplett, treetci |
 | Added `ignore` / `no_run` doctest fence | Documentation Examples | #566 Phase 1 backlog: 2 `no_run` sites |
+| Added inline `#[cfg(test)] mod tests { ... }` block | Unit Test Organization (shared rules) | Empty: #1105 moved the last inline block into `src/<module>/tests.rs` |
 
-Both rule checks are delta-scoped: new violations fail, the recorded backlog
+The rule checks are delta-scoped: new violations fail, the recorded backlog
 does not. The tenferro check parses Cargo.toml table context, so `tenferro-*`
 **feature** names are not mistaken for dependencies and `dev-dependencies` are
 out of scope.

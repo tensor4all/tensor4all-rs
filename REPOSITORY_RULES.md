@@ -62,13 +62,14 @@
 
 ## File Growth Dry Run
 
-- Issue [#917](https://github.com/tensor4all/tensor4all-rs/issues/917) starts
-  with an opt-in file-size experiment. Run the existing reviewer with
-  `--dry-run --file-growth`; the hosted workflow does not enable it yet.
+- Issue [#917](https://github.com/tensor4all/tensor4all-rs/issues/917) supplies
+  advisory file-size reminders in the existing review-bot comment on same-repo
+  PRs without a maintainer waiver. The hosted workflow passes
+  `--dry-run --file-growth`; use the same flags for a local preview.
 - It warns when a crate source `.rs` file grows from at most 1000 lines to
   more than 1000, or grows by at least 50 net lines while already above 2000
   lines. The 50-line floor applies only to the already-large reminder; first
-  crossings still remind on any positive growth. These are provisional
+  crossings still remind on any positive growth. These are the rollout
   defaults, adjustable with `--file-growth-soft-limit` and
   `--file-growth-large-limit`, plus `--file-growth-large-min-delta` for the
   nonnegative net-growth floor (0 allows any positive growth). The diff's merge
@@ -85,10 +86,12 @@
   responsibility in the PR body, or split at a meaningful boundary; the shared
   File Organization rule forbids splitting solely to lower line counts.
   No PR-body attestation is enforced by this first experiment.
-- Review the last 20 merged PRs' dry-run findings before enabling automated
-  comments or settling thresholds. A warning rate alone is not a false-positive
-  rate: reviewers must assess whether each reminder is useful. Reuse hints and
-  removal-attestation reminders remain follow-up work.
+- Rollout evidence includes the
+  [initial 20-PR sample](docs/experiments/2026-11-03-file-growth-dry-run.md) and a
+  [second, disjoint 20-PR sample](docs/experiments/2026-11-03-file-growth-rollout.md).
+  A warning rate alone is not a false-positive rate: reviewers must assess
+  whether each reminder is useful and recalibrate defaults when warranted.
+  Reuse hints and removal-attestation reminders remain follow-up decisions.
 
 ## No Hidden Dense Materialization In Production Paths
 
