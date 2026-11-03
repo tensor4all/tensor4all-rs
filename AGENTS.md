@@ -354,7 +354,7 @@ Scope, provisional thresholds and rollout are documented only in
 
 Drop `--dry-run` for the LLM pass; it needs `DEEPSEEK_API_KEY` in the
 environment or a repo-root `.env` (`pip install -r scripts/requirements-dev.txt`).
-System prompt: `ai/prompts/repository-rules-review.md`. Three deterministic
+System prompt: `ai/prompts/repository-rules-review.md`. Four deterministic
 checks run before and independently of the LLM:
 
 | Check | Rule | Baseline |
@@ -362,8 +362,9 @@ checks run before and independently of the LLM:
 | Secret-shaped text in added lines | (none) | Blocks the upload before anything reaches the API |
 | New direct `tenferro-*` dependency outside `tensor4all-tensorbackend` | Dense Layout And Linear Algebra | #566 Phase 3 backlog: core, tcicore, simplett, treetci |
 | Added `ignore` / `no_run` doctest fence | Documentation Examples | #566 Phase 1 backlog: 2 `no_run` sites |
+| Added inline `#[cfg(test)] mod tests { ... }` block | Unit Test Organization (shared rules) | Empty: #1105 moved the last inline block into `src/<module>/tests.rs` |
 
-Both rule checks are delta-scoped: new violations fail, the recorded backlog
+The rule checks are delta-scoped: new violations fail, the recorded backlog
 does not. The tenferro check parses Cargo.toml table context, so `tenferro-*`
 **feature** names are not mistaken for dependencies and `dev-dependencies` are
 out of scope.
