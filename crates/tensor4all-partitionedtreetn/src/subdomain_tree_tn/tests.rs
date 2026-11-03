@@ -176,3 +176,33 @@ fn truncate_refreshes_the_cached_content_digest() {
     );
     assert_ne!(patch.patch_order_key().3, before);
 }
+
+/// Indices that share an allocation id but differ in tags or prime level are
+/// different logical sites, and the ordering key must keep them apart.
+#[test]
+fn patch_order_key_distinguishes_same_id_indices() {
+    use tensor4all_core::{DynId, TagSet};
+
+    let shared_id = DynId(7);
+    let plain_index = DynIndex::new_with_tags(shared_id, 2, TagSet::new());
+    let tagged_index = DynIndex::new_with_tags(shared_id, 2, TagSet::from_str("Site").unwrap());
+    let mut primed_index = DynIndex::new_with_tags(shared_id, 2, TagSet::new());
+    primed_index.plev = 1;
+
+    let plain = patch(&plain_index, vec![1.0, 2.0]);
+    let tagged = patch(&tagged_index, vec![1.0, 2.0]);
+    let primed = patch(&primed_index, vec![1.0, 2.0]);
+
+    assert_eq!(plain_index.id, tagged_index.id);
+    assert_eq!(plain_index.id, primed_index.id);
+    assert_ne!(
+        plain.patch_order_key(),
+        tagged.patch_order_key(),
+        "tags must separate same-id indices"
+    );
+    assert_ne!(
+        plain.patch_order_key(),
+        primed.patch_order_key(),
+        "prime level must separate same-id indices"
+    );
+}

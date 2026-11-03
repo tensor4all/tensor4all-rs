@@ -23,18 +23,27 @@ thread_local! {
     static ALLOCATIONS: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
 }
 
+// SAFETY: every method forwards the caller's allocation to `System` unchanged,
+// so ownership and layout stay with the system allocator exactly as if this
+// wrapper were absent; `record` only bumps a thread-local counter and never
+// touches the pointer.
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record(layout.size());
+        // SAFETY: `layout` is the layout the caller passed to the allocator.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: `ptr`/`layout` are the pair the caller received from `alloc`
+        // through this wrapper, which forwarded them to `System`.
         unsafe { System.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         record(new_size);
+        // SAFETY: `ptr`/`layout` are the caller's live allocation and
+        // `new_size` its requested size, both forwarded unchanged.
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 }
