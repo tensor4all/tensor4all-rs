@@ -160,9 +160,9 @@ pub struct PatchingOptions {
 
     /// Optional maximum retained bond dimension. `Some(0)` is invalid.
     ///
-    /// This is a hard cap and takes precedence over `cutoff`. When a
-    /// budget-truncated patch still exceeds this cap, adaptive patching
-    /// splits it if an unprojected index is available.
+    /// This is a hard cap and takes precedence over `cutoff`. When the
+    /// budget-truncated probe of a patch still exceeds this cap, adaptive
+    /// patching splits the exact patch if an unprojected index is available.
     pub max_bond_dim: Option<usize>,
 
     /// Full site-index order used by [`PatchSplitStrategy::Sequential`].
@@ -215,10 +215,24 @@ impl Default for PatchingOptions {
 ///
 /// Input patches that share an equal projector key are first summed by strict
 /// subdomain addition, then the result is validated as one homogeneous,
-/// exact-topology partition. Over-cap patches are budget-truncated, split
-/// along full site indices, and retried until no permitted split remains. The
-/// explicit `center` is used for every TreeTN truncation and is never stored in
-/// the result.
+/// exact-topology partition. Over-cap patches are split along full site
+/// indices and retried until no permitted split remains. The explicit `center`
+/// is used for every TreeTN truncation and is never stored in the result.
+///
+/// # Project-first splits
+///
+/// As in [`contract_adaptive`], a split is only probed on a truncated value;
+/// its children come from the exact addends. The probe is the patch with its
+/// cutoff budget applied and no bond cap, because a capped probe cannot tell an
+/// exact rank from a truncated one; it decides only whether and where to split.
+/// Each child is the projection of the exact parent, compressed at a
+/// dtype-scaled round-off threshold (`64 * epsilon`) so projection-created null
+/// bond space is removed without spending the caller's budget. The cutoff
+/// budget and the bond cap are therefore spent once, on the final leaves,
+/// rather than once per split level with every level's loss inherited by all
+/// leaves below it. A leaf that is already below its budget still reaches that
+/// closing pass, which drops it, so the other leaves' budgets stay fractions of
+/// the whole input weight.
 ///
 /// # Arguments
 ///
@@ -229,10 +243,11 @@ impl Default for PatchingOptions {
 ///
 /// # Returns
 ///
-/// A new partition containing the retained, budget-truncated patches. The
-/// returned partition may still contain a patch above the cap when no
-/// unprojected split candidate exists. The whole-network error is best effort
-/// and is not bounded by `options.cutoff`.
+/// A new partition containing the retained, budget-truncated leaves. The split
+/// loop stops when no unprojected split candidate remains; the final adaptive
+/// truncation still applies `options.max_bond_dim` to every retained leaf. The
+/// whole-network error is best effort and is not bounded by `options.cutoff`:
+/// one local budget is reused at every bond of a leaf's truncation sweep.
 ///
 /// # Errors
 ///
@@ -321,6 +336,10 @@ where
         BudgetAllocation::Norm => None,
     };
 
+    // Project-first: the patches carried between iterations stay exact. The
+    // budget-truncated form of a patch is only a split-decision probe; the
+    // children of a split are projections of the exact patch. Truncation is
+    // therefore applied once, to the final leaves.
     let mut working = partitioned
         .into_iter()
         .map(|(_, subdomain)| subdomain)
@@ -335,37 +354,35 @@ where
                 total_volume,
             )?;
         }
-        working = budget_truncate_for_split_decision(working, center, options)?;
-        let over_cap = working.iter().any(|subdomain| {
-            options
-                .max_bond_dim
-                .is_some_and(|cap| subdomain.max_bond_dim() > cap)
-        });
-        if !over_cap {
-            let partitioned = PartitionedTreeTN::from_subdomains(working)?;
-            return truncate_adaptive(
-                &partitioned,
-                center,
-                options.cutoff,
-                options.allocation,
-                options.max_bond_dim,
-            );
-        }
 
         let mut next = Vec::new();
         let mut split_any = false;
         for subdomain in working {
-            let over_cap = options
-                .max_bond_dim
-                .is_some_and(|cap| subdomain.max_bond_dim() > cap);
-            if over_cap {
-                if let Some(children) = split_subdomain_by_options(&subdomain, center, options)? {
-                    split_any = true;
-                    next.extend(children);
-                    continue;
+            // A patch at or below its budget has no probe: it is never split
+            // and stays in the result set, so the closing truncation still
+            // derives every other leaf's budget from the whole input weight and
+            // drops the patch itself.
+            let probe = split_decision_probe(&subdomain, center, options)?;
+            let over_cap = probe.as_ref().is_some_and(|probe| {
+                options
+                    .max_bond_dim
+                    .is_some_and(|cap| probe.max_bond_dim() > cap)
+            });
+            let index = match probe {
+                Some(probe) if over_cap => choose_split_index(&probe, center, options)?,
+                _ => None,
+            };
+            let Some(index) = index else {
+                next.push(subdomain);
+                continue;
+            };
+
+            split_any = true;
+            for value in 0..index.dim {
+                if let Some(child) = project_if_present(&subdomain, &index, value, center)? {
+                    next.push(child);
                 }
             }
-            next.push(subdomain);
         }
 
         if !split_any {
@@ -818,55 +835,6 @@ where
     Ok(children)
 }
 
-#[cfg(test)]
-fn add_project_first<V>(
-    contributions: Vec<SubDomainTreeTN<V>>,
-    center: &V,
-    contract_options: &ContractionOptions,
-    patching_options: &PatchingOptions,
-) -> Result<Vec<SubDomainTreeTN<V>>>
-where
-    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
-{
-    if contributions.is_empty() {
-        return Ok(Vec::new());
-    }
-    // Same collect-group-exact-add-then-truncate-once pattern as the
-    // contraction helper: no hash-order-dependent intermediate truncation.
-    let terms: Vec<_> = contributions.iter().collect();
-    let mut probe = SubDomainTreeTN::exact_sum(&terms, patching_options.sum_engine)?;
-    let truncation = truncation_options_from_contract(contract_options);
-    probe.truncate(center, truncation)?;
-
-    let Some(cap) = patching_options.max_bond_dim else {
-        return Ok(vec![probe]);
-    };
-    if probe.max_bond_dim() < cap {
-        return Ok(vec![probe]);
-    }
-    let probe = with_split_budget(probe, patching_options.cutoff, patching_options.allocation)?;
-    let Some(index) = choose_split_index(&probe, center, patching_options)? else {
-        return Ok(vec![probe]);
-    };
-
-    let mut children = Vec::new();
-    for value in 0..index.dim {
-        let mut projected = Vec::with_capacity(contributions.len());
-        for contribution in &contributions {
-            if let Some(child) = project_if_present(contribution, &index, value, center)? {
-                projected.push(child);
-            }
-        }
-        children.extend(add_project_first(
-            projected,
-            center,
-            contract_options,
-            patching_options,
-        )?);
-    }
-    Ok(children)
-}
-
 fn project_if_present<V>(
     subdomain: &SubDomainTreeTN<V>,
     index: &tensor4all_core::DynIndex,
@@ -1237,30 +1205,37 @@ where
         .collect()
 }
 
-fn budget_truncate_for_split_decision<V>(
-    subdomains: Vec<SubDomainTreeTN<V>>,
+/// Split-decision probe of one exact patch.
+///
+/// The probe is the patch with its cutoff budget applied and no bond cap: a
+/// capped value could not distinguish an exact rank from a truncated one. It
+/// only decides whether and where to split; the patch itself stays exact.
+///
+/// Under [`BudgetAllocation::Volume`] the patch's assigned absolute budget is
+/// used and a patch at or below it returns `None`: it is never split, and the
+/// final adaptive truncation drops it. Under [`BudgetAllocation::Norm`] the
+/// relative policy is used and every patch is probed.
+fn split_decision_probe<V>(
+    subdomain: &SubDomainTreeTN<V>,
     center: &V,
     options: &PatchingOptions,
-) -> Result<Vec<SubDomainTreeTN<V>>>
+) -> Result<Option<SubDomainTreeTN<V>>>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    let mut retained = Vec::new();
-    for mut subdomain in subdomains {
-        let threshold = match options.allocation {
-            BudgetAllocation::Volume => {
-                let budget_squared = inherited_budget_squared(&subdomain)?;
-                if subdomain.norm_squared()? <= budget_squared {
-                    continue;
-                }
-                PatchThreshold::AbsoluteSquared(budget_squared)
+    let threshold = match options.allocation {
+        BudgetAllocation::Volume => {
+            let budget_squared = inherited_budget_squared(subdomain)?;
+            if subdomain.norm_squared()? <= budget_squared {
+                return Ok(None);
             }
-            BudgetAllocation::Norm => PatchThreshold::RelativeSquared(options.cutoff),
-        };
-        truncate_subdomain_with_threshold(&mut subdomain, center, threshold, None)?;
-        retained.push(subdomain);
-    }
-    Ok(retained)
+            PatchThreshold::AbsoluteSquared(budget_squared)
+        }
+        BudgetAllocation::Norm => PatchThreshold::RelativeSquared(options.cutoff),
+    };
+    let mut probe = subdomain.clone();
+    truncate_subdomain_with_threshold(&mut probe, center, threshold, None)?;
+    Ok(Some(probe))
 }
 
 /// Inherited absolute budget of one patch under [`BudgetAllocation::Volume`].
@@ -1433,19 +1408,6 @@ where
         options = options.with_max_bond_dim(max_bond_dim);
     }
     subdomain.truncate(center, options)
-}
-
-fn split_subdomain_by_options<V>(
-    subdomain: &SubDomainTreeTN<V>,
-    center: &V,
-    options: &PatchingOptions,
-) -> Result<Option<Vec<SubDomainTreeTN<V>>>>
-where
-    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
-{
-    choose_split_index(subdomain, center, options)?
-        .map(|index| split_subdomain(subdomain, &index, options.allocation))
-        .transpose()
 }
 
 fn choose_split_index<V>(

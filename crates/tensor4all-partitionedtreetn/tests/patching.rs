@@ -437,14 +437,14 @@ fn relative_tail_policy(cutoff: f64) -> TruncationOptions {
 /// that fixes `selector = p` is `Σ_i σ_i^(p) |site0 = i>|site1 = i>`, so its
 /// squared norm is `squared[p][0] + squared[p][1]` and its volume is
 /// `1 * 2 * 2 = 4`.
-struct TwoModeChain {
+pub(super) struct TwoModeChain {
     selector: DynIndex,
     site0: DynIndex,
     site1: DynIndex,
-    patches: [SubDomainTreeTN; 2],
+    pub(super) patches: [SubDomainTreeTN; 2],
 }
 
-fn two_mode_chain(squared: [[f64; 2]; 2]) -> TwoModeChain {
+pub(super) fn two_mode_chain(squared: [[f64; 2]; 2]) -> TwoModeChain {
     let selector = DynIndex::new_dyn(2);
     let site0 = DynIndex::new_dyn(2);
     let site1 = DynIndex::new_dyn(2);

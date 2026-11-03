@@ -119,7 +119,6 @@ fn adaptive_add_projects_original_addends_before_retrying() {
         product_patch(vec![1.0, 0.0], vec![1.0, 0.0]),
         product_patch(vec![0.0, 1.0], vec![0.0, 1.0]),
     ];
-    let contraction = ContractionOptions::default().with_max_bond_dim(1);
     let patching = PatchingOptions {
         cutoff: 0.0,
         allocation: BudgetAllocation::Volume,
@@ -129,16 +128,16 @@ fn adaptive_add_projects_original_addends_before_retrying() {
         sum_engine: SumEngine::Binary,
     };
 
-    let result = add_project_first(contributions, &0, &contraction, &patching).unwrap();
+    let result = add_with_patching(contributions, &0, &patching).unwrap();
 
     assert_eq!(result.len(), 2);
-    assert!(result.iter().all(|patch| patch.max_bond_dim() == 1));
+    assert!(result.values().all(|patch| patch.max_bond_dim() == 1));
     assert!(result
-        .iter()
+        .values()
         .all(|patch| patch.projector().get(&site0).is_some()));
     assert!(
         (result
-            .iter()
+            .values()
             .map(|patch| patch.norm_squared().unwrap())
             .sum::<f64>()
             - 2.0)
