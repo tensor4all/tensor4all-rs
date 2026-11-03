@@ -539,33 +539,20 @@ where
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn add(&self, other: &Self) -> Result<Self> {
-        Self::add_many(&[self, other])
-    }
-
-    /// Sum subdomains with one projector exactly, in one direct-sum pass
-    /// ([`TreeTN::add_many`]).
-    ///
-    /// The N-ary form of [`add`](Self::add), with the same checks for every
-    /// term against `terms[0]`; the result keeps `terms[0]`'s budget metadata.
-    /// Use it instead of an `add` chain, which copies the growing partial sum
-    /// at every step.
-    pub(crate) fn add_many(terms: &[&Self]) -> Result<Self> {
-        let (first, rest) = terms.split_first().ok_or(PartitionedTreeTNError::Empty)?;
-        first.validate_invariants()?;
-        let first_kind = first.scalar_kind()?;
-        for term in rest {
-            term.validate_invariants()?;
-            ensure_same_tree_structure(&first.data, &term.data)?;
-            ensure_same_dtype(first_kind, term.scalar_kind()?)?;
-            if first.projector != term.projector {
-                return Err(PartitionedTreeTNError::ProjectorMismatch);
-            }
+        self.validate_invariants()?;
+        other.validate_invariants()?;
+        ensure_same_tree_structure(&self.data, &other.data)?;
+        ensure_same_dtype(self.scalar_kind()?, other.scalar_kind()?)?;
+        if self.projector != other.projector {
+            return Err(PartitionedTreeTNError::ProjectorMismatch);
         }
 
-        let data: Vec<_> = terms.iter().map(|term| &term.data).collect();
-        let data = TreeTN::add_many(&data).map_err(PartitionedTreeTNError::from)?;
-        ensure_same_tree_structure(&first.data, &data)?;
-        Self::from_masked_data(data, first.projector.clone(), first.budget_squared)
+        let data = self
+            .data
+            .add(&other.data)
+            .map_err(PartitionedTreeTNError::from)?;
+        ensure_same_tree_structure(&self.data, &data)?;
+        Self::from_masked_data(data, self.projector.clone(), self.budget_squared)
     }
 
     /// Truncate this eagerly masked subdomain towards an explicit TreeTN center.

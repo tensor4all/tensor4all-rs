@@ -678,12 +678,14 @@ where
             }
         }
     }
-    // Exact-add the whole group without intermediate truncation (one N-ary
-    // direct sum), then truncate the completed group exactly once. Repeated
+    // Exact-add the whole group without intermediate truncation (strict TreeTN
+    // addition), then truncate the completed group exactly once. Repeated
     // add-and-truncate was hash-order dependent and re-approximated the sum at
     // every contribution; the single post-add truncation caps the group once.
-    let terms: Vec<_> = contributions.iter().collect();
-    let mut probe = SubDomainTreeTN::add_many(&terms)?;
+    let mut probe = first.clone();
+    for contribution in contributions.iter().skip(1) {
+        probe = probe.add(contribution)?;
+    }
     let truncation = truncation_options_from_contract(contract_options);
     probe.truncate(center, truncation)?;
 
@@ -805,14 +807,17 @@ fn add_project_first<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    if contributions.is_empty() {
+    let mut iter = contributions.iter();
+    let Some(first) = iter.next() else {
         return Ok(Vec::new());
-    }
+    };
     // Same collect-group-exact-add-then-truncate-once pattern as the
     // contraction helper: no hash-order-dependent intermediate truncation.
-    let terms: Vec<_> = contributions.iter().collect();
-    let mut probe = SubDomainTreeTN::add_many(&terms)?;
+    let mut probe = first.clone();
     let truncation = truncation_options_from_contract(contract_options);
+    for contribution in iter {
+        probe = probe.add(contribution)?;
+    }
     probe.truncate(center, truncation)?;
 
     let Some(cap) = patching_options.max_bond_dim else {
@@ -1097,20 +1102,20 @@ fn combine_equal_key_subdomains<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    let mut groups: HashMap<Projector, Vec<SubDomainTreeTN<V>>> = HashMap::new();
+    let mut combined: HashMap<Projector, SubDomainTreeTN<V>> = HashMap::new();
     for subdomain in subdomains {
-        groups
-            .entry(subdomain.projector().clone())
-            .or_default()
-            .push(subdomain);
+        let projector = subdomain.projector().clone();
+        match combined.remove(&projector) {
+            Some(existing) => {
+                let summed = existing.add(&subdomain)?;
+                combined.insert(projector, summed);
+            }
+            None => {
+                combined.insert(projector, subdomain);
+            }
+        }
     }
-    groups
-        .into_values()
-        .map(|mut group| match group.len() {
-            1 => group.pop().ok_or(PartitionedTreeTNError::Empty),
-            _ => SubDomainTreeTN::add_many(&group.iter().collect::<Vec<_>>()),
-        })
-        .collect()
+    Ok(combined.into_values().collect())
 }
 
 fn validate_patching_options(options: &PatchingOptions) -> Result<()> {

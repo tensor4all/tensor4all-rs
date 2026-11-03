@@ -2235,9 +2235,10 @@ impl TensorContractionLike for TensorTrain {
         })
     }
 
-    fn direct_sum_many(
-        _operands: &[&Self],
-        _groups: &[Vec<Self::Index>],
+    fn direct_sum(
+        &self,
+        _other: &Self,
+        _pairs: &[(Self::Index, Self::Index)],
     ) -> std::result::Result<DirectSumResult<Self>, Self::Error> {
         Err(TensorTrainError::OperationError {
             message: "TensorTrain does not support direct_sum; use add() instead".to_string(),

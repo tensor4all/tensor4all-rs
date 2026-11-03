@@ -7561,11 +7561,12 @@ impl TensorContractionLike for IdxTensor {
         IdxTensor::conj(self)
     }
 
-    fn direct_sum_many(
-        operands: &[&Self],
-        groups: &[Vec<DynIndex>],
+    fn direct_sum(
+        &self,
+        other: &Self,
+        pairs: &[(DynIndex, DynIndex)],
     ) -> std::result::Result<crate::tensor_like::DirectSumResult<Self>, Self::Error> {
-        let (tensor, new_indices) = crate::direct_sum::direct_sum_many(operands, groups)?;
+        let (tensor, new_indices) = crate::direct_sum::direct_sum(self, other, pairs)?;
         Ok(crate::tensor_like::DirectSumResult {
             tensor,
             new_indices,

@@ -894,7 +894,7 @@ where
             }
         }
 
-        // Exact-add each completed group in one N-ary direct sum, then
+        // Exact-add each completed group with strict TreeTN addition, then
         // truncate the group once (a single contribution is already the
         // per-pair contraction result). This replaces repeated
         // add-and-truncate, which was order dependent and re-approximated the
@@ -914,14 +914,18 @@ where
         );
         let duplicate_options = truncation_options_from_contraction(&options);
         let mut subdomains = Vec::with_capacity(groups.len());
-        for (_, mut contributions) in groups {
-            if contributions.len() == 1 {
-                subdomains.extend(contributions.pop());
-                continue;
+        for (_, contributions) in groups {
+            let mut contributions = contributions.into_iter();
+            let first = contributions.next().ok_or(PartitionedTreeTNError::Empty)?;
+            let mut combined = first;
+            let mut contribution_count = 1usize;
+            for contribution in contributions {
+                combined = combined.add(&contribution)?;
+                contribution_count += 1;
             }
-            let terms: Vec<_> = contributions.iter().collect();
-            let mut combined = SubDomainTreeTN::add_many(&terms)?;
-            combined.truncate(center, duplicate_options)?;
+            if contribution_count > 1 {
+                combined.truncate(center, duplicate_options)?;
+            }
             subdomains.push(combined);
         }
 
@@ -994,9 +998,8 @@ where
 
     /// Sum eager patches in logical patch-key order.
     ///
-    /// The result is one exact N-ary direct sum ([`TreeTN::add_many`]) of all
-    /// patches, so its bond dimensions are the sums of the patches' bond
-    /// dimensions; it never materializes the full tensor densely. Distinct patch keys have stable traversal and
+    /// The result uses strict high-level [`TreeTN::add`] and never materializes
+    /// the full tensor densely. Distinct patch keys have stable traversal and
     /// direct-sum construction order. Patches that share the logical index and
     /// projector key are then ordered by a content digest of their payloads,
     /// computed without materializing them and only for such a tie, so an input
@@ -1024,8 +1027,14 @@ where
             |(_, left), (_, right)| left.patch_order_key().cmp(right.patch_order_key()),
             |(_, patch)| patch.content_digest(),
         );
-        let data: Vec<_> = patches.into_iter().map(|(_, patch)| patch.data()).collect();
-        TreeTN::add_many(&data).map_err(PartitionedTreeTNError::from)
+        let (_, first) = patches.first().ok_or(PartitionedTreeTNError::Empty)?;
+        let mut result = first.data().clone();
+        for (_, patch) in patches.into_iter().skip(1) {
+            result = result
+                .add(patch.data())
+                .map_err(PartitionedTreeTNError::from)?;
+        }
+        Ok(result)
     }
 
     pub(crate) fn validate_contents(&self) -> Result<()> {

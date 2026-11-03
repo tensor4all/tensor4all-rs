@@ -227,11 +227,23 @@ impl TensorContractionLike for DefaultOnlyTensor {
         self.clone()
     }
 
-    fn direct_sum_many(
-        _operands: &[&Self],
-        _groups: &[Vec<DynIndex>],
+    fn direct_sum(
+        &self,
+        other: &Self,
+        pairs: &[(DynIndex, DynIndex)],
     ) -> std::result::Result<DirectSumResult<Self>, Self::Error> {
-        Err(anyhow::anyhow!("DefaultOnlyTensor does not support direct_sum_many").into())
+        let mut new_indices = Vec::with_capacity(pairs.len());
+        for (left, right) in pairs {
+            new_indices.push(
+                <DynIndex as IndexLike>::new_link(left.dim() + right.dim())
+                    .map_err(TensorVectorSpaceError::from)?,
+            );
+        }
+        let tensor = self.outer_product(other)?;
+        Ok(DirectSumResult {
+            tensor,
+            new_indices,
+        })
     }
 
     fn outer_product(&self, other: &Self) -> std::result::Result<Self, Self::Error> {
