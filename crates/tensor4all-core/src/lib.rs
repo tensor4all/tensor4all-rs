@@ -179,7 +179,7 @@ pub mod svd {
 }
 
 // Re-export linear algebra items for top-level access
-pub use defaults::direct_sum::direct_sum;
+pub use defaults::direct_sum::{direct_sum, direct_sum_many};
 pub use defaults::factorize::{
     factorize, factorize_full_rank, factorize_full_rank_in, factorize_full_rank_on_session,
     factorize_in, factorize_on_session,

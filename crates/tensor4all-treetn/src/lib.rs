@@ -114,6 +114,7 @@ pub use treetn::{
     CenterSearchResult,
     EvaluatedScalarKindMismatch,
     EvaluationHint,
+    ExactSum,
     FitOptions,
     // Core type
     GreedyCenterSearch,
@@ -123,6 +124,7 @@ pub use treetn::{
     PartialContractionSpec,
     // Swap
     ScheduledSwapStep,
+    SumEngine,
     SwapOptions,
     SwapSchedule,
     TreeTN,

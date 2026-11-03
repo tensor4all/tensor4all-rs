@@ -23,6 +23,7 @@ mod ops;
 pub mod partial_contraction;
 mod restructure;
 mod site_ops;
+mod sum;
 mod swap;
 mod tensor_like;
 mod transform;
@@ -77,6 +78,7 @@ pub use partial_contraction::{
 };
 
 // Re-export swap types
+pub use sum::{ExactSum, SumEngine};
 pub use swap::{ScheduledSwapStep, SwapOptions, SwapSchedule};
 
 // Re-export general-tree site-fixing operations
