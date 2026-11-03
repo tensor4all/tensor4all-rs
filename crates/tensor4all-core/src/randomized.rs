@@ -4,6 +4,9 @@
 //! and Tropp, SIAM Review 53 (2011), Algorithms 4.4 and 5.1. No upstream source
 //! code was translated. The input is a materialized local tensor; these routines
 //! do not materialize a tensor network.
+//!
+//! Only dense `f64` and `Complex64` inputs are supported. `f32` and `Complex32`
+//! (c32) return [`FactorizeError::UnsupportedStorage`] before consuming RNG state.
 
 use num_complex::Complex64;
 use rand::Rng;
@@ -54,6 +57,7 @@ impl Default for RangeOptions {
 ///
 /// Global truncation defaults are ignored. Threshold-based accuracy needs an
 /// a posteriori estimator and is deliberately unsupported in this first version.
+/// Only dense `f64`/`Complex64` inputs are supported; `f32`/`Complex32` are not.
 ///
 /// # Examples
 /// ```
@@ -368,6 +372,8 @@ fn range<R: Rng + ?Sized>(
 /// Returns Q with these indices and a fresh bond of dimension
 /// `min(rank + options.oversampling, m, n)`. `Q Q†` is a bond projector.
 /// Consumes Gaussian samples directly from `rng`; global QR defaults are ignored.
+/// Only dense `f64` and `Complex64` are supported; `f32` and `Complex32` (c32)
+/// return [`FactorizeError::UnsupportedStorage`] before advancing the RNG.
 ///
 /// # Errors
 /// Returns [`FactorizeError`] for zero rank, invalid/duplicate indices, size
@@ -548,6 +554,7 @@ pub(crate) fn svd_result<R: Rng + ?Sized>(
 /// Returns directly contractible U, S, V† with `min(max_bond_dim, m, n)`
 /// triplets. The projected singular values do not certify the full-input error.
 /// Uses the supplied RNG directly and ignores global truncation defaults.
+/// Supports dense `f64`/`Complex64`; `f32`/`Complex32` (c32) are unsupported.
 ///
 /// # Errors
 /// Returns [`FactorizeError`] for invalid rank/indices, size overflow,

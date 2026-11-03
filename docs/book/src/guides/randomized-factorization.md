@@ -4,6 +4,8 @@ Use `tensor4all_core::randomized_svd` when a dense local tensor needs only a
 small number of singular triplets. `randomized_range` returns an orthonormal
 basis Q instead, so a caller can explicitly insert the bond projector Q Q†.
 Both support `f64` and `Complex64` and consume a caller-owned RNG directly.
+`f32` and `Complex32` (c32) are unsupported, including through Fit and Zipup;
+they return `FactorizeError::UnsupportedStorage` rather than converting types.
 
 The example below is also a runnable TreeTN example and a checked doctest.
 It reconstructs an exactly rank-one matrix and verifies a known MPO product.

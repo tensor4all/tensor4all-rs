@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::tensor::RandomScalar;
@@ -150,19 +150,124 @@ fn decaying_spectrum_matches_deterministic_error() {
     )
     .unwrap();
     let deterministic = factorize(&a, &[i], &FactorizeOptions::svd().with_max_bond_dim(5)).unwrap();
-    let error = |r: tensor4all_core::FactorizeResult<IdxTensor>| {
-        a.sub(&r.left.contract_pair(&r.right).unwrap())
-            .unwrap()
-            .norm()
-            .unwrap()
-    };
-    let optimal = error(deterministic);
-    let approximate = error(random);
+    let optimal = factorization_error(&a, deterministic);
+    let approximate = factorization_error(&a, random);
+    // The expected RMS bound is 1.0086405662 times optimal for p=8, q=1.
+    // See docs/design/randomized-factorization.md. Keep the existing 1.02
+    // fixed-seed regression gate; it is not a guarantee for every draw.
+    let spectrum: Vec<_> = (0..24).map(|p| 0.6_f64.powi(p)).collect();
+    let expected_squared = expected_rank_error_squared(&spectrum, 5, 8, 1);
+    assert!(expected_squared.sqrt() < 1.02 * optimal);
     assert!(approximate >= optimal * (1. - 1e-12));
     assert!(
         approximate <= 1.02 * optimal,
         "RSVD error {approximate}, optimal {optimal}"
     );
+}
+
+fn factorization_error(a: &IdxTensor, factors: tensor4all_core::FactorizeResult<IdxTensor>) -> f64 {
+    a.sub(&factors.left.contract_pair(&factors.right).unwrap())
+        .unwrap()
+        .norm()
+        .unwrap()
+}
+
+// Exact-arithmetic real Gaussian bound, including truncation to the requested
+// rank. Split the p extra columns evenly between intermediate rank and
+// remaining oversampling, without choosing the split from observed errors.
+fn expected_rank_error_squared(spectrum: &[f64], rank: usize, p: usize, q: i32) -> f64 {
+    let intermediate_rank = rank + p / 2;
+    let remaining_p = rank + p - intermediate_rank;
+    let optimal_squared: f64 = spectrum[rank..].iter().map(|s| s * s).sum();
+    let range_tail: f64 = spectrum[intermediate_rank..].iter().map(|s| s * s).sum();
+    let powered_tail: f64 = spectrum[intermediate_rank..]
+        .iter()
+        .map(|s| s.powi(4 * q + 2))
+        .sum();
+    let inverse_head: f64 = spectrum[..intermediate_rank]
+        .iter()
+        .map(|s| s.powi(-4 * q))
+        .sum();
+    optimal_squared + range_tail + powered_tail * inverse_head / (remaining_p - 1) as f64
+}
+
+#[test]
+fn slow_and_fast_spectra_follow_dense_svd_rank_error_curves() {
+    use tensor4all_core::qr::{qr_with, QrOptions};
+    const N: usize = 32;
+    let i = DynIndex::new_dyn(N);
+    let j = DynIndex::new_dyn(N);
+    let mut fixture_rng = ChaCha8Rng::seed_from_u64(1108);
+    let mut rotation = |site: &DynIndex| {
+        let sample =
+            IdxTensor::random::<f64, _>(&mut fixture_rng, vec![site.clone(), DynIndex::new_dyn(N)])
+                .unwrap();
+        qr_with::<f64>(
+            &sample,
+            std::slice::from_ref(site),
+            &QrOptions::new().with_rtol(0.),
+        )
+        .unwrap()
+        .0
+    };
+    let u = rotation(&i);
+    let v = rotation(&j);
+    for decay in [0.6_f64, 0.95] {
+        let spectrum: Vec<_> = (0..N).map(|p| decay.powi(p as i32)).collect();
+        let mut data = vec![0.; N * N];
+        for (p, &s) in spectrum.iter().enumerate() {
+            data[p + N * p] = s;
+        }
+        let s = IdxTensor::from_dense(vec![u.indices()[1].clone(), v.indices()[1].clone()], data)
+            .unwrap();
+        let a = u
+            .contract_pair(&s)
+            .unwrap()
+            .contract_pair(&v.conj())
+            .unwrap();
+        for canonical in [Canonical::Left, Canonical::Right] {
+            let mut previous_errors = [f64::INFINITY; 8];
+            for rank in [2, 5, 9] {
+                let deterministic = factorize(
+                    &a,
+                    std::slice::from_ref(&i),
+                    &FactorizeOptions::svd()
+                        .with_svd_policy(SvdTruncationPolicy::new(0.))
+                        .with_canonical(canonical)
+                        .with_max_bond_dim(rank),
+                )
+                .unwrap();
+                let optimal = factorization_error(&a, deterministic);
+                let known_tail: f64 = spectrum[rank..].iter().map(|s| s * s).sum();
+                assert!((optimal * optimal - known_tail).abs() < 1e-12 * known_tail);
+                let mut squared_errors = 0.;
+                for (seed, previous) in previous_errors.iter_mut().enumerate() {
+                    let mut rng = ChaCha8Rng::seed_from_u64(seed as u64);
+                    let random = factorize_with_rng(
+                        &a,
+                        std::slice::from_ref(&i),
+                        &FactorizeOptions::rsvd(rank).with_canonical(canonical),
+                        &mut rng,
+                    )
+                    .unwrap();
+                    assert_eq!(random.rank, rank);
+                    let error = factorization_error(&a, random);
+                    assert!(error >= optimal * (1. - 1e-12));
+                    assert!(error < *previous, "decay={decay}, rank={rank}, seed={seed}");
+                    *previous = error;
+                    squared_errors += error * error;
+                }
+                // A fixed ensemble regression against an expectation bound;
+                // it does not claim a probability guarantee for these seeds.
+                let mean_squared = squared_errors / previous_errors.len() as f64;
+                let bound = expected_rank_error_squared(&spectrum, rank, 8, 1);
+                assert!(
+                    mean_squared <= bound,
+                    "decay={decay}, rank={rank}, canonical={canonical:?}, mean squared={mean_squared}, bound={bound}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -453,6 +558,7 @@ fn unsupported_storage_and_algorithm_options_leave_rng_untouched() {
     let j = DynIndex::new_dyn(2);
     let inputs = [
         IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1_f32, 0., 0., 1.]).unwrap(),
+        IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![Complex32::new(1., 0.); 4]).unwrap(),
         IdxTensor::from_diag(vec![i.clone(), j.clone()], vec![1_f64, 2.]).unwrap(),
     ];
     let mut rng = ChaCha8Rng::seed_from_u64(17);

@@ -26,7 +26,7 @@ Indices, dynamic-rank tensors, contraction, factorization. Most other crates re-
   - `FactorizeOptions::rsvd(rank)` / `factorize_with_rng(..., rng)` — fixed-rank
     dense RSVD; explicit SVD threshold policies return `UnsupportedTruncationPolicy`.
   - `randomized_range` / `randomized_svd` — caller-RNG Gaussian basis/SVD for
-    `f64` and `Complex64`. See the [randomized factorization guide](https://tensor4all.org/tensor4all-rs/guides/randomized-factorization.html).
+    `f64` and `Complex64`; `f32`/`Complex32` are unsupported. See the [randomized factorization guide](https://tensor4all.org/tensor4all-rs/guides/randomized-factorization.html).
 
 ## tensor4all-simplett — lightweight TT/MPS
 

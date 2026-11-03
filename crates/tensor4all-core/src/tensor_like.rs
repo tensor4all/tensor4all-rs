@@ -136,7 +136,8 @@ pub enum FactorizeAlg {
     /// Singular Value Decomposition.
     #[default]
     SVD,
-    /// Fixed-rank randomized SVD; requires a positive rank cap.
+    /// Fixed-rank randomized SVD; requires a positive rank cap and dense
+    /// `f64`/`Complex64`. `f32`/`Complex32` are unsupported.
     RSVD,
     /// QR decomposition.
     QR,
@@ -282,6 +283,7 @@ impl FactorizeOptions {
     ///
     /// `max_bond_dim` must be positive. Global truncation defaults are ignored;
     /// an explicit `svd_policy` or `qr_rtol` is rejected.
+    /// Only dense `f64`/`Complex64` inputs are supported, not `f32`/`Complex32`.
     ///
     /// # Examples
     /// ```

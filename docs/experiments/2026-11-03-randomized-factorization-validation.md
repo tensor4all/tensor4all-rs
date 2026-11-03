@@ -1,11 +1,42 @@
 # Local validation
 
-The final branch incorporates `origin/main` at `67583479`, including #1115.
+The final branch incorporates `origin/main` at `635f9a8e`, including #1115
+and the f32/Complex32 direct-sum support in #1117. RSVD's separate scalar
+restriction is unchanged and now explicitly documented and tested for both
+unsupported 32-bit types.
 Benchmark manifests pin the measured commits separately; both remain ancestors
 of the branch. Synchronization does not change the RSVD algorithm or benchmark
 protocols. This document records local checks; hosted checks are reported on
 [PR #1116](https://github.com/tensor4all/tensor4all-rs/pull/1116). No GPU execution
 is included in the local evidence.
+
+## Review revision checks
+
+The review adds a rotated-spectrum rank/error regression with both decay
+ratios `0.6` and `0.95`, ranks `2, 5, 9`, both canonical directions and seeds
+`0..8`. All 96 randomized decompositions are checked against dense SVD
+references, the known spectral tails, rank monotonicity, and the derived
+expected squared-error reference. The original `1.02` regression threshold
+is unchanged. The derivation is in the
+[design note](../design/randomized-factorization.md#expected-error-used-by-the-numerical-regression).
+
+- `cargo test --locked -p tensor4all-core randomized_factorization`:
+  18 tests passed, including explicit f32/Complex32 rejection.
+- `cargo test --locked -p tensor4all-treetn randomized_factorization`:
+  seven tests passed.
+- Core and TreeTN `cargo clippy --locked --all-targets` with the repository's
+  warnings/error-doc/panic-doc gates passed.
+- The `randomized` and `rsvd` core doctest filters passed ten examples.
+- The new rank/error curve test also passed with `cargo test --locked
+  --release -p tensor4all-core slow_and_fast_spectra_follow_dense_svd_rank_error_curves`.
+
+The benchmark raw data is retained on the separate evidence branch, with
+measurement and protocol files verified byte-for-byte against the original
+snapshot. This PR retains the harness, summary and validation conclusions.
+The previous implementation head `b3bc9a24` passed all hosted checks, including
+macOS Accelerate; CI is rerun for the review revisions before merge.
+
+## Earlier implementation checks
 
 Commands below use the existing shared Cargo target via `CARGO_TARGET_DIR`.
 Ordinary checks use the default development/test profiles. The release check
@@ -75,8 +106,10 @@ Checks on that combined tree:
 - `cargo test --locked --doc -p tensor4all-partitionedtreetn` passed 121 examples.
 
 The trial merge was discarded after validation. Subsequently #1115 was merged
-into main at `67583479a6c67441fd56beeaecb530bb3a0699a8`, and this branch merged
-that main revision without conflicts. The actual combined production tree is
-byte-identical to the trial tree: only this validation document, the worklog,
-and the relocated panic baseline differ. The compatibility results therefore
-also cover the final integration. Hosted CI is rerun on the synchronized head.
+into main at `67583479a6c67441fd56beeaecb530bb3a0699a8`, and integration head
+`b3bc9a24` merged that main revision without conflicts. At that integration
+head, the combined production tree was byte-identical to the trial tree: only
+the validation document, worklog and relocated panic baseline differed.
+Those compatibility results cover the #1115 integration; the subsequent #1117
+synchronization and review checks are described above. Hosted CI is rerun on
+the synchronized review head.

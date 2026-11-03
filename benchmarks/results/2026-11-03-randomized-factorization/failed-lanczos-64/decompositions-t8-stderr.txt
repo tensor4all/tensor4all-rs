@@ -1,7 +1,0 @@
-Error: Lanczos reference failed:
-thread 'main' (243874) panicked at <cargo-registry>/t4a-faer-0.28.2/src/./operator/svd/mod.rs:144:2:
-Assertion failed at <cargo-registry>/t4a-faer-0.28.2/src/./operator/svd/mod.rs:144:2
-Assertion failed: max_dim < Ord :: min(m, n)
-- max_dim = 64
-- Ord :: min(m, n) = 64
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

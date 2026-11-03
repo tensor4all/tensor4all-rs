@@ -51,8 +51,8 @@ reference executable, adding no library dependency. Set `T4A_LANCZOS_REFERENCE`
 to the printed binary, pin Rayon/BLAS thread variables and CPU affinity as above,
 then run `benchmark_randomized_factorization --decompositions`. Its
 `--contractions` mode compares Fit/Zipup against small bounded dense oracles.
-The [declared protocol](results/2026-11-03-randomized-factorization/protocol.md)
-records the fixture, repetitions, accuracy gates and limits of these diagnostics.
+See the [experiment summary](../docs/experiments/2026-11-03-randomized-factorization.md)
+for results, archived protocols, and the limits of these diagnostics.
 
 #### Merge-refine schedule (#752)
 

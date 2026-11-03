@@ -16,6 +16,14 @@
   workspace instead of adding a library dependency.
 - Retire simplett's unimplemented RSVD option instead of adding another
   implementation to a retiring crate.
+- Record the enum/option changes as breaking Rust API for the next minor
+  release in the changelog. Explicitly document the `f32`/`Complex32` exclusion.
+- Preserve the existing `1.02` regression threshold. A derived Gaussian
+  expected squared-error bound gives an RMS factor `1.0086405662` on its
+  fixture; this does not guarantee an individual draw. Add rotated slow/fast
+  spectra at several ranks and compare with dense SVD in both gauges.
+- Separate raw benchmark evidence into its own branch. Keep the harness,
+  experiment summary, validation conclusions and links in this implementation.
 
 ## Verification conclusions and constraints
 
@@ -35,10 +43,11 @@
   enum coverage remains. The C ABI is unchanged.
 - Header regeneration matches the checked-in header, which compiles as C11
   and C++17. The mdBook tests and API inventory also pass after synchronization.
-  No GPU or hosted CI validation is claimed.
-  [Validation details](../../benchmarks/results/2026-11-03-randomized-factorization/validation.md)
+  Full hosted CI, including macOS Accelerate, passed at `b3bc9a24`; review
+  revisions require a new CI run. No GPU execution validation is claimed.
+  [Validation details](../experiments/2026-11-03-randomized-factorization-validation.md)
   record the checks and local tooling limitations.
-- [Diagnostic results and declared protocols](../../benchmarks/results/2026-11-03-randomized-factorization/README.md)
+- [Diagnostic results and declared protocols](../experiments/2026-11-03-randomized-factorization.md)
   retain the baseline, Lanczos comparison, and complete experiment evidence.
   The final grids contain 72 decomposition and 96 contraction samples, all
   within their predeclared accuracy gates. GEMM/QR accounts for 50.9–78.0% of
