@@ -3,7 +3,8 @@
 Follow-up to #1087 / #1084. #1087 removed `DynIndex` allocation ids from the
 patch and contribution order, leaving three key components: the patch index
 signature, the patch's own projector coordinates in logical labels, and (then
-missing) a content tiebreak. This record covers the third component.
+missing) a content tiebreak. This record covers the third component, including
+the follow-up that stopped paying for it on every patch construction.
 
 ## Decisions
 
@@ -32,14 +33,20 @@ missing) a content tiebreak. This record covers the third component.
   tangent, so the digest can only be as strong as that. A gradient accumulated
   through `SubDomainTreeTN::data()` after construction makes the stored key
   stale, which affects ordering reproducibility only.
-- The third key component is per patch: each node tensor's digest folded in
-  sorted node-name order, preceded by that node's physical leg roles (which axis
-  is a site index, which is an internal bond, with the bond's canonical labels
-  and dimension, never its id). Without the leg roles, two networks over the same
-  site indices whose node tensors carry the same buffer under a different leg
-  order would share a key while being different networks. The key is built by one
-  helper and refreshed after `SubDomainTreeTN::truncate`, which rewrites payloads
-  in place.
+- The digest is per patch: each node tensor's digest folded in sorted node-name
+  order, preceded by that node's physical leg roles (which axis is a site index,
+  which is an internal bond, with the bond's canonical labels and dimension, never
+  its id). Without the leg roles, two networks over the same site indices whose
+  node tensors carry the same buffer under a different leg order would share a
+  digest while being different networks.
+- The digest is **not** part of the patch metadata key, and it is not computed at
+  construction. #1100 put it in the key, which made every patch construction pay a
+  linear pass over a payload even though only a metadata tie needs it. Now the
+  metadata key keeps its three components and one helper
+  (`sort_by_patch_order`) sorts on that key, then re-sorts each run of two or more
+  equal keys by content digest with `sort_by_cached_key`. A metadata tie group of
+  one item is left alone, so an input without ties never computes a digest.
+  Nothing is cached, so a truncated patch cannot carry a stale digest.
 - Rejected: computing the digest at sort time (the comparator would be
   `O(payload)` per comparison and cannot cache without interior mutability);
   recording storage kind / dtype / dims as a separate component for the `None`
@@ -64,14 +71,19 @@ missing) a content tiebreak. This record covers the third component.
   equal primals with different graphs tie, as documented.
 - Patch keys separate two patches whose index signature and projector
   coordinates are equal, and the order does not depend on construction order. A
-  swapped leg order over identical buffers changes the key. Truncation refreshes
-  the cached component.
+  swapped leg order over identical buffers changes the digest. An input whose
+  metadata keys are distinct computes no digest at all (counted through a
+  test-only counter), and the digest always describes the current payloads because
+  it is never cached.
 - Cost, measured on one host (Apple M5 Max, 18 CPUs, rustc 1.96.0, release
   profile, `RAYON/OPENBLAS/OMP/MKL/VECLIB` thread variables all 1,
-  `--test-threads=1`, one timing loop per shape, not a benchmark): the digest
-  runs at about 5.6 GB/s (2 M `f64` values in 2.9 ms). `SubDomainTreeTN::new`
-  grows by about 3 percent at 32 payload values, 27 percent at 8 k values and 43
-  percent at 2 M values. This is one linear pass over resident bytes, paid once
-  per patch construction.
+  `--test-threads=1`, one timing loop per shape, not a benchmark). The digest
+  itself runs at about 5.6 GB/s: 11 us for 8 k `f64` values, 2.77 ms for 2 M.
+  `SubDomainTreeTN::new` for a 2 M-value patch: 6.60 ms with the digest in the key
+  (#1100) versus 3.78 ms with the tie-only sort, i.e. back to the pre-#1100
+  construction cost; 38.8 us versus 27.9 us at 8 k values, and unchanged at 32
+  values. A tie group pays one digest per tied patch, which the unit test
+  `sort_by_patch_order_computes_digests_for_tied_patches_only` pins at exactly two
+  for a two-patch tie.
 - Unverified: the `None` path for a backend-resident payload has no CPU test (a
   CUDA build is needed); the CPU-reachable `None` paths are covered.

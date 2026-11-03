@@ -8,6 +8,7 @@ use super::{
     ReconstructionOptions, ReconstructionReport, ReconstructionTarget, ReconstructionTolerance,
     Region,
 };
+use crate::subdomain_tree_tn::sort_by_patch_order;
 use crate::{
     DynIndex, PartitionedTreeTNError, PatchSplitStrategy, Projector, Result, SubDomainTreeTN,
 };
@@ -257,12 +258,16 @@ fn reduce<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
     let mut current = Vec::with_capacity(originals.len());
     let mut error = 0.0;
     let mut ordered: Vec<_> = originals.iter().collect();
-    ordered.sort_by(|a, b| {
-        b.projector()
-            .len()
-            .cmp(&a.projector().len())
-            .then_with(|| a.patch_order_key().cmp(b.patch_order_key()))
-    });
+    sort_by_patch_order(
+        &mut ordered,
+        |a, b| {
+            b.projector()
+                .len()
+                .cmp(&a.projector().len())
+                .then_with(|| a.patch_order_key().cmp(b.patch_order_key()))
+        },
+        |patch| patch.content_digest(),
+    );
     for source in ordered {
         // INVARIANT: source has already been restricted to this region. Forget
         // the finer input support only in metadata; the data remains masked.

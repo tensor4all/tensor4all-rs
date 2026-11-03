@@ -8,8 +8,8 @@ use crate::error::{PartitionedTreeTNError, Result};
 use crate::projector::{canonical_index_cmp, Projector};
 use crate::subdomain_tree_tn::{
     contraction_output_site_indices, ensure_center, ensure_same_dtype, ensure_same_topology,
-    ensure_same_tree_structure, validate_contraction_options, validate_contraction_site_assignment,
-    validate_truncation_options, SubDomainTreeTN,
+    ensure_same_tree_structure, sort_by_patch_order, validate_contraction_options,
+    validate_contraction_site_assignment, validate_truncation_options, SubDomainTreeTN,
 };
 use tensor4all_core::DynIndex;
 use tensor4all_treetn::{contraction::ContractionOptions, TreeTN, TruncationOptions};
@@ -879,7 +879,7 @@ where
         nonempty_templates(self, other)?;
 
         // Group the pairwise contributions by output projector. Pairs come in
-        // logical patch-key order, which ends with each patch's content digest,
+        // logical patch-key order, with content digests breaking metadata ties,
         // so the order is independent of the input HashMap iteration order.
         let mut groups: Vec<(Projector, Vec<SubDomainTreeTN<V>>)> = Vec::new();
         let mut positions: HashMap<Projector, usize> = HashMap::new();
@@ -899,11 +899,19 @@ where
         // per-pair contraction result). This replaces repeated
         // add-and-truncate, which was order dependent and re-approximated the
         // sum at every contribution.
-        groups.sort_by(|(_, left), (_, right)| {
-            left.first()
-                .map(SubDomainTreeTN::patch_order_key)
-                .cmp(&right.first().map(SubDomainTreeTN::patch_order_key))
-        });
+        sort_by_patch_order(
+            &mut groups,
+            |(_, left), (_, right)| {
+                left.first()
+                    .map(SubDomainTreeTN::patch_order_key)
+                    .cmp(&right.first().map(SubDomainTreeTN::patch_order_key))
+            },
+            |(_, contributions)| {
+                contributions
+                    .first()
+                    .and_then(SubDomainTreeTN::content_digest)
+            },
+        );
         let duplicate_options = truncation_options_from_contraction(&options);
         let mut subdomains = Vec::with_capacity(groups.len());
         for (_, contributions) in groups {
@@ -952,8 +960,16 @@ where
 
         let mut left_patches: Vec<_> = self.data.values().collect();
         let mut right_patches: Vec<_> = other.data.values().collect();
-        left_patches.sort_by(|a, b| a.patch_order_key().cmp(b.patch_order_key()));
-        right_patches.sort_by(|a, b| a.patch_order_key().cmp(b.patch_order_key()));
+        sort_by_patch_order(
+            &mut left_patches,
+            |a, b| a.patch_order_key().cmp(b.patch_order_key()),
+            |patch| patch.content_digest(),
+        );
+        sort_by_patch_order(
+            &mut right_patches,
+            |a, b| a.patch_order_key().cmp(b.patch_order_key()),
+            |patch| patch.content_digest(),
+        );
         let mut contracted = Vec::new();
         for left in left_patches {
             for &right in &right_patches {
@@ -984,14 +1000,15 @@ where
     ///
     /// The result uses strict high-level [`TreeTN::add`] and never materializes
     /// the full tensor densely. Distinct patch keys have stable traversal and
-    /// direct-sum construction order. The patch key ends with a content digest
-    /// computed from the patch payloads without materializing them, so patches
-    /// that share logical index and projector keys are ordered by content.
-    /// Patches whose keys are equal in every component have unspecified
-    /// relative order. That covers numerically identical payloads (any order
-    /// gives the same bits), a payload that could not be fingerprinted without
-    /// materializing it, and a 64-bit digest collision; the last two leave
-    /// reproducibility to the structural key components.
+    /// direct-sum construction order. Patches that share the logical index and
+    /// projector key are then ordered by a content digest of their payloads,
+    /// computed without materializing them and only for such a tie, so an input
+    /// without metadata ties pays no linear payload pass. Patches that also tie
+    /// on content have unspecified relative order: either their payloads are
+    /// numerically identical, so any order gives the same bits, or a payload
+    /// could not be fingerprinted without materializing it, or two payloads
+    /// collided in the 64-bit digest; the last two leave reproducibility to the
+    /// structural key components.
     ///
     /// # Errors
     ///
@@ -1005,8 +1022,11 @@ where
         }
 
         let mut patches: Vec<_> = self.data.iter().collect();
-        patches
-            .sort_by(|(_, left), (_, right)| left.patch_order_key().cmp(right.patch_order_key()));
+        sort_by_patch_order(
+            &mut patches,
+            |(_, left), (_, right)| left.patch_order_key().cmp(right.patch_order_key()),
+            |(_, patch)| patch.content_digest(),
+        );
         let (_, first) = patches.first().ok_or(PartitionedTreeTNError::Empty)?;
         let mut result = first.data().clone();
         for (_, patch) in patches.into_iter().skip(1) {
