@@ -11,8 +11,8 @@ Both deterministic checks are delta-scoped on purpose. #566 records existing
 violations of each; a repo-wide gate would fail on the backlog, so these stop
 new violations from landing while the backlog burns down separately.
 
-The #917 file-size experiment is separately opt-in with ``--file-growth`` and
-``--dry-run``. It produces advisory warnings and is not enabled in hosted CI.
+The #917 file-size check is selected with ``--file-growth`` and ``--dry-run``.
+Hosted CI enables it; it produces advisory warnings only.
 
 Local API key loading uses the ``python-dotenv`` library. Install dev helpers with:
 

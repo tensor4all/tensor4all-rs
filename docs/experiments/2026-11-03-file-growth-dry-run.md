@@ -87,7 +87,9 @@ All thresholds remain provisional.
 The maintainer's [review](https://github.com/tensor4all/tensor4all-rs/pull/1103#issuecomment-6603046689)
 requested the configurable floor, with a default around 50 lines, while retaining
 the first-crossing reminder and whole-file counting. The new default implements
-that choice. The 1000/2000 size thresholds remain provisional, no PR-body section
-is enforced, and automatic comments remain disabled. The 5/20 warning frequency
+that choice. At the prototype merge, the size thresholds were provisional,
+no PR-body section was enforced and automatic growth comments were disabled.
+The [rollout follow-up](2026-11-03-file-growth-rollout.md) records a second sample
+and the decision to enable the existing reminders. The 5/20 warning frequency
 is not an empirical false-positive rate or a claim that splitting those files
 is necessary.
