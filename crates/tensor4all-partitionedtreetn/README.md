@@ -136,6 +136,15 @@ See "Patch L2 estimators" in
   site/edge construction and dense-axis order nondeterminism is resolved.
   `site_space` still has unspecified set iteration order, and cached generic
   evaluation retains the distinct planner limitation above.
+- `PartitionedTreeTN::contract` and `to_treetn` order patches and contributions
+  by the patch index signature, the patch's projectors in logical labels, and a
+  content digest of the patch payloads (leg roles, canonical bond labels, and
+  payload bit patterns). A pair that still compares equal is numerically
+  identical, so any order gives the same bits, or it compared equal through a
+  64-bit digest collision or a payload that cannot be fingerprinted without
+  materializing it (a backend-resident value), and then only reproducibility
+  across processes is left to the structural components. Two-process bitwise
+  equality of `contract` is tested in `tests/patch_order_determinism.rs`.
 
 The patch queue and pivot recycling derive from TCIAlgorithms.jl (MIT) through
 the chain driver of the retired `tensor4all-partitionedtt` crate (removed in

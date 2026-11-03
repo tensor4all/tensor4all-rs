@@ -465,6 +465,31 @@ pub(crate) fn col_major_strides(dims: &[usize]) -> Result<Vec<isize>> {
     Ok(strides)
 }
 
+/// Whether `strides` are already the column-major strides of `dims`.
+///
+/// Same answer as comparing against [`col_major_strides`], without the temporary
+/// stride vector: the contiguous-view accessors run on every borrowed payload
+/// read, and a temporary allocation there defeats the point of a borrow.
+fn has_col_major_strides(dims: &[usize], strides: &[isize]) -> bool {
+    if dims.len() != strides.len() {
+        return false;
+    }
+    let mut expected = 1isize;
+    for (&dim, &stride) in dims.iter().zip(strides) {
+        if stride != expected {
+            return false;
+        }
+        let Ok(dim) = isize::try_from(dim) else {
+            return false;
+        };
+        let Some(next) = expected.checked_mul(dim) else {
+            return false;
+        };
+        expected = next;
+    }
+    true
+}
+
 fn validate_canonical_axis_classes(axis_classes: &[usize]) -> Result<()> {
     let mut next_class = 0usize;
     for &class_id in axis_classes {
@@ -892,9 +917,7 @@ impl<T> StructuredStorage<T> {
     /// assert_eq!(d.dense_col_major_view_if_contiguous(), None);
     /// ```
     pub fn dense_col_major_view_if_contiguous(&self) -> Option<&[T]> {
-        if self.is_dense()
-            && matches!(col_major_strides(&self.payload_dims), Ok(strides) if strides == self.strides)
-        {
+        if self.is_dense() && has_col_major_strides(&self.payload_dims, &self.strides) {
             Some(&self.data)
         } else {
             None
@@ -904,7 +927,7 @@ impl<T> StructuredStorage<T> {
     /// Returns a borrowed compact-payload view when the payload is already
     /// stored contiguously in column-major order.
     pub fn payload_col_major_view_if_contiguous(&self) -> Option<&[T]> {
-        if matches!(col_major_strides(&self.payload_dims), Ok(strides) if strides == self.strides) {
+        if has_col_major_strides(&self.payload_dims, &self.strides) {
             Some(&self.data)
         } else {
             None
@@ -937,7 +960,7 @@ impl<T: Clone> StructuredStorage<T> {
         if payload_len == 0 {
             return Vec::new();
         }
-        if matches!(col_major_strides(&self.payload_dims), Ok(strides) if strides == self.strides) {
+        if has_col_major_strides(&self.payload_dims, &self.strides) {
             return self.data.clone();
         }
 

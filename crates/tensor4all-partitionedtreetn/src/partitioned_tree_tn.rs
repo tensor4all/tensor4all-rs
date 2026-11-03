@@ -879,8 +879,8 @@ where
         nonempty_templates(self, other)?;
 
         // Group the pairwise contributions by output projector. Pairs come in
-        // logical patch-key order, independent of the input HashMap iteration
-        // order except when patch keys compare equal.
+        // logical patch-key order, which ends with each patch's content digest,
+        // so the order is independent of the input HashMap iteration order.
         let mut groups: Vec<(Projector, Vec<SubDomainTreeTN<V>>)> = Vec::new();
         let mut positions: HashMap<Projector, usize> = HashMap::new();
         for (_, _, contracted) in self.contract_pairs(other, center, &options, wanted)? {
@@ -984,10 +984,14 @@ where
     ///
     /// The result uses strict high-level [`TreeTN::add`] and never materializes
     /// the full tensor densely. Distinct patch keys have stable traversal and
-    /// direct-sum construction order. Patches with equal
-    /// logical index and projector keys have unspecified relative order, even
-    /// when their contents differ. A content digest requires a non-materializing
-    /// storage accessor.
+    /// direct-sum construction order. The patch key ends with a content digest
+    /// computed from the patch payloads without materializing them, so patches
+    /// that share logical index and projector keys are ordered by content.
+    /// Patches whose keys are equal in every component have unspecified
+    /// relative order. That covers numerically identical payloads (any order
+    /// gives the same bits), a payload that could not be fingerprinted without
+    /// materializing it, and a 64-bit digest collision; the last two leave
+    /// reproducibility to the structural key components.
     ///
     /// # Errors
     ///
