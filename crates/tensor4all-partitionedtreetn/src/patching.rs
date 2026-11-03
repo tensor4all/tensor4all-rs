@@ -18,7 +18,7 @@ use crate::error::{PartitionedTreeTNError, Result};
 use crate::partitioned_tree_tn::PartitionedTreeTN;
 use crate::projector::Projector;
 use crate::subdomain_tree_tn::{
-    ensure_center, validate_contraction_options, ScalarKind, SubDomainTreeTN,
+    ensure_center, sort_by_patch_order, validate_contraction_options, ScalarKind, SubDomainTreeTN,
 };
 use tensor4all_core::{validate_svd_truncation_options, SvdTruncationPolicy};
 use tensor4all_treetn::{contraction::ContractionOptions, TruncationOptions};
@@ -598,11 +598,19 @@ where
     }
 
     let mut grouped: Vec<_> = groups.into_iter().collect();
-    grouped.sort_by(|(_, (_, left)), (_, (_, right))| {
-        left.first()
-            .map(SubDomainTreeTN::patch_order_key)
-            .cmp(&right.first().map(SubDomainTreeTN::patch_order_key))
-    });
+    sort_by_patch_order(
+        &mut grouped,
+        |(_, (_, left)), (_, (_, right))| {
+            left.first()
+                .map(SubDomainTreeTN::patch_order_key)
+                .cmp(&right.first().map(SubDomainTreeTN::patch_order_key))
+        },
+        |(_, (_, contributions))| {
+            contributions
+                .first()
+                .and_then(SubDomainTreeTN::content_digest)
+        },
+    );
     let mut subdomains = Vec::new();
     for (_, (pairs, contributions)) in grouped {
         subdomains.extend(contract_group_project_first(
@@ -1253,7 +1261,11 @@ where
 {
     let mut stats = Vec::with_capacity(partitioned.len());
     let mut patches: Vec<_> = partitioned.values().collect();
-    patches.sort_by(|left, right| left.patch_order_key().cmp(right.patch_order_key()));
+    sort_by_patch_order(
+        &mut patches,
+        |left, right| left.patch_order_key().cmp(right.patch_order_key()),
+        |patch| patch.content_digest(),
+    );
     for subdomain in patches {
         let volume = subdomain_volume(subdomain)?;
         let norm_squared = subdomain.norm_squared()?;

@@ -1,5 +1,6 @@
 //! Eagerly projected TreeTN subdomains.
 
+use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -55,19 +56,21 @@ where
     order_key: PatchOrderKey<V>,
 }
 
-// This type cannot contain a DynIndex or its allocation ID.
-//
-// The fourth component is the patch content digest, or `None` when a node
-// tensor's payload cannot be fingerprinted without materializing it (a
-// backend-resident or deferred payload). `None` sorts before every digest, so
-// an unavailable digest still has a deterministic position; only
-// `None`-against-`None` falls back to the two structural components above.
+// This type cannot contain a DynIndex or its allocation ID. Content is not part
+// of it: the digest is only needed where two keys tie, and it is computed there.
 pub(crate) type PatchOrderKey<V> = (
     Vec<(V, usize, Vec<String>, usize, i64)>,
     Vec<(V, usize)>,
     Vec<(V, usize, usize)>,
-    Option<u64>,
 );
+
+#[cfg(test)]
+thread_local! {
+    /// Content digests computed for ordering, so a test can assert that an input
+    /// without metadata ties computes none.
+    pub(crate) static CONTENT_DIGEST_CALLS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
 
 /// Fixed seed of the patch digest fold.
 ///
@@ -125,6 +128,47 @@ where
     Some(state)
 }
 
+/// Sort patches by their metadata key, then re-order what ties on it by content.
+///
+/// The first pass sorts on the metadata comparator alone. Every run of two or
+/// more items that compare equal is then re-sorted by content digest, so a
+/// metadata tie is broken by payload content while a run of one item is left
+/// alone.
+///
+/// The digest is a linear pass over a patch's payload, so this is what keeps
+/// ordering free when nothing ties: an input without metadata ties never calls
+/// `digest`. Items that also compare equal on content keep their relative order,
+/// and that last case is numerically inert for a sum.
+pub(crate) fn sort_by_patch_order<T>(
+    items: &mut Vec<T>,
+    compare: impl Fn(&T, &T) -> Ordering,
+    digest: impl Fn(&T) -> Option<u64>,
+) {
+    let mut order: Vec<usize> = (0..items.len()).collect();
+    order.sort_by(|&left, &right| compare(&items[left], &items[right]));
+    let mut start = 0;
+    while start < order.len() {
+        let mut end = start + 1;
+        while end < order.len()
+            && compare(&items[order[end]], &items[order[start]]) == Ordering::Equal
+        {
+            end += 1;
+        }
+        if end - start > 1 {
+            // One digest per item of the run, and stable, so content-identical
+            // items keep the input order.
+            order[start..end].sort_by_cached_key(|&index| digest(&items[index]));
+        }
+        start = end;
+    }
+    // `order` is a permutation of `0..items.len()`: sorting never drops or
+    // duplicates an index.
+    let mut slots: Vec<Option<T>> = std::mem::take(items).into_iter().map(Some).collect();
+    for index in order {
+        items.extend(slots[index].take());
+    }
+}
+
 /// Build the patch ordering key from a patch's own data and projector.
 fn build_order_key<V>(data: &TreeTN<IdxTensor, V>, projector: &Projector) -> PatchOrderKey<V>
 where
@@ -151,12 +195,7 @@ where
             }
         }
     }
-    (
-        signature,
-        labels,
-        coordinates,
-        tree_content_digest(data, &names),
-    )
+    (signature, labels, coordinates)
 }
 
 impl<V> SubDomainTreeTN<V>
@@ -239,23 +278,37 @@ where
     }
 
     /// Order patches by index signature, then by their own projector
-    /// coordinates in logical labels, then by content digest.
+    /// coordinates in logical labels.
     ///
-    /// The digest covers each node's leg roles, canonical bond labels and
-    /// payload bit patterns, and it is captured when the patch is built (and
-    /// refreshed after [`Self::truncate`]).
-    ///
-    /// Two patches that compare equal on every component have unspecified
-    /// relative order. That happens in three cases, none of which can change a
-    /// sum's bits for equal patches: numerically identical payloads, a payload
-    /// that could not be fingerprinted without materializing it
-    /// ([`IdxTensor::content_digest`] returned `None`), or a 64-bit digest
-    /// collision. Distributed rounding is unaffected because equal digests mean
-    /// equal contributions; only reproducibility across processes is at stake.
-    /// A gradient accumulated through [`Self::data`] after construction makes
-    /// the stored digest stale, which again affects reproducibility only.
+    /// This is the metadata key alone. Content is not part of it because
+    /// fingerprinting a payload costs a linear pass; callers order by content
+    /// only inside a metadata tie, through [`sort_by_patch_order`] and
+    /// [`Self::content_digest`].
     pub(crate) fn patch_order_key(&self) -> &PatchOrderKey<V> {
         &self.order_key
+    }
+
+    /// Content digest of this patch's payloads, for breaking metadata ties.
+    ///
+    /// Covers every node tensor in sorted node-name order, each preceded by that
+    /// node's leg roles and canonical bond labels, and each node's own payload
+    /// bit patterns. `None` when a payload cannot be read without materializing
+    /// it, in which case the patch keeps its metadata order.
+    pub(crate) fn content_digest(&self) -> Option<u64> {
+        #[cfg(test)]
+        CONTENT_DIGEST_CALLS.with(|count| count.set(count.get() + 1));
+        let mut names = self.data.node_names();
+        names.sort();
+        tree_content_digest(&self.data, &names)
+    }
+
+    /// Content digest of this patch followed by `other`, for ordering a patch
+    /// pair as one item.
+    pub(crate) fn paired_content_digest(&self, other: &Self) -> Option<u64> {
+        Some(mix_digest(
+            mix_digest(PATCH_DIGEST_SEED, self.content_digest()?),
+            other.content_digest()?,
+        ))
     }
 
     pub(crate) fn budget_squared(&self) -> Option<f64> {
@@ -547,8 +600,6 @@ where
         validate_data(&data)?;
         validate_projector_against_data(&data, &self.projector)?;
         self.data = data;
-        // Truncation changes the payloads, so the cached content digest is stale.
-        self.order_key = build_order_key(&self.data, &self.projector);
         Ok(())
     }
 

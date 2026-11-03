@@ -14,7 +14,7 @@ use tensor4all_treetn::{
 use super::{finite, invalid, SubsetOperatorOptions};
 use crate::subdomain_tree_tn::{
     ensure_center, ensure_same_dtype, ensure_same_topology, ensure_same_tree_structure,
-    PatchOrderKey,
+    sort_by_patch_order, PatchOrderKey,
 };
 use crate::{
     DynIndex, PartitionedTreeTN, PartitionedTreeTNError, Projector, Result, SubDomainTreeTN,
@@ -31,6 +31,14 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> Patch<V> {
         match self {
             Self::Stored(patch) => (patch.patch_order_key(), None),
             Self::Product(pair) => (pair.0.patch_order_key(), Some(pair.1.patch_order_key())),
+        }
+    }
+
+    /// Content digest of the patch, or of both factors of a tensor product.
+    fn content_digest(&self) -> Option<u64> {
+        match self {
+            Self::Stored(patch) => patch.content_digest(),
+            Self::Product(pair) => pair.0.paired_content_digest(&pair.1),
         }
     }
 }
@@ -116,7 +124,11 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     pub fn from_partition(partition: &PartitionedTreeTN<V>) -> Result<Self> {
         partition.validate_contents()?;
         let mut patches: Vec<_> = partition.values().collect();
-        patches.sort_by(|a, b| a.patch_order_key().cmp(b.patch_order_key()));
+        sort_by_patch_order(
+            &mut patches,
+            |a, b| a.patch_order_key().cmp(b.patch_order_key()),
+            |patch| patch.content_digest(),
+        );
         let network = patches.first().map(|p| p.site_index_network().clone());
         let mut scale = 0.0_f64;
         let mut stored = Vec::with_capacity(patches.len());
@@ -172,10 +184,14 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     pub fn from_tensor_products(
         mut pairs: Vec<(SubDomainTreeTN<V>, SubDomainTreeTN<V>)>,
     ) -> Result<Self> {
-        pairs.sort_by(|a, b| {
-            (a.0.patch_order_key(), a.1.patch_order_key())
-                .cmp(&(b.0.patch_order_key(), b.1.patch_order_key()))
-        });
+        sort_by_patch_order(
+            &mut pairs,
+            |(a, aa), (b, bb)| {
+                (a.patch_order_key(), aa.patch_order_key())
+                    .cmp(&(b.patch_order_key(), bb.patch_order_key()))
+            },
+            |(left, right)| left.paired_content_digest(right),
+        );
         let mut projectors = Vec::with_capacity(pairs.len());
         let mut network = None;
         for (left, right) in &pairs {
@@ -223,7 +239,11 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             scale = finite(scale.hypot(patch_norm))?;
             patches.push((projector, Patch::Product(Box::new((left, right)))));
         }
-        patches.sort_by(|a, b| a.1.order_key().cmp(&b.1.order_key()));
+        sort_by_patch_order(
+            &mut patches,
+            |(_, left), (_, right)| left.order_key().cmp(&right.order_key()),
+            |(_, patch)| patch.content_digest(),
+        );
         Ok(Self {
             patches,
             network,
@@ -371,7 +391,11 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
                 (projector, Patch::Stored(Box::new(prepared.image)))
             })
             .collect();
-        patches.sort_by(|a, b| a.1.order_key().cmp(&b.1.order_key()));
+        sort_by_patch_order(
+            &mut patches,
+            |(_, left), (_, right)| left.order_key().cmp(&right.order_key()),
+            |(_, patch)| patch.content_digest(),
+        );
 
         Ok(Self {
             patches,
