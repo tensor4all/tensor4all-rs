@@ -2,8 +2,8 @@ use std::error::Error;
 use std::fmt;
 
 use crate::traits::TTScalar;
-use tenferro_tensor::{Tensor, TensorScalar, TypedTensor};
-use tensor4all_tensorbackend::einsum_native_subscripts;
+use tenferro_tensor::{TensorScalar, TypedTensor};
+use tensor4all_tensorbackend::NativeEinsumPlan;
 
 pub(crate) type Result<T> = std::result::Result<T, EinsumHelperError>;
 
@@ -92,28 +92,23 @@ pub(crate) fn einsum_tensors<T: EinsumScalar>(
     operands: &[&TypedTensor<T>],
 ) -> Result<TypedTensor<T>> {
     // Subscript parsing, operand-count validation, and label mapping live in
-    // `einsum_native_subscripts`; this adapter only converts typed operands in
-    // and the result back out.
-    let tensors: Vec<Tensor> = operands
+    // `NativeEinsumPlan`; this adapter only borrows the operands in and converts
+    // the result back out. The operands are read through their views, so no
+    // operand is copied per call.
+    let backend = |error: &dyn fmt::Display| EinsumHelperError::Backend {
+        subscripts: subscripts.to_string(),
+        message: error.to_string(),
+    };
+    let plan = NativeEinsumPlan::new(subscripts).map_err(|error| backend(&*error))?;
+    let reads = operands
         .iter()
-        .map(|tensor| {
-            let tensor = tensor
-                .duplicate()
-                .map_err(|error| EinsumHelperError::Backend {
-                    subscripts: subscripts.to_string(),
-                    message: format!("operand duplication failed: {error}"),
-                })?;
-            Ok(T::typed_tensor_into_tensor(tensor))
-        })
-        .collect::<Result<_>>()?;
-    let operand_refs = tensors.iter().collect::<Vec<_>>();
+        .map(|tensor| tensor.as_view().into_tensor_read())
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| backend(&error))?;
 
-    let result = einsum_native_subscripts(subscripts, &operand_refs).map_err(|err| {
-        EinsumHelperError::Backend {
-            subscripts: subscripts.to_string(),
-            message: err.to_string(),
-        }
-    })?;
+    let result = plan
+        .execute_reads(&reads)
+        .map_err(|error| backend(&*error))?;
     let actual = result.dtype();
     T::into_typed(result).map_err(|error| EinsumHelperError::Backend {
         subscripts: subscripts.to_string(),
