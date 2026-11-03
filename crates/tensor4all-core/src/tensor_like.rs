@@ -838,15 +838,62 @@ pub trait TensorContractionLike: TensorIndex {
 
     /// Direct sum of two tensors along specified index pairs.
     ///
+    /// The two-operand form of [`direct_sum_many`](Self::direct_sum_many):
+    /// each pair `(a_index, b_index)` becomes one group `[a_index, b_index]`.
+    ///
     /// # Errors
     ///
     /// Returns `Self::Error` when the summed index spaces are incompatible
     /// (an index-space mismatch) or the underlying construction reports a
-    /// failure.
+    /// failure; see [`direct_sum_many`](Self::direct_sum_many).
     fn direct_sum(
         &self,
         other: &Self,
         pairs: &[(<Self as TensorIndex>::Index, <Self as TensorIndex>::Index)],
+    ) -> std::result::Result<DirectSumResult<Self>, Self::Error> {
+        let groups: Vec<Vec<<Self as TensorIndex>::Index>> = pairs
+            .iter()
+            .map(|(a_index, b_index)| vec![a_index.clone(), b_index.clone()])
+            .collect();
+        Self::direct_sum_many(&[self, other], &groups)
+    }
+
+    /// Direct sum of any number of tensors in one pass.
+    ///
+    /// Each entry of `groups` lists one index per operand, in operand order,
+    /// and becomes one new index whose dimension is the sum of the group's
+    /// dimensions. Operand `i` occupies its own diagonal block, after the
+    /// blocks of operands `0..i`; all other entries are zero. The indices that
+    /// belong to no group must be the same for every operand. The result
+    /// lists those common indices in `operands[0]`'s order, followed by the
+    /// new indices in `groups` order.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when `operands` or `groups` is empty, when a
+    /// group does not have one index per operand, when the index spaces are
+    /// incompatible (an index-space mismatch), or when the underlying
+    /// construction reports a failure. Types without a block construction
+    /// return an unsupported-operation error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorContractionLike};
+    ///
+    /// let (b0, b1, b2) = (DynIndex::new_dyn(1), DynIndex::new_dyn(1), DynIndex::new_dyn(2));
+    /// let t0 = IdxTensor::from_dense(vec![b0.clone()], vec![1.0_f64]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![b1.clone()], vec![2.0_f64]).unwrap();
+    /// let t2 = IdxTensor::from_dense(vec![b2.clone()], vec![3.0_f64, 4.0]).unwrap();
+    ///
+    /// let result = IdxTensor::direct_sum_many(&[&t0, &t1, &t2], &[vec![b0, b1, b2]]).unwrap();
+    ///
+    /// assert_eq!(result.new_indices[0].dim(), 4);
+    /// assert_eq!(result.tensor.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
+    /// ```
+    fn direct_sum_many(
+        operands: &[&Self],
+        groups: &[Vec<<Self as TensorIndex>::Index>],
     ) -> std::result::Result<DirectSumResult<Self>, Self::Error>;
 
     /// Outer product (tensor product) of two tensors.

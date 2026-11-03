@@ -212,6 +212,28 @@ let expected = IdxTensor::from_dense(vec![s], vec![2.0, 4.0]).unwrap();
 assert!(dense.distance(&expected).unwrap() < 1e-12);
 ```
 
+To sum more than two networks, pass them all to `TreeTN::add_many`. It builds the exact sum in one
+direct-sum pass, while a chain of `add` calls copies the growing partial sum at every step:
+
+```rust
+use tensor4all_core::prelude::*;
+use tensor4all_treetn::prelude::*;
+
+let s = DynIndex::new_dyn(2);
+let terms: Vec<_> = (1..=3)
+    .map(|k| {
+        let t = IdxTensor::from_dense(vec![s.clone()], vec![k as f64, 0.0]).unwrap();
+        TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap()
+    })
+    .collect();
+let refs: Vec<_> = terms.iter().collect();
+
+// sum represents terms[0] + terms[1] + terms[2]
+let sum = TreeTN::add_many(&refs).unwrap();
+let expected = IdxTensor::from_dense(vec![s], vec![6.0, 0.0]).unwrap();
+assert!(sum.to_dense().unwrap().distance(&expected).unwrap() < 1e-12);
+```
+
 After addition the bond dimensions grow, so it is common to follow up with `truncate` to keep them
 manageable.
 
