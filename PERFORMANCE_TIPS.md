@@ -154,16 +154,26 @@ Contract: a path that only reads a payload borrows it. `IdxTensor::dense_host_va
 returns an owned `Vec` (a full copy); `IdxTensor::with_dense_slice` borrows a
 host-contiguous payload. Evidence: reading one element of a `chi x 2 x chi`
 Complex64 core takes 5x (chi = 32) to 90x (chi = 141) longer through
-`dense_host_values` (#1027, #1039). The copy of both operands of
-`tensorbackend::mat_mul` is, by estimate, most of its gap to a borrowed `faer`
-product for `m = 1` shapes (#1040); `mat_mul_owned` takes ownership of operands
-the caller no longer needs.
+`dense_host_values` (#1027, #1039).
 
-Detect: `rg -n 'dense_host_values|to_typed_tensor\(\)' crates` and
-`rg -n 'mat_mul\(' crates` on paths repeated per call, node or sweep.
+The same estimate for `tensorbackend::mat_mul` (#1040) was resolved in #1096 by
+borrowing instead of copying: the entry dispatched `to_typed_tensor()` on both
+operands, which cloned each buffer; it now builds `TensorRead::View`s over the
+matrix buffers. On the reported shape (282x141 right operand, M5 Max, 1 thread,
+Accelerate provider, median of 300 interleaved iterations) the `m = 1` case went
+from 2.4x-3.1x (f64) and 1.15x-1.23x (c64) the cost of `mat_mul_owned` to
+0.89x-1.01x, with no operand-sized allocation left. `mat_mul_owned` still exists
+for callers that own the buffers; on the measured cases it is no longer faster.
 
-Fix: `with_dense_slice` for read-only access; `mat_mul_owned` when the operands
-are not needed afterwards; keep the copy where the values outlive the call.
+Detect: `rg -n 'dense_host_values' crates` and
+`rg -n 'to_typed_tensor\(\)' crates` on paths repeated per call, node or sweep
+(`to_typed_tensor` also appears where the values outlive the call - check the
+caller before changing it).
+
+Fix: `with_dense_slice` for read-only access; a borrowed view over the payload
+when it only feeds one kernel call (see `dot_general_borrowed` in
+`crates/tensor4all-tensorbackend/src/matrix.rs`); keep the copy where the values
+outlive the call.
 Check the storage kind before swapping: for a `Materialized` tensor
 `dense_host_values` reads the payload without entering a runtime, while
 `with_dense_slice` materializes it through the default eager context, so a
