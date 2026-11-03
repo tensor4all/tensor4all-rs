@@ -11,9 +11,9 @@ use tensor4all_treetn::TreeTN;
 fn pair(
     chi: usize,
     d: usize,
+    length: usize,
 ) -> anyhow::Result<(TreeTN<IdxTensor, usize>, TreeTN<IdxTensor, usize>)> {
     let mut rng = ChaCha8Rng::seed_from_u64(1108);
-    let length = 6;
     let shared: Vec<_> = (0..length).map(|_| DynIndex::new_dyn(d)).collect();
     let mut trees = Vec::new();
     for _ in 0..2 {
@@ -38,12 +38,15 @@ fn pair(
 }
 
 fn main() -> anyhow::Result<()> {
+    if std::env::args().any(|arg| arg == "--contractions") {
+        return contractions();
+    }
     if std::env::args().any(|arg| arg == "--decompositions") {
         return decompositions();
     }
     println!("method,chi,d,repeat,seconds,norm");
     for (chi, d) in [(8, 2), (16, 2), (32, 2), (16, 4)] {
-        let (a, b) = pair(chi, d)?;
+        let (a, b) = pair(chi, d, 6)?;
         for (method, options) in [
             ("zipup", ContractionOptions::zipup()),
             ("fit", ContractionOptions::fit().with_nfullsweeps(2)),
@@ -185,6 +188,72 @@ fn decompositions() -> anyhow::Result<()> {
             );
         }
         fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn contractions() -> anyhow::Result<()> {
+    use tensor4all_core::FactorizeAlg;
+    println!("chi,d,length,rank,method,algorithm,repeat,seconds,relative_error");
+    for (chi, d, length) in [
+        (16_usize, 2_usize, 6_u32),
+        (32, 2, 6),
+        (16, 4, 4),
+        (32, 4, 4),
+    ] {
+        // This explicit dense oracle is bounded to 65,536 entries, never a
+        // production dispatch or an unbounded whole-network materialization.
+        let elements = d
+            .checked_pow(2 * length)
+            .ok_or_else(|| anyhow::anyhow!("oracle size overflow"))?;
+        anyhow::ensure!(elements <= 65536, "dense oracle limit exceeded");
+        let (a, b) = pair(chi, d, length as usize)?;
+        let exact = a.contract_naive(&b)?;
+        let exact_norm = exact.norm()?;
+        for (method, base) in [
+            ("zipup", ContractionOptions::zipup()),
+            ("fit", ContractionOptions::fit().with_nfullsweeps(2)),
+        ] {
+            let prime = Instant::now();
+            while prime.elapsed().as_secs_f64() < 1.0 {
+                std::hint::spin_loop();
+            }
+            let mut deterministic_error = None;
+            for repeat in 0..4 {
+                let order = if repeat % 2 == 0 {
+                    [FactorizeAlg::SVD, FactorizeAlg::RSVD]
+                } else {
+                    [FactorizeAlg::RSVD, FactorizeAlg::SVD]
+                };
+                for algorithm in order {
+                    let mut options = base
+                        .clone()
+                        .with_max_bond_dim(chi)
+                        .with_factorize_alg(algorithm);
+                    options.rsvd_seed = 1108;
+                    let start = Instant::now();
+                    let result = black_box(contract(black_box(&a), black_box(&b), &0, options)?);
+                    let seconds = start.elapsed().as_secs_f64();
+                    let dense = result.to_dense()?;
+                    let residual = exact.sub(&dense)?.norm()? / exact_norm;
+                    if algorithm == FactorizeAlg::SVD {
+                        if deterministic_error.is_none() {
+                            deterministic_error = Some(residual);
+                        }
+                    } else {
+                        let baseline = deterministic_error
+                            .ok_or_else(|| anyhow::anyhow!("missing deterministic warmup"))?;
+                        anyhow::ensure!(
+                            residual <= 1.05 * baseline + 1e-12,
+                            "{method} RSVD error {residual}, SVD error {baseline}"
+                        );
+                    }
+                    if repeat > 0 {
+                        println!("{chi},{d},{length},{chi},{method},{algorithm:?},{},{seconds},{residual}",repeat-1);
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }
