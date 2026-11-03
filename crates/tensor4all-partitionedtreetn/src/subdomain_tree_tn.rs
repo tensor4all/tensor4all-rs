@@ -56,11 +56,108 @@ where
 }
 
 // This type cannot contain a DynIndex or its allocation ID.
+//
+// The fourth component is the patch content digest, or `None` when a node
+// tensor's payload cannot be fingerprinted without materializing it (a
+// backend-resident or deferred payload). `None` sorts before every digest, so
+// an unavailable digest still has a deterministic position; only
+// `None`-against-`None` falls back to the two structural components above.
 pub(crate) type PatchOrderKey<V> = (
     Vec<(V, usize, Vec<String>, usize, i64)>,
     Vec<(V, usize)>,
     Vec<(V, usize, usize)>,
+    Option<u64>,
 );
+
+/// Fixed seed of the patch digest fold.
+///
+/// It is unrelated to `IdxTensor::content_digest`'s seed: the patch fold only
+/// has to fold per-node digests reproducibly.
+const PATCH_DIGEST_SEED: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// Fold one 64-bit word into the patch digest state.
+///
+/// The patch digest only has to be reproducible across processes and builds, so
+/// it carries its own fixed mix instead of borrowing an unstable `Hasher`. The
+/// word is added rather than XORed for the reason `IdxTensor::content_digest`
+/// documents: an XOR step is linear over GF(2), so paired bit flips between two
+/// inputs cancel.
+fn mix_digest(state: u64, word: u64) -> u64 {
+    let mixed = state.wrapping_add(word).wrapping_mul(0x0000_0100_0000_01b3);
+    mixed ^ (mixed >> 32)
+}
+
+/// Content digest of every node tensor, folded in sorted node-name order.
+///
+/// `names` must be the patch's sorted node names, so two patches the signature
+/// component already matches fold the same nodes in the same order.
+///
+/// Each node contributes its leg roles before its payload: which physical axis
+/// is a site index and which is an internal bond, with the bond's labels and
+/// dimension. Without that, two networks over the same site indices whose node
+/// tensors carry the same buffer under a different leg order would share a
+/// digest while being different networks. Bond allocation ids are not hashed.
+fn tree_content_digest<V>(data: &TreeTN<IdxTensor, V>, names: &[V]) -> Option<u64>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let mut state = PATCH_DIGEST_SEED;
+    for name in names {
+        let node = data.node_index(name)?;
+        let tensor = data.tensor(node)?;
+        let site_indices = data.node_site_indices(name).unwrap_or_default();
+        for index in tensor.indices() {
+            let mut tags: Vec<_> = index.tags.iter().collect();
+            tags.sort();
+            let is_site = u64::from(site_indices.contains(index));
+            state = mix_digest(state, is_site);
+            state = mix_digest(state, index.dim as u64);
+            state = mix_digest(state, index.plev as u64);
+            state = mix_digest(state, tags.len() as u64);
+            for tag in tags {
+                for byte in tag.as_bytes() {
+                    state = mix_digest(state, u64::from(*byte));
+                }
+            }
+        }
+        state = mix_digest(state, tensor.content_digest()?);
+    }
+    Some(state)
+}
+
+/// Build the patch ordering key from a patch's own data and projector.
+fn build_order_key<V>(data: &TreeTN<IdxTensor, V>, projector: &Projector) -> PatchOrderKey<V>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let mut names = data.node_names();
+    names.sort();
+    let mut signature = Vec::new();
+    let mut labels = Vec::new();
+    let mut coordinates = Vec::new();
+    for name in &names {
+        for (axis, index) in data
+            .node_site_indices(name)
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+        {
+            let mut tags: Vec<_> = index.tags.iter().collect();
+            tags.sort();
+            signature.push((name.clone(), axis, tags, index.dim, index.plev));
+            labels.push((name.clone(), axis));
+            if let Some(value) = projector.get(index) {
+                coordinates.push((name.clone(), axis, value));
+            }
+        }
+    }
+    (
+        signature,
+        labels,
+        coordinates,
+        tree_content_digest(data, &names),
+    )
+}
 
 impl<V> SubDomainTreeTN<V>
 where
@@ -141,8 +238,22 @@ where
         Ok(())
     }
 
-    /// Equal keys can contain different payloads; their order, including content-identical ties, is unspecified.
-    /// A content digest needs a non-materializing storage accessor.
+    /// Order patches by index signature, then by their own projector
+    /// coordinates in logical labels, then by content digest.
+    ///
+    /// The digest covers each node's leg roles, canonical bond labels and
+    /// payload bit patterns, and it is captured when the patch is built (and
+    /// refreshed after [`Self::truncate`]).
+    ///
+    /// Two patches that compare equal on every component have unspecified
+    /// relative order. That happens in three cases, none of which can change a
+    /// sum's bits for equal patches: numerically identical payloads, a payload
+    /// that could not be fingerprinted without materializing it
+    /// ([`IdxTensor::content_digest`] returned `None`), or a 64-bit digest
+    /// collision. Distributed rounding is unaffected because equal digests mean
+    /// equal contributions; only reproducibility across processes is at stake.
+    /// A gradient accumulated through [`Self::data`] after construction makes
+    /// the stored digest stale, which again affects reproducibility only.
     pub(crate) fn patch_order_key(&self) -> &PatchOrderKey<V> {
         &self.order_key
     }
@@ -180,28 +291,7 @@ where
         if let Some(budget_squared) = budget_squared {
             validate_budget_squared(budget_squared)?;
         }
-        let mut signature = Vec::new();
-        let mut labels = Vec::new();
-        let mut coordinates = Vec::new();
-        let mut names = data.node_names();
-        names.sort();
-        for name in names {
-            for (axis, index) in data
-                .node_site_indices(&name)
-                .unwrap_or_default()
-                .iter()
-                .enumerate()
-            {
-                let mut tags: Vec<_> = index.tags.iter().collect();
-                tags.sort();
-                signature.push((name.clone(), axis, tags, index.dim, index.plev));
-                labels.push((name.clone(), axis));
-                if let Some(value) = projector.get(index) {
-                    coordinates.push((name.clone(), axis, value));
-                }
-            }
-        }
-        let order_key = (signature, labels, coordinates);
+        let order_key = build_order_key(&data, &projector);
         debug_assert!(
             !std::any::type_name::<PatchOrderKey<()>>().contains(std::any::type_name::<DynIndex>())
         );
@@ -457,6 +547,8 @@ where
         validate_data(&data)?;
         validate_projector_against_data(&data, &self.projector)?;
         self.data = data;
+        // Truncation changes the payloads, so the cached content digest is stale.
+        self.order_key = build_order_key(&self.data, &self.projector);
         Ok(())
     }
 
@@ -1004,3 +1096,6 @@ where
 
     TreeTN::from_tensors(tensors, node_names).map_err(PartitionedTreeTNError::from)
 }
+
+#[cfg(test)]
+mod tests;

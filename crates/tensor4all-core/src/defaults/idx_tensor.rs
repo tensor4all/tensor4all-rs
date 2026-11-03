@@ -31,7 +31,7 @@ use tensor4all_tensorbackend::{
     src_error_estimate_general as backend_src_error_estimate_general, Matrix,
 };
 use tensor4all_tensorbackend::{IncrementalQr, IncrementalQrScalar};
-use tensor4all_tensorbackend::{NonfiniteFlags, Storage, StorageKind};
+use tensor4all_tensorbackend::{NonfiniteFlags, Storage, StorageKind, StorageScalar};
 
 use super::contract::{ContractionOptions, PairwiseContractionOptions};
 use super::eager_session::{with_eager_session, with_engine, with_execution_engine};
@@ -634,6 +634,156 @@ pub(crate) enum IdxTensorStorage {
     },
 }
 
+/// Seed and multiplier of the content digest's word mix.
+///
+/// The mix is fixed here rather than taken from `DefaultHasher` so the digest is
+/// identical across processes, builds and Rust versions: storing it in a key
+/// that two processes compare would otherwise not be reproducible.
+const CONTENT_DIGEST_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const CONTENT_DIGEST_MULTIPLIER: u64 = 0x0000_0100_0000_01b3;
+
+/// Fold one 64-bit word into the digest state.
+///
+/// The word is *added* before the multiply, not XORed as in FNV-1a. An XOR step
+/// makes the mix linear over GF(2), so payloads whose bit flips pair up cancel:
+/// `[1.0, 2.0]` and `[-1.0, -2.0]` fold to the same state with an FNV-1a step,
+/// because their two sign-bit flips cancel. Addition propagates carries instead,
+/// so a flipped word cannot be undone by a later one.
+#[inline]
+fn digest_word(state: u64, word: u64) -> u64 {
+    let mixed = state
+        .wrapping_add(word)
+        .wrapping_mul(CONTENT_DIGEST_MULTIPLIER);
+    mixed ^ (mixed >> 32)
+}
+
+fn storage_kind_tag(kind: StorageKind) -> u64 {
+    match kind {
+        StorageKind::Dense => 1,
+        StorageKind::Diagonal => 2,
+        StorageKind::Structured => 3,
+    }
+}
+
+/// Scalar-kind tag for a digest, or `None` when there is no payload view for it.
+fn dtype_tag(dtype: DType) -> Option<u64> {
+    Some(match dtype {
+        DType::F32 => 1,
+        DType::F64 => 2,
+        DType::C32 => 3,
+        DType::C64 => 4,
+        _ => return None,
+    })
+}
+
+/// Native bit patterns of one payload scalar, for the digest.
+///
+/// The bits are taken from the payload's own scalar type, so a narrowed payload
+/// hashes its exact `f32`/`c32` patterns instead of a widened copy, and no
+/// floating-point conversion can canonicalize a NaN payload.
+trait DigestScalar {
+    /// Scalar bits, plus the imaginary part for a complex scalar.
+    fn digest_words(value: &Self) -> (u64, Option<u64>);
+}
+
+impl DigestScalar for f32 {
+    fn digest_words(value: &Self) -> (u64, Option<u64>) {
+        (u64::from(value.to_bits()), None)
+    }
+}
+
+impl DigestScalar for f64 {
+    fn digest_words(value: &Self) -> (u64, Option<u64>) {
+        (value.to_bits(), None)
+    }
+}
+
+impl DigestScalar for Complex32 {
+    fn digest_words(value: &Self) -> (u64, Option<u64>) {
+        (
+            u64::from(value.re.to_bits()),
+            Some(u64::from(value.im.to_bits())),
+        )
+    }
+}
+
+impl DigestScalar for Complex64 {
+    fn digest_words(value: &Self) -> (u64, Option<u64>) {
+        (value.re.to_bits(), Some(value.im.to_bits()))
+    }
+}
+
+/// Fold one borrowed payload into `state`.
+fn digest_values<T: DigestScalar>(mut state: u64, values: &[T]) -> u64 {
+    state = digest_word(state, values.len() as u64);
+    for value in values {
+        let (real, imaginary) = T::digest_words(value);
+        state = digest_word(state, real);
+        if let Some(imaginary) = imaginary {
+            state = digest_word(state, imaginary);
+        }
+    }
+    state
+}
+
+/// Fold a compact storage payload in, borrowing it in place.
+fn digest_storage(state: u64, storage: &Storage) -> Option<u64> {
+    match storage.dtype() {
+        DType::F32 => Some(digest_values(
+            state,
+            <f32 as StorageScalar>::payload_view(storage).ok()??,
+        )),
+        DType::F64 => Some(digest_values(
+            state,
+            <f64 as StorageScalar>::payload_view(storage).ok()??,
+        )),
+        DType::C32 => Some(digest_values(
+            state,
+            <Complex32 as StorageScalar>::payload_view(storage).ok()??,
+        )),
+        DType::C64 => Some(digest_values(
+            state,
+            <Complex64 as StorageScalar>::payload_view(storage).ok()??,
+        )),
+        _ => None,
+    }
+}
+
+/// Fold an eager payload and, when tracked, its accumulated gradient in.
+///
+/// The gradient is part of the fingerprint because a tracked payload's content
+/// is its primal plus its accumulated gradient: at `x = 0`, `x` and `2x` have
+/// bitwise equal primals and gradients `1` and `2`.
+fn digest_eager(mut state: u64, inner: &EagerTensor) -> Option<u64> {
+    let read = inner.tensor_read();
+    state = match inner.dtype() {
+        DType::F32 => digest_values(state, read.as_slice::<f32>().ok()?),
+        DType::F64 => digest_values(state, read.as_slice::<f64>().ok()?),
+        DType::C32 => digest_values(state, read.as_slice::<Complex32>().ok()?),
+        DType::C64 => digest_values(state, read.as_slice::<Complex64>().ok()?),
+        _ => return None,
+    };
+    if !inner.tracks_grad() {
+        return Some(state);
+    }
+    let Some(gradient) = inner.grad().ok()? else {
+        return Some(digest_word(state, 0));
+    };
+    state = digest_word(state, 1);
+    state = digest_word(state, gradient.shape().len() as u64);
+    for &dim in gradient.shape() {
+        state = digest_word(state, dim as u64);
+    }
+    let state = match gradient.dtype() {
+        DType::F32 => digest_values(state, gradient.as_slice::<f32>().ok()?),
+        DType::F64 => digest_values(state, gradient.as_slice::<f64>().ok()?),
+        DType::C32 => digest_values(state, gradient.as_slice::<Complex32>().ok()?),
+        DType::C64 => digest_values(state, gradient.as_slice::<Complex64>().ok()?),
+        _ => return None,
+    };
+    Some(state)
+}
+
 impl IdxTensorStorage {
     fn from_storage(storage: Arc<Storage>) -> Self {
         Self::Materialized(storage)
@@ -778,6 +928,35 @@ impl IdxTensorStorage {
                 }
             }
             Self::Deferred { source, .. } => source.storage_kind(),
+        }
+    }
+
+    /// Content fingerprint of the authoritative payload, without materializing it.
+    ///
+    /// `None` for a deferred payload (its stored failure means the payload is not
+    /// this value's content) and for any payload that can only be read by
+    /// copying: a backend-resident eager value, a non-contiguous compact payload,
+    /// or a scalar kind compact storage cannot hold.
+    fn content_digest(&self) -> Option<u64> {
+        let dtype = self.dtype()?;
+        let mut state = digest_word(CONTENT_DIGEST_OFFSET, storage_kind_tag(self.storage_kind()));
+        state = digest_word(state, dtype_tag(dtype)?);
+        state = digest_word(state, self.payload_dims().len() as u64);
+        for &dim in self.payload_dims() {
+            state = digest_word(state, dim as u64);
+        }
+        for &axis_class in self.axis_classes() {
+            state = digest_word(state, axis_class as u64);
+        }
+        // Hashed for every representation, so the same payload has the same
+        // digest whether it is compact or eager storage.
+        let tracked = self.eager().is_some_and(EagerTensor::tracks_grad);
+        state = digest_word(state, u64::from(tracked));
+        match self {
+            Self::Materialized(storage) => digest_storage(state, storage),
+            Self::Eager { inner, .. } => digest_eager(state, inner),
+            Self::Compact(payload) => digest_eager(state, &payload.payload),
+            Self::Deferred { .. } => None,
         }
     }
 
@@ -3986,6 +4165,57 @@ impl IdxTensor {
     /// ```
     pub fn storage_kind(&self) -> StorageKind {
         self.storage.storage_kind()
+    }
+
+    /// Return a content fingerprint of the authoritative payload, computed
+    /// without materializing it.
+    ///
+    /// Use this as an order tiebreak between tensors whose indices and shape
+    /// already compare equal, where the difference is the payload. Unlike
+    /// [`Self::to_storage`] it never builds a compact snapshot, and unlike
+    /// [`Self::with_dense_slice`] it never densifies a diagonal or structured
+    /// payload, so it is safe to call from a comparator: the hash is taken over
+    /// the payload that is already resident, at a cost linear in that payload.
+    ///
+    /// The fingerprint covers the storage kind, the scalar kind, the payload
+    /// dimensions, the axis classes, and every payload value's native bit
+    /// pattern. For a tracked payload it also covers the accumulated gradient,
+    /// because a primal alone does not show it. It does not cover `DynIndex`
+    /// identities or autodiff graph shape: equal digests mean equal readable
+    /// payloads, not identical objects. In particular two payloads whose
+    /// primals are bitwise equal and whose graphs differ for the same primal
+    /// (`x` and `2x` at `x = 0`, before any gradient is accumulated) share a
+    /// digest, because no readable value distinguishes them.
+    ///
+    /// The digest is a snapshot: accumulating a gradient on a tracked payload
+    /// afterwards changes what a fresh call would return.
+    ///
+    /// # Returns
+    /// - `Some(digest)`: equal payloads have equal digests, and payloads that
+    ///   differ in a readable value have different digests except for a 64-bit
+    ///   hash collision.
+    /// - `None`: the payload cannot be read without copying it, so no
+    ///   fingerprint exists. This covers a backend (CUDA) resident eager
+    ///   payload, a non-contiguous compact payload, a scalar kind compact
+    ///   storage cannot hold, and a deferred failed operation. Callers use
+    ///   their own documented fallback order for those tensors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    ///
+    /// let index = DynIndex::new_dyn(2);
+    /// let positive_zero = IdxTensor::from_dense(vec![index.clone()], vec![1.0_f64, 0.0])?;
+    /// let negative_zero = IdxTensor::from_dense(vec![index], vec![1.0_f64, -0.0])?;
+    ///
+    /// // Bit patterns, so `0.0` and `-0.0` are different content.
+    /// assert_ne!(positive_zero.content_digest(), negative_zero.content_digest());
+    /// assert_eq!(positive_zero.content_digest(), positive_zero.clone().content_digest());
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
+    pub fn content_digest(&self) -> Option<u64> {
+        self.storage.content_digest()
     }
 
     /// Return the exact eager scalar dtype without reading tensor values.

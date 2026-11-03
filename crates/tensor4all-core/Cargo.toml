@@ -113,6 +113,10 @@ name = "integration"
 path = "tests/main.rs"
 
 [[test]]
+name = "idx_tensor_content_digest"
+path = "tests/idx_tensor_content_digest.rs"
+
+[[test]]
 name = "plain_tensor_retention"
 path = "tests/plain_tensor_retention.rs"
 

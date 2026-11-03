@@ -306,6 +306,34 @@ fn eager_cache_conjugation_failure_is_deferred_with_original_diagnostic() {
     assert!(conjugated.detach().is_err());
 }
 
+/// A deferred payload reports no digest instead of falling back to the
+/// pre-failure source: the stored failure means the source is not this value's
+/// content, which is why `content_digest` exists next to `to_storage`.
+#[test]
+fn content_digest_is_none_for_a_deferred_payload() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(2);
+    let tensor = IdxTensor::from_diag(vec![i, j], vec![1.0_f64, 2.0]).unwrap();
+    tensor.as_inner().unwrap();
+    let target = Arc::as_ptr(tensor.eager_cache.get().unwrap());
+    assert!(tensor.content_digest().is_some());
+
+    let conjugated = assert_unwrapped_conjugation_error(
+        tensor,
+        target,
+        "forced eager cache conjugation failure",
+    );
+    let source = match &conjugated.storage {
+        IdxTensorStorage::Deferred { source, .. } => source.content_digest(),
+        _ => panic!("deferred storage expected"),
+    };
+    assert!(
+        source.is_some(),
+        "the pre-failure source is still readable in place"
+    );
+    assert_eq!(conjugated.content_digest(), None);
+}
+
 #[test]
 fn session_identity_alignment_shares_storage_and_cache_for_every_representation() {
     use tensor4all_tensorbackend::CpuExecutionContext;
