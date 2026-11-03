@@ -25,6 +25,8 @@ messages and PRs into other base branches are outside this sampling convention.
 
 Before enabling hosted comments, maintainers must assess the
 [20-PR evidence](../experiments/2026-11-03-file-growth-dry-run.md), choose thresholds
-and decide whether continued growth of already-large files deserves a reminder
-on every increase. Reuse matching, removal-attestation reminders, per-crate growth
+and confirm rollout. The maintainer's review selected a configurable minimum net
+growth of 50 lines for the already-large case, avoiding reminders on tiny edits.
+First crossings retain their original semantics. Reuse matching,
+removal-attestation reminders, per-crate growth
 summaries and scheduled reporting are separate follow-ups to this first slice.

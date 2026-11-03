@@ -66,9 +66,13 @@
   with an opt-in file-size experiment. Run the existing reviewer with
   `--dry-run --file-growth`; the hosted workflow does not enable it yet.
 - It warns when a crate source `.rs` file grows from at most 1000 lines to
-  more than 1000, or grows while already above 2000 lines. These are provisional
+  more than 1000, or grows by at least 50 net lines while already above 2000
+  lines. The 50-line floor applies only to the already-large reminder; first
+  crossings still remind on any positive growth. These are provisional
   defaults, adjustable with `--file-growth-soft-limit` and
-  `--file-growth-large-limit`. The diff's merge base is the per-file baseline;
+  `--file-growth-large-limit`, plus `--file-growth-large-min-delta` for the
+  nonnegative net-growth floor (0 allows any positive growth). The diff's merge
+  base is the per-file baseline;
   unchanged, shrinking and rename-only files produce no growth finding.
 - Counts are whole-file physical lines, including inline tests, comments and
   blanks, not a Rust parser's production-line estimate. Conventional `test`,

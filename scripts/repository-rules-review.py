@@ -1530,12 +1530,14 @@ def file_growth_findings(
     worktree: bool = False,
     soft_limit: int = 1000,
     large_limit: int = 2000,
+    large_min_delta: int = 50,
 ) -> list[Finding]:
     """Preview advisory whole-file growth against the merge base, never a hard cap.
 
     Numstat supplies the delta; reading the destination supplies its total size.
     Renames preserve the original size, so moving a large file alone is silent.
     No reviewed code is executed, and no historical file-size baseline is needed.
+    The net-growth floor applies only to already-large files, not first crossings.
     """
     comparison = [base] if worktree else [f"{base}...{head}"]
     entries = numstat_entries(run_git([
@@ -1562,8 +1564,11 @@ def file_growth_findings(
         before = after - added + deleted
         if before <= soft_limit < after:
             trigger = f"crosses the {soft_limit}-line soft review trigger"
-        elif before > large_limit:
-            trigger = f"grows a file already above {large_limit} lines"
+        elif before > large_limit and added - deleted >= large_min_delta:
+            trigger = (
+                f"grows a file already above {large_limit} lines "
+                f"by at least {large_min_delta} net lines"
+            )
         else:
             continue
         findings.append(Finding(
@@ -1608,6 +1613,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--file-growth-large-limit", type=int, default=2000,
         help="Provisional already-large threshold, at least the soft limit (default: 2000)",
+    )
+    parser.add_argument(
+        "--file-growth-large-min-delta", type=int, default=50,
+        help="Minimum net added lines for already-large files; 0 allows any growth "
+        "(default: 50). First crossings are unaffected.",
     )
     parser.add_argument(
         "--waived",
@@ -1655,6 +1665,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--file-growth requires --dry-run during the #917 experiment")
     if not 0 < args.file_growth_soft_limit <= args.file_growth_large_limit:
         parser.error("file-growth limits must satisfy 0 < soft <= large")
+    if args.file_growth_large_min_delta < 0:
+        parser.error("--file-growth-large-min-delta must be nonnegative")
 
     if args.llm_skipped_reason and not args.dry_run:
         print("--llm-skipped-reason requires --dry-run", file=sys.stderr)
@@ -1696,6 +1708,7 @@ def main(argv: list[str] | None = None) -> int:
             args.base, args.head, worktree=args.worktree,
             soft_limit=args.file_growth_soft_limit,
             large_limit=args.file_growth_large_limit,
+            large_min_delta=args.file_growth_large_min_delta,
         ))
     sensitive_finding = sensitive_diff_finding(diff_text)
     if sensitive_finding:

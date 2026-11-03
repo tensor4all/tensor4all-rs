@@ -1330,7 +1330,9 @@ def test_growth_counts_unterminated_lines_and_not_unicode_separators() -> None:
 def test_growth_boundary_cases_and_advisory_verdict() -> None:
     with growth_repository() as (mod, root, git):
         cases = {"cross": (1000, 1001), "exact": (999, 1000),
-                 "large": (2001, 2002), "edge": (2000, 2001),
+                 "large": (2001, 2051), "edge": (2000, 2050),
+                 "below": (2001, 2050), "above": (2001, 2052),
+                 "tiny": (2001, 2002),
                  "same": (2100, 2100), "shrink": (2100, 2001)}
         for name, (before, _) in cases.items():
             write_growth_file(root, f"crates/a/src/{name}.rs", before)
@@ -1343,10 +1345,11 @@ def test_growth_boundary_cases_and_advisory_verdict() -> None:
         git("commit", "-m", "growth")
         findings = mod.file_growth_findings(base, "HEAD")
         assert [f.file for f in findings] == [
-            "crates/a/src/cross.rs", "crates/a/src/large.rs",
+            "crates/a/src/above.rs", "crates/a/src/cross.rs", "crates/a/src/large.rs",
         ]
-        assert "1000 -> 1001 lines (+1/-0)" in findings[0].summary
-        assert "already above 2000" in findings[1].summary
+        assert "1000 -> 1001 lines (+1/-0)" in findings[1].summary
+        assert "already above 2000" in findings[2].summary
+        assert "at least 50 net lines" in findings[2].summary
         assert all(f.severity == "warn" for f in findings)
         assert mod.reconcile_verdict(findings) == "pass"
         assert "solely" in findings[0].detail
@@ -1367,6 +1370,24 @@ def test_growth_ignores_replacements_deletions_and_binary_files() -> None:
         assert mod.file_growth_findings(base, "HEAD") == []
 
 
+def test_growth_minimum_delta_uses_net_lines_and_can_be_lowered_to_zero() -> None:
+    with growth_repository() as (mod, root, git):
+        file = write_growth_file(root, "crates/a/src/lib.rs", 2100)
+        git("add", ".")
+        git("commit", "-m", "baseline")
+        old_lines = file.read_text().splitlines(keepends=True)
+        file.write_text("// replacement\n" * 100 + "".join(old_lines[100:])
+                        + "// appended\n" * 49)
+        assert mod.file_growth_findings("HEAD", "HEAD", worktree=True) == []
+        for floor in [49, 0]:
+            findings = mod.file_growth_findings(
+                "HEAD", "HEAD", worktree=True, large_min_delta=floor,
+            )
+            assert len(findings) == 1
+            assert "2100 -> 2149 lines (+149/-100)" in findings[0].summary
+            assert f"at least {floor} net lines" in findings[0].summary
+
+
 def test_growth_preserves_rename_baseline() -> None:
     with growth_repository() as (mod, root, git):
         path = "crates/a/src/old.rs"
@@ -1379,12 +1400,12 @@ def test_growth_preserves_rename_baseline() -> None:
         git("commit", "-m", "rename")
         assert mod.file_growth_findings(base, "HEAD") == []
         with (root / renamed).open("a") as stream:
-            stream.write("// one more line\n")
+            stream.write("// more lines\n" * 50)
         git("add", ".")
         git("commit", "-m", "grow renamed file")
         findings = mod.file_growth_findings(base, "HEAD")
         assert len(findings) == 1 and findings[0].file == renamed
-        assert "2100 -> 2101 lines (+1/-0)" in findings[0].summary
+        assert "2100 -> 2150 lines (+50/-0)" in findings[0].summary
 
 
 def test_growth_excludes_generated_headers_and_counts_inline_tests() -> None:
@@ -1470,6 +1491,7 @@ def test_growth_cli_rejects_live_mode_and_invalid_limits() -> None:
         ["--file-growth"],
         ["--dry-run", "--file-growth-soft-limit", "0"],
         ["--dry-run", "--file-growth-large-limit", "999"],
+        ["--dry-run", "--file-growth-large-min-delta", "-1"],
     ]:
         with contextlib.redirect_stderr(io.StringIO()):
             try:
@@ -1478,6 +1500,25 @@ def test_growth_cli_rejects_live_mode_and_invalid_limits() -> None:
                 assert error.code == 2
             else:
                 raise AssertionError(f"expected argument error: {args}")
+
+
+def test_growth_cli_forwards_configurable_minimum_delta() -> None:
+    with growth_repository() as (mod, root, git):
+        file = write_growth_file(root, "crates/a/src/lib.rs", 2100)
+        git("add", ".")
+        git("commit", "-m", "baseline")
+        file.write_text(file.read_text() + "// extra\n")
+        output = root / "review.json"
+        args = ["--base", "HEAD", "--worktree", "--dry-run", "--no-dotenv",
+                "--file-growth", "--output-json", str(output)]
+        for floor, expected in [(50, 0), (2, 0), (1, 1), (0, 1)]:
+            with contextlib.redirect_stdout(io.StringIO()):
+                assert mod.main([
+                    *args, "--file-growth-large-min-delta", str(floor),
+                ]) == 0
+            report = json.loads(output.read_text())
+            assert len(report["findings"]) == expected
+            assert report["verdict"] == "pass"
 
 
 def test_growth_custom_limits_and_header_window() -> None:
@@ -1550,9 +1591,13 @@ def test_growth_backtest_cli_writes_pinned_json_and_validates_options() -> None:
         payload = json.loads(output.read_text())
         assert payload["base"] == git("rev-parse", "HEAD")
         assert payload["soft_limit"] == 20 and payload["large_limit"] == 40
+        assert payload["large_min_delta"] == 50
         assert payload["prs"][0]["number"] == 7
         assert len(payload["prs"][0]["findings"]) == 1
-    for args in [["--count", "0"], ["--soft-limit", "0"], ["--large-limit", "999"]]:
+    for args in [
+        ["--count", "0"], ["--soft-limit", "0"], ["--large-limit", "999"],
+        ["--large-min-delta", "-1"],
+    ]:
         with contextlib.redirect_stderr(io.StringIO()):
             try:
                 backtest.main(args)
@@ -1560,6 +1605,28 @@ def test_growth_backtest_cli_writes_pinned_json_and_validates_options() -> None:
                 assert error.code == 2
             else:
                 raise AssertionError(f"expected argument error: {args}")
+
+
+def test_growth_backtest_cli_forwards_configurable_minimum_delta() -> None:
+    backtest = load_growth_backtest()
+    with growth_repository() as (mod, root, git), mock.patch.object(backtest, "reviewer", mod):
+        file = write_growth_file(root, "crates/a/src/lib.rs", 2100)
+        git("add", ".")
+        git("commit", "-m", "baseline")
+        file.write_text(file.read_text() + "// extra\n")
+        git("add", ".")
+        git("commit", "-m", "small addition (#8)")
+        output = root / "backtest.json"
+        for flags, floor, expected in [([], 50, 0), (["--large-min-delta", "1"], 1, 1),
+                                       (["--large-min-delta", "0"], 0, 1)]:
+            with contextlib.redirect_stdout(io.StringIO()) as text:
+                assert backtest.main([
+                    "--base", "HEAD", "--count", "1", "--output-json", str(output), *flags,
+                ]) == 0
+            payload = json.loads(output.read_text())
+            assert payload["large_min_delta"] == floor
+            assert len(payload["prs"][0]["findings"]) == expected
+            assert f"at least {floor} net added lines" in text.getvalue()
 
 
 # --- prompt and rules files --------------------------------------------------

@@ -25,7 +25,9 @@ sys.modules[spec.name] = reviewer
 spec.loader.exec_module(reviewer)
 
 
-def backtest(base: str, count: int, soft_limit: int, large_limit: int) -> list[dict]:
+def backtest(
+    base: str, count: int, soft_limit: int, large_limit: int, large_min_delta: int = 50,
+) -> list[dict]:
     """Apply the same check to PRs on first-parent history, newest landing first."""
     history = reviewer.run_git([
         "log", "--first-parent", "--format=%H%x09%P%x09%s", base,
@@ -39,6 +41,7 @@ def backtest(base: str, count: int, soft_limit: int, large_limit: int) -> list[d
         parent = parents.split()[0]
         findings = reviewer.file_growth_findings(
             parent, commit, soft_limit=soft_limit, large_limit=large_limit,
+            large_min_delta=large_min_delta,
         )
         rows.append({
             "number": int(match.group(1) or match.group(2)),
@@ -53,13 +56,16 @@ def backtest(base: str, count: int, soft_limit: int, large_limit: int) -> list[d
     raise ValueError(f"requested {count} merged PRs but found only {len(rows)} at {base}")
 
 
-def markdown_report(rows: list[dict], base: str, soft_limit: int, large_limit: int) -> str:
+def markdown_report(
+    rows: list[dict], base: str, soft_limit: int, large_limit: int, large_min_delta: int = 50,
+) -> str:
     """Render all verdicts and file-level evidence without claiming a false-positive rate."""
     warned = sum(bool(row["findings"]) for row in rows)
     lines = [
         "# File growth dry-run backtest (#917)", "",
         f"Pinned history tip: `{base}`. Latest {len(rows)} PRs on first-parent history.",
         f"Provisional limits: soft {soft_limit}, already-large {large_limit} lines.",
+        f"Already-large reminders require at least {large_min_delta} net added lines.",
         f"Warnings in **{warned}/{len(rows)} PRs**; all growth-only verdicts pass.", "",
         "Counts cover whole files, including inline tests. Conventional test/generated",
         "paths and generated headers are excluded, as documented in",
@@ -86,17 +92,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--count", type=int, default=20)
     parser.add_argument("--soft-limit", type=int, default=1000)
     parser.add_argument("--large-limit", type=int, default=2000)
+    parser.add_argument(
+        "--large-min-delta", type=int, default=50,
+        help="Minimum net added lines for already-large files (default: 50; 0 allows any growth)",
+    )
     parser.add_argument("--output-json", type=Path)
     args = parser.parse_args(argv)
     if args.count <= 0 or not 0 < args.soft_limit <= args.large_limit:
         parser.error("require count > 0 and 0 < soft-limit <= large-limit")
+    if args.large_min_delta < 0:
+        parser.error("--large-min-delta must be nonnegative")
     base = reviewer.run_git(["rev-parse", "--verify", f"{args.base}^{{commit}}"]).strip()
-    rows = backtest(base, args.count, args.soft_limit, args.large_limit)
-    print(markdown_report(rows, base, args.soft_limit, args.large_limit), end="")
+    rows = backtest(base, args.count, args.soft_limit, args.large_limit, args.large_min_delta)
+    print(markdown_report(
+        rows, base, args.soft_limit, args.large_limit, args.large_min_delta,
+    ), end="")
     if args.output_json:
         args.output_json.write_text(json.dumps({
             "base": base, "soft_limit": args.soft_limit,
-            "large_limit": args.large_limit, "prs": rows,
+            "large_limit": args.large_limit, "large_min_delta": args.large_min_delta,
+            "prs": rows,
         }, indent=2) + "\n", encoding="utf-8")
     return 0
 
