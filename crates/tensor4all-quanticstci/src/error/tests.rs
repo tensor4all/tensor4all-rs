@@ -27,3 +27,13 @@ fn from_conversions_preserve_source() {
         "root cause"
     );
 }
+
+#[test]
+fn from_treetci_error_preserves_source() {
+    let e = QuanticsTCIError::from(tensor4all_treetci::TreeTciError::from(anyhow::anyhow!(
+        "treetci root cause"
+    )));
+    assert!(e.to_string().contains("quantics TCI operation failed"));
+    let source = <dyn std::error::Error>::source(&e).unwrap().to_string();
+    assert!(source.contains("tree-TCI operation failed: treetci root cause"));
+}
