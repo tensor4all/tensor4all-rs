@@ -29,6 +29,7 @@ mod linalg_multithreaded;
 mod linalg_qr;
 mod prepared_contraction;
 mod random_rng_stream;
+mod randomized_factorization;
 mod resident_rrqr;
 mod runtime_free_indexed_ops;
 mod send_sync;

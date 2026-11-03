@@ -570,17 +570,6 @@ pub enum t4a_factorize_alg {
     CI = 3,
 }
 
-impl From<FactorizeAlg> for t4a_factorize_alg {
-    fn from(alg: FactorizeAlg) -> Self {
-        match alg {
-            FactorizeAlg::SVD => Self::SVD,
-            FactorizeAlg::QR => Self::QR,
-            FactorizeAlg::LU => Self::LU,
-            FactorizeAlg::CI => Self::CI,
-        }
-    }
-}
-
 impl From<t4a_factorize_alg> for FactorizeAlg {
     fn from(alg: t4a_factorize_alg) -> Self {
         match alg {

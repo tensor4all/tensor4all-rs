@@ -113,6 +113,11 @@ pub use tensor_index::TensorIndex;
 
 // Krylov subspace methods (GMRES, etc.)
 pub mod krylov;
+pub mod randomized;
+pub use randomized::{
+    randomized_range, randomized_range_in, randomized_range_on_session, randomized_svd,
+    RangeOptions, RsvdOptions, RsvdResult, RsvdTimings,
+};
 
 // Block tensor for block matrix GMRES
 pub mod block_tensor;
@@ -182,7 +187,8 @@ pub mod svd {
 pub use defaults::direct_sum::direct_sum;
 pub use defaults::factorize::{
     factorize, factorize_full_rank, factorize_full_rank_in, factorize_full_rank_on_session,
-    factorize_in, factorize_on_session,
+    factorize_in, factorize_on_session, factorize_with_rng, factorize_with_rng_in,
+    factorize_with_rng_on_session,
 };
 pub use defaults::qr::{
     default_qr_rtol, qr, qr_with, qr_with_on_session, set_default_qr_rtol, QrError, QrOptions,

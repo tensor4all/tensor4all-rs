@@ -95,7 +95,6 @@ where
         tolerance: options.tolerance,
         max_bond_dim: options.max_bond_dim,
         left_orthogonal: true,
-        ..Default::default()
     };
 
     for i in 0..n {

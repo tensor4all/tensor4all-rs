@@ -38,6 +38,21 @@ macOS also set `VECLIB_MAXIMUM_THREADS=1`.
 
 ### Rust
 
+#### Fixed-rank RSVD and Lanczos (#1108)
+
+`benchmark_randomized_factorization` diagnoses Fit/Zipup costs; its
+`--decompositions` mode compares SVD, RSVD and the existing faer Lanczos driver
+on identical column-major inputs at matched accuracy. It prints the GEMM/QR
+share of RSVD's total time. This is an internal algorithm comparison.
+
+Build the reference with `python3 scripts/build-rsvd-reference.py`. It identifies
+the exact transitive faer artifacts from Cargo JSON and compiles a standalone
+reference executable, adding no library dependency. Set `T4A_LANCZOS_REFERENCE`
+to the printed binary, pin Rayon/BLAS thread variables and CPU affinity as above,
+then run `benchmark_randomized_factorization --decompositions`.
+The [declared protocol](results/2026-11-03-randomized-factorization/protocol.md)
+records the fixture, repetitions, accuracy gates and limits of these diagnostics.
+
 #### Merge-refine schedule (#752)
 
 `benchmark_merge_refine` compares the level-coupled schedule against the greedy

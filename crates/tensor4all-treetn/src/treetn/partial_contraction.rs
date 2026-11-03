@@ -228,6 +228,12 @@ fn factorize_options_from_contraction_options(
     options: &ContractionOptions,
 ) -> Result<FactorizeOptions> {
     let mut factorize_options = match options.factorize_alg {
+        FactorizeAlg::RSVD => {
+            return Err(tensor4all_core::FactorizeError::InvalidOptions(
+                "partial contraction does not support RSVD; use contract with Fit or Zipup",
+            )
+            .into())
+        }
         FactorizeAlg::SVD => FactorizeOptions::svd(),
         FactorizeAlg::QR => FactorizeOptions::qr(),
         FactorizeAlg::LU => FactorizeOptions::lu(),

@@ -1,7 +1,7 @@
 //! Unified tensor factorization module.
 //!
 //! This module provides a unified `factorize()` function that dispatches to
-//! SVD, QR, LU, or CI (Cross Interpolation) algorithms based on options.
+//! SVD, RSVD, QR, LU, or CI (Cross Interpolation) algorithms based on options.
 //!
 //! # Note
 //!
@@ -65,6 +65,7 @@ pub use crate::tensor_like::{
 ///
 /// This function dispatches to the appropriate algorithm based on `options.alg`:
 /// - `SVD`: Singular Value Decomposition
+/// - `RSVD`: Fixed-rank randomized SVD (seeded convenience call)
 /// - `QR`: QR decomposition
 /// - `LU`: Rank-revealing LU decomposition
 /// - `CI`: Cross Interpolation
@@ -80,7 +81,7 @@ pub use crate::tensor_like::{
 ///
 /// # Returns
 /// A `FactorizeResult` containing the left and right factors, bond index,
-/// singular values (for SVD), and rank.
+/// singular values (for SVD/RSVD), and rank.
 ///
 /// # Errors
 /// Returns `FactorizeError` if:
@@ -89,6 +90,7 @@ pub use crate::tensor_like::{
 /// - QR is used with `Canonical::Right`
 /// - LU or CI is requested for a tracked tensor (those paths do not yet
 ///   preserve reverse-mode AD metadata)
+/// - RSVD is paired with an explicit threshold policy (`UnsupportedTruncationPolicy`)
 /// - The underlying algorithm fails
 pub fn factorize(
     t: &IdxTensor,
@@ -96,6 +98,17 @@ pub fn factorize(
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     options.validate()?;
+    if options.alg == FactorizeAlg::RSVD {
+        use rand::SeedableRng;
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rsvd_seed);
+        return crate::randomized::factorize(
+            t,
+            left_inds,
+            options,
+            &mut rng,
+            &mut crate::randomized::Route::Eager(None),
+        );
+    }
 
     if t.is_diag() {
         return Err(FactorizeError::UnsupportedStorage(
@@ -123,6 +136,142 @@ pub fn factorize(
     }
 }
 
+/// Factorize with a caller-owned RNG, preserving its stream across calls.
+///
+/// RSVD uses the positive `max_bond_dim` and `randomized` sketch options;
+/// `rsvd_seed` is ignored. Deterministic algorithms do not consume randomness.
+/// Returns the same canonical factors as [`factorize`].
+///
+/// # Errors
+/// Returns [`FactorizeError`] for invalid options or indices, unsupported
+/// storage/dtype, size overflow, or a backend failure.
+///
+/// # Examples
+/// ```
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_core::{factorize_with_rng, DynIndex, FactorizeOptions, IdxTensor, TensorContractionLike};
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+/// let a = IdxTensor::from_dense(vec![i.clone(), j], vec![3., 0., 0., 0.])?;
+/// let mut rng = ChaCha8Rng::seed_from_u64(11);
+/// let result = factorize_with_rng(&a, &[i], &FactorizeOptions::rsvd(1), &mut rng)?;
+/// assert!(a.sub(&result.left.contract_pair(&result.right)?)?.maxabs()? < 1e-12);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn factorize_with_rng<R: rand::Rng + ?Sized>(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &FactorizeOptions,
+    rng: &mut R,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    if options.alg == FactorizeAlg::RSVD {
+        crate::randomized::factorize(
+            t,
+            left_inds,
+            options,
+            rng,
+            &mut crate::randomized::Route::Eager(None),
+        )
+    } else {
+        factorize(t, left_inds, options)
+    }
+}
+
+/// Factorize with a continuous caller RNG in a caller-owned execution context.
+///
+/// Same rank, sketch and factor contracts as [`factorize_with_rng`]. Inputs,
+/// sketches and results belong to `context`; invalid inputs leave `rng` untouched.
+///
+/// # Errors
+/// Returns [`FactorizeError`] for invalid options/indices, foreign execution
+/// contexts, unsupported storage/dtype, overflow, or a backend failure.
+///
+/// # Examples
+/// ```
+/// use std::sync::Arc;
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_core::{factorize_with_rng_in, DynIndex, ExecutionContext, FactorizeOptions, IdxTensor, TensorContractionLike};
+/// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
+/// let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?)));
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+/// let a = IdxTensor::from_dense_in(&context, vec![i.clone(), j], vec![3., 0., 0., 0.])?;
+/// let mut rng = ChaCha8Rng::seed_from_u64(11);
+/// let result = factorize_with_rng_in(&a, &[i], &FactorizeOptions::rsvd(1), &mut rng, &context)?;
+/// let values = result.left.contract_pair(&result.right)?.to_vec::<f64>()?;
+/// assert!(values.iter().zip([3., 0., 0., 0.]).all(|(x, y)| (x - y).abs() < 1e-12));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn factorize_with_rng_in<R: rand::Rng + ?Sized>(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &FactorizeOptions,
+    rng: &mut R,
+    context: &ExecutionContext,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    if options.alg == FactorizeAlg::RSVD {
+        crate::randomized::factorize(
+            t,
+            left_inds,
+            options,
+            rng,
+            &mut crate::randomized::Route::Eager(Some(context)),
+        )
+    } else {
+        factorize_in(t, left_inds, options, context)
+    }
+}
+
+/// Factorize on a caller-held plain session using a caller-owned RNG.
+///
+/// Same rank, sketch and factor contracts as [`factorize_with_rng`]. All numeric
+/// operations use `session`; results are untracked host tensors. No eager runtime
+/// or second session is entered.
+///
+/// # Errors
+/// Returns [`FactorizeError`] for tracked/resident operands, unsupported storage
+/// or dtype, invalid options/indices, overflow, or a backend failure.
+///
+/// # Examples
+/// ```
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_core::{factorize_with_rng_on_session, DynIndex, FactorizeOptions, IdxTensor, TensorContractionLike};
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+/// let a = IdxTensor::from_dense(vec![i.clone(), j], vec![3., 0., 0., 0.])?;
+/// let mut rng = ChaCha8Rng::seed_from_u64(11);
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let result = {
+///     let mut session = Session::new(backend.engine_mut());
+///     factorize_with_rng_on_session(&mut session, &a, &[i], &FactorizeOptions::rsvd(1), &mut rng)?
+/// };
+/// assert!(a.sub(&result.left.contract_pair(&result.right)?)?.maxabs()? < 1e-12);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn factorize_with_rng_on_session<R: rand::Rng + ?Sized>(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &FactorizeOptions,
+    rng: &mut R,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    if options.alg == FactorizeAlg::RSVD {
+        crate::randomized::factorize(
+            t,
+            left_inds,
+            options,
+            rng,
+            &mut crate::randomized::Route::Session(session),
+        )
+    } else {
+        factorize_on_session(session, t, left_inds, options)
+    }
+}
+
 /// Select Gram eigendecomposition for safe untracked SVD truncations.
 ///
 /// This is intentionally crate-visible: the public entry point is the
@@ -132,6 +281,9 @@ pub(crate) fn factorize_auto(
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    if options.alg == FactorizeAlg::RSVD {
+        return factorize(t, left_inds, options);
+    }
     if options.alg != FactorizeAlg::SVD {
         return Err(FactorizeError::InvalidOptions(
             "automatic factorization only supports SVD options",
@@ -497,6 +649,18 @@ pub fn factorize_in(
     context: &ExecutionContext,
 ) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     options.validate()?;
+    if options.alg == FactorizeAlg::RSVD {
+        use rand::SeedableRng;
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rsvd_seed);
+        return crate::randomized::factorize(
+            t,
+            left_inds,
+            options,
+            &mut rng,
+            &mut crate::randomized::Route::Eager(Some(context)),
+        );
+    }
+
     t.validate_context(context)
         .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
 
@@ -515,6 +679,9 @@ pub fn factorize_in(
     match options.alg {
         FactorizeAlg::SVD => factorize_svd_with_options_in(t, left_inds, options, context),
         FactorizeAlg::QR => factorize_qr_with_options_in(t, left_inds, options, context),
+        FactorizeAlg::RSVD => Err(FactorizeError::InvalidOptions(
+            "RSVD needs a fixed rank and caller RNG; use factorize_with_rng",
+        )),
         FactorizeAlg::LU | FactorizeAlg::CI => Err(FactorizeError::UnsupportedStorage(
             "LU and CI factorization have no context-scoped path; use factorize() on host inputs",
         )),
@@ -560,6 +727,7 @@ pub fn factorize_full_rank_in(
             factorize_svd_with_options_in_full_rank(t, left_inds, canonical, context)
         }
         FactorizeAlg::QR => factorize_qr_full_rank_in(t, left_inds, canonical, context),
+        FactorizeAlg::RSVD => Err(FactorizeError::InvalidOptions("RSVD needs a fixed rank and caller RNG; use factorize_with_rng")),
         FactorizeAlg::LU | FactorizeAlg::CI => Err(FactorizeError::UnsupportedStorage(
             "LU and CI factorization have no context-scoped path; use factorize_full_rank() on host inputs",
         )),
@@ -740,6 +908,18 @@ pub fn factorize_on_session(
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     options.validate()?;
+    if options.alg == FactorizeAlg::RSVD {
+        use rand::SeedableRng;
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rsvd_seed);
+        return crate::randomized::factorize(
+            t,
+            left_inds,
+            options,
+            &mut rng,
+            &mut crate::randomized::Route::Session(session),
+        );
+    }
+
     if t.is_diag() {
         return Err(FactorizeError::UnsupportedStorage(
             "Diagonal storage not supported for factorize",
@@ -777,6 +957,9 @@ pub fn factorize_on_session(
             })?;
             Ok(FactorizeResult::new(q, r, bond_index, None, rank))
         }
+        FactorizeAlg::RSVD => Err(FactorizeError::InvalidOptions(
+            "RSVD needs a fixed rank and caller RNG; use factorize_with_rng",
+        )),
         FactorizeAlg::LU | FactorizeAlg::CI => Err(FactorizeError::UnsupportedStorage(
             "LU and CI factorization have no explicit-session path",
         )),
@@ -880,6 +1063,9 @@ pub fn factorize_full_rank_on_session(
             }
             factorize_qr_full_rank_on_session(session, t, left_inds)
         }
+        FactorizeAlg::RSVD => Err(FactorizeError::InvalidOptions(
+            "RSVD needs a fixed rank and caller RNG; use factorize_with_rng",
+        )),
         FactorizeAlg::LU | FactorizeAlg::CI => Err(FactorizeError::UnsupportedStorage(
             "LU and CI factorization have no explicit-session path",
         )),
@@ -995,6 +1181,9 @@ where
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     match options.alg {
+        FactorizeAlg::RSVD => Err(FactorizeError::InvalidOptions(
+            "RSVD must use the randomized dispatch",
+        )),
         FactorizeAlg::SVD => factorize_svd(t, left_inds, options),
         FactorizeAlg::QR => factorize_qr(t, left_inds, options),
         FactorizeAlg::LU => factorize_lu::<T>(t, left_inds, options),
@@ -1019,6 +1208,9 @@ where
     <T as ComplexFloat>::Real: Into<f64> + 'static,
 {
     match alg {
+        FactorizeAlg::RSVD => Err(FactorizeError::InvalidOptions(
+            "RSVD is a fixed-rank approximation; use SVD for full-rank factorization",
+        )),
         FactorizeAlg::SVD => factorize_svd_full_rank(t, left_inds, canonical),
         FactorizeAlg::QR => factorize_qr_full_rank(t, left_inds, canonical),
         FactorizeAlg::LU => factorize_lu_full_rank::<T>(t, left_inds, canonical),
@@ -1066,7 +1258,7 @@ fn factorize_svd_with_options(
 ///
 /// Shared by the host and context-scoped SVD factorization paths: contracts
 /// `S` into one side and renames the leftover `sim` leg back to `bond`.
-fn assemble_svd_factors(
+pub(crate) fn assemble_svd_factors(
     result: SvdFactorizeResult,
     canonical: Canonical,
     contract: &mut dyn FnMut(&IdxTensor, &IdxTensor) -> Result<IdxTensor, FactorizeError>,

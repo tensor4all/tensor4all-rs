@@ -154,7 +154,9 @@ fn assert_empty_side_split(
         Canonical::Right => &result.right,
     };
     let measure = match alg {
-        FactorizeAlg::SVD | FactorizeAlg::QR => canonical_factor.norm().unwrap(),
+        FactorizeAlg::SVD | FactorizeAlg::RSVD | FactorizeAlg::QR => {
+            canonical_factor.norm().unwrap()
+        }
         FactorizeAlg::LU | FactorizeAlg::CI => canonical_factor.maxabs().unwrap(),
     };
     assert!(

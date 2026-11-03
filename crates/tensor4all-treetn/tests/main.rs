@@ -23,6 +23,7 @@ mod linsolve;
 mod linsolve_mpo_xb;
 mod ops;
 mod random_rng_stream;
+mod randomized_factorization;
 mod repro_swap_truncation;
 mod session_cached_evaluator;
 mod session_factorization;

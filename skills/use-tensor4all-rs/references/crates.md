@@ -23,6 +23,10 @@ Indices, dynamic-rank tensors, contraction, factorization. Most other crates re-
 - `factorize(&t, &[left_indices], &opts) -> FactorizeResult { left, right, rank, singular_values }`.
   - `FactorizeOptions::svd().with_svd_policy(SvdTruncationPolicy::new(rtol))` / `.with_max_bond_dim(n)`.
   - `FactorizeOptions::qr().with_qr_rtol(tol)` / `.with_max_bond_dim(n)`.
+  - `FactorizeOptions::rsvd(rank)` / `factorize_with_rng(..., rng)` — fixed-rank
+    dense RSVD; explicit SVD threshold policies return `UnsupportedTruncationPolicy`.
+  - `randomized_range` / `randomized_svd` — caller-RNG Gaussian basis/SVD for
+    `f64` and `Complex64`. See the [randomized factorization guide](https://tensor4all.org/tensor4all-rs/guides/randomized-factorization.html).
 
 ## tensor4all-simplett — lightweight TT/MPS
 

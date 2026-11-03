@@ -658,7 +658,7 @@ fn retained_svd_rank(
     options: &SvdOptions,
 ) -> Result<usize, SvdError> {
     if !options.truncate {
-        return Ok(k.max(1));
+        return Ok(options.max_bond_dim.unwrap_or(k).min(k).max(1));
     }
     // Shared root guard: reject `max_bond_dim == Some(0)` and invalid
     // explicit policies before any truncation, so the caller cannot
