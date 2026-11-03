@@ -108,6 +108,10 @@ harness = false
 name = "structured_select"
 harness = false
 
+[[bench]]
+name = "direct_sum"
+harness = false
+
 [[test]]
 name = "integration"
 path = "tests/main.rs"
