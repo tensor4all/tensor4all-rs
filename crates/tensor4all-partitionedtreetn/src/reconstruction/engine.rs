@@ -49,6 +49,12 @@ struct WorkingRegion<V: Clone + Hash + Eq + Send + Sync + Debug> {
 /// caller's options are unchanged. Zero tolerance retains exact terms without
 /// SVD compression. Soft rank/search limits never force extra approximation.
 ///
+/// Terms are merged pairwise, in a balanced tree, and every merge decides on
+/// its own whether to keep the two terms combined (only when compression lowers
+/// the rank). No sum of more than two terms is formed, so this routine takes
+/// no [`SumEngine`](tensor4all_treetn::SumEngine): for two terms the binary add
+/// and the N-ary direct sum do the same work.
+///
 /// # Errors
 /// Returns `InvalidOptions` for invalid tolerances, zero rank/search limits,
 /// duplicate or absent split indices; `SiteIndexMismatch` for aliased dimensions;

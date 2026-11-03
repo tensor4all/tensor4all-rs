@@ -59,7 +59,17 @@ cutoff in `TreeTN::truncate` — so each patch is accurate relative to itself, n
 patch is dropped, and projected children inherit no absolute budget. The same
 choice applies to `add_with_patching`, `contract_adaptive`, and
 `truncate_adaptive`. `cutoff` is best effort for the final whole-network error;
-`max_bond_dim` is a hard cap. Inputs that share an equal projector key are
+`max_bond_dim` is a hard cap.
+
+When several patches are summed exactly (contributions to one output projector in
+`contract` and `contract_adaptive`, inputs with an equal key in `add_with_patching`,
+and all patches in `to_treetn`), the sum is built with a `SumEngine`.
+`PatchingOptions::sum_engine` and `PartitionedContractionOptions::sum_engine`
+default to `SumEngine::Binary`, which adds the patches one by one. `SumEngine::Nary`
+builds each sum in one pass, which is much faster when many patches meet in one
+sum, and `SumEngine::NaryWithin { limit_bytes }` does so only while the estimated
+size of the summed network fits the limit. `to_treetn_with(engine)` reports which
+method ran and the size estimate. Inputs that share an equal projector key are
 summed before patching:
 
 ```rust
@@ -67,7 +77,7 @@ summed before patching:
 # use tensor4all_partitionedtreetn::{
 #     add_with_patching, BudgetAllocation, PatchSplitStrategy, PatchingOptions, SubDomainTreeTN,
 # };
-# use tensor4all_treetn::TreeTN;
+# use tensor4all_treetn::{SumEngine, TreeTN};
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 let site0 = DynIndex::new_dyn(2);
 let bond = DynIndex::new_dyn(2);
@@ -92,6 +102,7 @@ let result = add_with_patching(
         max_bond_dim: Some(1),
         patch_order: vec![site0],
         split_strategy: PatchSplitStrategy::Sequential,
+        sum_engine: SumEngine::Binary,
     },
 )?;
 

@@ -12,7 +12,7 @@ use tensor4all_core::{
 };
 use tensor4all_treetn::{
     contraction::{self, ContractionMethod, ContractionOptions},
-    SiteIndexNetwork, TreeTN, TruncationOptions,
+    SiteIndexNetwork, SumEngine, TreeTN, TruncationOptions,
 };
 
 /// A TreeTN together with the projector defining its subdomain.
@@ -539,20 +539,37 @@ where
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn add(&self, other: &Self) -> Result<Self> {
-        self.validate_invariants()?;
-        other.validate_invariants()?;
-        ensure_same_tree_structure(&self.data, &other.data)?;
-        ensure_same_dtype(self.scalar_kind()?, other.scalar_kind()?)?;
-        if self.projector != other.projector {
-            return Err(PartitionedTreeTNError::ProjectorMismatch);
+        Self::exact_sum(&[self, other], SumEngine::Binary)
+    }
+
+    /// Sum subdomains with one projector exactly, building the sum with the
+    /// method `engine` chooses ([`TreeTN::exact_sum`]).
+    ///
+    /// Every term is checked as [`add`](Self::add) checks its operands: valid
+    /// invariants, the tree structure and dtype of `terms[0]`, and an equal
+    /// projector key. The stored TreeTNs are already eagerly masked, so the
+    /// sum is masked as well; it keeps `terms[0]`'s budget metadata. A single
+    /// term is returned as a clone. Which method ran is not reported; the
+    /// routines that sum patches document that.
+    pub(crate) fn exact_sum(terms: &[&Self], engine: SumEngine) -> Result<Self> {
+        let (first, rest) = terms.split_first().ok_or(PartitionedTreeTNError::Empty)?;
+        first.validate_invariants()?;
+        let first_kind = first.scalar_kind()?;
+        for term in rest {
+            term.validate_invariants()?;
+            ensure_same_tree_structure(&first.data, &term.data)?;
+            ensure_same_dtype(first_kind, term.scalar_kind()?)?;
+            if first.projector != term.projector {
+                return Err(PartitionedTreeTNError::ProjectorMismatch);
+            }
         }
 
-        let data = self
-            .data
-            .add(&other.data)
-            .map_err(PartitionedTreeTNError::from)?;
-        ensure_same_tree_structure(&self.data, &data)?;
-        Self::from_masked_data(data, self.projector.clone(), self.budget_squared)
+        let data: Vec<_> = terms.iter().map(|term| &term.data).collect();
+        let network = TreeTN::exact_sum(&data, engine)
+            .map_err(PartitionedTreeTNError::from)?
+            .network;
+        ensure_same_tree_structure(&first.data, &network)?;
+        Self::from_masked_data(network, first.projector.clone(), first.budget_squared)
     }
 
     /// Truncate this eagerly masked subdomain towards an explicit TreeTN center.
