@@ -1,3 +1,4 @@
+use crate::assemble::MultiIndex;
 use crate::error::Result as TreeTciResult;
 
 pub(crate) fn checked_batch_len(n_sites: usize, n_points: usize) -> TreeTciResult<usize> {
@@ -5,6 +6,99 @@ pub(crate) fn checked_batch_len(n_sites: usize, n_points: usize) -> TreeTciResul
         .checked_mul(n_points)
         .ok_or_else(|| anyhow::anyhow!("global index batch shape product overflowed usize"))
         .map_err(Into::into)
+}
+
+/// The entry indices of a candidate matrix, column-major with left fastest.
+///
+/// Entry `start + offset` is `(left, right)`; `n_left` is the number of left
+/// candidates and must be positive.
+pub(crate) fn candidate_entries(
+    start: usize,
+    count: usize,
+    n_left: usize,
+) -> impl Iterator<Item = (usize, usize)> {
+    (start..start + count).map(move |entry| (entry % n_left, entry / n_left))
+}
+
+/// Assemble the global points of `entries` of one edge's candidate matrix.
+///
+/// Fills `buffer` with column-major `(n_sites, count)` storage. `left` and
+/// `right` pair a subtree key's sites with its candidate fragments; the caller
+/// checks that they are disjoint and cover every site, which is what allows the
+/// buffer to be reused without clearing it.
+pub(crate) fn assemble_candidate_points<'a>(
+    buffer: &'a mut Vec<usize>,
+    n_sites: usize,
+    left: (&[usize], &[MultiIndex]),
+    right: (&[usize], &[MultiIndex]),
+    entries: impl Iterator<Item = (usize, usize)>,
+    count: usize,
+) -> TreeTciResult<&'a [usize]> {
+    buffer.resize(checked_batch_len(n_sites, count)?, 0);
+    let mut entries = entries;
+    for point in buffer.chunks_exact_mut(n_sites) {
+        let (left_index, right_index) = entries
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("candidate matrix has fewer than {count} entries"))?;
+        for (&site, &value) in left.0.iter().zip(left.1[left_index].iter()) {
+            point[site] = value;
+        }
+        for (&site, &value) in right.0.iter().zip(right.1[right_index].iter()) {
+            point[site] = value;
+        }
+    }
+    Ok(buffer)
+}
+
+/// Collect the results of `evaluate` over the chunks of `n_points` requests.
+///
+/// `evaluate(start, count)` returns the values of that chunk in request order;
+/// `what` names the requests in the error raised when it returns the wrong
+/// number. A single-chunk request hands over its values without a copy.
+pub(crate) fn collect_chunks<T>(
+    n_points: usize,
+    chunk_points: usize,
+    what: &str,
+    mut evaluate: impl FnMut(usize, usize) -> anyhow::Result<Vec<T>>,
+) -> anyhow::Result<Vec<T>> {
+    let mut values = Vec::new();
+    for (start, count) in chunk_ranges(n_points, chunk_points)? {
+        let chunk = evaluate(start, count)?;
+        anyhow::ensure!(
+            chunk.len() == count,
+            "batch evaluator returned {} values for {} {what} (points {}..{} of {})",
+            chunk.len(),
+            count,
+            start,
+            start + count,
+            n_points
+        );
+        if count == n_points {
+            // Single call: hand over the evaluator's buffer without a copy.
+            return Ok(chunk);
+        }
+        if values.is_empty() {
+            values.reserve_exact(n_points);
+        }
+        values.extend(chunk);
+    }
+    Ok(values)
+}
+
+/// Split `n_points` requests into calls of at most `chunk_points` entries.
+///
+/// Yields `(start, count)` pairs in request order; the last one is partial when
+/// `chunk_points` does not divide `n_points`. The chunking policy is the
+/// caller's: the cache it feeds does not own it.
+pub(crate) fn chunk_ranges(
+    n_points: usize,
+    chunk_points: usize,
+) -> anyhow::Result<impl Iterator<Item = (usize, usize)>> {
+    anyhow::ensure!(chunk_points > 0, "evaluation chunk size must be positive");
+    anyhow::ensure!(n_points > 0, "at least one point is required");
+    Ok((0..n_points)
+        .step_by(chunk_points)
+        .map(move |start| (start, chunk_points.min(n_points - start))))
 }
 
 /// Maximum number of points per evaluator call when TreeTCI evaluates a large
@@ -40,42 +134,16 @@ where
     F: FnMut(GlobalIndexBatch<'_>) -> anyhow::Result<Vec<T>>,
     G: FnMut(&mut [usize]),
 {
-    anyhow::ensure!(chunk_points > 0, "evaluation chunk size must be positive");
-    anyhow::ensure!(
-        n_sites > 0 && n_points > 0,
-        "at least one point with one site is required"
-    );
+    anyhow::ensure!(n_sites > 0, "at least one site is required");
     let buffer_points = chunk_points.min(n_points);
     let mut buffer = vec![0usize; checked_batch_len(n_sites, buffer_points)?];
-    let mut values = Vec::new();
-    let mut done = 0;
-    while done < n_points {
-        let count = buffer_points.min(n_points - done);
+    collect_chunks(n_points, chunk_points, what, |_, count| {
         let data = &mut buffer[..count * n_sites];
         for point in data.chunks_exact_mut(n_sites) {
             fill_point(point);
         }
-        let chunk = evaluate(GlobalIndexBatch::new(data, n_sites, count)?)?;
-        anyhow::ensure!(
-            chunk.len() == count,
-            "batch evaluator returned {} values for {} {what} (points {}..{} of {})",
-            chunk.len(),
-            count,
-            done,
-            done + count,
-            n_points
-        );
-        if count == n_points {
-            // Single call: hand over the evaluator's buffer without a copy.
-            return Ok(chunk);
-        }
-        if values.is_empty() {
-            values.reserve_exact(n_points);
-        }
-        values.extend(chunk);
-        done += count;
-    }
-    Ok(values)
+        evaluate(GlobalIndexBatch::new(data, n_sites, count)?)
+    })
 }
 
 /// Borrowed view of a global site-order batch.

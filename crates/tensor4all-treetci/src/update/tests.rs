@@ -1,5 +1,6 @@
 use super::{evaluate_candidate_matrix, update_edge_default};
 use crate::batch::EVALUATION_CHUNK_POINTS;
+use crate::evaluation::BatchExecution;
 use crate::test_support::assert_scalar_close;
 use crate::{GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge, TreeTciGraph};
 use anyhow::Result;
@@ -325,4 +326,78 @@ fn update_edge_selection_does_not_enter_the_process_global_backend() {
         "the same row pivots"
     );
     assert_eq!(selection.col_indices, expected.col_indices);
+}
+
+#[test]
+fn keyed_candidate_matrix_serves_duplicate_entries_from_one_evaluation() {
+    // Three 3-state sites split 1 | 2. The left list repeats a candidate, so two
+    // matrix entries are the same point.
+    let n_sites = 3;
+    let local_dims = vec![3, 3, 3];
+    let left_key = SubtreeKey::new(vec![0]);
+    let right_key = SubtreeKey::new(vec![1, 2]);
+    let left_candidates = vec![vec![0], vec![2], vec![0]];
+    let right_candidates = vec![vec![0, 1], vec![2, 2]];
+
+    let mut evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        Ok(batch
+            .data()
+            .chunks_exact(batch.n_sites())
+            .map(|point| {
+                point
+                    .iter()
+                    .enumerate()
+                    .map(|(site, &value)| (value + 1) as f64 * (site as f64 + 1.0))
+                    .sum()
+            })
+            .collect())
+    };
+    let mut execution = crate::evaluation::Compatibility::new(&mut evaluate);
+    let mut memo =
+        crate::evaluation::CachedExecution::new(&mut execution, &local_dims, Some(1 << 20))
+            .unwrap();
+
+    // Two chunks of three entries: the matrix spans a chunk boundary, and each
+    // chunk reuses the one pair of side keys prepared for the matrix. Each chunk
+    // holds one duplicate pair, so the in-batch deduplication stays exercised.
+    let matrix = |memo: &mut crate::evaluation::CachedExecution<'_, f64>| {
+        evaluate_candidate_matrix(
+            n_sites,
+            &left_key,
+            &left_candidates,
+            &right_key,
+            &right_candidates,
+            &local_dims,
+            memo,
+            3,
+        )
+        .unwrap()
+    };
+
+    // Column-major: (left 0, right 0), (left 2, right 0), (left 0, right 0), ...
+    let values = matrix(&mut memo);
+    assert_eq!(values, vec![9.0, 11.0, 9.0, 16.0, 18.0, 16.0]);
+
+    // Every entry is a lookup; the two duplicate entries are evaluated once.
+    let stats = memo.stats();
+    assert_eq!(stats.requested_points, 6);
+    assert_eq!(stats.evaluated_points, 4);
+    assert_eq!(stats.cache_misses, 6);
+    assert_eq!(stats.cache_hits, 0);
+    assert_eq!(stats.cached_entries, 4);
+
+    // The same matrix again is served entirely from the cache.
+    let again = matrix(&mut memo);
+    let bits = |values: &[f64]| {
+        values
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(bits(&again), bits(&values));
+    let stats = memo.stats();
+    assert_eq!(stats.requested_points, 12);
+    assert_eq!(stats.evaluated_points, 4);
+    assert_eq!(stats.cache_hits, 6);
+    assert_eq!(stats.cache_misses, 6);
 }

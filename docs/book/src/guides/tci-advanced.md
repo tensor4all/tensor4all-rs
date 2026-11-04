@@ -175,6 +175,17 @@ assert_eq!(cache.misses(), 1);
 assert_eq!(cache.retained_bytes(), 8 + std::mem::size_of::<f64>());
 ```
 
+When your requests are entries of a structure whose keys add -- a matrix over
+two disjoint site sets, for example, because `key(i, j) = key_left[i] +
+key_right[j]` -- `MultiIndexCache::evaluate_keyed` serves them from the cache's
+own per-side keys (`left_keys` / `right_keys`), so a hit costs no point assembly
+and no coordinate validation. The keys are built and validated by the cache,
+tagged by side in the type system, and bound to that cache and its generation, so
+a key of another cache or of a cleared cache is a typed error rather than a
+silent miss. Only `u64` and `u128` caches build side keys; a wider cache returns
+`CacheKeyError::SideKeyUnsupported`. A caller with plain points keeps using `get`
+and `insert`.
+
 ### Performance guidance
 
 - `CachedFunction` is most useful when the function evaluation is expensive
