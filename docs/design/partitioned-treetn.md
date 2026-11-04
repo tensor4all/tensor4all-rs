@@ -156,12 +156,13 @@ For each compatible projector pair it:
 
 Where a routine forms an exact sum of more than two patches, the method that
 builds it is a `tensor4all_treetn::SumEngine` (tensor4all/tensor4all-rs#1107):
-`Binary` adds the terms one by one, `Nary` builds the sum in one direct-sum
-pass, and `NaryWithin { limit_bytes }` uses the N-ary pass only while the
-estimated size of the built sum fits the limit. Every engine gives the same
-sum; they differ in time and peak memory. The default is `Binary` everywhere,
-and `Nary` is opt-in; changing a default needs measurements on real data
-first.
+`Binary` adds the terms one by one, `Balanced` makes the same adds on a
+balanced tree over the terms (`ceil(log2 N)` levels), `Nary` builds the sum in
+one direct-sum pass, and `NaryWithin { limit_bytes }` uses the N-ary pass only
+while the estimated size of the built sum fits the limit. Every engine gives
+the same sum; they differ in time and peak memory. The default is `Binary`
+everywhere, and `Balanced` and `Nary` are opt-in; changing a default needs
+measurements on real data first.
 
 | routine | sum | engine from |
 |---|---|---|
@@ -185,6 +186,60 @@ ahead of that need.
 engine: every sum they form has two terms (two operands per key, or a pairwise
 merge that decides on its own whether to keep the pair combined), and for two
 terms the binary add and the N-ary pass do the same work.
+
+### Pairwise sums with a per-add cutoff
+
+`TreeTN::pairwise_sum` (tensor4all/tensor4all-rs#1125) is the same pairwise
+reduction as one entry point with the truncation of the caller's choice after
+every add: `PairwiseSumOrder::{Sequential, Balanced}` for the order and an
+optional `PerAddCutoff { center, cutoff, max_bond_dim }` for the truncation.
+The exact and truncating variants share the reduction tree and differ only in
+the combine step, a plain `add` or an `add` plus one truncation, so
+`Sequential` without a cutoff is `SumEngine::Binary` and `Balanced` without one
+is `SumEngine::Balanced`.
+
+The cutoff is **per add**, and the type and the rustdoc name it so: it bounds
+one truncation, not the sum. With a relative squared discarded-tail cutoff
+`tau` one truncation discards at most `2 (R - 1) sqrt(tau)` relative error over
+its `2 (R - 1)` two-site steps, so the reduction is bounded by
+`(1 + 2 (R - 1) sqrt(tau))^L - 1`, first order `2 (R - 1) L kappa sqrt(tau)`.
+`L` is `N - 1` for the chain and `ceil(log2 N)` for the balanced tree, and
+`kappa >= 1` is the largest partial-sum norm over the result norm, which the
+caller has to bound. Reaching an end-to-end relative error `eps` with the chain
+therefore takes `tau = eps / ((N - 1)^2 kappa^2)` in squared terms (first
+order; the section-7 derivation of #1107).
+
+**Where the truncated pairwise sum wins at equal error.** The cost condition is
+that the rank kept along the way stays well below the bond `N * D` the exact
+engines build on the way to the same result: one truncation costs about
+`(N * D)^3` per site, while truncating after each add costs `N * w(D' + D, D')`
+with the kept rank `D'`. Equal error additionally needs the per-add cutoff to
+reproduce the one-shot result, which holds when the summands are themselves
+compressible: then each add's cutoff drops real weight, and weight the one-shot
+truncation would also drop. Measured on #1107's grid — chains of `R = 12` sites
+of dimension 2, bond `D = 10`, `N = 64` and `N = 256` terms, release build, one
+core, single runs (not medians), error as the relative Frobenius error against
+the dense exact sum:
+
+| case | equal error | `exact_sum` + `Binary`, then truncate | `pairwise_sum`, truncating per add |
+|---|---|---|---|
+| smooth, `N = 64` | 1.28e-4 | 0.163-0.177 s | 0.068-0.072 s (2.4x) |
+| mixed, `N = 64`, cutoff 1e-10 | 1.03e-5 | 0.189 s | 0.067-0.069 s (2.7x) |
+| smooth, `N = 256` | 1.28e-4 | 14.99 s, 8.63 GB peak RSS | 0.266-0.293 s, 34-38 MB (51x time, 225x memory) |
+
+The incompressible family (independent random cores) is the boundary case that
+shows the qualification: its kept rank is 64 against `N * D = 640`, so the
+pairwise route is 1.2-1.5x cheaper in time, but it cannot reach the one-shot
+error at any useful per-add cutoff — 1.7e-5 at `tau = 1e-8` and 9.9e-7 at
+`tau = 1e-10`, against 7.5e-15 — because each add discards weight the one-shot
+truncation keeps. Matching that error would take a per-add bound so tight that
+the kept rank erases the cost advantage. That is why the per-add truncation
+stays opt-in. The balanced tree also beats the sequential chain when the exact
+sum is wanted: same result, 0.086-0.095 s against 0.148-0.190 s at `N = 64`.
+
+These numbers are measured on chains at `R = 12` only, in single runs, and are
+not extrapolated to trees, to other `R`, or to summands whose bond differs from
+`D = 10`.
 
 `contract_adaptive` adds the stronger project-first rule inherited from
 `PartitionedMPSs.jl`. A contraction or duplicate-projector sum that reaches the
