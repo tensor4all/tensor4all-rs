@@ -67,12 +67,35 @@ When several patches are summed exactly (contributions to one output projector i
 `contract` and `contract_adaptive`, inputs with an equal key in `add_with_patching`,
 and all patches in `to_treetn`), the sum is built with a `SumEngine`.
 `PatchingOptions::sum_engine` and `PartitionedContractionOptions::sum_engine`
-default to `SumEngine::Binary`, which adds the patches one by one. `SumEngine::Nary`
-builds each sum in one pass, which is much faster when many patches meet in one
-sum, and `SumEngine::NaryWithin { limit_bytes }` does so only while the estimated
-size of the summed network fits the limit. `to_treetn_with(engine)` reports which
-method ran and the size estimate. Inputs that share an equal projector key are
-summed before patching:
+default to `SumEngine::Binary`, which adds the patches one by one.
+`SumEngine::Balanced` makes the same adds on a balanced tree over the patches,
+`ceil(log2 N)` levels deep: same sum, about `N^2` instead of `N^3` time, and one
+level of partial sums in memory instead of a single accumulator.
+`SumEngine::Nary` builds each sum in one pass, which is much faster when many
+patches meet in one sum, and `SumEngine::NaryWithin { limit_bytes }` does so only
+while the estimated size of the summed network fits the limit.
+`to_treetn_with(engine)` reports which method ran and the size estimate. Inputs
+that share an equal projector key are summed before patching.
+
+The treetn crate also offers the same pairwise reduction with a truncation after
+every add, `TreeTN::pairwise_sum(terms, PairwiseSumOrder::{Sequential, Balanced},
+Option<PerAddCutoff>)`, in place of one exact sum followed by one truncation.
+`PerAddCutoff::cutoff` is a **per-add** bound, not an end-to-end one: with `N`
+terms it accumulates over `N - 1` adds (`ceil(log2 N)` for the balanced tree), so
+the end-to-end error is best effort, and reaching a target relative error `eps`
+with the chain takes a per-add squared cutoff of about
+`eps / ((N - 1)^2 kappa^2)` with `kappa` the largest partial-sum norm over the
+result norm.
+
+It pays while the summands compress, so that the rank kept along the way stays
+well below the bond `N * D` that one exact sum builds. Measured on chains of 12
+sites, bond `D = 10`, one core, single runs, at equal error: 2.4x less time at
+`N = 64` on the smooth and mixed families, and at `N = 256` 51x less time and
+about 225x less peak memory. Where the summands do not compress, the per-add
+cutoff discards weight that the one-shot truncation keeps, so the exact sum
+stays the accurate choice. The per-add truncation is therefore opt-in; the sum
+engine section of `docs/design/partitioned-treetn.md` carries the measurement
+conditions and the full table.
 
 ```rust
 # use tensor4all_core::{DynIndex, IdxTensor};

@@ -121,8 +121,10 @@ pub use treetn::{
     LocalUpdateStep,
     LocalUpdateSweepPlan,
     LocalUpdater,
-    PartialContractionSpec,
     // Swap
+    PairwiseSumOrder,
+    PartialContractionSpec,
+    PerAddCutoff,
     ScheduledSwapStep,
     SumEngine,
     SwapOptions,

@@ -78,7 +78,7 @@ pub use partial_contraction::{
 };
 
 // Re-export swap types
-pub use sum::{ExactSum, SumEngine};
+pub use sum::{ExactSum, PairwiseSumOrder, PerAddCutoff, SumEngine};
 pub use swap::{ScheduledSwapStep, SwapOptions, SwapSchedule};
 
 // Re-export general-tree site-fixing operations

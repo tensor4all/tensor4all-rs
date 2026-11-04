@@ -17,6 +17,7 @@ mod dmrg;
 mod f7_zipup_context;
 mod fit_sum;
 mod gse;
+mod heavy_pairwise_sum;
 mod issue192_regression;
 mod issue695_zipup_max_rank;
 mod linsolve;

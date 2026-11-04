@@ -153,3 +153,145 @@ fn exact_sum_checks_the_terms_before_estimating() {
         "{mismatch:#}"
     );
 }
+
+#[test]
+fn balanced_engine_builds_the_same_network() {
+    let sites = star_sites();
+    let terms = star_terms(&sites);
+    let refs: Vec<_> = terms.iter().collect();
+
+    let binary = TreeTN::exact_sum(&refs, SumEngine::Binary).unwrap();
+    let balanced = TreeTN::exact_sum(&refs, SumEngine::Balanced).unwrap();
+    let nary = TreeTN::exact_sum(&refs, SumEngine::Nary).unwrap();
+
+    assert!(!balanced.used_nary);
+    assert_eq!(balanced.estimated_nary_bytes, STAR_ESTIMATE);
+    assert_same_tensors(&balanced.network, &binary.network);
+    assert_same_tensors(&balanced.network, &nary.network);
+}
+
+#[test]
+fn pairwise_sum_without_cutoff_equals_the_exact_engines() {
+    let sites = star_sites();
+    let terms = star_terms(&sites);
+    let refs: Vec<_> = terms.iter().collect();
+
+    let sequential = TreeTN::pairwise_sum(&refs, PairwiseSumOrder::Sequential, None).unwrap();
+    let balanced = TreeTN::pairwise_sum(&refs, PairwiseSumOrder::Balanced, None).unwrap();
+    let nary = TreeTN::exact_sum(&refs, SumEngine::Nary).unwrap();
+
+    assert_same_tensors(&sequential, &balanced);
+    assert_same_tensors(&sequential, &nary.network);
+    assert_eq!(sequential.link_dims(), balanced.link_dims());
+}
+
+#[test]
+fn pairwise_sum_balanced_odd_level_carries_a_term_up() {
+    let sites = star_sites();
+    let terms = star_terms(&sites);
+    for count in 1..=terms.len() {
+        let refs: Vec<_> = terms[..count].iter().collect();
+        let balanced = TreeTN::pairwise_sum(&refs, PairwiseSumOrder::Balanced, None).unwrap();
+        let sequential = TreeTN::pairwise_sum(&refs, PairwiseSumOrder::Sequential, None).unwrap();
+        let nary = TreeTN::exact_sum(&refs, SumEngine::Nary).unwrap();
+        assert_same_tensors(&balanced, &sequential);
+        assert_same_tensors(&balanced, &nary.network);
+    }
+}
+
+#[test]
+fn pairwise_sum_truncates_after_every_add() {
+    let sites = star_sites();
+    let terms = star_terms(&sites);
+    let refs: Vec<_> = terms.iter().collect();
+    let exact = TreeTN::exact_sum(&refs, SumEngine::Nary).unwrap().network;
+
+    for order in [PairwiseSumOrder::Sequential, PairwiseSumOrder::Balanced] {
+        let truncated = TreeTN::pairwise_sum(
+            &refs,
+            order,
+            Some(PerAddCutoff {
+                center: &0,
+                cutoff: 1.0e-20,
+                max_bond_dim: Some(2),
+            }),
+        )
+        .unwrap();
+        // The per-add cap holds on every bond of the result.
+        assert!(truncated.link_dims().iter().all(|&dim| dim <= 2));
+        // An unattainably small per-add cutoff still reproduces the sum to
+        // round-off on this fixture.
+        let exact_dense = exact.to_dense().unwrap();
+        assert!(
+            truncated
+                .to_dense()
+                .unwrap()
+                .distance(&exact_dense)
+                .unwrap()
+                < 1.0e-10
+        );
+    }
+}
+
+#[test]
+fn pairwise_sum_rejects_invalid_per_add_cutoffs() {
+    let sites = star_sites();
+    let terms = star_terms(&sites);
+    let refs: Vec<_> = terms.iter().collect();
+
+    for cutoff in [-1.0, f64::NAN, f64::INFINITY] {
+        let error = TreeTN::pairwise_sum(
+            &refs,
+            PairwiseSumOrder::Balanced,
+            Some(PerAddCutoff {
+                center: &0,
+                cutoff,
+                max_bond_dim: None,
+            }),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("threshold"), "{error:#}");
+    }
+
+    let zero_cap = TreeTN::pairwise_sum(
+        &refs,
+        PairwiseSumOrder::Sequential,
+        Some(PerAddCutoff {
+            center: &0,
+            cutoff: 1.0e-12,
+            max_bond_dim: Some(0),
+        }),
+    )
+    .unwrap_err();
+    assert!(
+        format!("{zero_cap:#}").contains("max_bond_dim"),
+        "{zero_cap:#}"
+    );
+
+    let no_terms = TreeTN::<IdxTensor, usize>::pairwise_sum(
+        &[],
+        PairwiseSumOrder::Balanced,
+        Some(PerAddCutoff {
+            center: &0,
+            cutoff: 1.0e-12,
+            max_bond_dim: None,
+        }),
+    )
+    .unwrap_err();
+    assert!(
+        format!("{no_terms:#}").contains("at least one term"),
+        "{no_terms:#}"
+    );
+
+    let bad_center = TreeTN::pairwise_sum(
+        &refs,
+        PairwiseSumOrder::Balanced,
+        Some(PerAddCutoff {
+            center: &99,
+            cutoff: 1.0e-12,
+            max_bond_dim: None,
+        }),
+    )
+    .unwrap_err();
+    assert!(!format!("{bad_center:#}").is_empty());
+}
