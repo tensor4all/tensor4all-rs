@@ -21,6 +21,22 @@ exhaustive matches, complete struct literals, or named public types:
   use the core and TreeTN APIs.
 - `tensor4all-capi`: remove the unused Rust `From<FactorizeAlg>` conversion
   to the C enum. The C ABI and C enum values are unchanged.
+- `tensor4all-tensorbackend`: `ScalarValue` (the dynamic scalar value) and
+  `ScalarTensorElement` (its construction trait) are now public here and are the
+  only definitions; `tensor4all-core` dropped its private copies and uses these.
+  `BackendScalar` and `AnyScalar` remain the two wrappers. The new public surface
+  is additive; the removed core items were `pub(crate)`, so no external caller
+  loses a path.
+
+### Fixed
+
+- `abs()` of a `c32` scalar is now formed in `f64` (`hypot` after widening the
+  parts) instead of computing the modulus in `f32` and widening the result, so
+  `BackendScalar::abs` and `AnyScalar::abs` agree bit-for-bit. Values change only
+  by the last bits of the former `f32` norm.
+- `abs()` of an integer scalar widens before taking the absolute value, so
+  `i32::MIN` and `i64::MIN` no longer overflow (debug panic / negative result in
+  release).
 
 ### Added
 

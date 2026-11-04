@@ -709,3 +709,25 @@ fn sum_from_storage_keeps_every_storage_dtype() {
     assert_eq!(sum.as_native().dtype(), DType::C64);
     assert_eq!(sum.as_c64(), Some(Complex64::new(1.5, 1.25)));
 }
+
+#[test]
+fn c32_abs_is_computed_in_f64_before_widening() {
+    // These values round differently when the modulus is formed in `f32`, so
+    // they pin the pre-#1134 backend result apart from the shared `f64` rule.
+    for (re, im) in [(1.0e-4_f32, 1.0e-4_f32), (1.0_f32, 1.0_f32)] {
+        let value = Complex32::new(re, im);
+        let expected = f64::from(re).hypot(f64::from(im));
+        assert_ne!(expected, value.norm() as f64);
+        assert_eq!(ScalarValue::C32(value).abs(), expected);
+        assert_eq!(BackendScalar::from_value(value).abs(), expected);
+    }
+}
+
+#[test]
+fn integer_abs_is_not_negated_at_the_type_minimum() {
+    assert_eq!(ScalarValue::I32(i32::MIN).abs(), 2_147_483_648.0);
+    assert_eq!(
+        ScalarValue::I64(i64::MIN).abs(),
+        9_223_372_036_854_775_808.0
+    );
+}

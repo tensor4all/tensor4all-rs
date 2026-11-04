@@ -122,11 +122,14 @@ two hand-maintained copies of the TCI2 convergence criterion (A1).
 - Risk: **medium** — `AnyScalar::abs` is visible behaviour; unifying changes
   f32-complex rounding. Also already tracked (closed) as part of #659, re-verified
   here at `origin/main`.
-- Why it is like this: `tensor4all-core::AnyScalar` wraps `BackendScalar` plus
-  eager-session/AD fields, and was ported from `tensor4all-tensorbackend`'s
-  value type rather than exported from it (the layering rule forbids core from
-  reaching into backend internals, and the backend never made the value type
-  public).
+- Resolved in #1134: `ScalarValue` and `ScalarTensorElement` are now defined once,
+  publicly, in `tensor4all-tensorbackend`; core's copies are deleted and `abs` of
+  a `c32` value is formed in `f64` for both wrappers.
+- Why it is like this: `tensor4all-core::AnyScalar` keeps its own rank-0
+  `IdxTensor` plus the shared value and an AD flag, and was ported from
+  `tensor4all-tensorbackend`'s value type rather than exported from it (the
+  layering rule forbids core from reaching into backend internals, and the
+  backend never made the value type public).
 
 ### A4. `move_center_to_region_full_rank` is copy-pasted between GSE and TDVP
 
@@ -547,7 +550,8 @@ two hand-maintained copies of the TCI2 convergence criterion (A1).
   `origin/main` = `56c25d4a`, `core::AnyScalar` still exists next to
   `tensorbackend::BackendScalar`, and `ScalarValue` is still defined twice. This
   audit adds the detail that they already diverge numerically
-  (`hypot` vs `Complex::norm`).
+  (`hypot` vs `Complex::norm`). The `ScalarValue` half is fixed in #1134; the two
+  wrappers remain by design, since their payloads are different layers.
 - Hand-rolled contraction loops and `_f64`/`_c64` twins were swept in **#624**
   (closed); the remaining items found here are a different class (error types,
   validation predicates, stop criteria), not contraction loops.
