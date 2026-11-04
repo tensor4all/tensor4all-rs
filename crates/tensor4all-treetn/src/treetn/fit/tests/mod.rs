@@ -1196,7 +1196,11 @@ fn fit_repro(site_dim: usize, b_bond_dim: usize, max_bond_dim: usize) -> FitRepr
     }
 }
 
-fn fit_repro_dense(specimen: &FitRepro, print_order: Option<usize>) -> Vec<f64> {
+fn fit_repro_dense(
+    specimen: &FitRepro,
+    nfullsweeps: usize,
+    print_order: Option<usize>,
+) -> Vec<f64> {
     use crate::treetn::contraction::{ContractionMethod, ContractionOptions};
     use crate::treetn::{partial_contract, PartialContractionSpec};
 
@@ -1209,7 +1213,7 @@ fn fit_repro_dense(specimen: &FitRepro, print_order: Option<usize>) -> Vec<f64> 
         method: ContractionMethod::Fit,
         ..ContractionOptions::fit()
     }
-    .with_nfullsweeps(2)
+    .with_nfullsweeps(nfullsweeps)
     .with_svd_policy(
         SvdTruncationPolicy::new(1e-30)
             .with_squared_values()
@@ -1239,6 +1243,10 @@ fn fit_repro_dense(specimen: &FitRepro, print_order: Option<usize>) -> Vec<f64> 
 /// changed from call to call within one process. This is the reported
 /// reproducer; it prints the order each call resolves to, so a failure records
 /// which order produced which result.
+///
+/// Both `nfullsweeps = 0` (the clean path) and `nfullsweeps > 0` (the dirty
+/// path) are run, as the #1138 close comment required: the zero-sweep result is
+/// compared bitwise against itself across calls, not against the swept result.
 #[test]
 fn partial_contract_fit_repeats_bitwise_identically() {
     const CALLS: usize = 32;
@@ -1251,30 +1259,34 @@ fn partial_contract_fit_repeats_bitwise_identically() {
     // bit-identical even when the order is forced to reverse).
     const MAX_BOND_DIM: usize = 2;
     let specimen = fit_repro(SITE_DIM, B_BOND, MAX_BOND_DIM);
-
-    let mut results: Vec<(Vec<u64>, Vec<f64>)> = Vec::new();
-    for call in 0..CALLS {
-        let values = fit_repro_dense(&specimen, Some(call));
-        let bits: Vec<u64> = values.iter().map(|x| x.to_bits()).collect();
-        match results.iter().find(|(seen, _)| *seen == bits) {
-            Some(_) => {}
-            None => results.push((bits, values)),
+    // #1138's close comment required both the clean (zero-sweep) and the dirty
+    // (nfullsweeps > 0) path, because a tolerance-based test would absorb the
+    // difference. A future change that makes the zero-sweep path
+    // nondeterministic has to fail here too.
+    for (nfullsweeps, label) in [(0usize, "zero sweeps"), (2usize, "two sweeps")] {
+        let mut results: Vec<(Vec<u64>, Vec<f64>)> = Vec::new();
+        for call in 0..CALLS {
+            let values = fit_repro_dense(&specimen, nfullsweeps, Some(call));
+            let bits: Vec<u64> = values.iter().map(|x| x.to_bits()).collect();
+            match results.iter().find(|(seen, _)| *seen == bits) {
+                Some(_) => {}
+                None => results.push((bits, values)),
+            }
         }
+        let max_diff = if results.len() > 1 {
+            let first = &results[0].1;
+            results
+                .iter()
+                .flat_map(|(_, v)| first.iter().zip(v).map(|(x, y)| (x - y).abs()))
+                .fold(0.0_f64, f64::max)
+        } else {
+            0.0
+        };
+        assert_eq!(
+            results.len(),
+            1,
+            "{label}: {CALLS} calls on the same input objects gave {} distinct results (max |difference| {max_diff:.3e}); see the per-call leg order above",
+            results.len()
+        );
     }
-    let max_diff = if results.len() > 1 {
-        let first = &results[0].1;
-        results
-            .iter()
-            .flat_map(|(_, v)| first.iter().zip(v).map(|(x, y)| (x - y).abs()))
-            .fold(0.0_f64, f64::max)
-    } else {
-        0.0
-    };
-    assert_eq!(
-        results.len(),
-        1,
-        "{CALLS} calls on the same input objects gave {} distinct results \
-         (max |difference| {max_diff:.3e}); see the per-call leg order above",
-        results.len()
-    );
 }

@@ -812,6 +812,14 @@ where
 ///   index remains in the result.
 /// - **Unmentioned indices**: Pass through unchanged as external legs.
 ///
+/// # Reproducibility
+///
+/// With [`ContractionMethod::Fit`](crate::treetn::contraction::ContractionMethod::Fit),
+/// repeated calls with the same inputs and the same `options` are intended to
+/// return bitwise identical results within one process. The two-site
+/// factorizations order their legs by position, not by index identity, so a
+/// call does not depend on the ids of the legs it mints internally (see #1138).
+///
 /// # Errors
 ///
 /// Returns [`TreeTNOperationError`] when `spec` is invalid (for example a selected index is not

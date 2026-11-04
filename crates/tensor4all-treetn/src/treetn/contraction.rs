@@ -2006,6 +2006,10 @@ pub enum ContractionMethod {
     #[default]
     Zipup,
     /// Fit/variational contraction (iterative optimization).
+    ///
+    /// Repeated calls with the same inputs are bitwise reproducible within one
+    /// process: the two-site updates order their legs by position rather than
+    /// by index identity.
     Fit,
     /// Generic dense/reference contraction: contract to a full tensor, then
     /// decompose back to TreeTN.
