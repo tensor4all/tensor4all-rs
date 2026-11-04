@@ -747,7 +747,19 @@ where
         .filter(|idx| site_c_u.contains(*idx) || left_bond_indices.iter().any(|bond| bond == *idx))
         .cloned()
         .collect();
-    sort_indices_deterministic(&mut left_inds);
+    // Order the left legs by dimension and prime level, and break a tie by the
+    // leg's position in the tensor rather than by its index identity: both the
+    // site leg and every bond this split sees are minted inside the call
+    // (`IndexLike::sim` for the diagonal output pair, `generate_id` for a bond),
+    // so an identity-ordered tie makes the row order the SVD sees -- and hence
+    // its rounding -- a property of the objects, not of the inputs (#1138).
+    // `sort_by` is stable, so equal keys keep the order `external_indices`
+    // gives them.
+    left_inds.sort_by(|left, right| {
+        left.dim()
+            .cmp(&right.dim())
+            .then_with(|| left.plev().cmp(&right.plev()))
+    });
     if let Some(left_inds_started) = left_inds_started {
         with_fit_profile(|profile| {
             profile.left_inds_time += left_inds_started.elapsed();

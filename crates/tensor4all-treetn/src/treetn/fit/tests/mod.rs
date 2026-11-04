@@ -1,6 +1,6 @@
 use super::*;
 use crate::treetn::localupdate::{LocalUpdateStep, LocalUpdater};
-use tensor4all_core::{DynIndex, IdxTensor};
+use tensor4all_core::{sort_indices_deterministic, DynIndex, IdxTensor, IndexLike, TensorIndex};
 
 /// Create a simple 2-node TreeTN: A -- bond -- B
 fn make_two_node_treetn() -> TreeTN<IdxTensor, String> {
@@ -1053,5 +1053,228 @@ fn test_adaptive_fit_complex_matches_naive() {
     assert!(
         err < 1e-6,
         "complex adaptive fit should match the exact product, rel_err={err:.6e}"
+    );
+}
+
+/// The two legs of the fit's local optimum that tie on (dim, plev): a site leg of
+/// the left node and the bond to its left. Reading them off the produced network
+/// exposes the same tie the sort inside `fit_two_site_update` has to break.
+fn left_leg_tie(result: &TreeTN<IdxTensor, usize>) -> Option<(DynIndex, DynIndex)> {
+    for node in result.site_index_network().node_names() {
+        let Some(site) = result
+            .site_index_network()
+            .site_space(node)
+            .and_then(|space| space.iter().next().cloned())
+        else {
+            continue;
+        };
+        let Some(index) = result.node_index(node) else {
+            continue;
+        };
+        let Some(tensor) = result.tensor(index) else {
+            continue;
+        };
+        for leg in tensor.external_indices() {
+            if leg == site || leg.dim() != site.dim() || leg.plev() != site.plev() {
+                continue;
+            }
+            return Some((site, leg));
+        }
+    }
+    None
+}
+
+/// Print, per call, the tie and the order an *identity*-keyed comparator picks for
+/// it. That order is what moved between calls before the fix; with the fix the
+/// fit no longer consults it, so a failure and this print side by side say which
+/// order produced which result.
+fn print_leg_order(call: usize, result: &TreeTN<IdxTensor, usize>) {
+    let Some((site, bond)) = left_leg_tie(result) else {
+        eprintln!("call {call}: no (dim, plev) tie in the left-leg set");
+        return;
+    };
+    // The comparator this test would use is the fit's; report the plain
+    // (dim, plev, then index identity) order that the unfixed sort applies, so
+    // a failure records the identity dependence rather than a position order.
+    let mut legs = vec![site.clone(), bond.clone()];
+    sort_indices_deterministic(&mut legs);
+    let order = if legs[0] == site {
+        "site, bond"
+    } else {
+        "bond, site"
+    };
+    eprintln!(
+        "call {call}: tie on (dim {}, plev {}) -> identity order [{order}]",
+        site.dim(),
+        site.plev()
+    );
+}
+
+/// Deterministic values in [-1, 1) so the fixtures need no RNG crate.
+struct Lcg(u64);
+impl Lcg {
+    fn next_value(&mut self) -> f64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (self.0 >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+    }
+}
+
+const FIT_REPRO_NODES: usize = 3;
+
+/// One reproducer fixture: two chains and the site pairs that are contracted.
+struct FitRepro {
+    a: TreeTN<IdxTensor, usize>,
+    b: TreeTN<IdxTensor, usize>,
+    a_sites: Vec<DynIndex>,
+    diagonal_pairs: Vec<(DynIndex, DynIndex)>,
+    max_bond_dim: usize,
+}
+
+/// The reported reproducer: `a` is a three-node chain with one site index of
+/// dimension `site_dim` per node and bonds of the same dimension, `b` is a chain
+/// with bonds of dimension `b_bond_dim`, and each site of `a` is paired with one
+/// site of `b`.
+///
+/// The two left legs of the two-site update (a site leg and the bond to its left)
+/// tie on the sort's first two keys only when their dimensions are equal, so
+/// `b_bond_dim` and `site_dim` must agree for the tie to exist. `b_bond_dim = 1`
+/// makes the exact product rank `site_dim`, so a cap of `site_dim` truncates
+/// nothing and the leg order cannot move a bit; that is why the reproduction needs
+/// `b_bond_dim = site_dim` with the cap below it.
+///
+fn fit_repro(site_dim: usize, b_bond_dim: usize, max_bond_dim: usize) -> FitRepro {
+    let mut rng = Lcg(0x5eed);
+    let new_sites = |dim| {
+        (0..FIT_REPRO_NODES)
+            .map(|_| DynIndex::new_dyn(dim))
+            .collect::<Vec<_>>()
+    };
+    let new_bonds = |dim| {
+        (0..FIT_REPRO_NODES - 1)
+            .map(|_| DynIndex::new_dyn(dim))
+            .collect::<Vec<_>>()
+    };
+
+    let a_sites = new_sites(site_dim);
+    let b_sites = new_sites(site_dim);
+    let a_bonds = new_bonds(site_dim);
+    let b_bonds = new_bonds(b_bond_dim);
+
+    let mut chain = |sites: &[DynIndex], bonds: &[DynIndex]| {
+        let tensors = (0..FIT_REPRO_NODES)
+            .map(|n| {
+                let mut inds = vec![sites[n].clone()];
+                if n > 0 {
+                    inds.push(bonds[n - 1].clone());
+                }
+                if n + 1 < FIT_REPRO_NODES {
+                    inds.push(bonds[n].clone());
+                }
+                let len: usize = inds.iter().map(|i| i.dim()).product();
+                IdxTensor::from_dense(inds, (0..len).map(|_| rng.next_value()).collect()).unwrap()
+            })
+            .collect::<Vec<_>>();
+        TreeTN::from_tensors(tensors, (0..FIT_REPRO_NODES).collect()).unwrap()
+    };
+
+    let a = chain(&a_sites, &a_bonds);
+    let b = chain(&b_sites, &b_bonds);
+    let diagonal_pairs = a_sites
+        .iter()
+        .cloned()
+        .zip(b_sites.iter().cloned())
+        .collect::<Vec<_>>();
+    FitRepro {
+        a,
+        b,
+        a_sites,
+        diagonal_pairs,
+        max_bond_dim,
+    }
+}
+
+fn fit_repro_dense(specimen: &FitRepro, print_order: Option<usize>) -> Vec<f64> {
+    use crate::treetn::contraction::{ContractionMethod, ContractionOptions};
+    use crate::treetn::{partial_contract, PartialContractionSpec};
+
+    let spec = PartialContractionSpec {
+        contract_pairs: Vec::new(),
+        diagonal_pairs: specimen.diagonal_pairs.clone(),
+        output_order: Some(specimen.a_sites.clone()),
+    };
+    let options = ContractionOptions {
+        method: ContractionMethod::Fit,
+        ..ContractionOptions::fit()
+    }
+    .with_nfullsweeps(2)
+    .with_svd_policy(
+        SvdTruncationPolicy::new(1e-30)
+            .with_squared_values()
+            .with_discarded_tail_sum(),
+    )
+    .with_max_bond_dim(specimen.max_bond_dim);
+
+    let c = partial_contract(&specimen.a, &specimen.b, &spec, &0usize, options)
+        .expect("partial_contract");
+    if let Some(call) = print_order {
+        print_leg_order(call, &c);
+    }
+    c.to_dense()
+        .expect("dense")
+        .permute_indices(&specimen.a_sites)
+        .expect("permute")
+        .dense_host_values::<f64>()
+        .expect("values")
+}
+
+/// #1138: repeated calls on the same input objects must agree bit for bit.
+///
+/// `partial_contract` with `ContractionMethod::Fit` and `nfullsweeps > 0` ordered
+/// the left legs of its two-site factorization by index id. Both tied legs are
+/// minted inside the call (`sim()` for the diagonal output pair, `generate_id`
+/// for a bond), so the row order the SVD sees -- and therefore its rounding --
+/// changed from call to call within one process. This is the reported
+/// reproducer; it prints the order each call resolves to, so a failure records
+/// which order produced which result.
+#[test]
+fn partial_contract_fit_repeats_bitwise_identically() {
+    const CALLS: usize = 32;
+    const SITE_DIM: usize = 2;
+    const B_BOND: usize = 2;
+    // Below the bond dimension, so the two-site SVD really discards weight. This
+    // is what makes a moved leg order show up in the values at all: with the cap
+    // at the bond dimension, the truncation is exact and the order cannot move a
+    // bit (measured on the report's own site-2/bond-2/cap-2 fixture, which stays
+    // bit-identical even when the order is forced to reverse).
+    const MAX_BOND_DIM: usize = 2;
+    let specimen = fit_repro(SITE_DIM, B_BOND, MAX_BOND_DIM);
+
+    let mut results: Vec<(Vec<u64>, Vec<f64>)> = Vec::new();
+    for call in 0..CALLS {
+        let values = fit_repro_dense(&specimen, Some(call));
+        let bits: Vec<u64> = values.iter().map(|x| x.to_bits()).collect();
+        match results.iter().find(|(seen, _)| *seen == bits) {
+            Some(_) => {}
+            None => results.push((bits, values)),
+        }
+    }
+    let max_diff = if results.len() > 1 {
+        let first = &results[0].1;
+        results
+            .iter()
+            .flat_map(|(_, v)| first.iter().zip(v).map(|(x, y)| (x - y).abs()))
+            .fold(0.0_f64, f64::max)
+    } else {
+        0.0
+    };
+    assert_eq!(
+        results.len(),
+        1,
+        "{CALLS} calls on the same input objects gave {} distinct results \
+         (max |difference| {max_diff:.3e}); see the per-call leg order above",
+        results.len()
     );
 }
