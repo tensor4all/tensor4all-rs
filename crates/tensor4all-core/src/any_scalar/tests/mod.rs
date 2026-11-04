@@ -217,3 +217,35 @@ fn every_infallible_scalar_operation_retains_an_initialization_error() {
             .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
     }
 }
+
+/// Bit-identical for finite values, and equal when both sides are `NaN`.
+fn assert_same_f64(lhs: f64, rhs: f64) {
+    assert!(
+        lhs.to_bits() == rhs.to_bits() || (lhs.is_nan() && rhs.is_nan()),
+        "{lhs} != {rhs}"
+    );
+}
+
+fn assert_wrappers_agree<T: ScalarTensorElement>(value: T) {
+    let backend = BackendScalar::from_value(value);
+    let core = AnyScalar::from_value(value);
+    assert_same_f64(backend.real(), core.real());
+    assert_same_f64(backend.imag(), core.imag());
+    assert_same_f64(backend.abs(), core.abs());
+    assert_eq!(backend.is_complex(), core.is_complex());
+    assert_eq!(backend.is_zero(), core.is_zero());
+}
+
+#[test]
+fn backend_scalar_and_any_scalar_agree_on_every_dtype() {
+    assert_wrappers_agree(1.25_f32);
+    assert_wrappers_agree(-2.5_f64);
+    assert_wrappers_agree(0.0_f32);
+    assert_wrappers_agree(Complex32::new(3.0, -4.0));
+    // The c32 magnitudes that separate an `f32` norm from an `f64` hypot.
+    assert_wrappers_agree(Complex32::new(1.0e-4, 1.0e-4));
+    assert_wrappers_agree(Complex32::new(1.0, 1.0));
+    assert_wrappers_agree(Complex64::new(1.0, 1.0));
+    assert_wrappers_agree(Complex64::new(0.0, 0.0));
+    assert_wrappers_agree(Complex64::new(f64::INFINITY, f64::NAN));
+}

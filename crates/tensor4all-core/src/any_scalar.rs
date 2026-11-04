@@ -9,136 +9,14 @@ use anyhow::{anyhow, Result};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 use tenferro::DType;
-use tensor4all_tensorbackend::BackendScalar;
+use tensor4all_tensorbackend::{
+    BackendScalar, ScalarTensorElement, ScalarValue, Storage, SumFromStorage,
+};
 
 use crate::defaults::eager_session::{
     with_eager_session_typed, with_engine, with_execution_engine,
 };
 use crate::defaults::idx_tensor::IdxTensor;
-use crate::TensorElement;
-use tensor4all_tensorbackend::{Storage, SumFromStorage};
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum ScalarValue {
-    F32(f32),
-    F64(f64),
-    C32(Complex32),
-    C64(Complex64),
-}
-
-impl From<f64> for ScalarValue {
-    fn from(value: f64) -> Self {
-        Self::F64(value)
-    }
-}
-
-impl From<f32> for ScalarValue {
-    fn from(value: f32) -> Self {
-        Self::F32(value)
-    }
-}
-
-impl From<Complex64> for ScalarValue {
-    fn from(value: Complex64) -> Self {
-        Self::C64(value)
-    }
-}
-
-impl From<Complex32> for ScalarValue {
-    fn from(value: Complex32) -> Self {
-        Self::C32(value)
-    }
-}
-
-impl ScalarValue {
-    fn real(self) -> f64 {
-        match self {
-            Self::F32(value) => value as f64,
-            Self::F64(value) => value,
-            Self::C32(value) => value.re as f64,
-            Self::C64(value) => value.re,
-        }
-    }
-
-    fn imag(self) -> f64 {
-        match self {
-            Self::F32(_) | Self::F64(_) => 0.0,
-            Self::C32(value) => value.im as f64,
-            Self::C64(value) => value.im,
-        }
-    }
-
-    fn abs(self) -> f64 {
-        match self {
-            Self::F32(value) => value.abs() as f64,
-            Self::F64(value) => value.abs(),
-            Self::C32(value) => {
-                if value.re.is_nan() || value.im.is_nan() {
-                    f64::NAN
-                } else {
-                    f64::from(value.re).hypot(f64::from(value.im))
-                }
-            }
-            Self::C64(value) => {
-                if value.re.is_nan() || value.im.is_nan() {
-                    f64::NAN
-                } else {
-                    value.re.hypot(value.im)
-                }
-            }
-        }
-    }
-
-    fn is_complex(self) -> bool {
-        matches!(self, Self::C32(_) | Self::C64(_))
-    }
-
-    fn is_zero(self) -> bool {
-        match self {
-            Self::F32(value) => value == 0.0,
-            Self::F64(value) => value == 0.0,
-            Self::C32(value) => value == Complex32::new(0.0, 0.0),
-            Self::C64(value) => value == Complex64::new(0.0, 0.0),
-        }
-    }
-
-    fn into_complex(self) -> Complex64 {
-        match self {
-            Self::F32(value) => Complex64::new(value as f64, 0.0),
-            Self::F64(value) => Complex64::new(value, 0.0),
-            Self::C32(value) => Complex64::new(value.re as f64, value.im as f64),
-            Self::C64(value) => value,
-        }
-    }
-}
-
-trait ScalarTensorElement: TensorElement {
-    fn scalar_value(value: Self) -> ScalarValue;
-}
-
-impl ScalarTensorElement for f32 {
-    fn scalar_value(value: Self) -> ScalarValue {
-        ScalarValue::F32(value)
-    }
-}
-
-impl ScalarTensorElement for f64 {
-    fn scalar_value(value: Self) -> ScalarValue {
-        ScalarValue::F64(value)
-    }
-}
-
-impl ScalarTensorElement for Complex32 {
-    fn scalar_value(value: Self) -> ScalarValue {
-        ScalarValue::C32(value)
-    }
-}
-
-impl ScalarTensorElement for Complex64 {
-    fn scalar_value(value: Self) -> ScalarValue {
-        ScalarValue::C64(value)
-    }
-}
 
 #[cfg(test)]
 thread_local! {
@@ -239,6 +117,12 @@ fn operation_error_from_anyhow(op: &'static str, source: anyhow::Error) -> anyho
 #[derive(Clone)]
 pub struct AnyScalar {
     tensor: std::result::Result<IdxTensor, AnyScalarTensorError>,
+    /// Holds only the four [`ScalarTensorElement`] kinds. Values arrive through
+    /// [`AnyScalar::from_value`] and [`AnyScalar::from_published`] (both bound to
+    /// that trait), [`AnyScalar::scalar_value_from_tensor`] (which rejects every
+    /// other dtype), or [`AnyScalar::from_backend_scalar`] (which normalises to
+    /// `f64`/`c64`), so the integer and bool variants are matched but never
+    /// stored.
     value: ScalarValue,
     tracks_grad: bool,
 }
@@ -303,6 +187,10 @@ impl AnyScalar {
             ScalarValue::F64(_) => Self::from_value(0.0_f64),
             ScalarValue::C32(_) => Self::from_value(Complex32::new(0.0, 0.0)),
             ScalarValue::C64(_) => Self::from_value(Complex64::new(0.0, 0.0)),
+            // Unreachable: see the invariant on `AnyScalar::value`.
+            ScalarValue::I32(_) | ScalarValue::I64(_) | ScalarValue::Bool(_) => {
+                Self::from_real(0.0)
+            }
         }
     }
 
@@ -312,6 +200,10 @@ impl AnyScalar {
             ScalarValue::F64(_) => Self::from_value(1.0_f64),
             ScalarValue::C32(_) => Self::from_value(Complex32::new(1.0, 0.0)),
             ScalarValue::C64(_) => Self::from_value(Complex64::new(1.0, 0.0)),
+            // Unreachable: see the invariant on `AnyScalar::value`.
+            ScalarValue::I32(_) | ScalarValue::I64(_) | ScalarValue::Bool(_) => {
+                Self::from_real(1.0)
+            }
         }
     }
 
@@ -396,11 +288,10 @@ impl AnyScalar {
     }
 
     fn from_backend_scalar(value: BackendScalar) -> Self {
+        // `scalar_value_from_backend` normalises to exactly these two kinds.
         match Self::scalar_value_from_backend(value) {
-            ScalarValue::F32(value) => Self::from_value(value),
-            ScalarValue::F64(value) => Self::from_value(value),
-            ScalarValue::C32(value) => Self::from_value(value),
             ScalarValue::C64(value) => Self::from_value(value),
+            other => Self::from_real(other.real()),
         }
     }
 
@@ -414,10 +305,10 @@ impl AnyScalar {
     /// freshly materialized tensor populates an eager cache from the process-global eager runtime. An
     /// explicit-session route must not do that, so this constructor takes the value directly; the tensor is
     /// carried only so the scalar still behaves like one.
-    pub(crate) fn from_published<T: Into<ScalarValue>>(value: T, tensor: IdxTensor) -> Self {
+    pub(crate) fn from_published<T: ScalarTensorElement>(value: T, tensor: IdxTensor) -> Self {
         Self {
             tensor: Ok(tensor),
-            value: value.into(),
+            value: T::scalar_value(value),
             tracks_grad: false,
         }
     }
@@ -457,7 +348,6 @@ impl AnyScalar {
     /// assert_eq!(scalar.real(), 3.0);
     /// assert!(scalar.is_real());
     /// ```
-    #[allow(private_bounds)]
     pub fn from_value<T: ScalarTensorElement>(value: T) -> Self {
         Self {
             tensor: initialize_tensor(value),
@@ -897,6 +787,9 @@ impl AnyScalar {
         match self.value() {
             ScalarValue::F32(value) => Some(value as f64),
             ScalarValue::F64(value) => Some(value),
+            ScalarValue::I32(value) => Some(value as f64),
+            ScalarValue::I64(value) => Some(value as f64),
+            ScalarValue::Bool(value) => Some(if value { 1.0 } else { 0.0 }),
             ScalarValue::C32(_) | ScalarValue::C64(_) => None,
         }
     }
@@ -919,7 +812,11 @@ impl AnyScalar {
     /// ```
     pub fn as_c64(&self) -> Option<Complex64> {
         match self.value() {
-            ScalarValue::F32(_) | ScalarValue::F64(_) => None,
+            ScalarValue::F32(_)
+            | ScalarValue::F64(_)
+            | ScalarValue::I32(_)
+            | ScalarValue::I64(_)
+            | ScalarValue::Bool(_) => None,
             ScalarValue::C32(value) => Some(Complex64::new(value.re as f64, value.im as f64)),
             ScalarValue::C64(value) => Some(value),
         }
@@ -1133,12 +1030,7 @@ impl AnyScalar {
     }
 
     pub(crate) fn to_backend_scalar(&self) -> BackendScalar {
-        match self.value() {
-            ScalarValue::F32(value) => BackendScalar::from_value(value),
-            ScalarValue::F64(value) => BackendScalar::from_value(value),
-            ScalarValue::C32(value) => BackendScalar::from_value(value),
-            ScalarValue::C64(value) => BackendScalar::from_value(value),
-        }
+        BackendScalar::from(self.value())
     }
 
     pub(crate) fn try_add(&self, rhs: &Self) -> Result<Self> {
@@ -1575,6 +1467,9 @@ impl fmt::Display for AnyScalar {
         match self.value() {
             ScalarValue::F32(value) => value.fmt(f),
             ScalarValue::F64(value) => value.fmt(f),
+            ScalarValue::I32(value) => value.fmt(f),
+            ScalarValue::I64(value) => value.fmt(f),
+            ScalarValue::Bool(value) => value.fmt(f),
             ScalarValue::C32(value) => value.fmt(f),
             ScalarValue::C64(value) => value.fmt(f),
         }
@@ -1586,6 +1481,9 @@ impl fmt::Debug for AnyScalar {
         let dtype = match self.value {
             ScalarValue::F32(_) => "f32",
             ScalarValue::F64(_) => "f64",
+            ScalarValue::I32(_) => "i32",
+            ScalarValue::I64(_) => "i64",
+            ScalarValue::Bool(_) => "bool",
             ScalarValue::C32(_) => "c32",
             ScalarValue::C64(_) => "c64",
         };
