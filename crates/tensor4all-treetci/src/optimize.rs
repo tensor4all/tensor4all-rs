@@ -248,8 +248,14 @@ pub struct TreeTciOptions {
     /// Use `Some(256 * 1024 * 1024)` for expensive deterministic targets.
     /// `Some(0)` deduplicates only within each batch and retains no values.
     /// At capacity, inserts are skipped and reported; no entries are evicted.
-    /// Memoization requires a fixed value for each point throughout the call,
-    /// and supports index spaces up to 1024 bits. Callback errors and wrong
+    /// Memoization requires a fixed value for each point throughout the call.
+    /// Edge candidate matrices are looked up through cache-owned side keys,
+    /// which exist for the `u64` and `u128` key widths only, so an index space
+    /// whose selected width exceeds 128 bits (but still fits the cache's 1024
+    /// bits) returns [`crate::TreeTciError::Operation`] holding
+    /// `CacheKeyError::SideKeyUnsupported` at run setup rather than falling back
+    /// to whole-point lookups; a space beyond 1024 bits fails at cache
+    /// construction with `CacheKeyError::Overflow`. Callback errors and wrong
     /// output lengths are never cached. The cache belongs to this run, is
     /// shared across updates/searches/final materialization, and is dropped
     /// at return. Bytes exclude allocator overhead and do not bound total RSS.

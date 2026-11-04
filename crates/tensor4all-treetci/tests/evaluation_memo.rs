@@ -304,3 +304,46 @@ fn memo_accepts_a_borrowed_mutable_tree_evaluator() {
         IdxTensor::from_dense(dense.indices().to_vec(), vec![2.0, 4.0, 4.0, 8.0]).unwrap();
     assert!(dense.sub(&expected).unwrap().maxabs().unwrap() < 1e-12);
 }
+
+#[test]
+fn memo_rejects_index_spaces_wider_than_its_side_keys() {
+    // 129 binary sites need 129 bits, so the memo cache selects a 256-bit key,
+    // which has no side-key support. The run fails at setup instead of silently
+    // falling back to whole-point lookups.
+    let error = crossinterpolate2::<f64, _, _, _>(
+        |batch: GlobalIndexBatch<'_>| Ok(vec![1.0; batch.n_points()]),
+        vec![2; 129],
+        TreeTciGraph::linear_chain(129).unwrap(),
+        vec![vec![0; 129]],
+        TreeTciOptions {
+            evaluation_cache_bytes: Some(1024),
+            seed: Some(0),
+            ..Default::default()
+        },
+        None,
+        &DefaultProposer,
+        &mut (),
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("no side-key support"),
+        "unexpected error: {error}"
+    );
+
+    // Without memoization the same run is untouched by the keyed path.
+    let result = crossinterpolate2::<f64, _, _, _>(
+        |batch: GlobalIndexBatch<'_>| Ok(vec![1.0; batch.n_points()]),
+        vec![2; 129],
+        TreeTciGraph::linear_chain(129).unwrap(),
+        vec![vec![0; 129]],
+        TreeTciOptions {
+            max_iter: 1,
+            seed: Some(0),
+            ..Default::default()
+        },
+        None,
+        &DefaultProposer,
+        &mut (),
+    );
+    assert!(result.is_ok(), "{result:?}");
+}

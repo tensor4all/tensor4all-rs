@@ -1,7 +1,7 @@
 use crate::evaluation::BatchExecution;
 use crate::{
     assemble::MultiIndex,
-    batch::{evaluate_points_chunked, EVALUATION_CHUNK_POINTS},
+    batch::{collect_chunks, EVALUATION_CHUNK_POINTS},
     PivotCandidateProposer, TreeTCI2, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
@@ -148,17 +148,23 @@ where
 ///
 /// Returns the values in column-major order with `left_candidates.len()` rows.
 ///
-/// The global points are written straight into a contiguous batch buffer.
-/// Assembling them as individual `Vec<usize>` points instead and packing
-/// those into a batch costs one heap allocation and one extra full copy per
-/// matrix *entry*, and re-validating per point checks the
-/// bipartition `n_left * n_right` times over -- at a branching vertex that is
-/// O(10^7) allocations for a single edge update. The bipartition is a property
-/// of the two subtree keys, so it is checked once up front instead.
+/// The global points are written straight into a contiguous batch buffer by the
+/// execution, once per entry it has to evaluate. Assembling them as individual
+/// `Vec<usize>` points instead and packing those into a batch costs one heap
+/// allocation and one extra full copy per matrix *entry*, and re-validating per
+/// point checks the bipartition `n_left * n_right` times over -- at a branching
+/// vertex that is O(10^7) allocations for a single edge update. The bipartition
+/// is a property of the two subtree keys, so it is checked once up front
+/// instead.
 ///
-/// The points are evaluated in calls of at most `chunk_points` points through
-/// one reused buffer, so memory stays bounded by `n_sites * chunk_points`
-/// rather than `n_sites * n_left * n_right` (gigabytes at a branching vertex).
+/// A memoizing execution looks the entries up by the cache's own keys built from
+/// the two sides, so it assembles a point only for the entries that miss; the
+/// chunking below is the caller's, because the cache does not own the policy
+/// that bounds this scratch buffer.
+///
+/// The entries are evaluated in calls of at most `chunk_points` entries, so the
+/// point buffer stays bounded by `n_sites * chunk_points` rather than
+/// `n_sites * n_left * n_right` (gigabytes at a branching vertex).
 /// The values, and their order, do not depend on `chunk_points`.
 #[allow(clippy::too_many_arguments)]
 fn evaluate_candidate_matrix<T>(
@@ -222,36 +228,24 @@ where
         }
     }
 
+    ensure!(n_sites > 0, "at least one site is required");
     let n_left = left_candidates.len();
     let n_right = right_candidates.len();
     let n_points = n_left.checked_mul(n_right).ok_or_else(|| {
         anyhow::anyhow!("candidate matrix shape {n_left} x {n_right} overflows usize")
     })?;
-
-    // Column-major (n_sites, n_points): left candidates vary fastest.
-    let mut left_index = 0;
-    let mut right_index = 0;
-    evaluate_points_chunked(
-        n_sites,
+    let left = (left_sites, left_candidates);
+    let right = (right_sites, right_candidates);
+    // One key per side (or one point buffer) for the whole matrix; the chunks
+    // below only address entries.
+    let mut sides = execution.candidate_sides(left, right)?;
+    collect_chunks(
         n_points,
         chunk_points,
-        |point| {
-            let left = &left_candidates[left_index];
-            let right = &right_candidates[right_index];
-            for (&site, &value) in left_sites.iter().zip(left.iter()) {
-                point[site] = value;
-            }
-            for (&site, &value) in right_sites.iter().zip(right.iter()) {
-                point[site] = value;
-            }
-            left_index += 1;
-            if left_index == n_left {
-                left_index = 0;
-                right_index += 1;
-            }
-        },
-        &mut |batch| execution.call(batch),
         "candidate-matrix entries",
+        |start, count| {
+            execution.call_candidate_entries(&mut sides, n_sites, left, right, start, count)
+        },
     )
 }
 

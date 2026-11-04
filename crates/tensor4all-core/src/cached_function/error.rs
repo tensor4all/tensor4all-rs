@@ -58,4 +58,62 @@ pub enum CacheKeyError {
         /// Number of values returned by the callback.
         got: usize,
     },
+
+    /// The cache's key width cannot encode one side of a site split.
+    #[error(
+        "a {key_type} cache has no side-key support: only u64 and u128 caches build side keys"
+    )]
+    SideKeyUnsupported {
+        /// Name of the cache's selected key type.
+        key_type: &'static str,
+    },
+
+    /// The cache's index space has an empty site, so it holds no point at all.
+    #[error("a cache with local dimension 0 at site {site} has no points and no side keys")]
+    SideKeyDegenerate {
+        /// Site whose local dimension is zero.
+        site: usize,
+    },
+
+    /// A side's site list names a site outside the cache's index space.
+    #[error("side site {site} is out of range for {n_sites} sites")]
+    SideSiteOutOfBounds {
+        /// Invalid site.
+        site: usize,
+        /// Number of sites in the cache's index space.
+        n_sites: usize,
+    },
+
+    /// A side's site list names the same site twice.
+    #[error("side names site {site} more than once")]
+    RepeatedSideSite {
+        /// Repeated site.
+        site: usize,
+    },
+
+    /// Side keys were built by a different cache.
+    #[error("side keys belong to a different cache")]
+    SideKeyOwner,
+
+    /// Side keys were built before the cache's generation advanced.
+    #[error("side keys are stale: the cache was cleared after they were built")]
+    SideKeyStale,
+
+    /// The two sides of a keyed request cover the same site.
+    #[error("the left and right sides of a keyed request both cover site {site}")]
+    OverlappingSideSites {
+        /// Site covered by both sides.
+        site: usize,
+    },
+
+    /// A keyed request addresses a fragment outside its side.
+    #[error("{side} fragment {index} is out of range for {len} fragments")]
+    SideKeyPosition {
+        /// Side named by the request: `"left"` or `"right"`.
+        side: &'static str,
+        /// Index addressed by the request.
+        index: usize,
+        /// Number of fragments on that side.
+        len: usize,
+    },
 }

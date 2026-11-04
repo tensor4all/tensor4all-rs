@@ -39,6 +39,7 @@ use bnum::types::{U1024, U256, U512};
 
 use cache_key::CacheKey;
 use index_int::IndexInt;
+use multi_index_cache::SideKeyValues;
 
 /// Compute total bits needed to represent the index space.
 pub(crate) fn total_bits(local_dims: &[usize]) -> u32 {
@@ -261,6 +262,49 @@ impl<V: Clone + Send + Sync> InnerCache<V> {
             Self::U1024 { .. } => "U1024",
         }
     }
+
+    /// Whether this key width can encode one side of an additive site split.
+    fn supports_side_keys(&self) -> bool {
+        matches!(self, Self::U64 { .. } | Self::U128 { .. })
+    }
+
+    /// Encode one side of an additive site split with this cache's coefficients.
+    ///
+    /// Returns `None` for the key widths that have no side-key support. The
+    /// caller has already checked that `sites` are distinct and in range and
+    /// that every fragment matches its site list.
+    fn side_key_values<I: IndexInt>(
+        &self,
+        sites: &[usize],
+        fragments: &[Vec<I>],
+    ) -> Option<SideKeyValues> {
+        match self {
+            Self::U64 { coeffs, .. } => {
+                let side = select_coeffs(coeffs, sites);
+                Some(SideKeyValues::U64(
+                    fragments
+                        .iter()
+                        .map(|fragment| flat_index(fragment, &side))
+                        .collect(),
+                ))
+            }
+            Self::U128 { coeffs, .. } => {
+                let side = select_coeffs(coeffs, sites);
+                Some(SideKeyValues::U128(
+                    fragments
+                        .iter()
+                        .map(|fragment| flat_index(fragment, &side))
+                        .collect(),
+                ))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The coefficients of `sites`, in the order the fragments carry them.
+fn select_coeffs<K: Clone>(coeffs: &[K], sites: &[usize]) -> Vec<K> {
+    sites.iter().map(|&site| coeffs[site].clone()).collect()
 }
 
 /// Type-erased cache interface for custom key types.
