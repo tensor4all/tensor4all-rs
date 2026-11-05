@@ -246,13 +246,6 @@ fn test_with_site_dims_rejects_product_overflow() {
 }
 
 #[test]
-fn flat_indexer_rejects_key_spaces_over_1024_bits() {
-    let result = FlatIndexer::new(&vec![2; 1025]);
-    let error = result.err().expect("key width must be rejected");
-    assert!(error.to_string().contains("1024-bit key limit"));
-}
-
-#[test]
 fn find_split_heuristic() {
     let tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2, 2], 1.0);
     let cache = TTCache::new(&tt);
@@ -310,33 +303,122 @@ fn test_key_width_boundary_for_binary_sites() {
             "{sites} binary sites"
         );
     }
-    // The remaining hard cap itself stays covered by
-    // `flat_indexer_rejects_key_spaces_over_1024_bits`.
 }
 
-/// Distinct multi-indices must not collide through the mixed-radix key at a
-/// width that only became reachable once the width counted `ceil(log2(dim))`,
-/// and the largest key must be exactly `cardinality - 1`.
 #[test]
-fn test_key_width_boundary_flat_index_keys_are_distinct() {
-    let indexer = FlatIndexer::new(&vec![2usize; 1024]).unwrap();
-    let mut bit0 = vec![0usize; 1024];
-    bit0[0] = 1;
-    let mut bit1023 = vec![0usize; 1024];
-    bit1023[1023] = 1;
-    let keys = [
-        indexer.flat_index(&vec![0usize; 1024]),
-        indexer.flat_index(&vec![1usize; 1024]),
-        indexer.flat_index(&bit0),
-        indexer.flat_index(&bit1023),
-    ];
-    for first in 0..keys.len() {
-        for second in first + 1..keys.len() {
-            assert_ne!(
-                keys[first], keys[second],
-                "keys {first} and {second} collide"
+fn batch_cache_supports_keys_wider_than_1024_bits() {
+    let n = 1370;
+    let mut tensors = Vec::with_capacity(n);
+    for site in 0..n {
+        let mut tensor = tensor3_zeros(1, 2, 1).unwrap();
+        tensor.set3(0, 0, 0, 1.0);
+        tensor.set3(
+            0,
+            1,
+            0,
+            if site == 0 {
+                2.0
+            } else if site == 1024 {
+                5.0
+            } else if site == n - 1 {
+                3.0
+            } else {
+                1.0
+            },
+        );
+        tensors.push(tensor);
+    }
+    let tt = SimpleTensorTrain::new(tensors).unwrap();
+    let mut indices = vec![vec![0; n]; 5];
+    indices[1][0] = 1;
+    indices[2][1024] = 1;
+    indices[3][n - 1] = 1;
+    indices[4][0] = 1;
+    indices[4][1024] = 1;
+    indices[4][n - 1] = 1;
+    let mut cache = TTCache::new(&tt);
+    for split in [None, Some(1050), Some(n - 1050), Some(n)] {
+        assert_eq!(
+            cache.evaluate_many(&indices, split).unwrap(),
+            vec![1.0, 2.0, 5.0, 3.0, 30.0]
+        );
+    }
+}
+
+#[test]
+fn integer_cache_keys_preserve_mixed_dimensions_and_partial_lengths() {
+    let tensors = [3, 1, 5, 2]
+        .into_iter()
+        .map(|dim| {
+            let mut tensor = tensor3_zeros(1, dim, 1).unwrap();
+            for index in 0..dim {
+                tensor.set3(0, index, 0, (index + 1) as f64);
+            }
+            tensor
+        })
+        .collect();
+    let tt = SimpleTensorTrain::new(tensors).unwrap();
+    let mut cache =
+        TTCache::with_site_dims(&tt, vec![vec![3], vec![1], vec![5], vec![1, 2]]).unwrap();
+    for _ in 0..2 {
+        assert_eq!(cache.evaluate_left(&[]).unwrap(), vec![1.0]);
+        assert_eq!(cache.evaluate_left(&[2]).unwrap(), vec![3.0]);
+        assert_eq!(cache.evaluate_left(&[2, 0]).unwrap(), vec![3.0]);
+        assert_eq!(cache.evaluate_left(&[2, 0, 4]).unwrap(), vec![15.0]);
+        assert_eq!(cache.evaluate_left(&[2, 0, 4, 1]).unwrap(), vec![30.0]);
+        assert_eq!(cache.evaluate_right(&[]).unwrap(), vec![1.0]);
+        assert_eq!(cache.evaluate_right(&[1]).unwrap(), vec![2.0]);
+        assert_eq!(cache.evaluate_right(&[4, 1]).unwrap(), vec![10.0]);
+        assert_eq!(cache.evaluate_right(&[0, 4, 1]).unwrap(), vec![10.0]);
+        assert_eq!(cache.evaluate_right(&[2, 0, 4, 1]).unwrap(), vec![30.0]);
+        for split in [None, Some(1), Some(2), Some(3), Some(4)] {
+            assert_eq!(
+                cache
+                    .evaluate_many(
+                        &[vec![0, 0, 0, 0], vec![2, 0, 4, 1], vec![1, 0, 2, 0]],
+                        split
+                    )
+                    .unwrap(),
+                vec![1.0, 30.0, 6.0]
             );
         }
+        for (left, index, site, max) in [(true, vec![0, 1], 1, 1), (false, vec![5, 0], 2, 5)] {
+            let error = if left {
+                cache.evaluate_left(&index)
+            } else {
+                cache.evaluate_right(&index)
+            }
+            .unwrap_err();
+            assert!(
+                matches!(error, SimpleTensorTrainError::IndexOutOfBounds { site: s, index: i, max: m } if s == site && i == index[if left { 1 } else { 0 }] && m == max)
+            );
+        }
+        cache.clear_cache();
+        assert!(cache.cache_left.iter().all(|c| c.is_empty()));
+        assert!(cache.cache_right.iter().all(|c| c.is_empty()));
     }
-    assert_eq!(keys[1], IndexKey::U1024(U1024::MAX));
+}
+
+#[test]
+fn cache_allows_partial_evaluation_around_zero_dimension_site() {
+    let tt = SimpleTensorTrain::<f64>::zeros(&[2, 0, 3]);
+    let mut cache = TTCache::new(&tt);
+    assert_eq!(cache.evaluate_left(&[1]).unwrap(), vec![0.0]);
+    assert_eq!(cache.evaluate_right(&[2]).unwrap(), vec![0.0]);
+    assert!(matches!(
+        cache.evaluate_left(&[1, 0]),
+        Err(SimpleTensorTrainError::IndexOutOfBounds {
+            site: 1,
+            max: 0,
+            ..
+        })
+    ));
+    assert!(matches!(
+        cache.evaluate_right(&[0, 2]),
+        Err(SimpleTensorTrainError::IndexOutOfBounds {
+            site: 1,
+            max: 0,
+            ..
+        })
+    ));
 }
