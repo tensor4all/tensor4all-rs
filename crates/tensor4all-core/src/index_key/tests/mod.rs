@@ -440,3 +440,25 @@ fn an_unfilled_builder_reports_the_width_it_holds() {
     assert_eq!(key.width_bits(), 0);
     assert!(matches!(key.repr(), Repr::U64(0)));
 }
+
+#[test]
+fn singleton_fields_at_storage_boundaries_encode_without_panicking() {
+    for bits in [0, 64, 128, 256, 512, 576, 1024] {
+        let mut dims = vec![2; bits];
+        let mut indices = vec![1; bits];
+        let original = FlatIndexer::try_new(&dims)
+            .unwrap()
+            .encode(&indices)
+            .unwrap();
+        dims.extend([1, 1]);
+        indices.extend([0, 0]);
+        let extended = FlatIndexer::try_new(&dims)
+            .unwrap()
+            .encode(&indices)
+            .unwrap();
+        assert_eq!(
+            extended, original,
+            "{bits}-bit key with trailing singleton fields"
+        );
+    }
+}
