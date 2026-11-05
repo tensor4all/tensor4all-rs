@@ -119,6 +119,16 @@ thread_local! {
 /// that need more atoms, refine them explicitly: operands with equal layouts
 /// are combined without a further refinement.
 ///
+/// # Where the number comes from
+///
+/// 4096 is a policy bound, not a measured one. The design issue (#1095) asked for a
+/// default small enough to be obviously safe ("thousands of atoms") and for the
+/// error to name both numbers; 4096 is the smallest power of two above that
+/// range, so the check stays a single comparison. The value says nothing about
+/// what the crate can hold: an operand refined onto that many atoms holds 4096
+/// patches per patch it started with, which is why the automatic path stops
+/// there and the explicit [`PartitionedTreeTN::refine_to`] does not.
+///
 /// # Examples
 ///
 /// ```
