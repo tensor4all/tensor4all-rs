@@ -19,6 +19,23 @@ fn cache_key_error(error: IndexKeyError) -> SimpleTensorTrainError {
     }
 }
 
+// Build metadata only for visited lengths, after public index validation. In
+// particular, a zero-dimensional site must not reject unrelated partial reads.
+fn partial_key<T: TTScalar>(
+    indexer: &mut Option<FlatIndexer>,
+    tensors: &[Tensor3<T>],
+    indices: &[LocalIndex],
+) -> Result<IndexKey> {
+    let indexer = match indexer {
+        Some(indexer) => indexer,
+        slot @ None => {
+            let dims: Vec<_> = tensors.iter().map(Tensor3Ops::site_dim).collect();
+            slot.insert(FlatIndexer::try_new(&dims).map_err(cache_key_error)?)
+        }
+    };
+    indexer.encode(indices).map_err(cache_key_error)
+}
+
 /// Helper struct for building unique index mappings
 struct IndexMapper {
     left_indexer: FlatIndexer,
@@ -132,9 +149,12 @@ pub struct TTCache<T: TTScalar> {
     /// The site tensors (reshaped to 3D: left_bond x flat_site x right_bond)
     tensors: Vec<Tensor3<T>>,
     /// Cache for left partial evaluations: site -> (indices -> vector)
-    cache_left: Vec<std::collections::HashMap<MultiIndex, Vec<T>>>,
+    cache_left: Vec<FxHashMap<IndexKey, Vec<T>>>,
     /// Cache for right partial evaluations: site -> (indices -> vector)
-    cache_right: Vec<std::collections::HashMap<MultiIndex, Vec<T>>>,
+    cache_right: Vec<FxHashMap<IndexKey, Vec<T>>>,
+    /// Key metadata for each visited left prefix / right suffix length.
+    left_indexers: Vec<Option<FlatIndexer>>,
+    right_indexers: Vec<Option<FlatIndexer>>,
     /// Site dimensions for each tensor (can be multi-dimensional per site)
     site_dims: Vec<Vec<usize>>,
 }
@@ -148,8 +168,10 @@ impl<T: TTScalar> TTCache<T> {
 
         Self {
             tensors,
-            cache_left: (0..n).map(|_| std::collections::HashMap::new()).collect(),
-            cache_right: (0..n).map(|_| std::collections::HashMap::new()).collect(),
+            cache_left: (0..n).map(|_| FxHashMap::default()).collect(),
+            cache_right: (0..n).map(|_| FxHashMap::default()).collect(),
+            left_indexers: vec![None; n],
+            right_indexers: vec![None; n],
             site_dims,
         }
     }
@@ -206,14 +228,9 @@ impl<T: TTScalar> TTCache<T> {
             }
         }
 
-        let tensors: Vec<Tensor3<T>> = tt.site_tensors().to_vec();
-
-        Ok(Self {
-            tensors,
-            cache_left: (0..n).map(|_| std::collections::HashMap::new()).collect(),
-            cache_right: (0..n).map(|_| std::collections::HashMap::new()).collect(),
-            site_dims,
-        })
+        let mut cache = Self::new(tt);
+        cache.site_dims = site_dims;
+        Ok(cache)
     }
 
     /// Number of sites
@@ -324,15 +341,22 @@ impl<T: TTScalar> TTCache<T> {
     /// any index is out of bounds for its site, or if the tenferro-backed
     /// matrix-vector contraction fails.
     pub fn evaluate_left(&mut self, indices: &[LocalIndex]) -> Result<Vec<T>> {
-        let ell = indices.len();
         self.validate_partial_indices(0, indices)?;
+        self.evaluate_left_validated(indices)
+    }
 
+    fn evaluate_left_validated(&mut self, indices: &[LocalIndex]) -> Result<Vec<T>> {
+        let ell = indices.len();
         if ell == 0 {
             return Ok(vec![T::one()]);
         }
 
         // Check cache
-        let key: MultiIndex = indices.to_vec();
+        let key = partial_key(
+            &mut self.left_indexers[ell - 1],
+            &self.tensors[..ell],
+            indices,
+        )?;
         if let Some(cached) = self.cache_left[ell - 1].get(&key) {
             return Ok(cached.clone());
         }
@@ -345,7 +369,7 @@ impl<T: TTScalar> TTCache<T> {
             tensor.slice_site(flat_idx)
         } else {
             // Recursive case: left[0..ell-1] * tensor[ell-1][:, idx, :]
-            let left = self.evaluate_left(&indices[0..ell - 1])?;
+            let left = self.evaluate_left_validated(&indices[0..ell - 1])?;
             let flat_idx = self.multi_to_flat(ell - 1, &indices[ell - 1..ell])?;
             let tensor = &self.tensors[ell - 1];
             let slice = tensor.slice_site(flat_idx);
@@ -381,15 +405,24 @@ impl<T: TTScalar> TTCache<T> {
             });
         }
 
+        self.validate_partial_indices(n - ell, indices)?;
+        self.evaluate_right_validated(indices)
+    }
+
+    fn evaluate_right_validated(&mut self, indices: &[LocalIndex]) -> Result<Vec<T>> {
+        let n = self.len();
+        let ell = indices.len();
         if ell == 0 {
             return Ok(vec![T::one()]);
         }
-
         let start = n - ell;
-        self.validate_partial_indices(start, indices)?;
 
         // Check cache
-        let key: MultiIndex = indices.to_vec();
+        let key = partial_key(
+            &mut self.right_indexers[start],
+            &self.tensors[start..],
+            indices,
+        )?;
         if let Some(cached) = self.cache_right[start].get(&key) {
             return Ok(cached.clone());
         }
@@ -402,7 +435,7 @@ impl<T: TTScalar> TTCache<T> {
             tensor.slice_site(flat_idx)
         } else {
             // Recursive case: tensor[start][:, idx, :] * right[1..]
-            let right = self.evaluate_right(&indices[1..])?;
+            let right = self.evaluate_right_validated(&indices[1..])?;
             let flat_idx = self.multi_to_flat(start, &indices[0..1])?;
             let tensor = &self.tensors[start];
             let slice = tensor.slice_site(flat_idx);
