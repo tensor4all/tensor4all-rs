@@ -22,6 +22,9 @@ pub type Result<T> = std::result::Result<T, PartitionedTreeTNError>;
 /// coordinates and full index identities. Backend and TreeTN failures retain
 /// their typed source errors for diagnostics.
 ///
+/// The enum is `#[non_exhaustive]`: variants are added as new failure modes are
+/// found, so a caller matching on it must keep a wildcard arm.
+///
 /// # Examples
 ///
 /// ```
@@ -36,6 +39,7 @@ pub type Result<T> = std::result::Result<T, PartitionedTreeTNError>;
 /// ));
 /// ```
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum PartitionedTreeTNError {
     /// A different projector overlaps an existing partition patch.
     #[error("projectors overlap; use disjoint projector keys or replace the exact key")]

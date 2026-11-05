@@ -172,3 +172,29 @@ fn private_helpers_wrap_the_requested_diagnostics() {
     );
     assert!(Error::source(&topology).is_some());
 }
+
+#[test]
+fn caller_matches_keep_a_wildcard_arm() {
+    // `#[non_exhaustive]`: callers name the variants they act on and keep the
+    // rest on a wildcard arm, so a later variant does not break their build.
+    fn repair_note(error: PartitionedTreeTNError) -> String {
+        match error {
+            PartitionedTreeTNError::RefinementTooLarge { atoms, limit } => {
+                format!("refine explicitly: {atoms} atoms exceed the limit of {limit}")
+            }
+            other => other.to_string(),
+        }
+    }
+
+    assert_eq!(
+        repair_note(PartitionedTreeTNError::RefinementTooLarge {
+            atoms: 10,
+            limit: 4,
+        }),
+        "refine explicitly: 10 atoms exceed the limit of 4"
+    );
+    assert_eq!(
+        repair_note(PartitionedTreeTNError::Empty),
+        "partitioned TreeTN is empty; add at least one patch"
+    );
+}
