@@ -121,7 +121,7 @@ fn partition_supports_complex_dtype_and_rejects_mixed_dtype_before_mutation() {
     assert_eq!(target.len(), before.len());
 
     assert!(matches!(
-        complex.add(&real, &0, TruncationOptions::default()),
+        complex.add(&real),
         Err(PartitionedTreeTNError::DTypeMismatch { .. })
     ));
     assert!(matches!(
@@ -136,7 +136,7 @@ fn partition_addition_allows_missing_keys_and_refines_overlapping_layouts() {
     let left = PartitionedTreeTN::from_subdomain(subdomain(&site, [2.0, 100.0], 0)).unwrap();
     let right = PartitionedTreeTN::from_subdomain(subdomain(&site, [300.0, 4.0], 1)).unwrap();
 
-    let sum = left.add(&right, &0, TruncationOptions::default()).unwrap();
+    let sum = left.add(&right).unwrap();
     assert_eq!(sum.len(), 2);
     let dense = sum.to_treetn().unwrap();
     assert_eq!(
@@ -151,9 +151,7 @@ fn partition_addition_allows_missing_keys_and_refines_overlapping_layouts() {
     // `{site=0}` and `{}` overlap without being equal. Refining onto the common
     // refinement keeps the whole unprojected patch instead of rejecting.
     let overlap = PartitionedTreeTN::from_subdomain(unprojected(&site, vec![1.0, 2.0])).unwrap();
-    let refined_sum = left
-        .add(&overlap, &0, TruncationOptions::default())
-        .unwrap();
+    let refined_sum = left.add(&overlap).unwrap();
     assert_eq!(refined_sum.len(), 2);
     assert_eq!(
         refined_sum
@@ -174,11 +172,11 @@ fn partition_addition_validates_center_and_options_before_shortcuts() {
     let right = PartitionedTreeTN::new();
 
     assert!(matches!(
-        left.add(&right, &0, TruncationOptions::default()),
+        left.add_truncated(&right, &0, TruncationOptions::default()),
         Err(PartitionedTreeTNError::Empty)
     ));
     assert!(matches!(
-        left.add(
+        left.add_truncated(
             &left,
             &99,
             TruncationOptions::default().with_max_bond_dim(0),
@@ -186,7 +184,7 @@ fn partition_addition_validates_center_and_options_before_shortcuts() {
         Err(PartitionedTreeTNError::InvalidOptions { .. })
     ));
     assert!(matches!(
-        left.add(&left, &99, TruncationOptions::default()),
+        left.add_truncated(&left, &99, TruncationOptions::default()),
         Err(PartitionedTreeTNError::InvalidCenter)
     ));
 }
@@ -570,7 +568,7 @@ fn non_finite_svd_truncation_thresholds_are_rejected_before_shortcuts() {
         let options = TruncationOptions::new().with_svd_policy(SvdTruncationPolicy::new(threshold));
         assert!(
             matches!(
-                partition.add(&partition, &0, options),
+                partition.add_truncated(&partition, &0, options),
                 Err(PartitionedTreeTNError::InvalidOptions { .. })
             ),
             "disjoint addition must reject threshold {threshold}"
@@ -601,7 +599,7 @@ fn non_finite_svd_truncation_thresholds_are_rejected_before_shortcuts() {
 
     // `max_bond_dim == 0` is a separate invalid case on every validated path.
     assert!(matches!(
-        partition.add(
+        partition.add_truncated(
             &partition,
             &0,
             TruncationOptions::default().with_max_bond_dim(0)
@@ -649,7 +647,7 @@ fn empty_and_zero_node_subdomains_have_consistent_semantics() {
     let site = DynIndex::new_dyn(2);
     let nonempty = PartitionedTreeTN::from_subdomain(subdomain(&site, [1.0, 2.0], 0)).unwrap();
     assert!(matches!(
-        empty.add(&nonempty, &0, TruncationOptions::default()),
+        empty.add(&nonempty),
         Err(PartitionedTreeTNError::Empty)
     ));
     assert!(matches!(
@@ -1138,9 +1136,7 @@ fn add_refines_layouts_that_only_differ_on_a_dimension_one_index() {
 
     let atoms = PartitionedTreeTN::common_refinement(&[&unprojected, &projected]).unwrap();
     assert_eq!(atoms, vec![projector(&[(&x, 0)])]);
-    let sum = unprojected
-        .add(&projected, &0, TruncationOptions::default())
-        .unwrap();
+    let sum = unprojected.add(&projected).unwrap();
     assert_eq!(sum.len(), 1);
     let expected = dense_of(&unprojected).add(&dense_of(&projected)).unwrap();
     assert_close(&dense_of(&sum), &expected, "dimension-one layout");
@@ -1223,12 +1219,8 @@ fn common_refinement_is_order_independent() {
     }
 
     // Equal atom sets mean equal keys and values in both add orders.
-    let sum = unprojected
-        .add(&split, &0, TruncationOptions::default())
-        .unwrap();
-    let swapped = split
-        .add(&unprojected, &0, TruncationOptions::default())
-        .unwrap();
+    let sum = unprojected.add(&split).unwrap();
+    let swapped = split.add(&unprojected).unwrap();
     assert_eq!(
         sorted(&sum.projectors().cloned().collect::<Vec<_>>()),
         sorted(&swapped.projectors().cloned().collect::<Vec<_>>())
@@ -1381,16 +1373,26 @@ fn add_refines_overlapping_unequal_layouts_and_commutes() {
         ],
     );
 
-    let sum = coarse.add(&fine, &0, TruncationOptions::default()).unwrap();
+    let sum = coarse.add(&fine).unwrap();
     let expected = dense_of(&coarse).add(&dense_of(&fine)).unwrap();
     assert_close(&dense_of(&sum), &expected, "add refined");
 
-    let swapped = fine.add(&coarse, &0, TruncationOptions::default()).unwrap();
+    let swapped = fine.add(&coarse).unwrap();
     assert_eq!(
         sorted(&sum.projectors().cloned().collect::<Vec<_>>()),
         sorted(&swapped.projectors().cloned().collect::<Vec<_>>())
     );
     assert_close(&dense_of(&swapped), &expected, "add commutativity");
+
+    // The truncating variant refines onto the same atoms.
+    let truncated = coarse
+        .add_truncated(&fine, &0, TruncationOptions::default())
+        .unwrap();
+    assert_eq!(
+        sorted(&truncated.projectors().cloned().collect::<Vec<_>>()),
+        sorted(&sum.projectors().cloned().collect::<Vec<_>>())
+    );
+    assert_close(&dense_of(&truncated), &expected, "add_truncated refined");
 }
 
 #[test]
@@ -1408,9 +1410,7 @@ fn add_keeps_the_part_the_other_operand_does_not_cover() {
         &[projector(&[(&k1, 0), (&k2, 0)]), projector(&[(&k1, 1)])],
     );
 
-    let sum = coarse
-        .add(&missing, &0, TruncationOptions::default())
-        .unwrap();
+    let sum = coarse.add(&missing).unwrap();
     assert_eq!(sum.len(), 3);
     assert!(sum.contains(&projector(&[(&k1, 0), (&k2, 1)])));
     let expected = dense_of(&coarse).add(&dense_of(&missing)).unwrap();
@@ -1427,13 +1427,56 @@ fn add_with_equal_layouts_is_unchanged() {
     let left = layout(&tree, &coarsest);
     let right = layout(&tree, &coarsest);
 
-    let sum = left.add(&right, &0, TruncationOptions::default()).unwrap();
+    let sum = left.add(&right).unwrap();
     assert_eq!(
         sorted(&sum.projectors().cloned().collect::<Vec<_>>()),
         sorted(&coarsest)
     );
     let expected = dense_of(&left).add(&dense_of(&right)).unwrap();
     assert_close(&dense_of(&sum), &expected, "add equal layouts");
+}
+
+#[test]
+fn add_is_exact_and_add_truncated_truncates_only_shared_keys() {
+    let k1 = DynIndex::new_dyn(2);
+    let k2 = DynIndex::new_dyn(2);
+    let a = DynIndex::new_dyn(2);
+    let tree = chain(&[k1.clone(), k2.clone()], &a, 107);
+    let shared = projector(&[(&k1, 0)]);
+    let one_sided = projector(&[(&k1, 1)]);
+    let both = layout(&tree, &[shared.clone(), one_sided.clone()]);
+    let shared_only = layout(&tree, std::slice::from_ref(&shared));
+    let link_dims = |partition: &PartitionedTreeTN<usize>, key: &Projector| {
+        partition.get(key).unwrap().data().link_dims()
+    };
+
+    // The bonds of a shared key add and nothing is truncated.
+    let exact = both.add(&shared_only).unwrap();
+    assert_eq!(link_dims(&exact, &shared), vec![6]);
+    assert_eq!(link_dims(&exact, &one_sided), vec![3]);
+    let expected = dense_of(&both).add(&dense_of(&shared_only)).unwrap();
+    assert_close(&dense_of(&exact), &expected, "exact add");
+
+    // Only the shared key is truncated; the one-sided key is copied unchanged.
+    let truncated = both
+        .add_truncated(
+            &shared_only,
+            &0,
+            TruncationOptions::default().with_max_bond_dim(1),
+        )
+        .unwrap();
+    assert_eq!(link_dims(&truncated, &shared), vec![1]);
+    assert_eq!(link_dims(&truncated, &one_sided), vec![3]);
+    assert_close(
+        &truncated
+            .get(&one_sided)
+            .unwrap()
+            .data()
+            .to_dense()
+            .unwrap(),
+        &both.get(&one_sided).unwrap().data().to_dense().unwrap(),
+        "one-sided key",
+    );
 }
 
 #[test]
@@ -1446,7 +1489,7 @@ fn contract_and_add_reject_empty_operands() {
     let empty = PartitionedTreeTN::<usize>::new();
 
     assert!(matches!(
-        coarse.add(&empty, &0, TruncationOptions::default()),
+        coarse.add(&empty),
         Err(PartitionedTreeTNError::Empty)
     ));
     assert!(matches!(
