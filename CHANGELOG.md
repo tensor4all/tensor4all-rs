@@ -4,9 +4,15 @@
 
 ### Breaking Rust API changes
 
-Fixed-rank randomized factorization (#1108) is a breaking pre-1.0 Rust API
-change designated for the next minor release. The following changes break
-exhaustive matches, complete struct literals, or named public types:
+Fixed-rank randomized factorization (#1108) and the partitioned TreeTN error
+enum are breaking pre-1.0 Rust API changes designated for the next minor
+release. The following changes break exhaustive matches, complete struct
+literals, or named public types:
+
+- `tensor4all-partitionedtreetn`: `PartitionedTreeTNError` gained the
+  `RefinementTooLarge { atoms, limit }` variant (#1143) and is now
+  `#[non_exhaustive]`. Both land in this release, so an exhaustive match breaks
+  once: add a wildcard arm, and later variants stay additive.
 
 - `tensor4all-core`: `FactorizeAlg::RSVD` and
   `FactorizeError::UnsupportedTruncationPolicy` are new enum variants.
