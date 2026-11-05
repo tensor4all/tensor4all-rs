@@ -95,31 +95,6 @@ impl IndexMapper {
     }
 }
 
-/// Helper for counting unique keys in split heuristic
-struct UniqueCounter {
-    indexer: FlatIndexer,
-    keys: FxHashSet<IndexKey>,
-}
-
-impl UniqueCounter {
-    fn new(local_dims: &[usize], capacity: usize) -> Result<Self> {
-        Ok(Self {
-            indexer: FlatIndexer::try_new(local_dims).map_err(cache_key_error)?,
-            keys: FxHashSet::with_capacity_and_hasher(capacity, Default::default()),
-        })
-    }
-
-    fn insert(&mut self, idx: &[usize]) -> Result<()> {
-        let key = self.indexer.encode(idx).map_err(cache_key_error)?;
-        self.keys.insert(key);
-        Ok(())
-    }
-
-    fn len(&self) -> usize {
-        self.keys.len()
-    }
-}
-
 /// Cached tensor train evaluator.
 ///
 /// Wraps a tensor train and caches left and right partial contractions so
@@ -545,7 +520,7 @@ impl<T: TTScalar> TTCache<T> {
         // Determine split position
         let split = match split {
             Some(s) => s,
-            None => self.find_split_heuristic(indices)?,
+            None => self.find_split_heuristic(indices),
         };
 
         if split == 0 || split > n {
@@ -631,56 +606,35 @@ impl<T: TTScalar> TTCache<T> {
     ///
     /// Samples at 1/4, 1/2, 3/4 positions and returns the one with
     /// minimum total unique left + right parts.
-    fn find_split_heuristic(&self, indices: &[MultiIndex]) -> Result<usize> {
+    fn find_split_heuristic(&self, indices: &[MultiIndex]) -> usize {
         let n = self.len();
         if n <= 1 {
-            return Ok(n.max(1));
+            return n.max(1);
         }
 
-        let local_dims: Vec<usize> = self
-            .site_dims
-            .iter()
-            .map(|dims| {
-                dims.iter()
-                    .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
-            })
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
-                message: "cache heuristic site-dimension product overflowed usize".to_string(),
-            })?;
-
-        // Helper to compute cost at a split position
-        let compute_cost = |split: usize| -> Result<usize> {
+        // These sets only count within this call and borrow the validated batch;
+        // encoding keys for three discarded split candidates adds avoidable work.
+        let mut left = FxHashSet::with_capacity_and_hasher(indices.len(), Default::default());
+        let mut right = FxHashSet::with_capacity_and_hasher(indices.len(), Default::default());
+        let mut best_split = n / 2;
+        let mut best_cost = usize::MAX;
+        for split in [n / 4, n / 2, n.saturating_mul(3) / 4] {
             if split == 0 || split >= n {
-                return Ok(usize::MAX);
+                continue;
             }
-
-            let mut left_counter = UniqueCounter::new(&local_dims[..split], indices.len())?;
-            let mut right_counter = UniqueCounter::new(&local_dims[split..], indices.len())?;
-
+            left.clear();
+            right.clear();
             for idx in indices {
-                left_counter.insert(&idx[..split])?;
-                right_counter.insert(&idx[split..])?;
+                left.insert(&idx[..split]);
+                right.insert(&idx[split..]);
             }
-
-            Ok(left_counter.len().saturating_add(right_counter.len()))
-        };
-
-        // 3-point sampling: 1/4, 1/2, 3/4 positions
-        let candidates = [n / 4, n / 2, n.saturating_mul(3) / 4];
-        let costs: Result<Vec<(usize, usize)>> = candidates
-            .iter()
-            .filter(|&&p| p >= 1 && p < n)
-            .map(|&p| Ok((p, compute_cost(p)?)))
-            .collect();
-
-        costs?
-            .into_iter()
-            .min_by_key(|&(_, c)| c)
-            .map(|(p, _)| p)
-            .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
-                message: "cache heuristic could not choose a valid split".to_string(),
-            })
+            let cost = left.len().saturating_add(right.len());
+            if cost < best_cost {
+                best_cost = cost;
+                best_split = split;
+            }
+        }
+        best_split
     }
 }
 
