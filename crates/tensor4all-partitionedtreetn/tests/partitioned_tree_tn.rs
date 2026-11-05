@@ -2,7 +2,7 @@ use num_complex::Complex64;
 use tensor4all_core::{contract_pair, DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy};
 use tensor4all_partitionedtreetn::{
     add_with_patching, PartitionedTreeTN, PartitionedTreeTNError, PatchingOptions, Projector,
-    SubDomainTreeTN,
+    SubDomainTreeTN, AUTOMATIC_REFINEMENT_LIMIT,
 };
 use tensor4all_treetn::{
     contraction::{ContractionMethod, ContractionOptions},
@@ -1499,4 +1499,83 @@ fn contract_and_add_reject_empty_operands() {
     assert!(PartitionedTreeTN::<usize>::common_refinement(&[])
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn add_rejects_an_automatic_refinement_above_the_limit() {
+    // `{a=0}` against `{}` refines onto one atom per coordinate of `a`.
+    let atoms = AUTOMATIC_REFINEMENT_LIMIT + 1;
+    let a = DynIndex::new_dyn(atoms);
+    let b = DynIndex::new_dyn(2);
+    let tree = chain(std::slice::from_ref(&a), &b, 109);
+    let unprojected = layout(&tree, &[Projector::new()]);
+    let projected = layout(&tree, &[projector(&[(&a, 0)])]);
+
+    let error = unprojected.add(&projected).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            PartitionedTreeTNError::RefinementTooLarge { atoms: found, limit }
+                if found == atoms && limit == AUTOMATIC_REFINEMENT_LIMIT
+        ),
+        "{error:?}"
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains(&format!("{atoms} atoms"))
+            && message.contains(&format!("limit of {AUTOMATIC_REFINEMENT_LIMIT}"))
+            && message.contains("refine_to"),
+        "{message}"
+    );
+    assert!(matches!(
+        projected.add_truncated(&unprojected, &0, TruncationOptions::default()),
+        Err(PartitionedTreeTNError::RefinementTooLarge { .. })
+    ));
+
+    // The explicit refinement calls are not limited.
+    let explicit = PartitionedTreeTN::common_refinement(&[&unprojected, &projected]).unwrap();
+    assert_eq!(explicit.len(), atoms);
+    let refined = projected.refine_to(&explicit).unwrap();
+    assert_eq!(refined.len(), 1);
+    assert_close(
+        &dense_of(&refined),
+        &dense_of(&projected),
+        "explicit refine",
+    );
+}
+
+#[test]
+fn contract_rejects_an_automatic_refinement_above_the_limit() {
+    // `k1` and `a` are contracted. The right patches fix the uncontracted `k2`
+    // and `k3`, whose outputs `{k2=0}` and `{k3=0}` overlap, so the refinement
+    // grid has `dim * dim` atoms although each index alone is under the limit.
+    let dim = 65;
+    assert!(dim <= AUTOMATIC_REFINEMENT_LIMIT && dim * dim > AUTOMATIC_REFINEMENT_LIMIT);
+    let k1 = DynIndex::new_dyn(2);
+    let k2 = DynIndex::new_dyn(dim);
+    let k3 = DynIndex::new_dyn(dim);
+    let a = DynIndex::new_dyn(2);
+    let left = layout(
+        &chain(std::slice::from_ref(&k1), &a, 113),
+        &[projector(&[(&k1, 0)]), projector(&[(&k1, 1)])],
+    );
+    let right = layout(
+        &chain(&[k1.clone(), k2.clone(), k3.clone()], &a, 127),
+        &[
+            projector(&[(&k1, 0), (&k2, 0)]),
+            projector(&[(&k1, 1), (&k3, 0)]),
+        ],
+    );
+
+    let error = left
+        .contract(&right, &0, ContractionOptions::default())
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            PartitionedTreeTNError::RefinementTooLarge { atoms, limit }
+                if atoms == dim * dim && limit == AUTOMATIC_REFINEMENT_LIMIT
+        ),
+        "{error:?}"
+    );
 }

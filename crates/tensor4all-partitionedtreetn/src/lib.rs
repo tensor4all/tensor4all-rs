@@ -45,7 +45,9 @@ mod subdomain_tree_tn;
 
 pub use error::{PartitionedTreeTNError, Result};
 pub use error_norm::{ErrorNorm, ErrorTolerance, L2Reference};
-pub use partitioned_tree_tn::{PartitionedContractionOptions, PartitionedTreeTN};
+pub use partitioned_tree_tn::{
+    PartitionedContractionOptions, PartitionedTreeTN, AUTOMATIC_REFINEMENT_LIMIT,
+};
 pub use patching::{
     add_with_patching, contract_adaptive, contract_adaptive_selected, truncate_adaptive,
     BudgetAllocation, PatchSplitStrategy, PatchingOptions,

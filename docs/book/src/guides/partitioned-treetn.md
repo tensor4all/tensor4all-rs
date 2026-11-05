@@ -168,7 +168,11 @@ other does not cover. `contract` refines both operands only when two predicted
 output projectors would overlap without being equal, and then on the
 uncontracted indices that the input patches fix, so any two outputs are equal or
 disjoint. Equal or disjoint layouts take the old path and are unchanged.
-`add_truncated` refines like `add`. `contract_selected`, `contract_adaptive`, and
+`add_truncated` refines like `add`. This automatic refinement is limited to
+`AUTOMATIC_REFINEMENT_LIMIT` atoms; a larger one returns
+`PartitionedTreeTNError::RefinementTooLarge` before anything is refined, and
+callers who need it call `common_refinement` and `refine_to` explicitly, which
+are not limited. `contract_selected`, `contract_adaptive`, and
 `add_with_patching` do not refine.
 
 ## Adaptive patched interpolation

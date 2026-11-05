@@ -13,6 +13,8 @@ use crate::PatchingOptions;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
+mod refinement_limit;
+
 const BRANCHES: usize = 3;
 const QUBITS: usize = 2;
 const BOND: usize = 2;

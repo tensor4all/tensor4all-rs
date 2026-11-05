@@ -101,6 +101,58 @@ thread_local! {
     pub(crate) static CONTRACTED_PAIRS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Largest number of atoms that [`PartitionedTreeTN::add`],
+/// [`PartitionedTreeTN::add_truncated`], and [`PartitionedTreeTN::contract`]
+/// refine onto automatically.
+///
+/// Those methods refine operands whose patch layouts overlap without being
+/// equal onto a layout of disjoint projectors, the atoms: the common
+/// refinement for `add`, and for `contract` the grid of the uncontracted
+/// indices that the patches fix, whose size is the product of their
+/// dimensions. A refined operand holds at most its patch count times the
+/// number of atoms. When the atoms would exceed this limit, those methods
+/// return [`PartitionedTreeTNError::RefinementTooLarge`] before refining
+/// anything.
+///
+/// The explicit [`PartitionedTreeTN::common_refinement`] and
+/// [`PartitionedTreeTN::refine_to`] are not limited. To combine operands
+/// that need more atoms, refine them explicitly: operands with equal layouts
+/// are combined without a further refinement.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, IdxTensor};
+/// use tensor4all_partitionedtreetn::{
+///     PartitionedTreeTN, PartitionedTreeTNError, Projector, SubDomainTreeTN,
+///     AUTOMATIC_REFINEMENT_LIMIT,
+/// };
+/// use tensor4all_treetn::TreeTN;
+///
+/// // `{a=0}` against `{}` needs one atom per coordinate of `a`.
+/// let a = DynIndex::new_dyn(AUTOMATIC_REFINEMENT_LIMIT + 1);
+/// let tree = TreeTN::from_tensors(
+///     vec![IdxTensor::from_dense(vec![a.clone()], vec![1.0_f64; a.dim])?],
+///     vec![0usize],
+/// )?;
+/// let whole = PartitionedTreeTN::from_subdomain(SubDomainTreeTN::from_treetn(tree.clone())?)?;
+/// let part = PartitionedTreeTN::from_subdomain(SubDomainTreeTN::new(
+///     tree,
+///     Projector::from_pairs([(a.clone(), 0)])?,
+/// )?)?;
+/// assert!(matches!(
+///     whole.add(&part),
+///     Err(PartitionedTreeTNError::RefinementTooLarge { atoms, limit })
+///         if atoms == AUTOMATIC_REFINEMENT_LIMIT + 1 && limit == AUTOMATIC_REFINEMENT_LIMIT
+/// ));
+///
+/// // The explicit refinement is not limited.
+/// let atoms = PartitionedTreeTN::common_refinement(&[&whole, &part])?;
+/// assert_eq!(atoms.len(), AUTOMATIC_REFINEMENT_LIMIT + 1);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub const AUTOMATIC_REFINEMENT_LIMIT: usize = 4096;
+
 /// A collection of pairwise-disjoint, eagerly masked TreeTN patches.
 ///
 /// All patches in one collection have the same named topology, exact full
@@ -449,7 +501,10 @@ where
     /// projectors, merged with the restrictions the patch already carries, so a
     /// patch region is covered by the sub-patches of the layout projectors inside
     /// it and no value is truncated. This lets a caller combine partitions with
-    /// different patch layouts without projecting patches by hand.
+    /// different patch layouts without projecting patches by hand. Unlike the
+    /// automatic refinement in [`Self::add`] and [`Self::contract`], this method
+    /// is not limited by [`AUTOMATIC_REFINEMENT_LIMIT`]: the result can hold up
+    /// to the patch count times `layout.len()` patches.
     ///
     /// # Arguments
     ///
@@ -531,7 +586,9 @@ where
     /// projector of every operand is exactly a union of atoms, including the part
     /// of one operand's region that the other operands do not cover. Refining each
     /// operand onto these atoms with [`Self::refine_to`] gives operand layouts
-    /// that [`Self::add`] can sum patch by patch.
+    /// that [`Self::add`] can sum patch by patch. The atom count is not limited
+    /// by [`AUTOMATIC_REFINEMENT_LIMIT`], so this is the way to combine operands
+    /// whose common refinement exceeds it.
     ///
     /// # Arguments
     ///
@@ -691,7 +748,9 @@ where
     /// that the other operand does not cover, so the sum is exact rather than
     /// clipped to the overlap. The refinement masks sites and truncates nothing;
     /// it can increase the patch count. When the layouts are already
-    /// equal or disjoint, no refinement runs and the result is unchanged.
+    /// equal or disjoint, no refinement runs and the result is unchanged. A
+    /// common refinement with more than [`AUTOMATIC_REFINEMENT_LIMIT`] atoms is
+    /// rejected before either operand is refined.
     ///
     /// # Errors
     ///
@@ -700,7 +759,10 @@ where
     /// [`PartitionedTreeTNError::SiteIndexMismatch`], or
     /// [`PartitionedTreeTNError::DTypeMismatch`] before patch shortcuts,
     /// [`PartitionedTreeTNError::OverlappingProjectors`] for an operand whose
-    /// own stored layout is invalid, or a typed TreeTN error for addition.
+    /// own stored layout is invalid,
+    /// [`PartitionedTreeTNError::RefinementTooLarge`] when the common refinement
+    /// has more than [`AUTOMATIC_REFINEMENT_LIMIT`] atoms, or a typed TreeTN
+    /// error for addition.
     ///
     /// # Examples
     ///
@@ -733,7 +795,7 @@ where
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn add(&self, other: &Self) -> Result<Self> {
-        self.add_with(other, None)
+        self.add_with(other, None, AUTOMATIC_REFINEMENT_LIMIT)
     }
 
     /// Add two partitions patch-wise and truncate every key present in both.
@@ -807,13 +869,19 @@ where
         options: TruncationOptions,
     ) -> Result<Self> {
         validate_truncation_options(&options)?;
-        self.add_with(other, Some((center, options)))
+        self.add_with(other, Some((center, options)), AUTOMATIC_REFINEMENT_LIMIT)
     }
 
     /// Shared body of [`Self::add`] and [`Self::add_truncated`]: validate the
-    /// operands, refine differing layouts, and sum patch-wise, truncating the
-    /// keys present in both operands when `truncation` is given.
-    fn add_with(&self, other: &Self, truncation: Option<(&V, TruncationOptions)>) -> Result<Self> {
+    /// operands, refine differing layouts onto at most `limit` atoms, and sum
+    /// patch-wise, truncating the keys present in both operands when
+    /// `truncation` is given.
+    fn add_with(
+        &self,
+        other: &Self,
+        truncation: Option<(&V, TruncationOptions)>,
+        limit: usize,
+    ) -> Result<Self> {
         self.validate_contents()?;
         other.validate_contents()?;
         let (left_template, right_template) = nonempty_templates(self, other)?;
@@ -828,6 +896,7 @@ where
             return self.add_patchwise(other, truncation);
         }
         let atoms = Self::common_refinement(&[self, other])?;
+        ensure_refinement_within(atoms.len(), limit)?;
         let left = self.refine_to(&atoms)?;
         let right = other.refine_to(&atoms)?;
         left.add_patchwise(&right, truncation)
@@ -883,7 +952,8 @@ where
     /// grow with the product of those indices' dimensions, and the refinement is
     /// exact: it masks sites and truncates nothing. When the predicted output
     /// projectors are already equal or disjoint, no refinement runs and the result
-    /// is unchanged.
+    /// is unchanged. A grid with more than [`AUTOMATIC_REFINEMENT_LIMIT`] atoms
+    /// is rejected before either operand is refined.
     ///
     /// # Errors
     ///
@@ -894,8 +964,10 @@ where
     /// [`PartitionedTreeTNError::InvalidCenter`],
     /// [`PartitionedTreeTNError::InvalidOptions`],
     /// [`PartitionedTreeTNError::OverlappingProjectors`] for an operand whose own
-    /// stored layout is invalid, or a typed TreeTN/backend error. The operation
-    /// returns a new partition, so failure cannot mutate either input.
+    /// stored layout is invalid, [`PartitionedTreeTNError::RefinementTooLarge`]
+    /// when the refinement grid has more than [`AUTOMATIC_REFINEMENT_LIMIT`]
+    /// atoms, or a typed TreeTN/backend error. The operation returns a new
+    /// partition, so failure cannot mutate either input.
     pub fn contract(
         &self,
         other: &Self,
@@ -906,7 +978,9 @@ where
         validate_contraction_options(&options.contraction)?;
         self.validate_contents()?;
         other.validate_contents()?;
-        if let Some((left, right)) = self.refined_for_contract(other, center)? {
+        if let Some((left, right)) =
+            self.refined_for_contract(other, center, AUTOMATIC_REFINEMENT_LIMIT)?
+        {
             return left.contract_with_selection(&right, center, options, None);
         }
         self.contract_with_selection(other, center, options, None)
@@ -921,8 +995,14 @@ where
     /// pair. The operands are then refined on the uncontracted output indices that
     /// any patch of either operand fixes, each operand restricted to the indices
     /// its own tree carries, which makes every pair output projector fix that same
-    /// index set.
-    fn refined_for_contract(&self, other: &Self, center: &V) -> Result<Option<(Self, Self)>> {
+    /// index set. A grid with more than `limit` atoms is rejected before it is
+    /// built.
+    fn refined_for_contract(
+        &self,
+        other: &Self,
+        center: &V,
+        limit: usize,
+    ) -> Result<Option<(Self, Self)>> {
         let Some((left_template, right_template, output_sites)) =
             prepare_contraction(self, other, center)?
         else {
@@ -971,9 +1051,12 @@ where
                 .cloned()
                 .collect()
         };
+        let left_fixed = on(&left_sites);
+        let right_fixed = on(&right_sites);
+        ensure_refinement_within(grid_len(&left_fixed).max(grid_len(&right_fixed)), limit)?;
         Ok(Some((
-            self.refine_to(&value_grid(&on(&left_sites)))?,
-            other.refine_to(&value_grid(&on(&right_sites)))?,
+            self.refine_to(&value_grid(&left_fixed))?,
+            other.refine_to(&value_grid(&right_fixed))?,
         )))
     }
 
@@ -1363,6 +1446,21 @@ where
 }
 
 /// Every projector that fixes each index of `indices` to every coordinate.
+/// Number of projectors [`value_grid`] returns for `indices`, saturating at
+/// `usize::MAX`.
+fn grid_len(indices: &[DynIndex]) -> usize {
+    indices
+        .iter()
+        .fold(1usize, |len, index| len.saturating_mul(index.dim))
+}
+
+fn ensure_refinement_within(atoms: usize, limit: usize) -> Result<()> {
+    if atoms > limit {
+        return Err(PartitionedTreeTNError::RefinementTooLarge { atoms, limit });
+    }
+    Ok(())
+}
+
 fn value_grid(indices: &[DynIndex]) -> Vec<Projector> {
     let mut grid = vec![Projector::new()];
     for index in indices {
