@@ -138,9 +138,11 @@ Patch-wise addition preserves the TT predecessor's restricted contract:
   refinement before the sum (see [Common refinement](#common-refinement)), which
   keeps the part of every patch that the other operand does not cover.
 
-Matching patches use strict `TreeTN::add` and are truncated at the caller's
-explicit center. Addition requires exact named topology, site-index assignment,
-and dtype compatibility.
+Matching patches use strict `TreeTN::add`. `add` returns that exact sum;
+`add_truncated` also truncates every key present in both operands at the
+caller's explicit center, copies a one-sided key unchanged, and does not bound
+the resulting error by its cutoff. Addition requires exact named topology,
+site-index assignment, and dtype compatibility.
 
 Contraction likewise requires the two partitions to use the same named topology
 in v1; it does not call `restructure_to` or a mismatched-topology dense fallback.
@@ -182,10 +184,11 @@ and `ExactSum::estimated_nary_bytes`. A reporting variant of the partition
 routines can be added when a caller needs one; a statistics type was not added
 ahead of that need.
 
-`PartitionedTreeTN::add`, `reconstruct` and `schedule_merge_refine` take no
-engine: every sum they form has two terms (two operands per key, or a pairwise
-merge that decides on its own whether to keep the pair combined), and for two
-terms the binary add and the N-ary pass do the same work.
+`PartitionedTreeTN::add`, `PartitionedTreeTN::add_truncated`, `reconstruct`
+and `schedule_merge_refine` take no engine: every sum they form has two terms
+(two operands per key, or a pairwise merge that decides on its own whether to
+keep the pair combined), and for two terms the binary add and the N-ary pass do
+the same work.
 
 ### Pairwise sums with a per-add cutoff
 

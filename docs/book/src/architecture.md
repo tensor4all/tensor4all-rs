@@ -131,6 +131,9 @@ The interactive layered map is at
 Beyond the naming-policy suffixes (`_mut`, `_into`, `_batched`), the following
 operation names are unified across crates:
 
+- **Addition**: `add` is the exact sum on every tensor-network type.
+  `PartitionedTreeTN::add_truncated` also truncates the keys present in both
+  operands; its error is not bounded by the cutoff in its options.
 - **Inner product**: `inner_product` everywhere. (`dot` was retired in
   `tensor4all-simplett`.)
 - **Densification**: `full_tensor` materializes a tensor train/MPO into a flat

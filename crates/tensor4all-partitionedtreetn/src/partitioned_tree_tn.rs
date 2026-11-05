@@ -669,11 +669,13 @@ where
         Ok(cells)
     }
 
-    /// Add two partitions patch-wise at an explicit truncation center.
+    /// Add two partitions patch-wise, exactly.
     ///
-    /// Identical projector keys are added with strict [`TreeTN::add`] semantics
-    /// and truncated with `options`. A key present on only one side is copied as
-    /// the other side's zero contribution.
+    /// Identical projector keys are added with strict [`TreeTN::add`] semantics,
+    /// so the bonds of a key present in both operands add and nothing is
+    /// truncated. A key present on only one side is copied as the other side's
+    /// zero contribution. To truncate the summed keys in the same call, use
+    /// [`Self::add_truncated`].
     ///
     /// Every sum here has exactly two terms, one per operand, so this method
     /// takes no [`SumEngine`]: for two terms the binary add and the N-ary
@@ -697,38 +699,154 @@ where
     /// [`PartitionedTreeTNError::TopologyMismatch`],
     /// [`PartitionedTreeTNError::SiteIndexMismatch`], or
     /// [`PartitionedTreeTNError::DTypeMismatch`] before patch shortcuts,
-    /// [`PartitionedTreeTNError::InvalidCenter`] for an absent center,
-    /// [`PartitionedTreeTNError::InvalidOptions`] for an invalid truncation
-    /// option, [`PartitionedTreeTNError::OverlappingProjectors`] for an operand
-    /// whose own stored layout is invalid, or a typed TreeTN error for
-    /// addition/truncation.
-    pub fn add(&self, other: &Self, center: &V, options: TruncationOptions) -> Result<Self> {
+    /// [`PartitionedTreeTNError::OverlappingProjectors`] for an operand whose
+    /// own stored layout is invalid, or a typed TreeTN error for addition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let patch = |values: Vec<f64>, coordinate: usize|
+    ///     -> Result<_, Box<dyn std::error::Error>> {
+    ///     let tree = TreeTN::from_tensors(
+    ///         vec![IdxTensor::from_dense(vec![site.clone()], values)?],
+    ///         vec![0usize],
+    ///     )?;
+    ///     Ok(SubDomainTreeTN::new(
+    ///         tree,
+    ///         Projector::from_pairs([(site.clone(), coordinate)])?,
+    ///     )?)
+    /// };
+    /// let left = PartitionedTreeTN::from_subdomains(vec![
+    ///     patch(vec![1.0, 0.0], 0)?,
+    ///     patch(vec![0.0, 2.0], 1)?,
+    /// ])?;
+    /// let right = PartitionedTreeTN::from_subdomain(patch(vec![10.0, 0.0], 0)?)?;
+    ///
+    /// let sum = left.add(&right)?;
+    /// assert_eq!(sum.len(), 2);
+    /// assert_eq!(sum.to_treetn()?.to_dense()?.to_vec::<f64>()?, vec![11.0, 2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn add(&self, other: &Self) -> Result<Self> {
+        self.add_with(other, None)
+    }
+
+    /// Add two partitions patch-wise and truncate every key present in both.
+    ///
+    /// Each key present in both operands is added exactly, as in [`Self::add`],
+    /// and the sum is then truncated towards `center` with `options`. A key
+    /// present on only one side is copied without truncation.
+    ///
+    /// The resulting error is not bounded by the cutoff in `options`: that
+    /// threshold bounds the discarded weight of one local factorization, and
+    /// each key's sum is truncated on its own, over several bonds. Use
+    /// `max_bond_dim` when a hard retained-rank bound is required.
+    ///
+    /// Operands with different patch layouts are first refined onto
+    /// [`Self::common_refinement`], as described for [`Self::add`]; the keys
+    /// present in both refined operands are then the ones truncated.
+    ///
+    /// # Arguments
+    ///
+    /// * `center` - Node of the shared topology that each truncated key's
+    ///   TreeTN is canonicalized towards.
+    /// * `options` - Truncation applied to each key present in both operands.
+    ///   `TruncationOptions::default()` uses the TreeTN default policy;
+    ///   `max_bond_dim` caps every truncated key's bonds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartitionedTreeTNError::InvalidOptions`] for an invalid
+    /// truncation option before any other check, the errors documented by
+    /// [`Self::add`], [`PartitionedTreeTNError::InvalidCenter`] for a center
+    /// absent from either operand's topology, or a typed TreeTN error for
+    /// truncation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN};
+    /// use tensor4all_treetn::{TreeTN, TruncationOptions};
+    ///
+    /// // A two-node chain whose bond has dimension 2.
+    /// let k = DynIndex::new_dyn(2);
+    /// let a = DynIndex::new_dyn(2);
+    /// let bond = DynIndex::new_dyn(2);
+    /// let tree = TreeTN::from_tensors(
+    ///     vec![
+    ///         IdxTensor::from_dense(vec![k.clone(), bond.clone()], vec![1.0_f64, 2.0, 3.0, 5.0])?,
+    ///         IdxTensor::from_dense(vec![bond, a], vec![1.0_f64, 0.0, 0.0, 1.0])?,
+    ///     ],
+    ///     vec![0usize, 1],
+    /// )?;
+    /// let key = Projector::from_pairs([(k, 0)])?;
+    /// let partition =
+    ///     PartitionedTreeTN::from_subdomain(SubDomainTreeTN::new(tree, key.clone())?)?;
+    ///
+    /// // The exact sum's bond is 2 + 2; the truncated sum's is capped at 1.
+    /// let exact = partition.add(&partition)?;
+    /// let truncated = partition.add_truncated(
+    ///     &partition,
+    ///     &0,
+    ///     TruncationOptions::default().with_max_bond_dim(1),
+    /// )?;
+    /// assert_eq!(exact.get(&key).ok_or("missing key")?.data().link_dims(), vec![4]);
+    /// assert_eq!(truncated.get(&key).ok_or("missing key")?.data().link_dims(), vec![1]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn add_truncated(
+        &self,
+        other: &Self,
+        center: &V,
+        options: TruncationOptions,
+    ) -> Result<Self> {
         validate_truncation_options(&options)?;
+        self.add_with(other, Some((center, options)))
+    }
+
+    /// Shared body of [`Self::add`] and [`Self::add_truncated`]: validate the
+    /// operands, refine differing layouts, and sum patch-wise, truncating the
+    /// keys present in both operands when `truncation` is given.
+    fn add_with(&self, other: &Self, truncation: Option<(&V, TruncationOptions)>) -> Result<Self> {
         self.validate_contents()?;
         other.validate_contents()?;
         let (left_template, right_template) = nonempty_templates(self, other)?;
         ensure_same_tree_structure(left_template.data(), right_template.data())?;
         ensure_same_dtype(left_template.scalar_kind()?, right_template.scalar_kind()?)?;
-        ensure_center(left_template.data(), center)?;
-        ensure_center(right_template.data(), center)?;
+        if let Some((center, _)) = truncation {
+            ensure_center(left_template.data(), center)?;
+            ensure_center(right_template.data(), center)?;
+        }
 
         if ensure_union_disjoint(&self.data, &other.data).is_ok() {
-            return self.add_patchwise(other, center, options);
+            return self.add_patchwise(other, truncation);
         }
         let atoms = Self::common_refinement(&[self, other])?;
         let left = self.refine_to(&atoms)?;
         let right = other.refine_to(&atoms)?;
-        left.add_patchwise(&right, center, options)
+        left.add_patchwise(&right, truncation)
     }
 
-    fn add_patchwise(&self, other: &Self, center: &V, options: TruncationOptions) -> Result<Self> {
+    fn add_patchwise(
+        &self,
+        other: &Self,
+        truncation: Option<(&V, TruncationOptions)>,
+    ) -> Result<Self> {
         ensure_union_disjoint(&self.data, &other.data)?;
 
         let mut result = Self::new();
         for (projector, left) in &self.data {
             if let Some(right) = other.data.get(projector) {
                 let mut sum = left.add(right)?;
-                sum.truncate(center, options)?;
+                if let Some((center, options)) = truncation {
+                    sum.truncate(center, options)?;
+                }
                 result.insert_prevalidated(sum)?;
             } else {
                 result.insert_prevalidated(left.clone())?;
