@@ -2,7 +2,7 @@
 //!
 //! Tests robustness of auto_split heuristic with different data split positions.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use rand::prelude::*;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_simplett::cache::TTCache;
@@ -163,8 +163,103 @@ fn bench_overhead(c: &mut Criterion) {
     group.finish();
 }
 
+/// Isolate key overhead at several widths, ranks, batch sizes and cache states.
+/// Cold timing excludes cache construction/drop, but includes lazy key metadata.
+fn bench_cache_keys(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cache_keys");
+    group.sample_size(20);
+    group.warm_up_time(std::time::Duration::from_millis(200));
+    group.measurement_time(std::time::Duration::from_millis(500));
+
+    for (n_sites, bond_dim, n_side) in [
+        (32, 1, 8),
+        (100, 1, 8),
+        (100, 1, 32),
+        (100, 8, 32),
+        (300, 1, 8),
+        (300, 8, 8),
+    ] {
+        // Dense cores with a known product value, independent of the bond rank.
+        let tensors = (0..n_sites)
+            .map(|site| {
+                let left = if site == 0 { 1 } else { bond_dim };
+                let right = if site + 1 == n_sites { 1 } else { bond_dim };
+                let mut tensor = tensor3_zeros(left, 2, right).unwrap();
+                for l in 0..left {
+                    for s in 0..2 {
+                        for r in 0..right {
+                            tensor.set3(l, s, r, (1.0 + s as f64 / 1024.0) / right as f64);
+                        }
+                    }
+                }
+                tensor
+            })
+            .collect();
+        let tt = SimpleTensorTrain::<f64>::new(tensors).unwrap();
+        let split = n_sites / 2;
+        let indices = generate_tci_like_indices(n_side, n_side, n_sites, 2, split, 627);
+        let case = format!("n{n_sites}_chi{bond_dim}_batch{}", indices.len());
+        let mut cache = TTCache::new(&tt);
+        let values = cache.evaluate_many(&indices, Some(split)).unwrap();
+        for (idx, value) in indices.iter().zip(&values) {
+            let expected = (1025.0_f64 / 1024.0).powi(idx.iter().sum::<usize>() as i32);
+            assert!((value - expected).abs() < 1e-12);
+        }
+        assert_eq!(cache.evaluate_many(&indices, None).unwrap(), values);
+        let left = &indices[0][..split];
+        let right = &indices[0][split..];
+        let left_value =
+            (1025.0_f64 / 1024.0).powi(left.iter().sum::<usize>() as i32) / bond_dim as f64;
+        let right_value = (1025.0_f64 / 1024.0).powi(right.iter().sum::<usize>() as i32);
+        assert!(cache
+            .evaluate_left(left)
+            .unwrap()
+            .iter()
+            .all(|v| (v - left_value).abs() < 1e-12));
+        assert!(cache
+            .evaluate_right(right)
+            .unwrap()
+            .iter()
+            .all(|v| (v - right_value).abs() < 1e-12));
+
+        group.bench_function(BenchmarkId::new("cold_fixed", &case), |b| {
+            b.iter_batched_ref(
+                || TTCache::new(&tt),
+                |cache| {
+                    black_box(
+                        cache
+                            .evaluate_many(black_box(&indices), Some(split))
+                            .unwrap(),
+                    )
+                },
+                BatchSize::SmallInput,
+            );
+        });
+        group.bench_function(BenchmarkId::new("warm_fixed", &case), |b| {
+            b.iter(|| {
+                black_box(
+                    cache
+                        .evaluate_many(black_box(&indices), Some(split))
+                        .unwrap(),
+                )
+            });
+        });
+        group.bench_function(BenchmarkId::new("warm_auto", &case), |b| {
+            b.iter(|| black_box(cache.evaluate_many(black_box(&indices), None).unwrap()));
+        });
+        group.bench_function(BenchmarkId::new("left_hit", &case), |b| {
+            b.iter(|| black_box(cache.evaluate_left(black_box(left)).unwrap()));
+        });
+        group.bench_function(BenchmarkId::new("right_hit", &case), |b| {
+            b.iter(|| black_box(cache.evaluate_right(black_box(right)).unwrap()));
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_cache_keys,
     bench_overhead,
     bench_data_split_half,
     bench_data_split_quarter

@@ -2710,12 +2710,12 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "approx 0.5.1",
- "bnum",
  "criterion",
  "num-complex 0.4.6",
  "num-traits",
  "rand",
  "rand_chacha",
+ "rustc-hash",
  "tenferro-cpu",
  "tenferro-tensor",
  "tensor4all-core",
