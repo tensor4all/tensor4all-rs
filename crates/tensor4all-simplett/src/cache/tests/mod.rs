@@ -262,7 +262,7 @@ fn find_split_heuristic() {
         vec![1, 1, 0, 0],
     ];
 
-    let split = cache.find_split_heuristic(&indices).unwrap();
+    let split = cache.find_split_heuristic(&indices);
     assert_eq!(split, 1);
 
     // Indices where split=3 is optimal:
@@ -276,7 +276,7 @@ fn find_split_heuristic() {
         vec![0, 0, 1, 1],
     ];
 
-    let split2 = cache.find_split_heuristic(&indices2).unwrap();
+    let split2 = cache.find_split_heuristic(&indices2);
     assert_eq!(split2, 3);
 }
 
