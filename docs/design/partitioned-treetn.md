@@ -308,9 +308,15 @@ to the indices each operand's tree carries. Every output projector then fixes
 that same index set, so any two are equal or disjoint. When the layouts are
 already equal or disjoint, neither operation refines and the result is unchanged.
 A patch count can grow with the product of the refined indices' dimensions;
-refinement is not recompressed here. `contract_selected`, `contract_adaptive`,
-`contract_adaptive_selected`, and `add_with_patching` keep their exact-key
-behavior and do not refine.
+refinement is not recompressed here. The automatic refinement in `add`,
+`add_truncated`, and `contract` is limited to `AUTOMATIC_REFINEMENT_LIMIT`
+(4096) atoms (#1095): the common refinement's atom count, or for `contract` the
+larger operand grid, is checked before any patch is refined, and a larger
+refinement returns `RefinementTooLarge { atoms, limit }`. A refined operand then
+holds at most its patch count times `limit` patches. `common_refinement` and
+`refine_to` are the explicit opt-in and are not limited.
+`contract_selected`, `contract_adaptive`, `contract_adaptive_selected`, and
+`add_with_patching` keep their exact-key behavior and do not refine.
 
 ## Adaptive patching
 

@@ -85,6 +85,30 @@ pub enum PartitionedTreeTNError {
         value: usize,
     },
 
+    /// The automatic refinement of differing patch layouts in
+    /// [`PartitionedTreeTN::add`](crate::PartitionedTreeTN::add),
+    /// [`PartitionedTreeTN::add_truncated`](crate::PartitionedTreeTN::add_truncated),
+    /// or [`PartitionedTreeTN::contract`](crate::PartitionedTreeTN::contract)
+    /// needs more layout projectors than
+    /// [`AUTOMATIC_REFINEMENT_LIMIT`](crate::AUTOMATIC_REFINEMENT_LIMIT).
+    ///
+    /// Nothing has been refined when this is returned. To refine beyond the
+    /// limit, call
+    /// [`PartitionedTreeTN::refine_to`](crate::PartitionedTreeTN::refine_to)
+    /// explicitly, which is not limited.
+    #[error(
+        "automatic refinement needs {atoms} atoms, above the limit of {limit}; \
+         refine the operands explicitly with refine_to or use fewer projected indices"
+    )]
+    RefinementTooLarge {
+        /// Number of layout projectors the refinement needs, saturating at
+        /// `usize::MAX`. For `contract` this is the larger of the two
+        /// operands' grids.
+        atoms: usize,
+        /// The limit that `atoms` exceeds.
+        limit: usize,
+    },
+
     /// A checked patch-volume product or sum overflowed `usize`.
     #[error("partition volume overflowed usize; use smaller site dimensions or fewer patches")]
     VolumeOverflow,
