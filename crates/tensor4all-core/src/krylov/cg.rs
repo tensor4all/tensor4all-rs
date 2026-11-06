@@ -7,6 +7,9 @@
 //!
 //! Copyright (c) 2017: Jutho. MIT license; see ../../LICENSE-KrylovKit.md.
 
+use super::vector_ops::{
+    finite_norm, normalization_exponent, scale_pow2, scale_real_pow2, true_residual,
+};
 use super::KrylovError;
 use crate::{AnyScalar, TensorVectorSpace};
 use anyhow::Result;
@@ -184,7 +187,7 @@ where
     }
     b.validate()?;
     x0.validate()?;
-    let b_norm = finite_norm(b, 0, "right-hand-side norm")?;
+    let b_norm = finite_norm(b, "cg", 0, "right-hand-side norm")?;
     let threshold = options.atol.max(options.rtol * b_norm);
     if !threshold.is_finite() {
         return Err(KrylovError::InvalidOptions {
@@ -205,7 +208,7 @@ where
     };
     let mut x = x0.clone();
     let mut r = true_residual(&apply_a, b, &x)?;
-    let mut residual_norm = finite_norm(&r, 0, "initial residual norm")?;
+    let mut residual_norm = finite_norm(&r, "cg", 0, "initial residual norm")?;
     let mut iterations = 0;
     if b_norm == 0.0 {
         return Ok(CgResult {
@@ -231,7 +234,7 @@ where
     let mut p = r.clone();
     let mut rho = residual_inner_product(&r, 0)?;
     for iteration in 1..=options.max_iter {
-        let p_norm = finite_norm(&p, iteration, "search direction norm")?;
+        let p_norm = finite_norm(&p, "cg", iteration, "search direction norm")?;
         if p_norm == 0.0 {
             return Err(KrylovError::NumericalBreakdown {
                 solver: "cg",
@@ -244,7 +247,7 @@ where
         p = scale_pow2(p, -direction_exponent)?;
         let ap = apply_a(&p)?;
         ap.validate()?;
-        let ap_norm = finite_norm(&ap, iteration, "operator image norm")?;
+        let ap_norm = finite_norm(&ap, "cg", iteration, "operator image norm")?;
         if ap_norm == 0.0 {
             return Err(KrylovError::NonPositiveCurvature {
                 solver: "cg",
@@ -297,7 +300,7 @@ where
         let image = scale_pow2(ap, -direction_exponent)?;
         r = r.axpby(AnyScalar::new_real(1.0), &image, -alpha)?;
         iterations = iteration;
-        let working_norm = finite_norm(&r, iteration, "recursive residual norm")?;
+        let working_norm = finite_norm(&r, "cg", iteration, "recursive residual norm")?;
         residual_norm = scale_real_pow2(working_norm, residual_exponent);
         if !residual_norm.is_finite() {
             return Err(KrylovError::NumericalBreakdown {
@@ -309,7 +312,7 @@ where
         }
         if residual_norm <= threshold || iteration == options.max_iter {
             r = true_residual(&apply_a, b, &x)?;
-            residual_norm = finite_norm(&r, iteration, "true residual norm")?;
+            residual_norm = finite_norm(&r, "cg", iteration, "true residual norm")?;
             if residual_norm <= threshold || iteration == options.max_iter {
                 break;
             }
@@ -342,60 +345,6 @@ where
         residual_norm,
         converged: residual_norm <= threshold,
     })
-}
-
-// INVARIANT: callers supply a positive finite f64 norm; its binary exponent
-// lies in [-1074, 1024], including subnormals and log2 rounding at f64::MAX.
-fn normalization_exponent(norm: f64) -> i32 {
-    norm.log2().floor() as i32
-}
-
-// Each factor is a normal, finite power of two even in f32/Complex32.
-const SCALE_CHUNK: i32 = 126;
-
-fn scale_pow2<T: TensorVectorSpace>(mut value: T, mut exponent: i32) -> Result<T> {
-    while exponent != 0 {
-        let chunk = exponent.clamp(-SCALE_CHUNK, SCALE_CHUNK);
-        value = value.scale(AnyScalar::new_real(2.0_f64.powi(chunk)))?;
-        exponent -= chunk;
-    }
-    Ok(value)
-}
-
-fn scale_real_pow2(mut value: f64, mut exponent: i32) -> f64 {
-    while exponent != 0 {
-        let chunk = exponent.clamp(-SCALE_CHUNK, SCALE_CHUNK);
-        value *= 2.0_f64.powi(chunk);
-        exponent -= chunk;
-    }
-    value
-}
-
-fn true_residual<T, F>(apply_a: &F, b: &T, x: &T) -> Result<T>
-where
-    T: TensorVectorSpace,
-    F: Fn(&T) -> Result<T>,
-{
-    let ax = apply_a(x)?;
-    ax.validate()?;
-    Ok(b.sub(&ax)?)
-}
-
-fn finite_norm<T: TensorVectorSpace>(
-    x: &T,
-    iteration: usize,
-    quantity: &'static str,
-) -> Result<f64> {
-    let norm = x.norm()?;
-    if !norm.is_finite() || norm < 0.0 {
-        return Err(KrylovError::NumericalBreakdown {
-            solver: "cg",
-            iteration,
-            quantity,
-        }
-        .into());
-    }
-    Ok(norm)
 }
 
 fn finite_scalar(value: &AnyScalar, iteration: usize, quantity: &'static str) -> Result<()> {

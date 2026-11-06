@@ -13,6 +13,8 @@ Core tensor library: Index system, dynamic-rank Tensor, contraction, SVD/QR/LU f
 - `krylov::cg()` — matrix-free conjugate gradients for Hermitian
   positive-definite systems, with true-residual convergence checks
 - `krylov::gmres()` — restarted matrix-free GMRES for general linear systems
+- `krylov::bicgstab()` — matrix-free BiCGSTAB for real nonsymmetric and complex
+  non-Hermitian systems, with true-residual convergence checks
 
 ## Example
 
