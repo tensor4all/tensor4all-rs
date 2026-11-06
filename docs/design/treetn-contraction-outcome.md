@@ -2,17 +2,17 @@
 
 ## Status
 
-Post-hoc reporting implemented on 2026-11-06 against `097e2927`, following
-the earlier design reviews and the approved first implementation slice.
-`contract_with_outcome`, its context/caller-RNG companions, and the report
-types run the existing contraction completely before classifying final
-stored ranks. Early abort and adaptive-driver adoption remain future slices.
+Reporting and deterministic general-tree SVD zip-up cancellation are implemented
+on 2026-11-06 against `097e2927`, following the approved implementation slices.
+`contract_with_outcome` and its context counterpart can stop at a retained
+tree edge; the chain path and other methods still classify completed results.
+Caller-RNG entries remain post-hoc. Adaptive-driver adoption remains future work.
 Part of milestone M6 (adaptive patched contraction) of
 [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md);
 background in section 1 of
 [tree-patching-findings.md](./tree-patching-findings.md). The current public
-API is documented in `contraction/outcome.rs`; the early-abort schedule
-described below remains a design for the next slice, not a performance claim.
+API is documented in `contraction/outcome.rs`. Factorization counts establish
+skipped work on test cases; no wall-time or downstream speedup is claimed.
 
 ## Problem
 
@@ -26,10 +26,10 @@ contribution with the patch cap afterwards, and, if a group saturates,
 discards the results and recomputes them on projected children. The
 contractions that led to the discarded results are paid in full.
 
-The achievable saving is bounded: zip-up processes edges from the leaves
-toward the center, and the first edges usually carry small ranks, so an abort
-typically happens partway through the sweep. The up-front copy,
-canonicalization, and reindexing of both operands is always paid.
+The achievable saving depends on the first qualifying retained edge. The
+general-tree schedule reindexes both operands before processing edges, and
+that preparation is still paid. It does not first canonicalize the operands;
+the separate chain schedule performs canonicalization and final truncation.
 
 ## Goals
 
@@ -142,8 +142,8 @@ The public entry above is the existing generic compatibility route with a
 report. Its `contract_with_outcome_in` counterpart accepts
 `TreeTN<IdxTensor, V>` inputs and the caller's `ExecutionContext`, matching
 `contract_in`. Both return `TreeTNOperationError`, preserve source chains,
-and reuse current option/context/layout validation. A foreign context or an
-invalid dense-reference limit must not be hidden by a rank shortcut. No new
+and reuse current option/context/layout validation. A foreign explicit context
+or an invalid dense-reference limit must not be hidden by a rank shortcut. No new
 backend, host readback, dense fallback, or AD-detaching path is introduced.
 
 Randomized dispatch already exists: RSVD for Zipup/Fit and seeded SRC. The
@@ -158,7 +158,7 @@ threshold detection in this version, so the same seed/stream produces the
 same full result and RNG consumption as the matching ordinary entry.
 
 The first implementation establishes post-hoc reports on the existing
-dispatch. The proposed second slice adds early abort only to deterministic SVD on the
+dispatch. The second slice adds early abort only to deterministic SVD on the
 general-tree zip-up path. The abort hook is selected at the schedule boundary,
 shared by compatibility and context routes. It may skip numerical work after
 the decisive edge, so errors that would occur only in that unexecuted work
@@ -179,12 +179,12 @@ differ in shape:
 
 ## Method coverage
 
-All rows currently use post-hoc classification. The early-abort column
-describes the next slice; it is not implemented yet.
+Only `Zipup` with `factorize_alg == FactorizeAlg::SVD` is eligible for the
+early-abort hook. The topology dispatch then keeps the chain schedule post-hoc.
 
-| Method | Report | Early abort in this proposal |
+| Method | Report | Early abort |
 |---|---|---|
-| Zipup, deterministic SVD, tree path | Final link dimensions | Planned. Each retained edge's factorization rank is its final link dimension (no truncation pass follows the edge loop), so a future hook can stop after the first retained edge reaching the threshold |
+| Zipup, deterministic SVD, tree path | Final link dimensions | Implemented. Stops after the first retained edge reaching the threshold; no truncation pass follows the edge loop |
 | Zipup, chain path | Final link dimensions | No; saturation is evaluated after completion. The edge loop runs in a non-orthogonal gauge and a final truncation sweep follows, so per-edge factorization ranks are only upper bounds on the final dimensions; aborting on them would report saturation that `contract` does not show |
 | Zipup/Fit with RSVD | Final link dimensions | No; preserve current RNG consumption and detect saturation after completion |
 | Src | Final link dimensions | No; evaluated after completion |
@@ -195,6 +195,54 @@ Post-hoc detection saves no work but gives the same answer as early abort
 would, so callers see one contract for every method. Chain-path early abort
 based on the conservative factorization ranks is possible future work; it
 would need a separate opt-in because it changes which contractions saturate.
+
+## Literature basis and tree-specific argument
+
+The references below already appear in the repository's
+[provenance policy](../PROVENANCE_AND_CITATION_POLICY.md). They establish the
+algorithm lineage; the API and tree-specific equivalence argument are our
+own design and derivation, not a theorem attributed to those papers.
+
+- [Grosso et al., arXiv:2602.22372v1, §4.3](https://arxiv.org/html/2602.22372v1#S4.SS3)
+  motivates rank-cap refinement and explicitly mentions stopping a local
+  contraction by monitoring zip-up SVD rank. It does not specify our TreeTN
+  traversal, outcome API, or an equivalence theorem for our schedules.
+- [Stoudenmire and White, NJP 12, 055026 (2010), preprint pp. 5–6](https://arxiv.org/pdf/1002.1305)
+  describes zip-up and the return sweep. [Paeckel et al., Ann. Phys. 411,
+  167998 (2019), §2.8.3](https://arxiv.org/html/1901.05824v3#S2.SS8.SSS3)
+  also discusses final compression and limitations of local truncation.
+  These support keeping our chain path post-hoc, not treating its intermediate
+  ranks as final ranks or error certificates.
+
+The following is an **independent tree-specific derivation** for
+`TreeTN::contract_zipup_controlled`, under its existing valid-input contract:
+
+1. The child-to-parent traversal contracts a node with its completed child
+   remainders, then factors all external indices except the two original
+   parent bonds. Factorization produces a new link of dimension `rank`.
+2. A subtree with no surviving left indices is passed upward before
+   factorization, so it creates no report edge and cannot trigger the hook.
+   For a retained child, its new link is a left index at each subsequent
+   parent factorization. Its presence prevents that parent from being pruned.
+   The root is always constructed, even without an output site index.
+3. Later operations consume the right factor at the parent; they neither
+   replace the saved child factor nor resize its link. Result assembly
+   connects the same link identities, and setting the canonical region
+   only changes metadata. There is no final rank-changing sweep on this path.
+4. Therefore each observed retained rank is the stored link dimension that
+   a successful complete execution would return. Once it reaches the
+   independent threshold, that complete network necessarily satisfies the
+   same existential saturation predicate. The hook may discard the factors
+   and stop without constructing a partial public network.
+
+This proves the stored-dimension classification for this schedule only.
+It says nothing about minimal Schmidt rank, discarded weight, accuracy,
+termination of adaptive splitting, or cancellation between later patch sums.
+Errors in skipped numerical work are not evaluated. Adding a return sweep,
+recompression, topology-changing fusion or a different link representation
+requires rechecking this argument before reusing the hook. The first
+implementation's analytical baselines and post-hoc reports are software
+oracles; they are not additional claims made by the papers.
 
 ## Adoption in `partitionedtreetn`
 
@@ -271,9 +319,9 @@ decide adaptive overlap, merge placement or the sibling-merge error ledger.
    equality and exhausted split orders; post-hoc reporting and context/RNG
    parity through the existing dispatch. Metadata tests include unequal
    stored ranks, root fallbacks and the first saturating report edge.
-2. Add the deterministic tree zip-up abort hook. Tests compare its retained
-   edge to the completed report and count executed factorizations. No skipped
-   work is claimed for the chain or randomized paths.
+2. Implemented: deterministic tree zip-up abort hook, with public-entry
+   factorization counts, first/later-edge comparisons to completed reports,
+   scalar-pruning coverage and unchanged chain/randomized schedules.
 3. Adopt lazy grouping in the Sequential adaptive path, preserving the
    selected and ordinary baselines. `ExactParameterGain` retains full probes.
 

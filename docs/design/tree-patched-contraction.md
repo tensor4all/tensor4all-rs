@@ -7,12 +7,12 @@ Proposal for milestone M6 of
 needs review and the answers to the [open questions](#open-questions-for-the-user)
 before implementation. It builds on, and does not replace, the
 [contraction outcome record](./treetn-contraction-outcome.md), which documents
-the implemented post-hoc reporting API and proposes the early-abort hook
+the implemented rank reporting API and general-tree SVD zip-up abort hook
 for `tensor4all-treetn`.
 
-The post-hoc outcome API and its context/caller-RNG companions are implemented.
-Early abort, adaptive adoption, partitioned Hadamard and sibling merging are
-not implemented. This record was
+The outcome API, its context/caller-RNG companions and deterministic general-tree
+SVD zip-up abort are implemented. Adaptive adoption, partitioned Hadamard and
+sibling merging are not implemented. This record was
 originally written against `4d4fb6fc` and synchronized on 2026-11-06 against
 `origin/main` at `097e2927`. Existing adaptive contraction and subsequently
 merged refinement, selection and exact-sum work are reusable foundations;
@@ -75,7 +75,7 @@ group and projects only that group's operands. What is missing:
 | Gap | Effect |
 |---|---|
 | Every selected compatible pair is contracted before grouping | Saturated contributions are paid in full, then discarded |
-| No early abort inside a contraction | Each saturated probe runs to completion |
+| Adaptive driver does not use the outcome hook | Its saturated probes still run to completion |
 | Adaptive groups have no shared overlap-resolution policy | Adaptive/selected output assembly can still reject unequal overlapping projectors; non-adaptive `contract` already has bounded operand refinement |
 | No element-wise product | `tensor4all_treetn::hadamard` exists, but there is no partitioned or adaptive version and no projector rule for paired indices of distinct identity |
 | No merging | Overpatched outputs keep all their patches |
@@ -414,8 +414,8 @@ pushes and PR creation still require the user's approval:
 1. Golden data for ordinary/selected `contract_adaptive`; reuse current
    logical ordering, `exact_sum`, and the section 1 pair metadata. Norm reuse
    is a separate performance candidate and needs evidence before adoption.
-2. `contract_with_outcome` post-hoc reporting is implemented. Next come the
-   tree zip-up early-abort hook, `partial_contract_with_outcome`, and adaptive
+2. `contract_with_outcome` reporting and the tree zip-up early-abort hook are
+   implemented. Next come `partial_contract_with_outcome` and adaptive
    adoption, with the outcome record plus the amendment above.
 3. The reviewed adaptive overlap policy, reusing bounded refinement or
    introducing explicitly reviewed fusion; preserve shipped non-adaptive
@@ -465,9 +465,9 @@ evaluator. The earlier interpolation checkpoint is complete.
 
 Implementation gates that remain inside M6:
 
-1. Post-hoc reporting and the frozen ordinary/selected baselines are in place.
-   Review the early-abort hook and method coverage before schedule changes
-   (question 6).
+1. Reporting, the tree zip-up hook and frozen ordinary/selected baselines are
+   in place. Preserve the documented hook proof and method coverage during
+   adaptive adoption (question 6).
 2. Review adaptive overlap handling (question 1) against the shipped bounded
    refinement and selected-output contracts before changing layouts.
 3. Settle merge placement, tolerance and excluded-patch behavior (questions
@@ -507,10 +507,10 @@ the user in the PR that adds it.
    matrix product the right workloads, or is there a downstream contraction
    (for example a bubble in gw-rs) that should be the benchmark instead?
 6. **Outcome record.** The [contraction outcome proposal](./treetn-contraction-outcome.md)
-   has an implemented post-hoc API: `abort_at_rank`, stored-rank semantics,
-   context/RNG parity and analytical baselines. Review the deterministic
-   tree zip-up abort hook with the amendment in section 2 before changing
-   the numerical schedule.
+   has an implemented API: `abort_at_rank`, stored-rank semantics,
+   context/RNG parity, analytical baselines and deterministic tree zip-up
+   cancellation. Its literature section distinguishes cited methods from our
+   tree-specific proof. Review adaptive adoption with the amendment in section 2.
 7. **Multi-level merge error.** Choose a conservative level-wise ledger or
    a final residual check against the original partition, with explicit
    rejection/rollback and resource behavior. The old sum of squared local

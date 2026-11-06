@@ -1,11 +1,11 @@
-//! Final stored-rank reports over the existing contraction dispatch.
+//! Stored-rank reports and general-tree SVD zip-up cancellation over the existing dispatch.
 
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::num::NonZeroUsize;
 
 use rand::Rng;
-use tensor4all_core::{IdxTensor, IndexLike, TensorLike};
+use tensor4all_core::{FactorizeAlg, IdxTensor, IndexLike, TensorLike};
 use tensor4all_tensorbackend::ExecutionContext;
 
 use super::{ContractionMethod, ContractionOptions, TreeTN, TreeTNOperationError};
@@ -57,9 +57,9 @@ pub struct ContractionReport<V> {
 
 /// A completed contraction with its report, or its first threshold-reaching edge.
 ///
-/// [`contract_with_outcome`] currently performs the full contraction before
-/// classification. `Saturated` discards the computed network and does not imply
-/// that work was aborted early or that a truncation error occurred.
+/// [`contract_with_outcome`] can stop deterministic SVD zip-up on its general-tree
+/// path. Other paths classify the completed network. `Saturated` returns no
+/// network and implies neither a truncation error nor a bound on approximation error.
 ///
 /// # Examples
 ///
@@ -79,7 +79,7 @@ pub struct ContractionReport<V> {
 /// ```
 #[derive(Debug, Clone)]
 #[non_exhaustive]
-// Keep the completed network by value, matching `contract` without an extra heap allocation.
+// INVARIANT: keep the completed network by value, matching `contract` without another allocation.
 #[allow(clippy::large_enum_variant)]
 pub enum ContractionOutcome<T, V>
 where
@@ -93,14 +93,15 @@ where
         /// Stored output-link dimensions in deterministic report order.
         report: ContractionReport<V>,
     },
-    /// The first report edge whose stored rank is at least the threshold.
+    /// The first threshold-reaching edge in tree processing order, or post-hoc report order.
     Saturated {
-        /// Its endpoints and final stored dimension; no partial network is returned.
+        /// Its endpoints and stored dimension in the corresponding completed result.
+        /// No partial network is returned.
         edge: EdgeRank<V>,
     },
 }
 
-/// Contract two trees completely, then report their stored output ranks or saturation.
+/// Contract two trees and report their stored output ranks or saturation.
 ///
 /// # Arguments
 ///
@@ -110,20 +111,27 @@ where
 ///   Naive requires an explicit dense-reference limit; randomized methods keep
 ///   their current seed fields and named RNG.
 /// * `abort_at_rank` - `None` returns `Completed`; `Some(k)` returns `Saturated`
-///   on the first report edge with stored rank `>= k`. It is independent of
+///   on the first eligible edge with stored rank `>= k`. It is independent of
 ///   `options.max_bond_dim`. An edgeless result always completes.
 ///
 /// # Returns
 ///
-/// A [`ContractionOutcome`]. All numerical work completes before rank detection,
-/// even when saturation is reported; this version does not save contraction work.
+/// A [`ContractionOutcome`]. With `Zipup` and `FactorizeAlg::SVD`, the general-tree
+/// path stops after the first retained edge reaching the threshold, in the first
+/// operand's leaves-to-center processing order. Those stored link dimensions
+/// are never resized later on that path. The chain path and all other methods
+/// finish before classification, using the report order instead. `None` always
+/// runs the full contraction. Completed results use the unchanged numerical schedule.
 /// No payload readback, canonicalization, or additional truncation is performed.
 ///
 /// # Errors
 ///
 /// Returns [`TreeTNOperationError`] for the same option, topology, context,
 /// factorization or backend failures as [`super::contract`], preserving their
-/// sources, or when the returned network's edge metadata cannot form a report.
+/// sources, or when a completed network's edge metadata cannot form a report.
+/// Option validation precedes cancellation; the caller-context counterpart
+/// also validates both inputs' ownership up front. Errors from work skipped
+/// after an early stop are not evaluated or returned.
 ///
 /// # Examples
 ///
@@ -165,6 +173,21 @@ where
     <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
+    if let Some(threshold) = tree_abort_threshold(&options, abort_at_rank) {
+        super::validate_contract_options(&options)?;
+        return a
+            .contract_zipup_controlled(
+                b,
+                center,
+                crate::CanonicalForm::Unitary,
+                options.svd_policy,
+                options.max_bond_dim,
+                super::ZipupTopologyMode::PruneScalarSubtrees,
+                &super::GlobalLeaves,
+                super::zipup_control::AbortAtRank { center, threshold },
+            )
+            .map_err(Into::into);
+    }
     finish(
         super::contract(a, b, center, options)?,
         center,
@@ -172,7 +195,7 @@ where
     )
 }
 
-/// Contract completely on a caller-owned context, then classify the final stored ranks.
+/// Contract on a caller-owned context, reporting stored ranks or tree zip-up saturation.
 ///
 /// # Arguments
 ///
@@ -185,13 +208,15 @@ where
 /// # Returns
 ///
 /// The same report/classification as [`contract_with_outcome`], without changing
-/// the context or AD semantics of the underlying method. Detection is post-hoc.
+/// the context or AD semantics of the underlying method. General-tree SVD zip-up
+/// may stop early; chain and other methods classify the completed network.
 ///
 /// # Errors
 ///
 /// Returns [`TreeTNOperationError`] for all errors of [`super::contract_in`]
 /// (including foreign contexts and unsupported storage), with preserved sources,
-/// or invalid output-edge metadata.
+/// or invalid completed-output metadata. Numerical work skipped after a tree
+/// zip-up stop is not evaluated, so its errors cannot be returned.
 ///
 /// # Examples
 ///
@@ -222,6 +247,23 @@ pub fn contract_with_outcome_in<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
+    if let Some(threshold) = tree_abort_threshold(&options, abort_at_rank) {
+        super::validate_contract_options(&options)?;
+        a.validate_context(context)?;
+        b.validate_context(context)?;
+        return a
+            .contract_zipup_controlled(
+                b,
+                center,
+                crate::CanonicalForm::Unitary,
+                options.svd_policy,
+                options.max_bond_dim,
+                super::ZipupTopologyMode::PruneScalarSubtrees,
+                &super::SessionLeaves(context.clone()),
+                super::zipup_control::AbortAtRank { center, threshold },
+            )
+            .map_err(Into::into);
+    }
     finish(
         super::contract_in(a, b, center, options, context)?,
         center,
@@ -359,7 +401,18 @@ where
     finish(network, center, abort_at_rank)
 }
 
-fn finish<T, V>(
+fn tree_abort_threshold(
+    options: &ContractionOptions,
+    threshold: Option<NonZeroUsize>,
+) -> Option<NonZeroUsize> {
+    if options.method == ContractionMethod::Zipup && options.factorize_alg == FactorizeAlg::SVD {
+        threshold
+    } else {
+        None
+    }
+}
+
+pub(super) fn finish<T, V>(
     network: TreeTN<T, V>,
     center: &V,
     threshold: Option<NonZeroUsize>,

@@ -26,10 +26,11 @@ For final stored bond dimensions, use
 and caller-RNG counterparts). `Completed` contains the network and a
 leaves-to-root rank report. A positive `abort_at_rank` threshold classifies
 the result as `Saturated` when a stored edge reaches it, including equality;
-an edgeless result always completes. This is currently post-hoc detection:
-all contraction work finishes before classification, so the FLOP counts below
-are unchanged. Stored-rank saturation is not an error estimate or evidence
-that the truncation cap discarded weight.
+an edgeless result always completes. Deterministic SVD zip-up on the general-tree
+path can stop after the first qualifying retained edge. Chain zip-up and other
+methods classify after completion. The FLOP counts below describe completed
+runs. Stored-rank saturation is not an error estimate or evidence that the
+truncation cap discarded weight.
 
 ## 1. Setup and notation
 

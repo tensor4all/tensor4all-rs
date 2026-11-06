@@ -13,9 +13,10 @@ decisions that need numbers are made in their milestone on real data.
 ## 1. Contraction outcome and early abort (consumed by M6)
 
 - `tensor4all_treetn::contraction::contract` returns only a `TreeTN`.
-  The post-hoc `contract_with_outcome` family now reports final stored edge
-  ranks for all methods without changing their numerical execution. It does
-  not report discarded weight or whether `max_bond_dim` was binding.
+  The `contract_with_outcome` family reports final stored edge ranks for all
+  methods. General-tree SVD zip-up can stop at a retained edge; other paths
+  classify after completion. It does not report discarded weight or whether
+  `max_bond_dim` was binding.
 - Zip-up applies `max_bond_dim` through core `factorize` at each edge.
   `tensor4all_core::FactorizeResult` exposes the realized `rank` and, for SVD,
   the retained singular values, but not the discarded weight or whether the

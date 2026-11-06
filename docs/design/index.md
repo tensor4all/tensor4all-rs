@@ -31,7 +31,7 @@
 | [partitioned-treetn.md](./partitioned-treetn.md) | Issue #648 migration design for TreeTN-native eager partitioning and adaptive patching |
 | [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md) | Milestone roadmap for adaptive patched interpolation, contraction, and parallel execution on arbitrary trees |
 | [tree-patched-contraction.md](./tree-patched-contraction.md) | Proposal: adaptive patched contraction and element-wise products, overlapping-output fusion, and sibling merging on trees (tree patching M6); not implemented |
-| [treetn-contraction-outcome.md](./treetn-contraction-outcome.md) | Implemented post-hoc contraction rank reports; proposed tree zip-up early abort (tree patching M6) |
+| [treetn-contraction-outcome.md](./treetn-contraction-outcome.md) | Stored-rank reports, general-tree SVD zip-up early abort and its literature/proof boundary (tree patching M6) |
 | [tree-interpolation-engine-seam.md](./tree-interpolation-engine-seam.md) | Engine-agnostic tree interpolation contract in treetn and its TreeTCI implementation (tree patching M1, implemented) |
 | [tree-interpolation-edge-pivots.md](./tree-interpolation-edge-pivots.md) | Proposal: optional selected edge pivots through the interpolation engine seam for a future recursive split-selection study; not implemented |
 | [tree-pqtci-driver.md](./tree-pqtci-driver.md) | Sequential adaptive patched interpolation driver in partitionedtreetn (tree patching M2, implemented) |

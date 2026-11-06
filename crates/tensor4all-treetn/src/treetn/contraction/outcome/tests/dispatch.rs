@@ -1,5 +1,7 @@
 //! Post-hoc outcomes preserve each existing contraction dispatch.
 
+mod early_abort;
+
 use std::error::Error;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -39,6 +41,17 @@ impl Fixture {
         let edges: Vec<_> = (1..count)
             .map(|node| (if branched { 0 } else { node - 1 }, node))
             .collect();
+        let output_nodes: Vec<_> = (usize::from(omit_center_output)..count).collect();
+        Self::with_edges(&edges, &output_nodes, real, phased)
+    }
+
+    fn with_edges<T: TensorElement>(
+        edges: &[(usize, usize)],
+        output_nodes: &[usize],
+        real: impl Fn(f64) -> T + Copy,
+        phased: impl Fn(f64) -> T + Copy,
+    ) -> Self {
+        let count = edges.len() + 1;
         let shared: Vec<_> = (0..count).map(|_| DynIndex::new_dyn(2)).collect();
         let outputs: Vec<_> = shared.iter().map(DynIndex::prime).collect();
         let a_bonds: Vec<_> = edges.iter().map(|_| DynIndex::new_dyn(2)).collect();
@@ -47,7 +60,7 @@ impl Fixture {
         let mut b_tensors = Vec::new();
         for node in 0..count {
             let mut a_indices = vec![shared[node].clone()];
-            if node != 0 || !omit_center_output {
+            if output_nodes.contains(&node) {
                 a_indices.push(outputs[node].clone());
             }
             let mut b_indices = vec![shared[node].clone()];
@@ -66,12 +79,15 @@ impl Fixture {
         }
         let output_sites: Vec<_> = outputs
             .into_iter()
-            .skip(usize::from(omit_center_output))
+            .enumerate()
+            .filter_map(|(node, index)| output_nodes.contains(&node).then_some(index))
             .collect();
         let mut expected = vec![real(0.); 1 << output_sites.len()];
         let last = expected.len() - 1;
-        expected[0] = phased(1.);
-        expected[last] = phased(2.);
+        expected[0] = phased(if last == 0 { 3. } else { 1. });
+        if last != 0 {
+            expected[last] = phased(2.);
+        }
         Self {
             a: TreeTN::from_tensors(a_tensors, (0..count).collect()).unwrap(),
             b: TreeTN::from_tensors(b_tensors, (0..count).collect()).unwrap(),

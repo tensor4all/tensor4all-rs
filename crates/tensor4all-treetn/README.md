@@ -13,8 +13,8 @@ truncation, naive/zip-up/fit/SRC contraction, and linear solving.
 
 ## Contraction rank outcomes
 
-`contraction::contract_with_outcome` runs the selected contraction completely,
-then returns `ContractionOutcome::Completed { network, report }` or the first
+`contraction::contract_with_outcome` returns
+`ContractionOutcome::Completed { network, report }` or the first
 `Saturated { edge }` whose final stored bond dimension reaches
 `abort_at_rank: Option<NonZeroUsize>`. Equality saturates; `None` always
 completes. Edgeless outputs always complete. The report root is the requested
@@ -22,12 +22,17 @@ center when it survives, otherwise the unique canonical-region node or the
 smallest output node name.
 
 The threshold is independent of `ContractionOptions::max_bond_dim`. This
-post-hoc report saves no contraction work and certifies neither accuracy nor
-the mathematical Schmidt rank. The `_in` entry uses a caller-owned context;
+report certifies neither accuracy nor the mathematical Schmidt rank.
+Deterministic SVD zip-up on the general-tree path stops after the first retained
+edge reaching the threshold, in input processing order. Its stored dimensions
+are never resized later. Chain zip-up and all other methods finish before
+classification in report order. `None` always performs the full contraction.
+The `_in` entry uses a caller-owned context;
 `contract_with_outcome_with_rng` and its `_in` counterpart consume the caller's
-stream directly for SRC and RSVD Zipup/Fit. All routes retain their ordinary
-entry's dtype, AD, validation and numerical-error behavior. Existing `contract`
-calls collect no report.
+stream directly for SRC and RSVD Zipup/Fit. Completed runs retain their ordinary
+entry's dtype and AD behavior. Errors from skipped work are not evaluated;
+option validation and explicit-context ownership validation happen first.
+Existing `contract` calls collect no report.
 
 ## Example
 
