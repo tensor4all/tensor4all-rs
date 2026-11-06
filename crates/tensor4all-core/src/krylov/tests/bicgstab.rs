@@ -193,15 +193,66 @@ fn bicgstab_zero_rhs_and_exact_nonzero_guesses() {
     let zero = PlainVector {
         data: vec![0.0, 0.0],
     };
-    let options = BiCgStabOptions {
-        atol: 1e-12,
-        ..BiCgStabOptions::default()
+    let calls = AtomicUsize::new(0);
+    let counted = |x: &PlainVector| {
+        calls.fetch_add(1, Ordering::Relaxed);
+        apply(x)
     };
-    let result = bicgstab(apply, &zero, &initial, &options).unwrap();
+    let result = bicgstab(counted, &zero, &initial, &BiCgStabOptions::default()).unwrap();
     assert!(result.converged);
-    assert!(result.iterations > 0);
-    assert!(result.solution.maxabs().unwrap() < 1e-12);
-    assert!(apply(&result.solution).unwrap().norm().unwrap() <= options.atol);
+    assert_eq!(result.iterations, 0);
+    assert_eq!(result.residual_norm, 0.0);
+    assert_eq!(result.solution.data, zero.data);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn bicgstab_breakdown_survives_failed_recovery_check() {
+    // Cycle one breaks down at omega after three operator calls; the fourth
+    // call is the recovery's true-residual check.
+    let rhs = PlainVector {
+        data: vec![1.0, 0.0],
+    };
+    let initial = PlainVector {
+        data: vec![0.0, 0.0],
+    };
+    let calls = AtomicUsize::new(0);
+    let nonfinite_check = |x: &PlainVector| -> Result<PlainVector> {
+        if calls.fetch_add(1, Ordering::Relaxed) >= 3 {
+            return Ok(PlainVector {
+                data: vec![f64::NAN, 0.0],
+            });
+        }
+        Ok(PlainVector {
+            data: vec![x.data[0] + x.data[1], x.data[0]],
+        })
+    };
+    assert!(matches!(
+        bicgstab(nonfinite_check, &rhs, &initial, &BiCgStabOptions::default()),
+        Err(KrylovError::NumericalBreakdown {
+            solver: "bicgstab",
+            iteration: 1,
+            quantity: "omega",
+        })
+    ));
+    assert_eq!(calls.load(Ordering::Relaxed), 4);
+
+    let calls = AtomicUsize::new(0);
+    let failing_check = |x: &PlainVector| -> Result<PlainVector> {
+        if calls.fetch_add(1, Ordering::Relaxed) >= 3 {
+            return Err(std::io::Error::other("recovery operator failed").into());
+        }
+        Ok(PlainVector {
+            data: vec![x.data[0] + x.data[1], x.data[0]],
+        })
+    };
+    match bicgstab(failing_check, &rhs, &initial, &BiCgStabOptions::default()).unwrap_err() {
+        KrylovError::Operation {
+            solver: "bicgstab",
+            source,
+        } => assert!(source.downcast_ref::<std::io::Error>().is_some()),
+        other => panic!("recovery callback failure was replaced: {other:?}"),
+    }
 }
 
 #[test]
