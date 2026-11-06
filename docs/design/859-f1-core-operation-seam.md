@@ -242,20 +242,19 @@ scaled accumulator (`Lassq`) over the values the session materialized, so the tw
 including on fixtures whose direct squares underflow or overflow. The session's part is the materialization:
 the operand is adapted and materialized on the caller's session instead of through the compatibility route.
 
-**An earlier roadmap note in §4.2 said the scaled accumulation is why this needed its own slice, and that
-claim is narrower than `1e-200`-style examples suggested.** The public API squares the accumulator's norm, so
-for a tensor whose norm is representable but whose square is not, `norm_squared` returns `0` in the
-compatibility route as well; and `norm` is defined as the square root of that same squared value, so it
-returns `0` too. The accumulator still matters for rounding and for in-range magnitudes, and this route
-reproduces it exactly rather than summing squares itself, but the record no longer claims a visible
-representability difference.
+`norm_squared` squares the accumulator's norm, so it returns zero or infinity
+when the squared result is outside `f64`'s range. `norm` finishes the same
+accumulator directly, preserving representable norms such as `1e-200` and
+`1e200`. Both the compatibility and session routes follow this distinction;
+`norm` must not be implemented by squaring and then taking a square root.
+Errors from the session norm carry `norm_on_session` as their operation name.
 
 The dtype domain was the shared narrow one when this slice landed; §4.6 widens it for the norms, because their
 whole result is a plain `f64`. The refusal is the shared adaptation's rather than the compatibility route's
 `ScalarTypeMismatch`, and diagonal or structured payloads are refused for the same reason as in the other
 slices.
 
-Evidence (`crates/tensor4all-core/tests/f1_session_norm.rs`, 4 tests): exact parity with `norm_squared` and
+Evidence (`crates/tensor4all-core/tests/f1_session_norm.rs`): exact parity with `norm_squared` and
 `norm` for `f64` and `c64` dense operands, plus independently known results (`[3, 4]` and `[3 + 4i]` both 25);
 **a discriminating fixture**: for `[1.0, 1.0]` the accumulator squares `sqrt(2)`, which is not exactly the
 naive sum `2`, and the session route reproduces the accumulator's value while sixteen copies of `1e-162` -
@@ -265,7 +264,9 @@ between two implementations that both sum squares; representation and nonfinite 
 non-contiguous eager operand, several infinities and a complex infinity (all agreeing with compatibility), a
 NaN in a complex component refused through both entry points, and `f32` refusals under this entry point's
 name through both; the diagonal and tracked refusals with the same operation name; and repeated calls inside
-one held session agreeing.
+one held session agreeing. Extreme-scale real and complex fixtures independently check
+`norm([3s, 4s]) = 5s` for `s = 1e-200` and `1e200`; single-precision cases
+exercise both direct-norm dtype branches at small and large magnitudes.
 
 ## 4.6 Slice 7: which dtypes a route can serve follows from its result carrier
 

@@ -6,11 +6,11 @@
 //! # Solvers
 //!
 //! - [`gmres`]: Generalized Minimal Residual Method (GMRES) for non-symmetric systems
+//! - [`cg`]: Conjugate gradients for Hermitian positive-definite systems
 //! - [`hermitian_lanczos_lowest_eigenpair`]: Matrix-free lowest eigenpair solver for Hermitian operators
 //!
 //! # Future Extensions
 //!
-//! - CG (Conjugate Gradient) for symmetric positive definite systems
 //! - BiCGSTAB for non-symmetric systems with better convergence properties
 //!
 //! # Example
@@ -45,6 +45,9 @@ use tensor4all_tensorbackend::{
     hermitian_exponential_first_column, lowest_hermitian_eigenpair, Matrix,
 };
 
+mod cg;
+pub use cg::{cg, CgOptions, CgResult};
+
 /// Error returned by the matrix-free Krylov solvers.
 #[derive(Debug, thiserror::Error)]
 pub enum KrylovError {
@@ -65,6 +68,26 @@ pub enum KrylovError {
     /// An affine GMRES call supplied only zero coefficients.
     #[error("gmres_affine: at least one affine coefficient must be nonzero")]
     NoAffineCoefficient,
+    /// CG encountered a direction with zero or negative curvature.
+    #[error("{solver}: nonpositive curvature {curvature} at iteration {iteration}; use GMRES for operators that are not positive definite")]
+    NonPositiveCurvature {
+        /// Solver that detected the invalid direction.
+        solver: &'static str,
+        /// One-based iteration in which the direction was encountered.
+        iteration: usize,
+        /// Real `p^H A p` for the power-of-two normalized search direction.
+        curvature: f64,
+    },
+    /// A recurrence encountered nonfinite arithmetic or a vanishing divisor.
+    #[error("{solver}: numerical breakdown in {quantity} at iteration {iteration}")]
+    NumericalBreakdown {
+        /// Solver that detected the numerical failure.
+        solver: &'static str,
+        /// Completed or attempted iteration, with zero for initialization.
+        iteration: usize,
+        /// Quantity that was nonfinite or unusable as a divisor.
+        quantity: &'static str,
+    },
     /// The projected operator was not Hermitian.
     #[error("{solver}: projected operator is not Hermitian: {source}")]
     NonHermitian {

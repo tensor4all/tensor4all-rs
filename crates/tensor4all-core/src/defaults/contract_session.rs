@@ -552,7 +552,8 @@ pub fn permute_indices_on_session(
 ///
 /// Note what that accumulator does and does not change here: this API squares the accumulated norm, so for a
 /// tensor whose norm is representable but whose square is not - the `1e-200` scale - the returned value is
-/// `0` in the compatibility route as well, and [`norm_on_session`] squares-and-roots the same value. The
+/// `0` in the compatibility route as well. [`norm_on_session`] finishes the accumulator directly and
+/// preserves that representable norm. The
 /// accumulator's benefit is that individually underflowing squares can still add up to a representable
 /// result; it is not a promise about any single fixture.
 ///
@@ -591,18 +592,29 @@ pub fn norm_squared_on_session(
     session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
     tensor: &IdxTensor,
 ) -> Result<f64, IdxTensorError> {
-    const OP: &str = "norm_squared_on_session";
-    let operand = tensor.session_dense_operand(OP)?;
-    let value = materialize_on_session(OP, session, operand)?;
-    let squared =
+    norm_on_session_impl::<true>(session, tensor)
+}
+
+fn norm_on_session_impl<const SQUARED: bool>(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    tensor: &IdxTensor,
+) -> Result<f64, IdxTensorError> {
+    let op = if SQUARED {
+        "norm_squared_on_session"
+    } else {
+        "norm_on_session"
+    };
+    let operand = tensor.session_dense_operand(op)?;
+    let value = materialize_on_session(op, session, operand)?;
+    let reduced =
         match value.dtype() {
             // The compatibility route accumulates every accepted floating dtype in `f64`, so promoting here is
             // its behaviour rather than a widening of this route's own.
             tenferro::DType::F32 => {
                 let values = value
                     .as_slice::<f32>()
-                    .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
-                crate::defaults::idx_tensor::lassq_norm_squared(
+                    .map_err(|error| IdxTensorError::operation(op, anyhow::Error::new(error)))?;
+                crate::defaults::idx_tensor::lassq_norm::<SQUARED>(
                     values
                         .iter()
                         .map(|value| num_complex::Complex64::new(f64::from(*value), 0.0)),
@@ -611,16 +623,16 @@ pub fn norm_squared_on_session(
             tenferro::DType::C32 => {
                 let values = value
                     .as_slice::<num_complex::Complex32>()
-                    .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
-                crate::defaults::idx_tensor::lassq_norm_squared(values.iter().map(|value| {
+                    .map_err(|error| IdxTensorError::operation(op, anyhow::Error::new(error)))?;
+                crate::defaults::idx_tensor::lassq_norm::<SQUARED>(values.iter().map(|value| {
                     num_complex::Complex64::new(f64::from(value.re), f64::from(value.im))
                 }))
             }
             tenferro::DType::F64 => {
                 let values = value
                     .as_slice::<f64>()
-                    .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
-                crate::defaults::idx_tensor::lassq_norm_squared(
+                    .map_err(|error| IdxTensorError::operation(op, anyhow::Error::new(error)))?;
+                crate::defaults::idx_tensor::lassq_norm::<SQUARED>(
                     values
                         .iter()
                         .map(|value| num_complex::Complex64::new(*value, 0.0)),
@@ -629,25 +641,26 @@ pub fn norm_squared_on_session(
             tenferro::DType::C64 => {
                 let values = value
                     .as_slice::<num_complex::Complex64>()
-                    .map_err(|error| IdxTensorError::operation(OP, anyhow::Error::new(error)))?;
-                crate::defaults::idx_tensor::lassq_norm_squared(values.iter().copied())
+                    .map_err(|error| IdxTensorError::operation(op, anyhow::Error::new(error)))?;
+                crate::defaults::idx_tensor::lassq_norm::<SQUARED>(values.iter().copied())
             }
             other => {
                 return Err(IdxTensorError::operation(
-                    OP,
+                    op,
                     anyhow::anyhow!(
                     "the explicit-session route serves the dtypes this seam serves, not {other:?}"
                 ),
                 ));
             }
         };
-    squared.ok_or(IdxTensorError::NaNInput { operation: OP })
+    reduced.ok_or(IdxTensorError::NaNInput { operation: op })
 }
 
 /// Compute the Euclidean norm of a dense host tensor on a caller-held explicit session.
 ///
-/// The square root of [`norm_squared_on_session`], exactly as the compatibility route defines
-/// [`IdxTensor::norm`] as the square root of [`IdxTensor::norm_squared`].
+/// Uses the same scaled accumulation as [`norm_squared_on_session`] and
+/// [`IdxTensor::norm`], finishing directly as a norm so its square cannot
+/// underflow or overflow before the result is returned.
 ///
 /// # Errors
 ///
@@ -657,9 +670,7 @@ pub fn norm_squared_on_session(
 /// error, or a non-floating dtype) and for a materialization, session-copy or host-read failure. `f32` and
 /// `c32` operands are **served** by this route, promoted into the same `f64` accumulation the compatibility
 /// route uses.
-/// Both carry `norm_squared_on_session` as their operation name, because the computation is delegated - the
-/// same shape as slice 5's delegation and as the compatibility route's own `norm` delegating to
-/// `norm_squared`.
+/// Errors carry `norm_on_session` as their operation name.
 ///
 /// # Examples
 ///
@@ -681,7 +692,7 @@ pub fn norm_on_session(
     session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
     tensor: &IdxTensor,
 ) -> Result<f64, IdxTensorError> {
-    Ok(norm_squared_on_session(session, tensor)?.sqrt())
+    norm_on_session_impl::<false>(session, tensor)
 }
 
 /// Publish a compact host copy of one operand on the caller's session.

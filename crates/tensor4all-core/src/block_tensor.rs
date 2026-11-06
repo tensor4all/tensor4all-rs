@@ -460,6 +460,15 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
         })
     }
 
+    fn norm(&self) -> std::result::Result<f64, Self::Error> {
+        self.blocks.iter().try_fold(0.0_f64, |norm, block| {
+            let block_norm = block
+                .norm()
+                .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))?;
+            Ok(norm.hypot(block_norm))
+        })
+    }
+
     fn maxabs(&self) -> std::result::Result<f64, Self::Error> {
         self.blocks.iter().try_fold(0.0_f64, |acc, block| {
             let value = block

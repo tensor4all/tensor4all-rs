@@ -774,6 +774,10 @@ pub trait TensorVectorSpace: TensorIndex {
 
     /// Compute the Frobenius norm of the tensor.
     ///
+    /// The default takes the square root of [`Self::norm_squared`]. Override
+    /// it with scaled accumulation when a representable norm must survive
+    /// underflow or overflow of its square, as `IdxTensor` and `BlockTensor` do.
+    ///
     /// # Errors
     ///
     /// Returns `Self::Error` when the norm cannot be evaluated (a materialization
