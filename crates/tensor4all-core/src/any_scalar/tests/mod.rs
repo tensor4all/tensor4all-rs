@@ -1,5 +1,28 @@
 use super::*;
 
+#[test]
+fn complex_division_preserves_extreme_self_quotients() {
+    for scale in [f64::from_bits(1), 1e-200, 1e200, f64::MAX] {
+        let z = AnyScalar::new_complex(scale, scale);
+        let ratio = &z / &z;
+        assert!((ratio.real() - 1.0).abs() < 1e-14);
+        assert_eq!(ratio.imag(), 0.0);
+        assert!(ratio.as_tensor().is_ok());
+    }
+}
+
+#[test]
+fn tracked_complex_division_retains_range_and_graph() {
+    for scale in [1e-200, 1e200] {
+        let z = AnyScalar::new_complex(scale, scale).enable_grad().unwrap();
+        let ratio = &z / &z;
+        assert!((ratio.real() - 1.0).abs() < 1e-14);
+        assert_eq!(ratio.imag(), 0.0);
+        assert!(ratio.tracks_grad());
+        assert!(ratio.as_tensor().is_ok());
+    }
+}
+
 fn with_forced_tensor_initialization_failure<T>(f: impl FnOnce() -> T) -> T {
     let previous =
         FORCE_ANY_SCALAR_TENSOR_INITIALIZATION_FAILURE.with(|failure| failure.replace(true));

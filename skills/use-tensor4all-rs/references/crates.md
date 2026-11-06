@@ -8,6 +8,15 @@ All `tensor4all_*` crate names map to `tensor4all-<name>` packages.
 
 Indices, dynamic-rank tensors, contraction, factorization. Most other crates re-export from here.
 
+- `krylov::bicgstab(apply_a, &b, &x0, &BiCgStabOptions) -> Result<BiCgStabResult<T>, KrylovError>` —
+  matrix-free BiCGSTAB over `TensorVectorSpace` for real nonsymmetric and complex
+  non-Hermitian operators. Options `{ max_iter, rtol, atol }` default to
+  `100`, `1e-10`, `0`. The true-residual threshold is `max(atol, rtol*||b||)`;
+  `residual_norm` is absolute. Intermediate-step convergence consumes one cycle.
+  An optimistic estimate restarts from the true residual within the cycle budget.
+  Working vectors are rescaled by powers of two. Detected recurrence breakdowns
+  return `KrylovError::NumericalBreakdown`, including for invertible operators.
+
 - `krylov::cg(apply_a, &b, &x0, &CgOptions) -> Result<CgResult<T>, KrylovError>` —
   matrix-free conjugate gradients over `TensorVectorSpace` for Hermitian
   positive-definite operators. `CgOptions { max_iter, rtol, atol, hermitian_tol }`;
