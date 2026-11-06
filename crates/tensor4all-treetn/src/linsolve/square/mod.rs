@@ -56,7 +56,7 @@ where
     /// Number of sweeps performed
     pub sweeps: usize,
     /// Final relative residual norm `||(a0 I + a1 A)x - b|| / ||b||`.
-    /// For a numerically zero RHS, this is the absolute residual norm.
+    /// For an RHS with zero norm, this is the absolute residual norm.
     pub residual: Option<f64>,
     /// Converged flag
     pub converged: bool,
@@ -382,7 +382,7 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     let mut operator = operator.clone();
-    Ok(operator.norm()? <= 1.0e-15)
+    Ok(operator.norm()? == 0.0)
 }
 
 fn solve_identity_term_only<T, V>(
@@ -459,8 +459,9 @@ where
 ///
 /// This evaluates `||(a0 I + a1 A)x - b|| / ||b||` by applying `operator` to
 /// `solution`, combining the identity and operator terms, and measuring the
-/// TreeTN norm of the resulting residual. When `||b||` is numerically zero, the
-/// absolute residual norm is returned to avoid division by zero.
+/// TreeTN norm of the resulting residual. When `||b||` is exactly zero, the
+/// absolute residual norm is returned; a small nonzero `||b||` still yields the
+/// relative residual.
 ///
 /// # Arguments
 /// * `operator` - Linear operator `A` including any input/output index mappings.
@@ -546,7 +547,7 @@ where
     let mut residual = lhs.add_reindexed_like_self(&negative_rhs)?;
 
     let rhs_norm = rhs.clone().norm()?;
-    if rhs_norm <= 1.0e-15 {
+    if rhs_norm == 0.0 {
         return residual.norm();
     }
     Ok(residual.norm()? / rhs_norm)

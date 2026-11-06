@@ -490,3 +490,17 @@ fn one_site_als_rank_two_chain_requires_alternating_local_solves() {
         "regression must exercise alternating solves"
     );
 }
+
+#[test]
+fn small_nonzero_operator_is_not_treated_as_zero() {
+    let mut p = Problem::new(&[(0, 1)], false);
+    let scale = 1.0e-20;
+    p.operator.scale_mut(AnyScalar::new_real(scale)).unwrap();
+    for nsite in [1, 2] {
+        let options = p
+            .options(20)
+            .with_nsite(nsite)
+            .with_coefficients(p.a0.re, p.a1.re / scale);
+        p.assert_solution(&p.solve(p.init.clone(), 0, options));
+    }
+}

@@ -2388,6 +2388,33 @@ fn test_relative_linear_system_residual_with_mapped_coefficients() {
     assert!(residual < 1.0e-12, "residual={residual}");
 }
 
+#[test]
+fn test_relative_linear_system_residual_stays_relative_for_tiny_rhs() {
+    let phys_dim = 2;
+    let (state, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
+    let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[2.0, 2.0], phys_dim);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
+    let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+    let mut rhs = state.clone();
+    rhs.scale_mut(AnyScalar::new_real(1.0e-20)).unwrap();
+    let mut zero = state;
+    zero.scale_mut(AnyScalar::new_real(0.0)).unwrap();
+
+    // x = 0 leaves the whole RHS as residual, so the relative residual is 1.
+    let residual = relative_linear_system_residual(
+        &operator,
+        &zero,
+        &rhs,
+        AnyScalar::new_real(3.0),
+        AnyScalar::new_real(1.0),
+        ApplyOptions::naive(),
+    )
+    .unwrap();
+
+    assert!((residual - 1.0).abs() < 1.0e-12, "residual={residual}");
+}
+
 /// Mapped local linsolve should allow operator nodes with no site indices.
 ///
 /// This is the generic tensor-network form of an operator acting on selected

@@ -571,6 +571,16 @@ where
                 .nodes
                 .first()
                 .ok_or_else(|| anyhow::anyhow!("empty ALS update region"))?;
+            // The local problem is a valid projection only when the solved
+            // tensor is the orthogonality center.
+            let center = full_treetn.canonical_region();
+            if center.len() != 1 || !center.contains(node) {
+                return Err(anyhow::anyhow!(
+                    "one-site ALS must solve at the orthogonality center: \
+                     source {node:?}, canonical region {center:?}"
+                )
+                .into());
+            }
             let src = subtree
                 .node_index(node)
                 .ok_or_else(|| anyhow::anyhow!("ALS source node missing"))?;
