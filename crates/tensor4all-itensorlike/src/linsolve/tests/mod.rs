@@ -49,7 +49,7 @@ fn infer_index_mappings_handles_same_id_primed_output() {
 }
 
 #[test]
-fn one_site_als_wrapper_solves_real_and_complex_affine_systems() {
+fn local_solver_selection_wrapper_solves_real_and_complex_affine_systems() {
     use num_complex::Complex64;
     use tensor4all_core::AnyScalar;
 
@@ -100,34 +100,65 @@ fn one_site_als_wrapper_solves_real_and_complex_affine_systems() {
                     .collect(),
             )
             .unwrap();
-            let a0 = z(0.25, 0.5);
-            let a1 = z(1.5, -0.25);
-            let options = LinsolveOptions::new(2).with_nsite(1).with_coefficients(
-                if complex {
-                    AnyScalar::from(a0)
-                } else {
-                    AnyScalar::new_real(a0.re)
-                },
-                if complex {
-                    AnyScalar::from(a1)
-                } else {
-                    AnyScalar::new_real(a1.re)
-                },
-            );
-            assert_eq!(options.nsite(), 1);
-            assert_eq!(LinsolveOptions::default().nsite(), 2);
-            let result = linsolve(&operator, &rhs, init, &options).unwrap();
-            let expected = make(sites, values.iter().map(|v| v / (a0 + a1)).collect());
-            assert!(
-                result
-                    .to_dense()
-                    .unwrap()
-                    .sub(&expected)
-                    .unwrap()
-                    .maxabs()
-                    .unwrap()
-                    < 1e-8
-            );
+            use crate::LocalSolver;
+            use tensor4all_core::krylov::{BiCgStabOptions, CgOptions};
+            for nsite in if nsites == 1 { vec![1] } else { vec![1, 2] } {
+                for solver in [
+                    LocalSolver::Gmres,
+                    LocalSolver::Cg(CgOptions::default()),
+                    LocalSolver::BiCgStab(BiCgStabOptions::default()),
+                ] {
+                    let a0 = z(0.25, 0.5);
+                    let a1 = if matches!(&solver, LocalSolver::Cg(_)) {
+                        z(1.5, -0.5)
+                    } else {
+                        z(1.5, -0.25)
+                    };
+                    let options = LinsolveOptions::new(2)
+                        .with_nsite(nsite)
+                        .with_local_solver(solver)
+                        .with_coefficients(
+                            if complex {
+                                AnyScalar::from(a0)
+                            } else {
+                                AnyScalar::new_real(a0.re)
+                            },
+                            if complex {
+                                AnyScalar::from(a1)
+                            } else {
+                                AnyScalar::new_real(a1.re)
+                            },
+                        );
+                    let options = if matches!(options.local_solver(), LocalSolver::Gmres) {
+                        options
+                    } else {
+                        options
+                            .with_gmres_tol(f64::NAN)
+                            .with_gmres_restart_dim(0)
+                            .with_gmres_max_restarts(0)
+                    };
+                    assert_eq!(options.nsite(), nsite);
+                    assert!(matches!(
+                        LinsolveOptions::default().local_solver(),
+                        LocalSolver::Gmres
+                    ));
+                    let result = linsolve(&operator, &rhs, init.clone(), &options).unwrap();
+                    let expected = make(
+                        sites.clone(),
+                        values.iter().map(|v| v / (a0 + a1)).collect(),
+                    );
+                    assert!(
+                        result
+                            .to_dense()
+                            .unwrap()
+                            .sub(&expected)
+                            .unwrap()
+                            .maxabs()
+                            .unwrap()
+                            < 1e-8
+                    );
+                }
+            }
         }
     }
 }
@@ -157,5 +188,76 @@ fn one_site_als_wrapper_rejects_invalid_update_modes_and_truncation() {
             message.contains("nsite") || message.contains("one-site"),
             "{message}"
         );
+    }
+}
+
+#[test]
+fn local_solver_selection_wrapper_validates_native_options_before_identity_shortcut() {
+    use crate::LocalSolver;
+    use tensor4all_core::krylov::{BiCgStabOptions, CgOptions};
+    let site = DynIndex::new_dyn(2);
+    let rhs = TensorTrain::new(vec![make_tensor(vec![site.clone()], vec![1.0, 2.0])]).unwrap();
+    let operator = TensorTrain::new(vec![make_tensor(
+        vec![site.prime(), site],
+        vec![1.0, 0.0, 0.0, 1.0],
+    )])
+    .unwrap();
+    for solver in [
+        LocalSolver::Cg(CgOptions {
+            hermitian_tol: f64::NAN,
+            ..Default::default()
+        }),
+        LocalSolver::BiCgStab(BiCgStabOptions {
+            atol: f64::INFINITY,
+            ..Default::default()
+        }),
+    ] {
+        let options = LinsolveOptions::new(0)
+            .with_nsite(1)
+            .with_coefficients(1.0, 0.0)
+            .with_local_solver(solver);
+        let error = linsolve(&operator, &rhs, rhs.clone(), &options).unwrap_err();
+        let TensorTrainError::OperationErrorSource { source, .. } = &error else {
+            panic!("expected OperationErrorSource, got {error:?}");
+        };
+        assert!(
+            matches!(
+                source.downcast_ref::<tensor4all_core::krylov::KrylovError>(),
+                Some(tensor4all_core::krylov::KrylovError::InvalidOptions { .. })
+            ),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
+fn local_solver_selection_wrapper_reports_invalid_gmres_options_as_operation_errors() {
+    let site = DynIndex::new_dyn(2);
+    let rhs = TensorTrain::new(vec![make_tensor(vec![site.clone()], vec![1.0, 2.0])]).unwrap();
+    let operator = TensorTrain::new(vec![make_tensor(
+        vec![site.prime(), site],
+        vec![1.0, 0.0, 0.0, 1.0],
+    )])
+    .unwrap();
+    for (options, expected) in [
+        (
+            LinsolveOptions::new(2).with_gmres_tol(f64::NAN),
+            "gmres_tol must be finite and > 0",
+        ),
+        (
+            LinsolveOptions::new(2).with_gmres_max_restarts(0),
+            "gmres_max_restarts must be >= 1",
+        ),
+        (
+            LinsolveOptions::new(2).with_gmres_restart_dim(0),
+            "gmres_restart_dim must be >= 1",
+        ),
+    ] {
+        let error = linsolve(&operator, &rhs, rhs.clone(), &options.with_nsite(1)).unwrap_err();
+        assert!(
+            matches!(&error, TensorTrainError::OperationError { .. }),
+            "{error:?}"
+        );
+        assert!(error.to_string().contains(expected), "{error}");
     }
 }

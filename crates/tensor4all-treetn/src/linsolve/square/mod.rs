@@ -8,7 +8,7 @@
 //!
 //! The algorithm uses alternating updates (sweeping) similar to DMRG:
 //! 1. Position environments to expose a local region
-//! 2. Solve the local linear problem using GMRES (through `tensor4all_core::krylov::gmres`)
+//! 2. Solve the local linear problem with GMRES (default), CG, or BiCGSTAB
 //! 3. Move the center by exact QR (one-site ALS), or split by SVD (two-site MALS)
 //! 4. Update environment caches
 //!
@@ -37,7 +37,7 @@ use anyhow::{bail, Result};
 
 use tensor4all_core::{AnyScalar, IndexLike, TensorLike};
 
-use crate::linsolve::common::LinsolveOptions;
+use crate::linsolve::common::{validate_local_options, LinsolveOptions};
 use crate::operator::{apply_linear_operator, ApplyOptions, IndexMapping, LinearOperator};
 use crate::{
     apply_local_update_sweep, CanonicalizationOptions, LocalUpdateStep, LocalUpdateSweepPlan,
@@ -110,6 +110,12 @@ where
 /// convergence. Redundant dimensions may shrink during QR. Explicit bond caps
 /// and SVD policies are rejected in this mode. The default two-site MALS mode
 /// can adapt ranks using SVD. A single-node network requires one-site mode.
+///
+/// [`LinsolveOptions::with_local_solver`] selects GMRES (default), CG, or
+/// BiCGSTAB. CG requires the effective operator `a0 I + a1 H` to be Hermitian
+/// positive-definite. Core errors propagate; a breakdown never triggers fallback.
+/// Local nonconvergence returns the best local iterate and the outer true
+/// residual controls sweep convergence.
 ///
 /// # Arguments
 ///
@@ -256,13 +262,15 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     options.validate_update_mode()?;
+    validate_local_options(&options)?;
     validate_linsolve_inputs(operator, rhs, &init)?;
     if options.nsite == 2 && rhs.node_count() < 2 {
         return Err(anyhow::anyhow!("square_linsolve requires at least two sites with nsite=2; use nsite=1 for a single-node solve").into());
     }
 
     let identity_only = options.a1.is_zero() || operator_is_zero(operator)?;
-    // ALS must project even an identity solve into the initial bond spaces.
+    // The closed form is exact for every local solver. ALS must still project
+    // an identity solve into the initial bond spaces, so it sweeps instead.
     if identity_only && (options.nsite == 2 || options.a0.is_zero()) {
         return solve_identity_term_only(
             operator,

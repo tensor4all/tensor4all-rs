@@ -119,7 +119,12 @@ This skill is for *using* the library. If the working tree is the tensor4all-rs 
 ## Linear solves
 
 `tensor4all_treetn::square_linsolve` and `tensor4all_itensorlike::linsolve`
-solve `(a0 I + a1 A)x = b` with projected GMRES. Their `LinsolveOptions`
+solve `(a0 I + a1 A)x = b` with projected GMRES by default. Both option types
+accept `.with_local_solver(LocalSolver::Cg(CgOptions::default()))` or
+`LocalSolver::BiCgStab(BiCgStabOptions::default())`; the MPS crate re-exports
+TreeTN's selector. CG requires the effective affine operator to be HPD. Native
+CG/BiCGSTAB tolerances and budgets apply; `gmres_*` controls are ignored for
+other selections. Core breakdown/operation errors propagate without fallback. Their `LinsolveOptions`
 default to two-site MALS (`nsite=2`), which can adapt ranks by SVD. Use
 `.with_nsite(1)` for one-site ALS and single-node systems: exact QR transports
 the center, ranks cannot grow, and redundant dimensions may shrink. Supply a

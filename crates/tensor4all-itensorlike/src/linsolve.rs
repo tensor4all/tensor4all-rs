@@ -12,7 +12,9 @@ use tensor4all_core::DynIndex;
 use tensor4all_treetn::{square_linsolve, IndexMapping, TruncationOptions};
 
 use crate::error::{Result, TensorTrainError};
-use crate::options::{validate_svd_truncation_options, CanonicalForm, LinsolveOptions};
+use crate::options::{
+    validate_svd_truncation_options, CanonicalForm, LinsolveOptions, LocalSolver,
+};
 use crate::tensortrain::TensorTrain;
 
 /// Solve `(a₀ + a₁ * A) * x = b` for `x`.
@@ -21,6 +23,9 @@ use crate::tensortrain::TensorTrain;
 /// [`LinsolveOptions::with_nsite(1)`](LinsolveOptions::with_nsite) for one-site
 /// ALS without bond growth or SVD truncation. One-site mode also supports
 /// single-tensor trains. Choose sufficient initial ranks for the solution.
+/// Select GMRES (default), CG, or BiCGSTAB with
+/// [`LinsolveOptions::with_local_solver`]. CG requires a Hermitian
+/// positive-definite effective operator `a0 I + a1 A`.
 ///
 /// # Examples
 /// ```
@@ -55,9 +60,12 @@ use crate::tensortrain::TensorTrain;
 ///
 /// Returns [`TensorTrainError::InvalidStructure`] when any input train is
 /// empty or when their lengths differ, [`TensorTrainError::OperationError`]
-/// when a sweep, GMRES, or SVD option is invalid or when the operator and initial
-/// guess cannot be index-mapped, and [`TensorTrainError::TreeTn`] when the update
-/// mode is invalid or the underlying TreeTN solve fails.
+/// when a sweep, SVD or selected GMRES option is invalid or when the operator
+/// and initial guess cannot be index-mapped,
+/// [`TensorTrainError::OperationErrorSource`] wrapping a
+/// [`KrylovError`](tensor4all_core::krylov::KrylovError) when selected CG or
+/// BiCGSTAB options are invalid, and [`TensorTrainError::TreeTn`] when the
+/// update mode is invalid or the underlying TreeTN solve fails.
 ///
 pub fn linsolve(
     operator: &TensorTrain,
@@ -91,27 +99,7 @@ pub fn linsolve(
     }
 
     validate_svd_truncation_options(options.max_bond_dim(), options.svd_policy())?;
-
-    if !options.gmres_tol().is_finite() || options.gmres_tol() <= 0.0 {
-        return Err(TensorTrainError::OperationError {
-            message: format!(
-                "gmres_tol must be finite and > 0, got {}",
-                options.gmres_tol()
-            ),
-        });
-    }
-
-    if options.gmres_max_restarts() == 0 {
-        return Err(TensorTrainError::OperationError {
-            message: "gmres_max_restarts must be >= 1".to_string(),
-        });
-    }
-
-    if options.gmres_restart_dim() == 0 {
-        return Err(TensorTrainError::OperationError {
-            message: "gmres_restart_dim must be >= 1".to_string(),
-        });
-    }
+    validate_local_solver_options(options)?;
 
     if let Some(tol) = options.convergence_tol() {
         if !tol.is_finite() || tol < 0.0 {
@@ -127,6 +115,7 @@ pub fn linsolve(
     let (a0, a1) = options.coefficients();
     let treetn_options = tensor4all_treetn::LinsolveOptions::new(nfullsweeps)
         .with_nsite(options.nsite())
+        .with_local_solver(options.local_solver().clone())
         .with_truncation(TruncationOptions::new())
         .with_gmres_tol(options.gmres_tol())
         .with_gmres_max_restarts(options.gmres_max_restarts())
@@ -186,6 +175,39 @@ type SiteMappings = (
 /// finds the operator index exactly matching init's index (input) and the
 /// remaining full index (output). Returns `(None, None)` when no mappings are
 /// needed (operator and init share all site indices).
+/// Check the selected local solver's controls; inactive `gmres_*` values are ignored.
+fn validate_local_solver_options(options: &LinsolveOptions) -> Result<()> {
+    let native = match options.local_solver() {
+        LocalSolver::Gmres => {
+            if !options.gmres_tol().is_finite() || options.gmres_tol() <= 0.0 {
+                return Err(TensorTrainError::OperationError {
+                    message: format!(
+                        "gmres_tol must be finite and > 0, got {}",
+                        options.gmres_tol()
+                    ),
+                });
+            }
+            if options.gmres_max_restarts() == 0 {
+                return Err(TensorTrainError::OperationError {
+                    message: "gmres_max_restarts must be >= 1".to_string(),
+                });
+            }
+            if options.gmres_restart_dim() == 0 {
+                return Err(TensorTrainError::OperationError {
+                    message: "gmres_restart_dim must be >= 1".to_string(),
+                });
+            }
+            return Ok(());
+        }
+        LocalSolver::Cg(native) => native.validate(),
+        LocalSolver::BiCgStab(native) => native.validate(),
+    };
+    native.map_err(|source| TensorTrainError::OperationErrorSource {
+        message: "invalid local solver options".to_string(),
+        source: std::sync::Arc::new(source),
+    })
+}
+
 fn infer_index_mappings(operator: &TensorTrain, init: &TensorTrain) -> Result<SiteMappings> {
     let op_treetn = operator.as_treetn();
     let init_treetn = init.as_treetn();

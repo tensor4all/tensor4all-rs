@@ -623,3 +623,36 @@ fn cg_rejects_nonfinite_inputs_and_operator_outputs() {
         ));
     }
 }
+
+#[test]
+fn cg_static_options_validation() {
+    CgOptions {
+        max_iter: 0,
+        rtol: 0.0,
+        atol: 0.0,
+        hermitian_tol: 0.0,
+    }
+    .validate()
+    .unwrap();
+    for invalid in [f64::NAN, f64::INFINITY, -1.0] {
+        for options in [
+            CgOptions {
+                rtol: invalid,
+                ..CgOptions::default()
+            },
+            CgOptions {
+                atol: invalid,
+                ..CgOptions::default()
+            },
+            CgOptions {
+                hermitian_tol: invalid,
+                ..CgOptions::default()
+            },
+        ] {
+            assert!(matches!(
+                options.validate(),
+                Err(KrylovError::InvalidOptions { solver: "cg", .. })
+            ));
+        }
+    }
+}

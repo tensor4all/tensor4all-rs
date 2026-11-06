@@ -34,6 +34,23 @@ struct Problem {
 
 impl Problem {
     fn new(edges: &[(usize, usize)], complex: bool) -> Self {
+        let z = |re, im| Complex64::new(re, if complex { im } else { 0.0 });
+        Self::with_local_operator(
+            edges,
+            complex,
+            [z(3.0, 0.1), z(0.25, -0.2), z(-0.15, 0.3), z(2.0, -0.2)],
+            z(0.3, 0.2),
+            z(0.7, -0.1),
+        )
+    }
+
+    fn with_local_operator(
+        edges: &[(usize, usize)],
+        complex: bool,
+        local: [Complex64; 4],
+        a0: Complex64,
+        a1: Complex64,
+    ) -> Self {
         let n = edges
             .iter()
             .flat_map(|&(u, v)| [u, v])
@@ -49,9 +66,6 @@ impl Problem {
             edges.to_vec(),
         );
         let z = |re, im| Complex64::new(re, if complex { im } else { 0.0 });
-        let local = [z(3.0, 0.1), z(0.25, -0.2), z(-0.15, 0.3), z(2.0, -0.2)];
-        let a0 = z(0.3, 0.2);
-        let a1 = z(0.7, -0.1);
         let values: Vec<_> = (0..1 << n)
             .map(|i| z((i + 1) as f64 / 3.0, (i as f64).cos()))
             .collect();
@@ -502,5 +516,173 @@ fn small_nonzero_operator_is_not_treated_as_zero() {
             .with_nsite(nsite)
             .with_coefficients(p.a0.re, p.a1.re / scale);
         p.assert_solution(&p.solve(p.init.clone(), 0, options));
+    }
+}
+
+fn local_solver_choices() -> Vec<tensor4all_treetn::LocalSolver> {
+    use tensor4all_core::krylov::{BiCgStabOptions, CgOptions};
+    use tensor4all_treetn::LocalSolver;
+    vec![
+        LocalSolver::Gmres,
+        LocalSolver::Cg(CgOptions {
+            rtol: 1e-12,
+            ..Default::default()
+        }),
+        LocalSolver::BiCgStab(BiCgStabOptions {
+            rtol: 1e-12,
+            ..Default::default()
+        }),
+    ]
+}
+
+#[test]
+fn local_solver_selection_supports_one_and_two_site_tree_sweeps() {
+    for complex in [false, true] {
+        for edges in [vec![(0, 1), (1, 2)], vec![(0, 1), (0, 2), (0, 3)]] {
+            let z = |re, im| Complex64::new(re, if complex { im } else { 0.0 });
+            let p = Problem::with_local_operator(
+                &edges,
+                complex,
+                [z(3.0, 0.0), z(0.25, 0.4), z(0.25, -0.4), z(2.0, 0.0)],
+                z(0.3, 0.0),
+                z(0.7, 0.0),
+            );
+            for nsite in [1, 2] {
+                for solver in local_solver_choices() {
+                    let options = p.options(4).with_nsite(nsite).with_local_solver(solver);
+                    p.assert_solution(&p.solve(p.init.clone(), edges.last().unwrap().1, options));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn local_solver_selection_bicgstab_handles_general_tree_operators() {
+    use tensor4all_core::krylov::BiCgStabOptions;
+    use tensor4all_treetn::LocalSolver;
+    for complex in [false, true] {
+        let p = Problem::new(&[(0, 1), (0, 2), (0, 3)], complex);
+        for nsite in [1, 2] {
+            let options = p
+                .options(4)
+                .with_nsite(nsite)
+                .with_local_solver(LocalSolver::BiCgStab(BiCgStabOptions {
+                    rtol: 1e-12,
+                    ..Default::default()
+                }));
+            p.assert_solution(&p.solve(p.init.clone(), 0, options));
+        }
+    }
+}
+
+#[test]
+fn local_solver_selection_respects_zero_budget_for_identity_only_sweeps() {
+    use tensor4all_core::krylov::{BiCgStabOptions, CgOptions};
+    use tensor4all_treetn::LocalSolver;
+    let p = Problem::new(&[(0, 1)], false);
+    let before = p.init.contract_to_tensor().unwrap();
+    let closed_form = p
+        .rhs
+        .contract_to_tensor()
+        .unwrap()
+        .scale(AnyScalar::new_real(0.5))
+        .unwrap();
+    let zero_budget_solvers = || {
+        [
+            LocalSolver::Gmres,
+            LocalSolver::Cg(CgOptions {
+                max_iter: 0,
+                ..Default::default()
+            }),
+            LocalSolver::BiCgStab(BiCgStabOptions {
+                max_iter: 0,
+                ..Default::default()
+            }),
+        ]
+    };
+    // One-site ALS sweeps an identity-only system, so native budgets apply.
+    for solver in zero_budget_solvers().into_iter().skip(1) {
+        let options = p
+            .options(1)
+            .with_nsite(1)
+            .with_coefficients(2.0, 0.0)
+            .with_local_solver(solver);
+        let result = p.solve(p.init.clone(), 0, options);
+        assert!(!result.converged);
+        assert_eq!(result.sweeps, 1);
+        assert!(result.residual.unwrap() > 1e-3);
+        assert!(
+            result
+                .solution
+                .contract_to_tensor()
+                .unwrap()
+                .sub(&before)
+                .unwrap()
+                .maxabs()
+                .unwrap()
+                < 1e-12
+        );
+    }
+    // Two-site MALS returns the same closed form whichever solver is selected.
+    for solver in zero_budget_solvers() {
+        let options = p
+            .options(1)
+            .with_nsite(2)
+            .with_coefficients(2.0, 0.0)
+            .with_local_solver(solver);
+        let result = p.solve(p.init.clone(), 0, options);
+        assert!(
+            result
+                .solution
+                .contract_to_tensor()
+                .unwrap()
+                .sub(&closed_form)
+                .unwrap()
+                .maxabs()
+                .unwrap()
+                < 1e-12
+        );
+    }
+}
+
+#[test]
+fn local_solver_selection_zero_and_tiny_rhs_across_sweep_modes() {
+    for complex in [false, true] {
+        for scale in [0.0, 1e-20] {
+            let z = |re, im| Complex64::new(re, if complex { im } else { 0.0 });
+            let mut p = Problem::with_local_operator(
+                &[(0, 1)],
+                complex,
+                [z(3.0, 0.0), z(0.25, 0.2), z(0.25, -0.2), z(2.0, 0.0)],
+                z(0.3, 0.0),
+                z(0.7, 0.0),
+            );
+            p.rhs.scale_mut(AnyScalar::new_real(scale)).unwrap();
+            let expected = p.expected.scale(AnyScalar::new_real(scale)).unwrap();
+            if scale != 0.0 {
+                p.init.scale_mut(AnyScalar::new_real(0.0)).unwrap();
+            }
+            for nsite in [1, 2] {
+                for solver in local_solver_choices() {
+                    let options = p.options(2).with_nsite(nsite).with_local_solver(solver);
+                    let result = p.solve(p.init.clone(), 0, options);
+                    assert!(
+                        result.converged,
+                        "{complex} {scale} {nsite}: {:?}",
+                        result.residual
+                    );
+                    let error = result
+                        .solution
+                        .contract_to_tensor()
+                        .unwrap()
+                        .sub(&expected)
+                        .unwrap()
+                        .maxabs()
+                        .unwrap();
+                    assert!(error <= 1e-8 * scale, "{complex} {scale} {nsite}: {error}");
+                }
+            }
+        }
     }
 }

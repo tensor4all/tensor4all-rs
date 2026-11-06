@@ -1,5 +1,6 @@
 //! Common options for linsolve algorithms.
 
+use super::LocalSolver;
 use crate::TruncationOptions;
 use tensor4all_core::{AnyScalar, SvdTruncationPolicy};
 
@@ -39,7 +40,10 @@ pub struct LinsolveOptions {
     ///
     /// Explicit bond caps or SVD policies are invalid with `nsite = 1`.
     pub truncation: TruncationOptions,
-    /// Tolerance for GMRES convergence.
+    /// Local Krylov solver; GMRES by default. CG requires the effective
+    /// operator `a0 I + a1 A` to be Hermitian positive-definite.
+    pub local_solver: LocalSolver,
+    /// Tolerance for GMRES convergence; ignored when another solver is selected.
     pub gmres_tol: f64,
     /// Residual tolerance convention for GMRES convergence.
     pub gmres_tolerance_mode: GmresToleranceMode,
@@ -70,6 +74,7 @@ impl Default for LinsolveOptions {
             nfullsweeps: 5,
             nsite: 2,
             truncation: TruncationOptions::default(),
+            local_solver: LocalSolver::default(),
             gmres_tol: 1e-10,
             gmres_tolerance_mode: GmresToleranceMode::Relative,
             gmres_max_restarts: 100,
@@ -144,6 +149,25 @@ impl LinsolveOptions {
     /// Set the SVD truncation policy used by TreeTN truncation steps.
     pub fn with_svd_policy(mut self, policy: SvdTruncationPolicy) -> Self {
         self.truncation = self.truncation.with_svd_policy(policy);
+        self
+    }
+
+    /// Select the local solver and its native options; GMRES is the default.
+    ///
+    /// CG requires a Hermitian positive-definite effective operator; BiCGSTAB
+    /// and GMRES accept general systems. Native CG/BiCGSTAB options determine
+    /// tolerances and budgets; the `gmres_*` settings apply only to GMRES.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::krylov::BiCgStabOptions;
+    /// use tensor4all_treetn::{LinsolveOptions, LocalSolver};
+    /// let options = LinsolveOptions::new(3)
+    ///     .with_local_solver(LocalSolver::BiCgStab(BiCgStabOptions::default()));
+    /// assert!(matches!(options.local_solver, LocalSolver::BiCgStab(_)));
+    /// ```
+    pub fn with_local_solver(mut self, local_solver: LocalSolver) -> Self {
+        self.local_solver = local_solver;
         self
     }
 
