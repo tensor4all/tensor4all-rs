@@ -25,9 +25,11 @@ decisions that need numbers are made in their milestone on real data.
   its per-edge factorization ranks are upper bounds on the final bond
   dimensions. The tree path has no such pass; its factorization ranks are the
   final link dimensions.
-- `partitionedtreetn::contract_adaptive` contracts every compatible pair,
-  then compares bond dimensions with the patch cap; a saturated group is
-  discarded and recomputed on projected children.
+- `partitionedtreetn::contract_adaptive` groups planned pairs before contraction.
+  Sequential stops a splittable group at its first saturated contribution and
+  retries projected original operands. Explicit patch orders can use the hook
+  from the first pair; implicit orders first complete one pair. Exact-gain,
+  absent-cap and exhausted-order paths still build the full group sum.
 - Non-adaptive `PartitionedTreeTN::contract` now refines operands when their
   predicted output regions overlap (#1093), subject to the default
   4096-atom bound (#1143/#1144). `contract_selected` and both adaptive entries

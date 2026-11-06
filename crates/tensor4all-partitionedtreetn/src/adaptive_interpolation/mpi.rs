@@ -1096,7 +1096,7 @@ fn agree_on_validation<C: Communicator>(
 ///   `MPI_THREAD_FUNNELED` or stronger, because the progress loop stays on the
 ///   initialization thread while the lanes compute.
 /// * `lanes` - The rank's lane executor, built from one
-///   [`CpuEngine`](tenferro_cpu::CpuEngine) per lane
+///   `CpuEngine` per lane
 ///   ([`TenferroLanes::new`](hataori_tenferro::TenferroLanes::new)).
 /// * `root` - The rank that owns the queue and receives the result. It must be
 ///   in `[0, world.size())`.

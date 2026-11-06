@@ -87,6 +87,9 @@ pub(crate) type ContractedPair<'a, V> = (
     SubDomainTreeTN<V>,
 );
 
+/// A compatible pair and its predicted output projector, without contraction.
+pub(crate) type PlannedPair<'a, V> = (&'a SubDomainTreeTN<V>, &'a SubDomainTreeTN<V>, Projector);
+
 /// The patch templates of a contraction with its output site space.
 pub(crate) type ContractionPreparation<'a, V> = (
     &'a SubDomainTreeTN<V>,
@@ -96,8 +99,8 @@ pub(crate) type ContractionPreparation<'a, V> = (
 
 #[cfg(test)]
 thread_local! {
-    /// Top-level patch pairs passed to `SubDomainTreeTN::contract` by
-    /// `PartitionedTreeTN::contract_pairs`.
+    /// Numeric pair attempts in partition contraction and adaptive groups;
+    /// planning pairs alone does not advance this counter.
     pub(crate) static CONTRACTED_PAIRS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -1243,8 +1246,36 @@ where
         options: &ContractionOptions,
         wanted: Option<&HashSet<Projector>>,
     ) -> Result<Vec<ContractedPair<'a, V>>> {
+        let mut contracted = Vec::new();
+        self.for_each_planned_pair(other, center, wanted, |(left, right, output)| {
+            #[cfg(test)]
+            CONTRACTED_PAIRS.with(|count| count.set(count.get() + 1));
+            let Some(contribution) = left.contract(right, center, options.clone())? else {
+                return Ok(());
+            };
+            debug_assert_eq!(
+                contribution.projector(),
+                &output,
+                "predicted output projector differs from the contracted pair's"
+            );
+            contracted.push((left, right, contribution));
+            Ok(())
+        })?;
+        Ok(contracted)
+    }
+
+    /// Plan compatible pairs in the same logical left-then-right order as
+    /// `contract_pairs`, preserving template validation even for an empty selection.
+    /// Each pair is passed to `visit` without retaining a second full pair list.
+    pub(crate) fn for_each_planned_pair<'a>(
+        &'a self,
+        other: &'a Self,
+        center: &V,
+        wanted: Option<&HashSet<Projector>>,
+        mut visit: impl FnMut(PlannedPair<'a, V>) -> Result<()>,
+    ) -> Result<()> {
         let Some((_, _, output_sites)) = prepare_contraction(self, other, center)? else {
-            return Ok(Vec::new());
+            return Ok(());
         };
 
         let mut left_patches: Vec<_> = self.data.values().collect();
@@ -1259,7 +1290,6 @@ where
             |a, b| a.patch_order_key().cmp(b.patch_order_key()),
             |patch| patch.content_digest(),
         );
-        let mut contracted = Vec::new();
         for left in left_patches {
             for &right in &right_patches {
                 let Some(merged) = left.projector().intersection(right.projector()) else {
@@ -1269,20 +1299,10 @@ where
                 if wanted.is_some_and(|wanted| !wanted.contains(&output)) {
                     continue;
                 }
-                #[cfg(test)]
-                CONTRACTED_PAIRS.with(|count| count.set(count.get() + 1));
-                let Some(contribution) = left.contract(right, center, options.clone())? else {
-                    continue;
-                };
-                debug_assert_eq!(
-                    contribution.projector(),
-                    &output,
-                    "predicted output projector differs from the contracted pair's"
-                );
-                contracted.push((left, right, contribution));
+                visit((left, right, output))?;
             }
         }
-        Ok(contracted)
+        Ok(())
     }
 
     /// Sum eager patches in logical patch-key order.

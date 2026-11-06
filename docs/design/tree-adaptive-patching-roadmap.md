@@ -68,7 +68,7 @@ completing every exit criterion of M6–M9.
 | M3 | Interpolation implemented; M3b adaptive-algebra budget remains proposed |
 | M4 | Representation decision deferred; #797's site-free-node defects are fixed |
 | M5 | Complete under its recorded completion rule; optional studies remain with M9 |
-| M6 | Adaptive contraction, rank reports and general-tree SVD zip-up abort implemented; adaptive adoption, Hadamard and sibling merge remain in the [completion proposal](./tree-patched-contraction.md) |
+| M6 | Adaptive contraction, rank reports, general-tree SVD zip-up abort and lazy Sequential adoption implemented; Hadamard and sibling merge remain in the [completion proposal](./tree-patched-contraction.md) |
 | M7 | Interpolation lanes implemented; contraction fan-out, generic-path determinism qualification and representative scaling remain |
 | M8 | Interpolation MPI and world-size 1/2 smoke verification implemented; the full distributed exit remains open |
 | M9 | Continuous; residual corner regressions are scheduled heavy tests, and downstream-scale measurements remain |
@@ -360,8 +360,9 @@ unresolved-issue list is in this roadmap or the findings record.
 
 Status: **partially implemented.** Existing project-first and selected-output
 contraction are reusable. Outcome reporting, the general-tree SVD zip-up
-abort hook and the partial-contraction outcome adapter are implemented. The remaining [M6 proposal](./tree-patched-contraction.md)
-covers adaptive adoption, Hadamard and sibling merging; those stages retain their
+abort hook, partial-contraction outcome adapter and lazy Sequential adoption
+are implemented. The remaining [M6 proposal](./tree-patched-contraction.md)
+covers Hadamard and sibling merging; those stages retain their
 own design and numerical validation gates.
 
 Design: [tree-patched-contraction.md](./tree-patched-contraction.md)

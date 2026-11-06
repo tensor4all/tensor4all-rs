@@ -56,6 +56,15 @@ where
     order_key: PatchOrderKey<V>,
 }
 
+/// A crate-internal probe result; reports remain owned by the TreeTN layer.
+#[derive(Debug)]
+// INVARIANT: a probe returns the completed patch by value, without an extra heap allocation.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum SubDomainContractionOutcome<V: Clone + Hash + Eq + Send + Sync + Debug> {
+    Completed(SubDomainTreeTN<V>),
+    Saturated,
+}
+
 // This type cannot contain a DynIndex or its allocation ID. Content is not part
 // of it: the digest is only needed where two keys tie, and it is computed there.
 pub(crate) type PatchOrderKey<V> = (
@@ -665,7 +674,53 @@ where
         center: &V,
         options: ContractionOptions,
     ) -> Result<Option<Self>> {
-        validate_contraction_options(&options)?;
+        let Some(merged) = self.prepare_pair_contraction(other, center, &options)? else {
+            return Ok(None);
+        };
+        let data = contraction::contract(&self.data, &other.data, center, options)?;
+        self.finish_pair_contraction(data, merged).map(Some)
+    }
+
+    /// Probe a pair through the TreeTN outcome owner, retaining the ordinary
+    /// subdomain validation, projector and inherited-budget semantics.
+    pub(crate) fn contract_with_outcome(
+        &self,
+        other: &Self,
+        center: &V,
+        options: ContractionOptions,
+        threshold: std::num::NonZeroUsize,
+    ) -> Result<Option<SubDomainContractionOutcome<V>>> {
+        let Some(merged) = self.prepare_pair_contraction(other, center, &options)? else {
+            return Ok(None);
+        };
+        match contraction::contract_with_outcome(
+            &self.data,
+            &other.data,
+            center,
+            options,
+            Some(threshold),
+        )? {
+            contraction::ContractionOutcome::Completed { network, .. } => self
+                .finish_pair_contraction(network, merged)
+                .map(SubDomainContractionOutcome::Completed)
+                .map(Some),
+            contraction::ContractionOutcome::Saturated { .. } => {
+                Ok(Some(SubDomainContractionOutcome::Saturated))
+            }
+            // The upstream outcome enum is non-exhaustive.
+            _ => Err(PartitionedTreeTNError::tree(
+                "unsupported contraction outcome; update the partitioned adapter",
+            )),
+        }
+    }
+
+    fn prepare_pair_contraction(
+        &self,
+        other: &Self,
+        center: &V,
+        options: &ContractionOptions,
+    ) -> Result<Option<Projector>> {
+        validate_contraction_options(options)?;
         self.validate_invariants()?;
         other.validate_invariants()?;
         ensure_same_topology(&self.data, &other.data)?;
@@ -680,13 +735,19 @@ where
             .projector
             .intersection(&other.projector)
             .ok_or(PartitionedTreeTNError::ProjectorConflict)?;
-        let data = contraction::contract(&self.data, &other.data, center, options)
-            .map_err(PartitionedTreeTNError::from)?;
+        Ok(Some(merged_projector))
+    }
+
+    fn finish_pair_contraction(
+        &self,
+        data: TreeTN<IdxTensor, V>,
+        merged_projector: Projector,
+    ) -> Result<Self> {
         let (site_indices, _) = data
             .all_site_indices()
             .map_err(PartitionedTreeTNError::from)?;
         let projector = merged_projector.filter_indices(&site_indices);
-        Self::from_masked_data(data, projector, self.budget_squared).map(Some)
+        Self::from_masked_data(data, projector, self.budget_squared)
     }
 
     /// Compute the Frobenius norm without mutating the stored TreeTN.

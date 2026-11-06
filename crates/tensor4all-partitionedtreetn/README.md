@@ -7,6 +7,23 @@ volume-proportional adaptive patching.
 
 Adaptive patching is bond-cap-driven and independent of adaptive interpolation.
 
+## Adaptive contraction
+
+`contract_adaptive` and `contract_adaptive_selected` predict compatible pairs'
+output projectors and group them before tensor work. With a cap, Sequential
+stops a splittable group at its first saturated contribution and projects the
+original operands for child retries. An explicit `patch_order` permits TreeTN
+rank probing from the first pair; an empty order completes the first pair to
+retain the existing default node/site split order. Deterministic general-tree
+SVD zip-up can stop inside an attempt. Chains, Fit and randomized methods finish
+each attempted pair, and can still skip the group's remaining pairs.
+
+ExactParameterGain, no cap and no available split candidate keep full group
+evaluation. Contribution order, exact summation and final budget allocation
+remain at their existing owners. The cap trigger is the existing refinement
+heuristic; cancellation between contributions can lower the sum's rank, and
+no global error certificate or wall-time speedup is implied.
+
 ## Adaptive patched interpolation
 
 `adaptive_interpolation::patched_interpolate` builds a partition directly from

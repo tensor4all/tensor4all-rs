@@ -12,7 +12,7 @@ for `tensor4all-treetn`.
 
 The outcome API, its context/caller-RNG companions, deterministic general-tree
 SVD zip-up abort and partial-contraction outcome adapter are implemented.
-Adaptive adoption, partitioned Hadamard and
+Sequential adaptive adoption is implemented. Partitioned Hadamard and
 sibling merging are not implemented. This record was
 originally written against `4d4fb6fc` and synchronized on 2026-11-06 against
 `origin/main` at `097e2927`. Existing adaptive contraction and subsequently
@@ -40,16 +40,18 @@ ordering.
 `contract_adaptive` (`crates/tensor4all-partitionedtreetn/src/patching.rs`)
 already implements the project-first rule of `PartitionedMPSs.jl`:
 
-1. `PartitionedTreeTN::contract_pairs` validates the operand templates,
-   enumerates pairs in logical patch order, and predicts each output
-   projector before tensor work. Incompatible pairs and unselected outputs
-   are skipped. Remaining compatible pairs are contracted in full.
-2. Contributions are grouped by their exact output projector (the
+1. `PartitionedTreeTN::for_each_planned_pair` validates the operand templates,
+   enumerates pairs in logical patch order and predicts each output projector
+   without tensor work. Incompatible pairs and unselected outputs are skipped.
+2. Pair metadata is grouped by its exact output projector (the
    intersection of the operand projectors, filtered to surviving site
    indices).
 3. Each group runs `contract_group_project_first`:
-   - with `Sequential`, if one contribution already reaches the cap and a
-     split index exists, the group splits without forming the sum (#788);
+   - with `Sequential` and an available split index, contributions are probed
+     one at a time with the outcome API; the first saturation stops the group
+     before the remaining pairs or group sum. An explicit order permits the
+     first pair to use the tree hook; an empty order first completes one pair
+     to preserve its actual default node/site order;
    - otherwise `SubDomainTreeTN::exact_sum` uses the caller's `SumEngine`,
      the result is truncated once with the contraction options, and checked
      against the cap (equality counts);
@@ -75,8 +77,6 @@ group and projects only that group's operands. What is missing:
 
 | Gap | Effect |
 |---|---|
-| Every selected compatible pair is contracted before grouping | Saturated contributions are paid in full, then discarded |
-| Adaptive driver does not use the outcome hook | Its saturated probes still run to completion |
 | Adaptive groups have no shared overlap-resolution policy | Adaptive/selected output assembly can still reject unequal overlapping projectors; non-adaptive `contract` already has bounded operand refinement |
 | No element-wise product | `tensor4all_treetn::hadamard` exists, but there is no partitioned or adaptive version and no projector rule for paired indices of distinct identity |
 | No merging | Overpatched outputs keep all their patches |
@@ -418,8 +418,9 @@ pushes and PR creation still require the user's approval:
    logical ordering, `exact_sum`, and the section 1 pair metadata. Norm reuse
    is a separate performance candidate and needs evidence before adoption.
 2. `contract_with_outcome`, the tree zip-up early-abort hook and
-   `partial_contract_with_outcome` are implemented. Next comes adaptive
-   adoption, with the outcome record plus the amendment above.
+   `partial_contract_with_outcome` and Sequential adaptive adoption are
+   implemented, with the outcome record plus the amendment above. Exact-gain
+   selection, exhausted orders and absent caps retain full group evaluation.
 3. The reviewed adaptive overlap policy, reusing bounded refinement or
    introducing explicitly reviewed fusion; preserve shipped non-adaptive
    refinement and selected-output semantics.
@@ -468,9 +469,9 @@ evaluator. The earlier interpolation checkpoint is complete.
 
 Implementation gates that remain inside M6:
 
-1. Reporting, the tree zip-up hook and frozen ordinary/selected baselines are
-   in place. Preserve the documented hook proof and method coverage during
-   adaptive adoption (question 6).
+1. Reporting, the tree zip-up hook, frozen ordinary/selected baselines and
+   lazy adaptive adoption are in place. Preserve the documented hook proof,
+   per-contribution heuristic and method coverage (question 6).
 2. Review adaptive overlap handling (question 1) against the shipped bounded
    refinement and selected-output contracts before changing layouts.
 3. Settle merge placement, tolerance and excluded-patch behavior (questions
@@ -513,7 +514,8 @@ the user in the PR that adds it.
    has an implemented API: `abort_at_rank`, stored-rank semantics,
    context/RNG parity, analytical baselines and deterministic tree zip-up
    cancellation. Its literature section distinguishes cited methods from our
-   tree-specific proof. Review adaptive adoption with the amendment in section 2.
+   tree-specific proof. Sequential adaptive adoption preserves the amendment in
+   section 2, with the documented first-completed-probe rule for implicit orders.
 7. **Multi-level merge error.** Choose a conservative level-wise ledger or
    a final residual check against the original partition, with explicit
    rejection/rollback and resource behavior. The old sum of squared local

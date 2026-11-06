@@ -8,7 +8,8 @@ on 2026-11-06 against `097e2927`, following the approved implementation slices.
 tree edge; the chain path and other methods still classify completed results.
 Caller-RNG entries remain post-hoc. `partial_contract_with_outcome` also reuses
 the hook for equal topologies without `output_order`; its other paths are
-post-hoc. Adaptive-driver adoption remains future work.
+post-hoc. Sequential adaptive-driver adoption is implemented; partitioned
+Hadamard, overlap-policy changes and sibling merging remain separate work.
 Part of milestone M6 (adaptive patched contraction) of
 [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md);
 background in section 1 of
@@ -288,14 +289,16 @@ stopping; it does not establish this adapter's index or topology equivalence.
 The former #788 prerequisite is resolved. Adoption preserves the existing
 ordinary and selected baselines described below.
 
-- Today `contract_adaptive` contracts selected compatible pairs before grouping
-  them by output projector, so no contraction can be skipped at the top
-  level. The adoption groups pairs first: the output projector of a pair is
+- Implemented: `contract_adaptive` and its selected counterpart group planned
+  compatible pairs before tensor work: the output projector of a pair is
   computed from the operands (projector intersection filtered to the surviving
   output indices, as `SubDomainTreeTN::contract` does), without contracting.
 - For each group with `PatchSplitStrategy::Sequential`, the split candidate
   is computed from the group's output indices and projector before any
-  contraction. If a candidate exists, pairs are contracted with
+  contraction when `patch_order` is explicit. With an empty order, the first
+  contribution completes so its actual node/site layout determines the default
+  candidate; this preserves method-specific axis order without predicting it.
+  If a candidate exists, subsequent eligible attempts use
   `abort_at_rank = patching cap`. A contribution counts as saturated when its
   outcome is `Saturated` or, for a `Completed` network, when
   `SubDomainTreeTN::max_bond_dim() >= cap`. The second clause keeps today's
@@ -308,10 +311,13 @@ ordinary and selected baselines described below.
   contributions are contracted without a threshold, as today.
 - Layout and value preservation is checked against the baseline, rather
   than inferred from rank predicates alone. Keep the existing logical
-  ordering and content-digest tie-break, exact `SumEngine`, selected top-level
+  pair ordering and content-digest tie-break, exact `SumEngine`, selected top-level
   projector matching, and project-first child recomputation. Selecting a
   parent group includes its split descendants; requesting only a descendant
-  projector does not select an unmatched ancestor group.
+  projector does not select an unmatched ancestor group. Groups execute in
+  first-appearance order of the canonical pair plan, without a numerical
+  output digest. Completed output patches are still sorted by their actual
+  keys/content at the existing final budget-allocation owner.
 - Chain-shaped inputs that keep output sites always take the chain zip-up
   path, which detects saturation after completion, so they gain only the
   skipped remaining pairs of a group, not a shortened contraction. Tests of
@@ -361,8 +367,10 @@ decide adaptive overlap, merge placement or the sibling-merge error ledger.
 2. Implemented: deterministic tree zip-up abort hook, with public-entry
    factorization counts, first/later-edge comparisons to completed reports,
    scalar-pruning coverage and unchanged chain/randomized schedules.
-3. Adopt lazy grouping in the Sequential adaptive path, preserving the
+3. Implemented: lazy grouping in the Sequential adaptive path, preserving the
    selected and ordinary baselines. `ExactParameterGain` retains full probes.
+   An empty split order completes its first contribution to determine the
+   original default candidate; explicit orders permit probing from the first pair.
 
 ### Existing adaptive baselines
 

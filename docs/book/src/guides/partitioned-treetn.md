@@ -63,6 +63,17 @@ inherit no absolute budget. The same choice applies to `add_with_patching`,
 `contract_adaptive`, and `truncate_adaptive`. `cutoff` is best effort for the final whole-network error;
 `max_bond_dim` is a hard cap.
 
+Adaptive contraction groups compatible pairs by their predicted output
+projector before computing them. With a cap and `Sequential`, it stops a
+splittable group at the first saturated contribution and recomputes children
+from projected original operands. Explicit `patch_order` permits probing from
+the first pair; an empty order completes that pair to retain its actual default
+node/site order. General-tree SVD zip-up can also stop inside an attempt.
+Other methods finish each attempted pair, while later pairs may be skipped.
+`ExactParameterGain`, no cap and exhausted orders still evaluate the full group.
+This preserves the existing per-contribution refinement heuristic, which does
+not imply that the final sum would have the same rank or certify its error.
+
 When several patches are summed exactly (contributions to one output projector in
 `contract` and `contract_adaptive`, inputs with an equal key in `add_with_patching`,
 and all patches in `to_treetn`), the sum is built with a `SumEngine`.
