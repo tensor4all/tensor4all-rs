@@ -53,6 +53,7 @@ Record any new port, derivation, or algorithm origin in
 | Global L2 reconstruction | Separate [reconstruction path](./orthogonal-target-reconstruction.md); does not implement M3b for adaptive algebra |
 | Unequal overlapping layouts | Non-adaptive `add`/`contract` refine automatically (#1093), with a default 4096-atom limit (#1143/#1144); selected/adaptive contraction do not use that automatic-refinement wrapper |
 | General sibling merge and contraction early abort | Proposed under M6; no public implementation |
+| Final contraction rank reports | Post-hoc outcome APIs with context/caller-RNG parity; all numerical work still completes |
 
 The chain crate `tensor4all-partitionedtt` was removed in #1005. Its
 algorithms remain design lineage, not a verification baseline. M1–M3's
@@ -67,7 +68,7 @@ completing every exit criterion of M6–M9.
 | M3 | Interpolation implemented; M3b adaptive-algebra budget remains proposed |
 | M4 | Representation decision deferred; #797's site-free-node defects are fixed |
 | M5 | Complete under its recorded completion rule; optional studies remain with M9 |
-| M6 | Existing adaptive contraction plus an unimplemented [completion proposal](./tree-patched-contraction.md) |
+| M6 | Adaptive contraction and post-hoc rank reports implemented; early abort, Hadamard and sibling merge remain in the [completion proposal](./tree-patched-contraction.md) |
 | M7 | Interpolation lanes implemented; contraction fan-out, generic-path determinism qualification and representative scaling remain |
 | M8 | Interpolation MPI and world-size 1/2 smoke verification implemented; the full distributed exit remains open |
 | M9 | Continuous; residual corner regressions are scheduled heavy tests, and downstream-scale measurements remain |
@@ -358,9 +359,10 @@ unresolved-issue list is in this roadmap or the findings record.
 ### M6. Adaptive patched contraction (L)
 
 Status: **partially implemented.** Existing project-first and selected-output
-contraction are reusable. The [M6 proposal](./tree-patched-contraction.md)
-and [contraction outcome proposal](./treetn-contraction-outcome.md) remain
-unimplemented and need design review; synchronization does not approve them.
+contraction are reusable, and post-hoc outcome reporting is implemented.
+The remaining [M6 proposal](./tree-patched-contraction.md) covers early abort,
+adaptive adoption, Hadamard and sibling merging; those stages retain their
+own design and numerical validation gates.
 
 Design: [tree-patched-contraction.md](./tree-patched-contraction.md)
 (proposal).

@@ -6,11 +6,13 @@ Proposal for milestone M6 of
 [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md). It
 needs review and the answers to the [open questions](#open-questions-for-the-user)
 before implementation. It builds on, and does not replace, the
-[contraction outcome proposal](./treetn-contraction-outcome.md), which adds the
-early-abort entry point to `tensor4all-treetn`; that record is still a
-proposal and its approval is a prerequisite of step 2 below.
+[contraction outcome record](./treetn-contraction-outcome.md), which documents
+the implemented post-hoc reporting API and proposes the early-abort hook
+for `tensor4all-treetn`.
 
-The completion APIs proposed here have not been implemented. This record was
+The post-hoc outcome API and its context/caller-RNG companions are implemented.
+Early abort, adaptive adoption, partitioned Hadamard and sibling merging are
+not implemented. This record was
 originally written against `4d4fb6fc` and synchronized on 2026-11-06 against
 `origin/main` at `097e2927`. Existing adaptive contraction and subsequently
 merged refinement, selection and exact-sum work are reusable foundations;
@@ -412,9 +414,9 @@ pushes and PR creation still require the user's approval:
 1. Golden data for ordinary/selected `contract_adaptive`; reuse current
    logical ordering, `exact_sum`, and the section 1 pair metadata. Norm reuse
    is a separate performance candidate and needs evidence before adoption.
-2. `contract_with_outcome` and `partial_contract_with_outcome` in
-   `tensor4all-treetn` (the outcome record plus the amendment above), and
-   their adoption in the driver.
+2. `contract_with_outcome` post-hoc reporting is implemented. Next come the
+   tree zip-up early-abort hook, `partial_contract_with_outcome`, and adaptive
+   adoption, with the outcome record plus the amendment above.
 3. The reviewed adaptive overlap policy, reusing bounded refinement or
    introducing explicitly reviewed fusion; preserve shipped non-adaptive
    refinement and selected-output semantics.
@@ -463,8 +465,9 @@ evaluator. The earlier interpolation checkpoint is complete.
 
 Implementation gates that remain inside M6:
 
-1. Review the outcome API, rank-threshold semantics and method coverage
-   (question 6); freeze current ordinary/selected outputs before refactoring.
+1. Post-hoc reporting and the frozen ordinary/selected baselines are in place.
+   Review the early-abort hook and method coverage before schedule changes
+   (question 6).
 2. Review adaptive overlap handling (question 1) against the shipped bounded
    refinement and selected-output contracts before changing layouts.
 3. Settle merge placement, tolerance and excluded-patch behavior (questions
@@ -504,10 +507,10 @@ the user in the PR that adds it.
    matrix product the right workloads, or is there a downstream contraction
    (for example a bubble in gw-rs) that should be the benchmark instead?
 6. **Outcome record.** The [contraction outcome proposal](./treetn-contraction-outcome.md)
-   now has a concrete review candidate: `abort_at_rank`, stored-rank semantics,
-   context/RNG parity, post-hoc reporting before deterministic tree zip-up
-   abort, and the ordinary/selected analytical baselines. Review that contract
-   with the amendment in section 2 before adding the public API.
+   has an implemented post-hoc API: `abort_at_rank`, stored-rank semantics,
+   context/RNG parity and analytical baselines. Review the deterministic
+   tree zip-up abort hook with the amendment in section 2 before changing
+   the numerical schedule.
 7. **Multi-level merge error.** Choose a conservative level-wise ledger or
    a final residual check against the original partition, with explicit
    rejection/rollback and resource behavior. The old sum of squared local

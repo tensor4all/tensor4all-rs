@@ -21,6 +21,16 @@ select fixed-rank RSVD; see [Randomized Factorization](randomized-factorization.
 This replaces the local decomposition and does not project environments or
 remove the local two-site contraction cost.
 
+For final stored bond dimensions, use
+`tensor4all_treetn::contraction::contract_with_outcome` (or its caller-context
+and caller-RNG counterparts). `Completed` contains the network and a
+leaves-to-root rank report. A positive `abort_at_rank` threshold classifies
+the result as `Saturated` when a stored edge reaches it, including equality;
+an edgeless result always completes. This is currently post-hoc detection:
+all contraction work finishes before classification, so the FLOP counts below
+are unchanged. Stored-rank saturation is not an error estimate or evidence
+that the truncation cap discarded weight.
+
 ## 1. Setup and notation
 
 Consider two MPOs \\(A\\) and \\(B\\) of length \\(L\\) and their compressed

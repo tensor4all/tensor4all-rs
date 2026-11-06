@@ -64,6 +64,11 @@ pub(super) enum ZipupTopologyMode {
 
 pub(super) mod randomized;
 pub use randomized::{contract_with_rng, contract_with_rng_in};
+mod outcome;
+pub use outcome::{
+    contract_with_outcome, contract_with_outcome_in, contract_with_outcome_with_rng,
+    contract_with_outcome_with_rng_in, ContractionOutcome, ContractionReport, EdgeRank,
+};
 mod src_chain;
 mod src_probe;
 mod src_tree;

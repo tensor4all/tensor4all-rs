@@ -2,14 +2,17 @@
 
 ## Status
 
-Review candidate synchronized on 2026-11-06 with `097e2927`, following the
-earlier two design reviews. The API below is proposed, not implemented. Part of milestone M6 (adaptive
-patched contraction) of
+Post-hoc reporting implemented on 2026-11-06 against `097e2927`, following
+the earlier design reviews and the approved first implementation slice.
+`contract_with_outcome`, its context/caller-RNG companions, and the report
+types run the existing contraction completely before classifying final
+stored ranks. Early abort and adaptive-driver adoption remain future slices.
+Part of milestone M6 (adaptive patched contraction) of
 [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md);
 background in section 1 of
-[tree-patching-findings.md](./tree-patching-findings.md). It adds public API
-to `tensor4all-treetn` and must be approved before implementation, which is
-scheduled with M6, not before the interpolation milestones.
+[tree-patching-findings.md](./tree-patching-findings.md). The current public
+API is documented in `contraction/outcome.rs`; the early-abort schedule
+described below remains a design for the next slice, not a performance claim.
 
 ## Problem
 
@@ -45,7 +48,7 @@ canonicalization, and reindexing of both operands is always paid.
 - Early abort on the chain zip-up path, for Src, for Naive, and for Fit in the
   first version (see Method coverage). The former Fit initializer dependency
   #656 landed through #981; it is no longer an external blocker. Fit's
-  outcome/report coverage remains an unimplemented part of this proposal.
+  reporting is now implemented; early abort for Fit is still out of scope.
 - Outcome variants of `partial_contract` and `hadamard`, and of the low-level
   SRC entry points `contract_src_with_rng` and `contract_src_with_rng_in`.
   Patched element-wise products are an M6 item and will reuse the entry point
@@ -136,7 +139,7 @@ pub fn contract_with_outcome<T, V>(
 ### Execution and RNG parity
 
 The public entry above is the existing generic compatibility route with a
-report. Its proposed `contract_with_outcome_in` counterpart accepts
+report. Its `contract_with_outcome_in` counterpart accepts
 `TreeTN<IdxTensor, V>` inputs and the caller's `ExecutionContext`, matching
 `contract_in`. Both return `TreeTNOperationError`, preserve source chains,
 and reuse current option/context/layout validation. A foreign context or an
@@ -144,17 +147,18 @@ invalid dense-reference limit must not be hidden by a rank shortcut. No new
 backend, host readback, dense fallback, or AD-detaching path is introduced.
 
 Randomized dispatch already exists: RSVD for Zipup/Fit and seeded SRC. The
-outcome route must preserve that dispatch rather than treating every Zipup
-as deterministic SVD. Caller-RNG companions, proposed as
+outcome route preserves that dispatch rather than treating every Zipup
+as deterministic SVD. Caller-RNG companions,
 `contract_with_outcome_with_rng` and `contract_with_outcome_with_rng_in`,
-follow `contract_with_rng*`: consume the supplied stream directly, never
-derive a private seed. Seed-based entries use the same named RNG and seed
+follow `contract_with_rng*` for RSVD and `contract_src_with_rng*` for SRC:
+consume the supplied stream directly, never derive a private seed.
+Seed-based entries use the same named RNG and seed
 fields as their current counterparts. Randomized methods complete before
 threshold detection in this version, so the same seed/stream produces the
 same full result and RNG consumption as the matching ordinary entry.
 
 The first implementation establishes post-hoc reports on the existing
-dispatch; the second adds early abort only to deterministic SVD on the
+dispatch. The proposed second slice adds early abort only to deterministic SVD on the
 general-tree zip-up path. The abort hook is selected at the schedule boundary,
 shared by compatibility and context routes. It may skip numerical work after
 the decisive edge, so errors that would occur only in that unexecuted work
@@ -175,9 +179,12 @@ differ in shape:
 
 ## Method coverage
 
+All rows currently use post-hoc classification. The early-abort column
+describes the next slice; it is not implemented yet.
+
 | Method | Report | Early abort in this proposal |
 |---|---|---|
-| Zipup, deterministic SVD, tree path | Final link dimensions | Yes. Each retained edge's factorization rank is its final link dimension (no truncation pass follows the edge loop), so the contraction stops after the first retained edge whose rank reaches the threshold |
+| Zipup, deterministic SVD, tree path | Final link dimensions | Planned. Each retained edge's factorization rank is its final link dimension (no truncation pass follows the edge loop), so a future hook can stop after the first retained edge reaching the threshold |
 | Zipup, chain path | Final link dimensions | No; saturation is evaluated after completion. The edge loop runs in a non-orthogonal gauge and a final truncation sweep follows, so per-edge factorization ranks are only upper bounds on the final dimensions; aborting on them would report saturation that `contract` does not show |
 | Zipup/Fit with RSVD | Final link dimensions | No; preserve current RNG consumption and detect saturation after completion |
 | Src | Final link dimensions | No; evaluated after completion |
@@ -260,9 +267,10 @@ existing contraction options and return types remain unchanged. These are
 review choices for the first outcome slice; accepting this document does not
 decide adaptive overlap, merge placement or the sibling-merge error ledger.
 
-1. Preserve ordinary/selected adaptive baselines, including threshold
-   equality and exhausted split orders; establish post-hoc report and
-   context/RNG parity through the shared dispatch.
+1. Implemented: ordinary/selected adaptive baselines, including threshold
+   equality and exhausted split orders; post-hoc reporting and context/RNG
+   parity through the existing dispatch. Metadata tests include unequal
+   stored ranks, root fallbacks and the first saturating report edge.
 2. Add the deterministic tree zip-up abort hook. Tests compare its retained
    edge to the completed report and count executed factorizations. No skipped
    work is claimed for the chain or randomized paths.
