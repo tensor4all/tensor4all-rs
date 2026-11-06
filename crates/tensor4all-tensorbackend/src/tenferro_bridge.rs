@@ -11,9 +11,8 @@ use anyhow::{anyhow, ensure, Result};
 use num_complex::{Complex32, Complex64};
 use omeco::ScoreFunction;
 use tenferro::{
-    program::CoreSemanticOp, DType, GraphCompiler, Runtime, ScopedExecutionOutcome,
-    ScopedReadInputs, Tensor as NativeTensor, TensorRead, TensorScalar, TensorSessionOpsExt,
-    TensorView, TraceContext,
+    program::CoreSemanticOp, CompiledGraph, DType, GraphCompiler, Tensor as NativeTensor,
+    TensorRead, TensorScalar, TensorSessionOpsExt, TraceContext,
 };
 use tenferro_einsum::{
     ConcreteEinsumPlan, ContractionOptimizerOptions, ContractionTree, EinsumSubscripts, Subscripts,
@@ -59,13 +58,11 @@ fn native_tensor_from_vec<T: TensorScalar>(
 }
 
 use crate::context::{
-    default_engine_buffer_pool_stats, reset_default_engine, reset_default_engine_buffer_pool,
-    with_default_graph_runtime, with_default_session,
+    default_context, default_engine_buffer_pool_stats, reset_default_engine,
+    reset_default_engine_buffer_pool, with_default_graph_compiler, with_default_session,
 };
 use crate::memory::release_process_allocator_cached_memory;
-use crate::storage::Storage;
-#[cfg(test)]
-use crate::storage::StorageRepr;
+use crate::storage::{storage_dtype_dispatch, Storage, StorageScalar};
 use crate::tensor_element::TensorElement;
 use crate::BackendScalar;
 
@@ -137,9 +134,26 @@ struct NativeEinsumProfileEntry {
     total_time: Duration,
 }
 
-const CONCRETE_EINSUM_PLAN_CACHE_CAPACITY: usize = 256;
+/// Entries kept before the cache is cleared. Real workloads cycle through
+/// hundreds to a few thousand distinct contraction signatures (#891: a
+/// 400-shape QTT cycle re-prepared every plan at 256), so the bound sits above
+/// that working set while still capping the per-thread cache.
+const CONCRETE_EINSUM_PLAN_CACHE_CAPACITY: usize = 4096;
+
+/// One parsed einsum expression, shared by every plan built from the same string.
+#[derive(Debug)]
+struct NativeEinsumSpec {
+    subscripts: Subscripts,
+    einsum_subscripts: EinsumSubscripts,
+}
+
+/// Distinct expression strings kept before the cache is cleared. The string form is used with
+/// literal expressions, so the working set is a few dozen entries.
+const NATIVE_EINSUM_SPEC_CACHE_CAPACITY: usize = 1024;
 
 thread_local! {
+    static NATIVE_EINSUM_SPEC_CACHE: RefCell<HashMap<String, Arc<NativeEinsumSpec>>> =
+        RefCell::new(HashMap::new());
     static NATIVE_EINSUM_PROFILE_STATE: RefCell<HashMap<NativeEinsumSignature, NativeEinsumProfileEntry>> =
         RefCell::new(HashMap::new());
     static NATIVE_EINSUM_TRACE_STATE: RefCell<HashSet<NativeEinsumSignature>> =
@@ -258,6 +272,29 @@ fn concrete_einsum_signature(
     }
 }
 
+/// Parse an einsum expression once per distinct string on this thread.
+fn cached_native_einsum_spec(subscripts: &str) -> Result<Arc<NativeEinsumSpec>> {
+    if let Some(spec) =
+        NATIVE_EINSUM_SPEC_CACHE.with(|cache| cache.borrow().get(subscripts).cloned())
+    {
+        return Ok(spec);
+    }
+    let parsed = Subscripts::parse(subscripts)
+        .map_err(|error| anyhow!("invalid einsum subscripts '{subscripts}': {error}"))?;
+    let spec = Arc::new(NativeEinsumSpec {
+        einsum_subscripts: EinsumSubscripts::from(&parsed),
+        subscripts: parsed,
+    });
+    NATIVE_EINSUM_SPEC_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= NATIVE_EINSUM_SPEC_CACHE_CAPACITY {
+            cache.clear();
+        }
+        cache.insert(subscripts.to_string(), Arc::clone(&spec));
+    });
+    Ok(spec)
+}
+
 fn cached_concrete_einsum_plan(
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
@@ -288,6 +325,11 @@ fn cached_concrete_einsum_plan(
 #[cfg(test)]
 fn reset_concrete_einsum_plan_cache() {
     CONCRETE_EINSUM_PLAN_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+#[cfg(test)]
+fn native_einsum_spec_cache_len() -> usize {
+    NATIVE_EINSUM_SPEC_CACHE.with(|cache| cache.borrow().len())
 }
 
 #[cfg(test)]
@@ -701,14 +743,18 @@ fn compile_native_einsum_program(
 
 fn run_cached_native_einsum(
     subscripts: &EinsumSubscripts,
-    execute: impl FnOnce(&mut GraphCompiler, &Runtime) -> Result<NativeTensor>,
+    build: impl FnOnce(&mut GraphCompiler) -> Result<CompiledGraph>,
+    execute: impl FnOnce(&crate::context::CpuExecutionContext, &CompiledGraph) -> Result<NativeTensor>,
 ) -> Result<NativeTensor> {
     let trace_pool = native_einsum_pool_trace_enabled();
     let pool_before = trace_pool
         .then(default_engine_buffer_pool_stats)
         .transpose()?;
-    let result =
-        with_default_graph_runtime(|compiler, runtime, _backend| execute(compiler, runtime))??;
+    // Compile under the compiler lock only; the graph then runs under the
+    // context's engine lock. Holding both would make a compile wait for a graph
+    // that is running.
+    let program = with_default_graph_compiler(build)?;
+    let result = execute(default_context(), &program)?;
     if trace_pool {
         let pool_after = default_engine_buffer_pool_stats()?;
         let output_bytes = native_tensor_bytes(&result);
@@ -786,30 +832,22 @@ fn cached_einsum_native_tensors(
     inputs: &[&NativeTensor],
     subscripts: &EinsumSubscripts,
 ) -> Result<NativeTensor> {
-    run_cached_native_einsum(subscripts, |compiler, runtime| {
-        let program = compile_native_einsum_program(
-            compiler,
-            inputs.iter().map(|tensor| {
-                tenferro::program::ProgramInputSpec::new(
-                    tensor.dtype(),
-                    tensor.shape().iter().copied().map(Into::into),
-                )
-            }),
-            subscripts,
-        )?;
-        let mut outputs = runtime
-            .run_compiled(&program, inputs)
-            .map_err(|e| anyhow!("native einsum failed: {e}"))?;
-        if outputs.len() != 1 {
-            return Err(anyhow!(
-                "native einsum returned {} outputs instead of one",
-                outputs.len()
-            ));
-        }
-        outputs
-            .pop()
-            .ok_or_else(|| anyhow!("native einsum returned no output"))
-    })
+    run_cached_native_einsum(
+        subscripts,
+        |compiler| {
+            compile_native_einsum_program(
+                compiler,
+                inputs.iter().map(|tensor| {
+                    tenferro::program::ProgramInputSpec::new(
+                        tensor.dtype(),
+                        tensor.shape().iter().copied().map(Into::into),
+                    )
+                }),
+                subscripts,
+            )
+        },
+        |context, program| single_output(context.run_graph(program, inputs)),
+    )
 }
 
 fn cached_einsum_native_reads(
@@ -817,60 +855,71 @@ fn cached_einsum_native_reads(
     subscripts: &Subscripts,
 ) -> Result<NativeTensor> {
     let einsum_subscripts = EinsumSubscripts::from(subscripts);
+    execute_native_einsum_reads(inputs, subscripts, &einsum_subscripts)
+}
+
+fn execute_native_einsum_reads(
+    inputs: &[TensorRead<'_>],
+    subscripts: &Subscripts,
+    einsum_subscripts: &EinsumSubscripts,
+) -> Result<NativeTensor> {
     if inputs.first().is_some_and(|first| {
         concrete_einsum_dtype_supported(first.dtype())
             && inputs.iter().all(|input| input.dtype() == first.dtype())
     }) {
-        let plan = cached_concrete_einsum_plan(inputs, subscripts, &einsum_subscripts)?;
+        let plan = cached_concrete_einsum_plan(inputs, subscripts, einsum_subscripts)?;
         // The plan reports `tenferro_einsum::Error`, so the session-entry
         // rejection is mapped here rather than through the tenferro-tensor-typed
         // session helper.
-        return crate::context::default_context()
-            .with_session(|session| plan.execute_read(inputs, session))
+        return default_context()
+            .with_session(|engine| plan.execute_read(inputs, engine))
             .map_err(|entry| {
                 anyhow::Error::new(entry).context("native einsum session entry failed")
             })?
             .map_err(|error| anyhow!("native einsum session execution failed: {error}"));
     }
 
-    let views = inputs
-        .iter()
-        .map(|input| input.clone().tensor_view())
-        .collect::<Vec<_>>();
-    run_cached_native_einsum(&einsum_subscripts, |compiler, runtime| {
-        let program = compile_native_einsum_program(
-            compiler,
-            views.iter().map(|tensor| {
-                tenferro::program::ProgramInputSpec::new(
-                    tensor.dtype(),
-                    tensor.shape().iter().copied().map(Into::into),
-                )
-            }),
-            &einsum_subscripts,
-        )?;
-        let outcome = runtime
-            .execute_scoped_read_only(&program, ScopedReadInputs::new(views))
-            .map_err(|rejected| {
-                let (error, _inputs) = rejected.into_parts();
-                anyhow!("native einsum submission rejected: {error}")
-            })?;
-        let bundle = match outcome {
-            ScopedExecutionOutcome::Completed(bundle) => bundle,
-            ScopedExecutionOutcome::RetiredFailed { error, .. } => {
-                return Err(anyhow!("native einsum failed: {error}"));
-            }
-        };
-        bundle
-            .into_owned_output(0)
-            .map_err(|(_, error)| anyhow!("native einsum output extraction failed: {error}"))
-    })
+    run_cached_native_einsum(
+        einsum_subscripts,
+        |compiler| {
+            compile_native_einsum_program(
+                compiler,
+                inputs.iter().map(|tensor| {
+                    tenferro::program::ProgramInputSpec::new(
+                        tensor.dtype(),
+                        tensor.shape().iter().copied().map(Into::into),
+                    )
+                }),
+                einsum_subscripts,
+            )
+        },
+        |context, program| single_output(context.run_graph_reads(program, inputs)),
+    )
     .map_err(|e| anyhow!("native read einsum failed: {e}"))
+}
+
+/// Reduce a graph's output list to the single tensor an einsum produces.
+fn single_output(
+    outputs: std::result::Result<Vec<NativeTensor>, crate::context::CpuExecutionContextError>,
+) -> Result<NativeTensor> {
+    let mut outputs = outputs.map_err(|e| anyhow!("native einsum failed: {e}"))?;
+    if outputs.len() != 1 {
+        return Err(anyhow!(
+            "native einsum returned {} outputs instead of one",
+            outputs.len()
+        ));
+    }
+    outputs
+        .pop()
+        .ok_or_else(|| anyhow!("native einsum returned no output"))
 }
 
 /// Build a dense native tensor from column-major data.
 /// # Errors
 ///
-/// Returns an error when the data length does not match the logical dimension product (a shape mismatch) or the backend conversion fails.
+/// Returns an error when the shape product would overflow `usize`,
+/// when `data.len()` does not match the expected shape, or when the backend
+/// rejects the tensor.
 pub fn dense_native_tensor_from_col_major<T: TensorElement>(
     data: &[T],
     logical_dims: &[usize],
@@ -892,8 +941,9 @@ pub fn dense_native_tensor_from_col_major<T: TensorElement>(
 ///
 /// # Errors
 ///
-/// Returns an error when the data length does not match the logical dimension
-/// product (a shape mismatch) or the backend conversion fails.
+/// Returns an error when the shape product would overflow `usize`,
+/// when `data.len()` does not match the expected shape, or when the backend
+/// rejects the tensor.
 pub fn dense_native_tensor_from_col_major_owned<T: TensorElement>(
     data: Vec<T>,
     logical_dims: &[usize],
@@ -901,10 +951,67 @@ pub fn dense_native_tensor_from_col_major_owned<T: TensorElement>(
     T::dense_native_tensor_from_col_major_owned(data, logical_dims)
 }
 
+/// Borrow column-major data as a read-only native operand without copying.
+///
+/// The returned input owns nothing: it is a [`TensorRead`] view over `data`, so
+/// a shared operand (a frame matrix, a weight matrix) reaches an einsum as a
+/// borrowed read instead of a full-size copy. Use it with
+/// [`einsum_native_tensor_reads`] on the compatibility frontend, or
+/// [`NativeTensorReadInput::as_read`] to feed an explicit session's read route.
+///
+/// # Arguments
+///
+/// * `data` - Borrowed column-major values whose length equals the product of
+///   `logical_dims`.
+/// * `logical_dims` - Logical tensor dimensions in column-major axis order.
+///
+/// # Returns
+///
+/// A borrowed read input that stays valid for `data`'s lifetime.
+///
+/// # Errors
+///
+/// Returns an error when the shape product overflows `usize`, when `data.len()`
+/// does not match the expected shape, or when the view is rejected as invalid.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{
+///     dense_native_tensor_read_input_from_col_major, einsum_native_tensor_reads,
+/// };
+///
+/// let lhs = [1.0_f64, 2.0, 3.0, 4.0];
+/// let rhs = [5.0_f64, 6.0];
+/// let lhs = dense_native_tensor_read_input_from_col_major(&lhs, &[2, 2])?;
+/// let rhs = dense_native_tensor_read_input_from_col_major(&rhs, &[2, 1])?;
+/// let product = einsum_native_tensor_reads(
+///     &[(&lhs, &[0, 1]), (&rhs, &[1, 2])],
+///     &[0, 2],
+/// )?;
+/// assert_eq!(product.as_slice::<f64>()?, &[23.0, 34.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn dense_native_tensor_read_input_from_col_major<'a, T>(
+    data: &'a [T],
+    logical_dims: &[usize],
+) -> Result<NativeTensorReadInput<'a>>
+where
+    T: TensorElement,
+{
+    let view = tenferro::TypedTensorView::from_col_major(logical_dims, data)
+        .map_err(|error| anyhow!("native tensor view rejected: {error}"))?;
+    Ok(NativeTensorReadInput::Borrowed(TensorRead::from_view(
+        <T as TensorScalar>::tensor_view(view),
+    )))
+}
+
 /// Build a dense native tensor whose logical values are diagonal.
 /// # Errors
 ///
-/// Returns an error when the diagonal payload is incompatible with the logical rank (a shape mismatch) or the backend conversion fails.
+/// Returns an error when `logical_rank` is zero, when expanding the diagonal
+/// would overflow `usize`, or when the backend rejects the resulting dense
+/// tensor.
 pub fn diag_native_tensor_from_col_major<T: TensorElement>(
     data: &[T],
     logical_rank: usize,
@@ -913,94 +1020,132 @@ pub fn diag_native_tensor_from_col_major<T: TensorElement>(
 }
 
 /// Convert storage to a dense native tensor.
+///
+/// The native tensor keeps the storage's own scalar dtype: a compact `f32` or
+/// `Complex32` payload becomes an `f32`/`c32` native tensor instead of being
+/// widened to `f64`/`Complex64`.
 /// # Errors
 ///
-/// Returns an error when the storage cannot be converted to a native tensor (a scalar-kind mismatch or backend failure).
+/// Returns a [`BridgeError`] when materializing `storage` to the requested
+/// dense shape fails (for example a shape mismatch) or when the
+/// dense-to-native conversion fails.
 pub fn storage_to_native_tensor(
     storage: &Storage,
     logical_dims: &[usize],
 ) -> std::result::Result<NativeTensor, BridgeError> {
-    if storage.is_c64() {
-        dense_native_tensor_from_col_major(
-            &storage
-                .to_dense_c64_col_major_vec(logical_dims)
-                .map_err(|e| anyhow!("dense c64 materialization failed: {e}"))?,
+    storage_dtype_dispatch!(storage.dtype(), Payload => {
+        let values = <Payload as StorageScalar>::dense_values(storage, logical_dims)
+            .map_err(|error| anyhow!("dense payload materialization failed: {error}"))?;
+        <Payload as TensorElement>::dense_native_tensor_from_col_major_owned(
+            values,
             logical_dims,
         )
         .map_err(BridgeError::from)
-    } else {
-        dense_native_tensor_from_col_major(
-            &storage
-                .to_dense_f64_col_major_vec(logical_dims)
-                .map_err(|e| anyhow!("dense f64 materialization failed: {e}"))?,
-            logical_dims,
+    },
+    else Err(anyhow!("unsupported storage scalar type").into()))
+}
+
+/// Copy the compact payload as a native tensor of the stored dtype.
+///
+/// This visits only referenced payload entries and preserves the stored scalar
+/// dtype, so it is the dtype-generic payload bridge for compact storage.
+/// # Errors
+///
+/// Returns a [`BridgeError`] when the payload cannot be copied or the
+/// backend rejects the native tensor.
+pub fn storage_payload_native(storage: &Storage) -> std::result::Result<NativeTensor, BridgeError> {
+    storage_dtype_dispatch!(storage.dtype(), Payload => {
+        let values = <Payload as StorageScalar>::payload_vec(storage)
+            .map_err(|error| anyhow!("compact payload copy failed: {error}"))?;
+        native_tensor_from_vec(storage.payload_dims().to_vec(), values)
+    },
+    else Err(anyhow!("unsupported storage scalar type").into()))
+}
+
+/// Build structured storage from a native payload, preserving its dtype.
+///
+/// `output_payload_dims` and `output_axis_classes` describe the planned compact
+/// layout. The compact payload keeps the native tensor's scalar dtype, so a
+/// narrow contraction result stays narrow.
+/// # Errors
+///
+/// Returns a [`BridgeError`] when the payload shape does not match
+/// `output_payload_dims`, when its dtype has no compact storage representation,
+/// or when the storage metadata or payload read fails.
+pub fn storage_from_payload_native(
+    payload: NativeTensor,
+    output_payload_dims: &[usize],
+    output_axis_classes: Vec<usize>,
+) -> std::result::Result<Storage, BridgeError> {
+    if payload.shape() != output_payload_dims {
+        return Err(anyhow!(
+            "payload shape {:?} does not match planned payload dims {:?}",
+            payload.shape(),
+            output_payload_dims
         )
-        .map_err(BridgeError::from)
+        .into());
     }
+    let strides = crate::storage::col_major_strides(output_payload_dims)?;
+    storage_dtype_dispatch!(payload.dtype(), Payload => {
+        let values = native_slice::<Payload>(&payload, "failed to read structured payload")?.to_vec();
+        Storage::new_structured(
+            values,
+            output_payload_dims.to_vec(),
+            strides,
+            output_axis_classes,
+        )
+        .map_err(|error| anyhow!("structured payload storage construction failed: {error}").into())
+    },
+    else Err(anyhow!(
+        "unsupported structured payload dtype {:?}; expected a floating or complex floating dtype",
+        payload.dtype()
+    )
+    .into()))
 }
 
 /// Build a read-only native tensor input over the compact storage payload.
 ///
 /// Contiguous payloads are borrowed without copying. Non-contiguous payloads
-/// are materialized into an owned native tensor.
+/// are materialized into an owned native tensor. Both paths preserve the stored
+/// scalar dtype, so `f32`/`Complex32` payloads are served without widening.
 /// # Errors
 ///
-/// Returns an error when the storage payload cannot be read into a native buffer (a scalar-kind mismatch or backend failure).
+/// Returns a [`BridgeError`] when the storage dtype is not a floating or
+/// complex floating dtype, when the contiguous payload view cannot be built, or
+/// when the payload cannot be read into a native tensor.
 pub fn storage_payload_native_read_input(
     storage: &Storage,
 ) -> std::result::Result<NativeTensorReadInput<'_>, BridgeError> {
-    if storage.is_f64() {
-        if let Some(view) = storage
-            .payload_f64_col_major_view_if_contiguous()
+    storage_dtype_dispatch!(storage.dtype(), Payload => {
+        if let Some(view) = <Payload as StorageScalar>::payload_view(storage)
             .map_err(anyhow::Error::msg)?
         {
+            let typed = tenferro::TypedTensorView::from_col_major(storage.payload_dims(), view)
+                .map_err(|error| BridgeError::from(anyhow::Error::new(error)))?;
             return Ok(NativeTensorReadInput::Borrowed(TensorRead::from_view(
-                TensorView::f64(storage.payload_dims(), view)
-                    .map_err(|e| BridgeError::from(anyhow::Error::new(e)))?,
+                <Payload as TensorScalar>::tensor_view(typed),
             )));
         }
-        native_tensor_from_vec(
-            storage.payload_dims().to_vec(),
-            storage
-                .payload_f64_col_major_vec()
-                .map_err(anyhow::Error::msg)?,
-        )
-        .map(NativeTensorReadInput::Owned)
-    } else if storage.is_c64() {
-        if let Some(view) = storage
-            .payload_c64_col_major_view_if_contiguous()
-            .map_err(anyhow::Error::msg)?
-        {
-            return Ok(NativeTensorReadInput::Borrowed(TensorRead::from_view(
-                TensorView::c64(storage.payload_dims(), view)
-                    .map_err(|e| BridgeError::from(anyhow::Error::new(e)))?,
-            )));
-        }
-        native_tensor_from_vec(
-            storage.payload_dims().to_vec(),
-            storage
-                .payload_c64_col_major_vec()
-                .map_err(anyhow::Error::msg)?,
-        )
-        .map(NativeTensorReadInput::Owned)
-    } else {
-        Err(anyhow!("unsupported storage scalar type").into())
-    }
+        let values = <Payload as StorageScalar>::payload_vec(storage)
+            .map_err(|error| anyhow!("compact payload copy failed: {error}"))?;
+        native_tensor_from_vec(storage.payload_dims().to_vec(), values)
+            .map(NativeTensorReadInput::Owned)
+    },
+    else Err(anyhow!("unsupported storage scalar type").into()))
 }
 
 /// Materialize a native tensor into dense storage.
 /// # Errors
 ///
-/// Returns an error when the native tensor cannot be converted to storage (a scalar-kind mismatch or backend failure).
+/// Returns a [`BridgeError`] when the tensor has an external scalar kind, when
+/// reading its host slice fails, or when the dense storage materialization
+/// fails.
 pub fn native_tensor_primal_to_storage(
     tensor: &NativeTensor,
 ) -> std::result::Result<Storage, BridgeError> {
     match tensor.dtype() {
         DType::F32 => Storage::from_dense_col_major(
-            native_slice::<f32>(tensor, "failed to read f32 native tensor")?
-                .iter()
-                .map(|&value| value as f64)
-                .collect::<Vec<_>>(),
+            native_slice::<f32>(tensor, "failed to read f32 native tensor")?.to_vec(),
             tensor.shape(),
         )
         .map_err(|e| {
@@ -1054,10 +1199,7 @@ pub fn native_tensor_primal_to_storage(
             ))
         }),
         DType::C32 => Storage::from_dense_col_major(
-            native_slice::<Complex32>(tensor, "failed to read c32 native tensor")?
-                .iter()
-                .map(|&value| Complex64::new(value.re as f64, value.im as f64))
-                .collect::<Vec<_>>(),
+            native_slice::<Complex32>(tensor, "failed to read c32 native tensor")?.to_vec(),
             tensor.shape(),
         )
         .map_err(|e| {
@@ -1086,8 +1228,8 @@ pub fn native_tensor_primal_to_storage(
 /// Materialize dense column-major values from a native tensor.
 /// # Errors
 ///
-/// Returns an error when the native tensor cannot be materialized as a dense
-/// column-major buffer (a dtype mismatch or backend failure).
+/// Returns a [`BridgeError`] when `tensor`'s dtype does not match `T` or when
+/// its host data cannot be read.
 pub fn native_tensor_primal_to_dense_col_major<T: TensorElement>(
     tensor: &NativeTensor,
 ) -> std::result::Result<Vec<T>, BridgeError> {
@@ -1119,8 +1261,9 @@ pub fn native_tensor_primal_to_dense_col_major<T: TensorElement>(
 /// scalar type `T` selects the promoted target.
 /// # Errors
 ///
-/// Returns an error when the native tensor is not compatible with the scalar
-/// target (a dtype mismatch) or the materialization fails.
+/// Returns a [`BridgeError`] when the tensor's real/complex kind does not
+/// match `T`, when conversion to `T` fails, or when the tensor is not
+/// diagonal-compatible (rank 0 or unequal dimensions).
 ///
 /// # Examples
 /// ```
@@ -1160,7 +1303,9 @@ pub fn native_tensor_primal_to_diag<T: TensorElement>(
 /// Reshape a native tensor without changing its column-major linearization.
 /// # Errors
 ///
-/// Returns an error when the native tensor cannot be reshaped to the requested dimensions (a shape mismatch) or the backend fails.
+/// Fails with a `CpuExecutionContextError` when the default context's engine is
+/// already borrowed on this thread, or when the shape `logical_dims` and the
+/// element count of `tensor` do not match.
 pub fn reshape_col_major_native_tensor(
     tensor: &NativeTensor,
     logical_dims: &[usize],
@@ -1172,7 +1317,8 @@ pub fn reshape_col_major_native_tensor(
 /// Compute a QR decomposition on a native tensor.
 /// # Errors
 ///
-/// Returns an error when the QR factorization fails (a backend or non-convergence failure).
+/// Returns a [`BridgeError`] when the context rejects the entry or when
+/// the QR factorization fails.
 pub fn qr_native_tensor(
     tensor: &NativeTensor,
 ) -> std::result::Result<(NativeTensor, NativeTensor), BridgeError> {
@@ -1184,7 +1330,9 @@ pub fn qr_native_tensor(
 /// Compute an SVD on a native tensor.
 /// # Errors
 ///
-/// Returns an error when the SVD factorization fails (a backend or non-convergence failure).
+/// Fails with a `CpuExecutionContextError` when the default context's engine is
+/// already borrowed on this thread, or when the backend SVD reports a
+/// non-convergence failure.
 pub fn svd_native_tensor(
     tensor: &NativeTensor,
 ) -> Result<(NativeTensor, NativeTensor, NativeTensor)> {
@@ -1196,7 +1344,9 @@ pub fn svd_native_tensor(
 /// Sum all elements of a native tensor, returning a dynamic scalar.
 /// # Errors
 ///
-/// Returns an error when the native reduction fails (a backend or dtype mismatch failure).
+/// Returns a [`BridgeError`] when the backend reduction fails, when the
+/// reduced result cannot read back its host slice, or when the scalar cannot
+/// be wrapped as a [`BackendScalar`].
 pub fn sum_native_tensor(tensor: &NativeTensor) -> std::result::Result<BackendScalar, BridgeError> {
     let reduced = if tensor.shape().is_empty() {
         tensor
@@ -1221,7 +1371,9 @@ pub fn tangent_native_tensor(_tensor: &NativeTensor) -> Option<NativeTensor> {
 /// Multiply a native tensor by a dynamic scalar.
 /// # Errors
 ///
-/// Returns an error when the native scaling fails (a backend or dtype mismatch failure).
+/// Returns a [`BridgeError`] when `tensor` or `scalar` cannot be promoted to a
+/// common dtype, when the dtype is integer, bool, or external, or when the
+/// backend rejects the scaled tensor.
 pub fn scale_native_tensor(
     tensor: &NativeTensor,
     scalar: &BackendScalar,
@@ -1290,7 +1442,9 @@ pub fn scale_native_tensor(
 /// Compute `a * lhs + b * rhs`.
 /// # Errors
 ///
-/// Returns an error when the native axpby fails (a shape or dtype mismatch, or a backend failure).
+/// Returns a [`BridgeError`] when `lhs` and `rhs` have different shapes, when
+/// the operands cannot be promoted to a common dtype, when the dtype is
+/// integer, bool, or external, or when the backend rejects the result.
 pub fn axpby_native_tensor(
     lhs: &NativeTensor,
     a: &BackendScalar,
@@ -1594,6 +1748,172 @@ pub fn einsum_native_tensors(
     Ok(result)
 }
 
+/// Execute a cached einsum over borrowed native tensors using string subscripts.
+///
+/// This is the shared string-notation entry: it parses `subscripts` into the
+/// numeric labels that [`einsum_native_tensors`] consumes, checks that the
+/// equation describes exactly the supplied operands, and then delegates the
+/// contraction. Use it instead of re-implementing the parsing plus label
+/// mapping in each crate; use [`einsum_native_tensors`] directly when the
+/// labels are already numeric.
+///
+/// # Arguments
+///
+/// * `subscripts` - NumPy/PyTorch-style einsum notation such as `"ij,jk->ik"`
+///   or `"ii->"` for a trace. Parenthesized contraction order is rejected; see
+///   [`tenferro_einsum::Subscripts::parse`].
+/// * `operands` - One native tensor per comma-separated input term, in term
+///   order. Ranks must match the term lengths and repeated labels must have
+///   equal extents.
+///
+/// # Returns
+///
+/// The contracted native tensor in the promoted common dtype of the operands.
+///
+/// # Errors
+///
+/// Returns an error when the notation parser rejects `subscripts` as invalid
+/// notation, when the operand count does not match the number of comma-separated
+/// input terms, when an input term's label count does not match its operand
+/// rank, when repeated or contracted labels have incompatible shapes, or when
+/// dtype promotion or the backend contraction fails.
+///
+/// # Compatibility frontend
+///
+/// Like [`einsum_native_tensors`], this runs on the retained process-global
+/// (compatibility) frontend of
+/// [tensor4all-rs#859](https://github.com/tensor4all/tensor4all-rs/issues/859):
+/// it selects the default execution context and pays one graph dispatch per
+/// call. It is meant for cold or per-stage paths, not per-element hot loops;
+/// use [`CpuExecutionContext`](crate::CpuExecutionContext) sessions for those.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::einsum_native_subscripts;
+/// use tenferro::Tensor as NativeTensor;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+///
+/// // Column-major A = [[1, 2], [3, 4]] and B = [[5, 6], [7, 8]].
+/// let lhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
+/// let rhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0])?;
+/// let product = einsum_native_subscripts("ij,jk->ik", &[&lhs, &rhs])?;
+/// assert_eq!(product.shape(), &[2, 2]);
+/// assert_eq!(product.as_slice::<f64>()?, &[19.0, 43.0, 22.0, 50.0]);
+///
+/// let trace = einsum_native_subscripts("ii->", &[&lhs])?;
+/// assert_eq!(trace.as_slice::<f64>()?, &[5.0]);
+/// # Ok(())
+/// # }
+/// ```
+pub fn einsum_native_subscripts(
+    subscripts: &str,
+    operands: &[&NativeTensor],
+) -> Result<NativeTensor> {
+    let plan = NativeEinsumPlan::new(subscripts)?;
+    let reads = operands
+        .iter()
+        .map(|tensor| TensorRead::from_tensor(tensor))
+        .collect::<Vec<_>>();
+    plan.execute_reads(&reads)
+}
+
+/// A parsed einsum specification reusable across operand shapes and borrowed buffers.
+///
+/// The specification is parsed once; shape-specific owning execution plans are
+/// prepared and cached by the backend. This is the minimal parsed-plan bridge
+/// for <https://github.com/tensor4all/tensor4all-rs/issues/1065>.
+/// Unlike an operand-bound concrete plan, this specification accepts new shapes.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::NativeEinsumPlan;
+/// use tenferro_tensor::{Tensor, TensorRead};
+/// # fn main() -> anyhow::Result<()> {
+/// let plan = NativeEinsumPlan::new("i->")?;
+/// for (data, expected) in [(vec![1.0_f64, 2.0], 3.0), (vec![1.0, 2.0, 3.0], 6.0)] {
+///     let operand = Tensor::from_vec_col_major([data.len()], data)?;
+///     let sum = plan.execute_reads(&[TensorRead::from_tensor(&operand)])?;
+///     assert_eq!(sum.as_slice::<f64>()?, &[expected]);
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug)]
+pub struct NativeEinsumPlan {
+    spec: Arc<NativeEinsumSpec>,
+}
+
+impl NativeEinsumPlan {
+    /// Parse a fixed einsum expression without binding operand shapes or storage.
+    ///
+    /// The parse is shared per thread: a repeated call with the same expression string returns a
+    /// plan over the already parsed specification instead of re-parsing it, so the string form can
+    /// be called inside a loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid subscripts, such as a missing explicit output term.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::NativeEinsumPlan;
+    /// let error = NativeEinsumPlan::new("ij,jk").unwrap_err();
+    /// assert!(error.to_string().contains("invalid einsum subscripts"));
+    /// ```
+    pub fn new(subscripts: &str) -> Result<Self> {
+        Ok(Self {
+            spec: cached_native_einsum_spec(subscripts)?,
+        })
+    }
+
+    /// Execute the parsed expression on borrowed inputs without copying them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for empty inputs, operand-count or rank mismatches,
+    /// incompatible label extents, or a backend execution failure. Mixed dtypes
+    /// retain the promotion performed by the native einsum graph.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::NativeEinsumPlan;
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    /// # fn main() -> anyhow::Result<()> {
+    /// let plan = NativeEinsumPlan::new("i,i->")?;
+    /// let lhs = Tensor::from_vec_col_major([2], vec![1.0_f64, 2.0])?;
+    /// let rhs = Tensor::from_vec_col_major([2], vec![3.0_f64, 4.0])?;
+    /// let dot = plan.execute_reads(&[TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)])?;
+    /// assert_eq!(dot.as_slice::<f64>()?, &[11.0]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn execute_reads(&self, inputs: &[TensorRead<'_>]) -> Result<NativeTensor> {
+        ensure!(
+            self.spec.subscripts.inputs.len() == inputs.len(),
+            "einsum subscripts describe {} input term(s) but {} operand(s) were given",
+            self.spec.subscripts.inputs.len(),
+            inputs.len()
+        );
+        ensure!(
+            !inputs.is_empty(),
+            "native einsum requires at least one operand"
+        );
+        for (tensor, ids) in inputs.iter().zip(&self.spec.subscripts.inputs) {
+            ensure!(
+                tensor.shape().len() == ids.len(),
+                "einsum id list {:?} does not match tensor shape {:?}",
+                ids,
+                tensor.shape()
+            );
+        }
+        execute_native_einsum_reads(inputs, &self.spec.subscripts, &self.spec.einsum_subscripts)
+    }
+}
+
 /// Execute a cached einsum over read-only native tensor inputs.
 ///
 /// Backends consume borrowed host views inside their execution session. Mixed
@@ -1601,7 +1921,9 @@ pub fn einsum_native_tensors(
 /// non-contiguous operands remain borrowed until runtime execution.
 /// # Errors
 ///
-/// Returns an error when the native einsum fails (a shape or dtype mismatch, or a backend failure).
+/// Returns an error when `operands` is empty, when a tensor rank does not
+/// match its id list length, when a label is out of bounds for the supported
+/// range, or when the backend einsum fails.
 pub fn einsum_native_tensor_reads(
     operands: &[(&NativeTensorReadInput<'_>, &[usize])],
     output_ids: &[usize],
@@ -1636,7 +1958,8 @@ pub fn einsum_native_tensor_reads(
 /// Permute axes of a native tensor.
 /// # Errors
 ///
-/// Returns an error when the native permutation fails (a shape or index mismatch, or a backend failure).
+/// Returns a [`BridgeError`] when `perm` is not a permutation of `tensor`'s
+/// axes or when the backend transpose fails.
 pub fn permute_native_tensor(
     tensor: &NativeTensor,
     perm: &[usize],
@@ -1649,7 +1972,9 @@ pub fn permute_native_tensor(
 /// Contract two native tensors along matching axes.
 /// # Errors
 ///
-/// Returns an error when the native contraction fails (a shape or index mismatch, or a backend failure).
+/// Returns an error when `axes_a`/`axes_b` are out of bounds or have differing
+/// lengths, when the contracted dimensions do not match, or when the backend
+/// einsum fails.
 pub fn contract_native_tensor(
     lhs: &NativeTensor,
     axes_a: &[usize],
@@ -1671,7 +1996,7 @@ pub fn contract_native_tensor(
 /// Compute the outer product of two native tensors.
 /// # Errors
 ///
-/// Returns an error when the native outer product fails (a shared-index or shape mismatch, or a backend failure).
+/// Returns a [`BridgeError`] when the underlying einsum contraction fails.
 pub fn outer_product_native_tensor(
     lhs: &NativeTensor,
     rhs: &NativeTensor,
@@ -1682,7 +2007,9 @@ pub fn outer_product_native_tensor(
 /// Conjugate a native tensor.
 /// # Errors
 ///
-/// Returns an error when the native conjugation fails (a dtype mismatch or backend failure).
+/// Returns a [`BridgeError`] when the dtype is external, when duplicating a
+/// real tensor fails, or when the host slice of a complex tensor cannot be
+/// read.
 pub fn conj_native_tensor(tensor: &NativeTensor) -> std::result::Result<NativeTensor, BridgeError> {
     match tensor.dtype() {
         DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => tensor
@@ -1715,7 +2042,8 @@ pub fn conj_native_tensor(tensor: &NativeTensor) -> std::result::Result<NativeTe
 /// Permute storage by round-tripping through native tensors.
 /// # Errors
 ///
-/// Returns an error when the native storage permutation fails (a shape or index mismatch, or a backend failure).
+/// Returns a [`BridgeError`] when the storage-to-native conversion, the
+/// permutation, or the native-to-storage conversion fails.
 pub fn permute_storage_native(
     storage: &Storage,
     logical_dims: &[usize],
@@ -1729,7 +2057,8 @@ pub fn permute_storage_native(
 /// Contract storages via native tensors.
 /// # Errors
 ///
-/// Returns an error when the native storage contraction fails (a shape or index mismatch, or a backend failure).
+/// Returns a [`BridgeError`] when either storage-to-native conversion, the
+/// contraction, or the native-to-storage conversion fails.
 pub fn contract_storage_native(
     storage_a: &Storage,
     dims_a: &[usize],
@@ -1748,7 +2077,8 @@ pub fn contract_storage_native(
 /// Outer-product storages via native tensors.
 /// # Errors
 ///
-/// Returns an error when the native storage outer product fails (a shared-index or shape mismatch, or a backend failure).
+/// Returns a [`BridgeError`] when either storage-to-native conversion, the
+/// outer product, or the native-to-storage conversion fails.
 pub fn outer_product_storage_native(
     lhs: &Storage,
     lhs_dims: &[usize],
@@ -1765,7 +2095,8 @@ pub fn outer_product_storage_native(
 /// Scale storage by a scalar via native tensors.
 /// # Errors
 ///
-/// Returns an error when the native storage scaling fails (a dtype mismatch or backend failure).
+/// Returns a [`BridgeError`] when the storage-to-native conversion, the
+/// scaling, or the native-to-storage conversion fails.
 pub fn scale_storage_native(
     storage: &Storage,
     logical_dims: &[usize],
@@ -1779,7 +2110,8 @@ pub fn scale_storage_native(
 /// Compute `a * lhs + b * rhs` over storages via native tensors.
 /// # Errors
 ///
-/// Returns an error when the native storage axpby fails (a shape or dtype mismatch, or a backend failure).
+/// Returns a [`BridgeError`] when either storage-to-native conversion, the
+/// axpby, or the native-to-storage conversion fails.
 pub fn axpby_storage_native(
     lhs: &Storage,
     lhs_dims: &[usize],

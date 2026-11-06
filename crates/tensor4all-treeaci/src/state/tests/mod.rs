@@ -285,6 +285,7 @@ fn profile_high_rank_chain_phases_and_candidate_cache() {
                 Ok(())
             },
             &mut rng,
+            None,
         )
         .unwrap();
         let sweep_elapsed = sweep_started.elapsed();
@@ -571,6 +572,7 @@ fn profile_unequal_incident_bonds_at_coordination_four() {
                 Ok(())
             },
             &mut rng,
+            None,
         )
         .unwrap();
         let sweep_elapsed = sweep_started.elapsed();

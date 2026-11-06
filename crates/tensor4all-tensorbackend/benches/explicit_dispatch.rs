@@ -6,7 +6,8 @@
 //! * `compatibility` — the process-global convenience entry, one session entry per call;
 //! * `explicit_scoped` — `CpuExecutionContext::with_concrete_session`, one session entry per
 //!   call on a caller-supplied backend;
-//! * `explicit_held` — `explicit::HeldSession`, one session entry for the whole stage;
+//! * `explicit_session` — `explicit::Session::new` over a caller-owned kernel engine, one
+//!   borrow for the whole stage;
 //! * `bridge` — `explicit::lift` plus `explicit::detach`, the named tracking boundary, whose
 //!   cost is reported separately from the kernel numbers rather than counted as zero.
 //!
@@ -15,7 +16,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro::Tensor;
-use tenferro_cpu::CpuBackend;
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::{explicit, qr_native_tensor, CpuExecutionContext};
 
 /// Matrices per arm.
@@ -60,13 +61,11 @@ fn bench_qr(c: &mut Criterion) {
             });
         });
 
-        group.bench_with_input(BenchmarkId::new("explicit_held", size), &size, |b, _| {
-            let context = context();
-            let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-            let mut held = explicit::HeldSession::open(&backend).expect("held session");
-            black_box(held.with_session(|view| view.qr(&a)).expect("held QR"));
-            b.iter(|| black_box(held.with_session(|view| view.qr(&a)).expect("held QR")));
-            held.close().expect("affinity restores");
+        group.bench_with_input(BenchmarkId::new("explicit_session", size), &size, |b, _| {
+            let mut backend = CpuBackend::with_threads(1).expect("one-worker backend");
+            let mut session = explicit::Session::new(backend.engine_mut());
+            black_box(session.qr(&a).expect("session QR"));
+            b.iter(|| black_box(session.qr(&a).expect("session QR")));
         });
     }
 
@@ -79,14 +78,21 @@ fn bench_bridge(c: &mut Criterion) {
     for &size in SIZES {
         group.bench_with_input(BenchmarkId::new("lift_detach", size), &size, |b, _| {
             let context = context();
+            let mut engine = tenferro_cpu::CpuEngine::serial();
             black_box(
-                explicit::detach(&explicit::lift(&context, matrix(size)).expect("lift"))
-                    .expect("detach"),
+                explicit::detach(
+                    &explicit::lift(&context, matrix(size)).expect("lift"),
+                    &mut engine,
+                )
+                .expect("detach"),
             );
             b.iter(|| {
                 black_box(
-                    explicit::detach(&explicit::lift(&context, matrix(size)).expect("lift"))
-                        .expect("detach"),
+                    explicit::detach(
+                        &explicit::lift(&context, matrix(size)).expect("lift"),
+                        &mut engine,
+                    )
+                    .expect("detach"),
                 )
             });
         });

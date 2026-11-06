@@ -493,12 +493,11 @@ struct HermitianRitzState {
 /// # Returns
 /// The lowest Ritz eigenpair and the true residual norm.
 /// # Errors
-/// Returns an error when the operator is not Hermitian-compatible (a shape
-/// mismatch or a [`KrylovError::NonHermitian`] projection failure), when the
-/// options are invalid (a [`KrylovError::InvalidOptions`]), when the initial
-/// vector is numerically zero (a [`KrylovError::ZeroInitialVector`]), or when
-/// an underlying tensor or backend operation fails (a
-/// [`KrylovError::Operation`]). Non-convergence is reported through
+/// Returns [`KrylovError::NonHermitian`] when the projected operator is not
+/// Hermitian, [`KrylovError::InvalidOptions`] when an option is invalid,
+/// [`KrylovError::ZeroInitialVector`] when `initial` is numerically zero, and
+/// [`KrylovError::Operation`] when an operator application or backend call
+/// fails. Non-convergence is reported through
 /// [`HermitianLanczosResult::converged`] and does not produce an error.
 /// # Examples
 /// ```
@@ -645,12 +644,11 @@ where
 /// # Returns
 /// A [`HermitianKrylovExpmResult`] containing the evolved vector and diagnostics.
 /// # Errors
-/// Returns an error when the operator is not Hermitian-compatible (a shape
-/// mismatch or a [`KrylovError::NonHermitian`] projection failure), when the
-/// options are invalid (a [`KrylovError::InvalidOptions`]), when the initial
-/// vector is numerically zero (a [`KrylovError::ZeroInitialVector`]), or when
-/// an underlying tensor or backend operation fails (a
-/// [`KrylovError::Operation`]). Non-convergence is reported through
+/// Returns [`KrylovError::NonHermitian`] when the projected operator is not
+/// Hermitian, [`KrylovError::InvalidOptions`] when an option is invalid,
+/// [`KrylovError::ZeroInitialVector`] when `initial` is numerically zero, and
+/// [`KrylovError::Operation`] when an operator application or backend call
+/// fails. Non-convergence is reported through
 /// [`HermitianKrylovExpmResult::converged`] and does not produce an error.
 /// # Examples
 /// ```
@@ -1011,12 +1009,11 @@ where
 /// coefficients are applied in the projected Hessenberg problem, matching
 /// KrylovKit's affine linear-solve convention.
 /// # Errors
-/// Returns an error when the operator and vectors have incompatible shapes (a
-/// shape mismatch), when the affine coefficients are all zero (a
-/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
-/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
-/// Non-convergence is reported through the result's `converged` flag and does
-/// not produce an error.
+/// Returns [`KrylovError::InvalidOptions`] when an option is invalid,
+/// [`KrylovError::NoAffineCoefficient`] when both affine coefficients are zero,
+/// and [`KrylovError::Operation`] when the operator application, vector-space
+/// arithmetic, or a backend call fails. Non-convergence is reported through the
+/// result's `converged` flag and does not produce an error.
 ///
 pub fn gmres_affine<T, F>(
     apply_a: F,
@@ -1048,12 +1045,11 @@ where
 /// KrylovKit's `linsolve(operator, b, a0, a1)` algorithm and avoids changing the
 /// Krylov basis when affine coefficients are present.
 /// # Errors
-/// Returns an error when the operator and vectors have incompatible shapes (a
-/// shape mismatch), when the affine coefficients are all zero (a
-/// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
-/// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
-/// Non-convergence is reported through the result's `converged` flag and does
-/// not produce an error.
+/// Returns [`KrylovError::InvalidOptions`] when an option is invalid,
+/// [`KrylovError::NoAffineCoefficient`] when both affine coefficients are zero,
+/// and [`KrylovError::Operation`] when the operator application, vector-space
+/// arithmetic, or a backend call fails. Non-convergence is reported through the
+/// result's `converged` flag and does not produce an error.
 ///
 pub fn gmres_affine_with_absolute_tolerance<T, F>(
     apply_a: F,

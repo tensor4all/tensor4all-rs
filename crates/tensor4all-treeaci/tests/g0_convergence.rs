@@ -1,5 +1,4 @@
-#[path = "support/g0.rs"]
-mod g0;
+use crate::g0;
 
 use num_complex::Complex64;
 use tensor4all_core::IdxTensor;

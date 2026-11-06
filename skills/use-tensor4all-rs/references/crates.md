@@ -23,10 +23,14 @@ Indices, dynamic-rank tensors, contraction, factorization. Most other crates re-
 - `factorize(&t, &[left_indices], &opts) -> FactorizeResult { left, right, rank, singular_values }`.
   - `FactorizeOptions::svd().with_svd_policy(SvdTruncationPolicy::new(rtol))` / `.with_max_bond_dim(n)`.
   - `FactorizeOptions::qr().with_qr_rtol(tol)` / `.with_max_bond_dim(n)`.
+  - `FactorizeOptions::rsvd(rank)` / `factorize_with_rng(..., rng)` — fixed-rank
+    dense RSVD; explicit SVD threshold policies return `UnsupportedTruncationPolicy`.
+  - `randomized_range` / `randomized_svd` — caller-RNG Gaussian basis/SVD for
+    `f64` and `Complex64`; `f32`/`Complex32` are unsupported. See the [randomized factorization guide](https://tensor4all.org/tensor4all-rs/guides/randomized-factorization.html).
 
 ## tensor4all-simplett — lightweight TT/MPS
 
-Plain generic tensor train (`f32`, `f64`, `Complex32`, or `Complex64` where the selected operations support the dtype); no named indices needed. The go-to for numerics.
+Plain generic tensor train (`f32`, `f64`, `Complex32`, or `Complex64` where the selected operations support the dtype); no named indices needed. Being retired in favour of `TreeTN`: use it where an API still produces or requires it (TCI, quantics TCI/transforms), not for new code.
 
 - `SimpleTensorTrain::<f64>` / `::<Complex64>` — chain of 3-leg cores.
   - `SimpleTensorTrain::constant(&[dims], val)`, `::zeros(&[dims])`.
@@ -65,14 +69,14 @@ Direct cross interpolation on integer indices. TCI2 is the primary algorithm; TC
 
 ## tensor4all-core — caching + multi-index plumbing (TCI substrate, ex-tensor4all-tcicore)
 
-Shared interpolation plumbing includes `CachedFunction`, `MultiIndex`, packed assignment keys, and floating-zone searches. Prefer the higher-level interpolation crates for complete algorithms. `MultiIndex` is re-exported from `tensor4all-partitionedtt`.
+Shared interpolation plumbing includes `CachedFunction`, `MultiIndex`, packed assignment keys, and floating-zone searches. Prefer the higher-level interpolation crates for complete algorithms. `MultiIndex` is re-exported from `tensor4all-core` (and from `tensor4all-simplett` / `tensor4all-treetci`).
 
 - `CachedFunction::new(f, &local_dims)` — memoize expensive evaluations across sweeps. `.eval(&idx)`, `.cache_size()`, `.num_cache_hits()`. Worth it only when `f` is expensive; cheap functions lose to overhead.
-- `MultiIndex` = `Vec<usize>`, the coordinate type threaded through `tensorci` and `partitionedtt` callbacks.
+- `MultiIndex` = `Vec<usize>`, the coordinate type threaded through `tensorci` and `treetci` callbacks.
 - `index_key::IndexKey::owned_heap_bytes()` reports the key's owned heap payload, including spare dynamic-limb capacity; excludes its inline struct and allocator metadata. Use this when estimating a cache containing packed assignment keys.
 - `floating_zone_walk_with_initial_error` reuses a previously evaluated starting residual, then follows the same scan order and stopping rule as `floating_zone_walk`. Its typed `FloatingZoneError` distinguishes invalid dimensions, starts, residuals, or stopping tolerances from callback failures. This avoids evaluating a batched guard start a second time.
 
-Do **not** depend on `tensor4all-tensorbackend` — it is internal (storage + linalg wrappers); use the public crates and never instantiate `CpuBackend` directly.
+`tensor4all-tensorbackend` is low-level infrastructure (`Matrix`, `CpuExecutionContext`, storage + linalg wrappers); prefer the higher-level crates and depend on it directly only for those building blocks.
 
 ## tensor4all-treeaci — native tree elementwise approximation
 
@@ -119,7 +123,7 @@ Every constructor returns a `LinearOperator` (from `tensor4all-treetn`). All use
 Generic `TreeTN` over arbitrary tree topology (TT/MPS is the path-graph special case).
 
 - `TreeTN::<IdxTensor, V>::from_tensors(tensors, labels) -> Result` — topology inferred from shared bond indices; site indices appear once, bond indices appear twice. `V: Eq + Hash` labels vertices.
-- `.node_count()`, `.edge_count()`, `ttn[v]` access, `.norm()`, `.to_dense()` (test/small only), `.add(&b)` (same topology + matching site indices; bonds grow as direct sum), `.replaceind(&old, &new)`.
+- `.node_count()`, `.edge_count()`, `ttn[v]` access, `.norm()`, `.to_dense()` (test/small only), `.add(&b)` (same topology + matching site indices; bonds grow as direct sum), `TreeTN::exact_sum(&[&a, &b, &c], SumEngine)` (exact sum of many networks; default `Binary` add chain, opt-in `Nary` / `NaryWithin { limit_bytes }` one-pass direct sum, result reports `used_nary`), `TreeTN::add_many(&[&a, &b, &c])` (the N-ary pass itself), `.replaceind(&old, &new)`.
 - `.canonicalize([root], CanonicalizationOptions)`, `.truncate([root], TruncationOptions::default().with_max_bond_dim(n).with_rtol(t))`.
 - `apply_linear_operator(&op, &state, ApplyOptions)`:
   - `ApplyOptions::naive()` — local exact, no truncation; bond dims grow as products. Small/debug only.
@@ -171,26 +175,58 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
 - `Projector` — maps full `DynIndex` identities to zero-based coordinates.
 - `SubDomainTreeTN<V>` — eagerly masked TreeTN plus its projector.
 - `PartitionedTreeTN<V>` — homogeneous, pairwise-disjoint patches.
-- `PatchingOptions { cutoff, max_bond_dim, patch_order, split_strategy }` —
-  `cutoff` is a local discarded-weight cutoff (ITensorMPS convention): each
-  patch gets absolute threshold `cutoff · ‖F‖² · volume_p/total_volume`,
-  applied whole per local SVD, best effort (no global error bound).
+  `contract_selected(&other, &center, options, &wanted)` forms only the output
+  projectors in `wanted` and never contracts the pairs of other outputs; each
+  returned patch equals the one `contract` returns under that key.
+  `contract`/`contract_selected` take `impl Into<PartitionedContractionOptions>`
+  (a plain treetn `ContractionOptions` works and means `SumEngine::Binary`);
+  `PartitionedContractionOptions::sum_engine` chooses how contributions to one
+  output projector are summed (`Binary` default, opt-in `Nary` /
+  `NaryWithin { limit_bytes }`). `to_treetn_with(engine) -> ExactSum` reports
+  `used_nary` and `estimated_nary_bytes`; `to_treetn()` is `Binary`.
+- `PatchingOptions { cutoff, allocation, max_bond_dim, patch_order,
+  split_strategy, sum_engine }` — `sum_engine` (default `Binary`) builds the
+  equal-key and contribution sums of `add_with_patching` / `contract_adaptive`;
+  `cutoff` is a non-negative discarded-weight budget shared
+  across patches (ITensorMPS `cutoff` convention), not an SVD truncation-policy
+  knob, and best effort (no global error bound). `allocation:
+  BudgetAllocation` selects how it is spread: `Volume` (default) gives each
+  patch the absolute threshold `cutoff · ‖F‖² · volume_p/total_volume`, applied
+  whole per local SVD, and drops a patch whose squared norm is at most its
+  threshold; `Norm` applies the relative squared tail-sum cutoff `cutoff` at
+  every local SVD (the ITensor-style relative `TreeTN::truncate` rule), never
+  drops a nonzero patch, and inherits no absolute budget to projected children.
+  `BudgetAllocation` is `#[non_exhaustive]`.
 - `PatchSplitStrategy::{Sequential, ExactParameterGain}` — exact gain uses
   checked logical local tensor element counts after child truncation.
 - `add_with_patching(patches, &center, &options)` — split over-cap patches.
 - `adaptive_interpolation::patched_interpolate(&engine, topology, node_sites,
-  initial_pivots, evaluate, &PatchedInterpolationOptions)` — sequential tree
-  pQTCI. `evaluate` receives a column-major `[n_sites, n_points]` batch of
-  0-based full-domain points in the derived site order (nodes ascending, each
-  node's sites in order). An unaccepted patch splits at the next site of the
+  initial_pivots, &mut ctx, evaluate, &PatchedInterpolationOptions)` —
+  sequential tree pQTCI. `ctx` is the run's `EvalContext` over a session the
+  caller entered (`tensor4all_treetn::interpolation::EvalContext::new`); every
+  numerical stage runs on that session, and the result is published as compact
+  host storage. Two fan-out entries run the same driver:
+  `patched_interpolate_on_lanes(&mut lanes, ...)` takes a
+  `hataori_tenferro::TenferroLanes` and an `Fn + Sync` evaluator (each patch runs
+  in the lane's child session; the root wave and waves smaller than the lane
+  count run one patch at a time), and `patched_interpolate_mpi(&world, &mut
+  lanes, root, ...)` (features `hataori-mpi` / `hataori-mpi-rsmpi-rt`)
+  distributes waves over ranks through `hataori::pmap_lanes`, returning
+  `Option<result>` (`Some` on the root only). `evaluate` receives a column-major `[n_sites, n_points]`
+  batch of 0-based full-domain points in the derived site order (nodes
+  ascending, each node's sites in order) and the same context. An unaccepted patch splits at the next site of the
   (partial) `patch_order`. `PatchedInterpolationOptions::new(max_bond_dim)`
   (at least 2) plus `with_*` builders: `error_norm` (crate-root `ErrorNorm`;
   default `ErrorNorm::L2 { reference: L2Reference::Required }`), `tolerance`
   (`ErrorTolerance { rtol, atol }`, default `1e-8`, `0`), `verification`
   (`VerificationOptions`: `samples` 64, `max_exhaustive_points` 1024,
-  `retries` 1, `audit` true), `n_initial_pivots` (5), `recycle_pivots`
+  `retries` 1, `audit` true, `estimator`
+  (`L2Estimator::ResidualTt` by default, or `UniformMonteCarlo`),
+  `residual_bond_ratio` 0.25, `residual_bond_floor` 4), `variables` (empty;
+  sites of each variable for the residual estimator's corner and edge
+  starts), `n_initial_pivots` (5), `recycle_pivots`
   (false), `cache_candidates` (false; children also start from their
-  largest cached values, a partial corner-miss mitigation), `seed` (0;
+  largest cached values, a partial uniform-sampling mitigation), `seed` (0;
   per-patch streams, no `&mut R` API), `max_patches`,
   `min_patch_bits` (`None`; generalized bits = active sites, any dimension;
   a blocked failing patch is retained as `PatchStatus::ToleranceNotMet`),
@@ -199,28 +235,37 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   Under L2 pass `ErrorNorm::l2(L2Reference::Given(l2_norm_of_f))` (an L2 norm,
   not `max |f|`), or `rtol = 0` with `atol`; `L2Reference::MonteCarlo` is an
   opt-in estimate. The driver measures every accepted and zero patch
-  (exhaustive up to `max_exhaustive_points`, else sampled plus audit) and
+  (exhaustive up to `max_exhaustive_points`, else estimated with
+  `verification.estimator` and audited) and
   reports `report.norm` (`NormReport::L2 { tau, error: L2ErrorReport { global:
   GlobalL2Error::{Certified, Audited, AcceptanceOnly, ToleranceNotMet}, ..
   }, .. }`): `Certified` bounds the error and states that every patch met
   its allowance, only up to a calibrated (not proven) rounding model;
   `ToleranceNotMet` (a retained patch missed its allowance; check
   `report.tolerance_met()`) still bounds the error with an
-  `ExactOrExhaustive` basis but is never certified; a sampled run is an estimate only with the audit on, otherwise
-  acceptance-only (neither a bound nor an estimate). Known limitation:
-  sampled acceptance and the audit can both miss a localized feature that
-  enters a patch only through a corner or an edge, and the audit's standard
-  error does not reveal it, so an `Audited` error can be orders of magnitude
-  too small; only `Certified` (exact or exhaustive) is a guarantee. `ErrorNorm::sampled_max()` /
+  `ExactOrExhaustive` basis but is never certified; a non-exact run is an estimate only with the audit on, otherwise
+  acceptance-only (neither a bound nor an estimate). The default
+  `ResidualTt` estimator interpolates the residual from the patch corners and
+  edges; `UniformMonteCarlo` samples uniformly and can miss a localized
+  feature that enters a patch only through a corner or an edge, with an audit
+  standard error that does not reveal it, so an `Audited` error can be orders
+  of magnitude too small. Only `Certified` (exact or exhaustive) is a
+  guarantee. `ErrorNorm::sampled_max()` /
   `sampled_max_with_reference(max_abs)` keep the M2 engine criterion (no
   certified bound, no measured error, no L2 claim). `MaxAbs`/`WeightedL2` are placeholders
   (`UnsupportedNorm`). Zero patches are in `report.zero_patches` (absent from
   the partition); supply pivots in the support of sparse functions. Patches
   with at most one free site are exact; every point is evaluated at most once.
-- `truncate_adaptive(&partition, &center, cutoff, max_bond_dim)` — assign
-  volume-proportional absolute local cutoffs and drop patches at/below theirs.
+- `truncate_adaptive(&partition, &center, cutoff, allocation, max_bond_dim)` —
+  apply the selected allocation; `Volume` assigns volume-proportional absolute
+  local cutoffs and drops patches at/below theirs, `Norm` truncates every patch
+  relative to itself.
 - `contract_adaptive(&left, &right, &center, &contract_options, &patching_options)` —
   contract and retruncate against the corrected output norm.
+  `contract_adaptive_selected(..., &wanted)` forms only the wanted output
+  projectors (split outputs refine a wanted key); its `Volume` budget uses the
+  totals of the selected outputs, so a block can be truncated differently than
+  in the full call.
 - `reconstruction::ReconstructionTarget::from_partition(&partition)` — immutable
   disjoint-patch target with a pinned L2 norm. `from_tensor_products(pairs)`
   accepts independent factor pairs on the same named topology, keeps them
@@ -261,10 +306,12 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   `MergeRefineOptions::output_depth` stops early; `None` refines every selected
   bit. `target_bond_dim` is a soft rank goal: `None` keeps the trajectory uniform
   and exact, and `Some(goal)` makes it adaptive, refining a region only when that
-  lowers its maximum retained rank and combining a merged pair only when combining
-  pays off (otherwise both operands stay as separate terms). A truncation is
+  lowers its maximum retained rank. A region that stops refining keeps its output
+  key and still merges its input siblings on the remaining levels, and a merged
+  pair is combined when it fits the goal or lowers the bond dimension (otherwise
+  both operands stay as separate terms). A truncation is
   accepted only when it strictly lowers the bond dimension and its measured
-  residual fits an equal share of the allowance, so the measured `error_bound`
+  residual fits its level's share of the allowance, so the measured `error_bound`
   never exceeds the allowance. A contribution is dropped only when its measured norm
   fits its share, reported through `dropped_terms`/`dropped_error`, and exceeding
   `max_terms` returns a resource-limit error. `coordinate_groups` supplies several
@@ -287,41 +334,14 @@ All truncating and contracting operations require an explicit existing node name
 as `center`. Reconstruction remasks compressed candidates to preserve exact
 support zeros. No production path materializes a full network densely.
 
-## tensor4all-partitionedtt — legacy subdomain patches + adaptive TCI
+## (removed) tensor4all-partitionedtt
 
-This crate is deprecated during migration. Use `tensor4all-partitionedtreetn`
-for new named TreeTN work. It remains buildable and receives correctness and
-security fixes only; no removal date is set.
-
-Split a function's domain into non-overlapping projected patches, each its own TT. Use when a function is low-rank only after fixing some site indices. Re-exports `DynIndex`, `IdxTensor`, `MultiIndex`, `SimpleTensorTrain`, `ContractOptions`/`TruncateOptions`, `TCI2Options` — get them here rather than reaching into core internals.
-
-- `Projector` — maps site `DynIndex` → fixed coordinate, defining a subdomain.
-  - `Projector::new()`, `Projector::from_pairs([(idx, value), ...])?`.
-  - `.get(&idx) -> Option<usize>`, `.is_projected_at(&idx)`, `.insert(idx, value)?`, `.projected_indices()`, `.len()`, `.is_empty()`.
-- `SubDomainTT` — an itensorlike `TensorTrain` plus its `Projector`.
-  - `SubDomainTT::new(tt, projector)?`, `SubDomainTT::from_tt(tt)` (empty projector).
-  - `.data()`, `.projector()`, `.max_bond_dim()`, `.into_data()`, `.all_indices()`.
-- `PartitionedTT` — collection of mutually disjoint `SubDomainTT`s (disjointness validated at construction and insertion).
-  - `PartitionedTT::from_subdomains(vec)?`, `::from_subdomain(one)?`, `::new()`.
-  - `.len()`, `.is_empty()`, `.projectors()`, `.iter()`, `.values()`, `.contains(&projector)`.
-  - `.to_tensor_train() -> Result<SimpleTensorTrain>` — recombine all patches into one TT (drops the partition structure).
-  - `.contract(&other, &ContractOptions)?` (also free `contract` / `proj_contract`).
-- Adaptive patching — bond-cap-driven splitting plus volume-proportional truncation:
-  - `add_with_patching(subdomains: Vec<SubDomainTT>, &PatchingOptions) -> Result<PartitionedTT>` — split over-cap patches along `patch_order`, then truncate.
-  - `contract_adaptive(&left, &right, &ContractOptions, &PatchingOptions) -> Result<PartitionedTT>`.
-  - `truncate_adaptive(&PartitionedTT, rtol, max_bond_dim) -> Result<PartitionedTT>` — total budget `rtol²·‖F‖²` shared by patch volume; patches at/below their budget are dropped.
-  - `PatchingOptions { rtol: 1e-12, max_bond_dim: 100, patch_order: Vec<DynIndex>, split_strategy: ExactParameterGain }`.
-  - `PatchSplitStrategy::{Sequential, ExactParameterGain (default)}` — `ExactParameterGain` forms + counts child cores to pick the smallest split; `Sequential` takes the first unprojected `patch_order` index.
-- Adaptive TCI interpolation — ports TCIAlgorithms.jl `adaptiveinterpolate` / `createpatch` / `_globalpivots`:
-  - `adaptiveinterpolate::<T, F, B>(f, batched_f: Option<B>, site_indices: Vec<DynIndex>, initial_pivots: Vec<MultiIndex>, AdaptiveInterpolateOptions) -> Result<AdaptiveInterpolationResult<T>>`; use `.partitioned_tt()` and `.patch_caches()`.
-  - Default feature `adaptive-hataori-rayon` provides `adaptiveinterpolate_in(&Domain, ...)` with `LocalMode::Outer`; `adaptive-hataori-mpi` is default-off and provides collective `adaptiveinterpolate_mpi`.
-    - `f: &MultiIndex -> T` receives one **full, 0-based** multi-index (tensorci territory, not quanticstci).
-    - `batched_f: Option<B>` with `B: Fn(&[MultiIndex]) -> Vec<T>` — same function, batched; pass `None` when batching is unavailable.
-    - `initial_pivots` — full-domain, 0-based; empty allowed.
-  - `AdaptiveInterpolateOptions { tci_options: TCI2Options, patch_order: Vec<DynIndex>, n_initial_pivots: 5, recycle_pivots: false }`. Empty `patch_order` ⇒ site order; nonempty must be an exact full-`Index` permutation of `site_indices`.
-  - Flow: run TCI2 per patch on the active (unprojected) sites; **accept** only when `TCI2Termination::Converged` **and** final error ≤ `tci_options.tolerance`; otherwise split at the next `patch_order` index into one child per coordinate. Patches with 0/1 active sites are evaluated exactly. Reaching `max_bond_dim`/`max_iter` is a stop, not convergence — such a patch is split.
-  - `recycle_pivots = true` seeds children with a rejected parent's diagonal TCI pivots (opt-in; incompatible pivots discarded; every child is still replenished to `n_initial_pivots`).
-  - Sampled-zero policy: if every candidate evaluates below `1e-30` the patch is stored as zero — supply known-nonzero pivots for sparse functions.
+The legacy positional-TT crate was removed in #915 D3 (settling #825). Use
+`tensor4all-partitionedtreetn` above; the
+[Partitioned TreeTN guide](../../../docs/book/src/guides/partitioned-treetn.md)
+has the entry-point mapping (`PartitionedTT` -> `PartitionedTreeTN`,
+`adaptiveinterpolate` -> `adaptive_interpolation::patched_interpolate`,
+`rtol` -> `cutoff = rtol²`).
 
 ## tensor4all-hdf5 — ITensors.jl-compatible I/O
 
@@ -332,3 +352,10 @@ Split a function's domain into non-overlapping projected patches, each its own T
 ## tensor4all-capi — C FFI
 
 Status enum `t4a_status_code` with `T4A_` prefix (`T4A_SUCCESS`, `T4A_NULL_POINTER`, `T4A_INTERNAL_ERROR`). Header `crates/tensor4all-capi/include/tensor4all_capi.h` regenerated with `cbindgen`. See `docs/CAPI_DESIGN.md`. Wrapped by Tensor4all.jl. Not for direct Rust use.
+
+## tensor4all-treersi — experimental tree RSI products
+
+- `hadamard_many_in::<T, V>` computes a simultaneous Hadamard product in the inputs’ CPU execution context. `hadamard_many_with_rng_in` accepts a caller-owned RNG.
+- `TreeRsiOptions` requires a positive `max_bond_dim` or `sketch_dim`. `rel_tol` controls local pivots, not global accuracy.
+- Validate actual products on a small dense oracle or held-out batched points; errors and nonfinite results must fail acceptance. No arbitrary nonlinear or reciprocal API.
+- [Guide](../../../docs/book/src/guides/tree-rsi.md), [runnable example](../../../crates/tensor4all-treersi/examples/validated_product.rs).

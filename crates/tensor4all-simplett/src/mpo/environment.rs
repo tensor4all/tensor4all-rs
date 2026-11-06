@@ -19,6 +19,21 @@ pub(crate) fn mpo_helper_error(context: &str, err: impl std::fmt::Display) -> MP
     }
 }
 
+/// Check that `site` names a site of an MPO with `len` sites.
+fn validate_environment_site(len: usize, site: usize) -> Result<()> {
+    let Some(max) = len.checked_sub(1) else {
+        return Err(MPOError::Empty);
+    };
+    if site > max {
+        return Err(MPOError::IndexOutOfBounds {
+            site,
+            index: site,
+            max,
+        });
+    }
+    Ok(())
+}
+
 /// Contract two 4D site tensors over their shared physical index
 ///
 /// Given two 4D tensors:
@@ -31,8 +46,9 @@ pub(crate) fn mpo_helper_error(context: &str, err: impl std::fmt::Display) -> MP
 /// This is the Rust equivalent of `_contractsitetensors` from Julia.
 /// # Errors
 ///
-/// Returns an error when the site tensors are incompatible (a shape or index
-/// /// mismatch) or the contraction fails (a backend failure).
+/// Returns [`MPOError::SharedDimensionMismatch`] when the shared physical
+/// dimensions disagree, or [`MPOError::InvalidOperation`] when the einsum
+/// contraction or reshape fails.
 ///
 pub fn contract_site_tensors<T: SVDScalar + EinsumScalar>(
     a: &Tensor4<T>,
@@ -89,8 +105,11 @@ where
 /// contraction from the left.
 /// # Errors
 ///
-/// Returns an error when the environment construction fails (a shape or index
-/// /// mismatch, or a backend failure).
+/// Returns [`MPOError::LengthMismatch`] when the MPOs have different lengths,
+/// [`MPOError::Empty`] when they have no sites,
+/// [`MPOError::IndexOutOfBounds`] when `site` is not in `0..mpo_a.len()`, and
+/// another error when the environment construction fails (a shared-dimension
+/// mismatch or a backend failure).
 ///
 pub fn left_environment<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,
@@ -107,10 +126,11 @@ where
             got: mpo_b.len(),
         });
     }
+    validate_environment_site(mpo_a.len(), site)?;
 
     // Base case: left of site 0 is just [[1]]
     if site == 0 {
-        let mut env: Matrix2<T> = matrix2_zeros(1, 1);
+        let mut env: Matrix2<T> = matrix2_zeros(1, 1)?;
         env[[0, 0]] = T::one();
         return Ok(env);
     }
@@ -168,8 +188,11 @@ where
 /// contraction from the right.
 /// # Errors
 ///
-/// Returns an error when the environment construction fails (a shape or index
-/// /// mismatch, or a backend failure).
+/// Returns [`MPOError::LengthMismatch`] when the MPOs have different lengths,
+/// [`MPOError::Empty`] when they have no sites,
+/// [`MPOError::IndexOutOfBounds`] when `site` is not in `0..mpo_a.len()`, and
+/// another error when the environment construction fails (a shared-dimension
+/// mismatch or a backend failure).
 ///
 pub fn right_environment<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,
@@ -188,10 +211,11 @@ where
     }
 
     let n = mpo_a.len();
+    validate_environment_site(n, site)?;
 
     // Base case: right of last site is just [[1]]
     if site == n - 1 {
-        let mut env: Matrix2<T> = matrix2_zeros(1, 1);
+        let mut env: Matrix2<T> = matrix2_zeros(1, 1)?;
         env[[0, 0]] = T::one();
         return Ok(env);
     }

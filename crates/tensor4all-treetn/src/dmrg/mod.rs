@@ -732,8 +732,12 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the solve or sweep fails (a shape or index
-/// /// mismatch, a non-convergence failure, or a backend failure).
+/// Returns [`DmrgError::Algorithm`] when building the [`LinearOperator`] from
+/// `operator` and `init` fails, and otherwise propagates [`dmrg`]'s errors:
+/// [`DmrgError::UnsupportedNsite`], [`DmrgError::InvalidOption`],
+/// [`DmrgError::MissingCenter`], [`DmrgError::EmptyTwoSiteSweep`],
+/// [`DmrgError::TopologyMismatch`], the site-mapping errors, and the numerical
+/// failures.
 ///
 /// # Examples
 /// ```
@@ -850,22 +854,4 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn checked_real_scalar_rejects_significant_imaginary_part() {
-        let error = checked_real_scalar(&AnyScalar::new_complex(1.25, 0.5), 1.0e-3, "test scalar")
-            .unwrap_err();
-
-        assert!(matches!(
-            error,
-            DmrgError::NonRealScalar {
-                context: "test scalar",
-                real: 1.25,
-                imag: 0.5,
-                tolerance: 1.0e-3,
-            }
-        ));
-    }
-}
+mod tests;

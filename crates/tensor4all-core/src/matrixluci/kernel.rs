@@ -1,9 +1,9 @@
 //! Pivot-kernel traits.
 //!
 //! The [`PivotKernel`] trait abstracts pivot selection strategies.
-//! Implementations include [`DenseLuKernel`](super::DenseLuKernel)
+//! Implementations include [`DenseLuKernel`](super::dense::DenseLuKernel)
 //! (dense full-pivoting LU through the configured tensor backend) and
-//! [`LazyBlockRookKernel`](super::LazyBlockRookKernel) (residual-based
+//! [`LazyBlockRookKernel`](super::block_rook::LazyBlockRookKernel) (residual-based
 //! rook search for lazy sources).
 
 use crate::matrixluci::scalar::MatrixLuciScalar;

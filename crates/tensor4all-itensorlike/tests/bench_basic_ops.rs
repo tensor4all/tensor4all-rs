@@ -1,5 +1,5 @@
 //! Benchmark for main branch (tenferro backend).
-//! Run: cargo test --release -p tensor4all-itensorlike --test bench_basic_ops -- --nocapture
+//! Run: cargo test --release -p tensor4all-itensorlike --test integration -- --nocapture bench_basic_ops::
 
 use rand_chacha::ChaCha8Rng;
 use std::time::Instant;

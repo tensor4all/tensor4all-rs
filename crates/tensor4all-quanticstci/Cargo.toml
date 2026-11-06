@@ -10,14 +10,29 @@ authors = [
 license.workspace = true
 repository.workspace = true
 description = "High-level Quantics TCI interface for function interpolation"
+autotests = false
 
 [features]
-default = ["tenferro-cpu-faer"]
+default = ["tenferro-cpu-platform"]
+# The platform default: Apple Accelerate on macOS, faer elsewhere
+# (see the `tensor4all-cpu-platform` crate).
+tenferro-cpu-platform = [
+    "tensor4all-core/tenferro-cpu-platform",
+    "tensor4all-simplett/tenferro-cpu-platform",
+    "tensor4all-treetci/tenferro-cpu-platform",
+    "tensor4all-treetn/tenferro-cpu-platform",
+]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
     "tensor4all-simplett/tenferro-cpu-faer",
     "tensor4all-treetci/tenferro-cpu-faer",
     "tensor4all-treetn/tenferro-cpu-faer",
+]
+tenferro-system-blas = [
+    "tensor4all-core/tenferro-system-blas",
+    "tensor4all-simplett/tenferro-system-blas",
+    "tensor4all-treetci/tenferro-system-blas",
+    "tensor4all-treetn/tenferro-system-blas",
 ]
 tenferro-provider-inject = [
     "tensor4all-core/tenferro-provider-inject",
@@ -42,4 +57,11 @@ rand.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
-tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-faer"] }
+tenferro-cpu.workspace = true
+# Path-only dev-dependency so the QFT test can apply a real operator. Its
+# backend provider is inherited from this crate's selected provider feature.
+tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform", default-features = false }
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

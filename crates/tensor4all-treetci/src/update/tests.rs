@@ -1,5 +1,6 @@
 use super::{evaluate_candidate_matrix, update_edge_default};
 use crate::batch::EVALUATION_CHUNK_POINTS;
+use crate::evaluation::BatchExecution;
 use crate::test_support::assert_scalar_close;
 use crate::{GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge, TreeTciGraph};
 use anyhow::Result;
@@ -93,7 +94,7 @@ fn evaluate_candidate_matrix_writes_points_in_column_major_order() {
 
     // Encode each point's site values into a scalar so order and values are
     // both asserted in one shot: right candidates vary slowest (column-major).
-    let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+    let mut evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
         let mut out = Vec::with_capacity(batch.n_points());
         for p in 0..batch.n_points() {
             let code = (0..n_sites)
@@ -111,7 +112,7 @@ fn evaluate_candidate_matrix_writes_points_in_column_major_order() {
         &right_key,
         &right_candidates,
         &local_dims,
-        &evaluate,
+        &mut crate::evaluation::Compatibility::new(&mut evaluate),
         EVALUATION_CHUNK_POINTS,
     )
     .unwrap();
@@ -134,7 +135,7 @@ fn evaluate_candidate_matrix_rejects_malformed_candidate_length() {
     let right_candidates = vec![vec![1, 0, 1]];
 
     let malformed_left = vec![vec![0, 0, 1]]; // len 3 == right key len
-    let evaluate = |_batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![1.0]) };
+    let mut evaluate = |_batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![1.0]) };
     let result = evaluate_candidate_matrix(
         n_sites,
         &left_key,
@@ -142,7 +143,7 @@ fn evaluate_candidate_matrix_rejects_malformed_candidate_length() {
         &right_key,
         &right_candidates,
         &local_dims,
-        &evaluate,
+        &mut crate::evaluation::Compatibility::new(&mut evaluate),
         EVALUATION_CHUNK_POINTS,
     );
     assert!(result.is_err());
@@ -156,11 +157,13 @@ fn evaluate_candidate_matrix_rejects_malformed_candidate_length() {
         &right_key,
         &right_candidates,
         &local_dims,
-        &|batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
-            Ok(vec![
-                (batch.get(0, 0).unwrap() + batch.get(4, 0).unwrap()) as f64,
-            ])
-        },
+        &mut crate::evaluation::Compatibility::new(
+            &mut |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+                Ok(vec![
+                    (batch.get(0, 0).unwrap() + batch.get(4, 0).unwrap()) as f64,
+                ])
+            },
+        ),
         EVALUATION_CHUNK_POINTS,
     );
     assert_eq!(result.unwrap(), vec![1.0]);
@@ -173,7 +176,7 @@ fn evaluate_candidate_matrix_rejects_out_of_range_coordinates() {
     let left_key = SubtreeKey::new(vec![0, 1]);
     let right_key = SubtreeKey::new(vec![2, 3]);
     let right_candidates = vec![vec![0, 1]];
-    let evaluate = |_batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![1.0]) };
+    let mut evaluate = |_batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![1.0]) };
 
     // Value 2 is out of range for a 2-state site.
     let bad_left = vec![vec![0, 2]];
@@ -184,7 +187,7 @@ fn evaluate_candidate_matrix_rejects_out_of_range_coordinates() {
         &right_key,
         &right_candidates,
         &local_dims,
-        &evaluate,
+        &mut crate::evaluation::Compatibility::new(&mut evaluate),
         EVALUATION_CHUNK_POINTS,
     );
     assert!(result.is_err());
@@ -211,7 +214,7 @@ fn evaluate_candidate_matrix_is_independent_of_chunk_size() {
     let calls = RefCell::new(Vec::new());
     // Non-separable values, so any reordering or misassembled point changes
     // the result.
-    let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+    let mut evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
         calls.borrow_mut().push(batch.n_points());
         Ok(batch
             .data()
@@ -222,7 +225,7 @@ fn evaluate_candidate_matrix_is_independent_of_chunk_size() {
             })
             .collect())
     };
-    let run = |chunk_points: usize| {
+    let mut run = |chunk_points: usize| {
         calls.borrow_mut().clear();
         let values = evaluate_candidate_matrix(
             n_sites,
@@ -231,7 +234,7 @@ fn evaluate_candidate_matrix_is_independent_of_chunk_size() {
             &right_key,
             &right_candidates,
             &local_dims,
-            &evaluate,
+            &mut crate::evaluation::Compatibility::new(&mut evaluate),
             chunk_points,
         )
         .unwrap();
@@ -258,4 +261,143 @@ fn evaluate_candidate_matrix_is_independent_of_chunk_size() {
         assert_eq!(bits(&values), bits(&reference), "chunk {chunk_points}");
         assert_eq!(calls, expected_calls, "chunk {chunk_points}");
     }
+}
+
+/// Pivot selection is local and never enters the process-global backend.
+///
+/// Holding the process-global backend for the whole call is the discriminating part: the former route built
+/// LU factors through a backend solve and would block here. The selection-only path reuses the in-place
+/// elimination, so it must complete and still match the default route. The fixture is rank-deficient and
+/// rectangular (`i == j` on a 3x2 grid), which exercises a non-full pivot set.
+#[test]
+fn update_edge_selection_does_not_enter_the_process_global_backend() {
+    use rand::SeedableRng;
+    use tensor4all_tensorbackend::with_default_backend;
+
+    let mut tci = TreeTCI2::<f64>::new(vec![3, 2], two_site_graph()).unwrap();
+    tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+    tci.flush_pivot_errors();
+
+    let mut batch_eval = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        let mut values = Vec::with_capacity(batch.n_points());
+        for point in 0..batch.n_points() {
+            let i = batch.get(0, point).unwrap();
+            let j = batch.get(1, point).unwrap();
+            values.push(if i == j { 1.0 } else { 0.0 });
+        }
+        Ok(values)
+    };
+
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
+
+    let selection = with_default_backend(|_global| {
+        // The selection must complete while the process-global backend is held by this scope: a route that
+        // resolved a factor assembly through the global backend would block here, which is the dispatch
+        // evidence. (A global entry cannot be asserted to *fail* inside the scope, because entering the
+        // global session while its backend is held blocks rather than erroring.)
+        let mut execution = crate::evaluation::Compatibility::new(&mut batch_eval);
+        super::update_edge(
+            &mut tci,
+            TreeTciEdge::new(0, 1),
+            &mut execution,
+            &no_truncation_options(),
+            &crate::DefaultProposer,
+            &mut rng,
+        )
+        .expect("pivot selection does not need the process-global backend")
+    });
+
+    // The same pivots and errors the default route produces outside the held scope.
+    let mut reference = TreeTCI2::<f64>::new(vec![3, 2], two_site_graph()).unwrap();
+    reference.add_global_pivots(&[vec![0, 0]]).unwrap();
+    reference.flush_pivot_errors();
+    let expected = update_edge_default(
+        &mut reference,
+        TreeTciEdge::new(0, 1),
+        batch_eval,
+        &no_truncation_options(),
+    )
+    .unwrap();
+
+    assert_eq!(selection.rank, expected.rank);
+    assert_eq!(selection.pivot_errors, expected.pivot_errors);
+    assert_eq!(
+        selection.row_indices, expected.row_indices,
+        "the same row pivots"
+    );
+    assert_eq!(selection.col_indices, expected.col_indices);
+}
+
+#[test]
+fn keyed_candidate_matrix_serves_duplicate_entries_from_one_evaluation() {
+    // Three 3-state sites split 1 | 2. The left list repeats a candidate, so two
+    // matrix entries are the same point.
+    let n_sites = 3;
+    let local_dims = vec![3, 3, 3];
+    let left_key = SubtreeKey::new(vec![0]);
+    let right_key = SubtreeKey::new(vec![1, 2]);
+    let left_candidates = vec![vec![0], vec![2], vec![0]];
+    let right_candidates = vec![vec![0, 1], vec![2, 2]];
+
+    let mut evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        Ok(batch
+            .data()
+            .chunks_exact(batch.n_sites())
+            .map(|point| {
+                point
+                    .iter()
+                    .enumerate()
+                    .map(|(site, &value)| (value + 1) as f64 * (site as f64 + 1.0))
+                    .sum()
+            })
+            .collect())
+    };
+    let mut execution = crate::evaluation::Compatibility::new(&mut evaluate);
+    let mut memo =
+        crate::evaluation::CachedExecution::new(&mut execution, &local_dims, Some(1 << 20))
+            .unwrap();
+
+    // Two chunks of three entries: the matrix spans a chunk boundary, and each
+    // chunk reuses the one pair of side keys prepared for the matrix. Each chunk
+    // holds one duplicate pair, so the in-batch deduplication stays exercised.
+    let matrix = |memo: &mut crate::evaluation::CachedExecution<'_, f64>| {
+        evaluate_candidate_matrix(
+            n_sites,
+            &left_key,
+            &left_candidates,
+            &right_key,
+            &right_candidates,
+            &local_dims,
+            memo,
+            3,
+        )
+        .unwrap()
+    };
+
+    // Column-major: (left 0, right 0), (left 2, right 0), (left 0, right 0), ...
+    let values = matrix(&mut memo);
+    assert_eq!(values, vec![9.0, 11.0, 9.0, 16.0, 18.0, 16.0]);
+
+    // Every entry is a lookup; the two duplicate entries are evaluated once.
+    let stats = memo.stats();
+    assert_eq!(stats.requested_points, 6);
+    assert_eq!(stats.evaluated_points, 4);
+    assert_eq!(stats.cache_misses, 6);
+    assert_eq!(stats.cache_hits, 0);
+    assert_eq!(stats.cached_entries, 4);
+
+    // The same matrix again is served entirely from the cache.
+    let again = matrix(&mut memo);
+    let bits = |values: &[f64]| {
+        values
+            .iter()
+            .map(|value| value.to_bits())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(bits(&again), bits(&values));
+    let stats = memo.stats();
+    assert_eq!(stats.requested_points, 12);
+    assert_eq!(stats.evaluated_points, 4);
+    assert_eq!(stats.cache_hits, 6);
+    assert_eq!(stats.cache_misses, 6);
 }

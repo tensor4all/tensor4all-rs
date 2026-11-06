@@ -224,8 +224,9 @@ where
     /// The result of applying H to v: `H|v⟩`, with same index set and order as `v`.
     /// # Errors
     ///
-    /// Returns an error when the contraction or operation fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// Returns [`TreeTNOperationError`] when environment preparation fails, when a region node's
+    /// operator mappings are missing or inconsistent, or when replacing indices
+    /// or contracting the local tensors fails.
     ///
     pub fn apply<NT: NetworkTopology<V>>(
         &mut self,
@@ -547,6 +548,7 @@ where
             .iter()
             .filter_map(|child| self.envs.get(child, from))
             .collect();
+        let child_envs_is_empty = child_envs.is_empty();
 
         let node_idx_op = self
             .operator
@@ -613,14 +615,20 @@ where
             tensor_refs.push(ContractOperand::Owned(bra_conj));
         }
 
-        // Contract ket, op, bra, and child environments together
-        // Let contract() find the optimal contraction order
+        // Contract ket, op, bra, and child environments together.
+        // A site-free spectator leaf has a ket and a bra that share no index
+        // and no child environment to connect them, so the pair is
+        // outer-producted before the spectator operator leg is folded in.
         tensor_refs.extend(child_envs.into_iter().map(ContractOperand::Borrowed));
         let tensor_refs = tensor_refs
             .iter()
             .map(ContractOperand::as_ref)
             .collect::<Vec<_>>();
-        let contracted = T::contract(&tensor_refs).map_err(anyhow::Error::new)?;
+        let contracted = if no_site_spectator && child_envs_is_empty {
+            crate::treetn::contract_or_outer_product(tensor_refs[0], tensor_refs[1])?
+        } else {
+            T::contract(&tensor_refs).map_err(anyhow::Error::new)?
+        };
         if no_site_spectator {
             contracted
                 .contract_pair(tensor_op)

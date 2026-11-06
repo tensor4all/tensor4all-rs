@@ -60,7 +60,7 @@ fn main() {
     assert!((value - 1.0).abs() < 1e-12);
 
     // Sum over all indices (2 * 3 * 4 = 24 elements, all 1.0).
-    let total = tt.sum();
+    let total = tt.sum().unwrap();
     assert!((total - 24.0).abs() < 1e-12);
 
     // Compress with a truncation tolerance.
@@ -70,9 +70,9 @@ fn main() {
         ..Default::default()
     };
     let compressed = tt.compressed(&options).unwrap();
-    assert!((compressed.sum() - 24.0).abs() < 1e-10);
+    assert!((compressed.sum().unwrap() - 24.0).abs() < 1e-10);
 
-    println!("sum = {}", compressed.sum());
+    println!("sum = {}", compressed.sum().unwrap());
 }
 ```
 

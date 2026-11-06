@@ -1,9 +1,8 @@
 # Partitioned TreeTNs
 
 `tensor4all-partitionedtreetn` stores TreeTN subdomains as eagerly masked
-patches. It is the TreeTN-native successor to the deprecated
-`tensor4all-partitionedtt` crate and supports named chains, branched trees, and
-multiple site indices on one node.
+patches. It replaces the retired `tensor4all-partitionedtt` crate and supports
+named chains, branched trees, and multiple site indices on one node.
 
 This crate provides partition algebra, TreeTN-general adaptive patching, and
 adaptive patched interpolation of a function through any tree interpolation
@@ -46,20 +45,64 @@ densified.
 ## Adaptive patching
 
 Every truncating or contracting operation takes an explicit existing node name
-as its center. `add_with_patching` first assigns absolute local discarded-weight
-cutoffs proportional to logical patch volume
-(`cutoff * ||F||^2 * volume_p / total_volume`), applies each whole threshold at
-the patch's local SVD truncations, then splits patches that remain above the
-bond cap. The `cutoff` is best effort for the final whole-network error;
-`max_bond_dim` is a hard cap. Inputs that share an equal projector key are
-summed before patching:
+as its center. `PatchingOptions::cutoff` is a non-negative dimensionless
+discarded-weight **budget shared across patches**, not an SVD truncation-policy
+knob, and `PatchingOptions::allocation` selects how it is spread.
+`BudgetAllocation::Volume` (the default,
+[arXiv:2602.22372](https://arxiv.org/abs/2602.22372)) assigns the absolute local
+threshold `cutoff * ||F||^2 * volume_p / total_volume`, applies each whole
+threshold at the patch's local SVD truncations, and drops a patch whose squared
+norm is at most its threshold. Splitting is project-first: a patch whose
+budget-truncated probe is still above the bond cap is split, and its children
+are projections of the exact patch, so the threshold and the cap are spent
+once, on the final leaves. `BudgetAllocation::Norm` instead applies the
+relative squared tail-sum cutoff `cutoff` at every local SVD — the same rule as
+an ITensor-style relative cutoff in `TreeTN::truncate` — so each patch is
+accurate relative to itself, no patch is dropped, and projected children
+inherit no absolute budget. The same choice applies to `add_with_patching`,
+`contract_adaptive`, and `truncate_adaptive`. `cutoff` is best effort for the final whole-network error;
+`max_bond_dim` is a hard cap.
+
+When several patches are summed exactly (contributions to one output projector in
+`contract` and `contract_adaptive`, inputs with an equal key in `add_with_patching`,
+and all patches in `to_treetn`), the sum is built with a `SumEngine`.
+`PatchingOptions::sum_engine` and `PartitionedContractionOptions::sum_engine`
+default to `SumEngine::Binary`, which adds the patches one by one.
+`SumEngine::Balanced` makes the same adds on a balanced tree over the patches,
+`ceil(log2 N)` levels deep: same sum, about `N^2` instead of `N^3` time, and one
+level of partial sums in memory instead of a single accumulator.
+`SumEngine::Nary` builds each sum in one pass, which is much faster when many
+patches meet in one sum, and `SumEngine::NaryWithin { limit_bytes }` does so only
+while the estimated size of the summed network fits the limit.
+`to_treetn_with(engine)` reports which method ran and the size estimate. Inputs
+that share an equal projector key are summed before patching.
+
+The treetn crate also offers the same pairwise reduction with a truncation after
+every add, `TreeTN::pairwise_sum(terms, PairwiseSumOrder::{Sequential, Balanced},
+Option<PerAddCutoff>)`, in place of one exact sum followed by one truncation.
+`PerAddCutoff::cutoff` is a **per-add** bound, not an end-to-end one: with `N`
+terms it accumulates over `N - 1` adds (`ceil(log2 N)` for the balanced tree), so
+the end-to-end error is best effort, and reaching a target relative error `eps`
+with the chain takes a per-add squared cutoff of about
+`eps / ((N - 1)^2 kappa^2)` with `kappa` the largest partial-sum norm over the
+result norm.
+
+It pays while the summands compress, so that the rank kept along the way stays
+well below the bond `N * D` that one exact sum builds. Measured on chains of 12
+sites, bond `D = 10`, one core, single runs, at equal error: 2.4x less time at
+`N = 64` on the smooth and mixed families, and at `N = 256` 51x less time and
+about 225x less peak memory. Where the summands do not compress, the per-add
+cutoff discards weight that the one-shot truncation keeps, so the exact sum
+stays the accurate choice. The per-add truncation is therefore opt-in; the sum
+engine section of `docs/design/partitioned-treetn.md` carries the measurement
+conditions and the full table.
 
 ```rust
 # use tensor4all_core::{DynIndex, IdxTensor};
 # use tensor4all_partitionedtreetn::{
-#     add_with_patching, PatchSplitStrategy, PatchingOptions, SubDomainTreeTN,
+#     add_with_patching, BudgetAllocation, PatchSplitStrategy, PatchingOptions, SubDomainTreeTN,
 # };
-# use tensor4all_treetn::TreeTN;
+# use tensor4all_treetn::{SumEngine, TreeTN};
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 let site0 = DynIndex::new_dyn(2);
 let bond = DynIndex::new_dyn(2);
@@ -80,9 +123,11 @@ let result = add_with_patching(
     &0,
     &PatchingOptions {
         cutoff: 0.0,
+        allocation: BudgetAllocation::Volume,
         max_bond_dim: Some(1),
         patch_order: vec![site0],
         split_strategy: PatchSplitStrategy::Sequential,
+        sum_engine: SumEngine::Binary,
     },
 )?;
 
@@ -97,6 +142,39 @@ assert!(result.values().all(|patch| patch.max_bond_dim() <= 1));
 then compares checked sums of logical local tensor element counts. Structured
 storage payload length and AD state are not used as the metric.
 
+### Contracting selected outputs
+
+`PartitionedTreeTN::contract` contracts every compatible patch pair and returns
+every output projector. When only some outputs are needed, such as a few blocks
+of a block product over a branch-like index, `PartitionedTreeTN::contract_selected`
+takes the wanted output projectors and skips every pair whose output projector
+is not among them, so its cost follows the pairs of the wanted outputs. Each
+returned patch equals the one `contract` returns under the same key when both
+operate on the same patch pairs, because `contract_selected` never refines the
+operands. `contract_adaptive_selected` is the adaptive counterpart. Its `Volume`
+budget uses the norm and volume totals of the selected outputs, so a wanted block
+can be truncated, or dropped, differently from the same block in a call over all
+outputs.
+
+### Different patch layouts
+
+`add` and `contract` accept operands whose patch layouts differ.
+`PartitionedTreeTN::common_refinement` returns the disjoint atoms every operand's
+patch projectors are unions of, and `PartitionedTreeTN::refine_to` projects a
+partition onto a layout, keeping every value that layout covers, and dropping a
+region that no layout projector covers. `add` refines both operands onto
+the common refinement, so each operand keeps the part of its region that the
+other does not cover. `contract` refines both operands only when two predicted
+output projectors would overlap without being equal, and then on the
+uncontracted indices that the input patches fix, so any two outputs are equal or
+disjoint. Equal or disjoint layouts take the old path and are unchanged.
+`add_truncated` refines like `add`. This automatic refinement is limited to
+`AUTOMATIC_REFINEMENT_LIMIT` atoms; a larger one returns
+`PartitionedTreeTNError::RefinementTooLarge` before anything is refined, and
+callers who need it call `common_refinement` and `refine_to` explicitly, which
+are not limited. `contract_selected`, `contract_adaptive`, and
+`add_with_patching` do not refine.
+
 ## Adaptive patched interpolation
 
 `adaptive_interpolation::patched_interpolate` interpolates a function on an
@@ -108,10 +186,31 @@ and every child is interpolated in turn. For quantics grids, list the most
 significant bits first.
 
 The evaluator receives a column-major `[n_sites, n_points]` batch of
-zero-based full-domain points in the derived site order: nodes in ascending
-name order, each node's sites in the given order. Each patch caches its
+zero-based full-domain points in the derived site order (nodes in ascending
+name order, each node's sites in the given order) and the run's
+`EvalContext`. Every numerical stage of the run - the engine, re-embedding,
+measurement, and the norm readout - runs on the engine behind that context;
+nothing enters the process-global session, so a run completes on the engine
+you pass in (for example one lane's engine) and needs no process-global
+warm-up.
+The returned partition and report are published as compact host storage and
+stay usable after the session closes. Each patch caches its
 samples and hands them to its children, so no point is evaluated twice, and a
 patch with at most one unfixed site is evaluated exactly without the engine.
+
+The driver has three entries that share one wave loop over the BFS
+generations of the patch queue. `patched_interpolate` runs every patch on the
+caller's session, one after another.
+`adaptive_interpolation::patched_interpolate_on_lanes` fans each wave out over
+the lanes of a caller-owned `hataori_tenferro::TenferroLanes`, so every patch
+runs in the child session of the lane that pulled it; the root wave and waves
+smaller than the lane count run one patch at a time, so a single item keeps
+the backend's whole team.
+`adaptive_interpolation::patched_interpolate_mpi` (feature `hataori-mpi` or
+`hataori-mpi-rsmpi-rt`) distributes each wave over MPI ranks through
+`hataori::pmap_lanes`, with the root owning the queue and the result. The
+schedule does not change the report: seeds come from the seed and the patch
+path, counters are per patch, and the wave merge is in canonical path order.
 
 The accuracy requirement is an `ErrorNorm` with an
 `ErrorTolerance { rtol, atol }`. The default, `ErrorNorm::L2`, bounds the L2
@@ -126,7 +225,9 @@ measures every accepted and zero patch itself.
 #     patched_interpolate, GlobalL2Error, PatchedInterpolationOptions,
 # };
 # use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
+# use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 # use tensor4all_treetci::TreeTciInterpolator;
+# use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 # use tensor4all_treetn::NodeNameNetwork;
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 // A junction "c" of degree three without a site, and three leaves.
@@ -153,14 +254,17 @@ let options = PatchedInterpolationOptions::new(3)
     .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
     .with_patch_order(vec![x.clone(), y.clone()]);
+let mut backend = CpuBackend::with_threads(1)?;
+let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
 let result = patched_interpolate(
     &TreeTciInterpolator::default(),
     topology,
     node_sites,
-    ColMajorArray::new(vec![1, 2, 2], vec![3, 1])?,
-    |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
-        Ok(batch.data().chunks(3).map(f).collect())
-    },
+    ColMajorArray::new(vec![1, 2, 2], vec![3, 1]).expect("2D pivots"),
+    &mut ctx,
+    |batch: ColMajorArrayRef<'_, usize>,
+     _ctx: &mut EvalContext<'_>|
+     -> anyhow::Result<Vec<f64>> { Ok(batch.data().chunks(3).map(f).collect()) },
     &options,
 )?;
 
@@ -182,29 +286,43 @@ Under `ErrorNorm::L2` the allowance is split by patch volume: every accepted
 or zero patch must have a root-mean-square residual of at most
 `tau = delta / sqrt(|X|)`, which is also the engine's absolute tolerance. A
 patch with at most `max(max_exhaustive_points, samples)` points (see
-`VerificationOptions`) is measured at every point; a larger patch on fresh
-uniform samples, followed by an independent audit sample. A failed
-measurement of a converged run reruns the engine with the worst measured
-points added to its pivots, then splits the patch. What a run can claim is
+`VerificationOptions`) is measured at every point; a larger patch is
+estimated by `VerificationOptions::estimator`, followed by an independent
+audit with the same estimator. The default `L2Estimator::ResidualTt`
+interpolates the residual `f - f~` with the same engine, starting from the
+largest residuals of a small uniform seed sample and from the patch corners
+and edges (grouped by `with_variables`), and uses the exact norm of that
+residual TT; its bond cap is
+`max(ceil(chi_patch * residual_bond_ratio), residual_bond_floor)`, and a run
+that reaches the cap falls back to the larger of the residual norm and the
+seed sample's RMS. `L2Estimator::UniformMonteCarlo` reproduces the M3
+uniform sample. The report's `residual_evaluations` and
+`residual_saturations` count the residual runs and the patches whose residual
+run reached its cap. A failed measurement of a converged run reruns the
+engine with the worst measured points (and the residual run's nonzero
+pivots) added to its pivots, then splits the patch. What a run can claim is
 the report's `GlobalL2Error`:
 
 - `Certified`: every contribution is exact or exhaustive, and the absolute
   error is at most `delta` up to a small relative margin and a rounding term
   from a calibrated, not proven, model (`rounding_limited` says when that term is not below `tau`);
   `relative_error_bound` bounds `E / ||f||` when `||f~||` exceeds `E`.
-- `Audited`: some contribution was sampled, and every sampled one was
-  audited. The audited mean square is an unbiased estimate (its square root
-  is not) with a standard error, never a bound and not a guarantee: a
-  residual concentrated on unsampled points is missed by the acceptance
-  sample and the audit alike, and the standard error, computed from the same
-  points, does not reveal it. A localized feature that enters a patch only
-  through a corner or an edge is such a case; the audited error can then be
-  orders of magnitude too small. More `samples` make a miss less likely but
-  do not exclude it. The opt-in `with_cache_candidates(true)` (child
-  patches also start from the largest values the parent already evaluated
-  in them) can prevent a miss where the parent sampled the feature, but not
-  one where the parent never sampled it or where the engine saw the feature
-  without resolving it and the acceptance sample misses the residual.
+- `Audited`: some contribution is non-exact, and every such one was
+  audited. It is an estimate with a standard error, never a bound and not a
+  guarantee. Under `L2Estimator::UniformMonteCarlo` the audited mean square
+  is unbiased (its square root is not), but a residual concentrated on
+  unsampled points is missed by the acceptance sample and the audit alike,
+  and the standard error, computed from the same points, does not reveal it.
+  A localized feature that enters a patch only through a corner or an edge is
+  such a case; the audited error can then be orders of magnitude too small.
+  More `samples` make a miss less likely but do not exclude it. The opt-in
+  `with_cache_candidates(true)` (child patches also start from the largest
+  values the parent already evaluated in them) can prevent a miss where the
+  parent sampled the feature, but not one where the parent never sampled it
+  or where the engine saw the feature without resolving it and the
+  acceptance sample misses the residual. `L2Estimator::ResidualTt`, the
+  default, starts from the patch corners and edges and does not rely on
+  uniform points alone, but its capped residual TT is still an estimate.
 - `AcceptanceOnly`: audits were disabled. The combined acceptance statistics
   are neither a bound nor an estimate.
 - `ToleranceNotMet`: some patch was retained by the minimum patch size
@@ -243,7 +361,9 @@ capped acceptance exhaustively measured.
 #     ToleranceNotMetBasis,
 # };
 # use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
+# use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 # use tensor4all_treetci::TreeTciInterpolator;
+# use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 # use tensor4all_treetn::NodeNameNetwork;
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
 // f(x, y) = 1 + [x == y] on two sites of dimension 3 has rank three, which
@@ -261,14 +381,17 @@ let options = PatchedInterpolationOptions::new(2)
     .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
     .with_min_patch_bits(2);
+let mut backend = CpuBackend::with_threads(1)?;
+let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
 let result = patched_interpolate(
     &TreeTciInterpolator::default(),
     topology,
     node_sites,
-    ColMajorArray::new(vec![0, 0], vec![2, 1])?,
-    |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
-        Ok(batch.data().chunks(2).map(f).collect())
-    },
+    ColMajorArray::new(vec![0, 0], vec![2, 1]).expect("2D pivots"),
+    &mut ctx,
+    |batch: ColMajorArrayRef<'_, usize>,
+     _ctx: &mut EvalContext<'_>|
+     -> anyhow::Result<Vec<f64>> { Ok(batch.data().chunks(2).map(f).collect()) },
     &options,
 )?;
 
@@ -436,12 +559,15 @@ children and produces four output children. The default `None` treats `selection
 one axis with the documented reversed placement. `MergeRefineOptions::target_bond_dim` is a
 soft rank goal: `None` keeps the trajectory uniform and exact, while `Some(goal)`
 makes it adaptive. An output region is then refined only when its retained terms
-exceed the goal and refining lowers its maximum retained rank, a merged pair is
-combined into one term only when combining pays off (otherwise both operands stay
-as separate terms of the region's superposition), and every truncation candidate
-must fit the item's share of the global allowance. An unaffordable or gainless
-candidate is retained exactly rather than violating the accuracy contract, and
-exceeding `MergeRefineOptions::max_terms` returns a resource-limit error.
+exceed the goal and refining lowers its maximum retained rank. A region that stops
+refining keeps its output key and still merges its input siblings on every later
+level, so it consolidates the input prefixes it held instead of freezing them. A
+merged pair is combined into one term when it fits the goal or lowers the bond
+dimension (otherwise both operands stay as separate terms of the region's
+superposition), and every truncation candidate must fit the item's share of the
+global allowance. An unaffordable or gainless candidate is retained exactly rather
+than violating the accuracy contract, and exceeding `MergeRefineOptions::max_terms`
+returns a resource-limit error.
 
 `MergeRefineOptions::apply_options` opts into a truncating operator application.
 The schedule then applies the operator with those options *and* exactly, measures
@@ -483,8 +609,21 @@ with a central named node and three named leaves is a valid partition input.
 See the [Tree Tensor Networks guide](tree-tn.md) for constructing branched
 networks and selecting contraction/truncation options.
 
-## Migration
+## Migration from `tensor4all-partitionedtt`
 
-Use this crate for new named TreeTN partition work. The old
-`tensor4all-partitionedtt` crate remains buildable during migration and receives
-correctness and security fixes only; no removal date has been set.
+The retired `tensor4all-partitionedtt` crate (removed in #915 D3, settling
+#825) worked on the positional `SimpleTensorTrain` representation. This crate
+carries the same partition algebra on named `TreeTN` values:
+
+| `tensor4all-partitionedtt` | `tensor4all-partitionedtreetn` |
+|---|---|
+| `PartitionedTT` | `PartitionedTreeTN` |
+| `SubDomainTT::from_tt` | `SubDomainTreeTN::from_treetn` |
+| `PatchingOptions { rtol, .. }` | `PatchingOptions { cutoff = rtol², .. }` |
+| `add_with_patching(subdomains, &options)` | `add_with_patching(subdomains, &center, &options)` |
+| `truncate_adaptive(&tt, rtol, cap)` | `truncate_adaptive(&partition, &center, cutoff, allocation, cap)` |
+| `adaptiveinterpolate(...)` | `adaptive_interpolation::patched_interpolate(...)` |
+
+The adaptive interpolation driver needs an engine that implements
+`TreeInterpolator`; `tensor4all-treetci::TreeTciInterpolator` is the TreeTCI
+one. `benchmarks/rust/benchmark_patching.rs` is the ported patching benchmark.

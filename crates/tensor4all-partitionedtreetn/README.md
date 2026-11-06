@@ -16,6 +16,34 @@ implementing `tensor4all_treetn::interpolation::TreeInterpolator` (for example
 fixes the next site of `patch_order` and retries on every child. The crate
 depends on the engine trait only, not on `tensor4all-treetci`.
 
+The run takes the caller's `EvalContext` (a session the caller has already
+entered, together with the caller's parallelism budget), and the evaluator
+receives that same context. Every numerical stage - the engine call, the
+re-embedding of fixed sites, the measurement of a stored patch, and the norm
+readout - runs on that session, so a run completes inside a caller-held
+engine, such as a scheduler lane's engine, and needs no process-global
+warm-up. The returned partition and report are published as compact host
+storage and stay usable after the session closes.
+
+### Entries
+
+Three entries run the same driver: one wave loop over the BFS generations of
+the patch queue. A wave is dispatched, merged in canonical path order, and its
+splits form the next one.
+
+| Entry | Where a patch runs | Evaluator |
+|---|---|---|
+| `patched_interpolate` | the caller's `EvalContext`, one patch after another | `FnMut` |
+| `patched_interpolate_on_lanes` | the engine of the `hataori_tenferro::TenferroLanes` lane that pulled it; every wave runs one patch per lane, and the caller sizes each lane's engine | `Fn + Sync` |
+| `patched_interpolate_mpi` (features `hataori-mpi` / `hataori-mpi-rsmpi-rt`) | the lane of the rank that `hataori::pmap_lanes` assigns the patch to; the root orchestrates waves and owns the result | `Fn + Sync` |
+
+The schedule never changes the result contract: random sub-seeds come from the
+seed and the patch path, counters are per patch and summed, references are
+pinned while the single root patch runs, and `max_patches` is checked before a
+wave is dispatched. A lanes run reproduces the serial report at one and two
+lanes on the fixtures of `tests/adaptive_lanes.rs`; the rounding caveat of the
+generic cached-evaluator path is unchanged.
+
 The accuracy requirement is `PatchedInterpolationOptions::error_norm` with
 `tolerance: ErrorTolerance { rtol, atol }`:
 
@@ -28,9 +56,13 @@ The accuracy requirement is `PatchedInterpolationOptions::error_norm` with
   functions. The allowance is split by patch volume (`rms_P(f - f~) <= tau`
   with `tau = delta / sqrt(|X|)`), and the driver measures every accepted and
   zero patch itself: exhaustively up to
-  `VerificationOptions::max_exhaustive_points`, otherwise on fresh uniform
-  samples with an independent audit. A failed measurement of a converged run
-  reruns the engine with the worst points as pivots, then splits.
+  `VerificationOptions::max_exhaustive_points`, otherwise with the selected
+  estimator `VerificationOptions::estimator` and an independent audit. The
+  default `L2Estimator::ResidualTt` interpolates the residual from the patch
+  corners and edges and takes its exact norm;
+  `L2Estimator::UniformMonteCarlo` reproduces the M3 uniform sample. A failed
+  measurement of a converged run reruns the engine with the worst points as
+  pivots, then splits.
 - `ErrorNorm::SampledMax` is the M2 criterion: the engine's sampled error
   estimate against `max(atol, rtol * max_reference)`. It is **neither** a
   certified bound nor a measured error, and makes no L2 claim.
@@ -49,8 +81,8 @@ for their size. Both default to the M3 behavior.
 
 The opt-in `cache_candidates` starts every child patch from the largest
 values of its inherited evaluation cache as well (no new evaluations). It
-mitigates the corner-localized misses described below without excluding
-them.
+mitigates uniform-sampling misses of the `UniformMonteCarlo` estimator
+without excluding them.
 
 The report's `GlobalL2Error` states what an L2 run can claim. `Certified`
 (every contribution exact or exhaustive, every patch within its allowance)
@@ -64,14 +96,17 @@ patch was retained without meeting its allowance; its `basis` says which of
 the three applies to its measured value. Sampled measurements cannot bound
 the L2 error of a black-box function.
 
-Known limitation: the acceptance sample and the audit are both uniform, so
-both can miss a localized feature that enters a patch only through a corner
-or an edge, and the audit's standard error does not reveal such a miss (it is
-computed from the same points). An `Audited` result can then underestimate
-the error by orders of magnitude. Raising `VerificationOptions::samples`
-makes this less likely but does not exclude it; only `Certified` results
-(every contribution exact or exhaustive) are guarantees. See "Known
-limitation: corner-localized misses" in
+Neither sampled estimator is a guarantee. Under
+`L2Estimator::UniformMonteCarlo` both the acceptance sample and the audit are
+uniform, so both can miss a localized feature that enters a patch only
+through a corner or an edge, and the audit's standard error does not reveal
+such a miss (it is computed from the same points); an `Audited` result can
+then underestimate the error by orders of magnitude. Raising
+`VerificationOptions::samples` makes this less likely but does not exclude
+it. `L2Estimator::ResidualTt` starts its residual run from the patch corners
+and edges instead, but its capped residual TT is still an estimate. Only
+`Certified` results (every contribution exact or exhaustive) are guarantees.
+See "Patch L2 estimators" in
 [`docs/design/tree-patching-error-contract.md`](../../docs/design/tree-patching-error-contract.md).
 
 - Patches are processed sequentially in FIFO order; each has an evaluation
@@ -101,19 +136,42 @@ limitation: corner-localized misses" in
   site/edge construction and dense-axis order nondeterminism is resolved.
   `site_space` still has unspecified set iteration order, and cached generic
   evaluation retains the distinct planner limitation above.
+- `PartitionedTreeTN::contract` and `to_treetn` order patches and contributions
+  by the patch index signature and the patch's projectors in logical labels.
+  Patches that tie on that metadata are ordered by a content digest of their
+  payloads (leg roles, canonical bond labels, payload bit patterns), computed
+  only inside a tie, so an input without metadata ties pays no extra pass over
+  the data. A pair that ties on content as well is numerically identical, so any
+  order gives the same bits, or it tied through a 64-bit digest collision or a
+  payload that cannot be fingerprinted without materializing it (a
+  backend-resident value); only reproducibility across processes is left to the
+  structural components then. Two-process bitwise equality of `contract` is
+  tested in `tests/patch_order_determinism.rs`.
 
 The patch queue and pivot recycling derive from TCIAlgorithms.jl (MIT) through
-the deprecated `tensor4all-partitionedtt`; this crate carries
-`LICENSE-TCIALGORITHMS-MIT`.
+the chain driver of the retired `tensor4all-partitionedtt` crate (removed in
+#915 D3, settling #825); this crate carries `LICENSE-TCIALGORITHMS-MIT`.
 
 ## Truncation convention
 
-The scalar adaptive truncation parameter is `PatchingOptions::cutoff`, a local
-discarded-weight cutoff following the ITensorMPS convention. One absolute local
-threshold `cutoff * ||F||^2 * volume_p / total_volume` is derived per operation
-and applied whole at every local SVD. It is **best effort** for the final
-whole-network error; `max_bond_dim` is a hard cap and takes precedence. No API
-in the existing adaptive-patching API claims a global relative-error bound.
+The scalar adaptive truncation parameter is `PatchingOptions::cutoff`, a
+non-negative dimensionless discarded-weight budget following the ITensorMPS
+convention. It is a **cross-patch budget**, not an SVD truncation-policy knob,
+and `PatchingOptions::allocation` selects how it is spread over the patches:
+
+- `BudgetAllocation::Volume` (default, arXiv:2602.22372): one absolute local
+  threshold `cutoff * ||F||^2 * volume_p / total_volume` is derived per
+  operation and applied whole at every local SVD, and a patch whose squared
+  norm is at most its threshold is dropped. This gives approximately uniform
+  absolute accuracy over the domain.
+- `BudgetAllocation::Norm`: every local SVD applies the relative squared
+  tail-sum cutoff `cutoff` — the same rule as an ITensor-style relative cutoff
+  in `TreeTN::truncate` — so each patch is accurate relative to itself, no patch
+  is dropped, and no absolute budget is inherited by projected children.
+
+Both are **best effort** for the final whole-network error; `max_bond_dim` is a
+hard cap and takes precedence. No API in the existing adaptive-patching API
+claims a global relative-error bound.
 
 ## Reconstruction with a global L2 tolerance
 
@@ -221,6 +279,7 @@ let result = add_with_patching(
         max_bond_dim: Some(1),
         patch_order: vec![site0],
         split_strategy: PatchSplitStrategy::Sequential,
+        ..PatchingOptions::default()
     },
 )?;
 
@@ -241,6 +300,6 @@ requires an explicit existing TreeTN node name as its center.
 - [Migration design](../../docs/design/partitioned-treetn.md)
 - [Provenance and citation policy](../../docs/PROVENANCE_AND_CITATION_POLICY.md)
 
-The deprecated `tensor4all-partitionedtt` crate remains buildable during the
-migration window. It is limited to correctness and security fixes; no removal
-date has been set.
+The `tensor4all-partitionedtt` crate this one replaced was removed in #915 D3
+(settling #825); the [Partitioned TreeTN guide](https://tensor4all.org/tensor4all-rs/guides/partitioned-treetn.html)
+maps its entry points onto this crate's.

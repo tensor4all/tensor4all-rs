@@ -3,7 +3,9 @@
 use std::mem::size_of;
 
 use tensor4all_core::IdxTensor;
-use tensor4all_core::{matrix_luci_factors_from_matrix_owned, RrLUOptions};
+use tensor4all_core::{
+    matrix_luci_factors_from_matrix_owned, matrix_luci_factors_from_matrix_owned_in, RrLUOptions,
+};
 #[cfg(test)]
 use tensor4all_tensorbackend::mat_mul;
 #[cfg(not(test))]
@@ -83,6 +85,7 @@ pub(crate) fn materialize_and_factor_edge<T, V, F>(
     options: &TreeAciOptions<V>,
     left_orthogonal: bool,
     operator: &mut F,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> Result<LocalUpdateResult<T>>
 where
     T: TreeAciScalar,
@@ -349,7 +352,19 @@ where
                     mat_mul(&row_candidate_matrix, &col_bond_matrix)
                 };
             #[cfg(not(test))]
-            let product_result = mat_mul_owned(row_candidate_matrix, col_bond_matrix);
+            let product_result: std::result::Result<Matrix<T>, String> = match context {
+                Some(context) => {
+                    match context.with_concrete_session(|session| {
+                        session.mat_mul(&row_candidate_matrix, &col_bond_matrix)
+                    }) {
+                        Ok(Ok(product)) => Ok(product),
+                        Ok(Err(error)) => Err(error.to_string()),
+                        Err(error) => Err(error.to_string()),
+                    }
+                }
+                None => mat_mul_owned(row_candidate_matrix, col_bond_matrix)
+                    .map_err(|error| error.to_string()),
+            };
             let product = product_result.map_err(|error| TreeAciError::Numerical {
                 message: error.to_string(),
             })?;
@@ -397,15 +412,19 @@ where
     local_scale.normalize(&mut matrix);
     #[cfg(test)]
     let luci_started = std::time::Instant::now();
-    let mut factors = matrix_luci_factors_from_matrix_owned(
-        matrix,
-        Some(RrLUOptions {
-            max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
-            rel_tol: 0.0,
-            abs_tol: tolerance.local_threshold(),
-            left_orthogonal,
-        }),
-    )
+    let lu_options = RrLUOptions {
+        max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
+        rel_tol: 0.0,
+        abs_tol: tolerance.local_threshold(),
+        left_orthogonal,
+    };
+    // The caller-owned route factorizes on the supplied context; the compatibility route keeps its own path.
+    let mut factors = match context {
+        Some(context) => {
+            matrix_luci_factors_from_matrix_owned_in(matrix, Some(lu_options), context)
+        }
+        None => matrix_luci_factors_from_matrix_owned(matrix, Some(lu_options)),
+    }
     .map_err(|error| TreeAciError::Numerical {
         message: error.to_string(),
     })?;

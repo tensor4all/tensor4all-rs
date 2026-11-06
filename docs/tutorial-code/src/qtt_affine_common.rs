@@ -121,8 +121,11 @@ pub fn transformed_reference(x: usize, y: usize, bits: usize, mode: AffineBounda
 /// Build the source QTT for the periodic analytic function.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// Returns
+/// [`tensor4all_quanticstci::QuanticsTCIError::InvalidConfiguration`] when the
+/// grid sizes or TCI options are invalid, and
+/// [`tensor4all_quanticstci::QuanticsTCIError::Operation`] when an initial pivot
+/// is out of bounds or the backend interpolation fails.
 ///
 pub fn build_source_qtt(config: &AffineTutorialConfig) -> Result<AffineQttOutput, Box<dyn Error>> {
     let n = point_count(config.bits);
@@ -171,8 +174,12 @@ fn boundary_conditions(mode: AffineBoundaryMode) -> Vec<BoundaryCondition> {
 /// Build the affine operator and transpose it to obtain the passive pullback.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// Returns
+/// [`tensor4all_quanticstransform::QuanticsTransformError::InvalidConfiguration`]
+/// when the affine coefficients, variable counts, or boundary conditions are
+/// invalid, and
+/// [`tensor4all_quanticstransform::QuanticsTransformError::Operation`] when the
+/// operator construction or backend conversion fails.
 ///
 pub fn build_affine_operator(
     config: &AffineTutorialConfig,
@@ -185,8 +192,9 @@ pub fn build_affine_operator(
 /// Evaluate a TreeTN at one set of site values and return the complex scalar.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// Returns [`tensor4all_treetn::TreeTNOperationError`] when the number of
+/// `site_values` differs from `site_indices`, a site index is missing from the
+/// network, or the backend evaluation fails.
 ///
 pub fn evaluate_tree_point(
     tn: &TreeTN<IdxTensor, usize>,
@@ -200,8 +208,9 @@ pub fn evaluate_tree_point(
 /// Apply the affine operator to the source QTT.
 /// # Errors
 ///
-/// Returns an error when the construction or evaluation fails (a shape
-/// /// mismatch or backend failure).
+/// Returns [`tensor4all_treetn::TreeTNOperationError`] when the source train
+/// cannot be converted to a `TreeTN`, the operator cannot be aligned to the
+/// state's site indices, or the backend contraction fails.
 ///
 pub fn apply_affine_operator(
     source: &QuanticsTensorCI2<f64>,
@@ -223,8 +232,9 @@ pub fn apply_affine_operator(
 #[allow(clippy::too_many_arguments)]
 /// # Errors
 ///
-/// Returns an error when the collection fails (a shape mismatch or
-/// /// backend failure).
+/// Returns a `quanticsgrids::QuanticsGridError` when a grid index is out of
+/// bounds and [`tensor4all_treetn::TreeTNOperationError`] when a TreeTN
+/// evaluation fails.
 ///
 pub fn collect_samples(
     periodic: &TreeTN<IdxTensor, usize>,
@@ -328,8 +338,8 @@ fn write_optional_usize(value: Option<usize>) -> String {
 /// Write dense samples to CSV.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_samples_csv(path: &Path, samples: &[AffineSamplePoint]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
@@ -368,8 +378,8 @@ pub fn write_samples_csv(path: &Path, samples: &[AffineSamplePoint]) -> Result<(
 /// Write bond-dimension rows to CSV.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_bond_dims_csv(path: &Path, rows: &[AffineBondDimRow]) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
@@ -397,8 +407,8 @@ pub fn write_bond_dims_csv(path: &Path, rows: &[AffineBondDimRow]) -> Result<(),
 /// Write affine operator bond dimensions to CSV.
 /// # Errors
 ///
-/// Returns an error when the CSV output cannot be written (an I/O
-/// /// failure).
+/// Returns an [`std::io::Error`] when the output path's parent directory is
+/// missing or the file cannot be created, written, or flushed.
 ///
 pub fn write_operator_bond_dims_csv(
     path: &Path,
@@ -469,98 +479,4 @@ pub fn print_summary(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn scratch_csv(name: &str) -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time is after the Unix epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!("{name}-{nonce}.csv"))
-    }
-
-    #[test]
-    fn transformed_reference_applies_boundary_modes() {
-        let bits = 3;
-        let n = point_count(bits);
-
-        let periodic = transformed_reference(n - 1, 2, bits, AffineBoundaryMode::Periodic);
-        assert!((periodic - source_function(1, 2, n)).abs() < 1e-12);
-
-        let open_outside = transformed_reference(n - 1, 2, bits, AffineBoundaryMode::Open);
-        assert_eq!(open_outside, 0.0);
-
-        let open_inside = transformed_reference(1, 2, bits, AffineBoundaryMode::Open);
-        assert!((open_inside - source_function(3, 2, n)).abs() < 1e-12);
-    }
-
-    #[test]
-    fn bond_dim_rows_pad_missing_profiles() {
-        assert_eq!(
-            collect_bond_dims(&[2, 3], &[5], &[6], &[7, 11, 13]),
-            vec![
-                (1, Some(2), Some(5), Some(6), Some(7)),
-                (2, Some(3), None, None, Some(11)),
-                (3, None, None, None, Some(13)),
-            ]
-        );
-
-        assert_eq!(
-            collect_operator_bond_dims(&[2], &[4], &[3, 5]),
-            vec![(1, Some(2), Some(4), Some(3)), (2, None, None, Some(5))]
-        );
-    }
-
-    #[test]
-    fn csv_writers_keep_headers_and_empty_optional_cells() -> Result<(), Box<dyn Error>> {
-        let samples_path = scratch_csv("affine-samples");
-        write_samples_csv(
-            &samples_path,
-            &[AffineSamplePoint {
-                x_index: 1,
-                y_index: 2,
-                x: 0,
-                y: 1,
-                source_u_periodic: 1,
-                source_v: 1,
-                source_exact: 0.5,
-                periodic_exact: 0.25,
-                periodic_qtt: 0.125,
-                periodic_abs_error: 0.125,
-                antiperiodic_exact: -0.25,
-                antiperiodic_qtt: -0.125,
-                antiperiodic_abs_error: 0.125,
-                open_exact: 0.0,
-                open_qtt: 0.0,
-                open_abs_error: 0.0,
-            }],
-        )?;
-        let sample_csv = fs::read_to_string(&samples_path)?;
-        assert!(sample_csv.starts_with(
-            "x_index,y_index,x,y,source_u_periodic,source_v,source_exact,periodic_exact,periodic_qtt,periodic_abs_error,antiperiodic_exact,antiperiodic_qtt,antiperiodic_abs_error,open_exact,open_qtt,open_abs_error\n"
-        ));
-        assert!(sample_csv.contains(",0.5000000000000000,0.2500000000000000,"));
-
-        let bond_dims_path = scratch_csv("affine-bonds");
-        write_bond_dims_csv(&bond_dims_path, &[(1, Some(2), None, Some(3), Some(4))])?;
-        let bond_csv = fs::read_to_string(&bond_dims_path)?;
-        assert_eq!(
-            bond_csv,
-            "bond_index,input_bond_dim,periodic_transformed_bond_dim,antiperiodic_transformed_bond_dim,open_transformed_bond_dim\n1,2,,3,4\n"
-        );
-
-        let operator_dims_path = scratch_csv("affine-operator-bonds");
-        write_operator_bond_dims_csv(&operator_dims_path, &[(1, None, Some(6), Some(8))])?;
-        let operator_csv = fs::read_to_string(&operator_dims_path)?;
-        assert_eq!(
-            operator_csv,
-            "bond_index,periodic_operator_bond_dim,antiperiodic_operator_bond_dim,open_operator_bond_dim\n1,,6,8\n"
-        );
-
-        Ok(())
-    }
-}
+mod tests;

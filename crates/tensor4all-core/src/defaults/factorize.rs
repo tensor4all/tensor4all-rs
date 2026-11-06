@@ -1,7 +1,7 @@
 //! Unified tensor factorization module.
 //!
 //! This module provides a unified `factorize()` function that dispatches to
-//! SVD, QR, LU, or CI (Cross Interpolation) algorithms based on options.
+//! SVD, RSVD, QR, LU, or CI (Cross Interpolation) algorithms based on options.
 //!
 //! # Note
 //!
@@ -32,6 +32,7 @@
 //! # }
 //! ```
 
+use super::eager_session::with_eager_session;
 use crate::defaults::idx_tensor::unfold_split_inner;
 use crate::defaults::DynIndex;
 use crate::{contract_pair, unfold_split, AnyScalar, IdxTensor};
@@ -44,7 +45,8 @@ use tenferro_ad::EagerTensor;
 use tensor4all_tensorbackend::{Matrix, TensorElement};
 
 use crate::defaults::svd::{
-    compute_retained_rank, svd_for_factorize, svd_for_factorize_in, SvdFactorizeResult,
+    compute_retained_rank, svd_for_factorize, svd_for_factorize_in, svd_for_factorize_on_session,
+    SvdFactorizeResult,
 };
 use crate::qr::{qr_with, qr_with_in, QrOptions};
 use crate::svd::SvdOptions;
@@ -63,6 +65,7 @@ pub use crate::tensor_like::{
 ///
 /// This function dispatches to the appropriate algorithm based on `options.alg`:
 /// - `SVD`: Singular Value Decomposition
+/// - `RSVD`: Fixed-rank randomized SVD (seeded convenience call)
 /// - `QR`: QR decomposition
 /// - `LU`: Rank-revealing LU decomposition
 /// - `CI`: Cross Interpolation
@@ -78,7 +81,7 @@ pub use crate::tensor_like::{
 ///
 /// # Returns
 /// A `FactorizeResult` containing the left and right factors, bond index,
-/// singular values (for SVD), and rank.
+/// singular values (for SVD/RSVD), and rank.
 ///
 /// # Errors
 /// Returns `FactorizeError` if:
@@ -87,6 +90,7 @@ pub use crate::tensor_like::{
 /// - QR is used with `Canonical::Right`
 /// - LU or CI is requested for a tracked tensor (those paths do not yet
 ///   preserve reverse-mode AD metadata)
+/// - RSVD is paired with an explicit threshold policy (`UnsupportedTruncationPolicy`)
 /// - The underlying algorithm fails
 pub fn factorize(
     t: &IdxTensor,
@@ -94,6 +98,17 @@ pub fn factorize(
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     options.validate()?;
+    if options.alg == FactorizeAlg::RSVD {
+        use rand::SeedableRng;
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rsvd_seed);
+        return crate::randomized::factorize(
+            t,
+            left_inds,
+            options,
+            &mut rng,
+            &mut crate::randomized::Route::Eager(None),
+        );
+    }
 
     if t.is_diag() {
         return Err(FactorizeError::UnsupportedStorage(
@@ -111,13 +126,149 @@ pub fn factorize(
     } else if options.alg == FactorizeAlg::CI && t.is_c32() {
         factorize_ci::<Complex32>(t, left_inds, options)
     } else if t.is_f64() {
-        factorize_impl_f64(t, left_inds, options)
+        factorize_impl::<f64>(t, left_inds, options)
     } else if t.is_c64() {
-        factorize_impl_c64(t, left_inds, options)
+        factorize_impl::<Complex64>(t, left_inds, options)
     } else {
         Err(FactorizeError::UnsupportedStorage(
             "factorize requires f64/Complex64, or f32/Complex32 with CI",
         ))
+    }
+}
+
+/// Factorize with a caller-owned RNG, preserving its stream across calls.
+///
+/// RSVD uses the positive `max_bond_dim` and `randomized` sketch options;
+/// `rsvd_seed` is ignored. Deterministic algorithms do not consume randomness.
+/// Returns the same canonical factors as [`factorize`].
+///
+/// # Errors
+/// Returns [`FactorizeError`] for invalid options or indices, unsupported
+/// storage/dtype, size overflow, or a backend failure.
+///
+/// # Examples
+/// ```
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_core::{factorize_with_rng, DynIndex, FactorizeOptions, IdxTensor, TensorContractionLike};
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+/// let a = IdxTensor::from_dense(vec![i.clone(), j], vec![3., 0., 0., 0.])?;
+/// let mut rng = ChaCha8Rng::seed_from_u64(11);
+/// let result = factorize_with_rng(&a, &[i], &FactorizeOptions::rsvd(1), &mut rng)?;
+/// assert!(a.sub(&result.left.contract_pair(&result.right)?)?.maxabs()? < 1e-12);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn factorize_with_rng<R: rand::Rng + ?Sized>(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &FactorizeOptions,
+    rng: &mut R,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    if options.alg == FactorizeAlg::RSVD {
+        crate::randomized::factorize(
+            t,
+            left_inds,
+            options,
+            rng,
+            &mut crate::randomized::Route::Eager(None),
+        )
+    } else {
+        factorize(t, left_inds, options)
+    }
+}
+
+/// Factorize with a continuous caller RNG in a caller-owned execution context.
+///
+/// Same rank, sketch and factor contracts as [`factorize_with_rng`]. Inputs,
+/// sketches and results belong to `context`; invalid inputs leave `rng` untouched.
+///
+/// # Errors
+/// Returns [`FactorizeError`] for invalid options/indices, foreign execution
+/// contexts, unsupported storage/dtype, overflow, or a backend failure.
+///
+/// # Examples
+/// ```
+/// use std::sync::Arc;
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_core::{factorize_with_rng_in, DynIndex, ExecutionContext, FactorizeOptions, IdxTensor, TensorContractionLike};
+/// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
+/// let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?)));
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+/// let a = IdxTensor::from_dense_in(&context, vec![i.clone(), j], vec![3., 0., 0., 0.])?;
+/// let mut rng = ChaCha8Rng::seed_from_u64(11);
+/// let result = factorize_with_rng_in(&a, &[i], &FactorizeOptions::rsvd(1), &mut rng, &context)?;
+/// let values = result.left.contract_pair(&result.right)?.to_vec::<f64>()?;
+/// assert!(values.iter().zip([3., 0., 0., 0.]).all(|(x, y)| (x - y).abs() < 1e-12));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn factorize_with_rng_in<R: rand::Rng + ?Sized>(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &FactorizeOptions,
+    rng: &mut R,
+    context: &ExecutionContext,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    if options.alg == FactorizeAlg::RSVD {
+        crate::randomized::factorize(
+            t,
+            left_inds,
+            options,
+            rng,
+            &mut crate::randomized::Route::Eager(Some(context)),
+        )
+    } else {
+        factorize_in(t, left_inds, options, context)
+    }
+}
+
+/// Factorize on a caller-held plain session using a caller-owned RNG.
+///
+/// Same rank, sketch and factor contracts as [`factorize_with_rng`]. All numeric
+/// operations use `session`; results are untracked host tensors. No eager runtime
+/// or second session is entered.
+///
+/// # Errors
+/// Returns [`FactorizeError`] for tracked/resident operands, unsupported storage
+/// or dtype, invalid options/indices, overflow, or a backend failure.
+///
+/// # Examples
+/// ```
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_core::{factorize_with_rng_on_session, DynIndex, FactorizeOptions, IdxTensor, TensorContractionLike};
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+/// let a = IdxTensor::from_dense(vec![i.clone(), j], vec![3., 0., 0., 0.])?;
+/// let mut rng = ChaCha8Rng::seed_from_u64(11);
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let result = {
+///     let mut session = Session::new(backend.engine_mut());
+///     factorize_with_rng_on_session(&mut session, &a, &[i], &FactorizeOptions::rsvd(1), &mut rng)?
+/// };
+/// assert!(a.sub(&result.left.contract_pair(&result.right)?)?.maxabs()? < 1e-12);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn factorize_with_rng_on_session<R: rand::Rng + ?Sized>(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &FactorizeOptions,
+    rng: &mut R,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    if options.alg == FactorizeAlg::RSVD {
+        crate::randomized::factorize(
+            t,
+            left_inds,
+            options,
+            rng,
+            &mut crate::randomized::Route::Session(session),
+        )
+    } else {
+        factorize_on_session(session, t, left_inds, options)
     }
 }
 
@@ -130,6 +281,9 @@ pub(crate) fn factorize_auto(
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    if options.alg == FactorizeAlg::RSVD {
+        return factorize(t, left_inds, options);
+    }
     if options.alg != FactorizeAlg::SVD {
         return Err(FactorizeError::InvalidOptions(
             "automatic factorization only supports SVD options",
@@ -259,10 +413,10 @@ fn factorize_gram(
         .eigenvectors
         .as_inner()
         .map_err(FactorizeError::ComputationError)?;
-    let basis_inner = eigenvectors_inner
-        .runtime()
-        .with_eager_session(|session| session.take_cols(eigenvectors_inner, &retained_columns))
-        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    let basis_inner = with_eager_session(eigenvectors_inner.runtime(), None, |session| {
+        session.take_cols(eigenvectors_inner, &retained_columns)
+    })
+    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
     let bond_index = DynIndex::new_bond(rank)
         .map_err(|error| FactorizeError::ComputationError(anyhow::anyhow!(error)))?;
     let basis_index = if eigenvectors_left {
@@ -357,10 +511,10 @@ fn reshape_factor(tensor: IdxTensor, indices: Vec<DynIndex>) -> Result<IdxTensor
     let inner = tensor
         .as_inner()
         .map_err(FactorizeError::ComputationError)?;
-    let inner = inner
-        .runtime()
-        .with_eager_session(|session| session.reshape(inner, &dims))
-        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    let inner = with_eager_session(inner.runtime(), None, |session| {
+        session.reshape(inner, &dims)
+    })
+    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
     IdxTensor::from_inner(indices, inner).map_err(FactorizeError::ComputationError)
 }
 
@@ -431,9 +585,9 @@ pub fn factorize_full_rank(
     } else if alg == FactorizeAlg::CI && t.is_c32() {
         factorize_ci_full_rank::<Complex32>(t, left_inds, canonical)
     } else if t.is_f64() {
-        factorize_impl_f64_full_rank(t, left_inds, alg, canonical)
+        factorize_impl_full_rank::<f64>(t, left_inds, alg, canonical)
     } else if t.is_c64() {
-        factorize_impl_c64_full_rank(t, left_inds, alg, canonical)
+        factorize_impl_full_rank::<Complex64>(t, left_inds, alg, canonical)
     } else {
         Err(FactorizeError::UnsupportedStorage(
             "factorize requires f64/Complex64, or f32/Complex32 with CI",
@@ -464,7 +618,7 @@ pub fn factorize_full_rank(
 ///     factorize_in, Canonical, FactorizeAlg,
 /// };
 /// use tensor4all_tensorbackend::CpuExecutionContext;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = ExecutionContext::Cpu(Arc::new(
 ///     CpuExecutionContext::from_backend(CpuBackend::new()),
@@ -495,6 +649,18 @@ pub fn factorize_in(
     context: &ExecutionContext,
 ) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     options.validate()?;
+    if options.alg == FactorizeAlg::RSVD {
+        use rand::SeedableRng;
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rsvd_seed);
+        return crate::randomized::factorize(
+            t,
+            left_inds,
+            options,
+            &mut rng,
+            &mut crate::randomized::Route::Eager(Some(context)),
+        );
+    }
+
     t.validate_context(context)
         .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
 
@@ -513,6 +679,9 @@ pub fn factorize_in(
     match options.alg {
         FactorizeAlg::SVD => factorize_svd_with_options_in(t, left_inds, options, context),
         FactorizeAlg::QR => factorize_qr_with_options_in(t, left_inds, options, context),
+        FactorizeAlg::RSVD => Err(FactorizeError::InvalidOptions(
+            "RSVD needs a fixed rank and caller RNG; use factorize_with_rng",
+        )),
         FactorizeAlg::LU | FactorizeAlg::CI => Err(FactorizeError::UnsupportedStorage(
             "LU and CI factorization have no context-scoped path; use factorize() on host inputs",
         )),
@@ -558,6 +727,7 @@ pub fn factorize_full_rank_in(
             factorize_svd_with_options_in_full_rank(t, left_inds, canonical, context)
         }
         FactorizeAlg::QR => factorize_qr_full_rank_in(t, left_inds, canonical, context),
+        FactorizeAlg::RSVD => Err(FactorizeError::InvalidOptions("RSVD needs a fixed rank and caller RNG; use factorize_with_rng")),
         FactorizeAlg::LU | FactorizeAlg::CI => Err(FactorizeError::UnsupportedStorage(
             "LU and CI factorization have no context-scoped path; use factorize_full_rank() on host inputs",
         )),
@@ -600,7 +770,30 @@ fn factorize_svd_with_eager_options_in(
 ) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     let result = svd_for_factorize_in(t, left_inds, svd_options, context)
         .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
-    assemble_svd_factors(result, canonical)
+    let mut contract =
+        |lhs: &IdxTensor, rhs: &IdxTensor| context_svd_factor_contraction(lhs, rhs, context);
+    assemble_svd_factors(result, canonical, &mut contract)
+}
+
+/// Contract two SVD factors through the caller-owned context's engine.
+///
+/// The context-scoped factorization assembles `S * V^H` (or `U * S`) after the
+/// decomposition returns, so the assembly must run on the same context engine
+/// instead of the process-global default one. `S` stays a compact diagonal, so
+/// the contraction is the structured diagonal scaling of the other factor, run
+/// as one payload einsum on `context`'s engine. The result keeps the factors'
+/// own eager runtime; only the executing engine is selected by `context`.
+fn context_svd_factor_contraction(
+    lhs: &IdxTensor,
+    rhs: &IdxTensor,
+    context: &ExecutionContext,
+) -> Result<IdxTensor, FactorizeError> {
+    lhs.try_contract_pairwise_default_with_options_in(
+        rhs,
+        crate::PairwiseContractionOptions::new(),
+        context,
+    )
+    .map_err(FactorizeError::ComputationError)
 }
 
 fn factorize_qr_with_options_in(
@@ -661,57 +854,367 @@ fn factorize_qr_with_eager_options_in(
     Ok(FactorizeResult::new(q, r, bond_index, None, rank))
 }
 
-fn factorize_impl_f64(
+/// The eager/global contraction the SVD factor assembly uses.
+fn global_svd_factor_contraction(
+    lhs: &IdxTensor,
+    rhs: &IdxTensor,
+) -> Result<IdxTensor, FactorizeError> {
+    contract_pair(lhs, rhs)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))
+}
+
+/// Factorize a tensor on a caller-held explicit session.
+///
+/// This is the runtime-free counterpart of [`factorize`] for the concrete (non-AD) frontend: the
+/// index bookkeeping, the truncation/retention policies and the factor assembly are the same code
+/// paths as the eager route, while every decomposition runs on `session` and the factors are
+/// published as plain host-storage [`IdxTensor`]s. Nothing here enters another session or the eager
+/// runtime, so a scheduler-owned lane can call it directly.
+///
+/// QR and SVD are served. LU and CI have no session route (the same restriction as
+/// [`factorize_in`]).
+///
+/// # Errors
+///
+/// Returns [`FactorizeError`] for invalid options, an unsupported storage representation or dtype
+/// (diagonal/structured payloads and tracked or device-resident values are refused), a `Right`
+/// canonical QR request, an LU/CI request, or a rejection by the supplied session.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{
+///     factorize_on_session, DynIndex, FactorizeOptions, IdxTensor, TensorContractionLike,
+/// };
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+///
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+/// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+///
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let mut session = Session::new(backend.engine_mut());
+/// let result =
+///     factorize_on_session(&mut session, &tensor, std::slice::from_ref(&i), &FactorizeOptions::svd())?;
+/// assert_eq!(result.rank, 2);
+/// let reconstructed = result.left.contract_pair(&result.right)?;
+/// assert!(tensor.sub(&reconstructed)?.maxabs()? < 1.0e-12);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn factorize_on_session(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
     t: &IdxTensor,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    options.validate()?;
+    if options.alg == FactorizeAlg::RSVD {
+        use rand::SeedableRng;
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rsvd_seed);
+        return crate::randomized::factorize(
+            t,
+            left_inds,
+            options,
+            &mut rng,
+            &mut crate::randomized::Route::Session(session),
+        );
+    }
+
+    if t.is_diag() {
+        return Err(FactorizeError::UnsupportedStorage(
+            "Diagonal storage not supported for factorize",
+        ));
+    }
+    if t.tracks_grad() {
+        return Err(FactorizeError::UnsupportedStorage(
+            "a tracked value cannot enter the plain explicit-session route; detach it explicitly before the region",
+        ));
+    }
     match options.alg {
-        FactorizeAlg::SVD => factorize_svd(t, left_inds, options),
-        FactorizeAlg::QR => factorize_qr(t, left_inds, options),
-        FactorizeAlg::LU => factorize_lu::<f64>(t, left_inds, options),
-        FactorizeAlg::CI => factorize_ci::<f64>(t, left_inds, options),
+        FactorizeAlg::SVD => factorize_svd_with_options_on_session(session, t, left_inds, options),
+        FactorizeAlg::QR => {
+            if options.canonical == Canonical::Right {
+                return Err(FactorizeError::UnsupportedCanonical(
+                    "QR only supports Canonical::Left (would need LQ for right)",
+                ));
+            }
+            let qr_options = if let Some(rtol) = options.qr_rtol {
+                QrOptions::new().with_rtol(rtol)
+            } else {
+                QrOptions::new()
+            };
+            let (q, r) = qr_factors_on_session(session, t, left_inds, &qr_options)
+                .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+            let bond_index = q.indices.last().cloned().ok_or_else(|| {
+                FactorizeError::ComputationError(anyhow::anyhow!(
+                    "QR factorization returned a rank-0 Q tensor"
+                ))
+            })?;
+            let rank = *q.dims().last().ok_or_else(|| {
+                FactorizeError::ComputationError(anyhow::anyhow!(
+                    "QR factorization returned Q with no dimensions"
+                ))
+            })?;
+            Ok(FactorizeResult::new(q, r, bond_index, None, rank))
+        }
+        FactorizeAlg::RSVD => Err(FactorizeError::InvalidOptions(
+            "RSVD needs a fixed rank and caller RNG; use factorize_with_rng",
+        )),
+        FactorizeAlg::LU | FactorizeAlg::CI => Err(FactorizeError::UnsupportedStorage(
+            "LU and CI factorization have no explicit-session path",
+        )),
     }
 }
 
-fn factorize_impl_f64_full_rank(
+/// Full-rank factorization on a caller-held explicit session.
+///
+/// The runtime-free counterpart of [`factorize_full_rank`]: the split
+/// bookkeeping and factor assembly are shared with the eager route, while the
+/// decomposition runs on `session` and the factors are published as plain
+/// host-storage [`IdxTensor`]s. Nothing here enters another session or the
+/// eager runtime, so a caller that already owns a held session (TreeTN
+/// canonicalization, for example) can call it directly.
+///
+/// QR and SVD are served. LU and CI have no session route.
+///
+/// # Errors
+///
+/// Returns [`FactorizeError`] for a diagonal, structured or tracked operand, a
+/// `Right` canonical QR request, an LU/CI request, or a rejection by the
+/// supplied session.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{
+///     factorize_full_rank_on_session, Canonical, DynIndex, FactorizeAlg, IdxTensor,
+///     TensorContractionLike,
+/// };
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+///
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(2);
+/// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+///
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let mut session = Session::new(backend.engine_mut());
+/// let result = factorize_full_rank_on_session(
+///     &mut session,
+///     &tensor,
+///     std::slice::from_ref(&i),
+///     FactorizeAlg::QR,
+///     Canonical::Left,
+/// )?;
+/// assert_eq!(result.rank, 2);
+/// let reconstructed = result.left.contract_pair(&result.right)?;
+/// assert!(tensor.sub(&reconstructed)?.maxabs()? < 1e-12);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn factorize_full_rank_on_session(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
     t: &IdxTensor,
     left_inds: &[DynIndex],
     alg: FactorizeAlg,
     canonical: Canonical,
 ) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    if t.is_diag() {
+        return Err(FactorizeError::UnsupportedStorage(
+            "Diagonal storage not supported for factorize",
+        ));
+    }
+    if t.tracks_grad() {
+        return Err(FactorizeError::UnsupportedStorage(
+            "a tracked value cannot enter the plain explicit-session route; detach it explicitly before the region",
+        ));
+    }
     match alg {
-        FactorizeAlg::SVD => factorize_svd_full_rank(t, left_inds, canonical),
-        FactorizeAlg::QR => factorize_qr_full_rank(t, left_inds, canonical),
-        FactorizeAlg::LU => factorize_lu_full_rank::<f64>(t, left_inds, canonical),
-        FactorizeAlg::CI => factorize_ci_full_rank::<f64>(t, left_inds, canonical),
+        FactorizeAlg::SVD => {
+            let options = SvdOptions::full_rank();
+            let result = if t.is_f32() {
+                svd_for_factorize_on_session::<f32>(session, t, left_inds, &options)
+            } else if t.is_f64() {
+                svd_for_factorize_on_session::<f64>(session, t, left_inds, &options)
+            } else if t.is_c32() {
+                svd_for_factorize_on_session::<Complex32>(session, t, left_inds, &options)
+            } else if t.is_c64() {
+                svd_for_factorize_on_session::<Complex64>(session, t, left_inds, &options)
+            } else {
+                Err(crate::svd::SvdError::ComputationError(anyhow::anyhow!(
+                    "the explicit-session SVD route serves floating-point tensors"
+                )))
+            }
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+            let mut contract = |lhs: &IdxTensor, rhs: &IdxTensor| {
+                crate::contract_pair_on_session(
+                    session,
+                    lhs,
+                    rhs,
+                    crate::PairwiseContractionOptions::new(),
+                )
+                .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))
+            };
+            assemble_svd_factors(result, canonical, &mut contract)
+        }
+        FactorizeAlg::QR => {
+            if canonical == Canonical::Right {
+                return Err(FactorizeError::UnsupportedCanonical(
+                    "QR only supports Canonical::Left (would need LQ for right)",
+                ));
+            }
+            factorize_qr_full_rank_on_session(session, t, left_inds)
+        }
+        FactorizeAlg::RSVD => Err(FactorizeError::InvalidOptions(
+            "RSVD needs a fixed rank and caller RNG; use factorize_with_rng",
+        )),
+        FactorizeAlg::LU | FactorizeAlg::CI => Err(FactorizeError::UnsupportedStorage(
+            "LU and CI factorization have no explicit-session path",
+        )),
     }
 }
 
-fn factorize_impl_c64(
+fn factorize_qr_full_rank_on_session(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    let options = QrOptions::full_rank();
+    let (q, r) = if t.is_f32() {
+        crate::qr::qr_with_on_session::<f32>(session, t, left_inds, &options)
+    } else if t.is_f64() {
+        crate::qr::qr_with_on_session::<f64>(session, t, left_inds, &options)
+    } else if t.is_c32() {
+        crate::qr::qr_with_on_session::<Complex32>(session, t, left_inds, &options)
+    } else if t.is_c64() {
+        crate::qr::qr_with_on_session::<Complex64>(session, t, left_inds, &options)
+    } else {
+        Err(crate::qr::QrError::ComputationError(anyhow::anyhow!(
+            "the explicit-session QR route serves floating-point tensors"
+        )))
+    }
+    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+
+    let bond_index = q
+        .indices
+        .last()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("QR factorization returned a rank-0 Q tensor"))?;
+    let rank = *q
+        .dims()
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("QR factorization returned Q with no dimensions"))?;
+    Ok(FactorizeResult::new(q, r, bond_index, None, rank))
+}
+
+/// Thin QR factors on the caller's session, in the tensor's own scalar type.
+///
+/// The session route keeps the operand dtype instead of narrowing the
+/// factorization to `f64`, so `f32`/`c32` operands factorize without a widening
+/// round trip.
+fn qr_factors_on_session(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &QrOptions,
+) -> Result<(IdxTensor, IdxTensor), crate::qr::QrError> {
+    if t.is_f32() {
+        crate::qr::qr_with_on_session::<f32>(session, t, left_inds, options)
+    } else if t.is_f64() {
+        crate::qr::qr_with_on_session::<f64>(session, t, left_inds, options)
+    } else if t.is_c32() {
+        crate::qr::qr_with_on_session::<Complex32>(session, t, left_inds, options)
+    } else if t.is_c64() {
+        crate::qr::qr_with_on_session::<Complex64>(session, t, left_inds, options)
+    } else {
+        Err(crate::qr::QrError::ComputationError(anyhow::anyhow!(
+            "the explicit-session QR route serves floating-point tensors"
+        )))
+    }
+}
+
+fn factorize_svd_with_options_on_session(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
     t: &IdxTensor,
     left_inds: &[DynIndex],
     options: &FactorizeOptions,
 ) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    let mut svd_options = SvdOptions::new();
+    if let Some(policy) = options.svd_policy {
+        svd_options = svd_options.with_policy(policy);
+    }
+    if let Some(max_bond_dim) = options.max_bond_dim {
+        svd_options = svd_options.with_max_bond_dim(max_bond_dim);
+    }
+    let result = if t.is_f32() {
+        svd_for_factorize_on_session::<f32>(session, t, left_inds, &svd_options)
+    } else if t.is_f64() {
+        svd_for_factorize_on_session::<f64>(session, t, left_inds, &svd_options)
+    } else if t.is_c32() {
+        svd_for_factorize_on_session::<Complex32>(session, t, left_inds, &svd_options)
+    } else if t.is_c64() {
+        svd_for_factorize_on_session::<Complex64>(session, t, left_inds, &svd_options)
+    } else {
+        Err(crate::svd::SvdError::ComputationError(anyhow::anyhow!(
+            "the explicit-session SVD route serves floating-point tensors"
+        )))
+    }
+    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    let mut contract = |lhs: &IdxTensor, rhs: &IdxTensor| -> Result<IdxTensor, FactorizeError> {
+        crate::contract_pair_on_session(session, lhs, rhs, crate::PairwiseContractionOptions::new())
+            .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))
+    };
+    assemble_svd_factors(result, options.canonical, &mut contract)
+}
+
+fn factorize_impl<T>(
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    options: &FactorizeOptions,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError>
+where
+    T: TensorElement
+        + ComplexFloat
+        + Default
+        + From<<T as ComplexFloat>::Real>
+        + MatrixScalar
+        + crate::MatrixLuciScalar
+        + 'static,
+    <T as ComplexFloat>::Real: Into<f64> + 'static,
+{
     match options.alg {
+        FactorizeAlg::RSVD => Err(FactorizeError::InvalidOptions(
+            "RSVD must use the randomized dispatch",
+        )),
         FactorizeAlg::SVD => factorize_svd(t, left_inds, options),
         FactorizeAlg::QR => factorize_qr(t, left_inds, options),
-        FactorizeAlg::LU => factorize_lu::<Complex64>(t, left_inds, options),
-        FactorizeAlg::CI => factorize_ci::<Complex64>(t, left_inds, options),
+        FactorizeAlg::LU => factorize_lu::<T>(t, left_inds, options),
+        FactorizeAlg::CI => factorize_ci::<T>(t, left_inds, options),
     }
 }
 
-fn factorize_impl_c64_full_rank(
+fn factorize_impl_full_rank<T>(
     t: &IdxTensor,
     left_inds: &[DynIndex],
     alg: FactorizeAlg,
     canonical: Canonical,
-) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError>
+where
+    T: TensorElement
+        + ComplexFloat
+        + Default
+        + From<<T as ComplexFloat>::Real>
+        + MatrixScalar
+        + crate::MatrixLuciScalar
+        + 'static,
+    <T as ComplexFloat>::Real: Into<f64> + 'static,
+{
     match alg {
+        FactorizeAlg::RSVD => Err(FactorizeError::InvalidOptions(
+            "RSVD is a fixed-rank approximation; use SVD for full-rank factorization",
+        )),
         FactorizeAlg::SVD => factorize_svd_full_rank(t, left_inds, canonical),
         FactorizeAlg::QR => factorize_qr_full_rank(t, left_inds, canonical),
-        FactorizeAlg::LU => factorize_lu_full_rank::<Complex64>(t, left_inds, canonical),
-        FactorizeAlg::CI => factorize_ci_full_rank::<Complex64>(t, left_inds, canonical),
+        FactorizeAlg::LU => factorize_lu_full_rank::<T>(t, left_inds, canonical),
+        FactorizeAlg::CI => factorize_ci_full_rank::<T>(t, left_inds, canonical),
     }
 }
 
@@ -748,16 +1251,17 @@ fn factorize_svd_with_options(
     svd_options: &SvdOptions,
 ) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     let result = svd_for_factorize(t, left_inds, svd_options)?;
-    assemble_svd_factors(result, canonical)
+    assemble_svd_factors(result, canonical, &mut global_svd_factor_contraction)
 }
 
 /// Absorb the SVD factors into left/right canonical form.
 ///
 /// Shared by the host and context-scoped SVD factorization paths: contracts
 /// `S` into one side and renames the leftover `sim` leg back to `bond`.
-fn assemble_svd_factors(
+pub(crate) fn assemble_svd_factors(
     result: SvdFactorizeResult,
     canonical: Canonical,
+    contract: &mut dyn FnMut(&IdxTensor, &IdxTensor) -> Result<IdxTensor, FactorizeError>,
 ) -> Result<FactorizeResult<IdxTensor>, FactorizeError> {
     let u = result.u;
     let s = result.s;
@@ -774,8 +1278,7 @@ fn assemble_svd_factors(
     match canonical {
         Canonical::Left => {
             // L = U (orthogonal), R = S * V^H
-            let right_contracted = contract_pair(&s, &vh)
-                .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
+            let right_contracted = contract(&s, &vh)?;
             let right = right_contracted
                 .replaceind(&sim_bond_index, &bond_index)
                 .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
@@ -789,8 +1292,7 @@ fn assemble_svd_factors(
         }
         Canonical::Right => {
             // L = U * S, R = V^H
-            let left_contracted = contract_pair(&u, &s)
-                .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
+            let left_contracted = contract(&u, &s)?;
             let left = left_contracted
                 .replaceind(&sim_bond_index, &bond_index)
                 .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;

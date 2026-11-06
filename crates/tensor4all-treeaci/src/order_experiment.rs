@@ -13,6 +13,7 @@ pub(crate) fn pivot_only_update<T, V, F>(
     forward: DirectedEdgeId,
     options: &TreeAciOptions<V>,
     operator: &mut F,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> Result<usize>
 where
     T: TreeAciScalar,
@@ -28,6 +29,7 @@ where
         options,
         true,
         operator,
+        context,
     )?;
     let directed =
         state
@@ -115,6 +117,7 @@ pub(crate) fn run_arm<T, V, F>(
     order: EdgeOrder,
     sweeps: usize,
     operator: &mut F,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> Result<ArmOutcome>
 where
     T: TreeAciScalar,
@@ -139,7 +142,7 @@ where
             shuffle(&mut plan, &mut rng);
         }
         for forward in plan {
-            let evaluated = pivot_only_update(state, forward, options, operator)?;
+            let evaluated = pivot_only_update(state, forward, options, operator, context)?;
             evaluated_points =
                 evaluated_points
                     .checked_add(evaluated)

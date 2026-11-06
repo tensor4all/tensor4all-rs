@@ -24,6 +24,14 @@
   `unwrap`, `expect`, unchecked indexing, poisoned-lock unwraps, or debug-only
   assertions. Return a crate-local typed error or a C API status with preserved
   diagnostic context.
+- Internal invariants that no public input can reach, and the documented
+  `# Panics` precondition of an infallible standard-trait implementation
+  (`Index`/`IndexMut`, `Clone`, ...), use
+  `tensor4all_tensorbackend::invariant_violated` only. It is the single
+  sanctioned `panic!`; the library panic audit allowlists exactly that helper
+  and reports every call site. Do not launder an internal invariant through a
+  private-helper `assert!`, and do not add typed-error plumbing for a state that
+  is unreachable by construction.
 - Fast paths and zero-size returns get the same scrutiny as the main path: a
   shortcut must not skip rank, index identity, scalar kind, topology, or layout
   checks the full path would apply.
@@ -51,6 +59,39 @@
   declaring it ready.
 - After any `origin/main` synchronization, rerun or re-monitor CI; earlier
   green checks are insufficient.
+
+## File Growth Dry Run
+
+- Issue [#917](https://github.com/tensor4all/tensor4all-rs/issues/917) supplies
+  advisory file-size reminders in the existing review-bot comment on same-repo
+  PRs without a maintainer waiver. The hosted workflow passes
+  `--dry-run --file-growth`; use the same flags for a local preview.
+- It warns when a crate source `.rs` file grows from at most 1000 lines to
+  more than 1000, or grows by at least 50 net lines while already above 2000
+  lines. The 50-line floor applies only to the already-large reminder; first
+  crossings still remind on any positive growth. These are the rollout
+  defaults, adjustable with `--file-growth-soft-limit` and
+  `--file-growth-large-limit`, plus `--file-growth-large-min-delta` for the
+  nonnegative net-growth floor (0 allows any positive growth). The diff's merge
+  base is the per-file baseline;
+  unchanged, shrinking and rename-only files produce no growth finding.
+- Counts are whole-file physical lines, including inline tests, comments and
+  blanks, not a Rust parser's production-line estimate. Conventional `test`,
+  `tests` and `generated` directories, `test.rs`/`tests.rs`/`generated.rs`,
+  `test_*`/`*_test.rs`/`*_tests.rs` and
+  `generated_*`/`*_generated.rs`/`*.generated.rs` filenames are excluded.
+  A generated marker (`@generated` or `DO NOT EDIT`, case-insensitive) in the
+  first 20 lines also excludes a file. Unmarked generated files can still warn.
+- All growth findings are advisory `warn` findings. Explain a file's coherent
+  responsibility in the PR body, or split at a meaningful boundary; the shared
+  File Organization rule forbids splitting solely to lower line counts.
+  No PR-body attestation is enforced by this first experiment.
+- Rollout evidence includes the
+  [initial 20-PR sample](docs/experiments/2026-11-03-file-growth-dry-run.md) and a
+  [second, disjoint 20-PR sample](docs/experiments/2026-11-03-file-growth-rollout.md).
+  A warning rate alone is not a false-positive rate: reviewers must assess
+  whether each reminder is useful and recalibrate defaults when warranted.
+  Reuse hints and removal-attestation reminders remain follow-up decisions.
 
 ## No Hidden Dense Materialization In Production Paths
 

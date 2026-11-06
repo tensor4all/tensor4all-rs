@@ -42,8 +42,8 @@
 //! };
 //!
 //! let options = TreeTciOptions { tolerance: 1e-10, max_iter: 5, ..Default::default() };
-//! let result = crossinterpolate2::<f64, _, _>(
-//!     evaluate, vec![2, 2], graph, vec![], options, None, &DefaultProposer,
+//! let result = crossinterpolate2::<f64, _, _, _>(
+//!     evaluate, vec![2, 2], graph, vec![], options, None, &DefaultProposer, &mut (),
 //! ).unwrap();
 //!
 //! assert_eq!(result.termination, tensor4all_treetci::TreeTciTermination::Converged);
@@ -88,6 +88,7 @@ mod interpolator;
 pub mod key;
 /// TreeTN materialization from converged TreeTCI pivots.
 pub mod materialize;
+mod observer;
 /// Optimization loop and options for TreeTCI.
 pub mod optimize;
 /// Pivot candidate generation strategies.
@@ -102,7 +103,10 @@ pub mod visitor;
 #[cfg(test)]
 mod test_support;
 
-pub use api::{crossinterpolate2, crossinterpolate2_with_rng, TreeTciRunResult};
+pub use api::{
+    crossinterpolate2, crossinterpolate2_in, crossinterpolate2_with_rng,
+    crossinterpolate2_with_rng_in, TreeTciRunResult,
+};
 pub use assemble::MultiIndex;
 pub use batch::GlobalIndexBatch;
 pub use error::{Result as TreeTciResult, TreeTciError};
@@ -111,10 +115,11 @@ pub use globalpivot::{find_global_pivots, find_global_pivots_with_rng};
 pub use graph::{TreeTciEdge, TreeTciGraph};
 pub use interpolator::TreeTciInterpolator;
 pub use key::SubtreeKey;
-pub use materialize::to_treetn;
+pub use materialize::{to_treetn, to_treetn_in};
+pub use observer::{TreeTciIteration, TreeTciObserver};
 pub use optimize::{
-    optimize_default, optimize_with_proposer, optimize_with_proposer_with_rng,
-    TreeTciOptimizationResult, TreeTciOptions, TreeTciTermination,
+    optimize_default, optimize_with_proposer, optimize_with_proposer_in,
+    optimize_with_proposer_with_rng, TreeTciOptimizationResult, TreeTciOptions, TreeTciTermination,
 };
 pub use proposer::{
     DefaultProposer, PivotCandidateProposer, SimpleProposer, TruncatedDefaultProposer,
@@ -125,20 +130,4 @@ pub use state::TreeTCI2;
 pub use visitor::{AllEdges, EdgeVisitor};
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tensor4all_core::ColMajorArray;
-
-    #[test]
-    fn two_dimensional_column_helpers_report_shape_errors() {
-        let one_dimensional = ColMajorArray::new(vec![1usize, 2, 3], vec![3]).unwrap();
-        let err = ncols_2d(&one_dimensional).unwrap_err();
-        assert!(err.to_string().contains("expected 2D ColMajorArray"));
-        assert!(err.to_string().contains("[3]"));
-
-        let matrix = ColMajorArray::new(vec![1usize, 2, 3, 4], vec![2, 2]).unwrap();
-        let err = column_2d(&matrix, 2).unwrap_err();
-        assert!(err.to_string().contains("column 2 is out of range"));
-        assert!(err.to_string().contains("[2, 2]"));
-    }
-}
+mod tests;

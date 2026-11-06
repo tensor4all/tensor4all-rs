@@ -58,6 +58,7 @@ pub const MEASUREMENT_ROUNDING_FACTOR: f64 = 648.0;
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::MeasurementMethod;
 ///
 /// assert_ne!(MeasurementMethod::Exhaustive, MeasurementMethod::Sampled);
+/// assert_ne!(MeasurementMethod::ResidualTt, MeasurementMethod::Sampled);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -80,6 +81,15 @@ pub enum MeasurementMethod {
     /// then report a small error, and the standard error, computed from the
     /// same points, does not reveal the miss.
     Sampled,
+    /// The residual was approximated by a residual TT built from the same
+    /// engine and its exact norm was divided by `sqrt(|P|)`
+    /// ([`L2Estimator::ResidualTt`](super::L2Estimator::ResidualTt)). An
+    /// estimate, not a bound: the residual TT is capped, and a run that
+    /// reaches the cap falls back to the larger of its norm and the uniform
+    /// sample's RMS. [`L2Measurement::residual_rms`],
+    /// [`L2Measurement::residual_saturated`], and
+    /// [`L2Measurement::sample_rms`] say how the estimate was formed.
+    ResidualTt,
 }
 
 /// One L2 measurement of a patch residual `r = f - f~_P` (under
@@ -92,6 +102,8 @@ pub enum MeasurementMethod {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -103,21 +115,29 @@ pub enum MeasurementMethod {
 /// // One node with one site: the root is built exactly from its four values.
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node(0usize)?;
-/// let result = patched_interpolate(
+/// let result = {
+///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(4)])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| 1.0 + x as f64).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
-/// )?;
+/// )
+/// }?;
 /// let measurement = result.report.accepted[0].acceptance.as_ref().unwrap();
 /// assert_eq!(measurement.method, MeasurementMethod::Exact);
 /// assert_eq!((measurement.points, measurement.patch_points), (4, 4.0));
 /// assert_eq!(measurement.rms, 0.0);
 /// assert_eq!(measurement.error_norm(), Some(0.0));
+/// // An exact measurement carries none of the residual-estimator fields.
+/// assert_eq!(measurement.residual_rms, None);
+/// assert_eq!(measurement.sample_rms, None);
+/// assert!(!measurement.residual_saturated);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, PartialEq)]
@@ -126,20 +146,44 @@ pub struct L2Measurement {
     /// How the residual was measured.
     pub method: MeasurementMethod,
     /// Points measured: `|P|` for `Exact` and `Exhaustive`, the drawn sample
-    /// count (duplicates included) for `Sampled`.
+    /// count (duplicates included) for `Sampled`, and for `ResidualTt` the
+    /// size of the uniform seed sample, whose points are not the residual
+    /// run's.
     pub points: usize,
     /// `|P|` as `f64` (inexact above `2^53`).
     pub patch_points: f64,
-    /// `rms_P(f - f~_P)` over the measured points; exact (up to rounding) for
-    /// `Exact` and `Exhaustive`.
+    /// The measured or estimated `rms_P(f - f~_P)`: exact (up to rounding)
+    /// for `Exact` and `Exhaustive`, the sampled RMS for `Sampled`, and the
+    /// deciding estimate of the residual run for `ResidualTt`.
     pub rms: f64,
-    /// Standard error of the mean square divided by the mean square; `0`
-    /// unless `Sampled`, and `0` when the mean square is `0`, which carries
-    /// no information. It is computed from the measured points, so it does
-    /// not reveal a residual concentrated on points that were not drawn.
+    /// Standard error of the mean square divided by the mean square, the
+    /// Monte-Carlo-only diagnostic of the measured sample. It is `0` for
+    /// `Exact`, `Exhaustive`, and a [`MeasurementMethod::ResidualTt`]
+    /// estimate that did not saturate its bond cap; for a saturated residual
+    /// estimate it is the standard error of the seed sample that co-decided
+    /// the value. It is computed from the sampled points, so it does not
+    /// reveal a residual concentrated on points that were not drawn.
     pub mean_square_rel_std_error: f64,
-    /// Largest `|f - f~_P|` over the measured points.
+    /// Largest `|f - f~_P|` over the measured points (the seed sample for
+    /// [`MeasurementMethod::ResidualTt`], which does not evaluate the
+    /// residual TT at these points).
     pub max_residual: f64,
+    /// `||TT_r||_2 / sqrt(|P|)` of the residual TT, when a residual run
+    /// produced the measurement ([`MeasurementMethod::ResidualTt`]); `None`
+    /// otherwise. It is `Some(0.0)` when every initial pivot of the residual
+    /// run was exactly zero and the engine returned
+    /// `InterpolationError::AllSamplesZero` before its global pivot search.
+    pub residual_rms: Option<f64>,
+    /// Whether the residual run that decided this measurement did not
+    /// converge, so the reported `rms` is the larger of `residual_rms` and
+    /// `sample_rms`. [`PatchedInterpolationReport::residual_saturations`]
+    /// counts the patches whose deciding residual run specifically reached
+    /// the bond cap.
+    pub residual_saturated: bool,
+    /// The RMS of the uniform seed sample (`measurement.rms` for a
+    /// [`MeasurementMethod::Sampled`] measurement, where it is the deciding
+    /// value). `None` when no uniform sample was drawn.
+    pub sample_rms: Option<f64>,
 }
 
 impl L2Measurement {
@@ -149,6 +193,8 @@ impl L2Measurement {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -170,16 +216,20 @@ impl L2Measurement {
     ///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(18.0_f64.sqrt())))
     ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
     ///     .with_min_patch_bits(2);
-    /// let result = patched_interpolate(
+    /// let result = {
+    ///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    ///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+    ///         patched_interpolate(
     ///     &TreeTciInterpolator::default(),
     ///     topology,
     ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
-    ///     ColMajorArray::new(vec![0, 0], vec![2, 1])?,
-    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///     ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap(), &mut ctx,
+    ///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///         Ok(batch.data().chunks(2).map(f).collect())
     ///     },
     ///     &options,
-    /// )?;
+    /// )
+    /// }?;
     /// let measurement = result.report.accepted[0].acceptance.as_ref().unwrap();
     /// // All nine points of the patch were measured, and the error exceeds tau.
     /// assert_eq!(measurement.patch_points, 9.0);
@@ -189,6 +239,24 @@ impl L2Measurement {
     /// ```
     pub fn error_norm(&self) -> Option<f64> {
         finite(self.patch_points.sqrt() * self.rms)
+    }
+
+    /// The residual-TT value of the measurement for error messages: the
+    /// number, or `none` when no residual run contributed.
+    pub(super) fn residual_text(&self) -> String {
+        match self.residual_rms {
+            Some(value) => format!("{value}"),
+            None => "none".to_string(),
+        }
+    }
+
+    /// The uniform seed sample's RMS for error messages: the number, or
+    /// `none` when no sample was drawn.
+    pub(super) fn sample_text(&self) -> String {
+        match self.sample_rms {
+            Some(value) => format!("{value}"),
+            None => "none".to_string(),
+        }
     }
 }
 
@@ -206,6 +274,8 @@ impl L2Measurement {
 /// allowance.
 ///
 /// ```
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -217,16 +287,20 @@ impl L2Measurement {
 /// // An exactly evaluated root meets its allowance.
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node(0usize)?;
-/// let result = patched_interpolate(
+/// let result = {
+///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(3)])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| 1.0 + x as f64).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
-/// )?;
+/// )
+/// }?;
 /// assert_eq!(result.report.accepted[0].status, PatchStatus::WithinTolerance);
 /// assert!(result.report.tolerance_met());
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -234,9 +308,10 @@ impl L2Measurement {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PatchStatus {
-    /// The patch meets its allowance: under L2 its acceptance measurement is
-    /// at most `tau`; under `SampledMax` the engine converged or its estimate
-    /// is at most the engine tolerance.
+    /// The patch meets its allowance: under L2 the acceptance estimate of
+    /// the selected [`L2Estimator`](super::L2Estimator) is at most `tau`;
+    /// under `SampledMax` the engine converged or its estimate is at most the
+    /// engine tolerance.
     WithinTolerance,
     /// The minimum patch size blocked the split of a patch whose last engine
     /// run missed its allowance; the patch was retained with that run.
@@ -248,6 +323,8 @@ pub enum PatchStatus {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -262,16 +339,20 @@ pub enum PatchStatus {
 /// let site = DynIndex::new_dyn(4);
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node(0usize)?;
-/// let result = patched_interpolate(
+/// let result = {
+///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![site])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| x as f64 - 1.0).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2).with_error_norm(ErrorNorm::sampled_max()),
-/// )?;
+/// )
+/// }?;
 /// let record = &result.report.accepted[0];
 /// assert!(record.projector.is_empty());
 /// assert_eq!(record.termination, InterpolationTermination::Converged);
@@ -309,10 +390,11 @@ pub struct PatchRecord {
     pub retries_used: usize,
     /// The measurement that decided the patch (under L2 only): the passing
     /// one, or for a [`PatchStatus::ToleranceNotMet`] patch its last failed
-    /// one.
+    /// one. Its method says which estimator decided it.
     pub acceptance: Option<L2Measurement>,
-    /// The independent audit of a `Sampled` acceptance (under L2 with
-    /// [`VerificationOptions::audit`](super::VerificationOptions::audit)).
+    /// The independent audit of a sampled acceptance (under L2 with
+    /// [`VerificationOptions::audit`](super::VerificationOptions::audit)); it
+    /// uses the same estimator as the acceptance.
     pub audit: Option<L2Measurement>,
     /// Whether the patch meets its allowance.
     pub status: PatchStatus,
@@ -324,6 +406,8 @@ pub struct PatchRecord {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -335,16 +419,20 @@ pub struct PatchRecord {
 /// // f vanishes everywhere: the exact root is a zero patch.
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node(0usize)?;
-/// let result = patched_interpolate(
+/// let result = {
+///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(3)])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(vec![0.0; batch.shape()[1]])
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
-/// )?;
+/// )
+/// }?;
 /// let zero = &result.report.zero_patches[0];
 /// assert!(zero.projector.is_empty());
 /// assert_eq!(zero.acceptance.as_ref().unwrap().method, MeasurementMethod::Exact);
@@ -435,6 +523,8 @@ pub enum MaxReferenceSource {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -446,16 +536,20 @@ pub enum MaxReferenceSource {
 /// // An exactly evaluated root with values (3, 4), so ||f|| = 5.
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node(0usize)?;
-/// let result = patched_interpolate(
+/// let result = {
+///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
-/// )?;
+/// )
+/// }?;
 /// let error = result.report.norm.l2_error().unwrap();
 /// let approximation_rms = error.approximation_rms.unwrap();
 /// let GlobalL2Error::Certified {
@@ -505,21 +599,29 @@ pub enum GlobalL2Error {
         /// The bound relies on `||f~||` from `TreeTN::log_norm`.
         relative_error_bound: Option<f64>,
     },
-    /// Every `Sampled` contribution has an audit: an estimate, not a bound,
-    /// and not a guarantee. The audits sample uniformly, like the acceptance,
-    /// so a residual concentrated on a small set (for example a localized
-    /// feature that enters a patch only through a corner or an edge) can be
-    /// missed by both; `rms_error_estimate` and `mean_square_rel_std_error`
-    /// can then both be small while the true `E` is orders of magnitude
-    /// larger. Only [`GlobalL2Error::Certified`] bounds `E`, and only up to
-    /// the rounding model of [`MEASUREMENT_ROUNDING_FACTOR`].
+    /// Every non-exact contribution has an audit: an estimate, not a bound,
+    /// and not a guarantee. Under
+    /// [`L2Estimator::UniformMonteCarlo`](super::L2Estimator::UniformMonteCarlo)
+    /// the audits sample uniformly, like the acceptance, so a residual
+    /// concentrated on a small set (for example a localized feature that
+    /// enters a patch only through a corner or an edge) can be missed by
+    /// both; `rms_error_estimate` and `mean_square_rel_std_error` can then
+    /// both be small while the true `E` is orders of magnitude larger.
+    /// [`L2Estimator::ResidualTt`](super::L2Estimator::ResidualTt) starts its
+    /// residual run from the patch corners and edges instead, but its value
+    /// is still an estimate: the residual TT is capped, and a run that
+    /// reaches the cap falls back to a uniform sample. Only
+    /// [`GlobalL2Error::Certified`] bounds `E`, and only up to the rounding
+    /// model of [`MEASUREMENT_ROUNDING_FACTOR`].
     #[non_exhaustive]
     Audited {
         /// Estimated `E / sqrt(|X|)` (exact and exhaustive contributions as
         /// measured, sampled ones from their audits).
         rms_error_estimate: f64,
         /// Relative standard error of `rms_error_estimate^2`, from the audit
-        /// samples; it says nothing about a residual the audits did not draw.
+        /// samples (a Monte-Carlo diagnostic: a converged residual-TT term
+        /// contributes none); it says nothing about a residual the audits did
+        /// not draw.
         mean_square_rel_std_error: f64,
         /// Plug-in estimate of the bound `E / (||f~|| - E)` with the audited
         /// estimate of `E` inserted; not an unbiased estimate of `E / ||f||`,
@@ -529,7 +631,7 @@ pub enum GlobalL2Error {
         /// `TreeTN::log_norm`.
         relative_bound_estimate: Option<f64>,
     },
-    /// Some `Sampled` contribution has no audit: the combined acceptance
+    /// Some non-exact contribution has no audit: the combined acceptance
     /// statistics, which are neither a bound nor an estimate of `E`. No
     /// relative statement exists.
     #[non_exhaustive]
@@ -561,6 +663,8 @@ pub enum GlobalL2Error {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -588,16 +692,20 @@ pub enum GlobalL2Error {
 ///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
 ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
 ///     .with_min_patch_bits(2);
-/// let result = patched_interpolate(
+/// let result = {
+///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     node_sites,
-///     ColMajorArray::new(vec![0, 0], vec![2, 1])?,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap(), &mut ctx,
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().chunks(2).map(f).collect())
 ///     },
 ///     &options,
-/// )?;
+/// )
+/// }?;
 /// let record = &result.report.accepted[0];
 /// assert_eq!(record.status, PatchStatus::ToleranceNotMet);
 /// assert_eq!(record.termination, InterpolationTermination::BondCapReached);
@@ -637,7 +745,7 @@ pub enum ToleranceNotMetBasis {
         /// `E / ||f||` from the measured value, never from `tau`.
         relative_error_bound: Option<f64>,
     },
-    /// Every `Sampled` contribution has an audit: `measured_rms` is an
+    /// Every non-exact contribution has an audit: `measured_rms` is an
     /// estimate, as in [`GlobalL2Error::Audited`].
     #[non_exhaustive]
     Audited {
@@ -646,7 +754,7 @@ pub enum ToleranceNotMetBasis {
         /// As in [`GlobalL2Error::Audited`].
         relative_bound_estimate: Option<f64>,
     },
-    /// Some `Sampled` contribution has no audit: `measured_rms` combines
+    /// Some non-exact contribution has no audit: `measured_rms` combines
     /// acceptance statistics, neither a bound nor an estimate.
     AcceptanceOnly,
 }
@@ -658,6 +766,8 @@ impl GlobalL2Error {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -679,16 +789,20 @@ impl GlobalL2Error {
     ///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(18.0_f64.sqrt())))
     ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
     ///     .with_min_patch_bits(2);
-    /// let result = patched_interpolate(
+    /// let result = {
+    ///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    ///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+    ///         patched_interpolate(
     ///     &TreeTciInterpolator::default(),
     ///     topology,
     ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
-    ///     ColMajorArray::new(vec![0, 0], vec![2, 1])?,
-    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///     ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap(), &mut ctx,
+    ///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///         Ok(batch.data().chunks(2).map(f).collect())
     ///     },
     ///     &options,
-    /// )?;
+    /// )
+    /// }?;
     /// let global = &result.report.norm.l2_error().unwrap().global;
     /// let GlobalL2Error::ToleranceNotMet { measured_rms, .. } = global else {
     ///     panic!("the retained patch misses its allowance");
@@ -718,6 +832,8 @@ impl GlobalL2Error {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -729,16 +845,20 @@ impl GlobalL2Error {
 /// // An exact root: certified with zero error and a zero relative bound.
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node(0usize)?;
-/// let result = patched_interpolate(
+/// let result = {
+///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
-/// )?;
+/// )
+/// }?;
 /// let error = result.report.norm.l2_error().unwrap();
 /// assert_eq!(error.domain_points, 2.0);
 /// assert_eq!(error.certified_fraction, 1.0);
@@ -781,6 +901,8 @@ impl L2ErrorReport {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -802,16 +924,20 @@ impl L2ErrorReport {
     ///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(18.0_f64.sqrt())))
     ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
     ///     .with_min_patch_bits(2);
-    /// let result = patched_interpolate(
+    /// let result = {
+    ///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    ///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+    ///         patched_interpolate(
     ///     &TreeTciInterpolator::default(),
     ///     topology,
     ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
-    ///     ColMajorArray::new(vec![0, 0], vec![2, 1])?,
-    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///     ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap(), &mut ctx,
+    ///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///         Ok(batch.data().chunks(2).map(f).collect())
     ///     },
     ///     &options,
-    /// )?;
+    /// )
+    /// }?;
     /// let error = result.report.norm.l2_error().unwrap();
     /// assert_eq!(error.domain_points, 9.0);
     /// assert_eq!(error.error_norm(), Some(3.0 * error.global.rms_value()));
@@ -829,6 +955,8 @@ impl L2ErrorReport {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -840,16 +968,20 @@ impl L2ErrorReport {
     /// // An exactly evaluated root with values (3, 4), so ||f|| = 5.
     /// let mut topology = NodeNameNetwork::new();
     /// topology.add_node(0usize)?;
-    /// let result = patched_interpolate(
+    /// let result = {
+    ///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    ///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+    ///         patched_interpolate(
     ///     &TreeTciInterpolator::default(),
     ///     topology,
     ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-    ///     ColMajorArray::new(vec![], vec![1, 0])?,
-    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
+    ///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///         Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
     ///     },
     ///     &PatchedInterpolationOptions::new(2),
-    /// )?;
+    /// )
+    /// }?;
     /// let error = result.report.norm.l2_error().unwrap();
     /// let norm = error.approximation_norm().unwrap();
     /// assert!((norm - 5.0).abs() < 1e-12);
@@ -867,6 +999,8 @@ impl L2ErrorReport {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -881,16 +1015,20 @@ impl L2ErrorReport {
 /// topology.add_node(0usize)?;
 /// let options = PatchedInterpolationOptions::new(2)
 ///     .with_tolerance(ErrorTolerance { rtol: 1e-3, atol: 0.0 });
-/// let result = patched_interpolate(
+/// let result = {
+///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
 ///     },
 ///     &options,
-/// )?;
+/// )
+/// }?;
 /// let norm = &result.report.norm;
 /// assert!(matches!(norm, NormReport::L2 { source: L2ReferenceSource::ExactRoot, .. }));
 /// assert!((norm.reference_norm().unwrap() - 5.0).abs() < 1e-12);
@@ -933,6 +1071,8 @@ impl NormReport {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -946,16 +1086,20 @@ impl NormReport {
     /// let run = |options: &PatchedInterpolationOptions| {
     ///     let mut topology = NodeNameNetwork::new();
     ///     topology.add_node(0usize)?;
-    ///     patched_interpolate(
+    ///     {
+    ///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    ///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+    ///         patched_interpolate(
     ///         &TreeTciInterpolator::default(),
     ///         topology,
     ///         BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-    ///         ColMajorArray::new(vec![], vec![1, 0])?,
-    ///         |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///         ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
+    ///         |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///             Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
     ///         },
     ///         options,
     ///     )
+    /// }
     ///     .map_err(Box::<dyn std::error::Error>::from)
     /// };
     /// let l2 = PatchedInterpolationOptions::new(2)
@@ -981,6 +1125,8 @@ impl NormReport {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -994,16 +1140,20 @@ impl NormReport {
     /// let run = |options: &PatchedInterpolationOptions| {
     ///     let mut topology = NodeNameNetwork::new();
     ///     topology.add_node(0usize)?;
-    ///     patched_interpolate(
+    ///     {
+    ///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    ///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+    ///         patched_interpolate(
     ///         &TreeTciInterpolator::default(),
     ///         topology,
     ///         BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-    ///         ColMajorArray::new(vec![], vec![1, 0])?,
-    ///         |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///         ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
+    ///         |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///             Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
     ///         },
     ///         options,
     ///     )
+    /// }
     ///     .map_err(Box::<dyn std::error::Error>::from)
     /// };
     /// let l2 = PatchedInterpolationOptions::new(2)
@@ -1028,6 +1178,8 @@ impl NormReport {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1041,16 +1193,20 @@ impl NormReport {
     /// let run = |options: &PatchedInterpolationOptions| {
     ///     let mut topology = NodeNameNetwork::new();
     ///     topology.add_node(0usize)?;
-    ///     patched_interpolate(
+    ///     {
+    ///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    ///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+    ///         patched_interpolate(
     ///         &TreeTciInterpolator::default(),
     ///         topology,
     ///         BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-    ///         ColMajorArray::new(vec![], vec![1, 0])?,
-    ///         |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///         ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
+    ///         |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///             Ok(batch.data().iter().map(|&x| if x == 0 { 3.0 } else { 4.0 }).collect())
     ///         },
     ///         options,
     ///     )
+    /// }
     ///     .map_err(Box::<dyn std::error::Error>::from)
     /// };
     /// let l2 = PatchedInterpolationOptions::new(2)
@@ -1085,6 +1241,8 @@ impl NormReport {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1103,17 +1261,21 @@ impl NormReport {
 /// topology.add_edge(&0, &1)?;
 /// let node_sites = BTreeMap::from([(0usize, vec![a.clone()]), (1, vec![b.clone()])]);
 /// let f = |p: &[usize]| if p[0] == 1 { 1.0 + p[1] as f64 } else { (p[1] * p[1]) as f64 };
-/// let result = patched_interpolate(
+/// let result = {
+///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     node_sites,
-///     ColMajorArray::new(vec![1, 2], vec![2, 1])?,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     ColMajorArray::new(vec![1, 2], vec![2, 1]).unwrap(), &mut ctx,
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().chunks(2).map(f).collect())
 ///     },
 ///     &PatchedInterpolationOptions::new(2)
 ///         .with_error_norm(ErrorNorm::sampled_max_with_reference(4.0)),
-/// )?;
+/// )
+/// }?;
 /// let report = &result.report;
 /// assert!(matches!(report.norm, NormReport::SampledMax { max_reference, .. } if max_reference == 4.0));
 /// assert_eq!(report.splits, 1);
@@ -1124,6 +1286,8 @@ impl NormReport {
 /// // Six points in total, each evaluated once; SampledMax measures nothing.
 /// assert_eq!(report.function_evaluations, 6);
 /// assert_eq!(report.measurement_evaluations, 0);
+/// assert_eq!(report.residual_evaluations, 0);
+/// assert_eq!(report.residual_saturations, 0);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]
@@ -1152,6 +1316,17 @@ pub struct PatchedInterpolationReport {
     pub measurement_evaluations: usize,
     /// The part of `measurement_evaluations` made by audits.
     pub audit_evaluations: usize,
+    /// The part of `measurement_evaluations` made by the residual-TT
+    /// estimator: the residual run itself and the evaluation of its pivots.
+    /// Zero under
+    /// [`L2Estimator::UniformMonteCarlo`](super::L2Estimator::UniformMonteCarlo).
+    pub residual_evaluations: usize,
+    /// Number of patches whose deciding residual run ended at its bond cap
+    /// without converging, so the deciding estimate was the larger of the
+    /// residual norm and the uniform sample's RMS. A patch counts once. Zero
+    /// under
+    /// [`L2Estimator::UniformMonteCarlo`](super::L2Estimator::UniformMonteCarlo).
+    pub residual_saturations: usize,
     /// Number of measurements of engine outcomes that exceeded the
     /// allowance, including those of retained
     /// [`PatchStatus::ToleranceNotMet`] patches.
@@ -1169,6 +1344,8 @@ impl PatchedInterpolationReport {
     /// # Examples
     ///
     /// ```
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
     /// use std::collections::BTreeMap;
     /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
     /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1190,16 +1367,20 @@ impl PatchedInterpolationReport {
     ///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(18.0_f64.sqrt())))
     ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
     ///     .with_min_patch_bits(2);
-    /// let result = patched_interpolate(
+    /// let result = {
+    ///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    ///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+    ///         patched_interpolate(
     ///     &TreeTciInterpolator::default(),
     ///     topology,
     ///     BTreeMap::from([(0usize, vec![x]), (1, vec![y])]),
-    ///     ColMajorArray::new(vec![0, 0], vec![2, 1])?,
-    ///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    ///     ColMajorArray::new(vec![0, 0], vec![2, 1]).unwrap(), &mut ctx,
+    ///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///         Ok(batch.data().chunks(2).map(f).collect())
     ///     },
     ///     &options,
-    /// )?;
+    /// )
+    /// }?;
     /// assert_eq!(result.report.accepted[0].status, PatchStatus::ToleranceNotMet);
     /// assert!(!result.report.tolerance_met());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -1216,6 +1397,8 @@ impl PatchedInterpolationReport {
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -1228,16 +1411,20 @@ impl PatchedInterpolationReport {
 /// let site = DynIndex::new_dyn(3);
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node(0usize)?;
-/// let result = patched_interpolate(
+/// let result = {
+///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     BTreeMap::from([(0usize, vec![site])]),
-///     ColMajorArray::new(vec![], vec![1, 0])?,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(vec![0.0; batch.shape()[1]])
 ///     },
 ///     &PatchedInterpolationOptions::new(2),
-/// )?;
+/// )
+/// }?;
 /// assert!(result.partition.is_empty());
 /// assert_eq!(result.report.zero_patches.len(), 1);
 /// # Ok::<(), Box<dyn std::error::Error>>(())

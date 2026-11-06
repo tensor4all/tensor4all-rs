@@ -1,6 +1,18 @@
 use super::*;
 use std::collections::BTreeMap;
+use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+use tensor4all_treetn::interpolation::Parallelism;
 use tensor4all_treetn::NodeNameNetwork;
+
+/// Run `f` with an evaluation context over one caller-owned engine, so unit tests of
+/// evaluator handling use the same explicit capability production runs use.
+fn with_context<R>(f: impl FnOnce(&mut EvalContext<'_>) -> R) -> R {
+    let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    f(&mut EvalContext::new(
+        Session::new(backend.engine_mut()),
+        Parallelism::Serial,
+    ))
+}
 
 #[test]
 fn map_termination_applies_the_cap_precedence() {
@@ -284,45 +296,163 @@ fn layout_with_a_fused_vertex_takes_the_general_path() {
 
 #[test]
 fn call_evaluator_marks_errors_and_wrong_lengths() {
-    let data = [0usize, 1, 1, 0];
-    let short = |_: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> { Ok(vec![1.0]) };
-    let error = call_evaluator(&short, &data, 2).unwrap_err();
-    assert!(has_evaluator_failure(error.as_ref()));
-    assert!(format!("{error:#}").contains("returned 1 values for 2 points"));
+    with_context(|ctx| {
+        let data = [0usize, 1, 1, 0];
+        let mut short = |_: ColMajorArrayRef<'_, usize>,
+                         _: &mut EvalContext<'_>|
+         -> anyhow::Result<Vec<f64>> { Ok(vec![1.0]) };
+        let error = call_evaluator(&mut short, &data, 2, ctx).unwrap_err();
+        assert!(has_evaluator_failure(error.as_ref()));
+        assert!(format!("{error:#}").contains("returned 1 values for 2 points"));
 
-    let failing =
-        |_: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> { anyhow::bail!("nope") };
-    let error = call_evaluator(&failing, &data, 2).unwrap_err();
-    assert!(has_evaluator_failure(error.as_ref()));
+        let mut failing = |_: ColMajorArrayRef<'_, usize>,
+                           _: &mut EvalContext<'_>|
+         -> anyhow::Result<Vec<f64>> { anyhow::bail!("nope") };
+        let error = call_evaluator(&mut failing, &data, 2, ctx).unwrap_err();
+        assert!(has_evaluator_failure(error.as_ref()));
 
-    let echo = |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
-        assert_eq!(batch.shape(), &[2, 2]);
-        Ok(batch
-            .data()
-            .chunks(2)
-            .map(|p| (p[0] * 10 + p[1]) as f64)
-            .collect())
-    };
-    assert_eq!(call_evaluator(&echo, &data, 2).unwrap(), vec![1.0, 10.0]);
+        let mut echo = |batch: ColMajorArrayRef<'_, usize>,
+                        _: &mut EvalContext<'_>|
+         -> anyhow::Result<Vec<f64>> {
+            assert_eq!(batch.shape(), &[2, 2]);
+            Ok(batch
+                .data()
+                .chunks(2)
+                .map(|p| (p[0] * 10 + p[1]) as f64)
+                .collect())
+        };
+        assert_eq!(
+            call_evaluator(&mut echo, &data, 2, ctx).unwrap(),
+            vec![1.0, 10.0]
+        );
+    });
 }
 
 #[test]
 fn call_evaluator_rejects_non_finite_complex_components_and_magnitudes() {
     use num_complex::Complex64;
-    for bad in [
-        Complex64::new(f64::NAN, 1.0),
-        Complex64::new(1.0, f64::INFINITY),
-        Complex64::new(f64::MAX, f64::MAX),
-    ] {
-        let evaluate = |_: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<Complex64>> {
-            Ok(vec![Complex64::new(1.0, 0.0), bad])
-        };
-        let error = call_evaluator(&evaluate, &[0, 1], 1).unwrap_err();
-        assert!(has_evaluator_failure(error.as_ref()));
-        let message = format!("{error:#}");
-        assert!(
-            message.contains("batch point 1, coordinates [1]"),
-            "{message}"
-        );
+    with_context(|ctx| {
+        for bad in [
+            Complex64::new(f64::NAN, 1.0),
+            Complex64::new(1.0, f64::INFINITY),
+            Complex64::new(f64::MAX, f64::MAX),
+        ] {
+            let mut evaluate = |_: ColMajorArrayRef<'_, usize>,
+                                _: &mut EvalContext<'_>|
+             -> anyhow::Result<Vec<Complex64>> {
+                Ok(vec![Complex64::new(1.0, 0.0), bad])
+            };
+            let error = call_evaluator(&mut evaluate, &[0, 1], 1, ctx).unwrap_err();
+            assert!(has_evaluator_failure(error.as_ref()));
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("batch point 1, coordinates [1]"),
+                "{message}"
+            );
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Problem-supplied global search starts (issue #1033).
+// ---------------------------------------------------------------------------
+
+/// Chain of six binary nodes, one binary site per node.
+const CORNER_NODES: usize = 6;
+
+/// f = 1 + 10 * delta at the all-ones corner: a flat field except one corner.
+fn corner_function(point: &[usize]) -> f64 {
+    if point.iter().all(|&coordinate| coordinate == 1) {
+        11.0
+    } else {
+        1.0
     }
+}
+
+fn corner_evaluate(
+    batch: ColMajorArrayRef<'_, usize>,
+    _ctx: &mut EvalContext<'_>,
+) -> anyhow::Result<Vec<f64>> {
+    Ok(batch
+        .data()
+        .chunks(batch.shape()[0])
+        .map(corner_function)
+        .collect())
+}
+
+/// The chain problem with its only initial pivot at the all-zero corner and,
+/// when given, extra global search starts in site order.
+fn corner_chain_problem(starts: Option<ColMajorArray<usize>>) -> InterpolationProblem<usize> {
+    let mut topology = NodeNameNetwork::new();
+    for node in 0..CORNER_NODES {
+        topology.add_node(node).unwrap();
+    }
+    for node in 0..CORNER_NODES - 1 {
+        topology.add_edge(&node, &(node + 1)).unwrap();
+    }
+    let node_sites = (0..CORNER_NODES)
+        .map(|node| (node, vec![DynIndex::new_dyn(2)]))
+        .collect();
+    let pivots = ColMajorArray::new(vec![0; CORNER_NODES], vec![CORNER_NODES, 1]).unwrap();
+    // Seed 34: the ten random starts of each of the first three searches keep
+    // at least two zero coordinates, so the corner stays unreachable for the
+    // unstarted run below.
+    let problem = InterpolationProblem::new(topology, node_sites, pivots, 1e-10, None, 34).unwrap();
+    match starts {
+        Some(starts) => problem.with_global_search_starts(starts).unwrap(),
+        None => problem,
+    }
+}
+
+#[test]
+fn interpolator_forwards_problem_global_search_starts() {
+    let corner = vec![1usize; CORNER_NODES];
+    with_context(|ctx| {
+        // Without a start, the seeded random search misses the corner and the
+        // run converges to the constant field 1, which is the initial pivot's
+        // cross-section everywhere.
+        let problem = corner_chain_problem(None);
+        let without = TreeTciInterpolator::default()
+            .interpolate(&problem, &mut *ctx, corner_evaluate)
+            .unwrap();
+        assert_eq!(without.termination, InterpolationTermination::Converged);
+        let value = without
+            .network
+            .evaluate_point(problem.site_order(), &corner)
+            .unwrap()
+            .real();
+        assert!(
+            (value - 1.0).abs() < 1e-12,
+            "the corner feature should be missed without a start, got {value}"
+        );
+
+        // Forwarding the problem's start through the run options lets the
+        // engine's global search find the corner, and the rank-2 result is
+        // exact.
+        let starts = ColMajorArray::new(corner.clone(), vec![CORNER_NODES, 1]).unwrap();
+        let problem = corner_chain_problem(Some(starts));
+        let with = TreeTciInterpolator::default()
+            .interpolate(&problem, &mut *ctx, corner_evaluate)
+            .unwrap();
+        assert_eq!(with.termination, InterpolationTermination::Converged);
+        let value = with
+            .network
+            .evaluate_point(problem.site_order(), &corner)
+            .unwrap()
+            .real();
+        assert!(
+            (value - 11.0).abs() < 1e-8,
+            "the forwarded start should recover the corner, got {value}"
+        );
+        let interior = [0, 1, 0, 1, 0, 1];
+        let value = with
+            .network
+            .evaluate_point(problem.site_order(), &interior)
+            .unwrap()
+            .real();
+        assert!(
+            (value - 1.0).abs() < 1e-8,
+            "a non-corner point should stay at 1, got {value}"
+        );
+    });
 }

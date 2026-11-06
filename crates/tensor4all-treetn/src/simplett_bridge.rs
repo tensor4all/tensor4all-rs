@@ -5,6 +5,10 @@ use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorElement};
 use tensor4all_simplett::{
     tensor3_from_data, tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops,
 };
+use tensor4all_tensorbackend::{
+    dense_native_tensor_from_col_major, dense_native_tensor_from_col_major_owned,
+    einsum_native_subscripts, native_tensor_primal_to_dense_col_major,
+};
 
 use crate::TreeTN;
 
@@ -15,8 +19,8 @@ use crate::TreeTN;
 ///
 /// # Errors
 ///
-/// Returns an error when the tensor train cannot be converted to a TreeTN
-/// /// (a shape or index mismatch, or a backend failure).
+/// Returns [`TreeTNOperationError`] when a fresh bond index cannot be allocated, or when
+/// [`TreeTN::from_tensors`] rejects the generated node names.
 ///
 /// # Examples
 ///
@@ -53,8 +57,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the tensor train cannot be converted to a TreeTN
-/// /// (a shape or index mismatch, or a backend failure).
+/// Returns [`TreeTNOperationError`] when `node_names` has a different length than the train,
+/// when a fresh bond index cannot be allocated, or when
+/// [`TreeTN::from_tensors`] rejects the names.
 ///
 /// # Examples
 ///
@@ -92,8 +97,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the tensor train cannot be converted to a TreeTN
-/// /// (a shape or index mismatch, or a backend failure).
+/// Returns an error when `node_names` or `site_indices` has a different length
+/// than the train, when a provided site index dimension does not match the
+/// corresponding train site, when a fresh bond index cannot be allocated, or
+/// when [`TreeTN::from_tensors`] rejects the names.
 ///
 /// # Examples
 ///
@@ -307,8 +314,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the insertion fails (a shape or index mismatch, or
-/// /// a missing-index failure).
+/// Returns [`TreeTNOperationError`] when the chain is not named `0..n` with exactly one site
+/// index per node, when `position` is greater than the site count, when `value`
+/// is outside the inserted site's dimension, or when a conversion to or from
+/// [`SimpleTensorTrain`] fails.
 ///
 /// # Examples
 ///
@@ -371,7 +380,8 @@ where
     } else {
         tt.site_tensor(position - 1).right_dim()
     };
-    let mut inserted = tensor3_zeros::<T>(bond_dim, site_index.dim(), bond_dim);
+    let mut inserted =
+        tensor3_zeros::<T>(bond_dim, site_index.dim(), bond_dim).map_err(anyhow::Error::from)?;
     for bond in 0..bond_dim {
         inserted.set3(bond, value, bond, T::one());
     }
@@ -386,92 +396,6 @@ where
     let tt = SimpleTensorTrain::new(tensors)
         .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
     tensor_train_to_treetn_with_names_and_site_indices(&tt, (0..tt.len()).collect(), site_indices)
-}
-
-/// Fix a site in a linear-chain `TreeTN<IdxTensor, usize>` and remove it.
-///
-/// `position` selects the chain site to remove, and `value` selects the local
-/// coordinate kept at that site. The returned chain has one fewer site, node
-/// names `0..n-2`, and all remaining site indices preserved in their original
-/// order.
-///
-/// # Arguments
-///
-/// - `treetn`: a linear-chain `TreeTN` whose node names are exactly `0..n`.
-///
-///   Each node must carry exactly one site index.
-/// - `position`: chain site to fix and remove, in `0..n`.
-/// - `value`: local coordinate retained at the removed site.
-///
-/// # Returns
-///
-/// A new linear-chain `TreeTN` representing the original tensor restricted to
-/// `site[position] == value`, with that site removed from the external index
-/// list.
-///
-/// # Errors
-///
-/// Returns an error when the removal fails (a shape or index mismatch, or a
-/// /// missing-index failure).
-///
-/// # Examples
-///
-/// ```
-/// use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
-/// use tensor4all_treetn::{
-///     fix_and_remove_site_from_treetn_chain, tensor_train_to_treetn, treetn_to_tensor_train,
-/// };
-///
-/// # fn main() -> anyhow::Result<()> {
-/// let tt = SimpleTensorTrain::new(vec![
-///     tensor3_from_data(vec![1.0_f64, 2.0], 1, 2, 1)?,
-///     tensor3_from_data(vec![10.0_f64, 20.0], 1, 2, 1)?,
-/// ])?;
-/// let (tree, _) = tensor_train_to_treetn(&tt)?;
-///
-/// let reduced = fix_and_remove_site_from_treetn_chain::<f64>(tree, 0, 1)?;
-/// let roundtrip = treetn_to_tensor_train::<f64>(reduced)?;
-///
-/// assert_eq!(roundtrip.site_dims(), vec![2]);
-/// assert!((roundtrip.evaluate(&[0])? - 20.0).abs() < 1.0e-12);
-/// assert!((roundtrip.evaluate(&[1])? - 40.0).abs() < 1.0e-12);
-/// # Ok(())
-/// # }
-/// ```
-pub fn fix_and_remove_site_from_treetn_chain<T>(
-    treetn: TreeTN<IdxTensor, usize>,
-    position: usize,
-    value: usize,
-) -> std::result::Result<TreeTN<IdxTensor, usize>, TreeTNOperationError>
-where
-    T: TTScalar + TensorElement + Clone + Default,
-{
-    let site_indices = chain_site_indices(&treetn, "fix_and_remove_site_from_treetn_chain")?;
-    if !(position < site_indices.len()) {
-        return Err(anyhow::anyhow!(
-            "fix_and_remove_site_from_treetn_chain: position {} is out of range 0..{}",
-            position,
-            site_indices.len()
-        )
-        .into());
-    };
-    if !(site_indices.len() > 1) {
-        return Err(anyhow::anyhow!("fix_and_remove_site_from_treetn_chain: cannot remove the only site because scalar zero-site TreeTN chains are not supported").into());
-    };
-
-    let tt = treetn_to_tensor_train::<T>(treetn)?;
-    if !(value < tt.site_dim(position)) {
-        return Err(anyhow::anyhow!(
-            "fix_and_remove_site_from_treetn_chain: fixed value {} exceeds site dimension {}",
-            value,
-            tt.site_dim(position)
-        )
-        .into());
-    };
-
-    let reduced_site = fixed_site_matrix(tt.site_tensor(position), value);
-    remove_site_with_reduced_matrix(tt, site_indices, position, &reduced_site)
-        .map_err(TreeTNOperationError::from)
 }
 
 /// Contract a site of a linear-chain `TreeTN<IdxTensor, usize>` with weights and remove it.
@@ -497,8 +421,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the removal fails (a shape or index mismatch, or a
-/// /// missing-index failure).
+/// Returns [`TreeTNOperationError`] when the chain is not named `0..n` with exactly one site
+/// index per node, when `position` is out of range, when removing the site
+/// would leave a zero-site chain, when `weights` does not match the site's
+/// dimension, or when a conversion to or from [`SimpleTensorTrain`] fails.
 ///
 /// # Examples
 ///
@@ -552,7 +478,7 @@ where
         tt.site_dim(position)).into());
     };
 
-    let reduced_site = weighted_site_matrix(tt.site_tensor(position), weights);
+    let reduced_site = weighted_site_matrix(tt.site_tensor(position), weights)?;
     remove_site_with_reduced_matrix(tt, site_indices, position, &reduced_site)
         .map_err(TreeTNOperationError::from)
 }
@@ -589,27 +515,19 @@ fn chain_site_indices(treetn: &TreeTN<IdxTensor, usize>, context: &str) -> Resul
     Ok(site_indices)
 }
 
-fn fixed_site_matrix<T>(tensor: &tensor4all_simplett::Tensor3<T>, value: usize) -> Vec<T>
+fn weighted_site_matrix<T>(
+    tensor: &tensor4all_simplett::Tensor3<T>,
+    weights: &[T],
+) -> Result<Vec<T>>
 where
-    T: TTScalar + Clone + Default,
+    T: TTScalar + TensorElement,
 {
-    tensor.slice_site(value)
-}
-
-fn weighted_site_matrix<T>(tensor: &tensor4all_simplett::Tensor3<T>, weights: &[T]) -> Vec<T>
-where
-    T: TTScalar + Clone + Default,
-{
-    let mut matrix = vec![T::default(); tensor.left_dim() * tensor.right_dim()];
-    for (s, &weight) in weights.iter().enumerate() {
-        for r in 0..tensor.right_dim() {
-            for l in 0..tensor.left_dim() {
-                let offset = l + tensor.left_dim() * r;
-                matrix[offset] = matrix[offset] + *tensor.get3(l, s, r) * weight;
-            }
-        }
-    }
-    matrix
+    // `l s r, s -> l r`: contract the site axis against the weights and keep the
+    // `(left, right)` matrix. Cold path -- one graph dispatch per removed site.
+    let site = dense_native_tensor_from_col_major_owned(tensor.to_col_major_vec(), tensor.dims())?;
+    let weights = dense_native_tensor_from_col_major(weights, &[weights.len()])?;
+    let matrix = einsum_native_subscripts("lsr,s->lr", &[&site, &weights])?;
+    Ok(native_tensor_primal_to_dense_col_major::<T>(&matrix)?)
 }
 
 fn remove_site_with_reduced_matrix<T>(
@@ -627,7 +545,7 @@ where
             tensors.push(absorb_reduced_site_into_left(
                 tt.site_tensor(site),
                 reduced_site,
-            ));
+            )?);
         } else {
             tensors.push(tt.site_tensor(site).clone());
         }
@@ -638,7 +556,7 @@ where
             reduced_site,
             tt.site_tensor(position),
             tt.site_tensor(position + 1),
-        ));
+        )?);
         for site in position + 2..tt.len() {
             tensors.push(tt.site_tensor(site).clone());
         }
@@ -654,47 +572,40 @@ fn absorb_reduced_site_into_right<T>(
     reduced_site: &[T],
     removed: &tensor4all_simplett::Tensor3<T>,
     right: &tensor4all_simplett::Tensor3<T>,
-) -> tensor4all_simplett::Tensor3<T>
+) -> Result<tensor4all_simplett::Tensor3<T>>
 where
-    T: TTScalar + Clone + Default,
+    T: TTScalar + TensorElement,
 {
+    // `l k, k s r -> l s r`: contract the removed site's right bond (already
+    // reduced into `reduced_site` as an `(l, k)` matrix) into the next site.
     let left_dim = removed.left_dim();
     let removed_right_dim = removed.right_dim();
-    let mut tensor = tensor3_zeros::<T>(left_dim, right.site_dim(), right.right_dim());
-
-    for l in 0..left_dim {
-        for s in 0..right.site_dim() {
-            for r in 0..right.right_dim() {
-                let mut value = T::default();
-                for bridge in 0..removed_right_dim {
-                    value = value + reduced_site[l + left_dim * bridge] * *right.get3(bridge, s, r);
-                }
-                tensor.set3(l, s, r, value);
-            }
-        }
-    }
-    tensor
+    let site_dim = right.site_dim();
+    let right_dim = right.right_dim();
+    let reduced = dense_native_tensor_from_col_major(reduced_site, &[left_dim, removed_right_dim])?;
+    let right_native =
+        dense_native_tensor_from_col_major_owned(right.to_col_major_vec(), right.dims())?;
+    let absorbed = einsum_native_subscripts("lk,ksr->lsr", &[&reduced, &right_native])?;
+    let data = native_tensor_primal_to_dense_col_major::<T>(&absorbed)?;
+    Ok(tensor3_from_data(data, left_dim, site_dim, right_dim)?)
 }
 
 fn absorb_reduced_site_into_left<T>(
     left: &tensor4all_simplett::Tensor3<T>,
     reduced_site: &[T],
-) -> tensor4all_simplett::Tensor3<T>
+) -> Result<tensor4all_simplett::Tensor3<T>>
 where
-    T: TTScalar + Clone + Default,
+    T: TTScalar + TensorElement,
 {
-    let mut tensor = tensor3_zeros::<T>(left.left_dim(), left.site_dim(), 1);
-
-    for l in 0..left.left_dim() {
-        for s in 0..left.site_dim() {
-            let mut value = T::default();
-            for (bridge, &weight) in reduced_site.iter().enumerate().take(left.right_dim()) {
-                value = value + *left.get3(l, s, bridge) * weight;
-            }
-            tensor.set3(l, s, 0, value);
-        }
-    }
-    tensor
+    // `l s k, k -> l s`, then keep a trailing unit right bond.
+    let left_dim = left.left_dim();
+    let site_dim = left.site_dim();
+    let left_native =
+        dense_native_tensor_from_col_major_owned(left.to_col_major_vec(), left.dims())?;
+    let weights_native = dense_native_tensor_from_col_major(reduced_site, &[reduced_site.len()])?;
+    let absorbed = einsum_native_subscripts("lsk,k->ls", &[&left_native, &weights_native])?;
+    let data = native_tensor_primal_to_dense_col_major::<T>(&absorbed)?;
+    Ok(tensor3_from_data(data, left_dim, site_dim, 1)?)
 }
 
 struct ChainSiteMetadata {
@@ -941,3 +852,6 @@ where
     }
     data
 }
+
+#[cfg(test)]
+mod tests;

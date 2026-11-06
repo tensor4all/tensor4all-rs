@@ -549,15 +549,10 @@ fn test_crossinterpolate2_rook_search_uses_partial_batch_requests() {
             "rook search should request partial batches, got full batch of {} entries",
             max_batch.get()
         );
-        if rank_cap == 1 {
-            // Finding a nonzero pivot still uses only partial samples.
-            assert!(total_requested.get() < 64);
-        } else {
-            // Certifying an exactly zero residual can require all entries.
-            // Roundoff can instead trigger the ordinary tolerance stop.
-            // In either case, entries are requested only in partial batches.
-            assert!(total_requested.get() <= 64);
-        }
+        // A rank cap reports the largest remaining residual, which evaluates
+        // every unselected entry. Both caps can therefore touch all entries,
+        // but only in partial batches.
+        assert!(total_requested.get() <= 64);
         let (values, _) = tci.to_tensor_train().unwrap().full_tensor().unwrap();
         for (offset, value) in values.iter().enumerate() {
             let expected = ((offset % 8 + 1) * (offset / 8 + 1)) as f64;
@@ -730,7 +725,7 @@ fn test_crossinterpolate2_5sites_constant() {
     let tt = tt_result.unwrap();
 
     // Sum should be 2.5 * 2^5 = 80
-    let sum = tt.sum();
+    let sum = tt.sum().unwrap();
     assert!((sum - 80.0).abs() < 1e-8, "Expected sum=80, got {}", sum);
 }
 

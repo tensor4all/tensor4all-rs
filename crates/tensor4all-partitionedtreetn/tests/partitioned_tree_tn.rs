@@ -1,8 +1,8 @@
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy};
+use tensor4all_core::{contract_pair, DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy};
 use tensor4all_partitionedtreetn::{
     add_with_patching, PartitionedTreeTN, PartitionedTreeTNError, PatchingOptions, Projector,
-    SubDomainTreeTN,
+    SubDomainTreeTN, AUTOMATIC_REFINEMENT_LIMIT,
 };
 use tensor4all_treetn::{
     contraction::{ContractionMethod, ContractionOptions},
@@ -121,7 +121,7 @@ fn partition_supports_complex_dtype_and_rejects_mixed_dtype_before_mutation() {
     assert_eq!(target.len(), before.len());
 
     assert!(matches!(
-        complex.add(&real, &0, TruncationOptions::default()),
+        complex.add(&real),
         Err(PartitionedTreeTNError::DTypeMismatch { .. })
     ));
     assert!(matches!(
@@ -131,12 +131,12 @@ fn partition_supports_complex_dtype_and_rejects_mixed_dtype_before_mutation() {
 }
 
 #[test]
-fn partition_addition_allows_missing_keys_and_rejects_overlapping_layouts() {
+fn partition_addition_allows_missing_keys_and_refines_overlapping_layouts() {
     let site = DynIndex::new_dyn(2);
     let left = PartitionedTreeTN::from_subdomain(subdomain(&site, [2.0, 100.0], 0)).unwrap();
     let right = PartitionedTreeTN::from_subdomain(subdomain(&site, [300.0, 4.0], 1)).unwrap();
 
-    let sum = left.add(&right, &0, TruncationOptions::default()).unwrap();
+    let sum = left.add(&right).unwrap();
     assert_eq!(sum.len(), 2);
     let dense = sum.to_treetn().unwrap();
     assert_eq!(
@@ -148,13 +148,21 @@ fn partition_addition_allows_missing_keys_and_rejects_overlapping_layouts() {
         vec![2.0, 4.0]
     );
 
+    // `{site=0}` and `{}` overlap without being equal. Refining onto the common
+    // refinement keeps the whole unprojected patch instead of rejecting.
     let overlap = PartitionedTreeTN::from_subdomain(unprojected(&site, vec![1.0, 2.0])).unwrap();
-    let before = left.clone();
-    assert!(matches!(
-        left.add(&overlap, &0, TruncationOptions::default()),
-        Err(PartitionedTreeTNError::OverlappingProjectors)
-    ));
-    assert_eq!(left.len(), before.len());
+    let refined_sum = left.add(&overlap).unwrap();
+    assert_eq!(refined_sum.len(), 2);
+    assert_eq!(
+        refined_sum
+            .to_treetn()
+            .unwrap()
+            .to_dense()
+            .unwrap()
+            .to_vec::<f64>()
+            .unwrap(),
+        vec![3.0, 2.0]
+    );
 }
 
 #[test]
@@ -164,11 +172,11 @@ fn partition_addition_validates_center_and_options_before_shortcuts() {
     let right = PartitionedTreeTN::new();
 
     assert!(matches!(
-        left.add(&right, &0, TruncationOptions::default()),
+        left.add_truncated(&right, &0, TruncationOptions::default()),
         Err(PartitionedTreeTNError::Empty)
     ));
     assert!(matches!(
-        left.add(
+        left.add_truncated(
             &left,
             &99,
             TruncationOptions::default().with_max_bond_dim(0),
@@ -176,7 +184,7 @@ fn partition_addition_validates_center_and_options_before_shortcuts() {
         Err(PartitionedTreeTNError::InvalidOptions { .. })
     ));
     assert!(matches!(
-        left.add(&left, &99, TruncationOptions::default()),
+        left.add_truncated(&left, &99, TruncationOptions::default()),
         Err(PartitionedTreeTNError::InvalidCenter)
     ));
 }
@@ -319,11 +327,12 @@ fn single_node_mask(indices: Vec<DynIndex>, projector: Projector) -> SubDomainTr
 }
 
 #[test]
-fn contraction_of_valid_disjoint_inputs_reports_overlapping_output_regions() {
+fn contraction_of_valid_disjoint_inputs_refines_overlapping_output_regions() {
     // `{a=0}` and `{b=0}` are distinct projector keys that still intersect in
     // the full (a, b) site space, so valid disjoint inputs can contract into
-    // overlapping outputs. This is a documented limitation: the operation must
-    // reject rather than silently corrupt, and callers refine the output space.
+    // overlapping output regions. `contract` refines both operands on the
+    // uncontracted indices their patches fix, so every output region fixes (a, b)
+    // and any two are equal or disjoint.
     let shared = DynIndex::new_dyn(2);
     let left_external = DynIndex::new_dyn(2);
     let right_external = DynIndex::new_dyn(2);
@@ -354,16 +363,51 @@ fn contraction_of_valid_disjoint_inputs_reports_overlapping_output_regions() {
         ),
         single_node_mask(
             vec![shared.clone(), right_external.clone()],
-            Projector::from_pairs([(shared, 1)]).unwrap(),
+            Projector::from_pairs([(shared.clone(), 1)]).unwrap(),
         ),
     ])
     .unwrap();
 
-    let result = left.contract(&right, &0, ContractionOptions::default());
-    assert!(matches!(
-        result,
-        Err(PartitionedTreeTNError::OverlappingProjectors)
-    ));
+    let result = left
+        .contract(&right, &0, ContractionOptions::default())
+        .unwrap();
+    // The documented workaround, done by hand: split every patch that leaves an
+    // uncontracted index free into one sub-patch per value of that index. The
+    // library must do the same work itself and match it.
+    let left_by_hand = left
+        .refine_to(&[
+            Projector::from_pairs([(shared.clone(), 0), (left_external.clone(), 0)]).unwrap(),
+            Projector::from_pairs([(shared.clone(), 0), (left_external.clone(), 1)]).unwrap(),
+            Projector::from_pairs([(shared.clone(), 1)]).unwrap(),
+        ])
+        .unwrap();
+    let right_by_hand = right
+        .refine_to(&[
+            Projector::from_pairs([(shared.clone(), 0), (right_external.clone(), 0)]).unwrap(),
+            Projector::from_pairs([(shared.clone(), 0), (right_external.clone(), 1)]).unwrap(),
+            Projector::from_pairs([(shared.clone(), 1), (right_external.clone(), 0)]).unwrap(),
+            Projector::from_pairs([(shared.clone(), 1), (right_external.clone(), 1)]).unwrap(),
+        ])
+        .unwrap();
+    let by_hand = left_by_hand
+        .contract(&right_by_hand, &0, ContractionOptions::default())
+        .unwrap();
+
+    // Both operands are the all-ones tensor over their sites, so every output
+    // entry is the sum over the two values of the contracted index.
+    assert_eq!(result.len(), 4);
+    assert!(result.projectors().all(|key| key.len() == 2));
+    let dense = result.to_treetn().unwrap().to_dense().unwrap();
+    assert_eq!(dense.to_vec::<f64>().unwrap(), vec![2.0, 2.0, 2.0, 2.0]);
+    let difference = dense
+        .sub(&by_hand.to_treetn().unwrap().to_dense().unwrap())
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    assert!(
+        difference < 1e-12,
+        "differs from the hand refinement by {difference}"
+    );
 }
 
 #[test]
@@ -524,7 +568,7 @@ fn non_finite_svd_truncation_thresholds_are_rejected_before_shortcuts() {
         let options = TruncationOptions::new().with_svd_policy(SvdTruncationPolicy::new(threshold));
         assert!(
             matches!(
-                partition.add(&partition, &0, options),
+                partition.add_truncated(&partition, &0, options),
                 Err(PartitionedTreeTNError::InvalidOptions { .. })
             ),
             "disjoint addition must reject threshold {threshold}"
@@ -555,7 +599,7 @@ fn non_finite_svd_truncation_thresholds_are_rejected_before_shortcuts() {
 
     // `max_bond_dim == 0` is a separate invalid case on every validated path.
     assert!(matches!(
-        partition.add(
+        partition.add_truncated(
             &partition,
             &0,
             TruncationOptions::default().with_max_bond_dim(0)
@@ -603,7 +647,7 @@ fn empty_and_zero_node_subdomains_have_consistent_semantics() {
     let site = DynIndex::new_dyn(2);
     let nonempty = PartitionedTreeTN::from_subdomain(subdomain(&site, [1.0, 2.0], 0)).unwrap();
     assert!(matches!(
-        empty.add(&nonempty, &0, TruncationOptions::default()),
+        empty.add(&nonempty),
         Err(PartitionedTreeTNError::Empty)
     ));
     assert!(matches!(
@@ -774,4 +818,764 @@ fn to_treetn_layout_and_values_are_stable_for_branched_multi_patch_sums() {
             "to_treetn rebuild {rebuild} differs from the first build"
         );
     }
+}
+
+// --- Different patch layouts: refinement, contract, and add (#1088) ---------
+
+/// Deterministic pseudo-random value in [-1, 1) for a coordinate vector.
+fn seeded(seed: u64, values: &[usize]) -> f64 {
+    let state = values.iter().fold(seed, |state, &value| {
+        (state ^ value as u64)
+            .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            .rotate_left(31)
+    });
+    (state >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+}
+
+/// Every coordinate vector of `indices`, first index fastest.
+fn grid_points(indices: &[DynIndex]) -> Vec<Vec<usize>> {
+    let total: usize = indices.iter().map(|index| index.dim).product();
+    (0..total)
+        .map(|mut position| {
+            indices
+                .iter()
+                .map(|index| {
+                    let value = position % index.dim;
+                    position /= index.dim;
+                    value
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn projector(pairs: &[(&DynIndex, usize)]) -> Projector {
+    Projector::from_pairs(
+        pairs
+            .iter()
+            .map(|(index, value)| ((*index).clone(), *value)),
+    )
+    .unwrap()
+}
+
+/// Compare projector lists as sets: `Projector` has no total order.
+fn sorted(projectors: &[Projector]) -> Vec<Projector> {
+    let key = |projector: &Projector| {
+        let mut entries: Vec<(String, usize)> = projector
+            .iter()
+            .map(|(index, &value)| (format!("{index:?}"), value))
+            .collect();
+        entries.sort();
+        entries
+    };
+    let mut projectors = projectors.to_vec();
+    projectors.sort_by_key(key);
+    projectors
+}
+
+/// Two-node chain `0 - 1`: node 0 carries `node0` then a bond, node 1 the bond
+/// then `external`. The bond dimension is 3, so contraction is not trivial.
+fn chain(node0: &[DynIndex], external: &DynIndex, seed: u64) -> TreeTN<IdxTensor, usize> {
+    let bond = DynIndex::new_dyn(3);
+    let legs0: Vec<DynIndex> = node0.iter().cloned().chain([bond.clone()]).collect();
+    let values0: Vec<f64> = grid_points(&legs0)
+        .iter()
+        .map(|coord| seeded(seed, coord))
+        .collect();
+    let legs1 = vec![bond.clone(), external.clone()];
+    let values1: Vec<f64> = grid_points(&legs1)
+        .iter()
+        .map(|coord| seeded(seed.wrapping_add(7), coord))
+        .collect();
+    TreeTN::from_tensors(
+        vec![
+            IdxTensor::from_dense(legs0, values0).unwrap(),
+            IdxTensor::from_dense(legs1, values1).unwrap(),
+        ],
+        vec![0usize, 1usize],
+    )
+    .unwrap()
+}
+
+/// One patch per projector, all sharing `tree`'s topology and site space.
+fn layout(tree: &TreeTN<IdxTensor, usize>, projectors: &[Projector]) -> PartitionedTreeTN<usize> {
+    PartitionedTreeTN::from_subdomains(
+        projectors
+            .iter()
+            .map(|projector| SubDomainTreeTN::new(tree.clone(), projector.clone()).unwrap())
+            .collect(),
+    )
+    .unwrap()
+}
+
+fn dense_of(partition: &PartitionedTreeTN<usize>) -> IdxTensor {
+    partition.to_treetn().unwrap().to_dense().unwrap()
+}
+
+fn assert_close(actual: &IdxTensor, expected: &IdxTensor, label: &str) {
+    assert_eq!(
+        actual.indices().len(),
+        expected.indices().len(),
+        "{label}: rank"
+    );
+    let difference = actual.sub(expected).unwrap().maxabs().unwrap();
+    assert!(difference < 1e-12, "{label}: max difference {difference}");
+}
+
+#[test]
+fn refine_to_splits_patches_and_rejects_invalid_layouts() {
+    let k1 = DynIndex::new_dyn(2);
+    let k2 = DynIndex::new_dyn(2);
+    let a = DynIndex::new_dyn(2);
+    let tree = chain(&[k1.clone(), k2.clone()], &a, 11);
+    let coarse = layout(&tree, &[projector(&[(&k1, 0)]), projector(&[(&k1, 1)])]);
+    let fine_projectors = [
+        projector(&[(&k1, 0), (&k2, 0)]),
+        projector(&[(&k1, 0), (&k2, 1)]),
+        projector(&[(&k1, 1)]),
+    ];
+
+    let refined = coarse.refine_to(&fine_projectors).unwrap();
+    assert_eq!(refined.len(), 3);
+    assert_eq!(
+        sorted(&refined.projectors().cloned().collect::<Vec<_>>()),
+        sorted(&fine_projectors)
+    );
+    // Projection is an exact restriction: the refined patches sum to the same
+    // dense tensor as the coarse patches.
+    assert_close(&dense_of(&refined), &dense_of(&coarse), "refine_to values");
+
+    // Refining onto the layout the partition already has changes nothing.
+    let unchanged = coarse
+        .refine_to(&[projector(&[(&k1, 0)]), projector(&[(&k1, 1)])])
+        .unwrap();
+    assert_eq!(unchanged.len(), 2);
+    assert_close(
+        &dense_of(&unchanged),
+        &dense_of(&coarse),
+        "identity refinement",
+    );
+
+    // A layout projector that conflicts with every patch contributes nothing,
+    // and a patch keeps only the sub-patch the layout actually names.
+    let single = layout(&tree, &[projector(&[(&k1, 0)])]);
+    assert!(single
+        .refine_to(&[projector(&[(&k1, 1)])])
+        .unwrap()
+        .is_empty());
+    let half = single
+        .refine_to(&[projector(&[(&k1, 0), (&k2, 1)])])
+        .unwrap();
+    assert_eq!(half.len(), 1);
+
+    // An overlapping layout is not a refinement: it must stay an error.
+    assert!(matches!(
+        coarse.refine_to(&[projector(&[(&k1, 0)]), Projector::new()]),
+        Err(PartitionedTreeTNError::OverlappingProjectors)
+    ));
+    assert!(matches!(
+        coarse.refine_to(&[projector(&[(&k1, 0)]), projector(&[(&k1, 0)])]),
+        Err(PartitionedTreeTNError::OverlappingProjectors)
+    ));
+    // An index the partition's tree does not carry is a caller error.
+    let foreign = DynIndex::new_dyn(2);
+    assert!(matches!(
+        coarse.refine_to(&[projector(&[(&k1, 0), (&foreign, 0)])]),
+        Err(PartitionedTreeTNError::ProjectorIndexNotFound { .. })
+    ));
+}
+
+#[test]
+fn common_refinement_matches_the_documented_layout() {
+    let k1 = DynIndex::new_dyn(2);
+    let k2 = DynIndex::new_dyn(2);
+    let a = DynIndex::new_dyn(2);
+    let tree = chain(&[k1.clone(), k2.clone()], &a, 13);
+    let coarse = layout(&tree, &[projector(&[(&k1, 0)]), projector(&[(&k1, 1)])]);
+    let fine_projectors = [
+        projector(&[(&k1, 0), (&k2, 0)]),
+        projector(&[(&k1, 0), (&k2, 1)]),
+        projector(&[(&k1, 1)]),
+    ];
+    let fine = layout(&tree, &fine_projectors);
+
+    // The issue's example: for `{k1=0},{k1=1}` and the layout above, the second
+    // layout is the common refinement.
+    let atoms = PartitionedTreeTN::common_refinement(&[&coarse, &fine]).unwrap();
+    assert_eq!(sorted(&atoms), sorted(&fine_projectors));
+
+    // Operand order does not matter.
+    assert_eq!(
+        atoms,
+        PartitionedTreeTN::common_refinement(&[&fine, &coarse]).unwrap()
+    );
+    // A single operand is refined onto its own layout.
+    assert_eq!(
+        sorted(&PartitionedTreeTN::common_refinement(&[&coarse]).unwrap()),
+        sorted(&[projector(&[(&k1, 0)]), projector(&[(&k1, 1)])])
+    );
+    // Both operands share one refined key set, so add can sum patch by patch.
+    let left = coarse.refine_to(&atoms).unwrap();
+    let right = fine.refine_to(&atoms).unwrap();
+    assert_eq!(left.len(), 3);
+    assert_eq!(right.len(), 3);
+    assert_close(&dense_of(&left), &dense_of(&coarse), "coarse coverage");
+    assert_close(&dense_of(&right), &dense_of(&fine), "fine coverage");
+}
+
+#[test]
+fn common_refinement_covers_each_operand_remainder() {
+    // Independent per-patch splitting is not a common refinement: `{b=0,c=0}`
+    // and `{}` would give `{b=0,c=0}` plus sub-regions of it. Every atom must
+    // stay disjoint and both operands must be exactly covered.
+    let a = DynIndex::new_dyn(2);
+    let b = DynIndex::new_dyn(2);
+    let c = DynIndex::new_dyn(2);
+    let tree = chain(&[a.clone(), b.clone()], &c, 17);
+    let left = layout(
+        &tree,
+        &[
+            projector(&[(&b, 0), (&c, 0)]),
+            projector(&[(&a, 0), (&b, 1)]),
+        ],
+    );
+    let right = layout(&tree, &[Projector::new()]);
+
+    let atoms = PartitionedTreeTN::common_refinement(&[&left, &right]).unwrap();
+    assert!(Projector::are_disjoint(&atoms));
+    // Every patch is a union of atoms that lie inside it: each atom is inside
+    // one patch or disjoint from all of them.
+    for patch in left.projectors().chain(right.projectors()) {
+        for atom in &atoms {
+            assert!(
+                atom.is_subset_of(patch) || !atom.is_compatible_with(patch),
+                "atom {atom:?} partially overlaps patch {patch:?}"
+            );
+        }
+    }
+
+    // Both operands keep every value, and the sum covers both.
+    let left_refined = left.refine_to(&atoms).unwrap();
+    let right_refined = right.refine_to(&atoms).unwrap();
+    assert_close(&dense_of(&left_refined), &dense_of(&left), "left remainder");
+    assert_close(
+        &dense_of(&right_refined),
+        &dense_of(&right),
+        "right remainder",
+    );
+
+    // An empty operand contributes no atoms of its own.
+    let empty = PartitionedTreeTN::<usize>::new();
+    assert_eq!(
+        sorted(&PartitionedTreeTN::common_refinement(&[&empty, &left]).unwrap()),
+        sorted(&left.projectors().cloned().collect::<Vec<_>>())
+    );
+}
+
+#[test]
+fn common_refinement_covers_three_operands() {
+    let k1 = DynIndex::new_dyn(2);
+    let k2 = DynIndex::new_dyn(2);
+    let a = DynIndex::new_dyn(2);
+    let tree = chain(&[k1.clone(), k2.clone()], &a, 71);
+    let coarse = layout(&tree, &[projector(&[(&k1, 0)]), projector(&[(&k1, 1)])]);
+    let fine = layout(
+        &tree,
+        &[
+            projector(&[(&k1, 0), (&k2, 0)]),
+            projector(&[(&k1, 0), (&k2, 1)]),
+            projector(&[(&k1, 1)]),
+        ],
+    );
+    let full = layout(
+        &tree,
+        &[
+            projector(&[(&k1, 0), (&k2, 0)]),
+            projector(&[(&k1, 0), (&k2, 1)]),
+            projector(&[(&k1, 1), (&k2, 0)]),
+            projector(&[(&k1, 1), (&k2, 1)]),
+        ],
+    );
+
+    let atoms = PartitionedTreeTN::common_refinement(&[&coarse, &fine, &full]).unwrap();
+    assert!(Projector::are_disjoint(&atoms));
+    // `full` already refines both others, so it is the coarsest common refinement.
+    assert_eq!(
+        sorted(&atoms),
+        sorted(&full.projectors().cloned().collect::<Vec<_>>())
+    );
+    // The atom set is a property of the layouts, not of the operand order.
+    for order in [
+        [&coarse, &full, &fine],
+        [&fine, &coarse, &full],
+        [&fine, &full, &coarse],
+        [&full, &coarse, &fine],
+        [&full, &fine, &coarse],
+    ] {
+        assert_eq!(atoms, PartitionedTreeTN::common_refinement(&order).unwrap());
+    }
+    for operand in [&coarse, &fine, &full] {
+        let refined = operand.refine_to(&atoms).unwrap();
+        assert_close(
+            &dense_of(&refined),
+            &dense_of(operand),
+            "reference coverage",
+        );
+    }
+}
+
+#[test]
+fn add_refines_layouts_that_only_differ_on_a_dimension_one_index() {
+    // `{x=0}` with `x` of dimension one restricts `{}` without having an
+    // alternative coordinate, so a refinement that only counts cells misses it.
+    let x = DynIndex::new_dyn(1);
+    let y = DynIndex::new_dyn(2);
+    let tree = chain(std::slice::from_ref(&x), &y, 83);
+    let unprojected = layout(&tree, &[Projector::new()]);
+    let projected = layout(&tree, &[projector(&[(&x, 0)])]);
+
+    let atoms = PartitionedTreeTN::common_refinement(&[&unprojected, &projected]).unwrap();
+    assert_eq!(atoms, vec![projector(&[(&x, 0)])]);
+    let sum = unprojected.add(&projected).unwrap();
+    assert_eq!(sum.len(), 1);
+    let expected = dense_of(&unprojected).add(&dense_of(&projected)).unwrap();
+    assert_close(&dense_of(&sum), &expected, "dimension-one layout");
+}
+
+#[test]
+fn common_refinement_rejects_identity_matching_dimension_mismatches() {
+    // `DynIndex` equality excludes the dimension, so two operands can project an
+    // identity-matching index with different dimensions. Enumerating complements
+    // would then depend on the operand order, so this must be rejected.
+    let wide = DynIndex::new_dyn(2);
+    let mut narrow = wide.clone();
+    narrow.dim = 1;
+    let y = DynIndex::new_dyn(2);
+    let z = DynIndex::new_dyn(2);
+    let unprojected = layout(
+        &chain(&[wide.clone(), y.clone()], &z, 89),
+        &[Projector::new()],
+    );
+    let narrow_patch = layout(
+        &chain(&[narrow.clone(), y.clone()], &z, 97),
+        &[projector(&[(&narrow, 0)])],
+    );
+    let wide_patch = layout(
+        &chain(&[wide.clone(), y], &z, 101),
+        &[projector(&[(&wide, 0)])],
+    );
+
+    assert!(matches!(
+        PartitionedTreeTN::common_refinement(&[&unprojected, &narrow_patch, &wide_patch]),
+        Err(PartitionedTreeTNError::SiteIndexMismatch)
+    ));
+    assert!(matches!(
+        PartitionedTreeTN::common_refinement(&[&wide_patch, &unprojected, &narrow_patch]),
+        Err(PartitionedTreeTNError::SiteIndexMismatch)
+    ));
+}
+
+#[test]
+fn common_refinement_deduplicates_repeated_layouts() {
+    // A region contributed by two later operands must not be appended twice.
+    let x = DynIndex::new_dyn(2);
+    let y = DynIndex::new_dyn(2);
+    let tree = chain(std::slice::from_ref(&x), &y, 73);
+    let first = layout(&tree, &[projector(&[(&x, 0)])]);
+    let second = layout(&tree, &[projector(&[(&x, 1)])]);
+
+    let atoms = PartitionedTreeTN::common_refinement(&[&first, &second, &second]).unwrap();
+    assert!(Projector::are_disjoint(&atoms));
+    assert_eq!(
+        sorted(&atoms),
+        sorted(&[projector(&[(&x, 0)]), projector(&[(&x, 1)])])
+    );
+}
+
+#[test]
+fn common_refinement_is_order_independent() {
+    // A first-operand-seeded construction gives different atoms depending on
+    // which operand seeds the cells, which would make `add` order dependent.
+    let x = DynIndex::new_dyn(2);
+    let y = DynIndex::new_dyn(2);
+    let z = DynIndex::new_dyn(2);
+    let tree = chain(&[x.clone(), y.clone()], &z, 79);
+    let unprojected = layout(&tree, &[Projector::new()]);
+    let split = layout(
+        &tree,
+        &[
+            projector(&[(&x, 0), (&y, 0)]),
+            projector(&[(&y, 1), (&z, 0)]),
+        ],
+    );
+
+    let forwards = PartitionedTreeTN::common_refinement(&[&unprojected, &split]).unwrap();
+    let backwards = PartitionedTreeTN::common_refinement(&[&split, &unprojected]).unwrap();
+    assert_eq!(forwards, backwards);
+    assert!(Projector::are_disjoint(&forwards));
+    for operand in [&unprojected, &split] {
+        let refined = operand.refine_to(&forwards).unwrap();
+        assert_close(&dense_of(&refined), &dense_of(operand), "coverage");
+    }
+
+    // Equal atom sets mean equal keys and values in both add orders.
+    let sum = unprojected.add(&split).unwrap();
+    let swapped = split.add(&unprojected).unwrap();
+    assert_eq!(
+        sorted(&sum.projectors().cloned().collect::<Vec<_>>()),
+        sorted(&swapped.projectors().cloned().collect::<Vec<_>>())
+    );
+    let expected = dense_of(&unprojected).add(&dense_of(&split)).unwrap();
+    assert_close(&dense_of(&sum), &expected, "unprojected add");
+    assert_close(&dense_of(&swapped), &expected, "swapped unprojected add");
+}
+
+#[test]
+fn contract_refines_when_one_operand_carries_the_output_index() {
+    // The issue's contract example: `left` patches `(k1, a)` coarsely, `right`
+    // patches `(k1, k2, a)` finely, and only `right` carries `k2`, which
+    // survives the contraction. `left` cannot be refined on `k2`.
+    let k1 = DynIndex::new_dyn(2);
+    let k2 = DynIndex::new_dyn(2);
+    let a = DynIndex::new_dyn(2);
+    let left_tree = chain(std::slice::from_ref(&k1), &a, 19);
+    let right_tree = chain(&[k1.clone(), k2.clone()], &a, 23);
+    let left = layout(
+        &left_tree,
+        &[projector(&[(&k1, 0)]), projector(&[(&k1, 1)])],
+    );
+    let right = layout(
+        &right_tree,
+        &[
+            projector(&[(&k1, 0), (&k2, 0)]),
+            projector(&[(&k1, 0), (&k2, 1)]),
+            projector(&[(&k1, 1)]),
+        ],
+    );
+
+    let result = left
+        .contract(&right, &0, ContractionOptions::default())
+        .unwrap();
+    assert_eq!(result.len(), 2);
+    let expected = contract_pair(&dense_of(&left), &dense_of(&right)).unwrap();
+    assert_close(&dense_of(&result), &expected, "contract refinement");
+
+    // The caller-side workaround: refine `right` on `k2` by hand, then contract.
+    let by_hand = right
+        .refine_to(&[
+            projector(&[(&k1, 0), (&k2, 0)]),
+            projector(&[(&k1, 0), (&k2, 1)]),
+            projector(&[(&k1, 1), (&k2, 0)]),
+            projector(&[(&k1, 1), (&k2, 1)]),
+        ])
+        .unwrap();
+    let worked_around = left
+        .contract(&by_hand, &0, ContractionOptions::default())
+        .unwrap();
+    assert_close(
+        &dense_of(&result),
+        &dense_of(&worked_around),
+        "contract by hand",
+    );
+}
+
+#[test]
+fn contract_refines_when_the_left_operand_carries_the_output_index() {
+    // Mirror of the issue's case: the fine layout is now on the left.
+    let k1 = DynIndex::new_dyn(2);
+    let k2 = DynIndex::new_dyn(2);
+    let a = DynIndex::new_dyn(2);
+    let left_tree = chain(&[k1.clone(), k2.clone()], &a, 53);
+    let right_tree = chain(std::slice::from_ref(&k1), &a, 59);
+    let left = layout(
+        &left_tree,
+        &[
+            projector(&[(&k1, 0), (&k2, 0)]),
+            projector(&[(&k1, 0), (&k2, 1)]),
+            projector(&[(&k1, 1)]),
+        ],
+    );
+    let right = layout(
+        &right_tree,
+        &[projector(&[(&k1, 0)]), projector(&[(&k1, 1)])],
+    );
+
+    let result = left
+        .contract(&right, &0, ContractionOptions::default())
+        .unwrap();
+    assert_eq!(result.len(), 2);
+    let expected = contract_pair(&dense_of(&left), &dense_of(&right)).unwrap();
+    assert_close(
+        &dense_of(&result),
+        &expected,
+        "mirrored contract refinement",
+    );
+}
+
+#[test]
+fn contract_keeps_equal_layouts_unrefined() {
+    // Equal layouts produce equal or disjoint output keys already, so no
+    // refinement runs and the coarse output key `{}` survives.
+    let k1 = DynIndex::new_dyn(2);
+    let k2 = DynIndex::new_dyn(2);
+    let a = DynIndex::new_dyn(2);
+    let left_tree = chain(std::slice::from_ref(&k1), &a, 29);
+    let right_tree = chain(&[k1.clone(), k2.clone()], &a, 31);
+    let left = layout(
+        &left_tree,
+        &[projector(&[(&k1, 0)]), projector(&[(&k1, 1)])],
+    );
+    let right = layout(
+        &right_tree,
+        &[projector(&[(&k1, 0)]), projector(&[(&k1, 1)])],
+    );
+
+    let result = left
+        .contract(&right, &0, ContractionOptions::default())
+        .unwrap();
+    assert_eq!(result.len(), 1);
+    assert!(result.contains(&Projector::new()));
+    let expected = contract_pair(&dense_of(&left), &dense_of(&right)).unwrap();
+    assert_close(&dense_of(&result), &expected, "contract equal layouts");
+}
+
+#[test]
+fn contract_returns_an_empty_partition_for_disjoint_layouts() {
+    // No patch pair intersects, so there is nothing to refine and nothing to
+    // contract; this must stay an empty result rather than an error.
+    let k1 = DynIndex::new_dyn(2);
+    let k2 = DynIndex::new_dyn(2);
+    let a = DynIndex::new_dyn(2);
+    let left_tree = chain(std::slice::from_ref(&k1), &a, 61);
+    let right_tree = chain(&[k1.clone(), k2], &a, 67);
+    let left = layout(&left_tree, &[projector(&[(&k1, 0)])]);
+    let right = layout(&right_tree, &[projector(&[(&k1, 1)])]);
+
+    let result = left
+        .contract(&right, &0, ContractionOptions::default())
+        .unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn add_refines_overlapping_unequal_layouts_and_commutes() {
+    let k1 = DynIndex::new_dyn(2);
+    let k2 = DynIndex::new_dyn(2);
+    let a = DynIndex::new_dyn(2);
+    let tree = chain(&[k1.clone(), k2.clone()], &a, 37);
+    let coarse = layout(&tree, &[projector(&[(&k1, 0)]), projector(&[(&k1, 1)])]);
+    let fine = layout(
+        &tree,
+        &[
+            projector(&[(&k1, 0), (&k2, 0)]),
+            projector(&[(&k1, 0), (&k2, 1)]),
+            projector(&[(&k1, 1)]),
+        ],
+    );
+
+    let sum = coarse.add(&fine).unwrap();
+    let expected = dense_of(&coarse).add(&dense_of(&fine)).unwrap();
+    assert_close(&dense_of(&sum), &expected, "add refined");
+
+    let swapped = fine.add(&coarse).unwrap();
+    assert_eq!(
+        sorted(&sum.projectors().cloned().collect::<Vec<_>>()),
+        sorted(&swapped.projectors().cloned().collect::<Vec<_>>())
+    );
+    assert_close(&dense_of(&swapped), &expected, "add commutativity");
+
+    // The truncating variant refines onto the same atoms.
+    let truncated = coarse
+        .add_truncated(&fine, &0, TruncationOptions::default())
+        .unwrap();
+    assert_eq!(
+        sorted(&truncated.projectors().cloned().collect::<Vec<_>>()),
+        sorted(&sum.projectors().cloned().collect::<Vec<_>>())
+    );
+    assert_close(&dense_of(&truncated), &expected, "add_truncated refined");
+}
+
+#[test]
+fn add_keeps_the_part_the_other_operand_does_not_cover() {
+    // `missing` has no `{k1=0, k2=1}` patch. Refining by intersections alone
+    // would drop `coarse`'s part on it, which is silently wrong; the common
+    // refinement keeps it.
+    let k1 = DynIndex::new_dyn(2);
+    let k2 = DynIndex::new_dyn(2);
+    let a = DynIndex::new_dyn(2);
+    let tree = chain(&[k1.clone(), k2.clone()], &a, 41);
+    let coarse = layout(&tree, &[projector(&[(&k1, 0)]), projector(&[(&k1, 1)])]);
+    let missing = layout(
+        &tree,
+        &[projector(&[(&k1, 0), (&k2, 0)]), projector(&[(&k1, 1)])],
+    );
+
+    let sum = coarse.add(&missing).unwrap();
+    assert_eq!(sum.len(), 3);
+    assert!(sum.contains(&projector(&[(&k1, 0), (&k2, 1)])));
+    let expected = dense_of(&coarse).add(&dense_of(&missing)).unwrap();
+    assert_close(&dense_of(&sum), &expected, "add remainder");
+}
+
+#[test]
+fn add_with_equal_layouts_is_unchanged() {
+    let k1 = DynIndex::new_dyn(2);
+    let k2 = DynIndex::new_dyn(2);
+    let a = DynIndex::new_dyn(2);
+    let tree = chain(&[k1.clone(), k2.clone()], &a, 43);
+    let coarsest = [projector(&[(&k1, 0)]), projector(&[(&k1, 1)])];
+    let left = layout(&tree, &coarsest);
+    let right = layout(&tree, &coarsest);
+
+    let sum = left.add(&right).unwrap();
+    assert_eq!(
+        sorted(&sum.projectors().cloned().collect::<Vec<_>>()),
+        sorted(&coarsest)
+    );
+    let expected = dense_of(&left).add(&dense_of(&right)).unwrap();
+    assert_close(&dense_of(&sum), &expected, "add equal layouts");
+}
+
+#[test]
+fn add_is_exact_and_add_truncated_truncates_only_shared_keys() {
+    let k1 = DynIndex::new_dyn(2);
+    let k2 = DynIndex::new_dyn(2);
+    let a = DynIndex::new_dyn(2);
+    let tree = chain(&[k1.clone(), k2.clone()], &a, 107);
+    let shared = projector(&[(&k1, 0)]);
+    let one_sided = projector(&[(&k1, 1)]);
+    let both = layout(&tree, &[shared.clone(), one_sided.clone()]);
+    let shared_only = layout(&tree, std::slice::from_ref(&shared));
+    let link_dims = |partition: &PartitionedTreeTN<usize>, key: &Projector| {
+        partition.get(key).unwrap().data().link_dims()
+    };
+
+    // The bonds of a shared key add and nothing is truncated.
+    let exact = both.add(&shared_only).unwrap();
+    assert_eq!(link_dims(&exact, &shared), vec![6]);
+    assert_eq!(link_dims(&exact, &one_sided), vec![3]);
+    let expected = dense_of(&both).add(&dense_of(&shared_only)).unwrap();
+    assert_close(&dense_of(&exact), &expected, "exact add");
+
+    // Only the shared key is truncated; the one-sided key is copied unchanged.
+    let truncated = both
+        .add_truncated(
+            &shared_only,
+            &0,
+            TruncationOptions::default().with_max_bond_dim(1),
+        )
+        .unwrap();
+    assert_eq!(link_dims(&truncated, &shared), vec![1]);
+    assert_eq!(link_dims(&truncated, &one_sided), vec![3]);
+    assert_close(
+        &truncated
+            .get(&one_sided)
+            .unwrap()
+            .data()
+            .to_dense()
+            .unwrap(),
+        &both.get(&one_sided).unwrap().data().to_dense().unwrap(),
+        "one-sided key",
+    );
+}
+
+#[test]
+fn contract_and_add_reject_empty_operands() {
+    let k1 = DynIndex::new_dyn(2);
+    let k2 = DynIndex::new_dyn(2);
+    let a = DynIndex::new_dyn(2);
+    let tree = chain(&[k1.clone(), k2.clone()], &a, 47);
+    let coarse = layout(&tree, &[projector(&[(&k1, 0)]), projector(&[(&k1, 1)])]);
+    let empty = PartitionedTreeTN::<usize>::new();
+
+    assert!(matches!(
+        coarse.add(&empty),
+        Err(PartitionedTreeTNError::Empty)
+    ));
+    assert!(matches!(
+        coarse.contract(&empty, &0, ContractionOptions::default()),
+        Err(PartitionedTreeTNError::Empty)
+    ));
+    assert!(PartitionedTreeTN::<usize>::common_refinement(&[])
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn add_rejects_an_automatic_refinement_above_the_limit() {
+    // `{a=0}` against `{}` refines onto one atom per coordinate of `a`.
+    let atoms = AUTOMATIC_REFINEMENT_LIMIT + 1;
+    let a = DynIndex::new_dyn(atoms);
+    let b = DynIndex::new_dyn(2);
+    let tree = chain(std::slice::from_ref(&a), &b, 109);
+    let unprojected = layout(&tree, &[Projector::new()]);
+    let projected = layout(&tree, &[projector(&[(&a, 0)])]);
+
+    let error = unprojected.add(&projected).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            PartitionedTreeTNError::RefinementTooLarge { atoms: found, limit }
+                if found == atoms && limit == AUTOMATIC_REFINEMENT_LIMIT
+        ),
+        "{error:?}"
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains(&format!("{atoms} atoms"))
+            && message.contains(&format!("limit of {AUTOMATIC_REFINEMENT_LIMIT}"))
+            && message.contains("refine_to"),
+        "{message}"
+    );
+    assert!(matches!(
+        projected.add_truncated(&unprojected, &0, TruncationOptions::default()),
+        Err(PartitionedTreeTNError::RefinementTooLarge { .. })
+    ));
+
+    // The explicit refinement calls are not limited.
+    let explicit = PartitionedTreeTN::common_refinement(&[&unprojected, &projected]).unwrap();
+    assert_eq!(explicit.len(), atoms);
+    let refined = projected.refine_to(&explicit).unwrap();
+    assert_eq!(refined.len(), 1);
+    assert_close(
+        &dense_of(&refined),
+        &dense_of(&projected),
+        "explicit refine",
+    );
+}
+
+#[test]
+fn contract_rejects_an_automatic_refinement_above_the_limit() {
+    // `k1` and `a` are contracted. The right patches fix the uncontracted `k2`
+    // and `k3`, whose outputs `{k2=0}` and `{k3=0}` overlap, so the refinement
+    // grid has `dim * dim` atoms although each index alone is under the limit.
+    let dim = 65;
+    assert!(dim <= AUTOMATIC_REFINEMENT_LIMIT && dim * dim > AUTOMATIC_REFINEMENT_LIMIT);
+    let k1 = DynIndex::new_dyn(2);
+    let k2 = DynIndex::new_dyn(dim);
+    let k3 = DynIndex::new_dyn(dim);
+    let a = DynIndex::new_dyn(2);
+    let left = layout(
+        &chain(std::slice::from_ref(&k1), &a, 113),
+        &[projector(&[(&k1, 0)]), projector(&[(&k1, 1)])],
+    );
+    let right = layout(
+        &chain(&[k1.clone(), k2.clone(), k3.clone()], &a, 127),
+        &[
+            projector(&[(&k1, 0), (&k2, 0)]),
+            projector(&[(&k1, 1), (&k3, 0)]),
+        ],
+    );
+
+    let error = left
+        .contract(&right, &0, ContractionOptions::default())
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            PartitionedTreeTNError::RefinementTooLarge { atoms, limit }
+                if atoms == dim * dim && limit == AUTOMATIC_REFINEMENT_LIMIT
+        ),
+        "{error:?}"
+    );
 }

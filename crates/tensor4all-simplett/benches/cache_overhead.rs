@@ -56,7 +56,7 @@ fn create_tt_with_bond_dim(
         let left_dim = if i == 0 { 1 } else { bond_dim };
         let right_dim = if i == n_sites - 1 { 1 } else { bond_dim };
 
-        let mut t: Tensor3<f64> = tensor3_zeros(left_dim, local_dim, right_dim);
+        let mut t: Tensor3<f64> = tensor3_zeros(left_dim, local_dim, right_dim).unwrap();
         for l in 0..left_dim {
             for s in 0..local_dim {
                 for r in 0..right_dim {

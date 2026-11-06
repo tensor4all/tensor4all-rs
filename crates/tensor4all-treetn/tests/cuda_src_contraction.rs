@@ -12,11 +12,11 @@ use std::sync::Arc;
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{
     CudaExecutionContext, DynIndex, ExecutionContext, IdxTensor, TensorConstructionLike,
     TensorContractionLike,
 };
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 use tensor4all_treetn::contraction::{
     contract, contract_src_with_rng_in, ContractionOptions, SrcOptions,
@@ -82,7 +82,7 @@ fn make_chain_pair() -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
             vec![
                 IdxTensor::from_dense(
                     vec![shared[0].clone(), outputs[0].clone(), bonds[0].clone()],
-                    (0..8).map(|x| num(x)).collect(),
+                    (0..8).map(&num).collect(),
                 )
                 .unwrap(),
                 IdxTensor::from_dense(

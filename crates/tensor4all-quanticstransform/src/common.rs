@@ -97,14 +97,16 @@ pub type QuanticsOperator = LinearOperator<IdxTensor, usize>;
 /// # Returns
 /// LinearOperator wrapping the MPO as a TreeTN.
 /// # Errors
-/// Returns an error when the tensor train cannot be converted to an operator
-/// (a shape or index mismatch, or a backend failure).
+/// Returns [`QuanticsTransformError::Operation`] when `tt` is empty, when
+/// `site_dims` has a different length than `tt`, when a site dimension does
+/// not equal `site_dims[i]^2`, or when a site tensor construction or TreeTN
+/// assembly fails.
 /// # Examples
 /// ```
 /// use num_complex::Complex64;
 /// use tensor4all_quanticstransform::tensortrain_to_linear_operator;
 /// use tensor4all_simplett::{tensor3_zeros, AbstractTensorTrain, Tensor3Ops, SimpleTensorTrain};
-/// let mut tensor = tensor3_zeros(1, 4, 1);
+/// let mut tensor = tensor3_zeros(1, 4, 1).unwrap();
 /// tensor.set3(0, 0, 0, Complex64::new(1.0, 0.0));
 /// tensor.set3(0, 3, 0, Complex64::new(1.0, 0.0));
 /// let mpo = SimpleTensorTrain::new(vec![tensor]).unwrap();
@@ -307,14 +309,16 @@ pub fn tensortrain_to_linear_operator(
 /// # Returns
 /// LinearOperator wrapping the MPO as a TreeTN.
 /// # Errors
-/// Returns an error when the tensor train cannot be converted to an operator
-/// (a shape or index mismatch, or a backend failure).
+/// Returns [`QuanticsTransformError::Operation`] when `tt` is empty, when
+/// `input_dims`/`output_dims` have a different length than `tt`, when a site
+/// dimension does not equal `output_dims[i] * input_dims[i]`, or when a site
+/// tensor construction or TreeTN assembly fails.
 /// # Examples
 /// ```
 /// use num_complex::Complex64;
 /// use tensor4all_quanticstransform::tensortrain_to_linear_operator_asymmetric;
 /// use tensor4all_simplett::{tensor3_zeros, AbstractTensorTrain, Tensor3Ops, SimpleTensorTrain};
-/// let mut tensor = tensor3_zeros(1, 6, 1);
+/// let mut tensor = tensor3_zeros(1, 6, 1).unwrap();
 /// tensor.set3(0, 0, 0, Complex64::new(1.0, 0.0));
 /// tensor.set3(0, 5, 0, Complex64::new(1.0, 0.0));
 /// let mpo = SimpleTensorTrain::new(vec![tensor]).unwrap();
@@ -656,8 +660,9 @@ pub(crate) fn embed_single_var_mpo(
 /// Create an identity MPO for `r` binary sites.
 /// # Errors
 ///
-/// Returns an error when `r` is zero (an invalid-configuration failure) or
-/// the site-list allocation overflows (an overflow failure).
+/// Returns [`QuanticsTransformError::Operation`] when `r` is zero, when the
+/// site-list allocation overflows `usize`, or when a site tensor or the MPO
+/// assembly fails.
 /// # Examples
 /// ```
 /// use tensor4all_quanticstransform::identity_mpo;
@@ -667,11 +672,6 @@ pub(crate) fn embed_single_var_mpo(
 /// assert_eq!(mpo.site_dims(), vec![4, 4]);
 /// assert!(identity_mpo(0).is_err());
 /// ```
-#[allow(dead_code)]
-/// # Errors
-/// Returns an error when the operator construction fails (an overflow or
-/// invalid-configuration failure, or a shape mismatch).
-///
 pub fn identity_mpo(
     r: usize,
 ) -> std::result::Result<SimpleTensorTrain<Complex64>, QuanticsTransformError> {
@@ -686,7 +686,7 @@ pub fn identity_mpo(
     for _ in 0..r {
         // Identity tensor: delta_{s_out, s_in}
         // Shape: (1, 4, 1) where 4 = 2*2 for (s_out, s_in)
-        let mut t = tensor3_zeros(1, 4, 1);
+        let mut t = tensor3_zeros(1, 4, 1).map_err(anyhow::Error::from)?;
         // s = s_out * 2 + s_in
         // Identity: s_out == s_in
         t.set3(0, 0, 0, Complex64::one()); // (0, 0)
@@ -697,21 +697,6 @@ pub fn identity_mpo(
     SimpleTensorTrain::new(tensors)
         .map_err(|e| anyhow::anyhow!("Failed to create identity MPO: {e}"))
         .map_err(QuanticsTransformError::from)
-}
-
-/// Create a scalar MPO (constant times identity).
-#[allow(dead_code)]
-/// # Errors
-/// Returns an error when the operator construction fails (an overflow or
-/// invalid-configuration failure, or a shape mismatch).
-///
-pub fn scalar_mpo(
-    r: usize,
-    value: Complex64,
-) -> std::result::Result<SimpleTensorTrain<Complex64>, QuanticsTransformError> {
-    let mut mpo = identity_mpo(r)?;
-    mpo.scale_mut(value);
-    Ok(mpo)
 }
 
 #[cfg(test)]

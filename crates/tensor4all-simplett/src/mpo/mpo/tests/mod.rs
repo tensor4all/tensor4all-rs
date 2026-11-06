@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn test_mpo_zeros() {
-    let mpo = MPO::<f64>::zeros(&[(2, 2), (3, 3), (2, 2)]);
+    let mpo = MPO::<f64>::zeros(&[(2, 2), (3, 3), (2, 2)]).unwrap();
     assert_eq!(mpo.len(), 3);
     assert_eq!(mpo.site_dims(), vec![(2, 2), (3, 3), (2, 2)]);
     assert_eq!(mpo.rank(), 1);
@@ -10,7 +10,7 @@ fn test_mpo_zeros() {
 
 #[test]
 fn test_mpo_constant() {
-    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 5.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 5.0).unwrap();
     assert_eq!(mpo.len(), 2);
 
     // Sum should be 5.0 * (2*2) * (2*2) = 5.0 * 4 * 4 = 80.0
@@ -20,23 +20,23 @@ fn test_mpo_constant() {
 
 #[test]
 fn test_mpo_new_rejects_invalid_structure() {
-    let left: Tensor4<f64> = tensor4_zeros(1, 2, 2, 2);
-    let right: Tensor4<f64> = tensor4_zeros(3, 2, 2, 1);
+    let left: Tensor4<f64> = tensor4_zeros(1, 2, 2, 2).unwrap();
+    let right: Tensor4<f64> = tensor4_zeros(3, 2, 2, 1).unwrap();
     let err = MPO::new(vec![left, right]).unwrap_err();
     assert!(err.to_string().contains("Bond shape mismatch"));
 
-    let bad_left: Tensor4<f64> = tensor4_zeros(2, 2, 2, 1);
+    let bad_left: Tensor4<f64> = tensor4_zeros(2, 2, 2, 1).unwrap();
     let err = MPO::new(vec![bad_left]).unwrap_err();
     assert!(err.to_string().contains("Invalid boundary"));
 
-    let bad_right: Tensor4<f64> = tensor4_zeros(1, 2, 2, 2);
+    let bad_right: Tensor4<f64> = tensor4_zeros(1, 2, 2, 2).unwrap();
     let err = MPO::new(vec![bad_right]).unwrap_err();
     assert!(err.to_string().contains("Invalid boundary"));
 }
 
 #[test]
 fn test_mpo_empty_and_single_site_constructors() {
-    let empty = MPO::<f64>::constant(&[], 3.0);
+    let empty = MPO::<f64>::constant(&[], 3.0).unwrap();
     assert!(empty.is_empty());
     assert_eq!(empty.link_dims(), Vec::<usize>::new());
     assert_eq!(empty.rank(), 1);
@@ -48,7 +48,7 @@ fn test_mpo_empty_and_single_site_constructors() {
         .to_string()
         .contains("MPO is empty"));
 
-    let single = MPO::<f64>::constant(&[(2, 3)], 4.0);
+    let single = MPO::<f64>::constant(&[(2, 3)], 4.0).unwrap();
     assert_eq!(single.site_dim(0), (2, 3));
     assert_eq!(single.link_dims(), Vec::<usize>::new());
     assert_eq!(single.evaluate(&[1, 2]).unwrap(), 4.0);
@@ -76,13 +76,13 @@ fn test_mpo_identity() {
 #[test]
 fn test_mpo_evaluate() {
     // Create a simple MPO
-    let mut t0: Tensor4<f64> = tensor4_zeros(1, 2, 2, 1);
+    let mut t0: Tensor4<f64> = tensor4_zeros(1, 2, 2, 1).unwrap();
     t0.set4(0, 0, 0, 0, 1.0);
     t0.set4(0, 0, 1, 0, 2.0);
     t0.set4(0, 1, 0, 0, 3.0);
     t0.set4(0, 1, 1, 0, 4.0);
 
-    let mut t1: Tensor4<f64> = tensor4_zeros(1, 2, 2, 1);
+    let mut t1: Tensor4<f64> = tensor4_zeros(1, 2, 2, 1).unwrap();
     t1.set4(0, 0, 0, 0, 1.0);
     t1.set4(0, 0, 1, 0, 0.5);
     t1.set4(0, 1, 0, 0, 2.0);
@@ -98,7 +98,7 @@ fn test_mpo_evaluate() {
 
 #[test]
 fn test_mpo_evaluate_reports_invalid_indices() {
-    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
 
     let err = mpo.evaluate(&[0, 0, 0]).unwrap_err();
     assert!(err.to_string().contains("Expected 4 indices"));
@@ -114,7 +114,7 @@ fn test_mpo_evaluate_reports_invalid_indices() {
 
 #[test]
 fn test_mpo_full_tensor_zero_dimension_returns_shape() {
-    let mpo = MPO::<f64>::zeros(&[(0, 2)]);
+    let mpo = MPO::<f64>::zeros(&[(0, 2)]).unwrap();
     let (data, shape) = mpo.full_tensor().unwrap();
     assert!(data.is_empty());
     assert_eq!(shape, vec![0, 2]);
@@ -122,7 +122,7 @@ fn test_mpo_full_tensor_zero_dimension_returns_shape() {
 
 #[test]
 fn test_mpo_scale() {
-    let mut mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mut mpo = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
     mpo.scale_mut(3.0);
 
     // Sum should be 3.0 * (2*2) * (2*2) = 3.0 * 16 = 48.0
@@ -132,9 +132,9 @@ fn test_mpo_scale() {
 
 #[test]
 fn test_mpo_link_dims() {
-    let mut t0: Tensor4<f64> = tensor4_zeros(1, 2, 2, 3);
-    let mut t1: Tensor4<f64> = tensor4_zeros(3, 2, 2, 2);
-    let t2: Tensor4<f64> = tensor4_zeros(2, 2, 2, 1);
+    let mut t0: Tensor4<f64> = tensor4_zeros(1, 2, 2, 3).unwrap();
+    let mut t1: Tensor4<f64> = tensor4_zeros(3, 2, 2, 2).unwrap();
+    let t2: Tensor4<f64> = tensor4_zeros(2, 2, 2, 1).unwrap();
 
     // Fill with some values
     t0.set4(0, 0, 0, 0, 1.0);
@@ -147,7 +147,7 @@ fn test_mpo_link_dims() {
 
 #[test]
 fn test_mpo_full_tensor() {
-    let mpo = MPO::<f64>::constant(&[(2, 2)], 5.0);
+    let mpo = MPO::<f64>::constant(&[(2, 2)], 5.0).unwrap();
     let (data, shape) = mpo.full_tensor().unwrap();
 
     assert_eq!(shape, vec![2, 2]);
@@ -161,7 +161,7 @@ fn test_mpo_full_tensor() {
 
 #[test]
 fn test_mpo_full_tensor_matches_evaluate() {
-    let mut tensor: Tensor4<f64> = tensor4_zeros(1, 2, 3, 1);
+    let mut tensor: Tensor4<f64> = tensor4_zeros(1, 2, 3, 1).unwrap();
     tensor.set4(0, 0, 0, 0, 1.0);
     tensor.set4(0, 1, 0, 0, 2.0);
     tensor.set4(0, 0, 1, 0, 3.0);

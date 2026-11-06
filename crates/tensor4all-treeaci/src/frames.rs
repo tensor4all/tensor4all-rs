@@ -11,7 +11,9 @@ use tensor4all_tensorbackend::Matrix;
 use tensor4all_treetn::TreeTN;
 
 use crate::{
-    problem::{enforce_limit, DirectedEdgeId, LocalPhysicalPlan, PreparedTreeProblem},
+    problem::{
+        checked_product, enforce_limit, DirectedEdgeId, LocalPhysicalPlan, PreparedTreeProblem,
+    },
     samples::{CandidateSets, ComponentSample, SampleArena, SampleId},
     Result, TreeAciError, TreeAciNode, TreeAciScalar,
 };
@@ -47,14 +49,6 @@ impl Drop for FrameKernelTimer {
             ..Default::default()
         });
     }
-}
-
-fn checked_product(factors: &[usize], context: &'static str) -> Result<usize> {
-    factors.iter().try_fold(1usize, |product, &factor| {
-        product
-            .checked_mul(factor)
-            .ok_or(TreeAciError::SizeOverflow { context })
-    })
 }
 
 type OrientedCoreCache<T> = Rc<RefCell<HashMap<DirectedEdgeId, Rc<Matrix<T>>>>>;
@@ -105,17 +99,17 @@ fn multi_incoming_scratch_elements(
     let mut terms = Vec::with_capacity(2 * degree + 2);
     for (dim, count) in incoming_dims.iter().zip(counts) {
         terms.push(checked_product(
-            &[*dim, *count],
+            [*dim, *count],
             "incoming batch frame matrix",
         )?);
     }
     if degree > 0 {
         terms.push(checked_product(
-            &[outgoing_dim, incoming_dims[0]],
+            [outgoing_dim, incoming_dims[0]],
             "incoming batch core matrix",
         )?);
         terms.push(checked_product(
-            &[outgoing_dim, counts[0]],
+            [outgoing_dim, counts[0]],
             "incoming batch stage slice",
         )?);
     }
@@ -124,7 +118,7 @@ fn multi_incoming_scratch_elements(
         factors.push(outgoing_dim);
         factors.extend_from_slice(&counts[..=step]);
         factors.extend_from_slice(&incoming_dims[step + 1..]);
-        terms.push(checked_product(&factors, "incoming batch stage matrix")?);
+        terms.push(checked_product(factors, "incoming batch stage matrix")?);
     }
     checked_sum(&terms, "incoming batch scratch elements")
 }
@@ -162,32 +156,8 @@ fn enforce_frame_working_elements_with_extra_bytes<T: TreeAciScalar, V: TreeAciN
     enforce_limit("working bytes", bytes, problem.max_working_bytes)
 }
 
-/// Metadata bytes charged for the grouped-GEMM job lists of one
-/// arbitrary-degree incoming batch.
-///
-/// Charged twice per job: once for the descriptor list this crate builds and
-/// once for the equivalent translated list the tensorbackend facade owns for
-/// the duration of the call. Degrees below three never build a job list.
-///
-/// # Errors
-///
-/// Returns [`TreeAciError::SizeOverflow`] when the block count or its byte
-/// charge overflows `usize`.
-fn grouped_gemm_descriptor_bytes(incoming_dims: &[usize]) -> Result<usize> {
-    if incoming_dims.len() < 3 {
-        return Ok(0);
-    }
-    let blocks = checked_product(&incoming_dims[1..], "incoming batch grouped-GEMM blocks")?;
-    blocks
-        .checked_mul(2 * size_of::<tensor4all_tensorbackend::GroupedGemmJob>())
-        .ok_or(TreeAciError::SizeOverflow {
-            context: "incoming batch grouped-GEMM descriptor bytes",
-        })
-}
-
-/// Whether `elements` scalars plus `extra_bytes` of metadata fit what is left
-/// of the working-byte budget after `reserved_bytes`, without raising an
-/// error.
+/// Whether `elements` scalars fit what is left of the working-byte budget after
+/// `reserved_bytes`, without raising an error.
 ///
 /// The arbitrary-degree routing contract needs to *choose* a route rather
 /// than reject a request, so an overflowing or over-budget estimate reports
@@ -200,12 +170,10 @@ fn grouped_gemm_descriptor_bytes(incoming_dims: &[usize]) -> Result<usize> {
 fn frame_working_elements_fit<T: TreeAciScalar, V: TreeAciNode>(
     problem: &PreparedTreeProblem<V>,
     elements: usize,
-    extra_bytes: usize,
     reserved_bytes: usize,
 ) -> bool {
     elements
         .checked_mul(size_of::<T>())
-        .and_then(|bytes| bytes.checked_add(extra_bytes))
         .and_then(|bytes| bytes.checked_add(reserved_bytes))
         .is_some_and(|bytes| bytes <= problem.max_working_bytes)
 }
@@ -1325,15 +1293,15 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 checked_sum(
                     &[
                         checked_product(
-                            &[outgoing_dim, problem.physical[node].local_dim, incoming_dim],
+                            [outgoing_dim, problem.physical[node].local_dim, incoming_dim],
                             "single-incoming candidate core matrix",
                         )?,
                         checked_product(
-                            &[incoming_dim, count],
+                            [incoming_dim, count],
                             "single-incoming candidate frame matrix",
                         )?,
                         checked_product(
-                            &[outgoing_dim, problem.physical[node].local_dim, count],
+                            [outgoing_dim, problem.physical[node].local_dim, count],
                             "single-incoming candidate output matrix",
                         )?,
                     ],
@@ -1387,16 +1355,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     multi_incoming_scratch_elements(outgoing_dim, &incoming_dims, &counts)
                         .ok()
                         .filter(|elements| {
-                            grouped_gemm_descriptor_bytes(&incoming_dims).is_ok_and(
-                                |descriptor_bytes| {
-                                    frame_working_elements_fit::<T, V>(
-                                        problem,
-                                        *elements,
-                                        descriptor_bytes,
-                                        reserved_bytes,
-                                    )
-                                },
-                            )
+                            frame_working_elements_fit::<T, V>(problem, *elements, reserved_bytes)
                         });
                 Ok(batched.unwrap_or(scalar))
             }
@@ -1518,7 +1477,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     ///
     /// # Errors
     ///
-    /// Propagates every failure of the selected kernel.
+    /// Same errors as [`Self::candidate_frames_for_edge`].
     pub(crate) fn candidate_frames_for_edge_rows<V: TreeAciNode>(
         &self,
         inputs: &[TreeTN<IdxTensor, V>],
@@ -1702,22 +1661,22 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             let scratch = checked_sum(
                 &[
                     checked_product(
-                        &[outgoing_dim, physical.local_dim, incoming_dim],
+                        [outgoing_dim, physical.local_dim, incoming_dim],
                         "single-incoming candidate core matrix",
                     )?,
                     checked_product(
-                        &[incoming_dim, incoming_ids.len()],
+                        [incoming_dim, incoming_ids.len()],
                         "single-incoming candidate frame matrix",
                     )?,
                     checked_product(
-                        &[outgoing_dim, physical.local_dim, incoming_ids.len()],
+                        [outgoing_dim, physical.local_dim, incoming_ids.len()],
                         "single-incoming candidate output matrix",
                     )?,
                 ],
                 "single-incoming candidate scratch elements",
             )?;
             let physical_offset_bytes = checked_product(
-                &[physical.local_dim, size_of::<usize>()],
+                [physical.local_dim, size_of::<usize>()],
                 "single-incoming candidate physical-offset bytes",
             )?;
             enforce_frame_working_elements_with_extra_bytes::<T, V>(
@@ -1850,8 +1809,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     ///   complete Cartesian cross is no larger than the number of candidates
     ///   the caller actually asked for *and* every simultaneously live buffer
     ///   of that cross fits what is left of `max_working_bytes` after the
-    ///   caller's own `reserved_bytes` ([`multi_incoming_scratch_elements`]
-    ///   plus [`grouped_gemm_descriptor_bytes`]);
+    ///   caller's own `reserved_bytes` ([`multi_incoming_scratch_elements`]);
     /// * the **scalar** route, the same
     ///   [`contract_core_slice`] accumulator used by
     ///   [`ScalarCoreLayout::contract`] and [`Self::candidate_frame`],
@@ -1979,16 +1937,10 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 }
             }
             let counts = ids.iter().map(Vec::len).collect::<Vec<_>>();
-            let cross = checked_product(&counts, "multi-incoming candidate cross")?;
+            let cross = checked_product(counts.iter().copied(), "multi-incoming candidate cross")?;
             let scratch = multi_incoming_scratch_elements(outgoing_dim, &incoming_dims, &counts)?;
-            let descriptor_bytes = grouped_gemm_descriptor_bytes(&incoming_dims)?;
             let batched = cross <= indices.len()
-                && frame_working_elements_fit::<T, V>(
-                    problem,
-                    scratch,
-                    descriptor_bytes,
-                    reserved_bytes,
-                );
+                && frame_working_elements_fit::<T, V>(problem, scratch, reserved_bytes);
 
             if !batched {
                 #[cfg(test)]
@@ -2654,22 +2606,22 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
         let scratch = checked_sum(
             &[
                 checked_product(
-                    &[outgoing_dim, physical.local_dim, incoming_dim],
+                    [outgoing_dim, physical.local_dim, incoming_dim],
                     "single-incoming frame core matrix",
                 )?,
                 checked_product(
-                    &[incoming_dim, incoming_ids.len()],
+                    [incoming_dim, incoming_ids.len()],
                     "single-incoming frame input matrix",
                 )?,
                 checked_product(
-                    &[outgoing_dim, physical.local_dim, incoming_ids.len()],
+                    [outgoing_dim, physical.local_dim, incoming_ids.len()],
                     "single-incoming frame output matrix",
                 )?,
             ],
             "single-incoming frame scratch elements",
         )?;
         let physical_offset_bytes = checked_product(
-            &[physical.local_dim, size_of::<usize>()],
+            [physical.local_dim, size_of::<usize>()],
             "single-incoming physical-offset bytes",
         )?;
         enforce_frame_working_elements_with_extra_bytes::<T, V>(
@@ -3537,10 +3489,11 @@ fn incoming_batch_matrix<T: TreeAciScalar>(
 /// frame matrix, so the peak gathered core memory stays `outgoing_dim * d_0`
 /// and the complete `outgoing_dim * prod d_k` core cross is never
 /// materialized. Each later step contracts the next component out of the whole
-/// running buffer through one shared-operand grouped GEMM
-/// (`tensor4all_tensorbackend::grouped_mat_mul_shared`, the #712 facade): the
-/// blocks all reuse the same frame matrix and write disjoint output spans, so
-/// no block is copied into its own matrix and no intermediate is duplicated.
+/// running buffer through one backend einsum: the running buffer is
+/// `rows x contracted x blocks` and the frame matrix is shared by every block,
+/// so `rkb,kc->rcb` contracts all blocks in one call, with both operands
+/// borrowed from the existing buffers and the result buffer moved into the next
+/// stage.
 ///
 /// Contraction proceeds in incoming-edge order, the same order and the same
 /// association the exactly-two-incoming kernel already uses, so degree three
@@ -3564,10 +3517,13 @@ fn generalized_incoming_batch<T: TreeAciScalar>(
     frame_matrices: &[Matrix<T>],
 ) -> Result<Vec<T>> {
     let degree = incoming_axes.len();
-    let mut remaining = checked_product(&incoming_dims[1..], "incoming batch stage-one blocks")?;
-    let mut rows = checked_product(&[outgoing_dim, counts[0]], "incoming batch stage-one rows")?;
+    let mut remaining = checked_product(
+        incoming_dims[1..].iter().copied(),
+        "incoming batch stage-one blocks",
+    )?;
+    let mut rows = checked_product([outgoing_dim, counts[0]], "incoming batch stage-one rows")?;
     let mut stage = Vec::with_capacity(checked_product(
-        &[rows, remaining],
+        [rows, remaining],
         "incoming batch stage-one elements",
     )?);
     for block in 0..remaining {
@@ -3602,36 +3558,53 @@ fn generalized_incoming_batch<T: TreeAciScalar>(
             .ok_or(TreeAciError::SizeOverflow {
                 context: "incoming batch stage elements",
             })?;
-        let mut next = vec![T::default(); next_elements];
-        if !stage.is_empty() && !next.is_empty() {
-            let lhs_span = rows * contracted;
-            let jobs = (0..remaining)
-                .map(|block| {
-                    tensor4all_tensorbackend::GroupedGemmJob::new(
-                        block * next_rows,
-                        block * lhs_span,
-                        0,
-                        rows,
-                        contracted,
-                        counts[axis_index],
-                    )
-                })
-                .collect::<Vec<_>>();
+        // `stage` is `rows x contracted x blocks` in column-major order and every
+        // block multiplies the same `contracted x counts` frame matrix, so the
+        // whole stage is one `rkb,kc->rcb` einsum: its `rcb` output is already
+        // the column-major `next` buffer. Both operands arrive as borrowed read
+        // views over the existing buffers and the result's native buffer is
+        // transferred into the next stage, so the step copies neither operand
+        // nor its output.
+        let next = if !stage.is_empty() && next_elements > 0 {
+            let stage_read =
+                tensor4all_tensorbackend::dense_native_tensor_read_input_from_col_major(
+                    &stage,
+                    &[rows, contracted, remaining],
+                )
+                .map_err(|error| TreeAciError::Numerical {
+                    message: error.to_string(),
+                })?;
+            let frame_read =
+                tensor4all_tensorbackend::dense_native_tensor_read_input_from_col_major(
+                    frame_matrices[axis_index].as_col_major_slice(),
+                    &[contracted, counts[axis_index]],
+                )
+                .map_err(|error| TreeAciError::Numerical {
+                    message: error.to_string(),
+                })?;
+            let stage_ids = [0usize, 1, 2];
+            let frame_ids = [1usize, 3];
+            let operands = [
+                (&stage_read, stage_ids.as_slice()),
+                (&frame_read, frame_ids.as_slice()),
+            ];
             #[cfg(feature = "diagnostics")]
             let kernel_started = std::time::Instant::now();
-            tensor4all_tensorbackend::grouped_mat_mul_shared(
-                &stage,
-                frame_matrices[axis_index].as_col_major_slice(),
-                &mut next,
-                &jobs,
-                tensor4all_tensorbackend::GroupedGemmOptions::default(),
-            )
-            .map_err(|error| TreeAciError::Numerical {
-                message: error.to_string(),
-            })?;
+            let contracted =
+                tensor4all_tensorbackend::einsum_native_tensor_reads(&operands, &[0, 3, 2])
+                    .map_err(|error| TreeAciError::Numerical {
+                        message: error.to_string(),
+                    })?;
             #[cfg(feature = "diagnostics")]
-            diagnostics_record_matmul(kernel_started.elapsed(), jobs.len());
-        }
+            diagnostics_record_matmul(kernel_started.elapsed(), 1);
+            T::into_dense_values_from_native_col_major(contracted).map_err(|error| {
+                TreeAciError::Numerical {
+                    message: error.to_string(),
+                }
+            })?
+        } else {
+            vec![T::default(); next_elements]
+        };
         stage = next;
         rows = next_rows;
     }

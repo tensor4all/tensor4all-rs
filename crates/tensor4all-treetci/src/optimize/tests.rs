@@ -1,8 +1,11 @@
 use super::{optimize_default, TreeTciOptimizationResult, TreeTciOptions, TreeTciTermination};
 use crate::test_support::assert_scalar_close;
-use crate::{GlobalIndexBatch, TreeTCI2, TreeTciEdge, TreeTciGraph};
+use crate::{
+    AllEdges, DefaultProposer, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer, TreeTCI2,
+    TreeTciEdge, TreeTciGraph,
+};
 use anyhow::Result;
-use tensor4all_core::IndexLike;
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 
 #[test]
 fn accepted_global_pivots_prevent_sampled_convergence() {
@@ -47,9 +50,15 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
             seed: Some(7),
             ..Default::default()
         };
-        let result =
-            crate::optimize_with_proposer(&mut state, evaluate, &options, &InitialCrossOnly)
-                .unwrap();
+        let result = crate::optimize_with_proposer(
+            &mut state,
+            evaluate,
+            &options,
+            &InitialCrossOnly,
+            &crate::AllEdges,
+            &mut (),
+        )
+        .unwrap();
         let (reason, iterations) = if enable_global_pivots {
             assert!(residual_points_seen.get() > 0);
             (crate::TreeTciTermination::MaxIterations, 4)
@@ -134,7 +143,7 @@ fn optimize_rejects_invalid_options_before_callback() {
 #[test]
 fn api_crossinterpolate2_rejects_invalid_options_before_callback() {
     let calls = std::cell::Cell::new(0);
-    let error = crate::crossinterpolate2::<f64, _, _>(
+    let error = crate::crossinterpolate2::<f64, _, _, _>(
         |_| {
             calls.set(calls.get() + 1);
             Ok(vec![1.0])
@@ -148,6 +157,7 @@ fn api_crossinterpolate2_rejects_invalid_options_before_callback() {
         },
         None,
         &crate::DefaultProposer,
+        &mut (),
     )
     .unwrap_err();
     assert!(matches!(
@@ -184,7 +194,7 @@ fn optimize_default_converges_on_two_site_identity() {
             tolerance: 1e-12,
             max_iter: 4,
             max_bond_dim: None,
-            normalize_error: true,
+            scale_tolerance: true,
             ..Default::default()
         },
     )
@@ -231,7 +241,7 @@ fn optimize_default_stops_early_once_converged() {
             tolerance: 1e-12,
             max_iter: 4,
             max_bond_dim: None,
-            normalize_error: true,
+            scale_tolerance: true,
             ..Default::default()
         },
     )
@@ -278,7 +288,7 @@ fn optimize_default_stops_early_when_bond_dim_saturated() {
             tolerance: 1e-12,
             max_iter: 10,
             max_bond_dim: Some(1),
-            normalize_error: true,
+            scale_tolerance: true,
             ..Default::default()
         },
     )
@@ -497,7 +507,7 @@ fn capped_sparse_chain_with_global_pivots_stops_on_swept_state() {
     );
 
     // The public entry point from the issue report succeeds as well.
-    let crate::TreeTciRunResult { treetn, ranks, .. } = crate::crossinterpolate2::<f64, _, _>(
+    let crate::TreeTciRunResult { treetn, ranks, .. } = crate::crossinterpolate2::<f64, _, _, _>(
         evaluate,
         vec![4; N_SITES],
         TreeTciGraph::linear_chain(N_SITES).unwrap(),
@@ -505,6 +515,7 @@ fn capped_sparse_chain_with_global_pivots_stops_on_swept_state() {
         options,
         None,
         &crate::DefaultProposer,
+        &mut (),
     )
     .unwrap();
     assert!(ranks.iter().all(|&rank| rank <= 8));
@@ -587,11 +598,297 @@ fn optimizer_threads_the_caller_stream_through_each_edge_pass() {
     let evaluate = |batch: GlobalIndexBatch<'_>| Ok(vec![1.0; batch.n_points()]);
     let mut rng = ChaCha8Rng::seed_from_u64(73);
     let mut reference = rng.clone();
-    super::optimize_with_proposer_with_rng(&mut state, evaluate, &options, &proposer, &mut rng)
-        .unwrap();
+    super::optimize_with_proposer_with_rng(
+        &mut state,
+        evaluate,
+        &options,
+        &proposer,
+        &mut (),
+        &mut rng,
+    )
+    .unwrap();
     assert_eq!(
         *proposer.0.borrow(),
         (0..4).map(|_| reference.next_u64()).collect::<Vec<_>>()
     );
     assert_eq!(rng.next_u64(), reference.next_u64());
+}
+
+/// Branching tree used by the edge-order regressions: centre 1 with leaves
+/// 0, 2, 3. Sorted edges are (0,1), (1,2), (1,3).
+fn branching_graph() -> TreeTciGraph {
+    TreeTciGraph::new(
+        4,
+        &[
+            TreeTciEdge::new(0, 1),
+            TreeTciEdge::new(1, 2),
+            TreeTciEdge::new(1, 3),
+        ],
+    )
+    .unwrap()
+}
+
+/// A sum of single-site terms, exactly rank 2 across every cut.
+fn branching_value(point: &[usize]) -> f64 {
+    1.0 + point[0] as f64 + 2.0 * point[1] as f64 + 3.0 * point[2] as f64 + 4.0 * point[3] as f64
+}
+
+fn branching_evaluate(batch: GlobalIndexBatch<'_>) -> Result<Vec<f64>> {
+    let mut point = vec![0usize; batch.n_sites()];
+    let mut values = Vec::with_capacity(batch.n_points());
+    for p in 0..batch.n_points() {
+        for (site, slot) in point.iter_mut().enumerate() {
+            *slot = batch.get(site, p).unwrap();
+        }
+        values.push(branching_value(&point));
+    }
+    Ok(values)
+}
+
+/// Dense reference on the network's own site indices, in site order.
+fn dense_branching_reference(tn: &tensor4all_treetn::TreeTN<IdxTensor, usize>) -> IdxTensor {
+    let local_dims = [2usize; 4];
+    let indices: Vec<DynIndex> = (0..4)
+        .map(|site| tn.site_space(&site).unwrap().iter().next().unwrap().clone())
+        .collect();
+    let total: usize = local_dims.iter().product();
+    let mut point = vec![0usize; 4];
+    let mut values = Vec::with_capacity(total);
+    for _ in 0..total {
+        values.push(branching_value(&point));
+        for (slot, &dim) in point.iter_mut().zip(&local_dims) {
+            *slot += 1;
+            if *slot < dim {
+                break;
+            }
+            *slot = 0;
+        }
+    }
+    IdxTensor::from_dense(indices, values).unwrap()
+}
+
+/// A visitor that always returns a fixed edge sequence.
+struct FixedOrder(Vec<TreeTciEdge>);
+
+impl EdgeVisitor for FixedOrder {
+    fn visit_order<T>(&self, _state: &TreeTCI2<T>) -> Vec<TreeTciEdge> {
+        self.0.clone()
+    }
+}
+
+/// Records the edge of every proposer call, then delegates to the default.
+struct RecordingProposer(std::cell::RefCell<Vec<TreeTciEdge>>);
+
+impl PivotCandidateProposer for RecordingProposer {
+    fn seed(&self) -> u64 {
+        DefaultProposer.seed()
+    }
+
+    fn candidates_with_rng<T, R: rand::Rng + ?Sized>(
+        &self,
+        state: &TreeTCI2<T>,
+        edge: TreeTciEdge,
+        rng: &mut R,
+    ) -> crate::TreeTciResult<(Vec<Vec<usize>>, Vec<Vec<usize>>)> {
+        self.0.borrow_mut().push(edge);
+        DefaultProposer.candidates_with_rng(state, edge, rng)
+    }
+}
+
+fn branching_options() -> TreeTciOptions {
+    TreeTciOptions {
+        tolerance: 1e-12,
+        max_iter: 5,
+        enable_global_pivots: false,
+        seed: Some(0),
+        ..Default::default()
+    }
+}
+
+/// Passing `AllEdges` explicitly is bit-identical to the default entry point.
+#[test]
+fn explicit_all_edges_matches_the_default_optimizer() {
+    let evaluate = |batch: GlobalIndexBatch<'_>| Ok(vec![1.0; batch.n_points()]);
+
+    let mut default_state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+    default_state.add_global_pivots(&[vec![0, 0]]).unwrap();
+    default_state.max_sample_value = 1.0;
+    let default =
+        optimize_default(&mut default_state, evaluate, &TreeTciOptions::default()).unwrap();
+
+    let mut visitor_state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+    visitor_state.add_global_pivots(&[vec![0, 0]]).unwrap();
+    visitor_state.max_sample_value = 1.0;
+    let explicit = crate::optimize_with_proposer(
+        &mut visitor_state,
+        evaluate,
+        &TreeTciOptions::default(),
+        &DefaultProposer,
+        &AllEdges,
+        &mut (),
+    )
+    .unwrap();
+
+    assert_eq!(explicit.ranks, default.ranks);
+    assert_eq!(explicit.errors, default.errors);
+    assert_eq!(explicit.termination, default.termination);
+    for edge in default_state.graph.edges() {
+        let (left, right) = default_state.graph.subregion_vertices(edge).unwrap();
+        assert_eq!(default_state.ijset[&left], visitor_state.ijset[&left]);
+        assert_eq!(default_state.ijset[&right], visitor_state.ijset[&right]);
+    }
+}
+
+/// A caller-chosen permutation is visited exactly and converges to the dense
+/// function at `1e-12 * max|f|`.
+#[test]
+fn custom_edge_order_is_visited_and_converges() {
+    let custom = vec![
+        TreeTciEdge::new(1, 3),
+        TreeTciEdge::new(1, 2),
+        TreeTciEdge::new(0, 1),
+    ];
+    let proposer = RecordingProposer(std::cell::RefCell::new(Vec::new()));
+    let mut state = TreeTCI2::<f64>::new(vec![2, 2, 2, 2], branching_graph()).unwrap();
+    state.add_global_pivots(&[vec![0, 0, 0, 0]]).unwrap();
+    state.max_sample_value = branching_value(&[0, 0, 0, 0]).abs();
+
+    let result = crate::optimize_with_proposer(
+        &mut state,
+        branching_evaluate,
+        &branching_options(),
+        &proposer,
+        &FixedOrder(custom.clone()),
+        &mut (),
+    )
+    .unwrap();
+
+    // Every inner pass records exactly the requested order.
+    let recorded = proposer.0.borrow().clone();
+    assert!(!recorded.is_empty());
+    assert_eq!(recorded.len() % custom.len(), 0);
+    for pass in recorded.chunks(custom.len()) {
+        assert_eq!(pass, custom.as_slice());
+    }
+    assert_eq!(result.termination, TreeTciTermination::Converged);
+
+    let tn = crate::to_treetn(&state, branching_evaluate, None).unwrap();
+    let reference = dense_branching_reference(&tn);
+    let residual = tn
+        .to_dense()
+        .unwrap()
+        .sub(&reference)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    let scale = reference.maxabs().unwrap();
+    assert!(
+        residual <= 1e-12 * scale,
+        "max abs residual {residual:e} exceeds 1e-12 * {scale:e}"
+    );
+}
+
+/// A missing, duplicated, or unknown edge is rejected before any evaluation,
+/// so no edge is left with a stale bond error.
+#[test]
+fn invalid_edge_order_is_rejected_before_mutation() {
+    let cases: [(&str, Vec<TreeTciEdge>); 3] = [
+        (
+            "omitted",
+            vec![TreeTciEdge::new(0, 1), TreeTciEdge::new(1, 2)],
+        ),
+        (
+            "duplicated",
+            vec![
+                TreeTciEdge::new(0, 1),
+                TreeTciEdge::new(0, 1),
+                TreeTciEdge::new(1, 2),
+                TreeTciEdge::new(1, 3),
+            ],
+        ),
+        (
+            "unknown",
+            vec![
+                TreeTciEdge::new(0, 1),
+                TreeTciEdge::new(1, 2),
+                TreeTciEdge::new(2, 3),
+            ],
+        ),
+    ];
+
+    for (name, order) in cases {
+        let mut state = TreeTCI2::<f64>::new(vec![2, 2, 2, 2], branching_graph()).unwrap();
+        state.add_global_pivots(&[vec![0, 0, 0, 0]]).unwrap();
+        state.max_sample_value = 1.0;
+        let before = state.max_bond_error();
+        let calls = std::cell::Cell::new(0);
+
+        let error = crate::optimize_with_proposer(
+            &mut state,
+            |batch: GlobalIndexBatch<'_>| {
+                calls.set(calls.get() + 1);
+                Ok(vec![1.0; batch.n_points()])
+            },
+            &branching_options(),
+            &DefaultProposer,
+            &FixedOrder(order),
+            &mut (),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(error, crate::TreeTciError::InvalidConfiguration { .. }),
+            "{name}: unexpected error {error:?}"
+        );
+        assert_eq!(calls.get(), 0, "{name}: evaluator ran before validation");
+        assert_eq!(state.max_bond_error(), before, "{name}: state mutated");
+    }
+}
+
+#[test]
+fn optimize_rejects_invalid_global_search_starts_before_callback() {
+    let cases = [
+        (
+            vec![vec![0]],
+            false,
+            "global_search_starts[0] has 1 coordinates but the state has 2 sites",
+        ),
+        (
+            vec![vec![0, 0, 0]],
+            true,
+            "global_search_starts[0] has 3 coordinates but the state has 2 sites",
+        ),
+        (
+            vec![vec![0, 0], vec![0, 2]],
+            true,
+            "global_search_starts[1] has coordinate 2 at site 1, out of range for local dimension 2",
+        ),
+    ];
+    for (starts, enable_global_pivots, needle) in cases {
+        let mut tci = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+        tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+        let calls = std::cell::Cell::new(0);
+        let options = TreeTciOptions {
+            enable_global_pivots,
+            global_search_starts: starts,
+            ..TreeTciOptions::default()
+        };
+        let error = optimize_default(
+            &mut tci,
+            |_| {
+                calls.set(calls.get() + 1);
+                Ok(vec![1.0])
+            },
+            &options,
+        )
+        .unwrap_err();
+        // The start set is checked against the state before any sweep, so the
+        // message names the offending entry and the target was never called.
+        assert!(error.to_string().contains(needle), "{error}");
+        assert!(matches!(
+            error,
+            crate::TreeTciError::InvalidConfiguration { .. }
+        ));
+        assert_eq!(calls.get(), 0);
+    }
 }

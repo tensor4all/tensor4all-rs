@@ -1,10 +1,10 @@
 // Benchmark isolated local GMRES and full two-site square_linsolve sweeps.
 //
 // Run:
-//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_local_linsolve --release
+//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_local_linsolve --release
 //
 // Optional args:
-//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_local_linsolve --release -- <N> <state_bond_dim> <operator_bond_dim> <nsweeps> <gmres_max_restarts> <gmres_restart_dim> <step_index>
+//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_local_linsolve --release -- <N> <state_bond_dim> <operator_bond_dim> <nsweeps> <gmres_max_restarts> <gmres_restart_dim> <step_index>
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -17,9 +17,8 @@ use rand::{Rng, SeedableRng};
 use tensor4all_core::{
     index::{DynId, Index},
     krylov::{gmres, GmresOptions},
-    print_and_reset_contract_profile, reset_contract_profile,
-    AnyScalar, DynIndex, IndexLike, SvdTruncationPolicy, TensorContractionLike, IdxTensor,
-    TensorIndex,
+    print_and_reset_contract_profile, reset_contract_profile, AnyScalar, DynIndex, IdxTensor,
+    IndexLike, SvdTruncationPolicy, TensorContractionLike, TensorIndex,
 };
 use tensor4all_treetn::{
     square_linsolve, CanonicalizationOptions, IndexMapping, LinsolveOptions, LocalUpdateSweepPlan,
@@ -205,8 +204,14 @@ fn main() -> anyhow::Result<()> {
         "N must be at least 2 for a two-site local step"
     );
     anyhow::ensure!(nfullsweeps > 0, "nsweeps must be greater than zero");
-    anyhow::ensure!(gmres_max_restarts > 0, "gmres_max_restarts must be greater than zero");
-    anyhow::ensure!(gmres_restart_dim > 0, "gmres_restart_dim must be greater than zero");
+    anyhow::ensure!(
+        gmres_max_restarts > 0,
+        "gmres_max_restarts must be greater than zero"
+    );
+    anyhow::ensure!(
+        gmres_restart_dim > 0,
+        "gmres_restart_dim must be greater than zero"
+    );
 
     let phys_dim = 2usize;
     let seed = 20260518_u64;

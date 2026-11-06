@@ -118,6 +118,34 @@ Every public type, trait, and function **must** have doc comments:
 - `anyhow` for internal errors and context; `thiserror` for public API error
   types.
 
+### Public error migration
+
+The rule above predates the code: public functions returning `anyhow::Result`
+exist across `tensor4all-core`, `treetci`, `treetn`, `quanticstci`,
+`quanticstransform`, `hdf5` and `partitionedtreetn`. Treat this as a migration,
+not a cleanup.
+
+1. New public API returns a typed error. No new `anyhow::Result` in a `pub fn`,
+   in any crate.
+2. Existing public `anyhow::Result` is converted crate by crate, and only when
+   that crate takes a breaking change anyway, so the conversion never forces a
+   release on its own.
+3. `anyhow` stays allowed inside a function body, and in tests and benchmarks.
+4. The conversion order starts with the crates that already have a real error
+   enum, so the change is mechanical rather than a redesign.
+
+### Documented exceptions
+
+Two public shapes stay on `anyhow` for now; a reviewer should not ask for them
+to change without reopening this policy.
+
+- The cross-interpolation callback (`crossinterpolate2*`,
+  `MultiIndexCache::evaluate_batched`). The error type belongs to the caller, so
+  a typed error would force every callback author to adopt our enum.
+- `pub source: anyhow::Error` on the existing operation errors (`Hdf5Error`,
+  `AnyScalarError`, `TreeTNOperationError`). Replacing it with a typed source is
+  part of each crate conversion in item 2 above, not a separate change.
+
 ### C API Error Handling
 
 `tensor4all-capi` preserves error details through `t4a_last_error_message`; ABI
@@ -149,8 +177,10 @@ numerical regression is impractically slow without optimization, run that test
 in release mode and record why. Do not run both `release` and `ci` by default.
 See the [local validation table](CONTRIBUTING.md#validate-locally).
 
-- Private functions: `#[cfg(test)]` module in the source file. Integration
-  tests: `tests/`.
+- Private functions: `#[cfg(test)] mod tests;` in the source file, the suite in
+  `src/<module>/tests.rs`. See the shared rule
+  [Unit Test Organization](https://github.com/tensor4all/tensor4all-agent-rules/blob/main/rules/rust/index.md#unit-test-organization).
+  Integration tests: `tests/`.
 - **Dense whole-result comparisons**: do not recompute contractions
   element-by-element. Materialize once to a dense tensor/matrix, then compare
   via tensor subtraction and `maxabs()`. `IdxTensor` subtraction aligns indices
@@ -175,10 +205,11 @@ test to the scheduled heavy-tests workflow.
 - Before pushing a deletion PR, attest in the PR body that removed code paths
   were reviewed for coverage impact (shared rules `common/docs-and-tests.md`:
   coverage is CI-owned, the local gate is attestation-based). CI coverage is
-  authoritative; a local run is optional:
+  authoritative and runs nightly (`.github/workflows/coverage.yml`), so a PR
+  does not show it; a local run is optional:
 
 ```bash
-cargo llvm-cov --release --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
+cargo llvm-cov --profile coverage --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
 ```
 
@@ -319,9 +350,13 @@ python3 scripts/repository-rules-review.py --base main --worktree --dry-run
 python3 scripts/test-repository-rules-review.py   # the script's own tests
 ```
 
+The hosted reviewer enables #917 file-size reminders. Add `--file-growth` to
+the local dry run to include them. Scope, defaults and rollout are documented in
+[File Growth Dry Run](REPOSITORY_RULES.md#file-growth-dry-run).
+
 Drop `--dry-run` for the LLM pass; it needs `DEEPSEEK_API_KEY` in the
 environment or a repo-root `.env` (`pip install -r scripts/requirements-dev.txt`).
-System prompt: `ai/prompts/repository-rules-review.md`. Three deterministic
+System prompt: `ai/prompts/repository-rules-review.md`. Four deterministic
 checks run before and independently of the LLM:
 
 | Check | Rule | Baseline |
@@ -329,8 +364,9 @@ checks run before and independently of the LLM:
 | Secret-shaped text in added lines | (none) | Blocks the upload before anything reaches the API |
 | New direct `tenferro-*` dependency outside `tensor4all-tensorbackend` | Dense Layout And Linear Algebra | #566 Phase 3 backlog: core, tcicore, simplett, treetci |
 | Added `ignore` / `no_run` doctest fence | Documentation Examples | #566 Phase 1 backlog: 2 `no_run` sites |
+| Added inline `#[cfg(test)] mod tests { ... }` block | Unit Test Organization (shared rules) | Empty: #1105 moved the last inline block into `src/<module>/tests.rs` |
 
-Both rule checks are delta-scoped: new violations fail, the recorded backlog
+The rule checks are delta-scoped: new violations fail, the recorded backlog
 does not. The tenferro check parses Cargo.toml table context, so `tenferro-*`
 **feature** names are not mistaken for dependencies and `dev-dependencies` are
 out of scope.

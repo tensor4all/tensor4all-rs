@@ -10,14 +10,14 @@ where
     f64: From<<T as TensorScalar>::Real>,
 {
     let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], <T as Scalar>::from_f64(1.0));
-    let original_sum = tt.sum();
+    let original_sum = tt.sum().unwrap();
 
     let mut tt_compressed = tt.clone();
     tt_compressed
         .compress(&CompressionOptions::default())
         .unwrap();
 
-    let compressed_sum = tt_compressed.sum();
+    let compressed_sum = tt_compressed.sum().unwrap();
     assert!(<T as Scalar>::abs_sq(original_sum - compressed_sum).sqrt() < 1e-10);
 }
 
@@ -27,13 +27,13 @@ where
     f64: From<<T as TensorScalar>::Real>,
 {
     // Create a simple tensor train
-    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2);
+    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2).unwrap();
     t0.set3(0, 0, 0, <T as Scalar>::from_f64(1.0));
     t0.set3(0, 0, 1, <T as Scalar>::from_f64(0.5));
     t0.set3(0, 1, 0, <T as Scalar>::from_f64(0.0));
     t0.set3(0, 1, 1, <T as Scalar>::from_f64(1.0));
 
-    let mut t1: Tensor3<T> = tensor3_zeros(2, 3, 2);
+    let mut t1: Tensor3<T> = tensor3_zeros(2, 3, 2).unwrap();
     for l in 0..2 {
         for s in 0..3 {
             for r in 0..2 {
@@ -47,21 +47,21 @@ where
         }
     }
 
-    let mut t2: Tensor3<T> = tensor3_zeros(2, 2, 1);
+    let mut t2: Tensor3<T> = tensor3_zeros(2, 2, 1).unwrap();
     t2.set3(0, 0, 0, <T as Scalar>::from_f64(1.0));
     t2.set3(0, 1, 0, <T as Scalar>::from_f64(0.5));
     t2.set3(1, 0, 0, <T as Scalar>::from_f64(0.5));
     t2.set3(1, 1, 0, <T as Scalar>::from_f64(1.0));
 
     let tt = SimpleTensorTrain::new(vec![t0, t1, t2]).unwrap();
-    let original_sum = tt.sum();
+    let original_sum = tt.sum().unwrap();
 
     let mut tt_compressed = tt.clone();
     tt_compressed
         .compress(&CompressionOptions::default())
         .unwrap();
 
-    let compressed_sum = tt_compressed.sum();
+    let compressed_sum = tt_compressed.sum().unwrap();
     assert!(<T as Scalar>::abs_sq(original_sum - compressed_sum).sqrt() < 1e-8);
 }
 
@@ -71,14 +71,14 @@ where
     f64: From<<T as TensorScalar>::Real>,
 {
     // Create a tensor train with higher bond dimension
-    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 3);
+    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 3).unwrap();
     for s in 0..2 {
         for r in 0..3 {
             t0.set3(0, s, r, <T as Scalar>::from_f64((s + r + 1) as f64));
         }
     }
 
-    let mut t1: Tensor3<T> = tensor3_zeros(3, 2, 1);
+    let mut t1: Tensor3<T> = tensor3_zeros(3, 2, 1).unwrap();
     for l in 0..3 {
         for s in 0..2 {
             t1.set3(l, s, 0, <T as Scalar>::from_f64((l + s + 1) as f64));
@@ -86,7 +86,7 @@ where
     }
 
     let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
-    let original_norm = tt.norm();
+    let original_norm = tt.norm().unwrap();
 
     let options = CompressionOptions {
         max_bond_dim: Some(2),
@@ -98,7 +98,7 @@ where
     tt_compressed.compress(&options).unwrap();
 
     // Norm should be approximately preserved (with some truncation error)
-    let compressed_norm = tt_compressed.norm();
+    let compressed_norm = tt_compressed.norm().unwrap();
     assert!((original_norm - compressed_norm).abs() < original_norm * 0.1);
 }
 
@@ -140,7 +140,7 @@ where
     f64: From<<T as TensorScalar>::Real>,
 {
     let tt = SimpleTensorTrain::<T>::constant(&[2, 3, 2], <T as Scalar>::from_f64(1.0));
-    let original_sum = tt.sum();
+    let original_sum = tt.sum().unwrap();
 
     let mut tt_compressed = tt.clone();
     let options = CompressionOptions {
@@ -149,7 +149,7 @@ where
     };
     tt_compressed.compress(&options).unwrap();
 
-    let compressed_sum = tt_compressed.sum();
+    let compressed_sum = tt_compressed.sum().unwrap();
     assert!(<T as Scalar>::abs_sq(original_sum - compressed_sum).sqrt() < 1e-10);
 }
 
@@ -159,20 +159,20 @@ where
     f64: From<<T as TensorScalar>::Real>,
 {
     // Create a rank-3 TT and compress with SVD to max_bond_dim=2
-    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 3);
+    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 3).unwrap();
     for s in 0..2 {
         for r in 0..3 {
             t0.set3(0, s, r, <T as Scalar>::from_f64((s + r + 1) as f64));
         }
     }
-    let mut t1: Tensor3<T> = tensor3_zeros(3, 2, 1);
+    let mut t1: Tensor3<T> = tensor3_zeros(3, 2, 1).unwrap();
     for l in 0..3 {
         for s in 0..2 {
             t1.set3(l, s, 0, <T as Scalar>::from_f64((l + s + 1) as f64));
         }
     }
     let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
-    let original_norm = tt.norm();
+    let original_norm = tt.norm().unwrap();
 
     let options = CompressionOptions {
         method: CompressionMethod::SVD,
@@ -183,7 +183,7 @@ where
     let mut tt_compressed = tt.clone();
     tt_compressed.compress(&options).unwrap();
 
-    let compressed_norm = tt_compressed.norm();
+    let compressed_norm = tt_compressed.norm().unwrap();
     assert!((original_norm - compressed_norm).abs() < original_norm * 0.1);
 }
 
@@ -219,8 +219,8 @@ where
     let right_vectors = [[half, half], [half, -half]];
     let coefficients = [1.0e6, 1.0e-3];
 
-    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2);
-    let mut t1: Tensor3<T> = tensor3_zeros(2, 2, 1);
+    let mut t0: Tensor3<T> = tensor3_zeros(1, 2, 2).unwrap();
+    let mut t1: Tensor3<T> = tensor3_zeros(2, 2, 1).unwrap();
     for (component, &coefficient) in coefficients.iter().enumerate() {
         for site in 0..2 {
             t0.set3(
@@ -288,4 +288,71 @@ fn normalize_error_selects_relative_or_absolute_threshold_f64() {
 #[test]
 fn normalize_error_selects_relative_or_absolute_threshold_c64() {
     test_normalize_error_selects_relative_or_absolute_threshold_generic::<Complex64>();
+}
+
+/// The #1028 input: a 128 x 128 complex matrix whose only nonzero singular values are 0.5968 and
+/// 6.3e-4. t4a-faer 0.25.0/0.25.1 return 6.3e-4 after a run of zeros (tensor4all/faer#82).
+pub(crate) fn unsorted_spectrum_entries() -> [(usize, usize, Complex64); 3] {
+    [
+        (
+            41,
+            80,
+            Complex64::new(-1.3368711811580607e-64, 3.48452997681476e-64),
+        ),
+        (
+            67,
+            80,
+            Complex64::new(-5.871970588424443e-1, -1.065196368760547e-1),
+        ),
+        (
+            5,
+            112,
+            Complex64::new(-2.8153454475366503e-4, 5.652970997533713e-4),
+        ),
+    ]
+}
+
+#[test]
+fn descending_order_is_none_for_ordered_values_and_sorts_the_rest() {
+    assert_eq!(descending_order::<f64>(&[], |value| value), None);
+    assert_eq!(descending_order(&[3.0, 3.0, 1.0, 0.0], |value| value), None);
+    assert_eq!(
+        descending_order(&[0.5, 0.0, 1.0e-3], |value| value),
+        Some(vec![0, 2, 1])
+    );
+    assert_eq!(
+        descending_order(&[0.0, 2.0, 1.0, 2.0], |value| value),
+        Some(vec![1, 3, 2, 0])
+    );
+}
+
+/// Regression for #1028: SVD compression keeps a larger singular value that the backend returns
+/// after smaller ones, together with its vectors.
+#[test]
+fn factorize_svd_keeps_a_larger_value_that_follows_a_smaller_one() {
+    let n = 128;
+    let mut matrix = Matrix::<Complex64>::zeros(n, n);
+    for (row, col, value) in unsorted_spectrum_entries() {
+        matrix[[row, col]] = value;
+    }
+    for left_orthogonal in [true, false] {
+        let (left, right, rank) =
+            factorize_svd(&matrix, 1e-12, true, None, left_orthogonal).unwrap();
+        assert_eq!(rank, 2, "left_orthogonal = {left_orthogonal}");
+        let mut error = 0.0;
+        for i in 0..n {
+            for j in 0..n {
+                let mut value = Complex64::new(0.0, 0.0);
+                for k in 0..rank {
+                    value += left[[i, k]] * right[[k, j]];
+                }
+                error += (value - matrix[[i, j]]).norm_sqr();
+            }
+        }
+        assert!(
+            error.sqrt() <= 1e-12 * 0.6,
+            "left_orthogonal = {left_orthogonal}: reconstruction error {:e}",
+            error.sqrt()
+        );
+    }
 }

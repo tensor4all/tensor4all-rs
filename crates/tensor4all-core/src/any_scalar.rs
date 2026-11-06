@@ -9,109 +9,14 @@ use anyhow::{anyhow, Result};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 use tenferro::DType;
-use tensor4all_tensorbackend::BackendScalar;
+use tensor4all_tensorbackend::{
+    BackendScalar, ScalarTensorElement, ScalarValue, Storage, SumFromStorage,
+};
 
+use crate::defaults::eager_session::{
+    with_eager_session_typed, with_engine, with_execution_engine,
+};
 use crate::defaults::idx_tensor::IdxTensor;
-use crate::TensorElement;
-use tensor4all_tensorbackend::{Storage, SumFromStorage};
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum ScalarValue {
-    F32(f32),
-    F64(f64),
-    C32(Complex32),
-    C64(Complex64),
-}
-
-impl ScalarValue {
-    fn real(self) -> f64 {
-        match self {
-            Self::F32(value) => value as f64,
-            Self::F64(value) => value,
-            Self::C32(value) => value.re as f64,
-            Self::C64(value) => value.re,
-        }
-    }
-
-    fn imag(self) -> f64 {
-        match self {
-            Self::F32(_) | Self::F64(_) => 0.0,
-            Self::C32(value) => value.im as f64,
-            Self::C64(value) => value.im,
-        }
-    }
-
-    fn abs(self) -> f64 {
-        match self {
-            Self::F32(value) => value.abs() as f64,
-            Self::F64(value) => value.abs(),
-            Self::C32(value) => {
-                if value.re.is_nan() || value.im.is_nan() {
-                    f64::NAN
-                } else {
-                    f64::from(value.re).hypot(f64::from(value.im))
-                }
-            }
-            Self::C64(value) => {
-                if value.re.is_nan() || value.im.is_nan() {
-                    f64::NAN
-                } else {
-                    value.re.hypot(value.im)
-                }
-            }
-        }
-    }
-
-    fn is_complex(self) -> bool {
-        matches!(self, Self::C32(_) | Self::C64(_))
-    }
-
-    fn is_zero(self) -> bool {
-        match self {
-            Self::F32(value) => value == 0.0,
-            Self::F64(value) => value == 0.0,
-            Self::C32(value) => value == Complex32::new(0.0, 0.0),
-            Self::C64(value) => value == Complex64::new(0.0, 0.0),
-        }
-    }
-
-    fn into_complex(self) -> Complex64 {
-        match self {
-            Self::F32(value) => Complex64::new(value as f64, 0.0),
-            Self::F64(value) => Complex64::new(value, 0.0),
-            Self::C32(value) => Complex64::new(value.re as f64, value.im as f64),
-            Self::C64(value) => value,
-        }
-    }
-}
-
-trait ScalarTensorElement: TensorElement {
-    fn scalar_value(value: Self) -> ScalarValue;
-}
-
-impl ScalarTensorElement for f32 {
-    fn scalar_value(value: Self) -> ScalarValue {
-        ScalarValue::F32(value)
-    }
-}
-
-impl ScalarTensorElement for f64 {
-    fn scalar_value(value: Self) -> ScalarValue {
-        ScalarValue::F64(value)
-    }
-}
-
-impl ScalarTensorElement for Complex32 {
-    fn scalar_value(value: Self) -> ScalarValue {
-        ScalarValue::C32(value)
-    }
-}
-
-impl ScalarTensorElement for Complex64 {
-    fn scalar_value(value: Self) -> ScalarValue {
-        ScalarValue::C64(value)
-    }
-}
 
 #[cfg(test)]
 thread_local! {
@@ -212,6 +117,12 @@ fn operation_error_from_anyhow(op: &'static str, source: anyhow::Error) -> anyho
 #[derive(Clone)]
 pub struct AnyScalar {
     tensor: std::result::Result<IdxTensor, AnyScalarTensorError>,
+    /// Holds only the four [`ScalarTensorElement`] kinds. Values arrive through
+    /// [`AnyScalar::from_value`] and [`AnyScalar::from_published`] (both bound to
+    /// that trait), [`AnyScalar::scalar_value_from_tensor`] (which rejects every
+    /// other dtype), or [`AnyScalar::from_backend_scalar`] (which normalises to
+    /// `f64`/`c64`), so the integer and bool variants are matched but never
+    /// stored.
     value: ScalarValue,
     tracks_grad: bool,
 }
@@ -276,6 +187,10 @@ impl AnyScalar {
             ScalarValue::F64(_) => Self::from_value(0.0_f64),
             ScalarValue::C32(_) => Self::from_value(Complex32::new(0.0, 0.0)),
             ScalarValue::C64(_) => Self::from_value(Complex64::new(0.0, 0.0)),
+            // Unreachable: see the invariant on `AnyScalar::value`.
+            ScalarValue::I32(_) | ScalarValue::I64(_) | ScalarValue::Bool(_) => {
+                Self::from_real(0.0)
+            }
         }
     }
 
@@ -285,6 +200,10 @@ impl AnyScalar {
             ScalarValue::F64(_) => Self::from_value(1.0_f64),
             ScalarValue::C32(_) => Self::from_value(Complex32::new(1.0, 0.0)),
             ScalarValue::C64(_) => Self::from_value(Complex64::new(1.0, 0.0)),
+            // Unreachable: see the invariant on `AnyScalar::value`.
+            ScalarValue::I32(_) | ScalarValue::I64(_) | ScalarValue::Bool(_) => {
+                Self::from_real(1.0)
+            }
         }
     }
 
@@ -303,10 +222,11 @@ impl AnyScalar {
     {
         let lhs_inner = lhs.as_tensor()?.as_inner()?;
         let rhs_inner = rhs.as_tensor()?.as_inner()?;
-        let result = lhs_inner
-            .runtime()
-            .with_eager_session(|session| f(session, lhs_inner, rhs_inner))
-            .map_err(|error| operation_error(op, error))?;
+        let result = with_eager_session_typed(lhs_inner.runtime(), None, |session| {
+            f(session, lhs_inner, rhs_inner)
+        })
+        .map_err(|error| operation_error(op, error))?
+        .map_err(|error| operation_error(op, error))?;
         Self::from_tensor_result(IdxTensor::from_inner(vec![], result), op)
     }
 
@@ -322,9 +242,8 @@ impl AnyScalar {
         E: From<tenferro_ad::Error> + std::error::Error + Send + Sync + 'static,
     {
         let inner = input.as_tensor()?.as_inner()?;
-        let result = inner
-            .runtime()
-            .with_eager_session(|session| f(session, inner))
+        let result = with_eager_session_typed(inner.runtime(), None, |session| f(session, inner))
+            .map_err(|error| operation_error(op, error))?
             .map_err(|error| operation_error(op, error))?;
         Self::from_tensor_result(IdxTensor::from_inner(vec![], result), op)
     }
@@ -369,16 +288,29 @@ impl AnyScalar {
     }
 
     fn from_backend_scalar(value: BackendScalar) -> Self {
+        // `scalar_value_from_backend` normalises to exactly these two kinds.
         match Self::scalar_value_from_backend(value) {
-            ScalarValue::F32(value) => Self::from_value(value),
-            ScalarValue::F64(value) => Self::from_value(value),
-            ScalarValue::C32(value) => Self::from_value(value),
             ScalarValue::C64(value) => Self::from_value(value),
+            other => Self::from_real(other.real()),
         }
     }
 
     pub(crate) fn from_tensor(tensor: IdxTensor) -> Result<Self> {
         Self::wrap_tensor(tensor)
+    }
+
+    /// Wrap a scalar whose rank-0 value is already published as plain host storage.
+    ///
+    /// [`AnyScalar::from_tensor`] extracts its value through the tensor's eager representation, which for a
+    /// freshly materialized tensor populates an eager cache from the process-global eager runtime. An
+    /// explicit-session route must not do that, so this constructor takes the value directly; the tensor is
+    /// carried only so the scalar still behaves like one.
+    pub(crate) fn from_published<T: ScalarTensorElement>(value: T, tensor: IdxTensor) -> Self {
+        Self {
+            tensor: Ok(tensor),
+            value: T::scalar_value(value),
+            tracks_grad: false,
+        }
     }
 
     pub(crate) fn as_tensor(&self) -> Result<&IdxTensor> {
@@ -416,7 +348,6 @@ impl AnyScalar {
     /// assert_eq!(scalar.real(), 3.0);
     /// assert!(scalar.is_real());
     /// ```
-    #[allow(private_bounds)]
     pub fn from_value<T: ScalarTensorElement>(value: T) -> Self {
         Self {
             tensor: initialize_tensor(value),
@@ -537,8 +468,8 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when the scalar is not a tracked leaf (a missing-graph
-    /// /// failure).
+    /// Returns an [`AnyScalarError`] when this scalar's eager backend tensor
+    /// could not be created, or when the AD backend cannot detach it.
     ///
     /// # Examples
     ///
@@ -607,8 +538,10 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when the scalar is not a tracked leaf or the gradient is
-    /// /// unavailable (a missing-graph or dtype mismatch failure).
+    /// Returns an [`AnyScalarError`] when this scalar's eager backend tensor
+    /// could not be created, or when the AD backend cannot read the stored
+    /// gradient. A scalar with no recorded gradient returns `Ok(None)` rather
+    /// than an error.
     ///
     /// # Examples
     ///
@@ -638,8 +571,9 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when the scalar is not a tracked leaf (a missing-graph
-    /// /// failure).
+    /// Returns an [`AnyScalarError`] when this scalar's eager backend tensor
+    /// could not be created, or when the AD backend cannot clear the stored
+    /// gradient.
     ///
     /// # Examples
     ///
@@ -669,8 +603,9 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when the scalar is not a scalar-valued leaf or the reverse
-    /// /// pass fails (a graph failure).
+    /// Returns an [`AnyScalarError`] when this scalar's eager backend tensor
+    /// could not be created, when it is not a scalar-valued tracked leaf, or
+    /// when the reverse pass fails.
     ///
     /// # Examples
     ///
@@ -685,10 +620,10 @@ impl AnyScalar {
     /// assert_eq!(grad.real(), 4.0);
     /// ```
     pub fn backward(&self) -> std::result::Result<(), AnyScalarError> {
-        self.as_tensor()?
-            .backward()
-            .map_err(anyhow::Error::from)
-            .map_err(AnyScalarError::from)
+        let inner = self.as_tensor()?.as_inner()?;
+        with_execution_engine(inner.runtime(), None, |engine| inner.backward(engine))
+            .map(|_| ())
+            .map_err(|error| AnyScalarError::from(anyhow::Error::new(error)))
     }
 
     /// Returns a detached copy of this scalar.
@@ -699,8 +634,8 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when the scalar is not a tracked leaf (a missing-graph
-    /// /// failure).
+    /// Returns an [`AnyScalarError`] when this scalar's eager backend tensor
+    /// could not be created, or when the AD backend cannot detach it.
     ///
     /// # Examples
     ///
@@ -716,8 +651,11 @@ impl AnyScalar {
     /// assert!(!detached.tracks_grad());
     /// ```
     pub fn detach(&self) -> std::result::Result<Self, AnyScalarError> {
-        Self::from_tensor(self.as_tensor()?.detach().map_err(anyhow::Error::from)?)
-            .map_err(AnyScalarError::from)
+        let tensor = self.as_tensor()?;
+        let inner = tensor.as_inner()?;
+        let detached = with_engine(inner.runtime(), None, |engine| inner.detach(engine))
+            .map_err(|error| AnyScalarError::from(anyhow::Error::new(error)))?;
+        Self::from_tensor(IdxTensor::from_inner(vec![], detached)?).map_err(AnyScalarError::from)
     }
 
     /// Returns the real part of this scalar.
@@ -849,6 +787,9 @@ impl AnyScalar {
         match self.value() {
             ScalarValue::F32(value) => Some(value as f64),
             ScalarValue::F64(value) => Some(value),
+            ScalarValue::I32(value) => Some(value as f64),
+            ScalarValue::I64(value) => Some(value as f64),
+            ScalarValue::Bool(value) => Some(if value { 1.0 } else { 0.0 }),
             ScalarValue::C32(_) | ScalarValue::C64(_) => None,
         }
     }
@@ -871,7 +812,11 @@ impl AnyScalar {
     /// ```
     pub fn as_c64(&self) -> Option<Complex64> {
         match self.value() {
-            ScalarValue::F32(_) | ScalarValue::F64(_) => None,
+            ScalarValue::F32(_)
+            | ScalarValue::F64(_)
+            | ScalarValue::I32(_)
+            | ScalarValue::I64(_)
+            | ScalarValue::Bool(_) => None,
             ScalarValue::C32(value) => Some(Complex64::new(value.re as f64, value.im as f64)),
             ScalarValue::C64(value) => Some(value),
         }
@@ -885,8 +830,10 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when the conjugation fails (a dtype mismatch or backend
-    /// /// failure).
+    /// Returns an [`AnyScalarError`] when this scalar's eager backend tensor
+    /// could not be created, or when the AD backend's conjugation fails (for
+    /// example for a dtype it cannot track). Real-valued scalars are returned
+    /// unchanged.
     ///
     /// # Examples
     ///
@@ -977,8 +924,9 @@ impl AnyScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when the components cannot be composed (a dtype mismatch
-    /// or a backend failure).
+    /// Returns an [`AnyScalarError`] when either input is not real-valued, or
+    /// when the multiplication by the imaginary unit or the addition fails in
+    /// the eager backend.
     ///
     /// # Examples
     ///
@@ -1082,12 +1030,7 @@ impl AnyScalar {
     }
 
     pub(crate) fn to_backend_scalar(&self) -> BackendScalar {
-        match self.value() {
-            ScalarValue::F32(value) => BackendScalar::from_value(value),
-            ScalarValue::F64(value) => BackendScalar::from_value(value),
-            ScalarValue::C32(value) => BackendScalar::from_value(value),
-            ScalarValue::C64(value) => BackendScalar::from_value(value),
-        }
+        BackendScalar::from(self.value())
     }
 
     pub(crate) fn try_add(&self, rhs: &Self) -> Result<Self> {
@@ -1524,6 +1467,9 @@ impl fmt::Display for AnyScalar {
         match self.value() {
             ScalarValue::F32(value) => value.fmt(f),
             ScalarValue::F64(value) => value.fmt(f),
+            ScalarValue::I32(value) => value.fmt(f),
+            ScalarValue::I64(value) => value.fmt(f),
+            ScalarValue::Bool(value) => value.fmt(f),
             ScalarValue::C32(value) => value.fmt(f),
             ScalarValue::C64(value) => value.fmt(f),
         }
@@ -1535,6 +1481,9 @@ impl fmt::Debug for AnyScalar {
         let dtype = match self.value {
             ScalarValue::F32(_) => "f32",
             ScalarValue::F64(_) => "f64",
+            ScalarValue::I32(_) => "i32",
+            ScalarValue::I64(_) => "i64",
+            ScalarValue::Bool(_) => "bool",
             ScalarValue::C32(_) => "c32",
             ScalarValue::C64(_) => "c64",
         };
@@ -1547,229 +1496,4 @@ impl fmt::Debug for AnyScalar {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn with_forced_tensor_initialization_failure<T>(f: impl FnOnce() -> T) -> T {
-        let previous =
-            FORCE_ANY_SCALAR_TENSOR_INITIALIZATION_FAILURE.with(|failure| failure.replace(true));
-        let result = f();
-        FORCE_ANY_SCALAR_TENSOR_INITIALIZATION_FAILURE.with(|failure| failure.set(previous));
-        result
-    }
-
-    #[test]
-    fn compact_sum_preserves_f32_and_c32_dtype_with_and_without_ad() {
-        let indices = || vec![crate::DynIndex::new_dyn(2), crate::DynIndex::new_dyn(2)];
-        for tensor in [
-            IdxTensor::from_diag(indices(), vec![1.0_f32, 2.0_f32])
-                .unwrap()
-                .sum()
-                .unwrap(),
-            IdxTensor::from_diag(indices(), vec![1.0_f32, 2.0_f32])
-                .unwrap()
-                .enable_grad()
-                .unwrap()
-                .sum()
-                .unwrap(),
-        ] {
-            assert!(matches!(tensor.value(), ScalarValue::F32(3.0)));
-        }
-        for tensor in [
-            IdxTensor::from_diag(
-                indices(),
-                vec![Complex32::new(1.0, 2.0), Complex32::new(3.0, 4.0)],
-            )
-            .unwrap()
-            .sum()
-            .unwrap(),
-            IdxTensor::from_diag(
-                indices(),
-                vec![Complex32::new(1.0, 2.0), Complex32::new(3.0, 4.0)],
-            )
-            .unwrap()
-            .enable_grad()
-            .unwrap()
-            .sum()
-            .unwrap(),
-        ] {
-            assert!(
-                matches!(tensor.value(), ScalarValue::C32(value) if value == Complex32::new(4.0, 6.0))
-            );
-        }
-    }
-
-    #[test]
-    fn non_grad_scalar_arithmetic_uses_plain_values() {
-        let a = AnyScalar::new_real(3.0);
-        let b = AnyScalar::new_real(4.0);
-
-        let value = ((a.clone() + b.clone()) * b.clone() - AnyScalar::new_real(8.0))
-            / AnyScalar::new_real(2.0);
-
-        assert_eq!(value.as_f64(), Some(10.0));
-        assert!(!value.tracks_grad());
-        assert!(value.as_tensor().is_ok());
-    }
-
-    #[test]
-    fn tracked_scalar_arithmetic_preserves_autodiff() {
-        let x = AnyScalar::new_real(2.0).enable_grad().unwrap();
-        let y = &x * &x;
-
-        assert!(y.tracks_grad());
-        y.backward().unwrap();
-
-        let grad = x.grad().unwrap().unwrap();
-        assert_eq!(grad.as_f64(), Some(4.0));
-    }
-
-    #[test]
-    fn scalar_tensor_initialization_failure_is_retained_for_tensor_operations() {
-        let scalar = with_forced_tensor_initialization_failure(|| AnyScalar::new_real(2.0));
-        assert_eq!(scalar.real(), 2.0);
-        assert!(!scalar.tracks_grad());
-
-        let error = scalar.as_tensor().unwrap_err();
-        assert!(error.downcast_ref::<AnyScalarTensorError>().is_some());
-        assert!(error
-            .to_string()
-            .contains("AnyScalar tensor initialization failed"));
-        assert!(error
-            .chain()
-            .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
-
-        let error = scalar.clone().enable_grad().unwrap_err();
-        assert!(error
-            .source
-            .downcast_ref::<AnyScalarTensorError>()
-            .is_some());
-        assert!(error
-            .source
-            .chain()
-            .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
-    }
-
-    #[test]
-    fn tracked_scalar_operation_failure_retains_error_and_graph_state() {
-        let scalar = AnyScalar::new_real(2.0).enable_grad().unwrap();
-        let result = with_forced_tensor_initialization_failure(|| scalar.powf(2.0));
-
-        assert!(result.tracks_grad());
-        assert_eq!(result.real(), 4.0);
-
-        let error = result.as_tensor().unwrap_err();
-        assert!(error.downcast_ref::<AnyScalarTensorError>().is_some());
-        assert!(error
-            .to_string()
-            .contains("AnyScalar tensor initialization failed"));
-        assert!(error
-            .chain()
-            .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
-
-        let error = result.clone().enable_grad().unwrap_err();
-        assert!(error
-            .source
-            .downcast_ref::<AnyScalarTensorError>()
-            .is_some());
-        assert!(error
-            .source
-            .chain()
-            .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
-    }
-
-    #[test]
-    fn tracked_backend_failure_preserves_typed_diagnostic_through_fallback() {
-        let lhs = AnyScalar::new_real(2.0).enable_grad().unwrap();
-        let rhs = AnyScalar::new_real(3.0).enable_grad().unwrap();
-        let operation = AnyScalar::from_eager_binary(&lhs, &rhs, "add", |_session, _lhs, _rhs| {
-            Err(tenferro_ad::Error::from(
-                tenferro_tensor::Error::backend_failure(
-                    "forced_add",
-                    "forced tracked backend failure",
-                ),
-            ))
-        });
-        let result = AnyScalar::fallback_result(operation, "add", || ScalarValue::F64(5.0), true);
-
-        assert!(result.tracks_grad());
-        assert_eq!(result.real(), 5.0);
-        let error = result.as_tensor().unwrap_err();
-        assert!(error.downcast_ref::<AnyScalarTensorError>().is_some());
-        let stored = error.downcast_ref::<AnyScalarTensorError>().unwrap();
-        match stored {
-            AnyScalarTensorError::Operation { source, .. } => {
-                assert!(source
-                    .downcast_ref::<tenferro_ad::Error>()
-                    .is_some_and(|error| error
-                        .to_string()
-                        .contains("forced tracked backend failure")));
-            }
-            AnyScalarTensorError::Initialization { .. } => {
-                panic!("operation failure was converted to initialization failure")
-            }
-        }
-        let error = result.enable_grad().unwrap_err();
-        assert!(error.to_string().contains("forced tracked backend failure"));
-    }
-
-    #[test]
-    fn every_infallible_scalar_fallback_retains_a_tracked_error() {
-        let failed = AnyScalar {
-            tensor: Err(AnyScalarTensorError::Operation {
-                op: "seed",
-                source: Arc::new(std::io::Error::other("forced tracked scalar failure")),
-            }),
-            value: ScalarValue::F64(2.0),
-            tracks_grad: true,
-        };
-        let one = AnyScalar::new_real(1.0);
-
-        let results = [
-            &failed + &one,
-            &failed * &one,
-            &failed / &one,
-            -&failed,
-            failed.conj(),
-            failed.real_part(),
-            failed.imag_part(),
-            failed.sqrt(),
-            failed.powf(2.0),
-            failed.powi(2),
-        ];
-        for result in results {
-            assert!(result.tracks_grad());
-            let error = result.as_tensor().unwrap_err();
-            assert!(error.downcast_ref::<AnyScalarTensorError>().is_some());
-            assert!(error
-                .chain()
-                .any(|cause| cause.to_string() == "forced tracked scalar failure"));
-        }
-    }
-
-    #[test]
-    fn every_infallible_scalar_operation_retains_an_initialization_error() {
-        let failed = with_forced_tensor_initialization_failure(|| AnyScalar::new_real(2.0));
-        let one = AnyScalar::new_real(1.0);
-
-        let results = [
-            &failed + &one,
-            &failed * &one,
-            &failed / &one,
-            -&failed,
-            failed.conj(),
-            failed.real_part(),
-            failed.imag_part(),
-            failed.sqrt(),
-            failed.powf(2.0),
-            failed.powi(0),
-        ];
-        for result in results {
-            let error = result.as_tensor().unwrap_err();
-            assert!(error.downcast_ref::<AnyScalarTensorError>().is_some());
-            assert!(error
-                .chain()
-                .any(|cause| cause.to_string() == "forced AnyScalar eager initialization failure"));
-        }
-    }
-}
+mod tests;

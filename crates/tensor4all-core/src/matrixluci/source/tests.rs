@@ -1,4 +1,4 @@
-use crate::matrixluci::{CandidateMatrixSource, DenseMatrixSource, LazyMatrixSource};
+use crate::matrixluci::source::{CandidateMatrixSource, DenseMatrixSource, LazyMatrixSource};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 

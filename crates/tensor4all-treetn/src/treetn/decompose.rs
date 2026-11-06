@@ -44,8 +44,9 @@ impl<V: Clone + Hash + Eq, I: Clone + Eq> TreeTopology<V, I> {
     /// Validate that this topology describes a tree.
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// Returns [`TreeTNOperationError`] when `self` has no nodes, when its edge count is not
+    /// `node_count - 1` (for networks with more than one node), or when an edge
+    /// references an unknown node.
     ///
     pub fn validate(&self) -> std::result::Result<(), TreeTNOperationError> {
         let n = self.nodes.len();
@@ -167,7 +168,102 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
 {
-    factorize_tensor_to_treetn_with_root_impl(tensor, topology, options, root)
+    factorize_tensor_to_treetn_with_root_impl(
+        tensor,
+        topology,
+        options,
+        root,
+        &crate::treetn::contraction::GlobalLeaves,
+    )
+    .map_err(TreeTNOperationError::from)
+}
+
+/// Factorize a dense [`IdxTensor`] into a `TreeTN` on a caller-owned explicit `Session`.
+///
+/// The runtime-free counterpart of [`factorize_tensor_to_treetn_with`]: the topology validation, the
+/// traversal, the factorization placement and the network construction are the same code paths, while
+/// every leaf contraction and factorization runs on `session`. Nothing here enters a session or the
+/// process-global eager runtime, so a scheduler-owned lane can call it directly.
+///
+/// # Arguments
+///
+/// * `tensor` - The dense tensor to decompose. It must be a plain host-storage [`IdxTensor`].
+/// * `topology` - Tree topology specifying nodes, edges, and physical index assignments.
+/// * `options` - Factorization options; validated exactly as the eager entry validates them.
+/// * `root` - Name of the requested canonical center, which must exist in the topology.
+/// * `session` - The caller's session; every numerical leaf reborrows it.
+///
+/// # Errors
+///
+/// Returns [`TreeTNOperationError`] when the topology rejects the requested root or its physical
+/// index assignment, when an index is missing or repeated, when [`FactorizeOptions`] fails its own
+/// validation, when a leaf contraction or factorization fails on `session`, when a factorization
+/// truncates every bond to rank zero, or when the network cannot be constructed from the factors.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, FactorizeOptions, IdxTensor};
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// use tensor4all_treetn::{factorize_tensor_to_treetn_with_on_session, TreeTopology};
+///
+/// let left = DynIndex::new_dyn(2);
+/// let right = DynIndex::new_dyn(2);
+/// let tensor = IdxTensor::from_dense(
+///     vec![left.clone(), right.clone()],
+///     vec![1.0_f64, 2.0, 3.0, 4.0],
+/// )?;
+/// let topology = TreeTopology::new(
+///     [(0usize, vec![left]), (1usize, vec![right])].into(),
+///     vec![(0, 1)],
+/// );
+///
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let mut session = Session::new(backend.engine_mut());
+/// let tree = factorize_tensor_to_treetn_with_on_session(
+///     &tensor,
+///     &topology,
+///     FactorizeOptions::svd(),
+///     &0usize,
+///     &mut session,
+/// )?;
+/// let dense = tree.contract_to_tensor()?;
+/// assert!(dense.sub(&tensor)?.maxabs()? < 1.0e-12);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn factorize_tensor_to_treetn_with_on_session<V>(
+    tensor: &tensor4all_core::IdxTensor,
+    topology: &TreeTopology<V, tensor4all_core::DynIndex>,
+    options: FactorizeOptions,
+    root: &V,
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+) -> std::result::Result<TreeTN<tensor4all_core::IdxTensor, V>, TreeTNOperationError>
+where
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+{
+    factorize_tensor_to_treetn_with_leaves(
+        tensor,
+        topology,
+        options,
+        root,
+        &crate::treetn::contraction::SessionViewLeaves::new(session),
+    )
+}
+
+/// The same decomposition with an explicit leaf strategy (issue #859 F7).
+pub(crate) fn factorize_tensor_to_treetn_with_leaves<T, V>(
+    tensor: &T,
+    topology: &TreeTopology<V, T::Index>,
+    options: FactorizeOptions,
+    root: &V,
+    leaves: &dyn crate::treetn::contraction::LeafOps<T>,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug + Ord,
+{
+    factorize_tensor_to_treetn_with_root_impl(tensor, topology, options, root, leaves)
         .map_err(TreeTNOperationError::from)
 }
 
@@ -176,6 +272,7 @@ fn factorize_tensor_to_treetn_with_root_impl<T, V>(
     topology: &TreeTopology<V, T::Index>,
     options: FactorizeOptions,
     root: &V,
+    leaves: &dyn crate::treetn::contraction::LeafOps<T>,
 ) -> Result<TreeTN<T, V>>
 where
     T: TensorLike,
@@ -356,23 +453,15 @@ where
             .cloned()
             .collect();
 
-        if left_inds.is_empty() && current_indices.len() > 1 {
-            // This indicates an inconsistent topology specification for the current tensor.
-            // Previously we "skipped" such nodes, but that can lead to missing tensors and
-            // panics later when building the TreeTN.
-            return Err(anyhow::anyhow!(
-                "No physical indices found for node {:?} (requested indices={:?}) in current tensor indices={:?}",
-                node,
-                node_indices,
-                current_indices
-            ));
-        }
-
         // Perform factorization using TensorFactorizationLike::factorize
         // left will have the node's physical indices + bond index
-        // right will have bond index + remaining indices
-        let factorize_result = current_tensor
-            .factorize(&left_inds, &factorize_options)
+        // right will have bond index + remaining indices. A site-free node
+        // asks for an empty left side; `factorize_allowing_empty_side` is the
+        // single place where that empty-side split is handled.
+        let factorize_result =
+            super::factorize_allowing_empty_side(&current_tensor, &left_inds, |tensor, left| {
+                leaves.factorize(tensor, left, &factorize_options)
+            })
             .map_err(|e| anyhow::anyhow!("Factorization failed: {:?}", e))?;
 
         let left_indices = factorize_result.left.external_indices();

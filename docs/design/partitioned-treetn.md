@@ -125,6 +125,8 @@ mutation. Failure leaves the original partition unchanged.
 
 `to_treetn` deterministically sums the already projected patches with strict
 TreeTN direct-sum addition. It is the replacement for `to_tensor_train`.
+`to_treetn_with(engine)` builds the same sum with a chosen
+[sum engine](#sum-engine) and reports which method ran.
 
 ## Addition and contraction
 
@@ -132,11 +134,15 @@ Patch-wise addition preserves the TT predecessor's restricted contract:
 
 - identical projector keys may be added;
 - a patch absent from one operand is treated as zero; and
-- different overlapping projector layouts are rejected rather than refined.
+- different overlapping projector layouts are refined onto their common
+  refinement before the sum (see [Common refinement](#common-refinement)), which
+  keeps the part of every patch that the other operand does not cover.
 
-Matching patches use strict `TreeTN::add` and are truncated at the caller's
-explicit center. Addition requires exact named topology, site-index assignment,
-and dtype compatibility.
+Matching patches use strict `TreeTN::add`. `add` returns that exact sum;
+`add_truncated` also truncates every key present in both operands at the
+caller's explicit center, copies a one-sided key unchanged, and does not bound
+the resulting error by its cutoff. Addition requires exact named topology,
+site-index assignment, and dtype compatibility.
 
 Contraction likewise requires the two partitions to use the same named topology
 in v1; it does not call `restructure_to` or a mismatched-topology dense fallback.
@@ -147,6 +153,96 @@ For each compatible projector pair it:
 2. keeps projector entries only for surviving external full indices; and
 3. combines duplicate output projectors with strict TreeTN addition and the
    requested truncation policy.
+
+### Sum engine
+
+Where a routine forms an exact sum of more than two patches, the method that
+builds it is a `tensor4all_treetn::SumEngine` (tensor4all/tensor4all-rs#1107):
+`Binary` adds the terms one by one, `Balanced` makes the same adds on a
+balanced tree over the terms (`ceil(log2 N)` levels), `Nary` builds the sum in
+one direct-sum pass, and `NaryWithin { limit_bytes }` uses the N-ary pass only
+while the estimated size of the built sum fits the limit. Every engine gives
+the same sum; they differ in time and peak memory. The default is `Binary`
+everywhere, and `Balanced` and `Nary` are opt-in; changing a default needs
+measurements on real data first.
+
+| routine | sum | engine from |
+|---|---|---|
+| `contract`, `contract_selected` | contributions to one output projector, before the group truncation | `PartitionedContractionOptions::sum_engine` |
+| `contract_adaptive`, `contract_adaptive_selected` | contributions to one output projector, before the probe truncation | `PatchingOptions::sum_engine` |
+| `add_with_patching` | input patches with an equal projector key | `PatchingOptions::sum_engine` |
+| `to_treetn_with` | every patch | its argument; `to_treetn` uses `Binary` |
+
+`PartitionedContractionOptions` wraps treetn's `ContractionOptions`, which
+gains no field: a single treetn contraction never sums. A plain
+`ContractionOptions` converts into it with `Binary`. The engine changes only
+how a sum is built; truncation and the split rule are unaffected.
+
+The routines that return a partition do not report a `NaryWithin` fallback;
+`to_treetn_with` and `TreeTN::exact_sum` do, through `ExactSum::used_nary`
+and `ExactSum::estimated_nary_bytes`. A reporting variant of the partition
+routines can be added when a caller needs one; a statistics type was not added
+ahead of that need.
+
+`PartitionedTreeTN::add`, `PartitionedTreeTN::add_truncated`, `reconstruct`
+and `schedule_merge_refine` take no engine: every sum they form has two terms
+(two operands per key, or a pairwise merge that decides on its own whether to
+keep the pair combined), and for two terms the binary add and the N-ary pass do
+the same work.
+
+### Pairwise sums with a per-add cutoff
+
+`TreeTN::pairwise_sum` (tensor4all/tensor4all-rs#1125) is the same pairwise
+reduction as one entry point with the truncation of the caller's choice after
+every add: `PairwiseSumOrder::{Sequential, Balanced}` for the order and an
+optional `PerAddCutoff { center, cutoff, max_bond_dim }` for the truncation.
+The exact and truncating variants share the reduction tree and differ only in
+the combine step, a plain `add` or an `add` plus one truncation, so
+`Sequential` without a cutoff is `SumEngine::Binary` and `Balanced` without one
+is `SumEngine::Balanced`.
+
+The cutoff is **per add**, and the type and the rustdoc name it so: it bounds
+one truncation, not the sum. With a relative squared discarded-tail cutoff
+`tau` one truncation discards at most `2 (R - 1) sqrt(tau)` relative error over
+its `2 (R - 1)` two-site steps, so the reduction is bounded by
+`(1 + 2 (R - 1) sqrt(tau))^L - 1`, first order `2 (R - 1) L kappa sqrt(tau)`.
+`L` is `N - 1` for the chain and `ceil(log2 N)` for the balanced tree, and
+`kappa >= 1` is the largest partial-sum norm over the result norm, which the
+caller has to bound. Reaching an end-to-end relative error `eps` with the chain
+therefore takes `tau = eps / ((N - 1)^2 kappa^2)` in squared terms (first
+order; the section-7 derivation of #1107).
+
+**Where the truncated pairwise sum wins at equal error.** The cost condition is
+that the rank kept along the way stays well below the bond `N * D` the exact
+engines build on the way to the same result: one truncation costs about
+`(N * D)^3` per site, while truncating after each add costs `N * w(D' + D, D')`
+with the kept rank `D'`. Equal error additionally needs the per-add cutoff to
+reproduce the one-shot result, which holds when the summands are themselves
+compressible: then each add's cutoff drops real weight, and weight the one-shot
+truncation would also drop. Measured on #1107's grid — chains of `R = 12` sites
+of dimension 2, bond `D = 10`, `N = 64` and `N = 256` terms, release build, one
+core, single runs (not medians), error as the relative Frobenius error against
+the dense exact sum:
+
+| case | equal error | `exact_sum` + `Binary`, then truncate | `pairwise_sum`, truncating per add |
+|---|---|---|---|
+| smooth, `N = 64` | 1.28e-4 | 0.163-0.177 s | 0.068-0.072 s (2.4x) |
+| mixed, `N = 64`, cutoff 1e-10 | 1.03e-5 | 0.189 s | 0.067-0.069 s (2.7x) |
+| smooth, `N = 256` | 1.28e-4 | 14.99 s, 8.63 GB peak RSS | 0.266-0.293 s, 34-38 MB (51x time, 225x memory) |
+
+The incompressible family (independent random cores) is the boundary case that
+shows the qualification: its kept rank is 64 against `N * D = 640`, so the
+pairwise route is 1.2-1.5x cheaper in time, but it cannot reach the one-shot
+error at any useful per-add cutoff — 1.7e-5 at `tau = 1e-8` and 9.9e-7 at
+`tau = 1e-10`, against 7.5e-15 — because each add discards weight the one-shot
+truncation keeps. Matching that error would take a per-add bound so tight that
+the kept rank erases the cost advantage. That is why the per-add truncation
+stays opt-in. The balanced tree also beats the sequential chain when the exact
+sum is wanted: same result, 0.086-0.095 s against 0.148-0.190 s at `N = 64`.
+
+These numbers are measured on chains at `R = 12` only, in single runs, and are
+not extrapolated to trees, to other `R`, or to summands whose bond differs from
+`D = 10`.
 
 `contract_adaptive` adds the stronger project-first rule inherited from
 `PartitionedMPSs.jl`. A contraction or duplicate-projector sum that reaches the
@@ -161,6 +257,20 @@ projection-created null bond space without spending the caller's truncation
 budget; user-requested approximation remains confined to contraction and
 post-addition truncation.
 
+`add_with_patching` follows the same rule (#1131). Its split decision uses a
+probe: the patch with its cutoff budget applied and no bond cap. That probe is
+discarded; the children of a split are projections of the exact addend patch,
+compressed at the same `64 * epsilon` numerical-rank threshold. The cutoff
+budget and `max_bond_dim` are therefore spent once, on the final leaves, by the
+closing `truncate_adaptive` pass, instead of once per split level with each
+level's loss inherited by every leaf below it. The budget keeps its meaning:
+`cutoff` is a fraction of the operation's input `||F||^2` under `Volume` and a
+per-factorization relative cutoff under `Norm`. Every exact leaf, including one
+that is already below its budget, reaches the closing pass, so that pass
+re-derives each local threshold from the whole input weight; it is also what
+drops a below-budget leaf. Dropping such a leaf earlier would enlarge the
+survivors' shares.
+
 `SubDomainTreeTN::inner` uses the eagerly masked stored data directly. No
 projector-compatible region may be inferred or lazily remasked during inner
 product evaluation.
@@ -168,6 +278,45 @@ product evaluation.
 No production path may call `to_dense`, `contract_to_tensor`, or a dense
 reference contraction unless the caller explicitly selected and bounded a
 TreeTN dense-reference method.
+
+## Common refinement
+
+Two operations accept operands whose patch layouts differ, instead of the v1
+`OverlappingProjectors` rejection (#1088):
+
+- `PartitionedTreeTN::common_refinement(&[&PartitionedTreeTN<V>]) ->
+  Result<Vec<Projector>>` returns a pairwise-disjoint atom list such that every
+  patch projector of every operand is exactly a union of atoms, including the
+  part of one operand's region that the others do not cover. Every patch
+  projector, in canonical order, first subtracts the cells accumulated so far and
+  contributes its uncovered remainder, so a region is never added twice; the
+  cells are then split until each lies inside or outside every patch. A split
+  keeps the cells disjoint and fixes at least one more index, so this terminates,
+  and the result is a function of the projector sets, not of operand or map order.
+- `PartitionedTreeTN::refine_to(&[Projector]) -> Result<PartitionedTreeTN<V>>`
+  replaces every patch by its exact projections onto the compatible layout
+  projectors. Projection masks sites and truncates nothing, so it can increase
+  the patch count without changing values; a patch region that no layout
+  projector covers is dropped, and an empty layout returns an empty partition.
+
+`add` refines both operands onto their common refinement and then runs the
+unchanged patch-wise sum, which keeps each operand's part that the other does not
+cover. `contract` first predicts each pair's output projector; only when two of
+them overlap without being equal does it refine both operands, on the
+uncontracted external indices that any patch of either operand fixes, restricted
+to the indices each operand's tree carries. Every output projector then fixes
+that same index set, so any two are equal or disjoint. When the layouts are
+already equal or disjoint, neither operation refines and the result is unchanged.
+A patch count can grow with the product of the refined indices' dimensions;
+refinement is not recompressed here. The automatic refinement in `add`,
+`add_truncated`, and `contract` is limited to `AUTOMATIC_REFINEMENT_LIMIT`
+(4096) atoms (#1095): the common refinement's atom count, or for `contract` the
+larger operand grid, is checked before any patch is refined, and a larger
+refinement returns `RefinementTooLarge { atoms, limit }`. A refined operand then
+holds at most its patch count times `limit` patches. `common_refinement` and
+`refine_to` are the explicit opt-in and are not limited.
+`contract_selected`, `contract_adaptive`, `contract_adaptive_selected`, and
+`add_with_patching` keep their exact-key behavior and do not refine.
 
 ## Adaptive patching
 
@@ -185,8 +334,13 @@ The public signatures are:
 ```text
 add_with_patching<V>(Vec<SubDomainTreeTN<V>>, &V, &PatchingOptions)
     -> Result<PartitionedTreeTN<V>>
-truncate_adaptive<V>(&PartitionedTreeTN<V>, &V, f64, Option<usize>)
-    -> Result<PartitionedTreeTN<V>>
+truncate_adaptive<V>(
+    &PartitionedTreeTN<V>,
+    &V,
+    f64,
+    BudgetAllocation,
+    Option<usize>,
+) -> Result<PartitionedTreeTN<V>>
 contract_adaptive<V>(
     &PartitionedTreeTN<V>,
     &PartitionedTreeTN<V>,
@@ -196,23 +350,35 @@ contract_adaptive<V>(
 ) -> Result<PartitionedTreeTN<V>>
 ```
 
-`PatchingOptions` contains `cutoff`, `max_bond_dim`, a partial full-index
-`patch_order`, and `split_strategy`. `PatchSplitStrategy::Sequential` follows
+`PatchingOptions` contains `cutoff`, `allocation`, `max_bond_dim`, a partial
+full-index `patch_order`, and `split_strategy`. `PatchSplitStrategy::Sequential` follows
 that order; `ExactParameterGain` evaluates all available candidates. Split
 candidates are full external indices and remain independent of tree traversal
 order. Multiple external indices on one node are supported.
 
-### Truncation convention: local discarded-weight `cutoff`
+### Truncation convention: cross-patch discarded-weight `cutoff`
 
 The scalar truncation surface follows the ITensorMPS convention: `cutoff`
 bounds the discarded singular-value **weight** (sum of squared singular
-values) at each local factorization. It is best effort for the final
-whole-network norm error; `max_bond_dim` is a hard cap and takes precedence
-over `cutoff`. No API claims a global relative-error bound.
+values). It is best effort for the final whole-network norm error;
+`max_bond_dim` is a hard cap and takes precedence over `cutoff`. No API claims
+a global relative-error bound.
 
 `cutoff` is a direct discarded-weight threshold, not a re-labelled relative
 tolerance. The default is `cutoff = 1e-24`, the exact square of the superseded
 global `rtol = 1e-12`, so existing callers see behavior-parity compression.
+
+`cutoff` is a **cross-patch budget**, not an SVD truncation-policy knob, and
+`BudgetAllocation` (default `Volume`) states how it is spread over the patches.
+`Volume` keeps the published absolute allocation: patch `p` gets
+`cutoff * ||F||² * volume_p / V` and is dropped when its squared norm is at most
+that value. `Norm` instead applies the relative squared tail-sum cutoff
+`cutoff` at each local SVD — the ITensor-style relative `SvdTruncationPolicy`
+of `TreeTN::truncate` — so each patch is truncated relative to its own weight,
+no patch is dropped, and projected children inherit no absolute budget. Both
+rules distribute the same total weight because patch supports are disjoint.
+Use `SvdTruncationPolicy` directly for public per-factorization SVD truncation;
+`cutoff` never selects scale, measure, or rank rule by itself.
 Core relative singular-value policies remain available as
 `SvdTruncationPolicy`; for the explicit absolute-squared policy used by
 adaptive patching below, callers translating the old root-relative
@@ -341,7 +507,9 @@ Minimum focused matrix:
 - same-ID/different-metadata projectors used successfully as `HashMap` keys;
 - invalid center, topology, projector index, coordinate, and options;
 - transactional construction, insertion, and append failures;
-- identical-layout addition plus rejection of different overlapping layouts;
+- identical-layout addition plus refinement of different overlapping layouts;
+- refinement, common refinement, and contraction across different layouts,
+  including a contracted index that only one operand carries;
 - strict same-topology contraction and deterministic `to_treetn`;
 - explicit-center truncate, contract, and patching paths, including invalid
   centers;
@@ -366,6 +534,9 @@ impact attestation in the worklog/PR body.
   [Adaptive interpolation ownership](#adaptive-interpolation-ownership)).
   Implemented in M2 ([tree-pqtci-driver.md](tree-pqtci-driver.md)).
 - Common-refinement addition for different overlapping projector layouts.
+  Delivered for `add` and `contract` by #1088 (`refine_to` and
+  `common_refinement`); `contract_selected`, `contract_adaptive*`, and
+  `add_with_patching` keep their exact-key behavior.
 - Contraction between different named topologies.
 - Generic tensor storage beyond `IdxTensor`.
 - Removing `tensor4all-partitionedtt` after a separate maintainer decision.
@@ -379,7 +550,8 @@ Maintainer decisions recorded in this revision:
 - adaptive interpolation is excluded; TreeTN-general adaptive patching remains;
 - subdomain construction eagerly masks stored data;
 - center is not stored and is passed explicitly to operations that require it;
-- addition rejects different overlapping projector layouts;
+- addition refines different overlapping projector layouts onto their common
+  refinement (superseding the v1 rejection of #648/#661);
 - `ExactParameterGain` counts logical tensor elements;
 - deprecation is documentation-only with no fixed removal date;
 - node names are generic, tensor storage is `IdxTensor`, dtype is homogeneous,
@@ -431,8 +603,9 @@ Recorded final decisions:
   are rejected before every shortcut by one shared core validator
   (`validate_svd_truncation_options`) reused by TreeTN, partition, and
   adaptive entry points;
-- contraction output regions are not refined; overlapping outputs remain a
-  rejected, documented limitation (see Deferred work below);
+- contraction output regions are refined on the uncontracted indices the input
+  patches fix, so overlapping output regions are no longer a rejected
+  limitation (see [Common refinement](#common-refinement));
 - internal result construction collects, groups, and sorts duplicate projector
   contributions, exact-adds each group, truncates it once, and validates the
   full partition once;

@@ -96,10 +96,22 @@ fn path_pass_matches_train_endpoint_order_and_exact_reverse() {
     let inputs = vec![product_tree(&[(0, 1), (1, 2), (2, 3)], 4)];
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
 
-    let forward =
-        run_directional_pass(&mut state, &options, PassDirection::Forward, &mut identity).unwrap();
-    let reverse =
-        run_directional_pass(&mut state, &options, PassDirection::Reverse, &mut identity).unwrap();
+    let forward = run_directional_pass(
+        &mut state,
+        &options,
+        PassDirection::Forward,
+        &mut identity,
+        None,
+    )
+    .unwrap();
+    let reverse = run_directional_pass(
+        &mut state,
+        &options,
+        PassDirection::Reverse,
+        &mut identity,
+        None,
+    )
+    .unwrap();
 
     assert_eq!(forward.updated_edges, vec![5, 3, 1]);
     assert_eq!(reverse.updated_edges, vec![0, 2, 4]);
@@ -119,12 +131,22 @@ fn branched_topologies_cover_every_edge_with_optimal_retracing() {
         let options = TreeAciOptions::default();
         let inputs = vec![product_tree(&edges, edges.len() + 1)];
         let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
-        let forward =
-            run_directional_pass(&mut state, &options, PassDirection::Forward, &mut identity)
-                .unwrap();
-        let reverse =
-            run_directional_pass(&mut state, &options, PassDirection::Reverse, &mut identity)
-                .unwrap();
+        let forward = run_directional_pass(
+            &mut state,
+            &options,
+            PassDirection::Forward,
+            &mut identity,
+            None,
+        )
+        .unwrap();
+        let reverse = run_directional_pass(
+            &mut state,
+            &options,
+            PassDirection::Reverse,
+            &mut identity,
+            None,
+        )
+        .unwrap();
         assert_eq!(forward.update_count(), expected_forward_updates);
         assert_eq!(reverse.update_count(), expected_reverse_updates);
         let mut round = forward.updated_edges.clone();
@@ -156,6 +178,7 @@ fn failed_update_preserves_all_commits_before_the_failing_edge() {
         &options,
         PassDirection::Forward,
         &mut fail_after_one,
+        None,
     );
 
     assert!(matches!(result, Err(TreeAciError::Callback { .. })));
@@ -287,6 +310,7 @@ fn local_sweeps_honor_convergence_and_rank_limit_dwell() {
         &converged_options,
         &mut identity,
         &mut seeded_rng(),
+        None,
     )
     .unwrap();
     assert_eq!(converged.termination, TreeAciTermination::Converged);
@@ -309,6 +333,7 @@ fn local_sweeps_honor_convergence_and_rank_limit_dwell() {
         &limited_options,
         &mut identity,
         &mut seeded_rng(),
+        None,
     )
     .unwrap();
     assert_eq!(limited.termination, TreeAciTermination::RankLimited);
@@ -350,10 +375,10 @@ fn continuous_minimum_retracing_walk_preserves_pivot_gauges_on_binary_tree() {
     };
     let forward = [5, 6, 7, 1, 2, 10, 11, 8];
     for directed in forward {
-        update_edge_transaction(&mut state, directed, &options, true, &mut add).unwrap();
+        update_edge_transaction(&mut state, directed, &options, true, &mut add, None).unwrap();
     }
     for directed in forward.into_iter().rev().map(|directed| directed ^ 1) {
-        update_edge_transaction(&mut state, directed, &options, true, &mut add).unwrap();
+        update_edge_transaction(&mut state, directed, &options, true, &mut add, None).unwrap();
     }
     let actual = state
         .output

@@ -10,19 +10,66 @@ use tenferro::{DType, Tensor as NativeTensor, TensorScalar};
 use crate::storage::{Storage, SumFromStorage};
 use crate::tensor_element::TensorElement;
 
+/// Dynamic scalar value shared by every tensor4all scalar wrapper.
+///
+/// This is the single definition of the dynamic scalar value: [`BackendScalar`]
+/// here and `tensor4all_core::AnyScalar` both hold one and delegate their value
+/// accessors ([`real`](Self::real), [`imag`](Self::imag), [`abs`](Self::abs),
+/// [`is_complex`](Self::is_complex), [`is_zero`](Self::is_zero),
+/// [`into_complex`](Self::into_complex)) to it, so the two wrappers cannot
+/// disagree on a value. It is public because the core scalar wrapper lives in a
+/// downstream crate; the wrappers, not this enum, are the user-facing API.
+///
+/// The variants are exactly the scalar payloads this backend can hold: the four
+/// floating types ([`ScalarTensorElement`]) and the three non-floating kinds a
+/// rank-0 native tensor can carry. `tensor4all_core` only ever constructs the
+/// floating variants, because it reads values from `IdxTensor`, whose element
+/// types are [`ScalarTensorElement`].
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum ScalarValue {
+pub enum ScalarValue {
+    /// 32-bit floating point.
     F32(f32),
+    /// 64-bit floating point.
     F64(f64),
+    /// 32-bit signed integer.
     I32(i32),
+    /// 64-bit signed integer.
     I64(i64),
+    /// Boolean.
     Bool(bool),
+    /// 32-bit complex floating point.
     C32(Complex32),
+    /// 64-bit complex floating point.
     C64(Complex64),
 }
 
+impl From<f64> for ScalarValue {
+    fn from(value: f64) -> Self {
+        Self::F64(value)
+    }
+}
+
+impl From<f32> for ScalarValue {
+    fn from(value: f32) -> Self {
+        Self::F32(value)
+    }
+}
+
+impl From<Complex64> for ScalarValue {
+    fn from(value: Complex64) -> Self {
+        Self::C64(value)
+    }
+}
+
+impl From<Complex32> for ScalarValue {
+    fn from(value: Complex32) -> Self {
+        Self::C32(value)
+    }
+}
+
 impl ScalarValue {
-    fn real(self) -> f64 {
+    /// Real part as `f64`; `0.0` imaginary means the value equals this.
+    pub fn real(self) -> f64 {
         match self {
             Self::F32(value) => value as f64,
             Self::F64(value) => value,
@@ -40,7 +87,8 @@ impl ScalarValue {
         }
     }
 
-    fn imag(self) -> f64 {
+    /// Imaginary part as `f64`; `0.0` for the non-complex variants.
+    pub fn imag(self) -> f64 {
         match self {
             Self::F32(_) | Self::F64(_) | Self::I32(_) | Self::I64(_) | Self::Bool(_) => 0.0,
             Self::C32(value) => value.im as f64,
@@ -48,12 +96,20 @@ impl ScalarValue {
         }
     }
 
-    fn abs(self) -> f64 {
+    /// Magnitude as `f64`.
+    ///
+    /// Integer and boolean kinds widen with `as`/`From` conversions, so an
+    /// integer above 2^53 rounds to the nearest `f64` before the absolute value
+    /// is taken (never negated, so `i32::MIN` and `i64::MIN` stay correct).
+    /// Both complex kinds widen their parts to `f64` first and then use
+    /// `f64::hypot`, so a `c32` magnitude is not rounded through an `f32`
+    /// intermediate. Any NaN part yields `NaN`.
+    pub fn abs(self) -> f64 {
         match self {
             Self::F32(value) => value.abs() as f64,
             Self::F64(value) => value.abs(),
-            Self::I32(value) => value.abs() as f64,
-            Self::I64(value) => value.abs() as f64,
+            Self::I32(value) => f64::from(value).abs(),
+            Self::I64(value) => (value as f64).abs(),
             Self::Bool(value) => {
                 if value {
                     1.0
@@ -61,28 +117,32 @@ impl ScalarValue {
                     0.0
                 }
             }
+            // Both complex kinds widen their parts before forming the modulus,
+            // so a `c32` magnitude never rounds through an `f32` intermediate.
             Self::C32(value) => {
                 if value.re.is_nan() || value.im.is_nan() {
                     f64::NAN
                 } else {
-                    value.norm() as f64
+                    f64::from(value.re).hypot(f64::from(value.im))
                 }
             }
             Self::C64(value) => {
                 if value.re.is_nan() || value.im.is_nan() {
                     f64::NAN
                 } else {
-                    value.norm()
+                    value.re.hypot(value.im)
                 }
             }
         }
     }
 
-    fn is_complex(self) -> bool {
+    /// Whether this is one of the complex variants.
+    pub fn is_complex(self) -> bool {
         matches!(self, Self::C32(_) | Self::C64(_))
     }
 
-    fn is_zero(self) -> bool {
+    /// Exact comparison against zero of the variant's own payload type.
+    pub fn is_zero(self) -> bool {
         match self {
             Self::F32(value) => value == 0.0,
             Self::F64(value) => value == 0.0,
@@ -94,7 +154,8 @@ impl ScalarValue {
         }
     }
 
-    fn into_complex(self) -> Complex64 {
+    /// Value widened to `Complex64` with a zero imaginary part when real.
+    pub fn into_complex(self) -> Complex64 {
         match self {
             Self::F32(value) => Complex64::new(value as f64, 0.0),
             Self::F64(value) => Complex64::new(value, 0.0),
@@ -107,11 +168,22 @@ impl ScalarValue {
     }
 }
 
+/// Snapshot a compact storage reduction as the dynamic scalar kind it was stored as.
+///
+/// The dispatch follows the storage's own dtype instead of assuming `f64` for every real payload: a
+/// narrow `f32` storage yields an `f32` scalar and a `c32` storage a `c32` scalar, exactly as
+/// [`SumFromStorage`] defines them, so a reduction never changes the scalar kind.
 fn scalar_value_from_storage(storage: &Storage) -> ScalarValue {
-    if storage.is_f64() {
-        ScalarValue::F64(f64::sum_from_storage(storage))
-    } else {
-        ScalarValue::C64(Complex64::sum_from_storage(storage))
+    match storage.dtype() {
+        DType::F32 => ScalarValue::F32(f32::sum_from_storage(storage)),
+        DType::F64 => ScalarValue::F64(f64::sum_from_storage(storage)),
+        DType::C32 => ScalarValue::C32(Complex32::sum_from_storage(storage)),
+        DType::C64 => ScalarValue::C64(Complex64::sum_from_storage(storage)),
+        // `Storage` wraps exactly the four floating payloads above, so no other dtype can be stored.
+        other => crate::invariant_violated(
+            "compact storage reduction",
+            format!("compact storage carries no {other:?} payload"),
+        ),
     }
 }
 
@@ -184,15 +256,33 @@ fn scalar_value_from_native(native: &NativeTensor) -> Result<ScalarValue> {
     }
 }
 
-trait ScalarTensorElement: TensorElement {
+/// Maps a concrete tensor element type onto its [`ScalarValue`] variant.
+///
+/// This is the single implementation of the scalar construction contract:
+/// [`BackendScalar::from_value`] here and `tensor4all_core::AnyScalar::from_value`
+/// use it instead of each matching on the element type. It is public for the
+/// same reason as [`ScalarValue`]: the core wrapper is in a downstream crate and
+/// bounds its own `from_value` on this trait. Implemented for `f32`, `f64`,
+/// [`Complex32`], and [`Complex64`].
+///
+/// # Examples
+///
+/// ```
+/// use num_complex::Complex64;
+/// use tensor4all_tensorbackend::{BackendScalar, ScalarTensorElement, ScalarValue};
+///
+/// assert_eq!(Complex64::scalar_value(Complex64::new(1.0, -2.0)), ScalarValue::C64(Complex64::new(1.0, -2.0)));
+/// assert!((BackendScalar::from_value(Complex64::new(3.0, -4.0)).abs() - 5.0).abs() < 1e-12);
+/// ```
+pub trait ScalarTensorElement: TensorElement {
+    /// Lifts this concrete element into its dynamic scalar variant.
     fn scalar_value(value: Self) -> ScalarValue;
 }
 
 fn scalar_native<T: TensorScalar>(value: T) -> NativeTensor {
-    crate::require_invariant(
-        NativeTensor::from_vec_col_major(vec![], vec![value]),
-        "rank-0 scalar construction failed",
-    )
+    NativeTensor::from_vec_col_major(vec![], vec![value]).unwrap_or_else(|error| {
+        crate::invariant_violated("rank-0 scalar construction failed", error)
+    })
 }
 
 impl ScalarTensorElement for f32 {
@@ -424,7 +514,6 @@ impl BackendScalar {
     /// assert!((z.real() - 1.0).abs() < 1e-10);
     /// assert!((z.imag() - 2.0).abs() < 1e-10);
     /// ```
-    #[allow(private_bounds)]
     pub fn from_value<T: ScalarTensorElement>(value: T) -> Self {
         Self {
             native: scalar_native(value),
@@ -724,8 +813,8 @@ impl BackendScalar {
     ///
     /// # Errors
     ///
-    /// Returns an error when either input is not a real scalar (a dtype
-    /// mismatch failure).
+    /// Returns an error when `real` or `imag` is complex rather than a real
+    /// scalar (an invalid input).
     ///
     /// # Examples
     ///
@@ -820,7 +909,13 @@ impl BackendScalar {
 
 impl SumFromStorage for BackendScalar {
     fn sum_from_storage(storage: &Storage) -> Self {
-        match scalar_value_from_storage(storage) {
+        Self::from(scalar_value_from_storage(storage))
+    }
+}
+
+impl From<ScalarValue> for BackendScalar {
+    fn from(value: ScalarValue) -> Self {
+        match value {
             ScalarValue::F32(value) => Self::from_value(value),
             ScalarValue::F64(value) => Self::from_value(value),
             ScalarValue::I32(value) => Self::from_i32(value),

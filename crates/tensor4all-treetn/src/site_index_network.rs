@@ -95,8 +95,7 @@ where
     /// Returns an error if the node already exists.
     /// # Errors
     ///
-    /// Returns an error when the site space is invalid (a shape mismatch) or the
-    ///  node is a duplicate (a duplicate operation failure).
+    /// Returns [`TreeTNOperationError`] when `node_name` already exists.
     ///
     pub fn add_node(
         &mut self,
@@ -121,8 +120,8 @@ where
     /// Rename an existing node and preserve its site-space metadata.
     /// # Errors
     ///
-    /// Returns an error when the node is not found (a missing-index failure) or
-    ///  the new name is a duplicate (a duplicate operation failure).
+    /// Returns [`TreeTNOperationError`] when `new_name` is already in use, or when `old_name`
+    /// is not present.
     ///
     pub fn rename_node(
         &mut self,
@@ -204,8 +203,8 @@ where
     /// Updates both the site space and the reverse lookup.
     /// # Errors
     ///
-    /// Returns an error when the site index is already present (a duplicate-index
-    ///  failure) or the node is not found (a missing-index failure).
+    /// Returns [`TreeTNOperationError`] when `node_name` is not present. Registering an index
+    /// that is already in the node's site space is a no-op.
     ///
     pub fn add_site_index(
         &mut self,
@@ -226,8 +225,8 @@ where
     /// Updates both the site space and the reverse lookup.
     /// # Errors
     ///
-    /// Returns an error when the site index is not present (a missing-index
-    ///  failure).
+    /// Returns [`TreeTNOperationError`] when `node_name` is not present. An index that is not in
+    /// the node's site space is reported as `Ok(false)`, not as an error.
     ///
     pub fn remove_site_index(
         &mut self,
@@ -250,9 +249,8 @@ where
     /// Updates both the site space and the reverse lookup.
     /// # Errors
     ///
-    /// Returns an error when the old site index is not present (a missing-index
-    ///  failure) or the new index has an incompatible dimension (a shape
-    ///  mismatch).
+    /// Returns [`TreeTNOperationError`] when `node_name` is not present, or when `old_index` is
+    /// not in that node's site space.
     ///
     pub fn replace_site_index(
         &mut self,
@@ -284,8 +282,7 @@ where
     /// This is an atomic operation that removes all old indices and adds all new ones.
     /// # Errors
     ///
-    /// Returns an error when the node is not found (a missing-index failure) or
-    ///  the site space is invalid (a shape mismatch).
+    /// Returns [`TreeTNOperationError`] when `node_name` is not present.
     ///
     pub fn set_site_space(
         &mut self,
@@ -327,8 +324,7 @@ where
     /// Returns an error if either node doesn't exist.
     /// # Errors
     ///
-    /// Returns an error when an endpoint node is not found (a missing-index
-    ///  failure) or the edge already exists (a duplicate operation failure).
+    /// Returns [`TreeTNOperationError`] when `n1` or `n2` is not present.
     ///
     pub fn add_edge(
         &mut self,
@@ -549,8 +545,8 @@ where
     /// would be needed.
     /// # Errors
     ///
-    /// Returns an error when the operator topology is incompatible (a shape or
-    ///  index mismatch failure).
+    /// Returns [`TreeTNOperationError`] when `self` and `operator` do not have the same
+    /// topology.
     ///
     pub fn apply_operator_topology(
         &self,

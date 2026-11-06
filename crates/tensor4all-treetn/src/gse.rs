@@ -22,6 +22,7 @@ use tensor4all_core::{
     IndexLike, LinearizationOrder, PairwiseContractionOptions, SvdTruncationPolicy,
     TensorContractionLike, TensorFactorizationLike, TensorIndex,
 };
+use tensor4all_tensorbackend::invariant_violated;
 use thiserror::Error;
 
 use crate::local_update_support::{single_site_square_mappings, SquareSiteMappingError};
@@ -30,7 +31,7 @@ use crate::{CanonicalizationOptions, TdvpError, TdvpOptions, TdvpResult, TreeTN}
 
 /// Options controlling TreeTN global subspace expansion.
 #[derive(Debug, Clone)]
-pub struct GseOptions {
+pub struct GseOptions<V> {
     /// Number of Krylov reference states to build as `H psi`, `H^2 psi`, ...
     ///
     /// This field is used by [`global_subspace_expand`] and [`gse_tdvp`]. It is
@@ -38,7 +39,7 @@ pub struct GseOptions {
     /// are supplied directly.
     pub krylov_dim: usize,
     /// Options used when applying the operator to build each reference state.
-    pub reference_apply: ApplyOptions,
+    pub reference_apply: ApplyOptions<V>,
     /// Optional maximum bond dimension for generated reference states.
     ///
     /// When this is `None`, generated references use `maxlinkdim(state) + 1`,
@@ -56,7 +57,7 @@ pub struct GseOptions {
     pub expand_before_first_sweep: bool,
 }
 
-impl Default for GseOptions {
+impl<V> Default for GseOptions<V> {
     fn default() -> Self {
         Self {
             krylov_dim: 0,
@@ -71,7 +72,7 @@ impl Default for GseOptions {
     }
 }
 
-impl GseOptions {
+impl<V> GseOptions<V> {
     /// Set the number of generated Krylov reference states.
     pub fn with_krylov_dim(mut self, krylov_dim: usize) -> Self {
         self.krylov_dim = krylov_dim;
@@ -134,12 +135,21 @@ where
 }
 
 /// Options for [`gse_tdvp`].
-#[derive(Debug, Clone, Default)]
-pub struct GseTdvpOptions {
+#[derive(Debug, Clone)]
+pub struct GseTdvpOptions<V> {
     /// Global subspace expansion options.
-    pub gse: GseOptions,
+    pub gse: GseOptions<V>,
     /// Existing TreeTN TDVP options.
     pub tdvp: TdvpOptions,
+}
+
+impl<V> Default for GseTdvpOptions<V> {
+    fn default() -> Self {
+        Self {
+            gse: GseOptions::<V>::default(),
+            tdvp: TdvpOptions::default(),
+        }
+    }
 }
 
 /// Result returned by [`gse_tdvp`].
@@ -264,16 +274,29 @@ struct EdgeExpansionStats {
 
 /// Build Krylov references from `operator`, expand the TreeTN state, and return
 /// the expanded state.
+///
 /// # Errors
 ///
-/// Returns an error when the subspace expansion fails (a shape or index
-/// /// mismatch, a non-convergence failure, or a backend failure).
+/// Returns [`GseError::InvalidOption`] when `density_weight_cutoff` or
+/// `hermitian_tol` is negative or not finite, or when
+/// `reference_max_bond_dim` is set to zero; [`GseError::MissingCenter`] when
+/// `center` is not a node of `init`; [`GseError::TopologyMismatch`] when the
+/// state and the operator MPO topology differ; and
+/// [`GseError::UnsupportedStateSiteCount`],
+/// [`GseError::UnsupportedMultipleSiteMappings`], [`GseError::MissingMapping`]
+/// or [`GseError::InvalidMapping`] when a node does not carry exactly one
+/// input and one output operator index. A generated reference that does not
+/// hold one state index per node, or whose site dimension disagrees with the
+/// target, fails with [`GseError::UnsupportedStateSiteCount`] or
+/// [`GseError::InvalidMapping`]. Failures of the underlying operator
+/// application, norm or canonicalization are reported as
+/// [`GseError::Algorithm`].
 ///
 pub fn global_subspace_expand<V>(
     operator: &LinearOperator<IdxTensor, V>,
     init: TreeTN<IdxTensor, V>,
     center: &V,
-    options: GseOptions,
+    options: GseOptions<V>,
 ) -> std::result::Result<GseResult<V>, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
@@ -300,14 +323,20 @@ where
 /// references being returned or mutated.
 /// # Errors
 ///
-/// Returns an error when the subspace expansion fails (a shape or index
-/// /// mismatch, a non-convergence failure, or a backend failure).
+/// Returns [`GseError::InvalidOption`] for an invalid `density_weight_cutoff`,
+/// `hermitian_tol` or `reference_max_bond_dim`, [`GseError::MissingCenter`]
+/// when `center` is not a node of `init`, [`GseError::TopologyMismatch`] when a
+/// supplied reference does not share the target topology, and
+/// [`GseError::UnsupportedStateSiteCount`] or [`GseError::InvalidMapping`] when
+/// a reference or the target violates the single-site state contract.
+/// Failures of the underlying canonicalization, index relabeling or edge
+/// expansion are reported as [`GseError::Algorithm`].
 ///
 pub fn global_subspace_expand_with_references<V>(
     init: TreeTN<IdxTensor, V>,
     references: Vec<TreeTN<IdxTensor, V>>,
     center: &V,
-    options: GseOptions,
+    options: GseOptions<V>,
 ) -> std::result::Result<GseResult<V>, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
@@ -368,14 +397,15 @@ where
 /// Run GSE before selected TDVP sweeps and delegate each sweep to existing TDVP.
 /// # Errors
 ///
-/// Returns an error when the global-subspace TDVP fails (a shape or index
-/// /// mismatch, a non-convergence failure, or a backend failure).
+/// Returns [`GseError::InvalidOption`] for invalid GSE options, the errors of
+/// [`global_subspace_expand`] for each expansion, and [`GseError::Tdvp`] when a
+/// TDVP sweep fails.
 ///
 pub fn gse_tdvp<V>(
     operator: &LinearOperator<IdxTensor, V>,
     init: TreeTN<IdxTensor, V>,
     center: &V,
-    options: GseTdvpOptions,
+    options: GseTdvpOptions<V>,
 ) -> std::result::Result<GseTdvpResult<V>, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
@@ -423,7 +453,7 @@ where
     })
 }
 
-fn validate_options(options: &GseOptions) -> Result<(), GseError> {
+fn validate_options<V>(options: &GseOptions<V>) -> Result<(), GseError> {
     if !options.density_weight_cutoff.is_finite() || options.density_weight_cutoff < 0.0 {
         return Err(GseError::InvalidOption {
             option: "density_weight_cutoff",
@@ -451,7 +481,7 @@ fn build_references<V>(
     operator: &LinearOperator<IdxTensor, V>,
     init: &TreeTN<IdxTensor, V>,
     center: &V,
-    options: &GseOptions,
+    options: &GseOptions<V>,
 ) -> Result<Vec<TreeTN<IdxTensor, V>>, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
@@ -549,7 +579,7 @@ fn expand_edges<V>(
     state: &mut TreeTN<IdxTensor, V>,
     references: &mut [TreeTN<IdxTensor, V>],
     center: &V,
-    options: &GseOptions,
+    options: &GseOptions<V>,
 ) -> Result<EdgeExpansionStats, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
@@ -603,48 +633,49 @@ fn expand_one_edge<V>(
     references: &mut [TreeTN<IdxTensor, V>],
     parent: &V,
     child: &V,
-    options: &GseOptions,
+    options: &GseOptions<V>,
 ) -> Result<usize, GseError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug + 'static,
 {
-    let edge = state
-        .edge_between(parent, child)
-        .ok_or_else(|| GseError::Algorithm {
-            context: "GSE target edge is missing",
-            source: anyhow::anyhow!("missing edge between {:?} and {:?}", parent, child),
-        })?;
-    let old_bond = state
-        .bond_index(edge)
-        .cloned()
-        .ok_or_else(|| GseError::Algorithm {
-            context: "GSE target edge has no bond index",
-            source: anyhow::anyhow!("missing bond between {:?} and {:?}", parent, child),
-        })?;
-    let child_idx = state
-        .node_index(child)
-        .ok_or_else(|| GseError::MissingCenter {
-            center: format!("{child:?}"),
-        })?;
-    let parent_idx = state
-        .node_index(parent)
-        .ok_or_else(|| GseError::MissingCenter {
-            center: format!("{parent:?}"),
-        })?;
-    let child_tensor = state
-        .tensor(child_idx)
-        .cloned()
-        .ok_or_else(|| GseError::Algorithm {
-            context: "GSE child tensor is missing",
-            source: anyhow::anyhow!("missing tensor at {:?}", child),
-        })?;
-    let parent_tensor = state
-        .tensor(parent_idx)
-        .cloned()
-        .ok_or_else(|| GseError::Algorithm {
-            context: "GSE parent tensor is missing",
-            source: anyhow::anyhow!("missing tensor at {:?}", parent),
-        })?;
+    // `parent`/`child` come from `state`'s own canonicalization edge order
+    // (`expand_edges`), so these lookups are internal invariants.
+    let edge = state.edge_between(parent, child).unwrap_or_else(|| {
+        invariant_violated(
+            "GSE target edge is missing",
+            format!("missing edge between {:?} and {:?}", parent, child),
+        )
+    });
+    let old_bond = state.bond_index(edge).cloned().unwrap_or_else(|| {
+        invariant_violated(
+            "GSE target edge has no bond index",
+            format!("missing bond between {:?} and {:?}", parent, child),
+        )
+    });
+    let child_idx = state.node_index(child).unwrap_or_else(|| {
+        invariant_violated(
+            "GSE node from the network's own traversal is missing",
+            format!("{child:?}"),
+        )
+    });
+    let parent_idx = state.node_index(parent).unwrap_or_else(|| {
+        invariant_violated(
+            "GSE node from the network's own traversal is missing",
+            format!("{parent:?}"),
+        )
+    });
+    let child_tensor = state.tensor(child_idx).cloned().unwrap_or_else(|| {
+        invariant_violated(
+            "GSE child tensor is missing",
+            format!("missing tensor at {:?}", child),
+        )
+    });
+    let parent_tensor = state.tensor(parent_idx).cloned().unwrap_or_else(|| {
+        invariant_violated(
+            "GSE parent tensor is missing",
+            format!("missing tensor at {:?}", parent),
+        )
+    });
     let q_indices = child_tensor
         .external_indices()
         .into_iter()
@@ -821,52 +852,42 @@ fn update_reference_edge<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    let edge = reference
-        .edge_between(parent, child)
-        .ok_or_else(|| GseError::Algorithm {
-            context: "GSE reference edge is missing during update",
-            source: anyhow::anyhow!(
+    // `reference` was checked against the target with `same_topology`
+    // (`validate_reference`) and `parent`/`child` come from the target's edge
+    // order, so these lookups are internal invariants.
+    let edge = reference.edge_between(parent, child).unwrap_or_else(|| {
+        invariant_violated(
+            "GSE reference edge is missing during update",
+            format!(
                 "missing reference edge between {:?} and {:?}",
-                parent,
-                child
+                parent, child
             ),
-        })?;
-    let _old_bond = reference
-        .bond_index(edge)
-        .cloned()
-        .ok_or_else(|| GseError::Algorithm {
-            context: "GSE reference edge has no bond index during update",
-            source: anyhow::anyhow!(
-                "missing reference bond between {:?} and {:?}",
-                parent,
-                child
-            ),
-        })?;
-    let child_idx = reference
-        .node_index(child)
-        .ok_or_else(|| GseError::MissingCenter {
-            center: format!("{child:?}"),
-        })?;
-    let parent_idx = reference
-        .node_index(parent)
-        .ok_or_else(|| GseError::MissingCenter {
-            center: format!("{parent:?}"),
-        })?;
-    let child_tensor = reference
-        .tensor(child_idx)
-        .cloned()
-        .ok_or_else(|| GseError::Algorithm {
-            context: "GSE reference child tensor is missing during update",
-            source: anyhow::anyhow!("missing reference tensor at {:?}", child),
-        })?;
-    let parent_tensor =
-        reference
-            .tensor(parent_idx)
-            .cloned()
-            .ok_or_else(|| GseError::Algorithm {
-                context: "GSE reference parent tensor is missing during update",
-                source: anyhow::anyhow!("missing reference tensor at {:?}", parent),
-            })?;
+        )
+    });
+    let child_idx = reference.node_index(child).unwrap_or_else(|| {
+        invariant_violated(
+            "GSE node from the network's own traversal is missing",
+            format!("{child:?}"),
+        )
+    });
+    let parent_idx = reference.node_index(parent).unwrap_or_else(|| {
+        invariant_violated(
+            "GSE node from the network's own traversal is missing",
+            format!("{parent:?}"),
+        )
+    });
+    let child_tensor = reference.tensor(child_idx).cloned().unwrap_or_else(|| {
+        invariant_violated(
+            "GSE reference child tensor is missing during update",
+            format!("missing reference tensor at {:?}", child),
+        )
+    });
+    let parent_tensor = reference.tensor(parent_idx).cloned().unwrap_or_else(|| {
+        invariant_violated(
+            "GSE reference parent tensor is missing during update",
+            format!("missing reference tensor at {:?}", parent),
+        )
+    });
     let ref_q_indices = map_q_indices(target, reference, child, parent, target_q_indices)?;
     let new_bond =
         DynIndex::new_bond(target_new_bond.dim()).map_err(|source| GseError::Algorithm {
@@ -1341,20 +1362,17 @@ where
             node: format!("{node:?}"),
             count: 0,
         })?;
-    if site_space.len() != 1 {
-        return Err(GseError::UnsupportedStateSiteCount {
+    // Exactly one state index per node: testing `next()` twice expresses that
+    // directly, without the unreachable `None` arm that a length check
+    // followed by a single `next()` leaves behind.
+    let mut indices = site_space.iter();
+    match (indices.next(), indices.next()) {
+        (Some(index), None) => Ok(index.clone()),
+        _ => Err(GseError::UnsupportedStateSiteCount {
             node: format!("{node:?}"),
             count: site_space.len(),
-        });
+        }),
     }
-    site_space
-        .iter()
-        .next()
-        .cloned()
-        .ok_or_else(|| GseError::UnsupportedStateSiteCount {
-            node: format!("{node:?}"),
-            count: 0,
-        })
 }
 
 fn product_dim(indices: &[DynIndex]) -> std::result::Result<usize, GseError> {
@@ -1441,231 +1459,4 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn basis_vector(dim: usize, selected: usize) -> Vec<f64> {
-        let mut values = vec![0.0; dim];
-        values[selected] = 1.0;
-        values
-    }
-
-    fn product_chain_state(left_dim: usize, right_dim: usize) -> TreeTN<IdxTensor, &'static str> {
-        let left = DynIndex::new_dyn(left_dim);
-        let right = DynIndex::new_dyn(right_dim);
-        let bond = DynIndex::new_dyn(1);
-        let left_tensor =
-            IdxTensor::from_dense(vec![left, bond.clone()], basis_vector(left_dim, 0)).unwrap();
-        let right_tensor =
-            IdxTensor::from_dense(vec![bond.clone(), right], basis_vector(right_dim, 0)).unwrap();
-        let mut state = TreeTN::<IdxTensor, &'static str>::new();
-        let left_node = state.add_tensor("site0", left_tensor).unwrap();
-        let right_node = state.add_tensor("site1", right_tensor).unwrap();
-        state.connect(left_node, &bond, right_node, &bond).unwrap();
-        state
-    }
-
-    fn product_chain3_state(tail_bond_dim: usize) -> TreeTN<IdxTensor, &'static str> {
-        let s0 = DynIndex::new_dyn(2);
-        let s1 = DynIndex::new_dyn(2);
-        let s2 = DynIndex::new_dyn(2);
-        let b01 = DynIndex::new_dyn(1);
-        let b12 = DynIndex::new_dyn(tail_bond_dim);
-        let t0 = IdxTensor::from_dense(vec![s0, b01.clone()], vec![1.0, 0.0]).unwrap();
-        let mut t1_data = vec![0.0; 2 * tail_bond_dim];
-        t1_data[0] = 1.0;
-        let t1 = IdxTensor::from_dense(vec![b01.clone(), s1, b12.clone()], t1_data).unwrap();
-        let mut t2_data = vec![0.0; tail_bond_dim * 2];
-        t2_data[0] = 1.0;
-        let t2 = IdxTensor::from_dense(vec![b12.clone(), s2], t2_data).unwrap();
-
-        let mut state = TreeTN::<IdxTensor, &'static str>::new();
-        let n0 = state.add_tensor("site0", t0).unwrap();
-        let n1 = state.add_tensor("site1", t1).unwrap();
-        let n2 = state.add_tensor("site2", t2).unwrap();
-        state.connect(n0, &b01, n1, &b01).unwrap();
-        state.connect(n1, &b12, n2, &b12).unwrap();
-        state
-    }
-
-    #[test]
-    fn gse_option_builders_set_reference_knobs() {
-        let policy = SvdTruncationPolicy::new(1.0e-8);
-        let options = GseOptions::default()
-            .with_reference_max_bond_dim(7)
-            .with_reference_svd_policy(policy)
-            .with_normalize_references(false)
-            .with_expand_before_first_sweep(false);
-
-        assert_eq!(options.reference_max_bond_dim, Some(7));
-        assert_eq!(options.reference_svd_policy, Some(policy));
-        assert!(!options.normalize_references);
-        assert!(!options.expand_before_first_sweep);
-    }
-
-    #[test]
-    fn square_site_mapping_errors_convert_to_gse_errors() {
-        let err = GseError::from(SquareSiteMappingError::UnsupportedStateSiteCount {
-            node: "site0".to_string(),
-            count: 2,
-        });
-        assert!(matches!(
-            err,
-            GseError::UnsupportedStateSiteCount { node, count }
-                if node == "site0" && count == 2
-        ));
-
-        let err = GseError::from(SquareSiteMappingError::UnsupportedMultipleSiteMappings {
-            node: "site1".to_string(),
-            role: "input",
-            count: 2,
-        });
-        assert!(matches!(
-            err,
-            GseError::UnsupportedMultipleSiteMappings { node, role, count }
-                if node == "site1" && role == "input" && count == 2
-        ));
-
-        let err = GseError::from(SquareSiteMappingError::MissingMapping {
-            node: "site2".to_string(),
-            role: "output",
-        });
-        assert!(matches!(
-            err,
-            GseError::MissingMapping { node, role }
-                if node == "site2" && role == "output"
-        ));
-
-        let err = GseError::from(SquareSiteMappingError::InvalidMapping {
-            node: "site3".to_string(),
-            reason: "bad dimension".to_string(),
-        });
-        assert!(matches!(
-            err,
-            GseError::InvalidMapping { node, reason }
-                if node == "site3" && reason == "bad dimension"
-        ));
-    }
-
-    #[test]
-    fn identity_on_index_pairs_handles_empty_products_and_mismatches() {
-        let scalar = identity_on_index_pairs(&[], &[]).unwrap();
-        assert!(scalar.indices().is_empty());
-        assert_eq!(scalar.to_vec::<f64>().unwrap(), vec![1.0]);
-
-        let left0 = DynIndex::new_dyn(2);
-        let left1 = DynIndex::new_dyn(3);
-        let right0 = DynIndex::new_dyn(2);
-        let right1 = DynIndex::new_dyn(3);
-        let identity = identity_on_index_pairs(
-            &[left0.clone(), left1.clone()],
-            &[right0.clone(), right1.clone()],
-        )
-        .unwrap();
-        assert_eq!(identity.indices(), &[left0.clone(), right0, left1, right1]);
-        assert_eq!(identity.sum().unwrap().real(), 6.0);
-
-        let err = identity_on_index_pairs(&[left0], &[]).unwrap_err();
-        assert!(matches!(
-            err,
-            GseError::Algorithm { context, .. }
-                if context == "GSE failed to build identity on q-space"
-        ));
-    }
-
-    #[test]
-    fn adjoint_by_index_groups_swaps_groups_and_rejects_mismatched_lengths() {
-        let left = DynIndex::new_dyn(2);
-        let right = DynIndex::new_dyn(2);
-        let tensor =
-            IdxTensor::from_dense(vec![left.clone(), right.clone()], vec![1.0, 2.0, 3.0, 4.0])
-                .unwrap();
-
-        let adjoint = adjoint_by_index_groups(
-            &tensor,
-            std::slice::from_ref(&left),
-            std::slice::from_ref(&right),
-        )
-        .unwrap();
-        assert_eq!(adjoint.indices(), &[right.clone(), left.clone()]);
-        assert_eq!(adjoint.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
-
-        let err = adjoint_by_index_groups(&tensor, &[left], &[]).unwrap_err();
-        assert!(matches!(
-            err,
-            GseError::Algorithm { context, .. }
-                if context == "GSE failed to adjoint grouped tensor"
-        ));
-    }
-
-    #[test]
-    fn validate_reference_rejects_site_dimension_mismatch() {
-        let target = product_chain_state(2, 2);
-        let reference = product_chain_state(3, 2);
-
-        let err = validate_reference(&target, &reference).unwrap_err();
-        assert!(matches!(
-            err,
-            GseError::InvalidMapping { reason, .. }
-                if reason == "reference site dimension does not match target"
-        ));
-    }
-
-    #[test]
-    fn map_q_indices_rejects_parent_bond_and_child_bond_dimension_mismatch() {
-        let target = product_chain3_state(2);
-        let reference = product_chain3_state(3);
-        let site1 = single_site_index(&target, &"site1").unwrap();
-        let parent_edge = target.edge_between(&"site0", &"site1").unwrap();
-        let parent_bond = target.bond_index(parent_edge).unwrap().clone();
-        let child_edge = target.edge_between(&"site1", &"site2").unwrap();
-        let child_bond = target.bond_index(child_edge).unwrap().clone();
-
-        let err = map_q_indices(
-            &target,
-            &reference,
-            &"site1",
-            &"site0",
-            &[site1.clone(), parent_bond],
-        )
-        .unwrap_err();
-        assert!(matches!(
-            err,
-            GseError::Algorithm { context, .. }
-                if context == "GSE parent bond cannot appear in q index map"
-        ));
-
-        let err = map_q_indices(
-            &target,
-            &reference,
-            &"site1",
-            &"site0",
-            &[site1, child_bond],
-        )
-        .unwrap_err();
-        assert!(matches!(
-            err,
-            GseError::InvalidMapping { reason, .. }
-                if reason == "reference child-side bond dimension does not match target"
-        ));
-    }
-
-    #[test]
-    fn move_center_to_region_full_rank_handles_errors_and_path_moves() {
-        let mut uncached = product_chain_state(2, 2);
-        let err = move_center_to_region_full_rank(&mut uncached, &[]).unwrap_err();
-        assert!(err.to_string().contains("empty region"));
-
-        let err = move_center_to_region_full_rank(&mut uncached, &["site0"]).unwrap_err();
-        assert!(err.to_string().contains("not canonicalized"));
-
-        let mut state = product_chain_state(2, 2)
-            .canonicalize(["site0"], CanonicalizationOptions::forced())
-            .unwrap();
-        move_center_to_region_full_rank(&mut state, &["site0"]).unwrap();
-        assert!(state.canonical_region().contains(&"site0"));
-
-        move_center_to_region_full_rank(&mut state, &["site1"]).unwrap();
-        assert!(state.canonical_region().contains(&"site1"));
-    }
-}
+mod tests;

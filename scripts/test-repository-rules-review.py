@@ -6,9 +6,15 @@ Run with `python3 scripts/test-repository-rules-review.py`; no pytest needed.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
+import json
 import pathlib
+import subprocess
 import sys
+import tempfile
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -392,6 +398,34 @@ def test_tenferro_route_allows_tensorbackend() -> None:
     assert findings == []
 
 
+def test_tenferro_route_allows_wiring_crate() -> None:
+    mod = load_module()
+    path = "crates/tensor4all-cpu-platform/Cargo.toml"
+    manifest = (
+        '[package]\nname = "tensor4all-cpu-platform"\n\n'
+        "[target.'cfg(target_os = \"macos\")'.dependencies]\n"
+        'tenferro-linalg = { workspace = true, features = ["blas-accelerate"] }\n'
+    )
+    original = mod.file_text_at
+    mod.file_text_at = lambda p, *, ref, worktree: manifest
+    try:
+        findings = mod.deterministic_checks(
+            [path],
+            added={
+                path: [
+                    (
+                        5,
+                        'tenferro-linalg = { workspace = true, features = ["blas-accelerate"] }',
+                    )
+                ]
+            },
+            ref="head",
+        )
+    finally:
+        mod.file_text_at = original
+    assert findings == []
+
+
 def test_tenferro_route_ignores_untouched_existing_dependency() -> None:
     mod = load_module()
     path = "crates/tensor4all-core/Cargo.toml"
@@ -444,6 +478,61 @@ def test_prohibited_doctest_covers_markdown_and_comma_lists() -> None:
     )
     assert len(findings) == 1
     assert "ignore" in findings[0].detail
+
+
+def test_inline_test_module_blocks_new_inline_block() -> None:
+    mod = load_module()
+    path = "crates/tensor4all-core/src/tensor_like.rs"
+    diff = make_diff(path, ["#[cfg(test)]", "mod tests {", "    #[test]"])
+    findings = mod.deterministic_checks(
+        [path], added=mod.added_lines_with_text(diff)
+    )
+    assert len(findings) == 1
+    assert findings[0].id == "inline-unit-tests"
+    assert findings[0].rule_section == "Unit Test Organization"
+    assert f"{path}:3:" in findings[0].detail
+
+
+def test_inline_test_module_covers_pub_crate_and_indented_forms() -> None:
+    mod = load_module()
+    path = "crates/tensor4all-core/src/lib.rs"
+    diff = make_diff(
+        path, ["pub(crate) mod tests {", "pub mod tests{", "    mod tests {"]
+    )
+    findings = mod.deterministic_checks(
+        [path], added=mod.added_lines_with_text(diff)
+    )
+    assert len(findings) == 1
+    assert findings[0].detail.count(".rs:") == 3
+
+
+def test_inline_test_module_accepts_separate_file_declaration() -> None:
+    mod = load_module()
+    path = "crates/tensor4all-core/src/tensor_like.rs"
+    diff = make_diff(
+        path,
+        [
+            "#[cfg(test)]",
+            "mod tests;",
+            '#[path = "tests.rs"]',
+            "mod tests;",
+            "mod tests_helper;",
+        ],
+    )
+    findings = mod.deterministic_checks(
+        [path], added=mod.added_lines_with_text(diff)
+    )
+    assert findings == []
+
+
+def test_inline_test_module_ignores_non_rust_files() -> None:
+    mod = load_module()
+    path = "docs/book/src/guide.md"
+    diff = make_diff(path, ["mod tests {"])
+    findings = mod.deterministic_checks(
+        [path], added=mod.added_lines_with_text(diff)
+    )
+    assert findings == []
 
 
 # --- model response handling -------------------------------------------------
@@ -1225,6 +1314,424 @@ def test_format_report_lists_findings_with_location() -> None:
     )
     assert "[block] x (Public Boundary Safety) crates/tensor4all-core/src/lib.rs:42" in report
     assert "detail line" in report
+
+
+# --- opt-in file growth ------------------------------------------------------
+
+
+@contextlib.contextmanager
+def growth_repository():
+    """Exercise real Git comparisons without changing this repository's index."""
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as directory:
+        root = pathlib.Path(directory)
+
+        def git(*args):
+            return subprocess.run(
+                ["git", *args], cwd=root, check=True, capture_output=True, text=True,
+            ).stdout.strip()
+
+        git("init", "-b", "main")
+        git("config", "user.name", "Growth test")
+        git("config", "user.email", "growth@example.invalid")
+        git("commit", "--allow-empty", "-m", "initial")
+        original = mod.run_git
+        mod.run_git = lambda args, **kwargs: original(args, cwd=root, **kwargs)
+        mod.ROOT = root
+        yield mod, root, git
+
+
+def write_growth_file(root, path, count):
+    file = root / path
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_text("".join(f"// line {i}\n" for i in range(count)), encoding="utf-8")
+    return file
+
+
+def test_numstat_parses_renames_binary_and_unusual_paths() -> None:
+    mod = load_module()
+    output = (
+        "2\t1\tcrates/a/src/日本 語.rs\0"
+        "1\t0\t\0crates/a/src/old.rs\0crates/a/src/new\tname\n.rs\0"
+        "-\t-\tbinary.rs\0-\t-\t\0old.bin\0new.bin\0"
+    )
+    assert mod.numstat_entries(output) == [
+        ("crates/a/src/日本 語.rs", 2, 1),
+        ("crates/a/src/new\tname\n.rs", 1, 0),
+    ]
+    assert mod.numstat_entries("") == []
+
+
+def test_growth_paths_exclude_only_documented_test_generated_locations() -> None:
+    mod = load_module()
+    for path in ["crates/a/src/lib.rs", "crates/a/src/nested/日本 語.rs"]:
+        assert mod.file_growth_path(path), path
+    for suffix in [
+        "tests/mod.rs", "test/mod.rs", "generated/types.rs", "tests.rs", "test.rs",
+        "test_helpers.rs", "foo_test.rs", "foo_tests.rs", "generated.rs",
+        "generated_types.rs", "types_generated.rs", "types.generated.rs", "lib.md",
+    ]:
+        assert not mod.file_growth_path("crates/a/src/" + suffix), suffix
+    for path in ["tools/src/lib.rs", "crates/a/tests/lib.rs", "crates/src/lib.rs"]:
+        assert not mod.file_growth_path(path), path
+
+
+def test_growth_counts_unterminated_lines_and_not_unicode_separators() -> None:
+    mod = load_module()
+    for text, expected in [("", 0), ("x", 1), ("x\n", 1), ("x\ny", 2), ("x\u2028y", 1)]:
+        assert mod.file_line_count(text) == expected
+
+
+def test_growth_boundary_cases_and_advisory_verdict() -> None:
+    with growth_repository() as (mod, root, git):
+        cases = {"cross": (1000, 1001), "exact": (999, 1000),
+                 "large": (2001, 2051), "edge": (2000, 2050),
+                 "below": (2001, 2050), "above": (2001, 2052),
+                 "tiny": (2001, 2002),
+                 "same": (2100, 2100), "shrink": (2100, 2001)}
+        for name, (before, _) in cases.items():
+            write_growth_file(root, f"crates/a/src/{name}.rs", before)
+        git("add", ".")
+        git("commit", "-m", "baseline")
+        base = git("rev-parse", "HEAD")
+        for name, (_, after) in cases.items():
+            write_growth_file(root, f"crates/a/src/{name}.rs", after)
+        git("add", ".")
+        git("commit", "-m", "growth")
+        findings = mod.file_growth_findings(base, "HEAD")
+        assert [f.file for f in findings] == [
+            "crates/a/src/above.rs", "crates/a/src/cross.rs", "crates/a/src/large.rs",
+        ]
+        assert "1000 -> 1001 lines (+1/-0)" in findings[1].summary
+        assert "already above 2000" in findings[2].summary
+        assert "at least 50 net lines" in findings[2].summary
+        assert all(f.severity == "warn" for f in findings)
+        assert mod.reconcile_verdict(findings) == "pass"
+        assert "solely" in findings[0].detail
+
+
+def test_growth_ignores_replacements_deletions_and_binary_files() -> None:
+    with growth_repository() as (mod, root, git):
+        replaced = write_growth_file(root, "crates/a/src/replaced.rs", 2100)
+        deleted = write_growth_file(root, "crates/a/src/deleted.rs", 2100)
+        git("add", ".")
+        git("commit", "-m", "baseline")
+        base = git("rev-parse", "HEAD")
+        replaced.write_text("// replacement\n" * 2100)
+        deleted.unlink()
+        (root / "crates/a/src/binary.rs").write_bytes(b"\0" + b"x\n" * 2100)
+        git("add", "-A")
+        git("commit", "-m", "replace delete binary")
+        assert mod.file_growth_findings(base, "HEAD") == []
+
+
+def test_growth_minimum_delta_uses_net_lines_and_can_be_lowered_to_zero() -> None:
+    with growth_repository() as (mod, root, git):
+        file = write_growth_file(root, "crates/a/src/lib.rs", 2100)
+        git("add", ".")
+        git("commit", "-m", "baseline")
+        old_lines = file.read_text().splitlines(keepends=True)
+        file.write_text("// replacement\n" * 100 + "".join(old_lines[100:])
+                        + "// appended\n" * 49)
+        assert mod.file_growth_findings("HEAD", "HEAD", worktree=True) == []
+        for floor in [49, 0]:
+            findings = mod.file_growth_findings(
+                "HEAD", "HEAD", worktree=True, large_min_delta=floor,
+            )
+            assert len(findings) == 1
+            assert "2100 -> 2149 lines (+149/-100)" in findings[0].summary
+            assert f"at least {floor} net lines" in findings[0].summary
+
+
+def test_growth_preserves_rename_baseline() -> None:
+    with growth_repository() as (mod, root, git):
+        path = "crates/a/src/old.rs"
+        renamed = "crates/a/src/日本 語.rs"
+        write_growth_file(root, path, 2100)
+        git("add", ".")
+        git("commit", "-m", "baseline")
+        base = git("rev-parse", "HEAD")
+        git("mv", path, renamed)
+        git("commit", "-m", "rename")
+        assert mod.file_growth_findings(base, "HEAD") == []
+        with (root / renamed).open("a") as stream:
+            stream.write("// more lines\n" * 50)
+        git("add", ".")
+        git("commit", "-m", "grow renamed file")
+        findings = mod.file_growth_findings(base, "HEAD")
+        assert len(findings) == 1 and findings[0].file == renamed
+        assert "2100 -> 2150 lines (+50/-0)" in findings[0].summary
+
+
+def test_growth_excludes_generated_headers_and_counts_inline_tests() -> None:
+    with growth_repository() as (mod, root, git):
+        for name, marker in [("bindings", "// @generated"), ("auto", "// do not edit")]:
+            file = write_growth_file(root, f"crates/a/src/{name}.rs", 1001)
+            file.write_text(marker + "\n" + file.read_text())
+        file = write_growth_file(root, "crates/a/src/lib.rs", 1000)
+        file.write_text(file.read_text() + "#[cfg(test)] mod tests {}\n")
+        for path in ["crates/a/src/tests/large.rs", "crates/a/src/generated/large.rs"]:
+            write_growth_file(root, path, 2100)
+        findings = mod.file_growth_findings("HEAD", "HEAD", worktree=True)
+        assert [f.file for f in findings] == ["crates/a/src/lib.rs"]
+        assert "0 -> 1001" in findings[0].summary
+        assert "inline tests" in findings[0].detail
+
+
+def test_growth_worktree_covers_staged_unstaged_untracked_without_index_changes() -> None:
+    with growth_repository() as (mod, root, git):
+        file = write_growth_file(root, "crates/a/src/lib.rs", 1000)
+        git("add", ".")
+        git("commit", "-m", "baseline")
+        file.write_text(file.read_text() + "// staged\n")
+        git("add", ".")
+        file.write_text(file.read_text() + "// unstaged\n")
+        write_growth_file(root, "crates/a/src/new.rs", 1001)
+        status = git("status", "--porcelain")
+        findings = mod.file_growth_findings("HEAD", "ignored", worktree=True)
+        assert len(findings) == 2
+        assert "1000 -> 1002 lines (+2/-0)" in findings[0].summary
+        assert "0 -> 1001 lines (+1001/-0)" in findings[1].summary
+        assert git("status", "--porcelain") == status
+
+
+def test_growth_worktree_skips_untracked_binary_files() -> None:
+    with growth_repository() as (mod, root, git):
+        file = root / "crates/a/src/binary.rs"
+        file.parent.mkdir(parents=True)
+        file.write_bytes(b"\x00\xff" + b"x\n" * 2100)
+        assert mod.file_growth_findings("HEAD", "HEAD", worktree=True) == []
+
+
+def test_growth_uses_merge_base_not_diverged_base_tip() -> None:
+    with growth_repository() as (mod, root, git):
+        write_growth_file(root, "crates/a/src/lib.rs", 1000)
+        git("add", ".")
+        git("commit", "-m", "common")
+        git("checkout", "-b", "feature")
+        write_growth_file(root, "crates/a/src/lib.rs", 1001)
+        git("add", ".")
+        git("commit", "-m", "feature")
+        git("checkout", "main")
+        write_growth_file(root, "crates/a/src/lib.rs", 3000)
+        git("add", ".")
+        git("commit", "-m", "unrelated base growth")
+        findings = mod.file_growth_findings("main", "feature")
+        assert len(findings) == 1
+        assert "1000 -> 1001" in findings[0].summary
+
+
+def test_growth_cli_is_opt_in_and_warnings_do_not_fail() -> None:
+    with growth_repository() as (mod, root, git):
+        write_growth_file(root, "crates/a/src/lib.rs", 1001)
+        output = root / "report.json"
+        args = ["--base", "HEAD", "--worktree", "--dry-run", "--no-dotenv",
+                "--output-json", str(output)]
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(
+            mod, "call_deepseek", side_effect=AssertionError("dry run must be offline"),
+        ):
+            assert mod.main(args) == 0
+            assert json.loads(output.read_text())["findings"] == []
+            assert mod.main([*args, "--file-growth"]) == 0
+        report = json.loads(output.read_text())
+        assert report["verdict"] == "pass" and report["block_findings"] == []
+        assert len(report["findings"]) == 1
+        assert report["findings"][0]["severity"] == "warn"
+        assert "File Growth Dry Run" in report["rule_sections"]
+
+
+def test_growth_cli_rejects_live_mode_and_invalid_limits() -> None:
+    mod = load_module()
+    for args in [
+        ["--file-growth"],
+        ["--dry-run", "--file-growth-soft-limit", "0"],
+        ["--dry-run", "--file-growth-large-limit", "999"],
+        ["--dry-run", "--file-growth-large-min-delta", "-1"],
+    ]:
+        with contextlib.redirect_stderr(io.StringIO()):
+            try:
+                mod.main(["--base", "HEAD", *args])
+            except SystemExit as error:
+                assert error.code == 2
+            else:
+                raise AssertionError(f"expected argument error: {args}")
+
+
+def test_growth_cli_forwards_configurable_minimum_delta() -> None:
+    with growth_repository() as (mod, root, git):
+        file = write_growth_file(root, "crates/a/src/lib.rs", 2100)
+        git("add", ".")
+        git("commit", "-m", "baseline")
+        file.write_text(file.read_text() + "// extra\n")
+        output = root / "review.json"
+        args = ["--base", "HEAD", "--worktree", "--dry-run", "--no-dotenv",
+                "--file-growth", "--output-json", str(output)]
+        for floor, expected in [(50, 0), (2, 0), (1, 1), (0, 1)]:
+            with contextlib.redirect_stdout(io.StringIO()):
+                assert mod.main([
+                    *args, "--file-growth-large-min-delta", str(floor),
+                ]) == 0
+            report = json.loads(output.read_text())
+            assert len(report["findings"]) == expected
+            assert report["verdict"] == "pass"
+
+
+def test_growth_custom_limits_and_header_window() -> None:
+    with growth_repository() as (mod, root, git):
+        file = write_growth_file(root, "crates/a/src/lib.rs", 20)
+        # Line 21 is ordinary content; it is outside the generated-header window.
+        file.write_text(file.read_text() + "// DO NOT EDIT\n")
+        findings = mod.file_growth_findings(
+            "HEAD", "HEAD", worktree=True, soft_limit=20, large_limit=40,
+        )
+        assert len(findings) == 1 and "20-line" in findings[0].summary
+        file.write_text("// ordinary\n" * 19 + "// @generated\n")
+        assert mod.file_growth_findings(
+            "HEAD", "HEAD", worktree=True, soft_limit=10, large_limit=40,
+        ) == []
+
+
+def load_growth_backtest():
+    path = ROOT / "scripts" / "backtest-file-growth.py"
+    spec = importlib.util.spec_from_file_location("growth_backtest", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_growth_backtest_replays_squash_and_merge_contributions_in_order() -> None:
+    backtest = load_growth_backtest()
+    with growth_repository() as (mod, root, git), mock.patch.object(backtest, "reviewer", mod):
+        git("commit", "--amend", "--allow-empty", "-m", "root (#1)")
+        write_growth_file(root, "crates/a/src/lib.rs", 1001)
+        git("add", ".")
+        git("commit", "-m", "squashed contribution (#2)")
+        git("checkout", "-b", "feature")
+        write_growth_file(root, "crates/a/src/lib.rs", 1002)
+        git("add", ".")
+        git("commit", "-m", "feature body")
+        git("checkout", "main")
+        git("commit", "--allow-empty", "-m", "direct commit without PR number")
+        git("merge", "--no-ff", "feature", "-m", "Merge pull request #3 from example/feature")
+        rows = backtest.backtest("HEAD", 2, 1000, 2000)
+        assert [row["number"] for row in rows] == [3, 2]
+        assert rows[0]["findings"] == []
+        assert len(rows[1]["findings"]) == 1
+        assert rows[1]["verdict"] == "pass"
+        assert rows[0]["base"] == git("rev-parse", "HEAD^1")
+        report = backtest.markdown_report(rows, "HEAD", 1000, 2000)
+        assert "1/2 PRs" in report and "0 -> 1001" in report
+        assert "original pre-merge PR heads" in report
+        try:
+            backtest.backtest("HEAD", 3, 1000, 2000)
+        except ValueError as error:
+            assert "found only 2" in str(error)
+        else:
+            raise AssertionError("root commit must not be counted as a PR contribution")
+
+
+def test_growth_backtest_cli_writes_pinned_json_and_validates_options() -> None:
+    backtest = load_growth_backtest()
+    with growth_repository() as (mod, root, git), mock.patch.object(backtest, "reviewer", mod):
+        write_growth_file(root, "crates/a/src/lib.rs", 21)
+        git("add", ".")
+        git("commit", "-m", "small contribution (#7)")
+        output = root / "backtest.json"
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert backtest.main([
+                "--base", "HEAD", "--count", "1", "--soft-limit", "20",
+                "--large-limit", "40", "--output-json", str(output),
+            ]) == 0
+        payload = json.loads(output.read_text())
+        assert payload["base"] == git("rev-parse", "HEAD")
+        assert payload["soft_limit"] == 20 and payload["large_limit"] == 40
+        assert payload["large_min_delta"] == 50
+        assert payload["prs"][0]["number"] == 7
+        assert len(payload["prs"][0]["findings"]) == 1
+    for args in [
+        ["--count", "0"], ["--soft-limit", "0"], ["--large-limit", "999"],
+        ["--large-min-delta", "-1"],
+    ]:
+        with contextlib.redirect_stderr(io.StringIO()):
+            try:
+                backtest.main(args)
+            except SystemExit as error:
+                assert error.code == 2
+            else:
+                raise AssertionError(f"expected argument error: {args}")
+
+
+def test_growth_backtest_cli_forwards_configurable_minimum_delta() -> None:
+    backtest = load_growth_backtest()
+    with growth_repository() as (mod, root, git), mock.patch.object(backtest, "reviewer", mod):
+        file = write_growth_file(root, "crates/a/src/lib.rs", 2100)
+        git("add", ".")
+        git("commit", "-m", "baseline")
+        file.write_text(file.read_text() + "// extra\n")
+        git("add", ".")
+        git("commit", "-m", "small addition (#8)")
+        output = root / "backtest.json"
+        for flags, floor, expected in [([], 50, 0), (["--large-min-delta", "1"], 1, 1),
+                                       (["--large-min-delta", "0"], 0, 1)]:
+            with contextlib.redirect_stdout(io.StringIO()) as text:
+                assert backtest.main([
+                    "--base", "HEAD", "--count", "1", "--output-json", str(output), *flags,
+                ]) == 0
+            payload = json.loads(output.read_text())
+            assert payload["large_min_delta"] == floor
+            assert len(payload["prs"][0]["findings"]) == expected
+            assert f"at least {floor} net added lines" in text.getvalue()
+
+
+def test_hosted_growth_command_uses_trusted_base_and_preserves_blocking_checks() -> None:
+    """Replay the actual workflow shell step on untrusted head data, without checkout."""
+    workflow = (ROOT / ".github/workflows/review_bot.yml").read_text()
+    step = workflow.split(
+        "      - name: Run repository rules review (deterministic)\n", 1,
+    )[1].split("      - name:", 1)[0]
+    shell = step.split("        run: |\n", 1)[1]
+    shell = "\n".join(line[10:] for line in shell.splitlines() if line.startswith("          "))
+    with growth_repository() as (mod, root, git):
+        # Reproduce the trusted-base checkout; every reviewed head replaces its
+        # script with one that would fail if it were executed instead of diffed.
+        for relative in ["scripts/repository-rules-review.py", "REPOSITORY_RULES.md",
+                         "PERFORMANCE_TIPS.md", "ai/prompts/repository-rules-review.md"]:
+            dest = root / relative
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text((ROOT / relative).read_text())
+        file = write_growth_file(root, "crates/a/src/lib.rs", 1000)
+        git("add", ".")
+        git("commit", "-m", "trusted base")
+        base = git("rev-parse", "HEAD")
+        file.write_text(file.read_text() + "// first crossing\n")
+        (root / "scripts/repository-rules-review.py").write_text(
+            "raise SystemExit('PR head code must not execute')\n",
+        )
+        git("add", ".")
+        git("commit", "-m", "untrusted head with growth")
+        warn_head = git("rev-parse", "HEAD")
+        file.write_text(file.read_text() + "/// ```ignore\n")
+        git("add", ".")
+        git("commit", "-m", "untrusted head with prohibited doctest")
+        block_head = git("rev-parse", "HEAD")
+        git("checkout", "--detach", base)
+        for head, expected_status, after in [(warn_head, 0, 1001), (block_head, 1, 1002)]:
+            command = shell.replace("${{ steps.refs.outputs.base }}", base).replace(
+                "${{ steps.refs.outputs.head }}", head,
+            )
+            result = subprocess.run(
+                ["bash", "-c", command], cwd=root, capture_output=True, text=True,
+            )
+            assert result.returncode == expected_status, result.stdout + result.stderr
+            report = (root / "review-report.txt").read_text()
+            assert "[warn] file-growth:crates/a/src/lib.rs" in report
+            assert f"1000 -> {after} lines (+{after - 1000}/-0)" in report
+            if expected_status:
+                assert "Verdict: fail" in report and "[block] prohibited-doctest" in report
+            else:
+                assert "Verdict: pass" in report and "[block]" not in report
+            assert git("rev-parse", "HEAD") == base
 
 
 # --- prompt and rules files --------------------------------------------------

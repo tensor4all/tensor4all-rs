@@ -54,6 +54,12 @@ use thiserror::Error;
 /// ```
 #[derive(Debug, Error)]
 pub enum FactorizeError {
+    /// RSVD cannot certify a threshold-based truncation policy.
+    #[error("RSVD does not support truncation policy {0:?}; specify a fixed max_bond_dim, or select deterministic SVD for rtol/cutoff")]
+    UnsupportedTruncationPolicy(
+        /// The rejected policy; no deterministic fallback was attempted.
+        SvdTruncationPolicy,
+    ),
     /// Factorization computation failed.
     ///
     /// The underlying error is preserved as an `anyhow` source, so a typed
@@ -130,6 +136,9 @@ pub enum FactorizeAlg {
     /// Singular Value Decomposition.
     #[default]
     SVD,
+    /// Fixed-rank randomized SVD; requires a positive rank cap and dense
+    /// `f64`/`Complex64`. `f32`/`Complex32` are unsupported.
+    RSVD,
     /// QR decomposition.
     QR,
     /// Rank-revealing LU decomposition.
@@ -239,14 +248,20 @@ pub struct FactorizeOptions {
     /// Canonical direction.
     pub canonical: Canonical,
     /// Maximum rank for truncation.
-    /// If `None`, no rank limit is applied.
+    /// If `None`, no rank limit is applied to deterministic methods; RSVD
+    /// requires a positive rank cap.
     pub max_bond_dim: Option<usize>,
     /// SVD truncation policy.
-    /// If `None`, uses the SVD global default.
+    /// If `None`, deterministic SVD uses its global default. RSVD ignores
+    /// global defaults and rejects every explicit threshold policy.
     pub svd_policy: Option<SvdTruncationPolicy>,
     /// QR-specific relative tolerance.
     /// If `None`, uses the QR global default.
     pub qr_rtol: Option<f64>,
+    /// Gaussian sketch options for RSVD; ignored by deterministic algorithms.
+    pub randomized: crate::RangeOptions,
+    /// Seed for convenience RSVD calls. Caller-RNG entries ignore this field.
+    pub rsvd_seed: u64,
 }
 
 impl Default for FactorizeOptions {
@@ -257,11 +272,34 @@ impl Default for FactorizeOptions {
             max_bond_dim: None,
             svd_policy: None,
             qr_rtol: None,
+            randomized: crate::RangeOptions::default(),
+            rsvd_seed: 0,
         }
     }
 }
 
 impl FactorizeOptions {
+    /// Create fixed-rank RSVD options with the default sketch and seed zero.
+    ///
+    /// `max_bond_dim` must be positive. Global truncation defaults are ignored;
+    /// an explicit `svd_policy` or `qr_rtol` is rejected.
+    /// Only dense `f64`/`Complex64` inputs are supported, not `f32`/`Complex32`.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{FactorizeAlg, FactorizeOptions};
+    /// let options = FactorizeOptions::rsvd(3);
+    /// assert_eq!(options.alg, FactorizeAlg::RSVD);
+    /// assert_eq!(options.max_bond_dim, Some(3));
+    /// ```
+    pub fn rsvd(max_bond_dim: usize) -> Self {
+        Self {
+            alg: FactorizeAlg::RSVD,
+            max_bond_dim: Some(max_bond_dim),
+            ..Self::default()
+        }
+    }
+
     /// Create options for SVD factorization.
     ///
     /// # Examples
@@ -400,8 +438,15 @@ impl FactorizeOptions {
     ///
     /// Returns [`FactorizeError::InvalidOptions`] if an algorithm is paired with
     /// unsupported algorithm-specific truncation settings, or if `max_bond_dim`
-    /// is zero or an SVD policy threshold is non-finite/negative.
+    /// is zero or an SVD policy threshold is non-finite/negative. Returns
+    /// [`FactorizeError::UnsupportedTruncationPolicy`] for every RSVD threshold
+    /// policy; specify a fixed rank or select deterministic SVD instead.
     pub fn validate(&self) -> std::result::Result<(), FactorizeError> {
+        if self.alg == FactorizeAlg::RSVD {
+            if let Some(policy) = self.svd_policy {
+                return Err(FactorizeError::UnsupportedTruncationPolicy(policy));
+            }
+        }
         validate_svd_truncation_options(self.max_bond_dim, self.svd_policy).map_err(|error| {
             FactorizeError::InvalidOptions(match error {
                 SvdTruncationOptionsError::ZeroMaxBondDim => "max_bond_dim must be at least 1",
@@ -412,6 +457,21 @@ impl FactorizeOptions {
         })?;
 
         match self.alg {
+            FactorizeAlg::RSVD => {
+                if self.max_bond_dim.is_none() {
+                    return Err(FactorizeError::InvalidOptions("RSVD requires max_bond_dim"));
+                }
+                if self.qr_rtol.is_some() {
+                    return Err(FactorizeError::InvalidOptions(
+                        "RSVD does not accept qr_rtol; specify a fixed max_bond_dim",
+                    ));
+                }
+                self.max_bond_dim
+                    .and_then(|rank| rank.checked_add(self.randomized.oversampling))
+                    .ok_or(FactorizeError::InvalidOptions(
+                        "rank + oversampling overflows usize",
+                    ))?;
+            }
             FactorizeAlg::SVD => {
                 if self.qr_rtol.is_some() {
                     return Err(FactorizeError::InvalidOptions(
@@ -486,7 +546,7 @@ pub struct FactorizeResult<T: TensorIndex> {
     pub right: T,
     /// Bond index connecting left and right factors.
     pub bond_index: T::Index,
-    /// Singular values (only for SVD).
+    /// Retained singular values (SVD or the projected matrix for RSVD).
     pub singular_values: Option<Vec<f64>>,
     /// Retained bond dimension of the factorization.
     ///
@@ -643,7 +703,7 @@ pub trait TensorVectorSpace: TensorIndex {
     /// # Errors
     ///
     /// Returns `Self::Error` when the norm cannot be evaluated (a materialization
-    /// /// or backend failure).
+    /// or backend failure).
     ///
     /// # Examples
     /// ```
@@ -717,7 +777,7 @@ pub trait TensorVectorSpace: TensorIndex {
     /// # Errors
     ///
     /// Returns `Self::Error` when the norm cannot be evaluated (a materialization
-    /// /// or backend failure).
+    /// or backend failure).
     ///
     /// # Examples
     /// ```
@@ -758,7 +818,7 @@ pub trait TensorVectorSpace: TensorIndex {
     /// # Errors
     ///
     /// Returns `Self::Error` when the maximum cannot be evaluated (a
-    /// /// materialization or backend failure).
+    /// materialization or backend failure).
     ///
     /// # Examples
     /// ```
@@ -838,6 +898,11 @@ pub trait TensorContractionLike: TensorIndex {
 
     /// Direct sum of two tensors along specified index pairs.
     ///
+    /// Each pair `(a_index, b_index)` becomes one new index of dimension
+    /// `dim(a_index) + dim(b_index)`; `self` occupies the first block and
+    /// `other` the second. For more than two operands use
+    /// [`direct_sum_many`](Self::direct_sum_many).
+    ///
     /// # Errors
     ///
     /// Returns `Self::Error` when the summed index spaces are incompatible
@@ -848,6 +913,108 @@ pub trait TensorContractionLike: TensorIndex {
         other: &Self,
         pairs: &[(<Self as TensorIndex>::Index, <Self as TensorIndex>::Index)],
     ) -> std::result::Result<DirectSumResult<Self>, Self::Error>;
+
+    /// Direct sum of any number of tensors.
+    ///
+    /// Each entry of `groups` lists one index per operand, in operand order,
+    /// and becomes one new index whose dimension is the sum of the group's
+    /// dimensions. Operand `i` occupies its own diagonal block, after the
+    /// blocks of operands `0..i`; all other entries are zero. The indices that
+    /// belong to no group must be the same for every operand. The result
+    /// lists those common indices in `operands[0]`'s order, followed by the
+    /// new indices in `groups` order.
+    ///
+    /// The provided implementation folds [`direct_sum`](Self::direct_sum)
+    /// from the left, `((t0 (+) t1) (+) t2) ...`, which copies the growing
+    /// partial result at every step. Implementors with a dense layout should
+    /// override it with a one-pass construction, as `IdxTensor` does.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when `operands` or `groups` is empty, when a
+    /// group does not have one index per operand, when the index spaces are
+    /// incompatible (an index-space mismatch), or when the underlying
+    /// construction reports a failure. Types without a block construction
+    /// return an unsupported-operation error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorContractionLike};
+    ///
+    /// let (b0, b1, b2) = (DynIndex::new_dyn(1), DynIndex::new_dyn(1), DynIndex::new_dyn(2));
+    /// let t0 = IdxTensor::from_dense(vec![b0.clone()], vec![1.0_f64]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![b1.clone()], vec![2.0_f64]).unwrap();
+    /// let t2 = IdxTensor::from_dense(vec![b2.clone()], vec![3.0_f64, 4.0]).unwrap();
+    ///
+    /// let result = IdxTensor::direct_sum_many(&[&t0, &t1, &t2], &[vec![b0, b1, b2]]).unwrap();
+    ///
+    /// assert_eq!(result.new_indices[0].dim(), 4);
+    /// assert_eq!(result.tensor.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
+    /// ```
+    fn direct_sum_many(
+        operands: &[&Self],
+        groups: &[Vec<<Self as TensorIndex>::Index>],
+    ) -> std::result::Result<DirectSumResult<Self>, Self::Error> {
+        let (first, rest) = operands
+            .split_first()
+            .ok_or_else(|| anyhow::anyhow!("direct_sum_many requires at least one operand"))?;
+        if groups.is_empty() {
+            return Err(
+                anyhow::anyhow!("direct_sum_many requires at least one index group").into(),
+            );
+        }
+        if let Some((g, group)) = groups
+            .iter()
+            .enumerate()
+            .find(|(_, group)| group.len() != operands.len())
+        {
+            return Err(anyhow::anyhow!(
+                "index group {g} has {} entries, expected one per operand ({})",
+                group.len(),
+                operands.len()
+            )
+            .into());
+        }
+        let Some((second, later)) = rest.split_first() else {
+            // One operand: rename each grouped index to a fresh link and move
+            // the new indices after the common ones.
+            let old: Vec<<Self as TensorIndex>::Index> =
+                groups.iter().map(|group| group[0].clone()).collect();
+            let new_indices = old
+                .iter()
+                .map(|index| <<Self as TensorIndex>::Index as IndexLike>::new_link(index.dim()))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            let mut order: Vec<<Self as TensorIndex>::Index> = first
+                .external_indices()
+                .into_iter()
+                .filter(|index| !old.contains(index))
+                .collect();
+            order.extend(new_indices.iter().cloned());
+            let tensor = first
+                .replace_indices(&old, &new_indices)?
+                .permuteinds(&order)?;
+            return Ok(DirectSumResult {
+                tensor,
+                new_indices,
+            });
+        };
+        let pairs: Vec<_> = groups
+            .iter()
+            .map(|group| (group[0].clone(), group[1].clone()))
+            .collect();
+        let mut sum = first.direct_sum(second, &pairs)?;
+        for (offset, operand) in later.iter().enumerate() {
+            let pairs: Vec<_> = sum
+                .new_indices
+                .iter()
+                .cloned()
+                .zip(groups.iter().map(|group| group[offset + 2].clone()))
+                .collect();
+            sum = sum.tensor.direct_sum(operand, &pairs)?;
+        }
+        Ok(sum)
+    }
 
     /// Outer product (tensor product) of two tensors.
     ///
@@ -984,13 +1151,50 @@ pub trait TensorFactorizationLike: TensorIndex {
     /// # Errors
     ///
     /// Returns `FactorizeError` when the factorization fails (a non-convergence,
-    /// /// singular, or unsupported-storage failure).
+    /// singular, or unsupported-storage failure).
     ///
     fn factorize(
         &self,
         left_inds: &[<Self as TensorIndex>::Index],
         options: &FactorizeOptions,
     ) -> std::result::Result<FactorizeResult<Self>, FactorizeError>;
+
+    /// Factorize using a caller-owned RNG consumed directly by randomized algorithms.
+    ///
+    /// Deterministic algorithms leave `rng` untouched. The default refuses RSVD;
+    /// concrete tensor implementations can override it without exposing storage.
+    ///
+    /// # Errors
+    /// Returns [`FactorizeError`] for unsupported randomized factorization,
+    /// invalid options, or an underlying factorization failure.
+    ///
+    /// # Examples
+    /// ```
+    /// use rand::SeedableRng;
+    /// use rand_chacha::ChaCha8Rng;
+    /// use tensor4all_core::{DynIndex, FactorizeOptions, IdxTensor, TensorContractionLike, TensorFactorizationLike};
+    /// let i = DynIndex::new_dyn(2);
+    /// let j = DynIndex::new_dyn(2);
+    /// let a = IdxTensor::from_dense(vec![i.clone(), j], vec![3., 0., 0., 0.])?;
+    /// let mut rng = ChaCha8Rng::seed_from_u64(11);
+    /// let result = a.factorize_with_rng(&[i], &FactorizeOptions::rsvd(1), &mut rng)?;
+    /// assert!(a.sub(&result.left.contract_pair(&result.right)?)?.maxabs()? < 1e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn factorize_with_rng(
+        &self,
+        left_inds: &[<Self as TensorIndex>::Index],
+        options: &FactorizeOptions,
+        rng: &mut dyn rand::RngCore,
+    ) -> std::result::Result<FactorizeResult<Self>, FactorizeError> {
+        let _ = rng;
+        if options.alg == FactorizeAlg::RSVD {
+            return Err(FactorizeError::UnsupportedStorage(
+                "this tensor type does not support randomized factorization",
+            ));
+        }
+        self.factorize(left_inds, options)
+    }
 
     /// Factorize this tensor in a caller-owned execution context.
     ///
@@ -1073,7 +1277,7 @@ pub trait TensorFactorizationLike: TensorIndex {
     /// # Errors
     ///
     /// Returns `FactorizeError` when the factorization fails (a non-convergence,
-    /// /// singular, or unsupported-storage failure).
+    /// singular, or unsupported-storage failure).
     ///
     fn factorize_full_rank(
         &self,
@@ -1274,7 +1478,7 @@ pub trait TensorFactorizationLike: TensorIndex {
     /// use std::sync::Arc;
     /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor, TensorFactorizationLike};
     /// use tensor4all_tensorbackend::CpuExecutionContext;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = ExecutionContext::Cpu(Arc::new(
     ///     CpuExecutionContext::from_backend(CpuBackend::new()),
@@ -1411,7 +1615,7 @@ pub trait TensorConstructionLike: TensorContractionLike {
     /// use tensor4all_core::{DynIndex, ExecutionContext, TensorConstructionLike};
     /// use tensor4all_core::IdxTensor;
     /// use tensor4all_tensorbackend::CpuExecutionContext;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = ExecutionContext::Cpu(Arc::new(
     ///     CpuExecutionContext::from_backend(CpuBackend::new()),
@@ -1455,6 +1659,26 @@ pub trait TensorConstructionLike: TensorContractionLike {
         _context: &tensor4all_tensorbackend::ExecutionContext,
     ) -> std::result::Result<(), Self::Error> {
         Err(anyhow::anyhow!("context validation is not supported for this tensor type").into())
+    }
+
+    /// Re-publish this tensor in a caller-owned execution context.
+    ///
+    /// Context-scoped algorithms that take a whole tensor network adopt every
+    /// input tensor this way; the context-scoped truncation entry does, so a
+    /// network loaded from disk or materialised by TCI works without a
+    /// caller-side rebuild.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` with an `UnsupportedStorage` failure when adoption
+    /// is unsupported for this tensor type, and a backend failure when the
+    /// stored payload cannot be re-published or the tensor already belongs to a
+    /// *different* execution context than `context`.
+    fn adopt_into(
+        &self,
+        _context: &tensor4all_tensorbackend::ExecutionContext,
+    ) -> std::result::Result<Self, Self::Error> {
+        Err(anyhow::anyhow!("context adoption is not supported for this tensor type").into())
     }
 
     /// Construct a tensor from a column-major dense payload.
@@ -1588,7 +1812,7 @@ pub trait TensorConstructionLike: TensorContractionLike {
     /// use tensor4all_core::{DynIndex, ExecutionContext, TensorConstructionLike};
     /// use tensor4all_core::IdxTensor;
     /// use tensor4all_tensorbackend::CpuExecutionContext;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = ExecutionContext::Cpu(Arc::new(
     ///     CpuExecutionContext::from_backend(CpuBackend::new()),

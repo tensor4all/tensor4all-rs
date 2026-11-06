@@ -61,7 +61,7 @@ fn run_one_directional_pass(
     options: &TreeAciOptions<usize>,
 ) -> crate::Result<()> {
     let mut operator = sum_operator;
-    run_directional_pass(state, options, PassDirection::Forward, &mut operator).map(|_| ())
+    run_directional_pass(state, options, PassDirection::Forward, &mut operator, None).map(|_| ())
 }
 
 #[test]

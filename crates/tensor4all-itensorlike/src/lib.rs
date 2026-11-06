@@ -8,11 +8,12 @@ pub mod options;
 pub mod prelude;
 pub mod tensortrain;
 
-pub use contract::contract;
+pub use contract::{contract, contract_in};
 pub use error::{Result, TensorTrainError};
 pub use linsolve::linsolve;
 pub use options::{
-    CanonicalForm, ContractMethod, ContractOptions, LinsolveOptions, SrcOptions, TruncateOptions,
+    CanonicalForm, ContractMethod, ContractOptions, FitInitializer, LinsolveOptions, SrcOptions,
+    TruncateOptions, DEFAULT_FIT_INITIALIZER_SEED,
 };
 pub use tensor4all_core::SvdOptions;
 pub use tensortrain::TensorTrain;

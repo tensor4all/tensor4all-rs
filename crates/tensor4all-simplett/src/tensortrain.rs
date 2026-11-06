@@ -3,6 +3,14 @@
 use crate::error::{Result, SimpleTensorTrainError};
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
+use tenferro_tensor::TensorValue;
+use tensor4all_tensorbackend::{
+    einsum_native_tensor_reads, invariant_violated, NativeEinsumPlan, NativeTensorReadInput,
+};
+
+/// A `(1, d, 1)` core cannot overflow and its strides are representable; only
+/// out-of-memory remains, which std also treats as fatal.
+const UNIT_BOND_CORE: &str = "building a (1, d, 1) core";
 
 /// Tensor Train (Matrix Product State) representation.
 ///
@@ -48,7 +56,7 @@ use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 /// assert!((val - 3.0).abs() < 1e-12);
 ///
 /// // Sum over all indices: 3.0 * 2 * 3 * 4 = 72.0
-/// let s = tt.sum();
+/// let s = tt.sum().unwrap();
 /// assert!((s - 72.0).abs() < 1e-10);
 /// ```
 #[derive(Debug, Clone)]
@@ -78,11 +86,11 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, Tensor3Ops, tensor3_zeros};
     ///
     /// // Build a 2-site TT with bond dimension 1 and site dimensions [2, 3]
-    /// let mut t0 = tensor3_zeros::<f64>(1, 2, 1);
+    /// let mut t0 = tensor3_zeros::<f64>(1, 2, 1).unwrap();
     /// t0.set3(0, 0, 0, 1.0);
     /// t0.set3(0, 1, 0, 2.0);
     ///
-    /// let mut t1 = tensor3_zeros::<f64>(1, 3, 1);
+    /// let mut t1 = tensor3_zeros::<f64>(1, 3, 1).unwrap();
     /// t1.set3(0, 0, 0, 10.0);
     /// t1.set3(0, 1, 0, 20.0);
     /// t1.set3(0, 2, 0, 30.0);
@@ -138,10 +146,16 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     ///
     /// let tt = SimpleTensorTrain::<f64>::zeros(&[2, 3]);
     /// assert!((tt.evaluate(&[1, 2]).unwrap()).abs() < 1e-14);
-    /// assert!((tt.sum()).abs() < 1e-14);
+    /// assert!((tt.sum().unwrap()).abs() < 1e-14);
     /// ```
     pub fn zeros(site_dims: &[usize]) -> Self {
-        let tensors: Vec<Tensor3<T>> = site_dims.iter().map(|&d| tensor3_zeros(1, d, 1)).collect();
+        let tensors: Vec<Tensor3<T>> = site_dims
+            .iter()
+            .map(|&d| {
+                tensor3_zeros(1, d, 1)
+                    .unwrap_or_else(|error| invariant_violated(UNIT_BOND_CORE, error))
+            })
+            .collect();
         Self { tensors }
     }
 
@@ -161,7 +175,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// assert!((tt.evaluate(&[1, 2, 3]).unwrap() - 5.0).abs() < 1e-12);
     ///
     /// // Sum = 5.0 * 2 * 3 * 4 = 120.0
-    /// assert!((tt.sum() - 120.0).abs() < 1e-10);
+    /// assert!((tt.sum().unwrap() - 120.0).abs() < 1e-10);
     /// ```
     pub fn constant(site_dims: &[usize], value: T) -> Self {
         if site_dims.is_empty() {
@@ -174,7 +188,8 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         let mut tensors = Vec::with_capacity(n);
 
         // First tensor: all ones
-        let mut first = tensor3_zeros(1, site_dims[0], 1);
+        let mut first = tensor3_zeros(1, site_dims[0], 1)
+            .unwrap_or_else(|error| invariant_violated(UNIT_BOND_CORE, error));
         for s in 0..site_dims[0] {
             first.set3(0, s, 0, T::one());
         }
@@ -183,7 +198,8 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         // Middle tensors: all ones (only if n > 2)
         if n > 2 {
             for &d in &site_dims[1..n - 1] {
-                let mut tensor = tensor3_zeros(1, d, 1);
+                let mut tensor = tensor3_zeros(1, d, 1)
+                    .unwrap_or_else(|error| invariant_violated(UNIT_BOND_CORE, error));
                 for s in 0..d {
                     tensor.set3(0, s, 0, T::one());
                 }
@@ -193,7 +209,8 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
 
         // Last tensor: multiply by value
         if n > 1 {
-            let mut last = tensor3_zeros(1, site_dims[n - 1], 1);
+            let mut last = tensor3_zeros(1, site_dims[n - 1], 1)
+                .unwrap_or_else(|error| invariant_violated(UNIT_BOND_CORE, error));
             for s in 0..site_dims[n - 1] {
                 last.set3(0, s, 0, value);
             }
@@ -259,7 +276,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// let mut tt = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
     /// tt.scale_mut(3.0);
     /// assert!((tt.evaluate(&[0, 0]).unwrap() - 3.0).abs() < 1e-12);
-    /// assert!((tt.sum() - 18.0).abs() < 1e-10);
+    /// assert!((tt.sum().unwrap() - 18.0).abs() < 1e-10);
     /// ```
     pub fn scale_mut(&mut self, factor: T) {
         if !self.tensors.is_empty() {
@@ -303,45 +320,53 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// The reversed TT satisfies `reversed.evaluate(&[i_{L-1}, ..., i_0]) ==
     /// original.evaluate(&[i_0, ..., i_{L-1}])`.
     ///
+    /// # Errors
+    ///
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when a transposed
+    /// core shape cannot be represented (its column-major strides overflow,
+    /// e.g. an empty core of shape `(0, m, m)` with a huge `m`) or allocated.
+    ///
     /// # Examples
     ///
     /// ```
     /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain, Tensor3Ops, tensor3_zeros};
     ///
-    /// let mut t0 = tensor3_zeros::<f64>(1, 2, 1);
+    /// let mut t0 = tensor3_zeros::<f64>(1, 2, 1).unwrap();
     /// t0.set3(0, 0, 0, 1.0);
     /// t0.set3(0, 1, 0, 2.0);
-    /// let mut t1 = tensor3_zeros::<f64>(1, 3, 1);
+    /// let mut t1 = tensor3_zeros::<f64>(1, 3, 1).unwrap();
     /// t1.set3(0, 0, 0, 10.0);
     /// t1.set3(0, 1, 0, 20.0);
     /// t1.set3(0, 2, 0, 30.0);
     /// let tt = SimpleTensorTrain::new(vec![t0, t1]).unwrap();
     ///
-    /// let rev = tt.reverse();
+    /// let rev = tt.reverse().unwrap();
     /// assert_eq!(rev.site_dims(), vec![3, 2]);
     /// // T[0, 1] = 1.0 * 10.0 = 10.0, reversed: T_rev[0, 1] should also be 10.0 (site 0->10, site 1->2)
     /// // Original: T[1, 0] = 2.0 * 10.0 = 20.0
     /// // Reversed: T_rev[0, 1] = 20.0
     /// assert!((rev.evaluate(&[0, 1]).unwrap() - tt.evaluate(&[1, 0]).unwrap()).abs() < 1e-12);
     /// ```
-    pub fn reverse(&self) -> Self {
+    pub fn reverse(&self) -> Result<Self> {
         let mut new_tensors = Vec::with_capacity(self.tensors.len());
         for tensor in self.tensors.iter().rev() {
             // Swap left and right dimensions
             let mut new_tensor =
-                tensor3_zeros(tensor.right_dim(), tensor.site_dim(), tensor.left_dim());
-            for l in 0..tensor.left_dim() {
+                tensor3_zeros(tensor.right_dim(), tensor.site_dim(), tensor.left_dim())?;
+            // Column-major order (left index fastest); an empty extent ends
+            // the loop before the other extents are walked.
+            for r in 0..tensor.right_dim() {
                 for s in 0..tensor.site_dim() {
-                    for r in 0..tensor.right_dim() {
+                    for l in 0..tensor.left_dim() {
                         new_tensor.set3(r, s, l, *tensor.get3(l, s, r));
                     }
                 }
             }
             new_tensors.push(new_tensor);
         }
-        Self {
+        Ok(Self {
             tensors: new_tensors,
-        }
+        })
     }
 }
 
@@ -388,32 +413,67 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
             return Ok((Vec::new(), site_dims));
         }
 
-        // Build full tensor by iterating over all indices
-        let mut result = Vec::with_capacity(total_size);
-        let mut indices = vec![0usize; site_dims.len()];
-
-        loop {
-            // Evaluate at current indices
-            result.push(self.evaluate(&indices)?);
-
-            // Increment indices in column-major order, leftmost index fastest.
-            let mut carry = true;
-            for i in 0..site_dims.len() {
-                if carry {
-                    indices[i] += 1;
-                    if indices[i] >= site_dims[i] {
-                        indices[i] = 0;
-                    } else {
-                        carry = false;
-                    }
+        // Physical strides fit the checked positive total_size; bond extents need separate checks.
+        let first = &self.tensors[0];
+        let mut bond_dim = first
+            .left_dim()
+            .checked_mul(first.right_dim())
+            .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
+                message: "full tensor environment element count overflowed usize".to_string(),
+            })?;
+        let mut stride = first.site_dim();
+        stride
+            .checked_mul(bond_dim)
+            .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
+                message: "full tensor environment element count overflowed usize".to_string(),
+            })?;
+        let backend_error = |message: String| SimpleTensorTrainError::InvalidOperation { message };
+        // Seed lsr->lrs, then fold (l,r) into the bond, preserving the existing
+        // first-left-bond behavior even for cores replaced through the mutable API.
+        let first_read = NativeTensorReadInput::Borrowed(T::tensor_read(first.as_inner()));
+        let mut environment = einsum_native_tensor_reads(&[(&first_read, &[0, 1, 2])], &[0, 2, 1])
+            .map(TensorValue::from_tensor)
+            .map_err(|error| backend_error(error.to_string()))?;
+        // E[l,p] * A[l,s,r] -> E'[r,p,s]; folding (p,s) keeps the earlier
+        // prefix fastest, so the final dense buffer is first-site-fastest column-major.
+        let plan = NativeEinsumPlan::new("lp,lsr->rps")
+            .map_err(|error| backend_error(error.to_string()))?;
+        for (site, tensor) in self.tensors.iter().enumerate().skip(1) {
+            let left = tensor.left_dim();
+            let right = tensor.right_dim();
+            // Every environment state of the predecessor has to be consumed: a narrower
+            // left bond would silently drop the rest instead of reading past it.
+            if left != bond_dim {
+                return Err(SimpleTensorTrainError::DimensionMismatch { site: site - 1 });
+            }
+            let dim = tensor.site_dim();
+            let next_stride = stride * dim;
+            next_stride.checked_mul(right).ok_or_else(|| {
+                SimpleTensorTrainError::InvalidOperation {
+                    message: "full tensor environment element count overflowed usize".to_string(),
                 }
-            }
-
-            if carry {
-                break; // All indices wrapped around
-            }
+            })?;
+            let prefix = environment
+                .reshape_view([bond_dim, stride])
+                .map_err(|error| backend_error(error.to_string()))?;
+            environment = plan
+                .execute_reads(&[prefix.tensor_read(), T::tensor_read(tensor.as_inner())])
+                .map(TensorValue::from_tensor)
+                .map_err(|error| backend_error(error.to_string()))?;
+            stride = next_stride;
+            bond_dim = right;
+        }
+        if bond_dim != 1 {
+            return Err(SimpleTensorTrainError::InvalidOperation {
+                message: format!("Final contraction resulted in {bond_dim} elements, expected 1"),
+            });
         }
 
+        let result = environment
+            .tensor_read()
+            .as_slice::<T>()
+            .map_err(|error| backend_error(error.to_string()))?
+            .to_vec();
         Ok((result, site_dims))
     }
 }
@@ -427,8 +487,9 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the contraction or operation fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when a site index in
+    /// `dims` is out of range or an intermediate matrix multiply / tensor
+    /// allocation fails.
     ///
     /// # Examples
     ///
@@ -516,7 +577,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
 
                 // Reshape product (tprod_rows, site_dim * right_dim)
                 // into tensor (tprod_rows, site_dim, right_dim)
-                let mut new_tensor = tensor3_zeros(tprod_rows, site_dim, right_dim);
+                let mut new_tensor = tensor3_zeros(tprod_rows, site_dim, right_dim)?;
                 for l in 0..tprod_rows {
                     for s in 0..site_dim {
                         for r in 0..right_dim {
@@ -537,8 +598,16 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         if result_tensors.is_empty() {
             // All dims summed → return 1-site TT wrapping scalar
             // tprod should be 1×1
+            if tprod.nrows() != 1 || tprod.ncols() != 1 {
+                return Err(SimpleTensorTrainError::InvalidOperation {
+                    message: format!(
+                        "Final contraction resulted in a {:?} environment, expected [1, 1]",
+                        (tprod.nrows(), tprod.ncols())
+                    ),
+                });
+            }
             let scalar = tprod[[0, 0]];
-            let mut t = tensor3_zeros(1, 1, 1);
+            let mut t = tensor3_zeros(1, 1, 1)?;
             t.set3(0, 0, 0, scalar);
             return SimpleTensorTrain::new(vec![t]);
         }
@@ -567,7 +636,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
             })?;
 
         // Reshape back to tensor (last_left, last_site, tprod_cols)
-        let mut new_last = tensor3_zeros(last_left, last_site, tprod_cols);
+        let mut new_last = tensor3_zeros(last_left, last_site, tprod_cols)?;
         for l in 0..last_left {
             for s in 0..last_site {
                 for r in 0..tprod_cols {

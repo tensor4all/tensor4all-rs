@@ -16,17 +16,19 @@ use tensor4all_core::{
 };
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::interpolation::{
-    InterpolationError, InterpolationOutcome, InterpolationProblem, InterpolationTermination,
-    TreeInterpolator,
+    EvalContext, InterpolationError, InterpolationOutcome, InterpolationProblem,
+    InterpolationTermination, TreeInterpolator,
 };
 use tensor4all_treetn::TreeTN;
 
 use crate::error::Result as TreeTciResult;
+use crate::evaluation::{CachedExecution, Explicit};
 use crate::globalpivot::ScalarParts;
-use crate::materialize::to_named_treetn;
+use crate::materialize::to_named_treetn_chunked;
+use crate::optimize::{optimize_with_streams, with_seeded_streams};
 use crate::{
-    column_2d, ncols_2d, optimize_with_proposer, DefaultProposer, GlobalIndexBatch, MultiIndex,
-    TreeTCI2, TreeTciEdge, TreeTciError, TreeTciGraph, TreeTciOptions, TreeTciTermination,
+    column_2d, ncols_2d, AllEdges, DefaultProposer, GlobalIndexBatch, MultiIndex, TreeTCI2,
+    TreeTciEdge, TreeTciError, TreeTciGraph, TreeTciOptions, TreeTciTermination,
 };
 
 /// Tree interpolation engine backed by TreeTCI.
@@ -46,11 +48,13 @@ use crate::{
 ///
 /// - `tolerance` (set to the problem's absolute tolerance),
 /// - `max_bond_dim` (the problem's cap),
-/// - `normalize_error` (always `false`: the tolerance is absolute), and
-/// - `seed` (the problem's seed, the only source of randomness).
+/// - `scale_tolerance` (always `false`: the tolerance is absolute),
+/// - `seed` (the problem's seed, the only source of randomness), and
+/// - `global_search_starts` (the problem's extra global pivot search starts,
+///   replacing the engine's).
 ///
-/// The remaining options (`max_iter`, the global pivot search settings, and
-/// `evaluation_cache_bytes`) come from the engine. The optional target memo
+/// The remaining options (`max_iter`, the global pivot search budget settings,
+/// and `evaluation_cache_bytes`) come from the engine. The optional target memo
 /// covers optimization; named network materialization calls the evaluator
 /// separately. A single-node problem is evaluated exactly on its full
 /// index set, which costs the product of its site dimensions.
@@ -60,9 +64,10 @@ use crate::{
 /// ```
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 /// use tensor4all_treetci::TreeTciInterpolator;
 /// use tensor4all_treetn::interpolation::{
-///     InterpolationProblem, InterpolationTermination, TreeInterpolator,
+///     EvalContext, InterpolationProblem, InterpolationTermination, Parallelism, TreeInterpolator,
 /// };
 /// use tensor4all_treetn::NodeNameNetwork;
 ///
@@ -81,10 +86,14 @@ use crate::{
 ///
 /// // f(x0, x1, y) = (1 + x0 + 2 x1) * (1 + y), rank one across the edge.
 /// let f = |p: &[usize]| ((1 + p[0] + 2 * p[1]) * (1 + p[2])) as f64;
-/// let evaluate = |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+/// let evaluate = |batch: ColMajorArrayRef<'_, usize>,
+///                 _ctx: &mut EvalContext<'_>|
+///  -> anyhow::Result<Vec<f64>> {
 ///     Ok(batch.data().chunks(batch.shape()[0]).map(f).collect())
 /// };
-/// let outcome = TreeTciInterpolator::default().interpolate(&problem, evaluate)?;
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+/// let outcome = TreeTciInterpolator::default().interpolate(&problem, &mut ctx, evaluate)?;
 ///
 /// assert_eq!(outcome.termination, InterpolationTermination::Converged);
 /// assert!(outcome.error_estimate <= 1e-12);
@@ -104,7 +113,7 @@ impl TreeTciInterpolator {
 
     /// Build an engine from TreeTCI options.
     ///
-    /// `tolerance`, `max_bond_dim`, `normalize_error`, and `seed` are replaced
+    /// `tolerance`, `max_bond_dim`, `scale_tolerance`, and `seed` are replaced
     /// by the problem on every run (see the type documentation); the other
     /// fields configure the run.
     ///
@@ -156,7 +165,7 @@ impl TreeTciInterpolator {
     }
 
     /// The options of one run: the engine's options with the problem's
-    /// tolerance, cap, and seed, and `normalize_error` disabled.
+    /// tolerance, cap, and seed, and `scale_tolerance` disabled.
     fn run_options(
         &self,
         absolute_tolerance: f64,
@@ -166,7 +175,7 @@ impl TreeTciInterpolator {
         TreeTciOptions {
             tolerance: absolute_tolerance,
             max_bond_dim: cap.map(NonZeroUsize::get),
-            normalize_error: false,
+            scale_tolerance: false,
             seed: Some(seed),
             ..self.options.clone()
         }
@@ -229,32 +238,43 @@ where
     /// let pivots = ColMajorArray::new(vec![0, 0], vec![2, 1])?;
     /// let problem = InterpolationProblem::new(topology, node_sites, pivots, 1e-10, None, 0)?;
     ///
-    /// let failing = |_: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    /// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+    ///
+    /// let failing = |_: ColMajorArrayRef<'_, usize>, _: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
     ///     anyhow::bail!("out of domain")
     /// };
-    /// let error = TreeTciInterpolator::default().interpolate(&problem, failing).unwrap_err();
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let error = TreeTciInterpolator::default()
+    ///     .interpolate(
+    ///         &problem,
+    ///         &mut EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial),
+    ///         failing,
+    ///     )
+    ///     .unwrap_err();
     /// assert!(matches!(error, InterpolationError::Evaluator { .. }));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     fn interpolate<V, F>(
         &self,
         problem: &InterpolationProblem<V>,
-        evaluate: F,
+        ctx: &mut EvalContext<'_>,
+        mut evaluate: F,
     ) -> Result<InterpolationOutcome<V>, InterpolationError>
     where
         V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-        F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
+        F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
     {
         let layout = VertexLayout::new(problem)?;
 
         // Zero-patch rule, applied before any topology-specific path.
         let initial = problem.initial_pivots();
-        let initial_values =
-            call_evaluator(&evaluate, initial.data(), layout.n_sites()).map_err(classify_anyhow)?;
+        let initial_values = call_evaluator(&mut evaluate, initial.data(), layout.n_sites(), ctx)
+            .map_err(classify_anyhow)?;
         let max_initial = initial_sample_scale(&initial_values)?;
 
         if layout.vertex_count() == 1 {
-            return interpolate_single_node(&layout, &evaluate);
+            return interpolate_single_node(&layout, &mut evaluate, ctx);
         }
 
         let options = self.run_options(
@@ -262,10 +282,23 @@ where
             problem.max_bond_dim(),
             problem.seed(),
         );
-        let vertex_evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<T>> {
-            let sites = layout.vertex_batch_to_sites(batch)?;
-            call_evaluator(&evaluate, &sites, layout.n_sites())
+        // The problem owns the per-run global search starts, like its pivots
+        // and seed. Site-order columns fuse into one coordinate per vertex.
+        let options = TreeTciOptions {
+            global_search_starts: layout
+                .site_columns_to_vertices(problem.global_search_starts())
+                .map_err(|source| InterpolationError::Engine { source })?,
+            ..options
         };
+        // The one mutable owner of the run: the caller's context plus the vertex-order
+        // adapter around the caller's evaluator. Every numerical step the engine reaches
+        // through this owner reborrows the same session.
+        let vertex_evaluate =
+            |batch: GlobalIndexBatch<'_>, ctx: &mut EvalContext<'_>| -> Result<Vec<T>> {
+                let sites = layout.vertex_batch_to_sites(batch)?;
+                call_evaluator(&mut evaluate, &sites, layout.n_sites(), ctx)
+            };
+        let mut execution = Explicit::new(ctx, vertex_evaluate);
 
         let graph = TreeTciGraph::new(layout.vertex_count(), &layout.edges).map_err(engine)?;
         let mut state = TreeTCI2::<T>::new(layout.local_dims.clone(), graph).map_err(engine)?;
@@ -275,15 +308,30 @@ where
         state.add_global_pivots(&vertex_pivots).map_err(engine)?;
         state.max_sample_value = max_initial;
 
-        let report =
-            optimize_with_proposer(&mut state, vertex_evaluate, &options, &DefaultProposer)
-                .map_err(classify)?;
-        let network = to_named_treetn(
+        let report = with_seeded_streams(&options, &DefaultProposer, |streams| {
+            let mut cached = CachedExecution::new(
+                &mut execution,
+                &state.local_dims,
+                options.evaluation_cache_bytes,
+            )?;
+            optimize_with_streams(
+                &mut state,
+                &mut cached,
+                &options,
+                &DefaultProposer,
+                &AllEdges,
+                &mut (),
+                streams,
+            )
+        })
+        .map_err(classify)?;
+        let network = to_named_treetn_chunked(
             &state,
-            vertex_evaluate,
+            &mut execution,
             None,
             &layout.node_names,
             &layout.vertex_sites,
+            crate::batch::EVALUATION_CHUNK_POINTS,
         )
         .map_err(classify)?;
         let pivots = joined_pivots(&state, &layout)
@@ -342,17 +390,22 @@ struct EvaluatorFailure {
 /// Call the caller's evaluator on a column-major `[n_sites, n_points]` batch
 /// and check that it returns one finite value with finite magnitude per
 /// point. Evaluator failures are wrapped in [`EvaluatorFailure`].
-fn call_evaluator<T, F>(evaluate: &F, data: &[usize], n_sites: usize) -> Result<Vec<T>>
+fn call_evaluator<T, F>(
+    evaluate: &mut F,
+    data: &[usize],
+    n_sites: usize,
+    ctx: &mut EvalContext<'_>,
+) -> Result<Vec<T>>
 where
     T: CommonScalar,
-    F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
+    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
     // INVARIANT: `n_sites >= 1` because `InterpolationProblem::new` requires
     // at least one active site, so the division is defined.
     let n_points = data.len() / n_sites;
     let shape = [n_sites, n_points];
     let batch = ColMajorArrayRef::new(data, &shape)?;
-    let values = evaluate(batch).map_err(|source| EvaluatorFailure { source })?;
+    let values = evaluate(batch, ctx).map_err(|source| EvaluatorFailure { source })?;
     if values.len() != n_points {
         return Err(EvaluatorFailure {
             source: anyhow::anyhow!(
@@ -706,12 +759,13 @@ where
 /// sites and store the values as the node's tensor.
 fn interpolate_single_node<T, V, F>(
     layout: &VertexLayout<V>,
-    evaluate: &F,
+    evaluate: &mut F,
+    ctx: &mut EvalContext<'_>,
 ) -> Result<InterpolationOutcome<V>, InterpolationError>
 where
     T: tensor4all_core::TensorElement + CommonScalar,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
+    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
     let n_sites = layout.n_sites();
     let n_points = layout.local_dims[0];
@@ -736,7 +790,7 @@ where
             .map_err(|source| InterpolationError::Engine { source })?;
         points.extend_from_slice(&out);
     }
-    let values = call_evaluator(evaluate, &points, n_sites).map_err(classify_anyhow)?;
+    let values = call_evaluator(evaluate, &points, n_sites, ctx).map_err(classify_anyhow)?;
     let max_sample_magnitude = max_magnitude(&values);
     let tensor =
         IdxTensor::from_dense(layout.vertex_sites[0].clone(), values).map_err(|error| {

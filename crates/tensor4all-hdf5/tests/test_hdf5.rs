@@ -140,6 +140,40 @@ fn test_itensor_f64_storage_dataset_uses_column_major_linearization() {
 }
 
 #[test]
+fn test_itensor_narrow_floats_are_refused_instead_of_widened() {
+    // The ITensor schema stores f64/Complex64 only. A compact `f32`/`c32` payload must be refused
+    // rather than silently widened into the serialized dtype.
+    let path = temp_path("itensor_narrow_float_refusal");
+    let i = Index::new_dyn(2);
+    let f32_tensor = IdxTensor::from_dense(vec![i.clone()], vec![1.5_f32, -2.5]).unwrap();
+    let error = save_itensor(&path, "tensor", &f32_tensor).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Unsupported storage type for HDF5 serialization"),
+        "{error}"
+    );
+
+    let c32_tensor = IdxTensor::from_dense(
+        vec![i],
+        vec![
+            num_complex::Complex32::new(1.0, -1.0),
+            num_complex::Complex32::new(0.5, 0.0),
+        ],
+    )
+    .unwrap();
+    // A narrow complex payload takes the complex branch (as it did as an eager payload) and fails the
+    // strict Complex64 read instead of being converted.
+    let error = save_itensor(&path, "tensor", &c32_tensor).unwrap_err();
+    assert!(
+        error.to_string().contains("Failed to extract c64 data"),
+        "{error}"
+    );
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
 fn test_itensor_c64_roundtrip() {
     let path = temp_path("itensor_c64");
     let tensor = make_test_tensor_c64();
@@ -555,10 +589,12 @@ fn mps_i32_max_limits_are_rejected() {
 #[test]
 fn mps_in_range_invalid_orthogonality_limits_are_rejected() {
     for (name, llim, rlim) in [
-        ("below_left_boundary", -2_i64, 4_i64),
-        ("past_right_boundary", -1, 5),
-        ("wrong_gap", 0, 3),
-        ("center_past_end", 2, 4),
+        // ITensorMPS 1-based limits for length 3: valid iff 0 <= llim < rlim <= 4
+        ("negative_llim", -1_i64, 2_i64),
+        ("negative_llim_with_range", -1_i64, 3_i64),
+        ("past_right_boundary", 0, 5),
+        ("empty_range", 2, 2),
+        ("reversed", 3, 1),
     ] {
         let name = format!("mps_invalid_ortho_{name}");
         let error = mps_error(&name, |group| {
@@ -580,6 +616,113 @@ fn mps_in_range_invalid_orthogonality_limits_are_rejected() {
         assert!(error.contains(&llim.to_string()), "{llim}, {rlim}: {error}");
         assert!(error.contains(&rlim.to_string()), "{llim}, {rlim}: {error}");
         assert!(error.contains("length"), "{llim}, {rlim}: {error}");
+    }
+}
+
+/// Read the `(llim, rlim)` datasets of an MPS group as written to the file.
+fn file_limits(path: &str, name: &str) -> (i64, i64) {
+    let file = File::open(path).unwrap();
+    let group = file.group(name).unwrap();
+    let read = |field: &str| -> i64 {
+        group
+            .dataset(field)
+            .unwrap()
+            .as_reader()
+            .read_scalar()
+            .unwrap()
+    };
+    (read("llim"), read("rlim"))
+}
+
+/// Load the test MPS after overwriting its file limits with ITensorMPS values.
+fn load_with_file_limits(name: &str, llim: i64, rlim: i64) -> TensorTrain {
+    let path = temp_path(name);
+    save_mps(&path, "mps", &make_test_mps()).unwrap();
+    let file = File::open_rw(&path).unwrap();
+    let group = file.group("mps").unwrap();
+    for (field, value) in [("llim", llim), ("rlim", rlim)] {
+        group
+            .dataset(field)
+            .unwrap()
+            .as_writer()
+            .write_scalar(&value)
+            .unwrap();
+    }
+    drop(file);
+    let loaded = load_mps(&path, "mps").unwrap();
+    std::fs::remove_file(path).ok();
+    loaded
+}
+
+// tensor4all-rs#1041: the file holds ITensorMPS's 1-based limits, the TensorTrain a
+// 0-based center. Length 3 throughout.
+#[test]
+fn itensormps_limits_load_as_zero_based_center() {
+    for (llim, rlim, center) in [
+        (0_i64, 4_i64, None), // ITensorMPS without a center: llim = 0, rlim = length + 1
+        (-1_i64, 4_i64, None), // no center spelled llim = -1, rlim = length + 1
+        (0, 2, Some(0)),      // 1-based site 1
+        (1, 3, Some(1)),      // 1-based site 2
+        (2, 4, Some(2)),      // 1-based site 3, the last site
+        (0, 3, None),         // sites 1..=2 may be non-orthogonal: no single center
+        (1, 4, None),
+    ] {
+        let name = format!("mps_itensor_limits_{llim}_{rlim}");
+        let loaded = load_with_file_limits(&name, llim, rlim);
+        assert_eq!(loaded.ortho_center(), center, "llim={llim}, rlim={rlim}");
+    }
+}
+
+#[test]
+fn zero_based_center_is_written_as_itensormps_limits() {
+    let source = make_test_mps();
+    for (center, limits) in [
+        (None, (0_i64, 4_i64)),
+        (Some(0_usize), (0, 2)),
+        (Some(1), (1, 3)),
+        (Some(2), (2, 4)),
+    ] {
+        let tensors = source.tensors().into_iter().cloned().collect();
+        let (llim, rlim) = match center {
+            Some(c) => (c as i32 - 1, c as i32 + 1),
+            None => (-1, 4),
+        };
+        let mps = TensorTrain::with_ortho(tensors, llim, rlim, None).unwrap();
+        assert_eq!(mps.ortho_center(), center);
+
+        let path = temp_path(&format!("mps_write_limits_{center:?}"));
+        save_mps(&path, "mps", &mps).unwrap();
+        assert_eq!(file_limits(&path, "mps"), limits, "center {center:?}");
+        // and back: tensor4all -> HDF5 -> tensor4all keeps the center
+        assert_eq!(load_mps(&path, "mps").unwrap().ortho_center(), center);
+        std::fs::remove_file(path).ok();
+    }
+}
+
+/// MPS groups written by ITensorMPS.jl 0.3.45 (ITensors 0.9.30) through
+/// `tests/fixtures/itensormps_ortho_lims.jl`: 4 sites.
+#[test]
+fn itensormps_written_file_loads_with_its_center() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/itensormps_ortho_lims.h5"
+    );
+    for (name, limits, center) in [
+        ("noortho", (0_i64, 5_i64), None),
+        ("center1", (0, 2), Some(0_usize)),
+        ("center3", (2, 4), Some(2)),
+        ("center4", (3, 5), Some(3)),
+    ] {
+        assert_eq!(file_limits(path, name), limits, "{name}");
+        let loaded = load_mps(path, name).unwrap();
+        assert_eq!(loaded.len(), 4, "{name}");
+        assert_eq!(loaded.ortho_center(), center, "{name}");
+
+        // written back, the limits are the ones ITensorMPS wrote
+        let out = temp_path(&format!("mps_itensormps_rewrite_{name}"));
+        save_mps(&out, name, &loaded).unwrap();
+        assert_eq!(file_limits(&out, name), limits, "{name}");
+        std::fs::remove_file(out).ok();
     }
 }
 
@@ -999,6 +1142,176 @@ fn test_treetn_roundtrip() {
         assert_eq!(a.indices(), b.indices());
         assert!(a.distance(b).unwrap() < 1e-15);
     }
+}
+
+/// 4-node star (centre `c`, three leaves, bond dimension 3) with
+/// deterministic non-trivial data.
+fn make_star_treetn() -> TreeTN<IdxTensor, String> {
+    let bonds: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(3)).collect();
+    let s_c = DynIndex::new_dyn(2);
+    let data = |n: usize| -> Vec<f64> { (0..n).map(|i| ((i * 7 + 3) % 11) as f64 - 5.0).collect() };
+
+    let mut tensors = vec![IdxTensor::from_dense(
+        vec![bonds[0].clone(), bonds[1].clone(), bonds[2].clone(), s_c],
+        data(54),
+    )
+    .unwrap()];
+    let mut names = vec!["c".to_string()];
+    for (i, b) in bonds.iter().enumerate() {
+        tensors.push(
+            IdxTensor::from_dense(
+                vec![b.clone(), DynIndex::new_dyn(2)],
+                data(6 + i)[..6].to_vec(),
+            )
+            .unwrap(),
+        );
+        names.push(format!("leaf{i}"));
+    }
+    TreeTN::from_tensors(tensors, names).unwrap()
+}
+
+fn assert_treetn_bitwise_equal(a: &TreeTN<IdxTensor, String>, b: &TreeTN<IdxTensor, String>) {
+    let (ta, tb) = (treetn_node_tensors(a), treetn_node_tensors(b));
+    assert_eq!(ta.len(), tb.len());
+    for (x, y) in ta.iter().zip(&tb) {
+        assert_eq!(x.indices(), y.indices());
+        assert_eq!(x.distance(y).unwrap(), 0.0);
+    }
+}
+
+#[test]
+fn test_treetn_canonical_roundtrip() {
+    use tensor4all_treetn::CanonicalizationOptions;
+    let path = TempHdf5Path::new("treetn_canonical_roundtrip");
+    let tn = make_star_treetn()
+        .canonicalize(["c".to_string()], CanonicalizationOptions::default())
+        .unwrap();
+    assert_eq!(tn.canonical_form(), Some(CanonicalForm::Unitary));
+
+    save_treetn(path.as_str(), "tn", &tn).unwrap();
+    let loaded = load_treetn::<String>(path.as_str(), "tn").unwrap();
+
+    assert_eq!(loaded.canonical_region(), tn.canonical_region());
+    assert_eq!(loaded.canonical_form(), Some(CanonicalForm::Unitary));
+    assert_treetn_bitwise_equal(&tn, &loaded);
+
+    // Canonicalizing to the saved region must be a no-op on the loaded tree.
+    let again = loaded
+        .canonicalize(["c".to_string()], CanonicalizationOptions::default())
+        .unwrap();
+    assert_treetn_bitwise_equal(&tn, &again);
+}
+
+#[test]
+fn test_treetn_canonical_roundtrip_two_nodes_and_lu() {
+    use tensor4all_treetn::CanonicalizationOptions;
+    let path = TempHdf5Path::new("treetn_canonical_two_nodes");
+    let (s0, s1, b) = (
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+    );
+    let tn = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![
+            IdxTensor::from_dense(vec![s0, b.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+            IdxTensor::from_dense(vec![b, s1], vec![5.0, 6.0, 7.0, 8.0]).unwrap(),
+        ],
+        vec!["a".to_string(), "b".to_string()],
+    )
+    .unwrap()
+    .canonicalize(["a".to_string()], CanonicalizationOptions::default())
+    .unwrap();
+    save_treetn(path.as_str(), "tn", &tn).unwrap();
+    let loaded = load_treetn::<String>(path.as_str(), "tn").unwrap();
+    assert_eq!(loaded.canonical_region(), tn.canonical_region());
+    assert_eq!(loaded.canonical_form(), Some(CanonicalForm::Unitary));
+
+    // Non-default form and a two-node region are preserved too.
+    let mut tn = make_test_treetn();
+    tn.set_canonical_region(["left".to_string(), "root".to_string()])
+        .unwrap();
+    tn.set_canonical_form(Some(CanonicalForm::LU));
+    save_treetn(path.as_str(), "tn_lu", &tn).unwrap();
+    let loaded = load_treetn::<String>(path.as_str(), "tn_lu").unwrap();
+    assert_eq!(loaded.canonical_region(), tn.canonical_region());
+    assert_eq!(loaded.canonical_form(), Some(CanonicalForm::LU));
+}
+
+#[test]
+fn test_treetn_without_canonical_attrs() {
+    use tensor4all_treetn::CanonicalizationOptions;
+    // A tree that was never canonicalized writes neither attribute.
+    let path = TempHdf5Path::new("treetn_no_canonical");
+    save_treetn(path.as_str(), "tn", &make_test_treetn()).unwrap();
+    {
+        let file = File::open(path.as_str()).unwrap();
+        let group = file.group("tn").unwrap();
+        assert!(group.attr("canonical_region").is_err());
+        assert!(group.attr("canonical_form").is_err());
+    }
+    let loaded = load_treetn::<String>(path.as_str(), "tn").unwrap();
+    assert!(loaded.canonical_region().is_empty());
+    assert_eq!(loaded.canonical_form(), None);
+
+    // A legacy file (canonical tree, attributes stripped) loads as before.
+    let path = TempHdf5Path::new("treetn_stripped_canonical");
+    let tn = make_star_treetn()
+        .canonicalize(["c".to_string()], CanonicalizationOptions::default())
+        .unwrap();
+    save_treetn(path.as_str(), "tn", &tn).unwrap();
+    {
+        let file = File::open_rw(path.as_str()).unwrap();
+        let group = file.group("tn").unwrap();
+        group.delete_attr("canonical_region").unwrap();
+        group.delete_attr("canonical_form").unwrap();
+    }
+    let loaded = load_treetn::<String>(path.as_str(), "tn").unwrap();
+    assert!(loaded.canonical_region().is_empty());
+    assert_eq!(loaded.canonical_form(), None);
+    assert_treetn_bitwise_equal(&tn, &loaded);
+}
+
+#[test]
+fn test_treetn_invalid_canonical_attrs_rejected() {
+    use tensor4all_treetn::CanonicalizationOptions;
+    let path = TempHdf5Path::new("treetn_invalid_canonical");
+    let tn = make_star_treetn()
+        .canonicalize(["c".to_string()], CanonicalizationOptions::default())
+        .unwrap();
+    save_treetn(path.as_str(), "tn", &tn).unwrap();
+
+    {
+        let file = File::open_rw(path.as_str()).unwrap();
+        let group = file.group("tn").unwrap();
+        group.delete_attr("canonical_form").unwrap();
+        group
+            .new_attr::<i32>()
+            .shape(())
+            .create("canonical_form")
+            .unwrap()
+            .as_writer()
+            .write_scalar(&99)
+            .unwrap();
+    }
+    let err = load_treetn::<String>(path.as_str(), "tn").unwrap_err();
+    assert!(err.to_string().contains("canonical_form"), "{err}");
+
+    {
+        let file = File::open_rw(path.as_str()).unwrap();
+        let group = file.group("tn").unwrap();
+        group.delete_attr("canonical_form").unwrap();
+        group.delete_attr("canonical_region").unwrap();
+        group
+            .new_attr::<VarLenUnicode>()
+            .shape(1)
+            .create("canonical_region")
+            .unwrap()
+            .as_writer()
+            .write(&[VarLenUnicode::from_str("nope").unwrap()])
+            .unwrap();
+    }
+    let err = load_treetn::<String>(path.as_str(), "tn").unwrap_err();
+    assert!(format!("{err:#}").contains("canonical_region"), "{err:#}");
 }
 
 #[test]

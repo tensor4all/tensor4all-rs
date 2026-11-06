@@ -16,7 +16,6 @@ struct PartialContractionInputs {
     s_contract_b: DynIndex,
     s_multiply_a: DynIndex,
     s_multiply_b: DynIndex,
-    s_a_only: DynIndex,
     s_b_only: DynIndex,
 }
 
@@ -63,7 +62,6 @@ fn make_partial_contraction_inputs() -> PartialContractionInputs {
         s_contract_b,
         s_multiply_a,
         s_multiply_b,
-        s_a_only,
         s_b_only,
     }
 }
@@ -1442,4 +1440,129 @@ fn test_partial_contract_matches_dense_reference_for_cross_topology_chain() {
         result_dense.to_vec::<f64>().unwrap(),
         expected.to_vec::<f64>().unwrap()
     );
+}
+
+/// Two random three-node chains; per node a summed leg, a diagonal leg and a free leg on each side. Returns the
+/// chains and the summed and diagonal legs of both.
+#[allow(clippy::type_complexity)]
+fn make_random_paired_chains(
+    seed: u64,
+) -> (
+    TreeTN<IdxTensor, usize>,
+    TreeTN<IdxTensor, usize>,
+    Vec<(DynIndex, DynIndex)>,
+    Vec<(DynIndex, DynIndex)>,
+) {
+    use rand::{Rng, SeedableRng};
+    let n = 3;
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed);
+    let legs = || (0..n).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let (k_a, k_b, w_a, w_b) = (legs(), legs(), legs(), legs());
+    let mut chain = |summed: &[DynIndex], diagonal: &[DynIndex]| {
+        let bonds: Vec<DynIndex> = (1..n).map(|_| DynIndex::new_dyn(3)).collect();
+        let tensors = (0..n)
+            .map(|i| {
+                let mut indices =
+                    vec![summed[i].clone(), diagonal[i].clone(), DynIndex::new_dyn(2)];
+                if i > 0 {
+                    indices.push(bonds[i - 1].clone());
+                }
+                if i + 1 < n {
+                    indices.push(bonds[i].clone());
+                }
+                let len = indices.iter().map(|index| index.dim()).product::<usize>();
+                let values = (0..len)
+                    .map(|_| rng.random_range(-1.0_f64..1.0_f64))
+                    .collect();
+                IdxTensor::from_dense(indices, values).unwrap()
+            })
+            .collect();
+        TreeTN::<IdxTensor, usize>::from_tensors(tensors, (0..n).collect()).unwrap()
+    };
+    let a = chain(&k_a, &w_a);
+    let b = chain(&k_b, &w_b);
+    let summed = (0..n).map(|i| (k_a[i].clone(), k_b[i].clone())).collect();
+    let diagonal = (0..n).map(|i| (w_a[i].clone(), w_b[i].clone())).collect();
+    (a, b, summed, diagonal)
+}
+
+#[test]
+fn partial_contract_and_hadamard_honor_initial_max_bond_dim() {
+    let (a, b, summed, diagonal) = make_random_paired_chains(5);
+    let spec = PartialContractionSpec {
+        contract_pairs: summed.clone(),
+        diagonal_pairs: diagonal.clone(),
+        output_order: None,
+    };
+    let center = 0usize;
+    let fit = || ContractionOptions::fit().with_svd_policy(SvdTruncationPolicy::new(1e-12));
+
+    let start = partial_contract(
+        &a,
+        &b,
+        &spec,
+        &center,
+        fit().with_nfullsweeps(0).with_initial_max_bond_dim(1),
+    )
+    .unwrap();
+    assert!(start.link_dims().into_iter().all(|d| d == 1));
+
+    // with a tolerance, two sweeps from the rank-1 start reach the result of the full zip-up start
+    let reference = partial_contract(&a, &b, &spec, &center, fit())
+        .unwrap()
+        .to_dense()
+        .unwrap();
+    let fitted = partial_contract(
+        &a,
+        &b,
+        &spec,
+        &center,
+        fit().with_nfullsweeps(2).with_initial_max_bond_dim(1),
+    )
+    .unwrap()
+    .to_dense()
+    .unwrap();
+    let error = reference.distance(&fitted).unwrap();
+    assert!(error <= 1e-10, "relative error {error:e}");
+
+    // hadamard goes through partial_contract
+    let pairs: Vec<_> = summed.into_iter().chain(diagonal).collect();
+    let start = hadamard(
+        &a,
+        &b,
+        &pairs,
+        &center,
+        fit().with_nfullsweeps(0).with_initial_max_bond_dim(1),
+    )
+    .unwrap();
+    assert!(start.link_dims().into_iter().all(|d| d == 1));
+}
+
+#[test]
+fn partial_contract_validates_options_before_the_dense_fallback() {
+    // mismatched topologies with the dense fallback enabled (as in the scalar-result test above)
+    let s_a = DynIndex::new_dyn(2);
+    let s_b = DynIndex::new_dyn(2);
+    let bond_b = DynIndex::new_dyn(1);
+    let t_a = IdxTensor::from_dense(vec![s_a.clone()], vec![1.0, 2.0]).unwrap();
+    let tn_a = TreeTN::<IdxTensor, String>::from_tensors(vec![t_a], vec!["A".to_string()]).unwrap();
+    let t_b0 = IdxTensor::from_dense(vec![s_b.clone(), bond_b.clone()], vec![3.0, 4.0]).unwrap();
+    let t_b1 = IdxTensor::from_dense(vec![bond_b], vec![1.0]).unwrap();
+    let tn_b = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![t_b0, t_b1],
+        vec!["A".to_string(), "B".to_string()],
+    )
+    .unwrap();
+    let spec = PartialContractionSpec {
+        contract_pairs: vec![(s_a, s_b)],
+        diagonal_pairs: vec![],
+        output_order: None,
+    };
+    let options = || ContractionOptions::default().with_mismatched_topology_dense_limit(64);
+    for invalid in [
+        options().with_initial_max_bond_dim(0),
+        options().with_max_bond_dim(0),
+    ] {
+        assert!(partial_contract(&tn_a, &tn_b, &spec, &"A".to_string(), invalid).is_err());
+    }
 }

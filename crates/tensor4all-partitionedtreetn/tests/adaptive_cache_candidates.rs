@@ -4,7 +4,7 @@
 //! The root of `chain("s", 4, 2)` is measured exhaustively and fails, so its
 //! children inherit every value of their half; the children are then exact.
 
-mod adaptive_common;
+use crate::adaptive_common;
 
 use adaptive_common::*;
 use tensor4all_partitionedtreetn::adaptive_interpolation::{

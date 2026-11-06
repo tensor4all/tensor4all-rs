@@ -1,5 +1,14 @@
 # Dual-frontend coexistence in `tensor4all-tensorbackend` (#859 B0)
 
+> Updated 2026-10-21 for tenferro's caller-held engine model (tenferro-rs #2206).
+> The session, held-session, phase/lane and clone-based handle designs below
+> (§1 consequence, §2.4, §5.1, §5.4, §5bis rows, §5c rationale, §5d, §8 rows) are
+> superseded: `CpuBackend` owns one `CpuEngine` and is not `Clone`, the engine
+> borrow is the session, and `HeldSession`, `PhaseLane` and admission were deleted.
+> The current ownership model is in
+> [explicit-cpu-execution-context.md](explicit-cpu-execution-context.md). Other
+> sections are the B0 record and are kept as written.
+
 **Status:** baseline and specification only. This record delivers milestone B0 of
 [tensor4all-rs#859](https://github.com/tensor4all/tensor4all-rs/issues/859):
 "inventory existing public calls/features/representations and conversion
@@ -25,7 +34,7 @@ below is an open decision for the B1 change, not a commitment made here.
 | Public API inventory | generated, never committed: `cargo run -p xtask --release -- api-dump` → `target/api-dump/tensor4all_tensorbackend.md` (978 lines at this revision) |
 | Workspace consumers | 12 other workspace crates depend on `tensor4all-tensorbackend`: `aci`, `capi`, `core`, `interpolativeqtt`, `itensorlike`, `partitionedtt`, `quanticstci`, `simplett`, `tensorci`, `treeaci`, `treetci`, `treetn` |
 | Hosted workspace test job | `cargo nextest run --locked --cargo-profile ci --workspace --timings -v` (`.github/workflows/CI_rs.yml`, "Run workspace tests") |
-| Hosted coverage job (HDF5-excluded) | `cargo llvm-cov nextest --locked --release --no-clean --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json` (same workflow) |
+| Hosted coverage job (HDF5-excluded) | `cargo llvm-cov nextest --locked --cargo-profile coverage --no-clean --workspace --exclude tensor4all-hdf5 --json --output-path coverage.json` (same workflow) |
 
 Two upstream facts constrain B1 and are recorded here so the dependency is
 explicit rather than discovered mid-implementation:
@@ -49,13 +58,13 @@ explicit rather than discovered mid-implementation:
    scheduling claim on tenferro-rs #1945 (holdable CPU/CUDA sessions), which is
    open and says it "is not scheduled work and does not block any current PR".
 
-Consequently #859's long-term `held Session` contract — a `!Send + !Sync`
-session object that outlives a callback and keeps admission/resources on the
-opening thread — is **not implementable** at this pin. B1 can be delivered only
-as the new frontend's *value/operation* surface over the existing borrowed
-session, with the held-session lifetime deferred to the upstream U1 unit. The
-issue's own boundary rules do not permit substituting a different session
-lifetime, a global selector, or a second tenferro version to close that gap.
+Consequently, at this pin, #859's long-term `held Session` contract — a
+`!Send + !Sync` session object that outlives a callback and keeps
+admission/resources on the opening thread — was **not implementable**, and B1
+could be delivered only as the new frontend's *value/operation* surface over the
+existing borrowed session. **Superseded 2026-10-21 (tenferro-rs #2206):** no
+held session object is needed. The caller holds the `CpuEngine` (through
+`CpuBackend`) and lends it to `CpuExecutionContext::with_session`.
 
 The pin also predates tenferro-rs #2044 (`CpuExecSession::child_execution()`,
 merged 2026-10-09 as `1dccad7e7`), which #859's CPU child/phase execution and
@@ -141,6 +150,11 @@ APIs, so this is *not* a repository-wide zero-entry claim (see
 
 ### 2.4 Session routing today
 
+> Recorded at the pin in §1. Superseded 2026-10-21 (tenferro-rs #2206): nested
+> entry on the same context is a typed `CpuExecutionContextError::Reentered`, not
+> a panic; `with_session` lends `&mut CpuEngine`; the admission rejection path
+> is gone.
+
 `CpuExecutionContext::with_session` is the single canonical entry:
 
 ```text
@@ -221,7 +235,7 @@ The entry is the existing `CpuExecutionContext` (the `Context` of #859). The
 session surface is:
 
 ```text
-// Held form (needs upstream U1; see §8):
+// Held form (withdrawn 2026-10-21, tenferro-rs #2206; see §8): not implemented.
 impl CpuExecutionContext {
     fn open_session(&self) -> Result<Session<'_>, SessionError>;
 }
@@ -258,7 +272,7 @@ detach.
 | primitive | `axpby`/`scale`/`conj`/`sum`/`outer_product`, `permute`, `reshape`, dense/diagonal construction |
 | einsum | binary `contract`, N-ary `einsum` over owned values and over borrowed `TensorRead` inputs, output-ids and cached plan reuse |
 | linalg | `qr`, `svd`, `full_piv_lu`, `solve`, `triangular_solve`, `src_error_estimate`, `hermitian_eigendecomposition`, `hermitian_exponential_first_column`, `lowest_hermitian_eigenpair` |
-| structured/matrix | `Storage`-level `contract`/`permute`/`axpby`/`to_dense`, `Matrix` `mat_mul`/`batched_mat_mul_same_shape`/`grouped_mat_mul_shared`/`submatrix`/`swap_rows`/`swap_cols`/`transpose` |
+| structured/matrix | `Storage`-level `contract`/`permute`/`axpby`/`to_dense`, `Matrix` `mat_mul`/`batched_mat_mul_same_shape`/`submatrix`/`swap_rows`/`swap_cols`/`transpose` |
 
 Two clarifications the pinned API forces on this table:
 
@@ -302,7 +316,9 @@ the four #859 contracts made mechanical:
 
 `SessionError` distinguishes admission rejection (`SessionEntryError` source),
 nesting, incompatible context/AD identity, and unsupported-route, all *before*
-dispatch or partial output writes. No new process-global default backend, pool or
+dispatch or partial output writes. **Superseded 2026-10-21 (tenferro-rs #2206):**
+admission no longer exists; nesting is `CpuExecutionContextError::Reentered`, and
+the held-session lifetime questions in §5 and §8 are moot. No new process-global default backend, pool or
 cache is introduced by the explicit route; the existing upstream arbitration and
 thread-local reentry guards remain the safety mechanism.
 
@@ -328,7 +344,7 @@ exactly what is delivered, and §5c lists what is not.
 | Primitive routes | `reshape`, `permute`, `sum`, `conj` (allocation-returning) |
 | Einsum routes | `contraction` (binary, by axes), `einsum` (N-ary, by integer labels) and `einsum_reads` (borrowed `TensorRead` operands), evaluated session-direct, all promoting heterogeneous operands to the same common dtype the compatibility frontend uses, plus `contraction_into` writing a caller-provided destination |
 | Linalg routes | `qr`, `svd`, `solve`, `triangular_solve`, `full_piv_lu` (allocation-returning) |
-| Matrix routes | `mat_mul` through the shared `Matrix` container and `grouped_mat_mul_shared`, both available where the compatibility frontend is (`global-defaults`) |
+| Matrix routes | `mat_mul` through the shared `Matrix` container, available where the compatibility frontend is (`global-defaults`) |
 | Shared implementation | the label validation and the axis-to-label construction are one implementation (`src/einsum_ids.rs`) used by both frontends; the evaluation is tenferro-einsum's session-direct `einsum_subscripts`, which compiles no semantic graph and starts no runtime worker |
 | No legacy entry | the module never names `with_default_session`, the default context or the eager runtime; the label helpers live outside the compatibility-only module so the explicit-only build compiles |
 | No eager/AD | the routes reach only concrete `Tensor`/`BackendSession` operations; no `EagerTensor`, semantic node or gradient slot is constructed and no eager owner lock is taken |
@@ -342,14 +358,18 @@ exactly what is delivered, and §5c lists what is not.
 | Read/write/output routes | the read route, the binary output-into route and the N-ary output route (`PreparedEinsum::execute_into`) are delivered |
 | Remaining linalg operations | the Hermitian eigen routes and `src_error_estimate`; the Hermitian routes currently enter the process-global *eager* runtime, so they need the optional AD adapter rather than a concrete route, and `src_error_estimate` is session-free |
 | `Matrix`-level linalg routes | delivered: `solve_matrix`, `triangular_solve_matrix`, `full_piv_lu_matrix`, `qr_backend` and `svd_backend` on the session, through `solve_matrix_in`/`triangular_solve_matrix_in`/`full_piv_lu_matrix_in`/`qr_backend_in`/`svd_backend_in`, sharing the compatibility paths' kernels, conversion and validation |
-| Remaining batched GEMM route | `batched_mat_mul_same_shape` builds its jobs and then enters the compatibility session; `grouped_mat_mul_shared` now has a session entry (`Session::grouped_mat_mul_shared` via `grouped_mat_mul_shared_in`) |
+| Remaining batched GEMM route | `batched_mat_mul_same_shape` builds its jobs and then enters the compatibility session. The grouped facade was deleted: tenferro removed its grouped GEMM (tenferro-rs #2198/#2206), and its two callers are now one tenferro einsum each (`rkb,kc->rcb` in `tensor4all-treeaci` and `ral,al->rl` in `tensor4all-treersi`) |
 | Session-free operations (no explicit route needed) | `scale`, `axpby`, `conj` on the structured paths, the `Storage`-level contraction/permutation kernels, and `Matrix` `submatrix`/`swap_rows`/`swap_cols`/`transpose` are pure host code that names no session, so an explicit caller uses them as they are. `outer_product` is already expressible as `contraction(lhs, &[], rhs, &[])` |
 | Structured representation parity | structured/diagonal storage preservation on the explicit route (dtype promotion is delivered and shared) |
 | Compatibility bridges | `LogicalTensor` for host snapshots, plus `explicit::lift` and `explicit::detach` as the named plain/AD boundary: adoption moves the value into the context's own eager runtime, materialization is a separate named call, and neither is implicit |
-| Private child resources and the backend phase proof | delivered: `HeldSession::phase` / `PhaseLane` lend the session's own pool to a phase scheduler, each lane running this frontend's session view over a private child session; tests cover one lane, one lane per worker, error cancellation observed by a peer, and recovery |
+| Private child resources and the backend phase proof | delivered at the time, then **deleted 2026-10-21** with `HeldSession`/`PhaseLane` (tenferro-rs #2206). The replacement is one caller-held `CpuEngine` per lane (for example `TenferroLanes::new(Vec<CpuEngine>)` in hataori) |
 | Reusable plan surface | delivered as `explicit::PreparedEinsum`: prepare once over borrowed operands, then `execute` or `execute_into` on whichever session the caller holds |
 | Measurements | delivered in section 5c-1: paired dispatch numbers for all three entry routes plus the separately reported bridge cost |
-| A held *object* form | delivered as `explicit::HeldSession`, see section 5d |
+| A held *object* form | delivered as `explicit::HeldSession`, see section 5d; **deleted 2026-10-21** (tenferro-rs #2206) |
+
+*Superseded 2026-10-21:* the rationale below and the clone-based alternative assume
+a clonable backend. `CpuBackend` is not `Clone` now; the callback-scoped entry is
+the only entry, and it is the engine borrow itself.
 
 Why the entry is callback-scoped here, and what the alternatives are: tenferro's held
 session borrows a `&CpuBackend` for the caller's scope (`CpuBackend::open_session(&self)`),
@@ -406,6 +426,13 @@ boundary is specified at stage or batch granularity and why its cost is reported
 separately instead of being counted as free.
 
 ### 5d. The held session form
+
+> **Superseded 2026-10-21 (tenferro-rs #2206).** `HeldSession`, `PhaseLane`, the
+> clone-based handle and admission were deleted. `CpuBackend` owns one
+> `CpuEngine` and is not `Clone`; a caller that needs several calls in one scope
+> holds the engine borrow for the closure (`with_session(|&mut CpuEngine| ..)`),
+> and parallel lanes each hold their own engine. The text below is the record of
+> the design and of its §5c-1 measurements, not guidance.
 
 The route surface above is callback-scoped: `CpuExecutionContext::with_concrete_session`
 owns the backend borrow for the closure. A stage that spans many calls holds
@@ -495,8 +522,8 @@ F2–F5 own.
 
 | #859 requirement | Upstream dependency | State |
 | --- | --- | --- |
-| Held `Session` object, opening-thread admission, fallible close, non-panicking `Drop` | tenferro-rs #1945 unit U1 (explicit-executor CPU kernels → holdable session) | Open design discussion, explicitly not scheduled. tenferro-rs #1938 D12 defers A2 and instructs callers to reuse borrowed sessions. **Blocked, not implementable today.** |
-| CPU child sessions and the phase scheduler | tenferro-rs #2044 `CpuExecSession::child_execution()` | Merged 2026-10-09, **not in the pin of [§1](#1-recorded-baseline)**; needs a pin bump in the owning change. |
+| Held `Session` object, opening-thread admission, fallible close, non-panicking `Drop` | tenferro-rs #1945 unit U1 (explicit-executor CPU kernels → holdable session) | **Withdrawn 2026-10-21:** tenferro-rs #2206 replaced the session model with a caller-held `CpuEngine`, so no held session object is required. The row is kept as the B0 record. |
+| CPU child sessions and the phase scheduler | tenferro-rs #2044 `CpuExecSession::child_execution()` | Merged 2026-10-09, **not in the pin of [§1](#1-recorded-baseline)**. The phase scheduler (`PhaseLane`) was deleted with #2206; lanes now each hold their own engine. |
 | Real pending H2D/D2H, stream handoff, retirement, overlap | tenferro-rs #2009 / #1885, tensor4all/cubecl 0.10.2 | Partially reduced (borrowed upload 3→1 host copy, download without the extra copy); pinned staging and async transfer remain open. |
 | Explicit AD surface (B3) | tenferro-rs U2-AD | Not started. |
 

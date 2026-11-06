@@ -49,6 +49,7 @@ fn test_contraction_options_default() {
     assert!(opts.convergence_tol.is_none());
     assert!(opts.dense_reference_limit.is_none());
     assert!(opts.mismatched_topology_dense_limit.is_none());
+    assert!(opts.initial_max_bond_dim.is_none());
 }
 
 #[test]
@@ -1956,4 +1957,217 @@ fn test_naive_contraction_scalar_result() {
         "scalar contraction expected 6.0, got {}",
         val
     );
+}
+
+fn cpu_context() -> tensor4all_tensorbackend::ExecutionContext {
+    tensor4all_tensorbackend::ExecutionContext::Cpu(std::sync::Arc::new(
+        tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+            tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+        ),
+    ))
+}
+
+/// Two random chains of `n` nodes with bonds `chi`, sharing one summed leg per node and each with one free leg;
+/// `build` makes each tensor from its indices and column-major values.
+fn make_random_chain_pair_with(
+    n: usize,
+    chi: usize,
+    seed: u64,
+    build: &impl Fn(Vec<DynIndex>, Vec<f64>) -> IdxTensor,
+) -> (TreeTN<IdxTensor, usize>, TreeTN<IdxTensor, usize>) {
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let shared: Vec<DynIndex> = (0..n).map(|_| DynIndex::new_dyn(2)).collect();
+    let mut chain = || {
+        let bonds: Vec<DynIndex> = (1..n).map(|_| DynIndex::new_dyn(chi)).collect();
+        let tensors = (0..n)
+            .map(|i| {
+                let mut indices = vec![shared[i].clone(), DynIndex::new_dyn(2)];
+                if i > 0 {
+                    indices.push(bonds[i - 1].clone());
+                }
+                if i + 1 < n {
+                    indices.push(bonds[i].clone());
+                }
+                let len = indices.iter().map(IndexLike::dim).product::<usize>();
+                let values = (0..len)
+                    .map(|_| rng.random_range(-1.0_f64..1.0_f64))
+                    .collect();
+                build(indices, values)
+            })
+            .collect();
+        TreeTN::<IdxTensor, usize>::from_tensors(tensors, (0..n).collect()).unwrap()
+    };
+    (chain(), chain())
+}
+
+fn make_random_chain_pair(
+    n: usize,
+    chi: usize,
+    seed: u64,
+) -> (TreeTN<IdxTensor, usize>, TreeTN<IdxTensor, usize>) {
+    make_random_chain_pair_with(n, chi, seed, &|indices, values| {
+        IdxTensor::from_dense(indices, values).unwrap()
+    })
+}
+
+fn all_bonds_at_most(tn: &TreeTN<IdxTensor, usize>, cap: usize) -> bool {
+    tn.link_dims().into_iter().all(|d| d <= cap)
+}
+
+#[test]
+fn test_contract_fit_honors_initial_max_bond_dim() {
+    let (a, b) = make_random_chain_pair(4, 3, 7);
+    let center = 3usize;
+    let fit = || ContractionOptions::fit().with_svd_policy(SvdTruncationPolicy::new(1e-12));
+
+    // zero sweeps return the start: the full zip-up exceeds bond 1, the capped start does not
+    let full_start = contract(&a, &b, &center, fit().with_nfullsweeps(0)).unwrap();
+    assert!(!all_bonds_at_most(&full_start, 1));
+    let capped_start = contract(
+        &a,
+        &b,
+        &center,
+        fit().with_nfullsweeps(0).with_initial_max_bond_dim(1),
+    )
+    .unwrap();
+    assert!(all_bonds_at_most(&capped_start, 1));
+
+    // with a tolerance, two sweeps from the rank-1 start recover the exact product
+    let exact = a.contract_naive(&b).unwrap();
+    let fitted = contract(
+        &a,
+        &b,
+        &center,
+        fit().with_nfullsweeps(2).with_initial_max_bond_dim(1),
+    )
+    .unwrap()
+    .to_dense()
+    .unwrap();
+    let error = exact.distance(&fitted).unwrap();
+    assert!(error <= 1e-10, "relative error {error:e}");
+
+    // the zip-up method ignores the option
+    let zipup = contract(
+        &a,
+        &b,
+        &center,
+        ContractionOptions::zipup().with_initial_max_bond_dim(1),
+    )
+    .unwrap();
+    assert!(!all_bonds_at_most(&zipup, 1));
+}
+
+#[test]
+fn test_fit_start_cap_is_bounded_by_max_bond_dim_and_kept_without_truncation() {
+    let (a, b) = make_random_chain_pair(4, 3, 9);
+    let center = 3usize;
+    // the start cap never exceeds max_bond_dim
+    let start = contract(
+        &a,
+        &b,
+        &center,
+        ContractionOptions::fit()
+            .with_nfullsweeps(0)
+            .with_max_bond_dim(1)
+            .with_initial_max_bond_dim(2),
+    )
+    .unwrap();
+    assert!(all_bonds_at_most(&start, 1));
+    // without svd_policy or max_bond_dim, the sweeps keep the start's bond dimensions
+    let kept = contract(
+        &a,
+        &b,
+        &center,
+        ContractionOptions::fit()
+            .with_nfullsweeps(2)
+            .with_initial_max_bond_dim(1),
+    )
+    .unwrap();
+    assert!(all_bonds_at_most(&kept, 1));
+}
+
+#[test]
+fn test_initial_max_bond_dim_on_direct_and_context_entries() {
+    let (a, b) = make_random_chain_pair(3, 3, 11);
+    let center = 2usize;
+    let start = crate::treetn::contract_fit(
+        &a,
+        &b,
+        &center,
+        FitContractionOptions::new(0).with_initial_max_bond_dim(1),
+    )
+    .unwrap();
+    assert!(all_bonds_at_most(&start, 1));
+    let err = crate::treetn::contract_fit(
+        &a,
+        &b,
+        &center,
+        FitContractionOptions::new(1).with_initial_max_bond_dim(0),
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("initial_max_bond_dim"));
+
+    let context = cpu_context();
+    let (a, b) = make_random_chain_pair_with(3, 3, 11, &|indices, values| {
+        IdxTensor::from_dense_in(&context, indices, values).unwrap()
+    });
+    let start = crate::treetn::contract_fit_in(
+        &a,
+        &b,
+        &center,
+        FitContractionOptions::new(0).with_initial_max_bond_dim(1),
+        &context,
+    )
+    .unwrap();
+    assert!(all_bonds_at_most(&start, 1));
+    let start = contract_in(
+        &a,
+        &b,
+        &center,
+        ContractionOptions::fit()
+            .with_nfullsweeps(0)
+            .with_initial_max_bond_dim(1),
+        &context,
+    )
+    .unwrap();
+    assert!(all_bonds_at_most(&start, 1));
+    let err = contract_in(
+        &a,
+        &b,
+        &center,
+        ContractionOptions::fit().with_initial_max_bond_dim(0),
+        &context,
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("initial_max_bond_dim"));
+}
+
+#[test]
+fn test_every_entry_rejects_zero_initial_max_bond_dim() {
+    let (a, b) = make_random_chain_pair(2, 2, 1);
+    let center = 1usize;
+    let err = contract(
+        &a,
+        &b,
+        &center,
+        ContractionOptions::fit().with_initial_max_bond_dim(0),
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("initial_max_bond_dim"));
+
+    let src = || {
+        ContractionOptions::src()
+            .with_max_bond_dim(4)
+            .with_initial_max_bond_dim(0)
+    };
+    let mut rng = ChaCha8Rng::seed_from_u64(3);
+    let err = contract_src_with_rng(&a, &b, &center, src(), &mut rng).unwrap_err();
+    assert!(format!("{err:#}").contains("initial_max_bond_dim"));
+
+    let context = cpu_context();
+    let (a, b) = make_random_chain_pair_with(2, 2, 1, &|indices, values| {
+        IdxTensor::from_dense_in(&context, indices, values).unwrap()
+    });
+    let err = contract_src_with_rng_in(&a, &b, &center, src(), &mut rng, &context).unwrap_err();
+    assert!(format!("{err:#}").contains("initial_max_bond_dim"));
 }

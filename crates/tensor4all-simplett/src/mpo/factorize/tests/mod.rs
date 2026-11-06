@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn test_factorize_svd() {
-    let mut matrix: Matrix2<f64> = matrix2_zeros(4, 3);
+    let mut matrix: Matrix2<f64> = matrix2_zeros(4, 3).unwrap();
     for i in 0..4 {
         for j in 0..3 {
             matrix[[i, j]] = (i * 3 + j + 1) as f64;
@@ -14,7 +14,6 @@ fn test_factorize_svd() {
         tolerance: 1e-12,
         max_bond_dim: Some(10),
         left_orthogonal: true,
-        ..Default::default()
     };
 
     let result = factorize(&matrix, &options).unwrap();
@@ -45,7 +44,7 @@ fn test_factorize_svd() {
 
 #[test]
 fn test_factorize_lu() {
-    let mut matrix: Matrix2<f64> = matrix2_zeros(4, 3);
+    let mut matrix: Matrix2<f64> = matrix2_zeros(4, 3).unwrap();
     for i in 0..4 {
         for j in 0..3 {
             matrix[[i, j]] = (i * 3 + j) as f64;
@@ -57,7 +56,6 @@ fn test_factorize_lu() {
         tolerance: 1e-12,
         max_bond_dim: Some(10),
         left_orthogonal: true,
-        ..Default::default()
     };
 
     let result = factorize_lu(&matrix, &options).unwrap();
@@ -68,7 +66,7 @@ fn test_factorize_lu() {
 #[test]
 fn test_factorize_with_truncation() {
     // Create a rank-2 matrix
-    let mut matrix: Matrix2<f64> = matrix2_zeros(4, 4);
+    let mut matrix: Matrix2<f64> = matrix2_zeros(4, 4).unwrap();
     for i in 0..4 {
         for j in 0..4 {
             // Rank-2: outer product of [1,2,3,4] and [1,1,1,1] + [1,1,1,1] and [1,2,3,4]
@@ -81,7 +79,6 @@ fn test_factorize_with_truncation() {
         tolerance: 1e-10,
         max_bond_dim: Some(2),
         left_orthogonal: true,
-        ..Default::default()
     };
 
     let result = factorize(&matrix, &options).unwrap();
@@ -104,7 +101,7 @@ fn decaying_spectrum_matrix(scale: f64) -> Matrix2<f64> {
             * (std::f64::consts::PI * ((i + 1) * (k + 1)) as f64 / (n as f64 + 1.0)).sin()
     };
 
-    let mut matrix: Matrix2<f64> = matrix2_zeros(n, n);
+    let mut matrix: Matrix2<f64> = matrix2_zeros(n, n).unwrap();
     for i in 0..n {
         for j in 0..n {
             let mut value = 0.0;
@@ -124,7 +121,6 @@ fn test_factorize_svd_truncation_is_scale_invariant() {
         tolerance: 1e-7,
         max_bond_dim: Some(10),
         left_orthogonal: true,
-        ..Default::default()
     };
 
     let unscaled = factorize(&decaying_spectrum_matrix(1.0), &options).unwrap();
@@ -146,7 +142,7 @@ fn test_factorize_svd_truncation_is_scale_invariant() {
 
 #[test]
 fn test_factorize_svd_zero_matrix_returns_rank_one() {
-    let matrix: Matrix2<f64> = matrix2_zeros(3, 4);
+    let matrix: Matrix2<f64> = matrix2_zeros(3, 4).unwrap();
     let options = FactorizeOptions {
         method: FactorizeMethod::SVD,
         tolerance: 1e-10,
@@ -168,7 +164,7 @@ fn test_factorize_svd_zero_matrix_returns_rank_one() {
 fn test_factorize_svd_complex64() {
     use num_complex::Complex64;
 
-    let mut matrix: Matrix2<Complex64> = matrix2_zeros(4, 3);
+    let mut matrix: Matrix2<Complex64> = matrix2_zeros(4, 3).unwrap();
     for i in 0..4 {
         for j in 0..3 {
             // Create complex values with both real and imaginary parts
@@ -183,7 +179,6 @@ fn test_factorize_svd_complex64() {
         tolerance: 1e-12,
         max_bond_dim: Some(10),
         left_orthogonal: true,
-        ..Default::default()
     };
 
     let result = factorize(&matrix, &options).unwrap();
@@ -210,4 +205,42 @@ fn test_factorize_svd_complex64() {
         "Reconstruction error too large: {}",
         max_error
     );
+}
+
+/// Regression for #1028: MPO SVD factorization keeps a larger singular value that the backend
+/// returns after smaller ones, together with its vectors.
+#[test]
+fn factorize_svd_keeps_a_larger_value_that_follows_a_smaller_one() {
+    use num_complex::Complex64;
+
+    let n = 128;
+    let mut matrix: Matrix2<Complex64> = matrix2_zeros(n, n).unwrap();
+    for (row, col, value) in crate::compression::tests::unsorted_spectrum_entries() {
+        matrix[[row, col]] = value;
+    }
+    for left_orthogonal in [true, false] {
+        let options = FactorizeOptions {
+            method: FactorizeMethod::SVD,
+            tolerance: 1e-12,
+            max_bond_dim: None,
+            left_orthogonal,
+        };
+        let result = factorize(&matrix, &options).unwrap();
+        assert_eq!(result.rank, 2, "left_orthogonal = {left_orthogonal}");
+        let mut error = 0.0;
+        for i in 0..n {
+            for j in 0..n {
+                let mut value = Complex64::new(0.0, 0.0);
+                for k in 0..result.rank {
+                    value += result.left[[i, k]] * result.right[[k, j]];
+                }
+                error += (value - matrix[[i, j]]).norm_sqr();
+            }
+        }
+        assert!(
+            error.sqrt() <= 1e-12 * 0.6,
+            "left_orthogonal = {left_orthogonal}: reconstruction error {:e}",
+            error.sqrt()
+        );
+    }
 }

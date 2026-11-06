@@ -23,6 +23,9 @@ mod getting_started {}
 #[doc = include_str!("../../book/src/guides/tensor-basics.md")]
 mod tensor_basics {}
 
+#[doc = concat!("```rust\n", include_str!("../../../crates/tensor4all-treetn/examples/randomized_factorization.rs"), "\n```")]
+mod randomized_factorization {}
+
 #[doc = include_str!("../../book/src/guides/tensor-train.md")]
 mod tensor_train {}
 
@@ -48,18 +51,9 @@ mod quantics {}
 mod qft {}
 
 #[cfg(test)]
-mod tests {
-    use super::BOOK_INTRODUCTION;
+mod tests;
 
-    #[test]
-    fn introduction_uses_repo_relative_rustdoc_link() {
-        assert!(
-            BOOK_INTRODUCTION.contains("[rustdoc API reference](rustdoc/tensor4all_core/)"),
-            "top-level mdBook page must link to rustdoc within the published /tensor4all-rs/ site"
-        );
-        assert!(
-            !BOOK_INTRODUCTION.contains("[rustdoc API reference](../rustdoc/tensor4all_core/)"),
-            "top-level mdBook page must not climb above the published site root"
-        );
-    }
-}
+// The RSI guide includes this exact source via mdBook preprocessing. Embed
+// the source here so workspace doctests exercise it without that preprocessor.
+#[doc = concat!("```rust\n", include_str!("../../../crates/tensor4all-treersi/examples/validated_product.rs"), "\n``` ")]
+mod tree_rsi {}

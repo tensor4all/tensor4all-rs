@@ -37,7 +37,7 @@
 //! assert!((value - 1.0).abs() < 1e-12);
 //!
 //! // 3. Sum over all indices: 1.0 * 2 * 3 * 2 = 12.0
-//! let sum = tt.sum();
+//! let sum = tt.sum().unwrap();
 //! assert!((sum - 12.0).abs() < 1e-10);
 //!
 //! // 4. Compress to reduce bond dimensions
@@ -90,8 +90,5 @@ pub use tensortrain::SimpleTensorTrain;
 /// ```
 pub use tenferro_tensor::TypedTensor;
 pub use traits::{AbstractTensorTrain, TTScalar};
-pub use types::{
-    tensor3_from_data, tensor3_zeros, try_tensor3_zeros, LocalIndex, MultiIndex, Tensor3,
-    Tensor3Ops,
-};
+pub use types::{tensor3_from_data, tensor3_zeros, LocalIndex, MultiIndex, Tensor3, Tensor3Ops};
 pub use vidal::{DiagMatrix, InverseTensorTrain, VidalTensorTrain};

@@ -25,6 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::time::{Duration, Instant};
 
+use super::eager_session::{with_eager_session, with_engine};
 use anyhow::Result;
 use petgraph::algo::connected_components;
 use petgraph::prelude::*;
@@ -513,9 +514,8 @@ impl PairwiseContractionOptions {
 /// components is intentional.
 /// # Errors
 ///
-/// Returns an error when the network is disconnected (a disconnected-network
-/// failure), when indices are incompatible (a shape or index mismatch), or
-/// when the contraction reports a failure (a backend failure).
+/// Returns [`IdxTensorError::Operation`] when the network is disconnected,
+/// when indices do not match, or when the backend contraction fails.
 ///
 pub fn contract(tensors: &[&IdxTensor]) -> std::result::Result<IdxTensor, IdxTensorError> {
     contract_with_options(tensors, ContractionOptions::new())
@@ -524,9 +524,8 @@ pub fn contract(tensors: &[&IdxTensor]) -> std::result::Result<IdxTensor, IdxTen
 /// Contract a connected tensor network with advanced options.
 /// # Errors
 ///
-/// Returns an error when the network is disconnected (a disconnected-network
-/// failure), when indices are incompatible (a shape or index mismatch), or
-/// when the contraction reports a failure (a backend failure).
+/// Returns [`IdxTensorError::Operation`] when the network is disconnected,
+/// when indices do not match, or when the backend contraction fails.
 ///
 pub fn contract_with_options(
     tensors: &[&IdxTensor],
@@ -538,9 +537,8 @@ pub fn contract_with_options(
 /// Contract owned tensors with the default connected-network semantics.
 /// # Errors
 ///
-/// Returns an error when the network is disconnected (a disconnected-network
-/// failure), when indices are incompatible (a shape or index mismatch), or
-/// when the contraction reports a failure (a backend failure).
+/// Returns [`IdxTensorError::Operation`] when the network is disconnected,
+/// when indices do not match, or when the backend contraction fails.
 ///
 pub fn contract_owned(tensors: Vec<IdxTensor>) -> std::result::Result<IdxTensor, IdxTensorError> {
     contract_owned_with_options(tensors, ContractionOptions::new())
@@ -549,9 +547,8 @@ pub fn contract_owned(tensors: Vec<IdxTensor>) -> std::result::Result<IdxTensor,
 /// Contract owned tensors with advanced connected-network options.
 /// # Errors
 ///
-/// Returns an error when the network is disconnected (a disconnected-network
-/// failure), when indices are incompatible (a shape or index mismatch), or
-/// when the contraction reports a failure (a backend failure).
+/// Returns [`IdxTensorError::Operation`] when the network is disconnected,
+/// when indices do not match, or when the backend contraction fails.
 ///
 pub fn contract_owned_with_options(
     tensors: Vec<IdxTensor>,
@@ -576,9 +573,8 @@ pub fn contract_owned_with_options(
 /// paths used by [`crate::TensorContractionLike::contract_pair`].
 /// # Errors
 ///
-/// Returns an error when the pair is disconnected or has incompatible indices
-/// (a shape or index mismatch), or when the contraction reports a failure (a
-/// backend failure).
+/// Returns [`IdxTensorError::Operation`] when the pair has incompatible
+/// indices or when the backend contraction fails.
 ///
 pub fn contract_pair(
     lhs: &IdxTensor,
@@ -597,9 +593,8 @@ pub fn contract_pair(
 ///
 /// # Errors
 ///
-/// Returns an error when the pair is disconnected or has incompatible indices
-/// (a shape or index mismatch), or when the contraction reports a failure (a
-/// backend failure).
+/// Returns [`IdxTensorError::Operation`] when the pair has incompatible
+/// indices or when the backend contraction fails.
 ///
 /// # Examples
 ///
@@ -641,9 +636,8 @@ pub fn contract_pair_with_operand_options(
 /// Contract two tensors with explicit contraction options.
 /// # Errors
 ///
-/// Returns an error when the pair is disconnected or has incompatible indices
-/// (a shape or index mismatch), or when the contraction reports a failure (a
-/// backend failure).
+/// Returns [`IdxTensorError::Operation`] when the pair has incompatible
+/// indices or when the backend contraction fails.
 ///
 pub fn contract_pair_with_options(
     lhs: &IdxTensor,
@@ -656,8 +650,8 @@ pub fn contract_pair_with_options(
 /// Contract two tensors along explicitly specified index pairs.
 /// # Errors
 ///
-/// Returns an error when the contracted indices are incompatible (a shape or
-/// index mismatch) or the contraction reports a failure (a backend failure).
+/// Returns [`IdxTensorError::Operation`] when the contracted indices do not
+/// match or when the backend contraction fails.
 ///
 pub fn tensordot(
     lhs: &IdxTensor,
@@ -674,9 +668,8 @@ pub fn tensordot(
 /// structured storage is preserved when the operand layouts allow it.
 /// # Errors
 ///
-/// Returns an error when the two tensors share contractable indices (a
-/// shared-index mismatch) or the construction reports a failure (a backend
-/// failure).
+/// Returns [`IdxTensorError::Operation`] when the two tensors share a
+/// contractable index or when the backend construction fails.
 ///
 pub fn outer_product(
     lhs: &IdxTensor,
@@ -741,7 +734,12 @@ fn contract_owned_with_options_impl(
                 .enumerate()
                 .map(|(tensor_idx, tensor)| {
                     Ok((
-                        tensor.as_inner()?.duplicate_value()?,
+                        {
+                            let inner = tensor.as_inner()?;
+                            with_engine(inner.runtime(), None, |engine| {
+                                inner.duplicate_value(engine)
+                            })?
+                        },
                         plan.input_ids[tensor_idx].clone(),
                     ))
                 })
@@ -1071,8 +1069,9 @@ fn execute_contraction_plan(
             .first()
             .map(|operand| operand.runtime())
             .ok_or_else(|| anyhow::anyhow!("No tensors to contract"))?;
-        let result = runtime
-            .with_eager_session(|session| session.einsum_subscripts(&operands, &subscripts))?;
+        let result = with_eager_session(runtime, None, |session| {
+            session.einsum_subscripts(&operands, &subscripts)
+        })?;
         return IdxTensor::from_inner_with_axis_classes(
             plan.result_indices.clone(),
             result,
@@ -1120,8 +1119,9 @@ fn execute_contraction_plan(
             .first()
             .map(|operand| operand.runtime())
             .ok_or_else(|| anyhow::anyhow!("No tensors to contract"))?;
-        let result = runtime
-            .with_eager_session(|session| session.einsum_subscripts(&operands, &subscripts))?;
+        let result = with_eager_session(runtime, None, |session| {
+            session.einsum_subscripts(&operands, &subscripts)
+        })?;
         return IdxTensor::from_inner_with_axis_classes(
             plan.result_indices.clone(),
             result,
@@ -1209,14 +1209,43 @@ fn build_einsum_subscripts_from_usize_ids(
 
 /// A contraction plan with internal labels and result ordering.
 #[derive(Debug, Clone)]
-struct ContractionPlan {
-    input_ids: Vec<Vec<usize>>,
-    output_ids: Vec<usize>,
-    result_indices: Vec<DynIndex>,
-    result_axis_classes: Vec<usize>,
+pub(crate) struct ContractionPlan {
+    pub(crate) input_ids: Vec<Vec<usize>>,
+    pub(crate) output_ids: Vec<usize>,
+    pub(crate) result_indices: Vec<DynIndex>,
+    pub(crate) result_axis_classes: Vec<usize>,
 }
 
-fn build_contraction_plan(
+/// Plan an N-ary contraction for the explicit-session route.
+///
+/// Runs the compatibility route's own validation (retained-index existence,
+/// connectivity, empty input) and planning, so a session contraction has the
+/// same index semantics and refuses the same networks. A single operand needs
+/// no plan; the caller returns its clone exactly as the compatibility route
+/// does.
+pub(crate) fn session_contraction_plan(
+    tensors: &[&IdxTensor],
+    options: ContractionOptions<'_>,
+) -> Result<Option<ContractionPlan>> {
+    if tensors.is_empty() {
+        return Err(anyhow::anyhow!("No tensors to contract"));
+    }
+    validate_retained_indices_exist(tensors, options.retain_indices)?;
+    if tensors.len() == 1 {
+        return Ok(None);
+    }
+    let components =
+        find_tensor_connected_components_with_retained(tensors, options.retain_indices);
+    if components.len() > 1 {
+        return Err(anyhow::anyhow!(
+            "Disconnected tensor network: {} components found",
+            components.len()
+        ));
+    }
+    build_contraction_plan(tensors, options).map(Some)
+}
+
+pub(crate) fn build_contraction_plan(
     tensors: &[&IdxTensor],
     options: ContractionOptions<'_>,
 ) -> Result<ContractionPlan> {
@@ -1493,7 +1522,7 @@ fn has_contractable_indices(a: &IdxTensor, b: &IdxTensor) -> bool {
 /// Find connected components of tensors based on contractable indices.
 ///
 /// Uses petgraph for O(V+E) connected component detection.
-#[allow(dead_code)]
+#[cfg(test)]
 fn find_tensor_connected_components(tensors: &[&IdxTensor]) -> Vec<Vec<usize>> {
     find_tensor_connected_components_with_retained(tensors, &[])
 }

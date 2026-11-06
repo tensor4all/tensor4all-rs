@@ -4,8 +4,12 @@ This directory contains benchmark code for comparing Rust and Julia implementati
 
 ## Structure
 
-- `rust/`: shared Rust benchmark bodies. Prefer putting reusable benchmark
-  source here, then include it from a thin crate example.
+- `rust/`: the `tensor4all-benchmarks` package. Every workspace Rust performance
+  harness is an `[[example]]` target of that package; add new harnesses there
+  as examples instead of including them from a library crate's `examples/`.
+  Two features are opt-in: `diagnostics` (TreeACI branch counters, used by
+  `benchmark_branch_cost`) and `hdf5` (`inspect_mps_inputs`). Every other
+  harness runs with the default feature set.
 - `julia/`: Julia benchmark code using `ITensors.jl`, `ITensorMPS.jl`, or
   `AlternatingCrossInterpolation.jl`.
 - `results/`: saved benchmark commands and representative local outputs.
@@ -18,7 +22,37 @@ runner body into `benchmarks/rust/` and keep the crate-local entry point thin.
 
 ## Running Benchmarks
 
+A tensor4all-built CPU pool takes its worker count from
+`set_default_cpu_threads` if the caller set it, else Rayon's own default
+(`RAYON_NUM_THREADS`, see Rayon's documentation), which is evaluated under the
+main thread's allowed CPU mask and may be lower than that mask's CPU count
+because of cgroup quotas. The `RAYON_NUM_THREADS=1` commands below therefore pin
+the pool again. The pool's workers are confined to the main thread's allowed
+CPU set snapshot on Linux; inline operations and scheduler lane threads are
+not moved.
+
+The default CPU backend is faer on Linux and Windows and Apple Accelerate on
+macOS. Accelerate schedules its own threads, outside the tensor4all pool, and
+takes its thread limit from `VECLIB_MAXIMUM_THREADS`, so single-thread runs on
+macOS also set `VECLIB_MAXIMUM_THREADS=1`.
+
 ### Rust
+
+#### Fixed-rank RSVD and Lanczos (#1108)
+
+`benchmark_randomized_factorization` diagnoses Fit/Zipup costs; its
+`--decompositions` mode compares SVD, RSVD and the existing faer Lanczos driver
+on identical column-major inputs at matched accuracy. It prints the GEMM/QR
+share of RSVD's total time. This is an internal algorithm comparison.
+
+Build the reference with `python3 scripts/build-rsvd-reference.py`. It identifies
+the exact transitive faer artifacts from Cargo JSON and compiles a standalone
+reference executable, adding no library dependency. Set `T4A_LANCZOS_REFERENCE`
+to the printed binary, pin Rayon/BLAS thread variables and CPU affinity as above,
+then run `benchmark_randomized_factorization --decompositions`. Its
+`--contractions` mode compares Fit/Zipup against small bounded dense oracles.
+See the [experiment summary](../docs/experiments/2026-11-03-randomized-factorization.md)
+for results, archived protocols, and the limits of these diagnostics.
 
 #### Merge-refine schedule (#752)
 
@@ -28,13 +62,12 @@ complete transform to the whole input at once. It records the schedule's structu
 counters (applications, additions, projections, compressions, per-level items,
 refinement stops), the retained and transient ranks, stored parameters, elapsed
 time, the measured bound, and the deviation from the dense exact trajectory. The
-body lives in `rust/benchmark_merge_refine.rs` and is included by
-`crates/tensor4all-partitionedtreetn/examples/benchmark_merge_refine.rs`.
+body lives in `rust/benchmark_merge_refine.rs`.
 
 ```bash
 T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
-  cargo build --release -p tensor4all-partitionedtreetn --example benchmark_merge_refine
-RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  cargo build --release -p tensor4all-benchmarks --example benchmark_merge_refine
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_merge_refine
 ```
 
@@ -55,15 +88,16 @@ physical dimensions and are excluded from the hub fit.
 
 Build release binaries at the baseline and candidate revisions with the same
 benchmark source and lockfile. The benchmark lives in
-`rust/benchmark_treeaci_branch_cost.rs`, included by the TreeACI example. Add
-the workspace `serde_json` dev-dependency when using a baseline predating this
-example. Supply each revision via `T4A_BENCH_GIT_COMMIT` at build time, and keep
+`rust/benchmark_treeaci_branch_cost.rs`; the `diagnostics` feature of
+`tensor4all-benchmarks` enables the TreeACI branch counters, so a baseline
+predating the counters builds without it. Supply each revision via
+`T4A_BENCH_GIT_COMMIT` at build time, and keep
 each executable in a distinct path. First measure noise by passing the same
 feature-disabled baseline binary as both sides:
 
 ```bash
 T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
-  cargo build --release -p tensor4all-treeaci --example benchmark_branch_cost
+  cargo build --release -p tensor4all-benchmarks --example benchmark_branch_cost
 python3 scripts/run-treeaci-branch-cost.py \
   --baseline /path/to/baseline --candidate /path/to/baseline \
   --baseline-commit BASELINE_HASH --candidate-commit BASELINE_HASH \
@@ -127,8 +161,7 @@ spectral function `eta / ((e - mu)^2 + eta^2)` of a three-dimensional
 tight-binding band `e = -2 (cos 2 pi x + cos 2 pi y + cos 2 pi z)` on `bits`
 quantics bits per variable, on an interleaved chain (`chain`) or on a tree whose
 site-free root of degree three carries one arm per variable (`tree`). The
-shared body is in `rust/benchmark_tree_patch_representation.rs` and the crate
-example is a thin include. Modes:
+body is `rust/benchmark_tree_patch_representation.rs`. Modes:
 
 - `calibrate <chain|tree> <bits> <eta> <cap>`: one monolithic TreeTCI run, to
   find parameters whose unpatched rank is realistic;
@@ -154,10 +187,10 @@ agree; and the results of `truncate` and `add` are compared the same way.
 
 ```bash
 T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
-  cargo build --release -p tensor4all-partitionedtreetn \
+  cargo build --release -p tensor4all-benchmarks \
     --example benchmark_tree_patch_representation
 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
-MKL_NUM_THREADS=1 BLAS_NUM_THREADS=1 \
+MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 BLAS_NUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_tree_patch_representation \
     measure chain 12 1.2 128 run-a
 ```
@@ -174,11 +207,10 @@ runner has been committed yet (M4 is deferred; see the roadmap).
 chosen order and runs one uncapped TreeTCI per resulting patch, on chains and
 branched trees. It is an exploratory study, not a run of the adaptive pQTCI
 driver and not a comparison of split selectors. The source lives in
-`rust/benchmark_m5_fixed_depth_partition.rs`, included by the
-PartitionedTreeTN example of the same name.
+`rust/benchmark_m5_fixed_depth_partition.rs`.
 
 ```bash
-cargo run --release -p tensor4all-partitionedtreetn \
+cargo run --release -p tensor4all-benchmarks \
   --example benchmark_m5_fixed_depth_partition -- \
   ridge tree 8 0.03 0,1,2,3,4,5,6 msb 16 20
 ```
@@ -197,7 +229,7 @@ the quantities that must be identical between two builds for the timings to be
 compared at matched accuracy: function evaluations, rank and error histories
 (error bit patterns), a fingerprint of every pivot set of the run, and the
 sampled error of the result on 2000 `ChaCha8Rng` points. The body lives in
-`rust/benchmark_treetci_global_search.rs`, included by the TreeTCI example.
+`rust/benchmark_treetci_global_search.rs`.
 Build it at the baseline and candidate revisions and keep the binaries apart:
 
 For correctness repairs that change the search algorithm, trajectories may
@@ -208,8 +240,8 @@ uses this protocol; it does not attribute timing differences solely to readout.
 
 ```bash
 T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
-  cargo build --release -p tensor4all-treetci --example benchmark_global_search
-RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+  cargo build --release -p tensor4all-benchmarks --example benchmark_global_search
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_global_search [case]
 ```
 
@@ -230,10 +262,13 @@ materialization and cache drop. See the
 correctness checks, confidence intervals and acceptance gates.
 
 ```bash
-cargo build --release -p tensor4all-treetci --features tensor4all-core/default --example benchmark_memo
-RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+cargo build --release -p tensor4all-benchmarks --example benchmark_memo
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_memo memo
 ```
+
+The benchmark package depends on `tensor4all-core` with its default features, so
+the former `--features tensor4all-core/default` is implied by every target here.
 
 The [2026-10-09 scalar frame-builder report](results/2026-10-09-scalar-frame-batch-layout.md)
 uses the same 120-case protocol for batch-local axis metadata reuse (#686).
@@ -252,7 +287,7 @@ product perform different final work even when they return identical values.
 
 ```bash
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 TENFERRO_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 TENFERRO_NUM_THREADS=1 \
   taskset -c 2 cargo bench -p tensor4all-treetn --bench cached_evaluator -- \
   hiroshi_chain_evaluator_parity --warm-up-time 1 --measurement-time 1
 ```
@@ -269,19 +304,19 @@ alone establishes a correctness bug or resolves the real SGW workload.
 
 ```bash
 cd crates/tensor4all-itensorlike
-cargo run --release --example benchmark_contract
+cargo run --release -p tensor4all-itensorlike --example benchmark_contract
 ```
 
 Projected local-operator apply:
 
 ```bash
-RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_projected_apply --release -- 38 32 32 3 0
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_projected_apply --release -- 38 32 32 3 0
 ```
 
 Prepared local linsolve:
 
 ```bash
-RAYON_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_local_linsolve --release -- 38 32 32 1 10 30 0
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_local_linsolve --release -- 38 32 32 1 10 30 0
 ```
 
 ### SRC performance gates
@@ -298,7 +333,7 @@ T4A_BENCH_GIT_COMMIT=$commit \
 python3 scripts/run-src-benchmark-gates.py \
   --candidate target/release/examples/benchmark_src \
   --candidate-commit "$commit" --suite quick --pairs 1 --reps 1 \
-  --expected-backend tenferro --expected-features tenferro-cpu-faer \
+  --expected-backend tenferro --expected-features tenferro-cpu-platform \
   --output /tmp/src-quick.json
 ```
 
@@ -315,7 +350,10 @@ thread counts are fixed to one. `T4A_BENCH_MAX_INPUT_BYTES` and
 `--max-rss-mib` and `--max-virtual-mib` separately control measured RSS and
 `RLIMIT_AS`.
 
-The required CPU lane uses the default tenferro/faer backend. Provider-injected
+The required CPU lane uses the default CPU backend (faer on Linux). A paired
+comparison against a commit that predates `tenferro-cpu-platform` builds both
+binaries with `--no-default-features --features tenferro-cpu-faer` and passes
+`--expected-features tenferro-cpu-faer`, so both report the same feature set. Provider-injected
 and CUDA SRC are currently unsupported because the high-level SRC API does not
 own an execution context and constructs CPU probes. Do not infer SRC support
 from unrelated backend tests. On a CUDA host, verify the existing resident
@@ -323,7 +361,7 @@ TreeTN contraction lane separately:
 
 ```bash
 cargo test --release -p tensor4all-treetn \
-  --features tenferro-cuda --test cuda_tree_contraction -- --nocapture
+  --features tenferro-cuda --test integration -- --nocapture cuda_tree_contraction::
 ```
 
 Two-site TreeTN DMRG against a Pauli Heisenberg Hamiltonian
@@ -337,7 +375,7 @@ when converting an `OpSum` to a TTN. The Rust benchmark runs all requested
 sweeps, without sweep-to-sweep energy early stopping:
 
 ```bash
-RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_dmrg --release -- 8 4 3
+RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_dmrg --release -- 8 4 3
 ```
 
 Two-site TreeTN TDVP against the same Pauli Heisenberg Hamiltonian on chain and
@@ -350,7 +388,7 @@ control mechanisms. It performs one untimed TDVP warm-up per topology and
 reports runtime plus L2 error against a small dense exact evolution reference:
 
 ```bash
-RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 cargo run -p tensor4all-treetn --example benchmark_tdvp --release -- 8 4 3 0.02
+RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tdvp --release -- 8 4 3 0.02
 ```
 
 Append `all`, `chain`, or `star` to the Rust command to run both topologies or
@@ -359,23 +397,27 @@ only one topology in a fresh process.
 Non-AD local tensor operations:
 
 ```bash
-RAYON_NUM_THREADS=1 cargo run -p tensor4all-core --example benchmark_tensor_ops --release -- 20000 6 2 2 6
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tensor_ops --release -- 20000 6 2 2 6
 ```
 
 TensorTrain-level operations against ITensorMPS:
 
 ```bash
-RAYON_NUM_THREADS=1 cargo run -p tensor4all-itensorlike --example benchmark_tt_ops --release -- --L 32 --zipup-L 10 --chis 4,8,16,32,64
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tt_ops --release -- --L 32 --zipup-L 10 --chis 4,8,16,32,64
 ```
 
-PartitionedTT adaptive patching on a deterministic sum of randomly placed
-anisotropic Gaussians. The benchmark compares the static sequential split order
-against the exact child-parameter-gain ordering at the same global `rtol` and
-`max_bond_dim`, and reports patch count, total TT core parameters, max patch
+TreeTN-aware adaptive patching on a deterministic sum of randomly placed
+anisotropic Gaussians, stored as a two-node chain `TreeTN` and patched with
+`tensor4all-partitionedtreetn::add_with_patching` (the port of the removed
+`tensor4all-partitionedtt` case). The benchmark compares the static sequential
+split order against the exact child-parameter-gain ordering at the same global
+relative tolerance and `max_bond_dim`; the CLI keeps the old `--rtol` meaning
+through the ITensorMPS convention `cutoff = rtol^2` under the default volume
+allocation. It reports patch count, total TreeTN parameter count, max patch
 bond dimension, dense-reference relative error, and best elapsed time:
 
 ```bash
-RAYON_NUM_THREADS=1 cargo run -p tensor4all-partitionedtt --example benchmark_patching --release -- --x 24 --y 16 --components 10 --max-bond-dim 3 --rtol 1e-8 --repeats 3
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_patching --release -- --x 24 --y 16 --components 10 --max-bond-dim 3 --rtol 1e-8 --repeats 3
 ```
 
 ACI elementwise TT chi scaling:
@@ -385,7 +427,7 @@ RAYON_NUM_THREADS=1 cargo bench -p tensor4all-aci --bench elementwise_scaling --
 ```
 
 For Julia parity runs on macOS/Homebrew, build Rust against the same system
-OpenBLAS backend instead of the default faer backend:
+OpenBLAS backend instead of the default backend (Accelerate on macOS):
 
 ```bash
 OPENBLAS_ROOT=${OPENBLAS_ROOT:-$(brew --prefix openblas)}
@@ -393,7 +435,7 @@ env \
 RUSTFLAGS="-L native=${OPENBLAS_ROOT}/lib -l dylib=openblas" \
 DYLD_LIBRARY_PATH="${OPENBLAS_ROOT}/lib:${DYLD_LIBRARY_PATH:-}" \
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
 cargo bench -p tensor4all-aci \
   --no-default-features --features tenferro-system-blas \
   --bench elementwise_scaling -- --sample-size 10
@@ -407,7 +449,7 @@ env \
 RUSTFLAGS="-L native=${OPENBLAS_ROOT}/lib -l dylib=openblas" \
 DYLD_LIBRARY_PATH="${OPENBLAS_ROOT}/lib:${DYLD_LIBRARY_PATH:-}" \
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
 T4A_STEP_TIMING_REPEATS=50 T4A_STEP_TIMING_N_SITES=16 \
 T4A_STEP_TIMING_FIXED_SWEEPS=3 \
 T4A_STEP_TIMING_CHIS=16,32,64,128 \
@@ -434,7 +476,7 @@ env \
 RUSTFLAGS="-L native=${OPENBLAS_ROOT}/lib -l dylib=openblas" \
 DYLD_LIBRARY_PATH="${OPENBLAS_ROOT}/lib:${DYLD_LIBRARY_PATH:-}" \
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
 T4A_MATRIX_LUCI_REPEATS=20 T4A_MATRIX_LUCI_SIZES=16,32,64 \
 cargo test --release -p tensor4all-core \
   --no-default-features --features tenferro-system-blas \
@@ -446,9 +488,9 @@ MatrixLU standalone Hilbert timing:
 ```bash
 env \
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
 T4A_MATRIX_LU_REPEATS=20 T4A_MATRIX_LU_SIZES=16,32,64,128 \
-cargo run --release -p tensor4all-core --example benchmark_matrix_lu
+cargo run --release -p tensor4all-benchmarks --example benchmark_matrix_lu
 ```
 
 MatrixLU itself does not call BLAS, so no system-BLAS feature is required for
@@ -457,7 +499,7 @@ this standalone runner.
 Inspect Julia-dumped local linsolve inputs:
 
 ```bash
-cargo run -p tensor4all-hdf5 --example inspect_mps_inputs --release -- benchmarks/results/local_linsolve_inputs_N38_b32_o32.h5
+cargo run -p tensor4all-benchmarks --features hdf5 --example inspect_mps_inputs --release -- benchmarks/results/local_linsolve_inputs_N38_b32_o32.h5
 ```
 
 ### Julia
@@ -574,8 +616,8 @@ Both benchmarks perform MPO-MPO contraction using zip-up algorithm:
 
 The projected local-operator apply benchmarks isolate the local matvec hot path
 used by two-site TreeTN/ITensor-style local solves. The Rust source of truth is
-`benchmarks/rust/benchmark_projected_apply.rs`, included by the cargo example
-target under `tensor4all-treetn`; the Julia counterpart is
+`benchmarks/rust/benchmark_projected_apply.rs` (the `tensor4all-benchmarks`
+example of the same name); the Julia counterpart is
 `benchmarks/julia/benchmark_projected_apply.jl`.
 
 The prepared local linsolve benchmarks construct the operator, right-hand side,
@@ -595,8 +637,8 @@ The TensorTrain-level operation benchmarks compare tensor4all's
 contraction against ITensorMPS.jl. They use deterministic Complex64 fixtures and
 print CSV-style rows with sample counts, min/median/mean/max milliseconds,
 result max bond dimension, and a checksum. The Rust source of truth is
-`benchmarks/rust/benchmark_tt_ops.rs`, included by
-`tensor4all-itensorlike/examples/benchmark_tt_ops.rs`; the Julia counterpart is
+`benchmarks/rust/benchmark_tt_ops.rs`, the `tensor4all-benchmarks` example of
+the same name; the Julia counterpart is
 `benchmarks/julia/benchmark_tt_ops.jl`.
 
 The ACI elementwise benchmarks compare `tensor4all_aci::elementwise_batched`
@@ -620,8 +662,8 @@ test runs by using the ignored Rust test and the standalone Julia script.
 
 The MatrixLU standalone Hilbert benchmarks isolate `rrlu_mut` and `rrlu`
 without MatrixLUCI factor wrappers. The Rust source of truth is
-`benchmarks/rust/benchmark_matrix_lu.rs`, included by
-`tensor4all-core/examples/benchmark_matrix_lu.rs`; the Julia counterpart is
+`benchmarks/rust/benchmark_matrix_lu.rs`, the `tensor4all-benchmarks` example
+of the same name; the Julia counterpart is
 `benchmarks/julia/benchmark_matrix_lu.jl`.
 
 `dump_local_linsolve_inputs.jl` writes the prepared local operator as

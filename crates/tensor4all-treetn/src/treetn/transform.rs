@@ -25,7 +25,7 @@ type SplitBoundaryIndices<V, TargetV, I> = HashMap<V, HashMap<TargetV, HashSet<I
 ///
 /// For tree graphs, the Steiner tree is the union of unique shortest paths
 /// from one terminal node to every other terminal node.
-fn steiner_tree_indices<T: TensorLike>(
+pub(super) fn steiner_tree_indices<T: TensorLike>(
     graph: &StableGraph<T, T::Index, petgraph::Undirected>,
     terminals: &HashSet<NodeIndex>,
 ) -> HashSet<NodeIndex> {
@@ -46,7 +46,10 @@ fn steiner_tree_indices<T: TensorLike>(
     result
 }
 
-fn canonical_node_pair<NodeName>(left: &NodeName, right: &NodeName) -> (NodeName, NodeName)
+pub(super) fn canonical_node_pair<NodeName>(
+    left: &NodeName,
+    right: &NodeName,
+) -> (NodeName, NodeName)
 where
     NodeName: Clone + Ord,
 {
@@ -57,7 +60,7 @@ where
     }
 }
 
-fn choose_site_free_absorption_target<NodeName>(
+pub(super) fn choose_site_free_absorption_target<NodeName>(
     neighbor_targets: &HashSet<NodeName>,
     target_edges: &HashSet<(NodeName, NodeName)>,
 ) -> Option<NodeName>
@@ -137,8 +140,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, an
-    /// /// SVD or non-convergence failure, or a backend failure).
+    /// Returns [`TreeTNOperationError`] when a target node has no site space or site indices not
+    /// present in `self`, when a current node maps to multiple target nodes or to
+    /// none, or when contracting a node group fails.
     ///
     /// # Example
     /// ```text
@@ -475,8 +479,10 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, an
-    /// /// SVD or non-convergence failure, or a backend failure).
+    /// Returns [`TreeTNOperationError`] when a current or target node has no site space, when a
+    /// target index is absent from the current network, when a target node spans
+    /// multiple current nodes, when a current site index has no target node, or
+    /// when a node split fails.
     ///
     /// # Example
     /// ```text
@@ -662,7 +668,6 @@ where
             })?;
 
             let truncation_options = crate::TruncationOptions {
-                form: options.form,
                 truncation: options.truncation,
             };
 
@@ -909,6 +914,7 @@ where
                 max_bond_dim: None,
                 svd_policy: None,
                 qr_rtol: Some(0.0),
+                ..FactorizeOptions::default()
             };
 
             let factorize_result = remaining_tensor
@@ -983,6 +989,7 @@ where
                 max_bond_dim: None,
                 svd_policy: None,
                 qr_rtol: Some(0.0),
+                ..FactorizeOptions::default()
             };
 
             let factorize_result = remaining_tensor

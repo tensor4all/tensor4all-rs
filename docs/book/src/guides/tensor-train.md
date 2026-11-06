@@ -38,7 +38,7 @@ assert_eq!(tt.link_dims(), vec![1, 1]); // bond dim = 1 for a constant
 
 // Zero TT: all entries are zero
 let zero_tt = SimpleTensorTrain::<f64>::zeros(&[2, 3, 4]);
-assert!((zero_tt.sum()).abs() < 1e-14);
+assert!((zero_tt.sum()?).abs() < 1e-14);
 # Ok(())
 # }
 ```
@@ -54,7 +54,7 @@ let value = tt.evaluate(&[0, 1, 2])?;
 assert!((value - 1.0).abs() < 1e-12);
 
 // Sum over all multi-indices (equivalent to contracting with all-ones vectors)
-let total = tt.sum();
+let total = tt.sum()?;
 // For the constant TT: sum = 1.0 * 2 * 3 * 4 = 24.0
 assert!((total - 24.0).abs() < 1e-10);
 # Ok(())
@@ -128,7 +128,7 @@ for i in 0..4 {
 
 // Step 5: Check norm
 // norm^2 = 3^2 * 4^3 = 576, norm = 24
-assert!((compressed.norm() - 24.0).abs() < 1e-10);
+assert!((compressed.norm()? - 24.0).abs() < 1e-10);
 # Ok(())
 # }
 ```

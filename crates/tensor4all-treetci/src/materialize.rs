@@ -1,4 +1,5 @@
 use crate::error::{Result as TreeTciResult, TreeTciError};
+use crate::evaluation::{BatchExecution, Compatibility, Explicit};
 use crate::{
     batch::{evaluate_points_chunked, EVALUATION_CHUNK_POINTS},
     ncols_2d, GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge,
@@ -9,7 +10,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use tensor4all_core::MatrixLuciScalar as Scalar;
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
-use tensor4all_tensorbackend::FullPivLuScalar;
+use tensor4all_tensorbackend::{CpuExecutionContext, FullPivLuScalar};
+use tensor4all_treetn::interpolation::EvalContext;
 use tensor4all_treetn::TreeTN;
 
 /// Materialize a converged TreeTCI state as a `TreeTN`.
@@ -28,8 +30,10 @@ use tensor4all_treetn::TreeTN;
 /// This function is called internally by [`crossinterpolate2`](crate::crossinterpolate2).
 /// # Errors
 ///
-/// Returns an error when the operation fails (a shape or index mismatch, or
-/// /// a backend failure).
+/// Returns [`TreeTciError::IndexOutOfBounds`] when `center_site` is out of
+/// range, and [`TreeTciError::Operation`] when the evaluator fails, a pivot
+/// set is missing or malformed, a bond rank disagrees across an edge, or a
+/// pivot matrix is singular in a way the solve cannot handle.
 ///
 pub fn to_treetn<T, F>(
     state: &TreeTCI2<T>,
@@ -40,21 +44,58 @@ where
     T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
-    to_treetn_chunked(state, &evaluate, center_site, EVALUATION_CHUNK_POINTS)
+    let mut evaluate = evaluate;
+    let mut execution = Compatibility::new(&mut evaluate);
+    to_treetn_chunked(state, &mut execution, center_site, EVALUATION_CHUNK_POINTS)
+}
+
+/// Materialize a tree tensor network in a caller-owned CPU context.
+///
+/// The same materialization as [`to_treetn`], with the stage's session-bound work - the factor solves that build
+/// each site tensor - running on `context` instead of the process-global CPU context. The caller's evaluator is
+/// unchanged, and this is the entry a consumer that drives the TCI itself uses for its final materialization, as
+/// `tensor4all-quanticstci` does.
+///
+/// # Errors
+///
+/// Returns [`crate::TreeTciError::IndexOutOfBounds`] when `center_site` is out of
+/// range, and [`crate::TreeTciError::Operation`] when the evaluator fails, a pivot
+/// set is missing or malformed, a bond rank disagrees across an edge, a pivot
+/// matrix is singular in a way the solve cannot handle, or the caller's context
+/// refuses a solve.
+pub fn to_treetn_in<T, F>(
+    state: &TreeTCI2<T>,
+    evaluate: F,
+    center_site: Option<usize>,
+    context: &CpuExecutionContext,
+) -> TreeTciResult<TreeTN<IdxTensor, usize>>
+where
+    T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+{
+    let evaluate = evaluate;
+    context
+        .with_concrete_session(|session| {
+            let mut contextual =
+                |batch: GlobalIndexBatch<'_>, _ctx: &mut EvalContext<'_>| evaluate(batch);
+            let mut context = crate::evaluation::serial_context(session);
+            let mut execution = Explicit::new(&mut context, &mut contextual);
+            to_treetn_chunked(state, &mut execution, center_site, EVALUATION_CHUNK_POINTS)
+        })
+        .map_err(|error| TreeTciError::from(anyhow::Error::new(error)))?
 }
 
 /// [`to_treetn`] with an explicit number of points per evaluator call.
 ///
 /// The result does not depend on `chunk_points`; tests use it to check that.
-pub(crate) fn to_treetn_chunked<T, F>(
+pub(crate) fn to_treetn_chunked<T>(
     state: &TreeTCI2<T>,
-    evaluate: &F,
+    execution: &mut dyn BatchExecution<T>,
     center_site: Option<usize>,
     chunk_points: usize,
 ) -> TreeTciResult<TreeTN<IdxTensor, usize>>
 where
     T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     let node_names = (0..state.graph.n_sites()).collect::<Vec<_>>();
     let site_indices = state
@@ -64,7 +105,7 @@ where
         .collect::<Vec<_>>();
     to_named_treetn_chunked(
         state,
-        evaluate,
+        execution,
         center_site,
         &node_names,
         &site_indices,
@@ -82,6 +123,7 @@ where
 /// fastest). An empty list is allowed only for a dimension-one vertex, whose
 /// unit leg is then omitted. Both splits are pure reshapes of the column-major
 /// site tensor.
+#[cfg(test)]
 pub(crate) fn to_named_treetn<T, F, V>(
     state: &TreeTCI2<T>,
     evaluate: F,
@@ -94,9 +136,11 @@ where
     F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     V: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
 {
+    let mut evaluate = evaluate;
+    let mut execution = Compatibility::new(&mut evaluate);
     to_named_treetn_chunked(
         state,
-        &evaluate,
+        &mut execution,
         center_site,
         node_names,
         site_indices,
@@ -104,9 +148,9 @@ where
     )
 }
 
-fn to_named_treetn_chunked<T, F, V>(
+pub(crate) fn to_named_treetn_chunked<T, V>(
     state: &TreeTCI2<T>,
-    evaluate: &F,
+    execution: &mut dyn BatchExecution<T>,
     center_site: Option<usize>,
     node_names: &[V],
     site_indices: &[Vec<DynIndex>],
@@ -114,7 +158,6 @@ fn to_named_treetn_chunked<T, F, V>(
 ) -> TreeTciResult<TreeTN<IdxTensor, V>>
 where
     T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     V: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
 {
     let n_vertices = state.graph.n_sites();
@@ -192,7 +235,7 @@ where
         let out_keys = state.graph.edge_in_ij_keys(site, &out_edges)?;
 
         let data = if out_edges.is_empty() {
-            fill_tensor_values(state, &in_keys, &out_keys, &[site], evaluate, chunk_points)?
+            fill_tensor_values(state, &in_keys, &out_keys, &[site], execution, chunk_points)?
         } else {
             site_tensor_with_parent(
                 state,
@@ -200,7 +243,7 @@ where
                 out_edges[0],
                 &in_keys,
                 &out_keys,
-                evaluate,
+                execution,
                 chunk_points,
             )?
         };
@@ -229,25 +272,32 @@ where
             );
         }
 
-        tensors.push(IdxTensor::from_dense(indices, data)?);
+        // Publish compact host storage instead of adopting an eager value from
+        // the process-global runtime: materialization may run while the caller
+        // owns an explicit session, and the compact representation keeps every
+        // later indexed operation runtime-free.
+        tensors.push(IdxTensor::from_dense_compact(indices, data)?);
         names.push(node_names[site].clone());
     }
 
     TreeTN::from_tensors(tensors, names).map_err(TreeTciError::from)
 }
 
-fn site_tensor_with_parent<T, F>(
+// INVARIANT: the parameter list is the site's boundary (state, site, parent
+// edge, incoming and outgoing keys, evaluator, chunk size) plus the optional
+// caller context; a parameter object here would be passed straight through.
+#[allow(clippy::too_many_arguments)]
+fn site_tensor_with_parent<T>(
     state: &TreeTCI2<T>,
     site: usize,
     parent_edge: TreeTciEdge,
     in_keys: &[SubtreeKey],
     out_keys: &[SubtreeKey],
-    evaluate: &F,
+    execution: &mut dyn BatchExecution<T>,
     chunk_points: usize,
 ) -> Result<Vec<T>>
 where
     T: FullPivLuScalar + tensor4all_core::MatrixLuciScalar + tensor4all_core::TensorElement,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     if !(out_keys.len() == 1) {
         return Err(anyhow::anyhow!(
@@ -255,7 +305,8 @@ where
         ));
     };
 
-    let pi1_values = fill_tensor_values(state, in_keys, out_keys, &[site], evaluate, chunk_points)?;
+    let pi1_values =
+        fill_tensor_values(state, in_keys, out_keys, &[site], execution, chunk_points)?;
     let rows = state.local_dims[site]
         .checked_mul(product_pivot_dims(state, in_keys)?)
         .ok_or_else(|| anyhow::anyhow!("materialized site row count overflowed usize"))?;
@@ -267,7 +318,7 @@ where
         std::slice::from_ref(&site_side_key),
         out_keys,
         &[],
-        evaluate,
+        execution,
         chunk_points,
     )?;
     let p_rows = state
@@ -294,7 +345,8 @@ where
         return Ok(vec![T::zero(); len]);
     }
 
-    T::solve_right_full_piv_lu(&pi1_values, rows, cols, &p_values, p_rows, cols)
+    execution
+        .solve_right_full_piv_lu(&pi1_values, rows, cols, &p_values, p_rows, cols)
         .map_err(anyhow::Error::from)
 }
 
@@ -351,17 +403,16 @@ struct PointFactor<'a> {
 /// The points are written straight into a reused, chunked batch buffer
 /// instead of one `Vec` per point and per pivot combination. The bipartition
 /// of the sites is checked once up front instead of once per point.
-fn fill_tensor_values<T, F>(
+fn fill_tensor_values<T>(
     state: &TreeTCI2<T>,
     in_keys: &[SubtreeKey],
     out_keys: &[SubtreeKey],
     central_sites: &[usize],
-    evaluate: &F,
+    execution: &mut dyn BatchExecution<T>,
     chunk_points: usize,
 ) -> Result<Vec<T>>
 where
-    T: Scalar,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    T: Scalar + FullPivLuScalar,
 {
     let n_sites = state.local_dims.len();
     let mut factors = Vec::with_capacity(central_sites.len() + in_keys.len() + out_keys.len());
@@ -441,7 +492,7 @@ where
                 *digit = 0;
             }
         },
-        evaluate,
+        &mut |batch| execution.call(batch),
         "fill-tensor points",
     )
 }

@@ -14,6 +14,42 @@ use std::cell::RefCell;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
+/// The context-free materialization route, with the evaluator wrapped as the run's
+/// execution owner.
+fn materialize_compat(
+    state: &TreeTCI2<f64>,
+    mut evaluate: impl FnMut(GlobalIndexBatch<'_>) -> Result<Vec<f64>>,
+    center: Option<usize>,
+    chunk_points: usize,
+) -> crate::TreeTciResult<TreeTN<IdxTensor, usize>> {
+    let mut execution = crate::evaluation::Compatibility::new(&mut evaluate);
+    to_treetn_chunked(state, &mut execution, center, chunk_points)
+}
+
+/// The same materialization on one concrete session of `context`.
+#[cfg(test)]
+fn materialize_in_context(
+    state: &TreeTCI2<f64>,
+    mut evaluate: impl FnMut(GlobalIndexBatch<'_>) -> Result<Vec<f64>>,
+    center: Option<usize>,
+    chunk_points: usize,
+    context: &tensor4all_tensorbackend::CpuExecutionContext,
+) -> crate::TreeTciResult<TreeTN<IdxTensor, usize>> {
+    context
+        .with_session(|engine| {
+            let mut contextual =
+                |batch: GlobalIndexBatch<'_>,
+                 _ctx: &mut tensor4all_treetn::interpolation::EvalContext<'_>| {
+                    evaluate(batch)
+                };
+            let mut session = tensor4all_tensorbackend::explicit::Session::new(engine);
+            let mut ctx = crate::evaluation::serial_context(&mut session);
+            let mut execution = crate::evaluation::Explicit::new(&mut ctx, &mut contextual);
+            to_treetn_chunked(state, &mut execution, center, chunk_points)
+        })
+        .map_err(|error| crate::TreeTciError::from(anyhow::Error::new(error)))?
+}
+
 fn two_site_graph() -> TreeTciGraph {
     TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap()
 }
@@ -40,7 +76,7 @@ fn to_treetn_preserves_two_site_identity_evaluations() {
             tolerance: 1e-12,
             max_iter: 4,
             max_bond_dim: None,
-            normalize_error: true,
+            scale_tolerance: true,
             ..Default::default()
         },
     )
@@ -236,7 +272,7 @@ fn fill_tensor_values_matches_reference_point_order() {
             let reference = reference_fill_points(&state, &in_keys, &out_keys, &central);
             for chunk_points in [1, 7, EVALUATION_CHUNK_POINTS] {
                 let recorded = RefCell::new(Vec::new());
-                let record = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+                let mut record = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
                     recorded.borrow_mut().extend_from_slice(batch.data());
                     smooth_eval(batch)
                 };
@@ -245,7 +281,7 @@ fn fill_tensor_values_matches_reference_point_order() {
                     &in_keys,
                     &out_keys,
                     &central,
-                    &record,
+                    &mut crate::evaluation::Compatibility::new(&mut record),
                     chunk_points,
                 )
                 .unwrap();
@@ -266,7 +302,15 @@ fn fill_tensor_values_rejects_invalid_partitions() {
     let left = SubtreeKey::new(vec![0]);
     let right = SubtreeKey::new(vec![1]);
     let fill = |in_keys: &[SubtreeKey], out_keys: &[SubtreeKey], central: &[usize]| {
-        fill_tensor_values(&state, in_keys, out_keys, central, &smooth_eval, 4)
+        let mut evaluate = smooth_eval;
+        fill_tensor_values(
+            &state,
+            in_keys,
+            out_keys,
+            central,
+            &mut crate::evaluation::Compatibility::new(&mut evaluate),
+            4,
+        )
     };
 
     assert!(fill(&[left.clone(), right.clone()], &[], &[]).is_ok());
@@ -306,12 +350,13 @@ fn fill_tensor_values_rejects_invalid_partitions() {
         left.clone(),
         ColMajorArray::new(vec![0, 1], vec![2, 1]).unwrap(),
     );
+    let mut evaluate = smooth_eval;
     assert!(fill_tensor_values(
         &bad,
         std::slice::from_ref(&left),
         &[],
         &[1],
-        &smooth_eval,
+        &mut crate::evaluation::Compatibility::new(&mut evaluate),
         4
     )
     .unwrap_err()
@@ -321,7 +366,16 @@ fn fill_tensor_values_rejects_invalid_partitions() {
         left.clone(),
         ColMajorArray::new(vec![], vec![1, 0]).unwrap(),
     );
-    assert!(fill_tensor_values(&bad, &[left], &[], &[1], &smooth_eval, 4).is_err());
+    let mut evaluate = smooth_eval;
+    assert!(fill_tensor_values(
+        &bad,
+        &[left],
+        &[],
+        &[1],
+        &mut crate::evaluation::Compatibility::new(&mut evaluate),
+        4
+    )
+    .is_err());
 }
 
 /// Per-node dimensions and raw value bits, independent of bond index ids.
@@ -353,7 +407,7 @@ fn to_treetn_is_independent_of_chunk_size_on_chain_and_branched_tree() {
             let reference_bits = tensor_bits(&tn, n_sites);
             for chunk_points in [1, 7] {
                 let chunked =
-                    to_treetn_chunked(&state, &smooth_eval, Some(center), chunk_points).unwrap();
+                    materialize_compat(&state, smooth_eval, Some(center), chunk_points).unwrap();
                 assert_eq!(
                     tensor_bits(&chunked, n_sites),
                     reference_bits,
@@ -642,4 +696,178 @@ fn to_named_treetn_rejects_mismatched_names_and_site_dimensions() {
         .evaluate_point(&[first, unit, second], &[1, 0, 1])
         .unwrap();
     assert_scalar_close(value.real(), 1.0, 1.0, 1e-12);
+}
+
+// --- F3 step 3d: the materialization solve in a caller-owned context ---
+
+mod materialization_context {
+    use super::*;
+    use std::time::Duration;
+    use tensor4all_tensorbackend::{with_default_backend, CpuBackend, CpuExecutionContext};
+
+    /// A 4-site chain whose nonzero, nonsingular pivot data really reaches the
+    /// solve (`site_tensor_with_parent`), so the fixtures below exercise the
+    /// context-taking route rather than the zero-pivot early return.
+    fn nonzero_state() -> TreeTCI2<f64> {
+        let mut tci = TreeTCI2::<f64>::new(vec![3, 2, 2, 3], four_site_graph()).unwrap();
+        tci.add_global_pivots(&[vec![0, 0, 0, 0]]).unwrap();
+        tci.flush_pivot_errors();
+        tci
+    }
+
+    fn four_site_graph() -> TreeTciGraph {
+        TreeTciGraph::new(
+            4,
+            &[
+                TreeTciEdge::new(0, 1),
+                TreeTciEdge::new(1, 2),
+                TreeTciEdge::new(2, 3),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn smooth(batch: GlobalIndexBatch<'_>) -> Result<Vec<f64>> {
+        let mut values = Vec::with_capacity(batch.n_points());
+        for point in 0..batch.n_points() {
+            let mut total = 1.0;
+            for site in 0..4 {
+                let value = batch.get(site, point).unwrap() as f64;
+                total += value * 0.5 + (site as f64) * value * value;
+            }
+            values.push(total);
+        }
+        Ok(values)
+    }
+
+    fn one_worker_context() -> CpuExecutionContext {
+        CpuExecutionContext::from_backend(CpuBackend::with_threads(1).expect("1T CPU backend"))
+    }
+
+    fn dense_values(tn: &TreeTN<IdxTensor, usize>) -> Vec<f64> {
+        tn.to_dense().unwrap().to_vec::<f64>().unwrap()
+    }
+
+    #[test]
+    fn to_treetn_chunked_with_a_context_ignores_the_process_global_backend() {
+        // Warm the process-global eager runtime first: publishing a physical
+        // tensor adopts into it, and its *cold* initialization takes the
+        // global context's backend lock, which this test holds. Warm
+        // publication is a cached handle and takes no such lock.
+        let warm_state = nonzero_state();
+        let warm_context = one_worker_context();
+        let _ = materialize_in_context(
+            &warm_state,
+            smooth,
+            Some(1),
+            EVALUATION_CHUNK_POINTS,
+            &warm_context,
+        )
+        .expect("warm-up materialization");
+
+        let legacy = materialize_compat(&warm_state, smooth, Some(1), EVALUATION_CHUNK_POINTS)
+            .expect("legacy materialization");
+
+        // The scoped route must complete *while* the process-global backend is
+        // held by this scope: a materialization that resolved its solve
+        // through the global session would block here, which is the dispatch
+        // evidence. The run happens on a worker thread so a wrong route fails
+        // this test instead of hanging the suite; the panic releases the lock.
+        let scoped = with_default_backend(|_global| {
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let state = nonzero_state();
+                let context = one_worker_context();
+                let result = materialize_in_context(
+                    &state,
+                    smooth,
+                    Some(1),
+                    EVALUATION_CHUNK_POINTS,
+                    &context,
+                );
+                let _ = done_tx.send(());
+                result
+            });
+            match done_rx.recv_timeout(std::time::Duration::from_secs(120)) {
+                Ok(()) => worker.join().expect("worker thread").expect("scoped materialization"),
+                Err(_) => panic!(
+                    "the scoped materialization did not finish while the process-global backend was held"
+                ),
+            }
+        });
+
+        let scoped_values = dense_values(&scoped);
+        let legacy_values = dense_values(&legacy);
+        assert_eq!(scoped_values.len(), legacy_values.len());
+        for (index, (left, right)) in scoped_values.iter().zip(legacy_values.iter()).enumerate() {
+            assert!(
+                (left - right).abs() <= 1e-12 * right.abs().max(1.0),
+                "entry {index}: {left} != {right}"
+            );
+        }
+    }
+
+    #[test]
+    /// The negative control for the dispatch test above: under the same
+    /// held-global condition, the legacy route really does block on that
+    /// resource and then completes once the lock is released, so "the scoped
+    /// route completed" is discriminating evidence. Ignored by default because
+    /// it waits out a bounded timeout.
+    #[ignore = "negative control; waits out a bounded timeout"]
+    fn negative_control_legacy_route_blocks_while_the_global_backend_is_held() {
+        let warm_state = nonzero_state();
+        let warm_context = one_worker_context();
+        let _ = materialize_in_context(
+            &warm_state,
+            smooth,
+            Some(1),
+            EVALUATION_CHUNK_POINTS,
+            &warm_context,
+        )
+        .expect("warm-up materialization");
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker = with_default_backend(|_global| {
+            let worker = std::thread::spawn(move || {
+                let state = nonzero_state();
+                let _ = started_tx.send(());
+                let result = materialize_compat(&state, smooth, Some(1), EVALUATION_CHUNK_POINTS);
+                let _ = done_tx.send(());
+                result
+            });
+            started_rx
+                .recv_timeout(Duration::from_secs(30))
+                .expect("the worker starts while the global backend is held");
+            match done_rx.recv_timeout(Duration::from_secs(8)) {
+                Ok(()) => panic!("the legacy route completed while the global backend was held"),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("the worker died before reporting: it neither blocked nor completed")
+                }
+            }
+            worker
+        });
+
+        // Released now: the blocked legacy route must have been waiting for this
+        // resource, not failing for another reason.
+        let materialized = worker.join().expect("the worker thread lives");
+        let materialized =
+            materialized.expect("the legacy route completes once the lock is released");
+        assert!(materialized.to_dense().unwrap().maxabs().unwrap() > 0.0);
+    }
+
+    #[test]
+    fn a_zero_pivot_matrix_takes_the_early_return_without_a_solve() {
+        // The zero-pivot early return sits above the solve, so the context route emits a
+        // zero site tensor without a factorization.
+        let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+        state.add_global_pivots(&[vec![0, 0]]).unwrap();
+        let zero =
+            |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> { Ok(vec![0.0; batch.n_points()]) };
+        let context = one_worker_context();
+        let tn = crate::to_treetn_in(&state, zero, Some(0), &context)
+            .expect("a zero pivot matrix takes the early return");
+        assert_eq!(tn.to_dense().unwrap().maxabs().unwrap(), 0.0);
+    }
 }

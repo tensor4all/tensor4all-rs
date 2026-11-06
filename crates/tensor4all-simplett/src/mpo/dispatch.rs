@@ -11,11 +11,8 @@ pub enum ContractionAlgorithm {
     Naive,
     /// Zip-up contraction with on-the-fly compression
     ZipUp,
-    /// Variational fitting algorithm (currently unsupported for simplett MPOs)
-    Fit,
 }
 
-use super::contract_fit::{contract_fit, FitOptions};
 use super::contract_naive::contract_naive;
 use super::contract_zipup::contract_zipup;
 use super::contraction::ContractionOptions;
@@ -39,9 +36,13 @@ use crate::einsum_helper::EinsumScalar;
 ///
 /// # Errors
 ///
-/// Returns an error when the contraction or operation fails (a shape or
-/// index mismatch, a backend failure, or the selected algorithm is
-/// unsupported).
+/// Returns [`MPOError::LengthMismatch`](super::MPOError::LengthMismatch) when
+/// the two MPOs have different lengths,
+/// [`MPOError::SharedDimensionMismatch`](super::MPOError::SharedDimensionMismatch)
+/// when a shared physical dimension disagrees, or
+/// [`MPOError::InvalidOperation`](super::MPOError::InvalidOperation) /
+/// [`MPOError::FactorizationError`](super::MPOError::FactorizationError) when a
+/// site contraction or the selected algorithm's compression fails.
 ///
 /// # Example
 ///
@@ -59,10 +60,6 @@ use crate::einsum_helper::EinsumScalar;
 /// // Use zip-up algorithm for memory efficiency
 /// let result = contract(&mpo_a, &mpo_b, ContractionAlgorithm::ZipUp, &options).unwrap();
 /// assert_eq!(result.len(), 2);
-///
-/// // Simplett variational fitting is not implemented yet.
-/// let result = contract(&mpo_a, &mpo_b, ContractionAlgorithm::Fit, &options);
-/// assert!(matches!(result, Err(tensor4all_simplett::mpo::MPOError::Unsupported { .. })));
 /// ```
 pub fn contract<T: SVDScalar + EinsumScalar>(
     mpo_a: &MPO<T>,
@@ -76,15 +73,6 @@ where
     match algorithm {
         ContractionAlgorithm::Naive => contract_naive(mpo_a, mpo_b, Some(options.clone())),
         ContractionAlgorithm::ZipUp => contract_zipup(mpo_a, mpo_b, options),
-        ContractionAlgorithm::Fit => {
-            let fit_options = FitOptions {
-                tolerance: options.tolerance,
-                max_bond_dim: options.max_bond_dim,
-                factorize_method: options.factorize_method,
-                ..Default::default()
-            };
-            contract_fit(mpo_a, mpo_b, &fit_options, None)
-        }
     }
 }
 

@@ -69,7 +69,7 @@ macro_rules! continued_schedule {
                         })
                         .collect();
                     state.add_global_pivots(&pivots).unwrap();
-                    state.max_sample_value = value(&[0; 7]).abs_val();
+                    state.set_max_sample_value(value(&[0; 7]).abs_val());
                     state
                 };
                 let mut state = make_state();
@@ -87,6 +87,7 @@ macro_rules! continued_schedule {
                     evaluate,
                     &options,
                     &DefaultProposer,
+                    &mut (),
                     &mut rng,
                 )
                 .unwrap();
@@ -118,6 +119,7 @@ macro_rules! continued_schedule {
                     evaluate,
                     &options,
                     &DefaultProposer,
+                    &mut (),
                     &mut rng,
                 )
                 .unwrap();
@@ -139,6 +141,7 @@ macro_rules! continued_schedule {
                     evaluate,
                     &options,
                     &DefaultProposer,
+                    &mut (),
                     &mut fresh_rng,
                 )
                 .unwrap();

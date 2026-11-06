@@ -5,7 +5,11 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use tensor4all_core::{outer_product, CommonScalar, DynIndex, IdxTensor, TensorElement};
+use tensor4all_core::{
+    contract_pair_on_session, CommonScalar, DynIndex, IdxTensor, PairwiseContractionOptions,
+    TensorElement,
+};
+use tensor4all_tensorbackend::explicit::Session;
 use tensor4all_treetn::TreeTN;
 
 use crate::error::PartitionedTreeTNError;
@@ -22,7 +26,7 @@ where
 {
     let mut data = vec![T::from_f64(0.0); site.dim];
     data[coordinate] = T::from_f64(1.0);
-    Ok(IdxTensor::from_dense(vec![site.clone()], data)?)
+    Ok(IdxTensor::from_dense_compact(vec![site.clone()], data)?)
 }
 
 /// Re-attach every fixed site to its node with a one-hot factor.
@@ -30,10 +34,17 @@ where
 /// `network` carries the problem's node names and only the active sites. The
 /// result carries every site of the layout and is already masked by the
 /// fixed coordinates.
+///
+/// The one-hot factor is attached on the caller's session with
+/// [`contract_pair_on_session`]: its indices are disjoint from the node
+/// tensor's, so the contraction is the outer product, and the product is
+/// published as compact host storage instead of being adopted into the
+/// process-global eager runtime.
 pub(super) fn embed_fixed_sites<T, V>(
     network: &TreeTN<IdxTensor, V>,
     layout: &SiteLayout<V>,
     fixed: &[Option<usize>],
+    session: &mut Session<'_>,
 ) -> Result<TreeTN<IdxTensor, V>>
 where
     T: CommonScalar + TensorElement,
@@ -50,7 +61,12 @@ where
         for &position in positions {
             if let Some(coordinate) = fixed[position] {
                 let factor = one_hot::<T>(&layout.sites[position], coordinate)?;
-                tensor = outer_product(&tensor, &factor)?;
+                tensor = contract_pair_on_session(
+                    session,
+                    &tensor,
+                    &factor,
+                    PairwiseContractionOptions::new(),
+                )?;
             }
         }
         names.push(node.clone());
@@ -103,7 +119,7 @@ where
         };
         indices.extend(links.remove(node).unwrap_or_default());
         names.push(node.clone());
-        tensors.push(IdxTensor::from_dense(indices, data)?);
+        tensors.push(IdxTensor::from_dense_compact(indices, data)?);
     }
     Ok(TreeTN::from_tensors(tensors, names)?)
 }

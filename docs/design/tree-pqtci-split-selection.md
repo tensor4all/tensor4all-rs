@@ -142,7 +142,7 @@ State after the user's answers of 2026-10-03.
    (for example, child start candidates that include the parent's pivots near
    the split boundary); the default is unchanged. The fix itself belongs to
    the M9 global review
-   ([known limitation](./tree-patching-error-contract.md#known-limitation-corner-localized-misses)).
+   ([estimator contract](./tree-patching-error-contract.md#patch-l2-estimators)).
    Implemented on 2026-10-04 as `cache_candidates`: children also start from
    the largest values of their inherited evaluation cache. Changing only the
    split coordinate of parent points was rejected because in quantics it

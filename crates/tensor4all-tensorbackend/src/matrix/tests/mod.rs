@@ -276,9 +276,10 @@ fn matrix_constructors_reject_shape_product_overflow() {
         )
     );
 
-    let zero = Matrix::<u8>::zeros(0, usize::MAX);
+    // The largest representable extent (tenferro stores extents as isize).
+    let zero = Matrix::<u8>::zeros(0, isize::MAX as usize);
     assert_eq!(zero.nrows(), 0);
-    assert_eq!(zero.ncols(), usize::MAX);
+    assert_eq!(zero.ncols(), isize::MAX as usize);
     assert!(zero.as_col_major_slice().is_empty());
 }
 
@@ -298,12 +299,12 @@ fn matrix_indexing_rejects_each_axis_before_linearization() {
 
 #[test]
 fn matrix_multiplication_rejects_output_shape_overflow_before_backend() {
-    // A zero-column matrix may legitimately have an arbitrary row count (the
-    // checked shape product is 0). Multiplying it by a 0 x 2 matrix would
-    // produce an overflowing usize::MAX x 2 output; the multiplication must
+    // A zero-column matrix may legitimately have any representable row count
+    // (the checked shape product is 0). Multiplying it by a 0 x 3 matrix would
+    // produce an overflowing isize::MAX x 3 output; the multiplication must
     // reject the output element count before any backend call.
-    let left = Matrix::<f64>::from_col_major_vec(usize::MAX, 0, Vec::new());
-    let right = Matrix::<f64>::from_col_major_vec(0, 2, Vec::new());
+    let left = Matrix::<f64>::from_col_major_vec(isize::MAX as usize, 0, Vec::new());
+    let right = Matrix::<f64>::from_col_major_vec(0, 3, Vec::new());
     let error = mat_mul(&left, &right).unwrap_err().to_string();
     assert!(error.contains("overflows"), "got: {error}");
 
@@ -533,6 +534,74 @@ fn mat_mul_owned_matches_borrowed_multiplication() {
     assert_eq!(c.as_col_major_slice(), &[19.0, 43.0, 22.0, 50.0]);
 }
 
+/// The borrowed entry reads the matrix buffers in place, so it must return
+/// bit-for-bit the same values as the owned entry (#1096).
+#[test]
+fn mat_mul_matches_mat_mul_owned_bit_for_bit() {
+    fn check<T>(mk: impl Fn(f64, f64) -> T)
+    where
+        T: BlasMul + Copy + PartialEq + std::fmt::Debug,
+    {
+        let a = Matrix::from_col_major_vec(
+            2,
+            3,
+            [
+                mk(1.0, 1.0),
+                mk(4.0, -1.0),
+                mk(2.0, 0.5),
+                mk(5.0, 2.0),
+                mk(3.0, -2.0),
+                mk(6.0, 0.25),
+            ]
+            .to_vec(),
+        );
+        let b = Matrix::from_col_major_vec(
+            3,
+            2,
+            [
+                mk(7.0, 0.5),
+                mk(9.0, -3.0),
+                mk(8.0, 1.5),
+                mk(10.0, 0.0),
+                mk(11.0, -0.5),
+                mk(12.0, 2.0),
+            ]
+            .to_vec(),
+        );
+        let borrowed = mat_mul(&a, &b).unwrap();
+        let owned = mat_mul_owned(a, b).unwrap();
+        assert_eq!(
+            borrowed.as_col_major_slice(),
+            owned.as_col_major_slice(),
+            "borrowed and owned multiplication disagree"
+        );
+    }
+
+    check(|re, _im| re);
+    check(Complex64::new);
+}
+
+/// Empty dimensions must stay valid on the borrowed path: a zero-length slice
+/// still forms a rank-2 view.
+#[test]
+fn mat_mul_handles_empty_dimensions() {
+    let a = Matrix::<f64>::from_col_major_vec(0, 3, Vec::new());
+    let b = Matrix::from_col_major_vec(3, 2, vec![1.0, 3.0, 2.0, 4.0, 5.0, 6.0]);
+    let c = mat_mul(&a, &b).unwrap();
+    assert_eq!((c.nrows(), c.ncols()), (0, 2));
+
+    let a = Matrix::from_col_major_vec(2, 3, vec![1.0, 3.0, 2.0, 4.0, 5.0, 6.0]);
+    let b = Matrix::<f64>::from_col_major_vec(3, 0, Vec::new());
+    let c = mat_mul(&a, &b).unwrap();
+    assert_eq!((c.nrows(), c.ncols()), (2, 0));
+
+    let a = Matrix::from_col_major_vec(2, 0, Vec::new());
+    let b = Matrix::<f64>::from_col_major_vec(0, 4, Vec::new());
+    let c = mat_mul(&a, &b).unwrap();
+    assert_eq!((c.nrows(), c.ncols()), (2, 4));
+    assert_eq!(c.as_col_major_slice(), &[0.0; 8]);
+}
+
 #[test]
 fn test_mat_mul_rectangular_preserves_column_major_layout() {
     let a = from_vec2d(vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]]);
@@ -666,289 +735,20 @@ fn append_columns_reuses_spare_capacity_without_reallocating() {
 }
 
 #[test]
-fn grouped_gemm_shared_buffers_matches_individual_column_major_gemms() {
-    let lhs = vec![
-        1.0_f64, 3.0, 2.0, 4.0, // 2 x 2, job 0
-        2.0, 0.0, 1.0, 3.0, // 2 x 2, job 1
-    ];
-    let rhs = vec![
-        5.0_f64, 7.0, 6.0, 8.0, // shared 2 x 2 rhs
-    ];
-    let jobs = [
-        GroupedGemmJob::new(0, 0, 0, 2, 2, 2),
-        GroupedGemmJob::new(4, 4, 0, 2, 2, 2),
-    ];
-    let mut output = vec![0.0_f64; 8];
-
-    grouped_mat_mul_shared(
-        &lhs,
-        &rhs,
-        &mut output,
-        &jobs,
-        GroupedGemmOptions {
-            max_working_bytes: usize::MAX,
-        },
-    )
-    .unwrap();
-
-    assert_eq!(&output[0..4], &[19.0, 43.0, 22.0, 50.0]);
-    assert_eq!(&output[4..8], &[17.0, 21.0, 20.0, 24.0]);
-}
-
-#[test]
-fn grouped_gemm_shared_validation_rejects_overlap_and_budget_before_mutation() {
-    let lhs = vec![1.0_f64; 4];
-    let rhs = vec![1.0_f64; 4];
-    let jobs = [
-        GroupedGemmJob::new(0, 0, 0, 2, 2, 1),
-        GroupedGemmJob::new(1, 0, 0, 2, 2, 1),
-    ];
-    let mut output = vec![9.0_f64; 3];
-
-    let error = grouped_mat_mul_shared(
-        &lhs,
-        &rhs,
-        &mut output,
-        &jobs,
-        GroupedGemmOptions {
-            max_working_bytes: usize::MAX,
-        },
-    )
-    .unwrap_err();
-    assert!(matches!(error, GroupedGemmError::OverlappingOutputs { .. }));
-    assert_eq!(output, vec![9.0; 3]);
-
-    let error = grouped_mat_mul_shared(
-        &lhs,
-        &rhs,
-        &mut output,
-        &[GroupedGemmJob::new(0, 0, 0, 2, 2, 1)],
-        GroupedGemmOptions {
-            max_working_bytes: 0,
-        },
-    )
-    .unwrap_err();
-    assert!(matches!(
-        error,
-        GroupedGemmError::WorkingMemoryExceeded { .. }
-    ));
-    assert_eq!(output, vec![9.0; 3]);
-}
-
-#[test]
-fn grouped_gemm_shared_owned_preserves_output_owner_and_empty_is_noop() {
-    let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
-    let output = grouped_mat_mul_shared_owned(
-        vec![3.0_f64],
-        vec![4.0_f64],
-        vec![0.0_f64],
-        &jobs,
-        GroupedGemmOptions::default(),
-    )
-    .unwrap();
-    assert_eq!(output, vec![12.0]);
-
-    let mut empty_output = vec![7.0_f64];
-    grouped_mat_mul_shared(
-        &[],
-        &[],
-        &mut empty_output,
-        &[],
-        GroupedGemmOptions {
-            max_working_bytes: 0,
-        },
-    )
-    .unwrap();
-    assert_eq!(empty_output, vec![7.0]);
-}
-
-fn assert_grouped_matches_individual<T: MatrixScalar + tenferro::TensorScalar>(
-    lhs: &[T],
-    rhs: &[T],
-    jobs: &[GroupedGemmJob],
-    tolerance: f64,
-) {
-    let mut output = vec![T::zero(); 16];
-    grouped_mat_mul_shared(lhs, rhs, &mut output, jobs, GroupedGemmOptions::default()).unwrap();
-
-    for job in jobs {
-        let lhs_end = job.lhs_offset() + job.rows() * job.contracted();
-        let rhs_end = job.rhs_offset() + job.contracted() * job.cols();
-        let expected = mat_mul(
-            &Matrix::from_col_major_vec(
-                job.rows(),
-                job.contracted(),
-                lhs[job.lhs_offset()..lhs_end].to_vec(),
-            ),
-            &Matrix::from_col_major_vec(
-                job.contracted(),
-                job.cols(),
-                rhs[job.rhs_offset()..rhs_end].to_vec(),
-            ),
-        )
-        .unwrap();
-        let output_end = job.out_offset() + job.rows() * job.cols();
-        for (actual, expected) in output[job.out_offset()..output_end]
-            .iter()
-            .zip(expected.as_col_major_slice())
-        {
-            assert!(
-                (*actual - *expected).matrix_abs_sq() <= tolerance * tolerance,
-                "grouped result differs from individual GEMM"
-            );
-        }
+fn matrix_rejects_extents_beyond_isize_max() {
+    // An empty usize::MAX x 0 matrix has no element, but tenferro cannot store
+    // the extent, so the shape is rejected at construction instead of failing
+    // later inside an infallible conversion.
+    let huge = isize::MAX as usize + 1;
+    for (nrows, ncols) in [(huge, 0), (0, huge), (usize::MAX, 0)] {
+        assert!(matches!(
+            Matrix::<f64>::try_from_col_major_vec(nrows, ncols, Vec::new()),
+            Err(MatrixShapeError::ShapeOverflow { .. })
+        ));
+        assert!(matches!(
+            Matrix::<f64>::try_zeros(nrows, ncols),
+            Err(MatrixShapeError::ShapeOverflow { .. })
+        ));
     }
-}
-
-#[test]
-fn grouped_gemm_shared_all_scalar_kinds_match_individual_gemms() {
-    let jobs = [
-        GroupedGemmJob::new(0, 0, 0, 2, 2, 2),
-        GroupedGemmJob::new(4, 4, 0, 2, 2, 2),
-        GroupedGemmJob::new(8, 0, 4, 2, 2, 1),
-    ];
-    assert_grouped_matches_individual(
-        &[1.0_f32, 3.0, 2.0, 4.0, 2.0, 0.0, 1.0, 3.0],
-        &[5.0_f32, 7.0, 6.0, 8.0, 2.0, 4.0, 3.0, 1.0],
-        &jobs,
-        1.0e-5,
-    );
-    assert_grouped_matches_individual(
-        &[1.0_f64, 3.0, 2.0, 4.0, 2.0, 0.0, 1.0, 3.0],
-        &[5.0_f64, 7.0, 6.0, 8.0, 2.0, 4.0, 3.0, 1.0],
-        &jobs,
-        1.0e-12,
-    );
-    assert_grouped_matches_individual(
-        &[
-            Complex32::new(1.0, 0.5),
-            Complex32::new(3.0, -0.5),
-            Complex32::new(2.0, 0.25),
-            Complex32::new(4.0, -0.25),
-            Complex32::new(2.0, 0.0),
-            Complex32::new(0.0, 1.0),
-            Complex32::new(1.0, -1.0),
-            Complex32::new(3.0, 0.5),
-        ],
-        &[
-            Complex32::new(5.0, -0.5),
-            Complex32::new(7.0, 0.5),
-            Complex32::new(6.0, 0.25),
-            Complex32::new(8.0, -0.25),
-            Complex32::new(2.0, 0.0),
-            Complex32::new(4.0, 1.0),
-            Complex32::new(3.0, -1.0),
-            Complex32::new(1.0, 0.5),
-        ],
-        &jobs,
-        1.0e-4,
-    );
-    assert_grouped_matches_individual(
-        &[
-            Complex64::new(1.0, 0.5),
-            Complex64::new(3.0, -0.5),
-            Complex64::new(2.0, 0.25),
-            Complex64::new(4.0, -0.25),
-            Complex64::new(2.0, 0.0),
-            Complex64::new(0.0, 1.0),
-            Complex64::new(1.0, -1.0),
-            Complex64::new(3.0, 0.5),
-        ],
-        &[
-            Complex64::new(5.0, -0.5),
-            Complex64::new(7.0, 0.5),
-            Complex64::new(6.0, 0.25),
-            Complex64::new(8.0, -0.25),
-            Complex64::new(2.0, 0.0),
-            Complex64::new(4.0, 1.0),
-            Complex64::new(3.0, -1.0),
-            Complex64::new(1.0, 0.5),
-        ],
-        &jobs,
-        1.0e-12,
-    );
-}
-
-#[test]
-fn grouped_gemm_shared_validation_covers_bounds_overflow_and_shared_shapes() {
-    let mut output = vec![9.0_f64; 1];
-    let error = grouped_mat_mul_shared(
-        &[1.0],
-        &[1.0],
-        &mut output,
-        &[GroupedGemmJob::new(0, 0, 0, 2, 1, 1)],
-        GroupedGemmOptions::default(),
-    )
-    .unwrap_err();
-    assert!(matches!(error, GroupedGemmError::BufferOutOfBounds { .. }));
-    assert_eq!(output, vec![9.0]);
-
-    let error = grouped_mat_mul_shared(
-        &[],
-        &[1.0_f64],
-        &mut [0.0_f64],
-        &[GroupedGemmJob::new(0, usize::MAX, 0, 1, 1, 1)],
-        GroupedGemmOptions::default(),
-    )
-    .unwrap_err();
-    assert!(matches!(error, GroupedGemmError::SpanOverflow { .. }));
-
-    let error = grouped_mat_mul_shared(
-        &[],
-        &[],
-        &mut [] as &mut [f64],
-        &[GroupedGemmJob::new(0, 0, 0, usize::MAX, 2, 1)],
-        GroupedGemmOptions::default(),
-    )
-    .unwrap_err();
-    assert!(matches!(error, GroupedGemmError::DimensionOverflow { .. }));
-
-    let error = grouped_mat_mul_shared(
-        &[1.0_f64; 6],
-        &[1.0_f64; 6],
-        &mut [0.0_f64; 8],
-        &[
-            GroupedGemmJob::new(0, 0, 0, 2, 2, 1),
-            GroupedGemmJob::new(2, 0, 0, 1, 2, 2),
-        ],
-        GroupedGemmOptions::default(),
-    )
-    .unwrap_err();
-    assert!(matches!(
-        error,
-        GroupedGemmError::IncompatibleSharedLhs { .. }
-    ));
-
-    let error = grouped_mat_mul_shared(
-        &[1.0_f64; 6],
-        &[1.0_f64; 6],
-        &mut [0.0_f64; 8],
-        &[
-            GroupedGemmJob::new(0, 0, 0, 1, 2, 2),
-            GroupedGemmJob::new(4, 2, 0, 2, 1, 2),
-        ],
-        GroupedGemmOptions::default(),
-    )
-    .unwrap_err();
-    assert!(matches!(
-        error,
-        GroupedGemmError::IncompatibleSharedRhs { .. }
-    ));
-}
-
-#[test]
-fn grouped_gemm_shared_with_backend_uses_configured_thread_context() {
-    let mut backend = tenferro_cpu::CpuBackend::with_threads(1).unwrap();
-    let mut output = [0.0_f64];
-    grouped_mat_mul_shared_with_backend(
-        &mut backend,
-        &[3.0],
-        &[4.0],
-        &mut output,
-        &[GroupedGemmJob::new(0, 0, 0, 1, 1, 1)],
-        GroupedGemmOptions::default(),
-    )
-    .unwrap();
-    assert_eq!(output, [12.0]);
-    assert_eq!(backend.num_threads(), 1);
+    assert!(Matrix::<f64>::try_from_col_major_vec(isize::MAX as usize, 0, Vec::new()).is_ok());
 }

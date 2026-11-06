@@ -5,11 +5,11 @@
 
 use std::sync::Arc;
 
-use tenferro_cpu::CpuBackend;
 use tensor4all_core::{
     factorize_full_rank_in, factorize_in, Canonical, DynIndex, ExecutionContext, FactorizeAlg,
     FactorizeOptions, IdxTensor, TensorConstructionLike, TensorFactorizationLike,
 };
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
 use tensor4all_treetn::TreeTN;
 

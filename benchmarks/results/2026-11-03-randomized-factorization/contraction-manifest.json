@@ -1,0 +1,64 @@
+{
+  "candidate_commit": "5c7369e4685c216fe7504b556412f6a286f60ce6",
+  "base_commit": "1bedcbc009b1954421af9e7bc7a991cb40e15d8f",
+  "host": "Linux-6.18.54.1-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+  "purpose": "two-power-iteration matched-error contraction diagnostic; no guarded speedup claim",
+  "binary_sha256": "1ca325d8a06b0496879b5a842604037ed58daf2db25476c6abebb2cdedb7c821",
+  "protocol_sha256": "c187d51beb323da3f1b4f7e7d9acd76aad4311a7d27b8aee40588ca271e6644c",
+  "runs": [
+    {
+      "threads": 1,
+      "affinity": "8",
+      "load_before": [
+        0.5703125,
+        0.38818359375,
+        0.71142578125
+      ],
+      "env": {
+        "RAYON_NUM_THREADS": "1",
+        "BLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "exit_code": 0,
+      "seconds": 14.042688492998423,
+      "load_after": [
+        0.73974609375,
+        0.43505859375,
+        0.72265625
+      ],
+      "recorded_rows": 48,
+      "expected_rows": 48,
+      "thread_budget_readback": "THREAD_BUDGET requested=1 actual=1 workers=[]"
+    },
+    {
+      "threads": 8,
+      "affinity": "8-15",
+      "load_before": [
+        0.73974609375,
+        0.43505859375,
+        0.72265625
+      ],
+      "env": {
+        "RAYON_NUM_THREADS": "8",
+        "BLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "exit_code": 0,
+      "seconds": 12.095197155998903,
+      "load_after": [
+        0.7802734375,
+        0.4541015625,
+        0.7265625
+      ],
+      "recorded_rows": 48,
+      "expected_rows": 48,
+      "thread_budget_readback": "THREAD_BUDGET requested=8 actual=8 workers=[[8, 9, 10, 11, 12, 13, 14, 15], [8, 9, 10, 11, 12, 13, 14, 15], [8, 9, 10, 11, 12, 13, 14, 15], [8, 9, 10, 11, 12, 13, 14, 15], [8, 9, 10, 11, 12, 13, 14, 15], [8, 9, 10, 11, 12, 13, 14, 15], [8, 9, 10, 11, 12, 13, 14, 15], [8, 9, 10, 11, 12, 13, 14, 15]]"
+    }
+  ]
+}

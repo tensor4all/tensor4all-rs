@@ -3,10 +3,9 @@ use num_complex::Complex64;
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorIndex};
 use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
 use tensor4all_treetn::{
-    fix_and_remove_site_from_treetn_chain, insert_onehot_site_in_treetn_chain,
-    tensor_train_to_treetn, tensor_train_to_treetn_with_names,
-    tensor_train_to_treetn_with_names_and_site_indices, treetn_to_tensor_train,
-    weighted_remove_site_from_treetn_chain, TreeTN,
+    fix_and_remove_site, insert_onehot_site_in_treetn_chain, tensor_train_to_treetn,
+    tensor_train_to_treetn_with_names, tensor_train_to_treetn_with_names_and_site_indices,
+    treetn_to_tensor_train, weighted_remove_site_from_treetn_chain, TreeTN,
 };
 
 fn two_site_tensor_train_f64() -> SimpleTensorTrain<f64> {
@@ -423,11 +422,11 @@ fn insert_onehot_site_in_treetn_chain_rejects_invalid_fixed_value() -> Result<()
 }
 
 #[test]
-fn fix_and_remove_site_from_treetn_chain_removes_first_site() -> Result<()> {
+fn fix_and_remove_site_removes_first_site_and_keeps_names() -> Result<()> {
     let tt = three_site_tensor_train_f64();
     let (treetn, site_indices) = tensor_train_to_treetn(&tt)?;
 
-    let result = fix_and_remove_site_from_treetn_chain::<f64>(treetn, 0, 1)?;
+    let result = fix_and_remove_site(treetn, &0usize, 1)?;
     let dense = result.contract_to_tensor()?;
     let (old_values, old_dims) = tt.full_tensor().unwrap();
     let expected = IdxTensor::from_dense(
@@ -435,21 +434,18 @@ fn fix_and_remove_site_from_treetn_chain_removes_first_site() -> Result<()> {
         fixed_removed_dense(&old_values, &old_dims, 0, 1),
     )?;
 
-    assert_eq!(result.node_names(), vec![0, 1]);
-    assert_eq!(
-        treetn_to_tensor_train::<f64>(result.clone())?.site_dims(),
-        vec![2, 2]
-    );
+    // Only the removed node disappears; surviving names are not renumbered.
+    assert_eq!(result.node_names(), vec![1, 2]);
     assert!(dense.distance(&expected).unwrap() < 1.0e-12);
     Ok(())
 }
 
 #[test]
-fn fix_and_remove_site_from_treetn_chain_removes_middle_site() -> Result<()> {
+fn fix_and_remove_site_removes_middle_site_and_keeps_names() -> Result<()> {
     let tt = three_site_tensor_train_f64();
     let (treetn, site_indices) = tensor_train_to_treetn(&tt)?;
 
-    let result = fix_and_remove_site_from_treetn_chain::<f64>(treetn, 1, 0)?;
+    let result = fix_and_remove_site(treetn, &1usize, 0)?;
     let dense = result.contract_to_tensor()?;
     let (old_values, old_dims) = tt.full_tensor().unwrap();
     let expected = IdxTensor::from_dense(
@@ -457,21 +453,17 @@ fn fix_and_remove_site_from_treetn_chain_removes_middle_site() -> Result<()> {
         fixed_removed_dense(&old_values, &old_dims, 1, 0),
     )?;
 
-    assert_eq!(result.node_names(), vec![0, 1]);
-    assert_eq!(
-        treetn_to_tensor_train::<f64>(result.clone())?.site_dims(),
-        vec![2, 2]
-    );
+    assert_eq!(result.node_names(), vec![0, 2]);
     assert!(dense.distance(&expected).unwrap() < 1.0e-12);
     Ok(())
 }
 
 #[test]
-fn fix_and_remove_site_from_treetn_chain_removes_last_site() -> Result<()> {
+fn fix_and_remove_site_removes_last_site_and_keeps_names() -> Result<()> {
     let tt = three_site_tensor_train_f64();
     let (treetn, site_indices) = tensor_train_to_treetn(&tt)?;
 
-    let result = fix_and_remove_site_from_treetn_chain::<f64>(treetn, 2, 1)?;
+    let result = fix_and_remove_site(treetn, &2usize, 1)?;
     let dense = result.contract_to_tensor()?;
     let (old_values, old_dims) = tt.full_tensor().unwrap();
     let expected = IdxTensor::from_dense(
@@ -480,10 +472,6 @@ fn fix_and_remove_site_from_treetn_chain_removes_last_site() -> Result<()> {
     )?;
 
     assert_eq!(result.node_names(), vec![0, 1]);
-    assert_eq!(
-        treetn_to_tensor_train::<f64>(result.clone())?.site_dims(),
-        vec![2, 2]
-    );
     assert!(dense.distance(&expected).unwrap() < 1.0e-12);
     Ok(())
 }
@@ -535,26 +523,135 @@ fn weighted_remove_site_from_treetn_chain_removes_boundary_site() -> Result<()> 
 }
 
 #[test]
-fn fix_and_remove_site_from_treetn_chain_rejects_invalid_position() -> Result<()> {
+fn fix_and_remove_site_rejects_unknown_node() -> Result<()> {
     let tt = two_site_tensor_train_f64();
     let (treetn, _) = tensor_train_to_treetn(&tt)?;
 
-    let err = fix_and_remove_site_from_treetn_chain::<f64>(treetn, 2, 0).unwrap_err();
-
-    assert!(err.to_string().contains("position 2 is out of range 0..2"));
+    let err = fix_and_remove_site(treetn, &7usize, 0).unwrap_err();
+    assert!(
+        err.to_string().contains("is not part of the TreeTN"),
+        "{err}"
+    );
     Ok(())
 }
 
 #[test]
-fn fix_and_remove_site_from_treetn_chain_rejects_invalid_fixed_value() -> Result<()> {
+fn fix_and_remove_site_rejects_invalid_fixed_value() -> Result<()> {
     let tt = two_site_tensor_train_f64();
     let (treetn, _) = tensor_train_to_treetn(&tt)?;
 
-    let err = fix_and_remove_site_from_treetn_chain::<f64>(treetn, 0, 2).unwrap_err();
+    let err = fix_and_remove_site(treetn, &0usize, 2).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("out of range for site dimension 2"),
+        "{err}"
+    );
+    Ok(())
+}
 
-    assert!(err
-        .to_string()
-        .contains("fixed value 2 exceeds site dimension 2"));
+#[test]
+fn fix_and_remove_site_removes_a_leaf_of_a_branched_star() -> Result<()> {
+    // A degree-three hub `m` with leaves `a`, `b`, `c` is not a path graph, so
+    // this exercises the general-tree merge path.
+    let (site_m, site_a) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let (site_b, site_c) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let (bond_a, bond_b, bond_c) = (
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(3),
+        DynIndex::new_dyn(2),
+    );
+    let m = IdxTensor::from_dense(
+        vec![
+            site_m.clone(),
+            bond_a.clone(),
+            bond_b.clone(),
+            bond_c.clone(),
+        ],
+        (1..=24).map(|value| value as f64 / 7.0).collect(),
+    )?;
+    let a = IdxTensor::from_dense(
+        vec![bond_a, site_a.clone()],
+        (1..=4).map(|value| value as f64 / 3.0).collect(),
+    )?;
+    let b = IdxTensor::from_dense(
+        vec![bond_b, site_b],
+        (1..=6).map(|value| value as f64 / 5.0).collect(),
+    )?;
+    let c = IdxTensor::from_dense(
+        vec![bond_c, site_c],
+        (1..=4).map(|value| value as f64 / 2.0).collect(),
+    )?;
+    let treetn = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![m, a, b, c],
+        vec![
+            "m".to_string(),
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+        ],
+    )?;
+    let expected = treetn
+        .to_dense()?
+        .select_indices(std::slice::from_ref(&site_a), &[1])?;
+
+    let result = fix_and_remove_site(treetn, &"a".to_string(), 1)?;
+    let mut names = result.node_names();
+    names.sort();
+    assert_eq!(names, vec!["b", "c", "m"]);
+    assert!(result.to_dense()?.distance(&expected).unwrap() < 1.0e-12);
+    Ok(())
+}
+
+#[test]
+fn fix_and_remove_site_removes_an_internal_hub_of_a_branched_star() -> Result<()> {
+    // Removing the degree-three hub forces its three leaves onto one surviving
+    // node, so the merged tensor carries all of their bonds.
+    let (site_m, site_a) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let (site_b, site_c) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let (bond_a, bond_b, bond_c) = (
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(3),
+        DynIndex::new_dyn(2),
+    );
+    let m = IdxTensor::from_dense(
+        vec![
+            site_m.clone(),
+            bond_a.clone(),
+            bond_b.clone(),
+            bond_c.clone(),
+        ],
+        (1..=24).map(|value| value as f64 / 7.0).collect(),
+    )?;
+    let a = IdxTensor::from_dense(
+        vec![bond_a, site_a],
+        (1..=4).map(|value| value as f64 / 3.0).collect(),
+    )?;
+    let b = IdxTensor::from_dense(
+        vec![bond_b, site_b],
+        (1..=6).map(|value| value as f64 / 5.0).collect(),
+    )?;
+    let c = IdxTensor::from_dense(
+        vec![bond_c, site_c],
+        (1..=4).map(|value| value as f64 / 2.0).collect(),
+    )?;
+    let treetn = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![m, a, b, c],
+        vec![
+            "m".to_string(),
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+        ],
+    )?;
+    let expected = treetn
+        .to_dense()?
+        .select_indices(std::slice::from_ref(&site_m), &[1])?;
+
+    let result = fix_and_remove_site(treetn, &"m".to_string(), 1)?;
+    let mut names = result.node_names();
+    names.sort();
+    assert_eq!(names, vec!["a", "b", "c"]);
+    assert!(result.to_dense()?.distance(&expected).unwrap() < 1.0e-12);
     Ok(())
 }
 
@@ -572,16 +669,18 @@ fn weighted_remove_site_from_treetn_chain_rejects_weight_length_mismatch() -> Re
 }
 
 #[test]
-fn remove_site_from_treetn_chain_rejects_single_site_chain() -> Result<()> {
+fn fix_and_remove_site_rejects_a_single_node_network() -> Result<()> {
     let tt = single_site_tensor_train_f64();
     let (treetn, _) = tensor_train_to_treetn(&tt)?;
 
-    let err = fix_and_remove_site_from_treetn_chain::<f64>(treetn, 0, 1).unwrap_err();
+    let err = fix_and_remove_site(treetn, &0usize, 1).unwrap_err();
+    assert!(err.to_string().contains("is isolated"), "{err}");
+    Ok(())
+}
 
-    assert!(err.to_string().contains(
-        "cannot remove the only site because scalar zero-site TreeTN chains are not supported"
-    ));
-
+#[test]
+fn weighted_remove_site_from_treetn_chain_rejects_single_site_chain() -> Result<()> {
+    let tt = single_site_tensor_train_f64();
     let (treetn, _) = tensor_train_to_treetn(&tt)?;
     let err =
         weighted_remove_site_from_treetn_chain::<f64>(treetn, 0, &[1.0, 1.0, 1.0]).unwrap_err();

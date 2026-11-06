@@ -8,13 +8,16 @@
 | [tenferro-main-session-migration.md](./tenferro-main-session-migration.md) | First issue #623 slice: pin current tenferro main and migrate internal CPU calls to its canonical session API |
 | [explicit-cpu-execution-context.md](./explicit-cpu-execution-context.md) | Issue #663 explicit plain, graph, eager-AD, and logical reconstruction context |
 | [tensorbackend-session-entry.md](./tensorbackend-session-entry.md) | Issue #623 slice: centralize concrete CPU sessions on explicit contexts before CUDA dispatch |
+| [859-f1-core-operation-seam.md](./859-f1-core-operation-seam.md) | Issue #859 package F1, slice 1: pairwise contraction on a caller-held explicit session, its supported representations, typed refusals and evidence plan |
+| [859-f3-g0-stage-budget.md](./859-f3-g0-stage-budget.md) | Issue #670 / #859 F3: the measured worker-count diagnosis of the G0-shaped TreeTCI path (about 40% slower with four or more workers than with one) and what remains open |
 | [859-dual-frontend-coexistence.md](./859-dual-frontend-coexistence.md) | Issue #859 milestone B0: recorded coexistence baseline, legacy entry-site inventory, and the specified opt-in explicit/concrete frontend |
 | [869-core-cuda-feature-mismatch.md](./869-core-cuda-feature-mismatch.md) | Issue #869 typed rejection of execution contexts a core build cannot support, including the backend-CUDA-without-core-CUDA build |
 | [cuda-tree-contraction.md](./cuda-tree-contraction.md) | Issues #623/#553 single-CUDA explicit transfer and TreeTN contraction vertical slice |
 | [context-scoped-src-contraction.md](./context-scoped-src-contraction.md) | Issue #720 caller-owned context construction, factorization, adaptive decisions, and CUDA-resident SRC |
 | [torch_backend.md](./torch_backend.md) | PyTorch backend design exploration |
 | [tenferro_ad_scalar_operator_extension_note.md](./tenferro_ad_scalar_operator_extension_note.md) | Tenferro AD scalar operator extension notes |
-| [build-profiles.md](./build-profiles.md) | Debug-free ordinary Cargo profiles and the opt-in full-debug release profile |
+| [build-profiles.md](./build-profiles.md) | Debug-free ordinary Cargo profiles, the opt-in full-debug release profile, and the backend-provider feature convention and supported configurations |
+| [repository-growth-review.md](./repository-growth-review.md) | Issue #917 advisory file-size review, shared reviewer/backtest logic and rollout evidence |
 
 ## Tensor Networks
 

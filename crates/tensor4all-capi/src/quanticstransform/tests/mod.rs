@@ -416,7 +416,7 @@ fn test_try_vec_with_capacity_reports_invalid_argument_context() {
 }
 
 #[test]
-fn test_public_phase_materializer_reservation_failure_preserves_sentinel() {
+fn test_public_phase_materializer_oversized_layout_preserves_sentinel() {
     let layout = new_layout(t4a_qtt_layout_kind::Fused, &[usize::MAX]);
     let sentinel = std::ptr::NonNull::<t4a_treetn>::dangling().as_ptr();
     let mut op = sentinel;
@@ -427,9 +427,11 @@ fn test_public_phase_materializer_reservation_failure_preserves_sentinel() {
     );
     assert_eq!(op, sentinel);
     let error = last_error();
+    // 2^(r-1) overflows f64 for r = usize::MAX, which the phase rotation
+    // rejects before reserving the site list (#961).
     assert!(
-        error.contains("allocation failed"),
-        "expected actual reservation failure, got: {error}"
+        error.contains("theta * 2^(r-1) must be finite"),
+        "expected scaled-angle rejection, got: {error}"
     );
 
     t4a_qtt_layout_release(layout);

@@ -225,6 +225,30 @@ where
     }
 }
 
+/// The permutation that sorts `singular_values` in nonincreasing order, or `None` when they
+/// already are.
+///
+/// SVD prefix truncation assumes nonincreasing singular values, but a backend may return them out
+/// of order (tensor4all/faer#82). The ordered case costs one pass and no allocation. The
+/// `tensor4all-core` SVD wrappers keep the same check.
+/// `value` reads one entry as `f64`.
+pub(crate) fn descending_order<S: Copy>(
+    singular_values: &[S],
+    value: impl Fn(S) -> f64,
+) -> Option<Vec<usize>> {
+    if singular_values
+        .windows(2)
+        .all(|pair| value(pair[0]) >= value(pair[1]))
+    {
+        return None;
+    }
+    let mut order: Vec<usize> = (0..singular_values.len()).collect();
+    order.sort_by(|&left, &right| {
+        value(singular_values[right]).total_cmp(&value(singular_values[left]))
+    });
+    Some(order)
+}
+
 /// SVD-based factorization for TT compression
 fn factorize_svd<T>(
     matrix: &Matrix<T>,
@@ -283,6 +307,15 @@ where
         })?,
     );
 
+    // The prefix truncation below needs nonincreasing singular values; the backend may return
+    // them out of order (tensor4all/faer#82), so read them and their vectors through `order`.
+    let order = descending_order(&s_data, |value| value);
+    let s_data: Vec<f64> = match &order {
+        Some(order) => order.iter().map(|&p| s_data[p]).collect(),
+        None => s_data,
+    };
+    let col = |j: usize| order.as_ref().map_or(j, |order| order[j]);
+
     // Determine rank based on tolerance and max_bond_dim
     let min_dim = m.min(n);
     let s_max = if !s_data.is_empty() { s_data[0] } else { 0.0 };
@@ -313,13 +346,13 @@ where
         // Left = U[:, :rank], Right = diag(S[:rank]) * Vt[:rank, :]
         for i in 0..m {
             for j in 0..rank {
-                left[[i, j]] = u[[i, j]];
+                left[[i, j]] = u[[i, col(j)]];
             }
         }
         for i in 0..rank {
             let sv = T::from_f64(s_data[i]);
             for j in 0..n {
-                right[[i, j]] = sv * vt[[i, j]];
+                right[[i, j]] = sv * vt[[col(i), j]];
             }
         }
     } else {
@@ -327,12 +360,12 @@ where
         for i in 0..m {
             for j in 0..rank {
                 let sv = T::from_f64(s_data[j]);
-                left[[i, j]] = u[[i, j]] * sv;
+                left[[i, j]] = u[[i, col(j)]] * sv;
             }
         }
         for i in 0..rank {
             for j in 0..n {
-                right[[i, j]] = vt[[i, j]];
+                right[[i, j]] = vt[[col(i), j]];
             }
         }
     }
@@ -352,8 +385,10 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, an
-    /// /// SVD or non-convergence failure, or a backend failure).
+    /// Returns [`SimpleTensorTrainError::MatrixCI`] when the LU/CI
+    /// factorization fails, or
+    /// [`SimpleTensorTrainError::InvalidOperation`] when the SVD factorization,
+    /// a matrix multiply, or a tensor allocation fails.
     ///
     /// # Examples
     ///
@@ -403,7 +438,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
             )?;
 
             // Update current tensor
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim)?;
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..new_bond_dim {
@@ -431,7 +466,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
             })?;
 
             // Update next tensor
-            let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim);
+            let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim)?;
             for l in 0..new_bond_dim {
                 for s in 0..next_site_dim {
                     for r in 0..next_right_dim {
@@ -461,7 +496,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
             )?;
 
             // Update current tensor from right_factor
-            let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim)?;
             for l in 0..new_bond_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
@@ -486,7 +521,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
             })?;
 
             // Update prev tensor
-            let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim);
+            let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim)?;
             for l in 0..prev_left_dim {
                 for s in 0..prev_site_dim {
                     for r in 0..new_bond_dim {
@@ -506,8 +541,10 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, an
-    /// /// SVD or non-convergence failure, or a backend failure).
+    /// Returns [`SimpleTensorTrainError::MatrixCI`] when the LU/CI
+    /// factorization fails, or
+    /// [`SimpleTensorTrainError::InvalidOperation`] when the SVD factorization,
+    /// a matrix multiply, or a tensor allocation fails.
     ///
     /// # Examples
     ///
@@ -540,4 +577,4 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

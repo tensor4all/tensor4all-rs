@@ -83,17 +83,13 @@ where
     assert_eq!(tensor.dims(), vec![3, 3]);
     assert!(tensor.is_diag());
     assert_eq!(tensor.storage_kind(), StorageKind::Diagonal);
-    if tensor.is_f32() || tensor.is_c32() {
-        assert!(matches!(
-            tensor.storage(),
-            Err(TensorStorageError::UnsupportedDtype { .. })
-        ));
-    } else {
-        assert_eq!(
-            tensor.storage().unwrap().storage_kind(),
-            StorageKind::Diagonal
-        );
-    }
+    // Every supported element type keeps its own scalar kind in compact storage.
+    let storage = tensor.storage().expect("compact storage snapshot");
+    assert_eq!(storage.storage_kind(), StorageKind::Diagonal);
+    // The snapshot keeps the element type: a strict typed read succeeds and the
+    // other width of the same real/complex kind is refused.
+    let dense = tensor.to_vec::<T>().expect("own-dtype read");
+    assert_eq!(dense.len(), 9);
 }
 
 #[test]
@@ -227,7 +223,7 @@ fn test_idx_tensor_creation() {
     let storage = Arc::new(Storage::from_dense_col_major(vec![0.0; 6], &[2, 3]).unwrap());
 
     let tensor: IdxTensor = IdxTensor::new(indices, storage).unwrap();
-    assert_eq!(tensor.indices.len(), 2);
+    assert_eq!(tensor.indices().len(), 2);
     let dims = tensor.dims();
     assert_eq!(dims.len(), 2);
     assert_eq!(dims[0], 2);
@@ -546,9 +542,9 @@ fn test_replaceind_basic() {
     let replaced = tensor.replaceind(&i, &new_i).unwrap();
 
     // Check that the first index was replaced
-    assert_eq!(replaced.indices[0].id, new_i.id);
+    assert_eq!(replaced.indices()[0].id, new_i.id);
     // Check that the second index was not affected
-    assert_eq!(replaced.indices[1].id, j.id);
+    assert_eq!(replaced.indices()[1].id, j.id);
     // Check that dimensions are unchanged
     assert_eq!(replaced.dims(), vec![2, 3]);
     assert_eq!(
@@ -572,8 +568,8 @@ fn test_replaceind_no_match() {
     let replaced = tensor.replaceind(&k, &new_k).unwrap();
 
     // Check that indices are unchanged
-    assert_eq!(replaced.indices[0].id, i.id);
-    assert_eq!(replaced.indices[1].id, j.id);
+    assert_eq!(replaced.indices()[0].id, i.id);
+    assert_eq!(replaced.indices()[1].id, j.id);
 }
 
 #[test]
@@ -598,9 +594,9 @@ fn test_replace_indices_basic() {
         .unwrap();
 
     // Check that all indices were replaced
-    assert_eq!(replaced.indices[0].id, new_i.id);
-    assert_eq!(replaced.indices[1].id, new_j.id);
-    assert_eq!(replaced.indices[2].id, new_k.id);
+    assert_eq!(replaced.indices()[0].id, new_i.id);
+    assert_eq!(replaced.indices()[1].id, new_j.id);
+    assert_eq!(replaced.indices()[2].id, new_k.id);
     // Check that dimensions are unchanged
     assert_eq!(replaced.dims(), vec![2, 3, 4]);
 }
@@ -623,10 +619,10 @@ fn test_replace_indices_partial() {
         .unwrap();
 
     // Check that i was replaced
-    assert_eq!(replaced.indices[0].id, new_i.id);
+    assert_eq!(replaced.indices()[0].id, new_i.id);
     // Check that j and k are unchanged
-    assert_eq!(replaced.indices[1].id, j.id);
-    assert_eq!(replaced.indices[2].id, k.id);
+    assert_eq!(replaced.indices()[1].id, j.id);
+    assert_eq!(replaced.indices()[2].id, k.id);
 }
 
 #[test]
@@ -702,8 +698,8 @@ fn test_replace_indices_does_not_reorder_data() {
         .unwrap();
 
     // Check indices were replaced
-    assert_eq!(replaced.indices[0].id, new_i.id);
-    assert_eq!(replaced.indices[1].id, new_j.id);
+    assert_eq!(replaced.indices()[0].id, new_i.id);
+    assert_eq!(replaced.indices()[1].id, new_j.id);
     assert_eq!(replaced.dims(), vec![2, 3]);
 
     // CRITICAL: replace_indices does NOT reorder data
@@ -741,8 +737,8 @@ fn test_replace_indices_with_different_order_does_not_reorder_data() {
         .unwrap();
 
     // Check indices were replaced (order unchanged, just IDs changed)
-    assert_eq!(replaced.indices[0].id, new_i.id);
-    assert_eq!(replaced.indices[1].id, new_j.id);
+    assert_eq!(replaced.indices()[0].id, new_i.id);
+    assert_eq!(replaced.indices()[1].id, new_j.id);
     // Dimensions remain the same: [2, 3]
     assert_eq!(replaced.dims(), vec![2, 3]);
 
@@ -772,8 +768,8 @@ fn test_permuteinds_reorders_data() {
     let permuted = tensor.permute_indices(&[j.clone(), i.clone()]).unwrap();
 
     // Check indices were permuted
-    assert_eq!(permuted.indices[0].id, j.id);
-    assert_eq!(permuted.indices[1].id, i.id);
+    assert_eq!(permuted.indices()[0].id, j.id);
+    assert_eq!(permuted.indices()[1].id, i.id);
     assert_eq!(permuted.dims(), vec![3, 2]);
 
     // CRITICAL: permuteinds DOES reorder data
@@ -898,7 +894,7 @@ fn test_tensor_conj_f64() {
     let conj_tensor = tensor.conj();
 
     // Indices should be the same
-    assert_eq!(conj_tensor.indices[0].id, i.id);
+    assert_eq!(conj_tensor.indices()[0].id, i.id);
     // Dims should be the same
     assert_eq!(conj_tensor.dims(), vec![2]);
     // Data should be the same (real conj is identity)
@@ -922,8 +918,8 @@ fn test_tensor_conj_c64() {
     let conj_tensor = tensor.conj();
 
     // Indices should be preserved
-    assert_eq!(conj_tensor.indices[0].id, i.id);
-    assert_eq!(conj_tensor.indices[1].id, j.id);
+    assert_eq!(conj_tensor.indices()[0].id, i.id);
+    assert_eq!(conj_tensor.indices()[1].id, j.id);
     // Dims should be preserved
     assert_eq!(conj_tensor.dims(), vec![2, 3]);
     // Data should be conjugated
@@ -1162,4 +1158,142 @@ fn test_as_slice_error_on_wrong_type() {
     .unwrap();
     assert!(tensor_c64.to_vec::<f64>().is_err());
     assert!(tensor_c64.to_vec::<f64>().is_err());
+}
+
+/// Differential regression for #737: both structured `select_indices` paths
+/// must return exactly the dense `select_indices` result after the per-element
+/// scratch buffers were hoisted out of their loops.
+///
+/// The reference is a plain dense tensor holding the same materialized values,
+/// which selects through the independent runtime slice/reshape path.
+fn assert_structured_select_matches_dense<T>(
+    structured: IdxTensor,
+    selections: &[(Vec<DynIndex>, Vec<usize>)],
+) where
+    T: TensorElement + PartialEq + std::fmt::Debug,
+{
+    let dense = IdxTensor::from_dense(
+        structured.indices().to_vec(),
+        structured.to_vec::<T>().unwrap(),
+    )
+    .unwrap();
+
+    for (selected, positions) in selections {
+        let optimized = structured.select_indices(selected, positions).unwrap();
+        let reference = dense.select_indices(selected, positions).unwrap();
+        assert_eq!(
+            optimized.to_vec::<T>().unwrap(),
+            reference.to_vec::<T>().unwrap(),
+            "structured select_indices diverged from the dense reference for \
+             selected={selected:?} positions={positions:?}"
+        );
+    }
+}
+
+/// Copy-class structured tensor with axis classes `[0, 1, 0]` and payload
+/// `[2, 3]`, matching the existing structured-selection fixtures.
+fn copy_class_structured_f64(i: &DynIndex, j: &DynIndex, k: &DynIndex) -> IdxTensor {
+    let storage = Storage::new_structured(
+        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+        vec![2, 3],
+        vec![1, 2],
+        vec![0, 1, 0],
+    )
+    .unwrap();
+    IdxTensor::from_storage(vec![i.clone(), j.clone(), k.clone()], Arc::new(storage)).unwrap()
+}
+
+#[test]
+fn structured_select_indices_matches_dense_reference_f64() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(2);
+    let structured = copy_class_structured_f64(&i, &j, &k);
+    let selections = vec![
+        (vec![j.clone()], vec![1]),
+        (vec![k.clone()], vec![1]),
+        (vec![i.clone(), k.clone()], vec![1, 1]),
+        (vec![i.clone(), k.clone()], vec![0, 1]),
+        (vec![i.clone(), j.clone(), k.clone()], vec![1, 1, 1]),
+        (vec![i.clone(), j.clone()], vec![1, 1]),
+    ];
+    assert_structured_select_matches_dense::<f64>(structured, &selections);
+}
+
+#[test]
+fn structured_select_indices_matches_dense_reference_c64() {
+    let i = Index::new_dyn(2);
+    let j = Index::new_dyn(3);
+    let k = Index::new_dyn(2);
+    let storage = Storage::new_structured(
+        vec![
+            Complex64::new(1.0, -1.0),
+            Complex64::new(2.0, 0.5),
+            Complex64::new(3.0, 2.0),
+            Complex64::new(4.0, -0.5),
+            Complex64::new(5.0, 1.5),
+            Complex64::new(6.0, 0.0),
+        ],
+        vec![2, 3],
+        vec![1, 2],
+        vec![0, 1, 0],
+    )
+    .unwrap();
+    let structured =
+        IdxTensor::from_storage(vec![i.clone(), j.clone(), k.clone()], Arc::new(storage)).unwrap();
+    let selections = vec![
+        (vec![j.clone()], vec![2]),
+        (vec![k.clone()], vec![0]),
+        (vec![i.clone(), k.clone()], vec![1, 1]),
+        (vec![i.clone(), k.clone()], vec![0, 1]),
+        (vec![i.clone(), j.clone(), k.clone()], vec![0, 0, 0]),
+    ];
+    assert_structured_select_matches_dense::<Complex64>(structured, &selections);
+}
+
+#[test]
+fn structured_select_indices_matches_dense_reference_f32() {
+    let left = Index::new_dyn(2);
+    let site = Index::new_dyn(3);
+    let right = Index::new_dyn(2);
+    // Copy selector: payload is `2` at `site == 1` on the left/right diagonal.
+    let structured =
+        IdxTensor::from_copy_selector(left.clone(), site.clone(), right.clone(), 1, 2.0_f32)
+            .unwrap();
+    let selections = vec![
+        (vec![site.clone()], vec![1]),
+        (vec![right.clone()], vec![1]),
+        (vec![left.clone(), right.clone()], vec![0, 1]),
+        (
+            vec![left.clone(), site.clone(), right.clone()],
+            vec![1, 1, 1],
+        ),
+        (vec![left.clone(), site.clone()], vec![1, 0]),
+    ];
+    assert_structured_select_matches_dense::<f32>(structured, &selections);
+}
+
+#[test]
+fn structured_select_indices_matches_dense_reference_c32() {
+    let left = Index::new_dyn(2);
+    let site = Index::new_dyn(3);
+    let right = Index::new_dyn(2);
+    let structured = IdxTensor::from_copy_selector(
+        left.clone(),
+        site.clone(),
+        right.clone(),
+        2,
+        Complex32::new(1.0, -2.0),
+    )
+    .unwrap();
+    let selections = vec![
+        (vec![site.clone()], vec![2]),
+        (vec![right.clone()], vec![0]),
+        (vec![left.clone(), right.clone()], vec![1, 0]),
+        (
+            vec![left.clone(), site.clone(), right.clone()],
+            vec![0, 2, 1],
+        ),
+    ];
+    assert_structured_select_matches_dense::<Complex32>(structured, &selections);
 }

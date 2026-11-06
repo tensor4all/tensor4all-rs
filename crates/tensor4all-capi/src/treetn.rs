@@ -6,14 +6,15 @@ use crate::types::{
     InternalTreeTN, InternalTreeTNEvaluatorHandle,
 };
 use crate::{
-    capi_error, clone_opaque, is_assigned_opaque, panic_message, release_opaque, run_catching,
-    set_last_error, t4a_status_code, CapiResult, T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR,
-    T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
+    capi_error, clone_opaque, is_assigned_opaque, release_opaque, run_catching, run_status,
+    set_last_error, t4a_status_code, CapiResult, T4A_BUFFER_TOO_SMALL, T4A_INVALID_ARGUMENT,
+    T4A_NULL_POINTER,
 };
 use num_complex::Complex64;
 use std::collections::{HashMap, HashSet};
-use std::panic::{catch_unwind, AssertUnwindSafe};
-use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike, SvdTruncationPolicy};
+use tensor4all_core::{
+    validate_svd_truncation_options, AnyScalar, ColMajorArrayRef, IndexLike, SvdTruncationPolicy,
+};
 use tensor4all_treetn::contraction::{self, ContractionMethod, ContractionOptions};
 use tensor4all_treetn::{
     apply_linear_operator, partial_contract, square_linsolve, ApplyOptions, CachedEvaluatorOptions,
@@ -104,24 +105,6 @@ fn orthogonalize_error_message(force: libc::c_int, err: impl std::fmt::Display) 
         }
     }
     msg
-}
-
-fn run_status<F>(f: F) -> t4a_status_code
-where
-    F: FnOnce() -> CapiResult<()>,
-{
-    match catch_unwind(AssertUnwindSafe(f)) {
-        Ok(Ok(())) => T4A_SUCCESS,
-        Ok(Err((code, msg))) => {
-            set_last_error(&msg);
-            code
-        }
-        Err(panic) => {
-            let msg = panic_message(&*panic);
-            set_last_error(&msg);
-            T4A_INTERNAL_ERROR
-        }
-    }
 }
 
 fn require_tree<'a>(ptr: *const t4a_treetn) -> CapiResult<&'a t4a_treetn> {
@@ -465,11 +448,26 @@ fn build_split_options(
     options
 }
 
-fn build_swap_options(maxdim: usize, rtol: f64) -> SwapOptions {
-    SwapOptions {
+/// Build the swap options, rejecting an invalid explicit policy up front.
+///
+/// The policy is validated before dispatch so a swap that has nothing to move
+/// (an empty assignment, or a restructure plan without a swap phase) still
+/// reports an invalid threshold instead of silently ignoring it.
+fn build_swap_options(
+    maxdim: usize,
+    policy: *const t4a_svd_truncation_policy,
+) -> CapiResult<SwapOptions> {
+    let policy = resolve_svd_policy(policy);
+    validate_svd_truncation_options(None, policy)
+        .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;
+    let mut options = SwapOptions {
         max_bond_dim: (maxdim > 0).then_some(maxdim),
-        rtol: (rtol > 0.0).then_some(rtol),
+        svd_policy: None,
+    };
+    if let Some(policy) = policy {
+        options = options.with_svd_policy(policy);
     }
+    Ok(options)
 }
 
 fn build_final_truncation(
@@ -1254,6 +1252,17 @@ pub extern "C" fn t4a_treetn_split_to(
 }
 
 /// Reassign site indices to target vertices using scheduled swap transport.
+///
+/// `policy` selects the singular-value truncation applied at every swap
+/// factorization: `NULL` means no threshold truncation, so the swap is exact
+/// apart from a positive `maxdim` cap. A `maxdim = 0` and a `NULL` policy
+/// therefore perform an exact swap. A non-`NULL` policy is interpreted as
+/// documented for [`SvdTruncationPolicy`]; the previous `rtol` argument is
+/// equivalent to `threshold = rtol`, relative scale, singular-value measure,
+/// and the per-value rule.
+///
+/// `NULL` is swap-specific: the tensor and TreeTN SVD entries treat a `NULL`
+/// policy as the global default policy instead.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_swap_site_indices(
     treetn: *const t4a_treetn,
@@ -1261,7 +1270,7 @@ pub extern "C" fn t4a_treetn_swap_site_indices(
     assignment_target_vertices: *const libc::size_t,
     n_assignments: libc::size_t,
     maxdim: libc::size_t,
-    rtol: libc::c_double,
+    policy: *const t4a_svd_truncation_policy,
     out: *mut *mut t4a_treetn,
 ) -> t4a_status_code {
     run_catching(out, || {
@@ -1272,7 +1281,7 @@ pub extern "C" fn t4a_treetn_swap_site_indices(
             n_assignments,
             "target_assignment",
         )?;
-        let options = build_swap_options(maxdim, rtol);
+        let options = build_swap_options(maxdim, policy)?;
         let mut result = tn.inner().clone();
         result
             .swap_site_indices(&target_assignment, &options)
@@ -1282,6 +1291,11 @@ pub extern "C" fn t4a_treetn_swap_site_indices(
 }
 
 /// Restructure a TreeTN using split, swap, and optional final truncation phases.
+///
+/// `swap_policy` is the swap policy of [`t4a_treetn_swap_site_indices`],
+/// including its swap-specific `NULL` meaning: no threshold truncation. The
+/// tensor and TreeTN SVD entries instead treat `NULL` as the global default
+/// policy.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn t4a_treetn_restructure_to(
     treetn: *const t4a_treetn,
@@ -1296,7 +1310,7 @@ pub extern "C" fn t4a_treetn_restructure_to(
     split_maxdim: libc::size_t,
     split_final_sweep: libc::c_int,
     swap_maxdim: libc::size_t,
-    swap_rtol: libc::c_double,
+    swap_policy: *const t4a_svd_truncation_policy,
     final_policy: *const t4a_svd_truncation_policy,
     final_maxdim: libc::size_t,
     out: *mut *mut t4a_treetn,
@@ -1319,7 +1333,7 @@ pub extern "C" fn t4a_treetn_restructure_to(
                 split_maxdim,
                 split_final_sweep,
             ))
-            .with_swap(build_swap_options(swap_maxdim, swap_rtol));
+            .with_swap(build_swap_options(swap_maxdim, swap_policy)?);
         if let Some(final_truncation) = build_final_truncation(final_policy, final_maxdim) {
             options = options.with_final_truncation(final_truncation);
         }
@@ -1908,6 +1922,7 @@ pub extern "C" fn t4a_treetn_apply_operator_chain(
                 nfullsweeps: fit_nfullsweeps,
                 convergence_tol: resolve_convergence_tol(convergence_tol),
                 src_options: Default::default(),
+                center: None,
             },
         )
         .map_err(|err| capi_error(T4A_INVALID_ARGUMENT, err))?;

@@ -76,6 +76,7 @@ pub(crate) fn run_local_sweeps<'a, T, V, F>(
     options: &TreeAciOptions<V>,
     operator: &mut F,
     rng: &mut dyn rand::RngCore,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> Result<SweepHistory>
 where
     T: TreeAciScalar,
@@ -107,7 +108,7 @@ where
         } else {
             PassDirection::Reverse
         };
-        let report = run_directional_pass(state, options, direction, operator)?;
+        let report = run_directional_pass(state, options, direction, operator, context)?;
         stable_rank_passes =
             track_rank_stability(&mut previous_ranks, &state.edge_ranks, stable_rank_passes);
         evaluated_points = evaluated_points
@@ -232,6 +233,7 @@ pub(crate) fn run_directional_pass<T, V, F>(
     options: &TreeAciOptions<V>,
     direction: PassDirection,
     operator: &mut F,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> Result<PassReport>
 where
     T: TreeAciScalar,
@@ -259,6 +261,7 @@ where
             operator,
             &mut update_trace,
             &mut evaluated_points,
+            context,
         ) {
             if update_trace.any {
                 finalize_deferred_canonicalization(state)?;
@@ -318,6 +321,7 @@ fn run_phase_serial<T, V, F>(
     operator: &mut F,
     update_trace: &mut UpdateTrace,
     evaluated_points: &mut u64,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> Result<()>
 where
     T: TreeAciScalar,
@@ -345,7 +349,8 @@ where
 
         for step in &path.steps {
             let directed = directed_edge_for_step(state, step)?;
-            let report = update_edge_transaction(state, directed, options, true, operator)?;
+            let report =
+                update_edge_transaction(state, directed, options, true, operator, context)?;
             *evaluated_points = evaluated_points
                 .checked_add(u64::try_from(report.evaluated_points).map_err(|_| {
                     TreeAciError::SizeOverflow {

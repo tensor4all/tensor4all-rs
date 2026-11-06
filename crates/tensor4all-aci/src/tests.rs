@@ -6,12 +6,14 @@ use crate::{
         convergence_criterion_like_julia, error_metric, max_error_metric, rank_is_saturated,
         ranks_are_stable,
     },
-    elementwise_batched, initial_guess,
+    elementwise_batched,
+    local::LocalBlockEvaluator,
     random_tt::{
-        initial_guess_core_entry_count, initial_guess_existing_entry_count,
+        initial_guess, initial_guess_core_entry_count, initial_guess_existing_entry_count,
         initial_guess_total_entry_count, MAX_INITIAL_GUESS_CORE_ENTRIES,
     },
-    AciError, AciOptions, ElementwiseBatch, ElementwiseProblem, LocalBlockEvaluator,
+    state::ElementwiseProblem,
+    AciError, AciOptions, ElementwiseBatch,
 };
 use num_complex::Complex64;
 use std::cell::RefCell;
@@ -30,7 +32,7 @@ fn tensor_train_with_link_dims(site_dims: &[usize], link_dims: &[usize]) -> Simp
         .map(|(site, &site_dim)| {
             let left_dim = if site == 0 { 1 } else { link_dims[site - 1] };
             let right_dim = link_dims.get(site).copied().unwrap_or(1);
-            tensor3_zeros(left_dim, site_dim, right_dim)
+            tensor3_zeros(left_dim, site_dim, right_dim).unwrap()
         })
         .collect();
     SimpleTensorTrain::new(cores).unwrap()
@@ -118,7 +120,7 @@ fn local_test_problem() -> ElementwiseProblem<f64> {
     ])
     .unwrap();
     let mut problem =
-        ElementwiseProblem::new(vec![input_a, input_b], AciOptions::default()).unwrap();
+        ElementwiseProblem::new(vec![input_a, input_b], AciOptions::default(), None).unwrap();
     for input in 0..problem.n_inputs() {
         problem.left_frames[input][1] =
             Some(Matrix::from_col_major_vec(2, 2, vec![1.0, 2.0, 10.0, 20.0]));
@@ -594,7 +596,7 @@ fn elementwise_batch_rejects_out_of_range_point_index() {
 fn elementwise_problem_initializes_boundary_frames() {
     let a = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
-    let problem = ElementwiseProblem::new(vec![a, b], AciOptions::default()).unwrap();
+    let problem = ElementwiseProblem::new(vec![a, b], AciOptions::default(), None).unwrap();
     assert_eq!(problem.len(), 3);
     assert_eq!(problem.n_inputs(), 2);
     assert_eq!(problem.left_frame_shape(0, 0), Some((1, 1)));
@@ -630,7 +632,9 @@ fn sweep_forward_once(problem: &mut ElementwiseProblem<f64>, options: &AciOption
         Ok(())
     };
     for bond in 0..problem.len() - 1 {
-        problem.local_update(bond, true, options, &mut op).unwrap();
+        problem
+            .local_update(bond, true, options, &mut op, None)
+            .unwrap();
     }
 }
 
@@ -658,7 +662,7 @@ fn global_pivot_injection_stays_within_the_algebraic_bond_bounds() {
     let a = separable_tt(&site_dims, 0.25);
     let b = separable_tt(&site_dims, 0.5);
     let options = AciOptions::default();
-    let mut problem = ElementwiseProblem::new(vec![a, b], options.clone()).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![a, b], options.clone(), None).unwrap();
     sweep_forward_once(&mut problem, &options);
 
     let pivots: Vec<Vec<usize>> = (0..8)
@@ -712,7 +716,7 @@ fn global_pivot_injection_skips_pivots_already_represented() {
     let a = separable_tt(&site_dims, 0.25);
     let b = separable_tt(&site_dims, 0.5);
     let options = AciOptions::default();
-    let mut problem = ElementwiseProblem::new(vec![a, b], options.clone()).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![a, b], options.clone(), None).unwrap();
     sweep_forward_once(&mut problem, &options);
 
     let pivot = vec![vec![1usize, 0, 1, 0, 1, 0]];
@@ -729,7 +733,7 @@ fn global_pivot_injection_skips_pivots_already_represented() {
 fn elementwise_problem_initializes_all_rank_one_right_frames() {
     let a = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
-    let problem = ElementwiseProblem::new(vec![a, b], AciOptions::default()).unwrap();
+    let problem = ElementwiseProblem::new(vec![a, b], AciOptions::default(), None).unwrap();
 
     for input in 0..problem.n_inputs() {
         assert_eq!(
@@ -746,7 +750,7 @@ fn elementwise_problem_initializes_all_rank_one_right_frames() {
 #[test]
 fn elementwise_problem_handles_one_site_input() {
     let input = SimpleTensorTrain::<f64>::constant(&[2], 3.0);
-    let problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+    let problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
     assert_eq!(problem.len(), 1);
     assert_eq!(problem.left_frame_shape(0, 0), Some((1, 1)));
     assert_eq!(problem.right_frame_shape(0, 1), Some((1, 1)));
@@ -766,7 +770,7 @@ fn elementwise_problem_preserves_initial_guess_values() {
         ..AciOptions::default()
     };
 
-    let problem = ElementwiseProblem::new(vec![input], options).unwrap();
+    let problem = ElementwiseProblem::new(vec![input], options, None).unwrap();
 
     for indices in [[0, 0], [0, 1], [1, 0], [1, 1]] {
         assert!(
@@ -779,9 +783,9 @@ fn elementwise_problem_preserves_initial_guess_values() {
 #[test]
 fn elementwise_problem_updates_left_frame_for_selected_rows() {
     let input = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
-    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
 
-    problem.update_left_frame(0, 0, &[0, 1]).unwrap();
+    problem.update_left_frame(0, 0, &[0, 1], None).unwrap();
 
     assert_eq!(problem.left_frame_shape(0, 1), Some((2, 1)));
 }
@@ -793,9 +797,9 @@ fn elementwise_problem_updates_left_frame_values() {
         tensor3_from_data(vec![3.0, 4.0, 5.0, 6.0], 2, 2, 1).unwrap(),
     ])
     .unwrap();
-    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
 
-    problem.update_left_frame(0, 0, &[0, 1]).unwrap();
+    problem.update_left_frame(0, 0, &[0, 1], None).unwrap();
 
     assert_eq!(problem.left_frame_shape(0, 1), Some((2, 2)));
     assert_eq!(problem.left_frame_value(0, 1, 0, 0), Some(1.0));
@@ -812,9 +816,9 @@ fn elementwise_problem_updates_left_frame_values() {
 fn elementwise_problem_updates_all_left_frames_for_selected_rows() {
     let a = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
-    let mut problem = ElementwiseProblem::new(vec![a, b], AciOptions::default()).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![a, b], AciOptions::default(), None).unwrap();
 
-    problem.update_left_frames(0, &[0, 1]).unwrap();
+    problem.update_left_frames(0, &[0, 1], None).unwrap();
 
     assert_eq!(problem.left_frame_shape(0, 1), Some((2, 1)));
     assert_eq!(problem.left_frame_shape(1, 1), Some((2, 1)));
@@ -823,9 +827,9 @@ fn elementwise_problem_updates_all_left_frames_for_selected_rows() {
 #[test]
 fn elementwise_problem_updates_right_frame_for_selected_columns() {
     let input = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
-    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
 
-    problem.update_right_frame(0, 2, &[0, 1]).unwrap();
+    problem.update_right_frame(0, 2, &[0, 1], None).unwrap();
 
     assert_eq!(problem.right_frame_shape(0, 2), Some((1, 2)));
 }
@@ -837,9 +841,9 @@ fn elementwise_problem_updates_right_frame_values() {
         tensor3_from_data(vec![3.0, 30.0, 4.0, 40.0], 2, 2, 1).unwrap(),
     ])
     .unwrap();
-    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
 
-    problem.update_right_frame(0, 1, &[0, 1]).unwrap();
+    problem.update_right_frame(0, 1, &[0, 1], None).unwrap();
 
     assert_eq!(problem.right_frame_shape(0, 1), Some((2, 2)));
     assert_eq!(problem.right_frame_value(0, 1, 0, 0), Some(3.0));
@@ -855,13 +859,13 @@ fn elementwise_problem_updates_right_frame_values() {
 #[test]
 fn elementwise_problem_rejects_invalid_frame_selection_indices() {
     let input = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
-    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
 
-    let left_err = problem.update_left_frame(0, 0, &[2]).unwrap_err();
+    let left_err = problem.update_left_frame(0, 0, &[2], None).unwrap_err();
     assert!(matches!(left_err, AciError::InvalidInitialGuess { .. }));
     assert!(left_err.to_string().contains("row index"));
 
-    let right_err = problem.update_right_frame(0, 2, &[2]).unwrap_err();
+    let right_err = problem.update_right_frame(0, 2, &[2], None).unwrap_err();
     assert!(matches!(right_err, AciError::InvalidInitialGuess { .. }));
     assert!(right_err.to_string().contains("column index"));
 }
@@ -871,11 +875,12 @@ fn elementwise_problem_one_bond_local_update_matches_dense_product_left_orthogon
     let input_a = SimpleTensorTrain::<f64>::constant(&[2, 2], 2.0);
     let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2], 3.0);
     let options = AciOptions::<f64>::default();
-    let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
+    let mut problem =
+        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), None).unwrap();
     let mut operator = multiply_batch;
 
     problem
-        .local_update(0, true, &options, &mut operator)
+        .local_update(0, true, &options, &mut operator, None)
         .unwrap();
 
     for indices in [[0, 0], [1, 0], [0, 1], [1, 1]] {
@@ -892,14 +897,15 @@ fn elementwise_problem_one_bond_local_update_matches_dense_product_right_orthogo
     let input_a = SimpleTensorTrain::<f64>::constant(&[2, 2], 2.0);
     let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2], 3.0);
     let options = AciOptions::<f64>::default();
-    let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
+    let mut problem =
+        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), None).unwrap();
     for input in 0..problem.n_inputs() {
         problem.right_frames[input][1] = None;
     }
     let mut operator = multiply_batch;
 
     problem
-        .local_update(0, false, &options, &mut operator)
+        .local_update(0, false, &options, &mut operator, None)
         .unwrap();
 
     for indices in [[0, 0], [1, 0], [0, 1], [1, 1]] {
@@ -916,7 +922,8 @@ fn elementwise_problem_one_bond_local_update_returns_operator_error_side_channel
     let input_a = SimpleTensorTrain::<f64>::constant(&[2, 2], 2.0);
     let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2], 3.0);
     let options = AciOptions::<f64>::default();
-    let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
+    let mut problem =
+        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), None).unwrap();
     let mut operator = |_batch: ElementwiseBatch<'_, f64>, _output: &mut [f64]| {
         Err(AciError::Operator {
             message: "side-channel operator failure".to_string(),
@@ -924,7 +931,7 @@ fn elementwise_problem_one_bond_local_update_returns_operator_error_side_channel
     };
 
     let err = problem
-        .local_update(0, true, &options, &mut operator)
+        .local_update(0, true, &options, &mut operator, None)
         .unwrap_err();
 
     assert!(matches!(err, AciError::Operator { .. }));
@@ -936,11 +943,12 @@ fn elementwise_problem_one_bond_zero_update_keeps_left_frames_nonzero_dimensiona
     let input_a = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
     let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 3.0);
     let options = AciOptions::<f64>::default();
-    let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
+    let mut problem =
+        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), None).unwrap();
     let mut operator = zero_batch;
 
     problem
-        .local_update(0, true, &options, &mut operator)
+        .local_update(0, true, &options, &mut operator, None)
         .unwrap();
 
     assert_solution_is_zero_on_binary_three_site_grid(&problem);
@@ -949,7 +957,7 @@ fn elementwise_problem_one_bond_zero_update_keeps_left_frames_nonzero_dimensiona
     assert!(problem.local_input_value(0, 1, 0, 0).is_ok());
 
     problem
-        .local_update(1, true, &options, &mut operator)
+        .local_update(1, true, &options, &mut operator, None)
         .unwrap();
     assert_solution_is_zero_on_binary_three_site_grid(&problem);
 }
@@ -959,15 +967,16 @@ fn elementwise_problem_one_bond_zero_update_keeps_right_frames_nonzero_dimension
     let input_a = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
     let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 3.0);
     let options = AciOptions::<f64>::default();
-    let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
-    problem.update_left_frames(0, &[0]).unwrap();
+    let mut problem =
+        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), None).unwrap();
+    problem.update_left_frames(0, &[0], None).unwrap();
     for input in 0..problem.n_inputs() {
         problem.right_frames[input][2] = None;
     }
     let mut operator = zero_batch;
 
     problem
-        .local_update(1, false, &options, &mut operator)
+        .local_update(1, false, &options, &mut operator, None)
         .unwrap();
 
     assert_solution_is_zero_on_binary_three_site_grid(&problem);
@@ -976,7 +985,7 @@ fn elementwise_problem_one_bond_zero_update_keeps_right_frames_nonzero_dimension
     assert!(problem.local_input_value(0, 0, 0, 0).is_ok());
 
     problem
-        .local_update(0, false, &options, &mut operator)
+        .local_update(0, false, &options, &mut operator, None)
         .unwrap();
     assert_solution_is_zero_on_binary_three_site_grid(&problem);
 }
@@ -1310,7 +1319,7 @@ fn local_input_value_rejects_out_of_range_indices() {
 #[test]
 fn local_input_value_rejects_missing_frames() {
     let input = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
-    let problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+    let problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
 
     let err = problem.local_input_value(0, 1, 0, 0).unwrap_err();
 
@@ -1558,7 +1567,8 @@ fn initial_guess_zero_initializes_nonzero_dimensional_right_frames() {
         ..AciOptions::default()
     };
 
-    let mut problem = ElementwiseProblem::new(vec![input_a, input_b], options.clone()).unwrap();
+    let mut problem =
+        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), None).unwrap();
 
     assert_solution_is_zero_on_binary_three_site_grid(&problem);
     for input in 0..problem.n_inputs() {
@@ -1566,12 +1576,12 @@ fn initial_guess_zero_initializes_nonzero_dimensional_right_frames() {
         assert_eq!(problem.right_frame_shape(input, 2), Some((1, 1)));
         assert_eq!(problem.right_frame_shape(input, 3), Some((1, 1)));
     }
-    problem.update_left_frames(0, &[0]).unwrap();
+    problem.update_left_frames(0, &[0], None).unwrap();
     assert!(problem.local_input_value(0, 1, 0, 0).is_ok());
 
     let mut operator = zero_batch;
     problem
-        .local_update(1, false, &options, &mut operator)
+        .local_update(1, false, &options, &mut operator, None)
         .unwrap();
     assert_solution_is_zero_on_binary_three_site_grid(&problem);
 }
@@ -1929,9 +1939,9 @@ where
 
     let start = Instant::now();
     if left_orthogonal {
-        problem.update_left_frames(bond, &row_indices)?;
+        problem.update_left_frames(bond, &row_indices, None)?;
     } else {
-        problem.update_right_frames(bond + 1, &col_indices)?;
+        problem.update_right_frames(bond + 1, &col_indices, None)?;
     }
     problem.pivot_errors[bond] = pivot_error;
     problem.pivot_scales[bond] = sampled_scale;
@@ -1959,7 +1969,7 @@ fn timed_aci_run(
         )),
         ..AciOptions::default()
     };
-    let mut problem = ElementwiseProblem::new(inputs, options.clone()).unwrap();
+    let mut problem = ElementwiseProblem::new(inputs, options.clone(), None).unwrap();
     let mut timing = LocalStepTiming::default();
     let mut op = step_timing_multiply_batch;
     let mut ranks = Vec::new();

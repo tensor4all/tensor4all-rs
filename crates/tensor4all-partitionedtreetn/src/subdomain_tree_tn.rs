@@ -1,5 +1,6 @@
 //! Eagerly projected TreeTN subdomains.
 
+use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -7,10 +8,11 @@ use crate::error::{PartitionedTreeTNError, Result};
 use crate::projector::Projector;
 use tensor4all_core::{
     validate_svd_truncation_options, DynIndex, IdxTensor, IndexLike, SvdTruncationOptionsError,
+    TagSetLike,
 };
 use tensor4all_treetn::{
     contraction::{self, ContractionMethod, ContractionOptions},
-    SiteIndexNetwork, TreeTN, TruncationOptions,
+    SiteIndexNetwork, SumEngine, TreeTN, TruncationOptions,
 };
 
 /// A TreeTN together with the projector defining its subdomain.
@@ -51,6 +53,149 @@ where
     data: TreeTN<IdxTensor, V>,
     projector: Projector,
     budget_squared: Option<f64>,
+    order_key: PatchOrderKey<V>,
+}
+
+// This type cannot contain a DynIndex or its allocation ID. Content is not part
+// of it: the digest is only needed where two keys tie, and it is computed there.
+pub(crate) type PatchOrderKey<V> = (
+    Vec<(V, usize, Vec<String>, usize, i64)>,
+    Vec<(V, usize)>,
+    Vec<(V, usize, usize)>,
+);
+
+#[cfg(test)]
+thread_local! {
+    /// Content digests computed for ordering, so a test can assert that an input
+    /// without metadata ties computes none.
+    pub(crate) static CONTENT_DIGEST_CALLS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// Fixed seed of the patch digest fold.
+///
+/// It is unrelated to `IdxTensor::content_digest`'s seed: the patch fold only
+/// has to fold per-node digests reproducibly.
+const PATCH_DIGEST_SEED: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// Fold one 64-bit word into the patch digest state.
+///
+/// The patch digest only has to be reproducible across processes and builds, so
+/// it carries its own fixed mix instead of borrowing an unstable `Hasher`. The
+/// word is added rather than XORed for the reason `IdxTensor::content_digest`
+/// documents: an XOR step is linear over GF(2), so paired bit flips between two
+/// inputs cancel.
+fn mix_digest(state: u64, word: u64) -> u64 {
+    let mixed = state.wrapping_add(word).wrapping_mul(0x0000_0100_0000_01b3);
+    mixed ^ (mixed >> 32)
+}
+
+/// Content digest of every node tensor, folded in sorted node-name order.
+///
+/// `names` must be the patch's sorted node names, so two patches the signature
+/// component already matches fold the same nodes in the same order.
+///
+/// Each node contributes its leg roles before its payload: which physical axis
+/// is a site index and which is an internal bond, with the bond's labels and
+/// dimension. Without that, two networks over the same site indices whose node
+/// tensors carry the same buffer under a different leg order would share a
+/// digest while being different networks. Bond allocation ids are not hashed.
+fn tree_content_digest<V>(data: &TreeTN<IdxTensor, V>, names: &[V]) -> Option<u64>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let mut state = PATCH_DIGEST_SEED;
+    for name in names {
+        let node = data.node_index(name)?;
+        let tensor = data.tensor(node)?;
+        let site_indices = data.node_site_indices(name).unwrap_or_default();
+        for index in tensor.indices() {
+            let mut tags: Vec<_> = index.tags.iter().collect();
+            tags.sort();
+            let is_site = u64::from(site_indices.contains(index));
+            state = mix_digest(state, is_site);
+            state = mix_digest(state, index.dim as u64);
+            state = mix_digest(state, index.plev as u64);
+            state = mix_digest(state, tags.len() as u64);
+            for tag in tags {
+                for byte in tag.as_bytes() {
+                    state = mix_digest(state, u64::from(*byte));
+                }
+            }
+        }
+        state = mix_digest(state, tensor.content_digest()?);
+    }
+    Some(state)
+}
+
+/// Sort patches by their metadata key, then re-order what ties on it by content.
+///
+/// The first pass sorts on the metadata comparator alone. Every run of two or
+/// more items that compare equal is then re-sorted by content digest, so a
+/// metadata tie is broken by payload content while a run of one item is left
+/// alone.
+///
+/// The digest is a linear pass over a patch's payload, so this is what keeps
+/// ordering free when nothing ties: an input without metadata ties never calls
+/// `digest`. Items that also compare equal on content keep their relative order,
+/// and that last case is numerically inert for a sum.
+pub(crate) fn sort_by_patch_order<T>(
+    items: &mut Vec<T>,
+    compare: impl Fn(&T, &T) -> Ordering,
+    digest: impl Fn(&T) -> Option<u64>,
+) {
+    let mut order: Vec<usize> = (0..items.len()).collect();
+    order.sort_by(|&left, &right| compare(&items[left], &items[right]));
+    let mut start = 0;
+    while start < order.len() {
+        let mut end = start + 1;
+        while end < order.len()
+            && compare(&items[order[end]], &items[order[start]]) == Ordering::Equal
+        {
+            end += 1;
+        }
+        if end - start > 1 {
+            // One digest per item of the run, and stable, so content-identical
+            // items keep the input order.
+            order[start..end].sort_by_cached_key(|&index| digest(&items[index]));
+        }
+        start = end;
+    }
+    // `order` is a permutation of `0..items.len()`: sorting never drops or
+    // duplicates an index.
+    let mut slots: Vec<Option<T>> = std::mem::take(items).into_iter().map(Some).collect();
+    for index in order {
+        items.extend(slots[index].take());
+    }
+}
+
+/// Build the patch ordering key from a patch's own data and projector.
+fn build_order_key<V>(data: &TreeTN<IdxTensor, V>, projector: &Projector) -> PatchOrderKey<V>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let mut names = data.node_names();
+    names.sort();
+    let mut signature = Vec::new();
+    let mut labels = Vec::new();
+    let mut coordinates = Vec::new();
+    for name in &names {
+        for (axis, index) in data
+            .node_site_indices(name)
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+        {
+            let mut tags: Vec<_> = index.tags.iter().collect();
+            tags.sort();
+            signature.push((name.clone(), axis, tags, index.dim, index.plev));
+            labels.push((name.clone(), axis));
+            if let Some(value) = projector.get(index) {
+                coordinates.push((name.clone(), axis, value));
+            }
+        }
+    }
+    (signature, labels, coordinates)
 }
 
 impl<V> SubDomainTreeTN<V>
@@ -132,6 +277,40 @@ where
         Ok(())
     }
 
+    /// Order patches by index signature, then by their own projector
+    /// coordinates in logical labels.
+    ///
+    /// This is the metadata key alone. Content is not part of it because
+    /// fingerprinting a payload costs a linear pass; callers order by content
+    /// only inside a metadata tie, through [`sort_by_patch_order`] and
+    /// [`Self::content_digest`].
+    pub(crate) fn patch_order_key(&self) -> &PatchOrderKey<V> {
+        &self.order_key
+    }
+
+    /// Content digest of this patch's payloads, for breaking metadata ties.
+    ///
+    /// Covers every node tensor in sorted node-name order, each preceded by that
+    /// node's leg roles and canonical bond labels, and each node's own payload
+    /// bit patterns. `None` when a payload cannot be read without materializing
+    /// it, in which case the patch keeps its metadata order.
+    pub(crate) fn content_digest(&self) -> Option<u64> {
+        #[cfg(test)]
+        CONTENT_DIGEST_CALLS.with(|count| count.set(count.get() + 1));
+        let mut names = self.data.node_names();
+        names.sort();
+        tree_content_digest(&self.data, &names)
+    }
+
+    /// Content digest of this patch followed by `other`, for ordering a patch
+    /// pair as one item.
+    pub(crate) fn paired_content_digest(&self, other: &Self) -> Option<u64> {
+        Some(mix_digest(
+            mix_digest(PATCH_DIGEST_SEED, self.content_digest()?),
+            other.content_digest()?,
+        ))
+    }
+
     pub(crate) fn budget_squared(&self) -> Option<f64> {
         self.budget_squared
     }
@@ -140,6 +319,15 @@ where
         validate_budget_squared(budget_squared)?;
         self.budget_squared = Some(budget_squared);
         Ok(self)
+    }
+
+    /// Drop any inherited absolute budget metadata.
+    ///
+    /// Used when a stage truncates with a relative policy instead, so a later
+    /// consumer cannot mistake a stale absolute budget for the active rule.
+    pub(crate) fn without_budget_squared(mut self) -> Self {
+        self.budget_squared = None;
+        self
     }
 
     pub(crate) fn scalar_kind(&self) -> Result<Option<ScalarKind>> {
@@ -156,10 +344,20 @@ where
         if let Some(budget_squared) = budget_squared {
             validate_budget_squared(budget_squared)?;
         }
+        let order_key = build_order_key(&data, &projector);
+        debug_assert!(
+            !std::any::type_name::<PatchOrderKey<()>>().contains(std::any::type_name::<DynIndex>())
+        );
+        debug_assert_eq!(
+            order_key.2.len(),
+            projector.len(),
+            "key must use logical coordinates, never DynIndex IDs"
+        );
         Ok(Self {
             data,
             projector,
             budget_squared,
+            order_key,
         })
     }
 
@@ -210,11 +408,7 @@ where
         let _ = validate_data(&data)?;
         validate_projector_against_data(&data, &projector)?;
         let data = rebuild_masked_tree(&data, &projector)?;
-        Ok(Self {
-            data,
-            projector,
-            budget_squared: None,
-        })
+        Self::from_masked_data(data, projector, None)
     }
 
     /// Construct an eagerly rebuilt subdomain with an empty projector.
@@ -305,11 +499,7 @@ where
         }
 
         let data = rebuild_masked_tree(&self.data, &additions)?;
-        Ok(Some(Self {
-            data,
-            projector: merged_projector,
-            budget_squared: self.budget_squared,
-        }))
+        Self::from_masked_data(data, merged_projector, self.budget_squared).map(Some)
     }
 
     /// Add two subdomains with the same projector using strict TreeTN addition.
@@ -349,20 +539,37 @@ where
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn add(&self, other: &Self) -> Result<Self> {
-        self.validate_invariants()?;
-        other.validate_invariants()?;
-        ensure_same_tree_structure(&self.data, &other.data)?;
-        ensure_same_dtype(self.scalar_kind()?, other.scalar_kind()?)?;
-        if self.projector != other.projector {
-            return Err(PartitionedTreeTNError::ProjectorMismatch);
+        Self::exact_sum(&[self, other], SumEngine::Binary)
+    }
+
+    /// Sum subdomains with one projector exactly, building the sum with the
+    /// method `engine` chooses ([`TreeTN::exact_sum`]).
+    ///
+    /// Every term is checked as [`add`](Self::add) checks its operands: valid
+    /// invariants, the tree structure and dtype of `terms[0]`, and an equal
+    /// projector key. The stored TreeTNs are already eagerly masked, so the
+    /// sum is masked as well; it keeps `terms[0]`'s budget metadata. A single
+    /// term is returned as a clone. Which method ran is not reported; the
+    /// routines that sum patches document that.
+    pub(crate) fn exact_sum(terms: &[&Self], engine: SumEngine) -> Result<Self> {
+        let (first, rest) = terms.split_first().ok_or(PartitionedTreeTNError::Empty)?;
+        first.validate_invariants()?;
+        let first_kind = first.scalar_kind()?;
+        for term in rest {
+            term.validate_invariants()?;
+            ensure_same_tree_structure(&first.data, &term.data)?;
+            ensure_same_dtype(first_kind, term.scalar_kind()?)?;
+            if first.projector != term.projector {
+                return Err(PartitionedTreeTNError::ProjectorMismatch);
+            }
         }
 
-        let data = self
-            .data
-            .add(&other.data)
-            .map_err(PartitionedTreeTNError::from)?;
-        ensure_same_tree_structure(&self.data, &data)?;
-        Self::from_masked_data(data, self.projector.clone(), self.budget_squared)
+        let data: Vec<_> = terms.iter().map(|term| &term.data).collect();
+        let network = TreeTN::exact_sum(&data, engine)
+            .map_err(PartitionedTreeTNError::from)?
+            .network;
+        ensure_same_tree_structure(&first.data, &network)?;
+        Self::from_masked_data(network, first.projector.clone(), first.budget_squared)
     }
 
     /// Truncate this eagerly masked subdomain towards an explicit TreeTN center.
@@ -554,7 +761,11 @@ where
     ///
     /// # Errors
     ///
-    /// Returns a dtype mismatch, site-space mismatch, TreeTN, or backend error.
+    /// Returns [`PartitionedTreeTNError::TopologyMismatch`] or
+    /// [`PartitionedTreeTNError::SiteIndexMismatch`] when the stored trees
+    /// differ, [`PartitionedTreeTNError::DTypeMismatch`] for mixed scalar
+    /// dtypes, and [`PartitionedTreeTNError::TreeTN`] when the TreeTN inner
+    /// product fails.
     ///
     /// # Examples
     ///
@@ -775,6 +986,38 @@ where
     Ok(())
 }
 
+/// Site indices that survive the contraction of `left` with `right`: those
+/// without a contractable partner on the other side.
+///
+/// This is the output-index rule of TreeTN contraction, which pairs indices by
+/// [`IndexLike::is_contractable`] rather than by equality. Site indices are
+/// unique within one TreeTN, so testing each index against the whole other side
+/// gives the same pairing as the contraction's one-to-one matching.
+pub(crate) fn contraction_output_site_indices<V>(
+    left: &TreeTN<IdxTensor, V>,
+    right: &TreeTN<IdxTensor, V>,
+) -> Result<Vec<DynIndex>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    let (left_indices, _) = left
+        .all_site_indices()
+        .map_err(PartitionedTreeTNError::from)?;
+    let (right_indices, _) = right
+        .all_site_indices()
+        .map_err(PartitionedTreeTNError::from)?;
+    let unpaired = |indices: &[DynIndex], others: &[DynIndex]| {
+        indices
+            .iter()
+            .filter(|index| !others.iter().any(|other| index.is_contractable(other)))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let mut output = unpaired(&left_indices, &right_indices);
+    output.extend(unpaired(&right_indices, &left_indices));
+    Ok(output)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ScalarKind {
     F32,
@@ -921,3 +1164,6 @@ where
 
     TreeTN::from_tensors(tensors, node_names).map_err(PartitionedTreeTNError::from)
 }
+
+#[cfg(test)]
+mod tests;

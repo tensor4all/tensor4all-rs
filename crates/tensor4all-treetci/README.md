@@ -77,7 +77,13 @@ request order. Failed callbacks and incorrect output lengths insert nothing.
 At capacity, further insertions are skipped; cached entries are not evicted.
 `Some(0)` deduplicates within each batch but retains no values. `Some(usize::MAX)`
 explicitly removes the practical payload bound. Packed keys support index
-spaces up to 1024 bits; wider spaces remain usable with memoization disabled.
+spaces up to 1024 bits, but edge candidate matrices are looked up through the
+cache's own per-side keys, which exist for the `u64` and `u128` widths only. With
+memoization enabled, an index space whose selected key width is above 128 bits
+(and at most 1024) fails at setup with `CacheKeyError::SideKeyUnsupported`
+instead of falling back to whole-point lookups, and one beyond 1024 bits fails
+at cache construction with `CacheKeyError::Overflow`. Such spaces remain usable
+with memoization disabled.
 
 Inspect `result.evaluation`: `requested_points` includes all requests;
 `evaluated_points` counts successful points passed to the target; `cache_hits`

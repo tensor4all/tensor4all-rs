@@ -78,8 +78,9 @@ Verified against `main` at `b63e13de`.
   partition all vertices, and a completed edge update writes both sides in
   LU pairing order, so an edge's pivots can be joined column by column into
   full-domain points on chains and on branched trees.
-- With `normalize_error`, convergence uses `tolerance` times the patch-local
-  `max_sample_value`; with it disabled the raw bond error is compared.
+- With `scale_tolerance`, the convergence threshold is `tolerance` times the
+  patch-local running `max_sample_value`; with it disabled the raw bond error
+  is compared.
 - `tensor4all_treetci::to_treetn` names nodes by vertex id
   (`TreeTN<IdxTensor, usize>`) and creates one fresh site index per vertex.
   A `TreeTciGraph` vertex has one local dimension; dimension-one vertices are
@@ -232,7 +233,7 @@ and reported as `InvalidProblem`.
    `MaxIterations`), mapped to `InterpolationTermination` with the precedence
    above. `crossinterpolate2` keeps its current signature. The other caller of
    `optimize_with_proposer`, `tensor4all-quanticstci`, is updated in the same
-   M1 PR. The implementation runs with `normalize_error = false` and requires
+   M1 PR. The implementation runs with `scale_tolerance = false` and requires
    `max_iter >= 3`, because convergence needs three sweeps of history.
 2. **Evaluator errors.** TreeTCI wraps callback errors into its own operation
    error. The implementation wraps each evaluator error in a private marker
@@ -332,7 +333,7 @@ side adds `TreeTciInterpolator`, `TreeTciOptimizationResult`, and
   a unit test of the mapping.
 - **Engine configuration.** `TreeTciInterpolator::new` takes
   `TreeTciOptions`. On every run the problem overrides `tolerance` (the
-  absolute tolerance), `max_bond_dim` (the cap), `normalize_error` (always
+  absolute tolerance), `max_bond_dim` (the cap), `scale_tolerance` (always
   `false`), and `seed` (the problem seed); `max_iter`, the global pivot
   search settings and `evaluation_cache_bytes` come from the engine. The
   optional memo covers optimization; named materialization evaluates through

@@ -35,18 +35,26 @@ budget instead of per-test or per-job caps:
 Do not raise either number to accommodate a slow test. A test that needs more is a
 heavy test:
 
-- keep it in `crates/*/tests/heavy_*.rs` and mark it
+- keep it in `crates/*/tests/heavy_*.rs`, declared as a module in that package's
+  `tests/main.rs` integration target, and mark it
   `#[ignore = "heavy: runs in the scheduled heavy-tests workflow (see CONTRIBUTING.md)"]`;
 - [`.github/workflows/heavy-tests.yml`](.github/workflows/heavy-tests.yml) runs those
-  files nightly (`-E 'binary(/^heavy_/)' --run-ignored ignored-only`), builds every
+  files nightly (`-E 'test(/^heavy_/)' --run-ignored ignored-only`), builds every
   target for the compile check, and opens or updates a `ci-nightly` issue when it fails.
+
+Non-default feature configurations (system BLAS, provider injection, MPI,
+diagnostics, HDF5 runtime loading, CUDA) cannot share the default build, so they
+run in [`.github/workflows/feature-matrix.yml`](.github/workflows/feature-matrix.yml)
+nightly, also outside this budget and with its own bound per configuration. See
+[Supported feature configurations](#supported-feature-configurations) for the
+declared matrix.
 
 Run the heavy suite locally with:
 
 ```bash
 cargo build --locked --profile ci --workspace --all-targets
-cargo nextest run --locked --cargo-profile ci -p tensor4all-treeaci \
-    --run-ignored ignored-only -E 'binary(/^heavy_/)'
+cargo nextest run --locked --cargo-profile ci --workspace \
+    --run-ignored ignored-only -E 'test(/^heavy_/)'
 ```
 
 Example and bench targets stay out of the default suite for the same reason: they add
@@ -100,7 +108,10 @@ publication approvals are not weakened by choosing focused local checks.
 ### Full validation reference (not an unconditional local gate)
 
 Hosted CI remains required and authoritative for comprehensive tests, coverage,
-documentation and feature/backend checks. Consult `.github/workflows/CI_rs.yml`
+documentation and feature/backend checks. Coverage and its per-file thresholds
+run nightly in `.github/workflows/coverage.yml`, not on pull requests; a failing
+night files a `ci-nightly` issue. That workflow pins its Rust toolchain because the
+thresholds are measured percentages; bump it in a dedicated PR and re-measure there. Consult `.github/workflows/CI_rs.yml`
 for the current commands and platform setup. The following commands are useful
 when broader local validation is needed, not as a checklist for every push.
 They require `cargo-nextest`, mdBook 0.5.2, the HDF5 development library, and
@@ -126,7 +137,54 @@ Also run maintenance checks relevant to changed public APIs or crate boundaries:
 python3 scripts/audit-library-panics.py
 python3 scripts/check-public-error-docs.py
 python3 scripts/check-crate-boundaries.py
+./scripts/check-single-versions.sh
 ```
+
+`check-single-versions.sh` fails when a crate whose types cross a boundary (the
+CPU provider stack, the one faer identity, tenferro and hataori) resolves to two
+versions. The manifests use compatible ranges rather than exact `=version`
+pins so a dependency's patch fix can be locked with `cargo update` instead of a
+pin bump through the whole chain; this check is the guard that keeps a range
+from silently splitting an identity. It also fails when a committed lock under
+`tests/feature-configurations/` resolves a registry or git package to anything
+not in the root `Cargo.lock`, so a pin bump must regenerate those locks too.
+
+### Supported feature configurations
+
+Cargo features here are not additive: `tenferro-cpu-platform` (the default:
+Apple Accelerate on macOS, faer elsewhere), `tenferro-cpu-faer` and
+`tenferro-system-blas` are mutually exclusive CPU backends (tenferro-rs #2004),
+so `--all-features` is not a valid build target. The repository declares the
+configurations below and builds or audits exactly these. A configuration selects
+its packages explicitly; `--workspace --no-default-features` is never used,
+because the guide, tutorial, and benchmark packages are documented and built
+with their default features.
+
+| Configuration | Cargo selection | Verified by |
+|---|---|---|
+| default | Each crate's default features (faer on Linux) | PR CI Test, Doctests, and Lint (`cargo clippy --workspace --all-targets`); PR CI panic audit; nightly heavy-tests |
+| default on macOS | Each crate's default features (Apple Accelerate) | PR CI `macOS (Accelerate)`: workspace tests and doctests |
+| explicit-context | `-p tensor4all-tensorbackend --no-default-features --features explicit-context,tenferro-cpu-faer` | PR CI Lint (`Check explicit-context-only build`) |
+| system-blas | Every compute crate with `--no-default-features --features tenferro-system-blas` (plus `tensor4all-treetn/simplett-bridge` and `tensor4all-treersi/global-defaults`, which their test targets need); HDF5 with `link,tenferro-system-blas` | Nightly `.github/workflows/feature-matrix.yml`, including a panic audit |
+| provider-inject | Every compute crate with `--no-default-features --features tenferro-provider-inject` (plus `tensor4all-treetn/simplett-bridge` and `tensor4all-treersi/global-defaults`, which their test targets need); HDF5 with `link,tenferro-provider-inject` | Nightly feature matrix, including a panic audit |
+| mpi | `-p tensor4all-partitionedtreetn --features hataori-mpi` (the system-MPI backend of the adaptive patch driver; the `hataori-mpi-rsmpi-rt` runtime backend is covered by `scripts/check-mpi-smoke.sh`) | Nightly feature matrix, including a panic audit |
+| diagnostics | `-p tensor4all-treetn -p tensor4all-treeaci --features diagnostics` | Nightly feature matrix, including a panic audit |
+| hdf5-runtime-loading | `-p tensor4all-hdf5 --no-default-features --features runtime-loading,tenferro-cpu-faer` | Nightly feature matrix, including a panic audit |
+| cuda | `-p tensor4all-core -p tensor4all-treetn --features tenferro-cuda` | Nightly feature matrix, compile only; CUDA execution is verified locally on a GPU only |
+
+The PR CI panic audit compares the default configuration against
+`scripts/library-panics-baseline.json`. A non-default configuration reuses that
+baseline as an allowlist and does not report unmatched entries as stale, because
+it selects a subset of the workspace; pass `--config-name NAME --package ...`
+with the Cargo selection flags to audit one configuration:
+
+```bash
+python3 scripts/audit-library-panics.py --config-name diagnostics \
+  -p tensor4all-treetn -p tensor4all-treeaci --features diagnostics
+```
+
+Adding a supported feature configuration means adding it to the matrix in
+`.github/workflows/feature-matrix.yml` and to this table.
 
 ### Build artifacts
 

@@ -55,7 +55,7 @@ fn create_product_state_mps(x: usize, r: usize) -> SimpleTensorTrain<Complex64> 
         // Big-endian: site n contains bit 2^(R-1-n)
         let bit = (x >> (r - 1 - n)) & 1;
 
-        let mut t = tensor3_zeros(1, 2, 1);
+        let mut t = tensor3_zeros(1, 2, 1).unwrap();
         t.set3(0, bit, 0, Complex64::one());
         tensors.push(t);
     }
@@ -64,11 +64,11 @@ fn create_product_state_mps(x: usize, r: usize) -> SimpleTensorTrain<Complex64> 
 }
 
 fn create_two_bit_value_qtt(values: [f64; 4]) -> SimpleTensorTrain<Complex64> {
-    let mut first = tensor3_zeros(1, 2, 2);
+    let mut first = tensor3_zeros(1, 2, 2).unwrap();
     first.set3(0, 0, 0, Complex64::one());
     first.set3(0, 1, 1, Complex64::one());
 
-    let mut second = tensor3_zeros(2, 2, 1);
+    let mut second = tensor3_zeros(2, 2, 1).unwrap();
     for msb in 0..2 {
         for lsb in 0..2 {
             let z = 2 * msb + lsb;
@@ -96,7 +96,7 @@ fn contract_treetn_to_vector(
 
     // Extract data from the tensor
     // The tensor has indices ordered by the indices field
-    let ext_indices = &full_tensor.indices;
+    let ext_indices = &full_tensor.indices();
 
     // Build mapping from site index ID to position in external indices
     let mut idx_to_pos: HashMap<DynId, usize> = HashMap::new();
@@ -259,7 +259,7 @@ fn contract_operator_to_dense_matrix(
         .contract_to_tensor()
         .expect("Failed to contract MPO");
 
-    let ext_indices = &dense_tensor.indices;
+    let ext_indices = &dense_tensor.indices();
     let data = dense_tensor
         .to_vec::<Complex64>()
         .expect("Expected DenseC64 storage");
@@ -1872,7 +1872,7 @@ fn test_affine_identity() {
             // The site dimension is 4 (2^2 for M=1, N=1)
             // site index = y_bit + x_bit * 2
             // For input |x⟩, we want x_bit at each position
-            let mut t = tensor3_zeros(1, 4, 1);
+            let mut t = tensor3_zeros(1, 4, 1).unwrap();
             // Put amplitude 1 at site index corresponding to x_bit (input), summed over y_bit (output)
             // For testing, let's put amplitude at all y for this x
             for y_bit in 0..2 {

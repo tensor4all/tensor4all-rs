@@ -1,7 +1,7 @@
 use std::error::Error;
 use tensor4all_core::{DynIndex, IdxTensor, IdxTensorError};
 use tensor4all_itensorlike::{TensorTrain, TensorTrainError};
-use tensor4all_treetn::TreeTN;
+use tensor4all_treetn::{TreeTN, TreeTNOperationError};
 
 fn site_tensor(size: usize, data: Vec<f64>) -> IdxTensor {
     let site = DynIndex::new_dyn(size);
@@ -41,8 +41,10 @@ fn from_treetn_rejects_disconnected_topology() {
     tree.add_tensor(1, site_tensor(2, vec![3.0, 4.0])).unwrap();
 
     let error = TensorTrain::from_treetn(tree).unwrap_err();
-    assert!(matches!(error, TensorTrainError::InvalidStructure { .. }));
+    assert!(matches!(error, TensorTrainError::TreeTn { .. }));
     assert!(error.to_string().contains("linear-chain"));
+    let source = error.source().expect("TreeTn error keeps its source");
+    assert!(source.downcast_ref::<TreeTNOperationError>().is_some());
 }
 
 #[test]
@@ -58,7 +60,8 @@ fn dense_maxabs_preserves_typed_tensor_error_source() {
             }
         }
     ));
-    assert!(error.source().is_some());
+    let source = error.source().expect("IdxTensor error keeps its source");
+    assert!(source.downcast_ref::<IdxTensorError>().is_some());
 }
 
 #[test]

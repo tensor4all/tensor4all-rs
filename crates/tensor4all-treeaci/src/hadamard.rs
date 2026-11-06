@@ -25,8 +25,9 @@ use crate::{
 ///
 /// # Errors
 ///
-/// Returns [`crate::TreeAciError`] for invalid input, resource, or numerical
-/// failures.
+/// Returns the same [`crate::TreeAciError`] variants as
+/// [`tree_elementwise_batched`], except that the built-in product callback
+/// cannot produce [`crate::TreeAciError::Callback`].
 ///
 /// # Panics
 ///

@@ -1,9 +1,9 @@
 //! Projectors that fix selected TreeTN site indices to coordinates.
 //!
-//! The implementation follows the corrected `Projector` in
-//! `tensor4all-partitionedtt/src/projector.rs` after issue #634. In particular,
-//! equality, hashing, and deterministic ordering use the same full index
-//! identity: ID, canonical tags, and prime level.
+//! The implementation follows the corrected `Projector` of the retired
+//! `tensor4all-partitionedtt` crate after issue #634 (that crate was removed in
+//! #915 D3). In particular, equality, hashing, and deterministic ordering use
+//! the same full index identity: ID, canonical tags, and prime level.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -256,6 +256,53 @@ impl Projector {
         }
     }
 
+    /// Build a projector from entries copied out of already validated
+    /// projectors, so no coordinate can be out of bounds.
+    pub(crate) fn from_entries(entries: impl IntoIterator<Item = (DynIndex, usize)>) -> Self {
+        Self {
+            data: entries.into_iter().collect(),
+        }
+    }
+
+    /// Split `self` into disjoint cells cut by `other`.
+    ///
+    /// The first cell is the intersection, and the remaining cells cover the
+    /// part of `self` outside `other` exactly: order the indices that `other`
+    /// fixes and `self` does not as `i_1, ..., i_m`; for `j` from 1 to `m` one
+    /// cell keeps `self`'s entries, fixes `i_1` through `i_(j-1)` to `other`'s
+    /// coordinates, and fixes `i_j` to each other coordinate of that index.
+    /// Returns `None` when the two projectors conflict, so the caller keeps
+    /// `self` unsplit.
+    pub(crate) fn split_by(&self, other: &Self) -> Option<Vec<Self>> {
+        let inside = self.intersection(other)?;
+        let free: Vec<(&DynIndex, usize)> = other
+            .canonical_entries()
+            .into_iter()
+            .filter(|(index, _)| !self.data.contains_key(*index))
+            .collect();
+        let base: Vec<(DynIndex, usize)> = self
+            .iter()
+            .map(|(index, &value)| (index.clone(), value))
+            .collect();
+        let mut cells = vec![inside];
+        let mut prefix: Vec<(DynIndex, usize)> = Vec::new();
+        for (index, value) in free {
+            for alternative in 0..index.dim {
+                if alternative == value {
+                    continue;
+                }
+                cells.push(Self::from_entries(
+                    base.iter()
+                        .cloned()
+                        .chain(prefix.iter().cloned())
+                        .chain([(index.clone(), alternative)]),
+                ));
+            }
+            prefix.push((index.clone(), value));
+        }
+        Some(cells)
+    }
+
     /// Return entries in canonical full-identity and coordinate order.
     pub(crate) fn canonical_entries(&self) -> Vec<(&DynIndex, usize)> {
         let mut entries: Vec<_> = self
@@ -268,7 +315,6 @@ impl Projector {
     }
 
     /// Compare projectors by a deterministic total order compatible with `Eq`.
-    #[allow(dead_code)]
     pub(crate) fn canonical_cmp(&self, other: &Self) -> Ordering {
         let left = self.canonical_entries();
         let right = other.canonical_entries();

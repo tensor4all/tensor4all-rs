@@ -40,6 +40,7 @@ path = "src/shared.rs"
 [features]
 default = []
 production = []
+unrelated = []
 """
 
 FIXTURE_LIB = r'''#![allow(dead_code)]
@@ -329,18 +330,24 @@ def _finding_sort_key(entry: str) -> tuple[str, int, str]:
     return path, int(line), kind
 
 
-def _run_audit(root: Path, baseline: list[str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run_audit(
+    root: Path,
+    baseline: list[str] | None = None,
+    configuration: list[str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     baseline_path = root / "baseline.json"
     baseline_path.write_text(json.dumps(baseline or []), encoding="utf-8")
+    command = [
+        sys.executable,
+        str(SCRIPT),
+        "--root",
+        str(root),
+        "--baseline",
+        str(baseline_path),
+    ]
+    command.extend(configuration or [])
     return subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPT),
-            "--root",
-            str(root),
-            "--baseline",
-            str(baseline_path),
-        ],
+        command,
         text=True,
         capture_output=True,
         check=False,
@@ -364,13 +371,12 @@ def test_dep_info_selects_each_production_source_once() -> None:
             f"crates/demo/src/shared.rs:{_line(FIXTURE_SHARED, 'assert!(true);')}:assert",
             f"crates/demo/src/shared/nested.rs:{_line(FIXTURE_LIB_NESTED, 'assert!(true);')}:assert",
             f"crates/demo/src/selected.rs:{_line(FIXTURE_SELECTED, 'assert!(true);')}:assert",
-            f"crates/demo/src/feature_selected.rs:{_line(FIXTURE_FEATURE_SELECTED, 'assert!(true);')}:assert",
         ]
         result = _run_audit(fixture, baseline)
 
     assert result.returncode == 1, result.stderr
     assert result.stderr.splitlines() == [
-        "Audit failed: 15 unbaselined findings, 0 stale baseline entries."
+        "Audit failed: 14 unbaselined findings, 0 stale baseline entries."
     ]
     findings = result.stdout.splitlines()
     assert findings[: len(baseline)] == [
@@ -382,9 +388,8 @@ def test_dep_info_selects_each_production_source_once() -> None:
     expect_line = _line(FIXTURE_LIB, '    let _ = option.expect("production expect");')
     aliased_panic_line = _line(FIXTURE_LIB, '    fail!("aliased panic");')
     macro_argument_line = _line(FIXTURE_LIB, '    passthrough!(panic!("invoked macro argument"));')
-    all_features_line = _line(FIXTURE_LIB, '    panic!("all-features production");')
     bin_panic_line = _line(FIXTURE_SHARED, '    std::panic!("production binary");')
-    assert findings[len(baseline) :] == [
+    assert findings[len(baseline) :][:14] == [
         f"crates/demo/src/lib.rs:{allow_panic_line}:panic",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    let _ = option.unwrap();', 1)}:unwrap",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    let _ = option.unwrap();', 2)}:unwrap",
@@ -394,14 +399,15 @@ def test_dep_info_selects_each_production_source_once() -> None:
         f"crates/demo/src/lib.rs:{aliased_panic_line}:panic",
         f"crates/demo/src/lib.rs:{_line(FIXTURE_LIB, '    passthrough!(option.unwrap());')}:unwrap",
         f"crates/demo/src/lib.rs:{macro_argument_line}:panic",
-        f"crates/demo/src/lib.rs:{all_features_line}:panic",
         f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '        assert!(true);')}:assert",
         f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '    passthrough_assertion!(assert!(true));')}:assert",
         f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, '            (_unused:expr) => { assert!(true); };')}:assert",
         f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, 'pub fn nested_macro_use() { assert!(true); }')}:assert",
         f"crates/demo/src/shared.rs:{bin_panic_line}:panic",
     ]
-    assert {finding.rsplit(':', 1)[-1] for finding in findings[len(baseline) :]} >= {
+    # The call-site report is informational and prints even when empty.
+    assert findings[len(baseline) :][14:] == ["invariant_violated call sites: 0"]
+    assert {finding.rsplit(':', 1)[-1] for finding in findings[len(baseline) :][:14]} >= {
         "panic",
         "unreachable",
         "unwrap",
@@ -410,6 +416,83 @@ def test_dep_info_selects_each_production_source_once() -> None:
     assert all("ignored" not in finding for finding in findings)
     assert all("test_only" not in finding for finding in findings)
     assert all("file_level" not in finding for finding in findings)
+
+
+def test_configuration_selection_audits_its_feature_selection() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_fixture(fixture)
+        # This entry cannot match the selected configuration. A configuration
+        # audits a subset of the workspace, so unmatched baseline entries are
+        # not stale; only newly uncovered findings fail the pass.
+        result = _run_audit(
+            fixture,
+            ["crates/demo/src/lib.rs:999999:assert"],
+            [
+                "--config-name",
+                "production",
+                "--package",
+                "demo",
+                "--no-default-features",
+                "--features",
+                "production",
+            ],
+        )
+    assert result.returncode == 1, result.stderr
+    assert "Audit configuration: `production`" in result.stdout
+    assert "Stale baseline:" not in result.stdout
+    # Feature-gated production paths are visible only in this configuration.
+    production_line = _line(FIXTURE_LIB, '    panic!("all-features production");')
+    assert f"crates/demo/src/lib.rs:{production_line}:panic" in result.stdout
+    # `cfg_attr` swaps the `selected` module for its feature-selected path.
+    assert (
+        f"crates/demo/src/feature_selected.rs:{_line(FIXTURE_FEATURE_SELECTED, 'assert!(true);')}:assert"
+        in result.stdout
+    )
+
+
+def test_configuration_selection_combines_repeated_features() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_fixture(fixture)
+        # Cargo combines repeated --features; the wrapper must not keep only
+        # the last one, or `production` would silently go unaudited here.
+        result = _run_audit(
+            fixture,
+            configuration=[
+                "--config-name",
+                "production",
+                "--package",
+                "demo",
+                "--features",
+                "production",
+                "--features",
+                "unrelated",
+            ],
+        )
+    assert result.returncode == 1, result.stderr
+    production_line = _line(FIXTURE_LIB, '    panic!("all-features production");')
+    assert f"crates/demo/src/lib.rs:{production_line}:panic" in result.stdout
+
+
+def test_configuration_selection_requires_a_name_and_known_packages() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_fixture(fixture)
+        missing_name = _run_audit(fixture, configuration=["--features", "production"])
+        assert missing_name.returncode == 2
+        assert "require --config-name" in missing_name.stderr
+
+        no_package = _run_audit(fixture, configuration=["--config-name", "production"])
+        assert no_package.returncode == 2
+        assert "requires at least one --package" in no_package.stderr
+
+        unknown_package = _run_audit(
+            fixture,
+            configuration=["--config-name", "production", "--package", "absent"],
+        )
+        assert unknown_package.returncode == 2
+        assert "without production targets under crates/" in unknown_package.stderr
 
 
 def test_macro_assertion_arguments_and_transcribers_are_reported() -> None:
@@ -455,6 +538,181 @@ def _write_minimal_fixture(root: Path, lib: str) -> None:
     lib_path.write_text(lib, encoding="utf-8")
 
 
+def _write_invariant_fixture(root: Path, lib: str) -> None:
+    """Write a fixture at the one path whose invariant panic is sanctioned."""
+    manifest = '[workspace]\nmembers = ["crates/tensor4all-tensorbackend"]\nresolver = "2"\n'
+    package = (
+        '[package]\n'
+        'name = "tensor4all-tensorbackend"\n'
+        'version = "0.1.0"\n'
+        'edition = "2021"\n\n'
+        '[lib]\n'
+        'crate-type = ["cdylib", "rlib"]\n'
+    )
+    (root / "Cargo.toml").write_text(manifest, encoding="utf-8")
+    lib_path = root / "crates/tensor4all-tensorbackend/src/lib.rs"
+    lib_path.parent.mkdir(parents=True, exist_ok=True)
+    (root / "crates/tensor4all-tensorbackend/Cargo.toml").write_text(
+        package, encoding="utf-8"
+    )
+    lib_path.write_text(lib, encoding="utf-8")
+
+
+def test_private_runtime_assertion_only_helpers_are_reported() -> None:
+    lib = (
+        '#![allow(dead_code)]\n'
+        'pub fn api(ok: bool) {\n'
+        '    check(ok);\n'
+        '}\n\n'
+        'fn check(ok: bool) {\n'
+        '    assert!(ok);\n'
+        '}\n\n'
+        'struct Guard;\n'
+        'impl Guard {\n'
+        '    fn valid(&self, ok: bool) {\n'
+        '        debug_assert!(ok)\n'
+        '    }\n'
+        '}\n'
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_minimal_fixture(fixture, lib)
+        result = _run_audit(fixture)
+    assert result.returncode == 1, result.stderr
+    assert (
+        f"crates/demo/src/lib.rs:{_line(lib, 'assert!(ok);')}:assert" in result.stdout
+    )
+    assert (
+        f"crates/demo/src/lib.rs:{_line(lib, 'debug_assert!(ok)')}:debug_assert"
+        in result.stdout
+    )
+    assert "2 unbaselined findings" in result.stderr
+
+
+def test_private_literal_only_helpers_are_not_reported() -> None:
+    lib = (
+        '#![allow(dead_code)]\n'
+        'pub fn api() {\n'
+        '    check();\n'
+        '}\n\n'
+        'fn check() { assert!(true); }\n'
+        'fn equal() { assert_eq!(1, 1); }\n'
+        'fn mixed() {\n'
+        '    assert!(true);\n'
+        '    debug_assert_eq!(1, 1);\n'
+        '}\n'
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_minimal_fixture(fixture, lib)
+        result = _run_audit(fixture)
+    assert result.returncode == 0, result.stderr
+    assert "Audit passed" in result.stdout
+
+
+def test_private_cfg_test_helpers_are_excluded() -> None:
+    lib = (
+        '#![allow(dead_code)]\n'
+        '#[cfg(test)]\n'
+        'fn check(ok: bool) { assert!(ok); }\n'
+        '#[cfg(test)]\n'
+        'mod tests {\n'
+        '    fn inner(ok: bool) { assert!(ok); }\n'
+        '}\n'
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_minimal_fixture(fixture, lib)
+        result = _run_audit(fixture)
+    assert result.returncode == 0, result.stderr
+    assert "Audit passed" in result.stdout
+
+
+def test_sanctioned_invariant_panic_is_allowlisted_and_call_sites_reported() -> None:
+    lib = (
+        'pub fn invariant_violated(context: &str) -> ! {\n'
+        '    panic!("{context}")\n'
+        '}\n\n'
+        'pub fn caller(flag: bool) -> u32 {\n'
+        '    if flag {\n'
+        '        1\n'
+        '    } else {\n'
+        '        invariant_violated("bad")\n'
+        '    }\n'
+        '}\n'
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_invariant_fixture(fixture, lib)
+        result = _run_audit(fixture)
+    assert result.returncode == 0, result.stderr
+    assert (
+        "Sanctioned invariant panic: "
+        "crates/tensor4all-tensorbackend/src/lib.rs:2:panic" in result.stdout
+    )
+    assert "invariant_violated call sites: 1" in result.stdout
+    call_line = _line(lib, 'invariant_violated("bad")')
+    assert (
+        "invariant_violated call site: "
+        f"crates/tensor4all-tensorbackend/src/lib.rs:{call_line}"
+        in result.stdout
+    )
+
+
+def test_sanctioned_invariant_panic_survives_line_movement() -> None:
+    for prefix in ("", "// leading comment\n\n"):
+        lib = (
+            prefix
+            + 'pub fn invariant_violated(context: &str) -> ! {\n'
+            '    panic!("{context}")\n'
+            '}\n'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            _write_invariant_fixture(fixture, lib)
+            result = _run_audit(fixture)
+        assert result.returncode == 0, result.stderr
+        assert "Sanctioned invariant panic:" in result.stdout
+
+
+def test_extra_panic_in_sanctioned_helper_is_not_allowlisted() -> None:
+    lib = (
+        'pub fn invariant_violated(context: &str) -> ! {\n'
+        '    if context.is_empty() {\n'
+        '        panic!("empty");\n'
+        '    }\n'
+        '    panic!("{context}")\n'
+        '}\n'
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_invariant_fixture(fixture, lib)
+        result = _run_audit(fixture)
+    assert result.returncode == 1, result.stderr
+    assert "Sanctioned invariant panic:" not in result.stdout
+    # Python 3.10 (CI) cannot nest the f-string's own quote kind: hoist.
+    empty_line = _line(lib, 'panic!("empty")')
+    context_line = _line(lib, 'panic!("{context}")')
+    assert f"crates/tensor4all-tensorbackend/src/lib.rs:{empty_line}:panic" in result.stdout
+    assert f"crates/tensor4all-tensorbackend/src/lib.rs:{context_line}:panic" in result.stdout
+
+
+def test_nested_same_name_function_is_not_sanctioned() -> None:
+    lib = (
+        'mod inner {\n'
+        '    pub fn invariant_violated() -> ! {\n'
+        '        panic!("nested")\n'
+        '    }\n'
+        '}\n'
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_invariant_fixture(fixture, lib)
+        result = _run_audit(fixture)
+    assert result.returncode == 1, result.stderr
+    assert "Sanctioned invariant panic:" not in result.stdout
+
+
 def test_comment_and_rustdoc_assertion_text_is_excluded() -> None:
     lib = (
         '#![allow(dead_code)]\n'
@@ -482,10 +740,10 @@ def test_comment_and_rustdoc_assertion_text_is_excluded() -> None:
     assert all(not finding.endswith(":debug_assert") for finding in findings)
 
 
-def test_private_helper_assertions_are_classified_outside_the_surface() -> None:
-    # The scanner covers public free functions/methods and trait impls; an
-    # assertion in a private helper is classified as outside the scanned
-    # public-path surface and must not be reported.
+def test_private_literal_only_helper_assertions_are_outside_the_surface() -> None:
+    # The scanner covers public free functions/methods and trait impls. A
+    # private helper is only recorded when its whole body is a single runtime
+    # assertion; a literal-only helper like this one stays outside the surface.
     lib = (
         '#![allow(dead_code)]\n'
         'pub fn api() {\n'
@@ -632,9 +890,19 @@ def main() -> int:
     _build_tool_once()
     tests = [
         test_dep_info_selects_each_production_source_once,
+        test_configuration_selection_audits_its_feature_selection,
+        test_configuration_selection_combines_repeated_features,
+        test_configuration_selection_requires_a_name_and_known_packages,
         test_unknown_cfg_assertion_is_included_conservatively,
         test_comment_and_rustdoc_assertion_text_is_excluded,
-        test_private_helper_assertions_are_classified_outside_the_surface,
+        test_private_literal_only_helper_assertions_are_outside_the_surface,
+        test_private_runtime_assertion_only_helpers_are_reported,
+        test_private_literal_only_helpers_are_not_reported,
+        test_private_cfg_test_helpers_are_excluded,
+        test_sanctioned_invariant_panic_is_allowlisted_and_call_sites_reported,
+        test_sanctioned_invariant_panic_survives_line_movement,
+        test_extra_panic_in_sanctioned_helper_is_not_allowlisted,
+        test_nested_same_name_function_is_not_sanctioned,
         test_stale_baseline_entry_fails,
         test_macro_assertion_arguments_and_transcribers_are_reported,
         test_timeout_nesting_leaves_margin_for_ci,

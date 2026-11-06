@@ -108,6 +108,7 @@ use crate::treetn::TreeTN;
 /// - `nfullsweeps`: `1` (only used by Fit method)
 /// - `convergence_tol`: `None` (only used by Fit method)
 /// - `src_options`: [`SrcOptions::default`] (only used by SRC method)
+/// - `center`: `None` (the smaller-named chain endpoint on a chain, otherwise the smallest node name)
 ///
 /// # Examples
 ///
@@ -116,26 +117,36 @@ use crate::treetn::TreeTN;
 /// use tensor4all_core::SvdTruncationPolicy;
 ///
 /// // Default: Zipup with no truncation
-/// let opts = ApplyOptions::default();
+/// let opts = ApplyOptions::<String>::default();
 /// assert_eq!(opts.max_bond_dim, None);
+/// assert_eq!(opts.center, None);
 ///
 /// // Zipup with rank and tolerance limits
-/// let opts = ApplyOptions::zipup()
+/// let opts = ApplyOptions::<String>::zipup()
 ///     .with_max_bond_dim(50)
 ///     .with_svd_policy(SvdTruncationPolicy::new(1e-8));
 /// assert_eq!(opts.max_bond_dim, Some(50));
 /// assert_eq!(opts.svd_policy, Some(SvdTruncationPolicy::new(1e-8)));
 ///
 /// // Fit method with sweep control
-/// let opts = ApplyOptions::fit().with_nfullsweeps(3).with_max_bond_dim(20);
+/// let opts = ApplyOptions::<String>::fit()
+///     .with_nfullsweeps(3)
+///     .with_max_bond_dim(20);
 /// assert_eq!(opts.nfullsweeps, 3);
 ///
 /// // Local exact naive apply: no truncation and no full dense tensor.
-/// let opts = ApplyOptions::naive();
+/// let opts = ApplyOptions::<String>::naive();
 /// assert_eq!(opts.max_bond_dim, None);
+///
+/// // Pin the contraction centre explicitly; the node names are caller-chosen.
+/// let opts = ApplyOptions {
+///     center: Some("hub".to_string()),
+///     ..ApplyOptions::zipup()
+/// };
+/// assert_eq!(opts.center.as_deref(), Some("hub"));
 /// ```
 #[derive(Debug, Clone)]
-pub struct ApplyOptions {
+pub struct ApplyOptions<V> {
     /// Contraction method to use.
     pub method: ContractionMethod,
     /// Maximum bond dimension for truncation.
@@ -152,9 +163,17 @@ pub struct ApplyOptions {
     pub convergence_tol: Option<f64>,
     /// SRC-specific rank, tolerance, probe, and finalization controls.
     pub src_options: SrcOptions,
+    /// Node whose canonical region the contraction is centred on.
+    ///
+    /// `None` keeps the default centre: the smaller-named
+    /// chain endpoint on a chain, otherwise the smallest node name. Set it to an
+    /// interior node (for example the one with the largest bonds) to keep the
+    /// result canonical there and to start zip-up from that side. A centre that
+    /// is not a node of the state is rejected before any contraction work.
+    pub center: Option<V>,
 }
 
-impl Default for ApplyOptions {
+impl<V> Default for ApplyOptions<V> {
     fn default() -> Self {
         Self {
             method: ContractionMethod::Zipup,
@@ -164,11 +183,12 @@ impl Default for ApplyOptions {
             nfullsweeps: 1,
             convergence_tol: None,
             src_options: SrcOptions::default(),
+            center: None,
         }
     }
 }
 
-impl ApplyOptions {
+impl<V> ApplyOptions<V> {
     /// Create options with ZipUp method (default).
     pub fn zipup() -> Self {
         Self::default()
@@ -204,7 +224,7 @@ impl ApplyOptions {
     /// use tensor4all_treetn::{ApplyOptions, SrcOptions};
     /// use tensor4all_treetn::contraction::ContractionMethod;
     ///
-    /// let options = ApplyOptions::src().with_max_bond_dim(16);
+    /// let options = ApplyOptions::<usize>::src().with_max_bond_dim(16);
     /// assert_eq!(options.method, ContractionMethod::Src);
     /// ```
     pub fn src() -> Self {
@@ -245,7 +265,7 @@ impl ApplyOptions {
     /// ```
     /// use tensor4all_treetn::{ApplyOptions, SrcOptions};
     ///
-    /// let options = ApplyOptions::src()
+    /// let options = ApplyOptions::<usize>::src()
     ///     .with_max_bond_dim(16)
     ///     .with_src_options(SrcOptions::adaptive(1.0e-8, 16));
     /// assert_eq!(options.src_options.rtol, Some(1.0e-8));
@@ -280,8 +300,10 @@ impl ApplyOptions {
 ///
 /// # Errors
 ///
-/// Returns an error when the operator and state are incompatible (a shape or
-/// /// index mismatch) or the application fails (a backend failure).
+/// Returns [`TreeTNOperationError`] when the operator's node names are not a subset of the
+/// state's, when the state is empty, or when extending/embedding the operator,
+/// transforming the state's site indices, contracting the two networks, or
+/// transforming the output indices fails.
 ///
 /// # Example
 ///
@@ -345,7 +367,7 @@ impl ApplyOptions {
 pub fn apply_linear_operator<T, V>(
     operator: &LinearOperator<T, V>,
     state: &TreeTN<T, V>,
-    options: ApplyOptions,
+    options: ApplyOptions<V>,
 ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
@@ -353,6 +375,26 @@ where
     <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
+    // Choose a center node first so that an invalid caller center is rejected
+    // before any operator embedding, index transformation or contraction work.
+    // An explicit center wins; otherwise use an actual chain endpoint when the
+    // topology is chain-shaped (so SRC's fast chain path stays eligible),
+    // falling back to the smallest node name. See
+    // `TreeTN::preferred_contraction_center`'s doc comment.
+    let center: V = match options.center.as_ref() {
+        Some(center) => {
+            if state.node_index(center).is_none() {
+                return Err(TreeTNOperationError::from(anyhow::anyhow!(
+                    "apply_linear_operator: contraction center {center:?} is not a node of the state"
+                )));
+            }
+            center.clone()
+        }
+        None => state.preferred_contraction_center().ok_or_else(|| {
+            TreeTNOperationError::from(anyhow::anyhow!("apply_linear_operator: empty state"))
+        })?,
+    };
+
     // 1. Check if operator covers all state nodes
     let state_nodes: HashSet<V> = state.node_names().into_iter().collect();
     let op_nodes: HashSet<V> = operator.node_names();
@@ -380,13 +422,6 @@ where
     let transformed_state = transform_state_to_input(&full_operator, state)?;
 
     // 3. Contract state with operator MPO
-    // Choose a center node: an actual chain endpoint when the topology is
-    // chain-shaped (so SRC's fast chain path stays eligible), falling back
-    // to the smallest node name otherwise. See
-    // `TreeTN::preferred_contraction_center`'s doc comment.
-    let center = &state
-        .preferred_contraction_center()
-        .ok_or_else(|| anyhow::anyhow!("Empty state"))?;
 
     let contraction_options = ContractionOptions {
         method: options.method,
@@ -400,13 +435,13 @@ where
     };
 
     let contracted = if options.method == ContractionMethod::Naive {
-        apply_linear_operator_naive_local(&full_operator, &transformed_state, center)
+        apply_linear_operator_naive_local(&full_operator, &transformed_state, &center)
             .context("Failed to locally apply state with operator")?
     } else {
         contract(
             &transformed_state,
             full_operator.mpo(),
-            center,
+            &center,
             contraction_options,
         )
         .context("Failed to contract state with operator")?
@@ -434,8 +469,11 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the index binding fails (a shape or index mismatch,
-/// /// or a missing-index failure).
+/// Returns [`LinearOperatorIndexBindingError::DimensionMismatch`] when a pair
+/// changes an index dimension, [`LinearOperatorIndexBindingError::DuplicateSourceIndex`]
+/// when a source index is repeated or matches more than one mapping, and
+/// [`LinearOperatorIndexBindingError::MissingSourceIndex`] when a source index
+/// is absent from the input or output mappings.
 ///
 /// # Examples
 /// ```
@@ -506,8 +544,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the operator and state are incompatible (a shape or
-/// /// index mismatch) or a mapped index is missing (a missing-index failure).
+/// Returns [`LinearOperatorIndexApplyError::BindIndices`] when rebinding the
+/// true indices fails (see [`bind_linear_operator_indices`]), and
+/// [`LinearOperatorIndexApplyError::ApplyFailed`] when the rebound operator
+/// cannot be applied to `state`.
 ///
 /// # Examples
 /// ```
@@ -551,7 +591,7 @@ pub fn apply_linear_operator_to_indices<T, V>(
     state: &TreeTN<T, V>,
     input_pairs: &[(T::Index, T::Index)],
     output_pairs: &[(T::Index, T::Index)],
-    options: ApplyOptions,
+    options: ApplyOptions<V>,
 ) -> std::result::Result<TreeTN<T, V>, LinearOperatorIndexApplyError>
 where
     T: TensorLike,
@@ -572,16 +612,26 @@ where
 /// The selected state indices are resolved with
 /// [`TreeTN::external_indices_with_numbered_tag`]. For example,
 /// `tag_prefix = "k"` and `start_index = 1` selects `"k=1"`, `"k=2"`, ...
-/// in operator node order. The number of selected tags is inferred from the
-/// operator's true input mappings, so this helper works for any operator whose
-/// input and output mapping counts match.
+/// in ascending numeric tag order. The number of selected tags is inferred
+/// from the operator's true input mappings, so this helper works for any
+/// operator whose input and output mapping counts match.
+///
+/// Each selected state index is bound to the operator mapping declared on the
+/// **same state node** that holds the index. The operator's MPO node names must
+/// therefore match the state's node names; rename the operator otherwise. A
+/// selected index on a node without an operator mapping is rejected. When one
+/// node holds several selected tags, the tags are paired, in ascending numeric
+/// order, with that node's mapping vector order (the order returned by
+/// [`LinearOperator::get_input_mappings`] and
+/// [`LinearOperator::get_output_mappings`]).
 ///
 /// The result keeps the selected state indices as the operator output indices.
 /// If a transform should write to different output indices, use
 /// [`apply_linear_operator_to_indices`] and pass explicit output bindings.
 ///
 /// # Arguments
-/// * `operator` - Operator to apply. Its node order defines the bit order.
+/// * `operator` - Operator to apply. Its node names and per-node mapping counts
+///   define the binding for each selected state leg.
 /// * `state` - State containing numbered-tagged external indices.
 /// * `tag_prefix` - Prefix before the equals sign, such as `"k"` or `"x"`.
 /// * `start_index` - First numbered tag to select. Use `1` for Quantics.jl-style
@@ -594,8 +644,16 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when a numbered tag is ambiguous or missing (a
-/// /// missing-index failure) or the application fails (a backend failure).
+/// Returns [`LinearOperatorTaggedApplyError::SelectTaggedIndices`] when a
+/// numbered tag is ambiguous or missing,
+/// [`LinearOperatorTaggedApplyError::MappingCountMismatch`] when the total input
+/// and output mapping counts differ,
+/// [`LinearOperatorTaggedApplyError::MissingNodeMapping`] when a selected
+/// index's node has no operator input or output mapping, and
+/// [`LinearOperatorTaggedApplyError::SelectedTagCountMismatch`] when a node's
+/// selected tag count differs from that node's input or output mapping count.
+/// Failures inside the underlying application are returned through
+/// [`LinearOperatorTaggedApplyError::ApplyToIndices`].
 ///
 /// # Examples
 /// ```
@@ -647,33 +705,13 @@ pub fn apply_linear_operator_to_numbered_tags<V>(
     state: &TreeTN<IdxTensor, V>,
     tag_prefix: &str,
     start_index: usize,
-    options: ApplyOptions,
+    options: ApplyOptions<V>,
 ) -> std::result::Result<TreeTN<IdxTensor, V>, LinearOperatorTaggedApplyError>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    let input_true_indices = true_indices_in_operator_node_order(operator, &operator.input_mapping);
-    let output_true_indices =
-        true_indices_in_operator_node_order(operator, &operator.output_mapping);
-
-    if input_true_indices.len() != output_true_indices.len() {
-        return Err(LinearOperatorTaggedApplyError::MappingCountMismatch {
-            input_count: input_true_indices.len(),
-            output_count: output_true_indices.len(),
-        });
-    }
-
-    let state_indices = state.external_indices_with_numbered_tag(
-        tag_prefix,
-        start_index,
-        input_true_indices.len(),
-    )?;
-    let input_pairs: Vec<(DynIndex, DynIndex)> = input_true_indices
-        .into_iter()
-        .zip(state_indices.iter().cloned())
-        .collect();
-    let output_pairs: Vec<(DynIndex, DynIndex)> =
-        output_true_indices.into_iter().zip(state_indices).collect();
+    let (input_pairs, output_pairs) =
+        bind_numbered_tags_to_operator_nodes(operator, state, tag_prefix, start_index)?;
 
     Ok(apply_linear_operator_to_indices(
         operator,
@@ -684,22 +722,117 @@ where
     )?)
 }
 
-fn true_indices_in_operator_node_order<V>(
+/// Bind numbered-tagged state indices to operator mappings by node identity.
+///
+/// Each selected state index is matched to its owning state node and bound to
+/// that node's operator input/output mapping at the same within-node position
+/// as the tag's position in the node's selected-tag group. Selected tags are
+/// grouped in ascending numeric tag order, which is the only order available
+/// for the node's mapping vector.
+#[allow(clippy::type_complexity)]
+fn bind_numbered_tags_to_operator_nodes<V>(
     operator: &LinearOperator<IdxTensor, V>,
-    mappings_by_node: &HashMap<V, Vec<IndexMapping<DynIndex>>>,
-) -> Vec<DynIndex>
+    state: &TreeTN<IdxTensor, V>,
+    tag_prefix: &str,
+    start_index: usize,
+) -> std::result::Result<
+    (Vec<(DynIndex, DynIndex)>, Vec<(DynIndex, DynIndex)>),
+    LinearOperatorTaggedApplyError,
+>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    let mut nodes = operator.mpo().node_names();
-    nodes.sort();
-    let mut indices = Vec::new();
-    for node in nodes {
-        if let Some(mappings) = mappings_by_node.get(&node) {
-            indices.extend(mappings.iter().map(|mapping| mapping.true_index.clone()));
+    let input_count: usize = operator.input_mappings().values().map(Vec::len).sum();
+    let output_count: usize = operator.output_mappings().values().map(Vec::len).sum();
+    if input_count != output_count {
+        return Err(LinearOperatorTaggedApplyError::MappingCountMismatch {
+            input_count,
+            output_count,
+        });
+    }
+
+    let state_indices =
+        state.external_indices_with_numbered_tag(tag_prefix, start_index, input_count)?;
+
+    // The k-th selected index carries the tag `start_index + k`. Group the
+    // selected indices by the state node whose site space holds them, in
+    // ascending tag order within each node, and order the groups by their
+    // first tag so errors are reported deterministically.
+    let positions: HashMap<&DynIndex, usize> = state_indices
+        .iter()
+        .enumerate()
+        .map(|(position, index)| (index, position))
+        .collect();
+    let mut groups: Vec<(usize, V, Vec<usize>)> = Vec::new();
+    for node in state.node_names() {
+        let Some(space) = state.site_space(&node) else {
+            continue;
+        };
+        let mut group: Vec<usize> = space
+            .iter()
+            .filter_map(|index| positions.get(index).copied())
+            .collect();
+        group.sort_unstable();
+        if let Some(&first) = group.first() {
+            groups.push((first, node, group));
         }
     }
-    indices
+    groups.sort_unstable_by_key(|(first, _, _)| *first);
+
+    let mut input_pairs = Vec::with_capacity(input_count);
+    let mut output_pairs = Vec::with_capacity(output_count);
+    let mut selected_by_node: HashMap<V, usize> = HashMap::with_capacity(groups.len());
+    for (first, node, group) in groups {
+        let missing = |role| LinearOperatorTaggedApplyError::MissingNodeMapping {
+            role,
+            tag: format!("{tag_prefix}={}", start_index + first),
+            node: format!("{node:?}"),
+        };
+        let inputs = operator
+            .input_mappings()
+            .get(&node)
+            .ok_or_else(|| missing("input"))?;
+        let outputs = operator
+            .output_mappings()
+            .get(&node)
+            .ok_or_else(|| missing("output"))?;
+        // Per-node counts are validated below; a short zip only happens on a
+        // mismatch, whose pairs are then discarded with the error.
+        for ((position, input), output) in group.iter().zip(inputs).zip(outputs) {
+            let index = &state_indices[*position];
+            input_pairs.push((input.true_index.clone(), index.clone()));
+            output_pairs.push((output.true_index.clone(), index.clone()));
+        }
+        selected_by_node.insert(node, group.len());
+    }
+
+    validate_selected_tag_counts(operator.input_mappings(), &selected_by_node, "input")?;
+    validate_selected_tag_counts(operator.output_mappings(), &selected_by_node, "output")?;
+
+    Ok((input_pairs, output_pairs))
+}
+
+/// Reject a node whose number of selected tags differs from its mapping count.
+fn validate_selected_tag_counts<V>(
+    mappings_by_node: &HashMap<V, Vec<IndexMapping<DynIndex>>>,
+    selected_by_node: &HashMap<V, usize>,
+    role: &'static str,
+) -> std::result::Result<(), LinearOperatorTaggedApplyError>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    for (node, mappings) in mappings_by_node {
+        let selected = selected_by_node.get(node).copied().unwrap_or(0);
+        if selected != mappings.len() {
+            return Err(LinearOperatorTaggedApplyError::SelectedTagCountMismatch {
+                role,
+                node: format!("{node:?}"),
+                selected,
+                mappings: mappings.len(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn replace_mapping_true_indices<I, V>(

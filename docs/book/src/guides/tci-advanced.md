@@ -175,6 +175,17 @@ assert_eq!(cache.misses(), 1);
 assert_eq!(cache.retained_bytes(), 8 + std::mem::size_of::<f64>());
 ```
 
+When your requests are entries of a structure whose keys add -- a matrix over
+two disjoint site sets, for example, because `key(i, j) = key_left[i] +
+key_right[j]` -- `MultiIndexCache::evaluate_keyed` serves them from the cache's
+own per-side keys (`left_keys` / `right_keys`), so a hit costs no point assembly
+and no coordinate validation. The keys are built and validated by the cache,
+tagged by side in the type system, and bound to that cache and its generation, so
+a key of another cache or of a cleared cache is a typed error rather than a
+silent miss. Only `u64` and `u128` caches build side keys; a wider cache returns
+`CacheKeyError::SideKeyUnsupported`. A caller with plain points keeps using `get`
+and `insert`.
+
 ### Performance guidance
 
 - `CachedFunction` is most useful when the function evaluation is expensive
@@ -191,7 +202,7 @@ assert_eq!(cache.retained_bytes(), 8 + std::mem::size_of::<f64>());
 
 For a uniform half-open grid on `[x_min, x_max)`, the quantics tensor train sum becomes a Riemann integral after multiplying by the cell width:
 
-`integral = tt.sum() * (x_max - x_min) / 2^R`
+`integral = tt.sum().unwrap() * (x_max - x_min) / 2^R`
 
 ```rust
 # use tensor4all_simplett::AbstractTensorTrain;
@@ -210,7 +221,7 @@ For a uniform half-open grid on `[x_min, x_max)`, the quantics tensor train sum 
 #     TCI2Options { tolerance: 1e-12, seed: Some(42), ..Default::default() },
 # ).unwrap();
 let tt = tci.to_tensor_train().unwrap();
-let integral = tt.sum() * (x_max - 0.0) / (1usize << r) as f64;
+let integral = tt.sum().unwrap() * (x_max - 0.0) / (1usize << r) as f64;
 
 // For f(x) = exp(-3x) on [0, 1): integral = (1 - e^{-3}) / 3
 let exact_integral = (1.0 - (-3.0_f64).exp()) / 3.0;

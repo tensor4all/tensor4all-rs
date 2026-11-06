@@ -131,7 +131,7 @@ pub(crate) fn err_buffer_too_small(
 }
 
 /// Store an error and return a null pointer.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn err_null<T, E: std::fmt::Display>(err: E) -> *mut T {
     set_last_error(&err.to_string());
     std::ptr::null_mut()
@@ -159,6 +159,25 @@ where
             unsafe { *out = Box::into_raw(Box::new(value)) };
             T4A_SUCCESS
         }
+        Ok(Err((code, msg))) => {
+            set_last_error(&msg);
+            code
+        }
+        Err(panic) => {
+            let msg = panic_message(&*panic);
+            set_last_error(&msg);
+            T4A_INTERNAL_ERROR
+        }
+    }
+}
+
+/// Run a status-only closure, storing any error or panic message.
+pub(crate) fn run_status<F>(f: F) -> t4a_status_code
+where
+    F: FnOnce() -> CapiResult<()>,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(Ok(())) => T4A_SUCCESS,
         Ok(Err((code, msg))) => {
             set_last_error(&msg);
             code
@@ -223,7 +242,7 @@ pub(crate) fn unwrap_catch(result: std::thread::Result<t4a_status_code>) -> t4a_
 }
 
 /// Unwrap a `catch_unwind` pointer result, storing any panic message.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn unwrap_catch_ptr<T>(result: std::thread::Result<*mut T>) -> *mut T {
     match result {
         Ok(ptr) => ptr,

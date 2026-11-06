@@ -15,11 +15,44 @@ use tensor4all_tensorbackend::{mat_mul, solve_matrix, Matrix};
 ///
 /// Selects pivots by computing residual blocks on demand, avoiding full
 /// matrix materialization. Suitable for large matrices accessed via
-/// [`LazyMatrixSource`](super::LazyMatrixSource).
+/// [`LazyMatrixSource`](super::source::LazyMatrixSource).
 /// An exactly zero starting residual column is skipped. Certifying an all-zero
 /// residual may inspect every remaining entry, one column at a time.
+///
+/// The trailing `pivot_errors` entry is the exact maximum magnitude of the
+/// remaining residual block, which is the dense kernel's meaning. Measuring it
+/// costs one evaluation of every unselected entry, again one column at a time.
 #[derive(Default)]
 pub struct LazyBlockRookKernel;
+
+/// Subtract the eliminated part from `A[rows, cols]`.
+///
+/// `pivot` is `A[selected_rows, selected_cols]` and `a_rj` is
+/// `A[rows, selected_cols]`; loading them once lets a multi-column scan share
+/// them instead of re-reading the pivot operands per column block.
+fn residual_from<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
+    source: &S,
+    rows: &[usize],
+    cols: &[usize],
+    selected_rows: &[usize],
+    pivot: &Matrix<T>,
+    a_rj: &Matrix<T>,
+) -> Result<Matrix<T>> {
+    let mut residual = load_block(source, rows, cols);
+    if selected_rows.is_empty() {
+        return Ok(residual);
+    }
+
+    let a_ic = load_block(source, selected_rows, cols);
+    let solved = solve_matrix(pivot, &a_ic).map_err(|err| MatrixLuciError::InvalidArgument {
+        message: format!("residual pivot solve failed: {err}"),
+    })?;
+    let approx = mat_mul(a_rj, &solved).map_err(|err| MatrixLuciError::InvalidArgument {
+        message: format!("residual multiplication failed: {err}"),
+    })?;
+    subtract_inplace(&mut residual, &approx);
+    Ok(residual)
+}
 
 fn residual_block<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     source: &S,
@@ -28,22 +61,12 @@ fn residual_block<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     selected_rows: &[usize],
     selected_cols: &[usize],
 ) -> Result<Matrix<T>> {
-    let mut residual = load_block(source, rows, cols);
     if selected_rows.is_empty() {
-        return Ok(residual);
+        return Ok(load_block(source, rows, cols));
     }
-
     let pivot = load_block(source, selected_rows, selected_cols);
     let a_rj = load_block(source, rows, selected_cols);
-    let a_ic = load_block(source, selected_rows, cols);
-    let solved = solve_matrix(&pivot, &a_ic).map_err(|err| MatrixLuciError::InvalidArgument {
-        message: format!("residual pivot solve failed: {err}"),
-    })?;
-    let approx = mat_mul(&a_rj, &solved).map_err(|err| MatrixLuciError::InvalidArgument {
-        message: format!("residual multiplication failed: {err}"),
-    })?;
-    subtract_inplace(&mut residual, &approx);
-    Ok(residual)
+    residual_from(source, rows, cols, selected_rows, &pivot, &a_rj)
 }
 
 fn argmax_abs<T: MatrixLuciScalar>(matrix: &Matrix<T>) -> (usize, usize, f64) {
@@ -147,6 +170,42 @@ fn rook_pivot<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     Ok((current_row, remaining_cols[best_col_pos], best_abs))
 }
 
+/// Exact largest magnitude of the residual block over the unselected rows and
+/// columns.
+///
+/// The block is evaluated in column chunks of one pivot width, so it is never
+/// materialized in one piece. An exact maximum over the block costs one
+/// evaluation of every remaining entry; the pivot operands are loaded once.
+fn residual_max_abs<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
+    source: &S,
+    remaining_rows: &[usize],
+    remaining_cols: &[usize],
+    selected_rows: &[usize],
+    selected_cols: &[usize],
+) -> Result<f64> {
+    let (pivot, a_rj) = if selected_rows.is_empty() {
+        (Matrix::zeros(0, 0), Matrix::zeros(remaining_rows.len(), 0))
+    } else {
+        (
+            load_block(source, selected_rows, selected_cols),
+            load_block(source, remaining_rows, selected_cols),
+        )
+    };
+    let chunk_width = selected_rows.len().max(1);
+    let mut max_abs = 0.0f64;
+    for chunk in remaining_cols.chunks(chunk_width) {
+        let residual = residual_from(source, remaining_rows, chunk, selected_rows, &pivot, &a_rj)?;
+        let (_, _, value) = argmax_abs(&residual);
+        if !value.is_finite() {
+            return Err(MatrixLuciError::NaNEncountered {
+                matrix: "rook residual",
+            });
+        }
+        max_abs = max_abs.max(value);
+    }
+    Ok(max_abs)
+}
+
 fn factorize_lazy<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     source: &S,
     options: &PivotKernelOptions,
@@ -213,8 +272,16 @@ fn factorize_lazy<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     let rank = selected_rows.len();
     if rank >= full_rank {
         last_error = 0.0;
-    } else if rank == max_bond_dim && rank > 0 {
-        last_error = accepted[rank - 1];
+    } else if rank == max_bond_dim {
+        // A rank ceiling reports the maximum of the remaining residual, which
+        // is the dense kernel's meaning, not the last accepted pivot.
+        last_error = residual_max_abs(
+            source,
+            &remaining_indices(nrows, &selected_rows),
+            &remaining_indices(ncols, &selected_cols),
+            &selected_rows,
+            &selected_cols,
+        )?;
     }
     accepted.push(last_error);
 

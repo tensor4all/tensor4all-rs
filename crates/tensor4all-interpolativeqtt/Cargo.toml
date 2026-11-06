@@ -12,10 +12,20 @@ repository.workspace = true
 description = "Interpolative Quantics Tensor Train construction"
 
 [features]
-default = ["tenferro-cpu-faer"]
+default = ["tenferro-cpu-platform"]
+# The platform default: Apple Accelerate on macOS, faer elsewhere
+# (see the `tensor4all-cpu-platform` crate).
+tenferro-cpu-platform = [
+    "tensor4all-simplett/tenferro-cpu-platform",
+    "tensor4all-tensorbackend/tenferro-cpu-platform",
+]
 tenferro-cpu-faer = [
     "tensor4all-simplett/tenferro-cpu-faer",
     "tensor4all-tensorbackend/tenferro-cpu-faer",
+]
+tenferro-system-blas = [
+    "tensor4all-simplett/tenferro-system-blas",
+    "tensor4all-tensorbackend/tenferro-system-blas",
 ]
 tenferro-provider-inject = [
     "tensor4all-simplett/tenferro-provider-inject",

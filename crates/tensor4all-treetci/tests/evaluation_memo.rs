@@ -3,7 +3,8 @@ use num_complex::{Complex32, Complex64};
 use tensor4all_core::{CommonScalar, IdxTensor, MatrixLuciScalar, Scalar, TensorElement};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetci::{
-    crossinterpolate2, DefaultProposer, GlobalIndexBatch, TreeTciEdge, TreeTciGraph, TreeTciOptions,
+    crossinterpolate2, AllEdges, DefaultProposer, GlobalIndexBatch, TreeTciEdge, TreeTciGraph,
+    TreeTciOptions,
 };
 
 fn memo_parity<T>()
@@ -48,7 +49,7 @@ where
                     })
                     .collect())
             };
-            let result = crossinterpolate2::<T, _, _>(
+            let result = crossinterpolate2::<T, _, _, _>(
                 evaluate,
                 dims.clone(),
                 TreeTciGraph::new(dims.len(), &edges).unwrap(),
@@ -61,6 +62,7 @@ where
                 },
                 None,
                 &DefaultProposer,
+                &mut (),
             )
             .unwrap();
             assert_eq!(result.evaluation.evaluated_points, evaluated);
@@ -151,7 +153,7 @@ fn public_edge_updates_cross_default_chunk_boundary_in_column_major_order() {
     let mut state =
         TreeTCI2::<f64>::new(vec![257, 257], TreeTciGraph::linear_chain(2).unwrap()).unwrap();
     state.add_global_pivots(&[vec![0, 0]]).unwrap();
-    state.max_sample_value = 1.0;
+    state.set_max_sample_value(1.0);
     let mut calls = Vec::new();
     optimize_default(
         &mut state,
@@ -195,7 +197,7 @@ fn continued_optimization_and_caller_rng_each_own_a_fresh_cache() {
     let mut state =
         TreeTCI2::<f64>::new(vec![2, 2], TreeTciGraph::linear_chain(2).unwrap()).unwrap();
     state.add_global_pivots(&[vec![0, 0]]).unwrap();
-    state.max_sample_value = 2.0;
+    state.set_max_sample_value(2.0);
     let options = TreeTciOptions {
         evaluation_cache_bytes: Some(1024),
         max_iter: 1,
@@ -209,13 +211,21 @@ fn continued_optimization_and_caller_rng_each_own_a_fresh_cache() {
             Ok(vec![2.0; batch.n_points()])
         };
         let result = if seeded {
-            optimize_with_proposer(&mut state, evaluate, &options, &DefaultProposer)
+            optimize_with_proposer(
+                &mut state,
+                evaluate,
+                &options,
+                &DefaultProposer,
+                &AllEdges,
+                &mut (),
+            )
         } else {
             optimize_with_proposer_with_rng(
                 &mut state,
                 evaluate,
                 &options,
                 &DefaultProposer,
+                &mut (),
                 &mut rng,
             )
         }
@@ -232,7 +242,7 @@ fn memo_accepts_a_borrowed_mutable_tree_evaluator() {
     use tensor4all_core::ColMajorArrayRef;
     use tensor4all_treetn::TreeTNCachedEvaluator;
     let graph = TreeTciGraph::linear_chain(2).unwrap();
-    let source = crossinterpolate2::<f64, _, _>(
+    let source = crossinterpolate2::<f64, _, _, _>(
         |batch| {
             Ok(batch
                 .data()
@@ -251,6 +261,7 @@ fn memo_accepts_a_borrowed_mutable_tree_evaluator() {
         },
         None,
         &DefaultProposer,
+        &mut (),
     )
     .unwrap()
     .treetn;
@@ -265,7 +276,7 @@ fn memo_accepts_a_borrowed_mutable_tree_evaluator() {
         .collect::<Vec<_>>();
     let mut oracle =
         TreeTNCachedEvaluator::<usize>::new(&source, &indices, Default::default()).unwrap();
-    let result = crossinterpolate2::<f64, _, _>(
+    let result = crossinterpolate2::<f64, _, _, _>(
         |batch: GlobalIndexBatch<'_>| {
             let shape = [batch.n_sites(), batch.n_points()];
             Ok(oracle
@@ -284,6 +295,7 @@ fn memo_accepts_a_borrowed_mutable_tree_evaluator() {
         },
         None,
         &DefaultProposer,
+        &mut (),
     )
     .unwrap();
     assert_eq!(result.evaluation.evaluated_points, 4);
@@ -291,4 +303,47 @@ fn memo_accepts_a_borrowed_mutable_tree_evaluator() {
     let expected =
         IdxTensor::from_dense(dense.indices().to_vec(), vec![2.0, 4.0, 4.0, 8.0]).unwrap();
     assert!(dense.sub(&expected).unwrap().maxabs().unwrap() < 1e-12);
+}
+
+#[test]
+fn memo_rejects_index_spaces_wider_than_its_side_keys() {
+    // 129 binary sites need 129 bits, so the memo cache selects a 256-bit key,
+    // which has no side-key support. The run fails at setup instead of silently
+    // falling back to whole-point lookups.
+    let error = crossinterpolate2::<f64, _, _, _>(
+        |batch: GlobalIndexBatch<'_>| Ok(vec![1.0; batch.n_points()]),
+        vec![2; 129],
+        TreeTciGraph::linear_chain(129).unwrap(),
+        vec![vec![0; 129]],
+        TreeTciOptions {
+            evaluation_cache_bytes: Some(1024),
+            seed: Some(0),
+            ..Default::default()
+        },
+        None,
+        &DefaultProposer,
+        &mut (),
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("no side-key support"),
+        "unexpected error: {error}"
+    );
+
+    // Without memoization the same run is untouched by the keyed path.
+    let result = crossinterpolate2::<f64, _, _, _>(
+        |batch: GlobalIndexBatch<'_>| Ok(vec![1.0; batch.n_points()]),
+        vec![2; 129],
+        TreeTciGraph::linear_chain(129).unwrap(),
+        vec![vec![0; 129]],
+        TreeTciOptions {
+            max_iter: 1,
+            seed: Some(0),
+            ..Default::default()
+        },
+        None,
+        &DefaultProposer,
+        &mut (),
+    );
+    assert!(result.is_ok(), "{result:?}");
 }

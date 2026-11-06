@@ -22,6 +22,13 @@ fn make_index(dim: usize) -> DynIndex {
     Index::new_dyn(dim)
 }
 
+fn make_mapping() -> IndexMapping<DynIndex> {
+    IndexMapping {
+        true_index: make_index(2),
+        internal_index: make_index(2),
+    }
+}
+
 fn build_identity_operator(sites: &[(String, DynIndex)]) -> LinearOperator<IdxTensor, String> {
     let mut mpo = TreeTN::new();
     let mut input_mapping = HashMap::new();
@@ -453,6 +460,404 @@ fn apply_linear_operator_to_numbered_tags_reports_missing_tag() {
     ));
 }
 
+/// Build a product-state chain `site0..site{length-1}` whose site `i` carries
+/// the numbered tag `k=(i+1)`.
+fn build_numbered_tag_product_chain(
+    length: usize,
+) -> (TreeTN<IdxTensor, String>, Vec<(String, DynIndex)>) {
+    let site_indices: Vec<DynIndex> = (0..length)
+        .map(|i| {
+            Index::new_dyn_with_tags(2, TagSet::from_str(&format!("Qubit,k={}", i + 1)).unwrap())
+        })
+        .collect();
+    let bonds: Vec<DynIndex> = (0..length.saturating_sub(1))
+        .map(|_| make_index(1))
+        .collect();
+
+    let mut tensors = Vec::with_capacity(length);
+    let mut names = Vec::with_capacity(length);
+    for i in 0..length {
+        let mut legs = Vec::new();
+        if i > 0 {
+            legs.push(bonds[i - 1].clone());
+        }
+        legs.push(site_indices[i].clone());
+        if i + 1 < length {
+            legs.push(bonds[i].clone());
+        }
+        let len: usize = legs.iter().map(|index| index.dim()).product();
+        let mut data = vec![0.0; len];
+        // All bond dimensions are 1, so the site leg has stride 1.
+        data[0] = 1.0;
+        data[1] = (i as f64) + 2.0;
+        tensors.push(IdxTensor::from_dense(legs, data).unwrap());
+        names.push(format!("site{i}"));
+    }
+
+    let state = TreeTN::from_tensors(tensors, names.clone()).unwrap();
+    let sites = names.into_iter().zip(site_indices).collect();
+    (state, sites)
+}
+
+/// Build a chain MPO with the same node names as `sites`, identity everywhere
+/// except `factor_node`, where `factor` (output rows, input columns) is used.
+/// Returns the operator plus each node's distinct true input/output indices.
+#[allow(clippy::type_complexity)]
+fn build_numbered_tag_chain_operator(
+    sites: &[(String, DynIndex)],
+    factor_node: &str,
+    factor: [[f64; 2]; 2],
+) -> (
+    LinearOperator<IdxTensor, String>,
+    Vec<(String, DynIndex, DynIndex)>,
+) {
+    let length = sites.len();
+    let mpo_bonds: Vec<DynIndex> = (0..length.saturating_sub(1))
+        .map(|_| make_index(1))
+        .collect();
+
+    let mut tensors = Vec::with_capacity(length);
+    let mut names = Vec::with_capacity(length);
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+    let mut true_indices = Vec::with_capacity(length);
+
+    for (pos, (name, _state_site)) in sites.iter().enumerate() {
+        let true_input = make_index(2);
+        let true_output = make_index(2);
+        let internal_input = make_index(2);
+        let internal_output = make_index(2);
+
+        let mut legs = Vec::new();
+        if pos > 0 {
+            legs.push(mpo_bonds[pos - 1].clone());
+        }
+        legs.push(internal_output.clone());
+        legs.push(internal_input.clone());
+        if pos + 1 < length {
+            legs.push(mpo_bonds[pos].clone());
+        }
+        let len: usize = legs.iter().map(|index| index.dim()).product();
+        let mut data = vec![0.0; len];
+        let matrix = if name == factor_node {
+            factor
+        } else {
+            [[1.0, 0.0], [0.0, 1.0]]
+        };
+        // Column-major [bond_prev?, out, in, bond_next?]; both bond dims are 1,
+        // so the out leg has stride 1 and the in leg stride 2.
+        for out in 0..2 {
+            for input in 0..2 {
+                data[out + 2 * input] = matrix[out][input];
+            }
+        }
+        tensors.push(IdxTensor::from_dense(legs, data).unwrap());
+        names.push(name.clone());
+        input_mapping.insert(
+            name.clone(),
+            IndexMapping {
+                true_index: true_input.clone(),
+                internal_index: internal_input,
+            },
+        );
+        output_mapping.insert(
+            name.clone(),
+            IndexMapping {
+                true_index: true_output.clone(),
+                internal_index: internal_output,
+            },
+        );
+        true_indices.push((name.clone(), true_input, true_output));
+    }
+
+    let mpo = TreeTN::from_tensors(tensors, names).unwrap();
+    (
+        LinearOperator::new(mpo, input_mapping, output_mapping),
+        true_indices,
+    )
+}
+
+#[test]
+fn apply_linear_operator_to_numbered_tags_binds_by_node_identity_for_long_chains() {
+    // With 11 nodes, lexicographic node order (`site0, site1, site10, site2, ...`)
+    // differs from tag order. A local X on `site10` must act on `site10`.
+    let (state, sites) = build_numbered_tag_product_chain(11);
+    let factor = [[0.0, 1.0], [1.0, 0.0]];
+    let (operator, true_indices) = build_numbered_tag_chain_operator(&sites, "site10", factor);
+
+    for options in [ApplyOptions::naive(), ApplyOptions::default()] {
+        let result =
+            apply_linear_operator_to_numbered_tags(&operator, &state, "k", 1, options.clone())
+                .unwrap();
+
+        let mut input_pairs = Vec::new();
+        let mut output_pairs = Vec::new();
+        for ((_, state_index), (_, true_input, true_output)) in
+            sites.iter().zip(true_indices.iter())
+        {
+            input_pairs.push((true_input.clone(), state_index.clone()));
+            output_pairs.push((true_output.clone(), state_index.clone()));
+        }
+        let expected = apply_linear_operator_to_indices(
+            &operator,
+            &state,
+            &input_pairs,
+            &output_pairs,
+            options.clone(),
+        )
+        .unwrap();
+
+        let error = result
+            .to_dense()
+            .unwrap()
+            .sub(&expected.to_dense().unwrap())
+            .unwrap()
+            .maxabs()
+            .unwrap();
+        assert!(
+            error < 1.0e-10,
+            "node-identity binding failed for {:?}: maxabs error {error}",
+            options.method
+        );
+    }
+}
+
+#[test]
+fn apply_linear_operator_to_numbered_tags_respects_within_node_tag_order() {
+    let k1 = Index::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=1").unwrap());
+    let k2 = Index::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=2").unwrap());
+    // The node tensor stores its site legs as [k2, k1], the reverse of tag order.
+    let state_tensor =
+        IdxTensor::from_dense(vec![k2.clone(), k1.clone()], vec![3.0, 5.0, 6.0, 10.0]).unwrap();
+    let state =
+        TreeTN::<IdxTensor, String>::from_tensors(vec![state_tensor], vec!["site".to_string()])
+            .unwrap();
+    assert_eq!(
+        state.node_site_indices(&"site".to_string()),
+        Some(vec![k2.clone(), k1.clone()])
+    );
+
+    let true_in0 = make_index(2);
+    let true_in1 = make_index(2);
+    let true_out0 = make_index(2);
+    let true_out1 = make_index(2);
+    let in0 = make_index(2);
+    let in1 = make_index(2);
+    let out0 = make_index(2);
+    let out1 = make_index(2);
+    // Identity on mapping 0 and X on mapping 1, in column-major
+    // [out0, out1, in0, in1] leg order.
+    let mut data = vec![0.0; 16];
+    for o0 in 0..2 {
+        for o1 in 0..2 {
+            for i0 in 0..2 {
+                for i1 in 0..2 {
+                    let identity = if o0 == i0 { 1.0 } else { 0.0 };
+                    let x = if o1 + i1 == 1 { 1.0 } else { 0.0 };
+                    data[o0 + 2 * o1 + 4 * i0 + 8 * i1] = identity * x;
+                }
+            }
+        }
+    }
+    let mpo_tensor = IdxTensor::from_dense(
+        vec![out0.clone(), out1.clone(), in0.clone(), in1.clone()],
+        data,
+    )
+    .unwrap();
+    let mpo = TreeTN::<IdxTensor, String>::from_tensors(vec![mpo_tensor], vec!["site".to_string()])
+        .unwrap();
+
+    let mut input_mapping = HashMap::new();
+    input_mapping.insert(
+        "site".to_string(),
+        vec![
+            IndexMapping {
+                true_index: true_in0.clone(),
+                internal_index: in0,
+            },
+            IndexMapping {
+                true_index: true_in1.clone(),
+                internal_index: in1,
+            },
+        ],
+    );
+    let mut output_mapping = HashMap::new();
+    output_mapping.insert(
+        "site".to_string(),
+        vec![
+            IndexMapping {
+                true_index: true_out0.clone(),
+                internal_index: out0,
+            },
+            IndexMapping {
+                true_index: true_out1.clone(),
+                internal_index: out1,
+            },
+        ],
+    );
+    let operator = LinearOperator::new_multi(mpo, input_mapping, output_mapping);
+
+    let result =
+        apply_linear_operator_to_numbered_tags(&operator, &state, "k", 1, ApplyOptions::naive())
+            .unwrap();
+    // Tag order binds k=1 to mapping 0 and k=2 to mapping 1, independent of the
+    // node tensor's [k2, k1] leg order.
+    let expected = apply_linear_operator_to_indices(
+        &operator,
+        &state,
+        &[(true_in0, k1.clone()), (true_in1, k2.clone())],
+        &[(true_out0, k1), (true_out1, k2)],
+        ApplyOptions::naive(),
+    )
+    .unwrap();
+
+    let error = result
+        .to_dense()
+        .unwrap()
+        .sub(&expected.to_dense().unwrap())
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    assert!(error < 1.0e-12, "within-node tag order mismatch: {error}");
+}
+
+#[test]
+fn apply_linear_operator_to_numbered_tags_reports_missing_node_mapping() {
+    let k1 = Index::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=1").unwrap());
+    let k2 = Index::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=2").unwrap());
+    let bond = make_index(1);
+    let state = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![
+            IdxTensor::from_dense(vec![k1, bond.clone()], vec![1.0, 2.0]).unwrap(),
+            IdxTensor::from_dense(vec![bond, k2], vec![3.0, 5.0]).unwrap(),
+        ],
+        vec!["site0".to_string(), "site1".to_string()],
+    )
+    .unwrap();
+
+    // Operator mappings live on different node names, so no selected index finds
+    // a mapping on its own node.
+    let operator = build_identity_operator(&[
+        ("other0".to_string(), make_index(2)),
+        ("other1".to_string(), make_index(2)),
+    ]);
+    let err =
+        apply_linear_operator_to_numbered_tags(&operator, &state, "k", 1, ApplyOptions::naive())
+            .unwrap_err();
+    assert!(matches!(
+        err,
+        LinearOperatorTaggedApplyError::MissingNodeMapping {
+            role: "input",
+            ref tag,
+            ..
+        } if tag == "k=1"
+    ));
+
+    // Input mappings on the state nodes but an output mapping keyed elsewhere
+    // exercises the output-side missing-node path.
+    let mut input_mapping = HashMap::new();
+    input_mapping.insert("site0".to_string(), vec![make_mapping()]);
+    input_mapping.insert("site1".to_string(), vec![make_mapping()]);
+    let mut output_mapping = HashMap::new();
+    output_mapping.insert("site0".to_string(), vec![make_mapping()]);
+    output_mapping.insert("other".to_string(), vec![make_mapping()]);
+    let mpo = build_identity_operator(&[
+        ("site0".to_string(), make_index(2)),
+        ("site1".to_string(), make_index(2)),
+    ])
+    .mpo()
+    .clone();
+    let operator = LinearOperator::new_multi(mpo, input_mapping, output_mapping);
+    let err =
+        apply_linear_operator_to_numbered_tags(&operator, &state, "k", 1, ApplyOptions::naive())
+            .unwrap_err();
+    assert!(matches!(
+        err,
+        LinearOperatorTaggedApplyError::MissingNodeMapping {
+            role: "output",
+            ref tag,
+            ..
+        } if tag == "k=2"
+    ));
+}
+
+#[test]
+fn apply_linear_operator_to_numbered_tags_reports_per_node_count_mismatch() {
+    let k1 = Index::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=1").unwrap());
+    let k2 = Index::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=2").unwrap());
+    // Both numbered tags live on `site0`; `site1` carries no numbered tag.
+    let bond = make_index(1);
+    let state = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![
+            IdxTensor::from_dense(vec![k2, k1, bond.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+            IdxTensor::from_dense(vec![bond, make_index(2)], vec![5.0, 6.0]).unwrap(),
+        ],
+        vec!["site0".to_string(), "site1".to_string()],
+    )
+    .unwrap();
+
+    // One mapping per node: `site0` declares one mapping but receives two tags.
+    let operator = build_identity_operator(&[
+        ("site0".to_string(), make_index(2)),
+        ("site1".to_string(), make_index(2)),
+    ]);
+    let err =
+        apply_linear_operator_to_numbered_tags(&operator, &state, "k", 1, ApplyOptions::naive())
+            .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            LinearOperatorTaggedApplyError::SelectedTagCountMismatch { role: "input", .. }
+        ),
+        "{err:?}"
+    );
+
+    // Input counts match the selected tags while output counts do not, which
+    // exercises the output-side per-node count check.
+    let k3 = Index::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=3").unwrap());
+    let bond = make_index(1);
+    let state = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![
+            IdxTensor::from_dense(
+                vec![
+                    Index::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=1").unwrap()),
+                    Index::new_dyn_with_tags(2, TagSet::from_str("Qubit,k=2").unwrap()),
+                    bond.clone(),
+                ],
+                vec![1.0, 2.0, 3.0, 4.0],
+            )
+            .unwrap(),
+            IdxTensor::from_dense(vec![bond, k3], vec![5.0, 6.0]).unwrap(),
+        ],
+        vec!["site0".to_string(), "site1".to_string()],
+    )
+    .unwrap();
+
+    let mut input_mapping = HashMap::new();
+    input_mapping.insert("site0".to_string(), vec![make_mapping(), make_mapping()]);
+    input_mapping.insert("site1".to_string(), vec![make_mapping()]);
+    let mut output_mapping = HashMap::new();
+    output_mapping.insert("site0".to_string(), vec![make_mapping()]);
+    output_mapping.insert("site1".to_string(), vec![make_mapping(), make_mapping()]);
+    let mpo = build_identity_operator(&[
+        ("site0".to_string(), make_index(2)),
+        ("site1".to_string(), make_index(2)),
+    ])
+    .mpo()
+    .clone();
+    let operator = LinearOperator::new_multi(mpo, input_mapping, output_mapping);
+    let err =
+        apply_linear_operator_to_numbered_tags(&operator, &state, "k", 1, ApplyOptions::naive())
+            .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            LinearOperatorTaggedApplyError::SelectedTagCountMismatch { role: "output", .. }
+        ),
+        "{err:?}"
+    );
+}
+
 fn build_tree_state() -> (TreeTN<IdxTensor, String>, Vec<(String, DynIndex)>) {
     let s_a = make_index(2);
     let s_b = make_index(2);
@@ -617,7 +1022,7 @@ fn test_apply_options_builder() {
     let policy = SvdTruncationPolicy::new(1e-10)
         .with_squared_values()
         .with_discarded_tail_sum();
-    let opts = ApplyOptions::zipup()
+    let opts = ApplyOptions::<usize>::zipup()
         .with_max_bond_dim(50)
         .with_svd_policy(policy);
     assert_eq!(opts.method, ContractionMethod::Zipup);
@@ -625,12 +1030,75 @@ fn test_apply_options_builder() {
     assert_eq!(opts.svd_policy, Some(policy));
     assert_eq!(opts.qr_rtol, None);
 
-    let fit = ApplyOptions::fit().with_nfullsweeps(3);
+    let fit = ApplyOptions::<usize>::fit().with_nfullsweeps(3);
     assert_eq!(fit.method, ContractionMethod::Fit);
     assert_eq!(fit.nfullsweeps, 3);
 
-    let naive = ApplyOptions::naive();
+    let naive = ApplyOptions::<usize>::naive();
     assert_eq!(naive.method, ContractionMethod::Naive);
+}
+
+#[test]
+fn apply_options_explicit_center_is_honored_on_a_chain() {
+    // Non-`usize` String node names, and both the naive-local and contraction
+    // dispatch paths, must canonicalize the result at the requested centre.
+    use crate::operator::apply_linear_operator;
+
+    let (state, sites) = build_chain_state();
+    let operator = build_identity_operator(&[sites[0].clone(), sites[2].clone()]);
+    for (label, method) in [
+        ("naive", ApplyOptions::naive()),
+        ("zipup", ApplyOptions::zipup()),
+    ] {
+        let options = ApplyOptions {
+            center: Some("site1".to_string()),
+            ..method
+        };
+        let result = apply_linear_operator(&operator, &state, options).unwrap();
+        assert!(
+            result.canonical_region().contains("site1"),
+            "{label}: expected the result centred on site1, got {:?}",
+            result.canonical_region()
+        );
+        let distance = result
+            .to_dense()
+            .unwrap()
+            .distance(&state.to_dense().unwrap())
+            .unwrap();
+        assert!(distance < 1.0e-10, "{label}: identity distance {distance}");
+    }
+}
+
+#[test]
+fn apply_options_default_center_matches_preferred_center() {
+    use crate::operator::apply_linear_operator;
+
+    let (state, sites) = build_chain_state();
+    let operator = build_identity_operator(&[sites[0].clone(), sites[2].clone()]);
+    let preferred = state
+        .preferred_contraction_center()
+        .expect("chain has a preferred centre");
+    assert_eq!(preferred, "site0".to_string());
+
+    let result = apply_linear_operator(&operator, &state, ApplyOptions::default()).unwrap();
+    assert!(result.canonical_region().contains(&preferred));
+}
+
+#[test]
+fn apply_options_rejects_a_center_that_is_not_a_state_node() {
+    use crate::operator::apply_linear_operator;
+
+    let (state, sites) = build_chain_state();
+    let operator = build_identity_operator(&[sites[0].clone(), sites[2].clone()]);
+    let options = ApplyOptions {
+        center: Some("missing".to_string()),
+        ..ApplyOptions::default()
+    };
+    let err = apply_linear_operator(&operator, &state, options).unwrap_err();
+    assert!(
+        err.to_string().contains("is not a node of the state"),
+        "{err}"
+    );
 }
 
 #[test]

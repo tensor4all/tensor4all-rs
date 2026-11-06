@@ -19,12 +19,15 @@
 
 #[cfg(feature = "tenferro-cuda")]
 mod cuda;
+/// Engine selection for the implicit and context-scoped eager frontends.
+pub(crate) mod eager_session;
 /// Dynamic-length tensor implementation.
 pub mod idx_tensor;
 pub mod index;
 
 // Contraction
 pub mod contract;
+mod contract_session;
 pub(crate) mod structured_contraction;
 
 // Linear algebra modules
@@ -38,8 +41,14 @@ pub use contract::{
     contract_pair_with_options, contract_with_options, outer_product,
     print_and_reset_contract_profile, reset_contract_profile, tensordot, ContractionOptions,
 };
+pub use contract_session::{
+    contract_pair_on_session, contract_with_options_on_session, index_select_on_session,
+    inner_product_on_session, norm_on_session, norm_squared_on_session, permute_indices_on_session,
+    permute_on_session, select_indices_on_session, stack_along_new_index_on_session,
+    sum_on_session,
+};
 #[cfg(feature = "tenferro-cuda")]
-pub use cuda::IdxTensorCudaError;
+pub use cuda::{IdxTensorCudaError, PendingCudaIdxDownload};
 pub use idx_tensor::{
     compute_permutation_from_indices, diag_idx_tensor, print_and_reset_pairwise_contract_profile,
     reset_pairwise_contract_profile, unfold_split, IdxTensor, IdxTensorError, TensorStorageError,
@@ -47,7 +56,7 @@ pub use idx_tensor::{
 pub use index::{DefaultIndex, DefaultTagSet, DynId, DynIndex, Index, TagSet};
 
 // Re-export linear algebra functions and types
-pub use direct_sum::direct_sum;
+pub use direct_sum::{direct_sum, direct_sum_many};
 pub use factorize::{
     factorize, Canonical, FactorizeAlg, FactorizeError, FactorizeOptions, FactorizeResult,
 };

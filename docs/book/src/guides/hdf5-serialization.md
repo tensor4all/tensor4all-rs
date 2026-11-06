@@ -18,13 +18,15 @@ plus a `node_count` dataset:
 <name>/
   @type = "TreeTN"
   @version = 1
+  @canonical_region: VarLenUnicode[]?  (only when canonicalized)
+  @canonical_form: Int32?              (only when a form is set)
   node_count: Int64
   node_1/ ... node_N/
     @node_name: VarLenUnicode
     (ITensor — same per-node schema as save_itensor)
 ```
 
-Two design decisions keep the schema minimal:
+Three design decisions keep the schema minimal:
 
 - **Edges are not stored explicitly.** Bond connections are recovered on load
   from shared `Index` identity via `TreeTN::from_tensors`, exactly as the
@@ -36,6 +38,11 @@ Two design decisions keep the schema minimal:
   topology, node names (`TreeTN`'s `V` type) are *not* recoverable from the
   tensors, so they are stored explicitly. Any node name type that round-trips
   through strings works — `String` and `usize` are the common cases.
+- **Canonical state is optional.** A canonicalized tree also stores its
+  `canonical_region` (node names) and `canonical_form` (same Int32 encoding as
+  MPS). `load_treetn` restores them without re-checking the tensors, so
+  canonicalizing a loaded tree to the saved region is a no-op. Files without
+  these attributes load as non-canonicalized.
 
 ## Example
 
@@ -79,8 +86,7 @@ assert_eq!(loaded.node_names(), vec!["left".to_string(), "center".to_string(), "
 ## When to use which schema
 
 - **Chains (MPS/MPO)**: use `save_mps` / `load_mps` for ITensorMPS.jl
-  compatibility, or `save_treetn` when you want the orthogonality-center-free
-  TreeTN representation.
+  compatibility, or `save_treetn` for the general TreeTN representation.
 - **General trees**: `save_treetn` / `load_treetn` is the only option — no
   upstream ITensorNetworks.jl format exists.
 

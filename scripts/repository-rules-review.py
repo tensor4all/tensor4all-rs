@@ -3,13 +3,19 @@
 
 Ported from ``tenferro-rs/scripts/repository-rules-review.py`` by way of
 strided-rs, and adapted to this workspace: the rule sections and their path
-routing differ, and the deterministic checks enforce the two rules from
-https://github.com/tensor4all/tensor4all-rs/issues/566 that are exactly
-machine-checkable, rather than tenferro's AD boundary.
+routing differ, and the deterministic checks enforce the rules that are exactly
+machine-checkable -- the two from
+https://github.com/tensor4all/tensor4all-rs/issues/566 and the shared
+"Unit Test Organization" rule -- rather than tenferro's AD boundary.
 
-Both deterministic checks are delta-scoped on purpose. #566 records existing
-violations of each; a repo-wide gate would fail on the backlog, so these stop
+All rule checks are delta-scoped on purpose. #566 records existing violations of
+both of its rules, so a repo-wide gate would fail on that backlog; these stop
 new violations from landing while the backlog burns down separately.
+tensor4all-rs#1105 moved the last inline `mod tests {` block out, so the inline
+unit-test check has no backlog and is exact.
+
+The #917 file-size check is selected with ``--file-growth`` and ``--dry-run``.
+Hosted CI enables it; it produces advisory warnings only.
 
 Local API key loading uses the ``python-dotenv`` library. Install dev helpers with:
 
@@ -56,6 +62,9 @@ HUNK_HEADER = re.compile(
 # the rule is about the runtime route, and test code may reach for tenferro
 # fixtures directly.
 TENFERRO_ROUTE_CRATE = "tensor4all-tensorbackend"
+# Wiring-only crates: no code, only dependency tables that select tenferro
+# features. tensor4all-cpu-platform picks the CPU backend by target.
+TENFERRO_WIRING_CRATES = frozenset({"tensor4all-cpu-platform"})
 TENFERRO_DEP_TABLES = frozenset({"dependencies", "build-dependencies"})
 CARGO_TABLE = re.compile(r"^\[([^\]]+)\]\s*$")
 # `tenferro-linalg = ...`, `"tenferro-linalg" = ...`, `tenferro-linalg.workspace`
@@ -70,6 +79,14 @@ PROHIBITED_DOCTEST_FENCE = re.compile(
     r"^\s*(?://[/!]|\*)?\s*(?:`{3,}|~{3,})\s*([\w,\s-]*)$"
 )
 PROHIBITED_DOCTEST_ATTRS = frozenset({"ignore", "no_run"})
+
+# Inline unit-test blocks belong in their own file (shared rules
+# `rules/rust/index.md`, "Unit Test Organization"): the module keeps only
+# `#[cfg(test)] mod tests;` and the suite lives in `src/<module>/tests.rs`.
+# The `pub(crate)` forms are covered too. tensor4all-rs#1105 moved the last
+# inline block out, so this rejects every new one instead of a backlog; a
+# genuinely tiny leaf module is handled by the maintainer waiver label.
+INLINE_TEST_MODULE = re.compile(r"^\s*(?:pub(?:\(crate\))?\s+)?mod tests\s*\{")
 
 SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
@@ -171,11 +188,20 @@ PERFORMANCE_SECTIONS = (
     "Full Quantics Grid Sweeps",
     "Per-Call Reconstruction Inside Loops",
     "Owned Vector Cache Keys",
+    "Std Hasher On Integer Keys Of A Per-Point Map",
+    "Cache Key Rebuilt Per Request",
+    "Owned Copy Of A Dense Payload On A Per-Call Path",
+    "Input Validation Repeated Per Pass",
+    "Batch Entry Point Driven One Point At A Time",
     "Silent Slow-Path Fallback",
     "Unpinned Timing Claims",
 )
 
 SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
+    (
+        re.compile(r"^crates/[^/]+/src/.*\.rs$"),
+        frozenset({"File Growth Dry Run"}),
+    ),
     (
         re.compile(r"tensor4all-capi|/capi|\.h$|cbindgen|_capi"),
         frozenset(
@@ -204,7 +230,7 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
     ),
     (
         re.compile(
-            r"tensor4all-(?:treetn|simplett|itensorlike|partitionedtt)"
+            r"tensor4all-(?:treetn|simplett|itensorlike)"
             r"|tensortrain|treetn|/tt\b|mps|mpo"
         ),
         frozenset(
@@ -231,7 +257,7 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
     (
         re.compile(
             r"tensor4all-(?:tensorci|treetci|quanticstci|aci|treeaci|simplett"
-            r"|treetn|partitionedtt|partitionedtreetn)|evaluat|cache|contract"
+            r"|treetn|partitionedtreetn)|evaluat|cache|contract"
             r"|benchmarks/"
         ),
         frozenset(PERFORMANCE_SECTIONS),
@@ -1387,7 +1413,8 @@ def tenferro_route_violations(
         # its package name rather than its directory. Skipping every manifest
         # outside `crates/` would exempt the workspace members that live
         # elsewhere -- xtask, tools/api-dump, docs/tutorial-code, docs/book-tests.
-        if (package_name_of(text) or crate_of(path)) == TENFERRO_ROUTE_CRATE:
+        package = package_name_of(text) or crate_of(path)
+        if package == TENFERRO_ROUTE_CRATE or package in TENFERRO_WIRING_CRATES:
             continue
         declared = tenferro_dependency_lines(text)
         for line_no in sorted(added_numbers & declared.keys()):
@@ -1414,6 +1441,20 @@ def prohibited_doctest_violations(
             banned = sorted(attrs & PROHIBITED_DOCTEST_ATTRS)
             if banned:
                 violations.append(f"{path}:{line_no}: ```{' '.join(banned)}")
+    return violations
+
+
+def inline_test_module_violations(
+    added: dict[str, list[tuple[int, str]]],
+) -> list[str]:
+    """Report added inline `mod tests { ... }` blocks."""
+    violations: list[str] = []
+    for path in sorted(added):
+        if not path.endswith(".rs"):
+            continue
+        for line_no, text in added[path]:
+            if INLINE_TEST_MODULE.match(text):
+                violations.append(f"{path}:{line_no}: {text.strip()}")
     return violations
 
 
@@ -1468,6 +1509,129 @@ def deterministic_checks(
                 ),
             )
         )
+
+    inline_tests = inline_test_module_violations(added)
+    if inline_tests:
+        findings.append(
+            Finding(
+                id="inline-unit-tests",
+                severity="block",
+                rule_section="Unit Test Organization",
+                file=inline_tests[0].split(":")[0],
+                line=None,
+                summary="New inline `mod tests {` block in a source file",
+                detail=(
+                    "Keep unit tests out of production source files. Leave "
+                    "`#[cfg(test)] mod tests;` in the module and put the suite "
+                    "in `src/<module>/tests.rs` (shared rule "
+                    "tensor4all/tensor4all-agent-rules `rules/rust/index.md`, "
+                    "Unit Test Organization). A genuinely tiny leaf module can "
+                    "be waived with the maintainer waiver label.\n"
+                    + "\n".join(inline_tests)
+                ),
+            )
+        )
+    return findings
+
+
+def numstat_entries(output: str) -> list[tuple[str, int, int]]:
+    """Read NUL-delimited numstat, retaining rename destinations and binary skips."""
+    fields = iter(output.split("\0"))
+    entries = []
+    for field in fields:
+        if not field:
+            continue
+        added, deleted, path = field.split("\t", 2)
+        if not path:
+            next(fields)  # Rename source; counts describe the source-to-target delta.
+            path = next(fields)
+        if added != "-" and deleted != "-":
+            entries.append((path, int(added), int(deleted)))
+    return entries
+
+
+def file_growth_path(path: str) -> bool:
+    """Select crate source files, excluding conventional test/generated paths."""
+    parts = path.split("/")
+    if len(parts) < 4 or parts[0] != "crates" or parts[2] != "src":
+        return False
+    name = parts[-1]
+    return (
+        name.endswith(".rs")
+        and not {"tests", "test", "generated"}.intersection(parts[3:-1])
+        and name not in {"tests.rs", "test.rs", "generated.rs"}
+        and not name.startswith(("test_", "generated_"))
+        and not name.endswith(("_test.rs", "_tests.rs", "_generated.rs", ".generated.rs"))
+    )
+
+
+def file_line_count(text: str) -> int:
+    """Count physical lines, including an unterminated final line, as Git does."""
+    return text.count("\n") + int(bool(text) and not text.endswith("\n"))
+
+
+def file_growth_findings(
+    base: str,
+    head: str,
+    *,
+    worktree: bool = False,
+    soft_limit: int = 1000,
+    large_limit: int = 2000,
+    large_min_delta: int = 50,
+) -> list[Finding]:
+    """Preview advisory whole-file growth against the merge base, never a hard cap.
+
+    Numstat supplies the delta; reading the destination supplies its total size.
+    Renames preserve the original size, so moving a large file alone is silent.
+    No reviewed code is executed, and no historical file-size baseline is needed.
+    The net-growth floor applies only to already-large files, not first crossings.
+    """
+    comparison = [base] if worktree else [f"{base}...{head}"]
+    entries = numstat_entries(run_git([
+        "diff", "--numstat", "-z", "--find-renames", "--no-ext-diff",
+        "--no-textconv", *comparison, "--", "crates/",
+    ]))
+    if worktree:
+        for path in untracked_files():
+            if file_growth_path(path):
+                entries.extend(numstat_entries(run_git([
+                    "diff", "--numstat", "-z", "--no-index", "--no-ext-diff",
+                    "--no-textconv", "--", "/dev/null", path,
+                ], check=False)))
+
+    findings = []
+    for path, added, deleted in sorted(entries):
+        if added <= deleted or not file_growth_path(path):
+            continue
+        text = file_text_at(path, ref=head, worktree=worktree)
+        header = "\n".join(text.split("\n", 20)[:20])
+        if re.search(r"@generated\b|\bDO NOT EDIT\b", header, re.IGNORECASE):
+            continue
+        after = file_line_count(text)
+        before = after - added + deleted
+        if before <= soft_limit < after:
+            trigger = f"crosses the {soft_limit}-line soft review trigger"
+        elif before > large_limit and added - deleted >= large_min_delta:
+            trigger = (
+                f"grows a file already above {large_limit} lines "
+                f"by at least {large_min_delta} net lines"
+            )
+        else:
+            continue
+        findings.append(Finding(
+            id=f"file-growth:{path}",
+            severity="warn",
+            rule_section="File Growth Dry Run",
+            file=path,
+            line=None,
+            summary=f"{before} -> {after} lines (+{added}/-{deleted}); {trigger}",
+            detail=(
+                "Experimental, advisory only; counts include comments, blank lines "
+                "and inline tests. Explain the coherent responsibility in the PR "
+                "body, or split at a meaningful responsibility boundary. Never "
+                "split solely to lower the count. Thresholds remain provisional (#917)."
+            ),
+        ))
     return findings
 
 
@@ -1484,6 +1648,23 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run",
         action="store_true",
         help="Skip LLM call; run diff/section selection and deterministic checks only",
+    )
+    parser.add_argument(
+        "--file-growth", action="store_true",
+        help="Opt into the experimental advisory file-size check (requires --dry-run)",
+    )
+    parser.add_argument(
+        "--file-growth-soft-limit", type=int, default=1000,
+        help="Provisional crossing threshold in whole-file lines (default: 1000)",
+    )
+    parser.add_argument(
+        "--file-growth-large-limit", type=int, default=2000,
+        help="Provisional already-large threshold, at least the soft limit (default: 2000)",
+    )
+    parser.add_argument(
+        "--file-growth-large-min-delta", type=int, default=50,
+        help="Minimum net added lines for already-large files; 0 allows any growth "
+        "(default: 50). First crossings are unaffected.",
     )
     parser.add_argument(
         "--waived",
@@ -1527,6 +1708,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.file_growth and not args.dry_run:
+        parser.error("--file-growth requires --dry-run during the #917 experiment")
+    if not 0 < args.file_growth_soft_limit <= args.file_growth_large_limit:
+        parser.error("file-growth limits must satisfy 0 < soft <= large")
+    if args.file_growth_large_min_delta < 0:
+        parser.error("--file-growth-large-min-delta must be nonnegative")
+
     if args.llm_skipped_reason and not args.dry_run:
         print("--llm-skipped-reason requires --dry-run", file=sys.stderr)
         return 1
@@ -1562,6 +1750,13 @@ def main(argv: list[str] | None = None) -> int:
     findings = deterministic_checks(
         files, added=added_text, ref=args.head, worktree=args.worktree
     )
+    if args.file_growth:
+        findings.extend(file_growth_findings(
+            args.base, args.head, worktree=args.worktree,
+            soft_limit=args.file_growth_soft_limit,
+            large_limit=args.file_growth_large_limit,
+            large_min_delta=args.file_growth_large_min_delta,
+        ))
     sensitive_finding = sensitive_diff_finding(diff_text)
     if sensitive_finding:
         findings.append(sensitive_finding)

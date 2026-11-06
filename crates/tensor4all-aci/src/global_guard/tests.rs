@@ -131,7 +131,7 @@ fn find_global_pivots_noop_without_search_budget() {
     // Direct finder check: a zero budget returns nothing without touching
     // the problem.
     let input = two_peak_tt(10);
-    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default()).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
     let options = AciOptions {
         nsearch_global_pivots: 0,
         max_nglobal_pivot: 0,

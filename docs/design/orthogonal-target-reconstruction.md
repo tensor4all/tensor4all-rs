@@ -320,13 +320,18 @@ bond dimension one, the reported bound exceeded the true L2 deviation by 3.9x, 7
 and 12.8x at two, three and four levels before this change, and by 1.9x, 2.5x and
 3.2x afterwards.
 
-Budget allocation stays conservative: the application error is charged first, and a
-level can merge at most twice its live item count, so its share is
-`remaining / level_merges` and a level spends only what it measures (accepted
-residuals and dropped norms, including those of discarded probes). The sum of all
-measured components cannot exceed the allowance, so `error_bound` never does either. A
-restriction is nonexpansive and consumes no budget, and a rejected probe contributes
-no reported component, so nothing here needs a `sqrt(fanout)` division.
+Budget allocation stays conservative: the application error is charged first, and the
+rest is split over the levels that remain and over the share-sized charges the
+current level can make. A charge is one dropped norm or one accepted truncation
+residual, so the number of charges follows the operand term counts of the merges
+that level performs, including the discarded probe of a region that stops. The
+level share is `(remaining / levels_left) / charges`, so late levels are not
+starved and a multi-term item cannot spend more than its level's allocation. A
+level spends only what it measures (accepted residuals and dropped norms, including
+those of discarded probes). The sum of all measured components cannot exceed the
+allowance, so `error_bound` never does either. A restriction is nonexpansive and
+consumes no budget, and a rejected probe contributes no reported component, so
+nothing here needs a `sqrt(fanout)` division.
 
 Still open on this axis: attributing residual components to the final regions they
 touch so that residuals of nested levels could combine by the Euclidean norm instead
@@ -357,13 +362,17 @@ output region so the final region set stays prefix-free:
 
 - An output region is refined only when its retained terms exceed the goal *and*
   refining strictly lowers its maximum retained rank. Without that gain the region
-  stops with the input prefixes it already holds, so a rank-one object is not
-  forced into a preset output tiling. A stopped region keeps the input prefixes it
-  had before the discarded probe, whose measured residuals are never charged.
-- Merging a pair combines the two operands into one term only when that strictly
-  lowers the bond dimension against the naive sum; otherwise both stay as separate
-  terms, which keeps the retained ranks small at the cost of a longer term list.
-- Refinement stops are reported (`refined_regions`, `stopped_regions`), and the
+  stops refining, so a rank-one object is not forced into a preset output tiling.
+  A stopped region keeps its output key and still merges its input siblings on every
+  later level; restricting it to its own region is a no-op, so it runs the merge
+  half of the level with the same ledger share. Its measured probe components are
+  charged, but only the merge it keeps contributes a reported component.
+- Merging a pair combines the two operands into one term when the candidate fits the
+  goal or strictly lowers the bond dimension against the naive sum; otherwise both
+  stay as separate terms, which keeps the retained ranks small at the cost of a
+  longer term list.
+- Refinement stops are reported (`refined_regions`, `stopped_regions`), with a
+  stopped region counted once rather than once per remaining level, and the
   retained term count is bounded by `max_terms`, whose exhaustion is an explicit
   resource-limit error rather than a silent accuracy relaxation.
 - A merged or unpaired contribution is dropped only when its measured norm fits its
@@ -379,13 +388,15 @@ output region so the final region set stays prefix-free:
 engine on the same subset-operator target and against applying the complete
 transform to the whole input at once. It records the structural counters, the
 retained and transient ranks, stored parameters, elapsed time, the measured bound,
-and the deviation from the dense exact trajectory. On the recorded three- and
-four-bit families (2026-09-16) the operation counts match the design exactly
-(`2^d` applications and `2^d * d` additions for the exact trajectory, `2^d`
-additions for an adaptive stop). Runtime is rank-driven rather than
-structure-driven: at three bits the adaptive policy is slower despite three times
-fewer additions, and at four bits it is about five times faster while the exact
-trajectory's retained rank reaches `256` and the adaptive runs stay at the goal.
+and the deviation from the dense exact trajectory. The recorded three- and
+four-bit families (2026-09-16) predate the #777 change that keeps a stopped region
+merging its input siblings, so their adaptive-stop term counts and additions no
+longer describe the current schedule; the exact trajectory's operation counts
+(`2^d` applications and `2^d * d` additions) are unchanged. Runtime is rank-driven
+rather than structure-driven: in the recorded runs at three bits the adaptive
+policy was slower despite three times fewer additions, and at four bits it was
+about five times faster while the exact trajectory's retained rank reached `256`
+and the adaptive runs stayed at or below the goal.
 Applying the
 complete transform to the whole input is cheaper on those small inputs, which is the
 honest baseline the design must beat only in the patched-input regime that the

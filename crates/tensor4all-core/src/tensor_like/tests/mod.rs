@@ -227,21 +227,64 @@ impl TensorContractionLike for DefaultOnlyTensor {
         self.clone()
     }
 
+    /// Element-by-element binary direct sum; `direct_sum_many` is left to the
+    /// provided left fold, the path an external implementor gets for free.
     fn direct_sum(
         &self,
         other: &Self,
         pairs: &[(DynIndex, DynIndex)],
     ) -> std::result::Result<DirectSumResult<Self>, Self::Error> {
-        let mut new_indices = Vec::with_capacity(pairs.len());
-        for (left, right) in pairs {
-            new_indices.push(
+        let new_indices = pairs
+            .iter()
+            .map(|(left, right)| {
                 <DynIndex as IndexLike>::new_link(left.dim() + right.dim())
-                    .map_err(TensorVectorSpaceError::from)?,
-            );
+                    .map_err(TensorVectorSpaceError::from)
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut indices: Vec<DynIndex> = self
+            .indices
+            .iter()
+            .filter(|index| !pairs.iter().any(|(left, _)| left == *index))
+            .cloned()
+            .collect();
+        let n_common = indices.len();
+        indices.extend(new_indices.iter().cloned());
+        let dims = dims_of(&indices);
+        let mut data = vec![0.0; dims.iter().product()];
+        for (operand, side) in [(self, 0usize), (other, 1usize)] {
+            let operand_dims = dims_of(&operand.indices);
+            for (linear, &value) in operand.data.iter().enumerate() {
+                let coords = coords_from_linear(linear, &operand_dims);
+                let mut result_coords = vec![0usize; dims.len()];
+                for (axis, index) in operand.indices.iter().enumerate() {
+                    let paired = pairs.iter().position(|pair| {
+                        if side == 0 {
+                            &pair.0 == index
+                        } else {
+                            &pair.1 == index
+                        }
+                    });
+                    match paired {
+                        Some(p) => {
+                            let offset = if side == 0 { 0 } else { pairs[p].0.dim() };
+                            result_coords[n_common + p] = offset + coords[axis];
+                        }
+                        None => {
+                            let position = indices[..n_common]
+                                .iter()
+                                .position(|common| common == index)
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!("direct_sum: unpaired index mismatch")
+                                })?;
+                            result_coords[position] = coords[axis];
+                        }
+                    }
+                }
+                data[linear_index(&result_coords, &dims)] = value;
+            }
         }
-        let tensor = self.outer_product(other)?;
         Ok(DirectSumResult {
-            tensor,
+            tensor: Self { indices, data },
             new_indices,
         })
     }
@@ -864,7 +907,7 @@ fn tensor_factorization_preserves_multi_axis_probe_row_order() {
 fn tensor_like_default_context_seam_reports_unsupported() {
     use std::sync::Arc;
 
-    use tenferro_cpu::CpuBackend;
+    use tensor4all_tensorbackend::CpuBackend;
     use tensor4all_tensorbackend::{CpuExecutionContext, ExecutionContext};
 
     let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
@@ -896,4 +939,75 @@ fn tensor_like_default_context_seam_reports_unsupported() {
     )
     .unwrap_err();
     assert!(matches!(error, FactorizeError::UnsupportedStorage(_)));
+}
+
+/// `direct_sum_many` with three operands through the provided left fold of the
+/// implementor's binary `direct_sum` matches the one-pass `IdxTensor` kernel.
+#[test]
+fn tensor_contraction_default_direct_sum_many_folds_binary_direct_sum() {
+    let s = DynIndex::new_dyn(2);
+    let bonds: Vec<DynIndex> = [1, 2, 1].iter().map(|&d| DynIndex::new_dyn(d)).collect();
+    let values = |len: usize, seed: f64| (0..len).map(|k| seed + k as f64).collect::<Vec<_>>();
+    let make = |indices: Vec<DynIndex>, seed: f64| {
+        let len = dims_of(&indices).iter().product();
+        (
+            DefaultOnlyTensor {
+                indices: indices.clone(),
+                data: values(len, seed),
+            },
+            IdxTensor::from_dense(indices, values(len, seed)).unwrap(),
+        )
+    };
+    let (a, a_ref) = make(vec![s.clone(), bonds[0].clone()], 1.0);
+    let (b, b_ref) = make(vec![bonds[1].clone(), s.clone()], 10.0);
+    let (c, c_ref) = make(vec![s.clone(), bonds[2].clone()], 100.0);
+    let groups = vec![bonds.clone()];
+
+    let folded = DefaultOnlyTensor::direct_sum_many(&[&a, &b, &c], &groups).unwrap();
+    let one_pass = IdxTensor::direct_sum_many(&[&a_ref, &b_ref, &c_ref], &groups).unwrap();
+
+    assert_eq!(folded.new_indices[0].dim(), 4);
+    assert_eq!(
+        folded.tensor.indices,
+        vec![s, folded.new_indices[0].clone()]
+    );
+    assert_eq!(folded.tensor.data, one_pass.tensor.to_vec::<f64>().unwrap());
+}
+
+#[test]
+fn tensor_contraction_default_direct_sum_many_of_one_operand_renames_and_reorders() {
+    let s = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(3);
+    let a = DefaultOnlyTensor {
+        indices: vec![bond.clone(), s.clone()],
+        data: (0..6).map(|k| k as f64).collect(),
+    };
+
+    let result = DefaultOnlyTensor::direct_sum_many(&[&a], &[vec![bond.clone()]]).unwrap();
+
+    let new = result.new_indices[0].clone();
+    assert_eq!(new.dim(), 3);
+    assert_ne!(new, bond);
+    assert_eq!(result.tensor.indices, vec![s, new]);
+    // Transposed from (bond, s) to (s, new).
+    assert_eq!(result.tensor.data, vec![0.0, 3.0, 1.0, 4.0, 2.0, 5.0]);
+}
+
+#[test]
+fn tensor_contraction_default_direct_sum_many_rejects_bad_arguments() {
+    let bond = DynIndex::new_dyn(1);
+    let a = DefaultOnlyTensor {
+        indices: vec![bond.clone()],
+        data: vec![1.0],
+    };
+    let message = |groups: &[Vec<DynIndex>], operands: &[&DefaultOnlyTensor]| {
+        format!(
+            "{:#}",
+            DefaultOnlyTensor::direct_sum_many(operands, groups).unwrap_err()
+        )
+    };
+
+    assert!(message(&[vec![]], &[]).contains("at least one operand"));
+    assert!(message(&[], &[&a]).contains("at least one index group"));
+    assert!(message(&[vec![bond.clone()]], &[&a, &a]).contains("expected one per operand (2)"));
 }

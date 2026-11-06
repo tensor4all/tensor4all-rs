@@ -3,12 +3,14 @@
 //! This module provides the [`TreeTN`] type, a tree-structured tensor network
 //! for efficient tensor operations with canonicalization and truncation support.
 
-// Some utility functions are WIP and not yet connected
-#![allow(dead_code)]
+// Test-only evaluator/contraction inspection helpers and WIP utilities live in
+// this module; keep their non-test dead-code warnings suppressed here.
+#![cfg_attr(not(test), allow(dead_code))]
 
 mod addition;
 mod cached_evaluator;
 mod canonicalize;
+mod context;
 pub mod contraction;
 mod decompose;
 #[cfg(feature = "diagnostics")]
@@ -20,6 +22,8 @@ mod operator_impl;
 mod ops;
 pub mod partial_contraction;
 mod restructure;
+mod site_ops;
+mod sum;
 mod swap;
 mod tensor_like;
 mod transform;
@@ -41,7 +45,10 @@ use crate::named_graph::NamedGraph;
 use crate::site_index_network::SiteIndexNetwork;
 
 // Re-export the decomposition functions and types
-pub use decompose::{factorize_tensor_to_treetn, factorize_tensor_to_treetn_with, TreeTopology};
+pub use decompose::{
+    factorize_tensor_to_treetn, factorize_tensor_to_treetn_with,
+    factorize_tensor_to_treetn_with_on_session, TreeTopology,
+};
 
 // Re-export cached evaluator types
 pub use cached_evaluator::{
@@ -52,6 +59,9 @@ pub use cached_evaluator::{
 // Re-export evaluator types
 pub use evaluator::TreeTNEvaluator;
 
+// Re-export fit contraction entry points
+pub use fit::{contract_fit, contract_fit_from_initial, low_rank_initializer_tree_tn};
+
 // Re-export local update types
 pub use localupdate::{
     apply_local_update_sweep, get_boundary_edges, BoundaryEdge, LocalUpdateStep,
@@ -59,7 +69,7 @@ pub use localupdate::{
 };
 
 // Re-export the variational sum-fit entry point and its contraction options alias.
-pub use fit::{fit_sum, FitContractionOptions as FitOptions};
+pub use fit::{contract_fit_in, fit_sum, FitContractionOptions as FitOptions};
 
 // Re-export partial contraction types
 pub use partial_contraction::{
@@ -68,7 +78,11 @@ pub use partial_contraction::{
 };
 
 // Re-export swap types
+pub use sum::{ExactSum, PairwiseSumOrder, PerAddCutoff, SumEngine};
 pub use swap::{ScheduledSwapStep, SwapOptions, SwapSchedule};
+
+// Re-export general-tree site-fixing operations
+pub use site_ops::fix_and_remove_site;
 
 /// Legs grouped by full index, in first-occurrence order: each entry is an
 /// index and the `(node, leg)` pairs that carry it (used by `from_tensors`).
@@ -114,6 +128,35 @@ where
     T: TensorLike,
     F: FnOnce(&T, &[T::Index]) -> Result<tensor4all_core::FactorizeResult<T>>,
 {
+    factorize_allowing_empty_side_with(
+        tensor,
+        left_indices,
+        factorize,
+        global_stack::<T>,
+        global_select::<T>,
+    )
+}
+
+/// [`factorize_allowing_empty_side`] with the singleton-axis moves supplied by
+/// the caller.
+///
+/// The process-global route stacks and selects eagerly; a caller that holds an
+/// explicit session must do both on that session, because an eager entry is
+/// rejected while a session is active. The factorization and the exactness
+/// contract are identical on every route.
+fn factorize_allowing_empty_side_with<T, F, Stack, Select>(
+    tensor: &T,
+    left_indices: &[T::Index],
+    factorize: F,
+    stack: Stack,
+    select: Select,
+) -> Result<tensor4all_core::FactorizeResult<T>>
+where
+    T: TensorLike,
+    F: FnOnce(&T, &[T::Index]) -> Result<tensor4all_core::FactorizeResult<T>>,
+    Stack: Fn(&T, T::Index, isize) -> Result<T>,
+    Select: Fn(&T, &T::Index, usize) -> Result<T>,
+{
     let tensor_indices = tensor.external_indices();
     if let Some(missing) = left_indices
         .iter()
@@ -132,21 +175,17 @@ where
 
     let left_boundary = T::Index::new_link(1).context("failed to create left boundary")?;
     let right_boundary = T::Index::new_link(1).context("failed to create right boundary")?;
-    let augmented = T::stack_along_new_index(&[tensor], left_boundary.clone(), -1)
-        .and_then(|with_left| T::stack_along_new_index(&[&with_left], right_boundary.clone(), -1))
+    let augmented = stack(tensor, left_boundary.clone(), -1)
+        .and_then(|with_left| stack(&with_left, right_boundary.clone(), -1))
         .context("failed to add singleton boundaries for factorization")?;
     let mut augmented_left = left_indices.to_vec();
     augmented_left.push(left_boundary.clone());
 
     let result = factorize(&augmented, &augmented_left)
         .context("failed to factorize singleton-boundary tensor")?;
-    let left = result
-        .left
-        .select_indices(std::slice::from_ref(&left_boundary), &[0])
+    let left = select(&result.left, &left_boundary, 0)
         .context("failed to remove left singleton boundary")?;
-    let right = result
-        .right
-        .select_indices(std::slice::from_ref(&right_boundary), &[0])
+    let right = select(&result.right, &right_boundary, 0)
         .context("failed to remove right singleton boundary")?;
 
     Ok(tensor4all_core::FactorizeResult::new(
@@ -156,6 +195,50 @@ where
         result.singular_values,
         result.rank,
     ))
+}
+
+/// Add a dimension-one axis eagerly, the process-global singleton move.
+fn global_stack<T: TensorLike>(tensor: &T, index: T::Index, axis: isize) -> Result<T> {
+    T::stack_along_new_index(&[tensor], index, axis).map_err(anyhow::Error::from)
+}
+
+/// Select position zero of a dimension-one axis eagerly, the process-global
+/// singleton move.
+fn global_select<T: TensorLike>(tensor: &T, index: &T::Index, position: usize) -> Result<T> {
+    tensor
+        .select_indices(std::slice::from_ref(index), &[position])
+        .map_err(anyhow::Error::from)
+}
+
+/// Contract two local tensors that may share no index.
+///
+/// A site-free node's bra and ket tensors carry only bond indices, and the two
+/// copies use distinct bond indices, so they share nothing even though they
+/// belong to the same node. Tensor4all-core's connected-contraction contract
+/// rejects that intentional disconnected product, so the owning algorithm must
+/// make the outer product explicit here instead of relaxing the core contract
+/// or catching its disconnected-network error. This is the local-pair
+/// companion of [`factorize_allowing_empty_side`]: when the two tensors share
+/// at least one index the ordinary connected contraction is used, so a node
+/// with sites follows the previous path unchanged.
+///
+/// # Errors
+///
+/// Returns the error of `outer_product` when the tensors share nothing, or
+/// the error of `contract` when they do.
+pub(crate) fn contract_or_outer_product<T>(lhs: &T, rhs: &T) -> Result<T>
+where
+    T: TensorLike,
+{
+    let shared = tensor4all_core::index_ops::common_inds::<T::Index>(
+        &lhs.external_indices(),
+        &rhs.external_indices(),
+    );
+    if shared.is_empty() {
+        lhs.outer_product(rhs).map_err(anyhow::Error::from)
+    } else {
+        T::contract(&[lhs, rhs]).map_err(anyhow::Error::from)
+    }
 }
 
 /// Tree Tensor Network structure (inspired by ITensorNetworks.jl's TreeTensorNetwork).
@@ -280,9 +363,10 @@ where
     /// - Connection fails (e.g., shape mismatch)
     ///
     /// # Errors
-    /// Returns an error when `tensors` and `node_names` differ in length (a
-    /// shape mismatch) or a tensor structure is invalid (an invalid-state
-    /// failure).
+    /// Returns [`TreeTNOperationError`] when `tensors` and `node_names` differ in length, when a
+    /// node name is duplicated or an index appears in other than exactly two
+    /// tensors, when connection fails, or when the reconstructed network fails
+    /// its internal consistency check.
     /// # Examples
     ///
     /// ```
@@ -424,9 +508,7 @@ where
     /// Also updates the site_index_network with the physical indices (all indices initially,
     /// as no connections exist yet).
     /// # Errors
-    /// Returns an error when the tensor's site dimensions are incompatible with
-    /// its neighbors (a shape mismatch) or the node name is already in use
-    /// (a duplicate operation failure).
+    /// Returns [`TreeTNOperationError`] when `node_name` is already in use.
     ///
     pub fn add_tensor(
         &mut self,
@@ -446,8 +528,8 @@ where
     /// Returns the NodeIndex for the newly added tensor.
     ///
     /// # Errors
-    /// Returns an error when the tensor's site dimensions are incompatible with
-    /// its neighbors (a shape mismatch).
+    /// Returns [`TreeTNOperationError`] when the internally generated node name is already in
+    /// use.
     /// # Examples
     ///
     /// ```
@@ -496,9 +578,9 @@ where
     /// # Returns
     /// The EdgeIndex of the new connection, or an error if validation fails.
     /// # Errors
-    /// Returns an error when the indices do not belong to the two nodes (a
-    /// missing-index failure) or their dimensions differ (a dimension
-    /// mismatch).
+    /// Returns [`TreeTNOperationError`] when `index_a` and `index_b` are not the same full index,
+    /// when `node_a` or `node_b` does not exist, or when the index is not a leg
+    /// of the corresponding node's tensor.
     ///
     pub fn connect(
         &mut self,
@@ -756,6 +838,65 @@ where
         context_name: &str,
         context: Option<&tensor4all_tensorbackend::ExecutionContext>,
     ) -> Result<()> {
+        match context {
+            Some(execution) => self.sweep_edge_full_rank_with(
+                src,
+                dst,
+                alg,
+                context_name,
+                |tensor, left| {
+                    tensor
+                        .factorize_full_rank_in(left, alg, canonical, execution)
+                        .map_err(anyhow::Error::from)
+                },
+                |lhs, rhs| T::contract(&[lhs, rhs]).map_err(anyhow::Error::from),
+                global_stack::<T>,
+                global_select::<T>,
+            ),
+            None => self.sweep_edge_full_rank_with(
+                src,
+                dst,
+                alg,
+                context_name,
+                |tensor, left| {
+                    tensor
+                        .factorize_full_rank(left, alg, canonical)
+                        .map_err(anyhow::Error::from)
+                },
+                |lhs, rhs| T::contract(&[lhs, rhs]).map_err(anyhow::Error::from),
+                global_stack::<T>,
+                global_select::<T>,
+            ),
+        }
+    }
+
+    /// Process one edge with caller-supplied factorization and absorption.
+    ///
+    /// The single body behind the process-global, execution-context and
+    /// explicit-session full-rank sweeps: only where the factorization and the
+    /// dst absorption run differs, so a site-free node and the exactness
+    /// contract stay identical on every route.
+    // INVARIANT: the parameters are the seam's boundary (positions, algorithm,
+    // factorization, contraction, and the two singleton-axis moves); grouping
+    // them into a struct would only move the same values through one more layer.
+    #[allow(clippy::too_many_arguments)]
+    fn sweep_edge_full_rank_with<Factorize, Contract, Stack, Select>(
+        &mut self,
+        src: NodeIndex,
+        dst: NodeIndex,
+        alg: FactorizeAlg,
+        context_name: &str,
+        factorize: Factorize,
+        contract: Contract,
+        stack: Stack,
+        select: Select,
+    ) -> Result<()>
+    where
+        Factorize: FnOnce(&T, &[T::Index]) -> Result<tensor4all_core::FactorizeResult<T>>,
+        Contract: FnOnce(&T, &T) -> Result<T>,
+        Stack: Fn(&T, T::Index, isize) -> Result<T>,
+        Select: Fn(&T, &T::Index, usize) -> Result<T>,
+    {
         // Find edge between src and dst
         let edge = {
             let g = self.graph.graph();
@@ -804,24 +945,24 @@ where
         // leaves a unit-modulus scalar on a fresh dimension-one bond and moves
         // the whole source tensor into `dst`, which is exact for any bond
         // dimension.
-        let factorize_result =
-            factorize_allowing_empty_side(tensor_src, &left_inds, |tensor, left| {
-                match context {
-                    Some(execution) => {
-                        tensor.factorize_full_rank_in(left, alg, canonical, execution)
-                    }
-                    None => tensor.factorize_full_rank(left, alg, canonical),
-                }
-                .with_context(|| format!("{alg:?} full-rank factorization failed"))
-            })
-            .map_err(|error| {
-                // Keep the whole chain as the source, and name its root cause
-                // (for example the rank-zero bond of an LU/CI split of a zero
-                // tensor) in the top-level message, which is all that
-                // `TreeTNOperationError`'s `Display` shows.
-                let cause = error.root_cause().to_string();
-                error.context(format!("{context_name}: factorization failed: {cause}"))
-            })?;
+        let factorize_result = factorize_allowing_empty_side_with(
+            tensor_src,
+            &left_inds,
+            |tensor, left| {
+                factorize(tensor, left)
+                    .with_context(|| format!("{alg:?} full-rank factorization failed"))
+            },
+            stack,
+            select,
+        )
+        .map_err(|error| {
+            // Keep the whole chain as the source, and name its root cause
+            // (for example the rank-zero bond of an LU/CI split of a zero
+            // tensor) in the top-level message, which is all that
+            // `TreeTNOperationError`'s `Display` shows.
+            let cause = error.root_cause().to_string();
+            error.context(format!("{context_name}: factorization failed: {cause}"))
+        })?;
 
         let left_tensor = factorize_result.left;
         let right_tensor = factorize_result.right;
@@ -832,7 +973,7 @@ where
             .ok_or_else(|| anyhow::anyhow!("Tensor not found for dst node {:?}", dst))
             .with_context(|| format!("{}: dst tensor not found", context_name))?;
 
-        let updated_dst_tensor = T::contract(&[tensor_dst, &right_tensor]).with_context(|| {
+        let updated_dst_tensor = contract(tensor_dst, &right_tensor).with_context(|| {
             format!(
                 "{}: failed to absorb right factor into dst tensor",
                 context_name
@@ -887,8 +1028,9 @@ where
     ///
     /// Returns the old tensor if the node exists and validation passes.
     /// # Errors
-    /// Returns an error when `node` is out of range (an out of bounds failure) or
-    /// the new tensor has incompatible dimensions (a shape mismatch).
+    /// Returns [`TreeTNOperationError`] when the new tensor is missing one or more connection
+    /// indices. An unknown `node` returns `Ok(None)` rather than an error, and
+    /// index dimensions are not compared.
     ///
     pub fn replace_tensor(
         &mut self,
@@ -980,8 +1122,9 @@ where
     /// Also updates site_index_network: the old bond index becomes physical again,
     /// and the new bond index is removed from physical indices.
     /// # Errors
-    /// Returns an error when the edge is not found (a missing-edge failure) or
-    /// the new bond has an incompatible dimension (a shape mismatch).
+    /// Returns [`TreeTNOperationError`] when `edge` does not exist, when its bond or endpoint
+    /// names cannot be resolved, or when the old bond index is not registered
+    /// on `edge`; the new bond dimension is not validated.
     ///
     pub fn replace_edge_bond(
         &mut self,
@@ -1057,8 +1200,9 @@ where
     /// - This keeps dimensions and conjugate states, but changes identities.
     /// - This updates both endpoint tensors and internal bookkeeping.
     /// # Errors
-    /// Returns an error when the link-index relabeling fails (an invalid-index
-    /// failure).
+    /// Returns [`TreeTNOperationError`] when an edge has no bond index or endpoint tensor, when
+    /// replacing the index in a tensor fails, or when the new bond cannot be
+    /// registered.
     ///
     pub fn sim_link_indices(&self) -> std::result::Result<Self, TreeTNOperationError>
     where
@@ -1073,8 +1217,8 @@ where
     ///
     /// See [`Self::sim_link_indices`] for details.
     /// # Errors
-    /// Returns an error when the link-index relabeling fails (an invalid-index
-    /// failure).
+    /// Returns [`TreeTNOperationError`] under the same conditions as
+    /// [`Self::sim_link_indices`].
     ///
     pub fn sim_link_indices_mut(&mut self) -> std::result::Result<(), TreeTNOperationError>
     where
@@ -1168,7 +1312,8 @@ where
     /// The direction is specified as a node name (or None to clear).
     /// The node must be one of the edge's endpoints.
     /// # Errors
-    /// Returns an error when the edge is not found (a missing-index failure).
+    /// Returns [`TreeTNOperationError`] when `edge` does not exist, or when `dir` names a node
+    /// that is not one of the edge's endpoints.
     ///
     pub fn set_edge_ortho_towards(
         &mut self,
@@ -1232,8 +1377,8 @@ where
     /// - The graph is connected (all nodes reachable from the first node)
     /// - For each connected component: edges = nodes - 1 (tree condition)
     /// # Errors
-    /// Returns an error when the graph is not a tree (an invalid-topology
-    /// failure) or an internal invariant is violated (an invalid-state failure).
+    /// Returns [`TreeTNOperationError`] when the graph is disconnected, or when its edge count
+    /// is not `node_count - 1`.
     ///
     pub fn validate_tree(&self) -> std::result::Result<(), TreeTNOperationError> {
         let g = self.graph.graph();
@@ -1303,8 +1448,8 @@ where
     /// Rename an existing node while preserving topology, site space, and
     /// orthogonality metadata.
     /// # Errors
-    /// Returns an error when `old_name` is not found (a missing-index failure) or
-    /// `new_name` is already in use (a duplicate operation failure).
+    /// Returns [`TreeTNOperationError`] when `new_name` is already in use, or when `old_name`
+    /// is not present.
     ///
     pub fn rename_node(
         &mut self,
@@ -1368,7 +1513,7 @@ where
     /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor, TensorConstructionLike};
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tensor4all_treetn::TreeTN;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = ExecutionContext::Cpu(Arc::new(
     ///     CpuExecutionContext::from_backend(CpuBackend::new()),
@@ -1458,7 +1603,7 @@ where
     ///
     /// Validates that all specified nodes exist in the graph.
     /// # Errors
-    /// Returns an error when a region node is not found (a missing-index failure).
+    /// Returns [`TreeTNOperationError`] when any node in `region` does not exist in the graph.
     ///
     pub fn set_canonical_region(
         &mut self,
@@ -1495,11 +1640,44 @@ where
         self.canonical_form
     }
 
+    /// Set the canonical form without touching any tensor.
+    ///
+    /// Intended for restoring state from a trusted source such as a
+    /// serialized file, together with [`Self::set_canonical_region`]: once
+    /// the region and form match a later [`Self::canonicalize`] request, that
+    /// call returns early and leaves the tensors unchanged. The tensors are
+    /// not verified to actually be in the given form.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_treetn::{CanonicalForm, TreeTN};
+    ///
+    /// let (s0, s1, b) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    /// let mut tn = TreeTN::<IdxTensor, String>::from_tensors(
+    ///     vec![
+    ///         IdxTensor::from_dense(vec![s0, b.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap(),
+    ///         IdxTensor::from_dense(vec![b, s1], vec![5.0, 6.0, 7.0, 8.0]).unwrap(),
+    ///     ],
+    ///     vec!["a".to_string(), "b".to_string()],
+    /// )
+    /// .unwrap();
+    /// assert_eq!(tn.canonical_form(), None);
+    /// tn.set_canonical_form(Some(CanonicalForm::LU));
+    /// assert_eq!(tn.canonical_form(), Some(CanonicalForm::LU));
+    /// tn.set_canonical_form(None);
+    /// assert_eq!(tn.canonical_form(), None);
+    /// ```
+    pub fn set_canonical_form(&mut self, form: Option<CanonicalForm>) {
+        self.canonical_form = form;
+    }
+
     /// Add a node to the orthogonalization region.
     ///
     /// Validates that the node exists in the graph.
     /// # Errors
-    /// Returns an error when the node is not found (a missing-index failure).
+    /// Returns [`TreeTNOperationError`] when `node_name` does not exist in the graph.
     ///
     pub fn add_to_canonical_region(
         &mut self,
@@ -1527,11 +1705,6 @@ where
     /// The site index network contains both topology (graph structure) and site space (physical indices).
     pub fn site_index_network(&self) -> &SiteIndexNetwork<V, T::Index> {
         &self.site_index_network
-    }
-
-    /// Get a mutable reference to the site index network.
-    pub(crate) fn site_index_network_mut(&mut self) -> &mut SiteIndexNetwork<V, T::Index> {
-        &mut self.site_index_network
     }
 
     /// Get a reference to the site space (physical indices) for a node.
@@ -1937,8 +2110,9 @@ where
     /// * `options` - Truncation options for each SVD (default: no truncation, exact).
     ///
     /// # Errors
-    /// Returns an error when the index permutation is invalid (an invalid-index
-    /// or shape mismatch failure).
+    /// Returns [`TreeTNOperationError`] when the network is empty, when the target assignment
+    /// cannot produce a valid schedule (for example an unknown target index),
+    /// or when canonicalization, transport, or the per-edge swap fails.
     ///
     pub fn swap_site_indices(
         &mut self,
@@ -1979,14 +2153,16 @@ where
         )
         .context("swap_site_indices: canonicalize")?;
 
-        // `rtol: None` must mean "no truncation", so always set an explicit
-        // policy: falling back to the process-global SVD default would silently
-        // drop singular values the caller never asked to drop.
+        // An absent policy must mean "no truncation", so always set an
+        // explicit policy: falling back to the process-global SVD default
+        // would silently drop singular values the caller never asked to drop.
         let mut swap_factorize_options = FactorizeOptions::svd()
             .with_canonical(Canonical::Left)
-            .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(
-                options.rtol.unwrap_or(0.0),
-            ));
+            .with_svd_policy(
+                options
+                    .svd_policy
+                    .unwrap_or(tensor4all_core::SvdTruncationPolicy::new(0.0)),
+            );
         if let Some(mr) = options.max_bond_dim {
             swap_factorize_options = swap_factorize_options.with_max_bond_dim(mr);
         }
@@ -2040,8 +2216,8 @@ where
     /// Alias for [`swap_site_indices`](Self::swap_site_indices).
     ///
     /// # Errors
-    /// Returns an error when a target index is not found (a missing-index
-    /// failure) or the permutation is invalid.
+    /// Returns [`TreeTNOperationError`] under the same conditions as
+    /// [`Self::swap_site_indices`].
     /// # Examples
     ///
     /// ```
@@ -2115,8 +2291,9 @@ where
     /// # Returns
     /// `Ok(())` if the internal data is consistent, or `Err` with details about the inconsistency.
     /// # Errors
-    /// Returns an error when an internal invariant is violated (a graph
-    /// consistency failure).
+    /// Returns [`TreeTNOperationError`] when the graph is disconnected, when non-adjacent nodes
+    /// share an index, or when reconstricting the network from its tensors does
+    /// not reproduce the current topology, site spaces, or tensor data.
     ///
     pub fn verify_internal_consistency(&self) -> std::result::Result<(), TreeTNOperationError>
     where
@@ -2309,435 +2486,4 @@ pub(crate) fn common_inds<I: IndexLike>(inds_a: &[I], inds_b: &[I]) -> Vec<I> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-
-    use num_complex::Complex64;
-    use tenferro_cpu::CpuBackend;
-    use tensor4all_core::{
-        DynIndex, FactorizeResult, IdxTensor, TensorConstructionLike, TensorContractionLike,
-        TensorFactorizationLike, TensorIndex,
-    };
-    use tensor4all_tensorbackend::{CpuExecutionContext, ExecutionContext};
-
-    #[test]
-    fn from_tensors_empty_returns_empty_network() {
-        let tn = TreeTN::<IdxTensor, usize>::from_tensors(Vec::new(), Vec::new()).unwrap();
-
-        assert_eq!(tn.node_count(), 0);
-        assert_eq!(tn.edge_count(), 0);
-        assert!(tn.node_names().is_empty());
-    }
-
-    // ------------------------------------------------------------------------
-    // Empty-side factorization
-    // ------------------------------------------------------------------------
-
-    fn cpu_context() -> ExecutionContext {
-        ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
-            CpuBackend::new(),
-        )))
-    }
-
-    /// Build a column-major tensor, complex when `phase` is given and owned by
-    /// `context` when one is given.
-    fn sample_tensor(
-        indices: Vec<DynIndex>,
-        data: &[f64],
-        phase: Option<Complex64>,
-        context: Option<&ExecutionContext>,
-    ) -> IdxTensor {
-        match (phase, context) {
-            (None, None) => IdxTensor::from_dense(indices, data.to_vec()),
-            (None, Some(context)) => <IdxTensor as TensorConstructionLike>::from_dense_in(
-                context,
-                indices,
-                data.to_vec(),
-            ),
-            (Some(phase), None) => IdxTensor::from_dense(
-                indices,
-                data.iter().map(|value| phase * *value).collect::<Vec<_>>(),
-            ),
-            (Some(phase), Some(context)) => <IdxTensor as TensorConstructionLike>::from_dense_in(
-                context,
-                indices,
-                data.iter().map(|value| phase * *value).collect::<Vec<_>>(),
-            ),
-        }
-        .unwrap()
-    }
-
-    /// Which side of a two-site split has no indices.
-    #[derive(Clone, Copy, Debug)]
-    enum EmptySide {
-        Left,
-        Right,
-        Both,
-    }
-
-    /// A tensor and the left indices whose split leaves `side` empty.
-    fn empty_side_case(
-        side: EmptySide,
-        phase: Option<Complex64>,
-        context: Option<&ExecutionContext>,
-    ) -> (IdxTensor, Vec<DynIndex>) {
-        let (i, j) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3));
-        let data = [0.5, -1.0, 2.0, 0.25, 1.5, -0.75];
-        match side {
-            EmptySide::Left => (sample_tensor(vec![i, j], &data, phase, context), Vec::new()),
-            EmptySide::Right => (
-                sample_tensor(vec![i.clone(), j.clone()], &data, phase, context),
-                vec![j, i],
-            ),
-            EmptySide::Both => (
-                sample_tensor(Vec::new(), &[-2.5], phase, context),
-                Vec::new(),
-            ),
-        }
-    }
-
-    /// Copy a tensor into the default context through its host data, so
-    /// tensors owned by different execution contexts can be compared.
-    fn on_host(tensor: &IdxTensor) -> IdxTensor {
-        let indices = tensor.external_indices();
-        if tensor.is_complex() {
-            IdxTensor::from_dense(indices, tensor.to_vec::<Complex64>().unwrap())
-        } else {
-            IdxTensor::from_dense(indices, tensor.to_vec::<f64>().unwrap())
-        }
-        .unwrap()
-    }
-
-    fn sorted_indices(mut indices: Vec<DynIndex>) -> Vec<DynIndex> {
-        indices.sort_by_key(|index| *index.id());
-        indices
-    }
-
-    /// Check the structural and numerical contract of an empty-side split.
-    fn assert_empty_side_split(
-        tensor: &IdxTensor,
-        left_indices: &[DynIndex],
-        result: &FactorizeResult<IdxTensor>,
-        alg: FactorizeAlg,
-        canonical: Canonical,
-        label: &str,
-    ) {
-        let bond = &result.bond_index;
-        assert_eq!(bond.dim(), 1, "{label}: bond is not dimension one");
-        assert_eq!(result.rank, 1, "{label}: rank");
-
-        let mut expected_left = left_indices.to_vec();
-        expected_left.push(bond.clone());
-        let mut expected_right: Vec<DynIndex> = tensor
-            .external_indices()
-            .into_iter()
-            .filter(|index| !left_indices.contains(index))
-            .collect();
-        expected_right.push(bond.clone());
-        assert_eq!(
-            sorted_indices(result.left.external_indices()),
-            sorted_indices(expected_left),
-            "{label}: left factor indices"
-        );
-        assert_eq!(
-            sorted_indices(result.right.external_indices()),
-            sorted_indices(expected_right),
-            "{label}: right factor indices"
-        );
-
-        let reconstructed = on_host(&result.left)
-            .contract_pair(&on_host(&result.right))
-            .unwrap();
-        let residual = reconstructed
-            .sub(&on_host(tensor))
-            .unwrap()
-            .maxabs()
-            .unwrap();
-        let scale = tensor.maxabs().unwrap();
-        assert!(
-            residual <= 1e-12 * scale,
-            "{label}: reconstruction residual {residual}"
-        );
-
-        // With a dimension-one bond, a unitary canonical factor has unit
-        // norm and an LU/CI canonical factor has a unit pivot.
-        let canonical_factor = match canonical {
-            Canonical::Left => &result.left,
-            Canonical::Right => &result.right,
-        };
-        let measure = match alg {
-            FactorizeAlg::SVD | FactorizeAlg::QR => canonical_factor.norm().unwrap(),
-            FactorizeAlg::LU | FactorizeAlg::CI => canonical_factor.maxabs().unwrap(),
-        };
-        assert!(
-            (measure - 1.0).abs() <= 1e-12,
-            "{label}: canonical factor is not normalized ({measure})"
-        );
-    }
-
-    const EMPTY_SIDES: [EmptySide; 3] = [EmptySide::Left, EmptySide::Right, EmptySide::Both];
-    const PHASES: [Option<Complex64>; 2] = [None, Some(Complex64::new(0.6, -0.8))];
-
-    #[test]
-    fn empty_side_split_honours_algorithm_and_canonical_direction() {
-        let variants = [
-            (FactorizeAlg::SVD, Canonical::Left),
-            (FactorizeAlg::SVD, Canonical::Right),
-            (FactorizeAlg::QR, Canonical::Left),
-            (FactorizeAlg::LU, Canonical::Left),
-            (FactorizeAlg::LU, Canonical::Right),
-            (FactorizeAlg::CI, Canonical::Left),
-            (FactorizeAlg::CI, Canonical::Right),
-        ];
-        for (alg, canonical) in variants {
-            for side in EMPTY_SIDES {
-                for phase in PHASES {
-                    let label = format!("{alg:?}/{canonical:?}, empty {side:?}, phase {phase:?}");
-                    let (tensor, left_indices) = empty_side_case(side, phase, None);
-                    let result =
-                        factorize_allowing_empty_side(&tensor, &left_indices, |t, left| {
-                            Ok(t.factorize_full_rank(left, alg, canonical)?)
-                        })
-                        .unwrap();
-                    assert_empty_side_split(
-                        &tensor,
-                        &left_indices,
-                        &result,
-                        alg,
-                        canonical,
-                        &label,
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn empty_side_split_with_truncating_options_keeps_unit_bond() {
-        for canonical in [Canonical::Left, Canonical::Right] {
-            let options = FactorizeOptions::svd()
-                .with_canonical(canonical)
-                .with_max_bond_dim(1);
-            for side in EMPTY_SIDES {
-                let label = format!("truncating SVD/{canonical:?}, empty {side:?}");
-                let (tensor, left_indices) = empty_side_case(side, None, None);
-                let result = factorize_allowing_empty_side(&tensor, &left_indices, |t, left| {
-                    Ok(t.factorize(left, &options)?)
-                })
-                .unwrap();
-                assert_empty_side_split(
-                    &tensor,
-                    &left_indices,
-                    &result,
-                    FactorizeAlg::SVD,
-                    canonical,
-                    &label,
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn empty_side_split_keeps_factors_in_explicit_context() {
-        let context = cpu_context();
-        let variants = [
-            (FactorizeAlg::SVD, Canonical::Left),
-            (FactorizeAlg::SVD, Canonical::Right),
-            (FactorizeAlg::QR, Canonical::Left),
-        ];
-        for (alg, canonical) in variants {
-            for side in EMPTY_SIDES {
-                for phase in PHASES {
-                    let label = format!(
-                        "in-context {alg:?}/{canonical:?}, empty {side:?}, phase {phase:?}"
-                    );
-                    let (tensor, left_indices) = empty_side_case(side, phase, Some(&context));
-                    let result =
-                        factorize_allowing_empty_side(&tensor, &left_indices, |t, left| {
-                            Ok(t.factorize_full_rank_in(left, alg, canonical, &context)?)
-                        })
-                        .unwrap_or_else(|e| panic!("{label}: {e:#}"));
-                    result.left.validate_context(&context).unwrap();
-                    result.right.validate_context(&context).unwrap();
-                    assert_empty_side_split(
-                        &tensor,
-                        &left_indices,
-                        &result,
-                        alg,
-                        canonical,
-                        &label,
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn non_degenerate_split_is_delegated_unchanged() {
-        let (i, j) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
-        let tensor = sample_tensor(vec![i.clone(), j], &[1.0, 0.0, 0.0, 2.0], None, None);
-        let result = factorize_allowing_empty_side(&tensor, std::slice::from_ref(&i), |t, left| {
-            Ok(t.factorize_full_rank(left, FactorizeAlg::SVD, Canonical::Left)?)
-        })
-        .unwrap();
-        assert_eq!(result.bond_index.dim(), 2);
-        assert_eq!(result.singular_values, Some(vec![2.0, 1.0]));
-        let reconstructed = result.left.contract_pair(&result.right).unwrap();
-        assert!(reconstructed.sub(&tensor).unwrap().maxabs().unwrap() < 1e-12);
-    }
-
-    /// A left index that the tensor does not carry is rejected before
-    /// `factorize` runs, for both a non-degenerate and an empty right side.
-    /// The primed copy differs from a tensor index only by prime level.
-    #[test]
-    fn split_rejects_left_index_outside_tensor() {
-        let (i, j) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
-        let foreign = DynIndex::new_dyn(2);
-        let primed_i = i.prime();
-        let tensor = sample_tensor(
-            vec![i.clone(), j.clone()],
-            &[1.0, 0.0, 0.0, 2.0],
-            None,
-            None,
-        );
-        for left_indices in [
-            vec![foreign.clone()],
-            vec![i.clone(), foreign],
-            vec![i, j, primed_i],
-        ] {
-            let error = factorize_allowing_empty_side(&tensor, &left_indices, |_, _| {
-                panic!("factorize must not run for an invalid left index")
-            })
-            .unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains("is not an index of the tensor to factorize"),
-                "{error:#}"
-            );
-        }
-    }
-
-    // ------------------------------------------------------------------------
-    // Site-free nodes in sweeps
-    // ------------------------------------------------------------------------
-
-    /// `[0] -- bond(3) -- [1]`: node 0 is a site-free leaf, node 1 carries a
-    /// dimension-two site. Both tensors are multiplied by `phase`, so the
-    /// represented vector is `phase^2 * [14, 32]`.
-    fn site_free_leaf_tree(
-        phase: Option<Complex64>,
-        context: Option<&ExecutionContext>,
-    ) -> TreeTN<IdxTensor, usize> {
-        let bond = DynIndex::new_dyn(3);
-        let site = DynIndex::new_dyn(2);
-        let leaf = sample_tensor(vec![bond.clone()], &[1.0, 2.0, 3.0], phase, context);
-        let parent = sample_tensor(
-            vec![bond, site],
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-            phase,
-            context,
-        );
-        TreeTN::from_tensors(vec![leaf, parent], vec![0, 1]).unwrap()
-    }
-
-    /// Check the leaf edge has dimension one and the values are unchanged.
-    fn assert_site_free_leaf_values(tree: &TreeTN<IdxTensor, usize>, phase: Option<Complex64>) {
-        let edge = tree.edge_between(&0, &1).unwrap();
-        assert_eq!(tree.bond_index(edge).unwrap().dim(), 1);
-        let actual = on_host(&tree.to_dense().unwrap());
-        let phase_squared = phase.map(|phase| phase * phase);
-        let expected = sample_tensor(
-            actual.external_indices(),
-            &[14.0, 32.0],
-            phase_squared,
-            None,
-        );
-        let residual = actual.sub(&expected).unwrap().maxabs().unwrap();
-        assert!(residual < 1e-12, "site-free leaf residual {residual}");
-    }
-
-    /// Check every tensor of `tree` belongs to `context`.
-    fn assert_in_context(tree: &TreeTN<IdxTensor, usize>, context: &ExecutionContext) {
-        for node in tree.node_names() {
-            let index = tree.node_index(&node).unwrap();
-            tree.tensor(index)
-                .unwrap()
-                .validate_context(context)
-                .unwrap();
-        }
-    }
-
-    #[test]
-    fn sweep_absorbs_site_free_leaf_with_and_without_context() {
-        let context = cpu_context();
-        for phase in PHASES {
-            for scoped in [true, false] {
-                let label = format!("phase {phase:?}, scoped {scoped}");
-                let mut tree = site_free_leaf_tree(phase, scoped.then_some(&context));
-                let (src, dst) = (tree.node_index(&0).unwrap(), tree.node_index(&1).unwrap());
-                if scoped {
-                    tree.sweep_edge_full_rank_in(
-                        src,
-                        dst,
-                        FactorizeAlg::QR,
-                        Canonical::Left,
-                        "test",
-                        &context,
-                    )
-                    .unwrap_or_else(|e| panic!("{label}: {e:#}"));
-                    assert_in_context(&tree, &context);
-                } else {
-                    tree.sweep_edge_full_rank(src, dst, FactorizeAlg::QR, Canonical::Left, "test")
-                        .unwrap_or_else(|e| panic!("{label}: {e:#}"));
-                }
-                assert_site_free_leaf_values(&tree, phase);
-                // The swept leaf keeps a unit-modulus scalar.
-                let leaf = tree.tensor(src).unwrap();
-                assert!((leaf.norm().unwrap() - 1.0).abs() < 1e-12, "{label}");
-            }
-        }
-    }
-
-    #[test]
-    fn scoped_truncation_keeps_site_free_leaf_network_in_context() {
-        let context = cpu_context();
-        for phase in PHASES {
-            for center in [0, 1] {
-                let mut tree = site_free_leaf_tree(phase, Some(&context));
-                tree.truncate_impl_in([center], None, Some(4), "test", &context)
-                    .unwrap_or_else(|e| panic!("phase {phase:?}, center {center}: {e:#}"));
-                tree.verify_internal_consistency().unwrap();
-                assert_in_context(&tree, &context);
-                assert_site_free_leaf_values(&tree, phase);
-            }
-        }
-    }
-
-    #[test]
-    fn swap_on_edge_between_two_site_free_nodes_keeps_scalar() {
-        // Both sides of the split are empty: the merged tensor is a scalar.
-        let bond = DynIndex::new_dyn(3);
-        let mut tree = TreeTN::<IdxTensor, usize>::from_tensors(
-            vec![
-                sample_tensor(vec![bond.clone()], &[1.0, 2.0, 3.0], None, None),
-                sample_tensor(vec![bond], &[4.0, 5.0, 6.0], None, None),
-            ],
-            vec![0, 1],
-        )
-        .unwrap();
-        let (a, b) = (tree.node_index(&0).unwrap(), tree.node_index(&1).unwrap());
-        let no_sites = HashSet::new();
-        tree.swap_on_edge(a, b, &no_sites, &no_sites, &FactorizeOptions::svd())
-            .unwrap();
-
-        tree.verify_internal_consistency().unwrap();
-        assert_eq!(tree.link_dims(), vec![1]);
-        assert!((tree.tensor(a).unwrap().norm().unwrap() - 1.0).abs() < 1e-12);
-        assert_eq!(
-            tree.to_dense().unwrap().to_vec::<f64>().unwrap(),
-            vec![32.0]
-        );
-    }
-}
+mod tests;

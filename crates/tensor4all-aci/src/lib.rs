@@ -32,32 +32,31 @@ mod batch;
 mod elementwise;
 mod error;
 mod global_guard;
-#[allow(dead_code)]
+// Local evaluator conveniences are kept for the unit tests that exercise them.
+#[cfg_attr(not(test), allow(dead_code))]
 mod local;
 mod options;
-#[allow(dead_code)]
+// `initial_guess` is kept for the unit tests that exercise it directly.
+#[cfg_attr(not(test), allow(dead_code))]
 mod random_tt;
 mod result;
-#[allow(dead_code)]
 mod scalar;
-#[allow(dead_code)]
+// Test-only state inspection helpers live in this module.
+#[cfg_attr(not(test), allow(dead_code))]
 mod state;
-#[allow(dead_code)]
 pub(crate) mod validation;
 
 pub use batch::ElementwiseBatch;
 pub use elementwise::{
-    elementwise, elementwise_batched, elementwise_batched_with_rng, elementwise_with_rng,
+    elementwise, elementwise_batched, elementwise_batched_with_rng,
+    elementwise_batched_with_rng_in, elementwise_with_rng,
 };
 pub use error::{AciError, Result};
-#[allow(unused_imports)]
 pub(crate) use local::LocalBlockEvaluator;
 pub use options::AciOptions;
-#[allow(unused_imports)]
-pub(crate) use random_tt::{initial_guess, initial_guess_with_rng};
+pub(crate) use random_tt::initial_guess_with_rng;
 pub use result::{AciResult, AciTermination};
 pub use scalar::AciScalar;
-#[allow(unused_imports)]
 pub(crate) use state::ElementwiseProblem;
 
 #[cfg(test)]

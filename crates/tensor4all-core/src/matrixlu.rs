@@ -452,6 +452,71 @@ pub(crate) fn validate_col_major_matrix_len(
     Ok(())
 }
 
+/// Validate [`RrLUOptions`] before a factorization.
+///
+/// Negative or non-finite tolerances return [`MatrixCIError::InvalidArgument`].
+/// Shared by the dense, lazy, and selection-only entry points.
+pub(crate) fn validate_luci_options(options: &RrLUOptions) -> Result<()> {
+    for (name, value) in [("rel_tol", options.rel_tol), ("abs_tol", options.abs_tol)] {
+        if !value.is_finite() || value < 0.0 {
+            return Err(MatrixCIError::InvalidArgument {
+                message: format!("{name} must be finite and nonnegative"),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Whether `|value|` is finite, decided without a `hypot` per entry.
+///
+/// `abs_sq` is a multiply-add. When it is finite, so is `|value|`. Only a
+/// non-finite `abs_sq` (NaN, infinity, or a square that overflows) falls back
+/// to the exact `abs_val` test, so the decision equals `abs_val().is_finite()`
+/// for every input.
+#[inline]
+fn magnitude_is_finite<T: Scalar>(value: T) -> bool {
+    value.abs_sq().is_finite() || value.abs_val().is_finite()
+}
+
+/// Whether every entry of `data` has a finite magnitude (one pass).
+fn all_magnitudes_finite<T: Scalar>(data: &[T]) -> bool {
+    data.iter().all(|&value| magnitude_is_finite(value))
+}
+
+/// Validate the entries of a column-major matrix before a factorization.
+///
+/// NaN input returns [`MatrixCIError::NaNEncountered`]; infinite input
+/// magnitudes return [`MatrixCIError::InvalidArgument`]. An accepted matrix
+/// costs one pass; a rejected one a second pass to tell NaN from infinity.
+pub(crate) fn validate_luci_matrix<T: Scalar>(a: &Matrix<T>) -> Result<()> {
+    let data = a.as_col_major_slice();
+    if all_magnitudes_finite(data) {
+        return Ok(());
+    }
+    if data.iter().any(|&value| value.is_nan()) {
+        return Err(MatrixCIError::NaNEncountered {
+            matrix: "input".into(),
+        });
+    }
+    Err(MatrixCIError::InvalidArgument {
+        message: "input matrix magnitudes must be finite".into(),
+    })
+}
+
+/// Validate a column-major matrix and its [`RrLUOptions`] before a factorization.
+///
+/// Shared by the full-factor and selection-only entry points so both reject the
+/// same inputs with the same error: negative or non-finite tolerances and
+/// infinite input magnitudes return [`MatrixCIError::InvalidArgument`]; NaN
+/// input returns [`MatrixCIError::NaNEncountered`].
+pub(crate) fn validate_owned_luci_input<T: Scalar>(
+    a: &Matrix<T>,
+    options: &RrLUOptions,
+) -> Result<()> {
+    validate_luci_options(options)?;
+    validate_luci_matrix(a)
+}
+
 #[inline]
 fn col_major_offset(nrows: usize, row: usize, col: usize) -> usize {
     row + nrows * col
@@ -684,15 +749,13 @@ fn update_trailing_submatrix<T: Scalar>(data: &mut [T], nrows: usize, ncols: usi
     }
 }
 
-fn extract_lu_from_factorized<T: Scalar>(
+fn extract_l_from_factorized<T: Scalar>(
     data: &[T],
     nrows: usize,
-    ncols: usize,
     rank: usize,
     left_orthogonal: bool,
-) -> Result<(Matrix<T>, Matrix<T>)> {
-    debug_assert!(rank <= nrows.min(ncols));
-    debug_assert_eq!(data.len(), nrows * ncols);
+) -> Result<Matrix<T>> {
+    debug_assert!(rank <= nrows);
 
     let mut l_data = vec![T::zero(); nrows * rank];
     for col in 0..rank {
@@ -701,6 +764,31 @@ fn extract_lu_from_factorized<T: Scalar>(
         let dst_start = col_major_offset(nrows, col, col);
         l_data[dst_start..dst_start + (nrows - col)].copy_from_slice(&data[src_start..src_end]);
     }
+
+    if left_orthogonal {
+        for i in 0..rank {
+            l_data[col_major_offset(nrows, i, i)] = T::one();
+        }
+    }
+
+    if !all_magnitudes_finite(&l_data) {
+        return Err(MatrixCIError::NaNEncountered {
+            matrix: "L".to_string(),
+        });
+    }
+
+    Ok(Matrix::from_col_major_vec(nrows, rank, l_data))
+}
+
+fn extract_u_from_factorized<T: Scalar>(
+    data: &[T],
+    nrows: usize,
+    ncols: usize,
+    rank: usize,
+    left_orthogonal: bool,
+) -> Result<Matrix<T>> {
+    debug_assert!(rank <= nrows.min(ncols));
+    debug_assert_eq!(data.len(), nrows * ncols);
 
     let mut u_data = vec![T::zero(); rank * ncols];
     for col in 0..ncols {
@@ -713,31 +801,31 @@ fn extract_lu_from_factorized<T: Scalar>(
         }
     }
 
-    if left_orthogonal {
-        for i in 0..rank {
-            l_data[col_major_offset(nrows, i, i)] = T::one();
-        }
-    } else {
+    if !left_orthogonal {
         for i in 0..rank {
             u_data[col_major_offset(rank, i, i)] = T::one();
         }
     }
 
-    if l_data.iter().any(|&value| !value.abs_val().is_finite()) {
-        return Err(MatrixCIError::NaNEncountered {
-            matrix: "L".to_string(),
-        });
-    }
-    if u_data.iter().any(|&value| !value.abs_val().is_finite()) {
+    if !all_magnitudes_finite(&u_data) {
         return Err(MatrixCIError::NaNEncountered {
             matrix: "U".to_string(),
         });
     }
 
-    Ok((
-        Matrix::from_col_major_vec(nrows, rank, l_data),
-        Matrix::from_col_major_vec(rank, ncols, u_data),
-    ))
+    Ok(Matrix::from_col_major_vec(rank, ncols, u_data))
+}
+
+fn extract_lu_from_factorized<T: Scalar>(
+    data: &[T],
+    nrows: usize,
+    ncols: usize,
+    rank: usize,
+    left_orthogonal: bool,
+) -> Result<(Matrix<T>, Matrix<T>)> {
+    let left = extract_l_from_factorized(data, nrows, rank, left_orthogonal)?;
+    let right = extract_u_from_factorized(data, nrows, ncols, rank, left_orthogonal)?;
+    Ok((left, right))
 }
 
 /// Options for rank-revealing LU decomposition.
@@ -767,6 +855,202 @@ pub struct RrLUOptions {
     pub abs_tol: f64,
     /// Left orthogonal (L has 1s on diagonal) or right orthogonal (U has 1s)
     pub left_orthogonal: bool,
+}
+
+struct RrLUFactorization {
+    row_permutation: Vec<usize>,
+    col_permutation: Vec<usize>,
+    n_pivot: usize,
+    error: f64,
+}
+
+/// Left factor and pivot diagnostics needed by row interpolation.
+///
+/// This avoids materializing the complementary upper factor for RSI's
+/// row-only path while sharing the same pivoting implementation as [`rrlu_mut`].
+pub(crate) struct RrLULeft<T: Scalar> {
+    pub(crate) row_permutation: Vec<usize>,
+    pub(crate) l: Matrix<T>,
+    pub(crate) n_pivot: usize,
+    pub(crate) pivot_magnitudes: Vec<f64>,
+}
+
+/// Factorize after checking that every input magnitude is finite.
+fn factorize_mut_in_place<T: Scalar>(
+    a: &mut Matrix<T>,
+    opts: RrLUOptions,
+) -> Result<RrLUFactorization> {
+    if !all_magnitudes_finite(a.as_col_major_slice()) {
+        return Err(MatrixCIError::NaNEncountered {
+            matrix: "input".to_string(),
+        });
+    }
+    factorize_validated_in_place(a, opts)
+}
+
+/// Factorize a matrix whose entries the caller has validated.
+///
+/// INVARIANT: every input magnitude is finite (`validate_owned_luci_input`);
+/// the elimination below still reports non-finite intermediates.
+fn factorize_validated_in_place<T: Scalar>(
+    a: &mut Matrix<T>,
+    opts: RrLUOptions,
+) -> Result<RrLUFactorization> {
+    let nr = a.nrows();
+    let nc = a.ncols();
+    let data = a.as_col_major_mut_slice();
+    validate_col_major_matrix_len(nr, nc, data.len())?;
+
+    let max_bond_dim = opts.max_bond_dim.min(nr).min(nc);
+    let mut row_permutation = (0..nr).collect::<Vec<_>>();
+    let mut col_permutation = (0..nc).collect::<Vec<_>>();
+    let mut n_pivot = 0;
+    let mut error = f64::NAN;
+    let mut max_error = 0.0f64;
+
+    while n_pivot < max_bond_dim {
+        let k = n_pivot;
+        if k >= nr || k >= nc {
+            break;
+        }
+
+        let (pivot_row, pivot_col, pivot_val) =
+            submatrix_argmax_col_major(data, nr, nc, k, nr, k, nc);
+        let pivot_abs = pivot_val.abs_val();
+        error = pivot_abs;
+        if !pivot_abs.is_finite() {
+            return Err(MatrixCIError::NaNEncountered {
+                matrix: "residual".to_string(),
+            });
+        }
+
+        // Check stopping criteria (but add at least 1 pivot)
+        if n_pivot > 0 && (pivot_abs < opts.rel_tol * max_error || pivot_abs < opts.abs_tol) {
+            break;
+        }
+
+        if pivot_is_undividable::<T>(pivot_abs) {
+            break;
+        }
+
+        max_error = max_error.max(pivot_abs);
+
+        // Swap rows and columns
+        if pivot_row != k {
+            swap_rows_col_major(data, nr, nc, k, pivot_row);
+            row_permutation.swap(k, pivot_row);
+        }
+        if pivot_col != k {
+            swap_cols_col_major(data, nr, nc, k, pivot_col);
+            col_permutation.swap(k, pivot_col);
+        }
+
+        let pivot = col_major_get(data, nr, k, k);
+
+        // Eliminate
+        if opts.left_orthogonal {
+            scale_column_tail(data, nr, k, k + 1, pivot);
+        } else {
+            scale_row_tail(data, nr, nc, k, k + 1, pivot);
+        }
+
+        update_trailing_submatrix(data, nr, nc, k);
+        n_pivot += 1;
+    }
+
+    // Preserve the full-factor API's existing diagnostic semantics.
+    if n_pivot >= nr.min(nc) {
+        error = 0.0;
+    }
+
+    Ok(RrLUFactorization {
+        row_permutation,
+        col_permutation,
+        n_pivot,
+        error,
+    })
+}
+
+/// Pivot magnitudes and the final residual diagnostic of a factorization.
+///
+/// The trailing entry is `state.error` unless the search stopped exactly at a
+/// rank cap below `min(nrows, ncols)`, in which case it is the maximum
+/// magnitude of the remaining Schur complement. A zero cap therefore reports
+/// the whole matrix. Shared with [`rrlu_mut`] so the selection-only path cannot
+/// drift from the full-factor error history.
+fn pivot_errors_from_factorization<T: Scalar>(
+    a: &Matrix<T>,
+    state: &RrLUFactorization,
+    rank_cap: usize,
+) -> Result<Vec<f64>> {
+    let nrows = a.nrows();
+    let ncols = a.ncols();
+    let data = a.as_col_major_slice();
+    let mut errors = (0..state.n_pivot)
+        .map(|i| data[col_major_offset(nrows, i, i)].abs_val())
+        .collect::<Vec<_>>();
+
+    let max_bond_dim = rank_cap.min(nrows).min(ncols);
+    let mut error = state.error;
+    if state.n_pivot < nrows.min(ncols) && state.n_pivot == max_bond_dim {
+        error = 0.0;
+        for col in state.n_pivot..ncols {
+            for row in state.n_pivot..nrows {
+                let residual = col_major_get(data, nrows, row, col).abs_val();
+                if !residual.is_finite() {
+                    return Err(MatrixCIError::NaNEncountered {
+                        matrix: "residual".to_string(),
+                    });
+                }
+                error = error.max(residual);
+            }
+        }
+    }
+    errors.push(error);
+    Ok(errors)
+}
+
+pub(crate) fn rrlu_left_mut<T: Scalar>(
+    a: &mut Matrix<T>,
+    options: Option<RrLUOptions>,
+) -> Result<RrLULeft<T>> {
+    let mut options = options.unwrap_or_default();
+    options.left_orthogonal = true;
+    // INVARIANT: the caller (`matrix_luci`) validated the input.
+    let state = factorize_validated_in_place(a, options)?;
+    let nrows = a.nrows();
+    let data = a.as_col_major_slice();
+    let mut pivot_magnitudes = (0..state.n_pivot)
+        .map(|i| data[col_major_offset(nrows, i, i)].abs_val())
+        .collect::<Vec<_>>();
+    // The row-only API measures the remaining residual even at a rank cap.
+    let residual = if state.n_pivot >= a.nrows().min(a.ncols()) {
+        0.0
+    } else {
+        let (_, _, value) = submatrix_argmax_col_major(
+            data,
+            nrows,
+            a.ncols(),
+            state.n_pivot,
+            nrows,
+            state.n_pivot,
+            a.ncols(),
+        );
+        value.abs_val()
+    };
+    if !residual.is_finite() {
+        return Err(MatrixCIError::NaNEncountered {
+            matrix: "residual".to_string(),
+        });
+    }
+    pivot_magnitudes.push(residual);
+    let l = extract_l_from_factorized(data, nrows, state.n_pivot, true)?;
+    Ok(RrLULeft {
+        row_permutation: state.row_permutation,
+        l,
+        n_pivot: state.n_pivot,
+        pivot_magnitudes,
+    })
 }
 
 impl Default for RrLUOptions {
@@ -807,103 +1091,120 @@ impl Default for RrLUOptions {
 /// ```
 pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> Result<RrLU<T>> {
     let opts = options.unwrap_or_default();
-    let nr = a.nrows();
-    let nc = a.ncols();
-    let data = a.as_col_major_mut_slice();
-    validate_col_major_matrix_len(nr, nc, data.len())?;
+    let left_orthogonal = opts.left_orthogonal;
+    let rank_cap = opts.max_bond_dim;
+    let state = factorize_mut_in_place(a, opts)?;
+    let nrows = a.nrows();
+    let ncols = a.ncols();
+    let (l, u) = extract_lu_from_factorized(
+        a.as_col_major_slice(),
+        nrows,
+        ncols,
+        state.n_pivot,
+        left_orthogonal,
+    )?;
 
-    // Validate all entries, including those a pivot scan would otherwise skip.
-    if data.iter().any(|&value| !value.abs_val().is_finite()) {
-        return Err(MatrixCIError::NaNEncountered {
-            matrix: "input".to_string(),
-        });
-    }
+    // A rank ceiling exits before the next pivot scan. The shared extraction
+    // reports the remaining Schur complement, not the magnitude of the last
+    // accepted pivot.
+    let mut error = pivot_errors_from_factorization(a, &state, rank_cap)?;
+    let error = error.pop().unwrap_or(0.0);
 
-    let mut lu = RrLU::new(nr, nc, opts.left_orthogonal);
-    let max_bond_dim = opts.max_bond_dim.min(nr).min(nc);
-    let mut max_error = 0.0f64;
+    Ok(RrLU {
+        row_permutation: state.row_permutation,
+        col_permutation: state.col_permutation,
+        l,
+        u,
+        left_orthogonal,
+        n_pivot: state.n_pivot,
+        error,
+    })
+}
 
-    while lu.n_pivot < max_bond_dim {
-        let k = lu.n_pivot;
+/// Pivot indices and error diagnostics from a rank-revealing LU selection.
+///
+/// This is the selection-only counterpart of [`RrLU`]: the same pivot search
+/// and rank decision as [`rrlu`]/[`rrlu_mut`], but without assembling the `L`
+/// and `U` factors. Use it when only the selected pivots and the pivot error
+/// history are needed and the factors would be discarded.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::matrixlu::rrlu_pivots;
+/// use tensor4all_tensorbackend::from_vec2d;
+///
+/// let a = from_vec2d(vec![
+///     vec![1.0_f64, 2.0],
+///     vec![2.0, 4.0],
+/// ]);
+/// let pivots = rrlu_pivots(a, None).unwrap();
+/// assert_eq!(pivots.rank, 1);
+/// assert_eq!(pivots.row_indices.len(), pivots.rank);
+/// assert_eq!(pivots.col_indices.len(), pivots.rank);
+/// // One accepted pivot plus the final residual.
+/// assert_eq!(pivots.pivot_errors.len(), pivots.rank + 1);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct RrLUPivots {
+    /// Selected row indices, in pivot order.
+    pub row_indices: Vec<usize>,
+    /// Selected column indices, in pivot order.
+    pub col_indices: Vec<usize>,
+    /// Accepted pivot magnitudes followed by the final residual estimate.
+    pub pivot_errors: Vec<f64>,
+    /// Number of selected pivots.
+    pub rank: usize,
+}
 
-        if k >= nr || k >= nc {
-            break;
-        }
-
-        let (pivot_row, pivot_col, pivot_val) =
-            submatrix_argmax_col_major(data, nr, nc, k, nr, k, nc);
-
-        let pivot_abs = pivot_val.abs_val();
-        lu.error = pivot_abs;
-        if !pivot_abs.is_finite() {
-            return Err(MatrixCIError::NaNEncountered {
-                matrix: "residual".to_string(),
-            });
-        }
-
-        // Check stopping criteria (but add at least 1 pivot)
-        if lu.n_pivot > 0 && (pivot_abs < opts.rel_tol * max_error || pivot_abs < opts.abs_tol) {
-            break;
-        }
-
-        // Small pivots follow caller truncation; guard only zero or an
-        // unrepresentable reciprocal in the actual component type.
-        if pivot_is_undividable::<T>(pivot_abs) {
-            break;
-        }
-
-        max_error = max_error.max(pivot_abs);
-
-        // Swap rows and columns
-        if pivot_row != k {
-            swap_rows_col_major(data, nr, nc, k, pivot_row);
-            lu.row_permutation.swap(k, pivot_row);
-        }
-        if pivot_col != k {
-            swap_cols_col_major(data, nr, nc, k, pivot_col);
-            lu.col_permutation.swap(k, pivot_col);
-        }
-
-        let pivot = col_major_get(data, nr, k, k);
-
-        // Eliminate
-        if opts.left_orthogonal {
-            scale_column_tail(data, nr, k, k + 1, pivot);
-        } else {
-            scale_row_tail(data, nr, nc, k, k + 1, pivot);
-        }
-
-        update_trailing_submatrix(data, nr, nc, k);
-
-        lu.n_pivot += 1;
-    }
-
-    let n = lu.n_pivot;
-    let (l, u) = extract_lu_from_factorized(data, nr, nc, n, opts.left_orthogonal)?;
-
-    // A rank ceiling exits before the next pivot scan. Report the remaining
-    // Schur complement, not the magnitude of the last accepted pivot.
-    if n >= nr.min(nc) {
-        lu.error = 0.0;
-    } else if n == max_bond_dim {
-        lu.error = 0.0;
-        for col in n..nc {
-            for row in n..nr {
-                let residual = col_major_get(data, nr, row, col).abs_val();
-                if !residual.is_finite() {
-                    return Err(MatrixCIError::NaNEncountered {
-                        matrix: "residual".to_string(),
-                    });
-                }
-                lu.error = lu.error.max(residual);
-            }
-        }
-    }
-
-    lu.l = l;
-    lu.u = u;
-
-    Ok(lu)
+/// Select rrLU pivots without constructing the triangular factors.
+///
+/// Consumes the column-major matrix `a` (its storage is reused for the in-place
+/// elimination) and returns the selected row and column indices plus the pivot
+/// error history, using the same rank and tolerance rules as [`rrlu_mut`]. The
+/// trailing `pivot_errors` entry is the maximum remaining residual after a rank
+/// cap, so the sequence matches [`rrlu_mut`]'s `pivot_errors` exactly.
+///
+/// # Errors
+///
+/// Returns [`MatrixCIError::InvalidArgument`] if the matrix shape product
+/// overflows `usize`, its backing storage length does not match the shape, a
+/// tolerance is negative or non-finite, or an input entry is infinite. Returns
+/// [`MatrixCIError::NaNEncountered`] if an input entry or the remaining
+/// residual is NaN.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{matrixlu::rrlu_pivots, RrLUOptions};
+/// use tensor4all_tensorbackend::from_vec2d;
+///
+/// let a = from_vec2d(vec![
+///     vec![1.0_f64, 0.0],
+///     vec![0.0, 2.0],
+/// ]);
+/// // The first pivot is the largest-magnitude entry, at (1, 1).
+/// let pivots = rrlu_pivots(a, Some(RrLUOptions::default())).unwrap();
+/// assert_eq!(pivots.rank, 2);
+/// assert_eq!(pivots.row_indices, vec![1, 0]);
+/// assert_eq!(pivots.col_indices, vec![1, 0]);
+/// assert_eq!(pivots.pivot_errors, vec![2.0, 1.0, 0.0]);
+/// ```
+pub fn rrlu_pivots<T: Scalar>(
+    mut a: Matrix<T>,
+    options: Option<RrLUOptions>,
+) -> Result<RrLUPivots> {
+    let opts = options.unwrap_or_default();
+    let rank_cap = opts.max_bond_dim;
+    validate_owned_luci_input(&a, &opts)?;
+    let state = factorize_validated_in_place(&mut a, opts)?;
+    let pivot_errors = pivot_errors_from_factorization(&a, &state, rank_cap)?;
+    Ok(RrLUPivots {
+        row_indices: state.row_permutation[..state.n_pivot].to_vec(),
+        col_indices: state.col_permutation[..state.n_pivot].to_vec(),
+        pivot_errors,
+        rank: state.n_pivot,
+    })
 }
 
 /// Perform rank-revealing LU decomposition (non-destructive).

@@ -8,7 +8,7 @@ use tensor4all_core::{CommonScalar, IdxTensor, MatrixLuciScalar, TensorElement};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetci::{
     crossinterpolate2, crossinterpolate2_with_rng, globalpivot::ScalarParts, optimize_default,
-    optimize_with_proposer, optimize_with_proposer_with_rng, to_treetn, DefaultProposer,
+    optimize_with_proposer, optimize_with_proposer_with_rng, to_treetn, AllEdges, DefaultProposer,
     GlobalIndexBatch, TreeTCI2, TreeTciGraph, TreeTciOptions, TreeTciRunResult, TreeTciTermination,
 };
 
@@ -76,6 +76,7 @@ where
             options,
             None,
             &DefaultProposer,
+            &mut (),
         )
         .unwrap(),
         EntryPoint::CrossInterpolateWithRng => crossinterpolate2_with_rng(
@@ -86,23 +87,30 @@ where
             options,
             None,
             &DefaultProposer,
+            &mut (),
             &mut rng,
         )
         .unwrap(),
         _ => {
             let mut state = TreeTCI2::<T>::new(vec![3, 3, 2], graph).unwrap();
             state.add_global_pivots(&[vec![0; 3]]).unwrap();
-            state.max_sample_value = CommonScalar::abs_val(scale);
+            state.set_max_sample_value(CommonScalar::abs_val(scale));
             let result = match entry {
                 EntryPoint::Default => optimize_default(&mut state, evaluate, &options),
-                EntryPoint::Proposer => {
-                    optimize_with_proposer(&mut state, evaluate, &options, &DefaultProposer)
-                }
+                EntryPoint::Proposer => optimize_with_proposer(
+                    &mut state,
+                    evaluate,
+                    &options,
+                    &DefaultProposer,
+                    &AllEdges,
+                    &mut (),
+                ),
                 EntryPoint::ProposerWithRng => optimize_with_proposer_with_rng(
                     &mut state,
                     evaluate,
                     &options,
                     &DefaultProposer,
+                    &mut (),
                     &mut rng,
                 ),
                 _ => unreachable!("high-level entries handled above"),
@@ -224,6 +232,7 @@ fn iteration_limit_on_a_function_requiring_more_sweeps() {
             },
             None,
             &DefaultProposer,
+            &mut (),
         )
         .unwrap();
         let expected = dense_reference(&result, N_SITES, values.clone());

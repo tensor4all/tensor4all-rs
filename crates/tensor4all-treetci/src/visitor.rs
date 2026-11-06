@@ -3,7 +3,22 @@ use crate::{TreeTCI2, TreeTciEdge};
 /// Determines the order in which tree edges are visited during optimization.
 ///
 /// The optimizer calls [`visit_order`](EdgeVisitor::visit_order) once per
-/// inner pass to decide which edges to update.
+/// inner pass to decide which edges to update. Every result must be a
+/// permutation of the graph's edges: each edge exactly once per pass, with no
+/// missing, duplicated, or unknown edge. The optimizer validates this before a
+/// pass updates any state and rejects a violation with
+/// [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration).
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::{AllEdges, EdgeVisitor, TreeTCI2, TreeTciEdge, TreeTciGraph};
+///
+/// let graph = TreeTciGraph::linear_chain(3).unwrap();
+/// let state = TreeTCI2::<f64>::new(vec![2, 2, 2], graph).unwrap();
+/// let order = AllEdges.visit_order(&state);
+/// assert_eq!(order, vec![TreeTciEdge::new(0, 1), TreeTciEdge::new(1, 2)]);
+/// ```
 pub trait EdgeVisitor {
     /// Return the ordered list of edges to visit for the current state.
     fn visit_order<T>(&self, state: &TreeTCI2<T>) -> Vec<TreeTciEdge>;
@@ -11,8 +26,8 @@ pub trait EdgeVisitor {
 
 /// Visit all edges in canonical graph order.
 ///
-/// This is the default (and currently only) edge visitor. It visits every
-/// edge in the tree in sorted order.
+/// This is the default edge visitor. It visits every edge in the tree in
+/// sorted order.
 ///
 /// # Examples
 ///

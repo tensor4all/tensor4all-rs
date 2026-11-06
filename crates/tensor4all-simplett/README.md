@@ -23,7 +23,7 @@ let value = tt.evaluate(&[0, 1, 2])?;
 assert!((value - 1.0).abs() < 1e-15);
 
 // Sum over all indices: 2 * 3 * 4 = 24
-let total = tt.sum();
+let total = tt.sum()?;
 assert!((total - 24.0).abs() < 1e-10);
 
 // Compress with tolerance

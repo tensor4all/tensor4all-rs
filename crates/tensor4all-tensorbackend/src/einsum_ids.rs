@@ -7,7 +7,7 @@
 use anyhow::{anyhow, ensure, Result};
 use tenferro::TensorSessionOpsExt;
 use tenferro::{DType, Tensor as NativeTensor};
-use tenferro_tensor::BackendSession;
+use tenferro_tensor::Engine;
 
 pub(crate) fn checked_native_einsum_labels(labels: &[usize]) -> Result<Vec<u32>> {
     labels
@@ -111,16 +111,16 @@ pub(crate) fn common_dtype(dtypes: &[DType]) -> DType {
     }
 }
 
-/// Convert one native tensor to `to` on `session`, duplicating when it is already
+/// Convert one native tensor to `to` on `engine`, duplicating when it is already
 /// that dtype so the caller keeps an owned value either way.
 pub(crate) fn convert_native_tensor_in(
-    session: &mut dyn BackendSession,
+    engine: &mut dyn Engine,
     tensor: &NativeTensor,
     to: DType,
 ) -> tenferro_tensor::Result<NativeTensor> {
     if tensor.dtype() == to {
         tensor.duplicate()
     } else {
-        tensor.convert(to, session)
+        tensor.convert(to, engine)
     }
 }

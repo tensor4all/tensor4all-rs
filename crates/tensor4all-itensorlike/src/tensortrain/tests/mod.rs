@@ -240,7 +240,7 @@ fn profile_helpers_and_basic_accessors_cover_paths() {
     let tt = TensorTrain::new(vec![tensor]).unwrap();
     assert_eq!(tt.tensors().len(), 1);
     assert!(tt
-        .tensor_checked(5)
+        .tensor(5)
         .unwrap_err()
         .to_string()
         .contains("out of bounds"));
@@ -1083,7 +1083,7 @@ fn test_set_tensor_invalidates_ortho() {
 }
 
 #[test]
-fn test_set_tensor_checked_invalid_site_errors() {
+fn test_set_tensor_invalid_site_errors() {
     let s0 = idx(0, 2);
     let l01 = idx(1, 3);
     let s1 = idx(2, 2);
@@ -1094,7 +1094,7 @@ fn test_set_tensor_checked_invalid_site_errors() {
 
     let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
-    let err = tt.set_tensor_checked(2, replacement).unwrap_err();
+    let err = tt.set_tensor(2, replacement).unwrap_err();
     assert!(matches!(
         err,
         TensorTrainError::SiteOutOfBounds { site: 2, length: 2 }
@@ -1102,7 +1102,7 @@ fn test_set_tensor_checked_invalid_site_errors() {
 }
 
 #[test]
-fn test_set_tensor_checked_preserves_replacement_index_order() {
+fn test_set_tensor_preserves_replacement_index_order() {
     let s0 = idx(0, 2);
     let l01 = idx(1, 3);
     let s1 = idx(2, 2);
@@ -1112,13 +1112,13 @@ fn test_set_tensor_checked_preserves_replacement_index_order() {
     let replacement = make_tensor(vec![l01.clone(), s0.clone()]);
 
     let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
-    tt.set_tensor_checked(0, replacement).unwrap();
+    tt.set_tensor(0, replacement).unwrap();
 
     assert_eq!(tt.tensor(0).unwrap().indices(), &[l01, s0]);
 }
 
 #[test]
-fn test_tensor_mut_checked_invalid_site_errors() {
+fn test_tensor_mut_invalid_site_errors() {
     let s0 = idx(0, 2);
     let l01 = idx(1, 3);
     let s1 = idx(2, 2);
@@ -1128,7 +1128,7 @@ fn test_tensor_mut_checked_invalid_site_errors() {
 
     let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
-    let err = tt.tensor_mut_checked(2).unwrap_err();
+    let err = tt.tensor_mut(2).unwrap_err();
     assert!(matches!(
         err,
         TensorTrainError::SiteOutOfBounds { site: 2, length: 2 }
@@ -1150,31 +1150,6 @@ fn test_tensors_mut_returns_all_sites_in_order() {
 
     {
         let mut tensors = tt.tensors_mut().unwrap();
-        assert_eq!(tensors.len(), 2);
-        *tensors[0] = replacement.clone();
-    }
-
-    assert_eq!(
-        tt.tensor(0).unwrap().to_vec::<f64>().unwrap(),
-        vec![42.0; 6]
-    );
-}
-
-#[test]
-fn test_tensors_mut_checked_returns_all_sites_in_order() {
-    let s0 = idx(0, 2);
-    let l01 = idx(1, 3);
-    let s1 = idx(2, 2);
-
-    let t0 = make_tensor(vec![s0.clone(), l01.clone()]);
-    let t1 = make_tensor(vec![l01.clone(), s1.clone()]);
-    let mut tt = TensorTrain::new(vec![t0, t1]).unwrap();
-
-    let replacement =
-        IdxTensor::from_dense(vec![s0, l01], vec![42.0; 6]).expect("valid replacement");
-
-    {
-        let mut tensors = tt.tensors_mut_checked().unwrap();
         assert_eq!(tensors.len(), 2);
         *tensors[0] = replacement.clone();
     }
@@ -1341,7 +1316,7 @@ fn test_set_canonical_form() {
 }
 
 #[test]
-fn test_tensor_checked_out_of_bounds() {
+fn test_tensor_out_of_bounds() {
     let s0 = idx(0, 2);
     let l01 = idx(1, 3);
     let s1 = idx(2, 2);
@@ -1352,17 +1327,17 @@ fn test_tensor_checked_out_of_bounds() {
     let tt = TensorTrain::new(vec![t0, t1]).unwrap();
 
     // Valid access
-    assert!(tt.tensor_checked(0).is_ok());
-    assert!(tt.tensor_checked(1).is_ok());
+    assert!(tt.tensor(0).is_ok());
+    assert!(tt.tensor(1).is_ok());
 
     // Out of bounds
-    let err = tt.tensor_checked(2).unwrap_err();
+    let err = tt.tensor(2).unwrap_err();
     assert!(matches!(
         err,
         TensorTrainError::SiteOutOfBounds { site: 2, length: 2 }
     ));
 
-    let err = tt.tensor_checked(100).unwrap_err();
+    let err = tt.tensor(100).unwrap_err();
     assert!(matches!(err, TensorTrainError::SiteOutOfBounds { .. }));
 }
 
@@ -1777,36 +1752,10 @@ fn make_two_site_tt() -> TensorTrain {
 }
 
 #[test]
-fn tensor_checked_rejects_out_of_bounds_site() {
-    let tt = make_two_site_tt();
-    let err = tt.tensor_checked(5).unwrap_err();
-    assert!(matches!(
-        err,
-        TensorTrainError::SiteOutOfBounds { site: 5, .. }
-    ));
-}
-
-#[test]
-fn tensor_mut_checked_rejects_out_of_bounds_site() {
-    let mut tt = make_two_site_tt();
-    let err = tt.tensor_mut_checked(7).unwrap_err();
-    assert!(matches!(
-        err,
-        TensorTrainError::SiteOutOfBounds { site: 7, .. }
-    ));
-}
-
-#[test]
-fn tensor_mut_rejects_out_of_bounds_site() {
-    let mut tt = make_two_site_tt();
-    assert!(tt.tensor_mut(9).is_err());
-}
-
-#[test]
-fn empty_tt_len_and_tensor_checked() {
+fn empty_tt_len_and_tensor_accessor() {
     let tt = TensorTrain::new(vec![]).unwrap();
     assert_eq!(tt.len(), 0);
-    assert!(tt.tensor_checked(0).is_err());
+    assert!(tt.tensor(0).is_err());
     assert!(tt.ortho_lims().is_empty());
 }
 

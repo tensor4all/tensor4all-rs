@@ -29,9 +29,48 @@ addition to, not in place of, the upstream citations.
   further method papers (for example, ITensor asks DMRG users to also cite
   the original DMRG papers). The component table below tells you which
   upstream policies are relevant to the components you use.
+- Upstream projects that maintain their own citation policy (follow these
+  links when applying the recursion):
+  - [tenferro-rs](https://github.com/tensor4all/tenferro-rs/blob/main/docs/PROVENANCE_AND_CITATION_POLICY.md)
+    (the backend of every dense tensor operation here). It asks you to cite
+    faer, S. Quiñones El Kazdadi, *J. Open Source Softw.* 11(123), 6099
+    (2026), [doi:10.21105/joss.06099](https://doi.org/10.21105/joss.06099),
+    when the faer backend runs your dense CPU linear algebra (the default CPU
+    configuration on Linux and Windows; on macOS the default is Apple
+    Accelerate), and it recurses to strided-rs.
+  - [strided-rs](https://github.com/tensor4all/strided-rs/blob/main/docs/PROVENANCE_AND_CITATION_POLICY.md)
+    (strided CPU kernels and permutations used by tenferro-rs). Its algorithm
+    table asks for the HPTT paper, P. Springer, T. Su, P. Bientinesi,
+    [ARRAY 2017](https://doi.org/10.1145/3091966.3091968),
+    [arXiv:1704.04374](https://arxiv.org/abs/1704.04374), for its blocked
+    tensor transposition, and it points to
+    [Strided.jl](https://github.com/Jutho/Strided.jl) for its ported kernels.
+- Citation obligations attach to the components your computation actually
+  exercises, not to everything in your `Cargo.lock`. A crate that appears in
+  the dependency graph does not by itself create an obligation.
+- This policy applies to all versions of tensor4all-rs, including commits
+  that predate it. When preparing a publication, consult the current `main`
+  version of this document (and of the upstream policies above), not the
+  copy in the commit you pinned.
 - tensor4all-rs itself does not yet have a software paper; if you need to
   reference it directly, cite the repository URL and the version or commit
   you used.
+
+### Resolved citation set (as of 2026-10-17)
+
+An informative snapshot of what the recursion above currently resolves to;
+the linked policies remain authoritative. If you use tensor-train or tree
+tensor network contraction, truncation or fitting on the default CPU backend:
+
+- this repository (URL and the version or commit you used) and the ITensor
+  paper ([SciPost Phys. Codebases 4 (2022)](https://doi.org/10.21468/SciPostPhysCodeb.4));
+- the TCI paper ([SciPost Phys. 18, 104 (2025)](https://doi.org/10.21468/SciPostPhys.18.3.104))
+  if you use the TCI components;
+- the original papers of the algorithms you use (table "Algorithm origins");
+- tenferro-rs (repository URL and version or commit) and faer (above) when
+  faer is the backend that ran (the default outside macOS);
+- strided-rs (repository URL and version or commit), the HPTT paper and the
+  Strided.jl repository, through strided-rs's permutation and kernel ports.
 
 ## Component provenance
 
@@ -71,10 +110,8 @@ relationship; the role is stated only on the first row.
 | `tensor4all-interpolativeqtt` | Interpolative QTT construction | [InterpolativeQTT.jl](https://github.com/tensor4all/InterpolativeQTT.jl) | Port |
 | `tensor4all-quanticstransform` | Quantics operators (shift, flip, QFT, affine) | [Quantics.jl](https://github.com/tensor4all/Quantics.jl) | Port (validated against v0.4.7) |
 | `tensor4all-aci` | Alternating cross interpolation elementwise ops | [AlternatingCrossInterpolation.jl](https://github.com/tensor4all/AlternatingCrossInterpolation.jl) | Port |
-| `tensor4all-partitionedtt` | Partitioned TT over subdomains | [PartitionedMPSs.jl](https://github.com/tensor4all/PartitionedMPSs.jl) | Port |
-| `tensor4all-partitionedtt` | | [TCIAlgorithms.jl](https://github.com/tensor4all/TCIAlgorithms.jl) | Derived (MIT): adaptive TCI interpolation |
 | `tensor4all-partitionedtreetn` | Eagerly masked partitioned TreeTN representation and adaptive patching | [PartitionedMPSs.jl](https://github.com/tensor4all/PartitionedMPSs.jl) | Inspired (independent TreeTN implementation) |
-| `tensor4all-partitionedtreetn` | | [TCIAlgorithms.jl](https://github.com/tensor4all/TCIAlgorithms.jl) | Derived (MIT): adaptive interpolation patch queue, accept-or-split flow, and pivot recycling (`src/adaptive_interpolation.rs`), through `tensor4all-partitionedtt` |
+| `tensor4all-partitionedtreetn` | | [TCIAlgorithms.jl](https://github.com/tensor4all/TCIAlgorithms.jl) | Derived (MIT): adaptive interpolation patch queue, accept-or-split flow, and pivot recycling (`src/adaptive_interpolation.rs`), through the retired `tensor4all-partitionedtt` chain driver |
 | `tensor4all-hdf5` | HDF5 serialization | [ITensors.jl](https://github.com/ITensor/ITensors.jl) / ITensorMPS.jl file formats | Compatible (round-trip validated) |
 | `tensor4all-capi` | C FFI surface for language bindings | — | Original (consumed by [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl)) |
 
@@ -90,7 +127,9 @@ list is best-effort; corrections and additions are welcome.
 | DMRG | `treetn` | S. R. White, [Phys. Rev. Lett. 69, 2863 (1992)](https://doi.org/10.1103/PhysRevLett.69.2863); [Phys. Rev. B 48, 10345 (1993)](https://doi.org/10.1103/PhysRevB.48.10345) |
 | TDVP | `treetn` | J. Haegeman et al., [Phys. Rev. Lett. 107, 070601 (2011)](https://doi.org/10.1103/PhysRevLett.107.070601); [Phys. Rev. B 94, 165116 (2016)](https://doi.org/10.1103/PhysRevB.94.165116) |
 | Global subspace expansion (GSE) | `treetn` | M. Yang and S. R. White, [Phys. Rev. B 102, 094315 (2020)](https://doi.org/10.1103/PhysRevB.102.094315) |
-| Zip-up MPS/MPO contraction | `treetn` | S. Paeckel et al., [Ann. Phys. 411, 167998 (2019)](https://doi.org/10.1016/j.aop.2019.167998) |
+| Zip-up MPS/MPO contraction | `treetn`, `itensorlike` (`ContractOptions::zipup`) | E. M. Stoudenmire and S. R. White, [New J. Phys. 12, 055026 (2010)](https://doi.org/10.1088/1367-2630/12/5/055026); S. Paeckel et al., [Ann. Phys. 411, 167998 (2019)](https://doi.org/10.1016/j.aop.2019.167998) |
+| Variational (fit) MPO–MPS contraction | `treetn`, `itensorlike` (`ContractOptions::fit`) | U. Schollwöck, [Ann. Phys. 326, 96 (2011)](https://doi.org/10.1016/j.aop.2010.09.012) |
+| GMRES | `core` (`krylov`) | Y. Saad and M. H. Schultz, [SIAM J. Sci. Stat. Comput. 7, 856 (1986)](https://doi.org/10.1137/0907058) |
 | Tensor cross interpolation / TT-cross | `core` (TCI substrate), `tensorci`, `treetci` | I. Oseledets and E. Tyrtyshnikov, [Linear Algebra Appl. 432, 70 (2010)](https://doi.org/10.1016/j.laa.2009.07.024); Y. Núñez Fernández et al., [Phys. Rev. X 12, 041018 (2022)](https://doi.org/10.1103/PhysRevX.12.041018); [SciPost Phys. 18, 104 (2025)](https://doi.org/10.21468/SciPostPhys.18.3.104) |
 | Quantics representation | `quanticstci`, `quanticstransform` | I. Oseledets, [SIAM J. Matrix Anal. Appl. 31, 2130 (2010)](https://doi.org/10.1137/090757861); B. Khoromskij, [Constr. Approx. 34, 257 (2011)](https://doi.org/10.1007/s00365-011-9131-1) |
 | Quantics tensor cross interpolation (QTCI) | `quanticstci` | M. K. Ritter, Y. Núñez Fernández, M. Wallerberger, J. von Delft, H. Shinaoka, X. Waintal, "Quantics Tensor Cross Interpolation for High-Resolution, Parsimonious Representations of Multivariate Functions in Physics and Beyond", [Phys. Rev. Lett. 132, 056501 (2024)](https://doi.org/10.1103/PhysRevLett.132.056501) |
@@ -98,17 +137,17 @@ list is best-effort; corrections and additions are welcome.
 | Quantum Fourier transform as low-rank MPO | `quanticstransform` | J. Chen and M. Lindsey, "Direct interpolative construction of the discrete Fourier transform as a matrix product operator", Appl. Comput. Harmon. Anal. (2025), [arXiv:2404.03182](https://arxiv.org/abs/2404.03182) |
 | Interpolative QTT construction | `interpolativeqtt` | M. Lindsey, [arXiv:2311.12554](https://arxiv.org/abs/2311.12554) |
 | Alternating cross interpolation (ACI) | `aci` | M. K. Ritter et al., [arXiv:2604.00037](https://arxiv.org/abs/2604.00037) |
-| Partitioned tensor trains / adaptive patching | `partitionedtt`, `partitionedtreetn` | G. Grosso, M. K. Ritter, S. Rohshap, S. Badr, A. Kauch, M. Wallerberger, J. von Delft, H. Shinaoka, "Adaptive Patching for Tensor Train Computations", [arXiv:2602.22372](https://arxiv.org/abs/2602.22372) |
+| Partitioned tensor trains / adaptive patching | `partitionedtreetn` | G. Grosso, M. K. Ritter, S. Rohshap, S. Badr, A. Kauch, M. Wallerberger, J. von Delft, H. Shinaoka, "Adaptive Patching for Tensor Train Computations", [arXiv:2602.22372](https://arxiv.org/abs/2602.22372) |
 
 The TreeTN-native partitioned crate contains a tree adaptive interpolation
 driver whose patch queue, accept-or-split flow, and pivot recycling derive from
-TCIAlgorithms.jl through the legacy crate's chain driver; it carries the
-derivation notice in `src/adaptive_interpolation.rs` and
+TCIAlgorithms.jl through the chain driver of the retired
+`tensor4all-partitionedtt` crate (removed in #915 D3, settling #825); it carries
+the derivation notice in `src/adaptive_interpolation.rs` and
 `LICENSE-TCIALGORITHMS-MIT`. Its partition representation and patch algebra
-remain an independent TreeTN implementation. The legacy crate retains its
-existing TCIAlgorithms derivation notice and license.
+remain an independent TreeTN implementation.
 
 License-bearing derivations are declared in the affected crate
 (`tensor4all-treetn`: `LICENSE-APACHE`, SPDX `MIT AND Apache-2.0`;
-`tensor4all-partitionedtt` and `tensor4all-partitionedtreetn`:
-`LICENSE-TCIALGORITHMS-MIT`, crates remain MIT).
+`tensor4all-partitionedtreetn`: `LICENSE-TCIALGORITHMS-MIT`, crate remains
+MIT).

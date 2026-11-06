@@ -11,7 +11,9 @@ use std::hash::Hash;
 
 use anyhow::Result;
 
-use tensor4all_core::{sort_indices_deterministic, AnyScalar, IndexLike, TensorIndex, TensorLike};
+use tensor4all_core::{
+    sort_indices_deterministic, AnyScalar, DirectSumResult, IndexLike, TensorIndex, TensorLike,
+};
 
 use super::TreeTN;
 
@@ -57,8 +59,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the site spaces are incompatible (a shape mismatch)
-    /// /// or the reindexing fails.
+    /// Returns [`TreeTNOperationError`] when `self` and `template` have different topologies,
+    /// when a node's site-index count differs, when paired site indices have
+    /// different dimensions, or when rewriting the indices in the tensors fails.
     ///
     /// # Examples
     /// ```
@@ -150,8 +153,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the site spaces are incompatible (a shape mismatch)
-    /// /// or the addition fails.
+    /// Returns [`TreeTNOperationError`] when reindexing `other` (see
+    /// [`Self::reindex_site_space_like`]) or the following [`Self::add`] fails.
     ///
     /// # Examples
     /// ```
@@ -198,16 +201,10 @@ where
     /// A HashMap mapping edge keys (node_name_pair in canonical order) to MergedBondInfo.
     ///
     /// # Errors
-    /// Returns an error when the networks have incompatible topologies (a shape
-    /// or index mismatch) or a bond index cannot be found (a missing-index
-    /// failure).
+    /// Returns [`TreeTNOperationError`] when an edge or bond index cannot be resolved in either
+    /// network, or when `other` has no node or edge corresponding to one in
+    /// `self`. Dimensions are only recorded, not compared.
     #[allow(clippy::type_complexity)]
-    /// # Errors
-    ///
-    /// Returns an error when the networks have incompatible topologies (a shape
-    ///     /// or index mismatch) or a bond index cannot be found (a missing-index
-    ///     /// failure).
-    ///
     pub fn compute_merged_bond_indices(
         &self,
         other: &Self,
@@ -304,8 +301,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the networks are incompatible (a shape or index
-    /// /// mismatch) or the addition fails (a backend failure).
+    /// Returns [`TreeTNOperationError`] when the two networks have different topologies or
+    /// non-matching site spaces, or when the direct-sum construction of a node
+    /// tensor or the resulting [`TreeTN`] fails.
     ///
     /// # Examples
     ///
@@ -330,11 +328,101 @@ where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
-        // Verify same topology
-        if !self.same_topology(other) {
-            return Err(anyhow::anyhow!("Cannot add TreeTNs with different topologies").into());
+        Self::direct_sum_networks(&[self, other], |tensors, groups| {
+            let pairs: Vec<_> = groups
+                .iter()
+                .map(|group| (group[0].clone(), group[1].clone()))
+                .collect();
+            tensors[0].direct_sum(tensors[1], &pairs)
+        })
+    }
+
+    /// Sum any number of TreeTNs exactly, in one N-ary direct-sum pass.
+    ///
+    /// Each result node tensor is the N-ary direct sum
+    /// ([`TensorContractionLike::direct_sum_many`](tensor4all_core::TensorContractionLike::direct_sum_many))
+    /// of the terms' tensors at that node: term `i` occupies its own diagonal
+    /// block, so every bond dimension of the result is the sum of the terms'
+    /// bond dimensions there. Nothing is truncated.
+    ///
+    /// The result equals a chain of [`add`](Self::add) calls,
+    /// `((t0 + t1) + t2) + ...`, node tensor by node tensor, but every element
+    /// is written once instead of the growing partial sum being copied at
+    /// every add. The built network stores about `16 * sum_k d_k B_k` bytes in
+    /// `Complex64`, with `d_k` the site dimension of node `k` and `B_k` the
+    /// product of its summed bond dimensions; [`TreeTN::exact_sum`] can cap
+    /// that and fall back to the add chain.
+    ///
+    /// # Arguments
+    /// * `terms` - The networks to sum; at least one. All must share the
+    ///   topology **and** the site index IDs of `terms[0]`, and one scalar type.
+    ///
+    /// # Returns
+    /// The exact sum. Each node keeps `terms[0]`'s site legs in their order,
+    /// followed by the merged bond legs ordered by neighbor name, as
+    /// [`add`](Self::add) does for `self`; the bond blocks appear in `terms`
+    /// order. A single term is returned as a clone.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeTNOperationError`] when `terms` is empty, when a term has
+    /// a different topology or site space than `terms[0]`, or when the
+    /// direct-sum construction of a node tensor (for example mixed scalar
+    /// types) or the resulting [`TreeTN`] fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorLike};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// // Three two-site product states over the same site indices.
+    /// let (s0, s1) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    /// let product = |left: [f64; 2], right: [f64; 2]| {
+    ///     let bond = DynIndex::new_dyn(1);
+    ///     let t0 = IdxTensor::from_dense(vec![s0.clone(), bond.clone()], left.to_vec()).unwrap();
+    ///     let t1 = IdxTensor::from_dense(vec![bond, s1.clone()], right.to_vec()).unwrap();
+    ///     TreeTN::<IdxTensor, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap()
+    /// };
+    /// let a = product([1.0, 0.0], [1.0, 2.0]);
+    /// let b = product([0.0, 1.0], [3.0, 4.0]);
+    /// let c = product([1.0, 1.0], [1.0, 1.0]);
+    ///
+    /// let sum = TreeTN::add_many(&[&a, &b, &c]).unwrap();
+    ///
+    /// // Bond dimensions add up: 1 + 1 + 1.
+    /// assert_eq!(sum.link_dims(), vec![3]);
+    /// // Dense values, column-major over (s0, s1): a + b + c.
+    /// let expected = IdxTensor::from_dense(vec![s0, s1], vec![2.0, 4.0, 3.0, 5.0]).unwrap();
+    /// assert!(sum.to_dense().unwrap().distance(&expected).unwrap() < 1e-12);
+    /// ```
+    pub fn add_many(terms: &[&Self]) -> std::result::Result<Self, TreeTNOperationError>
+    where
+        V: Ord,
+        T::Index: Eq + Hash,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
+        if let [only] = terms {
+            return Ok((*only).clone());
         }
-        self.ensure_same_site_spaces(other)?;
+        Self::direct_sum_networks(terms, |tensors, groups| T::direct_sum_many(tensors, groups))
+    }
+
+    /// Direct-sum `terms` node by node with `node_sum`, which receives the
+    /// terms' tensors at a node and one bond group per neighbor (sorted by
+    /// name), each listing one bond index per term.
+    fn direct_sum_networks(
+        terms: &[&Self],
+        node_sum: impl Fn(&[&T], &[Vec<T::Index>]) -> std::result::Result<DirectSumResult<T>, T::Error>,
+    ) -> std::result::Result<Self, TreeTNOperationError>
+    where
+        V: Ord,
+        T::Index: Eq + Hash,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
+        let first = Self::ensure_summable(terms)?;
 
         // Track merged indices for each edge.
         // Key: (smaller_node_name, larger_node_name) for canonical ordering
@@ -345,91 +433,85 @@ where
         let mut result_tensors: Vec<T> = Vec::new();
         let mut result_node_names: Vec<V> = Vec::new();
 
-        for node_name in self.node_names() {
-            let self_idx = self
-                .node_index(&node_name)
-                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in self", node_name))?;
-            let other_idx = other
-                .node_index(&node_name)
-                .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in other", node_name))?;
+        for node_name in first.node_names() {
+            let tensors = terms
+                .iter()
+                .enumerate()
+                .map(|(term_position, term)| {
+                    term.node_index(&node_name)
+                        .and_then(|node| term.tensor(node))
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Tensor not found for node {:?} in term {term_position}",
+                                node_name
+                            )
+                        })
+                })
+                .collect::<Result<Vec<&T>>>()?;
 
-            let tensor_a = self.tensor(self_idx).ok_or_else(|| {
-                anyhow::anyhow!("Tensor not found for node {:?} in self", node_name)
-            })?;
-            let tensor_b = other.tensor(other_idx).ok_or_else(|| {
-                anyhow::anyhow!("Tensor not found for node {:?} in other", node_name)
-            })?;
-
-            // Find bond index pairs for this node and track neighbors.
-            // `direct_sum` lays out the merged bonds in `bond_pairs` order, so
-            // iterate neighbors sorted by name: the bond layout of the result
-            // then depends only on the topology, not on the petgraph edge order
-            // left behind by however `self` was built, and it is the same for
-            // `a + b` and for chained sums such as `(a + b) + c`.
-            let mut bond_pairs: Vec<(T::Index, T::Index)> = Vec::new();
-            let mut neighbors_for_edges: Vec<V> = Vec::new();
+            // Find the bond group of every neighbor. The direct sum lays out
+            // the merged bonds in group order, so iterate neighbors sorted by
+            // name: the bond layout of the result then depends only on the
+            // topology, not on the petgraph edge order left behind by however
+            // `terms[0]` was built, and it is the same for `a + b` and for
+            // chained sums such as `(a + b) + c`.
             let mut sorted_neighbors: Vec<V> =
-                self.site_index_network().neighbors(&node_name).collect();
+                first.site_index_network().neighbors(&node_name).collect();
             sorted_neighbors.sort();
-
-            for neighbor in sorted_neighbors {
-                // Get bond index from self
-                let self_edge = self.edge_between(&node_name, &neighbor).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Edge not found in self between {:?} and {:?}",
-                        node_name,
-                        neighbor
-                    )
-                })?;
-                let self_bond = self
-                    .bond_index(self_edge)
-                    .ok_or_else(|| anyhow::anyhow!("Bond index not found in self"))?;
-
-                // Get bond index from other
-                let other_edge = other.edge_between(&node_name, &neighbor).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Edge not found in other between {:?} and {:?}",
-                        node_name,
-                        neighbor
-                    )
-                })?;
-                let other_bond = other
-                    .bond_index(other_edge)
-                    .ok_or_else(|| anyhow::anyhow!("Bond index not found in other"))?;
-
-                bond_pairs.push((self_bond.clone(), other_bond.clone()));
-                neighbors_for_edges.push(neighbor);
-            }
+            let groups = sorted_neighbors
+                .iter()
+                .map(|neighbor| {
+                    terms
+                        .iter()
+                        .enumerate()
+                        .map(|(term_position, term)| {
+                            term.edge_between(&node_name, neighbor)
+                                .and_then(|edge| term.bond_index(edge))
+                                .cloned()
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!(
+                                        "Bond index not found in term {term_position} between {:?} and {:?}",
+                                        node_name,
+                                        neighbor
+                                    )
+                                })
+                        })
+                        .collect::<Result<Vec<T::Index>>>()
+                })
+                .collect::<Result<Vec<_>>>()?;
 
             // For nodes with no bonds (single-node network), use element-wise addition
             // instead of direct_sum (which requires at least one index pair).
-            if bond_pairs.is_empty() {
-                let sum_tensor = tensor_a
-                    .axpby(AnyScalar::new_real(1.0), tensor_b, AnyScalar::new_real(1.0))
-                    .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
-                result_tensors.push(sum_tensor);
+            if groups.is_empty() {
+                let mut sum = tensors[0].clone();
+                for tensor in &tensors[1..] {
+                    sum = sum
+                        .axpby(AnyScalar::new_real(1.0), tensor, AnyScalar::new_real(1.0))
+                        .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
+                }
+                result_tensors.push(sum);
                 result_node_names.push(node_name);
                 continue;
             }
 
             // Compute direct sum
-            let direct_sum_result = tensor_a
-                .direct_sum(tensor_b, &bond_pairs)
+            let direct_sum_result = node_sum(&tensors, &groups)
                 .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
             let mut result_tensor = direct_sum_result.tensor;
 
             // For each edge, ensure we use consistent merged indices:
             // - If we've already seen this edge, replace the auto-generated index with the stored one
             // - If this is the first time seeing this edge, store the auto-generated index
-            for (i, neighbor) in neighbors_for_edges.iter().enumerate() {
+            for (neighbor, new_index) in sorted_neighbors
+                .into_iter()
+                .zip(&direct_sum_result.new_indices)
+            {
                 // Create canonical edge key (smaller name first)
-                let edge_key = if node_name < *neighbor {
-                    (node_name.clone(), neighbor.clone())
+                let edge_key = if node_name < neighbor {
+                    (node_name.clone(), neighbor)
                 } else {
-                    (neighbor.clone(), node_name.clone())
+                    (neighbor, node_name.clone())
                 };
-
-                let new_index = &direct_sum_result.new_indices[i];
 
                 if let Some(stored_index) = edge_merged_indices.get(&edge_key) {
                     // Edge already processed - replace auto-generated index with stored one
@@ -466,8 +548,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the networks are incompatible (a shape or index
-    /// /// mismatch) or the axpby fails (a backend failure).
+    /// Returns [`TreeTNOperationError`] when scaling either operand (see [`Self::scale`]) or the
+    /// subsequent [`Self::add`] fails.
     ///
     /// # Examples
     /// ```
@@ -504,6 +586,28 @@ where
         let lhs = self.scale(a.into())?;
         let rhs = other.scale(b.into())?;
         lhs.add(&rhs)
+    }
+
+    /// Check that `terms` is non-empty and that every term has the topology
+    /// and the site spaces of `terms[0]`; return `terms[0]`.
+    pub(crate) fn ensure_summable<'a>(
+        terms: &[&'a Self],
+    ) -> std::result::Result<&'a Self, TreeTNOperationError>
+    where
+        V: Ord,
+        T::Index: Eq + Hash,
+    {
+        let (first, rest) = terms
+            .split_first()
+            .ok_or_else(|| anyhow::anyhow!("add_many requires at least one term"))?;
+        for term in rest {
+            // Verify same topology
+            if !first.same_topology(term) {
+                return Err(anyhow::anyhow!("Cannot add TreeTNs with different topologies").into());
+            }
+            first.ensure_same_site_spaces(term)?;
+        }
+        Ok(first)
     }
 
     fn ensure_same_site_spaces(&self, other: &Self) -> Result<()>

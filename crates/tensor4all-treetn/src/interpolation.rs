@@ -2,8 +2,9 @@
 //!
 //! A caller describes one interpolation problem with an
 //! [`InterpolationProblem`]: a tree topology with named nodes, the active site
-//! indices of every node, initial pivots, an absolute tolerance, an optional
-//! bond cap, and a seed. An engine implementing [`TreeInterpolator`] samples
+//! indices of every node, initial pivots, optional extra starting points for
+//! the engine's global pivot search, an absolute tolerance, an optional bond
+//! cap, and a seed. An engine implementing [`TreeInterpolator`] samples
 //! the function through a batch evaluator and returns an
 //! [`InterpolationOutcome`]: a [`TreeTN`] with the caller's node names and
 //! site indices, an [`InterpolationTermination`] verdict, the unnormalized
@@ -15,6 +16,16 @@
 //! engine is `tensor4all_treetci::TreeTciInterpolator`. Such code checks its
 //! topology and sites with [`validate_layout`], the same checks
 //! [`InterpolationProblem::new`] performs.
+//!
+//! # Execution
+//!
+//! Every run takes its execution capability explicitly through an
+//! [`EvalContext`]: the session the numerical work runs on and the parallelism
+//! budget the caller's own code may use. Nothing is installed and no ambient
+//! pool or thread-local selector chooses where the work runs
+//! ([`EvalContext::parallelism`]). A caller that owns a lane session - a
+//! scheduler worker, for example - passes it directly; a caller that runs on
+//! its own thread passes a `Session` over its own engine.
 //!
 //! # Site order
 //!
@@ -56,8 +67,121 @@ use std::hash::Hash;
 use std::num::NonZeroUsize;
 
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
+use tensor4all_tensorbackend::explicit::Session;
 
 use crate::{NodeNameNetwork, TreeTN};
+
+/// The parallelism budget of the application's own code inside an [`EvalContext`].
+///
+/// This describes what the *application's* code may do, not what the backend does:
+/// operations issued through [`EvalContext::session`] follow the backend's own lane
+/// policy, so a lane's child session still selects the backend's inner parallelism
+/// with the full domain budget. `parallelism` only bounds the caller's own fan-out
+/// (an evaluator that parallelizes its host work, for example), and it never
+/// installs a pool or reroutes work.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetn::interpolation::Parallelism;
+///
+/// fn workers(parallelism: Parallelism<'_>) -> usize {
+///     match parallelism {
+///         Parallelism::Serial => 1,
+///         Parallelism::Pool { budget, .. } => budget,
+///     }
+/// }
+/// assert_eq!(workers(Parallelism::Serial), 1);
+/// ```
+#[derive(Clone, Copy, Debug)]
+pub enum Parallelism<'a> {
+    /// The application's code stays on the thread that owns the session and must
+    /// not fan out. This is what a scheduler lane hands out: parallelism is across
+    /// work items, and the item's own thread keeps the backend's session.
+    Serial,
+    /// The application's code may parallelize on `pool` with at most `budget`
+    /// workers. This is what a full-budget session hands out, so a single item
+    /// can use the whole team for its own host work.
+    Pool {
+        /// The pool the application's own code may use.
+        pool: &'a rayon::ThreadPool,
+        /// Maximum number of workers the application's own code may use. Never
+        /// larger than the pool's thread count.
+        budget: usize,
+    },
+}
+
+/// The explicit execution capability of one interpolation run.
+///
+/// An `EvalContext` owns exactly one mutable access to an already-entered session
+/// and the parallelism budget of the caller's own code. Engines take it as an
+/// argument and reborrow [`EvalContext::session`] between their own operations and
+/// their evaluator calls, so the session has one mutable owner throughout the run
+/// and is never captured by a callback.
+///
+/// Nothing here selects an execution context: the session is the one the caller
+/// built (a session over a caller-owned engine, or the session of a scheduler-owned lane), and no route
+/// consults a process-global or thread-local default.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
+/// use tenferro::Tensor;
+///
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
+///
+/// let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+/// assert!(matches!(ctx.parallelism(), Parallelism::Serial));
+/// let sum = ctx.session().sum(&x)?;
+/// let total = sum.as_slice::<f64>()?.to_vec();
+/// assert_eq!(total, vec![4.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub struct EvalContext<'a> {
+    session: Session<'a>,
+    parallelism: Parallelism<'a>,
+}
+
+impl<'a> EvalContext<'a> {
+    /// Build the execution capability of one run from an already-entered session.
+    ///
+    /// # Arguments
+    ///
+    /// * `session` - The session every numerical operation of the run uses. It is
+    ///   borrowed, never entered or replaced here; the caller has already entered
+    ///   it (a session over a caller-owned engine, or a scheduler-owned lane's session).
+    /// * `parallelism` - The budget of the application's own code. Pass
+    ///   [`Parallelism::Serial`] inside a lane, where parallelism is across work
+    ///   items, and a full-budget [`Parallelism::Pool`] when one item may use the
+    ///   whole team.
+    pub fn new(session: Session<'a>, parallelism: Parallelism<'a>) -> Self {
+        Self {
+            session,
+            parallelism,
+        }
+    }
+
+    /// Reborrow the session of this run.
+    ///
+    /// Every numerical stage of an engine issues its backend work through this
+    /// accessor, and the engine reborrows it between its own operations and its
+    /// evaluator calls. The returned reference borrows `self`, so one mutable owner
+    /// stays explicit and no callback captures the session.
+    pub fn session(&mut self) -> &mut Session<'a> {
+        &mut self.session
+    }
+
+    /// The parallelism budget of the application's own code.
+    ///
+    /// This never describes the backend's execution: operations issued through
+    /// [`Self::session`] follow the backend's own lane policy.
+    pub fn parallelism(&self) -> Parallelism<'_> {
+        self.parallelism
+    }
+}
 
 /// One tree interpolation problem, validated on construction.
 ///
@@ -66,7 +190,10 @@ use crate::{NodeNameNetwork, TreeTN};
 /// the keys of `node_sites`, every active site index appears once with a
 /// positive dimension, at least one active site exists, the initial pivots
 /// are in-range points in site order, and the tolerance is finite and
-/// nonnegative. Fields are private; use the accessors.
+/// nonnegative. [`InterpolationProblem::with_global_search_starts`] adds
+/// optional extra starts for an engine's global pivot search under the same
+/// checks, except that the set may be empty. Fields are private; use the
+/// accessors.
 ///
 /// # Examples
 ///
@@ -114,6 +241,7 @@ where
     node_sites: BTreeMap<V, Vec<DynIndex>>,
     site_order: Vec<DynIndex>,
     initial_pivots: ColMajorArray<usize>,
+    global_search_starts: ColMajorArray<usize>,
     absolute_tolerance: f64,
     max_bond_dim: Option<NonZeroUsize>,
     seed: u64,
@@ -196,11 +324,16 @@ where
                 "absolute_tolerance must be finite and nonnegative, got {absolute_tolerance}"
             )));
         }
+        // No global search starts unless the caller adds them. The shape keeps
+        // one row per active site, like `initial_pivots`, with zero columns.
+        let global_search_starts = ColMajorArray::zeros(vec![site_order.len(), 0])
+            .map_err(|error| invalid(format!("could not build the empty start set: {error}")))?;
         Ok(Self {
             topology,
             node_sites,
             site_order,
             initial_pivots,
+            global_search_starts,
             absolute_tolerance,
             max_bond_dim,
             seed,
@@ -327,6 +460,105 @@ where
     /// ```
     pub fn initial_pivots(&self) -> &ColMajorArray<usize> {
         &self.initial_pivots
+    }
+
+    /// Add extra starting points for an engine's global pivot search.
+    ///
+    /// A global pivot search (TreeTCI's, for example) otherwise starts from
+    /// its own random points. These caller-supplied points are walked in
+    /// addition to those random starts, which lets a caller aim the search at
+    /// a region it already suspects, such as a corner or edge of a patch. An
+    /// engine without a global pivot search ignores them.
+    ///
+    /// They are per-run inputs like the initial pivots, so they belong to the
+    /// problem rather than to an engine's configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `starts` - Column-major `[n_active_sites, n_starts]` array in site
+    ///   order ([`Self::derive_site_order`]). Zero columns are allowed and
+    ///   mean no extra starts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InterpolationError::InvalidProblem`] when `starts` is not a
+    /// 2D array with one row per active site, or when a coordinate is out of
+    /// range for its site. The checks are those of the initial pivots, except
+    /// that an empty array is accepted.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use tensor4all_core::{ColMajorArray, DynIndex};
+    /// use tensor4all_treetn::interpolation::{InterpolationError, InterpolationProblem};
+    /// use tensor4all_treetn::NodeNameNetwork;
+    ///
+    /// let site = DynIndex::new_dyn(3);
+    /// let mut topology = NodeNameNetwork::new();
+    /// topology.add_node(0usize)?;
+    /// let node_sites = BTreeMap::from([(0usize, vec![site])]);
+    /// let pivots = ColMajorArray::new(vec![0], vec![1, 1])?;
+    /// let problem = InterpolationProblem::new(topology, node_sites, pivots, 0.0, None, 0)?;
+    /// assert_eq!(problem.global_search_starts().shape(), &[1, 0]);
+    ///
+    /// // Two starts: the high corner and its neighbour.
+    /// let starts = ColMajorArray::new(vec![2, 0], vec![1, 2])?;
+    /// let problem = problem.with_global_search_starts(starts)?;
+    /// assert_eq!(problem.global_search_starts().column(0), Some(&[2][..]));
+    /// assert_eq!(problem.global_search_starts().column(1), Some(&[0][..]));
+    ///
+    /// // Zero columns are allowed; an out-of-range coordinate is not.
+    /// assert!(problem
+    ///     .clone()
+    ///     .with_global_search_starts(ColMajorArray::new(vec![], vec![1, 0])?)
+    ///     .is_ok());
+    /// let bad = ColMajorArray::new(vec![3], vec![1, 1])?;
+    /// let error = problem.with_global_search_starts(bad).unwrap_err();
+    /// assert!(matches!(error, InterpolationError::InvalidProblem { .. }));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_global_search_starts(
+        mut self,
+        starts: ColMajorArray<usize>,
+    ) -> Result<Self, InterpolationError> {
+        validate_point_columns(
+            &starts,
+            &self.site_order,
+            "global_search_starts",
+            "global search start",
+            "start",
+            true,
+        )?;
+        self.global_search_starts = starts;
+        Ok(self)
+    }
+
+    /// Borrow the extra starting points for the engine's global pivot search.
+    ///
+    /// Shape `[n_active_sites, n_starts]` in site order. Empty (zero columns)
+    /// unless [`Self::with_global_search_starts`] supplied points.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use tensor4all_core::{ColMajorArray, DynIndex};
+    /// use tensor4all_treetn::interpolation::InterpolationProblem;
+    /// use tensor4all_treetn::NodeNameNetwork;
+    ///
+    /// let mut topology = NodeNameNetwork::new();
+    /// topology.add_node(0usize)?;
+    /// let node_sites = BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]);
+    /// let pivots = ColMajorArray::new(vec![0], vec![1, 1])?;
+    /// let problem = InterpolationProblem::new(topology, node_sites, pivots, 0.0, None, 0)?
+    ///     .with_global_search_starts(ColMajorArray::new(vec![1], vec![1, 1])?)?;
+    /// assert_eq!(problem.global_search_starts().shape(), &[1, 1]);
+    /// assert_eq!(problem.global_search_starts().column(0), Some(&[1][..]));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn global_search_starts(&self) -> &ColMajorArray<usize> {
+        &self.global_search_starts
     }
 
     /// Return the absolute tolerance compared with the engine's raw error
@@ -531,34 +763,58 @@ fn validate_pivots(
     pivots: &ColMajorArray<usize>,
     site_order: &[DynIndex],
 ) -> Result<(), InterpolationError> {
-    let (Some(n_rows), Some(n_cols)) = (pivots.nrows(), pivots.ncols()) else {
+    validate_point_columns(
+        pivots,
+        site_order,
+        "initial_pivots",
+        "initial pivot",
+        "pivot",
+        false,
+    )
+}
+
+/// Check a column-major point set in site order.
+///
+/// `array_name` names the array in shape and row messages, `column_name`
+/// starts coordinate messages, and `empty_noun` names one point when
+/// `allow_empty` is false. Initial pivots and global search starts share
+/// these checks; only the empty set differs.
+fn validate_point_columns(
+    points: &ColMajorArray<usize>,
+    site_order: &[DynIndex],
+    array_name: &str,
+    column_name: &str,
+    empty_noun: &str,
+    allow_empty: bool,
+) -> Result<(), InterpolationError> {
+    let (Some(n_rows), Some(n_cols)) = (points.nrows(), points.ncols()) else {
         return Err(invalid(format!(
-            "initial_pivots must be a 2D array, got shape {:?}",
-            pivots.shape()
+            "{array_name} must be a 2D array, got shape {:?}",
+            points.shape()
         )));
     };
     if n_rows != site_order.len() {
         return Err(invalid(format!(
-            "initial_pivots has {n_rows} rows but the problem has {} active sites",
+            "{array_name} has {n_rows} rows but the problem has {} active sites",
             site_order.len()
         )));
     }
-    if n_cols == 0 {
-        return Err(invalid(
-            "initial_pivots must contain at least one pivot".to_string(),
-        ));
+    if n_cols == 0 && !allow_empty {
+        return Err(invalid(format!(
+            "{array_name} must contain at least one {empty_noun}"
+        )));
     }
     for column in 0..n_cols {
-        let point = pivots.column(column).ok_or_else(|| {
+        let point = points.column(column).ok_or_else(|| {
             invalid(format!(
-                "initial_pivots column {column} is out of range for shape {:?}",
-                pivots.shape()
+                "{array_name} column {column} is out of range for shape {:?}",
+                points.shape()
             ))
         })?;
         for (row, (&value, site)) in point.iter().zip(site_order).enumerate() {
             if value >= site.dim() {
                 return Err(invalid(format!(
-                    "initial pivot {column} has coordinate {value} at row {row}, out of range for site dimension {}",
+                    "{column_name} {column} has coordinate {value} at row {row}, out of range for site dimension {}",
                     site.dim()
                 )));
             }
@@ -717,6 +973,9 @@ pub enum InterpolationError {
 ///   [`InterpolationTermination::BondCapReached`].
 /// - [`InterpolationProblem::seed`] overrides any seed in the engine's own
 ///   configuration.
+/// - [`InterpolationProblem::global_search_starts`] are extra starting points
+///   for an engine's global pivot search; an engine without one ignores them.
+///   They never replace the engine's own random starts.
 /// - If every initial pivot evaluates to exactly zero, the engine returns
 ///   [`InterpolationError::AllSamplesZero`]; a non-finite initial sample is an
 ///   invalid evaluator value and is reported as
@@ -727,16 +986,18 @@ pub enum InterpolationError {
 /// # Examples
 ///
 /// A toy engine that handles only single-node problems by evaluating every
-/// point:
+/// point. The engine has no numerics of its own, so it forwards the context to
+/// the evaluator and keeps the one mutable owner explicit:
 ///
 /// ```
 /// use std::collections::BTreeMap;
-/// use std::hash::Hash;
 /// use std::fmt::Debug;
+/// use std::hash::Hash;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 /// use tensor4all_treetn::interpolation::{
-///     InterpolationError, InterpolationOutcome, InterpolationProblem,
-///     InterpolationTermination, TreeInterpolator,
+///     EvalContext, InterpolationError, InterpolationOutcome, InterpolationProblem,
+///     InterpolationTermination, Parallelism, TreeInterpolator,
 /// };
 /// use tensor4all_treetn::{NodeNameNetwork, TreeTN};
 ///
@@ -746,11 +1007,12 @@ pub enum InterpolationError {
 ///     fn interpolate<V, F>(
 ///         &self,
 ///         problem: &InterpolationProblem<V>,
-///         evaluate: F,
+///         ctx: &mut EvalContext<'_>,
+///         mut evaluate: F,
 ///     ) -> Result<InterpolationOutcome<V>, InterpolationError>
 ///     where
 ///         V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-///         F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>>,
+///         F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>>,
 ///     {
 ///         let (node, sites) = match problem.node_sites().iter().next() {
 ///             Some(entry) if problem.node_sites().len() == 1 => entry,
@@ -773,7 +1035,8 @@ pub enum InterpolationError {
 ///         let shape = [dims.len(), n_points];
 ///         let batch = ColMajorArrayRef::new(&points, &shape)
 ///             .map_err(|e| InterpolationError::Engine { source: e.into() })?;
-///         let values = evaluate(batch).map_err(|source| InterpolationError::Evaluator { source })?;
+///         let values = evaluate(batch, ctx)
+///             .map_err(|source| InterpolationError::Evaluator { source })?;
 ///         let max = values.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
 ///         if max == 0.0 {
 ///             return Err(InterpolationError::AllSamplesZero);
@@ -792,6 +1055,17 @@ pub enum InterpolationError {
 ///     }
 /// }
 ///
+/// // f(x, y) = x + 10 y
+/// fn f(batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>> {
+///     let n = batch.shape()[1];
+///     Ok((0..n)
+///         .map(|p| {
+///             let row = |site: usize| batch.get(&[site, p]).expect("in-range row");
+///             (row(0) + 10 * row(1)) as f64
+///         })
+///         .collect())
+/// }
+///
 /// let (x, y) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3));
 /// let mut topology = NodeNameNetwork::new();
 /// topology.add_node("only".to_string())?;
@@ -799,13 +1073,9 @@ pub enum InterpolationError {
 /// let pivots = ColMajorArray::new(vec![1, 2], vec![2, 1])?;
 /// let problem = InterpolationProblem::new(topology, node_sites, pivots, 1e-12, None, 0)?;
 ///
-/// // f(x, y) = x + 10 y
-/// let outcome = DenseSingleNode.interpolate(&problem, |batch: ColMajorArrayRef<'_, usize>| {
-///     let n = batch.shape()[1];
-///     Ok((0..n)
-///         .map(|p| (batch.get(&[0, p]).unwrap() + 10 * batch.get(&[1, p]).unwrap()) as f64)
-///         .collect())
-/// })?;
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+/// let outcome = DenseSingleNode.interpolate(&problem, &mut ctx, f)?;
 /// assert_eq!(outcome.termination, InterpolationTermination::Converged);
 /// assert_eq!(outcome.max_sample_magnitude, 21.0);
 /// assert_eq!(outcome.network.evaluate_point(&[x, y], &[1, 2])?.real(), 21.0);
@@ -818,9 +1088,17 @@ pub trait TreeInterpolator<T> {
     ///
     /// * `problem` - Validated problem: topology, active sites, initial
     ///   pivots, tolerance, bond cap, and seed.
+    /// * `ctx` - The run's explicit execution capability. Every numerical stage
+    ///   of the engine issues its backend work through [`EvalContext::session`],
+    ///   and the engine reborrows that session between its own operations and
+    ///   its evaluator calls; the session has one mutable owner and is never
+    ///   captured by the callback. [`EvalContext::parallelism`] bounds only the
+    ///   application's own code.
     /// * `evaluate` - Batch evaluator. It receives a column-major
-    ///   `[n_active_sites, n_points]` array in site order and returns one
-    ///   value per point.
+    ///   `[n_active_sites, n_points]` array in site order and the same context,
+    ///   and returns one value per point. An evaluator that needs numerical work
+    ///   of its own issues it through the context's session; an evaluator that
+    ///   only computes host values ignores the context.
     ///
     /// # Returns
     ///
@@ -837,7 +1115,8 @@ pub trait TreeInterpolator<T> {
     ///   value at an initial pivot.
     /// - [`InterpolationError::AllSamplesZero`] when every initial pivot
     ///   evaluates to exactly zero.
-    /// - [`InterpolationError::Engine`] for any other engine failure.
+    /// - [`InterpolationError::Engine`] for any other engine failure, including
+    ///   a rejection by the supplied session.
     ///
     /// # Examples
     ///
@@ -861,11 +1140,12 @@ pub trait TreeInterpolator<T> {
     fn interpolate<V, F>(
         &self,
         problem: &InterpolationProblem<V>,
+        ctx: &mut EvalContext<'_>,
         evaluate: F,
     ) -> Result<InterpolationOutcome<V>, InterpolationError>
     where
         V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-        F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>;
+        F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>;
 }
 
 #[cfg(test)]

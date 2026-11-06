@@ -31,6 +31,32 @@ PUBLIC_FN_RE = re.compile(
 )
 TRAIT_FN_RE = re.compile(r"^\s*(?:(?:async|unsafe)\s+)*fn\b")
 RESULT_RE = re.compile(r"\b(?:[A-Za-z_][\w:]*::)?Result\s*<")
+# `type StorageResult<T> = std::result::Result<T, StorageError>;` declares an
+# alias whose signatures `RESULT_RE` would miss. Struct names that merely end
+# in `Result` (e.g. `FactorizeResult<T>`) are not aliases and stay excluded.
+RESULT_ALIAS_RE = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?type\s+([A-Za-z_]\w*)\s*(?:<[^=]*>)?\s*=\s*"
+    r"(?:(?:std|core)::)?(?:result::)?Result\s*<"
+)
+# `use crate::error::Result as TreeTciResult;` (also inside a `{...}` list).
+RESULT_USE_ALIAS_RE = re.compile(r"\bResult\s+as\s+([A-Za-z_]\w*)")
+
+
+def result_type_re(paths: list[Path]) -> re.Pattern[str]:
+    """Match `Result<` plus every `Result` alias declared in ``paths``."""
+    aliases: set[str] = set()
+    for path in paths:
+        if path.is_file():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                match = RESULT_ALIAS_RE.match(line)
+                if match:
+                    aliases.add(match.group(1))
+                if line.lstrip().startswith(("use ", "pub use ", "pub(crate) use ")):
+                    aliases.update(RESULT_USE_ALIAS_RE.findall(line))
+    if not aliases:
+        return RESULT_RE
+    names = "|".join(sorted(re.escape(alias) for alias in aliases))
+    return re.compile(r"\b(?:[A-Za-z_][\w:]*::)?(?:Result|" + names + r")\s*<")
 TRAIT_RE = re.compile(r"^\s*pub\s+(?:unsafe\s+)?trait\b")
 DOC_RE = re.compile(r"^\s*///")
 DOC_ATTRIBUTE_RE = re.compile(r'^\s*#\[doc\s*=\s*("(?:\\.|[^"\\])*")\s*\]\s*$')
@@ -52,6 +78,8 @@ DEFERRED_HINT_RE = re.compile(
 # prose spell-checker so boilerplate cannot satisfy the repository contract.
 CONCRETE_ERROR_RE = re.compile(
     r"(?:"
+    # Delegation to a linked API whose own section names the errors.
+    r"\b(?:same errors as|errors (?:of|from)) \[`[^`]+`\]|"
     r"\bInfallible\b|"
     r"\b(?:Error|ErrorKind)::(?!Validation\b)[A-Za-z0-9_]+\b|"
     r"\bValidationError::[A-Za-z0-9_]+\b|"
@@ -75,6 +103,63 @@ CONCRETE_ERROR_RE = re.compile(
     r"unsupported[- ](?:operation|dtype|conversion|backend|extension|rule))\b"
     r")",
 )
+# PR #593 generated ``# Errors`` bodies from one template::
+#
+#     Returns an error when <subject> (<category list>).
+#
+# The parenthetical only names an error *class* (``a backend failure``,
+# ``a shape or index mismatch``, ``an invalid-configuration failure``, ...),
+# never the concrete variant a caller can match on. Such a sentence is still
+# accepted by ``CONCRETE_ERROR_RE`` because it mentions ``mismatch`` or
+# ``failure``; this pattern rejects it instead so a regeneration pass cannot
+# reintroduce the boilerplate. A sentence that names a concrete variant
+# (``GseError::MissingCenter``) is actionable even when it also carries a
+# class label, so it is exempt.
+GENERATED_BOILERPLATE_START_RE = re.compile(r"^(?:It also )?[Rr]eturns an error when\b")
+GENERATED_BOILERPLATE_PAREN_RE = re.compile(r"\(([^()]*)\)")
+# Category labels use only words, spaces, commas, dots, slashes and hyphens; a
+# colon, bracket or backtick marks an explanation or a concrete variant.
+GENERATED_BOILERPLATE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ,./\-]*$")
+GENERATED_BOILERPLATE_TAIL_RE = re.compile(
+    r"\b(?:failure|mismatch|replacement|split|value|state|coefficient|"
+    r"overflow|underflow|dtype|operation|construction|bounds|gradient)$"
+)
+# A concrete error type or variant (``GseError``, ``GseError::MissingCenter``);
+# an unrelated path such as ``Tensor::from_elem`` does not count.
+GENERATED_BOILERPLATE_VARIANT_RE = re.compile(
+    r"\b[A-Z][A-Za-z0-9]*Error(?:Kind)?\b"
+)
+# Split at a real sentence boundary only, so ``i.e.``/``e.g.`` inside a label
+# does not hide a wrapped generated sentence.
+GENERATED_BOILERPLATE_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z`\[])")
+
+
+def is_category_label(content: str) -> bool:
+    """Return whether a parenthetical is a bare error-category list."""
+    label = content.strip()
+    if not GENERATED_BOILERPLATE_LABEL_RE.fullmatch(label):
+        return False
+    return GENERATED_BOILERPLATE_TAIL_RE.search(label) is not None
+
+
+def generated_boilerplate_sentence(section: str) -> str | None:
+    """Return the first generated ``# Errors`` sentence in ``section``.
+
+    Matching is done on the whitespace-normalized section text so a sentence
+    wrapped across ``///`` lines is still recognized.
+    """
+    normalized = re.sub(r"\s+", " ", section)
+    for sentence in GENERATED_BOILERPLATE_SENTENCE_RE.split(normalized):
+        if not GENERATED_BOILERPLATE_START_RE.match(sentence):
+            continue
+        if GENERATED_BOILERPLATE_VARIANT_RE.search(sentence):
+            continue
+        if any(
+            is_category_label(match.group(1))
+            for match in GENERATED_BOILERPLATE_PAREN_RE.finditer(sentence)
+        ):
+            return sentence
+    return None
 
 
 @dataclass(frozen=True)
@@ -110,9 +195,25 @@ def brace_delta(line: str) -> int:
     return code.count("{") - code.count("}")
 
 
-def preceding_docs(lines: list[str], index: int) -> tuple[str, bool]:
+def multiline_attribute_start(lines: list[str], end: int) -> int | None:
+    """Index of the ``#[`` line opening a multi-line attribute ending at ``end``."""
+    cursor = end - 1
+    while cursor >= 0 and end - cursor <= 20:
+        stripped = lines[cursor].strip()
+        if DOC_RE.match(lines[cursor]) or stripped == "" or stripped.endswith(("{", "}", ";")):
+            return None
+        if ATTRIBUTE_RE.match(lines[cursor]):
+            return cursor
+        cursor -= 1
+    return None
+
+
+def preceding_docs(lines: list[str], index: int) -> tuple[str, bool, int]:
     docs: list[str] = []
     hidden = False
+    # 0-based index of the first line consumed as part of the doc block; stays
+    # at ``index`` when the declaration has no preceding docs.
+    first = index
     cursor = index - 1
     while cursor >= 0:
         stripped = lines[cursor].strip()
@@ -126,12 +227,20 @@ def preceding_docs(lines: list[str], index: int) -> tuple[str, bool]:
             docs.append(f"/// {ast.literal_eval(match.group(1))}")
         elif ATTRIBUTE_RE.match(lines[cursor]):
             hidden = hidden or "doc(hidden)" in stripped
+        elif stripped.endswith("]") and (start := multiline_attribute_start(lines, cursor)) is not None:
+            # A multi-line attribute such as `#[deprecated(\n note = ".."\n)]`
+            # sits between the docs and the signature: skip all of its lines.
+            hidden = hidden or any("doc(hidden)" in line for line in lines[start : cursor + 1])
+            first = start
+            cursor = start - 1
+            continue
         elif stripped == "" and docs:
             break
         else:
             break
+        first = cursor
         cursor -= 1
-    return "\n".join(reversed(docs)), hidden
+    return "\n".join(reversed(docs)), hidden, first
 
 
 def function_signature_lines(lines: list[str], index: int) -> list[str]:
@@ -181,7 +290,11 @@ def deferred_section(doc: str) -> str | None:
     return doc_section(doc, DEFERRED_HEADING_RE)
 
 
-def audit_file(path: Path, changed_lines: set[int] | None = None) -> list[Finding]:
+def audit_file(
+    path: Path,
+    changed_lines: set[int] | None = None,
+    result_re: re.Pattern[str] = RESULT_RE,
+) -> list[Finding]:
     lines = path.read_text(encoding="utf-8").splitlines()
     findings: list[Finding] = []
     trait_depth: int | None = None
@@ -203,21 +316,38 @@ def audit_file(path: Path, changed_lines: set[int] | None = None) -> list[Findin
         is_trait_method = trait_depth is not None and bool(TRAIT_FN_RE.match(line))
         if is_public or is_trait_method:
             signature_lines = function_signature_lines(lines, index)
-            if changed_lines is not None and not any(
-                number in changed_lines for number in range(index + 1, index + 1 + len(signature_lines))
-            ):
-                depth += brace_delta(line)
-                if trait_depth is not None and depth < trait_depth:
-                    trait_depth = None
-                continue
+            docs, hidden, doc_start = preceding_docs(lines, index)
+            if changed_lines is not None:
+                # Audit the declaration when its signature changed, but also
+                # when any line of its preceding doc block changed: a doc-only
+                # edit can reintroduce boilerplate without touching the
+                # signature.
+                signature_lines_changed = set(
+                    range(index + 1, index + 1 + len(signature_lines))
+                )
+                doc_lines_changed = set(range(doc_start + 1, index + 1))
+                if not (signature_lines_changed | doc_lines_changed) & changed_lines:
+                    depth += brace_delta(line)
+                    if trait_depth is not None and depth < trait_depth:
+                        trait_depth = None
+                    continue
             signature = " ".join(signature_lines)
-            if RESULT_RE.search(signature):
-                docs, hidden = preceding_docs(lines, index)
+            if result_re.search(signature):
                 if not hidden:
                     section = error_section(docs)
                     if section is None:
                         findings.append(
                             Finding(path, index + 1, function_name(signature), "missing # Errors")
+                        )
+                    elif generated_boilerplate_sentence(section) is not None:
+                        findings.append(
+                            Finding(
+                                path,
+                                index + 1,
+                                function_name(signature),
+                                "# Errors uses generated boilerplate; name the concrete "
+                                "variants or conditions",
+                            )
                         )
                     elif not CONCRETE_ERROR_RE.search(re.sub(r"\s+", " ", section)):
                         findings.append(
@@ -255,11 +385,13 @@ def audit(
     changed_lines: dict[Path, set[int]] | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
-    for path in paths if paths is not None else rust_files(root):
+    selected = paths if paths is not None else list(rust_files(root))
+    result_re = result_type_re(list(rust_files(root)))
+    for path in selected:
         if not path.is_file():
             continue
         lines = changed_lines.get(path) if changed_lines is not None else None
-        findings.extend(audit_file(path, lines))
+        findings.extend(audit_file(path, lines, result_re))
     return findings
 
 

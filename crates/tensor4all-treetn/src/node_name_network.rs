@@ -155,8 +155,7 @@ where
     /// Returns an error if the node already exists.
     /// # Errors
     ///
-    /// Returns an error when the node is a duplicate (a duplicate operation
-    ///  failure) or the network is invalid (an invalid-topology failure).
+    /// Returns [`TreeTNOperationError`] when `node_name` already exists.
     ///
     pub fn add_node(
         &mut self,
@@ -175,8 +174,7 @@ where
     /// Returns an error if either node doesn't exist.
     /// # Errors
     ///
-    /// Returns an error when an endpoint node is not found (a missing-index
-    ///  failure) or the edge is a duplicate (a duplicate operation failure).
+    /// Returns [`TreeTNOperationError`] when `n1` or `n2` is not present.
     ///
     pub fn add_edge(
         &mut self,
@@ -199,8 +197,8 @@ where
     /// Rename an existing node.
     /// # Errors
     ///
-    /// Returns an error when the node is not found (a missing-index failure) or
-    ///  the new name is a duplicate (a duplicate operation failure).
+    /// Returns [`TreeTNOperationError`] when `new_name` is already in use, or when `old_name`
+    /// is not present.
     ///
     pub fn rename_node(
         &mut self,

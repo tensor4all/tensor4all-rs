@@ -31,15 +31,15 @@ fn test_qr_identity() {
     assert_eq!(r.dims(), vec![2, 2]);
 
     // Check indices
-    assert_eq!(q.indices.len(), 2);
-    assert_eq!(r.indices.len(), 2);
+    assert_eq!(q.indices().len(), 2);
+    assert_eq!(r.indices().len(), 2);
 
     // Check that Q and R share the bond index
-    assert_eq!(q.indices[1].id, r.indices[0].id);
+    assert_eq!(q.indices()[1].id, r.indices()[0].id);
 
     // Check that bond index has "Link" tag
-    assert!(q.indices[1].tags().has_tag("Link"));
-    assert!(r.indices[0].tags().has_tag("Link"));
+    assert!(q.indices()[1].tags().has_tag("Link"));
+    assert!(r.indices()[0].tags().has_tag("Link"));
 }
 
 #[test]
@@ -58,15 +58,15 @@ fn test_qr_simple_matrix() {
     assert_eq!(r.dims(), vec![2, 3]);
 
     // Check indices
-    assert_eq!(q.indices.len(), 2);
-    assert_eq!(r.indices.len(), 2);
+    assert_eq!(q.indices().len(), 2);
+    assert_eq!(r.indices().len(), 2);
 
     // Check that Q and R share the bond index
-    assert_eq!(q.indices[1].id, r.indices[0].id);
+    assert_eq!(q.indices()[1].id, r.indices()[0].id);
 
     // Check that bond index has "Link" tag
-    assert!(q.indices[1].tags().has_tag("Link"));
-    assert!(r.indices[0].tags().has_tag("Link"));
+    assert!(q.indices()[1].tags().has_tag("Link"));
+    assert!(r.indices()[0].tags().has_tag("Link"));
 }
 
 #[test]
@@ -151,23 +151,23 @@ fn test_qr_rank3() {
     assert_eq!(r.dims(), vec![2, 3, 4]);
 
     // Check indices
-    assert_eq!(q.indices.len(), 2);
-    assert_eq!(r.indices.len(), 3);
+    assert_eq!(q.indices().len(), 2);
+    assert_eq!(r.indices().len(), 3);
 
     // Check that Q has left index first, then bond
-    assert_eq!(q.indices[0].id, i.id);
+    assert_eq!(q.indices()[0].id, i.id);
 
     // Check that R has bond first, then right indices
-    assert_eq!(r.indices[0].id, q.indices[1].id); // bond index
-    assert_eq!(r.indices[1].id, j.id);
-    assert_eq!(r.indices[2].id, k.id);
+    assert_eq!(r.indices()[0].id, q.indices()[1].id); // bond index
+    assert_eq!(r.indices()[1].id, j.id);
+    assert_eq!(r.indices()[2].id, k.id);
 
     // Check that Q and R share the bond index
-    assert_eq!(q.indices[1].id, r.indices[0].id);
+    assert_eq!(q.indices()[1].id, r.indices()[0].id);
 
     // Check that bond index has "Link" tag
-    assert!(q.indices[1].tags().has_tag("Link"));
-    assert!(r.indices[0].tags().has_tag("Link"));
+    assert!(q.indices()[1].tags().has_tag("Link"));
+    assert!(r.indices()[0].tags().has_tag("Link"));
 }
 
 #[test]

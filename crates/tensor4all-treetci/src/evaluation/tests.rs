@@ -4,19 +4,16 @@ use super::*;
 fn failed_batches_are_retryable_without_retaining_partial_results() {
     for limit in [None, Some(0), Some(1024)] {
         let mut calls = 0;
-        let evaluator = RunEvaluator::new(
-            |batch: GlobalIndexBatch<'_>| {
-                calls += 1;
-                match calls {
-                    1 => anyhow::bail!("oracle unavailable"),
-                    2 => Ok(Vec::new()),
-                    _ => Ok(batch.data().iter().map(|&i| 10.0 * i as f64).collect()),
-                }
-            },
-            &[2],
-            limit,
-        )
-        .unwrap();
+        let mut evaluate = |batch: GlobalIndexBatch<'_>| {
+            calls += 1;
+            match calls {
+                1 => anyhow::bail!("oracle unavailable"),
+                2 => Ok(Vec::new()),
+                _ => Ok(batch.data().iter().map(|&i| 10.0 * i as f64).collect()),
+            }
+        };
+        let mut source = Compatibility::new(&mut evaluate);
+        let mut evaluator = CachedExecution::new(&mut source, &[2], limit).unwrap();
         let batch = GlobalIndexBatch::new(&[1, 0, 1], 1, 3).unwrap();
         assert_eq!(
             evaluator.call(batch).unwrap_err().to_string(),
@@ -54,12 +51,11 @@ fn failed_batches_are_retryable_without_retaining_partial_results() {
 
 #[test]
 fn invalid_memo_coordinates_do_not_call_the_oracle() {
-    let evaluator = RunEvaluator::<f64, _>::new(
-        |_| panic!("invalid batch must not reach the target"),
-        &[2],
-        Some(1024),
-    )
-    .unwrap();
+    let mut evaluate = |_: GlobalIndexBatch<'_>| -> anyhow::Result<Vec<f64>> {
+        panic!("invalid batch must not reach the target")
+    };
+    let mut source = Compatibility::new(&mut evaluate);
+    let mut evaluator = CachedExecution::new(&mut source, &[2], Some(1024)).unwrap();
     for batch in [
         GlobalIndexBatch::new(&[0, 2], 1, 2).unwrap(),
         GlobalIndexBatch::new(&[0, 0], 2, 1).unwrap(),
@@ -72,8 +68,9 @@ fn invalid_memo_coordinates_do_not_call_the_oracle() {
 #[test]
 fn wide_index_spaces_remain_supported_when_memo_is_disabled() {
     let dims = vec![2; 1025];
-    let evaluator =
-        RunEvaluator::new(|batch| Ok(vec![3.0; batch.n_points()]), &dims, None).unwrap();
+    let mut evaluate = |batch: GlobalIndexBatch<'_>| Ok(vec![3.0; batch.n_points()]);
+    let mut source = Compatibility::new(&mut evaluate);
+    let mut evaluator = CachedExecution::new(&mut source, &dims, None).unwrap();
     let indices = vec![0; 1025];
     assert_eq!(
         evaluator
@@ -81,5 +78,8 @@ fn wide_index_spaces_remain_supported_when_memo_is_disabled() {
             .unwrap(),
         vec![3.0]
     );
-    assert!(RunEvaluator::<f64, _>::new(|_| Ok(vec![]), &dims, Some(1024)).is_err());
+
+    let mut empty = |_: GlobalIndexBatch<'_>| -> anyhow::Result<Vec<f64>> { Ok(vec![]) };
+    let mut source = Compatibility::new(&mut empty);
+    assert!(CachedExecution::new(&mut source, &dims, Some(1024)).is_err());
 }

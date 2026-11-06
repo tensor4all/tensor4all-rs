@@ -7,16 +7,28 @@ use std::hash::Hash;
 use std::sync::Mutex;
 
 use tensor4all_core::{
-    outer_product, ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor, IndexLike,
-    TensorElement,
+    ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor, IndexLike, TensorElement,
 };
 use tensor4all_treetn::interpolation::{
-    InterpolationError, InterpolationOutcome, InterpolationProblem, InterpolationTermination,
-    TreeInterpolator,
+    EvalContext, InterpolationError, InterpolationOutcome, InterpolationProblem,
+    InterpolationTermination, TreeInterpolator,
 };
 use tensor4all_treetn::TreeTN;
 
 use super::{columns_of, factorize_dense, full_domain};
+
+/// The outer product of two column-major host payloads, the new factor on the
+/// last axis (no runtime entry: test networks are published compactly).
+pub(crate) fn host_outer<T>(left: &[T], right: &[T]) -> Vec<T>
+where
+    T: Copy + std::ops::Mul<Output = T>,
+{
+    let mut out = Vec::with_capacity(left.len() * right.len());
+    for &value in right {
+        out.extend(left.iter().map(|&left| left * value));
+    }
+    out
+}
 
 /// A rank-one network over the problem's active sites with dimension-one
 /// links: the product of `factor(position, coordinate)` over the sites, in
@@ -44,19 +56,20 @@ where
     let mut names = Vec::new();
     let mut tensors = Vec::new();
     for (node, sites) in problem.node_sites() {
-        let mut tensor = IdxTensor::from_dense(
-            links.remove(node).unwrap_or_default(),
-            vec![T::from_f64(1.0)],
-        )
-        .unwrap();
+        let mut indices = links.remove(node).unwrap_or_default();
+        let mut values = vec![T::from_f64(1.0)];
         for site in sites {
-            let values = (0..site.dim()).map(|x| factor(position, x)).collect();
-            let factor = IdxTensor::from_dense(vec![site.clone()], values).unwrap();
-            tensor = outer_product(&tensor, &factor).unwrap();
+            values = host_outer(
+                &values,
+                &(0..site.dim())
+                    .map(|x| factor(position, x))
+                    .collect::<Vec<_>>(),
+            );
+            indices.push(site.clone());
             position += 1;
         }
         names.push(node.clone());
-        tensors.push(tensor);
+        tensors.push(IdxTensor::from_dense_compact(indices, values).unwrap());
     }
     TreeTN::from_tensors(tensors, names).unwrap()
 }
@@ -180,11 +193,12 @@ where
     fn interpolate<V, F>(
         &self,
         problem: &InterpolationProblem<V>,
-        evaluate: F,
+        ctx: &mut EvalContext<'_>,
+        mut evaluate: F,
     ) -> Result<InterpolationOutcome<V>, InterpolationError>
     where
         V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-        F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
+        F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
     {
         let evaluator = |source: anyhow::Error| InterpolationError::Evaluator { source };
         let index = {
@@ -193,16 +207,16 @@ where
             calls.len() - 1
         };
         let step = self.steps[index.min(self.steps.len() - 1)].clone();
-        let initial = evaluate(problem.initial_pivots().as_ref()).map_err(evaluator)?;
+        let initial = evaluate(problem.initial_pivots().as_ref(), ctx).map_err(evaluator)?;
         let n_active = problem.site_order().len();
         let network = match step.network {
             Network::Exact => {
                 let dims: Vec<usize> = problem.site_order().iter().map(IndexLike::dim).collect();
                 let domain: Vec<usize> = full_domain(&dims).concat();
                 let shape = [n_active, domain.len() / n_active];
-                let values =
-                    evaluate(ColMajorArrayRef::new(&domain, &shape).unwrap()).map_err(evaluator)?;
-                factorize_dense(problem, values, false)?
+                let values = evaluate(ColMajorArrayRef::new(&domain, &shape).unwrap(), ctx)
+                    .map_err(evaluator)?;
+                factorize_dense(problem, values, false, ctx.session())?
             }
             Network::Constant(value) => rank_one_network(problem, |position, _| {
                 T::from_f64(if position == 0 { value } else { 1.0 })
@@ -253,11 +267,12 @@ impl TreeInterpolator<f64> for SpikeBlindEngine {
     fn interpolate<V, F>(
         &self,
         problem: &InterpolationProblem<V>,
-        evaluate: F,
+        ctx: &mut EvalContext<'_>,
+        mut evaluate: F,
     ) -> Result<InterpolationOutcome<V>, InterpolationError>
     where
         V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-        F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>>,
+        F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>>,
     {
         let evaluator = |source: anyhow::Error| InterpolationError::Evaluator { source };
         let call = record_call(problem);
@@ -267,13 +282,13 @@ impl TreeInterpolator<f64> for SpikeBlindEngine {
         let n_active = dims.len();
         let spike: Vec<usize> = sites.iter().map(|site| self.spike[site]).collect();
         let seen = call.initial_pivots.contains(&spike);
-        evaluate(problem.initial_pivots().as_ref()).map_err(evaluator)?;
+        evaluate(problem.initial_pivots().as_ref(), ctx).map_err(evaluator)?;
 
         let points = full_domain(&dims);
         let flat: Vec<usize> = points.concat();
         let shape = [n_active, points.len()];
         let mut values =
-            evaluate(ColMajorArrayRef::new(&flat, &shape).unwrap()).map_err(evaluator)?;
+            evaluate(ColMajorArrayRef::new(&flat, &shape).unwrap(), ctx).map_err(evaluator)?;
         if !seen {
             // g(x*) = g(p) prod_i g(p with x*_i) / g(p), p the opposite corner.
             let corner: Vec<usize> = spike
@@ -294,7 +309,7 @@ impl TreeInterpolator<f64> for SpikeBlindEngine {
             values[index] = filled;
         }
         let max_sample_magnitude = values.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
-        let network = factorize_dense(problem, values, false)?;
+        let network = factorize_dense(problem, values, false, ctx.session())?;
         let rank = network.link_dims().into_iter().max().unwrap_or(1);
         let termination = if problem.max_bond_dim().is_some_and(|cap| rank >= cap.get()) {
             InterpolationTermination::BondCapReached

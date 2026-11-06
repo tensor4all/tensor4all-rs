@@ -1,13 +1,13 @@
 // Benchmark non-AD IdxTensor vector-space operations.
 //
 // Run:
-//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-core --example benchmark_tensor_ops --release
+//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tensor_ops --release
 //
 // Optional args:
-//   cargo run -p tensor4all-core --example benchmark_tensor_ops --release -- <repeats> <dim1> <dim2> ...
+//   cargo run -p tensor4all-benchmarks --example benchmark_tensor_ops --release -- <repeats> <dim1> <dim2> ...
 //
 // Example matching a two-site local tensor with small bonds:
-//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-core --example benchmark_tensor_ops --release -- 20000 6 2 2 6
+//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tensor_ops --release -- 20000 6 2 2 6
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -16,7 +16,7 @@ use anyhow::{bail, Result};
 use num_complex::Complex64;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use tensor4all_core::{AnyScalar, DynIndex, TensorContractionLike, IdxTensor};
+use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, TensorContractionLike};
 
 fn parse_args() -> Result<(usize, Vec<usize>)> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -72,9 +72,7 @@ fn main() -> Result<()> {
     }
 
     println!("=== IdxTensor non-AD tensor ops benchmark ===");
-    println!(
-        "dims={dims:?} elements={element_count} repeats={repeats} dtype=Complex64"
-    );
+    println!("dims={dims:?} elements={element_count} repeats={repeats} dtype=Complex64");
 
     let (inner_seconds, inner_checksum) = elapsed_seconds(|| -> Result<Complex64> {
         let mut checksum = Complex64::new(0.0, 0.0);
@@ -123,14 +121,16 @@ fn main() -> Result<()> {
         axpby_checksum?,
     );
 
-    let (conj_contract_seconds, conj_contract_checksum) = elapsed_seconds(|| -> Result<Complex64> {
-        let mut checksum = Complex64::new(0.0, 0.0);
-        for _ in 0..repeats {
-            let value: Complex64 = black_box(a.conj().contract_pair(black_box(&b))?.sum()?).into();
-            checksum += value;
-        }
-        Ok(checksum)
-    });
+    let (conj_contract_seconds, conj_contract_checksum) =
+        elapsed_seconds(|| -> Result<Complex64> {
+            let mut checksum = Complex64::new(0.0, 0.0);
+            for _ in 0..repeats {
+                let value: Complex64 =
+                    black_box(a.conj().contract_pair(black_box(&b))?.sum()?).into();
+                checksum += value;
+            }
+            Ok(checksum)
+        });
     let conj_contract_checksum = conj_contract_checksum?;
     println!(
         "conj_contract_sum_seconds = {:.6} per_call_us = {:.3} checksum = {:.6e}+{:.6e}im",

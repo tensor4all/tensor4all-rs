@@ -32,9 +32,15 @@ use crate::batch::{
     take_error, unexpected_result, ValueDtype,
 };
 use crate::tensor::write_flat;
+use tensor4all_simplett::{TTCache, TTScalar};
 
 /// Cap on the number of dense elements `to_numpy()` will materialize.
 const MAX_DENSE_ELEMENTS: usize = 1 << 22;
+
+/// Grid points `to_numpy()` evaluates per `TTCache::evaluate_many` call: large
+/// enough to share the cached environments, small enough to keep one batch of
+/// quantics indices modest.
+const DENSE_EVALUATION_BATCH_POINTS: usize = 8192;
 
 /// The interpolation result, in whichever value type the evaluator fixed.
 enum QuanticsValues {
@@ -64,6 +70,49 @@ fn rank_of(values: &QuanticsValues) -> usize {
 
 fn qtci_error(context: &str, error: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(format!("{context}: {error}"))
+}
+
+/// Every grid value of `qtci` in C order (last axis fastest).
+///
+/// The points share the left and right environments of one `TTCache` instead of
+/// contracting the whole train once per point.
+fn dense_values<V>(qtci: &QuanticsTensorCI2<V>, shape: &[usize], total: usize) -> PyResult<Vec<V>>
+where
+    V: TTScalar + Default + Clone,
+{
+    let to_quantics = |index: &[usize]| -> PyResult<Vec<usize>> {
+        if let Some(grid) = qtci.discretized_grid() {
+            grid.grididx_to_quantics(index)
+                .map_err(|error| qtci_error("grid index conversion failed", error))
+        } else if let Some(grid) = qtci.inherent_grid() {
+            grid.grididx_to_quantics(index)
+                .map_err(|error| qtci_error("grid index conversion failed", error))
+        } else {
+            Err(PyValueError::new_err("QuanticsTCI has no grid"))
+        }
+    };
+    let tensor_train = qtci.tensor_train();
+    let mut cache = TTCache::new(&tensor_train);
+    let split = Some(cache.len() / 2).filter(|&split| split > 0);
+    let mut values = Vec::with_capacity(total);
+    let mut index = vec![0usize; shape.len()];
+    let mut batch = Vec::with_capacity(DENSE_EVALUATION_BATCH_POINTS.min(total));
+    let mut done = 0;
+    while done < total {
+        let len = DENSE_EVALUATION_BATCH_POINTS.min(total - done);
+        batch.clear();
+        for _ in 0..len {
+            batch.push(to_quantics(&index)?);
+            advance_index(&mut index, shape);
+        }
+        values.extend(
+            cache
+                .evaluate_many(&batch, split)
+                .map_err(|error| qtci_error("evaluate failed", error))?,
+        );
+        done += len;
+    }
+    Ok(values)
 }
 
 /// Advance a multi-index in C order (last axis fastest).
@@ -171,30 +220,15 @@ impl PyQuanticsTCI {
                  element limit; use sum() or evaluate() instead"
             )));
         }
-        let mut index = vec![0usize; self.shape.len()];
         match &self.inner {
             QuanticsValues::Real(qtci) => {
-                let mut flat = Vec::with_capacity(total);
-                for _ in 0..total {
-                    flat.push(
-                        qtci.evaluate(&index)
-                            .map_err(|error| qtci_error("evaluate failed", error))?,
-                    );
-                    advance_index(&mut index, &self.shape);
-                }
+                let flat = dense_values(qtci, &self.shape, total)?;
                 let array = PyArrayDyn::<f64>::zeros(py, IxDyn(&self.shape), false);
                 write_flat(&array, &flat)?;
                 Ok(array.into_any().unbind())
             }
             QuanticsValues::Complex(qtci) => {
-                let mut flat = Vec::with_capacity(total);
-                for _ in 0..total {
-                    flat.push(
-                        qtci.evaluate(&index)
-                            .map_err(|error| qtci_error("evaluate failed", error))?,
-                    );
-                    advance_index(&mut index, &self.shape);
-                }
+                let flat = dense_values(qtci, &self.shape, total)?;
                 let array = PyArrayDyn::<Complex64>::zeros(py, IxDyn(&self.shape), false);
                 write_flat(&array, &flat)?;
                 Ok(array.into_any().unbind())

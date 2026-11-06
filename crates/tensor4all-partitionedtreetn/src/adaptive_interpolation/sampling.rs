@@ -61,6 +61,12 @@ const VERIFY_STREAM: u64 = 0x7665_7269_6679_7374;
 const AUDIT_STREAM: u64 = 0x6175_6469_7473_7472;
 /// Stream selector of the Monte Carlo reference estimate ("scalestr").
 const SCALE_STREAM: u64 = 0x7363_616c_6573_7472;
+/// Stream selector of the residual-TT run ("residttr").
+const RESIDUAL_STREAM: u64 = 0x7265_7369_6474_7472;
+/// Stream selector of the residual-TT audit ("rsdtaudt").
+const RESIDUAL_AUDIT_STREAM: u64 = 0x7273_6474_6175_6474;
+/// Stream selector of the zero screen's residual-TT run ("rsdtzscr").
+const RESIDUAL_ZERO_SCREEN_STREAM: u64 = 0x7273_6474_7a73_6372;
 /// Random attempts per missing candidate before the column-major fallback.
 const ATTEMPTS_PER_CANDIDATE: usize = 20;
 /// Random attempts added to every patch before the column-major fallback.
@@ -153,6 +159,25 @@ impl PatchSeeds {
     /// `mix(s ^ SCALE_STREAM)`.
     pub(super) fn scale(&self) -> u64 {
         mix64(self.state ^ SCALE_STREAM)
+    }
+
+    /// Stream of the residual-TT run of engine run `attempt`,
+    /// `mix(mix(s ^ RESIDUAL_STREAM) ^ attempt)`. It drives the residual
+    /// problem's seed and the corner and edge draws of its start points.
+    pub(super) fn residual(&self, attempt: usize) -> u64 {
+        mix64(mix64(self.state ^ RESIDUAL_STREAM) ^ attempt as u64)
+    }
+
+    /// Stream of the audit's residual-TT run,
+    /// `mix(s ^ RESIDUAL_AUDIT_STREAM)`.
+    pub(super) fn residual_audit(&self) -> u64 {
+        mix64(self.state ^ RESIDUAL_AUDIT_STREAM)
+    }
+
+    /// Stream of the zero screen's residual-TT run,
+    /// `mix(s ^ RESIDUAL_ZERO_SCREEN_STREAM)`.
+    pub(super) fn residual_zero_screen(&self) -> u64 {
+        mix64(self.state ^ RESIDUAL_ZERO_SCREEN_STREAM)
     }
 }
 

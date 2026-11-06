@@ -10,15 +10,15 @@
 //! Properties of this frontend, from the coexistence record
 //! (`docs/design/859-dual-frontend-coexistence.md`):
 //!
-//! - **One explicit entry.** [`CpuExecutionContext::with_concrete_session`] opens
-//!   the session for the whole closure, so a stage pays one entry rather than one
+//! - **One explicit entry.** [`CpuExecutionContext::with_concrete_session`] lends the
+//!   context's engine for the whole closure, so a stage borrows it once rather than once
 //!   per operation, and the engine's prepared plans and buffer pool stay warm.
 //! - **No process-global selector.** No route here selects an execution context or
 //!   backend from a default context, a thread-local override or an environment
 //!   variable. (Upstream profiling hooks may still read their own environment flags;
 //!   those do not choose where the work runs.)
 //! - **No eager, trace or AD records.** These routes reach only concrete
-//!   `Tensor`/`BackendSession` operations; they never construct `EagerTensor`,
+//!   `Tensor`/engine operations; they never construct `EagerTensor`,
 //!   semantic nodes or gradient slots, and they take no eager owner lock. Tracked
 //!   values are not accepted at all, so no detach can happen implicitly.
 //! - **No implicit fallback.** An unsupported dtype or shape returns the
@@ -27,7 +27,7 @@
 //!   the compatibility frontend is [`LogicalTensor`](crate::LogicalTensor), which
 //!   carries dtype, shape and column-major data and no backend identity.
 //!
-//! The session is a [`tenferro_tensor::BackendSession`] scope, not a value
+//! The session is a borrow of one [`tenferro_cpu::CpuEngine`], not a value
 //! representation: the concrete values stay the ordinary tenferro tensors.
 //!
 //! # Examples
@@ -35,7 +35,7 @@
 //! ```
 //! use tensor4all_tensorbackend::{CpuExecutionContext, explicit::Session};
 //! use tenferro::Tensor;
-//! use tenferro_cpu::CpuBackend;
+//! use tensor4all_tensorbackend::CpuBackend;
 //!
 //! let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 //! let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -49,30 +49,31 @@
 
 use tenferro::Tensor as NativeTensor;
 use tenferro::TensorSessionOpsExt;
-use tenferro_cpu::{CpuPhaseError, PhaseRunError};
 use tenferro_einsum::{ConcreteEinsumPlan, EinsumSubscripts, TensorEinsumExt};
 use tenferro_linalg::TensorLinalgExt;
 
-use tenferro_tensor::BackendSession;
+use tenferro_tensor::{DotGeneralConfig, Engine, TensorRead};
 
 use crate::context::{CpuExecutionContext, CpuExecutionContextError};
 use crate::einsum_ids::{
     build_binary_einsum_ids, checked_native_einsum_labels, common_dtype, convert_native_tensor_in,
 };
 
-/// One explicit concrete session over a [`CpuExecutionContext`].
+/// One explicit concrete session over a caller-held CPU engine.
 ///
-/// The session borrows the context's backend for the whole
-/// [`CpuExecutionContext::with_concrete_session`] closure. Every route on it runs
-/// through that one session, so a stage does not pay a session entry per
-/// operation.
+/// The session borrows an engine for the whole of its life. Inside
+/// [`CpuExecutionContext::with_concrete_session`] that is the context's engine,
+/// borrowed for the closure; a caller that owns an engine ([`crate::CpuBackend`])
+/// builds the same session with [`Session::new`] and keeps it across as many
+/// operations as it wants. Every route on it runs through that one engine, so a
+/// stage does not pay an entry per operation.
 ///
 /// # Examples
 ///
 /// ```
 /// use tensor4all_tensorbackend::CpuExecutionContext;
 /// use tenferro::Tensor;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -92,7 +93,7 @@ use crate::einsum_ids::{
 /// # Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
 /// ```
 pub struct Session<'session> {
-    session: &'session mut dyn BackendSession,
+    engine: &'session mut dyn Engine,
 }
 
 impl std::fmt::Debug for Session<'_> {
@@ -124,13 +125,14 @@ pub enum ConversionError {
     },
 }
 
-/// Materialize a tracked eager value into a plain concrete value.
+/// Materialize a tracked eager value into a plain concrete value on `engine`.
 ///
 /// This is the explicit AD to plain boundary of the coexistence contract: the caller names
 /// the conversion, so tracking never disappears silently, and `no_grad` on an eager value is
 /// not this operation and does not select the concrete representation. The value keeps its
 /// dtype, logical shape and column-major layout; the result is an ordinary concrete tensor
-/// that this frontend's routes accept.
+/// that this frontend's routes accept. Materializing a lazy or prepared value needs an
+/// engine to evaluate it, so the caller passes the one it wants the copy to run on.
 ///
 /// # Errors
 ///
@@ -143,19 +145,24 @@ pub enum ConversionError {
 /// use tensor4all_tensorbackend::{explicit, CpuExecutionContext};
 /// use tenferro::Tensor;
 /// use tenferro_ad::EagerTensor;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let plain = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 /// let tracked = explicit::lift(&context, plain)?;
-/// let back = explicit::detach(&tracked)?;
+/// let back = context.with_backend(|backend| explicit::detach(&tracked, backend.engine_mut()))?;
 /// assert_eq!(back.as_slice::<f64>()?, &[1.0, 2.0]);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub fn detach(eager: &tenferro_ad::EagerTensor) -> Result<NativeTensor, ConversionError> {
-    eager.to_tensor().map_err(|source| ConversionError::Detach {
-        source: Box::new(source),
-    })
+pub fn detach(
+    eager: &tenferro_ad::EagerTensor,
+    engine: &mut dyn Engine,
+) -> Result<NativeTensor, ConversionError> {
+    eager
+        .to_tensor(engine)
+        .map_err(|source| ConversionError::Detach {
+            source: Box::new(source),
+        })
 }
 
 /// Adopt a plain concrete value into `context`'s eager runtime.
@@ -175,13 +182,14 @@ pub fn detach(eager: &tenferro_ad::EagerTensor) -> Result<NativeTensor, Conversi
 /// ```
 /// use tensor4all_tensorbackend::{explicit, CpuExecutionContext};
 /// use tenferro::Tensor;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let plain = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
 /// let tracked = explicit::lift(&context, plain)?;
 /// // The adopted value is tracked, and its runtime is the context's own.
-/// assert_eq!(explicit::detach(&tracked)?.as_slice::<f64>()?, &[3.0, 4.0]);
+/// let back = context.with_backend(|backend| explicit::detach(&tracked, backend.engine_mut()))?;
+/// assert_eq!(back.as_slice::<f64>()?, &[3.0, 4.0]);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn lift(
@@ -200,217 +208,6 @@ pub fn lift(
     })
 }
 
-/// One lane of a running phase over a [`HeldSession`].
-///
-/// A lane is bound to one worker of the context's pool and to one child session that stays
-/// open for the whole lane, so its scratch and prepared plans are reused across every work
-/// item the callback runs. [`PhaseLane::session`] hands out this frontend's [`Session`]
-/// view for that child.
-pub struct PhaseLane<'lane, 'session> {
-    lane: &'lane mut tenferro_cpu::PhaseLane<'session>,
-}
-
-impl std::fmt::Debug for PhaseLane<'_, '_> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("explicit::PhaseLane")
-            .field("cancelled", &self.cancelled())
-            .finish_non_exhaustive()
-    }
-}
-
-impl PhaseLane<'_, '_> {
-    /// The worker-local session view for this lane.
-    ///
-    /// Every route of this frontend is available on it, and it borrows the child session
-    /// for the duration of the call.
-    pub fn session(&mut self) -> Session<'_> {
-        Session::new(self.lane.session())
-    }
-
-    /// Whether some lane already failed or unwound.
-    ///
-    /// A lane callback must return cooperatively once this is set and must never wait
-    /// indefinitely for a peer: the phase can only join callbacks that terminate.
-    pub fn cancelled(&self) -> bool {
-        self.lane.cancelled()
-    }
-}
-
-/// A held concrete session over a caller-owned backend handle.
-///
-/// [`CpuExecutionContext::with_concrete_session`] scopes the session to one closure.
-/// A stage that spans many calls - a fit loop, a sweep, a batched driver - holds this
-/// instead: it borrows a backend handle the caller owns and keeps one session entry open
-/// until [`HeldSession::close`] or drop, handing out the same [`Session`] view the
-/// callback-scoped entry uses for every route.
-///
-/// The handle is obtained from the context, which keeps its backend behind a mutex for the
-/// compatibility entry, so the object is built from a caller-owned clone rather than from
-/// the context directly:
-///
-/// ```text
-/// let backend = context.with_backend(|backend| backend.clone());
-/// let mut session = explicit::HeldSession::open(&backend)?;
-/// ```
-///
-/// A clone shares the engine, arbiter, executor and buffer resources, so this is the same
-/// execution domain and not a second one. The held session is `!Send + !Sync`: it owns
-/// admission and the caller's narrowed CPU mask on the opening thread.
-///
-/// While a held session is open on a thread, that thread must not reach the context's other
-/// execution entries - the scoped [`CpuExecutionContext::with_concrete_session`] and the
-/// low-level [`CpuExecutionContext::with_backend`]. The scoped entry rejects it with a typed
-/// [`tenferro_tensor::SessionEntryError::Reentered`] before it takes the context's backend
-/// lock, so a held owner never waits for a lock that a conflicting scoped caller needs;
-/// `with_backend` is the caller-managed low-level route and carries the same restriction as
-/// a documented caller obligation.
-///
-/// # Examples
-///
-/// ```
-/// use tensor4all_tensorbackend::{explicit::HeldSession, CpuExecutionContext};
-/// use tenferro::Tensor;
-/// use tenferro_cpu::CpuBackend;
-///
-/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-/// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-/// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
-///
-/// let mut session = HeldSession::open(&backend)?;
-/// // One entry, two operations, and the routes are the same as the scoped entry's.
-/// let transposed = session.with_session(|view| view.permute(&a, &[1, 0]))?;
-/// let sum = session.with_session(|view| view.sum(&transposed))?;
-/// assert_eq!(sum.as_slice::<f64>()?, &[10.0]);
-/// session.close()?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// ```
-pub struct HeldSession<'backend> {
-    held: tenferro_cpu::CpuHeldSession<'backend>,
-}
-
-impl std::fmt::Debug for HeldSession<'_> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("explicit::HeldSession")
-            .finish_non_exhaustive()
-    }
-}
-
-impl<'backend> HeldSession<'backend> {
-    /// Open a held session on `backend`, which the caller keeps alive for the session.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`tenferro_tensor::SessionEntryError`]:
-    ///
-    /// - [`tenferro_tensor::SessionEntryError::Reentered`] when a CPU execution is already
-    ///   active on this thread, when an execution scope is open, or when `backend` is a
-    ///   child execution handle;
-    /// - [`tenferro_tensor::SessionEntryError::Contended`] when another root owns the
-    ///   engine's resources and this thread is a Rayon worker that cannot wait for them;
-    /// - [`tenferro_tensor::SessionEntryError::ResourcePoisoned`] for poisoned admission
-    ///   state;
-    /// - [`tenferro_tensor::SessionEntryError::Executor`] when the caller's CPU mask
-    ///   cannot be narrowed for the session.
-    ///
-    /// An ordinary cross-thread owner conflict **waits** in FIFO order rather than failing.
-    /// [`HeldSession::close`] reports an affinity-restoration failure; dropping the session
-    /// restores best-effort and cannot report one.
-    pub fn open(
-        backend: &'backend tenferro_cpu::CpuBackend,
-    ) -> Result<Self, tenferro_tensor::SessionEntryError> {
-        Ok(Self {
-            held: backend.open_session()?,
-        })
-    }
-
-    /// Run one operation view in this held session.
-    ///
-    /// The view is the same [`Session`] the callback-scoped entry hands out, built on this
-    /// session's own resources and dropped before this method returns.
-    pub fn with_session<R>(&mut self, f: impl FnOnce(&mut Session<'_>) -> R) -> R {
-        self.held.with_session(|view| f(&mut Session::new(view)))
-    }
-
-    /// Lend this session's CPU pool to a phase scheduler.
-    ///
-    /// Each lane runs `lane` on a worker of the context's own pool, with this frontend's
-    /// [`Session`] view, so the lane's work uses the same routes as the rest of the stage.
-    /// The lanes are joined before this returns, on the success, error and panic paths.
-    ///
-    /// The phase contract is the upstream one: one lane per worker for a multi-worker
-    /// context and a single inline lane otherwise, no second pool, cooperative cancellation
-    /// through the lane handle, and no legacy entry from inside a lane.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PhaseRunError::Session`] when a lane could not enter or clean up - including
-    /// a phase opened from a worker of the pool it would broadcast to, which is reported as
-    /// [`tenferro_tensor::SessionEntryError::Reentered`] - and [`PhaseRunError::Lane`] with a
-    /// lane callback's own error otherwise. Both are reported only after every lane finished.
-    ///
-    /// # Panics
-    ///
-    /// A panic inside a lane callback is resumed on the calling thread after every lane has
-    /// been joined first; this method does not panic on its own.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_tensorbackend::{explicit::HeldSession, CpuExecutionContext};
-    /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
-    ///
-    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(2)?);
-    /// let backend: CpuBackend = context.with_backend(|backend| backend.clone());
-    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
-    ///
-    /// let mut session = HeldSession::open(&backend)?;
-    /// let total = std::sync::Mutex::new(0.0_f64);
-    /// session.phase(|_index, lane| {
-    ///     if lane.cancelled() {
-    ///         return Ok::<(), tenferro_tensor::Error>(());
-    ///     }
-    ///     let sum = lane.session().sum(&a)?;
-    ///     *total.lock().expect("lane total lock") += sum.as_slice::<f64>()?[0];
-    ///     Ok(())
-    /// })?;
-    /// assert!(
-    ///     total.into_inner().expect("lane total") > 0.0,
-    ///     "each lane summed the same tensor"
-    /// );
-    /// session.close()?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn phase<E: Send>(
-        &mut self,
-        lane: impl Fn(usize, &mut PhaseLane<'_, '_>) -> Result<(), E> + Sync,
-    ) -> Result<(), PhaseRunError<E>> {
-        let outcome = self.held.phase(|phase| {
-            phase.run(|index, lane_handle| lane(index, &mut PhaseLane { lane: lane_handle }))
-        });
-        match outcome {
-            Ok(outcome) => outcome,
-            Err(CpuPhaseError::TargetPoolCaller { .. }) => Err(PhaseRunError::Session(
-                tenferro_tensor::SessionEntryError::Reentered {
-                    backend: "CpuExecutionContext",
-                },
-            )),
-        }
-    }
-
-    /// Close the session, releasing admission and the checked-out engine resources.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`tenferro_cpu::CpuHeldSessionError`] when the calling thread's CPU affinity
-    /// cannot be restored. The resources and the reservation are released either way.
-    pub fn close(self) -> Result<(), tenferro_cpu::CpuHeldSessionError> {
-        self.held.close()
-    }
-}
-
 /// One prepared N-ary einsum, reusable across operations of a session.
 ///
 /// Preparing validates the labels and plans the contraction once; every
@@ -424,7 +221,7 @@ impl<'backend> HeldSession<'backend> {
 /// ```
 /// use tensor4all_tensorbackend::{explicit::PreparedEinsum, CpuExecutionContext};
 /// use tenferro::Tensor;
-/// use tenferro_cpu::CpuBackend;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use tenferro_tensor::{TensorRead, TensorWrite};
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
@@ -508,7 +305,7 @@ impl<'operands> PreparedEinsum<'operands> {
     /// planned expression.
     pub fn execute(&self, session: &mut Session<'_>) -> tenferro_einsum::Result<NativeTensor> {
         self.plan
-            .execute_read(self.operands.as_slice(), session.backend())
+            .execute_read(self.operands.as_slice(), session.engine())
     }
 
     /// Evaluate the prepared plan into a caller-provided destination.
@@ -529,7 +326,7 @@ impl<'operands> PreparedEinsum<'operands> {
         out: tenferro_tensor::TensorWrite<'_>,
     ) -> tenferro_einsum::Result<()> {
         self.plan
-            .execute_read_into(self.operands.as_slice(), session.backend(), out)
+            .execute_read_into(self.operands.as_slice(), session.engine(), out)
     }
 }
 
@@ -542,7 +339,7 @@ impl<'operands> PreparedEinsum<'operands> {
 ///
 /// Returns [`tenferro_einsum::Error::Tensor`] when an operand cannot be converted.
 fn promote_operands(
-    session: &mut dyn BackendSession,
+    engine: &mut dyn Engine,
     operands: &[&NativeTensor],
 ) -> tenferro_einsum::Result<Vec<NativeTensor>> {
     let dtypes = operands
@@ -556,23 +353,47 @@ fn promote_operands(
     operands
         .iter()
         .map(|tensor| {
-            convert_native_tensor_in(session, tensor, target)
-                .map_err(tenferro_einsum::Error::Tensor)
+            convert_native_tensor_in(engine, tensor, target).map_err(tenferro_einsum::Error::Tensor)
         })
         .collect()
 }
 
 impl<'session> Session<'session> {
-    pub(crate) fn new(session: &'session mut dyn BackendSession) -> Self {
-        Self { session }
+    /// Wrap a borrowed engine as this frontend's session.
+    ///
+    /// A caller that owns an engine - a [`crate::CpuBackend`], an engine it built
+    /// itself, or one borrowed for a stage - builds the same [`Session`] the
+    /// callback-scoped [`CpuExecutionContext::with_concrete_session`] hands out, so a
+    /// long stage can keep one session across many operations without entering a
+    /// context. The engine stays borrowed for the whole life of the returned session:
+    /// this constructor never enters, replaces or reroutes an engine.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    /// use tenferro::Tensor;
+    ///
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    ///
+    /// let mut session = Session::new(backend.engine_mut());
+    /// // One session, two operations.
+    /// let transposed = session.permute(&a, &[1, 0])?;
+    /// let total = session.sum(&transposed)?;
+    /// assert_eq!(total.as_slice::<f64>()?, &[10.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn new(engine: &'session mut dyn Engine) -> Self {
+        Self { engine }
     }
 
-    /// The concrete session behind this explicit session.
+    /// The engine behind this explicit session.
     ///
-    /// Exposed so a prepared plan can evaluate itself on the caller's session; it is
+    /// Exposed so a prepared plan can evaluate itself on the caller's engine; it is
     /// not a second entry point, and it never consults another backend.
-    pub fn backend(&mut self) -> &mut dyn BackendSession {
-        self.session
+    pub fn engine(&mut self) -> &mut dyn Engine {
+        self.engine
     }
 
     /// Reshape a concrete tensor without changing its column-major linearization.
@@ -590,7 +411,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -603,7 +424,7 @@ impl<'session> Session<'session> {
         tensor: &NativeTensor,
         shape: &[usize],
     ) -> tenferro_tensor::Result<NativeTensor> {
-        tensor.reshape(shape, self.session)
+        tensor.reshape(shape, self.engine)
     }
 
     /// Permute the axes of a concrete tensor.
@@ -619,7 +440,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -632,7 +453,7 @@ impl<'session> Session<'session> {
         tensor: &NativeTensor,
         perm: &[usize],
     ) -> tenferro_tensor::Result<NativeTensor> {
-        tensor.transpose(perm, self.session)
+        tensor.transpose(perm, self.engine)
     }
 
     /// Binary contraction along the given axes, preserving the remaining axes in
@@ -653,12 +474,17 @@ impl<'session> Session<'session> {
     /// promotes them: a heterogeneous set contracts in the promoted dtype, and a set
     /// that already shares one dtype is used as is.
     ///
+    /// Operands that share a dtype (the common case) are contracted by a single
+    /// `dot_general` call on the engine, the same kernel and plan cache the global
+    /// route uses, without planning an einsum; only a dtype mismatch, which needs
+    /// promotion first, goes through the einsum route. Neither route conjugates.
+    ///
     /// # Examples
     ///
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -675,6 +501,14 @@ impl<'session> Session<'session> {
         rhs: &NativeTensor,
         rhs_axes: &[usize],
     ) -> tenferro_einsum::Result<NativeTensor> {
+        if lhs.dtype() == rhs.dtype() {
+            return self.contraction_reads(
+                TensorRead::from_tensor(lhs),
+                lhs_axes,
+                TensorRead::from_tensor(rhs),
+                rhs_axes,
+            );
+        }
         let (lhs_ids, rhs_ids, output_ids) =
             build_binary_einsum_ids(lhs.shape().len(), lhs_axes, rhs.shape().len(), rhs_axes)
                 .map_err(|error| tenferro_einsum::Error::InvalidSubscripts {
@@ -685,13 +519,74 @@ impl<'session> Session<'session> {
             output: output_ids,
         };
         let operands = [lhs, rhs];
-        let promoted = promote_operands(self.session, &operands)?;
+        let promoted = promote_operands(self.engine, &operands)?;
         let operands = if promoted.is_empty() {
             operands.to_vec()
         } else {
             promoted.iter().collect::<Vec<_>>()
         };
-        operands.einsum_subscripts(&subscripts, self.session)
+        operands.einsum_subscripts(&subscripts, self.engine)
+    }
+
+    /// Binary contraction of two borrowed reads that share a dtype, as one `dot_general`.
+    ///
+    /// Same axis semantics and output order as [`Session::contraction`] (the left
+    /// operand's free axes, then the right operand's), but the operands stay
+    /// borrowed, so a caller holding a non-owned read does not copy it first. Nothing
+    /// is conjugated.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_einsum::Error::InvalidSubscripts`] when the axis lists are
+    /// malformed or of different length, and [`tenferro_einsum::Error::Tensor`] when the
+    /// operands' dtypes differ (this route does not promote; use
+    /// [`Session::contraction`]) or the backend rejects the contraction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::CpuExecutionContext;
+    /// use tenferro::Tensor;
+    /// use tensor4all_tensorbackend::CpuBackend;
+    /// use tenferro_tensor::TensorRead;
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0])?;
+    /// let product = context.with_concrete_session(|session| {
+    ///     session.contraction_reads(
+    ///         TensorRead::from_tensor(&a),
+    ///         &[1],
+    ///         TensorRead::from_tensor(&b),
+    ///         &[0],
+    ///     )
+    /// })??;
+    /// assert_eq!(product.as_slice::<f64>()?, &[23.0, 34.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn contraction_reads(
+        &mut self,
+        lhs: TensorRead<'_>,
+        lhs_axes: &[usize],
+        rhs: TensorRead<'_>,
+        rhs_axes: &[usize],
+    ) -> tenferro_einsum::Result<NativeTensor> {
+        // The axis validation is the einsum route's own, so both routes refuse the
+        // same malformed input.
+        build_binary_einsum_ids(lhs.shape().len(), lhs_axes, rhs.shape().len(), rhs_axes).map_err(
+            |error| tenferro_einsum::Error::InvalidSubscripts {
+                message: format!("{error}"),
+            },
+        )?;
+        let config = DotGeneralConfig {
+            lhs_contracting_dims: lhs_axes.into(),
+            rhs_contracting_dims: rhs_axes.into(),
+            lhs_batch_dims: Default::default(),
+            rhs_batch_dims: Default::default(),
+        };
+        self.engine
+            .dot_general_read(lhs, rhs, &config)
+            .map_err(tenferro_einsum::Error::from)
     }
 
     /// N-ary einsum from integer labels, evaluated on this session.
@@ -717,7 +612,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -758,13 +653,13 @@ impl<'session> Session<'session> {
                 }
             })?,
         };
-        let promoted = promote_operands(self.session, operands)?;
+        let promoted = promote_operands(self.engine, operands)?;
         let operands: Vec<&NativeTensor> = if promoted.is_empty() {
             operands.to_vec()
         } else {
             promoted.iter().collect()
         };
-        operands.einsum_subscripts(&subscripts, self.session)
+        operands.einsum_subscripts(&subscripts, self.engine)
     }
 
     /// Sum every element of a concrete tensor, returning the rank-0 result.
@@ -784,7 +679,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -798,7 +693,7 @@ impl<'session> Session<'session> {
             return tensor.duplicate();
         }
         let axes = (0..tensor.shape().len()).collect::<Vec<_>>();
-        tensor.reduce_sum(Some(&axes), self.session)
+        tensor.reduce_sum(Some(&axes), self.engine)
     }
 
     /// Conjugate a concrete tensor.
@@ -817,7 +712,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     /// use num_complex::Complex64;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
@@ -833,7 +728,7 @@ impl<'session> Session<'session> {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn conj(&mut self, tensor: &NativeTensor) -> tenferro_tensor::Result<NativeTensor> {
-        tensor.conj(self.session)
+        tensor.conj(self.engine)
     }
 
     /// N-ary einsum over borrowed read inputs, without materializing them.
@@ -854,7 +749,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     /// use tenferro_tensor::TensorRead;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
@@ -892,7 +787,7 @@ impl<'session> Session<'session> {
         let output = checked_native_einsum_labels(output_ids).map_err(invalid)?;
         let subscripts = EinsumSubscripts { inputs, output };
         let plan = ConcreteEinsumPlan::prepare_read_subscripts(operands, &subscripts)?;
-        plan.execute_read(operands, self.session)
+        plan.execute_read(operands, self.engine)
     }
 
     /// Binary contraction into a caller-provided destination.
@@ -912,7 +807,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     /// use tenferro_tensor::TensorWrite;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
@@ -947,7 +842,7 @@ impl<'session> Session<'session> {
             tenferro_tensor::TensorRead::from_tensor(rhs),
         ];
         let plan = ConcreteEinsumPlan::prepare_read_subscripts(&inputs[..], &subscripts)?;
-        plan.execute_read_into(&inputs[..], self.session, out)
+        plan.execute_read_into(&inputs[..], self.engine, out)
     }
 
     /// Solve `A X = B` for column-major matrices on this session.
@@ -965,7 +860,7 @@ impl<'session> Session<'session> {
     ///
     /// ```
     /// use tensor4all_tensorbackend::{CpuExecutionContext, Matrix};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 0.0, 0.0, 4.0]);
@@ -984,7 +879,7 @@ impl<'session> Session<'session> {
         T: crate::backend::BackendLinalgScalar + Copy,
         NativeTensor: From<tenferro::TypedTensor<T>>,
     {
-        crate::solve_matrix_in(self.session, a, b)
+        crate::solve_matrix_in(self.engine, a, b)
     }
 
     /// Solve a triangular system for column-major matrices on this session.
@@ -1003,7 +898,7 @@ impl<'session> Session<'session> {
     ///
     /// ```
     /// use tensor4all_tensorbackend::{CpuExecutionContext, Matrix};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 1.0, 0.0, 4.0]);
@@ -1030,7 +925,7 @@ impl<'session> Session<'session> {
         NativeTensor: From<tenferro::TypedTensor<T>>,
     {
         crate::triangular_solve_matrix_in(
-            self.session,
+            self.engine,
             a,
             b,
             left_side,
@@ -1055,7 +950,7 @@ impl<'session> Session<'session> {
     ///
     /// ```
     /// use tensor4all_tensorbackend::{CpuExecutionContext, Matrix};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Matrix::from_col_major_vec(2, 2, vec![0.0_f64, 1.0, 2.0, 3.0]);
@@ -1072,7 +967,7 @@ impl<'session> Session<'session> {
     where
         T: crate::backend::BackendLinalgScalar + Copy,
     {
-        crate::full_piv_lu_matrix_in(self.session, a)
+        crate::full_piv_lu_matrix_in(self.engine, a)
     }
 
     /// Thin/economy QR of a typed tensor on this session.
@@ -1090,7 +985,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::TypedTensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0])?;
@@ -1123,7 +1018,7 @@ impl<'session> Session<'session> {
                     "QR input tensor construction failed: {error}"
                 ))
             })?;
-        crate::qr_backend_in(self.session, tensor)
+        crate::qr_backend_in(self.engine, tensor)
     }
 
     /// Thin/economy SVD of a typed tensor on this session.
@@ -1141,7 +1036,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::TypedTensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 0.0, 0.0, 2.0])?;
@@ -1174,7 +1069,7 @@ impl<'session> Session<'session> {
                 "SVD input tensor construction failed: {error}"
             ))
         })?;
-        crate::svd_backend_in(self.session, tensor)
+        crate::svd_backend_in(self.engine, tensor)
     }
 
     /// Matrix multiplication `A * B` on this session.
@@ -1193,7 +1088,7 @@ impl<'session> Session<'session> {
     ///
     /// ```
     /// use tensor4all_tensorbackend::{CpuExecutionContext, Matrix};
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 2.0, 3.0, 4.0]);
@@ -1208,52 +1103,7 @@ impl<'session> Session<'session> {
         a: &crate::matrix::Matrix<T>,
         b: &crate::matrix::Matrix<T>,
     ) -> Result<crate::matrix::Matrix<T>, crate::matrix::MatrixMulError> {
-        crate::mat_mul_in(self.session, a, b)
-    }
-
-    /// Execute grouped GEMMs on this session.
-    ///
-    /// Same validation, job translation and provider rules as
-    /// [`grouped_mat_mul_shared`](crate::grouped_mat_mul_shared), entered through this
-    /// session instead of the process-global one. A job whose contracted extent is
-    /// zero is a no-op segment, exactly as on the compatibility entry.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`GroupedGemmError`](crate::GroupedGemmError) when the buffers and jobs
-    /// disagree, or when the session rejects the request.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_tensorbackend::{CpuExecutionContext, GroupedGemmJob, GroupedGemmOptions};
-    /// use tenferro_cpu::CpuBackend;
-    ///
-    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-    /// let jobs = [GroupedGemmJob::new(0, 0, 0, 1, 1, 1)];
-    /// let mut output = [0.0_f64];
-    /// context.with_concrete_session(|session| {
-    ///     session.grouped_mat_mul_shared(
-    ///         &[3.0],
-    ///         &[4.0],
-    ///         &mut output,
-    ///         &jobs,
-    ///         GroupedGemmOptions::default(),
-    ///     )
-    /// })??;
-    /// assert_eq!(output, [12.0]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    #[cfg(feature = "global-defaults")]
-    pub fn grouped_mat_mul_shared<T: crate::matrix::MatrixScalar + tenferro::TensorScalar>(
-        &mut self,
-        lhs: &[T],
-        rhs: &[T],
-        output: &mut [T],
-        jobs: &[crate::matrix::GroupedGemmJob],
-        options: crate::matrix::GroupedGemmOptions,
-    ) -> Result<(), crate::matrix::GroupedGemmError> {
-        crate::grouped_mat_mul_shared_in(self.session, lhs, rhs, output, jobs, options)
+        crate::mat_mul_in(self.engine, a, b)
     }
 
     /// Thin/economy QR decomposition.
@@ -1269,7 +1119,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -1287,7 +1137,7 @@ impl<'session> Session<'session> {
         &mut self,
         tensor: &NativeTensor,
     ) -> tenferro_tensor::Result<(NativeTensor, NativeTensor)> {
-        tensor.qr(self.session)
+        tensor.qr(self.engine)
     }
 
     /// Thin/economy SVD.
@@ -1303,7 +1153,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 2.0])?;
@@ -1318,7 +1168,7 @@ impl<'session> Session<'session> {
         &mut self,
         tensor: &NativeTensor,
     ) -> tenferro_tensor::Result<(NativeTensor, NativeTensor, NativeTensor)> {
-        tensor.svd(self.session)
+        tensor.svd(self.engine)
     }
 
     /// Solve `A X = B` for a square `A`.
@@ -1334,7 +1184,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
@@ -1348,7 +1198,7 @@ impl<'session> Session<'session> {
         lhs: &NativeTensor,
         rhs: &NativeTensor,
     ) -> tenferro_tensor::Result<NativeTensor> {
-        lhs.solve(rhs, self.session)
+        lhs.solve(rhs, self.engine)
     }
 
     /// Solve `A X = B` where `A` is triangular.
@@ -1370,7 +1220,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// // Lower triangular, column-major.
@@ -1397,7 +1247,7 @@ impl<'session> Session<'session> {
             lower,
             transpose_a,
             unit_diagonal,
-            self.session,
+            self.engine,
         )
     }
 
@@ -1415,7 +1265,7 @@ impl<'session> Session<'session> {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -1442,16 +1292,16 @@ impl<'session> Session<'session> {
         NativeTensor,
         NativeTensor,
     )> {
-        tensor.full_piv_lu(self.session)
+        tensor.full_piv_lu(self.engine)
     }
 }
 
 impl CpuExecutionContext {
     /// Run `f` inside one explicit concrete session of this context.
     ///
-    /// The session is opened once for the whole closure, so a stage pays one entry
-    /// and reuses the engine's prepared plans and buffer pool. All routes on the
-    /// [`Session`] run on this context's backend only: nothing here consults the
+    /// The context's engine is borrowed once for the whole closure, so a stage
+    /// borrows it once and reuses its prepared plans and buffer pool. All routes on
+    /// the [`Session`] run on that engine only: nothing here consults the
     /// process-global default context, and nothing falls back to it.
     ///
     /// # Examples
@@ -1459,7 +1309,7 @@ impl CpuExecutionContext {
     /// ```
     /// use tensor4all_tensorbackend::CpuExecutionContext;
     /// use tenferro::Tensor;
-    /// use tenferro_cpu::CpuBackend;
+    /// use tensor4all_tensorbackend::CpuBackend;
     ///
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 3.0])?;
@@ -1470,40 +1320,20 @@ impl CpuExecutionContext {
     ///
     /// # Errors
     ///
-    /// Returns [`CpuExecutionContextError::SessionEntry`] when the session cannot be
-    /// opened, with [`tenferro_tensor::SessionEntryError`] as its typed cause:
-    /// [`tenferro_tensor::SessionEntryError::Reentered`] for a nested session on this
-    /// thread, [`tenferro_tensor::SessionEntryError::Contended`] for a caller inside the
-    /// context's own pool or a busy resource the backend cannot wait for, and
-    /// [`tenferro_tensor::SessionEntryError::ResourcePoisoned`] for poisoned admission
-    /// state. It also returns the same error when the calling thread cannot restore its
-    /// CPU affinity after `f` ran; that failure replaces the callback's value, exactly as
-    /// the compatibility entry reports it.
+    /// Returns [`CpuExecutionContextError::Reentered`] when the calling thread is
+    /// already inside a session of this context. A session entered from a Rayon
+    /// worker runs inline on a serial engine that shares the context engine's
+    /// prepared-plan cache, so a worker entry completes instead of waiting for a
+    /// pool it belongs to (tensor4all-rs#830).
     ///
     /// # Panics
     ///
-    /// Never. A panic in `f` propagates after the session is released.
-    ///
+    /// Never. A panic in `f` propagates after the engine borrow is released.
     pub fn with_concrete_session<R>(
         &self,
         f: impl FnOnce(&mut Session<'_>) -> R,
     ) -> Result<R, CpuExecutionContextError> {
-        // The compatibility frontend keeps its historical worker fallback, which
-        // runs the session on an unrelated one-thread backend. This frontend promises
-        // the caller's own backend, so a worker caller is rejected typed instead of
-        // being rerouted.
-        if rayon::current_thread_index().is_some() {
-            return Err(CpuExecutionContextError::SessionEntry {
-                source: std::sync::Arc::new(tenferro_tensor::SessionEntryError::Contended {
-                    backend: "CpuExecutionContext",
-                    message: "an explicit concrete session must be entered from outside the \
-                              context's own pool; the compatibility frontend keeps its \
-                              worker fallback"
-                        .to_owned(),
-                }),
-            });
-        }
-        self.with_session(|session| f(&mut Session::new(session)))
+        self.with_session(|engine| f(&mut Session::new(engine)))
     }
 }
 

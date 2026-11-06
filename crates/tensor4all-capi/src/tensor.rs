@@ -16,7 +16,7 @@ use crate::types::{
 };
 use crate::{
     capi_error, clone_opaque, err_buffer_too_small, err_null_pointer, is_assigned_opaque,
-    panic_message, release_opaque, run_catching, set_last_error, t4a_status_code, CapiResult,
+    release_opaque, run_catching, run_status, set_last_error, t4a_status_code, CapiResult,
     T4A_BUFFER_TOO_SMALL, T4A_INTERNAL_ERROR, T4A_INVALID_ARGUMENT, T4A_NULL_POINTER, T4A_SUCCESS,
 };
 
@@ -263,24 +263,6 @@ fn copy_c64_interleaved(
         }
     }
     Ok(())
-}
-
-fn run_status<F>(f: F) -> t4a_status_code
-where
-    F: FnOnce() -> CapiResult<()>,
-{
-    match catch_unwind(AssertUnwindSafe(f)) {
-        Ok(Ok(())) => T4A_SUCCESS,
-        Ok(Err((code, msg))) => {
-            set_last_error(&msg);
-            code
-        }
-        Err(panic) => {
-            let msg = panic_message(&*panic);
-            set_last_error(&msg);
-            T4A_INTERNAL_ERROR
-        }
-    }
 }
 
 fn require_tensor<'a>(ptr: *const t4a_tensor) -> Result<&'a t4a_tensor, (t4a_status_code, String)> {

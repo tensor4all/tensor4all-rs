@@ -11,7 +11,7 @@ use std::hash::Hash;
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use super::contraction::{contract, ContractionOptions};
+use super::contraction::{contract, dense_contract_output_indices, ContractionOptions};
 use super::decompose::{factorize_tensor_to_treetn_with, TreeTopology};
 use super::swap::SwapOptions;
 use super::TreeTN;
@@ -228,6 +228,12 @@ fn factorize_options_from_contraction_options(
     options: &ContractionOptions,
 ) -> Result<FactorizeOptions> {
     let mut factorize_options = match options.factorize_alg {
+        FactorizeAlg::RSVD => {
+            return Err(tensor4all_core::FactorizeError::InvalidOptions(
+                "partial contraction does not support RSVD; use contract with Fit or Zipup",
+            )
+            .into())
+        }
         FactorizeAlg::SVD => FactorizeOptions::svd(),
         FactorizeAlg::QR => FactorizeOptions::qr(),
         FactorizeAlg::LU => FactorizeOptions::lu(),
@@ -365,25 +371,6 @@ fn dense_element_count(indices: &[DynIndex]) -> Result<usize> {
             )
         })
     })
-}
-
-fn dense_contract_output_indices(a_indices: &[DynIndex], b_indices: &[DynIndex]) -> Vec<DynIndex> {
-    let mut b_remaining = b_indices.to_vec();
-    let mut output = Vec::new();
-
-    for idx_a in a_indices {
-        if let Some(position) = b_remaining
-            .iter()
-            .position(|idx_b| idx_a.is_contractable(idx_b))
-        {
-            b_remaining.remove(position);
-        } else {
-            output.push(idx_a.clone());
-        }
-    }
-
-    output.extend(b_remaining);
-    output
 }
 
 fn ensure_dense_reference_limit(
@@ -825,11 +812,20 @@ where
 ///   index remains in the result.
 /// - **Unmentioned indices**: Pass through unchanged as external legs.
 ///
+/// # Reproducibility
+///
+/// With [`ContractionMethod::Fit`](crate::treetn::contraction::ContractionMethod::Fit),
+/// repeated calls with the same inputs and the same `options` are intended to
+/// return bitwise identical results within one process. The two-site
+/// factorizations order their legs by position, not by index identity, so a
+/// call does not depend on the ids of the legs it mints internally (see #1138).
+///
 /// # Errors
 ///
-/// Returns an error when the contraction specification is invalid (an
-/// /// invalid-spec failure) or the contraction fails (a shape or index
-/// /// mismatch, or a backend failure).
+/// Returns [`TreeTNOperationError`] when `spec` is invalid (for example a selected index is not
+/// external to its operand or appears more than once), or when applying
+/// diagonal pairs, aligning contract pairs, contracting, restoring indices, or
+/// ordering the output fails.
 ///
 /// # Examples
 ///
@@ -874,6 +870,8 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
 {
+    // before any preparation, so that no fallback path can skip the option checks
+    super::contraction::validate_contract_options(&options)?;
     validate_partial_contraction_spec(a, b, spec)?;
 
     let (mut a_modified, mut b_modified, restore_from, restore_to) =
@@ -939,9 +937,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the contraction specification is invalid (an
-/// /// invalid-spec failure) or the contraction fails (a shape or index
-/// /// mismatch, or a backend failure).
+/// Returns [`TreeTNOperationError`] when `spec.output_order` is set instead of `None`, or when
+/// [`partial_contract`] or the [`TreeTN::restructure_to`] step fails.
 ///
 /// # Examples
 ///
@@ -1055,8 +1052,10 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the index spaces are incompatible (a shape or index
-/// /// mismatch) or the contraction fails (a backend failure).
+/// Returns [`SelectedIndexContractionError::PartialContractFailed`] when the
+/// underlying [`partial_contract`] fails, for example when a pair's left index
+/// is not external to `left`, a pair's right index is not external to `right`,
+/// or a paired dimension differs.
 ///
 /// # Examples
 /// ```
@@ -1119,8 +1118,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the index spaces are incompatible (a shape or index
-/// /// mismatch) or the weighted sum fails (a backend failure).
+/// Returns [`SelectedIndexContractionError::PartialContractFailed`] when the
+/// underlying [`partial_contract`] fails, for example when a state index is not
+/// external to `state` or a paired dimension differs.
 ///
 /// # Examples
 /// ```
@@ -1196,8 +1196,15 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the contraction or operation fails (a shape or
-/// /// index mismatch, or a backend failure).
+/// Returns [`SelectedIndexContractionError::DuplicateIndex`] for a repeated
+/// entry in `sum_indices`, [`SelectedIndexContractionError::IndexNotFound`] for
+/// an index absent from `state`,
+/// [`SelectedIndexContractionError::IndexInMultipleSiteSpaces`] for one in
+/// several site spaces, [`SelectedIndexContractionError::BuildOnesTensor`] or
+/// [`SelectedIndexContractionError::BuildWeightsTree`] when the unit-weight
+/// network cannot be built, and
+/// [`SelectedIndexContractionError::PartialContractFailed`] when the weighted
+/// sum fails.
 ///
 /// # Examples
 /// ```

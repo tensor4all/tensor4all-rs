@@ -1,8 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, ensure, Result};
-use num_complex::Complex64;
-use tenferro::{DType, Tensor as NativeTensor};
+use tenferro::Tensor as NativeTensor;
 use tensor4all_tensorbackend::{einsum_native_tensors, NativeTensorReadInput, Storage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -270,7 +269,7 @@ fn unique_first_appearance(values: &[usize]) -> Vec<usize> {
     result
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn normalize_payload_for_roots(
     payload: &NativeTensor,
     roots: &[usize],
@@ -337,79 +336,26 @@ pub(crate) fn normalize_payload_read_for_roots<'a>(
     Ok((NativeTensorReadInput::Owned(current_payload), current_roots))
 }
 
+/// Copy a compact payload as a native tensor of the stored dtype.
+///
+/// The dtype dispatch lives in `tensor4all-tensorbackend` so this crate has one
+/// storage-to-native seam instead of a per-dtype chain.
 pub(crate) fn storage_payload_native(storage: &Storage) -> Result<NativeTensor> {
-    if storage.is_f64() {
-        Ok(NativeTensor::from_vec_col_major(
-            storage.payload_dims().to_vec(),
-            storage
-                .payload_f64_col_major_vec()
-                .map_err(anyhow::Error::new)?,
-        )?)
-    } else if storage.is_c64() {
-        Ok(NativeTensor::from_vec_col_major(
-            storage.payload_dims().to_vec(),
-            storage
-                .payload_c64_col_major_vec()
-                .map_err(anyhow::Error::new)?,
-        )?)
-    } else {
-        Err(anyhow!("unsupported storage scalar type"))
-    }
+    tensor4all_tensorbackend::storage_payload_native(storage).map_err(anyhow::Error::from)
 }
 
+/// Build structured storage from a native payload, preserving its dtype.
 pub(crate) fn storage_from_payload_native(
     payload: NativeTensor,
     output_payload_dims: &[usize],
     output_axis_classes: Vec<usize>,
 ) -> Result<Storage> {
-    ensure!(
-        payload.shape() == output_payload_dims,
-        "payload shape {:?} does not match planned payload dims {:?}",
-        payload.shape(),
-        output_payload_dims
-    );
-    let strides = col_major_strides(output_payload_dims)?;
-    match payload.dtype() {
-        DType::F64 => {
-            let values = payload
-                .as_slice::<f64>()
-                .map_err(anyhow::Error::new)?
-                .to_vec();
-            Storage::new_structured(
-                values,
-                output_payload_dims.to_vec(),
-                strides,
-                output_axis_classes,
-            )
-        }
-        DType::C64 => {
-            let values = payload
-                .as_slice::<Complex64>()
-                .map_err(anyhow::Error::new)?
-                .to_vec();
-            Storage::new_structured(
-                values,
-                output_payload_dims.to_vec(),
-                strides,
-                output_axis_classes,
-            )
-        }
-        dtype => Err(anyhow!(
-            "unsupported structured payload dtype {dtype:?}; expected f64 or Complex64"
-        )),
-    }
-}
-
-fn col_major_strides(dims: &[usize]) -> Result<Vec<isize>> {
-    let mut stride = 1isize;
-    let mut strides = Vec::with_capacity(dims.len());
-    for &dim in dims {
-        strides.push(stride);
-        stride = stride
-            .checked_mul(dim as isize)
-            .ok_or_else(|| anyhow!("payload stride overflow for dims {dims:?}"))?;
-    }
-    Ok(strides)
+    tensor4all_tensorbackend::storage_from_payload_native(
+        payload,
+        output_payload_dims,
+        output_axis_classes,
+    )
+    .map_err(anyhow::Error::from)
 }
 
 fn first_duplicate_pair(values: &[usize]) -> Option<(usize, usize)> {
@@ -479,95 +425,4 @@ impl UnionFind {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tensor4all_tensorbackend::StorageKind;
-
-    #[test]
-    fn plans_diag_diag_partial_as_diag_output() {
-        let operands = vec![
-            OperandLayout::new(vec![3, 3], vec![0, 0]).unwrap(),
-            OperandLayout::new(vec![3, 3], vec![0, 0]).unwrap(),
-        ];
-        let spec = StructuredContractionSpec {
-            input_labels: vec![vec![0, 1], vec![1, 2]],
-            output_labels: vec![0, 2],
-            retained_labels: Default::default(),
-        };
-
-        let plan = StructuredContractionPlan::new(&operands, &spec).unwrap();
-        assert_eq!(plan.output_axis_classes, vec![0, 0]);
-        assert_eq!(plan.output_payload_roots.len(), 1);
-    }
-
-    #[test]
-    fn plans_general_structured_output_classes() {
-        let operands = vec![
-            OperandLayout::new(vec![2, 2, 3], vec![0, 0, 1]).unwrap(),
-            OperandLayout::new(vec![3, 5, 5], vec![0, 1, 1]).unwrap(),
-        ];
-        let spec = StructuredContractionSpec {
-            input_labels: vec![vec![0, 1, 2], vec![2, 3, 4]],
-            output_labels: vec![0, 1, 3, 4],
-            retained_labels: Default::default(),
-        };
-
-        let plan = StructuredContractionPlan::new(&operands, &spec).unwrap();
-        assert_eq!(plan.output_axis_classes, vec![0, 0, 1, 1]);
-        assert_eq!(plan.output_payload_dims, vec![2, 5]);
-    }
-
-    #[test]
-    fn detects_payload_repeated_labels() {
-        let operands = vec![
-            OperandLayout::new(vec![3, 3], vec![0, 1]).unwrap(),
-            OperandLayout::new(vec![3, 3], vec![0, 0]).unwrap(),
-        ];
-        let spec = StructuredContractionSpec {
-            input_labels: vec![vec![0, 1], vec![0, 1]],
-            output_labels: vec![],
-            retained_labels: Default::default(),
-        };
-
-        let plan = StructuredContractionPlan::new(&operands, &spec).unwrap();
-        assert!(plan.operand_plans[0].has_repeated_roots());
-    }
-
-    #[test]
-    fn normalizes_repeated_payload_roots_by_extracting_diagonal() {
-        let payload =
-            tenferro::Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-        let (normalized, roots) = normalize_payload_for_roots(&payload, &[0, 0]).unwrap();
-
-        assert_eq!(normalized.shape(), &[2]);
-        assert_eq!(normalized.as_slice::<f64>().unwrap(), &[1.0, 4.0]);
-        assert_eq!(roots, vec![0]);
-    }
-
-    #[test]
-    fn storage_payload_native_roundtrip_preserves_compact_payload() {
-        let storage = Storage::new_structured(
-            vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-            vec![2, 3],
-            vec![1, 2],
-            vec![0, 1, 0],
-        )
-        .unwrap();
-
-        let native = storage_payload_native(&storage).unwrap();
-        assert_eq!(native.shape(), &[2, 3]);
-        assert_eq!(
-            native.as_slice::<f64>().unwrap(),
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
-        );
-
-        let rebuilt = storage_from_payload_native(native, &[2, 3], vec![0, 1, 0]).unwrap();
-        assert_eq!(rebuilt.storage_kind(), StorageKind::Structured);
-        assert_eq!(rebuilt.payload_dims(), &[2, 3]);
-        assert_eq!(rebuilt.axis_classes(), &[0, 1, 0]);
-        assert_eq!(
-            rebuilt.payload_f64_col_major_vec().unwrap(),
-            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
-        );
-    }
-}
+mod tests;

@@ -76,6 +76,7 @@ fn finite_control_preserves_pivot_coordinates() {
             out.fill(0.0);
             Ok(())
         },
+        None,
     )
     .unwrap();
     let mut evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
@@ -111,6 +112,7 @@ fn nonfinite_walk_target_after_a_finite_start_is_rejected() {
                 out.fill(0.0);
                 Ok(())
             },
+            None,
         )
         .unwrap();
         let mut peek = rand_chacha::ChaCha8Rng::seed_from_u64(0);

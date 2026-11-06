@@ -26,14 +26,23 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use serde_json::json;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+use tensor4all_tensorbackend::explicit::Session;
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_treetci::{TreeTciInterpolator, TreeTciOptions};
 use tensor4all_treetn::interpolation::{
-    InterpolationError, InterpolationProblem, TreeInterpolator,
+    EvalContext, InterpolationError, InterpolationProblem, Parallelism, TreeInterpolator,
 };
 use tensor4all_treetn::{NodeNameNetwork, TreeTN};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 type Name = String;
+
+/// Run `body` with one explicit execution capability over a single-thread backend.
+fn with_eval_context<R>(body: impl FnOnce(&mut EvalContext<'_>) -> R) -> R {
+    let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+    body(&mut ctx)
+}
 type Network = TreeTN<tensor4all_core::IdxTensor, Name>;
 
 const RTOL: f64 = 1.0e-4;
@@ -447,12 +456,12 @@ impl DenseNet {
             let a = order[q];
             q += 1;
             for b in 0..nn {
-                if !seen[b] {
-                    if let Some(bond) = shares(a, b) {
-                        seen[b] = true;
-                        parent[b] = Some((a, bond));
-                        order.push(b);
-                    }
+                if !seen[b]
+                    && let Some(bond) = shares(a, b)
+                {
+                    seen[b] = true;
+                    parent[b] = Some((a, bond));
+                    order.push(b);
                 }
             }
         }
@@ -620,12 +629,8 @@ fn run() -> Result<()> {
                 .map(|s| w.sites.iter().position(|t| t == s).unwrap_or(usize::MAX))
                 .collect();
             // initial pivots: compatible feature points (up to 8) + random to 5
-            let compatible = |pt: &Vec<usize>| {
-                fixed
-                    .iter()
-                    .zip(pt)
-                    .all(|(f, &v)| f.is_none_or(|x| x == v))
-            };
+            let compatible =
+                |pt: &Vec<usize>| fixed.iter().zip(pt).all(|(f, &v)| f.is_none_or(|x| x == v));
             let mut init: Vec<Vec<usize>> = Vec::new();
             let mut seen = HashSet::new();
             for fp in feature_pts.iter().filter(|q| compatible(q)) {
@@ -660,7 +665,9 @@ fn run() -> Result<()> {
             )?;
             let requested = AtomicUsize::new(0);
             let unique: Mutex<HashSet<u128>> = Mutex::new(HashSet::new());
-            let evaluate = |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+            let evaluate = |batch: ColMajorArrayRef<'_, usize>,
+                            _ctx: &mut EvalContext<'_>|
+             -> anyhow::Result<Vec<f64>> {
                 let n = batch.shape()[1];
                 requested.fetch_add(n, Ordering::Relaxed);
                 let mut out = Vec::with_capacity(n);
@@ -678,7 +685,7 @@ fn run() -> Result<()> {
             let rss_before = proc_status("VmRSS:");
             reset_hwm();
             let t0 = Instant::now();
-            let outcome = engine.interpolate(&problem, evaluate);
+            let outcome = with_eval_context(|ctx| engine.interpolate(&problem, ctx, evaluate));
             let secs = t0.elapsed().as_secs_f64();
             let hwm = proc_status("VmHWM:");
             peak_hwm = peak_hwm.max(hwm);

@@ -1,15 +1,19 @@
 use crate::error::Result as TreeTciResult;
+use crate::evaluation::{BatchExecution, CachedExecution, Compatibility, Explicit};
 use crate::{
     globalpivot::{find_global_pivots_erased, ScalarParts},
     update::update_edge,
-    AllEdges, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer, TreeTCI2,
+    AllEdges, EdgeVisitor, GlobalIndexBatch, MultiIndex, PivotCandidateProposer, TreeTCI2,
+    TreeTciEdge, TreeTciIteration, TreeTciObserver,
 };
 use anyhow::Result;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
+use std::collections::HashSet;
 use tensor4all_core::CommonScalar;
 use tensor4all_core::{MatrixLuciScalar as Scalar, RrLUOptions};
 use tensor4all_tensorbackend::FullPivLuScalar;
+use tensor4all_treetn::interpolation::EvalContext;
 
 /// The stopping condition reached by a TreeTCI optimization call.
 ///
@@ -33,7 +37,8 @@ pub enum TreeTciTermination {
     /// final maximum rank equal to the minimum rank in that window, and
     /// no newly accepted global pivots.
     ///
-    /// Errors are normalized only when `normalize_error` is enabled.
+    /// Errors use the running maximum sample magnitude as their scale only
+    /// when `scale_tolerance` is enabled.
     /// Disabled searches and the search skipped on the final iteration
     /// contribute zero pivots; this reason does not certify an exhaustive
     /// residual check or a global search after that final iteration.
@@ -99,9 +104,10 @@ pub struct TreeTciOptimizationResult {
 /// | `tolerance`               | `1e-8`        | Relative stopping tolerance on normalized bond error |
 /// | `max_iter`                | `20`          | Maximum number of edge-order iterations              |
 /// | `max_bond_dim`            | `None`        | Maximum bond dimension (no cap by default)           |
-/// | `normalize_error`         | `true`        | Normalize error by maximum sample magnitude          |
+/// | `scale_tolerance`         | `true`        | Scale tolerance by running max sample magnitude      |
 /// | `enable_global_pivots`    | `true`        | Run automatic global pivot search after each sweep   |
 /// | `nsearch`                 | `5`           | Random starting points for the global pivot search   |
+/// | `global_search_starts`    | empty         | Extra caller-supplied starting points, walked first  |
 /// | `max_nglobal_pivot`       | `5`           | Global pivots added per iteration                    |
 /// | `tol_margin_global_search`| `10.0`        | Global pivot acceptance margin over `abs_tol`        |
 /// | `seed`                    | `None`        | RNG seed for the global pivot search                 |
@@ -116,17 +122,19 @@ pub struct TreeTciOptimizationResult {
 /// assert!((opts.tolerance - 1e-8).abs() < 1e-15);
 /// assert_eq!(opts.max_iter, 20);
 /// assert_eq!(opts.max_bond_dim, None);
-/// assert!(opts.normalize_error);
+/// assert!(opts.scale_tolerance);
 /// assert!(opts.enable_global_pivots);
+/// assert!(opts.global_search_starts.is_empty());
 ///
 /// // Custom options for high-precision work
 /// let opts = TreeTciOptions {
 ///     tolerance: 1e-12,
 ///     max_iter: 50,
 ///     max_bond_dim: Some(100),
-///     normalize_error: true,
+///     scale_tolerance: true,
 ///     enable_global_pivots: true,
 ///     nsearch: 20,
+///     global_search_starts: vec![vec![1, 1]],
 ///     max_nglobal_pivot: 10,
 ///     tol_margin_global_search: 5.0,
 ///     seed: Some(42),
@@ -136,6 +144,7 @@ pub struct TreeTciOptimizationResult {
 /// assert_eq!(opts.max_iter, 50);
 /// assert_eq!(opts.max_bond_dim, Some(100));
 /// assert!(opts.enable_global_pivots);
+/// assert_eq!(opts.global_search_starts, vec![vec![1, 1]]);
 /// assert_eq!(opts.seed, Some(42));
 /// ```
 #[derive(Clone, Debug)]
@@ -143,8 +152,9 @@ pub struct TreeTciOptions {
     /// Relative stopping tolerance on the normalized bond error.
     ///
     /// The optimization loop monitors the maximum bond error across all edges.
-    /// When `normalize_error` is true, this error is divided by the maximum
-    /// observed sample magnitude. Recommended range: `1e-6` to `1e-12`.
+    /// When `scale_tolerance` is true, this error is divided by the running
+    /// maximum observed sample magnitude, so the stopping threshold is
+    /// `tolerance * max_sample_value`. Recommended range: `1e-6` to `1e-12`.
     /// Default: `1e-8`.
     pub tolerance: f64,
 
@@ -165,12 +175,14 @@ pub struct TreeTciOptions {
     /// Default: `None` (no cap).
     pub max_bond_dim: Option<usize>,
 
-    /// Whether to normalize the bond error by the maximum observed sample magnitude.
+    /// Whether to scale the convergence tolerance by the running maximum
+    /// observed sample magnitude.
     ///
     /// When `true`, the stopping criterion uses relative error
-    /// `max_bond_error / max_sample_value`. When `false`, the raw absolute
-    /// bond error is used. Default: `true`.
-    pub normalize_error: bool,
+    /// `max_bond_error / max_sample_value`, so `tolerance` is scaled by the
+    /// largest sample seen so far. When `false`, the raw absolute bond error is
+    /// compared with `tolerance`. Default: `true`.
+    pub scale_tolerance: bool,
 
     /// Whether to run an automatic global pivot search after each sweep.
     ///
@@ -189,9 +201,25 @@ pub struct TreeTciOptions {
     ///
     /// Each starting point is locally optimized over all site coordinates.
     /// Larger values explore the index space more thoroughly at the cost of
-    /// more evaluations. Ignored when `enable_global_pivots` is `false`.
-    /// Default: `5`.
+    /// more evaluations. Drawn after [`Self::global_search_starts`]. Ignored
+    /// when `enable_global_pivots` is `false`. Default: `5`.
     pub nsearch: usize,
+
+    /// Extra starting points for the global pivot search, walked before the
+    /// `nsearch` random ones.
+    ///
+    /// Each entry is a full-site multi-index in the state's site order: one
+    /// coordinate per site, each below that site's local dimension. Use them
+    /// to aim the search at a region the local pivot updates miss, such as a
+    /// corner or edge of a patch; from a random start such a feature can look
+    /// like a flat zero fiber, where the greedy walk stalls. A supplied start
+    /// is walked even when `nsearch` is zero. Invalid entries are rejected
+    /// before any evaluation: a wrong length or an out-of-range coordinate is
+    /// a [`crate::TreeTciError::InvalidConfiguration`] from the optimizer and
+    /// a [`crate::TreeTciError::Operation`] from a direct search call.
+    /// Ignored (but still validated) when `enable_global_pivots` is `false`.
+    /// Default: empty.
+    pub global_search_starts: Vec<MultiIndex>,
 
     /// Maximum number of global pivots added per iteration.
     ///
@@ -203,7 +231,7 @@ pub struct TreeTciOptions {
     /// A candidate pivot is accepted when its interpolation error exceeds
     /// `abs_tol * tol_margin_global_search`, where `abs_tol` is the sweep's
     /// absolute tolerance (`tolerance * max_sample_value` when
-    /// `normalize_error` is enabled). The value is always validated (it must
+    /// `scale_tolerance` is enabled). The value is always validated (it must
     /// be finite and nonnegative) but only consulted when `enable_global_pivots`
     /// is `true`. Default: `10.0`.
     pub tol_margin_global_search: f64,
@@ -220,8 +248,14 @@ pub struct TreeTciOptions {
     /// Use `Some(256 * 1024 * 1024)` for expensive deterministic targets.
     /// `Some(0)` deduplicates only within each batch and retains no values.
     /// At capacity, inserts are skipped and reported; no entries are evicted.
-    /// Memoization requires a fixed value for each point throughout the call,
-    /// and supports index spaces up to 1024 bits. Callback errors and wrong
+    /// Memoization requires a fixed value for each point throughout the call.
+    /// Edge candidate matrices are looked up through cache-owned side keys,
+    /// which exist for the `u64` and `u128` key widths only, so an index space
+    /// whose selected width exceeds 128 bits (but still fits the cache's 1024
+    /// bits) returns [`crate::TreeTciError::Operation`] holding
+    /// `CacheKeyError::SideKeyUnsupported` at run setup rather than falling back
+    /// to whole-point lookups; a space beyond 1024 bits fails at cache
+    /// construction with `CacheKeyError::Overflow`. Callback errors and wrong
     /// output lengths are never cached. The cache belongs to this run, is
     /// shared across updates/searches/final materialization, and is dropped
     /// at return. Bytes exclude allocator overhead and do not bound total RSS.
@@ -260,9 +294,10 @@ impl Default for TreeTciOptions {
             tolerance: 1e-8,
             max_iter: 20,
             max_bond_dim: None,
-            normalize_error: true,
+            scale_tolerance: true,
             enable_global_pivots: true,
             nsearch: 5,
+            global_search_starts: Vec::new(),
             max_nglobal_pivot: 5,
             tol_margin_global_search: 10.0,
             seed: None,
@@ -294,9 +329,9 @@ impl Default for TreeTciOptions {
 /// # Errors
 ///
 /// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
-/// for invalid options. It
-/// also returns an error when the operation fails (a shape or index mismatch,
-/// or a backend failure).
+/// for invalid options, and [`TreeTciError::Operation`](crate::TreeTciError::Operation)
+/// when the evaluator fails, a pivot set is missing or malformed, or
+/// materialization fails.
 ///
 /// # Examples
 ///
@@ -311,7 +346,7 @@ impl Default for TreeTciOptions {
 /// let local_dims = vec![2, 2];
 /// let mut state = TreeTCI2::<f64>::new(local_dims, graph).unwrap();
 /// state.add_global_pivots(&[vec![0, 0]]).unwrap();
-/// state.max_sample_value = 1.0;
+/// state.set_max_sample_value(1.0);
 ///
 /// let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
 ///     let mut vals = Vec::with_capacity(batch.n_points());
@@ -342,17 +377,47 @@ where
     F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
     options.validate()?;
-    optimize_with_proposer(state, evaluate, options, &crate::DefaultProposer)
+    optimize_with_proposer(
+        state,
+        evaluate,
+        options,
+        &crate::DefaultProposer,
+        &AllEdges,
+        &mut (),
+    )
 }
 
-/// Optimize a TreeTCI state with `AllEdges` visitation and a caller-supplied
-/// pivot candidate proposer.
+/// Optimize a TreeTCI state with a caller-supplied pivot candidate proposer
+/// and edge visitor.
 ///
 /// Returns [`TreeTciOptimizationResult`] with per-iteration ranks, errors,
 /// and the stopping reason defined by [`TreeTciTermination`].
 ///
 /// Use this when you need a custom proposer (e.g., [`SimpleProposer`](crate::SimpleProposer)
-/// or [`TruncatedDefaultProposer`](crate::TruncatedDefaultProposer)).
+/// or [`TruncatedDefaultProposer`](crate::TruncatedDefaultProposer)) or a
+/// custom edge visit order. Pass [`AllEdges`] to keep the default order.
+///
+/// # Edge visit order
+///
+/// `visitor` decides which edge is updated and when. It is called once per
+/// inner pass, and its result must be a permutation of the graph's edges:
+/// every edge exactly once, with no missing, duplicated, or unknown edge. That
+/// contract is checked before the pass updates any state, so an invalid order
+/// cannot leave a stale bond error on an edge or let the convergence window
+/// pass with unswept edges. A contract violation returns
+/// [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration).
+/// Different valid orders generally reach different approximations; the
+/// documented sequence is exactly the order returned by the visitor's
+/// [`EdgeVisitor::visit_order`] on each pass.
+///
+/// # Observing iterations
+///
+/// `observer` receives a [`TreeTciIteration`] after each completed iteration,
+/// including the last, with the bond dimension and error the result records for
+/// it and the evaluation accounting so far; pass `&mut ()` to observe nothing.
+/// An observer cannot change the run and adds no evaluation of the target
+/// function. The error is the one recorded before that iteration's global pivot
+/// injection.
 ///
 /// The evaluator may be called several times per edge update; see
 /// [`GlobalIndexBatch`](crate::GlobalIndexBatch#batch-sizes) for the batch
@@ -374,15 +439,16 @@ where
 /// # Errors
 ///
 /// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
-/// for invalid options. It
-/// also returns an error when the operation fails (a shape or index mismatch,
-/// or a backend failure).
+/// for invalid options or a visitor order that is not a permutation of the
+/// graph's edges, and [`TreeTciError::Operation`](crate::TreeTciError::Operation)
+/// when the evaluator fails, a pivot set is missing or malformed, or
+/// materialization fails.
 ///
 /// # Examples
 ///
 /// ```
 /// use tensor4all_treetci::{
-///     optimize_with_proposer, GlobalIndexBatch, SimpleProposer,
+///     optimize_with_proposer, AllEdges, GlobalIndexBatch, SimpleProposer,
 ///     TreeTCI2, TreeTciEdge, TreeTciGraph, TreeTciOptions,
 /// };
 /// use anyhow::Result;
@@ -390,7 +456,7 @@ where
 /// let graph = TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap();
 /// let mut state = TreeTCI2::<f64>::new(vec![2, 2], graph).unwrap();
 /// state.add_global_pivots(&[vec![0, 0]]).unwrap();
-/// state.max_sample_value = 1.0;
+/// state.set_max_sample_value(1.0);
 ///
 /// let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
 ///     let mut vals = Vec::with_capacity(batch.n_points());
@@ -405,7 +471,7 @@ where
 /// let proposer = SimpleProposer::seeded(42);
 /// let options = TreeTciOptions { tolerance: 1e-10, max_iter: 3, ..Default::default() };
 /// let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } = optimize_with_proposer(
-///     &mut state, evaluate, &options, &proposer,
+///     &mut state, evaluate, &options, &proposer, &AllEdges, &mut (),
 /// ).unwrap();
 ///
 /// // One entry per sweep actually run; the loop stops early once converged,
@@ -413,34 +479,122 @@ where
 /// assert_eq!(ranks, vec![2; 3]);
 /// assert_eq!(ranks.len(), errors.len());
 /// ```
-pub fn optimize_with_proposer<T, F, P>(
+pub fn optimize_with_proposer<T, F, P, V, O>(
     state: &mut TreeTCI2<T>,
     evaluate: F,
     options: &TreeTciOptions,
     proposer: &P,
+    visitor: &V,
+    observer: &mut O,
 ) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
     F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
+    V: EdgeVisitor,
+    O: TreeTciObserver,
 {
     options.validate()?;
+    // The public optimizer keeps the process-global route: no caller-owned session.
+    let mut evaluate = evaluate;
+    let mut execution = Compatibility::new(&mut evaluate);
     with_seeded_streams(options, proposer, |streams| {
-        let evaluator = crate::evaluation::RunEvaluator::new(
-            evaluate,
-            &state.local_dims,
-            options.evaluation_cache_bytes,
-        )?;
-        let mut result = optimize_with_streams(
+        optimize_memoized(
             state,
-            |batch| evaluator.call(batch),
+            &mut execution,
             options,
             proposer,
+            visitor,
+            observer,
             streams,
-        )?;
-        result.evaluation = evaluator.stats();
-        Ok(result)
+        )
     })
+}
+
+/// The single optimization body for every frontend: one memoizing owner around the
+/// caller's execution route, then the sweep loop.
+pub(crate) fn optimize_memoized<T, P, V, O>(
+    state: &mut TreeTCI2<T>,
+    execution: &mut dyn BatchExecution<T>,
+    options: &TreeTciOptions,
+    proposer: &P,
+    visitor: &V,
+    observer: &mut O,
+    streams: &mut RandomStreams<'_>,
+) -> TreeTciResult<TreeTciOptimizationResult>
+where
+    T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
+    P: PivotCandidateProposer,
+    V: EdgeVisitor,
+    O: TreeTciObserver,
+{
+    let mut cached =
+        CachedExecution::new(execution, &state.local_dims, options.evaluation_cache_bytes)?;
+    let mut result = optimize_with_streams(
+        state,
+        &mut cached,
+        options,
+        proposer,
+        visitor,
+        observer,
+        streams,
+    )?;
+    result.evaluation = cached.stats();
+    Ok(result)
+}
+
+/// Optimize with an explicit proposer whose run-time execution runs in a caller-owned CPU context.
+///
+/// The same algorithm, options, stopping rule and diagnostics as [`optimize_with_proposer`]; what differs is the
+/// resource the stage's session-bound work runs in. Without a context it goes through the process-global CPU
+/// context; with one, the pivot search's materialization solve runs on `context`, as
+/// [`crossinterpolate2_in`](crate::crossinterpolate2_in) does for a whole run.
+///
+/// The caller's evaluator and the pivot search's readout are unchanged and still use their existing routes, so this
+/// is a caller-owned budget for the stage's session-bound work, not for everything the run touches.
+///
+/// # Errors
+///
+/// Returns [`crate::TreeTciError::InvalidConfiguration`] for invalid options,
+/// [`crate::TreeTciError::InvalidGraph`] for a malformed topology,
+/// [`crate::TreeTciError::IndexOutOfBounds`] for an out-of-range candidate, and
+/// [`crate::TreeTciError::Operation`] when the evaluator or the pivot search's materialization solve fails.
+/// A failing evaluator can leave a partially updated state.
+pub fn optimize_with_proposer_in<T, F, P, O>(
+    state: &mut TreeTCI2<T>,
+    evaluate: F,
+    options: &TreeTciOptions,
+    proposer: &P,
+    observer: &mut O,
+    context: &tensor4all_tensorbackend::CpuExecutionContext,
+) -> TreeTciResult<TreeTciOptimizationResult>
+where
+    T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
+    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    P: PivotCandidateProposer,
+    O: TreeTciObserver,
+{
+    options.validate()?;
+    let mut evaluate = evaluate;
+    context
+        .with_concrete_session(|session| {
+            let mut contextual =
+                |batch: GlobalIndexBatch<'_>, _ctx: &mut EvalContext<'_>| evaluate(batch);
+            let mut context = crate::evaluation::serial_context(session);
+            let mut execution = Explicit::new(&mut context, &mut contextual);
+            with_seeded_streams(options, proposer, |streams| {
+                optimize_memoized(
+                    state,
+                    &mut execution,
+                    options,
+                    proposer,
+                    &AllEdges,
+                    observer,
+                    streams,
+                )
+            })
+        })
+        .map_err(|error| crate::TreeTciError::from(anyhow::Error::new(error)))?
 }
 
 /// Optimize with a caller-owned random stream.
@@ -462,9 +616,9 @@ where
 ///
 /// # Errors
 /// Returns [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration)
-/// for invalid options. It
-/// also returns an error when the operation fails (a shape or index mismatch,
-/// or a backend failure).
+/// for invalid options, and [`TreeTciError::Operation`](crate::TreeTciError::Operation)
+/// when the evaluator fails, a pivot set is missing or malformed, or
+/// materialization fails.
 /// # Examples
 ///
 /// ```
@@ -479,7 +633,7 @@ where
 /// let graph = TreeTciGraph::new(2, &[TreeTciEdge::new(0, 1)]).unwrap();
 /// let mut state = TreeTCI2::<f64>::new(vec![2, 2], graph).unwrap();
 /// state.add_global_pivots(&[vec![0, 0]]).unwrap();
-/// state.max_sample_value = 1.0;
+/// state.set_max_sample_value(1.0);
 ///
 /// let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
 ///     let mut vals = Vec::with_capacity(batch.n_points());
@@ -494,21 +648,23 @@ where
 /// let mut rng = ChaCha8Rng::seed_from_u64(3);
 /// let options = TreeTciOptions { tolerance: 1e-10, max_iter: 1, ..Default::default() };
 /// let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } = optimize_with_proposer_with_rng(
-///     &mut state, evaluate, &options, &SimpleProposer::default(), &mut rng,
+///     &mut state, evaluate, &options, &SimpleProposer::default(), &mut (), &mut rng,
 /// ).unwrap();
 /// assert_eq!(ranks.len(), errors.len());
 /// ```
-pub fn optimize_with_proposer_with_rng<T, F, P, R>(
+pub fn optimize_with_proposer_with_rng<T, F, P, R, O>(
     state: &mut TreeTCI2<T>,
     evaluate: F,
     options: &TreeTciOptions,
     proposer: &P,
+    observer: &mut O,
     rng: &mut R,
 ) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
     F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
+    O: TreeTciObserver,
     R: rand::Rng + ?Sized,
 {
     // Erase the caller's RNG type once so the run below is instantiated once
@@ -516,20 +672,17 @@ where
     options.validate()?;
     let mut stream: &mut R = rng;
     let mut streams = RandomStreams::Shared(&mut stream);
-    let evaluator = crate::evaluation::RunEvaluator::new(
-        evaluate,
-        &state.local_dims,
-        options.evaluation_cache_bytes,
-    )?;
-    let mut result = optimize_with_streams(
+    let mut evaluate = evaluate;
+    let mut execution = Compatibility::new(&mut evaluate);
+    optimize_memoized(
         state,
-        |batch| evaluator.call(batch),
+        &mut execution,
         options,
         proposer,
+        &AllEdges,
+        observer,
         &mut streams,
-    )?;
-    result.evaluation = evaluator.stats();
-    Ok(result)
+    )
 }
 
 /// Construct named seeded streams once at a high-level run boundary.
@@ -577,25 +730,95 @@ impl RandomStreams<'_> {
     }
 }
 
-pub(crate) fn optimize_with_streams<T, F, P>(
+/// Check the caller-supplied global search starts against the state.
+///
+/// `TreeTciOptions::validate` is shape-independent; this check needs the
+/// state's local dimensions. It runs before any sweep, so an invalid start
+/// fails without evaluating the target.
+fn validate_global_search_starts(
+    options: &TreeTciOptions,
+    local_dims: &[usize],
+) -> TreeTciResult<()> {
+    for (index, start) in options.global_search_starts.iter().enumerate() {
+        if start.len() != local_dims.len() {
+            return Err(crate::TreeTciError::InvalidConfiguration {
+                message: format!(
+                    "global_search_starts[{index}] has {} coordinates but the state has {} sites",
+                    start.len(),
+                    local_dims.len()
+                ),
+            });
+        }
+        for (site, (&coordinate, &dimension)) in start.iter().zip(local_dims).enumerate() {
+            if coordinate >= dimension {
+                return Err(crate::TreeTciError::InvalidConfiguration {
+                    message: format!(
+                        "global_search_starts[{index}] has coordinate {coordinate} at site \
+                         {site}, out of range for local dimension {dimension}"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Check that `order` is a permutation of the tree's edges.
+///
+/// The truncated proposer relies on each edge's kept pivots matching a
+/// start-of-pass snapshot, so an order that omits, duplicates or invents an
+/// edge would leave stale bond errors and could satisfy convergence falsely.
+fn validate_edge_order<T>(state: &TreeTCI2<T>, order: &[TreeTciEdge]) -> TreeTciResult<()> {
+    let expected = state.graph.edges();
+    let expected_set: HashSet<TreeTciEdge> = expected.iter().copied().collect();
+    let mut seen = HashSet::with_capacity(order.len());
+    for &edge in order {
+        if !expected_set.contains(&edge) {
+            return Err(crate::TreeTciError::InvalidConfiguration {
+                message: format!(
+                    "edge visitor returned unknown edge {edge:?}; the tree has {} edges",
+                    expected.len()
+                ),
+            });
+        }
+        if !seen.insert(edge) {
+            return Err(crate::TreeTciError::InvalidConfiguration {
+                message: format!("edge visitor returned edge {edge:?} more than once per pass"),
+            });
+        }
+    }
+    if let Some(missing) = expected.iter().find(|edge| !seen.contains(edge)) {
+        return Err(crate::TreeTciError::InvalidConfiguration {
+            message: format!(
+                "edge visitor omitted edge {missing:?}; each edge must be visited exactly once per pass"
+            ),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn optimize_with_streams<T, P, V, O>(
     state: &mut TreeTCI2<T>,
-    evaluate: F,
+    execution: &mut dyn BatchExecution<T>,
     options: &TreeTciOptions,
     proposer: &P,
+    visitor: &V,
+    observer: &mut O,
     streams: &mut RandomStreams<'_>,
 ) -> TreeTciResult<TreeTciOptimizationResult>
 where
     T: Scalar + CommonScalar + FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
     P: PivotCandidateProposer,
+    V: EdgeVisitor,
+    O: TreeTciObserver,
 {
     options.validate()?;
+    validate_global_search_starts(options, &state.local_dims)?;
 
     let mut ranks = Vec::new();
     let mut errors = Vec::new();
     let mut nglobal_pivots_history: Vec<usize> = Vec::new();
     let mut termination = TreeTciTermination::MaxIterations;
-    let visitor = AllEdges;
     const INNER_EDGE_PASSES: usize = 2;
     // Mirrors `tensor4all-tensorci`'s `TensorCI2Options::ncheck_history` default
     // (see `convergence_criterion` in tensorci2.rs, itself a port of Julia's
@@ -606,9 +829,9 @@ where
     // so its error estimate is stale with respect to those pivots.
     const NCHECK_HISTORY: usize = 3;
 
-    for _iter in 0..options.max_iter {
+    for iteration in 0..options.max_iter {
         for _pass in 0..INNER_EDGE_PASSES {
-            let error_scale = if options.normalize_error && state.max_sample_value > 0.0 {
+            let error_scale = if options.scale_tolerance && state.max_sample_value > 0.0 {
                 state.max_sample_value
             } else {
                 1.0
@@ -620,16 +843,21 @@ where
                 left_orthogonal: true,
             };
 
-            // INVARIANT: AllEdges visits each edge once in this pass. Its
-            // two subtree keys are not changed by updates of other edges;
-            // proposers can retain its current pivots without a full snapshot.
+            // The visitor must return a permutation of the tree's edges for
+            // this pass. Validate before any update mutates state: an omitted
+            // edge would keep its previous bond error and could satisfy
+            // convergence falsely. The two subtree keys of an edge are not
+            // changed by updates of other edges, so proposers can retain the
+            // edge's current pivots without a full snapshot.
+            let order = visitor.visit_order(state);
+            validate_edge_order(state, &order)?;
             state.flush_pivot_errors();
 
-            for edge in visitor.visit_order(state) {
+            for edge in order {
                 update_edge(
                     state,
                     edge,
-                    &evaluate,
+                    execution,
                     &kernel_options,
                     proposer,
                     streams.candidates(),
@@ -637,13 +865,23 @@ where
             }
         }
 
-        ranks.push(state.max_bond_dim());
-        let normalized_error = if options.normalize_error && state.max_sample_value > 0.0 {
+        let max_bond_dim = state.max_bond_dim();
+        ranks.push(max_bond_dim);
+        let normalized_error = if options.scale_tolerance && state.max_sample_value > 0.0 {
             state.max_bond_error() / state.max_sample_value
         } else {
             state.max_bond_error()
         };
         errors.push(normalized_error);
+
+        // The observer sees exactly what the run just recorded, before any
+        // stopping check, so the last iteration is reported too.
+        observer.iteration(&TreeTciIteration {
+            iteration,
+            max_bond_dim,
+            error: normalized_error,
+            evaluation: &execution.stats(),
+        });
 
         // Mirrors `TreeTCI.jl`'s `convergencecriterion` third disjunct
         // (branch `local-fix-convergence`, commit 06563dd): once the rank has
@@ -679,8 +917,8 @@ where
         // never be processed by a subsequent sweep, so the recorded error
         // and termination reason would not reflect it, and the unswept state
         // would not be materializable (see above).
-        if options.enable_global_pivots && _iter + 1 < options.max_iter {
-            let error_scale = if options.normalize_error && state.max_sample_value > 0.0 {
+        if options.enable_global_pivots && iteration + 1 < options.max_iter {
+            let error_scale = if options.scale_tolerance && state.max_sample_value > 0.0 {
                 state.max_sample_value
             } else {
                 1.0
@@ -688,8 +926,9 @@ where
             let abs_tol = options.tolerance * error_scale;
             let pivots = find_global_pivots_erased(
                 state,
-                &evaluate,
+                execution,
                 options.nsearch,
+                &options.global_search_starts,
                 options.max_nglobal_pivot,
                 options.tol_margin_global_search,
                 abs_tol,

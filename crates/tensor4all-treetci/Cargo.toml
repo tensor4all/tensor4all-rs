@@ -9,13 +9,26 @@ authors = [
 license.workspace = true
 repository.workspace = true
 description = "Tree Tensor Cross Interpolation on tree graphs"
+autotests = false
 
 [features]
-default = ["tenferro-cpu-faer"]
+default = ["tenferro-cpu-platform"]
+# The platform default: Apple Accelerate on macOS, faer elsewhere
+# (see the `tensor4all-cpu-platform` crate).
+tenferro-cpu-platform = [
+    "tensor4all-core/tenferro-cpu-platform",
+    "tensor4all-tensorbackend/tenferro-cpu-platform",
+    "tensor4all-treetn/tenferro-cpu-platform",
+]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
     "tensor4all-tensorbackend/tenferro-cpu-faer",
     "tensor4all-treetn/tenferro-cpu-faer",
+]
+tenferro-system-blas = [
+    "tensor4all-core/tenferro-system-blas",
+    "tensor4all-tensorbackend/tenferro-system-blas",
+    "tensor4all-treetn/tenferro-system-blas",
 ]
 tenferro-provider-inject = [
     "tensor4all-core/tenferro-provider-inject",
@@ -36,6 +49,20 @@ tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 
+[[bench]]
+name = "g0_stage_budget"
+harness = false
+
+[[bench]]
+name = "stage_components"
+harness = false
+
 [dev-dependencies]
+tenferro-cpu.workspace = true
+rayon.workspace = true
 approx.workspace = true
 quanticsgrids.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

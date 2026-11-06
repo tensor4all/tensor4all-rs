@@ -1,6 +1,6 @@
 // M4 eager-versus-compact patch representation comparison at realistic bond
-// dimensions. The body is included by
-// `crates/tensor4all-partitionedtreetn/examples/benchmark_tree_patch_representation.rs`.
+// dimensions. The harness is the `benchmark_tree_patch_representation` example
+// of the `tensor4all-benchmarks` package.
 //
 // Usage (all modes print one JSON object per line):
 //
@@ -40,8 +40,12 @@ use tensor4all_partitionedtreetn::adaptive_interpolation::{
     patched_interpolate, PatchedInterpolationOptions, PatchedInterpolationResult,
 };
 use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, Projector};
+use tensor4all_tensorbackend::explicit::Session;
+use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_treetci::TreeTciInterpolator;
-use tensor4all_treetn::interpolation::{InterpolationProblem, TreeInterpolator};
+use tensor4all_treetn::interpolation::{
+    EvalContext, InterpolationProblem, Parallelism, TreeInterpolator,
+};
 use tensor4all_treetn::{
     CachedEvaluatorOptions, EvaluationHint, NodeNameNetwork, TreeTN, TreeTNCachedEvaluator,
     TruncationOptions,
@@ -50,6 +54,13 @@ use tensor4all_treetn::{
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 type Name = String;
 type Network = TreeTN<IdxTensor, Name>;
+
+/// Run `body` with one explicit execution capability over a single-thread backend.
+fn with_eval_context<R>(body: impl FnOnce(&mut EvalContext<'_>) -> R) -> R {
+    let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+    let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+    body(&mut ctx)
+}
 
 /// Relative tolerance of every interpolation (sampled max norm).
 const RTOL: f64 = 1.0e-4;
@@ -125,9 +136,12 @@ impl Workload {
     fn evaluator<'a>(
         &'a self,
         counter: &'a AtomicUsize,
-    ) -> impl Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>> + Send + Sync + 'a {
+    ) -> impl FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<f64>>
+           + Send
+           + Sync
+           + 'a {
         let n_sites = self.sites.len();
-        move |batch| {
+        move |batch, _ctx| {
             counter.fetch_add(batch.shape()[1], Ordering::Relaxed);
             Ok(batch
                 .data()
@@ -334,8 +348,9 @@ fn calibrate(workload: &Workload, cap: usize) -> Result<()> {
     )?;
     let counter = AtomicUsize::new(0);
     let start = Instant::now();
-    let outcome =
-        TreeTciInterpolator::default().interpolate(&problem, workload.evaluator(&counter))?;
+    let outcome = with_eval_context(|ctx| {
+        TreeTciInterpolator::default().interpolate(&problem, ctx, workload.evaluator(&counter))
+    })?;
     let seconds = start.elapsed().as_secs_f64();
     let link_dims = outcome.network.link_dims();
     println!(
@@ -374,14 +389,17 @@ fn interpolate_patches(
         .with_seed(SEED);
     let counter = AtomicUsize::new(0);
     let start = Instant::now();
-    let result = patched_interpolate(
-        &TreeTciInterpolator::default(),
-        workload.topology.clone(),
-        workload.node_sites.clone(),
-        workload.initial_pivots()?,
-        workload.evaluator(&counter),
-        &options,
-    )?;
+    let result = with_eval_context(|ctx| {
+        patched_interpolate(
+            &TreeTciInterpolator::default(),
+            workload.topology.clone(),
+            workload.node_sites.clone(),
+            workload.initial_pivots().expect("initial pivots"),
+            ctx,
+            workload.evaluator(&counter),
+            &options,
+        )
+    })?;
     let seconds = start.elapsed().as_secs_f64();
     Ok((result, seconds, counter.load(Ordering::Relaxed)))
 }
@@ -955,7 +973,7 @@ fn outside_max_abs(workload: &Workload, patch: &PatchPair, rng: &mut ChaCha8Rng)
 fn median(values: &mut [u128]) -> u128 {
     values.sort_unstable();
     let middle = values.len() / 2;
-    if values.len() % 2 == 0 {
+    if values.len().is_multiple_of(2) {
         (values[middle - 1] + values[middle]) / 2
     } else {
         values[middle]
@@ -965,7 +983,7 @@ fn median(values: &mut [u128]) -> u128 {
 fn median_f64(values: &mut [f64]) -> f64 {
     values.sort_by(f64::total_cmp);
     let middle = values.len() / 2;
-    if values.len() % 2 == 0 {
+    if values.len().is_multiple_of(2) {
         0.5 * (values[middle - 1] + values[middle])
     } else {
         values[middle]

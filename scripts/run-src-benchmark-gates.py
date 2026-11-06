@@ -109,6 +109,7 @@ def run_once(
             "OPENBLAS_NUM_THREADS": "1",
             "OMP_NUM_THREADS": "1",
             "MKL_NUM_THREADS": "1",
+            "VECLIB_MAXIMUM_THREADS": "1",
             "T4A_BENCH_ALGORITHM": case.algorithm,
         }
     )
@@ -257,7 +258,7 @@ def main() -> int:
     parser.add_argument("--reps", type=int, default=5)
     parser.add_argument("--correctness-tol", type=float, default=1.0e-8)
     parser.add_argument("--expected-backend", default="tenferro")
-    parser.add_argument("--expected-features", default="tenferro-cpu-faer")
+    parser.add_argument("--expected-features", default="tenferro-cpu-platform")
     parser.add_argument("--required-improvement-percent", type=float, default=0.0)
     parser.add_argument("--allowed-regression-percent", type=float, default=5.0)
     parser.add_argument("--max-dispersion-percent", type=float, default=10.0)

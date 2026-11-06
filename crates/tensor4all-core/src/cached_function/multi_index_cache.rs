@@ -13,8 +13,131 @@
 //! evaluation cached.
 
 use super::error;
-use super::{CacheBackend, IndexInt};
+use super::{cache_key::CacheKey, flat_index, IndexInt, InnerCache};
 use crate::ColMajorArrayRef;
+use std::collections::{hash_map::Entry, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Marker for the left side of an additive site split.
+///
+/// Side keys are side-tagged at the type level, so a left side cannot stand in
+/// where a right side is expected; see [`SideKeys`] and
+/// [`MultiIndexCache::evaluate_keyed`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LeftSide;
+
+/// Marker for the right side of an additive site split.
+///
+/// The counterpart of [`LeftSide`]; the tag exists only in the type, so
+/// swapping the two sides of a keyed request is a compile error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RightSide;
+
+/// One side of an additive site split, encoded with the cache's own keys.
+///
+/// Built by [`MultiIndexCache::left_keys`] or [`MultiIndexCache::right_keys`],
+/// never from a bare integer: the cache owns key construction, so a key always
+/// belongs to a validated site list of the cache that made it. The `Side`
+/// parameter keeps the two sides apart, and the keys stay bound to the cache
+/// instance and to its generation, so [`MultiIndexCache::evaluate_keyed`]
+/// rejects keys of another cache or of a cleared cache.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::MultiIndexCache;
+///
+/// let cache: MultiIndexCache<f64> = MultiIndexCache::new(&[3, 4]).unwrap();
+/// let left = cache.left_keys(&[0], &[vec![2usize]]).unwrap();
+/// assert_eq!(left.len(), 1);
+/// assert!(!left.is_empty());
+/// assert_eq!(left.sites(), &[0]);
+/// ```
+#[derive(Clone, Debug)]
+pub struct SideKeys<Side> {
+    cache: u64,
+    generation: u64,
+    sites: Vec<usize>,
+    values: SideKeyValues,
+    _side: std::marker::PhantomData<Side>,
+}
+
+impl<Side> SideKeys<Side> {
+    /// Number of fragments on this side, one per key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::MultiIndexCache;
+    ///
+    /// let cache: MultiIndexCache<f64> = MultiIndexCache::new(&[2, 2]).unwrap();
+    /// let side = cache.right_keys(&[1], &[vec![0usize], vec![1]]).unwrap();
+    /// assert_eq!(side.len(), 2);
+    /// ```
+    pub fn len(&self) -> usize {
+        match &self.values {
+            SideKeyValues::U64(values) => values.len(),
+            SideKeyValues::U128(values) => values.len(),
+        }
+    }
+
+    /// Whether this side carries no fragment.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::MultiIndexCache;
+    ///
+    /// let cache: MultiIndexCache<f64> = MultiIndexCache::new(&[2]).unwrap();
+    /// assert!(cache.left_keys(&[0], &[]).unwrap().is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The sites this side covers, in fragment order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::MultiIndexCache;
+    ///
+    /// let cache: MultiIndexCache<f64> = MultiIndexCache::new(&[2, 3, 4]).unwrap();
+    /// let side = cache.left_keys(&[2, 0], &[vec![3usize, 1]]).unwrap();
+    /// assert_eq!(side.sites(), &[2, 0]);
+    /// ```
+    pub fn sites(&self) -> &[usize] {
+        &self.sites
+    }
+}
+
+/// Side keys of one side, as the cache stores them.
+#[derive(Clone, Debug)]
+pub(crate) enum SideKeyValues {
+    U64(Vec<u64>),
+    U128(Vec<u128>),
+}
+
+/// The integers a side key can be, so one keyed batch serves both widths.
+trait SideWord: Copy + Eq + std::hash::Hash {
+    /// The cache key of an entry: the two sides of an additive split add.
+    fn compose(self, right: Self) -> Self;
+}
+
+impl SideWord for u64 {
+    fn compose(self, right: Self) -> Self {
+        self.wrapping_add(right)
+    }
+}
+
+impl SideWord for u128 {
+    fn compose(self, right: Self) -> Self {
+        self.wrapping_add(right)
+    }
+}
+
+/// Source of the ids that bind side keys to their cache.
+static NEXT_CACHE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Failure while evaluating a batch through [`MultiIndexCache`].
 ///
@@ -111,9 +234,13 @@ where
     I: IndexInt,
     V: Clone + Send + Sync + 'static,
 {
-    backend: CacheBackend<V>,
+    backend: InnerCache<V>,
     local_dims: Vec<usize>,
     key_bytes: usize,
+    /// Process-unique identity, so side keys of one cache cannot key another.
+    id: u64,
+    /// Advanced by [`Self::clear`]; side keys of an earlier generation are stale.
+    generation: u64,
     hits: usize,
     misses: usize,
     retained_byte_limit: usize,
@@ -200,12 +327,14 @@ where
         local_dims: &[usize],
         retained_byte_limit: usize,
     ) -> Result<Self, error::CacheKeyError> {
-        let backend = CacheBackend::Auto(super::InnerCache::<V>::new(local_dims)?);
+        let backend = InnerCache::<V>::new(local_dims)?;
         let key_bytes = backend.key_bytes();
         Ok(Self {
             backend,
             local_dims: local_dims.to_vec(),
             key_bytes,
+            id: NEXT_CACHE_ID.fetch_add(1, Ordering::Relaxed),
+            generation: 0,
             hits: 0,
             misses: 0,
             retained_byte_limit,
@@ -304,7 +433,6 @@ where
             .into());
         }
         let n_sites = indices.shape()[0];
-        let n_points = indices.shape()[1];
         if n_sites != self.local_dims.len() {
             return Err(error::CacheKeyError::InvalidIndexLength {
                 expected: self.local_dims.len(),
@@ -312,56 +440,352 @@ where
             }
             .into());
         }
-        let pending =
-            MultiIndexCache::<usize, I>::with_retained_byte_limit(&self.local_dims, usize::MAX)?;
-        let mut miss_data = Vec::new();
-        let mut slots = Vec::with_capacity(n_points);
-        for position in 0..n_points {
-            // INVARIANT: The checked 2D view contains exactly n_sites*n_points
-            // elements, including empty columns for a zero-site scalar batch.
-            let point = &indices.data()[position * n_sites..(position + 1) * n_sites];
-            if let Some(value) = self.get(point)? {
-                slots.push(Ok(value));
-            } else {
-                let slot = match pending.backend.get(point) {
-                    Some(slot) => slot,
-                    None => {
-                        let slot = pending.len();
-                        pending.backend.insert(point, slot);
-                        miss_data.extend_from_slice(point);
-                        slot
-                    }
-                };
-                slots.push(Err(slot));
+        macro_rules! evaluate_with {
+            ($cache:expr, $coeffs:expr) => {
+                evaluate_encoded_batch(
+                    $cache
+                        .get_mut()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                    $coeffs,
+                    &self.local_dims,
+                    self.retained_byte_limit,
+                    &mut self.hits,
+                    &mut self.misses,
+                    &mut self.dropped_inserts,
+                    indices,
+                    evaluate,
+                )
+            };
+        }
+        match &mut self.backend {
+            InnerCache::U64 { cache, coeffs } => evaluate_with!(cache, coeffs),
+            InnerCache::U128 { cache, coeffs } => evaluate_with!(cache, coeffs),
+            InnerCache::U256 { cache, coeffs } => evaluate_with!(cache, coeffs),
+            InnerCache::U512 { cache, coeffs } => evaluate_with!(cache, coeffs),
+            InnerCache::U1024 { cache, coeffs } => evaluate_with!(cache, coeffs),
+        }
+    }
+
+    /// Whether this cache can build the side keys [`Self::evaluate_keyed`]
+    /// consumes.
+    ///
+    /// Only `u64` and `u128` caches can: the wider key types have no side-key
+    /// support, so [`Self::left_keys`] and [`Self::right_keys`] return
+    /// [`error::CacheKeyError::SideKeyUnsupported`] for them.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::MultiIndexCache;
+    ///
+    /// let narrow: MultiIndexCache<f64> = MultiIndexCache::new(&[2, 2]).unwrap();
+    /// assert!(narrow.supports_side_keys());
+    ///
+    /// // 129 binary sites need 129 bits, which selects a 256-bit key.
+    /// let wide: MultiIndexCache<f64> = MultiIndexCache::new(&vec![2; 129]).unwrap();
+    /// assert!(!wide.supports_side_keys());
+    /// ```
+    pub fn supports_side_keys(&self) -> bool {
+        self.backend.supports_side_keys()
+    }
+
+    /// Build the cache-owned keys of one side of an additive site split.
+    ///
+    /// `sites` lists the sites this side covers, in the order the fragments
+    /// carry them; `fragments` holds one multi-index fragment per key. Every
+    /// site must be distinct and in range, every fragment must have
+    /// `sites.len()` coordinates, and every coordinate must be in its site's
+    /// local dimension.
+    ///
+    /// The keys use the cache's own mixed-radix coefficients, and the flat key
+    /// of a full point is linear in its coordinates, so an entry's key is the
+    /// sum of its two sides' keys. A caller that splits the sites into two
+    /// disjoint sets therefore reads a matrix entry with
+    /// [`Self::evaluate_keyed`] instead of assembling the point. The result is
+    /// tagged [`LeftSide`], so it cannot stand in where a [`RightSide`] is
+    /// expected.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`error::CacheKeyError::SideKeyUnsupported`] for a cache whose
+    /// key width has no side-key support,
+    /// [`error::CacheKeyError::SideKeyDegenerate`] when the index space has a
+    /// zero local dimension (its later coefficients are all zero, and it holds
+    /// no valid point), [`error::CacheKeyError::SideSiteOutOfBounds`] or
+    /// [`error::CacheKeyError::RepeatedSideSite`] for an invalid site list,
+    /// [`error::CacheKeyError::InvalidIndexLength`] when a fragment does not
+    /// match the site list, and [`error::CacheKeyError::IndexOutOfBounds`] for a
+    /// coordinate outside its site's local dimension.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::MultiIndexCache;
+    ///
+    /// // Sites 0 and 1 with local dimensions 3 and 4.
+    /// let mut cache: MultiIndexCache<f64> = MultiIndexCache::new(&[3, 4]).unwrap();
+    /// let left = cache
+    ///     .left_keys(&[0], &[vec![0usize], vec![1], vec![2]])
+    ///     .unwrap();
+    /// let right = cache
+    ///     .right_keys(&[1], &[vec![0usize], vec![1], vec![2], vec![3]])
+    ///     .unwrap();
+    ///
+    /// // Entry (2, 3) and entry (0, 3); the last request repeats an entry.
+    /// let mut evaluated = 0;
+    /// let values = cache
+    ///     .evaluate_keyed(&left, &right, &[(2, 3), (0, 3), (2, 3)], |misses| {
+    ///         evaluated += misses.len();
+    ///         Ok(misses.iter().map(|&(i, j)| (i * 4 + j) as f64).collect())
+    ///     })
+    ///     .unwrap();
+    /// assert_eq!(values, vec![11.0, 3.0, 11.0]);
+    /// assert_eq!(evaluated, 2, "the repeated entry is evaluated once");
+    /// assert_eq!(cache.misses(), 3, "every request is a lookup");
+    ///
+    /// // The second call is served from the cache.
+    /// let values = cache
+    ///     .evaluate_keyed(&left, &right, &[(2, 3)], |_| Ok(Vec::new()))
+    ///     .unwrap();
+    /// assert_eq!(values, vec![11.0]);
+    /// assert_eq!(cache.hits(), 1);
+    /// ```
+    pub fn left_keys(
+        &self,
+        sites: &[usize],
+        fragments: &[Vec<I>],
+    ) -> Result<SideKeys<LeftSide>, error::CacheKeyError> {
+        self.side_keys(sites, fragments)
+    }
+
+    /// Build the cache-owned keys of the other side of an additive site split.
+    ///
+    /// The mirror image of [`Self::left_keys`] with the [`RightSide`] tag; the
+    /// two sides must be disjoint when they are used together. See
+    /// [`Self::left_keys`] for the validation and the errors.
+    ///
+    /// # Errors
+    ///
+    /// The same conditions as [`Self::left_keys`]:
+    /// [`error::CacheKeyError::SideKeyUnsupported`],
+    /// [`error::CacheKeyError::SideKeyDegenerate`],
+    /// [`error::CacheKeyError::SideSiteOutOfBounds`],
+    /// [`error::CacheKeyError::RepeatedSideSite`],
+    /// [`error::CacheKeyError::InvalidIndexLength`], and
+    /// [`error::CacheKeyError::IndexOutOfBounds`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::MultiIndexCache;
+    ///
+    /// let cache: MultiIndexCache<f64> = MultiIndexCache::new(&[2, 3, 4]).unwrap();
+    /// let right = cache.right_keys(&[2, 0], &[vec![3usize, 1]]).unwrap();
+    /// assert_eq!(right.len(), 1);
+    /// assert_eq!(right.sites(), &[2, 0]);
+    /// ```
+    pub fn right_keys(
+        &self,
+        sites: &[usize],
+        fragments: &[Vec<I>],
+    ) -> Result<SideKeys<RightSide>, error::CacheKeyError> {
+        self.side_keys(sites, fragments)
+    }
+
+    /// Evaluate the entries of a keyed request list and return values in
+    /// request order.
+    ///
+    /// `requests` pairs one [`LeftSide`] fragment index with one [`RightSide`]
+    /// fragment index, in any order; a repeated entry is evaluated once. The
+    /// `evaluate` callback receives the distinct missing entries, in
+    /// first-occurrence order, as fragment indices, and returns one value per
+    /// entry. It may borrow mutable or thread-affine state; no `Send`/`Sync`
+    /// bound is imposed on the callback.
+    ///
+    /// The keys are authoritative, not a lookup hint: they come from this
+    /// cache, they are side-tagged, and the two sides are disjoint, so two
+    /// distinct points cannot share a key (repeated fragments produce repeated
+    /// entries, and a repeated entry is evaluated once). No point is
+    /// re-validated on a hit, and the insert stores the value under the composed
+    /// key. A site that neither side covers contributes zero to the composed
+    /// key, so sides that leave sites out address the point that is zero there.
+    /// A cache with a zero local dimension holds no valid point and builds no
+    /// side keys.
+    ///
+    /// Hits and misses count lookups, so a duplicate within a cold batch is a
+    /// miss. Inserts occur only after the whole callback succeeds; a failed
+    /// callback retains no new entries but keeps the lookups already counted.
+    /// The retained-byte limit and [`Self::dropped_inserts`] apply as in
+    /// [`Self::insert`].
+    ///
+    /// A left key used as a right key is a compile error:
+    ///
+    /// ```compile_fail
+    /// use tensor4all_core::MultiIndexCache;
+    ///
+    /// let mut cache: MultiIndexCache<f64> = MultiIndexCache::new(&[2, 2]).unwrap();
+    /// let left = cache.left_keys(&[0], &[vec![1usize]]).unwrap();
+    /// let right = cache.right_keys(&[1], &[vec![1usize]]).unwrap();
+    /// // Swapped sides: `SideKeys<LeftSide>` is not a `SideKeys<RightSide>`.
+    /// let _ = cache.evaluate_keyed(&right, &left, &[(0, 0)], |_| Ok(Vec::new()));
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CachedBatchError`] for keys of another cache
+    /// ([`error::CacheKeyError::SideKeyOwner`]), stale keys of a cleared cache
+    /// ([`error::CacheKeyError::SideKeyStale`]), overlapping sides
+    /// ([`error::CacheKeyError::OverlappingSideSites`]), a request index outside
+    /// its side ([`error::CacheKeyError::SideKeyPosition`]), a callback failure,
+    /// or a callback result with the wrong length.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{CacheKeyError, CachedBatchError, MultiIndexCache};
+    ///
+    /// let mut cache: MultiIndexCache<f64> = MultiIndexCache::new(&[2, 2]).unwrap();
+    /// let left = cache.left_keys(&[0], &[vec![0usize], vec![1]]).unwrap();
+    /// let right = cache.right_keys(&[1], &[vec![0usize], vec![1]]).unwrap();
+    /// let requests = [(0, 0), (1, 0), (0, 1), (1, 1)];
+    /// let first = cache
+    ///     .evaluate_keyed(&left, &right, &requests, |misses| {
+    ///         Ok(misses.iter().map(|&(i, j)| (2 * i + j) as f64).collect())
+    ///     })
+    ///     .unwrap();
+    /// assert_eq!(first, vec![0.0, 2.0, 1.0, 3.0]);
+    /// assert_eq!(cache.len(), 4);
+    ///
+    /// // A side that also covers site 1 breaks key composition.
+    /// let overlapping = cache.left_keys(&[0, 1], &[vec![0usize, 0]]).unwrap();
+    /// let error = cache
+    ///     .evaluate_keyed(&overlapping, &right, &[(0, 0)], |_| Ok(Vec::new()))
+    ///     .unwrap_err();
+    /// assert!(matches!(
+    ///     error,
+    ///     CachedBatchError::Index(CacheKeyError::OverlappingSideSites { site: 1 })
+    /// ));
+    /// ```
+    pub fn evaluate_keyed<F>(
+        &mut self,
+        left: &SideKeys<LeftSide>,
+        right: &SideKeys<RightSide>,
+        requests: &[(usize, usize)],
+        evaluate: F,
+    ) -> Result<Vec<V>, CachedBatchError>
+    where
+        F: FnOnce(&[(usize, usize)]) -> anyhow::Result<Vec<V>>,
+    {
+        self.check_side_pair(left, right)?;
+        let entry_bytes = self.key_bytes + std::mem::size_of::<V>();
+        macro_rules! keyed_with {
+            ($cache:expr, $left:expr, $right:expr) => {
+                evaluate_keyed_requests(
+                    $cache
+                        .get_mut()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                    $left,
+                    $right,
+                    requests,
+                    entry_bytes,
+                    self.retained_byte_limit,
+                    &mut self.hits,
+                    &mut self.misses,
+                    &mut self.dropped_inserts,
+                    evaluate,
+                )
+            };
+        }
+        match (&left.values, &right.values, &mut self.backend) {
+            (
+                SideKeyValues::U64(left),
+                SideKeyValues::U64(right),
+                InnerCache::U64 { cache, .. },
+            ) => {
+                keyed_with!(cache, left, right)
+            }
+            (
+                SideKeyValues::U128(left),
+                SideKeyValues::U128(right),
+                InnerCache::U128 { cache, .. },
+            ) => keyed_with!(cache, left, right),
+            // INVARIANT: both sides were built by this cache (checked above), so
+            // their widths are this cache's width and always agree.
+            _ => Err(error::CacheKeyError::SideKeyOwner.into()),
+        }
+    }
+
+    fn side_keys<Side>(
+        &self,
+        sites: &[usize],
+        fragments: &[Vec<I>],
+    ) -> Result<SideKeys<Side>, error::CacheKeyError> {
+        // A zero local dimension makes every coefficient after it zero, so
+        // distinct fragments would share a key; and no point of such a space is
+        // valid, so no key of it can be authoritative.
+        if let Some(site) = self.local_dims.iter().position(|&dim| dim == 0) {
+            return Err(error::CacheKeyError::SideKeyDegenerate { site });
+        }
+        validate_side_sites(&self.local_dims, sites)?;
+        for fragment in fragments {
+            if fragment.len() != sites.len() {
+                return Err(error::CacheKeyError::InvalidIndexLength {
+                    expected: sites.len(),
+                    got: fragment.len(),
+                });
+            }
+            for (&site, &value) in sites.iter().zip(fragment.iter()) {
+                let value = value.to_usize();
+                let dim = self.local_dims[site];
+                if value >= dim {
+                    return Err(error::CacheKeyError::IndexOutOfBounds {
+                        axis: site,
+                        index: value,
+                        dim,
+                    });
+                }
             }
         }
-        let n_misses = pending.len();
-        let values = if n_misses == 0 {
-            Vec::new()
-        } else {
-            let shape = [n_sites, n_misses];
-            let values = evaluate(ColMajorArrayRef::new(&miss_data, &shape)?)
-                .map_err(CachedBatchError::Evaluation)?;
-            if values.len() != n_misses {
-                return Err(error::CacheKeyError::BatchResultLength {
-                    expected: n_misses,
-                    got: values.len(),
-                }
-                .into());
+        let values = self.backend.side_key_values(sites, fragments).ok_or(
+            error::CacheKeyError::SideKeyUnsupported {
+                key_type: self.backend.key_type_name(),
+            },
+        )?;
+        Ok(SideKeys {
+            cache: self.id,
+            generation: self.generation,
+            sites: sites.to_vec(),
+            values,
+            _side: std::marker::PhantomData,
+        })
+    }
+
+    /// The keys are authoritative only if they are this cache's, of its current
+    /// generation, and of two disjoint sides.
+    ///
+    /// One pass over each site list: a site count is bounded only by the key
+    /// width, and a scan per left site would cost `n_left * n_right`.
+    fn check_side_pair(
+        &self,
+        left: &SideKeys<LeftSide>,
+        right: &SideKeys<RightSide>,
+    ) -> Result<(), error::CacheKeyError> {
+        if left.cache != self.id || right.cache != self.id {
+            return Err(error::CacheKeyError::SideKeyOwner);
+        }
+        if left.generation != self.generation || right.generation != self.generation {
+            return Err(error::CacheKeyError::SideKeyStale);
+        }
+        let mut covered = vec![false; self.local_dims.len()];
+        for &site in &left.sites {
+            covered[site] = true;
+        }
+        for &site in &right.sites {
+            if covered[site] {
+                return Err(error::CacheKeyError::OverlappingSideSites { site });
             }
-            for (position, value) in values.iter().enumerate() {
-                let point = &miss_data[position * n_sites..(position + 1) * n_sites];
-                self.insert(point, value.clone())?;
-            }
-            values
-        };
-        Ok(slots
-            .into_iter()
-            .map(|slot| match slot {
-                Ok(value) => value,
-                Err(position) => values[position].clone(),
-            })
-            .collect())
+        }
+        Ok(())
     }
 
     /// Store one successfully evaluated value.
@@ -461,6 +885,9 @@ where
 
     /// Drop every retained entry; counters and dimensions are preserved.
     ///
+    /// The cache's generation advances, so side keys built before this call are
+    /// stale and [`Self::evaluate_keyed`] rejects them.
+    ///
     /// # Examples
     ///
     /// ```
@@ -474,6 +901,7 @@ where
     /// ```
     pub fn clear(&mut self) {
         self.backend.clear();
+        self.generation += 1;
     }
 
     /// Number of lookups that found a cached value.
@@ -637,22 +1065,225 @@ where
     }
 
     fn validate(&self, idx: &[I]) -> Result<(), error::CacheKeyError> {
-        if idx.len() != self.local_dims.len() {
-            return Err(error::CacheKeyError::InvalidIndexLength {
-                expected: self.local_dims.len(),
-                got: idx.len(),
-            });
-        }
-        for (axis, (&value, &dim)) in idx.iter().zip(&self.local_dims).enumerate() {
-            let value = value.to_usize();
-            if value >= dim {
-                return Err(error::CacheKeyError::IndexOutOfBounds {
-                    axis,
-                    index: value,
-                    dim,
-                });
-            }
-        }
-        Ok(())
+        validate_index(&self.local_dims, idx)
     }
 }
+
+fn validate_index<I: IndexInt>(
+    local_dims: &[usize],
+    idx: &[I],
+) -> Result<(), error::CacheKeyError> {
+    if idx.len() != local_dims.len() {
+        return Err(error::CacheKeyError::InvalidIndexLength {
+            expected: local_dims.len(),
+            got: idx.len(),
+        });
+    }
+    for (axis, (&value, &dim)) in idx.iter().zip(local_dims).enumerate() {
+        let value = value.to_usize();
+        if value >= dim {
+            return Err(error::CacheKeyError::IndexOutOfBounds {
+                axis,
+                index: value,
+                dim,
+            });
+        }
+    }
+    Ok(())
+}
+
+// INVARIANT: These are disjoint fields of one cache plus its batch and callback;
+// grouping the borrowed fields would add an otherwise unused state type.
+#[allow(clippy::too_many_arguments)]
+fn evaluate_encoded_batch<K, V, I, F>(
+    cache: &mut HashMap<K, V>,
+    coeffs: &[K],
+    local_dims: &[usize],
+    retained_byte_limit: usize,
+    hits: &mut usize,
+    misses: &mut usize,
+    dropped_inserts: &mut usize,
+    indices: ColMajorArrayRef<'_, I>,
+    evaluate: F,
+) -> Result<Vec<V>, CachedBatchError>
+where
+    K: CacheKey,
+    V: Clone,
+    I: IndexInt,
+    F: FnOnce(ColMajorArrayRef<'_, I>) -> anyhow::Result<Vec<V>>,
+{
+    let n_sites = local_dims.len();
+    let n_points = indices.shape()[1];
+    let mut pending = HashMap::new();
+    let mut miss_keys = Vec::new();
+    let mut miss_data = Vec::new();
+    let mut slots = Vec::with_capacity(n_points);
+    for position in 0..n_points {
+        // INVARIANT: The checked 2D view contains exactly n_sites*n_points
+        // elements, including empty columns for a zero-site scalar batch.
+        let point = &indices.data()[position * n_sites..(position + 1) * n_sites];
+        validate_index(local_dims, point)?;
+        let key = flat_index(point, coeffs);
+        if let Some(value) = cache.get(&key) {
+            *hits += 1;
+            slots.push(Ok(value.clone()));
+        } else {
+            *misses += 1;
+            let slot = match pending.entry(key.clone()) {
+                Entry::Occupied(entry) => *entry.get(),
+                Entry::Vacant(entry) => {
+                    let slot = miss_keys.len();
+                    entry.insert(slot);
+                    miss_keys.push(key);
+                    miss_data.extend_from_slice(point);
+                    slot
+                }
+            };
+            slots.push(Err(slot));
+        }
+    }
+    let n_misses = miss_keys.len();
+    let values = if n_misses == 0 {
+        Vec::new()
+    } else {
+        let shape = [n_sites, n_misses];
+        let values = evaluate(ColMajorArrayRef::new(&miss_data, &shape)?)
+            .map_err(CachedBatchError::Evaluation)?;
+        if values.len() != n_misses {
+            return Err(error::CacheKeyError::BatchResultLength {
+                expected: n_misses,
+                got: values.len(),
+            }
+            .into());
+        }
+        let entry_bytes = std::mem::size_of::<K>() + std::mem::size_of::<V>();
+        for (key, value) in miss_keys.into_iter().zip(&values) {
+            if (cache.len() * entry_bytes).saturating_add(entry_bytes) > retained_byte_limit {
+                *dropped_inserts += 1;
+            } else {
+                cache.insert(key, value.clone());
+            }
+        }
+        values
+    };
+    Ok(slots
+        .into_iter()
+        .map(|slot| match slot {
+            Ok(value) => value,
+            Err(position) => values[position].clone(),
+        })
+        .collect())
+}
+
+fn validate_side_sites(local_dims: &[usize], sites: &[usize]) -> Result<(), error::CacheKeyError> {
+    let n_sites = local_dims.len();
+    let mut seen = vec![false; n_sites];
+    for &site in sites {
+        if site >= n_sites {
+            return Err(error::CacheKeyError::SideSiteOutOfBounds { site, n_sites });
+        }
+        if seen[site] {
+            return Err(error::CacheKeyError::RepeatedSideSite { site });
+        }
+        seen[site] = true;
+    }
+    Ok(())
+}
+
+/// Serve one keyed request list from one keyed map.
+///
+/// The mirror image of `evaluate_encoded_batch` for requests whose keys the
+/// cache composed from two sides: the keys are authoritative, so nothing is
+/// re-validated on a hit, and the caller sees only the distinct missing entries.
+#[allow(clippy::too_many_arguments)]
+fn evaluate_keyed_requests<K, V, F>(
+    cache: &mut HashMap<K, V>,
+    left: &[K],
+    right: &[K],
+    requests: &[(usize, usize)],
+    entry_bytes: usize,
+    retained_byte_limit: usize,
+    hits: &mut usize,
+    misses: &mut usize,
+    dropped_inserts: &mut usize,
+    evaluate: F,
+) -> Result<Vec<V>, CachedBatchError>
+where
+    K: SideWord,
+    V: Clone,
+    F: FnOnce(&[(usize, usize)]) -> anyhow::Result<Vec<V>>,
+{
+    for &(left_index, right_index) in requests {
+        if left_index >= left.len() {
+            return Err(error::CacheKeyError::SideKeyPosition {
+                side: "left",
+                index: left_index,
+                len: left.len(),
+            }
+            .into());
+        }
+        if right_index >= right.len() {
+            return Err(error::CacheKeyError::SideKeyPosition {
+                side: "right",
+                index: right_index,
+                len: right.len(),
+            }
+            .into());
+        }
+    }
+    let mut pending = HashMap::new();
+    let mut miss_keys = Vec::new();
+    let mut miss_entries = Vec::new();
+    let mut slots = Vec::with_capacity(requests.len());
+    for &(left_index, right_index) in requests {
+        let key = left[left_index].compose(right[right_index]);
+        if let Some(value) = cache.get(&key) {
+            *hits += 1;
+            slots.push(Ok(value.clone()));
+        } else {
+            *misses += 1;
+            let slot = match pending.entry(key) {
+                Entry::Occupied(entry) => *entry.get(),
+                Entry::Vacant(entry) => {
+                    let slot = miss_keys.len();
+                    entry.insert(slot);
+                    miss_keys.push(key);
+                    miss_entries.push((left_index, right_index));
+                    slot
+                }
+            };
+            slots.push(Err(slot));
+        }
+    }
+    let n_misses = miss_keys.len();
+    let values = if n_misses == 0 {
+        Vec::new()
+    } else {
+        let values = evaluate(&miss_entries).map_err(CachedBatchError::Evaluation)?;
+        if values.len() != n_misses {
+            return Err(error::CacheKeyError::BatchResultLength {
+                expected: n_misses,
+                got: values.len(),
+            }
+            .into());
+        }
+        for (key, value) in miss_keys.into_iter().zip(&values) {
+            if (cache.len() * entry_bytes).saturating_add(entry_bytes) > retained_byte_limit {
+                *dropped_inserts += 1;
+            } else {
+                cache.insert(key, value.clone());
+            }
+        }
+        values
+    };
+    Ok(slots
+        .into_iter()
+        .map(|slot| match slot {
+            Ok(value) => value,
+            Err(position) => values[position].clone(),
+        })
+        .collect())
+}
+
+#[cfg(test)]
+mod tests;

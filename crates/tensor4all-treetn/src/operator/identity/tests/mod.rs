@@ -18,7 +18,7 @@ fn test_identity_single_site() {
         build_identity_operator_tensor(std::slice::from_ref(&s_in), std::slice::from_ref(&s_out))
             .unwrap();
 
-    assert_eq!(tensor.indices.len(), 2);
+    assert_eq!(tensor.indices().len(), 2);
     assert_eq!(tensor.dims(), vec![2, 2]);
 
     // Check diagonal elements are 1
@@ -44,7 +44,7 @@ fn test_identity_two_sites() {
     )
     .unwrap();
 
-    assert_eq!(tensor.indices.len(), 4);
+    assert_eq!(tensor.indices().len(), 4);
     assert_eq!(tensor.dims(), vec![2, 2, 3, 3]);
 
     let data = get_f64_data(&tensor);
@@ -75,7 +75,7 @@ fn test_identity_dimension_mismatch() {
 fn test_identity_empty() {
     let tensor = build_identity_operator_tensor(&[], &[]).unwrap();
 
-    assert_eq!(tensor.indices.len(), 0);
+    assert_eq!(tensor.indices().len(), 0);
     assert_eq!(tensor.dims().len(), 0);
 
     let data = get_f64_data(&tensor);

@@ -116,6 +116,99 @@ key encoding for fallible, borrowed, or thread-affine targets, where the caller
 evaluates the misses), or `TTCache`, which encode keys internally. Do not
 hand-roll a multi-index cache.
 
+## Std Hasher On Integer Keys Of A Per-Point Map
+
+Contract: a std `HashMap` hashes with SipHash, which resists adversarial keys.
+Keys the library builds itself (mixed-radix integers, `IndexKey`) cannot be
+adversarial, so a per-point map keyed by them pays for a property it does not
+need. The repository already uses a cheap hasher for such keys (`WordMap`,
+`crates/tensor4all-partitionedtreetn/src/adaptive_interpolation/cache.rs`).
+Evidence: #1021 (`TreeTNCachedEvaluator::evaluate_batched_typed` with FxHash,
+pre-sized maps and one hash per point: paired time ratio 0.65 to 0.77 on random
+chains, bitwise-identical results; see #1027 for the other measurements).
+
+Detect: `rg -n 'HashMap<(u64|usize|IndexKey)' crates` on maps filled once per
+point or per request.
+
+Fix: a `BuildHasher` with a cheap hash (`rustc-hash`), or keep the std map with
+a comment saying why the keys can be adversarial. Check that no result depends
+on the map iteration order before changing the hasher.
+
+## Cache Key Rebuilt Per Request
+
+Contract: a cache key is computed once per request, from the smallest data
+that determines it, and reused for lookup, deduplication and insert.
+Evidence: #1020 (five key computations and seven lock acquisitions per miss),
+#1026 (keys built from the two sides of a candidate matrix instead of one key
+per point).
+
+Detect: `rg -n 'flat_index\(' crates/tensor4all-core/src/cached_function`;
+a key rebuilt after `get` for the `insert` that follows it; `get` followed by
+`insert` on the same map (use the entry API, which hashes once).
+
+Fix: reuse the key; build it from the parts for a structured request.
+
+## Owned Copy Of A Dense Payload On A Per-Call Path
+
+Contract: a path that only reads a payload borrows it. `IdxTensor::dense_host_values`
+returns an owned `Vec` (a full copy); `IdxTensor::with_dense_slice` borrows a
+host-contiguous payload. Evidence: reading one element of a `chi x 2 x chi`
+Complex64 core takes 5x (chi = 32) to 90x (chi = 141) longer through
+`dense_host_values` (#1027, #1039).
+
+The same estimate for `tensorbackend::mat_mul` (#1040) was resolved in #1096 by
+borrowing instead of copying: the entry dispatched `to_typed_tensor()` on both
+operands, which cloned each buffer; it now builds `TensorRead::View`s over the
+matrix buffers. On the reported shape (282x141 right operand, M5 Max, 1 thread,
+Accelerate provider, median of 300 interleaved iterations) the `m = 1` case went
+from 2.4x-3.1x (f64) and 1.15x-1.23x (c64) the cost of `mat_mul_owned` to
+0.89x-1.01x, with no operand-sized allocation left. `mat_mul_owned` still exists
+for callers that own the buffers; on the measured cases it is no longer faster.
+
+Detect: `rg -n 'dense_host_values' crates` and
+`rg -n 'to_typed_tensor\(\)' crates` on paths repeated per call, node or sweep
+(`to_typed_tensor` also appears where the values outlive the call - check the
+caller before changing it).
+
+Fix: `with_dense_slice` for read-only access; a borrowed view over the payload
+when it only feeds one kernel call (see `dot_general_borrowed` in
+`crates/tensor4all-tensorbackend/src/matrix.rs`); keep the copy where the values
+outlive the call.
+Check the storage kind before swapping: for a `Materialized` tensor
+`dense_host_values` reads the payload without entering a runtime, while
+`with_dense_slice` materializes it through the default eager context, so a
+session route needs a borrow that stays runtime-free for that kind (#1039).
+
+## Input Validation Repeated Per Pass
+
+Contract: data is validated once where it enters, as `evaluate_candidate_matrix`
+already does ("checked once up front", `crates/tensor4all-treetci/src/update.rs`).
+A second and third pass that repeat the same test, one `hypot` per complex
+entry, cost more than the single pass that is needed. Evidence: the rrLU input
+passes (`validate_luci_matrix` twice over the matrix, then
+`factorize_mut_in_place` once more) are 21 % to 25 % of a full-rank
+`rrlu_pivots` at n = 64 and 141 and 26x to 41x slower than one pass on the
+components (#1027, #1038).
+
+Detect: `rg -n 'abs_val\(\)\.is_finite\(\)|is_nan\(\)' crates/tensor4all-core/src/matrixlu.rs`;
+`any(` over the same slice more than once on one path.
+
+Fix: one pass that keeps every accept and reject decision and every error
+kind, or a validated type that carries the guarantee. For a magnitude test,
+`abs_sq().is_finite()` with the exact `abs_val` test as fallback only when it
+is not finite gives the same decision without a `hypot` per entry.
+
+## Batch Entry Point Driven One Point At A Time
+
+Contract: library code that owns a loop over independent walks does not pay a
+fixed per-call cost per point (an extension of "Wrapper That Disables
+Batching"). Evidence: #1022 (2.71x and 5.62x; the issue gives the setup).
+
+Detect: `rg -n 'evaluate_batched_with_hint|evaluate_batched_typed' crates`
+inside a callback or loop that passes one point.
+
+Fix: batch the walks in lockstep, or add a dedicated single-point readout.
+
 ## Silent Slow-Path Fallback
 
 Contract: a fast path (batch readout, structured op, backend call) that falls

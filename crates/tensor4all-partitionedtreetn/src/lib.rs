@@ -29,9 +29,10 @@
 //! The representation follows the partitioned tensor-network approach used by
 //! [PartitionedMPSs.jl](https://github.com/tensor4all/PartitionedMPSs.jl) and
 //! the adaptive patching literature. The patch queue of the adaptive
-//! interpolation driver derives from TCIAlgorithms.jl (MIT) through
-//! `tensor4all-partitionedtt`; see the notice in
-//! [`adaptive_interpolation`] and `LICENSE-TCIALGORITHMS-MIT`.
+//! interpolation driver derives from TCIAlgorithms.jl (MIT) through the chain
+//! driver of the retired `tensor4all-partitionedtt` crate (removed in #915 D3);
+//! see the notice in [`adaptive_interpolation`] and
+//! `LICENSE-TCIALGORITHMS-MIT`.
 
 pub mod adaptive_interpolation;
 mod error;
@@ -44,12 +45,15 @@ mod subdomain_tree_tn;
 
 pub use error::{PartitionedTreeTNError, Result};
 pub use error_norm::{ErrorNorm, ErrorTolerance, L2Reference};
-pub use partitioned_tree_tn::PartitionedTreeTN;
+pub use partitioned_tree_tn::{
+    PartitionedContractionOptions, PartitionedTreeTN, AUTOMATIC_REFINEMENT_LIMIT,
+};
 pub use patching::{
-    add_with_patching, contract_adaptive, truncate_adaptive, PatchSplitStrategy, PatchingOptions,
+    add_with_patching, contract_adaptive, contract_adaptive_selected, truncate_adaptive,
+    BudgetAllocation, PatchSplitStrategy, PatchingOptions,
 };
 pub use projector::Projector;
 pub use subdomain_tree_tn::SubDomainTreeTN;
 
 pub use tensor4all_core::{DynIndex, IdxTensor};
-pub use tensor4all_treetn::{SiteIndexNetwork, TreeTN};
+pub use tensor4all_treetn::{ExactSum, SiteIndexNetwork, SumEngine, TreeTN};

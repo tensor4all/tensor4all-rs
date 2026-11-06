@@ -82,8 +82,9 @@ where
     /// * `topology` - The network topology
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// Returns [`TreeTNOperationError`] when detecting link collisions, relabeling reference
+    /// links, preparing environments, resolving a local RHS tensor, or
+    /// contracting the local tensors fails.
     ///
     pub fn local_constant_term<NT: NetworkTopology<V>>(
         &mut self,
@@ -245,14 +246,17 @@ where
 
         let bra_conj = tensor_ref.conj();
 
-        // Contract bra and ket - T::contract auto-detects contractable pairs
-        let bra_ket = T::contract(&[&bra_conj, tensor_b])?;
-
-        // Contract bra*ket with child environments using T::contract
+        // At a site-free node the conjugated reference and the RHS tensor share
+        // no index. The incoming child environments connect the bra and ket
+        // sides, so contract the bra, the ket and those children together;
+        // only a genuinely disconnected leaf pair (no children) needs an
+        // explicit outer product.
         if child_envs.is_empty() {
-            Ok(bra_ket)
+            crate::treetn::contract_or_outer_product(&bra_conj, tensor_b)
         } else {
-            let mut all_tensors: Vec<&T> = vec![&bra_ket];
+            let mut all_tensors: Vec<&T> = Vec::with_capacity(2 + child_envs.len());
+            all_tensors.push(&bra_conj);
+            all_tensors.push(tensor_b);
             all_tensors.extend(child_envs);
             T::contract(&all_tensors).map_err(anyhow::Error::new)
         }

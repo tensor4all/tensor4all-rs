@@ -88,6 +88,7 @@ fn local_entries_equal_direct_values_and_callback_layout_is_column_major() {
         &options,
         true,
         &mut operator,
+        None,
     )
     .unwrap();
     assert_eq!(calls.get(), 1);
@@ -127,6 +128,7 @@ fn local_truncation_uses_relative_or_absolute_sampled_scale() {
                 &options,
                 left_orthogonal,
                 &mut diagonal,
+                None,
             )
             .unwrap();
 
@@ -179,6 +181,7 @@ fn luci_factors_reconstruct_rank_one_and_zero_targets() {
             &options,
             true,
             &mut operator,
+            None,
         )
         .unwrap();
 
@@ -222,6 +225,7 @@ fn zero_local_matrix_keeps_the_pivot_identity_in_the_interpolating_factor() {
             &options,
             left_orthogonal,
             &mut zero,
+            None,
         )
         .unwrap();
 
@@ -269,8 +273,7 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
     };
     assert!(matches!(
         materialize_and_factor_edge(
-            &inputs, &problem, &active, &frames, 0, &options, true, &mut failing,
-        ),
+            &inputs, &problem, &active, &frames, 0, &options, true, &mut failing, None ),
         Err(TreeAciError::Callback { message }) if message == "sentinel"
     ));
 
@@ -298,6 +301,7 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
             &limited,
             true,
             &mut unused,
+            None
         ),
         Err(TreeAciError::ResourceLimit {
             resource: "local matrix elements",
@@ -327,8 +331,7 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
             0,
             &working_limited,
             true,
-            &mut working_unused,
-        ),
+            &mut working_unused, None ),
         Err(TreeAciError::ResourceLimit {
             resource: "working bytes",
             requested,
@@ -488,6 +491,7 @@ fn run_local_update_measurement(
             &options,
             true,
             &mut operator,
+            None,
         )
         .unwrap();
         checksum.extend(update.local_values);

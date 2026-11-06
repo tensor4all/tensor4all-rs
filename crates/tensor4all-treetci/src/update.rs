@@ -1,14 +1,13 @@
+use crate::evaluation::BatchExecution;
 use crate::{
     assemble::MultiIndex,
-    batch::{evaluate_points_chunked, GlobalIndexBatch, EVALUATION_CHUNK_POINTS},
+    batch::{collect_chunks, EVALUATION_CHUNK_POINTS},
     PivotCandidateProposer, TreeTCI2, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
-use tensor4all_core::{
-    matrix_luci_factors_from_matrix, MatrixLuciFactors, MatrixLuciScalar as Scalar, RrLUOptions,
-};
+use tensor4all_core::{rrlu_pivots, MatrixLuciScalar as Scalar, RrLUOptions, RrLUPivots};
 use tensor4all_core::{ColMajorArray, CommonScalar};
-use tensor4all_tensorbackend::Matrix;
+use tensor4all_tensorbackend::{FullPivLuScalar, Matrix};
 
 #[cfg(test)]
 use crate::DefaultProposer;
@@ -16,22 +15,21 @@ use crate::DefaultProposer;
 /// Update one edge bipartition using a batch evaluator and a pivot-candidate proposer.
 ///
 /// Evaluates the function at candidate pivot points for one edge bipartition,
-/// then selects pivots via LU decomposition. The selected pivots are stored
-/// back into `state.ijset`.
+/// then selects pivots via a selection-only rank-revealing LU decomposition.
+/// The selected pivots are stored back into `state.ijset`.
 ///
 /// This is a low-level building block; prefer [`optimize_default`](crate::optimize_default)
 /// or [`crossinterpolate2`](crate::crossinterpolate2) for typical usage.
-pub(crate) fn update_edge<T, F, P, R>(
+pub(crate) fn update_edge<T, P, R>(
     state: &mut TreeTCI2<T>,
     edge: TreeTciEdge,
-    evaluate: F,
+    execution: &mut dyn BatchExecution<T>,
     options: &RrLUOptions,
     proposer: &P,
     rng: &mut R,
-) -> Result<MatrixLuciFactors<T>>
+) -> Result<RrLUPivots>
 where
-    T: Scalar + CommonScalar,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    T: Scalar + CommonScalar + FullPivLuScalar,
     P: PivotCandidateProposer,
     R: rand::Rng + ?Sized,
 {
@@ -49,7 +47,7 @@ where
         &right_key,
         &right_candidates,
         &state.local_dims,
-        &evaluate,
+        execution,
         EVALUATION_CHUNK_POINTS,
     )?;
 
@@ -58,9 +56,11 @@ where
     }
 
     // `evaluate_candidate_matrix` already returns column-major data with
-    // `left_candidates.len()` rows, so this hands over the buffer as-is.
+    // `left_candidates.len()` rows, so this hands over the buffer as-is. The
+    // selection-only path consumes it and never assembles L/U factors; pivot
+    // selection needs no execution context.
     let matrix = Matrix::from_col_major_vec(left_candidates.len(), right_candidates.len(), values);
-    let selection = matrix_luci_factors_from_matrix(&matrix, Some(options.clone()))?;
+    let selection = rrlu_pivots(matrix, Some(options.clone()))?;
 
     // The LU can select zero pivots when the sampled submatrix is numerically
     // zero (the function underflows in a subdomain). Keep at least one index
@@ -123,48 +123,62 @@ where
 pub(crate) fn update_edge_default<T, F>(
     state: &mut TreeTCI2<T>,
     edge: TreeTciEdge,
-    evaluate: F,
+    mut evaluate: F,
     options: &RrLUOptions,
-) -> Result<MatrixLuciFactors<T>>
+) -> Result<RrLUPivots>
 where
-    T: Scalar + CommonScalar,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    T: Scalar + CommonScalar + FullPivLuScalar,
+    F: FnMut(crate::GlobalIndexBatch<'_>) -> Result<Vec<T>>,
 {
+    use crate::evaluation::Compatibility;
     use rand::SeedableRng;
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
-    update_edge(state, edge, evaluate, options, &DefaultProposer, &mut rng)
+    let mut execution = Compatibility::new(&mut evaluate);
+    update_edge(
+        state,
+        edge,
+        &mut execution,
+        options,
+        &DefaultProposer,
+        &mut rng,
+    )
 }
 
 /// Evaluate the function on the full `I x J` candidate matrix for one edge.
 ///
 /// Returns the values in column-major order with `left_candidates.len()` rows.
 ///
-/// The global points are written straight into a contiguous batch buffer.
-/// Assembling them as individual `Vec<usize>` points instead and packing
-/// those into a batch costs one heap allocation and one extra full copy per
-/// matrix *entry*, and re-validating per point checks the
-/// bipartition `n_left * n_right` times over -- at a branching vertex that is
-/// O(10^7) allocations for a single edge update. The bipartition is a property
-/// of the two subtree keys, so it is checked once up front instead.
+/// The global points are written straight into a contiguous batch buffer by the
+/// execution, once per entry it has to evaluate. Assembling them as individual
+/// `Vec<usize>` points instead and packing those into a batch costs one heap
+/// allocation and one extra full copy per matrix *entry*, and re-validating per
+/// point checks the bipartition `n_left * n_right` times over -- at a branching
+/// vertex that is O(10^7) allocations for a single edge update. The bipartition
+/// is a property of the two subtree keys, so it is checked once up front
+/// instead.
 ///
-/// The points are evaluated in calls of at most `chunk_points` points through
-/// one reused buffer, so memory stays bounded by `n_sites * chunk_points`
-/// rather than `n_sites * n_left * n_right` (gigabytes at a branching vertex).
+/// A memoizing execution looks the entries up by the cache's own keys built from
+/// the two sides, so it assembles a point only for the entries that miss; the
+/// chunking below is the caller's, because the cache does not own the policy
+/// that bounds this scratch buffer.
+///
+/// The entries are evaluated in calls of at most `chunk_points` entries, so the
+/// point buffer stays bounded by `n_sites * chunk_points` rather than
+/// `n_sites * n_left * n_right` (gigabytes at a branching vertex).
 /// The values, and their order, do not depend on `chunk_points`.
 #[allow(clippy::too_many_arguments)]
-fn evaluate_candidate_matrix<T, F>(
+fn evaluate_candidate_matrix<T>(
     n_sites: usize,
     left_key: &crate::SubtreeKey,
     left_candidates: &[MultiIndex],
     right_key: &crate::SubtreeKey,
     right_candidates: &[MultiIndex],
     local_dims: &[usize],
-    evaluate: &F,
+    execution: &mut dyn BatchExecution<T>,
     chunk_points: usize,
 ) -> Result<Vec<T>>
 where
-    T: Scalar + CommonScalar,
-    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    T: Scalar + CommonScalar + FullPivLuScalar,
 {
     let left_sites = left_key.as_slice();
     let right_sites = right_key.as_slice();
@@ -214,36 +228,24 @@ where
         }
     }
 
+    ensure!(n_sites > 0, "at least one site is required");
     let n_left = left_candidates.len();
     let n_right = right_candidates.len();
     let n_points = n_left.checked_mul(n_right).ok_or_else(|| {
         anyhow::anyhow!("candidate matrix shape {n_left} x {n_right} overflows usize")
     })?;
-
-    // Column-major (n_sites, n_points): left candidates vary fastest.
-    let mut left_index = 0;
-    let mut right_index = 0;
-    evaluate_points_chunked(
-        n_sites,
+    let left = (left_sites, left_candidates);
+    let right = (right_sites, right_candidates);
+    // One key per side (or one point buffer) for the whole matrix; the chunks
+    // below only address entries.
+    let mut sides = execution.candidate_sides(left, right)?;
+    collect_chunks(
         n_points,
         chunk_points,
-        |point| {
-            let left = &left_candidates[left_index];
-            let right = &right_candidates[right_index];
-            for (&site, &value) in left_sites.iter().zip(left.iter()) {
-                point[site] = value;
-            }
-            for (&site, &value) in right_sites.iter().zip(right.iter()) {
-                point[site] = value;
-            }
-            left_index += 1;
-            if left_index == n_left {
-                left_index = 0;
-                right_index += 1;
-            }
-        },
-        evaluate,
         "candidate-matrix entries",
+        |start, count| {
+            execution.call_candidate_entries(&mut sides, n_sites, left, right, start, count)
+        },
     )
 }
 

@@ -2,7 +2,7 @@
 //! test engines: the verification, retry, split, zero-patch, reference, and
 //! error paths of the M3 error contract.
 
-mod adaptive_common;
+use crate::adaptive_common;
 
 use std::collections::HashSet;
 
@@ -10,12 +10,12 @@ use adaptive_common::*;
 use num_complex::{Complex32, Complex64};
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, CommonScalar, TensorElement};
 use tensor4all_partitionedtreetn::adaptive_interpolation::{
-    patched_interpolate, GlobalL2Error, L2ReferenceSource, MeasurementMethod, NormReport,
+    GlobalL2Error, L2Estimator, L2ReferenceSource, MeasurementMethod, NormReport,
     PatchedInterpolationError, PatchedInterpolationOptions, PatchedInterpolationReport,
     VerificationOptions, GLOBAL_ROUNDING_MARGIN, MEASUREMENT_ROUNDING_FACTOR,
 };
 use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference, Projector};
-use tensor4all_treetn::interpolation::InterpolationError;
+use tensor4all_treetn::interpolation::{EvalContext, InterpolationError};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -285,10 +285,14 @@ fn a_sampled_retry_measures_on_a_fresh_stream_and_audit_points_never_become_pivo
         Step::converged(Network::Constant(1.0)),
     ]);
     let seed = 3;
+    // The test reconstructs the Monte Carlo verification and audit streams
+    // and asserts every drawn point, so it runs the uniform Monte Carlo
+    // estimator.
     let options = l2_given(2, 64.0, 1e-6).with_seed(seed).with_verification(
         VerificationOptions::new()
             .with_samples(16)
-            .with_max_exhaustive_points(0),
+            .with_max_exhaustive_points(0)
+            .with_estimator(L2Estimator::UniformMonteCarlo),
     );
     let recorder = Recorder::default();
     let evaluate = recording_evaluator(&one, problem.sites.len(), &recorder);
@@ -467,17 +471,25 @@ fn failures_at_the_end_of_the_order_are_typed() {
         .with_verification(VerificationOptions::new().with_retries(0))
         .with_patch_order(vec![p0.clone()]);
     let wrong = || ScriptedEngine::new(vec![Step::converged(Network::Constant(1.0))]);
-    match run(&wrong(), &problem, &two, &[], &options) {
-        Err(PatchedInterpolationError::VerificationFailed {
-            projector,
-            measurement,
-        }) => {
-            assert_eq!(projector, Projector::from_pairs([(p0.clone(), 0)]).unwrap());
-            assert_eq!(measurement.method, MeasurementMethod::Exhaustive);
-            assert_eq!(measurement.rms, 1.0);
-        }
-        other => panic!("expected VerificationFailed, got {other:?}"),
-    }
+    let error = run(&wrong(), &problem, &two, &[], &options).unwrap_err();
+    let PatchedInterpolationError::VerificationFailed {
+        projector,
+        measurement,
+    } = &error
+    else {
+        panic!("expected VerificationFailed, got {error:?}");
+    };
+    assert_eq!(
+        projector,
+        &Projector::from_pairs([(p0.clone(), 0)]).unwrap()
+    );
+    assert_eq!(measurement.method, MeasurementMethod::Exhaustive);
+    assert_eq!(measurement.rms, 1.0);
+    // The diagnostic names the method that failed, not the configured
+    // estimator: no residual run happened here.
+    let text = error.to_string();
+    assert!(text.contains("Exhaustive"), "{text}");
+    assert!(!text.contains("ResidualTt"), "{text}");
     // A patch that does not converge keeps the M2 error.
     let capped = ScriptedEngine::new(vec![Step::capped()]);
     match run(&capped, &problem, &two, &[], &options) {
@@ -659,10 +671,13 @@ fn the_exhaustive_threshold_is_inclusive() {
         (2, 16, MeasurementMethod::Exhaustive),
         (2, 15, MeasurementMethod::Sampled),
     ] {
+        // This test pins the point plan and the method of a sampled plan, so
+        // it runs the uniform Monte Carlo estimator.
         let options = l2_given(2, norm, 1e-8).with_verification(
             VerificationOptions::new()
                 .with_samples(samples)
-                .with_max_exhaustive_points(max_exhaustive),
+                .with_max_exhaustive_points(max_exhaustive)
+                .with_estimator(L2Estimator::UniformMonteCarlo),
         );
         let result = run(&DenseEngine::new(), &problem, &f, &[], &options).unwrap();
         let measurement = result.report.accepted[0].acceptance.clone().unwrap();
@@ -950,7 +965,7 @@ fn an_exact_root_gives_the_reference_and_an_all_zero_exact_root_is_empty() {
 fn a_required_reference_fails_before_any_evaluation() {
     let problem = branched();
     let message = expect_invalid(
-        patched_interpolate(
+        run_raw(
             &DenseEngine::new(),
             problem.topology.clone(),
             problem.node_sites.clone(),
@@ -1026,7 +1041,7 @@ fn a_domain_too_large_for_f64_is_accepted_only_under_sampled_max() {
     assert_eq!(result.report.accepted.len(), 1);
 
     let message = expect_invalid(
-        patched_interpolate(
+        run_raw(
             &FiberEngine,
             problem.topology.clone(),
             problem.node_sites.clone(),
@@ -1116,7 +1131,7 @@ fn placeholder_norms_fail_before_every_other_check() {
             .with_error_norm(norm)
             .with_tolerance(tol(-1.0));
         let bad_pivots = ColMajorArray::new(vec![0], vec![1, 1]).unwrap();
-        match patched_interpolate(
+        match run_raw(
             &DenseEngine::new(),
             problem.topology.clone(),
             problem.node_sites.clone(),
@@ -1202,7 +1217,7 @@ fn new_invalid_inputs_are_rejected_before_any_evaluation() {
     ];
     for (options, needle) in cases {
         expect_invalid(
-            patched_interpolate(
+            run_raw(
                 &DenseEngine::new(),
                 problem.topology.clone(),
                 problem.node_sites.clone(),
@@ -1228,29 +1243,29 @@ fn a_non_finite_network_value_is_an_engine_error() {
 }
 
 #[test]
-fn verification_failures_display_their_remedy() {
+fn verification_failures_display_their_method_and_remedy() {
+    // A sampled acceptance of a multi-node problem under the default
+    // estimator: the diagnostic names the measurement method that decided the
+    // failure.
+    let problem = chain("s", 6, 2);
+    let f = |_: &[usize]| 1.0;
+    let options = l2_given(2, 8.0, 1e-3).with_verification(
+        VerificationOptions::new()
+            .with_samples(4)
+            .with_max_exhaustive_points(0),
+    );
+    let result = run(&DenseEngine::new(), &problem, &f, &[], &options).unwrap();
+    let measurement = result.report.accepted[0].acceptance.clone().unwrap();
+    assert_eq!(measurement.method, MeasurementMethod::ResidualTt);
     let error = PatchedInterpolationError::VerificationFailed {
         projector: Projector::new(),
-        measurement: tensor4all_partitionedtreetn::adaptive_interpolation::L2Measurement::clone(
-            &run(
-                &DenseEngine::new(),
-                &single_node(&[2]),
-                &|_: &[usize]| 1.0,
-                &[],
-                &PatchedInterpolationOptions::new(2),
-            )
-            .unwrap()
-            .report
-            .accepted[0]
-                .acceptance
-                .clone()
-                .unwrap(),
-        ),
+        measurement: Box::new(measurement),
     };
     let text = error.to_string();
-    assert!(text.contains("list more sites in patch_order"));
-    assert!(text.contains("raise rtol or atol"));
-    assert!(text.contains("check the reference norm"));
+    assert!(text.contains("ResidualTt"), "{text}");
+    assert!(text.contains("list more sites in patch_order"), "{text}");
+    assert!(text.contains("raise rtol or atol"), "{text}");
+    assert!(text.contains("check the reference norm"), "{text}");
 }
 
 // ---------------------------------------------------------------------------
@@ -1322,8 +1337,13 @@ fn wide_product() -> (Problem, impl Fn(&[usize]) -> f64 + Sync + Copy, f64) {
 fn unbounded_exhaustive_limits_never_measure_an_overflowing_patch_exhaustively() {
     let (problem, f, norm) = wide_product();
     let pivots = [vec![0; 65], vec![1; 65]];
-    let options = l2_given(2, norm, 1e-6)
-        .with_verification(VerificationOptions::new().with_max_exhaustive_points(usize::MAX));
+    // A fiber engine cannot represent a residual TT, and the test pins the
+    // sampled plan's method; it runs the uniform Monte Carlo estimator.
+    let options = l2_given(2, norm, 1e-6).with_verification(
+        VerificationOptions::new()
+            .with_max_exhaustive_points(usize::MAX)
+            .with_estimator(L2Estimator::UniformMonteCarlo),
+    );
     let result = run(&FiberEngine, &problem, &f, &pivots, &options).unwrap();
     let record = &result.report.accepted[0];
     let measurement = record.acceptance.as_ref().unwrap();
@@ -1341,7 +1361,7 @@ fn unbounded_exhaustive_limits_never_measure_an_overflowing_patch_exhaustively()
     let options = l2_given(2, norm, 1e-6)
         .with_verification(VerificationOptions::new().with_samples(usize::MAX));
     expect_invalid(
-        patched_interpolate(
+        run_raw(
             &FiberEngine,
             problem.topology.clone(),
             problem.node_sites.clone(),
@@ -1371,12 +1391,14 @@ fn an_unreservable_measurement_point_list_is_invalid_input_after_evaluations() {
     let calls = std::sync::atomic::AtomicUsize::new(0);
     // f = 0: every candidate sample is zero, so the zero screen measures the
     // whole root exhaustively.
-    let zero = |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+    let zero = |batch: ColMajorArrayRef<'_, usize>,
+                _ctx: &mut EvalContext<'_>|
+     -> anyhow::Result<Vec<f64>> {
         calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(vec![0.0; batch.shape()[1]])
     };
     let message = expect_invalid(
-        patched_interpolate(
+        run_raw(
             &FiberEngine,
             problem.topology.clone(),
             problem.node_sites.clone(),
@@ -1438,11 +1460,15 @@ impl tensor4all_treetn::interpolation::TreeInterpolator<f64> for WideLeafEngine 
     fn interpolate<V, F>(
         &self,
         problem: &tensor4all_treetn::interpolation::InterpolationProblem<V>,
+        _ctx: &mut tensor4all_treetn::interpolation::EvalContext<'_>,
         _evaluate: F,
     ) -> Result<tensor4all_treetn::interpolation::InterpolationOutcome<V>, InterpolationError>
     where
         V: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
-        F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>>,
+        F: FnMut(
+            ColMajorArrayRef<'_, usize>,
+            &mut tensor4all_treetn::interpolation::EvalContext<'_>,
+        ) -> anyhow::Result<Vec<f64>>,
     {
         use tensor4all_core::{DynIndex, IdxTensor};
         let sites: Vec<(V, Vec<DynIndex>)> = problem
@@ -1543,8 +1569,14 @@ fn failing_on(
     n_sites: usize,
     fail_on: usize,
     calls: &std::sync::atomic::AtomicUsize,
-) -> impl Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<f64>> + Send + Sync + '_ {
-    move |batch| {
+) -> impl FnMut(
+    ColMajorArrayRef<'_, usize>,
+    &mut tensor4all_treetn::interpolation::EvalContext<'_>,
+) -> anyhow::Result<Vec<f64>>
+       + Send
+       + Sync
+       + '_ {
+    move |batch, _ctx: &mut EvalContext<'_>| {
         let call = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         anyhow::ensure!(call != fail_on, "user failure on call {call}");
         Ok(batch.data().chunks(n_sites).map(f).collect())
@@ -1627,10 +1659,13 @@ fn evaluator_failures_in_l2_measurements_are_evaluator_errors() {
     );
     // Audit: candidates, the sampled verification, then the audit.
     let wide = chain("s", 12, 2);
+    // The test pins the evaluator-call sequence of the Monte Carlo
+    // verification and audit streams.
     let sampled = l2_given(2, 64.0, 1e-6).with_verification(
         VerificationOptions::new()
             .with_samples(16)
-            .with_max_exhaustive_points(0),
+            .with_max_exhaustive_points(0)
+            .with_estimator(L2Estimator::UniformMonteCarlo),
     );
     assert_last_call_failure_is_reported(
         || ScriptedEngine::new(vec![Step::converged(Network::Constant(1.0))]),
@@ -1675,4 +1710,33 @@ fn a_capped_rerun_after_a_failed_verification_keeps_no_split_index_left() {
     }
     let calls = engine.calls();
     assert_eq!(calls.len(), 4);
+}
+
+/// The session route of the same norm: the wide-bond, site-free leaf must
+/// canonicalize on the caller's session, including the singleton boundaries
+/// of the empty side, without entering the process-global eager runtime.
+#[test]
+fn treetn_log_norm_on_session_of_a_site_free_leaf_with_a_wide_bond() {
+    use tensor4all_core::{DynIndex, IdxTensor};
+    use tensor4all_tensorbackend::explicit::Session;
+    use tensor4all_tensorbackend::CpuBackend;
+    use tensor4all_treetn::TreeTN;
+    let (sa, sb) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let (ab, be) = (DynIndex::new_dyn(1), DynIndex::new_dyn(2));
+    let a = IdxTensor::from_dense(vec![sa, ab.clone()], vec![1.0, 0.0]).unwrap();
+    let b = IdxTensor::from_dense(vec![sb, ab, be.clone()], vec![3.0, 0.0, 0.0, 4.0]).unwrap();
+    let e = IdxTensor::from_dense(vec![be], vec![1.0, 1.0]).unwrap();
+    let mut network = TreeTN::<IdxTensor, String>::from_tensors(
+        vec![a, b, e],
+        vec!["a".to_string(), "b".to_string(), "e".to_string()],
+    )
+    .unwrap();
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut session = Session::new(backend.engine_mut());
+    let log_norm = network.log_norm_on_session(&mut session).unwrap();
+    assert!(
+        (log_norm.exp() - 5.0).abs() < 1e-12,
+        "log_norm.exp() = {}",
+        log_norm.exp()
+    );
 }

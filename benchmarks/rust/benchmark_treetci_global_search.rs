@@ -1,7 +1,7 @@
 // End-to-end TreeTCI runs dominated by the global pivot search (issue #792).
 //
-// The body is included by
-// `crates/tensor4all-treetci/examples/benchmark_global_search.rs`.
+// The harness is the `benchmark_global_search` example of the
+// `tensor4all-benchmarks` package.
 // Protocol notes are in `benchmarks/README.md`.
 //
 // Every case runs the default TreeTCI loop (`DefaultProposer`, global pivot
@@ -19,10 +19,10 @@ use std::time::Instant;
 use anyhow::{anyhow, Result};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
+use tensor4all_core::{ColMajorArrayRef, DynIndex};
 use tensor4all_treetci::{
-    optimize_with_proposer, to_treetn, DefaultProposer, GlobalIndexBatch, SubtreeKey,
-    TreeTCI2, TreeTciEdge, TreeTciGraph, TreeTciOptions,
+    optimize_with_proposer, to_treetn, AllEdges, DefaultProposer, GlobalIndexBatch, TreeTCI2,
+    TreeTciEdge, TreeTciGraph, TreeTciOptions,
 };
 use tensor4all_treetn::{CachedEvaluatorOptions, TreeTNCachedEvaluator};
 
@@ -113,17 +113,24 @@ fn branched_tree() -> Case {
     }
 }
 
-fn hash_pivot_sets(
-    hasher: &mut DefaultHasher,
-    ijset: &std::collections::HashMap<SubtreeKey, ColMajorArray<usize>>,
-) {
-    let mut entries: Vec<_> = ijset.iter().collect();
-    entries.sort_by(|a, b| a.0.cmp(b.0));
-    for (key, pivots) in entries {
+/// Hashes every stored pivot set: each belongs to one side of an edge, so the keys come from the graph.
+fn hash_pivot_sets(hasher: &mut DefaultHasher, state: &TreeTCI2<f64>) -> Result<()> {
+    let mut keys = Vec::new();
+    for edge in state.graph().edges() {
+        let (left, right) = state.graph().subregion_vertices(edge)?;
+        keys.extend([left, right]);
+    }
+    keys.sort();
+    keys.dedup();
+    for key in keys {
+        let pivots = state
+            .pivot_set(&key)
+            .ok_or_else(|| anyhow!("no pivot set stored for {:?}", key.as_slice()))?;
         key.as_slice().hash(hasher);
         pivots.shape().hash(hasher);
         pivots.data().hash(hasher);
     }
+    Ok(())
 }
 
 struct RunResult {
@@ -142,15 +149,11 @@ fn run_case(case: &Case, samples: &[usize], exact: &[f64]) -> Result<RunResult> 
     let f = &case.f;
     let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
         evaluations.set(evaluations.get() + batch.n_points() as u64);
-        Ok(batch
-            .data()
-            .chunks(batch.n_sites())
-            .map(f)
-            .collect())
+        Ok(batch.data().chunks(batch.n_sites()).map(f).collect())
     };
     let options = TreeTciOptions {
         tolerance: 1e-8,
-        normalize_error: true,
+        scale_tolerance: true,
         seed: Some(1),
         ..Default::default()
     };
@@ -160,16 +163,23 @@ fn run_case(case: &Case, samples: &[usize], exact: &[f64]) -> Result<RunResult> 
     let mut state = TreeTCI2::<f64>::new(case.local_dims.clone(), graph)?;
     let initial = vec![0usize; n_sites];
     state.add_global_pivots(std::slice::from_ref(&initial))?;
-    state.max_sample_value = f(&initial).abs();
+    state.set_max_sample_value(f(&initial).abs());
     let tensor4all_treetci::TreeTciOptimizationResult { ranks, errors, .. } =
-        optimize_with_proposer(&mut state, evaluate, &options, &DefaultProposer)?;
+        optimize_with_proposer(
+            &mut state,
+            evaluate,
+            &options,
+            &DefaultProposer,
+            &AllEdges,
+            &mut (),
+        )?;
     let treetn = to_treetn(&state, evaluate, None)?;
     let seconds = started.elapsed().as_secs_f64();
 
     let mut hasher = DefaultHasher::new();
     // Since #833, only current pivot sets exist. Historical result files
     // included pass snapshots and their fingerprints are not comparable.
-    hash_pivot_sets(&mut hasher, &state.ijset);
+    hash_pivot_sets(&mut hasher, &state)?;
     let pivot_fingerprint = hasher.finish();
 
     let site_indices: Vec<DynIndex> = (0..n_sites)
@@ -211,11 +221,15 @@ fn run_case(case: &Case, samples: &[usize], exact: &[f64]) -> Result<RunResult> 
 
 fn main() -> Result<()> {
     let commit = option_env!("T4A_BENCH_GIT_COMMIT").unwrap_or("unknown");
-    let threads = ["RAYON_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS"]
-        .iter()
-        .map(|name| format!("{name}={}", std::env::var(name).unwrap_or_default()))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let threads = [
+        "RAYON_NUM_THREADS",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+    ]
+    .iter()
+    .map(|name| format!("{name}={}", std::env::var(name).unwrap_or_default()))
+    .collect::<Vec<_>>()
+    .join(" ");
     println!("build commit={commit} {threads} repeats={REPEATS}");
 
     let filter = std::env::args().nth(1);

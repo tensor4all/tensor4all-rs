@@ -90,7 +90,7 @@ fn main() {
             5,
             &SwapOptions {
                 max_bond_dim: Some(5),
-                rtol: None,
+                svd_policy: None,
             },
             "",
         );
@@ -102,7 +102,7 @@ fn main() {
             5,
             &SwapOptions {
                 max_bond_dim: Some(10),
-                rtol: None,
+                svd_policy: None,
             },
             "",
         );
@@ -116,7 +116,7 @@ fn main() {
             5,
             &SwapOptions {
                 max_bond_dim: Some(5),
-                rtol: None,
+                svd_policy: None,
             },
             "bond_dim=5 max_bond_dim= 5",
         );
@@ -125,7 +125,7 @@ fn main() {
             5,
             &SwapOptions {
                 max_bond_dim: Some(10),
-                rtol: None,
+                svd_policy: None,
             },
             "bond_dim=5 max_bond_dim=10",
         );

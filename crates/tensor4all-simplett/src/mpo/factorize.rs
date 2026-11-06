@@ -1,6 +1,6 @@
 //! Factorization methods for MPO tensors
 //!
-//! This module provides various factorization methods (SVD, RSVD, LU, CI)
+//! This module provides various factorization methods (SVD, LU, CI)
 //! for compressing and reshaping MPO tensors.
 
 use super::error::{MPOError, Result};
@@ -16,8 +16,6 @@ pub enum FactorizeMethod {
     /// Singular Value Decomposition
     #[default]
     SVD,
-    /// Randomized SVD (faster for large matrices)
-    RSVD,
     /// LU decomposition with rank-revealing pivoting
     LU,
     /// Cross Interpolation
@@ -44,10 +42,6 @@ pub struct FactorizeOptions {
     pub max_bond_dim: Option<usize>,
     /// Whether to return the left factor as left-orthogonal
     pub left_orthogonal: bool,
-    /// Number of random projections for RSVD (parameter q)
-    pub rsvd_q: usize,
-    /// Oversampling parameter for RSVD (parameter p)
-    pub rsvd_p: usize,
 }
 
 impl Default for FactorizeOptions {
@@ -57,8 +51,6 @@ impl Default for FactorizeOptions {
             tolerance: 1e-12,
             max_bond_dim: None,
             left_orthogonal: true,
-            rsvd_q: 2,
-            rsvd_p: 10,
         }
     }
 }
@@ -120,8 +112,8 @@ impl SVDScalar for Complex64 {
 /// traits and should use `factorize_lu` directly.
 /// # Errors
 ///
-/// Returns an error when the factorization fails (a non-convergence, singular,
-/// /// or backend failure).
+/// Returns [`MPOError::FactorizationError`] when the SVD computation fails,
+/// when an empty matrix is factorized, or when an output cannot be read.
 ///
 pub fn factorize<T: SVDScalar>(
     matrix: &Matrix2<T>,
@@ -129,7 +121,6 @@ pub fn factorize<T: SVDScalar>(
 ) -> Result<FactorizeResult<T>> {
     match options.method {
         FactorizeMethod::SVD => factorize_svd(matrix, options),
-        FactorizeMethod::RSVD => factorize_rsvd(matrix, options),
         FactorizeMethod::LU | FactorizeMethod::CI => {
             // For LU/CI, fall back to SVD for now
             // Full LU/CI support requires tensor4all_core::Scalar trait
@@ -202,6 +193,14 @@ fn factorize_svd<T: SVDScalar>(
     let u = typed_tensor_to_matrix2(u, "svd.u")?;
     let vt = typed_tensor_to_matrix2(vt, "svd.vt")?;
     let singular_values = typed_col_major_values(&s, "svd.s")?;
+    // The prefix truncation below needs nonincreasing singular values; the backend may return
+    // them out of order (tensor4all/faer#82), so read them and their vectors through `order`.
+    let order = crate::compression::descending_order(&singular_values, T::linalg_real_to_f64);
+    let singular_values: Vec<_> = match &order {
+        Some(order) => order.iter().map(|&p| singular_values[p]).collect(),
+        None => singular_values,
+    };
+    let col = |j: usize| order.as_ref().map_or(j, |order| order[j]);
 
     // Determine rank based on tolerance and max_bond_dim
     let min_dim = m.min(n);
@@ -219,8 +218,6 @@ fn factorize_svd<T: SVDScalar>(
     // rank does not change when the input matrix is globally rescaled. An
     // absolute cutoff would keep near-noise singular values for large-norm
     // inputs and over-truncate small-norm ones.
-    // `svd_backend` returns singular values in non-increasing order, so the
-    // first entry is the largest; fall back to a scan to stay robust.
     let s_max = singular_values
         .iter()
         .take(min_dim)
@@ -257,8 +254,8 @@ fn factorize_svd<T: SVDScalar>(
     };
 
     // Build result matrices
-    let mut left: Matrix2<T> = matrix2_zeros(m, rank);
-    let mut right: Matrix2<T> = matrix2_zeros(rank, n);
+    let mut left: Matrix2<T> = matrix2_zeros(m, rank)?;
+    let mut right: Matrix2<T> = matrix2_zeros(rank, n)?;
 
     if options.left_orthogonal {
         // Left = U[:, :rank], Right = diag(S[:rank]) * Vt[:rank, :]
@@ -267,14 +264,14 @@ fn factorize_svd<T: SVDScalar>(
         // (V^T for real and V^H for complex), which is used directly here.
         for i in 0..m {
             for j in 0..rank {
-                left[[i, j]] = u[[i, j]];
+                left[[i, j]] = u[[i, col(j)]];
             }
         }
         for i in 0..rank {
             // Singular values are stored in first row: s[[0, i]] (LAPACK-style convention)
             let sv = T::from_linalg_real(singular_values[i]);
             for j in 0..n {
-                right[[i, j]] = sv * vt[[i, j]];
+                right[[i, j]] = sv * vt[[col(i), j]];
             }
         }
     } else {
@@ -283,12 +280,12 @@ fn factorize_svd<T: SVDScalar>(
             for j in 0..rank {
                 // Singular values are stored in first row: s[[0, j]] (LAPACK-style convention)
                 let sv = T::from_linalg_real(singular_values[j]);
-                left[[i, j]] = u[[i, j]] * sv;
+                left[[i, j]] = u[[i, col(j)]] * sv;
             }
         }
         for i in 0..rank {
             for j in 0..n {
-                right[[i, j]] = vt[[i, j]];
+                right[[i, j]] = vt[[col(i), j]];
             }
         }
     }
@@ -298,17 +295,6 @@ fn factorize_svd<T: SVDScalar>(
         right,
         rank,
         discarded,
-    })
-}
-
-/// Factorize using randomized SVD
-fn factorize_rsvd<T: SVDScalar>(
-    _matrix: &Matrix2<T>,
-    _options: &FactorizeOptions,
-) -> Result<FactorizeResult<T>> {
-    // TODO: Implement RSVD-based factorization
-    Err(MPOError::FactorizationError {
-        message: "RSVD factorization not yet implemented".to_string(),
     })
 }
 
@@ -322,8 +308,9 @@ fn factorize_rsvd<T: SVDScalar>(
 /// matching the SVD path.
 /// # Errors
 ///
-/// Returns an error when the LU factorization fails (a singular or backend
-/// /// failure).
+/// Returns [`MPOError::MatrixCI`] when the LU/CI factorization fails (for
+/// example a singular matrix), or [`MPOError::InvalidOperation`] when a factor
+/// matrix cannot be allocated.
 ///
 pub fn factorize_lu<T>(
     matrix: &Matrix2<T>,
@@ -361,7 +348,7 @@ where
     // Convert back to Matrix2
     let left_m = left_ci.nrows();
     let left_n = left_ci.ncols();
-    let mut left: Matrix2<T> = matrix2_zeros(left_m, left_n);
+    let mut left: Matrix2<T> = matrix2_zeros(left_m, left_n)?;
     for i in 0..left_m {
         for j in 0..left_n {
             left[[i, j]] = left_ci[[i, j]];
@@ -370,7 +357,7 @@ where
 
     let right_m = right_ci.nrows();
     let right_n = right_ci.ncols();
-    let mut right: Matrix2<T> = matrix2_zeros(right_m, right_n);
+    let mut right: Matrix2<T> = matrix2_zeros(right_m, right_n)?;
     for i in 0..right_m {
         for j in 0..right_n {
             right[[i, j]] = right_ci[[i, j]];
@@ -391,8 +378,8 @@ where
 /// Use this directly when you need CI-based factorization.
 /// # Errors
 ///
-/// Returns an error when the cross-interpolation factorization fails (a
-/// /// non-convergence or backend failure).
+/// Returns the same errors as [`factorize_lu`]: [`MPOError::MatrixCI`] or
+/// [`MPOError::InvalidOperation`].
 ///
 pub fn factorize_ci<T>(
     matrix: &Matrix2<T>,

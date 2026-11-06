@@ -471,3 +471,168 @@ fn factor_extraction_rejects_non_finite_factors() {
         );
     }
 }
+
+/// The factor outputs are accepted and rejected exactly as by the exact
+/// `abs_val().is_finite()` test: `|z|^2` may overflow while `|z|` is finite.
+#[test]
+fn factor_extraction_decisions_match_the_exact_magnitude_test() {
+    let cases = [
+        (Complex64::new(f64::NAN, 0.0), false),
+        (Complex64::new(0.0, f64::NAN), false),
+        (Complex64::new(f64::INFINITY, 0.0), false),
+        (Complex64::new(0.0, f64::NEG_INFINITY), false),
+        // Both components finite, but |z| overflows.
+        (Complex64::new(1.5e308, 1.5e308), false),
+        (Complex64::new(f64::MAX, f64::MAX), false),
+        // |z|^2 overflows, |z| is finite.
+        (Complex64::new(1e308, 1e308), true),
+        (Complex64::new(f64::MAX, 0.0), true),
+        (Complex64::new(0.0, -f64::MAX), true),
+        (Complex64::new(1e200, 1e200), true),
+    ];
+    for (z, accepted) in cases {
+        assert_eq!(accepted, z.abs_val().is_finite(), "{z:?}");
+        for left_orthogonal in [false, true] {
+            // 1x1, rank 1: the factor that is not forced to one carries `z`.
+            let result = super::extract_lu_from_factorized(&[z], 1, 1, 1, left_orthogonal);
+            assert_eq!(result.is_ok(), accepted, "{z:?}");
+            if !accepted {
+                let expected = if left_orthogonal { "U" } else { "L" };
+                assert!(matches!(
+                    result.unwrap_err(),
+                    crate::MatrixCIError::NaNEncountered { matrix } if matrix == expected
+                ));
+            }
+        }
+    }
+}
+
+/// The selection-only path must reproduce the full factorization's pivots and
+/// error history exactly, including the rank-cap residual and a zero cap.
+#[test]
+fn rrlu_pivots_matches_the_full_factorization() {
+    fn check<T: Scalar>() {
+        // (column-major entries, nrows, ncols, base options)
+        let cases: [(Vec<f64>, usize, usize, RrLUOptions); 4] = [
+            // Rank-deficient square matrix.
+            (
+                vec![1.0, 2.0, 3.0, 2.0, 4.0, 6.0, 3.0, 6.0, 9.0],
+                3,
+                3,
+                RrLUOptions::default(),
+            ),
+            // Cap below the exact rank: the trailing entry is the residual.
+            (
+                vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0],
+                3,
+                3,
+                RrLUOptions {
+                    max_bond_dim: 2,
+                    ..Default::default()
+                },
+            ),
+            // Zero cap reports the whole-matrix residual.
+            (
+                vec![1.0, 2.0, 3.0, 4.0],
+                2,
+                2,
+                RrLUOptions {
+                    max_bond_dim: 0,
+                    ..Default::default()
+                },
+            ),
+            // Rectangular rank-deficient matrix.
+            (
+                vec![1.0, 2.0, 2.0, 4.0, 3.0, 6.0],
+                3,
+                2,
+                RrLUOptions::default(),
+            ),
+        ];
+        for (entries, nrows, ncols, base) in cases {
+            for left_orthogonal in [false, true] {
+                let opts = RrLUOptions {
+                    left_orthogonal,
+                    ..base.clone()
+                };
+                let data: Vec<T> = entries.iter().map(|&value| T::from_f64(value)).collect();
+                let matrix = Matrix::from_col_major_vec(nrows, ncols, data);
+
+                let full = rrlu(&matrix, Some(opts.clone())).unwrap();
+                let pivots = rrlu_pivots(matrix, Some(opts)).unwrap();
+
+                assert_eq!(pivots.rank, full.npivots());
+                assert_eq!(pivots.row_indices, full.row_indices());
+                assert_eq!(pivots.col_indices, full.col_indices());
+                assert_eq!(pivots.pivot_errors, full.pivot_errors());
+            }
+        }
+    }
+    check::<f64>();
+    check::<f32>();
+    check::<Complex64>();
+}
+
+/// Input validation accepts and rejects the same entries, with the same error
+/// kinds, as the former three passes (`is_nan`, then `abs_val().is_finite()`
+/// in the validator, then again in the factorization).
+#[test]
+fn input_validation_decisions_and_error_kinds() {
+    use crate::MatrixCIError::{InvalidArgument, NaNEncountered};
+
+    fn matrix<T: Scalar>(bad: T) -> Matrix<T> {
+        let one = T::from_f64(1.0);
+        from_vec2d(vec![vec![one, bad], vec![T::from_f64(2.0), one]])
+    }
+
+    fn check_rejected<T: Scalar + std::fmt::Debug>(bad: T, nan: bool) {
+        let m = matrix(bad);
+        let validated = validate_luci_matrix(&m).unwrap_err();
+        let pivots = rrlu_pivots(m.clone(), None).unwrap_err();
+        let full = rrlu(&m, None).unwrap_err();
+        if nan {
+            assert!(matches!(validated, NaNEncountered { ref matrix } if matrix == "input"));
+            assert!(matches!(pivots, NaNEncountered { ref matrix } if matrix == "input"));
+        } else {
+            assert!(matches!(validated, InvalidArgument { .. }));
+            assert!(matches!(pivots, InvalidArgument { .. }));
+        }
+        // The factorization itself reports every non-finite entry as NaN.
+        assert!(matches!(full, NaNEncountered { ref matrix } if matrix == "input"));
+    }
+
+    check_rejected(f64::NAN, true);
+    check_rejected(f64::INFINITY, false);
+    check_rejected(f64::NEG_INFINITY, false);
+    check_rejected(f32::NAN, true);
+    check_rejected(f32::INFINITY, false);
+    check_rejected(Complex64::new(f64::NAN, 0.0), true);
+    check_rejected(Complex64::new(0.0, f64::NAN), true);
+    check_rejected(Complex64::new(f64::INFINITY, 0.0), false);
+    check_rejected(Complex64::new(0.0, f64::NEG_INFINITY), false);
+    // Both components finite, but |z| overflows: rejected as before.
+    check_rejected(Complex64::new(1.5e308, 1.5e308), false);
+    check_rejected(Complex64::new(f64::MAX, f64::MAX), false);
+    // NaN wins over an infinity elsewhere in the matrix.
+    let mixed = from_vec2d(vec![
+        vec![Complex64::new(f64::INFINITY, 0.0), Complex64::new(1.0, 0.0)],
+        vec![Complex64::new(0.0, f64::NAN), Complex64::new(1.0, 0.0)],
+    ]);
+    assert!(matches!(
+        validate_luci_matrix(&mixed),
+        Err(NaNEncountered { .. })
+    ));
+
+    // |z|^2 overflows but |z| is finite: accepted, as before.
+    for ok in [
+        Complex64::new(1e308, 1e308),
+        Complex64::new(f64::MAX, 0.0),
+        Complex64::new(0.0, -f64::MAX),
+        Complex64::new(1e200, 1e200),
+    ] {
+        assert!(validate_luci_matrix(&matrix(ok)).is_ok(), "{ok:?}");
+    }
+    assert!(validate_luci_matrix(&matrix(f64::MAX)).is_ok());
+    assert!(validate_luci_matrix(&matrix(f32::MAX)).is_ok());
+    assert!(validate_luci_matrix(&matrix(1e30_f32)).is_ok());
+}

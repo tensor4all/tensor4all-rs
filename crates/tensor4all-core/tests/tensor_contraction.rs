@@ -54,9 +54,9 @@ fn test_contract_dyn_len_matrix_multiplication() {
     // Contract along j: result should be C[i, k] with all 3.0 (since each element is sum of 3 ones)
     let result = tensor_a.contract_pair(&tensor_b).unwrap();
     assert_eq!(result.dims(), vec![2, 4]);
-    assert_eq!(result.indices.len(), 2);
-    assert_eq!(result.indices[0].id, i.id);
-    assert_eq!(result.indices[1].id, k.id);
+    assert_eq!(result.indices().len(), 2);
+    assert_eq!(result.indices()[0].id, i.id);
+    assert_eq!(result.indices()[1].id, k.id);
 
     assert_all_f64(&result, 8, 3.0);
 }
@@ -79,9 +79,9 @@ fn test_mul_operator_contraction() {
     // Contract along j using * operator: result should be C[i, k] with all 3.0
     let result = tensor_a.contract_pair(&tensor_b).unwrap();
     assert_eq!(result.dims(), vec![2, 4]);
-    assert_eq!(result.indices.len(), 2);
-    assert_eq!(result.indices[0].id, i.id);
-    assert_eq!(result.indices[1].id, k.id);
+    assert_eq!(result.indices().len(), 2);
+    assert_eq!(result.indices()[0].id, i.id);
+    assert_eq!(result.indices()[1].id, k.id);
 
     assert_all_f64(&result, 8, 3.0);
 }
@@ -100,7 +100,7 @@ fn test_mul_operator_owned() {
     // Use * operator with owned tensors
     let result = tensor_a.contract_pair(&tensor_b).unwrap();
     assert_eq!(result.dims(), vec![2, 4]);
-    assert_eq!(result.indices.len(), 2);
+    assert_eq!(result.indices().len(), 2);
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn test_contract_no_common_indices_gives_outer_product() {
     // No common indices → outer product
     let result = tensor_a.contract_pair(&tensor_b).unwrap();
     assert_eq!(result.dims(), vec![2, 3, 4]);
-    assert_eq!(result.indices.len(), 3);
+    assert_eq!(result.indices().len(), 3);
 }
 
 #[test]
@@ -129,9 +129,9 @@ fn test_contract_no_common_indices_preserves_left_then_right_index_order_and_val
 
     let result = tensor_a.contract_pair(&tensor_b).unwrap();
 
-    assert_eq!(result.indices, vec![i, j]);
+    assert_eq!(result.indices(), vec![i, j]);
     let expected = IdxTensor::from_dense(
-        result.indices.clone(),
+        result.indices().to_vec(),
         vec![
             6.0, -3.0, 8.0, //
             -4.0, -4.0, 2.0,
@@ -182,7 +182,7 @@ fn general_structured_contract_preserves_output_axis_classes() {
 
     let result = structured.contract_pair(&dense).unwrap();
 
-    assert_eq!(result.indices, vec![i, k, l]);
+    assert_eq!(result.indices(), vec![i, k, l]);
     assert_eq!(
         result.storage().unwrap().storage_kind(),
         StorageKind::Structured
@@ -220,9 +220,9 @@ fn test_contract_three_indices() {
     // Contract along j and k: result should be C[i, l] with all 12.0 (3 * 4 = 12)
     let result = tensor_a.contract_pair(&tensor_b).unwrap();
     assert_eq!(result.dims(), vec![2, 5]);
-    assert_eq!(result.indices.len(), 2);
-    assert_eq!(result.indices[0].id, i.id);
-    assert_eq!(result.indices[1].id, l.id);
+    assert_eq!(result.indices().len(), 2);
+    assert_eq!(result.indices()[0].id, i.id);
+    assert_eq!(result.indices()[1].id, l.id);
 
     assert_all_f64(&result, 10, 12.0);
 }
@@ -327,9 +327,9 @@ fn test_contract_mixed_f64_c64() {
     //                  = [[6+8i, 10+12i], [6+8i, 10+12i]]
     let result = tensor_a.contract_pair(&tensor_b).unwrap();
     assert_eq!(result.dims(), vec![2, 2]);
-    assert_eq!(result.indices.len(), 2);
-    assert_eq!(result.indices[0].id, i.id);
-    assert_eq!(result.indices[1].id, k.id);
+    assert_eq!(result.indices().len(), 2);
+    assert_eq!(result.indices()[0].id, i.id);
+    assert_eq!(result.indices()[1].id, k.id);
 
     assert_eq!(
         result.to_vec::<Complex64>().unwrap(),
@@ -420,8 +420,8 @@ fn test_contract_pair_with_lhs_conj_matches_materialized_conj() {
     let materialized = contract_pair(&lhs.conj(), &rhs).unwrap();
 
     assert!(flagged.isapprox(&materialized, 1e-12, 0.0).unwrap());
-    assert_eq!(flagged.indices[0].id, i.id);
-    assert_eq!(flagged.indices[1].id, k.id);
+    assert_eq!(flagged.indices()[0].id, i.id);
+    assert_eq!(flagged.indices()[1].id, k.id);
 }
 
 #[test]
@@ -458,8 +458,8 @@ fn test_contract_pair_with_rhs_conj_matches_materialized_conj() {
     let materialized = contract_pair(&lhs, &rhs.conj()).unwrap();
 
     assert!(flagged.isapprox(&materialized, 1e-12, 0.0).unwrap());
-    assert_eq!(flagged.indices[0].id, i.id);
-    assert_eq!(flagged.indices[1].id, k.id);
+    assert_eq!(flagged.indices()[0].id, i.id);
+    assert_eq!(flagged.indices()[1].id, k.id);
 }
 
 #[test]
@@ -479,9 +479,9 @@ fn test_tensordot_different_ids() {
     // Contract j (from A) with k (from B): result should be C[i, l] with all 3.0
     let result = tensordot(&tensor_a, &tensor_b, &[(j.clone(), k.clone())]).unwrap();
     assert_eq!(result.dims(), vec![2, 4]);
-    assert_eq!(result.indices.len(), 2);
-    assert_eq!(result.indices[0].id, i.id);
-    assert_eq!(result.indices[1].id, l.id);
+    assert_eq!(result.indices().len(), 2);
+    assert_eq!(result.indices()[0].id, i.id);
+    assert_eq!(result.indices()[1].id, l.id);
 
     assert_all_f64(&result, 8, 3.0);
 }

@@ -1,7 +1,7 @@
 use tensor4all_tensorbackend::{solve_matrix_owned, Matrix};
 
 use crate::{
-    problem::{DirectedEdgeId, PreparedTreeProblem},
+    problem::{checked_product, DirectedEdgeId, PreparedTreeProblem},
     samples::{PivotPairs, SampleArena, SampleId},
     Result, TreeAciError, TreeAciNode, TreeAciScalar,
 };
@@ -39,7 +39,7 @@ where
         for &(edge_number, incoming) in &incidents {
             shape.push(oriented_pivot_ids(pivots, edge_number, incoming)?.len());
         }
-        let element_count = checked_product(&shape)?;
+        let element_count = checked_product(shape.iter().copied(), "skeleton tensor elements")?;
         let mut values = vec![T::zero(); element_count];
         for (flat, value) in values.iter_mut().enumerate() {
             let coordinates = decode_mixed_radix(flat, &shape)?;
@@ -173,7 +173,7 @@ where
             .ok_or(TreeAciError::InternalInvariant {
                 message: "skeleton node tensor is missing",
             })?;
-        let count = checked_product(&shape[1..])?;
+        let count = checked_product(shape[1..].iter().copied(), "skeleton tensor elements")?;
         let mut sliced = Vec::with_capacity(count);
         for bond_assignment in 0..count {
             let index = bond_assignment
@@ -333,16 +333,6 @@ fn write_component<V: TreeAciNode>(
         write_component(problem, arena, incoming, child_sample, point, visited)?;
     }
     Ok(())
-}
-
-fn checked_product(shape: &[usize]) -> Result<usize> {
-    shape.iter().try_fold(1usize, |product, &dimension| {
-        product
-            .checked_mul(dimension)
-            .ok_or(TreeAciError::SizeOverflow {
-                context: "skeleton tensor elements",
-            })
-    })
 }
 
 fn decode_mixed_radix(mut flat: usize, shape: &[usize]) -> Result<Vec<usize>> {

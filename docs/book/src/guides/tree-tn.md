@@ -212,6 +212,34 @@ let expected = IdxTensor::from_dense(vec![s], vec![2.0, 4.0]).unwrap();
 assert!(dense.distance(&expected).unwrap() < 1e-12);
 ```
 
+To sum more than two networks exactly, use `TreeTN::exact_sum` with a `SumEngine`. The default,
+`SumEngine::Binary`, adds the terms one by one, `((t0 + t1) + t2) + ...`, which copies the growing
+partial sum at every add. `SumEngine::Nary` builds the same network in one N-ary direct-sum pass
+(`TreeTN::add_many`), which is much faster for many terms. It allocates the whole summed network at
+once, so it is opt-in. `SumEngine::NaryWithin { limit_bytes }` uses the N-ary pass only while the
+estimated size of the sum fits the limit, and falls back to the binary chain otherwise. The result
+reports which method ran:
+
+```rust
+use tensor4all_core::prelude::*;
+use tensor4all_treetn::prelude::*;
+
+let s = DynIndex::new_dyn(2);
+let terms: Vec<_> = (1..=3)
+    .map(|k| {
+        let t = IdxTensor::from_dense(vec![s.clone()], vec![k as f64, 0.0]).unwrap();
+        TreeTN::<_, usize>::from_tensors(vec![t], vec![0]).unwrap()
+    })
+    .collect();
+let refs: Vec<_> = terms.iter().collect();
+
+let engine = SumEngine::NaryWithin { limit_bytes: SumEngine::DEFAULT_NARY_LIMIT_BYTES };
+let sum = TreeTN::exact_sum(&refs, engine).unwrap();
+assert!(sum.used_nary);
+let expected = IdxTensor::from_dense(vec![s], vec![6.0, 0.0]).unwrap();
+assert!(sum.network.to_dense().unwrap().distance(&expected).unwrap() < 1e-12);
+```
+
 After addition the bond dimensions grow, so it is common to follow up with `truncate` to keep them
 manageable.
 
@@ -258,3 +286,15 @@ Concretely:
 
 When interoperating with code that uses `nhalfsweeps`, divide by two before passing the value to
 `tensor4all-treetn` APIs.
+
+A fit contraction starts its sweeps from a zip-up of the two inputs. With large bond dimensions that start can
+dominate the time and memory; `ContractionOptions::with_initial_max_bond_dim(k)` (or the same method on
+`FitOptions`) caps it at bond dimension `k`. The sweeps then grow the bonds as far as `svd_policy` or
+`max_bond_dim` allows; with neither set they keep the start's bond dimensions. With a single sweep, `k` has to be
+large enough for the requested accuracy.
+
+## Experimental sketched products
+
+For Hadamard products of existing compatible trees, see the
+[experimental RSI guide](tree-rsi.md). Validate actual output error separately
+from its local interpolation diagnostics.

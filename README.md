@@ -38,7 +38,7 @@ use tensor4all_simplett::prelude::*;
 
 let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 4], 1.0);
 assert!((tt.evaluate(&[0, 1, 2]).unwrap() - 1.0).abs() < 1e-12);
-assert!((tt.sum() - 24.0).abs() < 1e-12);
+assert!((tt.sum().unwrap() - 24.0).abs() < 1e-12);
 ```
 
 The root `README.md` is kept intentionally short and its Rust snippets are
@@ -50,9 +50,10 @@ validated in CI. Longer runnable examples live in the
 | Crate | Description |
 |-------|-------------|
 | [tensor4all-core](crates/tensor4all-core/) | Core types: Index, Tensor, contraction, SVD, QR |
-| [tensor4all-simplett](crates/tensor4all-simplett/) | Simple TT/MPS with compression |
+| [tensor4all-simplett](crates/tensor4all-simplett/) | Simple TT/MPS with compression (being retired; new code targets TreeTN) |
 | [tensor4all-aci](crates/tensor4all-aci/) | Alternating Cross Interpolation for elementwise tensor train operations |
 | [tensor4all-treeaci](crates/tensor4all-treeaci/) | Experimental native TreeTN ACI and simultaneous n-way Hadamard products |
+| [tensor4all-treersi](crates/tensor4all-treersi/) | Experimental CPU RSI Hadamard products on TreeTN; validate actual output error |
 | [tensor4all-itensorlike](crates/tensor4all-itensorlike/) | ITensors.jl-like TensorTrain API |
 | [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology |
 | [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI2 primary, TCI1 legacy) |
@@ -61,7 +62,6 @@ validated in CI. Longer runnable examples live in the
 | [tensor4all-quanticstransform](crates/tensor4all-quanticstransform/) | Quantics transformation operators |
 | [tensor4all-treetci](crates/tensor4all-treetci/) | Tree-structured cross interpolation |
 | [tensor4all-partitionedtreetn](crates/tensor4all-partitionedtreetn/) | Partitioned TreeTNs with eager masking, adaptive patching, and adaptive patched interpolation |
-| [tensor4all-partitionedtt](crates/tensor4all-partitionedtt/) | **Deprecated:** partitioned tensor trains and adaptive TCI interpolation during migration |
 | [tensor4all-hdf5](crates/tensor4all-hdf5/) | ITensors.jl-compatible HDF5 serialization |
 | [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
 
@@ -74,6 +74,7 @@ validated in CI. Longer runnable examples live in the
 - **[Design Documents](docs/design/index.md)** — architecture and design decisions
 - **[Provenance and Citation Policy](docs/PROVENANCE_AND_CITATION_POLICY.md)** — which components build on which external projects, algorithm origins, and how to cite
 - **[Contributing](CONTRIBUTING.md)** — issue intake, development conventions, validation, and pull requests
+- **[Changelog](CHANGELOG.md)** — breaking API changes and release notes
 
 ## Agent Skill
 

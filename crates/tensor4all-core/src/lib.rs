@@ -63,7 +63,7 @@ pub use cached_function::cache_key::CacheKey;
 pub use cached_function::error::CacheKeyError;
 pub use cached_function::index_int::IndexInt;
 pub use cached_function::multi_index_cache::{
-    CachedBatchError, MultiIndexCache, DEFAULT_RETAINED_BYTE_LIMIT,
+    CachedBatchError, LeftSide, MultiIndexCache, RightSide, SideKeys, DEFAULT_RETAINED_BYTE_LIMIT,
 };
 pub use cached_function::CachedFunction;
 pub use error::{MatrixCIError, Result};
@@ -73,11 +73,13 @@ pub use floating_zone::{
 pub use indexset::{IndexSet, LocalIndex, MultiIndex};
 pub use matrix_luci::{
     matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix,
-    matrix_luci_factors_from_matrix_owned, matrix_luci_factors_working_bytes, MatrixLUCI,
-    MatrixLuciFactors,
+    matrix_luci_factors_from_matrix_owned, matrix_luci_factors_from_matrix_owned_in,
+    matrix_luci_factors_from_matrix_owned_on_session, matrix_luci_factors_working_bytes,
+    matrix_luci_row_interpolation_owned_in, MatrixLUCI, MatrixLuciFactors,
+    MatrixLuciRowInterpolation,
 };
 pub use matrixaca::MatrixACA;
-pub use matrixlu::{rrlu, rrlu_mut, RrLU, RrLUOptions};
+pub use matrixlu::{rrlu, rrlu_mut, rrlu_pivots, RrLU, RrLUOptions, RrLUPivots};
 pub use scalar::Scalar;
 pub use traits::AbstractMatrixCI;
 
@@ -111,6 +113,11 @@ pub use tensor_index::TensorIndex;
 
 // Krylov subspace methods (GMRES, etc.)
 pub mod krylov;
+pub mod randomized;
+pub use randomized::{
+    randomized_range, randomized_range_in, randomized_range_on_session, randomized_svd,
+    RangeOptions, RsvdOptions, RsvdResult, RsvdTimings,
+};
 
 // Block tensor for block matrix GMRES
 pub mod block_tensor;
@@ -147,6 +154,12 @@ pub use defaults::contract::{
 pub use defaults::idx_tensor::{
     print_and_reset_pairwise_contract_profile, reset_pairwise_contract_profile,
 };
+pub use defaults::{
+    contract_pair_on_session, contract_with_options_on_session, index_select_on_session,
+    inner_product_on_session, norm_on_session, norm_squared_on_session, permute_indices_on_session,
+    permute_on_session, select_indices_on_session, stack_along_new_index_on_session,
+    sum_on_session,
+};
 
 // Re-export linear algebra modules from defaults for backwards compatibility
 // This allows `tensor4all_core::svd::...`, `tensor4all_core::qr::...`, etc.
@@ -171,11 +184,15 @@ pub mod svd {
 }
 
 // Re-export linear algebra items for top-level access
-pub use defaults::direct_sum::direct_sum;
+pub use defaults::direct_sum::{direct_sum, direct_sum_many};
 pub use defaults::factorize::{
-    factorize, factorize_full_rank, factorize_full_rank_in, factorize_in,
+    factorize, factorize_full_rank, factorize_full_rank_in, factorize_full_rank_on_session,
+    factorize_in, factorize_on_session, factorize_with_rng, factorize_with_rng_in,
+    factorize_with_rng_on_session,
 };
-pub use defaults::qr::{default_qr_rtol, qr, qr_with, set_default_qr_rtol, QrError, QrOptions};
+pub use defaults::qr::{
+    default_qr_rtol, qr, qr_with, qr_with_on_session, set_default_qr_rtol, QrError, QrOptions,
+};
 pub use defaults::svd::{
     default_svd_truncation_policy, set_default_svd_truncation_policy, svd, svd_with, SvdError,
     SvdOptions,

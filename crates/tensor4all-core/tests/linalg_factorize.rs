@@ -106,7 +106,7 @@ fn factorize_auto_matches_svd_for_safe_policy() {
 /// Test factorization with given options and verify reconstruction.
 fn test_factorize_reconstruction(options: &FactorizeOptions) {
     let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
+    let left_inds = vec![tensor.indices()[0].clone()];
 
     let result = factorize(&tensor, &left_inds, options).unwrap();
 
@@ -118,12 +118,12 @@ fn test_factorize_reconstruction(options: &FactorizeOptions) {
 /// Test that left and right factors share the same bond index.
 fn test_shared_bond_index(options: &FactorizeOptions) {
     let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
+    let left_inds = vec![tensor.indices()[0].clone()];
 
     let result = factorize(&tensor, &left_inds, options).unwrap();
 
-    let left_bond = result.left.indices.last().unwrap();
-    let right_bond = result.right.indices.first().unwrap();
+    let left_bond = result.left.indices().last().unwrap();
+    let right_bond = result.right.indices().first().unwrap();
     assert_eq!(
         left_bond.id, right_bond.id,
         "Left and right should share the same bond index"
@@ -156,6 +156,7 @@ fn test_factorize_reconstruction_all_algorithms() {
                 max_bond_dim: None,
                 svd_policy: None,
                 qr_rtol: None,
+                ..FactorizeOptions::default()
             };
             test_factorize_reconstruction(&options);
         }
@@ -179,6 +180,7 @@ fn test_factorize_shared_bond_index_all_algorithms() {
             max_bond_dim: None,
             svd_policy: None,
             qr_rtol: None,
+            ..FactorizeOptions::default()
         };
         test_shared_bond_index(&options);
     }
@@ -192,7 +194,7 @@ fn test_factorize_shared_bond_index_all_algorithms() {
 fn test_factorize_svd_returns_singular_values() {
     for canonical in [Canonical::Left, Canonical::Right] {
         let tensor = create_test_matrix();
-        let left_inds = vec![tensor.indices[0].clone()];
+        let left_inds = vec![tensor.indices()[0].clone()];
         let options = FactorizeOptions::svd().with_canonical(canonical);
         let result = factorize(&tensor, &left_inds, &options).unwrap();
 
@@ -207,7 +209,7 @@ fn test_factorize_svd_returns_singular_values() {
 #[test]
 fn test_factorize_svd_rank3() {
     let tensor = create_rank3_tensor();
-    let left_inds = vec![tensor.indices[0].clone(), tensor.indices[1].clone()];
+    let left_inds = vec![tensor.indices()[0].clone(), tensor.indices()[1].clone()];
 
     let options = FactorizeOptions::svd();
     let result = factorize(&tensor, &left_inds, &options).unwrap();
@@ -525,7 +527,7 @@ fn factorize_auto_gate_is_strict_and_preserves_tracked_ad() {
 #[test]
 fn test_factorize_qr_right_canonical_error() {
     let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
+    let left_inds = vec![tensor.indices()[0].clone()];
 
     let options = FactorizeOptions::qr().with_canonical(Canonical::Right);
     let result = factorize(&tensor, &left_inds, &options);
@@ -539,7 +541,7 @@ fn test_factorize_qr_right_canonical_error() {
 #[test]
 fn test_factorize_qr_no_singular_values() {
     let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
+    let left_inds = vec![tensor.indices()[0].clone()];
     let options = FactorizeOptions::qr();
     let result = factorize(&tensor, &left_inds, &options).unwrap();
 
@@ -555,13 +557,14 @@ fn test_factorize_lu_ci_no_singular_values() {
     for alg in [FactorizeAlg::LU, FactorizeAlg::CI] {
         for canonical in [Canonical::Left, Canonical::Right] {
             let tensor = create_test_matrix();
-            let left_inds = vec![tensor.indices[0].clone()];
+            let left_inds = vec![tensor.indices()[0].clone()];
             let options = FactorizeOptions {
                 alg,
                 canonical,
                 max_bond_dim: None,
                 svd_policy: None,
                 qr_rtol: None,
+                ..FactorizeOptions::default()
             };
             let result = factorize(&tensor, &left_inds, &options).unwrap();
 
@@ -573,7 +576,7 @@ fn test_factorize_lu_ci_no_singular_values() {
 #[test]
 fn test_factorize_lu_ci_reconstruction_with_unit_dim_axis() {
     let tensor = create_unit_dim_rank3_tensor();
-    let left_inds = vec![tensor.indices[1].clone(), tensor.indices[2].clone()];
+    let left_inds = vec![tensor.indices()[1].clone(), tensor.indices()[2].clone()];
 
     for alg in [FactorizeAlg::LU, FactorizeAlg::CI] {
         let options = FactorizeOptions {
@@ -582,6 +585,7 @@ fn test_factorize_lu_ci_reconstruction_with_unit_dim_axis() {
             max_bond_dim: None,
             svd_policy: None,
             qr_rtol: None,
+            ..FactorizeOptions::default()
         };
         let result = factorize(&tensor, &left_inds, &options).unwrap();
         let reconstructed = result.left.contract_pair(&result.right).unwrap();
@@ -592,7 +596,7 @@ fn test_factorize_lu_ci_reconstruction_with_unit_dim_axis() {
 #[test]
 fn test_factorize_lu_ci_reconstruction_with_col_major_matrix_input() {
     let tensor = create_non_symmetric_col_major_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
+    let left_inds = vec![tensor.indices()[0].clone()];
 
     for alg in [FactorizeAlg::LU, FactorizeAlg::CI] {
         let options = FactorizeOptions {
@@ -601,6 +605,7 @@ fn test_factorize_lu_ci_reconstruction_with_col_major_matrix_input() {
             max_bond_dim: None,
             svd_policy: None,
             qr_rtol: None,
+            ..FactorizeOptions::default()
         };
         let result = factorize(&tensor, &left_inds, &options).unwrap();
         let reconstructed = result.left.contract_pair(&result.right).unwrap();
@@ -615,7 +620,7 @@ fn test_factorize_lu_ci_reconstruction_with_col_major_matrix_input() {
 #[test]
 fn test_factorize_with_max_bond_dim() {
     let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
+    let left_inds = vec![tensor.indices()[0].clone()];
 
     // LU should respect max_bond_dim
     let options = FactorizeOptions::lu().with_max_bond_dim(1);
@@ -666,7 +671,7 @@ fn test_factorize_full_rank_ci_real_and_complex_both_canonical() {
 #[test]
 fn test_factorize_rejects_tracked_lu_and_ci_before_materialization() {
     let tensor = create_test_matrix().enable_grad().unwrap();
-    let left_inds = vec![tensor.indices[0].clone()];
+    let left_inds = vec![tensor.indices()[0].clone()];
 
     for options in [FactorizeOptions::lu(), FactorizeOptions::ci()] {
         let error = factorize(&tensor, &left_inds, &options).unwrap_err();
@@ -684,7 +689,7 @@ fn test_factorize_rejects_tracked_lu_and_ci_before_materialization() {
 #[test]
 fn test_factorize_rejects_mixed_algorithm_options() {
     let tensor = create_test_matrix();
-    let left_inds = vec![tensor.indices[0].clone()];
+    let left_inds = vec![tensor.indices()[0].clone()];
 
     let svd_with_qr = FactorizeOptions::svd().with_qr_rtol(1.0e-8);
     assert!(matches!(
@@ -735,9 +740,9 @@ fn test_diag_dense_contraction_svd_internals() {
 
     // Verify S and V share a common index
     let common_found = s
-        .indices
+        .indices()
         .iter()
-        .any(|s_idx| v.indices.iter().any(|v_idx| s_idx.id == v_idx.id));
+        .any(|s_idx| v.indices().iter().any(|v_idx| s_idx.id == v_idx.id));
     assert!(common_found, "S and V should share a common index");
 
     // Contractions should work

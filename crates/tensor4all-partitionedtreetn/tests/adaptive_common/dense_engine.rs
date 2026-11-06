@@ -13,14 +13,15 @@ use std::hash::Hash;
 use std::sync::Mutex;
 
 use tensor4all_core::{
-    contract_pair, outer_product, ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex,
-    FactorizeOptions, IdxTensor, IndexLike, TensorElement,
+    contract_pair_on_session, ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex,
+    FactorizeOptions, IdxTensor, IndexLike, PairwiseContractionOptions, TensorElement,
 };
+use tensor4all_tensorbackend::explicit::Session;
 use tensor4all_treetn::interpolation::{
-    InterpolationError, InterpolationOutcome, InterpolationProblem, InterpolationTermination,
-    TreeInterpolator,
+    EvalContext, InterpolationError, InterpolationOutcome, InterpolationProblem,
+    InterpolationTermination, TreeInterpolator,
 };
-use tensor4all_treetn::{factorize_tensor_to_treetn_with, TreeTN, TreeTopology};
+use tensor4all_treetn::{factorize_tensor_to_treetn_with_on_session, TreeTN, TreeTopology};
 
 use super::full_domain;
 
@@ -98,11 +99,12 @@ where
     fn interpolate<V, F>(
         &self,
         problem: &InterpolationProblem<V>,
-        evaluate: F,
+        ctx: &mut EvalContext<'_>,
+        mut evaluate: F,
     ) -> Result<InterpolationOutcome<V>, InterpolationError>
     where
         V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-        F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
+        F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
     {
         let evaluator = |source: anyhow::Error| InterpolationError::Evaluator { source };
         let site_order = problem.site_order().to_vec();
@@ -114,17 +116,17 @@ where
             Fault::BadBatch => {
                 let data = vec![0; n_active + 1];
                 let shape = [n_active + 1, 1];
-                evaluate(ColMajorArrayRef::new(&data, &shape).unwrap()).map_err(evaluator)?;
+                evaluate(ColMajorArrayRef::new(&data, &shape).unwrap(), ctx).map_err(evaluator)?;
             }
             Fault::OutOfRange => {
                 let data = dims.clone();
                 let shape = [n_active, 1];
-                evaluate(ColMajorArrayRef::new(&data, &shape).unwrap()).map_err(evaluator)?;
+                evaluate(ColMajorArrayRef::new(&data, &shape).unwrap(), ctx).map_err(evaluator)?;
             }
             _ => {}
         }
 
-        let initial = evaluate(problem.initial_pivots().as_ref()).map_err(evaluator)?;
+        let initial = evaluate(problem.initial_pivots().as_ref(), ctx).map_err(evaluator)?;
         if initial.iter().all(|value| value.abs_val() == 0.0) {
             return Err(InterpolationError::AllSamplesZero);
         }
@@ -140,14 +142,19 @@ where
         let domain: Vec<usize> = full_domain(&dims).concat();
         let shape = [n_active, domain.len() / n_active];
         let values =
-            evaluate(ColMajorArrayRef::new(&domain, &shape).unwrap()).map_err(evaluator)?;
+            evaluate(ColMajorArrayRef::new(&domain, &shape).unwrap(), ctx).map_err(evaluator)?;
         let (argmax, max_sample_magnitude) =
             values.iter().map(|value| value.abs_val()).enumerate().fold(
                 (0, 0.0_f64),
                 |best, (i, m)| if m > best.1 { (i, m) } else { best },
             );
 
-        let network = factorize_dense(problem, values, self.fault == Fault::WrongLayout)?;
+        let network = factorize_dense(
+            problem,
+            values,
+            self.fault == Fault::WrongLayout,
+            ctx.session(),
+        )?;
         let rank = network.link_dims().into_iter().max().unwrap_or(1);
         let termination = if self.fault == Fault::IterationLimit {
             InterpolationTermination::IterationLimit
@@ -201,6 +208,7 @@ pub(crate) fn factorize_dense<T, V>(
     problem: &InterpolationProblem<V>,
     values: Vec<T>,
     wrong_layout: bool,
+    session: &mut Session<'_>,
 ) -> Result<TreeTN<IdxTensor, V>, InterpolationError>
 where
     T: CommonScalar + TensorElement,
@@ -212,7 +220,8 @@ where
     if wrong_layout {
         indices[0] = indices[0].sim();
     }
-    let mut dense = IdxTensor::from_dense(indices.clone(), values).map_err(|e| engine(e.into()))?;
+    let mut dense =
+        IdxTensor::from_dense_compact(indices.clone(), values).map_err(|e| engine(e.into()))?;
     let one = vec![T::from_f64(1.0)];
     let mut nodes = HashMap::new();
     let mut dummies = HashMap::new();
@@ -222,8 +231,10 @@ where
         position += sites.len();
         if node_indices.is_empty() {
             let dummy = DynIndex::new_dyn(1);
-            let ones = IdxTensor::from_dense(vec![dummy.clone()], one.clone()).unwrap();
-            dense = outer_product(&dense, &ones).map_err(|e| engine(e.into()))?;
+            let ones = IdxTensor::from_dense_compact(vec![dummy.clone()], one.clone()).unwrap();
+            dense =
+                contract_pair_on_session(session, &dense, &ones, PairwiseContractionOptions::new())
+                    .map_err(|e| engine(e.into()))?;
             nodes.insert(node.clone(), vec![dummy]);
             dummies.insert(node.clone(), ones);
         } else {
@@ -243,11 +254,12 @@ where
         })
         .collect();
     let root = problem.node_sites().keys().next().unwrap();
-    let factorized = factorize_tensor_to_treetn_with(
+    let factorized = factorize_tensor_to_treetn_with_on_session(
         &dense,
         &TreeTopology::new(nodes, edges),
         FactorizeOptions::svd(),
         root,
+        session,
     )
     .map_err(|e| engine(e.into()))?;
     let names: Vec<V> = problem.node_sites().keys().cloned().collect();
@@ -258,7 +270,13 @@ where
                 .tensor(factorized.node_index(name).unwrap())
                 .unwrap();
             match dummies.get(name) {
-                Some(ones) => contract_pair(tensor, ones).unwrap(),
+                Some(ones) => contract_pair_on_session(
+                    session,
+                    tensor,
+                    ones,
+                    PairwiseContractionOptions::new(),
+                )
+                .unwrap(),
                 None => tensor.clone(),
             }
         })

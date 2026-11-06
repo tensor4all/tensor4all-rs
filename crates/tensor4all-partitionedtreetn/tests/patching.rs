@@ -1,10 +1,10 @@
 use num_complex::Complex64;
 use tensor4all_core::{DynIndex, IdxTensor, SvdTruncationPolicy};
 use tensor4all_partitionedtreetn::{
-    add_with_patching, contract_adaptive, truncate_adaptive, PartitionedTreeTN,
+    add_with_patching, contract_adaptive, truncate_adaptive, BudgetAllocation, PartitionedTreeTN,
     PartitionedTreeTNError, PatchSplitStrategy, PatchingOptions, Projector, SubDomainTreeTN,
 };
-use tensor4all_treetn::{contraction::ContractionOptions, TreeTN};
+use tensor4all_treetn::{contraction::ContractionOptions, SumEngine, TreeTN, TruncationOptions};
 
 fn rank_two_chain() -> (SubDomainTreeTN, DynIndex, DynIndex) {
     let site0 = DynIndex::new_dyn(2);
@@ -31,11 +31,32 @@ fn one_site_patch(site: &DynIndex, values: [f64; 2], coordinate: usize) -> SubDo
     .unwrap()
 }
 
+/// Branched complex tree whose split count is fixed by exact rank, not rounding.
+///
+/// `center[c0, c1, b0, b1] = (1 + i)` exactly when `b0 = c1 % 2` and
+/// `b1 = min(c1, 1)`, and both leaves are `(1 + i) [[1, 1], [1, -1]]`. With
+/// only `c0` fixed, `c1` still selects both leaf-0 rows (`b0 = 0, 1, 0`), so
+/// the center/leaf-0 bond has exact rank 2 and the patch must split on `c1`
+/// too; with both fixed, every bond has exact rank 1. A bond cap of 1 therefore
+/// requires exactly the 2 x 3 = 6 patches, each of squared norm
+/// `4 * |1 + i|^6 = 32`, whatever the SVD's rounding. An all-equal product
+/// state has exact rank 1 everywhere, so with `cutoff = 0` its split count
+/// would only follow whether the SVD returns its zero singular values as 0 or
+/// as `O(eps)` noise.
 fn branched_complex_tree() -> (TreeTN<IdxTensor, String>, Vec<DynIndex>) {
     let center_sites = vec![DynIndex::new_dyn(2), DynIndex::new_dyn(3)];
     let leaf_sites = vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
-    let bonds = vec![DynIndex::new_dyn(1), DynIndex::new_dyn(1)];
+    let bonds = vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
     let one = Complex64::new(1.0, 1.0);
+    let zero = Complex64::new(0.0, 0.0);
+    // Column-major over (c0, c1, b0, b1).
+    let mut center_values = vec![zero; 2 * 3 * 2 * 2];
+    for c0 in 0..2 {
+        for c1 in 0..3 {
+            let (b0, b1) = (c1 % 2, c1.min(1));
+            center_values[c0 + 2 * c1 + 6 * b0 + 12 * b1] = one;
+        }
+    }
     let center = IdxTensor::from_dense(
         vec![
             center_sites[0].clone(),
@@ -43,14 +64,16 @@ fn branched_complex_tree() -> (TreeTN<IdxTensor, String>, Vec<DynIndex>) {
             bonds[0].clone(),
             bonds[1].clone(),
         ],
-        vec![one; 6],
+        center_values,
     )
     .unwrap();
+    // Column-major over (bond, site): rows (1, 1) and (1, -1).
+    let leaf_values = vec![one, one, one, -one];
     let leaves = leaf_sites
         .iter()
         .zip(&bonds)
         .map(|(site, bond)| {
-            IdxTensor::from_dense(vec![bond.clone(), site.clone()], vec![one; 2]).unwrap()
+            IdxTensor::from_dense(vec![bond.clone(), site.clone()], leaf_values.clone()).unwrap()
         })
         .collect::<Vec<_>>();
     let mut tensors = vec![center];
@@ -146,18 +169,18 @@ fn local_cutoff_truncates_known_spectrum_with_exact_ranks() {
 
     // cutoff well below the second squared weight keeps rank 2 and the result
     // stays essentially exact.
-    let below = truncate_adaptive(&partition, &0, 1.0e-8, None).unwrap();
+    let below = truncate_adaptive(&partition, &0, 1.0e-8, BudgetAllocation::Volume, None).unwrap();
     assert_eq!(below.values().next().unwrap().max_bond_dim(), 2);
     assert!(dense_maxabs_diff(&patch, &below) < 1.0e-9);
 
     // cutoff above the second squared weight trims to rank 1, discarding only
     // the small mode `a|11>` (weight a*a = 0.01).
-    let above = truncate_adaptive(&partition, &0, 1.0e-2, None).unwrap();
+    let above = truncate_adaptive(&partition, &0, 1.0e-2, BudgetAllocation::Volume, None).unwrap();
     assert_eq!(above.values().next().unwrap().max_bond_dim(), 1);
     assert!(dense_maxabs_diff(&patch, &above) < 2.1e-1);
 
     // cutoff == 0 disables threshold truncation entirely.
-    let exact = truncate_adaptive(&partition, &0, 0.0, None).unwrap();
+    let exact = truncate_adaptive(&partition, &0, 0.0, BudgetAllocation::Volume, None).unwrap();
     assert_eq!(exact.values().next().unwrap().max_bond_dim(), 2);
 }
 
@@ -167,12 +190,12 @@ fn local_cutoff_hard_cap_takes_precedence_in_both_directions() {
     let partition = PartitionedTreeTN::from_subdomain(two_site_chain(a)).unwrap();
 
     // cutoff == 0 leaves thresholds off; the hard cap still trims the rank.
-    let capped = truncate_adaptive(&partition, &0, 0.0, Some(1)).unwrap();
+    let capped = truncate_adaptive(&partition, &0, 0.0, BudgetAllocation::Volume, Some(1)).unwrap();
     assert_eq!(capped.values().next().unwrap().max_bond_dim(), 1);
 
     // cutoff above the boundary trims even without a cap (and does not drop
     // the patch because its norm exceeds the local cutoff).
-    let uncapped = truncate_adaptive(&partition, &0, 0.5, None).unwrap();
+    let uncapped = truncate_adaptive(&partition, &0, 0.5, BudgetAllocation::Volume, None).unwrap();
     assert_eq!(uncapped.len(), 1);
     assert_eq!(uncapped.values().next().unwrap().max_bond_dim(), 1);
 }
@@ -186,12 +209,12 @@ fn truncate_adaptive_local_cutoff_applies_whole_threshold_on_multi_edge_patches(
     // whole-network error bound.
     let patch = four_site_chain(0.095);
     let partition = PartitionedTreeTN::from_subdomain(patch).unwrap();
-    let result = truncate_adaptive(&partition, &1, 0.1, None).unwrap();
+    let result = truncate_adaptive(&partition, &1, 0.1, BudgetAllocation::Volume, None).unwrap();
     assert_eq!(result.len(), 1);
     assert_eq!(result.values().next().unwrap().max_bond_dim(), 1);
 
     // A tight cutoff keeps the small modes (no threshold truncation, no cap).
-    let kept = truncate_adaptive(&partition, &1, 0.0, None).unwrap();
+    let kept = truncate_adaptive(&partition, &1, 0.0, BudgetAllocation::Volume, None).unwrap();
     assert_eq!(kept.len(), 1);
     assert_eq!(kept.values().next().unwrap().max_bond_dim(), 2);
 }
@@ -208,11 +231,11 @@ fn local_cutoff_patch_drop_follows_the_drop_boundary() {
     // total volume = 2 and each local cutoff = cutoff * 10 * (1/2) = 5*cutoff.
 
     // cutoff 0.2 -> local 1.0: the light patch (1 <= 1.0) is dropped.
-    let dropped = truncate_adaptive(&partition, &0, 0.2, None).unwrap();
+    let dropped = truncate_adaptive(&partition, &0, 0.2, BudgetAllocation::Volume, None).unwrap();
     assert_eq!(dropped.len(), 1);
 
     // cutoff 0.1 -> local 0.5: both patches (1 > 0.5, 9 > 0.5) are kept.
-    let kept = truncate_adaptive(&partition, &0, 0.1, None).unwrap();
+    let kept = truncate_adaptive(&partition, &0, 0.1, BudgetAllocation::Volume, None).unwrap();
     assert_eq!(kept.len(), 2);
 }
 
@@ -248,9 +271,10 @@ fn local_cutoff_truncates_complex64_systems() {
     let partition =
         PartitionedTreeTN::from_subdomain(SubDomainTreeTN::from_treetn(tree).unwrap()).unwrap();
 
-    let kept = truncate_adaptive(&partition, &0, 1.0e-4, None).unwrap();
+    let kept = truncate_adaptive(&partition, &0, 1.0e-4, BudgetAllocation::Volume, None).unwrap();
     assert_eq!(kept.values().next().unwrap().max_bond_dim(), 2);
-    let truncated = truncate_adaptive(&partition, &0, 1.0e-1, None).unwrap();
+    let truncated =
+        truncate_adaptive(&partition, &0, 1.0e-1, BudgetAllocation::Volume, None).unwrap();
     assert_eq!(truncated.values().next().unwrap().max_bond_dim(), 1);
 }
 
@@ -344,15 +368,18 @@ fn adaptive_patching_preserves_branched_complex_multisite_tree() {
     let center = "center".to_string();
     let options = PatchingOptions {
         cutoff: 0.0,
+        allocation: BudgetAllocation::Volume,
         max_bond_dim: Some(1),
         patch_order: sites[..2].to_vec(),
         split_strategy: PatchSplitStrategy::Sequential,
+        sum_engine: SumEngine::Binary,
     };
 
     let patched = add_with_patching(vec![patch], &center, &options).unwrap();
     assert_branched_complex_partition(&patched, &sites);
 
-    let retruncated = truncate_adaptive(&patched, &center, 0.0, Some(1)).unwrap();
+    let retruncated =
+        truncate_adaptive(&patched, &center, 0.0, BudgetAllocation::Volume, Some(1)).unwrap();
     assert_branched_complex_partition(&retruncated, &sites);
 }
 
@@ -361,9 +388,11 @@ fn add_with_patching_splits_at_explicit_center() {
     let (subdomain, site0, _) = rank_two_chain();
     let options = PatchingOptions {
         cutoff: 0.0,
+        allocation: BudgetAllocation::Volume,
         max_bond_dim: Some(1),
         patch_order: vec![site0.clone()],
         split_strategy: PatchSplitStrategy::Sequential,
+        sum_engine: SumEngine::Binary,
     };
 
     let result = add_with_patching(vec![subdomain], &0, &options).unwrap();
@@ -382,12 +411,299 @@ fn truncate_adaptive_uses_absolute_volume_budget_and_keeps_eager_values() {
     let low = one_site_patch(&site, [1.0e12, 0.01], 1);
     let partition = PartitionedTreeTN::from_subdomains(vec![high, low]).unwrap();
 
-    let result = truncate_adaptive(&partition, &0, 0.1, Some(2)).unwrap();
+    let result = truncate_adaptive(&partition, &0, 0.1, BudgetAllocation::Volume, Some(2)).unwrap();
 
     assert_eq!(result.len(), 1);
     let projector = Projector::from_pairs([(site, 0)]).unwrap();
     assert!(result.contains(&projector));
     assert!((result.get(&projector).unwrap().norm_squared().unwrap() - 100.0).abs() < 1e-10);
+}
+
+/// Relative squared tail-sum policy, the per-SVD rule of
+/// `BudgetAllocation::Norm` and of an ITensor-style relative `TreeTN` cutoff.
+fn relative_tail_policy(cutoff: f64) -> TruncationOptions {
+    TruncationOptions::new().with_svd_policy(
+        SvdTruncationPolicy::new(cutoff)
+            .with_relative()
+            .with_squared_values()
+            .with_discarded_tail_sum(),
+    )
+}
+
+/// Shared two-site chain whose projected selector site selects one of two bond
+/// spectra.
+///
+/// Node 0 has axes `(selector, site0, bond)` and node 1 `(bond, site1)`. A patch
+/// that fixes `selector = p` is `Σ_i σ_i^(p) |site0 = i>|site1 = i>`, so its
+/// squared norm is `squared[p][0] + squared[p][1]` and its volume is
+/// `1 * 2 * 2 = 4`.
+pub(super) struct TwoModeChain {
+    selector: DynIndex,
+    site0: DynIndex,
+    site1: DynIndex,
+    pub(super) patches: [SubDomainTreeTN; 2],
+}
+
+pub(super) fn two_mode_chain(squared: [[f64; 2]; 2]) -> TwoModeChain {
+    let selector = DynIndex::new_dyn(2);
+    let site0 = DynIndex::new_dyn(2);
+    let site1 = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(2);
+    // Column-major flat index of `(selector, site0, bond)` is `p + 2i + 4b`;
+    // only `b = i` entries are nonzero.
+    let mut values = vec![0.0_f64; 8];
+    for coordinate in 0..2 {
+        for (i, singular) in squared[coordinate].into_iter().map(f64::sqrt).enumerate() {
+            values[coordinate + 2 * i + 4 * i] = singular;
+        }
+    }
+    let node0 =
+        IdxTensor::from_dense(vec![selector.clone(), site0.clone(), bond.clone()], values).unwrap();
+    let node1 =
+        IdxTensor::from_dense(vec![bond, site1.clone()], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
+    let tree = TreeTN::from_tensors(vec![node0, node1], vec![0usize, 1]).unwrap();
+    let patch = |coordinate| {
+        SubDomainTreeTN::new(
+            tree.clone(),
+            Projector::from_pairs([(selector.clone(), coordinate)]).unwrap(),
+        )
+        .unwrap()
+    };
+    let patches = [patch(0), patch(1)];
+    TwoModeChain {
+        selector,
+        site0,
+        site1,
+        patches,
+    }
+}
+
+/// Two patches with squared norms 99 and 1 and equal volumes, sharing one
+/// operation. The heavy patch keeps its precision, the light patch is what
+/// distinguishes a relative from an absolute allocation.
+fn unbalanced_norm_partition() -> (SubDomainTreeTN, SubDomainTreeTN, PartitionedTreeTN) {
+    let chain = two_mode_chain([[98.99, 0.01], [0.8, 0.2]]);
+    let partition = PartitionedTreeTN::from_subdomains(chain.patches.to_vec()).unwrap();
+    (
+        chain.patches[0].clone(),
+        chain.patches[1].clone(),
+        partition,
+    )
+}
+
+#[test]
+fn truncate_adaptive_norm_truncates_each_patch_relative_to_itself() {
+    let (heavy, light, partition) = unbalanced_norm_partition();
+    let cutoff = 0.01;
+
+    let result = truncate_adaptive(&partition, &0, cutoff, BudgetAllocation::Norm, None).unwrap();
+    assert_eq!(result.len(), 2);
+
+    // Every patch equals `TreeTN::truncate` of that patch alone with the
+    // relative policy: the same retained ranks and the same values.
+    for source in [&heavy, &light] {
+        let expected = source
+            .data()
+            .clone()
+            .truncate([0usize], relative_tail_policy(cutoff))
+            .unwrap();
+        let actual = result.get(source.projector()).unwrap().data();
+        assert_eq!(actual.link_dims(), expected.link_dims());
+        let diff = actual
+            .clone()
+            .to_dense()
+            .unwrap()
+            .sub(&expected.to_dense().unwrap())
+            .unwrap()
+            .maxabs()
+            .unwrap();
+        assert!(diff < 1.0e-12, "per-patch relative mismatch {diff}");
+    }
+
+    // Relative tails 0.01/99 = 1.0e-4 and 0.2/1 = 0.2 are judged against each
+    // patch's own weight, so the heavy patch drops its small mode and the
+    // light one keeps both.
+    assert_eq!(result.get(heavy.projector()).unwrap().max_bond_dim(), 1);
+    assert_eq!(result.get(light.projector()).unwrap().max_bond_dim(), 2);
+
+    // Volume instead gives both patches the absolute threshold
+    // 0.01 * 100 * 4 / 8 = 0.5 and drops the light patch's 0.2 mode as well.
+    let volume = truncate_adaptive(&partition, &0, cutoff, BudgetAllocation::Volume, None).unwrap();
+    assert_eq!(volume.len(), 2);
+    assert_eq!(volume.get(heavy.projector()).unwrap().max_bond_dim(), 1);
+    assert_eq!(volume.get(light.projector()).unwrap().max_bond_dim(), 1);
+}
+
+#[test]
+fn truncate_adaptive_norm_never_drops_a_nonzero_patch() {
+    let chain = two_mode_chain([[98.99, 0.01], [0.9e-6, 0.1e-6]]);
+    let (heavy, tiny) = (chain.patches[0].clone(), chain.patches[1].clone());
+    let partition = PartitionedTreeTN::from_subdomains(vec![heavy.clone(), tiny.clone()]).unwrap();
+    let cutoff = 0.5;
+
+    let norm = truncate_adaptive(&partition, &0, cutoff, BudgetAllocation::Norm, None).unwrap();
+    assert_eq!(norm.len(), 2);
+    assert!(norm.get(tiny.projector()).unwrap().norm_squared().unwrap() > 0.0);
+
+    // The volume allocation compares the same patch with the absolute
+    // threshold 0.5 * 99 * 4 / 8 = 24.75 and drops it.
+    let volume = truncate_adaptive(&partition, &0, cutoff, BudgetAllocation::Volume, None).unwrap();
+    assert_eq!(volume.len(), 1);
+    assert!(volume.contains(heavy.projector()));
+}
+
+#[test]
+fn add_with_patching_norm_splits_only_the_patch_that_stays_over_cap() {
+    // Two patches over one shared chain, with squared norms 99 and 1 and equal
+    // volumes. The volume allocation gives both the absolute threshold
+    // 0.01 * 100 * 4 / 8 = 0.5, while `Norm` uses each patch's own relative
+    // tail: 1.0e-4 for the heavy patch and 0.2 for the light one.
+    let chain = two_mode_chain([[98.99, 0.01], [0.8, 0.2]]);
+    let (selector, heavy, light) = (
+        chain.selector.clone(),
+        chain.patches[0].clone(),
+        chain.patches[1].clone(),
+    );
+    let options = PatchingOptions {
+        cutoff: 0.01,
+        allocation: BudgetAllocation::Norm,
+        max_bond_dim: Some(1),
+        patch_order: Vec::new(),
+        split_strategy: PatchSplitStrategy::ExactParameterGain,
+        sum_engine: SumEngine::Binary,
+    };
+
+    let norm = add_with_patching(vec![heavy.clone(), light.clone()], &0, &options).unwrap();
+
+    // `Norm` truncates the heavy patch to rank 1 but keeps the light patch at
+    // rank 2, so the hard cap splits it into its two coordinates.
+    assert_eq!(norm.len(), 3);
+    assert!(norm.values().all(|patch| patch.max_bond_dim() <= 1));
+    let mut per_coordinate = [0usize; 2];
+    for patch in norm.values() {
+        per_coordinate[patch.projector().get(&selector).unwrap()] += 1;
+    }
+    assert_eq!(per_coordinate, [1, 2]);
+
+    // The volume allocation drops the light patch's 0.2 tail below its own
+    // absolute threshold, so nothing exceeds the cap and nothing is split.
+    let volume = add_with_patching(
+        vec![heavy, light],
+        &0,
+        &PatchingOptions {
+            allocation: BudgetAllocation::Volume,
+            ..options
+        },
+    )
+    .unwrap();
+    assert_eq!(volume.len(), 2);
+    assert!(volume.values().all(|patch| patch.max_bond_dim() == 1));
+}
+
+/// Identity-like two-node operator partition over the [`two_mode_chain`]
+/// topology, so contracting it with that chain leaves the state's bond.
+fn identity_operator(site0: &DynIndex, site1: &DynIndex) -> PartitionedTreeTN {
+    let out0 = DynIndex::new_dyn(2);
+    let out1 = DynIndex::new_dyn(2);
+    let op_bond = DynIndex::new_dyn(1);
+    let node0 = IdxTensor::from_dense(
+        vec![out0, site0.clone(), op_bond.clone()],
+        vec![1.0_f64, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
+    let node1 = IdxTensor::from_dense(
+        vec![op_bond, out1, site1.clone()],
+        vec![1.0_f64, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
+    let tree = TreeTN::from_tensors(vec![node0, node1], vec![0usize, 1]).unwrap();
+    PartitionedTreeTN::from_subdomain(SubDomainTreeTN::from_treetn(tree).unwrap()).unwrap()
+}
+
+#[test]
+fn contract_adaptive_norm_truncates_each_output_patch_relative_to_itself() {
+    // The identity operator leaves the state's bond, so the two output patches
+    // carry the squared spectra [98.99, 0.01] and [0.8, 0.2]: unequal patch
+    // weights over equal output volumes.
+    let chain = two_mode_chain([[98.99, 0.01], [0.8, 0.2]]);
+    let state = PartitionedTreeTN::from_subdomains(chain.patches.to_vec()).unwrap();
+    let operator = identity_operator(&chain.site0, &chain.site1);
+    let cutoff = 0.01;
+    let exact_options = PatchingOptions {
+        cutoff: 0.0,
+        allocation: BudgetAllocation::Norm,
+        max_bond_dim: None,
+        split_strategy: PatchSplitStrategy::ExactParameterGain,
+        ..PatchingOptions::default()
+    };
+    let exact = contract_adaptive(
+        &operator,
+        &state,
+        &0,
+        &ContractionOptions::default(),
+        &exact_options,
+    )
+    .unwrap();
+    assert_eq!(exact.len(), 2);
+    assert!(exact.values().all(|patch| patch.max_bond_dim() == 2));
+
+    let norm = contract_adaptive(
+        &operator,
+        &state,
+        &0,
+        &ContractionOptions::default(),
+        &PatchingOptions {
+            cutoff,
+            ..exact_options.clone()
+        },
+    )
+    .unwrap();
+    assert_eq!(norm.len(), 2);
+
+    // Every output patch equals `TreeTN::truncate` of the untruncated output
+    // patch with the relative policy: same retained ranks, same values.
+    let mut norm_rank = [0usize; 2];
+    for source in exact.values() {
+        let expected = source
+            .data()
+            .clone()
+            .truncate([0usize], relative_tail_policy(cutoff))
+            .unwrap();
+        let actual = norm.get(source.projector()).unwrap().data();
+        assert_eq!(actual.link_dims(), expected.link_dims());
+        let diff = actual
+            .clone()
+            .to_dense()
+            .unwrap()
+            .sub(&expected.to_dense().unwrap())
+            .unwrap()
+            .maxabs()
+            .unwrap();
+        assert!(diff < 1.0e-12, "per-patch relative mismatch {diff}");
+        norm_rank[source.projector().get(&chain.selector).unwrap()] =
+            actual.link_dims().into_iter().max().unwrap_or(1);
+    }
+    // Relative tails 0.01 / 99 = 1.01e-4 and 0.2 / 1 = 0.2 are judged against
+    // each patch's own weight, so the heavy patch drops its small mode and the
+    // light one keeps both.
+    assert_eq!(norm_rank, [1, 2]);
+
+    // The volume allocation gives both patches the same absolute threshold
+    // 0.01 * 100 * 4 / 8 = 0.5 and truncates the light patch to rank 1 too.
+    let volume = contract_adaptive(
+        &operator,
+        &state,
+        &0,
+        &ContractionOptions::default(),
+        &PatchingOptions {
+            cutoff,
+            allocation: BudgetAllocation::Volume,
+            ..exact_options
+        },
+    )
+    .unwrap();
+    assert_eq!(volume.len(), 2);
+    assert!(volume.values().all(|patch| patch.max_bond_dim() == 1));
 }
 
 #[test]
@@ -516,21 +832,21 @@ fn adaptive_paths_reject_invalid_options_before_shortcut_and_ordinary_paths() {
     for cutoff in bad_cutoffs {
         assert!(
             matches!(
-                truncate_adaptive(&partition, &0, cutoff, None),
+                truncate_adaptive(&partition, &0, cutoff, BudgetAllocation::Volume, None),
                 Err(PartitionedTreeTNError::InvalidOptions { .. })
             ),
             "truncate_adaptive must reject cutoff {cutoff} on a populated partition"
         );
         assert!(
             matches!(
-                truncate_adaptive(&empty, &0, cutoff, None),
+                truncate_adaptive(&empty, &0, cutoff, BudgetAllocation::Volume, None),
                 Err(PartitionedTreeTNError::InvalidOptions { .. })
             ),
             "truncate_adaptive must reject cutoff {cutoff} on the empty shortcut"
         );
     }
     assert!(matches!(
-        truncate_adaptive(&empty, &0, 0.0, Some(0)),
+        truncate_adaptive(&empty, &0, 0.0, BudgetAllocation::Volume, Some(0)),
         Err(PartitionedTreeTNError::InvalidOptions { .. })
     ));
 

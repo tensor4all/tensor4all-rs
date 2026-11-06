@@ -14,7 +14,12 @@ use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
 use tensor4all_tensorci::globalsearch::floating_zone;
 use tensor4all_treetn::{tensor_train_to_treetn, CachedEvaluatorOptions, TreeTNCachedEvaluator};
 
-fn random_chain_tt(n_sites: usize, local_dim: usize, bond_dim: usize, seed: u64) -> SimpleTensorTrain<f64> {
+fn random_chain_tt(
+    n_sites: usize,
+    local_dim: usize,
+    bond_dim: usize,
+    seed: u64,
+) -> SimpleTensorTrain<f64> {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut tensors = Vec::with_capacity(n_sites);
     for site in 0..n_sites {
@@ -34,13 +39,27 @@ fn main() {
             println!("hw: {line}");
         }
     }
-    println!("hw: logical CPUs: {}", std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0));
+    println!(
+        "hw: logical CPUs: {}",
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(0)
+    );
     println!("hw: backend: default CPU/faer (no T4A_TT_BACKEND override)");
-    println!("hw: T4A_PROFILE_CONTRACT set: {}", std::env::var("T4A_PROFILE_CONTRACT").is_ok());
+    println!(
+        "hw: T4A_PROFILE_CONTRACT set: {}",
+        std::env::var("T4A_PROFILE_CONTRACT").is_ok()
+    );
 
-    let n_sites = std::env::var("N_SITES").map(|v| v.parse().unwrap()).unwrap_or(16usize);
-    let local_dim = std::env::var("LOCAL_DIM").map(|v| v.parse().unwrap()).unwrap_or(2usize);
-    let bond_dim = std::env::var("BOND_DIM").map(|v| v.parse().unwrap()).unwrap_or(8usize);
+    let n_sites = std::env::var("N_SITES")
+        .map(|v| v.parse().unwrap())
+        .unwrap_or(16usize);
+    let local_dim = std::env::var("LOCAL_DIM")
+        .map(|v| v.parse().unwrap())
+        .unwrap_or(2usize);
+    let bond_dim = std::env::var("BOND_DIM")
+        .map(|v| v.parse().unwrap())
+        .unwrap_or(8usize);
 
     let tt = random_chain_tt(n_sites, local_dim, bond_dim, 21);
     let (tree, site_indices) = tensor_train_to_treetn(&tt).unwrap();
@@ -140,9 +159,8 @@ fn main() {
         (pivot, max_error)
     }
 
-    let f2 = |idx: &Vec<usize>| -> f64 {
-        (0..idx.len()).map(|i| (idx[i] as f64) * 0.1).sum::<f64>()
-    };
+    let f2 =
+        |idx: &Vec<usize>| -> f64 { (0..idx.len()).map(|i| (idx[i] as f64) * 0.1).sum::<f64>() };
     // Semantic equivalence first, untimed: batched and sequential must agree.
     let (pivot_b, err_b) =
         floating_zone_batched(&tt, &f2, &vec![local_dim; n_sites], None, 1.0e-12);
@@ -170,7 +188,11 @@ fn main() {
     let n_points = 1000usize;
     let mut rng4 = StdRng::seed_from_u64(1234);
     let batch: Vec<Vec<usize>> = (0..n_points)
-        .map(|_| (0..n_sites).map(|_| rng4.random_range(0..local_dim)).collect())
+        .map(|_| {
+            (0..n_sites)
+                .map(|_| rng4.random_range(0..local_dim))
+                .collect()
+        })
         .collect();
     let t0 = Instant::now();
     for _point in &batch {
@@ -226,7 +248,10 @@ fn main() {
         let mut cached = TreeTNCachedEvaluator::new(
             &tree,
             &site_indices,
-            CachedEvaluatorOptions { center: Some(center), ..Default::default() },
+            CachedEvaluatorOptions {
+                center: Some(center),
+                ..Default::default()
+            },
         )
         .unwrap();
         std::hint::black_box(cached.evaluate_batched(values).unwrap());

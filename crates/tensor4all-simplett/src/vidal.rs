@@ -16,6 +16,11 @@ use num_traits::ToPrimitive;
 use tenferro_tensor::{TensorScalar, TypedTensor};
 use tensor4all_core::Scalar;
 use tensor4all_core::{rrlu, RrLUOptions};
+use tensor4all_tensorbackend::invariant_violated;
+
+/// The core has the shape of an existing core, which was representable; only
+/// out-of-memory remains, which std also treats as fatal.
+const SAME_SHAPE_AS_EXISTING_CORE: &str = "rebuilding a core with an existing core's shape";
 use tensor4all_tensorbackend::{mat_mul, svd_backend, BackendLinalgScalar, Matrix};
 
 /// Compute QR decomposition
@@ -197,7 +202,7 @@ pub type DiagMatrix = Vec<f64>;
 /// assert!((val - 1.0).abs() < 1e-12);
 ///
 /// // The sum is also preserved: 1.0 * 2 * 3 = 6.0
-/// assert!((tt2.sum() - 6.0).abs() < 1e-10);
+/// assert!((tt2.sum().unwrap() - 6.0).abs() < 1e-10);
 /// ```
 #[derive(Debug, Clone)]
 pub struct VidalTensorTrain<T: TTScalar> {
@@ -213,8 +218,8 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     /// Create a VidalTensorTrain from a regular SimpleTensorTrain
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the underlying
+    /// [`VidalTensorTrain::from_tensor_train_with_partition`] conversion fails.
     ///
     pub fn from_tensor_train(tt: &SimpleTensorTrain<T>) -> Result<Self>
     where
@@ -227,8 +232,9 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     /// Create a VidalTensorTrain with a specific partition
     /// # Errors
     ///
-    /// Returns an error when the tensor train cannot be converted (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when
+    /// `partition.end` exceeds the train length, or when an intermediate QR,
+    /// SVD, matrix multiply, or tensor allocation fails.
     ///
     pub fn from_tensor_train_with_partition(
         tt: &SimpleTensorTrain<T>,
@@ -270,7 +276,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             let new_bond_dim = q.ncols();
 
             // Update current tensor with Q
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim)?;
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for b in 0..new_bond_dim {
@@ -293,7 +299,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
                     message: format!("Vidal left sweep matrix multiply failed: {err}"),
                 })?;
 
-            let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim);
+            let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim)?;
             for l in 0..new_bond_dim {
                 for s in 0..next_site_dim {
                     for r_idx in 0..next_right_dim {
@@ -322,7 +328,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             singular_values[i - 1] = sv;
 
             // Update current tensor with V^H (right-orthogonal)
-            let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim)?;
             for l in 0..new_bond_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
@@ -345,7 +351,8 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
                     }
                 })?;
 
-                let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim);
+                let mut new_prev_tensor =
+                    tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim)?;
                 for l in 0..prev_left_dim {
                     for s in 0..prev_site_dim {
                         for r in 0..new_bond_dim {
@@ -375,7 +382,7 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             let right_dim = tensors[i].right_dim();
             let left_dim = tensors[i].left_dim();
 
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim)?;
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
@@ -402,8 +409,8 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
     /// Create a VidalTensorTrain with given tensors and singular values
     /// # Errors
     ///
-    /// Returns an error when the dimensions are invalid (a shape mismatch) or the
-    /// /// construction fails.
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when
+    /// `singular_values` does not have exactly `tensors.len() - 1` entries.
     ///
     pub fn new(tensors: Vec<Tensor3<T>>, singular_values: Vec<DiagMatrix>) -> Result<Self> {
         let n = tensors.len();
@@ -473,7 +480,8 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             let right_dim = tensor.right_dim();
 
             // Multiply by singular values on the right
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim)
+                .unwrap_or_else(|error| invariant_violated(SAME_SHAPE_AS_EXISTING_CORE, error));
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
@@ -534,7 +542,7 @@ impl<T: TTScalar + Scalar + Default> AbstractTensorTrain<T> for VidalTensorTrain
 /// assert!((val - 1.0).abs() < 1e-12);
 ///
 /// // The sum is also preserved: 1.0 * 2 * 3 = 6.0
-/// assert!((tt2.sum() - 6.0).abs() < 1e-10);
+/// assert!((tt2.sum().unwrap() - 6.0).abs() < 1e-10);
 /// ```
 #[derive(Debug, Clone)]
 pub struct InverseTensorTrain<T: TTScalar> {
@@ -550,8 +558,8 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
     /// Create an InverseTensorTrain from a VidalTensorTrain
     /// # Errors
     ///
-    /// Returns an error when the Vidal representation is invalid (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when a rebuilt core
+    /// cannot be allocated.
     ///
     pub fn from_vidal(vidal: &VidalTensorTrain<T>) -> Result<Self> {
         let n = vidal.len();
@@ -572,7 +580,7 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
             let site_dim = tensor.site_dim();
             let right_dim = tensor.right_dim();
 
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim)?;
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
@@ -598,7 +606,7 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
             let site_dim = tensor.site_dim();
             let right_dim = tensor.right_dim();
 
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim)?;
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
@@ -632,7 +640,7 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
             let site_dim = tensor.site_dim();
             let right_dim = tensor.right_dim();
 
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim)?;
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
@@ -670,8 +678,8 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
     /// Create an InverseTensorTrain from a regular SimpleTensorTrain
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the underlying
+    /// [`VidalTensorTrain::from_tensor_train`] conversion fails.
     ///
     pub fn from_tensor_train(tt: &SimpleTensorTrain<T>) -> Result<Self>
     where
@@ -705,8 +713,8 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
     /// Set two adjacent site tensors along with their inverse singular values
     /// # Errors
     ///
-    /// Returns an error when the two-site tensors are incompatible (a shape
-    /// /// mismatch) or the merge fails (a backend failure).
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the train has
+    /// fewer than two sites or `i` is not the first index of an adjacent pair.
     ///
     pub fn set_two_site_tensors(
         &mut self,
@@ -715,12 +723,15 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
         inv_sv: DiagMatrix,
         tensor2: Tensor3<T>,
     ) -> Result<()> {
-        if i >= self.len() - 1 {
+        // A two-site update needs an adjacent pair, so an empty or one-site
+        // train has no valid site: `len() - 1` / `len() - 2` would underflow.
+        let n = self.len();
+        if n < 2 || i >= n - 1 {
             return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
                     "Cannot set two-site tensors at site {} (max {})",
                     i,
-                    self.len() - 2
+                    n.saturating_sub(2)
                 ),
             });
         }
@@ -747,7 +758,8 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
             let site_dim = tensor.site_dim();
             let right_dim = tensor.right_dim();
 
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim);
+            let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim)
+                .unwrap_or_else(|error| invariant_violated(SAME_SHAPE_AS_EXISTING_CORE, error));
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {

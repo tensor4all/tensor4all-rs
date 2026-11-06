@@ -22,7 +22,7 @@ pub fn fit_sum<T, V>(
 ) -> Result<TreeTN<T, V>, TreeTNOperationError>
 ```
 
-`initial` is required and fixes the output topology, site-index identities, and starting bond spaces. Crate root re-exports the existing private-module `FitContractionOptions` as `FitOptions`; the implementation type and contraction dispatcher remain unchanged. The unrelated `tensor4all-simplett::FitOptions` remains crate-qualified and unchanged. The options control full sweeps, maximum bond dimension, factorization/truncation policy, and convergence.
+`initial` is required and fixes the output topology, site-index identities, and starting bond spaces. Crate root re-exports the existing private-module `FitContractionOptions` as `FitOptions`; the implementation type and contraction dispatcher remain unchanged. The options control full sweeps, maximum bond dimension, factorization/truncation policy, and convergence.
 
 Inputs are compatible when every nonempty target has the same named topology as the nonempty `initial` and, at each node, the same number and dimensions of site indices. Target site indices are deterministically relabeled to those of `initial` with the existing `reindex_site_space_like` operation. When a node owns multiple equal-dimensional indices, correspondence is the existing full-index deterministic sort order (including prime level/tags), not caller insertion order. Target bond identities and dimensions need not match `initial`.
 

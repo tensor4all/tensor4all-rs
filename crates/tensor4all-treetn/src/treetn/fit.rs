@@ -27,18 +27,24 @@
 //! - ITensorNetworks.jl: `contract` with fitting algorithm
 
 use crate::error::TreeTNOperationError;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 
 use tensor4all_core::{
     print_and_reset_contract_profile, print_and_reset_native_einsum_profile,
     reset_contract_profile, reset_native_einsum_profile, sort_indices_deterministic, AnyScalar,
-    Canonical, FactorizeAlg, FactorizeOptions, IndexLike, SvdTruncationPolicy, TensorLike,
+    Canonical, DynIndex, FactorizeAlg, FactorizeOptions, IdxTensor, IndexLike, SvdTruncationPolicy,
+    TensorLike,
 };
 
+use num_complex::Complex64;
+
+use super::contraction::{GlobalLeaves, LeafOps, SessionLeaves};
 use super::localupdate::{LocalUpdateStep, LocalUpdateSweepPlan, LocalUpdater};
 use super::TreeTN;
 
@@ -138,6 +144,30 @@ where
     Ok(neighbors.into_iter().map(|(_index, node)| node).collect())
 }
 
+/// Like [`sorted_neighbors_by_node_index`], but caches the sorted neighbor list
+/// of `node` in `cache` on first use.
+///
+/// The order depends only on the network topology, which is fixed for a whole
+/// fit run, so the per-node sort and `node_index` lookups happen once per
+/// (node, topology) instead of on every environment access.
+fn cached_sorted_neighbors<T, V>(
+    cache: &mut HashMap<V, Vec<V>>,
+    tn: &TreeTN<T, V>,
+    node: &V,
+    context: &str,
+) -> Result<Vec<V>>
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    if let Some(order) = cache.get(node) {
+        return Ok(order.clone());
+    }
+    let order = sorted_neighbors_by_node_index(tn, node, None, context)?;
+    cache.insert(node.clone(), order.clone());
+    Ok(order)
+}
+
 fn tensor_at_node<'a, T, V>(tn: &'a TreeTN<T, V>, node: &V, tree_name: &str) -> Result<&'a T>
 where
     T: TensorLike,
@@ -199,7 +229,7 @@ where
     components
 }
 
-fn contract_fit_tensor_refs<T>(tensors: &[&T]) -> Result<T>
+fn contract_fit_tensor_refs<T>(tensors: &[&T], leaves: &dyn LeafOps<T>) -> Result<T>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -212,7 +242,7 @@ where
 
     let components = tensor_connected_components(tensors);
     if components.len() == 1 {
-        return T::contract(tensors).map_err(|e| anyhow::anyhow!("contract failed: {}", e));
+        return leaves.contract_refs(tensors);
     }
 
     let mut contracted_components = Vec::with_capacity(components.len());
@@ -224,7 +254,8 @@ where
         let contracted = if component_refs.len() == 1 {
             component_refs[0].clone()
         } else {
-            T::contract(&component_refs)
+            leaves
+                .contract_refs(&component_refs)
                 .map_err(|e| anyhow::anyhow!("component contract failed: {}", e))?
         };
         contracted_components.push(contracted);
@@ -235,8 +266,8 @@ where
         .next()
         .ok_or_else(|| anyhow::anyhow!("fit contraction produced no components"))?;
     for component in iter {
-        result = result
-            .outer_product(&component)
+        result = leaves
+            .outer_product(&result, &component)
             .map_err(|e| anyhow::anyhow!("component outer product failed: {}", e))?;
     }
 
@@ -269,8 +300,10 @@ where
     T: TensorLike,
     V: Clone + Hash + Eq,
 {
-    /// Environment tensors: (from, to) -> tensor
-    envs: HashMap<(V, V), T>,
+    /// Environment tensors: from -> to -> tensor.
+    envs: HashMap<V, HashMap<V, T>>,
+    /// Sorted neighbor lists (by `TreeTN` node index), cached per node.
+    neighbor_order: HashMap<V, Vec<V>>,
 }
 
 impl<T, V> FitEnvironment<T, V>
@@ -283,29 +316,29 @@ where
     pub fn new() -> Self {
         Self {
             envs: HashMap::new(),
+            neighbor_order: HashMap::new(),
         }
     }
 
     /// Get the environment tensor for edge (from, to) if it exists.
     pub fn get(&self, from: &V, to: &V) -> Option<&T> {
-        self.envs.get(&(from.clone(), to.clone()))
+        self.envs.get(from).and_then(|to_envs| to_envs.get(to))
     }
 
     /// Insert an environment tensor for edge (from, to).
-    /// This is mainly for testing; normally use `get_or_compute` for lazy evaluation.
-    #[allow(dead_code)]
+    /// Used by `get_or_compute`; tests may also seed it directly.
     pub(crate) fn insert(&mut self, from: V, to: V, env: T) {
-        self.envs.insert((from, to), env);
+        self.envs.entry(from).or_default().insert(to, env);
     }
 
     /// Check if environment exists for edge (from, to).
     pub fn contains(&self, from: &V, to: &V) -> bool {
-        self.envs.contains_key(&(from.clone(), to.clone()))
+        self.get(from, to).is_some()
     }
 
     /// Get the number of cached environments.
     pub fn len(&self) -> usize {
-        self.envs.len()
+        self.envs.values().map(HashMap::len).sum()
     }
 
     /// Check if the cache is empty.
@@ -316,6 +349,12 @@ where
     /// Clear all cached environments.
     pub fn clear(&mut self) {
         self.envs.clear();
+        self.neighbor_order.clear();
+    }
+
+    /// Sorted neighbors of `node`, computing and caching the order on first use.
+    fn sorted_neighbors(&mut self, tn: &TreeTN<T, V>, node: &V, context: &str) -> Result<Vec<V>> {
+        cached_sorted_neighbors(&mut self.neighbor_order, tn, node, context)
     }
 
     /// Get or compute the environment tensor for edge (from, to).
@@ -332,8 +371,9 @@ where
     /// * `tn_c` - Current approximation TreeTN
     /// # Errors
     ///
-    /// Returns an error when the cached fit value cannot be computed (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// Returns an error when `from` is not a node of `tn_c`, or when a node
+    /// environment cannot be computed because a contraction fails or an index
+    /// does not match.
     ///
     pub fn get_or_compute(
         &mut self,
@@ -342,6 +382,7 @@ where
         tn_a: &TreeTN<T, V>,
         tn_b: &TreeTN<T, V>,
         tn_c: &TreeTN<T, V>,
+        leaves: &dyn LeafOps<T>,
     ) -> std::result::Result<T, TreeTNOperationError>
     where
         <T::Index as IndexLike>::Id:
@@ -354,7 +395,7 @@ where
         });
 
         // If already cached, return a clone
-        if let Some(env) = self.envs.get(&(from.clone(), to.clone())) {
+        if let Some(env) = self.get(from, to) {
             if let Some(started) = started {
                 with_fit_profile(|profile| {
                     profile.env_hits += 1;
@@ -369,20 +410,21 @@ where
         });
 
         // Get neighbors of `from` excluding `to`
-        let child_neighbors =
-            sorted_neighbors_by_node_index(tn_c, from, Some(to), "FitEnvironment::get_or_compute")?;
+        let mut child_neighbors =
+            self.sorted_neighbors(tn_c, from, "FitEnvironment::get_or_compute")?;
+        child_neighbors.retain(|neighbor| neighbor != to);
 
         // Recursively get or compute child environments
         let child_envs: Vec<T> = child_neighbors
             .iter()
-            .map(|child| self.get_or_compute(child, from, tn_a, tn_b, tn_c))
+            .map(|child| self.get_or_compute(child, from, tn_a, tn_b, tn_c, leaves))
             .collect::<std::result::Result<Vec<_>, TreeTNOperationError>>()?;
 
         // Compute the environment for (from, to) using child environments
-        let env = compute_single_node_environment(from, to, tn_a, tn_b, tn_c, &child_envs)?;
+        let env = compute_single_node_environment(from, to, tn_a, tn_b, tn_c, &child_envs, leaves)?;
 
         // Cache and return
-        self.envs.insert((from.clone(), to.clone()), env.clone());
+        self.insert(from.clone(), to.clone(), env.clone());
         if let Some(started) = started {
             with_fit_profile(|profile| {
                 profile.env_get_time += started.elapsed();
@@ -417,8 +459,7 @@ where
     {
         for t in region {
             // Get all neighbors of t
-            let neighbors =
-                sorted_neighbors_by_node_index(tn_c, t, None, "FitEnvironment::invalidate")?;
+            let neighbors = self.sorted_neighbors(tn_c, t, "FitEnvironment::invalidate")?;
 
             // Remove all env[(t, *)] and propagate recursively
             for neighbor in neighbors {
@@ -433,14 +474,19 @@ where
     /// If env[(from, to)] exists, remove it and propagate to env[(to, x)] for all x ≠ from.
     fn invalidate_recursive(&mut self, from: &V, to: &V, tn_c: &TreeTN<T, V>) -> Result<()> {
         // Remove env[(from, to)] if it exists
-        if self.envs.remove(&(from.clone(), to.clone())).is_some() {
+        let removed = self
+            .envs
+            .get_mut(from)
+            .and_then(|to_envs| to_envs.remove(to))
+            .is_some();
+        if self.envs.get(from).is_some_and(HashMap::is_empty) {
+            self.envs.remove(from);
+        }
+        if removed {
             // Propagate to next generation: env[(to, x)] for all neighbors x of to, x ≠ from
-            let neighbors = sorted_neighbors_by_node_index(
-                tn_c,
-                to,
-                Some(from),
-                "FitEnvironment::invalidate_recursive",
-            )?;
+            let mut neighbors =
+                self.sorted_neighbors(tn_c, to, "FitEnvironment::invalidate_recursive")?;
+            neighbors.retain(|neighbor| neighbor != from);
 
             for neighbor in neighbors {
                 self.invalidate_recursive(to, &neighbor, tn_c)?;
@@ -461,8 +507,8 @@ where
     /// `Ok(())` if consistent, or an error describing the inconsistency.
     /// # Errors
     ///
-    /// Returns an error when the fitted structure is inconsistent (a graph
-    /// /// consistency failure).
+    /// Returns [`TreeTNOperationError`] when a cached environment's node is not in `tn_c`, or when
+    /// a required child environment is missing.
     ///
     pub fn verify_structural_consistency(
         &self,
@@ -471,22 +517,24 @@ where
     where
         V: Clone + Hash + Eq + std::fmt::Debug,
     {
-        for (from, to) in self.envs.keys() {
-            // Get neighbors of `from` excluding `to`
-            let child_neighbors = sorted_neighbors_by_node_index(
-                tn_c,
-                from,
-                Some(to),
-                "FitEnvironment::verify_structural_consistency",
-            )?;
+        for (from, to_envs) in self.envs.iter() {
+            for to in to_envs.keys() {
+                // Get neighbors of `from` excluding `to`
+                let child_neighbors = sorted_neighbors_by_node_index(
+                    tn_c,
+                    from,
+                    Some(to),
+                    "FitEnvironment::verify_structural_consistency",
+                )?;
 
-            // If `from` is not a leaf, all child environments must exist
-            for child in &child_neighbors {
-                if !self.envs.contains_key(&(child.clone(), from.clone())) {
-                    return Err(anyhow::anyhow!(
-                        "Structural inconsistency: env[({:?}, {:?})] exists but child env[({:?}, {:?})] is missing",
-                        from, to, child, from
-                    ).into());
+                // If `from` is not a leaf, all child environments must exist
+                for child in &child_neighbors {
+                    if self.get(child, from).is_none() {
+                        return Err(anyhow::anyhow!(
+                            "Structural inconsistency: env[({:?}, {:?})] exists but child env[({:?}, {:?})] is missing",
+                            from, to, child, from
+                        ).into());
+                    }
                 }
             }
         }
@@ -516,7 +564,8 @@ where
     T: TensorLike,
     V: Clone + Hash + Eq,
 {
-    envs: HashMap<(V, V), T>,
+    envs: HashMap<V, HashMap<V, T>>,
+    neighbor_order: HashMap<V, Vec<V>>,
 }
 
 impl<T, V> SumFitEnvironment<T, V>
@@ -528,7 +577,13 @@ where
     fn new() -> Self {
         Self {
             envs: HashMap::new(),
+            neighbor_order: HashMap::new(),
         }
+    }
+
+    /// Sorted neighbors of `node`, computing and caching the order on first use.
+    fn sorted_neighbors(&mut self, tn: &TreeTN<T, V>, node: &V, context: &str) -> Result<Vec<V>> {
+        cached_sorted_neighbors(&mut self.neighbor_order, tn, node, context)
     }
 
     fn get_or_compute(
@@ -537,29 +592,30 @@ where
         to: &V,
         target: &TreeTN<T, V>,
         psi: &TreeTN<T, V>,
+        leaves: &dyn LeafOps<T>,
     ) -> std::result::Result<T, TreeTNOperationError> {
-        if let Some(env) = self.envs.get(&(from.clone(), to.clone())) {
+        if let Some(env) = self.envs.get(from).and_then(|to_envs| to_envs.get(to)) {
             return Ok(env.clone());
         }
 
-        let child_neighbors = sorted_neighbors_by_node_index(
-            psi,
-            from,
-            Some(to),
-            "SumFitEnvironment::get_or_compute",
-        )?;
+        let mut child_neighbors =
+            self.sorted_neighbors(psi, from, "SumFitEnvironment::get_or_compute")?;
+        child_neighbors.retain(|neighbor| neighbor != to);
         let child_envs = child_neighbors
             .iter()
-            .map(|child| self.get_or_compute(child, from, target, psi))
+            .map(|child| self.get_or_compute(child, from, target, psi, leaves))
             .collect::<std::result::Result<Vec<_>, TreeTNOperationError>>()?;
 
         let target_tensor = tensor_at_node(target, from, "sum target")?;
         let psi_conj = tensor_at_node(psi, from, "fit state")?.conj();
         let mut tensor_refs = vec![target_tensor, &psi_conj];
         tensor_refs.extend(child_envs.iter());
-        let env = contract_fit_tensor_refs(&tensor_refs)
+        let env = contract_fit_tensor_refs(&tensor_refs, leaves)
             .map_err(|e| anyhow::anyhow!("sum target environment contraction failed: {e}"))?;
-        self.envs.insert((from.clone(), to.clone()), env.clone());
+        self.envs
+            .entry(from.clone())
+            .or_default()
+            .insert(to.clone(), env.clone());
         Ok(env)
     }
 
@@ -567,11 +623,12 @@ where
         &mut self,
         target: &TreeTN<T, V>,
         psi: &TreeTN<T, V>,
+        leaves: &dyn LeafOps<T>,
     ) -> std::result::Result<(), TreeTNOperationError> {
         for from in psi.node_names() {
             let neighbors: Vec<_> = psi.site_index_network().neighbors(&from).collect();
             for to in neighbors {
-                self.get_or_compute(&from, &to, target, psi)?;
+                self.get_or_compute(&from, &to, target, psi, leaves)?;
             }
         }
         Ok(())
@@ -583,8 +640,7 @@ where
         psi: &TreeTN<T, V>,
     ) -> std::result::Result<(), TreeTNOperationError> {
         for node in region {
-            let neighbors =
-                sorted_neighbors_by_node_index(psi, node, None, "SumFitEnvironment::invalidate")?;
+            let neighbors = self.sorted_neighbors(psi, node, "SumFitEnvironment::invalidate")?;
             for neighbor in neighbors {
                 self.invalidate_recursive(node, &neighbor, psi)?;
             }
@@ -598,13 +654,18 @@ where
         to: &V,
         psi: &TreeTN<T, V>,
     ) -> std::result::Result<(), TreeTNOperationError> {
-        if self.envs.remove(&(from.clone(), to.clone())).is_some() {
-            let neighbors = sorted_neighbors_by_node_index(
-                psi,
-                to,
-                Some(from),
-                "SumFitEnvironment::invalidate_recursive",
-            )?;
+        let removed = self
+            .envs
+            .get_mut(from)
+            .and_then(|to_envs| to_envs.remove(to))
+            .is_some();
+        if self.envs.get(from).is_some_and(HashMap::is_empty) {
+            self.envs.remove(from);
+        }
+        if removed {
+            let mut neighbors =
+                self.sorted_neighbors(psi, to, "SumFitEnvironment::invalidate_recursive")?;
+            neighbors.retain(|neighbor| neighbor != from);
             for neighbor in neighbors {
                 self.invalidate_recursive(to, &neighbor, psi)?;
             }
@@ -619,16 +680,19 @@ struct FitFactorizeConfig {
     svd_policy: Option<SvdTruncationPolicy>,
     qr_rtol: Option<f64>,
     factorize_alg: FactorizeAlg,
+    randomized: tensor4all_core::RangeOptions,
 }
 
 fn fit_factorize_options(config: FitFactorizeConfig) -> Result<FactorizeOptions> {
     let mut options = match config.factorize_alg {
+        FactorizeAlg::RSVD => FactorizeOptions::rsvd(config.max_bond_dim.unwrap_or(0)),
         FactorizeAlg::SVD => FactorizeOptions::svd(),
         FactorizeAlg::QR => FactorizeOptions::qr(),
         FactorizeAlg::LU => FactorizeOptions::lu(),
         FactorizeAlg::CI => FactorizeOptions::ci(),
     }
     .with_canonical(Canonical::Left);
+    options.randomized = config.randomized;
     if let Some(max_bond_dim) = config.max_bond_dim {
         options = options.with_max_bond_dim(max_bond_dim);
     }
@@ -638,10 +702,13 @@ fn fit_factorize_options(config: FitFactorizeConfig) -> Result<FactorizeOptions>
     if let Some(qr_rtol) = config.qr_rtol {
         options = options.with_qr_rtol(qr_rtol);
     }
-    options
-        .validate()
-        .map_err(|e| anyhow::anyhow!("invalid fit factorization options: {e}"))?;
+    options.validate()?;
     Ok(options)
+}
+
+struct FitExecution<'a, T: TensorLike> {
+    leaves: &'a dyn LeafOps<T>,
+    rng: &'a mut dyn rand::RngCore,
 }
 
 fn fit_two_site_update<T, V>(
@@ -651,6 +718,7 @@ fn fit_two_site_update<T, V>(
     local_optimum: T,
     left_bond_indices: &[T::Index],
     config: FitFactorizeConfig,
+    execution: FitExecution<'_, T>,
 ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
@@ -679,7 +747,19 @@ where
         .filter(|idx| site_c_u.contains(*idx) || left_bond_indices.iter().any(|bond| bond == *idx))
         .cloned()
         .collect();
-    sort_indices_deterministic(&mut left_inds);
+    // Order the left legs by dimension and prime level, and break a tie by the
+    // leg's position in the tensor rather than by its index identity: both the
+    // site leg and every bond this split sees are minted inside the call
+    // (`IndexLike::sim` for the diagonal output pair, `generate_id` for a bond),
+    // so an identity-ordered tie makes the row order the SVD sees -- and hence
+    // its rounding -- a property of the objects, not of the inputs (#1138).
+    // `sort_by` is stable, so equal keys keep the order `external_indices`
+    // gives them.
+    left_inds.sort_by(|left, right| {
+        left.dim()
+            .cmp(&right.dim())
+            .then_with(|| left.plev().cmp(&right.plev()))
+    });
     if let Some(left_inds_started) = left_inds_started {
         with_fit_profile(|profile| {
             profile.left_inds_time += left_inds_started.elapsed();
@@ -707,9 +787,14 @@ where
     // norm ends up on `node_v` together with the canonical center.
     let factorize_result =
         super::factorize_allowing_empty_side(&local_optimum, &left_inds, |tensor, left| {
-            tensor
-                .factorize(left, &options)
-                .map_err(|e| anyhow::anyhow!("factorization failed: {e}"))
+            let result = if options.alg == FactorizeAlg::RSVD {
+                execution
+                    .leaves
+                    .factorize_with_rng(tensor, left, &options, execution.rng)
+            } else {
+                execution.leaves.factorize(tensor, left, &options)
+            };
+            result.map_err(|e| anyhow::anyhow!("factorization failed: {e}"))
         })?;
     if let Some(factorize_started) = factorize_started {
         with_fit_profile(|profile| {
@@ -756,6 +841,7 @@ fn compute_leaf_environment<T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
     tn_c: &TreeTN<T, V>,
+    leaves: &dyn LeafOps<T>,
 ) -> Result<T>
 where
     T: TensorLike,
@@ -771,7 +857,7 @@ where
 
     // A, B, and C must form one connected local environment.
     let c_conj = tensor_c.conj();
-    let env = contract_fit_tensor_refs(&[tensor_a, tensor_b, &c_conj])?;
+    let env = contract_fit_tensor_refs(&[tensor_a, tensor_b, &c_conj], leaves)?;
 
     if let Some(started) = started {
         with_fit_profile(|profile| {
@@ -793,6 +879,7 @@ fn compute_single_node_environment<T, V>(
     tn_b: &TreeTN<T, V>,
     tn_c: &TreeTN<T, V>,
     child_envs: &[T],
+    leaves: &dyn LeafOps<T>,
 ) -> Result<T>
 where
     T: TensorLike,
@@ -808,7 +895,7 @@ where
 
     if child_envs.is_empty() {
         // Leaf node: compute from tensors directly
-        return compute_leaf_environment(node, towards, tn_a, tn_b, tn_c);
+        return compute_leaf_environment(node, towards, tn_a, tn_b, tn_c, leaves);
     }
 
     // Non-leaf: all local tensors and child environments must form one
@@ -816,7 +903,7 @@ where
     let c_conj = tensor_c.conj();
     let mut tensor_refs: Vec<&T> = vec![tensor_a, tensor_b, &c_conj];
     tensor_refs.extend(child_envs.iter());
-    let result = contract_fit_tensor_refs(&tensor_refs)?;
+    let result = contract_fit_tensor_refs(&tensor_refs, leaves)?;
 
     if let Some(started) = started {
         with_fit_profile(|profile| {
@@ -836,7 +923,7 @@ where
 /// Implements the `LocalUpdater` trait to perform 2-site updates
 /// that optimize `C ≈ A * B`.
 #[derive(Debug)]
-pub struct FitUpdater<T, V>
+pub struct FitUpdater<'a, T, V>
 where
     T: TensorLike,
     V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
@@ -849,17 +936,22 @@ where
     pub envs: FitEnvironment<T, V>,
     /// Maximum bond dimension
     pub max_bond_dim: Option<usize>,
-    /// Legacy relative tolerance retained for same-crate tests and call chains.
-    pub(crate) rtol: Option<f64>,
     /// Explicit SVD truncation policy
     pub svd_policy: Option<SvdTruncationPolicy>,
     /// QR-specific relative tolerance
     pub qr_rtol: Option<f64>,
     /// Factorization algorithm
     pub factorize_alg: FactorizeAlg,
+    pub(crate) randomized: tensor4all_core::RangeOptions,
+    rng: rand_chacha::ChaCha8Rng,
+
+    /// Leaf execution strategy for this updater's numeric leaves
+    /// (`GlobalLeaves` by default; the caller-owned context route installs
+    /// `SessionLeaves` through [`Self::with_leaves`]).
+    pub(crate) leaves: Box<dyn LeafOps<T> + 'a>,
 }
 
-impl<T, V> FitUpdater<T, V>
+impl<'a, T, V> FitUpdater<'a, T, V>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + std::fmt::Debug + Send + Sync,
@@ -871,40 +963,37 @@ where
     /// * `tn_a` - First input TreeTN
     /// * `tn_b` - Second input TreeTN
     /// * `max_bond_dim` - Maximum bond dimension for truncation
-    /// * `svd_policy` - Explicit SVD truncation policy
-    /// * `qr_rtol` - QR-specific relative tolerance
-    ///
-    /// Note: sim_internal_inds() should be called on tn_a and tn_b before passing
-    /// if index collision is a concern. This is not done here because contraction
-    /// module (which provides sim_internal_inds) is currently disabled.
+    /// * `svd_policy` - Explicit SVD truncation policy; `None` leaves the SVD
+    ///   factorization at its default behavior unless a bond cap applies.
+    pub(crate) fn with_leaves(mut self, leaves: Box<dyn LeafOps<T> + 'a>) -> Self {
+        self.leaves = leaves;
+        self
+    }
+
     pub fn new(
         tn_a: TreeTN<T, V>,
         tn_b: TreeTN<T, V>,
         max_bond_dim: Option<usize>,
-        rtol: Option<f64>,
+        svd_policy: Option<SvdTruncationPolicy>,
     ) -> Self {
         Self {
             tn_a,
             tn_b,
             envs: FitEnvironment::new(),
             max_bond_dim,
-            rtol,
-            svd_policy: rtol.map(SvdTruncationPolicy::new),
+            svd_policy,
             qr_rtol: None,
             factorize_alg: FactorizeAlg::SVD,
+            randomized: tensor4all_core::RangeOptions::default(),
+            rng: <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0),
+
+            leaves: Box::new(GlobalLeaves),
         }
     }
 
     /// Set the factorization algorithm.
     pub fn with_factorize_alg(mut self, alg: FactorizeAlg) -> Self {
         self.factorize_alg = alg;
-        self
-    }
-
-    /// Set the SVD truncation policy used by fit sweeps.
-    pub(crate) fn with_svd_policy(mut self, policy: Option<SvdTruncationPolicy>) -> Self {
-        self.rtol = policy.map(|value| value.threshold);
-        self.svd_policy = policy;
         self
     }
 
@@ -915,7 +1004,7 @@ where
     }
 }
 
-impl<T, V> LocalUpdater<T, V> for FitUpdater<T, V>
+impl<T, V> LocalUpdater<T, V> for FitUpdater<'_, T, V>
 where
     T: TensorLike,
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
@@ -962,8 +1051,9 @@ where
         let b_v = tensor_at_node(&self.tn_b, node_v, "tn_b")?;
 
         let mut env_tensors = Vec::new();
-        let u_neighbors =
-            sorted_neighbors_by_node_index(full_treetn, node_u, None, "FitUpdater::update")?;
+        let u_neighbors = self
+            .envs
+            .sorted_neighbors(full_treetn, node_u, "FitUpdater::update")?;
         let mut left_bond_indices = Vec::new();
         for neighbor in &u_neighbors {
             if neighbor == node_v {
@@ -990,11 +1080,13 @@ where
                 &self.tn_a,
                 &self.tn_b,
                 full_treetn,
+                self.leaves.as_ref(),
             )?);
         }
 
-        let v_neighbors =
-            sorted_neighbors_by_node_index(full_treetn, node_v, None, "FitUpdater::update")?;
+        let v_neighbors = self
+            .envs
+            .sorted_neighbors(full_treetn, node_v, "FitUpdater::update")?;
         for neighbor in &v_neighbors {
             if neighbor != node_u {
                 env_tensors.push(self.envs.get_or_compute(
@@ -1003,6 +1095,7 @@ where
                     &self.tn_a,
                     &self.tn_b,
                     full_treetn,
+                    self.leaves.as_ref(),
                 )?);
             }
         }
@@ -1010,7 +1103,7 @@ where
         let contract_started = fit_profile_enabled().then(Instant::now);
         let mut tensor_refs = vec![a_u, b_u, a_v, b_v];
         tensor_refs.extend(env_tensors.iter());
-        let local_optimum = contract_fit_tensor_refs(&tensor_refs)?;
+        let local_optimum = contract_fit_tensor_refs(&tensor_refs, self.leaves.as_ref())?;
         if let Some(contract_started) = contract_started {
             with_fit_profile(|profile| {
                 profile.two_site_contract_time += contract_started.elapsed();
@@ -1028,6 +1121,11 @@ where
                 svd_policy: self.svd_policy,
                 qr_rtol: self.qr_rtol,
                 factorize_alg: self.factorize_alg,
+                randomized: self.randomized,
+            },
+            FitExecution {
+                leaves: self.leaves.as_ref(),
+                rng: &mut self.rng,
             },
         )
     }
@@ -1124,6 +1222,7 @@ where
     targets: Vec<TreeTN<T, V>>,
     envs: Vec<SumFitEnvironment<T, V>>,
     factorize_config: FitFactorizeConfig,
+    rng: rand_chacha::ChaCha8Rng,
 }
 
 impl<T, V> SumFitUpdater<T, V>
@@ -1141,6 +1240,7 @@ where
     ) -> Self {
         let envs = targets.iter().map(|_| SumFitEnvironment::new()).collect();
         Self {
+            rng: <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0),
             targets,
             envs,
             factorize_config: FitFactorizeConfig {
@@ -1148,6 +1248,7 @@ where
                 svd_policy,
                 qr_rtol,
                 factorize_alg,
+                randomized: tensor4all_core::RangeOptions::default(),
             },
         }
     }
@@ -1156,7 +1257,11 @@ where
         for (target_index, (target, env)) in
             self.targets.iter().zip(self.envs.iter_mut()).enumerate()
         {
-            env.prepare(target, psi).map_err(|error| {
+            // `SumFitUpdater` has no leaf strategy of its own: `fit_sum`'s
+            // public entry has no caller-owned context route, so this driver
+            // always runs on the process-global route (unlike `FitUpdater`,
+            // which carries `self.leaves`).
+            env.prepare(target, psi, &GlobalLeaves).map_err(|error| {
                 anyhow::anyhow!(
                     "fit_sum: target {target_index} initial environment construction failed: {error}"
                 )
@@ -1197,10 +1302,13 @@ where
             profile.step_count += 1;
         });
 
-        let u_neighbors =
-            sorted_neighbors_by_node_index(full_treetn, node_u, None, "fit_sum updater")?;
-        let v_neighbors =
-            sorted_neighbors_by_node_index(full_treetn, node_v, None, "fit_sum updater")?;
+        let (u_neighbors, v_neighbors) = match self.envs.first_mut() {
+            Some(env) => (
+                env.sorted_neighbors(full_treetn, node_u, "fit_sum updater")?,
+                env.sorted_neighbors(full_treetn, node_v, "fit_sum updater")?,
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
         let mut left_bond_indices = Vec::new();
         for neighbor in &u_neighbors {
             if neighbor == node_v {
@@ -1227,7 +1335,7 @@ where
             for neighbor in &u_neighbors {
                 if neighbor != node_v {
                     env_tensors.push(
-                        env.get_or_compute(neighbor, node_u, target, full_treetn)
+                        env.get_or_compute(neighbor, node_u, target, full_treetn, &GlobalLeaves)
                             .map_err(|error| {
                                 anyhow::anyhow!(
                                     "fit_sum: target {target_index} environment contraction failed: {error}"
@@ -1239,7 +1347,7 @@ where
             for neighbor in &v_neighbors {
                 if neighbor != node_u {
                     env_tensors.push(
-                        env.get_or_compute(neighbor, node_v, target, full_treetn)
+                        env.get_or_compute(neighbor, node_v, target, full_treetn, &GlobalLeaves)
                             .map_err(|error| {
                                 anyhow::anyhow!(
                                     "fit_sum: target {target_index} environment contraction failed: {error}"
@@ -1252,11 +1360,12 @@ where
             let contract_started = fit_profile_enabled().then(Instant::now);
             let mut tensor_refs = vec![target_u, target_v];
             tensor_refs.extend(env_tensors.iter());
-            let contribution = contract_fit_tensor_refs(&tensor_refs).map_err(|error| {
-                anyhow::anyhow!(
+            let contribution =
+                contract_fit_tensor_refs(&tensor_refs, &GlobalLeaves).map_err(|error| {
+                    anyhow::anyhow!(
                     "fit_sum: target {target_index} local contribution contraction failed: {error}"
                 )
-            })?;
+                })?;
             if let Some(contract_started) = contract_started {
                 with_fit_profile(|profile| {
                     profile.two_site_contract_time += contract_started.elapsed();
@@ -1287,6 +1396,10 @@ where
             local_sum,
             &left_bond_indices,
             self.factorize_config,
+            FitExecution {
+                leaves: &GlobalLeaves,
+                rng: &mut self.rng,
+            },
         )
         .map_err(|error| anyhow::anyhow!("fit_sum: two-site update failed: {error}"))
         .map_err(TreeTNOperationError::from)
@@ -1345,8 +1458,6 @@ pub struct FitContractionOptions {
     /// Optional maximum output bond dimension. `None` preserves the existing
     /// bond-space cap when no truncation policy overrides it; `Some(0)` is invalid.
     pub max_bond_dim: Option<usize>,
-    /// Legacy relative tolerance retained for same-crate tests and call chains.
-    pub(crate) rtol: Option<f64>,
     /// Explicit SVD truncation policy. Its settings are validated before fitting,
     /// including when `nfullsweeps == 0`.
     pub svd_policy: Option<SvdTruncationPolicy>,
@@ -1355,11 +1466,25 @@ pub struct FitContractionOptions {
     pub qr_rtol: Option<f64>,
     /// Factorization algorithm used for local two-site updates.
     pub factorize_alg: FactorizeAlg,
+    /// RSVD sketch options; deterministic algorithms ignore these.
+    pub randomized: tensor4all_core::RangeOptions,
+    /// Seed for one continuous convenience RSVD stream across initialization and sweeps.
+    pub rsvd_seed: u64,
+
     /// Tolerance for early termination based on relative change.
     /// If `None`, run exactly `nfullsweeps` sweeps. If `Some(tol)`, `tol` must
     /// be finite and non-negative; fitting stops when the relative change in
     /// the network norm is below `tol`.
     pub convergence_tol: Option<f64>,
+    /// Bond cap of the zip-up result the sweeps start from; `None` (default) uses `max_bond_dim`.
+    ///
+    /// A small cap (for example 8 to 16) makes the start cheap: the zip-up then never forms large bonds. The sweeps
+    /// grow the bonds beyond the start only as far as `svd_policy` (or `qr_rtol`) or `max_bond_dim` allows; with
+    /// neither set they keep the start's bond dimensions. With few sweeps the cap must be large enough for the
+    /// requested accuracy. The cap never exceeds `max_bond_dim`. Only used when the fit builds its
+    /// own start ([`contract_fit`], [`contract_fit_in`]); [`contract_fit_from_initial`] and [`fit_sum`] take the
+    /// start from the caller.
+    pub initial_max_bond_dim: Option<usize>,
 }
 
 impl Default for FitContractionOptions {
@@ -1367,11 +1492,14 @@ impl Default for FitContractionOptions {
         Self {
             nfullsweeps: 1,
             max_bond_dim: None,
-            rtol: None,
             svd_policy: None,
             qr_rtol: None,
             factorize_alg: FactorizeAlg::SVD,
+            randomized: tensor4all_core::RangeOptions::default(),
+            rsvd_seed: 0,
+
             convergence_tol: None,
+            initial_max_bond_dim: None,
         }
     }
 }
@@ -1393,7 +1521,6 @@ impl FitContractionOptions {
 
     /// Set the SVD truncation policy.
     pub fn with_svd_policy(mut self, policy: SvdTruncationPolicy) -> Self {
-        self.rtol = Some(policy.threshold);
         self.svd_policy = Some(policy);
         self
     }
@@ -1402,16 +1529,6 @@ impl FitContractionOptions {
     pub fn with_qr_rtol(mut self, rtol: f64) -> Self {
         self.qr_rtol = Some(rtol);
         self
-    }
-
-    /// Set relative tolerance as a per-value relative SVD policy.
-    pub(crate) fn with_rtol(self, rtol: f64) -> Self {
-        self.with_svd_policy(SvdTruncationPolicy::new(rtol))
-    }
-
-    /// Get the legacy SVD threshold value when represented as an rtol.
-    pub(crate) fn rtol(&self) -> Option<f64> {
-        self.svd_policy.map(|policy| policy.threshold)
     }
 
     /// Set factorization algorithm.
@@ -1424,6 +1541,36 @@ impl FitContractionOptions {
     pub fn with_convergence_tol(mut self, tol: f64) -> Self {
         self.convergence_tol = Some(tol);
         self
+    }
+
+    /// Cap the bond dimension of the zip-up start (see [`Self::initial_max_bond_dim`]); `0` is rejected when the
+    /// contraction runs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::SvdTruncationPolicy;
+    /// use tensor4all_treetn::FitOptions;
+    ///
+    /// // A cheap start of bond dimension 16; the tolerance lets the sweep grow the bonds up to 512.
+    /// let options = FitOptions::new(1)
+    ///     .with_svd_policy(SvdTruncationPolicy::new(1e-10))
+    ///     .with_max_bond_dim(512)
+    ///     .with_initial_max_bond_dim(16);
+    /// assert_eq!(options.initial_max_bond_dim, Some(16));
+    /// assert_eq!(options.max_bond_dim, Some(512));
+    /// ```
+    pub fn with_initial_max_bond_dim(mut self, max_bond_dim: usize) -> Self {
+        self.initial_max_bond_dim = Some(max_bond_dim);
+        self
+    }
+
+    /// The bond cap of the zip-up start: `initial_max_bond_dim`, never above `max_bond_dim`.
+    fn start_max_bond_dim(&self) -> Option<usize> {
+        match (self.initial_max_bond_dim, self.max_bond_dim) {
+            (Some(start), Some(max)) => Some(start.min(max)),
+            (start, max) => start.or(max),
+        }
     }
 }
 
@@ -1447,6 +1594,7 @@ fn validate_fit_sum_options(options: &FitContractionOptions) -> Result<()> {
         svd_policy: options.svd_policy,
         qr_rtol: options.qr_rtol,
         factorize_alg: options.factorize_alg,
+        randomized: options.randomized,
     })?;
     Ok(())
 }
@@ -1606,6 +1754,8 @@ where
         options.qr_rtol,
         options.factorize_alg,
     );
+    updater.factorize_config.randomized = options.randomized;
+    updater.rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(options.rsvd_seed);
     updater
         .prepare(&psi)
         .context("fit_sum: failed to build initial target environments")?;
@@ -1637,14 +1787,119 @@ where
 /// A new TreeTN representing the contracted result.
 /// # Errors
 ///
-/// Returns an error when the fit contraction fails (a shape or index
-/// /// mismatch, or a backend failure).
+/// Returns [`TreeTNOperationError`] when the two inputs have different topologies, when the
+/// initial zip-up contraction fails, when a canonical center cannot be set, or
+/// when creating the sweep plan or running the variational sweeps fails.
 ///
 pub fn contract_fit<T, V>(
     tn_a: &TreeTN<T, V>,
     tn_b: &TreeTN<T, V>,
     center: &V,
     options: FitContractionOptions,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    if options.factorize_alg == FactorizeAlg::RSVD {
+        use rand::SeedableRng;
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rsvd_seed);
+        let leaves = super::contraction::randomized::leaves(
+            Box::new(GlobalLeaves),
+            options.randomized,
+            &mut rng,
+        );
+        validate_fit_sum_options(&options)?;
+        return contract_fit_with_leaves(tn_a, tn_b, center, options, leaves);
+    }
+    contract_fit_with_leaves(tn_a, tn_b, center, options, Box::new(GlobalLeaves))
+}
+
+/// Fit contraction whose numerical work runs in a caller-owned execution
+/// context (issue #859 F7).
+///
+/// The same algorithm, arguments and validation as [`contract`](crate::contraction::contract); what
+/// differs is the resource the initial zip-up, the environment contractions
+/// and the per-sweep factorizations run in. They go through the
+/// context-scoped core entries (`contract_pair_on_session`, `factorize_in`)
+/// instead of the process-global route. Inputs must be host-only or belong to
+/// the supplied context (`TreeTN::validate_context`); `LU`/`CI` factorization
+/// algorithms and the `factorize_auto` Gram shortcut have no context-scoped
+/// twin, so the context route factorizes directly with the same options and
+/// agrees with the plain route to tight tolerance.
+///
+/// # Refusal contract
+///
+/// The caller-owned route refuses, with a typed factorization error, shapes
+/// the plain route happens to factorize: in particular an operand site index
+/// that is the *prime* of the other operand's index (same id, different prime
+/// level) leaves an unpaired primed site whose context-scoped factorization is
+/// refused rather than conflated with its unprimed twin. Refusing is the
+/// explicit contract here; the divergence is recorded in
+/// `docs/worklogs/2026-10-12-f7-treetn-fit-context.md`.
+///
+/// # Arguments
+/// * `tn_a` - First input TreeTN
+/// * `tn_b` - Second input TreeTN
+/// * `center` - Center node name
+/// * `options` - Fit contraction options
+/// * `context` - The caller-owned execution context the numerics run in
+///
+/// # Returns
+/// The contracted TreeTN.
+///
+/// # Errors
+///
+/// Returns [`TreeTNOperationError`] when the topology or options are invalid,
+/// when an operand does not validate against `context`, when the
+/// context-scoped factorization refuses an operand (see the refusal contract
+/// above), or when the caller-owned context refuses a contraction or
+/// factorization.
+pub fn contract_fit_in<V>(
+    tn_a: &TreeTN<tensor4all_core::IdxTensor, V>,
+    tn_b: &TreeTN<tensor4all_core::IdxTensor, V>,
+    center: &V,
+    options: FitContractionOptions,
+    context: &tensor4all_tensorbackend::ExecutionContext,
+) -> std::result::Result<TreeTN<tensor4all_core::IdxTensor, V>, TreeTNOperationError>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+    <tensor4all_core::DynIndex as IndexLike>::Id:
+        Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+{
+    if options.factorize_alg == FactorizeAlg::RSVD {
+        super::contraction::randomized::validate_untracked_context_inputs(tn_a, tn_b)?;
+    }
+    tn_a.validate_context(context)?;
+    tn_b.validate_context(context)?;
+    if options.factorize_alg == FactorizeAlg::RSVD {
+        use rand::SeedableRng;
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rsvd_seed);
+        let leaves = super::contraction::randomized::leaves(
+            Box::new(SessionLeaves(context.clone())),
+            options.randomized,
+            &mut rng,
+        );
+        validate_fit_sum_options(&options)?;
+        return contract_fit_with_leaves(tn_a, tn_b, center, options, leaves);
+    }
+    contract_fit_with_leaves(
+        tn_a,
+        tn_b,
+        center,
+        options,
+        Box::new(SessionLeaves(context.clone())),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn contract_fit_with_leaves<'a, T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    options: FitContractionOptions,
+    leaves: Box<dyn LeafOps<T> + 'a>,
 ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
@@ -1666,15 +1921,20 @@ where
         );
     }
 
+    if options.initial_max_bond_dim == Some(0) {
+        return Err(anyhow::anyhow!("fit: initial_max_bond_dim must be at least 1").into());
+    }
+
     // Initialize C using the SVD-based zipup contraction while preserving
     // the input topology required by variational sweeps.
     let zipup_started = profile_enabled.then(Instant::now);
-    let mut tn_c = tn_a.contract_zipup_preserving_topology_with(
+    let tn_c = tn_a.contract_zipup_preserving_topology_with_leaves(
         tn_b,
         center,
         CanonicalForm::Unitary,
         options.svd_policy,
-        options.max_bond_dim,
+        options.start_max_bond_dim(),
+        leaves.as_ref(),
     )?;
     if let Some(zipup_started) = zipup_started {
         with_fit_profile(|profile| {
@@ -1683,21 +1943,87 @@ where
     }
 
     // The zip-up initializer already returns a network centered at `center`.
+    run_fit_from_state_with_leaves(tn_a, tn_b, center, options, tn_c, leaves)
+}
 
-    // Zero sweeps means "use the zip-up initializer as-is". Positive sweep
-    // counts are honored even when no truncation override is provided, so
-    // callers can explicitly exercise the variational update path.
+/// Contract two TreeTNs from a caller-supplied initial state, with the contraction leaves owned here.
+///
+/// The same sweep engine as [`contract_fit_with_leaves`]; what differs is that `C₀` is supplied rather than built
+/// from the zip-up contraction. That is what lets a caller start from a small-rank network instead of the exact
+/// product bond - see [`contract_fit_from_initial`] and [`low_rank_initializer_tree_tn`].
+pub(super) fn contract_fit_from_initial_with_leaves<'a, T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    options: FitContractionOptions,
+    tn_c: TreeTN<T, V>,
+    leaves: Box<dyn LeafOps<T> + 'a>,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    if fit_profile_enabled() {
+        fit_profile_reset();
+    }
+    reset_contract_profile();
+    reset_native_einsum_profile();
+
+    if !tn_a.same_topology(tn_b) {
+        return Err(
+            anyhow::anyhow!("TreeTNs must have the same topology for fit contraction").into(),
+        );
+    }
+    if !tn_a.same_topology(&tn_c) {
+        return Err(anyhow::anyhow!(
+            "fit initial TreeTN must have the same topology as the input TreeTNs"
+        )
+        .into());
+    }
+
+    run_fit_from_state_with_leaves(tn_a, tn_b, center, options, tn_c, leaves)
+}
+
+/// Run the variational sweeps on an already-initialized `C₀`.
+///
+/// One sweep engine for both entries: the initialization is the only difference between them, so the sweeps, the
+/// zero-sweep shortcut, the convergence handling and the profile bookkeeping stay in one place.
+pub(super) fn run_fit_from_state_with_leaves<'a, T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    options: FitContractionOptions,
+    mut tn_c: TreeTN<T, V>,
+    leaves: Box<dyn LeafOps<T> + 'a>,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    // The sweep machinery requires the network to carry a single canonical center at the requested node.
+    tn_c.set_canonical_region([center.clone()])?;
+
+    // Zero sweeps means "use the initial state as-is". Positive sweep counts are honored even when no truncation
+    // override is provided, so callers can explicitly exercise the variational update path.
     if options.nfullsweeps == 0 {
         finish_fit_profile("contract_fit");
         return Ok(tn_c);
     }
 
     // Create FitUpdater (environments are computed lazily)
-    let mut updater = FitUpdater::new(tn_a.clone(), tn_b.clone(), options.max_bond_dim, None)
-        .with_svd_policy(options.svd_policy)
-        .with_qr_rtol(options.qr_rtol)
-        .with_factorize_alg(options.factorize_alg);
+    let mut updater = FitUpdater::new(
+        tn_a.clone(),
+        tn_b.clone(),
+        options.max_bond_dim,
+        options.svd_policy,
+    )
+    .with_leaves(leaves)
+    .with_qr_rtol(options.qr_rtol)
+    .with_factorize_alg(options.factorize_alg);
 
+    updater.randomized = options.randomized;
     // Create sweep plan
     let plan = LocalUpdateSweepPlan::from_treetn(&tn_c, center, 2)
         .ok_or_else(|| anyhow::anyhow!("Failed to create sweep plan"))?;
@@ -1712,6 +2038,204 @@ where
     finish_fit_profile("contract_fit");
 
     Ok(tn_c)
+}
+
+/// Contract two TreeTNs using the fit (variational) algorithm, starting from a caller-supplied `C₀`.
+///
+/// [`contract_fit`] builds its starting state with the SVD-based zip-up contraction, which materializes the full
+/// product bond (up to `χ_A·χ_B` per edge) when no truncation policy is supplied. A caller that does not want
+/// that can build a small-rank starting state with [`low_rank_initializer_tree_tn`] - or any other network with
+/// the input topology - and pass it here.
+///
+/// # Arguments
+/// * `tn_a` - First input TreeTN
+/// * `tn_b` - Second input TreeTN
+/// * `center` - Node to use as canonical center
+/// * `options` - Fit algorithm options
+/// * `tn_c` - The starting state; it must have the same topology as the inputs, and it is used as-is when
+///   `options.nfullsweeps` is zero
+///
+/// # Returns
+/// A new TreeTN representing the contracted result.
+///
+/// # Errors
+///
+/// Returns [`TreeTNOperationError`] when `tn_a`, `tn_b`, and `tn_c` do not share the same
+/// topology, or when setting the canonical center or running the variational
+/// sweeps fails.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{DynIndex, IdxTensor};
+/// use tensor4all_treetn::{contract_fit_from_initial, low_rank_initializer_tree_tn, FitOptions, TreeTN};
+///
+/// let s0 = DynIndex::new_dyn(2);
+/// let s1 = DynIndex::new_dyn(2);
+/// let a0 = DynIndex::new_dyn(2);
+/// let a1 = DynIndex::new_dyn(2);
+/// let b0 = DynIndex::new_dyn(2);
+/// let b1 = DynIndex::new_dyn(2);
+/// let ba = DynIndex::new_dyn(2);
+/// let bb = DynIndex::new_dyn(2);
+/// let ta = IdxTensor::from_dense(vec![s0.clone(), a0.clone(), ba.clone()], (1..=8).map(|v| v as f64 / 8.0).collect()).unwrap();
+/// let ta2 = IdxTensor::from_dense(vec![ba, s1.clone(), a1], vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.5, 0.5]).unwrap();
+/// let tb = IdxTensor::from_dense(vec![s0, b0.clone(), bb.clone()], (1..=8).map(|v| (v as f64 - 1.0) / 9.0).collect()).unwrap();
+/// let tb2 = IdxTensor::from_dense(vec![bb, s1, b1], vec![1.0, 1.0, 0.0, 0.0, 0.25, 0.5, 0.25, 0.25]).unwrap();
+/// let tn_a = TreeTN::from_tensors(vec![ta, ta2], vec![0usize, 1]).unwrap();
+/// let tn_b = TreeTN::from_tensors(vec![tb, tb2], vec![0usize, 1]).unwrap();
+/// let center = 1usize;
+/// let init = low_rank_initializer_tree_tn(&tn_a, &tn_b, 1, 7).unwrap();
+/// let c = contract_fit_from_initial(&tn_a, &tn_b, &center, FitOptions::new(2), init).unwrap();
+/// assert_eq!(c.node_count(), 2);
+/// ```
+pub fn contract_fit_from_initial<T, V>(
+    tn_a: &TreeTN<T, V>,
+    tn_b: &TreeTN<T, V>,
+    center: &V,
+    options: FitContractionOptions,
+    tn_c: TreeTN<T, V>,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    if options.factorize_alg == FactorizeAlg::RSVD {
+        use rand::SeedableRng;
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rsvd_seed);
+        let leaves = super::contraction::randomized::leaves(
+            Box::new(GlobalLeaves),
+            options.randomized,
+            &mut rng,
+        );
+        validate_fit_sum_options(&options)?;
+        return contract_fit_from_initial_with_leaves(tn_a, tn_b, center, options, tn_c, leaves);
+    }
+    contract_fit_from_initial_with_leaves(tn_a, tn_b, center, options, tn_c, Box::new(GlobalLeaves))
+}
+
+/// Build a deterministic small-rank starting state for [`contract_fit_from_initial`].
+///
+/// Every surviving output site index is carried on its node and every edge gets a fresh bond of `bond_dim`, so no
+/// exact-product bond of dimension `χ_A·χ_B` is ever formed. `seed` fixes the random fill, and the dtype follows
+/// the inputs (a complex operand makes the fill complex).
+///
+/// The canonical center is not part of this: the network this builds is not canonical, and the fit entry that
+/// consumes it (`contract_fit_from_initial`) records and sweeps from the center it is given.
+///
+/// # Errors
+///
+/// Returns [`TreeTNOperationError`] for an invalid rank request (`bond_dim == 0`), and when the two inputs' index
+/// topology does not match - the same input validation [`contract_fit_from_initial`] applies.
+pub fn low_rank_initializer_tree_tn<V>(
+    tn_a: &TreeTN<IdxTensor, V>,
+    tn_b: &TreeTN<IdxTensor, V>,
+    bond_dim: usize,
+    seed: u64,
+) -> std::result::Result<TreeTN<IdxTensor, V>, TreeTNOperationError>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    if bond_dim == 0 {
+        return Err(anyhow::anyhow!("fit low-rank initializer requires bond_dim >= 1").into());
+    }
+    if !tn_a.same_topology(tn_b) {
+        return Err(
+            anyhow::anyhow!("TreeTNs must have the same topology for fit contraction").into(),
+        );
+    }
+
+    // Dtype of the random fill follows the input networks.
+    let complex = network_tensors_complex(tn_a) || network_tensors_complex(tn_b);
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    // 1. Fresh bond indices for each edge, with the requested dimension.
+    let mut edges: Vec<(V, V)> = tn_a.site_index_network().edges().collect();
+    edges.sort();
+    let mut edge_bond: HashMap<(V, V), DynIndex> = HashMap::with_capacity(edges.len());
+    for (a, b) in &edges {
+        let key = if a < b {
+            (a.clone(), b.clone())
+        } else {
+            (b.clone(), a.clone())
+        };
+        edge_bond.insert(key, DynIndex::new_dyn(bond_dim));
+    }
+
+    // 2. Per-node tensor: surviving site indices (symmetric difference of the
+    //    per-node site spaces of A and B) plus the incident bonds.
+    let mut node_names: Vec<V> = tn_a
+        .site_index_network()
+        .node_names()
+        .into_iter()
+        .cloned()
+        .collect();
+    node_names.sort();
+
+    let mut tensors: Vec<IdxTensor> = Vec::with_capacity(node_names.len());
+    for node in &node_names {
+        let a_sites: HashSet<DynIndex> = tn_a
+            .site_index_network()
+            .site_space(node)
+            .cloned()
+            .unwrap_or_default();
+        let b_sites: HashSet<DynIndex> = tn_b
+            .site_index_network()
+            .site_space(node)
+            .cloned()
+            .unwrap_or_default();
+        let shared: HashSet<DynIndex> = a_sites.intersection(&b_sites).cloned().collect();
+
+        let mut indices: Vec<DynIndex> = Vec::new();
+        indices.extend(a_sites.iter().filter(|s| !shared.contains(*s)).cloned());
+        indices.extend(b_sites.iter().filter(|s| !shared.contains(*s)).cloned());
+        sort_indices_deterministic(&mut indices);
+
+        let mut neighbors: Vec<V> = tn_a.site_index_network().neighbors(node).collect();
+        neighbors.sort();
+        for neighbor in &neighbors {
+            let key = if node < neighbor {
+                (node.clone(), neighbor.clone())
+            } else {
+                (neighbor.clone(), node.clone())
+            };
+            if let Some(bond) = edge_bond.get(&key) {
+                indices.push(bond.clone());
+            }
+        }
+
+        let tensor = if complex {
+            IdxTensor::random::<Complex64, _>(&mut rng, indices.clone())
+                .map_err(TreeTNOperationError::from)?
+        } else {
+            IdxTensor::random::<f64, _>(&mut rng, indices.clone())
+                .map_err(TreeTNOperationError::from)?
+        };
+        tensors.push(tensor);
+    }
+
+    let tn_c = TreeTN::from_tensors(tensors, node_names)?;
+    Ok(tn_c)
+}
+
+fn network_tensors_complex<V>(tn: &TreeTN<IdxTensor, V>) -> bool
+where
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    let mut complex = false;
+    for node in tn.site_index_network().node_names() {
+        let node = node.clone();
+        if let Some(idx) = tn.node_index(&node) {
+            if let Some(t) = tn.tensor(idx) {
+                if t.is_complex() {
+                    complex = true;
+                    break;
+                }
+            }
+        }
+    }
+    complex
 }
 
 #[cfg(test)]

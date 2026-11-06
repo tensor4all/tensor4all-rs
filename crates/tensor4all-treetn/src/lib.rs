@@ -52,7 +52,7 @@ mod treetn;
 
 pub use algorithm::{CanonicalForm, CompressionAlgorithm, ContractionAlgorithm};
 #[cfg(feature = "tenferro-cuda")]
-pub use cuda::CudaTreeTNError;
+pub use cuda::{CudaTreeTNError, CudaTreeTNPendingDownload};
 pub use dmrg::{dmrg, dmrg_with_treetn_operator, DmrgError, DmrgOptions, DmrgResult};
 pub use error::{
     LinearOperatorIndexApplyError, LinearOperatorIndexBindingError, LinearOperatorTaggedApplyError,
@@ -63,7 +63,9 @@ pub use gse::{
     GseResult, GseTdvpOptions, GseTdvpResult,
 };
 pub use treetn::contraction;
-pub use treetn::contraction::{contract_src_with_rng, contract_src_with_rng_in, SrcOptions};
+pub use treetn::contraction::{
+    contract_in, contract_src_with_rng, contract_src_with_rng_in, SrcOptions,
+};
 
 // dyn_treetn exports removed - use TreeTN<IdxTensor, V> directly
 pub use link_index_network::LinkIndexNetwork;
@@ -79,8 +81,7 @@ pub use options::{CanonicalizationOptions, RestructureOptions, SplitOptions, Tru
 pub use random::{random_treetn, LinkSpace};
 #[cfg(feature = "simplett-bridge")]
 pub use simplett_bridge::{
-    fix_and_remove_site_from_treetn_chain, insert_onehot_site_in_treetn_chain,
-    tensor_train_to_treetn, tensor_train_to_treetn_with_names,
+    insert_onehot_site_in_treetn_chain, tensor_train_to_treetn, tensor_train_to_treetn_with_names,
     tensor_train_to_treetn_with_names_and_site_indices, treetn_to_tensor_train,
     weighted_remove_site_from_treetn_chain,
 };
@@ -91,12 +92,18 @@ pub use treetn::diagnostics;
 pub use treetn::{
     // Local update
     apply_local_update_sweep,
+    contract_fit,
+    contract_fit_from_initial,
+    contract_fit_in,
     // Decomposition
     factorize_tensor_to_treetn,
     factorize_tensor_to_treetn_with,
+    factorize_tensor_to_treetn_with_on_session,
     fit_sum,
+    fix_and_remove_site,
     get_boundary_edges,
     hadamard,
+    low_rank_initializer_tree_tn,
     partial_contract,
     partial_contract_to_site_network,
     sum_over_indices,
@@ -107,15 +114,19 @@ pub use treetn::{
     CenterSearchResult,
     EvaluatedScalarKindMismatch,
     EvaluationHint,
+    ExactSum,
     FitOptions,
     // Core type
     GreedyCenterSearch,
     LocalUpdateStep,
     LocalUpdateSweepPlan,
     LocalUpdater,
-    PartialContractionSpec,
     // Swap
+    PairwiseSumOrder,
+    PartialContractionSpec,
+    PerAddCutoff,
     ScheduledSwapStep,
+    SumEngine,
     SwapOptions,
     SwapSchedule,
     TreeTN,

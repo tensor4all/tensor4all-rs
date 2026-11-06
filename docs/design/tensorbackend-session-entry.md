@@ -1,5 +1,8 @@
 # Tensorbackend Session Entry
 
+Status: superseded 2026-10-21 by tenferro's caller-held engine model (tenferro-rs #2206); the session/held-session APIs described here were deleted. See explicit-cpu-execution-context.md for the current ownership model.
+
+
 ## Status and scope
 
 This document defines the next focused slice of

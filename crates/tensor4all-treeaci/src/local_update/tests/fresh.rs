@@ -50,6 +50,7 @@ fn verify<T: crate::TreeAciScalar>(phase: T, rounding: f64) {
                         output.copy_from_slice(&target);
                         Ok(())
                     },
+                    None,
                 )
                 .unwrap();
                 assert_eq!(result.row_samples[0].local_coordinate, 2);

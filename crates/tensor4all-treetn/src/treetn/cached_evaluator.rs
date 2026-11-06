@@ -2,157 +2,12 @@
 
 use crate::error::TreeTNOperationError;
 use std::any::{Any, TypeId};
-use std::collections::{HashMap, HashSet};
+// FxHash for every map of the evaluator: the keys are `IndexKey`s, node names and node pairs, none attacker-controlled.
+type HashMap<K, V> = std::collections::HashMap<K, V, rustc_hash::FxBuildHasher>;
+type HashSet<K> = std::collections::HashSet<K, rustc_hash::FxBuildHasher>;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
-
-/// Test-only counting allocator.
-///
-/// [AI Supplied] #709 needs an objective, causal resource measurement rather
-/// than a hand-placed counter at the sites the change happens to touch: this
-/// counts every heap block the process requests on the measuring thread, so a
-/// removed short-lived vector or a removed rank-zero tensor shows up whether
-/// or not the test knows where it came from. Counting is thread-local and
-/// const-initialized, so it never allocates and never observes another test's
-/// concurrent work.
-#[cfg(test)]
-mod allocation_counter {
-    use std::alloc::{GlobalAlloc, Layout, System};
-    use std::cell::Cell;
-
-    thread_local! {
-        static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
-        static REQUESTED_BYTES: Cell<usize> = const { Cell::new(0) };
-    }
-
-    pub(super) struct CountingAllocator;
-
-    impl CountingAllocator {
-        fn record(bytes: usize) {
-            let _ = ALLOCATIONS.try_with(|count| count.set(count.get().wrapping_add(1)));
-            let _ = REQUESTED_BYTES.try_with(|count| count.set(count.get().saturating_add(bytes)));
-        }
-    }
-
-    // SAFETY: every method forwards to `System` with the same arguments; the
-    // only added work is a thread-local counter increment that cannot
-    // allocate or re-enter the allocator.
-    unsafe impl GlobalAlloc for CountingAllocator {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            Self::record(layout.size());
-            System.alloc(layout)
-        }
-
-        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-            Self::record(layout.size());
-            System.alloc_zeroed(layout)
-        }
-
-        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-            Self::record(new_size);
-            System.realloc(ptr, layout, new_size)
-        }
-
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-            System.dealloc(ptr, layout)
-        }
-    }
-
-    fn allocations() -> u64 {
-        ALLOCATIONS.try_with(Cell::get).unwrap_or_default()
-    }
-
-    /// Runs `body` and returns its result with the number of heap blocks the
-    /// current thread requested while it ran.
-    pub(super) fn measure<R>(body: impl FnOnce() -> R) -> (R, u64) {
-        let before = allocations();
-        let result = body();
-        let after = allocations();
-        (result, after.saturating_sub(before))
-    }
-    /// Counts requested payload bytes, including reallocations, on this thread.
-    pub(super) fn measure_requested_bytes<R>(body: impl FnOnce() -> R) -> (R, usize) {
-        let before = REQUESTED_BYTES.with(Cell::get);
-        let result = body();
-        let after = REQUESTED_BYTES.with(Cell::get);
-        (result, after.saturating_sub(before))
-    }
-}
-
-#[cfg(test)]
-#[global_allocator]
-static COUNTING_ALLOCATOR: allocation_counter::CountingAllocator =
-    allocation_counter::CountingAllocator;
-
-/// Temporary phase-timing counters for root-cause investigation into why the
-/// message cache does not deliver a net speedup despite a high hit rate. Not
-/// on the hot path in non-test builds.
-#[cfg(test)]
-mod phase_timing {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    pub static KEY_AND_LOOKUP_NS: AtomicU64 = AtomicU64::new(0);
-    pub static CONTRACT_NS: AtomicU64 = AtomicU64::new(0);
-    pub static TENSOR_VALUES_NS: AtomicU64 = AtomicU64::new(0);
-    pub static RECONSTRUCT_NS: AtomicU64 = AtomicU64::new(0);
-    pub static INSERT_NS: AtomicU64 = AtomicU64::new(0);
-    pub static BUILD_ENV_NS: AtomicU64 = AtomicU64::new(0);
-    pub static CENTER_NS: AtomicU64 = AtomicU64::new(0);
-    // [AI Supplied] Diagnostic-only split of immutable-capability checks and
-    // per-call assignment rebuilding inside `build_environment_cache`.
-    pub static RAW_CAPABILITY_NS: AtomicU64 = AtomicU64::new(0);
-    pub static ASSIGNMENT_BATCH_NS: AtomicU64 = AtomicU64::new(0);
-    pub static MESSAGE_LOOP_NS: AtomicU64 = AtomicU64::new(0);
-    pub static COMPONENT_ASSEMBLY_NS: AtomicU64 = AtomicU64::new(0);
-    // [AI Supplied] Diagnostic-only accounting for the per-center rooted
-    // metadata retained while Guard moves its evaluation hint across sites.
-    pub static PLAN_BUILD_NS: AtomicU64 = AtomicU64::new(0);
-    pub static LAYOUT_BUILD_NS: AtomicU64 = AtomicU64::new(0);
-    pub static PLAN_COUNT: AtomicU64 = AtomicU64::new(0);
-    // [AI Supplied] Diagnostic-only value counts for distinguishing all-hit
-    // descendant reconstruction from the messages that reach the center.
-    pub static RECONSTRUCT_VALUES: AtomicU64 = AtomicU64::new(0);
-    pub static FINAL_ENV_VALUES: AtomicU64 = AtomicU64::new(0);
-    // [AI Supplied] Diagnostic-only split of the raw internal-center path.
-    pub static RAW_CENTER_PREP_NS: AtomicU64 = AtomicU64::new(0);
-    pub static RAW_CENTER_CONTRACT_NS: AtomicU64 = AtomicU64::new(0);
-    pub static RAW_CENTER_DISPATCH_NS: AtomicU64 = AtomicU64::new(0);
-    pub static RAW_CENTER_PRELUDE_NS: AtomicU64 = AtomicU64::new(0);
-    pub static RAW_CENTER_RESULT_NS: AtomicU64 = AtomicU64::new(0);
-    pub static RAW_CENTER_VALUES_COPIED: AtomicU64 = AtomicU64::new(0);
-    pub static RAW_CENTER_ASSIGNMENTS_COPIED: AtomicU64 = AtomicU64::new(0);
-
-    pub fn add(counter: &AtomicU64, elapsed: std::time::Duration) {
-        counter.fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
-    }
-
-    pub fn reset_all() {
-        KEY_AND_LOOKUP_NS.store(0, Ordering::Relaxed);
-        CONTRACT_NS.store(0, Ordering::Relaxed);
-        TENSOR_VALUES_NS.store(0, Ordering::Relaxed);
-        RECONSTRUCT_NS.store(0, Ordering::Relaxed);
-        INSERT_NS.store(0, Ordering::Relaxed);
-        BUILD_ENV_NS.store(0, Ordering::Relaxed);
-        CENTER_NS.store(0, Ordering::Relaxed);
-        RAW_CAPABILITY_NS.store(0, Ordering::Relaxed);
-        ASSIGNMENT_BATCH_NS.store(0, Ordering::Relaxed);
-        MESSAGE_LOOP_NS.store(0, Ordering::Relaxed);
-        COMPONENT_ASSEMBLY_NS.store(0, Ordering::Relaxed);
-        PLAN_BUILD_NS.store(0, Ordering::Relaxed);
-        LAYOUT_BUILD_NS.store(0, Ordering::Relaxed);
-        PLAN_COUNT.store(0, Ordering::Relaxed);
-        RECONSTRUCT_VALUES.store(0, Ordering::Relaxed);
-        FINAL_ENV_VALUES.store(0, Ordering::Relaxed);
-        RAW_CENTER_PREP_NS.store(0, Ordering::Relaxed);
-        RAW_CENTER_CONTRACT_NS.store(0, Ordering::Relaxed);
-        RAW_CENTER_DISPATCH_NS.store(0, Ordering::Relaxed);
-        RAW_CENTER_PRELUDE_NS.store(0, Ordering::Relaxed);
-        RAW_CENTER_RESULT_NS.store(0, Ordering::Relaxed);
-        RAW_CENTER_VALUES_COPIED.store(0, Ordering::Relaxed);
-        RAW_CENTER_ASSIGNMENTS_COPIED.store(0, Ordering::Relaxed);
-    }
-}
 
 /// Temporary counters for issue #671's root-cause investigation: whether the
 /// branch contraction kernel's per-physical-value BLAS setup (building the
@@ -326,15 +181,20 @@ pub(crate) mod contraction_diagnostics {
 use anyhow::{bail, ensure, Context, Result};
 use num_complex::{Complex32, Complex64};
 use tensor4all_core::{
-    contract_with_options,
+    contract_with_options, contract_with_options_on_session,
     index_key::{FlatIndexer, IndexKey, KeyBuilder},
-    AnyScalar, ColMajorArrayRef, ContractionOptions, DynIndex, IdxTensor, IndexLike,
-    TensorContractionLike, TensorIndex, TensorLike,
+    index_select_on_session, permute_indices_on_session, select_indices_on_session,
+    stack_along_new_index_on_session, AnyScalar, ColMajorArrayRef, ContractionOptions, DynIndex,
+    IdxTensor, IndexLike, TensorIndex, TensorLike,
 };
-use tensor4all_tensorbackend::{mat_mul, mat_mul_owned, BlasMul, Matrix, TensorElement};
+use tensor4all_tensorbackend::explicit::Session;
+use tensor4all_tensorbackend::{
+    mat_mul, mat_mul_owned, BlasMul, Matrix, StorageScalar, TensorElement,
+};
 
 #[cfg(feature = "diagnostics")]
 use super::diagnostics;
+use super::evaluator::value_at;
 use super::TreeTN;
 
 type KeyId = usize;
@@ -342,6 +202,134 @@ type EnvironmentCache<V> = HashMap<V, StackedMessage>;
 type CacheBuildResult<V> = (Vec<ComponentBatch<V>>, EnvironmentCache<V>);
 type ParentMap<V> = HashMap<V, Option<V>>;
 type DirectedComponentLayouts<V> = HashMap<(V, V), Arc<DirectedComponentLayout<V>>>;
+
+/// Execution route for one cached-evaluation call: the process-global route or
+/// a caller-owned explicit `Session`.
+///
+/// Every numerical leaf of the evaluator (grouped GEMMs, retained-index
+/// contractions, selection, stacking, gathering and permutation) goes through
+/// this one seam, so the evaluation body is shared and only the leaf route
+/// changes. The global variant is exactly the compatibility route; the session
+/// variant never enters the process-global backend or an eager runtime.
+struct CachedEvaluationRoute<'route, 'session> {
+    session: Option<&'route mut Session<'session>>,
+}
+
+impl<'route, 'session> CachedEvaluationRoute<'route, 'session> {
+    fn global() -> Self {
+        Self { session: None }
+    }
+
+    fn on_session(session: &'route mut Session<'session>) -> Self {
+        Self {
+            session: Some(session),
+        }
+    }
+
+    fn mat_mul_owned<T: BlasMul>(
+        &mut self,
+        left: Matrix<T>,
+        right: Matrix<T>,
+    ) -> Result<Matrix<T>> {
+        match self.session.as_mut() {
+            None => mat_mul_owned(left, right).map_err(anyhow::Error::from),
+            Some(session) => session.mat_mul(&left, &right).map_err(anyhow::Error::from),
+        }
+    }
+
+    fn mat_mul<T: BlasMul>(&mut self, left: &Matrix<T>, right: &Matrix<T>) -> Result<Matrix<T>> {
+        match self.session.as_mut() {
+            None => mat_mul(left, right).map_err(anyhow::Error::from),
+            Some(session) => session.mat_mul(left, right).map_err(anyhow::Error::from),
+        }
+    }
+
+    fn contract_nary(
+        &mut self,
+        operands: &[&IdxTensor],
+        options: ContractionOptions<'_>,
+    ) -> Result<IdxTensor> {
+        match self.session.as_mut() {
+            None => contract_with_options(operands, options).map_err(anyhow::Error::from),
+            Some(session) => contract_with_options_on_session(session, operands, options)
+                .map_err(anyhow::Error::from),
+        }
+    }
+
+    fn select_indices(
+        &mut self,
+        tensor: &IdxTensor,
+        selected_indices: &[DynIndex],
+        positions: &[usize],
+    ) -> Result<IdxTensor> {
+        match self.session.as_mut() {
+            None => tensor
+                .select_indices(selected_indices, positions)
+                .map_err(anyhow::Error::from),
+            Some(session) => {
+                select_indices_on_session(session, tensor, selected_indices, positions)
+                    .map_err(anyhow::Error::from)
+            }
+        }
+    }
+
+    fn stack_along_new_index(
+        &mut self,
+        tensors: &[&IdxTensor],
+        new_index: DynIndex,
+        axis: isize,
+    ) -> Result<IdxTensor> {
+        match self.session.as_mut() {
+            None => IdxTensor::stack_along_new_index(tensors, new_index, axis)
+                .map_err(anyhow::Error::from),
+            Some(session) => stack_along_new_index_on_session(session, tensors, new_index, axis)
+                .map_err(anyhow::Error::from),
+        }
+    }
+
+    fn index_select(
+        &mut self,
+        tensor: &IdxTensor,
+        source_index: &DynIndex,
+        target_index: DynIndex,
+        positions: &[usize],
+    ) -> Result<IdxTensor> {
+        match self.session.as_mut() {
+            None => tensor
+                .index_select(source_index, target_index, positions)
+                .map_err(anyhow::Error::from),
+            Some(session) => {
+                index_select_on_session(session, tensor, source_index, target_index, positions)
+                    .map_err(anyhow::Error::from)
+            }
+        }
+    }
+
+    fn permute_indices(
+        &mut self,
+        tensor: &IdxTensor,
+        new_indices: &[DynIndex],
+    ) -> Result<IdxTensor> {
+        match self.session.as_mut() {
+            None => tensor
+                .permute_indices(new_indices)
+                .map_err(anyhow::Error::from),
+            Some(session) => permute_indices_on_session(session, tensor, new_indices)
+                .map_err(anyhow::Error::from),
+        }
+    }
+
+    fn tensor_from_cached_values(
+        &mut self,
+        indices: Vec<DynIndex>,
+        values: Vec<CachedScalar>,
+    ) -> Result<IdxTensor> {
+        match self.session.as_mut() {
+            None => tensor_from_cached_values(indices, values),
+            Some(_) => tensor_from_cached_values_compact(indices, values),
+        }
+    }
+}
 
 /// Minimum scalar multiply count before the backend setup cost is amortized
 /// by the grouped chain kernel. Smaller contractions keep the existing scalar
@@ -743,8 +731,8 @@ where
 {
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// index mismatch, or a backend failure).
+    /// Returns an error when `build_layout` rejects `tree`/`indices`, or when
+    /// `values` fails the shape or per-entry value checks.
     ///
     fn new(
         tree: &TreeTN<IdxTensor, V>,
@@ -767,7 +755,7 @@ where
         if neighbors.is_empty() {
             return Ok(Self {
                 neighbors,
-                directed_counts: HashMap::new(),
+                directed_counts: HashMap::default(),
                 node_costs: None,
             });
         }
@@ -778,7 +766,8 @@ where
 
         let (parent, order) = rooted_tree(&neighbors, &root)?;
         let mut local_interner = KeyInterner::<Vec<usize>>::default();
-        let mut local_keys: HashMap<V, Vec<KeyId>> = HashMap::with_capacity(node_names.len());
+        let mut local_keys: HashMap<V, Vec<KeyId>> =
+            HashMap::with_capacity_and_hasher(node_names.len(), Default::default());
         for node in &node_names {
             let entries = layout
                 .entries_by_node
@@ -806,7 +795,7 @@ where
 
         let mut component_interner = KeyInterner::<Vec<KeyId>>::default();
         let mut directed_keys: HashMap<V, HashMap<V, Vec<KeyId>>> =
-            HashMap::with_capacity(neighbors.len());
+            HashMap::with_capacity_and_hasher(neighbors.len(), Default::default());
 
         for node in order.iter().rev() {
             let Some(parent_node) = parent.get(node).and_then(Clone::clone) else {
@@ -883,7 +872,8 @@ where
             }
         }
 
-        let mut directed_counts = HashMap::with_capacity(tree.edge_count() * 2);
+        let mut directed_counts =
+            HashMap::with_capacity_and_hasher(tree.edge_count() * 2, Default::default());
         for (source, targets) in directed_keys {
             for (target, keys) in targets {
                 let count = keys.into_iter().collect::<HashSet<_>>().len();
@@ -941,7 +931,7 @@ where
         }
         Self {
             neighbors,
-            directed_counts: HashMap::new(),
+            directed_counts: HashMap::default(),
             node_costs: Some(node_costs),
         }
     }
@@ -971,8 +961,7 @@ where
 {
     /// # Errors
     ///
-    /// Returns an error when the construction or conversion fails (a shape or
-    /// /// index mismatch, or a backend failure).
+    /// Returns an error when `center` is not a node of `tree`.
     ///
     fn new(tree: &TreeTN<IdxTensor, V>, center: &V) -> Result<Self> {
         Self::from_neighbors(&sorted_neighbors(tree), center)
@@ -985,7 +974,7 @@ where
     fn from_neighbors(neighbors: &HashMap<V, Vec<V>>, center: &V) -> Result<Self> {
         let (parent, order) = rooted_tree(neighbors, center)?;
 
-        let mut children = HashMap::<V, Vec<V>>::new();
+        let mut children = HashMap::<V, Vec<V>>::default();
         for node in neighbors.keys() {
             children.insert(node.clone(), Vec::new());
         }
@@ -1468,15 +1457,8 @@ where
         tree: &TreeTN<IdxTensor, V>,
         indices: &[DynIndex],
     ) -> std::result::Result<Self, TreeTNOperationError> {
-        #[cfg(test)]
-        let layout_build_started = std::time::Instant::now();
         let layout = build_layout(tree, indices)?;
         let directed_component_layouts = build_directed_component_layouts(tree, &layout)?;
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::LAYOUT_BUILD_NS,
-            layout_build_started.elapsed(),
-        );
         let neighbors = sorted_neighbors(tree);
         let mut sorted_node_names = tree.node_names();
         sorted_node_names.sort();
@@ -1487,7 +1469,7 @@ where
                 directed_component_layouts,
                 neighbors,
                 sorted_node_names,
-                rooted_plans: std::sync::Mutex::new(HashMap::new()),
+                rooted_plans: std::sync::Mutex::new(HashMap::default()),
             }),
         })
     }
@@ -1614,18 +1596,10 @@ where
         if let Some(plan) = rooted_plans.get(center) {
             return Ok(Arc::clone(plan));
         }
-        #[cfg(test)]
-        let plan_build_started = std::time::Instant::now();
         let plan = Arc::new(RootedMessagePlan::from_neighbors(
             &self.inner.neighbors,
             center,
         )?);
-        #[cfg(test)]
-        {
-            use std::sync::atomic::Ordering;
-            phase_timing::add(&phase_timing::PLAN_BUILD_NS, plan_build_started.elapsed());
-            phase_timing::PLAN_COUNT.fetch_add(1, Ordering::Relaxed);
-        }
         rooted_plans.insert(center.clone(), Arc::clone(&plan));
         Ok(plan)
     }
@@ -1863,8 +1837,8 @@ where
             center,
             batch_point_limit,
             last_stats: CachedEvaluationStats::default(),
-            message_caches: HashMap::new(),
-            parent_bond_indices: HashMap::new(),
+            message_caches: HashMap::default(),
+            parent_bond_indices: HashMap::default(),
             prepared_branch_slices_f64: PreparedBranchSliceCache::new(branch_slice_cache_max_bytes),
             prepared_branch_slices_c64: PreparedBranchSliceCache::new(branch_slice_cache_max_bytes),
             raw_messages: false,
@@ -1949,8 +1923,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, or
-    /// a backend failure).
+    /// Returns [`TreeTNOperationError`] under the same conditions as
+    /// [`Self::evaluate_batched_with_hint`].
     ///
     /// # Examples
     ///
@@ -1997,9 +1971,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when `values` has the wrong shape for this evaluator's
-    /// index list (a shape mismatch), when the hinted node is not in the tree
-    /// (a missing-node failure), or when a contraction fails.
+    /// Returns [`TreeTNOperationError`] when `values` does not have shape
+    /// `[indices.len(), n_points]`, when the hinted node is not in the tree, or
+    /// when the cached message contractions fail.
     ///
     /// # Examples
     ///
@@ -2124,6 +2098,33 @@ where
             .map_err(|error| TreeTNOperationError::from(anyhow::Error::new(error)))
     }
 
+    /// Evaluates a hinted batch and returns typed scalars on a caller-owned explicit `Session`.
+    ///
+    /// The session counterpart of [`Self::evaluate_batched_typed`], with the same
+    /// precision conversion rules. Every numerical leaf (grouped GEMMs,
+    /// retained-index contractions, selection, stacking, gathering and
+    /// permutation) runs through `session` and publishes compact host storage,
+    /// so nothing enters the process-global backend or an eager runtime. This is
+    /// the only session batch wrapper: its results are typed scalars, because an
+    /// `AnyScalar` result would adopt a rank-zero eager tensor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeTNOperationError`] under the same conditions as
+    /// [`Self::evaluate_batched_typed`], and when the supplied session rejects a
+    /// leaf.
+    pub fn evaluate_batched_typed_on_session<T: TensorElement>(
+        &mut self,
+        session: &mut Session<'_>,
+        values: ColMajorArrayRef<'_, usize>,
+        hint: EvaluationHint<V>,
+    ) -> std::result::Result<Vec<T>, TreeTNOperationError> {
+        let mut route = CachedEvaluationRoute::on_session(session);
+        let cached = self.evaluate_batched_cached_with_route(values, hint, &mut route)?;
+        cached_values_into_typed(cached)
+            .map_err(|error| TreeTNOperationError::from(anyhow::Error::new(error)))
+    }
+
     /// Shared batch evaluation returning the evaluator's internal lightweight
     /// scalars. Both public batch entry points convert this result: the
     /// compatibility wrapper into `AnyScalar` and the typed entry point
@@ -2132,6 +2133,15 @@ where
         &mut self,
         values: ColMajorArrayRef<'_, usize>,
         hint: EvaluationHint<V>,
+    ) -> std::result::Result<Vec<CachedScalar>, TreeTNOperationError> {
+        self.evaluate_batched_cached_with_route(values, hint, &mut CachedEvaluationRoute::global())
+    }
+
+    fn evaluate_batched_cached_with_route(
+        &mut self,
+        values: ColMajorArrayRef<'_, usize>,
+        hint: EvaluationHint<V>,
+        route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> std::result::Result<Vec<CachedScalar>, TreeTNOperationError> {
         #[cfg(feature = "diagnostics")]
         let query_started = std::time::Instant::now();
@@ -2170,7 +2180,7 @@ where
             let chunk =
                 ColMajorArrayRef::new(&values.data()[n_indices * start..n_indices * end], &shape)
                     .map_err(anyhow::Error::from)?;
-            results.extend(self.evaluate_chunk(&center, chunk, hinted_center)?);
+            results.extend(self.evaluate_chunk(&center, chunk, hinted_center, route)?);
             stats.subtree_environment_count += self.last_stats.subtree_environment_count;
             stats.directed_message_count += self.last_stats.directed_message_count;
             stats.batched_message_contract_count += self.last_stats.batched_message_contract_count;
@@ -2203,28 +2213,32 @@ where
         center: &V,
         values: ColMajorArrayRef<'_, usize>,
         hinted_center: bool,
+        route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> std::result::Result<Vec<CachedScalar>, TreeTNOperationError> {
         if hinted_center {
             if let Some(result) = self.try_contract_cached_edge_cut(center, values)? {
                 return Ok(result);
             }
         }
-        #[cfg(test)]
-        let environment_started = std::time::Instant::now();
-        let environment_result = self.build_environment_cache(center, values);
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::BUILD_ENV_NS, environment_started.elapsed());
-        let (component_batches, environment_cache) = environment_result?;
-        #[cfg(test)]
-        let center_started = std::time::Instant::now();
-        let result = if hinted_center {
-            self.contract_edge_cut_or_center(center, values, &component_batches, &environment_cache)
+        let (component_batches, environment_cache) =
+            self.build_environment_cache(center, values, route)?;
+        let results = if hinted_center {
+            self.contract_edge_cut_or_center(
+                center,
+                values,
+                &component_batches,
+                &environment_cache,
+                route,
+            )
         } else {
-            self.contract_center_for_points(center, values, &component_batches, &environment_cache)
-        };
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::CENTER_NS, center_started.elapsed());
-        let results = result?;
+            self.contract_center_for_points(
+                center,
+                values,
+                &component_batches,
+                &environment_cache,
+                route,
+            )
+        }?;
         self.last_stats.batched_center_contract_count = 1;
         Ok(results)
     }
@@ -2312,29 +2326,14 @@ where
         &mut self,
         center: &V,
         values: ColMajorArrayRef<'_, usize>,
+        route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> Result<CacheBuildResult<V>> {
         self.last_stats = CachedEvaluationStats::default();
         let plan = self.rooted_plan_for_center(center)?;
-        #[cfg(test)]
-        let raw_capability_started = std::time::Instant::now();
         self.raw_messages = self.can_use_raw_messages(center)?;
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::RAW_CAPABILITY_NS,
-            raw_capability_started.elapsed(),
-        );
-        #[cfg(test)]
-        let assignment_batch_started = std::time::Instant::now();
         let assignment_batches = self.build_message_assignment_batches(&plan, values)?;
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::ASSIGNMENT_BATCH_NS,
-            assignment_batch_started.elapsed(),
-        );
 
-        #[cfg(test)]
-        let message_loop_started = std::time::Instant::now();
-        let mut messages = HashMap::<V, StackedMessage>::new();
+        let mut messages = HashMap::<V, StackedMessage>::default();
         for neighbor in plan.children.get(center).cloned().unwrap_or_default() {
             let node_message = self.get_or_compute_node_message(
                 &neighbor,
@@ -2342,19 +2341,13 @@ where
                 &plan,
                 &assignment_batches,
                 &mut messages,
+                route,
             )?;
             messages.insert(neighbor, node_message);
         }
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::MESSAGE_LOOP_NS,
-            message_loop_started.elapsed(),
-        );
 
-        #[cfg(test)]
-        let component_assembly_started = std::time::Instant::now();
         let mut component_batches = Vec::new();
-        let mut cache = HashMap::new();
+        let mut cache = HashMap::default();
         let mut subtree_environment_count = 0usize;
         for neighbor in plan.children.get(center).cloned().unwrap_or_default() {
             let assignment_batch = assignment_batches.get(&neighbor).ok_or_else(|| {
@@ -2369,12 +2362,6 @@ where
                     neighbor
                 )
             })?;
-            #[cfg(test)]
-            if let Some(raw_values) = environment.raw_values.as_ref() {
-                use std::sync::atomic::Ordering;
-                phase_timing::FINAL_ENV_VALUES
-                    .fetch_add(raw_values.len() as u64, Ordering::Relaxed);
-            }
             subtree_environment_count += assignment_batch.first_points.len();
             cache.insert(neighbor.clone(), environment);
             component_batches.push(ComponentBatch {
@@ -2382,11 +2369,6 @@ where
                 point_to_assignment: assignment_batch.point_to_assignment.clone(),
             });
         }
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::COMPONENT_ASSEMBLY_NS,
-            component_assembly_started.elapsed(),
-        );
         self.last_stats.subtree_environment_count = subtree_environment_count;
         #[cfg(test)]
         self.update_cache_storage_stats();
@@ -2560,7 +2542,7 @@ where
         values: ColMajorArrayRef<'_, usize>,
     ) -> Result<HashMap<V, AssignmentBatch>> {
         let n_points = values.shape()[1];
-        let mut local_keys = HashMap::<V, Vec<IndexKey>>::new();
+        let mut local_keys = HashMap::<V, Vec<IndexKey>>::default();
 
         // One scratch coordinate buffer for the whole call. Allocating it per
         // node and point was the assignment builder's dominant short-lived
@@ -2600,7 +2582,7 @@ where
             local_keys.insert(node.clone(), keys);
         }
 
-        let mut assignment_batches = HashMap::<V, AssignmentBatch>::new();
+        let mut assignment_batches = HashMap::<V, AssignmentBatch>::default();
         for node in &plan.postorder {
             let local_keys = local_keys.get(node).ok_or_else(|| {
                 anyhow::anyhow!(
@@ -2645,7 +2627,8 @@ where
                 node
             );
 
-            let mut assignment_ids = HashMap::<IndexKey, usize>::new();
+            let mut assignment_ids =
+                HashMap::<IndexKey, usize>::with_capacity_and_hasher(n_points, Default::default());
             let mut first_points = Vec::new();
             let mut assignment_keys = Vec::new();
             let mut point_to_assignment = Vec::with_capacity(n_points);
@@ -2667,14 +2650,16 @@ where
                     "TreeTNCachedEvaluator: composed key width does not match its component layout"
                 );
                 let key = builder.finish();
-                let assignment_id = if let Some(&assignment_id) = assignment_ids.get(&key) {
-                    assignment_id
-                } else {
-                    let assignment_id = assignment_keys.len();
-                    assignment_ids.insert(key.clone(), assignment_id);
-                    assignment_keys.push(key);
-                    first_points.push(point);
-                    assignment_id
+                // One hash per point (entry API); the key is cloned only when new.
+                let assignment_id = match assignment_ids.entry(key) {
+                    std::collections::hash_map::Entry::Occupied(entry) => *entry.get(),
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        let assignment_id = assignment_keys.len();
+                        assignment_keys.push(entry.key().clone());
+                        entry.insert(assignment_id);
+                        first_points.push(point);
+                        assignment_id
+                    }
                 };
                 point_to_assignment.push(assignment_id);
             }
@@ -2711,7 +2696,8 @@ where
                 )
             })?;
         let n_points = values.shape()[1];
-        let mut assignment_ids = HashMap::<IndexKey, usize>::new();
+        let mut assignment_ids =
+            HashMap::<IndexKey, usize>::with_capacity_and_hasher(n_points, Default::default());
         let mut first_points = Vec::new();
         let mut assignment_keys = Vec::new();
         let mut point_to_assignment = Vec::with_capacity(n_points);
@@ -2733,14 +2719,16 @@ where
                 .indexer
                 .encode(&raw)
                 .map_err(anyhow::Error::from)?;
-            let assignment_id = if let Some(&assignment_id) = assignment_ids.get(&key) {
-                assignment_id
-            } else {
-                let assignment_id = assignment_keys.len();
-                assignment_ids.insert(key.clone(), assignment_id);
-                assignment_keys.push(key);
-                first_points.push(point);
-                assignment_id
+            // One hash per point (entry API); the key is cloned only when new.
+            let assignment_id = match assignment_ids.entry(key) {
+                std::collections::hash_map::Entry::Occupied(entry) => *entry.get(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let assignment_id = assignment_keys.len();
+                    assignment_keys.push(entry.key().clone());
+                    entry.insert(assignment_id);
+                    first_points.push(point);
+                    assignment_id
+                }
             };
             point_to_assignment.push(assignment_id);
         }
@@ -2824,6 +2812,7 @@ where
         node: &V,
         values: ColMajorArrayRef<'_, usize>,
         points: &[usize],
+        _route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> Result<Option<Vec<f64>>> {
         #[cfg(test)]
         if raw_message_kernels_disabled_for_test() {
@@ -2857,7 +2846,7 @@ where
         // Column-major: stride of axis k is the product of the dims before it.
         let strides = [1usize, dims[0]];
 
-        let out = tensor.with_dense_slice::<f64, _>(|raw| {
+        let out = with_host_values::<f64, _>(tensor, |raw| {
             let mut out = Vec::with_capacity(parent_dim * points.len());
             for &point in points {
                 let physical_value = value_at(
@@ -2874,8 +2863,8 @@ where
                     out.push(raw[flat]);
                 }
             }
-            Ok::<_, anyhow::Error>(out)
-        })??;
+            Ok(out)
+        })?;
         Ok(Some(out))
     }
 
@@ -2889,6 +2878,7 @@ where
         node: &V,
         values: ColMajorArrayRef<'_, usize>,
         points: &[usize],
+        _route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> Result<Option<Vec<Complex64>>> {
         #[cfg(test)]
         if raw_message_kernels_disabled_for_test() {
@@ -2920,7 +2910,7 @@ where
         let dims = tensor.dims();
         let parent_dim = dims[parent_axis];
         let strides = [1usize, dims[0]];
-        let out = tensor.with_dense_slice::<Complex64, _>(|raw| {
+        let out = with_host_values::<Complex64, _>(tensor, |raw| {
             let mut out = Vec::with_capacity(parent_dim * points.len());
             for &point in points {
                 let physical_value = value_at(
@@ -2937,8 +2927,8 @@ where
                     out.push(raw[flat]);
                 }
             }
-            Ok::<_, anyhow::Error>(out)
-        })??;
+            Ok(out)
+        })?;
         Ok(Some(out))
     }
 
@@ -2947,6 +2937,7 @@ where
     /// multiply; small groups retain the scalar implementation so backend
     /// setup does not dominate low-rank calls.
     fn grouped_chain_message_contraction<T>(
+        route: &mut CachedEvaluationRoute<'_, '_>,
         spec: ChainContractionSpec,
         raw: &[T],
         physical_values: &[usize],
@@ -2990,7 +2981,7 @@ where
             return scalar_chain_message_contraction(spec, raw, physical_values, child_columns);
         }
 
-        let mut groups = HashMap::<usize, Vec<usize>>::new();
+        let mut groups = HashMap::<usize, Vec<usize>>::default();
         for (point, &physical_value) in physical_values.iter().enumerate() {
             groups.entry(physical_value).or_default().push(point);
         }
@@ -3077,11 +3068,10 @@ where
             });
             #[cfg(feature = "diagnostics")]
             let matmul_started = std::time::Instant::now();
-            let product = mat_mul_owned(
+            let product = route.mat_mul_owned(
                 Matrix::from_col_major_vec(parent_dim, child_dim, left),
                 Matrix::from_col_major_vec(child_dim, points.len(), right),
-            )
-            .map_err(anyhow::Error::from)?;
+            )?;
             #[cfg(feature = "diagnostics")]
             diagnostics::record_kernel(diagnostics::KernelDiagnostics {
                 matmul_ns: diagnostics::nanos(matmul_started.elapsed()),
@@ -3272,6 +3262,7 @@ where
     /// instead: still allocation-free, per-element-function-call-free array
     /// arithmetic, just not a single BLAS call.
     fn grouped_branch_message_contraction<T>(
+        route: &mut CachedEvaluationRoute<'_, '_>,
         spec: BranchContractionSpec,
         raw: &[T],
         physical_values: &[usize],
@@ -3339,7 +3330,7 @@ where
             );
         }
 
-        let mut groups = HashMap::<usize, Vec<usize>>::new();
+        let mut groups = HashMap::<usize, Vec<usize>>::default();
         for (point, &physical_value) in physical_values.iter().enumerate() {
             groups.entry(physical_value).or_default().push(point);
         }
@@ -3471,11 +3462,10 @@ where
                 contraction_diagnostics::inc(&contraction_diagnostics::BRANCH_BLAS_CALLS, 1);
                 contraction_diagnostics::inc(fast_axis_counter, 1);
             }
-            let intermediate = mat_mul_owned(
+            let intermediate = route.mat_mul_owned(
                 Matrix::from_col_major_vec(parent_dim * child_dim_2, child_dim_1, left),
                 Matrix::from_col_major_vec(child_dim_1, points.len(), right),
-            )
-            .map_err(anyhow::Error::from)?;
+            )?;
             let intermediate = intermediate.as_col_major_slice();
             #[cfg(feature = "diagnostics")]
             {
@@ -3551,7 +3541,7 @@ where
             spec.child_dim_2
         );
 
-        let mut groups = HashMap::<usize, Vec<usize>>::new();
+        let mut groups = HashMap::<usize, Vec<usize>>::default();
         for (point, &physical_value) in physical_values.iter().enumerate() {
             groups.entry(physical_value).or_default().push(point);
         }
@@ -3632,6 +3622,7 @@ where
 
     /// Contracts a branch with evaluator-owned prepared physical slices.
     fn grouped_branch_message_contraction_cached<T>(
+        route: &mut CachedEvaluationRoute<'_, '_>,
         cache: &mut PreparedBranchSliceCache<V, T>,
         node: &V,
         parent: &V,
@@ -3702,7 +3693,7 @@ where
                     |left| {
                         let right =
                             Matrix::from_col_major_vec(spec.child_dim_1, points.len(), right);
-                        mat_mul(left, &right).map_err(anyhow::Error::from)
+                        route.mat_mul(left, &right)
                     },
                 )
             },
@@ -3728,6 +3719,7 @@ where
     /// physical index and one child, a complex-valued tensor, or an
     /// unexpected axis count), so the caller falls back to
     /// [`Self::compute_stacked_message`].
+    #[allow(clippy::too_many_arguments)]
     fn try_compute_chain_message_raw(
         &self,
         node: &V,
@@ -3736,6 +3728,7 @@ where
         plan: &RootedMessagePlan<V>,
         assignment_batches: &HashMap<V, AssignmentBatch>,
         messages: &HashMap<V, StackedMessage>,
+        route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> Result<Option<Vec<f64>>> {
         #[cfg(test)]
         if raw_message_kernels_disabled_for_test() {
@@ -3839,9 +3832,15 @@ where
             physical_values.push(physical_value);
         }
         let child_columns = child_values;
-        let result = tensor.with_dense_slice::<f64, _>(|raw| {
-            Self::grouped_chain_message_contraction(spec, raw, &physical_values, &child_columns)
-        })??;
+        let result = with_host_values::<f64, _>(tensor, |raw| {
+            Self::grouped_chain_message_contraction(
+                route,
+                spec,
+                raw,
+                &physical_values,
+                &child_columns,
+            )
+        })?;
         Ok(Some(result))
     }
 
@@ -3850,6 +3849,7 @@ where
     /// This preserves the same postorder message and assignment-batch
     /// semantics as the real-valued helper, but performs the contraction with
     /// `Complex64` values directly in host memory.
+    #[allow(clippy::too_many_arguments)]
     fn try_compute_chain_message_complex_raw(
         &self,
         node: &V,
@@ -3858,6 +3858,7 @@ where
         plan: &RootedMessagePlan<V>,
         assignment_batches: &HashMap<V, AssignmentBatch>,
         messages: &HashMap<V, StackedMessage>,
+        route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> Result<Option<Vec<Complex64>>> {
         #[cfg(test)]
         if raw_message_kernels_disabled_for_test() {
@@ -3961,9 +3962,15 @@ where
             physical_values.push(physical_value);
         }
         let child_columns = child_values;
-        let result = tensor.with_dense_slice::<Complex64, _>(|raw| {
-            Self::grouped_chain_message_contraction(spec, raw, &physical_values, &child_columns)
-        })??;
+        let result = with_host_values::<Complex64, _>(tensor, |raw| {
+            Self::grouped_chain_message_contraction(
+                route,
+                spec,
+                raw,
+                &physical_values,
+                &child_columns,
+            )
+        })?;
         Ok(Some(result))
     }
 
@@ -3975,6 +3982,7 @@ where
     /// physical index and exactly two children, a complex-valued tensor, or
     /// an unexpected axis count), so the caller falls back to
     /// [`Self::compute_stacked_message`].
+    #[allow(clippy::too_many_arguments)]
     fn try_compute_branch_message_raw(
         &mut self,
         node: &V,
@@ -3983,6 +3991,7 @@ where
         plan: &RootedMessagePlan<V>,
         assignment_batches: &HashMap<V, AssignmentBatch>,
         messages: &HashMap<V, StackedMessage>,
+        route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> Result<Option<Vec<f64>>> {
         #[cfg(test)]
         if raw_message_kernels_disabled_for_test() {
@@ -4150,8 +4159,9 @@ where
             );
         }
         let cache = &mut self.prepared_branch_slices_f64;
-        let result = tensor.with_dense_slice::<f64, _>(|raw| {
+        let result = with_host_values::<f64, _>(tensor, |raw| {
             Self::grouped_branch_message_contraction_cached(
+                route,
                 cache,
                 node,
                 &parent,
@@ -4164,11 +4174,12 @@ where
                     child2_columns: &child_2_columns,
                 },
             )
-        })??;
+        })?;
         Ok(Some(result))
     }
 
     /// Complex-valued counterpart of [`Self::try_compute_branch_message_raw`].
+    #[allow(clippy::too_many_arguments)]
     fn try_compute_branch_message_complex_raw(
         &mut self,
         node: &V,
@@ -4177,6 +4188,7 @@ where
         plan: &RootedMessagePlan<V>,
         assignment_batches: &HashMap<V, AssignmentBatch>,
         messages: &HashMap<V, StackedMessage>,
+        route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> Result<Option<Vec<Complex64>>> {
         #[cfg(test)]
         if raw_message_kernels_disabled_for_test() {
@@ -4344,8 +4356,9 @@ where
             );
         }
         let cache = &mut self.prepared_branch_slices_c64;
-        let result = tensor.with_dense_slice::<Complex64, _>(|raw| {
+        let result = with_host_values::<Complex64, _>(tensor, |raw| {
             Self::grouped_branch_message_contraction_cached(
+                route,
                 cache,
                 node,
                 &parent,
@@ -4358,7 +4371,7 @@ where
                     child2_columns: &child_2_columns,
                 },
             )
-        })??;
+        })?;
         Ok(Some(result))
     }
 
@@ -4401,9 +4414,11 @@ where
         messages: &HashMap<V, StackedMessage>,
         kind: ScalarKind,
         decode: impl Fn(&CachedScalar) -> Option<T> + Copy,
+        route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> Result<Option<Vec<T>>>
     where
         T: TensorElement
+            + StorageScalar
             + BlasMul
             + Copy
             + Default
@@ -4517,12 +4532,13 @@ where
             )?);
         }
 
-        let result = tensor.with_dense_slice::<T, _>(|raw| {
-            multi_branch_message_contraction(&spec, raw, &physical_values, &child_columns)
-        })??;
+        let result = with_host_values::<T, _>(tensor, |raw| {
+            multi_branch_message_contraction(route, &spec, raw, &physical_values, &child_columns)
+        })?;
         Ok(Some(result))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn compute_generic_cached_message_values(
         &self,
         node: &V,
@@ -4531,9 +4547,17 @@ where
         plan: &RootedMessagePlan<V>,
         assignment_batches: &HashMap<V, AssignmentBatch>,
         messages: &HashMap<V, StackedMessage>,
+        route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> Result<Vec<CachedScalar>> {
-        let missing_message =
-            self.compute_stacked_message(node, values, points, plan, assignment_batches, messages)?;
+        let missing_message = self.compute_stacked_message(
+            node,
+            values,
+            points,
+            plan,
+            assignment_batches,
+            messages,
+            route,
+        )?;
         tensor_values_cached(
             missing_message
                 .tensor
@@ -4561,6 +4585,7 @@ where
         plan: &RootedMessagePlan<V>,
         assignment_batches: &HashMap<V, AssignmentBatch>,
         messages: &mut HashMap<V, StackedMessage>,
+        route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> Result<StackedMessage> {
         let assignment_batch = assignment_batches.get(node).ok_or_else(|| {
             anyhow::anyhow!(
@@ -4570,8 +4595,6 @@ where
         })?;
         self.last_stats.directed_message_count += assignment_batch.first_points.len();
         self.last_stats.batched_message_contract_count += 1;
-        #[cfg(test)]
-        let phase_start = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
         let diag_start = std::time::Instant::now();
         #[cfg(feature = "diagnostics")]
@@ -4592,6 +4615,7 @@ where
                 plan,
                 assignment_batches,
                 messages,
+                route,
             );
         };
         let parent = parent.clone();
@@ -4639,33 +4663,21 @@ where
                 .entry(directed_edge.clone())
                 .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_max_bytes));
             if let Some(positions) = cache.get_all_cached(&keys) {
-                #[cfg(test)]
-                phase_timing::add(&phase_timing::KEY_AND_LOOKUP_NS, phase_start.elapsed());
-                #[cfg(test)]
-                let reconstruct_start = std::time::Instant::now();
                 let mut data = Vec::with_capacity(bond_dim * keys.len());
                 for position in positions {
                     data.extend_from_slice(cache.column(position));
-                }
-                #[cfg(test)]
-                {
-                    use std::sync::atomic::Ordering;
-                    phase_timing::RECONSTRUCT_VALUES
-                        .fetch_add(data.len() as u64, Ordering::Relaxed);
                 }
                 let (tensor, raw_values) = if self.raw_messages {
                     (None, Some(data))
                 } else {
                     (
-                        Some(tensor_from_cached_values(
+                        Some(route.tensor_from_cached_values(
                             vec![bond_index, assignment_index.clone()],
                             data,
                         )?),
                         None,
                     )
                 };
-                #[cfg(test)]
-                phase_timing::add(&phase_timing::RECONSTRUCT_NS, reconstruct_start.elapsed());
                 self.last_stats.message_cache_hits += keys.len();
                 #[cfg(feature = "diagnostics")]
                 diagnostics::record_guard(
@@ -4695,8 +4707,6 @@ where
             }
             (hit_keys, missing_indices)
         };
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::KEY_AND_LOOKUP_NS, phase_start.elapsed());
         self.last_stats.message_cache_hits += hit_keys.len();
         self.last_stats.message_cache_misses += missing_indices.len();
         #[cfg(feature = "diagnostics")]
@@ -4729,6 +4739,7 @@ where
                     plan,
                     assignment_batches,
                     messages,
+                    route,
                 )?;
                 messages.insert(child, child_message);
             }
@@ -4748,13 +4759,15 @@ where
             .iter()
             .map(|&i| keys[i].clone())
             .collect::<Vec<_>>();
-        #[cfg(test)]
-        let contract_start = std::time::Instant::now();
         let tensor_kind = tensor_scalar_kind(tensor_for_node(self.tree, node)?)?;
         let missing_values: Vec<CachedScalar> = match tensor_kind {
             ScalarKind::C64 => {
-                let leaf =
-                    self.try_compute_leaf_message_complex_raw(node, values, &missing_points)?;
+                let leaf = self.try_compute_leaf_message_complex_raw(
+                    node,
+                    values,
+                    &missing_points,
+                    route,
+                )?;
                 let chain = if leaf.is_some() {
                     leaf
                 } else {
@@ -4765,6 +4778,7 @@ where
                         plan,
                         assignment_batches,
                         messages,
+                        route,
                     )?
                 };
                 let branch = if chain.is_some() {
@@ -4777,6 +4791,7 @@ where
                         plan,
                         assignment_batches,
                         messages,
+                        route,
                     )?
                 };
                 let raw_missing_values = if branch.is_some() {
@@ -4794,6 +4809,7 @@ where
                             CachedScalar::C64(value) => Some(*value),
                             _ => None,
                         },
+                        route,
                     )?
                 };
                 match raw_missing_values {
@@ -4805,11 +4821,13 @@ where
                         plan,
                         assignment_batches,
                         messages,
+                        route,
                     )?,
                 }
             }
             ScalarKind::F64 => {
-                let leaf = self.try_compute_leaf_message_raw(node, values, &missing_points)?;
+                let leaf =
+                    self.try_compute_leaf_message_raw(node, values, &missing_points, route)?;
                 let chain = if leaf.is_some() {
                     leaf
                 } else {
@@ -4820,6 +4838,7 @@ where
                         plan,
                         assignment_batches,
                         messages,
+                        route,
                     )?
                 };
                 let branch = if chain.is_some() {
@@ -4832,6 +4851,7 @@ where
                         plan,
                         assignment_batches,
                         messages,
+                        route,
                     )?
                 };
                 let raw_missing_values = if branch.is_some() {
@@ -4849,6 +4869,7 @@ where
                             CachedScalar::F64(value) => Some(*value),
                             _ => None,
                         },
+                        route,
                     )?
                 };
                 match raw_missing_values {
@@ -4860,6 +4881,7 @@ where
                         plan,
                         assignment_batches,
                         messages,
+                        route,
                     )?,
                 }
             }
@@ -4870,13 +4892,10 @@ where
                 plan,
                 assignment_batches,
                 messages,
+                route,
             )?,
         };
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::CONTRACT_NS, contract_start.elapsed());
 
-        #[cfg(test)]
-        let insert_start = std::time::Instant::now();
         // Same reasoning as the `get_all_cached` call above: the entry for
         // `node` was inserted at the top of this function and nothing
         // between there and here removes it, so `entry().or_insert_with()`
@@ -4898,11 +4917,7 @@ where
                 })
                 .collect::<Result<Vec<_>>>()
         })?;
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::INSERT_NS, insert_start.elapsed());
 
-        #[cfg(test)]
-        let reconstruct_start = std::time::Instant::now();
         // Merge cached and uncached columns in the original point order. A
         // finite budget may return `CacheSlot::Uncached`; those values are
         // still valid for this call and must not be looked up again.
@@ -4945,24 +4960,18 @@ where
             missing_slot_iter.next().is_none(),
             "TreeTNCachedEvaluator::evaluate_batched: extra cache slots after merge"
         );
-        #[cfg(test)]
-        {
-            use std::sync::atomic::Ordering;
-            phase_timing::RECONSTRUCT_VALUES.fetch_add(data.len() as u64, Ordering::Relaxed);
-        }
-        let (tensor, raw_values) = if self.raw_messages {
-            (None, Some(data))
-        } else {
-            (
-                Some(tensor_from_cached_values(
-                    vec![bond_index, assignment_index.clone()],
-                    data,
-                )?),
-                None,
-            )
-        };
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::RECONSTRUCT_NS, reconstruct_start.elapsed());
+        let (tensor, raw_values) =
+            if self.raw_messages {
+                (None, Some(data))
+            } else {
+                (
+                    Some(route.tensor_from_cached_values(
+                        vec![bond_index, assignment_index.clone()],
+                        data,
+                    )?),
+                    None,
+                )
+            };
         #[cfg(feature = "diagnostics")]
         diagnostics::record_guard(
             &diag_node,
@@ -4988,6 +4997,7 @@ where
     /// should carry) -- not necessarily the node's whole assignment batch, so
     /// a caller with a persistent cache can pass only the points it still
     /// needs to compute.
+    #[allow(clippy::too_many_arguments)]
     fn compute_stacked_message(
         &self,
         node: &V,
@@ -4996,26 +5006,28 @@ where
         plan: &RootedMessagePlan<V>,
         assignment_batches: &HashMap<V, AssignmentBatch>,
         messages: &HashMap<V, StackedMessage>,
+        route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> Result<StackedMessage> {
         let assignment_index = DynIndex::new_dyn(points.len());
         let tensor = tensor_for_node(self.tree, node)?;
         let mut local_slices = Vec::with_capacity(points.len());
         for point in points.iter().copied() {
             let index_vals = self.index_vals_for_point(node, values, point)?;
-            local_slices.push(slice_tensor(tensor, &index_vals).with_context(|| {
+            local_slices.push(slice_tensor(tensor, &index_vals, route).with_context(|| {
                 format!(
                     "TreeTNCachedEvaluator::evaluate_batched: failed to slice message node {:?}",
                     node
                 )
             })?);
         }
-        let local_message = stack_tensors_with_assignment_index(&assignment_index, &local_slices)
-            .with_context(|| {
-            format!(
+        let local_message =
+            stack_tensors_with_assignment_index(&assignment_index, &local_slices, route)
+                .with_context(|| {
+                    format!(
                 "TreeTNCachedEvaluator::evaluate_batched: failed to stack message node {:?}",
                 node
             )
-        })?;
+                })?;
 
         let children = plan.children.get(node).map(Vec::as_slice).unwrap_or(&[]);
         if children.is_empty() {
@@ -5061,16 +5073,17 @@ where
                 &child_message.assignment_index,
                 &assignment_index,
                 &selected_assignments,
+                route,
             )?);
         }
 
         let retain = [assignment_index.clone()];
         let options = ContractionOptions::new().with_retain_indices(&retain);
         let operand_refs = operands.iter().collect::<Vec<_>>();
-        let tensor = contract_with_options(&operand_refs, options).context(
+        let tensor = route.contract_nary(&operand_refs, options).context(
             "TreeTNCachedEvaluator::evaluate_batched: failed to contract batched directed message",
         )?;
-        let tensor = ensure_assignment_axis_last(tensor, &assignment_index)?;
+        let tensor = ensure_assignment_axis_last(tensor, &assignment_index, route)?;
         Ok(StackedMessage {
             assignment_index,
             tensor: Some(tensor),
@@ -5122,7 +5135,7 @@ where
             ScalarKind::F32 | ScalarKind::C32 => return Ok(None),
             ScalarKind::F64 => {}
             ScalarKind::C64 => {
-                let result = center_tensor.with_dense_slice::<Complex64, _>(|center_raw| {
+                return with_host_values::<Complex64, _>(center_tensor, |center_raw| {
                     let mut result = Vec::with_capacity(n_points);
                     for point in 0..n_points {
                         let physical_value = value_at(
@@ -5139,9 +5152,9 @@ where
                                 anyhow::anyhow!("missing centre assignment for point {point}")
                             })?;
                         ensure!(
-                            assignment < assignment_dim,
-                            "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
-                        );
+                        assignment < assignment_dim,
+                        "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
+                    );
                         let mut sum = Complex64::new(0.0, 0.0);
                         for bond in 0..bond_dim {
                             let center_offset = physical_value * center_strides[physical_axis]
@@ -5157,12 +5170,11 @@ where
                         result.push(CachedScalar::C64(sum));
                     }
                     Ok(Some(result))
-                })??;
-                return Ok(result);
+                });
             }
         }
 
-        let result = center_tensor.with_dense_slice::<f64, _>(|center_raw| {
+        with_host_values::<f64, _>(center_tensor, |center_raw| {
             let mut result = Vec::with_capacity(n_points);
             for point in 0..n_points {
                 let physical_value = value_at(
@@ -5179,9 +5191,9 @@ where
                         anyhow::anyhow!("missing centre assignment for point {point}")
                     })?;
                 ensure!(
-                    assignment < assignment_dim,
-                    "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
-                );
+                assignment < assignment_dim,
+                "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
+            );
                 let mut sum = 0.0;
                 for bond in 0..bond_dim {
                     let center_offset = physical_value * center_strides[physical_axis]
@@ -5196,8 +5208,7 @@ where
                 result.push(CachedScalar::F64(sum));
             }
             Ok(Some(result))
-        })??;
-        Ok(result)
+        })
     }
 
     /// Evaluates a one-component centre on a path without constructing a
@@ -5274,8 +5285,8 @@ where
             ScalarKind::F32 | ScalarKind::C32 => return Ok(None),
             ScalarKind::F64 => {}
             ScalarKind::C64 => {
-                let result = center_tensor.with_dense_slice::<Complex64, _>(|center_raw| {
-                    environment_tensor.with_dense_slice::<Complex64, _>(|environment_raw| {
+                return with_host_values::<Complex64, _>(center_tensor, |center_raw| {
+                    with_host_values::<Complex64, _>(environment_tensor, |environment_raw| {
                         let mut result = Vec::with_capacity(n_points);
                         for point in 0..n_points {
                             let physical_value = value_at(
@@ -5292,30 +5303,29 @@ where
                                     anyhow::anyhow!("missing centre assignment for point {point}")
                                 })?;
                             ensure!(
-                                assignment < assignment_dim,
-                                "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
-                            );
+                        assignment < assignment_dim,
+                        "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
+                    );
                             let mut sum = Complex64::new(0.0, 0.0);
                             for bond in 0..bond_dim {
-                                let center_offset =
-                                    physical_value * center_strides[physical_axis]
-                                        + bond * center_strides[bond_axis];
-                                let environment_offset =
-                                    bond * environment_strides[environment_bond_axis]
-                                        + assignment * environment_strides[assignment_axis];
-                                sum += center_raw[center_offset] * environment_raw[environment_offset];
+                                let center_offset = physical_value * center_strides[physical_axis]
+                                    + bond * center_strides[bond_axis];
+                                let environment_offset = bond
+                                    * environment_strides[environment_bond_axis]
+                                    + assignment * environment_strides[assignment_axis];
+                                sum +=
+                                    center_raw[center_offset] * environment_raw[environment_offset];
                             }
                             result.push(CachedScalar::C64(sum));
                         }
                         Ok(Some(result))
-                    })?
-                })??;
-                return Ok(result);
+                    })
+                });
             }
         }
 
-        let result = center_tensor.with_dense_slice::<f64, _>(|center_raw| {
-            environment_tensor.with_dense_slice::<f64, _>(|environment_raw| {
+        with_host_values::<f64, _>(center_tensor, |center_raw| {
+            with_host_values::<f64, _>(environment_tensor, |environment_raw| {
                 let mut result = Vec::with_capacity(n_points);
                 for point in 0..n_points {
                     let physical_value = value_at(
@@ -5328,26 +5338,26 @@ where
                         .point_to_assignment
                         .get(point)
                         .copied()
-                        .ok_or_else(|| anyhow::anyhow!("missing centre assignment for point {point}"))?;
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("missing centre assignment for point {point}")
+                        })?;
                     ensure!(
-                        assignment < assignment_dim,
-                        "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
-                    );
+                assignment < assignment_dim,
+                "centre assignment {assignment} is out of bounds for dimension {assignment_dim}"
+            );
                     let mut sum = 0.0;
                     for bond in 0..bond_dim {
                         let center_offset = physical_value * center_strides[physical_axis]
                             + bond * center_strides[bond_axis];
-                        let environment_offset =
-                            bond * environment_strides[environment_bond_axis]
-                                + assignment * environment_strides[assignment_axis];
+                        let environment_offset = bond * environment_strides[environment_bond_axis]
+                            + assignment * environment_strides[assignment_axis];
                         sum += center_raw[center_offset] * environment_raw[environment_offset];
                     }
                     result.push(CachedScalar::F64(sum));
                 }
                 Ok(Some(result))
-            })?
-        })??;
-        Ok(result)
+            })
+        })
     }
 
     /// Contracts a degree-2 or degree-3 center directly from raw core and
@@ -5365,8 +5375,6 @@ where
         component_batches: &[ComponentBatch<V>],
         environment_cache: &EnvironmentCache<V>,
     ) -> Result<Option<Vec<CachedScalar>>> {
-        #[cfg(test)]
-        let prelude_started = std::time::Instant::now();
         if component_batches.len() < 2 {
             return Ok(None);
         }
@@ -5400,18 +5408,11 @@ where
                 )
             })
             .collect::<Result<Vec<_>>>()?;
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::RAW_CENTER_PRELUDE_NS,
-            prelude_started.elapsed(),
-        );
 
         match tensor_scalar_kind(center_tensor)? {
             ScalarKind::F32 | ScalarKind::C32 => return Ok(None),
             ScalarKind::F64 => {}
             ScalarKind::C64 => {
-                #[cfg(test)]
-                let prep_started = std::time::Instant::now();
                 let Some(components) = self.raw_center_components::<Complex64>(
                     center,
                     component_batches,
@@ -5424,11 +5425,7 @@ where
                 else {
                     return Ok(None);
                 };
-                #[cfg(test)]
-                phase_timing::add(&phase_timing::RAW_CENTER_PREP_NS, prep_started.elapsed());
-                #[cfg(test)]
-                let contract_started = std::time::Instant::now();
-                let result = center_tensor.with_dense_slice::<Complex64, _>(|core| {
+                let result = with_host_values::<Complex64, _>(center_tensor, |core| {
                     contract_raw_center(
                         core,
                         &center_tensor.dims(),
@@ -5436,26 +5433,11 @@ where
                         &physical_values,
                         &components,
                     )
-                })??;
-                #[cfg(test)]
-                phase_timing::add(
-                    &phase_timing::RAW_CENTER_CONTRACT_NS,
-                    contract_started.elapsed(),
-                );
-                #[cfg(test)]
-                let result_started = std::time::Instant::now();
-                let result = result.into_iter().map(CachedScalar::C64).collect();
-                #[cfg(test)]
-                phase_timing::add(
-                    &phase_timing::RAW_CENTER_RESULT_NS,
-                    result_started.elapsed(),
-                );
-                return Ok(Some(result));
+                })?;
+                return Ok(Some(result.into_iter().map(CachedScalar::C64).collect()));
             }
         }
 
-        #[cfg(test)]
-        let prep_started = std::time::Instant::now();
         let Some(components) = self.raw_center_components::<f64>(
             center,
             component_batches,
@@ -5468,11 +5450,7 @@ where
         else {
             return Ok(None);
         };
-        #[cfg(test)]
-        phase_timing::add(&phase_timing::RAW_CENTER_PREP_NS, prep_started.elapsed());
-        #[cfg(test)]
-        let contract_started = std::time::Instant::now();
-        let result = center_tensor.with_dense_slice::<f64, _>(|core| {
+        let result = with_host_values::<f64, _>(center_tensor, |core| {
             contract_raw_center(
                 core,
                 &center_tensor.dims(),
@@ -5480,21 +5458,8 @@ where
                 &physical_values,
                 &components,
             )
-        })??;
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::RAW_CENTER_CONTRACT_NS,
-            contract_started.elapsed(),
-        );
-        #[cfg(test)]
-        let result_started = std::time::Instant::now();
-        let result = result.into_iter().map(CachedScalar::F64).collect();
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::RAW_CENTER_RESULT_NS,
-            result_started.elapsed(),
-        );
-        Ok(Some(result))
+        })?;
+        Ok(Some(result.into_iter().map(CachedScalar::F64).collect()))
     }
 
     fn raw_center_components<T>(
@@ -5541,14 +5506,6 @@ where
             let Some(values) = raw_values.iter().map(&convert).collect::<Option<Vec<_>>>() else {
                 return Ok(None);
             };
-            #[cfg(test)]
-            {
-                use std::sync::atomic::Ordering;
-                phase_timing::RAW_CENTER_VALUES_COPIED
-                    .fetch_add(values.len() as u64, Ordering::Relaxed);
-                phase_timing::RAW_CENTER_ASSIGNMENTS_COPIED
-                    .fetch_add(batch.point_to_assignment.len() as u64, Ordering::Relaxed);
-            }
             ensure!(
                 dim > 0 && values.len() % dim == 0,
                 "raw center environment length {} is incompatible with bond dimension {dim}",
@@ -5586,6 +5543,7 @@ where
         values: ColMajorArrayRef<'_, usize>,
         component_batches: &[ComponentBatch<V>],
         environment_cache: &EnvironmentCache<V>,
+        route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> Result<Vec<CachedScalar>> {
         let Some(cut_batch) = component_batches.first() else {
             return self.contract_center_for_points(
@@ -5593,6 +5551,7 @@ where
                 values,
                 component_batches,
                 environment_cache,
+                route,
             );
         };
         let cut_neighbor = cut_batch.neighbor.clone();
@@ -5617,20 +5576,21 @@ where
                 .get(&reverse_edge)
                 .is_some_and(|cache| center_batch.keys.iter().all(|key| cache.contains(key)));
             if fully_cached {
-                HashMap::from([(center.clone(), center_batch)])
+                HashMap::from_iter([(center.clone(), center_batch)])
             } else {
                 self.build_message_assignment_batches(&reverse_plan, values)?
             }
         } else {
             self.build_message_assignment_batches(&reverse_plan, values)?
         };
-        let mut reverse_messages = HashMap::new();
+        let mut reverse_messages = HashMap::default();
         let center_message = self.get_or_compute_node_message(
             center,
             values,
             &reverse_plan,
             &reverse_assignments,
             &mut reverse_messages,
+            route,
         )?;
         let center_assignment_batch = reverse_assignments.get(center).ok_or_else(|| {
             anyhow::anyhow!(
@@ -5663,6 +5623,7 @@ where
                 values,
                 component_batches,
                 environment_cache,
+                route,
             );
         }
 
@@ -5675,6 +5636,7 @@ where
                 values,
                 component_batches,
                 environment_cache,
+                route,
             );
         }
         let assembly = EdgeCutAssembly {
@@ -5720,7 +5682,12 @@ where
         decode: impl Fn(&CachedScalar) -> Option<T>,
     ) -> Result<Vec<T>>
     where
-        T: TensorElement + Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+        T: TensorElement
+            + StorageScalar
+            + Copy
+            + Default
+            + std::ops::AddAssign
+            + std::ops::Mul<Output = T>,
     {
         let left_values = stacked_message_values_typed(assembly.cut_environment, &decode)?;
         let right_values = stacked_message_values_typed(assembly.center_message, &decode)?;
@@ -5786,6 +5753,7 @@ where
         values: ColMajorArrayRef<'_, usize>,
         component_batches: &[ComponentBatch<V>],
         environment_cache: &EnvironmentCache<V>,
+        route: &mut CachedEvaluationRoute<'_, '_>,
     ) -> Result<Vec<CachedScalar>> {
         let n_points = values.shape()[1];
         if n_points == 0 {
@@ -5796,18 +5764,11 @@ where
         {
             return Ok(result);
         }
-        #[cfg(test)]
-        let raw_dispatch_started = std::time::Instant::now();
         let raw_internal_result = self.try_contract_internal_center_raw(
             center,
             values,
             component_batches,
             environment_cache,
-        );
-        #[cfg(test)]
-        phase_timing::add(
-            &phase_timing::RAW_CENTER_DISPATCH_NS,
-            raw_dispatch_started.elapsed(),
         );
         if let Some(result) = raw_internal_result? {
             return Ok(result);
@@ -5838,14 +5799,16 @@ where
                 &center_index_vals,
                 "TreeTNCachedEvaluator::evaluate_batched",
             )?;
-            center_slices.push(slice_tensor(center_tensor, &center_index_vals).context(
-                "TreeTNCachedEvaluator::evaluate_batched: failed to slice center tensor",
-            )?);
+            center_slices.push(
+                slice_tensor(center_tensor, &center_index_vals, route).context(
+                    "TreeTNCachedEvaluator::evaluate_batched: failed to slice center tensor",
+                )?,
+            );
         }
 
         let mut operands = Vec::with_capacity(1 + component_batches.len());
         operands.push(
-            stack_tensors_with_assignment_index(&point_index, &center_slices).context(
+            stack_tensors_with_assignment_index(&point_index, &center_slices, route).context(
                 "TreeTNCachedEvaluator::evaluate_batched: failed to stack center tensor",
             )?,
         );
@@ -5866,6 +5829,7 @@ where
                     &environment.assignment_index,
                     &point_index,
                     &batch.point_to_assignment,
+                    route,
                 )
                 .context(
                     "TreeTNCachedEvaluator::evaluate_batched: failed to gather center environment",
@@ -5879,11 +5843,11 @@ where
             let retain = [point_index.clone()];
             let options = ContractionOptions::new().with_retain_indices(&retain);
             let operand_refs = operands.iter().collect::<Vec<_>>();
-            contract_with_options(&operand_refs, options).context(
+            route.contract_nary(&operand_refs, options).context(
                 "TreeTNCachedEvaluator::evaluate_batched: failed to contract center batch",
             )?
         };
-        let result_tensor = ensure_assignment_axis_last(result_tensor, &point_index)?;
+        let result_tensor = ensure_assignment_axis_last(result_tensor, &point_index, route)?;
         anyhow::ensure!(
             result_tensor.indices() == std::slice::from_ref(&point_index),
             "TreeTNCachedEvaluator::evaluate_batched: center contraction left non-scalar indices {:?}",
@@ -5919,17 +5883,6 @@ where
     #[cfg(test)]
     fn stats_for_test(&self) -> CachedEvaluationStats {
         self.last_stats.clone()
-    }
-
-    /// Number of rooted traversal plans memoized in the shared plan.
-    #[cfg(test)]
-    fn rooted_plan_count_for_test(&self) -> usize {
-        self.plan
-            .inner
-            .rooted_plans
-            .lock()
-            .map(|plans| plans.len())
-            .unwrap_or_default()
     }
 }
 
@@ -5981,6 +5934,61 @@ fn tensor_from_cached_values(
         indices,
         values.into_iter().map(CachedScalar::into_any).collect(),
     )?)
+}
+
+/// Publish cached message values as compact host storage without entering a runtime.
+///
+/// The session route uses this instead of [`tensor_from_cached_values`], whose
+/// `IdxTensor::from_dense` publication adopts an eager value from the
+/// process-global runtime. Values keep their own dtype, and the result is
+/// compact, so later indexed operations on it stay runtime-free.
+fn tensor_from_cached_values_compact(
+    indices: Vec<DynIndex>,
+    values: Vec<CachedScalar>,
+) -> Result<IdxTensor> {
+    if let Some(data) = values
+        .iter()
+        .map(|value| match value {
+            CachedScalar::F32(value) => Some(*value),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+    {
+        return IdxTensor::from_dense_compact(indices, data).map_err(anyhow::Error::from);
+    }
+    if let Some(data) = values
+        .iter()
+        .map(|value| match value {
+            CachedScalar::F64(value) => Some(*value),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+    {
+        return IdxTensor::from_dense_compact(indices, data).map_err(anyhow::Error::from);
+    }
+    if let Some(data) = values
+        .iter()
+        .map(|value| match value {
+            CachedScalar::C32(value) => Some(*value),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+    {
+        return IdxTensor::from_dense_compact(indices, data).map_err(anyhow::Error::from);
+    }
+    if let Some(data) = values
+        .iter()
+        .map(|value| match value {
+            CachedScalar::C64(value) => Some(*value),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+    {
+        return IdxTensor::from_dense_compact(indices, data).map_err(anyhow::Error::from);
+    }
+    Err(anyhow::anyhow!(
+        "cached message contains mixed scalar kinds; a session message needs one dtype"
+    ))
 }
 
 // [AI Supplied] Test-only observation seam for the Hiroshi #671 work-count
@@ -6496,6 +6504,7 @@ where
 /// Returns an error when a child column list has the wrong length, an offset
 /// leaves `raw`, or the backend rejects the multiplication.
 fn grouped_multi_branch_message_contraction<T>(
+    route: &mut CachedEvaluationRoute<'_, '_>,
     spec: &MultiBranchContractionSpec,
     raw: &[T],
     physical_values: &[usize],
@@ -6516,7 +6525,7 @@ where
         .prepared_elements()?
         .checked_div(first_dim)
         .ok_or_else(|| anyhow::anyhow!("multi-branch child dimension must be positive"))?;
-    let mut groups = HashMap::<usize, Vec<usize>>::new();
+    let mut groups = HashMap::<usize, Vec<usize>>::default();
     for (point, &physical_value) in physical_values.iter().enumerate() {
         groups.entry(physical_value).or_default().push(point);
     }
@@ -6549,11 +6558,10 @@ where
         });
         #[cfg(feature = "diagnostics")]
         let matmul_started = std::time::Instant::now();
-        let intermediate = mat_mul_owned(
+        let intermediate = route.mat_mul_owned(
             Matrix::from_col_major_vec(rows, first_dim, left),
             Matrix::from_col_major_vec(first_dim, points.len(), right),
-        )
-        .map_err(anyhow::Error::from)?;
+        )?;
         #[cfg(feature = "diagnostics")]
         diagnostics::record_kernel(diagnostics::KernelDiagnostics {
             matmul_ns: diagnostics::nanos(matmul_started.elapsed()),
@@ -6604,6 +6612,7 @@ where
 ///
 /// Propagates the selected kernel's failures.
 fn multi_branch_message_contraction<T>(
+    route: &mut CachedEvaluationRoute<'_, '_>,
     spec: &MultiBranchContractionSpec,
     raw: &[T],
     physical_values: &[usize],
@@ -6628,9 +6637,17 @@ where
     }
     #[cfg(test)]
     record_multi_branch_route(true);
-    grouped_multi_branch_message_contraction(spec, raw, physical_values, child_columns)
+    grouped_multi_branch_message_contraction(route, spec, raw, physical_values, child_columns)
 }
 
+/// The chain message of every point, one point at a time: `output[point][parent] = sum over child of
+/// raw[physical, parent, child] * child_columns[point][child]`.
+///
+/// This serves the calls too small for the grouped matrix product, among them every one-point readout. Each output
+/// value is the sum over the child values in ascending order, started from zero, so the rounding does not depend on
+/// how the loops below are arranged. The child values are the outer loop: the `parent_dim` running sums are
+/// independent, which lets the adds overlap (a single sum is a chain of dependent adds), and a contiguous parent
+/// axis is read as a slice.
 fn scalar_chain_message_contraction<T>(
     spec: ChainContractionSpec,
     raw: &[T],
@@ -6652,36 +6669,55 @@ where
     let output_len = point_count
         .checked_mul(parent_dim)
         .ok_or_else(|| anyhow::anyhow!("chain parent-message shape overflows usize"))?;
+    let child_len = point_count
+        .checked_mul(child_dim)
+        .ok_or_else(|| anyhow::anyhow!("chain child-message shape overflows usize"))?;
+    anyhow::ensure!(
+        child_columns.len() >= child_len,
+        "chain child-message has {} values, {point_count} points x {child_dim} child values need {child_len}",
+        child_columns.len()
+    );
+    let (physical_stride, parent_stride, child_stride) = (
+        strides[physical_axis],
+        strides[parent_axis],
+        strides[child_axis],
+    );
     let mut output = vec![T::default(); output_len];
+    if parent_dim == 0 || child_dim == 0 {
+        return Ok(output);
+    }
+    // The offset of the last value this call reads for a physical value; the strides are non-negative, so it is
+    // the largest.
+    let span = (parent_dim - 1)
+        .checked_mul(parent_stride)
+        .and_then(|parent| parent.checked_add((child_dim - 1).checked_mul(child_stride)?))
+        .ok_or_else(|| anyhow::anyhow!("chain tensor offset overflows usize"))?;
     for (point, &physical_value) in physical_values.iter().enumerate() {
-        for parent_value in 0..parent_dim {
-            let mut sum = T::default();
-            for child_value in 0..child_dim {
-                let mut axis_values = [0usize; 3];
-                axis_values[physical_axis] = physical_value;
-                axis_values[parent_axis] = parent_value;
-                axis_values[child_axis] = child_value;
-                let flat = axis_values[0]
-                    .checked_mul(strides[0])
-                    .and_then(|value| value.checked_add(axis_values[1].checked_mul(strides[1])?))
-                    .and_then(|value| value.checked_add(axis_values[2].checked_mul(strides[2])?))
-                    .ok_or_else(|| anyhow::anyhow!("chain tensor offset overflows usize"))?;
-                let child_offset = point
-                    .checked_mul(child_dim)
-                    .and_then(|value| value.checked_add(child_value))
-                    .ok_or_else(|| anyhow::anyhow!("chain child offset overflows usize"))?;
-                sum += *raw
-                    .get(flat)
-                    .ok_or_else(|| anyhow::anyhow!("chain tensor offset is out of bounds"))?
-                    * *child_columns.get(child_offset).ok_or_else(|| {
-                        anyhow::anyhow!("chain child column offset is out of bounds")
-                    })?;
+        let base = physical_value
+            .checked_mul(physical_stride)
+            .ok_or_else(|| anyhow::anyhow!("chain tensor offset overflows usize"))?;
+        let last = base
+            .checked_add(span)
+            .ok_or_else(|| anyhow::anyhow!("chain tensor offset overflows usize"))?;
+        anyhow::ensure!(
+            last < raw.len(),
+            "chain tensor offset {last} is out of bounds"
+        );
+        // INVARIANT: every offset below is `base + parent * parent_stride + child * child_stride` with
+        // `parent < parent_dim` and `child < child_dim`, so it is at most `last`, which is checked above.
+        let columns = &child_columns[point * child_dim..(point + 1) * child_dim];
+        let sums = &mut output[point * parent_dim..(point + 1) * parent_dim];
+        for (child, &child_value) in columns.iter().enumerate() {
+            let start = base + child * child_stride;
+            if parent_stride == 1 {
+                for (sum, &value) in sums.iter_mut().zip(&raw[start..start + parent_dim]) {
+                    *sum += value * child_value;
+                }
+            } else {
+                for (parent, sum) in sums.iter_mut().enumerate() {
+                    *sum += raw[start + parent * parent_stride] * child_value;
+                }
             }
-            let destination = point
-                .checked_mul(parent_dim)
-                .and_then(|value| value.checked_add(parent_value))
-                .ok_or_else(|| anyhow::anyhow!("chain output offset overflows usize"))?;
-            output[destination] = sum;
         }
     }
     Ok(output)
@@ -6753,7 +6789,7 @@ where
         total_site_indices
     );
 
-    let mut seen = HashSet::with_capacity(indices.len());
+    let mut seen = HashSet::with_capacity_and_hasher(indices.len(), Default::default());
     for index in indices {
         anyhow::ensure!(
             seen.insert(index.clone()),
@@ -6762,8 +6798,8 @@ where
         );
     }
 
-    let mut entries_by_node: HashMap<V, Vec<SiteEntry>> = HashMap::new();
-    let mut tensor_indices_by_node: HashMap<V, Vec<DynIndex>> = HashMap::new();
+    let mut entries_by_node: HashMap<V, Vec<SiteEntry>> = HashMap::default();
+    let mut tensor_indices_by_node: HashMap<V, Vec<DynIndex>> = HashMap::default();
     for (input_position, index) in indices.iter().enumerate() {
         let node_name = tree
             .site_index_network()
@@ -6800,7 +6836,8 @@ where
         entries.sort_by_key(|entry| entry.local_axis);
     }
 
-    let mut local_layouts_by_node = HashMap::with_capacity(tree.node_count());
+    let mut local_layouts_by_node =
+        HashMap::with_capacity_and_hasher(tree.node_count(), Default::default());
     let mut node_names = tree.node_names();
     node_names.sort();
     for node in node_names {
@@ -6884,7 +6921,8 @@ where
     let neighbors = sorted_neighbors(tree);
     let mut node_names = tree.node_names();
     node_names.sort();
-    let mut directed_layouts = HashMap::with_capacity(tree.edge_count() * 2);
+    let mut directed_layouts =
+        HashMap::with_capacity_and_hasher(tree.edge_count() * 2, Default::default());
     for node in node_names {
         let node_neighbors = neighbors
             .get(&node)
@@ -6892,7 +6930,7 @@ where
         for neighbor in node_neighbors {
             let mut input_positions = Vec::new();
             let mut dimensions = Vec::new();
-            let mut visited = HashSet::new();
+            let mut visited = HashSet::default();
             let child_nodes = append_directed_component_layout(
                 layout,
                 &node,
@@ -6935,25 +6973,6 @@ fn validate_values_shape(
         n_indices
     );
     Ok(())
-}
-
-fn value_at(
-    values: ColMajorArrayRef<'_, usize>,
-    input_position: usize,
-    point: usize,
-    context: &str,
-) -> Result<usize> {
-    values
-        .get(&[input_position, point])
-        .copied()
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "{context}: missing coordinate at row {} point {} for shape {:?}",
-                input_position,
-                point,
-                values.shape()
-            )
-        })
 }
 
 /// Bounds-checks one point's local coordinates against its node's physical
@@ -7035,8 +7054,9 @@ fn tensor_scalar_kind(tensor: &IdxTensor) -> Result<ScalarKind> {
 /// payloads for the duration of the gather.
 ///
 /// Raw cached messages still need enum decoding, but the decoding is limited
-/// to the requested columns. An `IdxTensor` message uses `with_dense_slice` so
-/// ordinary host-contiguous payloads do not first materialize a full copy.
+/// to the requested columns. An `IdxTensor` message reads its compact host
+/// payload through `with_dense_host_slice`, so a session route does not enter the
+/// process-global eager runtime for a read.
 fn gather_message_columns<T>(
     message: &StackedMessage,
     child_dim: usize,
@@ -7046,7 +7066,7 @@ fn gather_message_columns<T>(
     context: &str,
 ) -> Result<Option<Vec<T>>>
 where
-    T: TensorElement + Copy,
+    T: TensorElement + Copy + StorageScalar,
 {
     if let Some(raw_values) = message.raw_values.as_ref() {
         let mut columns = Vec::with_capacity(child_dim * points.len());
@@ -7080,34 +7100,37 @@ where
     let Some(tensor) = message.tensor.as_ref() else {
         return Ok(None);
     };
-    let columns = tensor
-        .with_dense_slice::<T, _>(|raw_values| {
-            let mut columns = Vec::with_capacity(child_dim * points.len());
-            for &point in points {
-                let assignment = assignment_batch
-                    .point_to_assignment
-                    .get(point)
-                    .copied()
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("{context}: missing child assignment for point {point}")
-                    })?;
-                let start = assignment.checked_mul(child_dim).ok_or_else(|| {
-                    anyhow::anyhow!("{context}: child assignment offset overflows usize")
+    with_host_values::<T, _>(tensor, |raw_values| {
+        let mut columns = Vec::with_capacity(child_dim * points.len());
+        for &point in points {
+            let assignment = assignment_batch
+                .point_to_assignment
+                .get(point)
+                .copied()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("{context}: missing child assignment for point {point}")
                 })?;
-                let end = start.checked_add(child_dim).ok_or_else(|| {
-                    anyhow::anyhow!("{context}: child assignment end overflows usize")
-                })?;
-                columns.extend_from_slice(raw_values.get(start..end).ok_or_else(|| {
+            let start = assignment.checked_mul(child_dim).ok_or_else(|| {
+                anyhow::anyhow!("{context}: child assignment offset overflows usize")
+            })?;
+            let end = start.checked_add(child_dim).ok_or_else(|| {
+                anyhow::anyhow!("{context}: child assignment end overflows usize")
+            })?;
+            columns.extend_from_slice(
+                raw_values.get(start..end).ok_or_else(|| {
                     anyhow::anyhow!("{context}: child assignment is out of bounds")
-                })?);
-            }
-            Ok::<_, anyhow::Error>(Some(columns))
-        })
-        .map_err(anyhow::Error::from)??;
-    Ok(columns)
+                })?,
+            );
+        }
+        Ok(Some(columns))
+    })
 }
 
-fn slice_tensor(tensor: &IdxTensor, index_vals: &[(DynIndex, usize)]) -> Result<IdxTensor> {
+fn slice_tensor(
+    tensor: &IdxTensor,
+    index_vals: &[(DynIndex, usize)],
+    route: &mut CachedEvaluationRoute<'_, '_>,
+) -> Result<IdxTensor> {
     if index_vals.is_empty() {
         return Ok(tensor.clone());
     }
@@ -7120,31 +7143,48 @@ fn slice_tensor(tensor: &IdxTensor, index_vals: &[(DynIndex, usize)]) -> Result<
         .iter()
         .map(|(_, position)| *position)
         .collect::<Vec<_>>();
+    route.select_indices(tensor, &selected_indices, &positions)
+}
+
+/// Runs `read` on the dense host values of `tensor` without copying them.
+///
+/// A read-only path borrows the payload through
+/// [`IdxTensor::with_dense_host_slice`], which, like `dense_host_values`, does
+/// not enter a runtime for compact host storage. A path that keeps the values
+/// beyond the call uses `dense_host_values`.
+fn with_host_values<T, R>(tensor: &IdxTensor, read: impl FnOnce(&[T]) -> Result<R>) -> Result<R>
+where
+    T: StorageScalar,
+{
     tensor
-        .select_indices(&selected_indices, &positions)
-        .map_err(anyhow::Error::from)
+        .with_dense_host_slice::<T, _>(read)
+        .map_err(anyhow::Error::from)?
 }
 
 fn tensor_values_any(tensor: &IdxTensor) -> Result<Vec<AnyScalar>> {
     if tensor.is_f32() {
         tensor
-            .to_vec::<f32>()
-            .map(|values| values.into_iter().map(AnyScalar::from_value).collect())
+            .with_dense_host_slice::<f32, _>(|values| {
+                values.iter().copied().map(AnyScalar::from_value).collect()
+            })
             .map_err(anyhow::Error::from)
     } else if tensor.is_f64() {
         tensor
-            .to_vec::<f64>()
-            .map(|values| values.into_iter().map(AnyScalar::from_value).collect())
+            .with_dense_host_slice::<f64, _>(|values| {
+                values.iter().copied().map(AnyScalar::from_value).collect()
+            })
             .map_err(anyhow::Error::from)
     } else if tensor.is_c32() {
         tensor
-            .to_vec::<Complex32>()
-            .map(|values| values.into_iter().map(AnyScalar::from_value).collect())
+            .with_dense_host_slice::<Complex32, _>(|values| {
+                values.iter().copied().map(AnyScalar::from_value).collect()
+            })
             .map_err(anyhow::Error::from)
     } else if tensor.is_c64() {
         tensor
-            .to_vec::<Complex64>()
-            .map(|values| values.into_iter().map(AnyScalar::from_value).collect())
+            .with_dense_host_slice::<Complex64, _>(|values| {
+                values.iter().copied().map(AnyScalar::from_value).collect()
+            })
             .map_err(anyhow::Error::from)
     } else {
         bail!(
@@ -7219,7 +7259,7 @@ fn stacked_message_values_typed<T>(
     decode: impl Fn(&CachedScalar) -> Option<T>,
 ) -> Result<Vec<T>>
 where
-    T: TensorElement + Copy,
+    T: TensorElement + Copy + StorageScalar,
 {
     if let Some(raw_values) = message.raw_values.as_ref() {
         return raw_values
@@ -7235,9 +7275,7 @@ where
         .tensor
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("stacked message has no values"))?;
-    tensor
-        .with_dense_slice::<T, _>(|raw_values| Ok(raw_values.to_vec()))
-        .map_err(anyhow::Error::from)?
+    tensor.dense_host_values::<T>().map_err(anyhow::Error::from)
 }
 
 fn ensure_typed_message_storage_shape<T>(
@@ -7260,23 +7298,27 @@ fn ensure_typed_message_storage_shape<T>(
 fn tensor_values_cached(tensor: &IdxTensor) -> Result<Vec<CachedScalar>> {
     if tensor.is_f32() {
         tensor
-            .to_vec::<f32>()
-            .map(|values| values.into_iter().map(CachedScalar::F32).collect())
+            .with_dense_host_slice::<f32, _>(|values| {
+                values.iter().copied().map(CachedScalar::F32).collect()
+            })
             .map_err(anyhow::Error::from)
     } else if tensor.is_f64() {
         tensor
-            .to_vec::<f64>()
-            .map(|values| values.into_iter().map(CachedScalar::F64).collect())
+            .with_dense_host_slice::<f64, _>(|values| {
+                values.iter().copied().map(CachedScalar::F64).collect()
+            })
             .map_err(anyhow::Error::from)
     } else if tensor.is_c32() {
         tensor
-            .to_vec::<Complex32>()
-            .map(|values| values.into_iter().map(CachedScalar::C32).collect())
+            .with_dense_host_slice::<Complex32, _>(|values| {
+                values.iter().copied().map(CachedScalar::C32).collect()
+            })
             .map_err(anyhow::Error::from)
     } else if tensor.is_c64() {
         tensor
-            .to_vec::<Complex64>()
-            .map(|values| values.into_iter().map(CachedScalar::C64).collect())
+            .with_dense_host_slice::<Complex64, _>(|values| {
+                values.iter().copied().map(CachedScalar::C64).collect()
+            })
             .map_err(anyhow::Error::from)
     } else {
         bail!(
@@ -7289,6 +7331,7 @@ fn tensor_values_cached(tensor: &IdxTensor) -> Result<Vec<CachedScalar>> {
 fn stack_tensors_with_assignment_index(
     assignment_index: &DynIndex,
     tensors: &[IdxTensor],
+    route: &mut CachedEvaluationRoute<'_, '_>,
 ) -> Result<IdxTensor> {
     anyhow::ensure!(
         !tensors.is_empty(),
@@ -7302,8 +7345,7 @@ fn stack_tensors_with_assignment_index(
     );
 
     let tensor_refs = tensors.iter().collect::<Vec<_>>();
-    IdxTensor::stack_along_new_index(&tensor_refs, assignment_index.clone(), -1)
-        .map_err(anyhow::Error::from)
+    route.stack_along_new_index(&tensor_refs, assignment_index.clone(), -1)
 }
 
 fn gather_stacked_tensor(
@@ -7311,6 +7353,7 @@ fn gather_stacked_tensor(
     source_assignment_index: &DynIndex,
     target_assignment_index: &DynIndex,
     selected_assignments: &[usize],
+    route: &mut CachedEvaluationRoute<'_, '_>,
 ) -> Result<IdxTensor> {
     anyhow::ensure!(
         stacked.indices().last() == Some(source_assignment_index),
@@ -7323,18 +7366,18 @@ fn gather_stacked_tensor(
         target_assignment_index.dim()
     );
 
-    stacked
-        .index_select(
-            source_assignment_index,
-            target_assignment_index.clone(),
-            selected_assignments,
-        )
-        .map_err(anyhow::Error::from)
+    route.index_select(
+        stacked,
+        source_assignment_index,
+        target_assignment_index.clone(),
+        selected_assignments,
+    )
 }
 
 fn ensure_assignment_axis_last(
     tensor: IdxTensor,
     assignment_index: &DynIndex,
+    route: &mut CachedEvaluationRoute<'_, '_>,
 ) -> Result<IdxTensor> {
     if tensor.indices().last() == Some(assignment_index) {
         return Ok(tensor);
@@ -7353,7 +7396,7 @@ fn ensure_assignment_axis_last(
             .cloned(),
     );
     new_order.push(assignment_index.clone());
-    tensor.permuteinds(&new_order).map_err(anyhow::Error::new)
+    route.permute_indices(&tensor, &new_order)
 }
 
 fn sorted_neighbors<T, V>(tree: &TreeTN<T, V>) -> HashMap<V, Vec<V>>
@@ -7361,7 +7404,7 @@ where
     T: TensorLike,
     V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
 {
-    let mut map = HashMap::new();
+    let mut map = HashMap::default();
     let mut node_names = tree.node_names();
     node_names.sort();
     for node in node_names {
@@ -7376,7 +7419,7 @@ fn rooted_tree<V>(neighbors: &HashMap<V, Vec<V>>, root: &V) -> Result<(ParentMap
 where
     V: Clone + Eq + Hash + Ord + Debug,
 {
-    let mut parent = HashMap::<V, Option<V>>::new();
+    let mut parent = HashMap::<V, Option<V>>::default();
     let mut order = Vec::<V>::new();
     let mut stack = vec![(root.clone(), None)];
     while let Some((node, parent_node)) = stack.pop() {
@@ -7498,7 +7541,7 @@ where
         Self {
             max_bytes,
             retained_bytes: 0,
-            slices: HashMap::new(),
+            slices: HashMap::default(),
         }
     }
 
@@ -7595,7 +7638,7 @@ where
         Self {
             bond_dim,
             max_bytes,
-            positions: HashMap::new(),
+            positions: HashMap::default(),
             columns: Vec::new(),
             key_heap_bytes: 0,
             hits: 0,
@@ -7720,7 +7763,7 @@ where
         E: From<anyhow::Error>,
     {
         let mut missing_keys = Vec::new();
-        let mut missing_seen = HashSet::new();
+        let mut missing_seen = HashSet::default();
         for key in keys {
             if self.positions.contains_key(key) {
                 self.hits += 1;
@@ -7732,7 +7775,7 @@ where
             }
         }
 
-        let mut computed_values: HashMap<K, Vec<T>> = HashMap::new();
+        let mut computed_values: HashMap<K, Vec<T>> = HashMap::default();
         if !missing_keys.is_empty() {
             let computed = compute_missing(&missing_keys)?;
             if computed.len() != missing_keys.len() {
@@ -7800,6122 +7843,4 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use num_complex::{Complex32, Complex64};
-    use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, TensorElement};
-
-    #[derive(Clone, Copy, Default)]
-    struct WorkToken;
-
-    impl std::ops::AddAssign for WorkToken {
-        fn add_assign(&mut self, _rhs: Self) {}
-    }
-
-    impl std::ops::Mul for WorkToken {
-        type Output = Self;
-
-        fn mul(self, _rhs: Self) -> Self::Output {
-            self
-        }
-    }
-
-    trait CachedEvaluatorTestScalar: TensorElement + PartialEq + Debug {
-        const DEBUG_DTYPE: &'static str;
-        const TOLERANCE: f64;
-        const IS_COMPLEX: bool;
-
-        fn from_parts(real: f64, imag: f64) -> Self;
-
-        /// Lifts a typed value back into the dynamic wrapper so a typed batch
-        /// can be compared against the `AnyScalar` route without inventing a
-        /// second conversion policy.
-        fn into_any_scalar(self) -> AnyScalar;
-    }
-
-    impl CachedEvaluatorTestScalar for f32 {
-        const DEBUG_DTYPE: &'static str = "f32";
-        const TOLERANCE: f64 = 1.0e-5;
-        const IS_COMPLEX: bool = false;
-
-        fn from_parts(real: f64, _imag: f64) -> Self {
-            real as f32
-        }
-
-        fn into_any_scalar(self) -> AnyScalar {
-            AnyScalar::from_value(self)
-        }
-    }
-
-    impl CachedEvaluatorTestScalar for f64 {
-        const DEBUG_DTYPE: &'static str = "f64";
-        const TOLERANCE: f64 = 1.0e-12;
-        const IS_COMPLEX: bool = false;
-
-        fn from_parts(real: f64, _imag: f64) -> Self {
-            real
-        }
-
-        fn into_any_scalar(self) -> AnyScalar {
-            AnyScalar::from_value(self)
-        }
-    }
-
-    impl CachedEvaluatorTestScalar for Complex32 {
-        const DEBUG_DTYPE: &'static str = "c32";
-        const TOLERANCE: f64 = 1.0e-5;
-        const IS_COMPLEX: bool = true;
-
-        fn from_parts(real: f64, imag: f64) -> Self {
-            Self::new(real as f32, imag as f32)
-        }
-
-        fn into_any_scalar(self) -> AnyScalar {
-            AnyScalar::from_value(self)
-        }
-    }
-
-    impl CachedEvaluatorTestScalar for Complex64 {
-        const DEBUG_DTYPE: &'static str = "c64";
-        const TOLERANCE: f64 = 1.0e-12;
-        const IS_COMPLEX: bool = true;
-
-        fn from_parts(real: f64, imag: f64) -> Self {
-            Self::new(real, imag)
-        }
-
-        fn into_any_scalar(self) -> AnyScalar {
-            AnyScalar::from_value(self)
-        }
-    }
-
-    fn typed_three_node_chain<T: CachedEvaluatorTestScalar>(
-    ) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        let s0 = DynIndex::new_dyn(3);
-        let b01 = DynIndex::new_dyn(2);
-        let s1 = DynIndex::new_dyn(2);
-        let b12 = DynIndex::new_dyn(3);
-        let s2 = DynIndex::new_dyn(3);
-
-        let t0 = IdxTensor::from_dense(
-            vec![s0.clone(), b01.clone()],
-            vec![
-                T::from_parts(1.0, 0.25),
-                T::from_parts(-0.5, -0.75),
-                T::from_parts(2.0, -1.0),
-                T::from_parts(0.75, 0.5),
-                T::from_parts(-1.25, 0.75),
-                T::from_parts(0.125, -0.25),
-            ],
-        )
-        .unwrap();
-        let t1 = IdxTensor::from_dense(
-            vec![b01, s1.clone(), b12.clone()],
-            (0..12)
-                .map(|value| T::from_parts(value as f64 * 0.5 - 1.0, (value as f64 + 1.0) * 0.125))
-                .collect(),
-        )
-        .unwrap();
-        let t2 = IdxTensor::from_dense(
-            vec![b12, s2.clone()],
-            vec![
-                T::from_parts(0.25, -0.5),
-                T::from_parts(1.5, 0.75),
-                T::from_parts(-0.75, 1.25),
-                T::from_parts(2.0, -1.5),
-                T::from_parts(0.5, 0.25),
-                T::from_parts(-1.25, -0.75),
-                T::from_parts(1.25, 0.5),
-                T::from_parts(-0.25, 1.0),
-                T::from_parts(0.875, -0.625),
-            ],
-        )
-        .unwrap();
-
-        let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1, t2], vec![0, 1, 2]).unwrap();
-        (tree, vec![s0, s1, s2])
-    }
-
-    fn typed_unequal_y_tree<T: CachedEvaluatorTestScalar>(
-    ) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        let sc = DynIndex::new_dyn(2);
-        let s0 = DynIndex::new_dyn(2);
-        let s1 = DynIndex::new_dyn(2);
-        let s2 = DynIndex::new_dyn(2);
-        let b0 = DynIndex::new_dyn(2);
-        let b1 = DynIndex::new_dyn(3);
-        let b2 = DynIndex::new_dyn(4);
-
-        let center = IdxTensor::from_dense(
-            vec![sc.clone(), b0.clone(), b1.clone(), b2.clone()],
-            (0..48)
-                .map(|value| {
-                    T::from_parts(value as f64 * 0.125 - 1.0, (value as f64 + 1.0) * 0.0625)
-                })
-                .collect(),
-        )
-        .unwrap();
-        let leaf0 = IdxTensor::from_dense(
-            vec![b0, s0.clone()],
-            vec![
-                T::from_parts(1.0, 0.25),
-                T::from_parts(-0.5, -0.5),
-                T::from_parts(1.5, 0.75),
-                T::from_parts(0.25, -1.0),
-            ],
-        )
-        .unwrap();
-        let leaf1 = IdxTensor::from_dense(
-            vec![b1, s1.clone()],
-            (0..6)
-                .map(|value| T::from_parts(value as f64 * 0.25 + 0.5, -0.125))
-                .collect(),
-        )
-        .unwrap();
-        let leaf2 = IdxTensor::from_dense(
-            vec![b2, s2.clone()],
-            (0..8)
-                .map(|value| T::from_parts(1.0 - value as f64 * 0.125, 0.5))
-                .collect(),
-        )
-        .unwrap();
-
-        let tree =
-            TreeTN::<_, usize>::from_tensors(vec![center, leaf0, leaf1, leaf2], vec![0, 1, 2, 3])
-                .unwrap();
-        (tree, vec![sc, s0, s1, s2])
-    }
-
-    fn assert_typed_results<T: CachedEvaluatorTestScalar>(
-        actual: &[AnyScalar],
-        expected: &[AnyScalar],
-    ) {
-        assert_eq!(actual.len(), expected.len());
-        for (actual, expected) in actual.iter().zip(expected) {
-            let scale = actual
-                .real()
-                .abs()
-                .max(actual.imag().abs())
-                .max(expected.real().abs())
-                .max(expected.imag().abs())
-                .max(1.0);
-            assert!(
-                (actual.real() - expected.real()).abs() <= T::TOLERANCE * scale
-                    && (actual.imag() - expected.imag()).abs() <= T::TOLERANCE * scale,
-                "actual={actual:?} expected={expected:?}"
-            );
-            let debug = format!("{actual:?}");
-            assert!(
-                debug.contains(&format!("dtype: \"{}\"", T::DEBUG_DTYPE)),
-                "cached result lost dtype {}: {actual:?}",
-                T::DEBUG_DTYPE
-            );
-        }
-    }
-
-    fn assert_four_scalar_kind_chain<T: CachedEvaluatorTestScalar>() {
-        let (tree, indices) = typed_three_node_chain::<T>();
-        let values = [
-            0usize, 0, 0, // point 0
-            1, 0, 1, // point 1
-            0, 1, 1, // point 2
-            1, 1, 0, // point 3
-            1, 0, 1, // duplicate point 1
-        ];
-        let points = ColMajorArrayRef::new(&values, &[3, 5]).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let cold = evaluator.evaluate_batched(points).unwrap();
-        let warm = evaluator.evaluate_batched(points).unwrap();
-
-        assert_typed_results::<T>(&cold, &expected);
-        assert_typed_results::<T>(&warm, &expected);
-        assert!(
-            evaluator.stats_for_test().message_cache_hits > 0,
-            "warm four-scalar evaluation must reuse message cache"
-        );
-    }
-
-    /// [AI Supplied] Regression matrix for all supported cached-evaluator
-    /// scalar kinds. The ordinary evaluator is the dense-result oracle; the
-    /// debug dtype assertion ensures a cache round trip does not silently
-    /// promote 32-bit payloads.
-    #[test]
-    fn cached_evaluator_four_scalar_kinds_match_tree_evaluate() {
-        assert_four_scalar_kind_chain::<f32>();
-        assert_four_scalar_kind_chain::<f64>();
-        assert_four_scalar_kind_chain::<Complex32>();
-        assert_four_scalar_kind_chain::<Complex64>();
-    }
-
-    fn rewrap_typed<T: CachedEvaluatorTestScalar>(values: &[T]) -> Vec<AnyScalar> {
-        values
-            .iter()
-            .copied()
-            .map(CachedEvaluatorTestScalar::into_any_scalar)
-            .collect()
-    }
-
-    fn assert_exactly_equal_scalars(actual: &[AnyScalar], expected: &[AnyScalar]) {
-        assert_eq!(actual.len(), expected.len());
-        for (actual, expected) in actual.iter().zip(expected) {
-            assert_eq!(
-                (actual.real(), actual.imag()),
-                (expected.real(), expected.imag()),
-                "typed result differs from the AnyScalar wrapper: {actual:?} vs {expected:?}"
-            );
-            assert_eq!(
-                format!("{actual:?}"),
-                format!("{expected:?}"),
-                "typed result lost the wrapper's dtype"
-            );
-        }
-    }
-
-    /// The typed batch API must return exactly the values the `AnyScalar`
-    /// wrapper returns, for the same batch order, duplicates, hint, cache
-    /// state, evaluated-point accounting, and error paths.
-    fn assert_typed_matches_wrapper<T: CachedEvaluatorTestScalar>() {
-        let (tree, indices) = typed_three_node_chain::<T>();
-        // Point 4 duplicates point 1 and the batch is deliberately unsorted.
-        let values = [
-            0usize, 0, 0, // point 0
-            1, 0, 1, // point 1
-            0, 1, 1, // point 2
-            1, 1, 0, // point 3
-            1, 0, 1, // point 4 duplicates point 1
-        ];
-        let points = ColMajorArrayRef::new(&values, &[3, 5]).unwrap();
-        let oracle = tree.evaluate(&indices, points).unwrap();
-
-        let options = CachedEvaluatorOptions {
-            center: Some(1),
-            ..Default::default()
-        };
-        let mut wrapper = TreeTNCachedEvaluator::new(&tree, &indices, options.clone()).unwrap();
-        let mut typed = TreeTNCachedEvaluator::new(&tree, &indices, options).unwrap();
-
-        let wrapper_cold = wrapper.evaluate_batched(points).unwrap();
-        let typed_cold = typed
-            .evaluate_batched_typed::<T>(points, EvaluationHint::default())
-            .unwrap();
-        assert_typed_results::<T>(&wrapper_cold, &oracle);
-        assert_exactly_equal_scalars(&rewrap_typed(&typed_cold), &wrapper_cold);
-        assert_eq!(typed.stats_for_test(), wrapper.stats_for_test());
-
-        let wrapper_warm = wrapper.evaluate_batched(points).unwrap();
-        let typed_warm = typed
-            .evaluate_batched_typed::<T>(points, EvaluationHint::default())
-            .unwrap();
-        assert_exactly_equal_scalars(&rewrap_typed(&typed_warm), &wrapper_warm);
-        assert_eq!(typed.stats_for_test(), wrapper.stats_for_test());
-        assert!(
-            typed.stats_for_test().message_cache_hits > 0,
-            "warm typed batch must reuse the message cache"
-        );
-
-        let wrapper_hinted = wrapper
-            .evaluate_batched_with_hint(points, EvaluationHint::around(1))
-            .unwrap();
-        let typed_hinted = typed
-            .evaluate_batched_typed::<T>(points, EvaluationHint::around(1))
-            .unwrap();
-        assert_exactly_equal_scalars(&rewrap_typed(&typed_hinted), &wrapper_hinted);
-        assert_eq!(typed.stats_for_test(), wrapper.stats_for_test());
-
-        // Batch order and duplicate points survive both routes.
-        assert_eq!(typed_cold[1], typed_cold[4]);
-        assert_eq!(typed_hinted[1], typed_hinted[4]);
-        assert_eq!(typed_cold, typed_hinted);
-
-        // An empty batch is empty on both routes and resets the accounting.
-        let empty_values: [usize; 0] = [];
-        let empty = ColMajorArrayRef::new(&empty_values, &[3, 0]).unwrap();
-        assert!(wrapper.evaluate_batched(empty).unwrap().is_empty());
-        assert!(typed
-            .evaluate_batched_typed::<T>(empty, EvaluationHint::default())
-            .unwrap()
-            .is_empty());
-        assert_eq!(typed.stats_for_test(), wrapper.stats_for_test());
-
-        // A shape mismatch is rejected on both routes.
-        let wrong_shape = ColMajorArrayRef::new(&values, &[5, 3]).unwrap();
-        assert!(wrapper.evaluate_batched(wrong_shape).is_err());
-        assert!(typed
-            .evaluate_batched_typed::<T>(wrong_shape, EvaluationHint::default())
-            .is_err());
-
-        // A hinted centre that is not a node is rejected on both routes.
-        assert!(wrapper
-            .evaluate_batched_with_hint(points, EvaluationHint::around(99))
-            .is_err());
-        assert!(typed
-            .evaluate_batched_typed::<T>(points, EvaluationHint::around(99))
-            .is_err());
-
-        // Complex payloads must not be silently narrowed into a real request,
-        // while a real payload widens into a complex request. This is exactly
-        // the dynamic wrapper's own dtype contract.
-        let complex_request =
-            typed.evaluate_batched_typed::<Complex64>(points, EvaluationHint::default());
-        let complex = complex_request.unwrap();
-        for (typed_value, wrapper_value) in complex.iter().zip(&wrapper_cold) {
-            assert_eq!(typed_value.re, wrapper_value.real());
-            assert_eq!(typed_value.im, wrapper_value.imag());
-        }
-        let real_request = typed.evaluate_batched_typed::<f64>(points, EvaluationHint::default());
-        if T::IS_COMPLEX {
-            let message = real_request.unwrap_err().to_string();
-            assert!(
-                message.contains("f64"),
-                "a complex tree must reject an f64 request by name: {message}"
-            );
-        } else {
-            let real = real_request.unwrap();
-            for (typed_value, wrapper_value) in real.iter().zip(&wrapper_cold) {
-                assert_eq!(*typed_value, wrapper_value.real());
-            }
-        }
-    }
-
-    /// Builds a chain of `n_sites` rank-3 cores with the requested bond
-    /// dimension, matching the Guard's 16-site floating-zone fixture shape.
-    fn allocation_fixture_chain(
-        n_sites: usize,
-        bond_dim: usize,
-    ) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        use rand::{Rng, SeedableRng};
-        use rand_chacha::ChaCha8Rng;
-        use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, Tensor3, Tensor3Ops};
-
-        const LOCAL_DIM: usize = 2;
-        let mut rng = ChaCha8Rng::seed_from_u64(709);
-        let mut tensors: Vec<Tensor3<f64>> = Vec::with_capacity(n_sites);
-        for site in 0..n_sites {
-            let left_dim = if site == 0 { 1 } else { bond_dim };
-            let right_dim = if site == n_sites - 1 { 1 } else { bond_dim };
-            let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim);
-            for left in 0..left_dim {
-                for local in 0..LOCAL_DIM {
-                    for right in 0..right_dim {
-                        tensor.set3(left, local, right, rng.random::<f64>());
-                    }
-                }
-            }
-            tensors.push(tensor);
-        }
-        let train = SimpleTensorTrain::new(tensors).unwrap();
-        crate::tensor_train_to_treetn(&train).unwrap()
-    }
-
-    /// [AI Supplied] #709 resource gate. Two claims are measured with the
-    /// counting allocator rather than asserted from the diff:
-    ///
-    /// 1. the typed batch route allocates at least one fewer heap block per
-    ///    result than the `AnyScalar` wrapper, because it constructs no
-    ///    rank-zero tensor per result;
-    /// 2. a warm 16-site call stays far below the audited baseline of at
-    ///    least 3,072 short-lived assignment vectors per 16-site/64-point
-    ///    call recorded in
-    ///    `docs/worklogs/2026-09-01-treeaci-provenance-performance-audit.md`.
-    ///
-    /// Both evaluators are fully warm, so the measured difference is the
-    /// result boundary and the per-call assignment work, not cache misses.
-    #[test]
-    fn typed_batch_and_warm_assignment_allocations_stay_below_the_audited_baseline() {
-        const N_SITES: usize = 16;
-        const N_POINTS: usize = 64;
-        const AUDITED_ASSIGNMENT_VECTORS: u64 = 3_072;
-
-        let (tree, indices) = allocation_fixture_chain(N_SITES, 16);
-        let varying = N_SITES / 2;
-        let mut values = vec![0usize; N_SITES * N_POINTS];
-        for point in 0..N_POINTS {
-            values[varying + N_SITES * point] = point % 2;
-        }
-        let points = ColMajorArrayRef::new(&values, &[N_SITES, N_POINTS]).unwrap();
-        let mut two_point_values = vec![0usize; N_SITES * 2];
-        two_point_values[varying + N_SITES] = 1;
-        let two_points = ColMajorArrayRef::new(&two_point_values, &[N_SITES, 2]).unwrap();
-
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(varying),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let hint = EvaluationHint::around(varying);
-
-        // Warm every message the fixture needs before measuring.
-        evaluator
-            .evaluate_batched_with_hint(points, hint.clone())
-            .unwrap();
-        evaluator
-            .evaluate_batched_with_hint(two_points, hint.clone())
-            .unwrap();
-
-        let (wrapped, wrapper_allocations) = allocation_counter::measure(|| {
-            evaluator
-                .evaluate_batched_with_hint(points, hint.clone())
-                .unwrap()
-        });
-        let (typed, typed_allocations) = allocation_counter::measure(|| {
-            evaluator
-                .evaluate_batched_typed::<f64>(points, hint.clone())
-                .unwrap()
-        });
-        let (_, two_point_allocations) = allocation_counter::measure(|| {
-            evaluator
-                .evaluate_batched_typed::<f64>(two_points, hint.clone())
-                .unwrap()
-        });
-
-        eprintln!(
-            "#709 warm allocation counts: sites={N_SITES} points={N_POINTS} wrapper={wrapper_allocations} typed={typed_allocations} two_point_typed={two_point_allocations}"
-        );
-
-        assert_eq!(typed.len(), wrapped.len());
-        for (typed, wrapped) in typed.iter().zip(&wrapped) {
-            assert_eq!(*typed, wrapped.real());
-            assert_eq!(wrapped.imag(), 0.0);
-        }
-
-        assert!(
-            typed_allocations + N_POINTS as u64 <= wrapper_allocations,
-            "the typed route must save at least one allocation per result: typed={typed_allocations} wrapper={wrapper_allocations}"
-        );
-        assert!(
-            typed_allocations < AUDITED_ASSIGNMENT_VECTORS,
-            "a warm {N_SITES}-site {N_POINTS}-point typed call must stay far below the audited {AUDITED_ASSIGNMENT_VECTORS} short-lived assignment vectors, got {typed_allocations}"
-        );
-        assert!(
-            two_point_allocations < 256,
-            "a warm two-point Guard-shaped call must stay small, got {two_point_allocations}"
-        );
-    }
-
-    /// [AI Supplied] #709 differential gate: the typed batch API and the
-    /// `AnyScalar` compatibility wrapper must agree exactly for every
-    /// supported scalar kind, cache state, hint, and error path.
-    #[test]
-    fn evaluate_batched_typed_matches_any_scalar_wrapper_for_all_scalar_kinds() {
-        assert_typed_matches_wrapper::<f32>();
-        assert_typed_matches_wrapper::<f64>();
-        assert_typed_matches_wrapper::<Complex32>();
-        assert_typed_matches_wrapper::<Complex64>();
-    }
-
-    fn assert_reordered_duplicate_and_partial_hit<T: CachedEvaluatorTestScalar>() {
-        let (tree, indices) = typed_three_node_chain::<T>();
-        let initial = ColMajorArrayRef::new(&[0usize, 0, 0, 1, 0, 1], &[3usize, 2usize]).unwrap();
-        let reordered =
-            ColMajorArrayRef::new(&[1usize, 0, 1, 0, 0, 0, 1, 0, 1], &[3usize, 3usize]).unwrap();
-        let partial =
-            ColMajorArrayRef::new(&[1usize, 0, 1, 2, 1, 2, 0, 0, 0], &[3usize, 3usize]).unwrap();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let initial_expected = tree.evaluate(&indices, initial).unwrap();
-        let initial_actual = evaluator.evaluate_batched(initial).unwrap();
-        assert_typed_results::<T>(&initial_actual, &initial_expected);
-
-        let reordered_expected = tree.evaluate(&indices, reordered).unwrap();
-        let reordered_actual = evaluator.evaluate_batched(reordered).unwrap();
-        assert_typed_results::<T>(&reordered_actual, &reordered_expected);
-        assert!(
-            evaluator.stats_for_test().message_cache_hits > 0,
-            "reordered duplicate batch must reuse cached columns"
-        );
-        assert_eq!(reordered_actual[0], reordered_actual[2]);
-
-        let partial_expected = tree.evaluate(&indices, partial).unwrap();
-        let partial_actual = evaluator.evaluate_batched(partial).unwrap();
-        assert_typed_results::<T>(&partial_actual, &partial_expected);
-        let stats = evaluator.stats_for_test();
-        assert!(
-            stats.message_cache_hits > 0,
-            "partial batch must retain hits"
-        );
-        assert!(
-            stats.message_cache_misses > 0,
-            "partial batch must compute misses"
-        );
-    }
-
-    /// [AI Supplied] Cache-key metamorphic coverage: reordering and duplicating
-    /// point columns must preserve output order, while a mixed hit/miss batch
-    /// must agree with a fresh ordinary evaluation for every scalar kind.
-    #[test]
-    fn cached_evaluator_reordered_duplicate_and_partial_hit_batches_match() {
-        assert_reordered_duplicate_and_partial_hit::<f32>();
-        assert_reordered_duplicate_and_partial_hit::<f64>();
-        assert_reordered_duplicate_and_partial_hit::<Complex32>();
-        assert_reordered_duplicate_and_partial_hit::<Complex64>();
-    }
-
-    #[test]
-    fn chunk_limit_validation_scalar_batches_and_late_errors() {
-        let tree =
-            TreeTN::from_tensors(vec![IdxTensor::scalar(2.0).unwrap()], vec![0_usize]).unwrap();
-        let plan = CachedEvaluatorPlan::new(&tree, &[]).unwrap();
-        let invalid = CachedEvaluatorOptions {
-            max_batch_points: Some(0),
-            ..Default::default()
-        };
-        assert!(TreeTNCachedEvaluator::new(&tree, &[], invalid.clone()).is_err());
-        assert!(TreeTNCachedEvaluator::with_plan(&tree, &plan, invalid).is_err());
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &[], CachedEvaluatorOptions::default()).unwrap();
-        let actual = evaluator
-            .evaluate_batched_typed::<f64>(
-                ColMajorArrayRef::new(&[], &[0, 33]).unwrap(),
-                EvaluationHint::default(),
-            )
-            .unwrap();
-        assert_eq!(actual, vec![2.0; 33]);
-        assert_eq!(evaluator.stats_for_test().batched_center_contract_count, 1);
-        let (tree, indices) = typed_three_node_chain::<f64>();
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
-        let mut values = vec![0_usize; 3 * 257];
-        values[3 * 256] = indices[0].dim(); // invalid value in the last internal chunk
-        let points = ColMajorArrayRef::new(&values, &[3, 257]).unwrap();
-        assert!(evaluator.evaluate_batched(points).is_err());
-        values[3 * 256] = 1;
-        let points = ColMajorArrayRef::new(&values, &[3, 257]).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let actual = evaluator
-            .evaluate_batched_with_hint(points, EvaluationHint::around(0))
-            .unwrap();
-        assert_typed_results::<f64>(&actual, &expected);
-        assert!(evaluator
-            .evaluate_batched_with_hint(points, EvaluationHint::around(99))
-            .is_err());
-    }
-
-    fn assert_chunked_branch_hints<T: CachedEvaluatorTestScalar>() {
-        let (tree, indices) = typed_unequal_y_tree::<T>();
-        let values = (0..33)
-            .flat_map(|p| [p % 2, (p / 2) % 2, (p / 4) % 2, (p / 8) % 2])
-            .collect::<Vec<_>>();
-        let points = ColMajorArrayRef::new(&values, &[4, 33]).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        for limit in [1_usize, 7, 16, usize::MAX] {
-            let mut evaluator = TreeTNCachedEvaluator::new(
-                &tree,
-                &indices,
-                CachedEvaluatorOptions {
-                    max_batch_points: Some(limit),
-                    message_cache_max_bytes: 0,
-                    branch_slice_cache_max_bytes: 0,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-            for hint in [
-                EvaluationHint::default(),
-                EvaluationHint::around(0),
-                EvaluationHint::around(1),
-            ] {
-                let actual = evaluator.evaluate_batched(points).unwrap();
-                assert_typed_results::<T>(&actual, &expected);
-                let actual = evaluator.evaluate_batched_typed::<T>(points, hint).unwrap();
-                let actual = actual
-                    .into_iter()
-                    .map(CachedEvaluatorTestScalar::into_any_scalar)
-                    .collect::<Vec<AnyScalar>>();
-                assert_typed_results::<T>(&actual, &expected);
-                assert_eq!(
-                    evaluator.stats_for_test().batched_center_contract_count,
-                    33_usize.div_ceil(limit)
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn chunked_branch_hints_and_disabled_caches_preserve_all_scalar_kinds() {
-        assert_chunked_branch_hints::<f32>();
-        assert_chunked_branch_hints::<f64>();
-        assert_chunked_branch_hints::<Complex32>();
-        assert_chunked_branch_hints::<Complex64>();
-    }
-
-    #[test]
-    fn automatic_chunk_limit_shrinks_for_large_local_tensors() {
-        let indices = vec![DynIndex::new_dyn(128), DynIndex::new_dyn(128)];
-        let tensor = IdxTensor::from_dense(indices.clone(), vec![2.0_f64; 128 * 128]).unwrap();
-        let tree = TreeTN::from_tensors(vec![tensor], vec![0_usize]).unwrap();
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
-        let limit =
-            (32 * 1024 * 1024 / (128 * 128 * std::mem::size_of::<CachedScalar>())).clamp(1, 256);
-        assert_eq!(evaluator.batch_point_limit, limit);
-        assert!(limit < 256);
-        let values = vec![0_usize; 2 * (limit + 1)];
-        let shape = [2, limit + 1];
-        let actual = evaluator
-            .evaluate_batched_typed::<f64>(
-                ColMajorArrayRef::new(&values, &shape).unwrap(),
-                EvaluationHint::default(),
-            )
-            .unwrap();
-        assert_eq!(actual, vec![2.0; limit + 1]);
-        assert_eq!(evaluator.stats_for_test().batched_center_contract_count, 2);
-    }
-
-    fn assert_default_batch_chunking<T: CachedEvaluatorTestScalar>() {
-        let (tree, indices) = typed_three_node_chain::<T>();
-        for n_points in [0_usize, 1, 255, 256, 257, 512, 513] {
-            let values = (0..n_points)
-                .flat_map(|point| [point % 2, (point / 2) % 2, point % 3])
-                .collect::<Vec<_>>();
-            let shape = [3, n_points];
-            let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-            let expected = tree.evaluate(&indices, points).unwrap();
-            let mut evaluator = TreeTNCachedEvaluator::new(
-                &tree,
-                &indices,
-                CachedEvaluatorOptions {
-                    center: Some(1),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-            let actual = evaluator.evaluate_batched(points).unwrap();
-            assert_typed_results::<T>(&actual, &expected);
-            assert_eq!(
-                evaluator.stats_for_test().batched_center_contract_count,
-                n_points.div_ceil(256)
-            );
-        }
-    }
-
-    #[test]
-    fn default_batch_chunking_bounds_center_work_and_preserves_results() {
-        assert_default_batch_chunking::<f32>();
-        assert_default_batch_chunking::<f64>();
-        assert_default_batch_chunking::<Complex32>();
-        assert_default_batch_chunking::<Complex64>();
-    }
-
-    fn assert_cache_capacity_and_clear_reuse<T: CachedEvaluatorTestScalar>() {
-        let (tree, indices) = typed_three_node_chain::<T>();
-        let values = [0usize, 0, 0, 1, 0, 1, 0, 1, 1, 1, 1, 0];
-        let points = ColMajorArrayRef::new(&values, &[3usize, 4usize]).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-
-        let mut zero_budget = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                message_cache_max_bytes: 0,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let zero_cold = zero_budget.evaluate_batched(points).unwrap();
-        let zero_warm = zero_budget.evaluate_batched(points).unwrap();
-        assert_typed_results::<T>(&zero_cold, &expected);
-        assert_typed_results::<T>(&zero_warm, &expected);
-        assert!(zero_budget
-            .message_caches
-            .values()
-            .all(|cache| cache.retained_bytes() == 0));
-        let zero_stats = zero_budget.stats_for_test();
-        assert_eq!(zero_stats.message_cache_hits, 0);
-        assert_eq!(zero_stats.message_cache_key_count, 0);
-        assert_eq!(zero_stats.message_cache_logical_bytes, 0);
-        assert!(zero_stats.message_cache_owned_bytes_estimate > 0);
-
-        let one_column_bytes = std::mem::size_of::<CachedScalar>() * 2;
-        let mut bounded = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                message_cache_max_bytes: one_column_bytes,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let bounded_result = bounded.evaluate_batched(points).unwrap();
-        assert_typed_results::<T>(&bounded_result, &expected);
-        assert!(bounded
-            .message_caches
-            .values()
-            .all(|cache| cache.retained_bytes() <= one_column_bytes));
-        let bounded_stats = bounded.stats_for_test();
-        assert!(bounded_stats.message_cache_key_count > 0);
-        assert!(bounded_stats.message_cache_logical_bytes <= one_column_bytes * 2);
-        assert!(
-            bounded_stats.message_cache_owned_bytes_estimate
-                >= bounded_stats.message_cache_logical_bytes
-        );
-        bounded.message_caches.clear();
-        let after_clear = bounded.evaluate_batched(points).unwrap();
-        assert_typed_results::<T>(&after_clear, &expected);
-        assert!(
-            bounded.stats_for_test().message_cache_misses > 0,
-            "clearing message caches must force a fresh miss"
-        );
-    }
-
-    /// [AI Supplied] Retention and invalidation coverage for the four scalar
-    /// kinds. Zero-budget and partially retaining caches must still return the
-    /// ordinary result, and clearing/reusing a cache must not expose stale data.
-    #[test]
-    fn cached_evaluator_capacity_zero_over_budget_and_clear_reuse_match() {
-        assert_cache_capacity_and_clear_reuse::<f32>();
-        assert_cache_capacity_and_clear_reuse::<f64>();
-        assert_cache_capacity_and_clear_reuse::<Complex32>();
-        assert_cache_capacity_and_clear_reuse::<Complex64>();
-    }
-
-    /// [AI Supplied] A directed component is a graph property, not a property
-    /// of the center chosen for one evaluation. Moving the center across a
-    /// chain must therefore reuse the same `2E` physical component layouts.
-    #[test]
-    fn directed_component_layouts_are_shared_across_centers() {
-        let (tree, indices) = typed_three_node_chain::<f64>();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let values = [0usize, 0, 0, 1, 1, 1];
-        let points = ColMajorArrayRef::new(&values, &[3usize, 2usize]).unwrap();
-
-        for center in 0..3 {
-            evaluator
-                .evaluate_batched_with_hint(points, EvaluationHint::around(center))
-                .unwrap();
-        }
-
-        assert_eq!(evaluator.directed_component_layouts().len(), 4);
-        assert_eq!(
-            evaluator
-                .directed_component_layouts()
-                .values()
-                .map(|layout| layout.layout.input_positions.len())
-                .sum::<usize>(),
-            6
-        );
-    }
-
-    /// [AI Supplied] The composed key is checked against the direct encoder
-    /// for every unique assignment in a nested directed component. This keeps
-    /// the cache-key representation an exact equality-preserving encoding,
-    /// rather than an opaque tuple of temporary assignment IDs.
-    #[test]
-    fn directed_component_composition_matches_direct_encoding() {
-        let (tree, indices) = typed_three_node_chain::<f64>();
-        let evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let values = [0usize, 0, 0, 1, 1, 1, 2, 0, 1];
-        let points = ColMajorArrayRef::new(&values, &[3usize, 3usize]).unwrap();
-        let plan = RootedMessagePlan::new(&tree, &0).unwrap();
-        let assignment_batches = evaluator
-            .build_message_assignment_batches(&plan, points)
-            .unwrap();
-
-        for node in &plan.postorder {
-            let parent = plan.parent.get(node).and_then(Clone::clone).unwrap();
-            let component = evaluator
-                .directed_component_layouts()
-                .get(&(*node, parent))
-                .unwrap();
-            let batch = assignment_batches.get(node).unwrap();
-            for (assignment_id, &point) in batch.first_points.iter().enumerate() {
-                let raw = component
-                    .layout
-                    .input_positions
-                    .iter()
-                    .map(|&row| value_at(points, row, point, "test").unwrap())
-                    .collect::<Vec<_>>();
-                let direct = component.layout.indexer.encode(&raw).unwrap();
-                assert_eq!(batch.keys[assignment_id], direct, "node={node:?}");
-            }
-        }
-    }
-
-    /// [AI Supplied] KeyBuilder coverage includes zero-width, nested, wide,
-    /// duplicate/reordered assignments, invalid values, and checked overflow.
-    #[test]
-    fn key_builder_component_edge_cases_are_checked() {
-        assert!(FlatIndexer::try_new(&[0]).is_err());
-        let empty = FlatIndexer::try_new(&[]).unwrap().encode(&[]).unwrap();
-        let mut empty_builder = KeyBuilder::with_capacity_bits(0).unwrap();
-        empty_builder.push(&empty).unwrap();
-        assert_eq!(empty_builder.finish(), empty);
-
-        let left_indexer = FlatIndexer::try_new(&[2, 3]).unwrap();
-        let right_indexer = FlatIndexer::try_new(&[5]).unwrap();
-        let whole_indexer = FlatIndexer::try_new(&[2, 3, 5]).unwrap();
-        let left = left_indexer.encode(&[1, 2]).unwrap();
-        let right = right_indexer.encode(&[4]).unwrap();
-        let mut nested = KeyBuilder::with_capacity_bits(whole_indexer.width_bits()).unwrap();
-        nested.push(&left).unwrap();
-        nested.push(&right).unwrap();
-        assert_eq!(nested.finish(), whole_indexer.encode(&[1, 2, 4]).unwrap());
-
-        let duplicate = whole_indexer.encode(&[1, 2, 4]).unwrap();
-        let reordered = whole_indexer.encode(&[1, 2, 4]).unwrap();
-        assert_eq!(duplicate, reordered);
-        assert!(whole_indexer.encode(&[1, 2, 4]).is_ok());
-        assert!(whole_indexer.encode(&[1, 3, 4]).is_err());
-
-        let wide_indexer = FlatIndexer::try_new(&[2; 130]).unwrap();
-        let wide_values = vec![1usize; 130];
-        let wide = wide_indexer.encode(&wide_values).unwrap();
-        let mut wide_builder = KeyBuilder::with_capacity_bits(wide.width_bits()).unwrap();
-        wide_builder.push(&wide).unwrap();
-        assert_eq!(wide_builder.finish(), wide);
-
-        let mut overflow = KeyBuilder::with_capacity_bits(left.width_bits()).unwrap();
-        overflow.push(&left).unwrap();
-        assert!(overflow.push(&right).is_err());
-    }
-
-    /// [AI Supplied] Logical payload and owned-storage accounting must be
-    /// distinguishable: spare vector capacity and the key map are not part of
-    /// the logical byte budget but are still evaluator-owned storage.
-    #[test]
-    fn packed_message_cache_reports_logical_and_owned_bytes() {
-        let indexer = FlatIndexer::try_new(&[2]).unwrap();
-        let key = indexer.encode(&[1]).unwrap();
-        let mut cache = PackedMessageCache::<IndexKey, CachedScalar>::new(2, usize::MAX);
-        cache
-            .get_or_compute_batch(&[key], |_| {
-                Ok::<_, anyhow::Error>(vec![vec![CachedScalar::F64(1.0), CachedScalar::F64(2.0)]])
-            })
-            .unwrap();
-
-        let logical = 2 * std::mem::size_of::<CachedScalar>();
-        assert_eq!(cache.logical_payload_bytes(), logical);
-        assert_eq!(cache.retained_bytes(), logical);
-        assert!(cache.owned_retained_bytes_estimate() >= logical);
-        assert!(cache.owned_retained_bytes_estimate() > logical);
-    }
-
-    fn assert_wide_key_owned_bytes<T: CachedEvaluatorTestScalar>() {
-        let values = vec![T::from_parts(1.25, -0.5), T::from_parts(-2.0, 0.125)];
-        let column_bytes = values.len() * std::mem::size_of::<T>();
-        let narrow_key = FlatIndexer::try_new(&[2]).unwrap().encode(&[1]).unwrap();
-        let mut narrow = PackedMessageCache::<IndexKey, T>::new(2, column_bytes);
-        narrow
-            .get_or_compute_batch(&[narrow_key], |_| {
-                Ok::<_, anyhow::Error>(vec![values.clone()])
-            })
-            .unwrap();
-        assert_eq!(narrow.key_heap_bytes, 0);
-
-        for width in [130usize, 300, 700] {
-            let indexer = FlatIndexer::try_new(&vec![2; width]).unwrap();
-            let first = indexer.encode(&vec![1; width]).unwrap();
-            let mut other_values = vec![1; width];
-            other_values[0] = 0;
-            let refused = indexer.encode(&other_values).unwrap();
-            let mut cache = PackedMessageCache::<IndexKey, T>::new(2, column_bytes);
-            let slots = cache
-                .get_or_compute_batch(
-                    &[first.clone(), first.clone(), refused.clone()],
-                    |missing| {
-                        assert_eq!(missing, &[first.clone(), refused.clone()]);
-                        Ok::<_, anyhow::Error>(vec![values.clone(), values.clone()])
-                    },
-                )
-                .unwrap();
-            let CacheSlot::Cached(position) = slots[0] else {
-                panic!("the first column must be retained");
-            };
-            assert_eq!(slots[1], slots[0], "duplicate keys must share one column");
-            assert_eq!(cache.column(position), values);
-            assert_eq!(slots[2], CacheSlot::Uncached(values.clone()));
-            assert_eq!(cache.key_count(), 1);
-            let admitted_heap_bytes = cache.positions.keys().next().unwrap().owned_heap_bytes();
-            assert!(admitted_heap_bytes >= width.div_ceil(64) * 8);
-            assert_eq!(cache.key_heap_bytes, admitted_heap_bytes);
-            // Both maps and packed buffers have identical capacities and
-            // inline types. The wide key's heap is their sole size difference.
-            assert_eq!(cache.positions.capacity(), narrow.positions.capacity());
-            assert_eq!(cache.columns.capacity(), narrow.columns.capacity());
-            assert_eq!(
-                cache.owned_retained_bytes_estimate(),
-                narrow.owned_retained_bytes_estimate() + admitted_heap_bytes
-            );
-            assert_eq!(cache.logical_payload_bytes(), column_bytes);
-
-            let owned_before = cache.owned_retained_bytes_estimate();
-            let hits = cache
-                .get_or_compute_batch(&[first.clone(), first], |_| {
-                    panic!("cached keys must not invoke compute_missing")
-                })
-                .unwrap_or_else(|error: anyhow::Error| panic!("cache hit failed: {error}"));
-            assert_eq!(hits, vec![slots[0].clone(), slots[0].clone()]);
-            assert_eq!(cache.owned_retained_bytes_estimate(), owned_before);
-            let miss = cache
-                .get_or_compute_batch(std::slice::from_ref(&refused), |missing| {
-                    assert_eq!(missing, std::slice::from_ref(&refused));
-                    Ok::<_, anyhow::Error>(vec![values.clone()])
-                })
-                .unwrap();
-            assert_eq!(miss, vec![CacheSlot::Uncached(values.clone())]);
-            assert_eq!(cache.key_heap_bytes, admitted_heap_bytes);
-            assert_eq!(cache.owned_retained_bytes_estimate(), owned_before);
-
-            let failure = cache.get_or_compute_batch(std::slice::from_ref(&refused), |_| {
-                Err::<Vec<Vec<T>>, _>(anyhow::anyhow!("forced contraction failure"))
-            });
-            assert!(failure.is_err());
-            let invalid = cache.get_or_compute_batch(std::slice::from_ref(&refused), |_| {
-                Ok::<_, anyhow::Error>(vec![Vec::new()])
-            });
-            assert!(invalid.is_err());
-            assert_eq!(cache.key_heap_bytes, admitted_heap_bytes);
-            assert_eq!(cache.owned_retained_bytes_estimate(), owned_before);
-
-            let mut disabled = PackedMessageCache::<IndexKey, T>::new(2, 0);
-            disabled
-                .get_or_compute_batch(&[refused], |_| Ok::<_, anyhow::Error>(vec![values.clone()]))
-                .unwrap();
-            assert_eq!(disabled.key_count(), 0);
-            assert_eq!(disabled.key_heap_bytes, 0);
-        }
-    }
-
-    /// Wide retained keys own boxed/limb storage in addition to their inline
-    /// map buckets. Hits, refused misses, and errors must not charge it again.
-    #[test]
-    fn packed_message_cache_accounts_for_admitted_wide_key_heap_storage() {
-        assert_wide_key_owned_bytes::<f32>();
-        assert_wide_key_owned_bytes::<f64>();
-        assert_wide_key_owned_bytes::<Complex32>();
-        assert_wide_key_owned_bytes::<Complex64>();
-    }
-
-    #[test]
-    fn packed_message_cache_accumulates_multiple_wide_keys_once() {
-        let indexer = FlatIndexer::try_new(&[2; 300]).unwrap();
-        let first = indexer.encode(&[1; 300]).unwrap();
-        let second = indexer.encode(&[0; 300]).unwrap();
-        let mut cache = PackedMessageCache::<IndexKey, f64>::new(1, usize::MAX);
-        cache
-            .get_or_compute_batch(&[first.clone(), second.clone(), first.clone()], |missing| {
-                assert_eq!(missing, &[first.clone(), second.clone()]);
-                Ok::<_, anyhow::Error>(vec![vec![1.25], vec![-2.0]])
-            })
-            .unwrap();
-        assert_eq!(cache.key_count(), 2);
-        assert_eq!(cache.key_heap_bytes, 128);
-        cache
-            .get_or_compute_batch(&[second, first], |_| {
-                Err::<Vec<Vec<f64>>, _>(anyhow::anyhow!("cache hits must not compute"))
-            })
-            .unwrap();
-        assert_eq!(cache.key_heap_bytes, 128);
-    }
-
-    /// [AI Supplied] Packed message lookup must preserve the full bit width of
-    /// a component key; wide keys must not be truncated to a machine word.
-    #[test]
-    fn packed_message_cache_accepts_wide_index_keys() {
-        let indexer = FlatIndexer::try_new(&[2; 130]).unwrap();
-        let key = indexer.encode(&vec![1usize; 130]).unwrap();
-        let mut cache = PackedMessageCache::<IndexKey, CachedScalar>::new(1, usize::MAX);
-        let slots = cache
-            .get_or_compute_batch(std::slice::from_ref(&key), |_| {
-                Ok::<_, anyhow::Error>(vec![vec![CachedScalar::F64(3.0)]])
-            })
-            .unwrap();
-        assert!(matches!(slots.as_slice(), [CacheSlot::Cached(0)]));
-        assert!(cache.contains(&key));
-        assert_eq!(cache.key_count(), 1);
-    }
-
-    fn topology_tree(edges: &[(usize, usize)]) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        let n_nodes = edges
-            .iter()
-            .flat_map(|&(left, right)| [left, right])
-            .max()
-            .map_or(1, |node| node + 1);
-        let physical = (0..n_nodes)
-            .map(|_| DynIndex::new_dyn(2))
-            .collect::<Vec<_>>();
-        let bonds = edges
-            .iter()
-            .enumerate()
-            .map(|(edge, _)| DynIndex::new_dyn(2 + edge))
-            .collect::<Vec<_>>();
-        let mut tensors = Vec::with_capacity(n_nodes);
-        for (node, physical_index) in physical.iter().enumerate() {
-            let mut tensor_indices = vec![physical_index.clone()];
-            for (edge, &(left, right)) in edges.iter().enumerate() {
-                if node == left || node == right {
-                    tensor_indices.push(bonds[edge].clone());
-                }
-            }
-            let size = tensor_indices.iter().map(IndexLike::dim).product();
-            tensors.push(IdxTensor::from_dense(tensor_indices, vec![1.0_f64; size]).unwrap());
-        }
-        (
-            TreeTN::from_tensors(tensors, (0..n_nodes).collect()).unwrap(),
-            physical,
-        )
-    }
-
-    fn assert_shared_metadata_for_topology(edges: &[(usize, usize)], expected_refs: usize) {
-        let (tree, indices) = topology_tree(edges);
-        let n_nodes = tree.node_count();
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::<usize>::default())
-                .unwrap();
-        let values = vec![0usize; n_nodes];
-        let shape = [n_nodes, 1];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-        for center in tree.node_names() {
-            evaluator
-                .evaluate_batched_with_hint(points, EvaluationHint::around(center))
-                .unwrap();
-        }
-
-        assert_eq!(
-            evaluator.directed_component_layouts().len(),
-            edges.len() * 2
-        );
-        assert_eq!(
-            evaluator
-                .directed_component_layouts()
-                .values()
-                .map(|layout| layout.layout.input_positions.len())
-                .sum::<usize>(),
-            expected_refs
-        );
-    }
-
-    /// [AI Supplied] Path, Y, comb, and unequal-bond topologies retain one
-    /// component layout per directed edge. For one physical index per node,
-    /// the position census is `N * E`, independent of how many centers were
-    /// visited.
-    #[test]
-    fn directed_component_metadata_scales_with_edges_not_centers() {
-        for n_sites in [4usize, 8, 16] {
-            let path_edges = (0..n_sites - 1)
-                .map(|node| (node, node + 1))
-                .collect::<Vec<_>>();
-            assert_shared_metadata_for_topology(&path_edges, n_sites * (n_sites - 1));
-        }
-
-        let y_edges = [(0, 1), (0, 2), (0, 3)];
-        assert_shared_metadata_for_topology(&y_edges, 4 * 3);
-
-        let comb_edges = [(0, 1), (1, 2), (2, 3), (1, 4), (2, 5), (3, 6)];
-        assert_shared_metadata_for_topology(&comb_edges, 7 * 6);
-
-        let (unequal_tree, unequal_indices) = typed_unequal_y_tree::<f64>();
-        let mut unequal_evaluator = TreeTNCachedEvaluator::new(
-            &unequal_tree,
-            &unequal_indices,
-            CachedEvaluatorOptions::<usize>::default(),
-        )
-        .unwrap();
-        let unequal_values = [0usize; 4];
-        let unequal_points = ColMajorArrayRef::new(&unequal_values, &[4usize, 1usize]).unwrap();
-        for center in unequal_tree.node_names() {
-            unequal_evaluator
-                .evaluate_batched_with_hint(unequal_points, EvaluationHint::around(center))
-                .unwrap();
-        }
-        assert_eq!(unequal_evaluator.directed_component_layouts().len(), 6);
-        assert_eq!(
-            unequal_evaluator
-                .directed_component_layouts()
-                .values()
-                .map(|layout| layout.layout.input_positions.len())
-                .sum::<usize>(),
-            12
-        );
-    }
-
-    /// [AI Supplied] A fully cached top-level message must be returned before
-    /// its descendant messages are even consulted. The two calls in the
-    /// five-site chain therefore touch only the two directed messages needed
-    /// by the warm edge cut, not the complete rooted postorder.
-    #[test]
-    fn warm_edge_cut_skips_descendant_reconstruction() {
-        let (tree, indices) = five_node_chain();
-        let values = vec![0usize; 5 * 4];
-        let points = ColMajorArrayRef::new(&values, &[5usize, 4usize]).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let cold = evaluator.evaluate_batched_with_hint(points, EvaluationHint::around(0));
-        assert_scalars_close(&cold.unwrap(), &expected);
-        let warm = evaluator.evaluate_batched_with_hint(points, EvaluationHint::around(0));
-        assert_scalars_close(&warm.unwrap(), &expected);
-
-        let stats = evaluator.stats_for_test();
-        assert_eq!(
-            stats.batched_message_contract_count, 2,
-            "warm edge cut should visit only the two cut-directed messages: {stats:?}"
-        );
-        assert_eq!(
-            stats.message_cache_misses, 0,
-            "the warm edge cut must not contract a descendant cache miss: {stats:?}"
-        );
-    }
-
-    /// [AI Supplied] #671: a warm internal center needs exactly the two
-    /// directed messages on its selected cut, even when it has other arms.
-    #[test]
-    fn warm_internal_edge_cut_skips_unused_center_components() {
-        let (tree, indices) = five_node_chain();
-        let values = vec![0usize; 5 * 4];
-        let points = ColMajorArrayRef::new(&values, &[5, 4]).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
-        for _ in 0..2 {
-            let actual = evaluator
-                .evaluate_batched_with_hint(points, EvaluationHint::around(2))
-                .unwrap();
-            assert_scalars_close(&actual, &expected);
-        }
-        let stats = evaluator.stats_for_test();
-        assert_eq!(stats.message_cache_misses, 0);
-        assert_eq!(
-            stats.batched_message_contract_count, 2,
-            "a fully cached cut must not assemble the other center components: {stats:?}"
-        );
-    }
-
-    /// [AI Supplied] #671: already retained columns may take arithmetic
-    /// proportional to the bond, but must not be copied into transient heaps.
-    /// The allocator observes requested bytes independently of evaluator stats.
-    #[test]
-    fn warm_edge_cut_requested_bytes_are_independent_of_bond_dimension() {
-        fn requested_bytes(bond: usize) -> usize {
-            let (tree, indices) =
-                typed_tree_from_edges::<f64>(&[(0, 1), (1, 2), (2, 3), (3, 4)], &[bond; 4]);
-            let values = (0..64)
-                .flat_map(|point| (0..5).map(move |site| (point >> site) & 1))
-                .collect::<Vec<_>>();
-            let points = ColMajorArrayRef::new(&values, &[5, 64]).unwrap();
-            let mut evaluator =
-                TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default())
-                    .unwrap();
-            let cold = evaluator
-                .evaluate_batched_typed::<f64>(points, EvaluationHint::around(2))
-                .unwrap();
-            let (warm, bytes) = allocation_counter::measure_requested_bytes(|| {
-                evaluator
-                    .evaluate_batched_typed::<f64>(points, EvaluationHint::around(2))
-                    .unwrap()
-            });
-            assert_eq!(warm, cold);
-            assert_eq!(evaluator.stats_for_test().message_cache_misses, 0);
-            bytes
-        }
-        assert_eq!(
-            requested_bytes(2),
-            requested_bytes(32),
-            "warm queries must borrow packed columns instead of copying bond-sized payloads"
-        );
-    }
-
-    /// [AI Supplied] Borrowing preserves the legacy ordered edge-cut values
-    /// at degree 2/3/4, for every dtype and duplicate/reordered assignments.
-    #[test]
-    fn borrowed_cached_cut_matches_owned_assembly_for_all_scalar_kinds() {
-        fn check<T: CachedEvaluatorTestScalar>() {
-            for arms in 2..=4 {
-                let (tree, indices) = unequal_star_tree::<T>(arms);
-                let base = star_points(&indices, 12);
-                let values = base
-                    .chunks(indices.len())
-                    .rev()
-                    .cycle()
-                    .take(32)
-                    .flat_map(|point| point.iter().copied())
-                    .collect::<Vec<_>>();
-                let shape = [indices.len(), 32];
-                let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-                let mut evaluator =
-                    TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default())
-                        .unwrap();
-                evaluator
-                    .evaluate_batched_with_hint(points, EvaluationHint::around(0))
-                    .unwrap();
-                let (batches, environment) = evaluator.build_environment_cache(&0, points).unwrap();
-                let expected = evaluator
-                    .contract_edge_cut_or_center(&0, points, &batches, &environment)
-                    .unwrap()
-                    .into_iter()
-                    .map(CachedScalar::into_any)
-                    .collect::<Vec<_>>();
-                let retained = evaluator
-                    .message_caches
-                    .iter()
-                    .map(|(edge, cache)| {
-                        (
-                            *edge,
-                            (
-                                cache.key_count(),
-                                cache.logical_payload_bytes(),
-                                cache.owned_retained_bytes_estimate(),
-                            ),
-                        )
-                    })
-                    .collect::<HashMap<_, _>>();
-                let actual = evaluator
-                    .evaluate_batched_with_hint(points, EvaluationHint::around(0))
-                    .unwrap();
-                assert_eq!(actual, expected);
-                let after = evaluator
-                    .message_caches
-                    .iter()
-                    .map(|(edge, cache)| {
-                        (
-                            *edge,
-                            (
-                                cache.key_count(),
-                                cache.logical_payload_bytes(),
-                                cache.owned_retained_bytes_estimate(),
-                            ),
-                        )
-                    })
-                    .collect::<HashMap<_, _>>();
-                assert_eq!(after, retained);
-                assert_eq!(evaluator.stats_for_test().batched_message_contract_count, 2);
-                assert_eq!(evaluator.stats_for_test().message_cache_misses, 0);
-            }
-        }
-        check::<f32>();
-        check::<f64>();
-        check::<Complex32>();
-        check::<Complex64>();
-    }
-
-    /// [AI Supplied] An abandoned all-hit probe must not count any hits;
-    /// left-miss and right-miss batches match the original admission path.
-    #[test]
-    fn borrowed_cut_partial_hits_keep_legacy_cache_accounting() {
-        let (tree, indices) = five_node_chain();
-        for changed_site in [0, 4] {
-            let mut candidate =
-                TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default())
-                    .unwrap();
-            let mut reference =
-                TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default())
-                    .unwrap();
-            let zeros = [0usize; 5];
-            let cold = ColMajorArrayRef::new(&zeros, &[5, 1]).unwrap();
-            for evaluator in [&mut candidate, &mut reference] {
-                evaluator
-                    .evaluate_batched_with_hint(cold, EvaluationHint::around(2))
-                    .unwrap();
-            }
-            let mut values = zeros;
-            values[changed_site] = 1;
-            let points = ColMajorArrayRef::new(&values, &[5, 1]).unwrap();
-            let actual = candidate
-                .evaluate_batched_with_hint(points, EvaluationHint::around(2))
-                .unwrap();
-            let (batches, environment) = reference.build_environment_cache(&2, points).unwrap();
-            let expected = reference
-                .contract_edge_cut_or_center(&2, points, &batches, &environment)
-                .unwrap()
-                .into_iter()
-                .map(CachedScalar::into_any)
-                .collect::<Vec<_>>();
-            assert_eq!(actual, expected);
-            assert_eq!(
-                candidate.stats_for_test().message_cache_hits,
-                reference.stats_for_test().message_cache_hits
-            );
-            assert_eq!(
-                candidate.stats_for_test().message_cache_misses,
-                reference.stats_for_test().message_cache_misses
-            );
-            for (edge, cache) in &candidate.message_caches {
-                let expected = &reference.message_caches[edge];
-                assert_eq!(
-                    (
-                        cache.hits,
-                        cache.misses,
-                        cache.key_count(),
-                        cache.logical_payload_bytes()
-                    ),
-                    (
-                        expected.hits,
-                        expected.misses,
-                        expected.key_count(),
-                        expected.logical_payload_bytes()
-                    )
-                );
-            }
-        }
-    }
-
-    /// [AI Supplied] Packed columns reject malformed metadata rather than
-    /// panicking or silently reading a different scalar representation.
-    #[test]
-    fn borrowed_cut_checks_corrupt_cached_columns_before_recording_hits() {
-        let (tree, indices) = five_node_chain();
-        let zeros = [0usize; 5];
-        let points = ColMajorArrayRef::new(&zeros, &[5, 1]).unwrap();
-        for corruption in 0..5 {
-            let mut evaluator =
-                TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default())
-                    .unwrap();
-            evaluator
-                .evaluate_batched_with_hint(points, EvaluationHint::around(2))
-                .unwrap();
-            let edge = (1, 2);
-            let before = evaluator.message_caches[&edge].hits;
-            match corruption {
-                0 => {
-                    evaluator.parent_bond_indices.remove(&edge);
-                }
-                1 => {
-                    evaluator.message_caches.get_mut(&edge).unwrap().bond_dim += 1;
-                }
-                2 => {
-                    evaluator
-                        .message_caches
-                        .get_mut(&edge)
-                        .unwrap()
-                        .columns
-                        .truncate(1);
-                }
-                3 => {
-                    evaluator.message_caches.get_mut(&edge).unwrap().columns[1] =
-                        CachedScalar::F32(1.0);
-                }
-                _ => {
-                    evaluator
-                        .message_caches
-                        .get_mut(&edge)
-                        .unwrap()
-                        .positions
-                        .values_mut()
-                        .for_each(|position| *position = usize::MAX);
-                }
-            }
-            assert!(evaluator.try_contract_cached_edge_cut(&2, points).is_err());
-            assert_eq!(evaluator.message_caches[&edge].hits, before);
-        }
-        // Corrupt only metadata, without allocating an impossible payload:
-        // work-count overflow must fail before result assembly or hit commit.
-        let repeated_zeros = [0usize; 10];
-        let repeated = ColMajorArrayRef::new(&repeated_zeros, &[5, 2]).unwrap();
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
-        evaluator
-            .evaluate_batched_with_hint(repeated, EvaluationHint::around(2))
-            .unwrap();
-        let cut_edges = [(1, 2), (2, 1)];
-        let hits_before = cut_edges.map(|edge| evaluator.message_caches[&edge].hits);
-        evaluator
-            .parent_bond_indices
-            .insert((1, 2), DynIndex::new_dyn(usize::MAX));
-        for edge in cut_edges {
-            evaluator.message_caches.get_mut(&edge).unwrap().bond_dim = usize::MAX;
-        }
-        let error = evaluator
-            .try_contract_cached_edge_cut(&2, repeated)
-            .unwrap_err();
-        assert!(error.to_string().contains("work count overflows"));
-        assert_eq!(
-            cut_edges.map(|edge| evaluator.message_caches[&edge].hits),
-            hits_before
-        );
-
-        let cache = PackedMessageCache::<u32, f64>::new(2, 64);
-        assert!(cache.checked_column(usize::MAX).is_err());
-        assert!(column_dot(&[1.0f64], &[2.0, 3.0], |value| Some(*value)).is_err());
-        let unit_bond_cache = PackedMessageCache::<u32, f64>::new(1, 64);
-        assert!(unit_bond_cache.checked_column(usize::MAX).is_err());
-        assert!(cached_column_dot(
-            ScalarKind::F64,
-            &[CachedScalar::F64(1.0)],
-            &[CachedScalar::F32(2.0)]
-        )
-        .is_err());
-
-        assert!(cached_column_dot(
-            ScalarKind::F32,
-            &[CachedScalar::F64(1.0)],
-            &[CachedScalar::F64(2.0)]
-        )
-        .is_err());
-        assert!(cached_column_dot(
-            ScalarKind::C32,
-            &[CachedScalar::F32(1.0)],
-            &[CachedScalar::F32(2.0)]
-        )
-        .is_err());
-        assert!(cached_column_dot(
-            ScalarKind::C64,
-            &[CachedScalar::F64(1.0)],
-            &[CachedScalar::F64(2.0)]
-        )
-        .is_err());
-    }
-
-    /// [AI Supplied] Full-width component keys and invalid coordinates
-    /// remain checked when a warm cut bypasses recursive assignment building.
-    #[test]
-    fn borrowed_cut_handles_wide_keys_and_rejects_invalid_warm_coordinates() {
-        let edges = (0..259).map(|node| (node, node + 1)).collect::<Vec<_>>();
-        let (tree, indices) = typed_tree_from_edges::<f64>(&edges, &[1; 259]);
-        let values = (0..4)
-            .flat_map(|point| {
-                (0..260).map(move |site| match point {
-                    0 | 3 => 0,
-                    1 => 1,
-                    _ => site % 2,
-                })
-            })
-            .collect::<Vec<_>>();
-        let points = ColMajorArrayRef::new(&values, &[260, 4]).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
-        for _ in 0..2 {
-            let actual = evaluator
-                .evaluate_batched_with_hint(points, EvaluationHint::around(130))
-                .unwrap();
-            assert_typed_results::<f64>(&actual, &expected);
-        }
-        assert_eq!(evaluator.stats_for_test().batched_message_contract_count, 2);
-        assert_eq!(evaluator.stats_for_test().message_cache_misses, 0);
-        for edge in [(129, 130), (130, 129)] {
-            assert!(evaluator.message_caches[&edge]
-                .positions
-                .keys()
-                .any(|key| key.owned_heap_bytes() > 0));
-        }
-        let mut invalid = values;
-        invalid[259] = 2;
-        let points = ColMajorArrayRef::new(&invalid, &[260, 4]).unwrap();
-        assert!(evaluator
-            .evaluate_batched_with_hint(points, EvaluationHint::around(130))
-            .is_err());
-    }
-
-    #[cfg(feature = "diagnostics")]
-    #[test]
-    fn borrowed_cut_records_only_its_two_cache_hits_without_message_kernels() {
-        let (tree, indices) = five_node_chain();
-        let values = [0usize; 20];
-        let points = ColMajorArrayRef::new(&values, &[5, 4]).unwrap();
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
-        let expected = evaluator
-            .evaluate_batched_with_hint(points, EvaluationHint::around(2))
-            .unwrap();
-        diagnostics::reset();
-        let actual = evaluator
-            .evaluate_batched_with_hint(points, EvaluationHint::around(2))
-            .unwrap();
-        assert_eq!(actual, expected);
-        let records = diagnostics::snapshot();
-        assert_eq!(
-            records
-                .iter()
-                .map(|record| record.guard_cache_hits)
-                .sum::<u64>(),
-            2
-        );
-        assert_eq!(
-            records
-                .iter()
-                .map(|record| record.guard_cache_misses)
-                .sum::<u64>(),
-            0
-        );
-        assert_eq!(
-            records
-                .iter()
-                .map(|record| record.guard_kernel.matmul_calls)
-                .sum::<u64>(),
-            0
-        );
-        assert!(records
-            .iter()
-            .any(|record| record.node == "tree:1" && record.coordination_number == 2));
-        assert!(records
-            .iter()
-            .any(|record| record.node == "tree:2" && record.coordination_number == 2));
-        assert!(!records.iter().any(|record| record.node == "tree:3"));
-    }
-
-    /// [AI Supplied] The final edge-cut assembly is a dot product over the
-    /// selected bond, so its deterministic work count is exactly one visit per
-    /// requested point and bond coordinate.
-    #[test]
-    fn warm_edge_cut_assembly_scales_with_edge_bond() {
-        let (tree, indices) = five_node_chain();
-        let values = vec![0usize; 5 * 7];
-        let points = ColMajorArrayRef::new(&values, &[5usize, 7usize]).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(2),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let cold = evaluator.evaluate_batched_with_hint(points, EvaluationHint::around(2));
-        assert_scalars_close(&cold.unwrap(), &expected);
-        let warm = evaluator.evaluate_batched_with_hint(points, EvaluationHint::around(2));
-        assert_scalars_close(&warm.unwrap(), &expected);
-
-        let stats = evaluator.stats_for_test();
-        assert_eq!(stats.warm_edge_cut_assembly_visits, 7 * 2);
-    }
-
-    /// [AI Supplied] #718 Step 2 scaling gate for the #708 warm assembly law.
-    ///
-    /// The claim under test is `points * chi_edge` **and nothing else**: the
-    /// assembly is a dot product over the cut bond, so doubling either factor
-    /// must double the work count and changing a descendant bond dimension
-    /// must not change it at all. A single fixed size cannot separate those
-    /// three statements, so each factor is swept independently at 1x/2x/4x
-    /// while the other two are held fixed. The exponent claim is carried by
-    /// the deterministic counter, never by wall clock.
-    ///
-    /// Chain `0-1-2-3-4` centred on `2`: sorted neighbours of `2` are
-    /// `[1, 3]`, so the deterministic cut is the `(1, 2)` bond, which is
-    /// `bond_dims[1]` in [`typed_tree_from_edges`] edge order.
-    #[test]
-    fn warm_edge_cut_assembly_work_is_points_times_edge_bond_only() {
-        const CUT_BONDS: [usize; 3] = [2, 4, 8];
-        const POINT_COUNTS: [usize; 3] = [2, 4, 8];
-        const DESCENDANT_BONDS: [usize; 3] = [2, 4, 8];
-
-        fn measure_warm_assembly_visits(
-            cut_bond: usize,
-            descendant_bond: usize,
-            n_points: usize,
-        ) -> usize {
-            let (tree, indices) = typed_tree_from_edges::<f64>(
-                &[(0, 1), (1, 2), (2, 3), (3, 4)],
-                &[descendant_bond, cut_bond, descendant_bond, descendant_bond],
-            );
-            let values = (0..n_points)
-                .flat_map(|point| (0..indices.len()).map(move |site| (site + point) % 2))
-                .collect::<Vec<_>>();
-            let shape = [indices.len(), n_points];
-            let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-            let expected = tree.evaluate(&indices, points).unwrap();
-            let mut evaluator = TreeTNCachedEvaluator::new(
-                &tree,
-                &indices,
-                CachedEvaluatorOptions {
-                    center: Some(2),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-
-            let cold = evaluator
-                .evaluate_batched_with_hint(points, EvaluationHint::around(2))
-                .unwrap();
-            assert_scalars_close(&cold, &expected);
-            let warm = evaluator
-                .evaluate_batched_with_hint(points, EvaluationHint::around(2))
-                .unwrap();
-            assert_scalars_close(&warm, &expected);
-
-            let stats = evaluator.stats_for_test();
-            assert_eq!(
-                stats.message_cache_misses, 0,
-                "the second identical call must be fully warm: {stats:?}"
-            );
-            assert!(
-                stats.warm_edge_cut_assembly_visits > 0,
-                "fixture did not take the warm edge-cut route: {stats:?}"
-            );
-            stats.warm_edge_cut_assembly_visits
-        }
-
-        // Factor 1: the requested point count, at fixed cut bond and fixed
-        // descendant bonds.
-        for &n_points in &POINT_COUNTS {
-            assert_eq!(
-                measure_warm_assembly_visits(4, 4, n_points),
-                n_points * 4,
-                "warm assembly must be linear in the point count"
-            );
-        }
-
-        // Factor 2: the cut bond dimension, at a fixed point count.
-        for &cut_bond in &CUT_BONDS {
-            assert_eq!(
-                measure_warm_assembly_visits(cut_bond, 4, 4),
-                4 * cut_bond,
-                "warm assembly must be linear in the cut bond dimension"
-            );
-        }
-
-        // Factor 3: the descendant bonds, which the law says do not appear.
-        // This is the property the #708 redesign actually bought: the old
-        // vertex centre paid `d * product(incident bonds)` here.
-        let descendant_visits = DESCENDANT_BONDS
-            .map(|descendant_bond| measure_warm_assembly_visits(4, descendant_bond, 4));
-        assert_eq!(
-            descendant_visits,
-            [4 * 4, 4 * 4, 4 * 4],
-            "warm assembly must not depend on any descendant bond dimension"
-        );
-    }
-
-    fn typed_tree_from_edges<T: CachedEvaluatorTestScalar>(
-        edges: &[(usize, usize)],
-        bond_dims: &[usize],
-    ) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        assert_eq!(edges.len(), bond_dims.len());
-        let n_nodes = edges
-            .iter()
-            .flat_map(|&(left, right)| [left, right])
-            .max()
-            .map_or(1, |node| node + 1);
-        let physical = (0..n_nodes)
-            .map(|_| DynIndex::new_dyn(2))
-            .collect::<Vec<_>>();
-        let bonds = bond_dims
-            .iter()
-            .map(|&dim| DynIndex::new_dyn(dim))
-            .collect::<Vec<_>>();
-        let mut tensors = Vec::with_capacity(n_nodes);
-        for (node, physical_index) in physical.iter().enumerate() {
-            let mut tensor_indices = vec![physical_index.clone()];
-            for (edge, &(left, right)) in edges.iter().enumerate() {
-                if node == left || node == right {
-                    tensor_indices.push(bonds[edge].clone());
-                }
-            }
-            let size = tensor_indices.iter().map(IndexLike::dim).product();
-            tensors.push(
-                IdxTensor::from_dense(
-                    tensor_indices,
-                    (0..size)
-                        .map(|value| {
-                            T::from_parts(
-                                (value + node + 1) as f64 * 0.125,
-                                (value + 2 * node + 1) as f64 * 0.0625,
-                            )
-                        })
-                        .collect(),
-                )
-                .unwrap(),
-            );
-        }
-        (
-            TreeTN::from_tensors(tensors, (0..n_nodes).collect()).unwrap(),
-            physical,
-        )
-    }
-
-    fn flatten_points(points: &[[usize; 6]], n_indices: usize) -> Vec<usize> {
-        points
-            .iter()
-            .flat_map(|point| point[..n_indices].iter().copied())
-            .collect()
-    }
-
-    fn assert_edge_cut_batch_variants<T: CachedEvaluatorTestScalar>(
-        tree: &TreeTN<IdxTensor, usize>,
-        indices: &[DynIndex],
-        center: usize,
-        batches: &[(Vec<usize>, usize)],
-    ) {
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            tree,
-            indices,
-            CachedEvaluatorOptions {
-                center: Some(center),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        for (values, n_points) in batches {
-            let shape = [indices.len(), *n_points];
-            let points = ColMajorArrayRef::new(values, &shape).unwrap();
-            let expected = tree.evaluate(indices, points).unwrap();
-            let actual = evaluator
-                .evaluate_batched_with_hint(points, EvaluationHint::around(center))
-                .unwrap();
-            assert_typed_results::<T>(&actual, &expected);
-        }
-    }
-
-    /// [AI Supplied] Differential matrix for the complete edge-cut route.
-    /// Each fixture is evaluated cold, as a full hit, with reordered and
-    /// duplicate columns, with a partial hit/miss batch, and once again to
-    /// exercise persistent reuse. The ordinary TreeTN evaluator is the sole
-    /// numerical oracle.
-    fn edge_cut_cold_partial_reordered_and_repeated_batches_match_all_fixtures<
-        T: CachedEvaluatorTestScalar,
-    >() {
-        fn batches_for_path() -> Vec<(Vec<usize>, usize)> {
-            vec![
-                (
-                    flatten_points(
-                        &[
-                            [0, 0, 0, 0, 0, 0],
-                            [1, 0, 1, 0, 0, 0],
-                            [2, 1, 2, 0, 0, 0],
-                            [0, 1, 1, 0, 0, 0],
-                        ],
-                        3,
-                    ),
-                    4,
-                ),
-                (
-                    flatten_points(
-                        &[
-                            [0, 0, 0, 0, 0, 0],
-                            [1, 0, 1, 0, 0, 0],
-                            [2, 1, 2, 0, 0, 0],
-                            [0, 1, 1, 0, 0, 0],
-                        ],
-                        3,
-                    ),
-                    4,
-                ),
-                (
-                    flatten_points(
-                        &[
-                            [2, 1, 2, 0, 0, 0],
-                            [0, 0, 0, 0, 0, 0],
-                            [2, 1, 2, 0, 0, 0],
-                            [0, 1, 1, 0, 0, 0],
-                            [1, 0, 1, 0, 0, 0],
-                        ],
-                        3,
-                    ),
-                    5,
-                ),
-                (
-                    flatten_points(
-                        &[
-                            [0, 1, 1, 0, 0, 0],
-                            [2, 0, 2, 0, 0, 0],
-                            [0, 0, 0, 0, 0, 0],
-                            [1, 1, 2, 0, 0, 0],
-                        ],
-                        3,
-                    ),
-                    4,
-                ),
-                (
-                    flatten_points(
-                        &[
-                            [0, 1, 1, 0, 0, 0],
-                            [2, 0, 2, 0, 0, 0],
-                            [0, 0, 0, 0, 0, 0],
-                            [1, 1, 2, 0, 0, 0],
-                        ],
-                        3,
-                    ),
-                    4,
-                ),
-            ]
-        }
-
-        let path_batches = batches_for_path();
-        let (path, path_indices) = typed_three_node_chain::<T>();
-        assert_edge_cut_batch_variants::<T>(&path, &path_indices, 1, &path_batches);
-
-        let y_batches = vec![
-            (
-                flatten_points(
-                    &[
-                        [0, 0, 0, 0, 0, 0],
-                        [1, 0, 1, 0, 0, 0],
-                        [0, 1, 0, 1, 0, 0],
-                        [1, 1, 1, 1, 0, 0],
-                    ],
-                    4,
-                ),
-                4,
-            ),
-            (
-                flatten_points(
-                    &[
-                        [0, 0, 0, 0, 0, 0],
-                        [1, 0, 1, 0, 0, 0],
-                        [0, 1, 0, 1, 0, 0],
-                        [1, 1, 1, 1, 0, 0],
-                    ],
-                    4,
-                ),
-                4,
-            ),
-            (
-                flatten_points(
-                    &[
-                        [0, 1, 0, 1, 0, 0],
-                        [0, 0, 0, 0, 0, 0],
-                        [0, 1, 0, 1, 0, 0],
-                        [1, 0, 1, 0, 0, 0],
-                    ],
-                    4,
-                ),
-                4,
-            ),
-            (
-                flatten_points(
-                    &[[1, 1, 1, 1, 0, 0], [1, 0, 0, 1, 0, 0], [0, 0, 1, 0, 0, 0]],
-                    4,
-                ),
-                3,
-            ),
-            (
-                flatten_points(
-                    &[[1, 1, 1, 1, 0, 0], [1, 0, 0, 1, 0, 0], [0, 0, 1, 0, 0, 0]],
-                    4,
-                ),
-                3,
-            ),
-        ];
-        let (y, y_indices) = typed_unequal_y_tree::<T>();
-        assert_edge_cut_batch_variants::<T>(&y, &y_indices, 0, &y_batches);
-
-        let comb_edges = [(0, 1), (0, 2), (1, 3), (1, 4), (2, 5)];
-        let (comb, comb_indices) = typed_tree_from_edges::<T>(&comb_edges, &[2, 2, 2, 2, 2]);
-        let comb_batches = vec![
-            (
-                flatten_points(
-                    &[
-                        [0, 0, 0, 0, 0, 0],
-                        [1, 0, 1, 0, 1, 0],
-                        [0, 1, 0, 1, 0, 1],
-                        [1, 1, 1, 1, 1, 1],
-                    ],
-                    6,
-                ),
-                4,
-            ),
-            (
-                flatten_points(
-                    &[
-                        [0, 0, 0, 0, 0, 0],
-                        [1, 0, 1, 0, 1, 0],
-                        [0, 1, 0, 1, 0, 1],
-                        [1, 1, 1, 1, 1, 1],
-                    ],
-                    6,
-                ),
-                4,
-            ),
-            (
-                flatten_points(
-                    &[
-                        [0, 1, 0, 1, 0, 1],
-                        [0, 0, 0, 0, 0, 0],
-                        [0, 1, 0, 1, 0, 1],
-                        [1, 0, 1, 0, 1, 0],
-                    ],
-                    6,
-                ),
-                4,
-            ),
-            (
-                flatten_points(
-                    &[[1, 1, 1, 1, 1, 1], [1, 0, 0, 1, 0, 1], [0, 0, 1, 0, 1, 0]],
-                    6,
-                ),
-                3,
-            ),
-            (
-                flatten_points(
-                    &[[1, 1, 1, 1, 1, 1], [1, 0, 0, 1, 0, 1], [0, 0, 1, 0, 1, 0]],
-                    6,
-                ),
-                3,
-            ),
-        ];
-        assert_edge_cut_batch_variants::<T>(&comb, &comb_indices, 0, &comb_batches);
-    }
-
-    #[test]
-    fn edge_cut_differential_matrix_real_and_complex() {
-        edge_cut_cold_partial_reordered_and_repeated_batches_match_all_fixtures::<f32>();
-        edge_cut_cold_partial_reordered_and_repeated_batches_match_all_fixtures::<f64>();
-        edge_cut_cold_partial_reordered_and_repeated_batches_match_all_fixtures::<Complex32>();
-        edge_cut_cold_partial_reordered_and_repeated_batches_match_all_fixtures::<Complex64>();
-    }
-
-    fn assert_unequal_y_tree_matches<T: CachedEvaluatorTestScalar>() {
-        let (tree, indices) = typed_unequal_y_tree::<T>();
-        let values = [
-            0usize, 0, 0, 0, // all-zero assignment
-            1, 1, 1, 1, // all-one assignment
-            0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 0,
-        ];
-        let points = ColMajorArrayRef::new(&values, &[4usize, 5usize]).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let cold = evaluator.evaluate_batched(points).unwrap();
-        let warm = evaluator.evaluate_batched(points).unwrap();
-        assert_typed_results::<T>(&cold, &expected);
-        assert_typed_results::<T>(&warm, &expected);
-        let hub_message = evaluator
-            .build_environment_cache(&1, points)
-            .unwrap()
-            .1
-            .remove(&0)
-            .unwrap();
-        if matches!(T::DEBUG_DTYPE, "f32" | "c32") {
-            assert!(hub_message.tensor.is_some());
-            assert!(hub_message.raw_values.is_none());
-        }
-    }
-
-    /// [AI Supplied] Topology differential coverage for a Y-comb with unequal
-    /// incident bond dimensions. The leaf-centered root forces the hub's
-    /// two-child message path, while the ordinary evaluator remains the dense
-    /// oracle for cold and warm calls.
-    #[test]
-    fn cached_evaluator_path_y_comb_and_unequal_bond_layouts_match() {
-        assert_unequal_y_tree_matches::<f32>();
-        assert_unequal_y_tree_matches::<f64>();
-        assert_unequal_y_tree_matches::<Complex32>();
-        assert_unequal_y_tree_matches::<Complex64>();
-    }
-
-    /// [AI Supplied] Error and fallback coverage for the cached evaluator.
-    /// Shape and coordinate failures must return contextual errors, while a
-    /// degree-four hub (outside the raw-kernel degree limit) must use the
-    /// generic route and still match the dense oracle.
-    #[test]
-    fn cached_evaluator_error_paths_and_unsupported_raw_dispatch_are_typed() {
-        let (tree, indices) = two_node_tree();
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
-
-        let wrong_rank = ColMajorArrayRef::new(&[0usize, 0, 0], &[1usize, 3usize, 1usize]).unwrap();
-        let error = evaluator.evaluate_batched(wrong_rank).unwrap_err();
-        assert!(
-            error.to_string().contains("2D"),
-            "unexpected error: {error}"
-        );
-
-        let wrong_rows = ColMajorArrayRef::new(&[0usize, 0], &[1usize, 2usize]).unwrap();
-        let error = evaluator.evaluate_batched(wrong_rows).unwrap_err();
-        assert!(
-            error.to_string().contains("row count"),
-            "unexpected error: {error}"
-        );
-
-        let out_of_range = ColMajorArrayRef::new(&[0usize, 2], &[2usize, 1usize]).unwrap();
-        let error = evaluator.evaluate_batched(out_of_range).unwrap_err();
-        assert!(
-            error.to_string().contains("out of range"),
-            "unexpected error: {error}"
-        );
-
-        let s0 = DynIndex::new_dyn(2);
-        let bond = DynIndex::new_dyn(2);
-        let s1 = DynIndex::new_dyn(2);
-        let mixed = TreeTN::<_, usize>::from_tensors(
-            vec![
-                IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0_f32, 0.0, 0.0, 1.0])
-                    .unwrap(),
-                IdxTensor::from_dense(vec![bond, s1.clone()], vec![1.0_f64, 0.0, 0.0, 1.0])
-                    .unwrap(),
-            ],
-            vec![0, 1],
-        )
-        .unwrap();
-        let mixed_points = ColMajorArrayRef::new(&[0usize, 0], &[2usize, 1usize]).unwrap();
-        let mixed_indices = vec![s0.clone(), s1.clone()];
-        let mut mixed_evaluator =
-            TreeTNCachedEvaluator::new(&mixed, &mixed_indices, CachedEvaluatorOptions::default())
-                .unwrap();
-        let mixed_expected = mixed.evaluate(&mixed_indices, mixed_points);
-        let mixed_expected = mixed_expected.unwrap();
-        let mixed_cold = mixed_evaluator.evaluate_batched(mixed_points).unwrap();
-        let mixed_warm = mixed_evaluator.evaluate_batched(mixed_points).unwrap();
-        assert_typed_results::<f64>(&mixed_cold, &mixed_expected);
-        assert_typed_results::<f64>(&mixed_warm, &mixed_expected);
-        for center in [0, 1] {
-            for _ in 0..2 {
-                let actual = mixed_evaluator
-                    .evaluate_batched_with_hint(mixed_points, EvaluationHint::around(center))
-                    .unwrap();
-                assert_typed_results::<f64>(&actual, &mixed_expected);
-            }
-            assert!(mixed_evaluator
-                .try_contract_cached_edge_cut(&center, mixed_points)
-                .unwrap()
-                .is_none());
-        }
-
-        let (degree_four, degree_four_indices) = four_arm_star_tree();
-        let values = [
-            0usize, 0, 0, 0, 0, // point 0
-            1, 0, 1, 0, 1, // point 1
-            0, 1, 0, 1, 0, // point 2
-        ];
-        let points = ColMajorArrayRef::new(&values, &[5usize, 3usize]).unwrap();
-        let expected = degree_four.evaluate(&degree_four_indices, points).unwrap();
-        let mut fallback = TreeTNCachedEvaluator::new(
-            &degree_four,
-            &degree_four_indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let actual = fallback.evaluate_batched(points).unwrap();
-        assert_typed_results::<f64>(&actual, &expected);
-        let hub = fallback
-            .build_environment_cache(&1, points)
-            .unwrap()
-            .1
-            .remove(&0)
-            .unwrap();
-        // The values above already match the tree's own evaluation; the hub's
-        // three rooted children now reach that answer on the raw path.
-        assert!(hub.raw_values.is_some());
-        assert!(hub.tensor.is_none());
-    }
-
-    // [AI Supplied] Small exact fixture plumbing around the #671 relation.
-    fn measured_raw_center_core_visits(physical_dim: usize, bond_dims: &[usize]) -> usize {
-        let mut dims = Vec::with_capacity(1 + bond_dims.len());
-        dims.push(physical_dim);
-        dims.extend_from_slice(bond_dims);
-        // A zero-sized scalar executes the real loop nest at chi=256 without
-        // allocating the equivalent 268 MiB f64 degree-3 core.
-        let core = vec![WorkToken; dims.iter().product()];
-        let physical_values = (0..physical_dim).collect::<Vec<_>>();
-        let components = bond_dims
-            .iter()
-            .enumerate()
-            .map(|(position, &dim)| RawCenterComponent {
-                axis: position + 1,
-                dim,
-                point_to_assignment: vec![0; physical_dim],
-                values: vec![WorkToken; dim],
-            })
-            .collect::<Vec<_>>();
-
-        reset_raw_center_core_visits_for_test();
-        let values = contract_raw_center(&core, &dims, 0, &physical_values, &components).unwrap();
-        assert_eq!(values.len(), physical_dim);
-        raw_center_core_visits_for_test()
-    }
-
-    fn assert_representative_raw_center_values(physical_dim: usize, bond_dims: &[usize]) {
-        let mut dims = Vec::with_capacity(1 + bond_dims.len());
-        dims.push(physical_dim);
-        dims.extend_from_slice(bond_dims);
-        let core = vec![1.0_f64; dims.iter().product()];
-        let physical_values = (0..physical_dim).collect::<Vec<_>>();
-        let components = bond_dims
-            .iter()
-            .enumerate()
-            .map(|(position, &dim)| RawCenterComponent {
-                axis: position + 1,
-                dim,
-                point_to_assignment: vec![0; physical_dim],
-                values: vec![1.0; dim],
-            })
-            .collect::<Vec<_>>();
-
-        let values = contract_raw_center(&core, &dims, 0, &physical_values, &components).unwrap();
-        let expected_value = bond_dims.iter().product::<usize>() as f64;
-        assert_eq!(values, vec![expected_value; physical_dim]);
-    }
-
-    /// Hiroshi's issue #671 complexity relation is a deterministic work-count
-    /// invariant, not a wall-clock threshold: a dense center contraction must
-    /// visit `d * product(incident bond dimensions)` core elements when every
-    /// physical value is evaluated once.
-    #[test]
-    fn raw_center_work_scales_with_coordination_number_and_actual_bond_dimensions() {
-        const REPRESENTATIVE_BONDS: [usize; 3] = [64, 128, 256];
-        let z2_visits = REPRESENTATIVE_BONDS.map(|chi| {
-            let visits = measured_raw_center_core_visits(2, &[chi, chi]);
-            assert_eq!(visits, 2 * chi.pow(2));
-            visits
-        });
-        assert!(z2_visits
-            .windows(2)
-            .all(|pair| pair[1] / pair[0] == 2usize.pow(2)));
-
-        let z3_visits = REPRESENTATIVE_BONDS.map(|chi| {
-            let visits = measured_raw_center_core_visits(2, &[chi, chi, chi]);
-            assert_eq!(visits, 2 * chi.pow(3));
-            visits
-        });
-        assert!(z3_visits
-            .windows(2)
-            .all(|pair| pair[1] / pair[0] == 2usize.pow(3)));
-
-        assert_eq!(
-            measured_raw_center_core_visits(3, &[64, 128, 256]),
-            3 * 64 * 128 * 256,
-            "unequal bonds must use their actual product rather than max(chi)^z"
-        );
-
-        // Exercise real f64 arithmetic and storage at a representative
-        // degree-3 bond dimension (about 32 MiB of dense core payload).
-        assert_representative_raw_center_values(2, &[128, 128, 128]);
-    }
-
-    #[test]
-    fn tensor_from_cached_values_preserves_each_scalar_storage_kind() {
-        let real32_index = DynIndex::new_dyn(2);
-        let real32 = tensor_from_cached_values(
-            vec![real32_index],
-            vec![CachedScalar::F32(1.0), CachedScalar::F32(2.0)],
-        )
-        .unwrap();
-        assert_eq!(real32.to_vec::<f32>().unwrap(), vec![1.0, 2.0]);
-
-        let real_index = DynIndex::new_dyn(2);
-        let real = tensor_from_cached_values(
-            vec![real_index],
-            vec![CachedScalar::F64(1.0), CachedScalar::F64(2.0)],
-        )
-        .unwrap();
-        assert_eq!(real.to_vec::<f64>().unwrap(), vec![1.0, 2.0]);
-
-        let complex32_index = DynIndex::new_dyn(2);
-        let complex32 = tensor_from_cached_values(
-            vec![complex32_index],
-            vec![
-                CachedScalar::C32(Complex32::new(1.0, -2.0)),
-                CachedScalar::C32(Complex32::new(3.0, -4.0)),
-            ],
-        )
-        .unwrap();
-        assert_eq!(
-            complex32.to_vec::<Complex32>().unwrap(),
-            vec![Complex32::new(1.0, -2.0), Complex32::new(3.0, -4.0)]
-        );
-
-        let complex_index = DynIndex::new_dyn(2);
-        let complex = tensor_from_cached_values(
-            vec![complex_index],
-            vec![
-                CachedScalar::C64(Complex64::new(1.0, -2.0)),
-                CachedScalar::C64(Complex64::new(3.0, -4.0)),
-            ],
-        )
-        .unwrap();
-        assert_eq!(
-            complex.to_vec::<Complex64>().unwrap(),
-            vec![Complex64::new(1.0, -2.0), Complex64::new(3.0, -4.0)]
-        );
-
-        let mixed_index = DynIndex::new_dyn(2);
-        let mixed = tensor_from_cached_values(
-            vec![mixed_index],
-            vec![
-                CachedScalar::F64(5.0),
-                CachedScalar::C64(Complex64::new(6.0, 7.0)),
-            ],
-        )
-        .unwrap();
-        let mixed_values = tensor_values_any(&mixed).unwrap();
-        assert_eq!(mixed_values[0].real(), 5.0);
-        assert_eq!(mixed_values[0].imag(), 0.0);
-        assert_eq!(mixed_values[1].real(), 6.0);
-        assert_eq!(mixed_values[1].imag(), 7.0);
-    }
-
-    #[test]
-    fn packed_message_cache_computes_and_stores_new_keys() {
-        let mut cache = PackedMessageCache::<u32, f64>::new(2, usize::MAX);
-        let mut compute_calls = 0usize;
-
-        let slots = cache
-            .get_or_compute_batch(&[1u32, 2u32], |missing: &[u32]| {
-                compute_calls += 1;
-                Ok::<_, anyhow::Error>(
-                    missing
-                        .iter()
-                        .map(|k| vec![*k as f64, (*k as f64) * 10.0])
-                        .collect(),
-                )
-            })
-            .unwrap();
-
-        assert_eq!(compute_calls, 1);
-        let CacheSlot::Cached(p0) = slots[0] else {
-            panic!("expected a cached slot: {:?}", slots[0])
-        };
-        let CacheSlot::Cached(p1) = slots[1] else {
-            panic!("expected a cached slot: {:?}", slots[1])
-        };
-        assert_eq!(cache.column(p0), &[1.0, 10.0]);
-        assert_eq!(cache.column(p1), &[2.0, 20.0]);
-    }
-
-    #[test]
-    fn packed_message_cache_reuses_columns_across_calls() {
-        let mut cache = PackedMessageCache::<u32, f64>::new(2, usize::MAX);
-        let mut compute_calls = 0usize;
-        let compute = |missing: &[u32]| -> std::result::Result<Vec<Vec<f64>>, anyhow::Error> {
-            Ok(missing.iter().map(|k| vec![*k as f64, 0.0]).collect())
-        };
-
-        let first = cache
-            .get_or_compute_batch(&[1u32, 2u32], |missing| {
-                compute_calls += 1;
-                compute(missing)
-            })
-            .unwrap();
-
-        // A later call across a batch that repeats key 1 and adds new key 3
-        // must recompute only the miss (3), not the already-cached hit (1).
-        let second = cache
-            .get_or_compute_batch(&[1u32, 3u32], |missing| {
-                compute_calls += 1;
-                assert_eq!(missing, &[3u32], "must not recompute an already-cached key");
-                compute(missing)
-            })
-            .unwrap();
-
-        assert_eq!(compute_calls, 2);
-        assert_eq!(second[0], first[0], "key 1 must resolve to the same column");
-        let CacheSlot::Cached(p3) = second[1] else {
-            panic!("expected a cached slot: {:?}", second[1])
-        };
-        assert_eq!(cache.column(p3), &[3.0, 0.0]);
-    }
-
-    #[test]
-    fn packed_message_cache_reports_cumulative_hits_and_misses() {
-        let mut cache = PackedMessageCache::<u32, f64>::new(2, usize::MAX);
-        let compute = |missing: &[u32]| -> std::result::Result<Vec<Vec<f64>>, anyhow::Error> {
-            Ok(missing.iter().map(|k| vec![*k as f64, 0.0]).collect())
-        };
-
-        cache.get_or_compute_batch(&[1u32, 2u32], compute).unwrap();
-        assert_eq!((cache.hits(), cache.misses()), (0, 2));
-
-        // key 1 repeats (a hit), key 3 is new (a miss); duplicate key 1 within
-        // the same batch counts as two hits, not one.
-        cache
-            .get_or_compute_batch(&[1u32, 1u32, 3u32], compute)
-            .unwrap();
-        assert_eq!((cache.hits(), cache.misses()), (2, 3));
-    }
-
-    #[test]
-    fn packed_message_cache_get_all_cached_returns_none_on_any_miss_without_counting() {
-        let mut cache = PackedMessageCache::<u32, f64>::new(2, usize::MAX);
-        cache
-            .get_or_compute_batch(&[1u32], |missing| {
-                Ok::<_, anyhow::Error>(missing.iter().map(|k| vec![*k as f64, 0.0]).collect())
-            })
-            .unwrap();
-
-        assert!(cache.get_all_cached(&[1u32, 2u32]).is_none());
-        assert_eq!(
-            (cache.hits(), cache.misses()),
-            (0, 1),
-            "a partial-miss lookup must not touch the counters"
-        );
-
-        let positions = cache.get_all_cached(&[1u32]).unwrap();
-        assert_eq!(cache.column(positions[0]), &[1.0, 0.0]);
-        assert_eq!((cache.hits(), cache.misses()), (1, 1));
-    }
-
-    #[test]
-    fn packed_message_cache_records_confirmed_partial_hits() {
-        let mut cache = PackedMessageCache::<u32, f64>::new(2, usize::MAX);
-        cache
-            .get_or_compute_batch(&[1u32, 2u32], |missing| {
-                Ok::<_, anyhow::Error>(missing.iter().map(|k| vec![*k as f64, 0.0]).collect())
-            })
-            .unwrap();
-
-        let hit_keys = [1u32, 1u32, 2u32];
-        assert!(hit_keys.iter().all(|key| cache.contains(key)));
-        cache.record_hits(hit_keys.len());
-
-        assert_eq!((cache.hits(), cache.misses()), (3, 2));
-    }
-
-    #[test]
-    fn packed_message_cache_stops_retaining_once_budget_is_exhausted() {
-        // bond_dim=2, f64 -> 16 bytes per column. Budget fits exactly one.
-        let mut cache = PackedMessageCache::<u32, f64>::new(2, 16);
-
-        let slots = cache
-            .get_or_compute_batch(&[1u32, 2u32], |missing| {
-                Ok::<_, anyhow::Error>(missing.iter().map(|k| vec![*k as f64, 0.0]).collect())
-            })
-            .unwrap();
-
-        let CacheSlot::Cached(position) = slots[0] else {
-            panic!(
-                "first key should fit the budget and be cached: {:?}",
-                slots[0]
-            );
-        };
-        assert_eq!(cache.column(position), &[1.0, 0.0]);
-
-        let CacheSlot::Uncached(ref values) = slots[1] else {
-            panic!(
-                "second key exceeds the budget and must not be retained: {:?}",
-                slots[1]
-            );
-        };
-        assert_eq!(values, &[2.0, 0.0]);
-        assert!(
-            !cache.contains(&2u32),
-            "an over-budget key must not be recorded as cached"
-        );
-
-        // Recomputed on a later call, since it was never retained.
-        let mut recompute_calls = 0usize;
-        let slots_again = cache
-            .get_or_compute_batch(&[2u32], |missing| {
-                recompute_calls += 1;
-                Ok::<_, anyhow::Error>(missing.iter().map(|k| vec![*k as f64, 0.0]).collect())
-            })
-            .unwrap();
-        assert_eq!(recompute_calls, 1);
-        assert!(matches!(slots_again[0], CacheSlot::Uncached(_)));
-    }
-
-    /// `get_or_compute_batch` trusts `compute_missing` to return exactly one
-    /// column per requested missing key. If a caller's closure violates that
-    /// contract (returns fewer), the call must report a descriptive error
-    /// rather than panicking.
-    #[test]
-    fn packed_message_cache_reports_an_error_when_compute_missing_returns_too_few_columns() {
-        let mut cache = PackedMessageCache::<u32, f64>::new(2, usize::MAX);
-
-        let result = cache.get_or_compute_batch(&[1u32, 2u32], |missing| {
-            // Only ever returns a column for the first requested key,
-            // regardless of how many were actually missing.
-            Ok::<_, anyhow::Error>(vec![vec![missing[0] as f64, 0.0]])
-        });
-
-        let error = result.expect_err("a short compute_missing result must not panic");
-        assert!(
-            error.to_string().contains("fewer columns"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn grouped_chain_contraction_matches_scalar_reference_for_real_values() {
-        let raw = vec![
-            1.0, 2.0, 3.0, 4.0, // physical value 0
-            5.0, 6.0, 7.0, 8.0, // physical value 1
-        ];
-        let physical_values = [0usize, 1, 0, 1];
-        let child_columns = [
-            0.5, 1.5, // point 0
-            2.0, 3.0, // point 1
-            4.0, 5.0, // point 2
-            6.0, 7.0, // point 3
-        ];
-
-        let spec = ChainContractionSpec {
-            strides: [1, 2, 4],
-            physical_axis: 0,
-            parent_axis: 1,
-            child_axis: 2,
-            parent_dim: 2,
-            child_dim: 2,
-        };
-        let actual = TreeTNCachedEvaluator::<usize>::grouped_chain_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child_columns,
-        )
-        .unwrap();
-
-        let expected = vec![
-            8.0, 12.0, // physical 0, child column [0.5, 1.5]
-            22.0, 32.0, // physical 1, child column [2.0, 3.0]
-            29.0, 47.0, // physical 0, child column [4.0, 5.0]
-            54.0, 80.0, // physical 1, child column [6.0, 7.0]
-        ];
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn grouped_chain_contraction_matches_scalar_reference_for_complex_values() {
-        let raw = vec![
-            Complex64::new(1.0, 0.5),
-            Complex64::new(2.0, -1.0),
-            Complex64::new(3.0, 1.5),
-            Complex64::new(4.0, -2.0),
-            Complex64::new(5.0, 2.5),
-            Complex64::new(6.0, -3.0),
-            Complex64::new(7.0, 3.5),
-            Complex64::new(8.0, -4.0),
-        ];
-        let physical_values = [0usize, 1, 0, 1];
-        let child_columns = [
-            Complex64::new(0.5, -0.5),
-            Complex64::new(1.5, 0.25),
-            Complex64::new(2.0, 1.0),
-            Complex64::new(3.0, -0.75),
-            Complex64::new(4.0, -1.5),
-            Complex64::new(5.0, 0.5),
-            Complex64::new(6.0, 2.0),
-            Complex64::new(7.0, -1.25),
-        ];
-
-        let spec = ChainContractionSpec {
-            strides: [1, 2, 4],
-            physical_axis: 0,
-            parent_axis: 1,
-            child_axis: 2,
-            parent_dim: 2,
-            child_dim: 2,
-        };
-        let actual = TreeTNCachedEvaluator::<usize>::grouped_chain_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child_columns,
-        )
-        .unwrap();
-
-        let expected = scalar_grouped_chain_reference(spec, &raw, &physical_values, &child_columns);
-        for (actual, expected) in actual.iter().zip(expected) {
-            assert!((actual - expected).norm() < 1.0e-10);
-        }
-    }
-
-    #[test]
-    fn grouped_branch_contraction_matches_direct_reference_for_real_values() {
-        // 2x2x2x2 tensor (physical=2, parent=2, child1=2, child2=2), axis
-        // order [physical, parent, child1, child2] so strides = [1, 2, 4, 8].
-        let raw: Vec<f64> = (0..16).map(|v| v as f64 + 1.0).collect();
-        let spec = BranchContractionSpec {
-            strides: [1, 2, 4, 8],
-            physical_axis: 0,
-            parent_axis: 1,
-            child_axis_1: 2,
-            child_axis_2: 3,
-            parent_dim: 2,
-            child_dim_1: 2,
-            child_dim_2: 2,
-        };
-        // 3 points (below the BLAS-group threshold, so this always exercises
-        // scalar_branch_message_contraction): point 0 at physical=0, points
-        // 1-2 at physical=1.
-        let physical_values = [0usize, 1, 1];
-        let child1_columns = [1.0, 0.5, 2.0, 1.0, 0.25, 3.0];
-        let child2_columns = [1.0, 1.0, 0.5, 2.0, 1.5, 0.5];
-
-        let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child1_columns,
-            &child2_columns,
-        )
-        .unwrap();
-
-        let mut expected = vec![0.0f64; 3 * 2];
-        for (p, &v) in physical_values.iter().enumerate() {
-            for parent in 0..2 {
-                let mut sum = 0.0;
-                for c1 in 0..2 {
-                    for c2 in 0..2 {
-                        let flat = v + 2 * parent + 4 * c1 + 8 * c2;
-                        sum += raw[flat] * child1_columns[p * 2 + c1] * child2_columns[p * 2 + c2];
-                    }
-                }
-                expected[p * 2 + parent] = sum;
-            }
-        }
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn grouped_chain_contraction_large_real_groups_match_scalar_reference() {
-        let parent_dim = 64;
-        let child_dim = 64;
-        let point_count = 16;
-        let spec = ChainContractionSpec {
-            strides: [1, 2, 2 * parent_dim],
-            physical_axis: 0,
-            parent_axis: 1,
-            child_axis: 2,
-            parent_dim,
-            child_dim,
-        };
-        let raw: Vec<f64> = (0..2 * parent_dim * child_dim)
-            .map(|value| (value % 19) as f64 - 9.0)
-            .collect();
-        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 2).collect();
-        let child_columns: Vec<f64> = (0..point_count * child_dim)
-            .map(|value| (value % 13) as f64 - 6.0)
-            .collect();
-
-        let actual = TreeTNCachedEvaluator::<usize>::grouped_chain_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child_columns,
-        )
-        .unwrap();
-        let expected = scalar_grouped_chain_reference(spec, &raw, &physical_values, &child_columns);
-
-        assert!(actual
-            .iter()
-            .zip(expected)
-            .all(|(actual, expected)| (actual - expected).abs() < 1.0e-8));
-    }
-
-    #[test]
-    fn grouped_chain_contraction_large_complex_groups_match_scalar_reference() {
-        let parent_dim = 64;
-        let child_dim = 64;
-        let point_count = 16;
-        let spec = ChainContractionSpec {
-            strides: [1, 2, 2 * parent_dim],
-            physical_axis: 0,
-            parent_axis: 1,
-            child_axis: 2,
-            parent_dim,
-            child_dim,
-        };
-        let raw: Vec<Complex64> = (0..2 * parent_dim * child_dim)
-            .map(|value| Complex64::new((value % 19) as f64 - 9.0, (value % 11) as f64 - 5.0))
-            .collect();
-        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 2).collect();
-        let child_columns: Vec<Complex64> = (0..point_count * child_dim)
-            .map(|value| Complex64::new((value % 13) as f64 - 6.0, (value % 7) as f64 - 3.0))
-            .collect();
-
-        let actual = TreeTNCachedEvaluator::<usize>::grouped_chain_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child_columns,
-        )
-        .unwrap();
-        let expected = scalar_grouped_chain_reference(spec, &raw, &physical_values, &child_columns);
-
-        assert!(actual
-            .iter()
-            .zip(expected)
-            .all(|(actual, expected)| (*actual - expected).norm() < 1.0e-8));
-    }
-
-    #[test]
-    fn grouped_branch_contraction_large_real_groups_match_scalar_reference() {
-        let parent_dim = 8;
-        let child_dim_1 = 8;
-        let child_dim_2 = 8;
-        let point_count = 16;
-        let spec = BranchContractionSpec {
-            strides: [1, 2, 2 * parent_dim, 2 * parent_dim * child_dim_1],
-            physical_axis: 0,
-            parent_axis: 1,
-            child_axis_1: 2,
-            child_axis_2: 3,
-            parent_dim,
-            child_dim_1,
-            child_dim_2,
-        };
-        let raw: Vec<f64> = (0..2 * parent_dim * child_dim_1 * child_dim_2)
-            .map(|value| (value % 19) as f64 - 9.0)
-            .collect();
-        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 2).collect();
-        let child1_columns: Vec<f64> = (0..point_count * child_dim_1)
-            .map(|value| (value % 13) as f64 - 6.0)
-            .collect();
-        let child2_columns: Vec<f64> = (0..point_count * child_dim_2)
-            .map(|value| (value % 11) as f64 - 5.0)
-            .collect();
-
-        let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child1_columns,
-            &child2_columns,
-        )
-        .unwrap();
-        let expected = scalar_branch_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child1_columns,
-            &child2_columns,
-        )
-        .unwrap();
-
-        assert!(actual
-            .iter()
-            .zip(expected)
-            .all(|(actual, expected)| (actual - expected).abs() < 1.0e-6));
-    }
-
-    #[cfg(feature = "diagnostics")]
-    #[test]
-    fn grouped_branch_contraction_counts_one_blas_dispatch_per_physical_group() {
-        let parent_dim = 8;
-        let child_dim_1 = 8;
-        let child_dim_2 = 8;
-        let point_count = 16;
-        let spec = BranchContractionSpec {
-            strides: [1, 2, 2 * parent_dim, 2 * parent_dim * child_dim_1],
-            physical_axis: 0,
-            parent_axis: 1,
-            child_axis_1: 2,
-            child_axis_2: 3,
-            parent_dim,
-            child_dim_1,
-            child_dim_2,
-        };
-        let raw: Vec<f64> = (0..2 * parent_dim * child_dim_1 * child_dim_2)
-            .map(|value| value as f64)
-            .collect();
-        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 2).collect();
-        let child1_columns = vec![1.0_f64; point_count * child_dim_1];
-        let child2_columns = vec![1.0_f64; point_count * child_dim_2];
-
-        diagnostics::reset();
-        TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child1_columns,
-            &child2_columns,
-        )
-        .unwrap();
-
-        assert_eq!(
-            diagnostics::kernel_snapshot().matmul_calls,
-            2,
-            "each physical-value group dispatches one matrix multiplication"
-        );
-
-        let chain_parent_dim = 64;
-        let chain_child_dim = 64;
-        let chain_spec = ChainContractionSpec {
-            strides: [1, 2, 2 * chain_parent_dim],
-            physical_axis: 0,
-            parent_axis: 1,
-            child_axis: 2,
-            parent_dim: chain_parent_dim,
-            child_dim: chain_child_dim,
-        };
-        let chain_raw = vec![1.0_f64; 2 * chain_parent_dim * chain_child_dim];
-        let chain_child_columns = vec![1.0_f64; point_count * chain_child_dim];
-
-        diagnostics::reset();
-        TreeTNCachedEvaluator::<usize>::grouped_chain_message_contraction(
-            chain_spec,
-            &chain_raw,
-            &physical_values,
-            &chain_child_columns,
-        )
-        .unwrap();
-
-        assert_eq!(
-            diagnostics::kernel_snapshot().matmul_calls,
-            2,
-            "each physical-value group dispatches one chain matrix multiplication"
-        );
-    }
-
-    /// Same shape as `grouped_branch_contraction_large_real_groups_match_scalar_reference`,
-    /// but with `parent_axis` mapped to `raw`'s stride-1 (fastest) position
-    /// instead of `physical_axis` -- the contiguous-read fast path added
-    /// alongside the loop-invariant-hoisting fix (both for issue #671) only
-    /// runs when `strides[parent_axis] == 1`, and no existing test happened
-    /// to exercise that case (every other fixture puts `physical_axis` at
-    /// stride 1).
-    #[test]
-    fn grouped_branch_contraction_matches_scalar_reference_when_parent_axis_is_contiguous() {
-        let parent_dim = 8;
-        let child_dim_1 = 8;
-        let child_dim_2 = 8;
-        let physical_dim = 2;
-        let point_count = 16;
-        let spec = BranchContractionSpec {
-            strides: [
-                1,
-                parent_dim,
-                parent_dim * physical_dim,
-                parent_dim * physical_dim * child_dim_1,
-            ],
-            parent_axis: 0,
-            physical_axis: 1,
-            child_axis_1: 2,
-            child_axis_2: 3,
-            parent_dim,
-            child_dim_1,
-            child_dim_2,
-        };
-        let raw: Vec<f64> = (0..parent_dim * physical_dim * child_dim_1 * child_dim_2)
-            .map(|value| (value % 19) as f64 - 9.0)
-            .collect();
-        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 2).collect();
-        let child1_columns: Vec<f64> = (0..point_count * child_dim_1)
-            .map(|value| (value % 13) as f64 - 6.0)
-            .collect();
-        let child2_columns: Vec<f64> = (0..point_count * child_dim_2)
-            .map(|value| (value % 11) as f64 - 5.0)
-            .collect();
-
-        let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child1_columns,
-            &child2_columns,
-        )
-        .unwrap();
-        let expected = scalar_branch_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child1_columns,
-            &child2_columns,
-        )
-        .unwrap();
-
-        assert!(actual
-            .iter()
-            .zip(expected)
-            .all(|(actual, expected)| (actual - expected).abs() < 1.0e-6));
-    }
-
-    /// Same shape again, but with `child_axis_2` mapped to `raw`'s stride-1
-    /// position -- the second contiguous-read fast path (issue #671), added
-    /// after a fast-axis census on a real R=10 run found `child_axis_2` the
-    /// single most common fast axis among branch BLAS calls (51% of calls,
-    /// vs. 35% for `parent_axis` and 0% for `child_axis_1`, which is why
-    /// `child_axis_1` gets no dedicated fast path here). Exercises the
-    /// scatter-write side (`child_axis_2` is contiguous to read but not
-    /// `left`'s contiguous write axis -- `parent` is), which the
-    /// `parent_axis`-contiguous test above does not.
-    #[test]
-    fn grouped_branch_contraction_matches_scalar_reference_when_child_axis_2_is_contiguous() {
-        let parent_dim = 8;
-        let child_dim_1 = 8;
-        let child_dim_2 = 8;
-        let physical_dim = 2;
-        let point_count = 16;
-        let spec = BranchContractionSpec {
-            strides: [
-                1,
-                child_dim_2,
-                child_dim_2 * physical_dim,
-                child_dim_2 * physical_dim * parent_dim,
-            ],
-            child_axis_2: 0,
-            physical_axis: 1,
-            parent_axis: 2,
-            child_axis_1: 3,
-            parent_dim,
-            child_dim_1,
-            child_dim_2,
-        };
-        let raw: Vec<f64> = (0..child_dim_2 * physical_dim * parent_dim * child_dim_1)
-            .map(|value| (value % 19) as f64 - 9.0)
-            .collect();
-        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 2).collect();
-        let child1_columns: Vec<f64> = (0..point_count * child_dim_1)
-            .map(|value| (value % 13) as f64 - 6.0)
-            .collect();
-        let child2_columns: Vec<f64> = (0..point_count * child_dim_2)
-            .map(|value| (value % 11) as f64 - 5.0)
-            .collect();
-
-        let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child1_columns,
-            &child2_columns,
-        )
-        .unwrap();
-        let expected = scalar_branch_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child1_columns,
-            &child2_columns,
-        )
-        .unwrap();
-
-        assert!(actual
-            .iter()
-            .zip(expected)
-            .all(|(actual, expected)| (actual - expected).abs() < 1.0e-6));
-    }
-
-    #[test]
-    fn grouped_branch_contraction_large_complex_groups_match_scalar_reference() {
-        let parent_dim = 8;
-        let child_dim_1 = 8;
-        let child_dim_2 = 8;
-        let point_count = 16;
-        let spec = BranchContractionSpec {
-            strides: [1, 2, 2 * parent_dim, 2 * parent_dim * child_dim_1],
-            physical_axis: 0,
-            parent_axis: 1,
-            child_axis_1: 2,
-            child_axis_2: 3,
-            parent_dim,
-            child_dim_1,
-            child_dim_2,
-        };
-        let raw: Vec<Complex64> = (0..2 * parent_dim * child_dim_1 * child_dim_2)
-            .map(|value| Complex64::new((value % 19) as f64 - 9.0, (value % 11) as f64 - 5.0))
-            .collect();
-        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 2).collect();
-        let child1_columns: Vec<Complex64> = (0..point_count * child_dim_1)
-            .map(|value| Complex64::new((value % 13) as f64 - 6.0, (value % 7) as f64 - 3.0))
-            .collect();
-        let child2_columns: Vec<Complex64> = (0..point_count * child_dim_2)
-            .map(|value| Complex64::new((value % 9) as f64 - 4.0, (value % 5) as f64 - 2.0))
-            .collect();
-
-        let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child1_columns,
-            &child2_columns,
-        )
-        .unwrap();
-        let expected = scalar_branch_message_contraction(
-            spec,
-            &raw,
-            &physical_values,
-            &child1_columns,
-            &child2_columns,
-        )
-        .unwrap();
-
-        assert!(actual
-            .iter()
-            .zip(expected)
-            .all(|(actual, expected)| (*actual - expected).norm() < 1.0e-6));
-    }
-
-    #[test]
-    fn grouped_branch_contiguous_read_fast_paths_match_complex_reference() {
-        let parent_dim = 8;
-        let child_dim_1 = 8;
-        let child_dim_2 = 8;
-        let physical_dim = 2;
-        let point_count = 16;
-        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 2).collect();
-        let child1_columns: Vec<Complex64> = (0..point_count * child_dim_1)
-            .map(|value| Complex64::new((value % 13) as f64 - 6.0, (value % 7) as f64 - 3.0))
-            .collect();
-        let child2_columns: Vec<Complex64> = (0..point_count * child_dim_2)
-            .map(|value| Complex64::new((value % 11) as f64 - 5.0, (value % 9) as f64 - 4.0))
-            .collect();
-
-        let check = |spec, raw: Vec<Complex64>| {
-            let actual = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction(
-                spec,
-                &raw,
-                &physical_values,
-                &child1_columns,
-                &child2_columns,
-            )
-            .unwrap();
-            let expected = scalar_branch_message_contraction(
-                spec,
-                &raw,
-                &physical_values,
-                &child1_columns,
-                &child2_columns,
-            )
-            .unwrap();
-
-            assert!(actual
-                .iter()
-                .zip(expected)
-                .all(|(actual, expected)| (*actual - expected).norm() < 1.0e-6));
-        };
-
-        // The parent-axis contiguous read path.
-        check(
-            BranchContractionSpec {
-                strides: [
-                    1,
-                    parent_dim,
-                    parent_dim * physical_dim,
-                    parent_dim * physical_dim * child_dim_1,
-                ],
-                parent_axis: 0,
-                physical_axis: 1,
-                child_axis_1: 2,
-                child_axis_2: 3,
-                parent_dim,
-                child_dim_1,
-                child_dim_2,
-            },
-            (0..parent_dim * physical_dim * child_dim_1 * child_dim_2)
-                .map(|value| Complex64::new((value % 19) as f64 - 9.0, (value % 11) as f64 - 5.0))
-                .collect(),
-        );
-
-        // The child-2 contiguous read and scatter-write path.
-        check(
-            BranchContractionSpec {
-                strides: [
-                    1,
-                    child_dim_2,
-                    child_dim_2 * physical_dim,
-                    child_dim_2 * physical_dim * parent_dim,
-                ],
-                child_axis_2: 0,
-                physical_axis: 1,
-                parent_axis: 2,
-                child_axis_1: 3,
-                parent_dim,
-                child_dim_1,
-                child_dim_2,
-            },
-            (0..child_dim_2 * physical_dim * parent_dim * child_dim_1)
-                .map(|value| Complex64::new((value % 23) as f64 - 11.0, (value % 7) as f64 - 3.0))
-                .collect(),
-        );
-    }
-
-    #[test]
-    fn prepared_branch_slice_cache_reuses_hits_and_returns_over_budget_fallbacks() {
-        let spec = BranchContractionSpec {
-            strides: [1, 2, 16, 128],
-            physical_axis: 0,
-            parent_axis: 1,
-            child_axis_1: 2,
-            child_axis_2: 3,
-            parent_dim: 8,
-            child_dim_1: 8,
-            child_dim_2: 8,
-        };
-        let raw: Vec<f64> = (0..2 * 8 * 8 * 8).map(|value| value as f64).collect();
-        let physical_values = vec![0usize; 16];
-        let child1_columns = vec![1.0_f64; 16 * 8];
-        let child2_columns = vec![1.0_f64; 16 * 8];
-        let slice_bytes = 8 * 8 * 8 * std::mem::size_of::<f64>();
-        let mut cache = PreparedBranchSliceCache::new(slice_bytes);
-
-        let first = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
-            &mut cache,
-            &0,
-            &1,
-            ScalarKind::F64,
-            BranchMessageBatch {
-                spec,
-                raw: &raw,
-                physical_values: &physical_values,
-                child1_columns: &child1_columns,
-                child2_columns: &child2_columns,
-            },
-        )
-        .unwrap();
-        let second = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
-            &mut cache,
-            &0,
-            &1,
-            ScalarKind::F64,
-            BranchMessageBatch {
-                spec,
-                raw: &vec![999.0; raw.len()],
-                physical_values: &physical_values,
-                child1_columns: &child1_columns,
-                child2_columns: &child2_columns,
-            },
-        )
-        .unwrap();
-        assert_eq!(first, second, "a cache hit must reuse the immutable slice");
-        assert_eq!(cache.len(), 1);
-        assert_eq!(cache.retained_bytes(), slice_bytes);
-
-        let physical_values_with_new_slice = vec![1usize; 16];
-        let third = TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
-            &mut cache,
-            &0,
-            &1,
-            ScalarKind::F64,
-            BranchMessageBatch {
-                spec,
-                raw: &raw,
-                physical_values: &physical_values_with_new_slice,
-                child1_columns: &child1_columns,
-                child2_columns: &child2_columns,
-            },
-        )
-        .unwrap();
-        let expected_third = scalar_branch_message_contraction(
-            spec,
-            &raw,
-            &physical_values_with_new_slice,
-            &child1_columns,
-            &child2_columns,
-        )
-        .unwrap();
-        assert_eq!(third, expected_third);
-        assert_eq!(cache.len(), 1, "an over-budget slice must not be retained");
-        assert_eq!(cache.retained_bytes(), slice_bytes);
-
-        let mut zero_budget_cache = PreparedBranchSliceCache::new(0);
-        let zero_budget =
-            TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
-                &mut zero_budget_cache,
-                &0,
-                &1,
-                ScalarKind::F64,
-                BranchMessageBatch {
-                    spec,
-                    raw: &raw,
-                    physical_values: &physical_values,
-                    child1_columns: &child1_columns,
-                    child2_columns: &child2_columns,
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            zero_budget,
-            scalar_branch_message_contraction(
-                spec,
-                &raw,
-                &physical_values,
-                &child1_columns,
-                &child2_columns,
-            )
-            .unwrap()
-        );
-        assert_eq!(zero_budget_cache.len(), 0);
-        assert_eq!(zero_budget_cache.retained_bytes(), 0);
-    }
-
-    #[test]
-    fn prepared_branch_slices_match_scalar_for_all_real_axis_orders_and_unequal_bonds() {
-        let point_count = 256;
-        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 3).collect();
-        let child1_columns: Vec<f64> = (0..point_count * 2)
-            .map(|value| (value % 17) as f64 - 8.0)
-            .collect();
-        let child2_columns: Vec<f64> = (0..point_count * 4)
-            .map(|value| (value % 23) as f64 - 11.0)
-            .collect();
-
-        for physical_axis in 0..4 {
-            for parent_axis in 0..4 {
-                if parent_axis == physical_axis {
-                    continue;
-                }
-                for child_axis_1 in 0..4 {
-                    if child_axis_1 == physical_axis || child_axis_1 == parent_axis {
-                        continue;
-                    }
-                    let child_axis_2 = (0..4)
-                        .find(|axis| {
-                            *axis != physical_axis && *axis != parent_axis && *axis != child_axis_1
-                        })
-                        .unwrap();
-                    let mut dims = [0usize; 4];
-                    dims[physical_axis] = 3;
-                    dims[parent_axis] = 3;
-                    dims[child_axis_1] = 2;
-                    dims[child_axis_2] = 4;
-                    let mut strides = [1usize; 4];
-                    for axis in 1..4 {
-                        strides[axis] = strides[axis - 1] * dims[axis - 1];
-                    }
-                    let spec = BranchContractionSpec {
-                        strides,
-                        physical_axis,
-                        parent_axis,
-                        child_axis_1,
-                        child_axis_2,
-                        parent_dim: 3,
-                        child_dim_1: 2,
-                        child_dim_2: 4,
-                    };
-                    let raw: Vec<f64> = (0..dims.iter().product())
-                        .map(|value| (value % 29) as f64 - 14.0)
-                        .collect();
-                    let mut cache = PreparedBranchSliceCache::new(usize::MAX);
-                    let actual =
-                        TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
-                            &mut cache,
-                            &0,
-                            &1,
-                            ScalarKind::F64,
-                            BranchMessageBatch {
-                                spec,
-                                raw: &raw,
-                                physical_values: &physical_values,
-                                child1_columns: &child1_columns,
-                                child2_columns: &child2_columns,
-                            },
-                        )
-                        .unwrap();
-                    let expected = scalar_branch_message_contraction(
-                        spec,
-                        &raw,
-                        &physical_values,
-                        &child1_columns,
-                        &child2_columns,
-                    )
-                    .unwrap();
-                    assert!(actual
-                        .iter()
-                        .zip(expected)
-                        .all(|(actual, expected)| (actual - expected).abs() < 1.0e-8));
-                    let expected_bytes = 3 * 3 * 2 * 4 * std::mem::size_of::<f64>();
-                    assert_eq!(cache.retained_bytes(), expected_bytes);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn prepared_branch_slices_match_scalar_for_all_complex_axis_orders_and_unequal_bonds() {
-        let point_count = 256;
-        let physical_values: Vec<usize> = (0..point_count).map(|point| point % 3).collect();
-        let child1_columns: Vec<Complex64> = (0..point_count * 2)
-            .map(|value| Complex64::new((value % 17) as f64 - 8.0, (value % 7) as f64 - 3.0))
-            .collect();
-        let child2_columns: Vec<Complex64> = (0..point_count * 4)
-            .map(|value| Complex64::new((value % 23) as f64 - 11.0, (value % 5) as f64 - 2.0))
-            .collect();
-
-        for physical_axis in 0..4 {
-            for parent_axis in 0..4 {
-                if parent_axis == physical_axis {
-                    continue;
-                }
-                for child_axis_1 in 0..4 {
-                    if child_axis_1 == physical_axis || child_axis_1 == parent_axis {
-                        continue;
-                    }
-                    let child_axis_2 = (0..4)
-                        .find(|axis| {
-                            *axis != physical_axis && *axis != parent_axis && *axis != child_axis_1
-                        })
-                        .unwrap();
-                    let mut dims = [0usize; 4];
-                    dims[physical_axis] = 3;
-                    dims[parent_axis] = 3;
-                    dims[child_axis_1] = 2;
-                    dims[child_axis_2] = 4;
-                    let mut strides = [1usize; 4];
-                    for axis in 1..4 {
-                        strides[axis] = strides[axis - 1] * dims[axis - 1];
-                    }
-                    let spec = BranchContractionSpec {
-                        strides,
-                        physical_axis,
-                        parent_axis,
-                        child_axis_1,
-                        child_axis_2,
-                        parent_dim: 3,
-                        child_dim_1: 2,
-                        child_dim_2: 4,
-                    };
-                    let raw: Vec<Complex64> = (0..dims.iter().product())
-                        .map(|value| {
-                            Complex64::new((value % 29) as f64 - 14.0, (value % 11) as f64 - 5.0)
-                        })
-                        .collect();
-                    let mut cache = PreparedBranchSliceCache::new(usize::MAX);
-                    let actual =
-                        TreeTNCachedEvaluator::<usize>::grouped_branch_message_contraction_cached(
-                            &mut cache,
-                            &0,
-                            &1,
-                            ScalarKind::C64,
-                            BranchMessageBatch {
-                                spec,
-                                raw: &raw,
-                                physical_values: &physical_values,
-                                child1_columns: &child1_columns,
-                                child2_columns: &child2_columns,
-                            },
-                        )
-                        .unwrap();
-                    let expected = scalar_branch_message_contraction(
-                        spec,
-                        &raw,
-                        &physical_values,
-                        &child1_columns,
-                        &child2_columns,
-                    )
-                    .unwrap();
-                    assert!(actual
-                        .iter()
-                        .zip(expected)
-                        .all(|(actual, expected)| (*actual - expected).norm() < 1.0e-8));
-                    let expected_bytes = 3 * 3 * 2 * 4 * std::mem::size_of::<Complex64>();
-                    assert_eq!(cache.retained_bytes(), expected_bytes);
-                }
-            }
-        }
-    }
-
-    fn scalar_grouped_chain_reference<
-        T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
-    >(
-        spec: ChainContractionSpec,
-        raw: &[T],
-        physical_values: &[usize],
-        child_columns: &[T],
-    ) -> Vec<T> {
-        let ChainContractionSpec {
-            strides,
-            physical_axis,
-            parent_axis,
-            child_axis,
-            parent_dim,
-            child_dim,
-        } = spec;
-        let mut output = vec![T::default(); parent_dim * physical_values.len()];
-        for (point, &physical_value) in physical_values.iter().enumerate() {
-            for parent_value in 0..parent_dim {
-                let mut sum = T::default();
-                for child_value in 0..child_dim {
-                    let mut axis_values = [0usize; 3];
-                    axis_values[physical_axis] = physical_value;
-                    axis_values[parent_axis] = parent_value;
-                    axis_values[child_axis] = child_value;
-                    let flat = axis_values[0] * strides[0]
-                        + axis_values[1] * strides[1]
-                        + axis_values[2] * strides[2];
-                    sum += raw[flat] * child_columns[point * child_dim + child_value];
-                }
-                output[point * parent_dim + parent_value] = sum;
-            }
-        }
-        output
-    }
-
-    fn varied_three_node_chain() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        let s0 = DynIndex::new_dyn(2);
-        let b01 = DynIndex::new_dyn(2);
-        let s1 = DynIndex::new_dyn(2);
-        let b12 = DynIndex::new_dyn(2);
-        let s2 = DynIndex::new_dyn(2);
-
-        let t0 = IdxTensor::from_dense(vec![s0.clone(), b01.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])
-            .unwrap();
-        let t1 = IdxTensor::from_dense(
-            vec![b01, s1.clone(), b12.clone()],
-            (0..8).map(|i| i as f64 + 1.0).collect(),
-        )
-        .unwrap();
-        let t2 =
-            IdxTensor::from_dense(vec![b12, s2.clone()], vec![0.5_f64, 1.5, 2.5, 3.5]).unwrap();
-        let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1, t2], vec![0, 1, 2]).unwrap();
-        (tree, vec![s0, s1, s2])
-    }
-
-    /// A persistent per-edge message cache must not change results and must
-    /// actually get used across separate `evaluate_batched` calls on the same
-    /// evaluator -- the whole point of #626/#646's review-requested cache.
-    #[test]
-    fn evaluate_batched_reuses_persistent_message_cache_across_calls() {
-        let (tree, indices) = varied_three_node_chain();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let shape = [3usize, 2usize];
-
-        let values1 = [0usize, 0, 0, 0, 0, 1];
-        let points1 = ColMajorArrayRef::new(&values1, &shape).unwrap();
-        let actual1 = evaluator.evaluate_batched(points1).unwrap();
-        let expected1 = tree.evaluate(&indices, points1).unwrap();
-        assert_scalars_close(&actual1, &expected1);
-
-        // Repeats point0=(0,0,0) from the first call; point1=(1,0,0) is new.
-        let values2 = [0usize, 0, 0, 1, 0, 0];
-        let points2 = ColMajorArrayRef::new(&values2, &shape).unwrap();
-        let actual2 = evaluator.evaluate_batched(points2).unwrap();
-        let expected2 = tree.evaluate(&indices, points2).unwrap();
-        assert_scalars_close(&actual2, &expected2);
-
-        let stats = evaluator.stats_for_test();
-        assert!(
-            stats.message_cache_hits > 0,
-            "expected at least one message cache hit on the second call: {stats:?}"
-        );
-    }
-
-    #[test]
-    fn complex_cached_evaluator_preserves_values_across_cache_reuse() {
-        let (tree, indices) = complex_three_node_chain();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let shape = [3usize, 2usize];
-        let values1 = [0usize, 0, 0, 0, 0, 1];
-        let points1 = ColMajorArrayRef::new(&values1, &shape).unwrap();
-        let actual1 = evaluator.evaluate_batched(points1).unwrap();
-        let expected1 = tree.evaluate(&indices, points1).unwrap();
-        for (actual, expected) in actual1.iter().zip(expected1.iter()) {
-            assert!((actual.real() - expected.real()).abs() < 1.0e-12);
-            assert!((actual.imag() - expected.imag()).abs() < 1.0e-12);
-        }
-
-        let values2 = [0usize, 0, 0, 1, 0, 0];
-        let points2 = ColMajorArrayRef::new(&values2, &shape).unwrap();
-        let actual2 = evaluator.evaluate_batched(points2).unwrap();
-        let expected2 = tree.evaluate(&indices, points2).unwrap();
-        for (actual, expected) in actual2.iter().zip(expected2.iter()) {
-            assert!((actual.real() - expected.real()).abs() < 1.0e-12);
-            assert!((actual.imag() - expected.imag()).abs() < 1.0e-12);
-        }
-        assert!(evaluator.stats_for_test().message_cache_hits > 0);
-    }
-
-    #[test]
-    fn message_cache_reuses_a_subtree_when_another_site_changes() {
-        let (tree, indices) = varied_three_node_chain();
-        let shape = [3usize, 1usize];
-        let first_values = [0usize, 0, 0];
-        let second_values = [0usize, 0, 1];
-        let first = ColMajorArrayRef::new(&first_values, &shape).unwrap();
-        let second = ColMajorArrayRef::new(&second_values, &shape).unwrap();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let actual_first = evaluator.evaluate_batched(first).unwrap();
-        let actual_second = evaluator.evaluate_batched(second).unwrap();
-        let expected_first = tree.evaluate(&indices, first).unwrap();
-        let expected_second = tree.evaluate(&indices, second).unwrap();
-        assert_scalars_close(&actual_first, &expected_first);
-        assert_scalars_close(&actual_second, &expected_second);
-        assert!(
-            evaluator.stats_for_test().message_cache_hits > 0,
-            "changing a site outside node 0's subtree should reuse its cached message: {:?}",
-            evaluator.stats_for_test()
-        );
-    }
-
-    #[test]
-    fn zero_message_cache_budget_preserves_results_without_retaining_payload() {
-        let (tree, indices) = varied_three_node_chain();
-        let values = [0usize, 0, 0, 1, 0, 0];
-        let shape = [3usize, 2usize];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(0),
-                message_cache_max_bytes: 0,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let actual = evaluator.evaluate_batched(points).unwrap();
-
-        assert_scalars_close(&actual, &expected);
-        assert!(!evaluator.message_caches.is_empty());
-        assert!(evaluator
-            .message_caches
-            .values()
-            .all(|cache| cache.retained_bytes() == 0));
-        assert_eq!(evaluator.stats_for_test().message_cache_hits, 0);
-    }
-
-    /// Root cause of the cache slowdown (see the message-cache-prototype
-    /// worklog) is `IdxTensor::to_vec` on a `contract_with_options` result
-    /// hitting an expensive non-contiguous/backend-resident fallback. This
-    /// tests the fix's first slice: a leaf node's message computed directly
-    /// from the tree tensor's raw data, with no `contract_with_options` and
-    /// no intermediate `IdxTensor` at all, must match the existing generic
-    /// path exactly.
-    #[test]
-    fn raw_leaf_message_matches_generic_contraction() {
-        let (tree, indices) = varied_three_node_chain();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let shape = [3usize, 2usize];
-        let values = [0usize, 0, 0, 0, 0, 1];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-
-        // Force layout/center bookkeeping the same way evaluate_batched would.
-        evaluator.evaluate_batched(points).unwrap();
-
-        let plan = RootedMessagePlan::new(&tree, &0).unwrap();
-        let assignment_batches = evaluator
-            .build_message_assignment_batches(&plan, points)
-            .unwrap();
-        let leaf_points = assignment_batches.get(&2).unwrap().first_points.clone();
-
-        let expected_message = evaluator
-            .compute_stacked_message(
-                &2,
-                points,
-                &leaf_points,
-                &plan,
-                &assignment_batches,
-                &HashMap::new(),
-            )
-            .unwrap();
-        let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
-
-        let actual = evaluator
-            .try_compute_leaf_message_raw(&2, points, &leaf_points)
-            .unwrap()
-            .expect("leaf node with one physical index and a real tensor must be eligible");
-
-        assert_eq!(actual.len(), expected.len());
-        for (a, e) in actual.iter().zip(expected.iter()) {
-            assert!(
-                (a - e.real()).abs() < 1.0e-12,
-                "raw={a} generic={}",
-                e.real()
-            );
-        }
-    }
-
-    #[test]
-    fn raw_complex_leaf_message_matches_generic_contraction() {
-        let (tree, indices) = complex_three_node_chain();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let shape = [3usize, 2usize];
-        let values = [0usize, 0, 0, 0, 0, 1];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-
-        evaluator.evaluate_batched(points).unwrap();
-
-        let plan = RootedMessagePlan::new(&tree, &0).unwrap();
-        let assignment_batches = evaluator
-            .build_message_assignment_batches(&plan, points)
-            .unwrap();
-        let leaf_points = assignment_batches.get(&2).unwrap().first_points.clone();
-        let expected_message = evaluator
-            .compute_stacked_message(
-                &2,
-                points,
-                &leaf_points,
-                &plan,
-                &assignment_batches,
-                &HashMap::new(),
-            )
-            .unwrap();
-        let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
-
-        let actual = evaluator
-            .try_compute_leaf_message_complex_raw(&2, points, &leaf_points)
-            .unwrap()
-            .expect("complex leaf message should use the raw path");
-
-        assert_eq!(actual.len(), expected.len());
-        for (actual, expected) in actual.iter().zip(expected.iter()) {
-            assert!((actual.re - expected.real()).abs() < 1.0e-12);
-            assert!((actual.im - expected.imag()).abs() < 1.0e-12);
-        }
-    }
-
-    #[test]
-    fn raw_chain_message_matches_generic_contraction() {
-        let (tree, indices) = varied_three_node_chain();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let shape = [3usize, 2usize];
-        let values = [0usize, 0, 0, 0, 0, 1];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-        evaluator.evaluate_batched(points).unwrap();
-
-        let plan = RootedMessagePlan::new(&tree, &0).unwrap();
-        let assignment_batches = evaluator
-            .build_message_assignment_batches(&plan, points)
-            .unwrap();
-
-        // Node 2 (leaf, child of node 1) via the generic oracle path.
-        let leaf_points = assignment_batches.get(&2).unwrap().first_points.clone();
-        let node2_message = evaluator
-            .compute_stacked_message(
-                &2,
-                points,
-                &leaf_points,
-                &plan,
-                &assignment_batches,
-                &HashMap::new(),
-            )
-            .unwrap();
-        let mut messages = HashMap::new();
-        messages.insert(2usize, node2_message);
-
-        let node1_points = assignment_batches.get(&1).unwrap().first_points.clone();
-        let expected_message = evaluator
-            .compute_stacked_message(
-                &1,
-                points,
-                &node1_points,
-                &plan,
-                &assignment_batches,
-                &messages,
-            )
-            .unwrap();
-        let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
-
-        let actual = evaluator
-            .try_compute_chain_message_raw(
-                &1,
-                points,
-                &node1_points,
-                &plan,
-                &assignment_batches,
-                &messages,
-            )
-            .unwrap()
-            .expect("interior node with one child and one physical index must be eligible");
-
-        assert_eq!(actual.len(), expected.len());
-        for (a, e) in actual.iter().zip(expected.iter()) {
-            assert!(
-                (a - e.real()).abs() < 1.0e-10,
-                "raw={a} generic={}",
-                e.real()
-            );
-        }
-    }
-
-    #[test]
-    fn raw_complex_chain_message_matches_generic_contraction() {
-        let (tree, indices) = complex_three_node_chain();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let shape = [3usize, 2usize];
-        let values = [0usize, 0, 0, 0, 0, 1];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-        evaluator.evaluate_batched(points).unwrap();
-
-        let plan = RootedMessagePlan::new(&tree, &0).unwrap();
-        let assignment_batches = evaluator
-            .build_message_assignment_batches(&plan, points)
-            .unwrap();
-
-        let leaf_points = assignment_batches.get(&2).unwrap().first_points.clone();
-        let node2_message = evaluator
-            .compute_stacked_message(
-                &2,
-                points,
-                &leaf_points,
-                &plan,
-                &assignment_batches,
-                &HashMap::new(),
-            )
-            .unwrap();
-        let mut messages = HashMap::new();
-        messages.insert(2usize, node2_message);
-
-        let node1_points = assignment_batches.get(&1).unwrap().first_points.clone();
-        let expected_message = evaluator
-            .compute_stacked_message(
-                &1,
-                points,
-                &node1_points,
-                &plan,
-                &assignment_batches,
-                &messages,
-            )
-            .unwrap();
-        let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
-
-        let actual = evaluator
-            .try_compute_chain_message_complex_raw(
-                &1,
-                points,
-                &node1_points,
-                &plan,
-                &assignment_batches,
-                &messages,
-            )
-            .unwrap()
-            .expect("complex chain message should use the raw path");
-
-        assert_eq!(actual.len(), expected.len());
-        for (actual, expected) in actual.iter().zip(expected.iter()) {
-            assert!((actual.re - expected.real()).abs() < 1.0e-10);
-            assert!((actual.im - expected.imag()).abs() < 1.0e-10);
-        }
-    }
-
-    #[test]
-    fn raw_branch_message_matches_generic_contraction() {
-        let (tree, indices) = star_tree();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let shape = [4usize, 2usize];
-        let values = [0usize, 0, 0, 0, 1, 0, 1, 1];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-        evaluator.evaluate_batched(points).unwrap();
-
-        let plan = RootedMessagePlan::new(&tree, &1).unwrap();
-        let assignment_batches = evaluator
-            .build_message_assignment_batches(&plan, points)
-            .unwrap();
-
-        // Nodes 2 and 3 (leaves, the hub's two children when rooted at leaf
-        // 1) via the generic oracle path.
-        let mut messages = HashMap::new();
-        for leaf in [2usize, 3usize] {
-            let leaf_points = assignment_batches.get(&leaf).unwrap().first_points.clone();
-            let leaf_message = evaluator
-                .compute_stacked_message(
-                    &leaf,
-                    points,
-                    &leaf_points,
-                    &plan,
-                    &assignment_batches,
-                    &HashMap::new(),
-                )
-                .unwrap();
-            messages.insert(leaf, leaf_message);
-        }
-
-        let hub_points = assignment_batches.get(&0).unwrap().first_points.clone();
-        let expected_message = evaluator
-            .compute_stacked_message(
-                &0,
-                points,
-                &hub_points,
-                &plan,
-                &assignment_batches,
-                &messages,
-            )
-            .unwrap();
-        let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
-
-        let actual = evaluator
-            .try_compute_branch_message_raw(
-                &0,
-                points,
-                &hub_points,
-                &plan,
-                &assignment_batches,
-                &messages,
-            )
-            .unwrap()
-            .expect("branch node with two children and one physical index must be eligible");
-
-        assert_eq!(actual.len(), expected.len());
-        for (a, e) in actual.iter().zip(expected.iter()) {
-            assert!(
-                (a - e.real()).abs() < 1.0e-10,
-                "raw={a} generic={}",
-                e.real()
-            );
-        }
-    }
-
-    #[test]
-    fn degree_three_hub_keeps_raw_messages_when_center_is_a_leaf() {
-        let (tree, indices) = star_tree();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let shape = [4usize, 2usize];
-        let values = [0usize, 0, 0, 0, 1, 0, 1, 1];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-
-        let (_, environments) = evaluator.build_environment_cache(&1, points).unwrap();
-        let hub_message = environments
-            .get(&0)
-            .expect("leaf-centered star must expose the hub environment");
-
-        assert!(
-            hub_message.raw_values.is_some(),
-            "a degree-3 hub rooted at a leaf should retain its raw branch message"
-        );
-        assert!(
-            hub_message.tensor.is_none(),
-            "raw branch messages should not be materialized into an IdxTensor"
-        );
-    }
-
-    #[test]
-    fn evaluator_reuses_unequal_branch_slices_and_zero_budget_falls_back() {
-        let (tree, indices) = unequal_branch_tree();
-        let values1 = unequal_branch_values(0);
-        let points1 = ColMajorArrayRef::new(&values1, &[4, 64]).unwrap();
-        let expected1 = tree.evaluate(&indices, points1).unwrap();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                max_batch_points: Some(usize::MAX),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let actual1 = evaluator.evaluate_batched(points1).unwrap();
-        assert_scalars_close(&actual1, &expected1);
-        assert_eq!(evaluator.prepared_branch_slices_f64.len(), 3);
-        assert_eq!(
-            evaluator.prepared_branch_slices_f64.retained_bytes(),
-            3 * 8 * 6 * 4 * std::mem::size_of::<f64>()
-        );
-
-        let values2 = unequal_branch_values(1);
-        let points2 = ColMajorArrayRef::new(&values2, &[4, 64]).unwrap();
-        let expected2 = tree.evaluate(&indices, points2).unwrap();
-        let actual2 = evaluator.evaluate_batched(points2).unwrap();
-        assert_scalars_close(&actual2, &expected2);
-        assert_eq!(evaluator.prepared_branch_slices_f64.len(), 3);
-
-        let mut zero_budget = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                max_batch_points: Some(usize::MAX),
-                branch_slice_cache_max_bytes: 0,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let actual_zero = zero_budget.evaluate_batched(points1).unwrap();
-        assert_scalars_close(&actual_zero, &expected1);
-        assert_eq!(zero_budget.prepared_branch_slices_f64.len(), 0);
-        assert_eq!(zero_budget.prepared_branch_slices_f64.retained_bytes(), 0);
-    }
-
-    #[cfg(feature = "diagnostics")]
-    #[test]
-    fn build_environment_cache_records_guard_diagnostics_per_node_with_correct_coordination_numbers(
-    ) {
-        use crate::treetn::diagnostics;
-
-        let (tree, indices) = star_tree();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let shape = [4usize, 2usize];
-        let values = [0usize, 0, 0, 0, 1, 0, 1, 1];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-
-        diagnostics::reset();
-        let _ = evaluator.build_environment_cache(&1, points).unwrap();
-
-        let snapshot = diagnostics::snapshot();
-        let hub_record = snapshot
-            .iter()
-            .find(|record| record.node == "tree:0")
-            .expect("hub node (0) recorded");
-        assert_eq!(hub_record.coordination_number, 3);
-        assert_eq!(hub_record.bond_dims.len(), 3);
-        assert!(hub_record.guard_cache_hits + hub_record.guard_cache_misses > 0);
-
-        for leaf in ["tree:2", "tree:3"] {
-            let leaf_record = snapshot
-                .iter()
-                .find(|record| record.node == leaf)
-                .unwrap_or_else(|| panic!("leaf node ({leaf}) recorded"));
-            assert_eq!(leaf_record.coordination_number, 1);
-        }
-    }
-
-    /// A degree-4 hub used to disqualify the whole tree from the raw path,
-    /// because its leaf-rooted form has three children and no kernel covered
-    /// that. `try_compute_multi_branch_message_raw` does, so the tree keeps
-    /// its raw messages (tensor4all-rs #727).
-    #[test]
-    fn degree_four_hub_keeps_raw_messages_when_center_is_a_leaf() {
-        let (tree, indices) = four_arm_star_tree();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let values = vec![0usize; 5];
-        let shape = [5usize, 1usize];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-
-        let (_, environments) = evaluator.build_environment_cache(&1, points).unwrap();
-        let hub_message = environments
-            .get(&0)
-            .expect("leaf-centered star must expose the hub environment");
-
-        assert!(
-            hub_message.raw_values.is_some(),
-            "a degree-4 hub is covered by the arbitrary-degree message kernel"
-        );
-        assert!(hub_message.tensor.is_none());
-    }
-
-    fn complex_star_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        let sc = DynIndex::new_dyn(2);
-        let s0 = DynIndex::new_dyn(2);
-        let s1 = DynIndex::new_dyn(2);
-        let s2 = DynIndex::new_dyn(2);
-        let b0 = DynIndex::new_dyn(2);
-        let b1 = DynIndex::new_dyn(2);
-        let b2 = DynIndex::new_dyn(2);
-        let center_data: Vec<Complex64> = (0..16)
-            .map(|value| Complex64::new(value as f64 + 1.0, -(value as f64) * 0.25))
-            .collect();
-        let center = IdxTensor::from_dense(
-            vec![sc.clone(), b0.clone(), b1.clone(), b2.clone()],
-            center_data,
-        )
-        .unwrap();
-        let leaf0 = IdxTensor::from_dense(
-            vec![b0, s0.clone()],
-            vec![
-                Complex64::new(1.0, 0.5),
-                Complex64::new(0.5, -0.25),
-                Complex64::new(1.5, 0.75),
-                Complex64::new(2.0, -1.0),
-            ],
-        )
-        .unwrap();
-        let leaf1 = IdxTensor::from_dense(
-            vec![b1, s1.clone()],
-            vec![
-                Complex64::new(0.25, -0.5),
-                Complex64::new(1.0, 0.25),
-                Complex64::new(1.25, -0.75),
-                Complex64::new(2.0, 1.0),
-            ],
-        )
-        .unwrap();
-        let leaf2 = IdxTensor::from_dense(
-            vec![b2, s2.clone()],
-            vec![
-                Complex64::new(2.0, 0.5),
-                Complex64::new(1.0, -0.25),
-                Complex64::new(0.75, 0.5),
-                Complex64::new(1.5, -1.0),
-            ],
-        )
-        .unwrap();
-        let tree =
-            TreeTN::<_, usize>::from_tensors(vec![center, leaf0, leaf1, leaf2], vec![0, 1, 2, 3])
-                .unwrap();
-        (tree, vec![sc, s0, s1, s2])
-    }
-
-    #[test]
-    fn raw_complex_branch_message_matches_generic_contraction() {
-        let (tree, indices) = complex_star_tree();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let shape = [4usize, 2usize];
-        let values = [0usize, 0, 0, 0, 1, 0, 1, 1];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-        evaluator.evaluate_batched(points).unwrap();
-
-        let plan = RootedMessagePlan::new(&tree, &1).unwrap();
-        let assignment_batches = evaluator
-            .build_message_assignment_batches(&plan, points)
-            .unwrap();
-
-        let mut messages = HashMap::new();
-        for leaf in [2usize, 3usize] {
-            let leaf_points = assignment_batches.get(&leaf).unwrap().first_points.clone();
-            let leaf_message = evaluator
-                .compute_stacked_message(
-                    &leaf,
-                    points,
-                    &leaf_points,
-                    &plan,
-                    &assignment_batches,
-                    &HashMap::new(),
-                )
-                .unwrap();
-            messages.insert(leaf, leaf_message);
-        }
-
-        let hub_points = assignment_batches.get(&0).unwrap().first_points.clone();
-        let expected_message = evaluator
-            .compute_stacked_message(
-                &0,
-                points,
-                &hub_points,
-                &plan,
-                &assignment_batches,
-                &messages,
-            )
-            .unwrap();
-        let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
-
-        let actual = evaluator
-            .try_compute_branch_message_complex_raw(
-                &0,
-                points,
-                &hub_points,
-                &plan,
-                &assignment_batches,
-                &messages,
-            )
-            .unwrap()
-            .expect("complex branch message should use the raw path");
-
-        assert_eq!(actual.len(), expected.len());
-        for (actual, expected) in actual.iter().zip(expected.iter()) {
-            assert!((actual.re - expected.real()).abs() < 1.0e-10);
-            assert!((actual.im - expected.imag()).abs() < 1.0e-10);
-        }
-    }
-
-    #[test]
-    fn fixed_center_and_scan_hint_evaluation_match() {
-        let (tree, indices) = complex_three_node_chain();
-        let shape = [3usize, 2usize];
-        let values = [0usize, 0, 0, 0, 0, 1];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-
-        let mut hinted =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::<usize>::default())
-                .unwrap();
-        let mut fixed_center =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::<usize>::default())
-                .unwrap();
-
-        let hinted_values = hinted
-            .evaluate_batched_with_hint(points, EvaluationHint::around(1))
-            .unwrap();
-        let fixed_center_values = fixed_center.evaluate_batched(points).unwrap();
-
-        assert_scalars_close(&hinted_values, &fixed_center_values);
-    }
-
-    #[test]
-    fn raw_degree_three_center_matches_exact_real_evaluation() {
-        let (tree, indices) = star_tree();
-        let values = [0usize, 0, 0, 0, 1, 0, 1, 1];
-        let points = ColMajorArrayRef::new(&values, &[4, 2]).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::<usize>::default())
-                .unwrap();
-
-        let actual = evaluator
-            .evaluate_batched_with_hint(points, EvaluationHint::around(0))
-            .unwrap();
-
-        assert_scalars_close(&actual, &expected);
-    }
-
-    #[test]
-    fn raw_degree_three_center_matches_exact_complex_evaluation() {
-        let (tree, indices) = complex_star_tree();
-        let values = [0usize, 0, 0, 0, 1, 0, 1, 1];
-        let points = ColMajorArrayRef::new(&values, &[4, 2]).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::<usize>::default())
-                .unwrap();
-
-        let actual = evaluator
-            .evaluate_batched_with_hint(points, EvaluationHint::around(0))
-            .unwrap();
-
-        assert_scalars_close(&actual, &expected);
-    }
-
-    #[test]
-    fn changing_center_hint_reuses_unchanged_directed_messages() {
-        let (tree, indices) = complex_three_node_chain();
-        let shape = [3usize, 1usize];
-        let values = [0usize, 0, 0];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::<usize>::default())
-                .unwrap();
-
-        let first = evaluator
-            .evaluate_batched_with_hint(points, EvaluationHint::around(0))
-            .unwrap();
-        let second = evaluator
-            .evaluate_batched_with_hint(points, EvaluationHint::around(1))
-            .unwrap();
-
-        assert_scalars_close(&first, &expected);
-        assert_scalars_close(&second, &expected);
-        let stats = evaluator.stats_for_test();
-        assert_eq!(
-            stats.message_cache_hits, 2,
-            "both selected cut directions should be reused after changing centers: {stats:?}"
-        );
-        assert_eq!(
-            stats.message_cache_misses, 0,
-            "changing the center should not invalidate either cut direction: {stats:?}"
-        );
-    }
-
-    fn assert_scalars_close(actual: &[AnyScalar], expected: &[AnyScalar]) {
-        assert_eq!(actual.len(), expected.len());
-        for (actual, expected) in actual.iter().zip(expected.iter()) {
-            assert!(
-                (actual.real() - expected.real()).abs() < 1.0e-12,
-                "actual={actual:?} expected={expected:?}"
-            );
-            assert!(
-                (actual.imag() - expected.imag()).abs() < 1.0e-12,
-                "actual={actual:?} expected={expected:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn stack_tensors_adds_trailing_assignment_axis_in_column_major_order() {
-        let batch = DynIndex::new_dyn(2);
-        let i = DynIndex::new_dyn(2);
-        let a = IdxTensor::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
-        let b = IdxTensor::from_dense(vec![i.clone()], vec![3.0_f64, 4.0]).unwrap();
-
-        let stacked = stack_tensors_with_assignment_index(&batch, &[a, b]).unwrap();
-
-        assert_eq!(stacked.indices(), &[i, batch]);
-        assert_eq!(stacked.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
-    }
-
-    #[test]
-    fn gather_stacked_tensor_remaps_trailing_assignment_axis() {
-        let source_batch = DynIndex::new_dyn(3);
-        let target_batch = DynIndex::new_dyn(4);
-        let i = DynIndex::new_dyn(2);
-        let stacked = IdxTensor::from_dense(
-            vec![i.clone(), source_batch.clone()],
-            vec![10.0_f64, 11.0, 20.0, 21.0, 30.0, 31.0],
-        )
-        .unwrap();
-
-        let gathered =
-            gather_stacked_tensor(&stacked, &source_batch, &target_batch, &[2, 0, 2, 1]).unwrap();
-
-        assert_eq!(gathered.indices(), &[i, target_batch]);
-        assert_eq!(
-            gathered.to_vec::<f64>().unwrap(),
-            vec![30.0, 31.0, 10.0, 11.0, 30.0, 31.0, 20.0, 21.0]
-        );
-    }
-
-    fn two_node_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        let s0 = DynIndex::new_dyn(2);
-        let bond = DynIndex::new_dyn(2);
-        let s1 = DynIndex::new_dyn(2);
-
-        let t0 =
-            IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])
-                .unwrap();
-        let t1 =
-            IdxTensor::from_dense(vec![bond, s1.clone()], vec![0.5_f64, 1.5, 2.5, 3.5]).unwrap();
-
-        let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
-        (tree, vec![s0, s1])
-    }
-
-    fn three_node_chain() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        let s0 = DynIndex::new_dyn(2);
-        let b01 = DynIndex::new_dyn(2);
-        let s1 = DynIndex::new_dyn(2);
-        let b12 = DynIndex::new_dyn(2);
-        let s2 = DynIndex::new_dyn(2);
-
-        let t0 = IdxTensor::from_dense(vec![s0.clone(), b01.clone()], vec![1.0_f64; 4]).unwrap();
-        let t1 =
-            IdxTensor::from_dense(vec![b01, s1.clone(), b12.clone()], vec![1.0_f64; 8]).unwrap();
-        let t2 = IdxTensor::from_dense(vec![b12, s2.clone()], vec![1.0_f64; 4]).unwrap();
-        let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1, t2], vec![0, 1, 2]).unwrap();
-        (tree, vec![s0, s1, s2])
-    }
-
-    fn complex_three_node_chain() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        let s0 = DynIndex::new_dyn(2);
-        let b01 = DynIndex::new_dyn(2);
-        let s1 = DynIndex::new_dyn(2);
-        let b12 = DynIndex::new_dyn(2);
-        let s2 = DynIndex::new_dyn(2);
-
-        let t0 = IdxTensor::from_dense(
-            vec![s0.clone(), b01.clone()],
-            vec![
-                Complex64::new(1.0, 0.5),
-                Complex64::new(-0.25, 1.5),
-                Complex64::new(2.0, -0.75),
-                Complex64::new(0.5, -1.0),
-            ],
-        )
-        .unwrap();
-        let t1 = IdxTensor::from_dense(
-            vec![b01, s1.clone(), b12.clone()],
-            (0..8)
-                .map(|value| Complex64::new(value as f64 + 0.5, -(value as f64) * 0.25))
-                .collect(),
-        )
-        .unwrap();
-        let t2 = IdxTensor::from_dense(
-            vec![b12, s2.clone()],
-            vec![
-                Complex64::new(0.75, -0.5),
-                Complex64::new(1.25, 0.25),
-                Complex64::new(-1.0, 0.75),
-                Complex64::new(2.5, -1.25),
-            ],
-        )
-        .unwrap();
-        let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1, t2], vec![0, 1, 2]).unwrap();
-        (tree, vec![s0, s1, s2])
-    }
-
-    fn five_node_chain() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        let sites: Vec<DynIndex> = (0..5).map(|_| DynIndex::new_dyn(2)).collect();
-        let bonds: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
-
-        let t0 = IdxTensor::from_dense(vec![sites[0].clone(), bonds[0].clone()], vec![1.0_f64; 4])
-            .unwrap();
-        let t1 = IdxTensor::from_dense(
-            vec![bonds[0].clone(), sites[1].clone(), bonds[1].clone()],
-            vec![1.0_f64; 8],
-        )
-        .unwrap();
-        let t2 = IdxTensor::from_dense(
-            vec![bonds[1].clone(), sites[2].clone(), bonds[2].clone()],
-            vec![1.0_f64; 8],
-        )
-        .unwrap();
-        let t3 = IdxTensor::from_dense(
-            vec![bonds[2].clone(), sites[3].clone(), bonds[3].clone()],
-            vec![1.0_f64; 8],
-        )
-        .unwrap();
-        let t4 = IdxTensor::from_dense(vec![bonds[3].clone(), sites[4].clone()], vec![1.0_f64; 4])
-            .unwrap();
-
-        let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1, t2, t3, t4], vec![0, 1, 2, 3, 4])
-            .unwrap();
-        (tree, sites)
-    }
-
-    fn star_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        let sc = DynIndex::new_dyn(2);
-        let s0 = DynIndex::new_dyn(2);
-        let s1 = DynIndex::new_dyn(2);
-        let s2 = DynIndex::new_dyn(2);
-        let b0 = DynIndex::new_dyn(2);
-        let b1 = DynIndex::new_dyn(2);
-        let b2 = DynIndex::new_dyn(2);
-        let center_data: Vec<f64> = (0..16).map(|value| value as f64 + 1.0).collect();
-        let center = IdxTensor::from_dense(
-            vec![sc.clone(), b0.clone(), b1.clone(), b2.clone()],
-            center_data,
-        )
-        .unwrap();
-        let leaf0 =
-            IdxTensor::from_dense(vec![b0, s0.clone()], vec![1.0_f64, 0.5, 1.5, 2.0]).unwrap();
-        let leaf1 =
-            IdxTensor::from_dense(vec![b1, s1.clone()], vec![0.25_f64, 1.0, 1.25, 2.0]).unwrap();
-        let leaf2 =
-            IdxTensor::from_dense(vec![b2, s2.clone()], vec![2.0_f64, 1.0, 0.75, 1.5]).unwrap();
-        let tree =
-            TreeTN::<_, usize>::from_tensors(vec![center, leaf0, leaf1, leaf2], vec![0, 1, 2, 3])
-                .unwrap();
-        (tree, vec![sc, s0, s1, s2])
-    }
-
-    fn unequal_branch_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        let physical = DynIndex::new_dyn(3);
-        let parent_site = DynIndex::new_dyn(2);
-        let child1_site = DynIndex::new_dyn(4);
-        let child2_site = DynIndex::new_dyn(4);
-        let parent_bond = DynIndex::new_dyn(8);
-        let child1_bond = DynIndex::new_dyn(4);
-        let child2_bond = DynIndex::new_dyn(6);
-
-        // Axis order is [child1, physical, child2, parent], deliberately
-        // non-canonical. The three incident bonds have unequal dimensions.
-        let center_data: Vec<f64> = (0..3 * 4 * 6 * 8)
-            .map(|value| (value % 31) as f64 / 17.0 - 0.8)
-            .collect();
-        let center = IdxTensor::from_dense(
-            vec![
-                child1_bond.clone(),
-                physical.clone(),
-                child2_bond.clone(),
-                parent_bond.clone(),
-            ],
-            center_data,
-        )
-        .unwrap();
-        let parent = IdxTensor::from_dense(
-            vec![parent_bond, parent_site.clone()],
-            (0..16)
-                .map(|value| (value % 7) as f64 / 5.0 - 0.4)
-                .collect(),
-        )
-        .unwrap();
-        let child1 = IdxTensor::from_dense(
-            vec![child1_bond, child1_site.clone()],
-            (0..16)
-                .map(|value| (value % 5) as f64 / 3.0 - 0.5)
-                .collect(),
-        )
-        .unwrap();
-        let child2 = IdxTensor::from_dense(
-            vec![child2_bond, child2_site.clone()],
-            (0..24)
-                .map(|value| (value % 11) as f64 / 7.0 - 0.7)
-                .collect(),
-        )
-        .unwrap();
-        let tree =
-            TreeTN::from_tensors(vec![center, parent, child1, child2], vec![0, 1, 2, 3]).unwrap();
-        (tree, vec![physical, parent_site, child1_site, child2_site])
-    }
-
-    fn unequal_branch_values(offset: usize) -> Vec<usize> {
-        let point_count = 64;
-        let mut values = vec![0usize; 4 * point_count];
-        for point in 0..point_count {
-            values[4 * point] = (point + offset) % 3;
-            values[4 * point + 1] = (point / 2 + offset) % 2;
-            values[4 * point + 2] = (point / 3 + offset) % 4;
-            values[4 * point + 3] = (point / 5 + offset) % 4;
-        }
-        values
-    }
-
-    /// A hub of `arms` unequal bonds whose physical index sits *between* two
-    /// of them, with unequal leaf dimensions.
-    ///
-    /// Rooted at leaf 1 the hub has `arms - 1` children, so `arms >= 4`
-    /// reaches the arbitrary-degree message kernel. Nothing about the fixture
-    /// is canonical: axis order, bond dimensions, and site dimensions all
-    /// differ, so a kernel that assumes any of them cannot pass by accident.
-    fn unequal_star_tree<T: CachedEvaluatorTestScalar>(
-        arms: usize,
-    ) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        assert!(arms >= 2, "a star needs at least two arms");
-        let value = |offset: usize| {
-            T::from_parts(
-                (offset % 7) as f64 * 0.25 - 0.75,
-                ((offset % 5) as f64) * 0.125 - 0.25,
-            )
-        };
-        let hub_site = DynIndex::new_dyn(2);
-        let sites = (0..arms)
-            .map(|arm| DynIndex::new_dyn(2 + arm % 2))
-            .collect::<Vec<_>>();
-        // Bonds are large enough that a handful of points already crosses
-        // the grouped kernel's work threshold, so both routes are reachable
-        // through the evaluator rather than only through the primitives.
-        let bonds = (0..arms)
-            .map(|arm| DynIndex::new_dyn(4 + arm % 3))
-            .collect::<Vec<_>>();
-
-        let mut hub_indices = vec![bonds[0].clone(), hub_site.clone()];
-        hub_indices.extend(bonds[1..].iter().cloned());
-        let hub_len = hub_indices
-            .iter()
-            .map(|index| index.dim())
-            .product::<usize>();
-        let hub = IdxTensor::from_dense(hub_indices, (0..hub_len).map(value).collect::<Vec<T>>())
-            .unwrap();
-
-        let mut tensors = vec![hub];
-        for arm in 0..arms {
-            let leaf_len = bonds[arm].dim() * sites[arm].dim();
-            tensors.push(
-                IdxTensor::from_dense(
-                    vec![bonds[arm].clone(), sites[arm].clone()],
-                    (0..leaf_len)
-                        .map(|offset| value(offset + arm + 3))
-                        .collect::<Vec<T>>(),
-                )
-                .unwrap(),
-            );
-        }
-        let tree = TreeTN::<_, usize>::from_tensors(tensors, (0..=arms).collect()).unwrap();
-        let mut indices = vec![hub_site];
-        indices.extend(sites);
-        (tree, indices)
-    }
-
-    /// Distinct points, enumerated as an odometer over the site dimensions so
-    /// that `point_count` distinct assignments really do reach the kernel
-    /// (a cycling pattern repeats after `lcm(dims)` points and would silently
-    /// keep every batch under the grouped kernel's work threshold).
-    fn star_points(indices: &[DynIndex], point_count: usize) -> Vec<usize> {
-        let capacity: usize = indices.iter().map(|index| index.dim()).product();
-        assert!(
-            point_count <= capacity,
-            "the fixture has only {capacity} distinct points"
-        );
-        let mut values = Vec::with_capacity(indices.len() * point_count);
-        for point in 0..point_count {
-            let mut remaining = point;
-            for index in indices {
-                values.push(remaining % index.dim());
-                remaining /= index.dim();
-            }
-        }
-        values
-    }
-
-    /// Returns the `(grouped, flat)` route counts of the kernel call under
-    /// test, so the caller can pin which route this configuration takes
-    /// without counting the warm-up evaluation's own calls.
-    fn assert_multi_branch_matches_generic<T>(arms: usize, point_count: usize) -> (usize, usize)
-    where
-        T: CachedEvaluatorTestScalar
-            + BlasMul
-            + Copy
-            + Default
-            + std::ops::AddAssign
-            + std::ops::Mul<Output = T>,
-    {
-        let (tree, indices) = unequal_star_tree::<T>(arms);
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let values = star_points(&indices, point_count);
-        let shape = [indices.len(), point_count];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-        evaluator.evaluate_batched(points).unwrap();
-
-        let plan = RootedMessagePlan::new(&tree, &1).unwrap();
-        let assignment_batches = evaluator
-            .build_message_assignment_batches(&plan, points)
-            .unwrap();
-
-        // Every leaf except the centre is a child of the hub; compute those
-        // through the generic oracle so only the hub's own step differs.
-        let mut messages = HashMap::new();
-        for leaf in 2..=arms {
-            let leaf_points = assignment_batches.get(&leaf).unwrap().first_points.clone();
-            let leaf_message = evaluator
-                .compute_stacked_message(
-                    &leaf,
-                    points,
-                    &leaf_points,
-                    &plan,
-                    &assignment_batches,
-                    &HashMap::new(),
-                )
-                .unwrap();
-            messages.insert(leaf, leaf_message);
-        }
-        assert_eq!(
-            plan.children.get(&0).map(Vec::len),
-            Some(arms - 1),
-            "the hub must have every non-centre arm as a rooted child"
-        );
-
-        let hub_points = assignment_batches.get(&0).unwrap().first_points.clone();
-        let expected_message = evaluator
-            .compute_stacked_message(
-                &0,
-                points,
-                &hub_points,
-                &plan,
-                &assignment_batches,
-                &messages,
-            )
-            .unwrap();
-        let expected = tensor_values_any(expected_message.tensor.as_ref().unwrap()).unwrap();
-
-        reset_multi_branch_routes_for_test();
-        let actual = evaluator
-            .try_compute_multi_branch_message_raw::<T>(
-                &0,
-                points,
-                &hub_points,
-                &plan,
-                &assignment_batches,
-                &messages,
-                if T::IS_COMPLEX {
-                    ScalarKind::C64
-                } else {
-                    ScalarKind::F64
-                },
-                |value| match (value, T::IS_COMPLEX) {
-                    (CachedScalar::F64(value), false) => Some(T::from_parts(*value, 0.0)),
-                    (CachedScalar::C64(value), true) => Some(T::from_parts(value.re, value.im)),
-                    _ => None,
-                },
-            )
-            .unwrap()
-            .unwrap_or_else(|| panic!("a hub with {} rooted children must be eligible", arms - 1));
-
-        assert_eq!(actual.len(), expected.len());
-        let mut residual = 0.0f64;
-        for (raw, generic) in actual.iter().zip(expected.iter()) {
-            let raw = raw.into_any_scalar();
-            residual = residual
-                .max((raw.real() - generic.real()).abs())
-                .max((raw.imag() - generic.imag()).abs());
-        }
-        assert!(
-            residual <= 1.0e-10,
-            "arbitrary-degree message differs from the generic contraction by {residual:.3e} \
-             (arms={arms}, points={point_count})"
-        );
-        multi_branch_routes_for_test()
-    }
-
-    /// The arbitrary-degree message kernel must reproduce the generic
-    /// contraction at every degree it claims, for both scalar kinds, and on
-    /// both of its routes.
-    ///
-    /// The route a case takes follows from its own arithmetic -- the grouped
-    /// kernel is chosen when `parent_dim * prod(child_dims) * points` clears
-    /// the backend threshold -- so rather than restate that rule per case,
-    /// the matrix asserts that each call took exactly one route and that the
-    /// matrix as a whole exercised both.
-    #[test]
-    fn multi_branch_raw_message_matches_generic_contraction() {
-        let mut grouped_total = 0usize;
-        let mut flat_total = 0usize;
-        for arms in [4usize, 5, 6] {
-            for point_count in [1usize, 32] {
-                for complex in [false, true] {
-                    let (grouped, flat) = if complex {
-                        assert_multi_branch_matches_generic::<Complex64>(arms, point_count)
-                    } else {
-                        assert_multi_branch_matches_generic::<f64>(arms, point_count)
-                    };
-                    assert_eq!(
-                        grouped + flat,
-                        1,
-                        "arms={arms} points={point_count} complex={complex} took {grouped} grouped \
-                         and {flat} flat routes"
-                    );
-                    grouped_total += grouped;
-                    flat_total += flat;
-                }
-            }
-        }
-        assert!(
-            grouped_total > 0 && flat_total > 0,
-            "the matrix must exercise both routes, saw {grouped_total} grouped and {flat_total} flat"
-        );
-    }
-
-    /// The two routes of the arbitrary-degree kernel are the same
-    /// contraction, so they must agree with each other as well as with the
-    /// generic path -- the fallback-parity half of the routing contract.
-    #[test]
-    fn multi_branch_grouped_and_flat_routes_agree() {
-        // A hub of shape [parent=3, physical=2, c0=2, c1=3, c2=2] with the
-        // physical axis in the middle and a non-contiguous parent axis.
-        let spec = MultiBranchContractionSpec {
-            strides: vec![1, 3, 6, 12, 36],
-            physical_axis: 1,
-            parent_axis: 0,
-            child_axes: vec![2, 3, 4],
-            parent_dim: 3,
-            child_dims: vec![2, 3, 2],
-        };
-        let raw = (0..72)
-            .map(|value| (value % 11) as f64 * 0.25 - 1.0)
-            .collect::<Vec<f64>>();
-        let physical_values = vec![0usize, 1, 1, 0];
-        let child_columns = vec![
-            (0..8)
-                .map(|v| (v % 5) as f64 * 0.5 - 0.75)
-                .collect::<Vec<f64>>(),
-            (0..12)
-                .map(|v| (v % 7) as f64 * 0.25 - 0.5)
-                .collect::<Vec<f64>>(),
-            (0..8)
-                .map(|v| (v % 3) as f64 * 0.75 - 0.25)
-                .collect::<Vec<f64>>(),
-        ];
-
-        let flat =
-            scalar_multi_branch_message_contraction(&spec, &raw, &physical_values, &child_columns)
-                .unwrap();
-        let grouped =
-            grouped_multi_branch_message_contraction(&spec, &raw, &physical_values, &child_columns)
-                .unwrap();
-
-        assert_eq!(flat.len(), physical_values.len() * spec.parent_dim);
-        assert_eq!(flat.len(), grouped.len());
-        let residual = flat
-            .iter()
-            .zip(&grouped)
-            .fold(0.0f64, |residual, (left, right)| {
-                residual.max((left - right).abs())
-            });
-        assert!(
-            residual <= 1.0e-12,
-            "the grouped and flat routes disagree by {residual:.3e}"
-        );
-
-        // A hand-computed reference for one output element pins the two
-        // routes to the intended contraction rather than to each other:
-        // point 0 has physical 0 and reads child columns 0..d of each child.
-        let mut reference = 0.0f64;
-        for c0 in 0..spec.child_dims[0] {
-            for c1 in 0..spec.child_dims[1] {
-                for c2 in 0..spec.child_dims[2] {
-                    // Point 0 has physical value 0, so its physical
-                    // offset contributes nothing to this reference.
-                    let offset = c0 * spec.strides[spec.child_axes[0]]
-                        + c1 * spec.strides[spec.child_axes[1]]
-                        + c2 * spec.strides[spec.child_axes[2]]
-                        + 2 * spec.strides[spec.parent_axis];
-                    reference += raw[offset]
-                        * child_columns[0][c0]
-                        * child_columns[1][c1]
-                        * child_columns[2][c2];
-                }
-            }
-        }
-        assert!(
-            (flat[2] - reference).abs() <= 1.0e-12,
-            "flat route gives {} against the hand-computed {reference}",
-            flat[2]
-        );
-    }
-
-    /// The whole public evaluation must match the tree's own contraction on a
-    /// high-coordination star, with the centre both at a leaf (which
-    /// exercises the arbitrary-degree *message* kernel) and at the hub (which
-    /// exercises the arbitrary-degree *centre* contraction).
-    #[test]
-    fn cached_evaluator_matches_tree_evaluate_on_high_coordination_stars() {
-        for arms in [4usize, 5, 6] {
-            let (tree, indices) = unequal_star_tree::<f64>(arms);
-            let values = star_points(&indices, 5);
-            let shape = [indices.len(), 5];
-            let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-            let expected = tree.evaluate(&indices, points).unwrap();
-
-            for center in [1usize, 0] {
-                let mut evaluator = TreeTNCachedEvaluator::new(
-                    &tree,
-                    &indices,
-                    CachedEvaluatorOptions {
-                        center: Some(center),
-                        ..Default::default()
-                    },
-                )
-                .unwrap();
-                let cold = evaluator.evaluate_batched(points).unwrap();
-                let warm = evaluator.evaluate_batched(points).unwrap();
-                assert_scalars_close(&cold, &expected);
-                assert_scalars_close(&warm, &expected);
-            }
-        }
-    }
-
-    /// A centre of coordination four or more is contracted by the same raw
-    /// centre kernel that used to stop at three components.
-    #[test]
-    fn raw_center_contraction_covers_high_coordination_centers() {
-        for arms in [4usize, 5] {
-            let (tree, indices) = unequal_star_tree::<f64>(arms);
-            let values = star_points(&indices, 3);
-            let shape = [indices.len(), 3];
-            let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-            let expected = tree.evaluate(&indices, points).unwrap();
-            let mut evaluator = TreeTNCachedEvaluator::new(
-                &tree,
-                &indices,
-                CachedEvaluatorOptions {
-                    center: Some(0),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-
-            reset_raw_center_core_visits_for_test();
-            let actual = evaluator.evaluate_batched(points).unwrap();
-            assert_scalars_close(&actual, &expected);
-            assert!(
-                raw_center_core_visits_for_test() > 0,
-                "a degree-{arms} centre must reach the raw centre kernel"
-            );
-        }
-    }
-
-    fn four_arm_star_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        let sc = DynIndex::new_dyn(2);
-        let sites = (0..4).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
-        let bonds = (0..4).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
-        let center = IdxTensor::from_dense(
-            vec![
-                sc.clone(),
-                bonds[0].clone(),
-                bonds[1].clone(),
-                bonds[2].clone(),
-                bonds[3].clone(),
-            ],
-            vec![1.0_f64; 32],
-        )
-        .unwrap();
-        let leaves = bonds
-            .into_iter()
-            .zip(sites.iter().cloned())
-            .map(|(bond, site)| IdxTensor::from_dense(vec![bond, site], vec![1.0_f64; 4]))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .unwrap();
-        let mut tensors = vec![center];
-        tensors.extend(leaves);
-        let tree = TreeTN::<_, usize>::from_tensors(tensors, vec![0, 1, 2, 3, 4]).unwrap();
-        let mut indices = vec![sc];
-        indices.extend(sites);
-        (tree, indices)
-    }
-
-    #[test]
-    fn cached_evaluator_matches_tree_evaluate_on_two_node_chain() {
-        let (tree, indices) = two_node_tree();
-        let values = vec![0, 0, 1, 0, 0, 1, 1, 1];
-        let shape = [2, 4];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let options = CachedEvaluatorOptions {
-            center: Some(0),
-            ..CachedEvaluatorOptions::default()
-        };
-        let mut evaluator = TreeTNCachedEvaluator::new(&tree, &indices, options).unwrap();
-        let actual = evaluator.evaluate_batched(points).unwrap();
-
-        assert_scalars_close(&actual, &expected);
-        assert_eq!(evaluator.center(), Some(&0));
-    }
-
-    /// [AI Supplied] Correctness regression for the raw-path dtype dispatch.
-    #[test]
-    fn cached_evaluator_preserves_32_bit_scalar_dtypes() {
-        let s0 = DynIndex::new_dyn(2);
-        let s1 = DynIndex::new_dyn(2);
-        let bond = DynIndex::new_dyn(2);
-        let values = [0usize, 0, 1, 1];
-        let shape = [2usize, 2usize];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-
-        let real_tree = TreeTN::<_, usize>::from_tensors(
-            vec![
-                IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0_f32, 2.0, 3.0, 4.0])
-                    .unwrap(),
-                IdxTensor::from_dense(vec![bond.clone(), s1.clone()], vec![5.0_f32, 6.0, 7.0, 8.0])
-                    .unwrap(),
-            ],
-            vec![0, 1],
-        )
-        .unwrap();
-        let real_baseline = real_tree
-            .evaluate(&[s0.clone(), s1.clone()], points)
-            .unwrap();
-        assert_eq!(real_baseline[0].as_f64(), Some(23.0));
-        assert_eq!(real_baseline[1].as_f64(), Some(46.0));
-        let mut real_evaluator = TreeTNCachedEvaluator::new(
-            &real_tree,
-            &[s0.clone(), s1.clone()],
-            CachedEvaluatorOptions {
-                center: Some(0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let real_result = real_evaluator.evaluate_batched(points);
-        let real_cached_result = real_evaluator.evaluate_batched(points);
-
-        let c = |re| Complex32::new(re, 0.0);
-        let complex_tree = TreeTN::<_, usize>::from_tensors(
-            vec![
-                IdxTensor::from_dense(
-                    vec![s0.clone(), bond.clone()],
-                    vec![c(1.0), c(2.0), c(3.0), c(4.0)],
-                )
-                .unwrap(),
-                IdxTensor::from_dense(vec![bond, s1.clone()], vec![c(5.0), c(6.0), c(7.0), c(8.0)])
-                    .unwrap(),
-            ],
-            vec![0, 1],
-        )
-        .unwrap();
-        let complex_baseline = complex_tree
-            .evaluate(&[s0.clone(), s1.clone()], points)
-            .unwrap();
-        assert_eq!(
-            complex_baseline[0].as_c64(),
-            Some(Complex64::new(23.0, 0.0))
-        );
-        assert_eq!(
-            complex_baseline[1].as_c64(),
-            Some(Complex64::new(46.0, 0.0))
-        );
-        let mut complex_evaluator = TreeTNCachedEvaluator::new(
-            &complex_tree,
-            &[s0, s1],
-            CachedEvaluatorOptions {
-                center: Some(0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let complex_result = complex_evaluator.evaluate_batched(points);
-        let complex_cached_result = complex_evaluator.evaluate_batched(points);
-
-        assert!(
-            real_result.is_ok()
-                && real_cached_result.is_ok()
-                && complex_result.is_ok()
-                && complex_cached_result.is_ok(),
-            "32-bit cached evaluations must succeed cold and warm: f32={real_result:?}/{real_cached_result:?}, c32={complex_result:?}/{complex_cached_result:?}"
-        );
-        let real_result = real_result.unwrap();
-        let real_cached_result = real_cached_result.unwrap();
-        let complex_result = complex_result.unwrap();
-        let complex_cached_result = complex_cached_result.unwrap();
-        assert_eq!(real_result[0].as_f64(), Some(23.0));
-        assert_eq!(real_result[1].as_f64(), Some(46.0));
-        assert_eq!(real_cached_result[0].as_f64(), Some(23.0));
-        assert_eq!(real_cached_result[1].as_f64(), Some(46.0));
-        assert_eq!(complex_result[0].as_c64(), Some(Complex64::new(23.0, 0.0)));
-        assert_eq!(complex_result[1].as_c64(), Some(Complex64::new(46.0, 0.0)));
-        assert_eq!(
-            complex_cached_result[0].as_c64(),
-            Some(Complex64::new(23.0, 0.0))
-        );
-        assert_eq!(
-            complex_cached_result[1].as_c64(),
-            Some(Complex64::new(46.0, 0.0))
-        );
-    }
-
-    #[test]
-    fn component_cost_index_counts_unique_directed_components() {
-        let (tree, indices) = three_node_chain();
-        let values = vec![0, 0, 0, 0, 1, 1, 1, 1, 1];
-        let shape = [3, 3];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-
-        let cost_index = ComponentCostIndex::new(&tree, &indices, points).unwrap();
-
-        assert_eq!(cost_index.component_count(&(0, 1)).unwrap(), 2);
-        assert_eq!(cost_index.component_count(&(1, 0)).unwrap(), 2);
-        assert_eq!(cost_index.component_count(&(1, 2)).unwrap(), 3);
-        assert_eq!(cost_index.component_count(&(2, 1)).unwrap(), 2);
-        assert_eq!(cost_index.center_cost(&0).unwrap(), 2);
-        assert_eq!(cost_index.center_cost(&1).unwrap(), 4);
-        assert_eq!(cost_index.center_cost(&2).unwrap(), 3);
-    }
-
-    #[test]
-    fn component_cost_index_rejects_wrong_batch_row_count() {
-        let (tree, indices) = three_node_chain();
-        let values = vec![0, 1, 1, 0];
-        let shape = [2, 2];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-
-        let err = ComponentCostIndex::new(&tree, &indices, points)
-            .err()
-            .unwrap();
-        assert!(err.to_string().contains("row count"));
-    }
-
-    #[test]
-    fn greedy_center_search_descends_to_lower_cost_neighbor() {
-        let cost_index = ComponentCostIndex::from_parts_for_test(
-            HashMap::from([(0, vec![1]), (1, vec![0, 2]), (2, vec![1, 3]), (3, vec![2])]),
-            HashMap::from([(0, 40), (1, 20), (2, 10), (3, 15)]),
-        );
-
-        let result = GreedyCenterSearch::<usize>::default()
-            .search(&cost_index, &[0])
-            .unwrap();
-
-        assert_eq!(result.center, 2);
-        assert_eq!(result.cost, 10);
-        assert_eq!(result.path, vec![0, 1, 2]);
-    }
-
-    #[test]
-    fn greedy_center_search_uses_best_of_multiple_starts() {
-        let cost_index = ComponentCostIndex::from_parts_for_test(
-            HashMap::from([
-                ("a", vec!["b"]),
-                ("b", vec!["a", "c"]),
-                ("c", vec!["b", "d"]),
-                ("d", vec!["c"]),
-            ]),
-            HashMap::from([("a", 8), ("b", 6), ("c", 5), ("d", 2)]),
-        );
-
-        let result = GreedyCenterSearch::<&str>::with_max_steps(Some(1))
-            .search(&cost_index, &["a", "d"])
-            .unwrap();
-
-        assert_eq!(result.center, "d");
-        assert_eq!(result.cost, 2);
-    }
-
-    #[test]
-    fn cached_evaluator_selects_greedy_center_when_center_is_not_fixed() {
-        let (tree, indices) = three_node_chain();
-        let values = vec![0, 0, 0, 0, 1, 1, 1, 1, 1];
-        let shape = [3, 3];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                initial_centers: vec![1],
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let actual = evaluator.evaluate_batched(points).unwrap();
-
-        assert_eq!(evaluator.center(), Some(&0));
-        assert_scalars_close(&actual, &expected);
-    }
-
-    #[test]
-    fn cached_evaluator_rejects_unknown_initial_center() {
-        let (tree, indices) = three_node_chain();
-        let err = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                initial_centers: vec![99],
-                ..Default::default()
-            },
-        )
-        .err()
-        .unwrap();
-
-        assert!(err.to_string().contains("initial center"));
-    }
-
-    #[test]
-    fn cached_evaluator_computes_one_environment_per_unique_subtree_assignment() {
-        let (tree, indices) = three_node_chain();
-        let values = vec![0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1];
-        let shape = [3, 4];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let actual = evaluator.evaluate_batched(points).unwrap();
-
-        assert_scalars_close(&actual, &expected);
-        assert_eq!(evaluator.stats_for_test().subtree_environment_count, 4);
-    }
-
-    #[test]
-    fn cached_evaluator_reuses_directed_messages_inside_components() {
-        let (tree, indices) = five_node_chain();
-        let values = vec![
-            0, 0, 0, 0, 0, //
-            0, 1, 0, 0, 1, //
-            1, 0, 1, 1, 0, //
-            1, 1, 1, 1, 1,
-        ];
-        let shape = [5, 4];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(2),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let actual = evaluator.evaluate_batched(points).unwrap();
-
-        assert_scalars_close(&actual, &expected);
-        assert_eq!(evaluator.stats_for_test().directed_message_count, 12);
-    }
-
-    #[test]
-    fn cached_evaluator_batches_directed_messages() {
-        let (tree, indices) = five_node_chain();
-        let values = vec![
-            0, 0, 0, 0, 0, //
-            0, 1, 0, 0, 1, //
-            1, 0, 1, 1, 0, //
-            1, 1, 1, 1, 1,
-        ];
-        let shape = [5, 4];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(2),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let actual = evaluator.evaluate_batched(points).unwrap();
-        let stats = evaluator.stats_for_test();
-
-        assert_scalars_close(&actual, &expected);
-        assert!(stats.batched_message_contract_count < stats.directed_message_count);
-    }
-
-    #[test]
-    fn cached_evaluator_rejects_wrong_value_row_count() {
-        let (tree, indices) = two_node_tree();
-        let values = vec![0, 1, 1];
-        let shape = [1, 3];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
-
-        let err = evaluator.evaluate_batched(points).unwrap_err();
-        assert!(err.to_string().contains("row count"));
-    }
-
-    #[test]
-    fn cached_evaluator_rejects_out_of_range_site_value() {
-        let (tree, indices) = two_node_tree();
-        let values = vec![0, 2];
-        let shape = [2, 1];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
-
-        let err = evaluator.evaluate_batched(points).unwrap_err();
-        assert!(err.to_string().contains("out of range"));
-    }
-
-    #[test]
-    fn cached_evaluator_handles_repeated_points_without_changing_order() {
-        let (tree, indices) = two_node_tree();
-        let values = vec![0, 0, 1, 1, 0, 0, 1, 1];
-        let shape = [2, 4];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
-
-        let actual = evaluator.evaluate_batched(points).unwrap();
-
-        assert_scalars_close(&actual, &expected);
-        assert_eq!(actual[0].real(), actual[2].real());
-        assert_eq!(actual[1].real(), actual[3].real());
-    }
-
-    #[test]
-    fn cached_evaluator_matches_tree_evaluate_on_star_tree() {
-        let (tree, indices) = star_tree();
-        let values = vec![
-            0, 0, 0, 0, //
-            1, 0, 1, 0, //
-            0, 1, 0, 1, //
-            1, 1, 1, 1,
-        ];
-        let shape = [4, 4];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let actual = evaluator.evaluate_batched(points).unwrap();
-
-        assert_scalars_close(&actual, &expected);
-    }
-
-    /// `cached_evaluator_matches_tree_evaluate_on_star_tree` fixes `center`
-    /// to the hub itself, so the hub's combination goes through the
-    /// separate one-shot centre contraction, not `get_or_compute_node_message`
-    /// -- it never exercises `try_compute_branch_message_raw`. This test
-    /// fixes `center` to a leaf instead, so the hub (rooted toward that
-    /// leaf) has two children and its message must go through the new
-    /// branch dispatch, verified end-to-end through the public
-    /// `evaluate_batched` API rather than by manually driving the message
-    /// plan (unlike `raw_branch_message_matches_generic_contraction`).
-    #[test]
-    fn cached_evaluator_matches_tree_evaluate_on_star_tree_with_fixed_leaf_center() {
-        let (tree, indices) = star_tree();
-        let values = vec![
-            0, 0, 0, 0, //
-            1, 1, 0, 1, //
-            0, 1, 1, 0, //
-            1, 0, 1, 1,
-        ];
-        let shape = [4, 4];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(1),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let actual = evaluator.evaluate_batched(points).unwrap();
-
-        assert_scalars_close(&actual, &expected);
-    }
-
-    #[test]
-    fn cached_evaluator_batches_center_contraction() {
-        let (tree, indices) = star_tree();
-        let values = vec![
-            0, 0, 0, 0, //
-            1, 0, 1, 0, //
-            0, 1, 0, 1, //
-            1, 1, 1, 1,
-        ];
-        let shape = [4, 4];
-        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-        let expected = tree.evaluate(&indices, points).unwrap();
-        let mut evaluator = TreeTNCachedEvaluator::new(
-            &tree,
-            &indices,
-            CachedEvaluatorOptions {
-                center: Some(0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        let actual = evaluator.evaluate_batched(points).unwrap();
-
-        assert_scalars_close(&actual, &expected);
-        assert_eq!(evaluator.stats_for_test().batched_center_contract_count, 1);
-    }
-
-    /// Uncached-path duplicate of `evaluate_batched_with_hint`, calling
-    /// `compute_stacked_message` directly instead of
-    /// `get_or_compute_node_message`. Kept as measurement tooling (see
-    /// `message_cache_wall_time_on_realistic_floating_zone_walk`): times the
-    /// same floating-zone walk with and without the persistent message
-    /// cache, using one evaluator so construction overhead is identical
-    /// between the two conditions.
-    fn evaluate_batched_uncached(
-        evaluator: &mut TreeTNCachedEvaluator<'_, usize>,
-        values: ColMajorArrayRef<'_, usize>,
-        center: &usize,
-    ) -> Result<Vec<CachedScalar>> {
-        let plan = RootedMessagePlan::new(evaluator.tree, center)?;
-        let assignment_batches = evaluator.build_message_assignment_batches(&plan, values)?;
-        let mut messages = HashMap::<usize, StackedMessage>::new();
-        for node in &plan.postorder {
-            let points = assignment_batches.get(node).unwrap().first_points.clone();
-            let node_message = evaluator.compute_stacked_message(
-                node,
-                values,
-                &points,
-                &plan,
-                &assignment_batches,
-                &messages,
-            )?;
-            messages.insert(*node, node_message);
-        }
-        let mut component_batches = Vec::new();
-        let mut environment_cache = HashMap::new();
-        for neighbor in plan.children.get(center).cloned().unwrap_or_default() {
-            let assignment_batch = assignment_batches.get(&neighbor).unwrap();
-            let environment = messages.remove(&neighbor).unwrap();
-            environment_cache.insert(neighbor, environment);
-            component_batches.push(ComponentBatch {
-                neighbor,
-                point_to_assignment: assignment_batch.point_to_assignment.clone(),
-            });
-        }
-        evaluator.contract_center_for_points(center, values, &component_batches, &environment_cache)
-    }
-
-    /// Measurement, not a regression test: how much does the persistent
-    /// message cache save on the real `find_global_pivots` call pattern?
-    /// Drives `floating_zone_walk` with the same defaults
-    /// (`nsearch_global_pivots = 5`, `nsweeps_global_search = 100`) against a
-    /// 16-site chain at bond 128, once through the normal (now cached) path
-    /// and once through the direct, uncached path, on the same evaluator so
-    /// construction cost cancels out. Prints wall time and message counts for
-    /// both; asserts nothing about the ratio, since wall-clock numbers are
-    /// not a reproducible pass/fail condition.
-    ///
-    /// The cached path is expected to be faster on this workload because the
-    /// raw chain path avoids constructing an `IdxTensor` per message and the
-    /// persistent cache avoids recomputing unchanged directed messages. The
-    /// test remains measurement tooling rather than a wall-clock regression
-    /// assertion; see `docs/worklogs/2026-08-18-treeaci-message-cache-prototype.md`.
-    #[test]
-    fn message_cache_wall_time_on_realistic_floating_zone_walk() {
-        use rand::{Rng, SeedableRng};
-        use rand_chacha::ChaCha8Rng;
-        use std::time::Instant;
-        use tensor4all_core::floating_zone_walk;
-        use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, Tensor3, Tensor3Ops};
-
-        const N_SITES: usize = 16;
-        const LOCAL_DIM: usize = 2;
-        const BOND_DIM: usize = 128;
-        const NSEARCH: usize = 5;
-        const MAX_SWEEPS: usize = 100;
-
-        fn build_tree(seed: u64) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-            let mut rng = ChaCha8Rng::seed_from_u64(seed);
-            let mut tensors: Vec<Tensor3<f64>> = Vec::with_capacity(N_SITES);
-            for site in 0..N_SITES {
-                let left_dim = if site == 0 { 1 } else { BOND_DIM };
-                let right_dim = if site == N_SITES - 1 { 1 } else { BOND_DIM };
-                let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim);
-                for l in 0..left_dim {
-                    for s in 0..LOCAL_DIM {
-                        for r in 0..right_dim {
-                            tensor.set3(l, s, r, rng.random::<f64>());
-                        }
-                    }
-                }
-                tensors.push(tensor);
-            }
-            let tt = SimpleTensorTrain::new(tensors).unwrap();
-            crate::tensor_train_to_treetn(&tt).unwrap()
-        }
-
-        fn starts() -> Vec<Vec<usize>> {
-            let mut rng = ChaCha8Rng::seed_from_u64(11);
-            (0..NSEARCH)
-                .map(|_| {
-                    (0..N_SITES)
-                        .map(|_| rng.random_range(0..LOCAL_DIM))
-                        .collect()
-                })
-                .collect()
-        }
-        let site_dims = vec![LOCAL_DIM; N_SITES];
-
-        // Cached scan-aware path used by TreeACI's global guard.
-        let (tree, site_indices) = build_tree(7);
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &site_indices, CachedEvaluatorOptions::default())
-                .unwrap();
-        // Force a centre outside the timed region, matching the uncached arm.
-        let warm_values0 = vec![0usize; N_SITES];
-        let warm_shape0 = [N_SITES, 1];
-        let warm_points0 = ColMajorArrayRef::new(&warm_values0, &warm_shape0).unwrap();
-        evaluator.evaluate_batched(warm_points0).unwrap();
-        let mut total_hits = 0usize;
-        let mut total_misses = 0usize;
-        let mut total_calls = 0usize;
-        let cached_start = Instant::now();
-        for start in &starts() {
-            floating_zone_walk(
-                &site_dims,
-                start,
-                MAX_SWEEPS,
-                f64::INFINITY,
-                |_scan_site: Option<usize>, points: &[Vec<usize>]| -> Result<Vec<f64>> {
-                    let mut values = vec![0usize; N_SITES * points.len()];
-                    for (p, point) in points.iter().enumerate() {
-                        for (site, &v) in point.iter().enumerate() {
-                            values[site + N_SITES * p] = v;
-                        }
-                    }
-                    let shape = [N_SITES, points.len()];
-                    let arr = ColMajorArrayRef::new(&values, &shape).unwrap();
-                    let hint = (0..N_SITES)
-                        .find(|&site| {
-                            points[1..]
-                                .iter()
-                                .any(|point| point[site] != points[0][site])
-                        })
-                        .map(EvaluationHint::around)
-                        .unwrap_or_default();
-                    let out = evaluator.evaluate_batched_with_hint(arr, hint)?;
-                    let stats = evaluator.stats_for_test();
-                    total_hits += stats.message_cache_hits;
-                    total_misses += stats.message_cache_misses;
-                    total_calls += 1;
-                    Ok(out.iter().map(|v| v.real().abs()).collect())
-                },
-            )
-            .unwrap();
-        }
-        let cached_elapsed = cached_start.elapsed();
-
-        // Uncached path: identical tree, walk, and varying-site center.
-        let (tree2, site_indices2) = build_tree(7);
-        let mut evaluator2 =
-            TreeTNCachedEvaluator::new(&tree2, &site_indices2, CachedEvaluatorOptions::default())
-                .unwrap();
-        // Force a centre exactly as the cached run's first call would.
-        let warm_values = vec![0usize; N_SITES];
-        let warm_shape = [N_SITES, 1];
-        let warm_points = ColMajorArrayRef::new(&warm_values, &warm_shape).unwrap();
-        evaluator2.evaluate_batched(warm_points).unwrap();
-        let center = *evaluator2.center().unwrap();
-        let uncached_start = Instant::now();
-        for start in &starts() {
-            floating_zone_walk(
-                &site_dims,
-                start,
-                MAX_SWEEPS,
-                f64::INFINITY,
-                |_scan_site: Option<usize>, points: &[Vec<usize>]| -> Result<Vec<f64>> {
-                    let mut values = vec![0usize; N_SITES * points.len()];
-                    for (p, point) in points.iter().enumerate() {
-                        for (site, &v) in point.iter().enumerate() {
-                            values[site + N_SITES * p] = v;
-                        }
-                    }
-                    let shape = [N_SITES, points.len()];
-                    let arr = ColMajorArrayRef::new(&values, &shape).unwrap();
-                    let varying_center = (0..N_SITES).find(|&site| {
-                        points[1..]
-                            .iter()
-                            .any(|point| point[site] != points[0][site])
-                    });
-                    let out = evaluate_batched_uncached(
-                        &mut evaluator2,
-                        arr,
-                        varying_center.as_ref().unwrap_or(&center),
-                    )?;
-                    Ok(out.iter().map(|v| v.as_complex().re.abs()).collect())
-                },
-            )
-            .unwrap();
-        }
-        let uncached_elapsed = uncached_start.elapsed();
-
-        println!(
-            "floating-zone walk at bond={BOND_DIM}: cached={cached_elapsed:?} uncached={uncached_elapsed:?} speedup={:.2}x total_calls={total_calls} total_hits={total_hits} total_misses={total_misses} node_hit_rate={:.3}",
-            uncached_elapsed.as_secs_f64() / cached_elapsed.as_secs_f64(),
-            total_hits as f64 / (total_hits + total_misses) as f64,
-        );
-        assert!(cached_elapsed.as_nanos() > 0);
-    }
-
-    /// Root-cause investigation for the slowdown found by
-    /// `message_cache_wall_time_on_realistic_floating_zone_walk`: which phase
-    /// inside `get_or_compute_node_message` actually accounts for the time,
-    /// on the real call pattern -- not inferred from the old bond=2 primitive
-    /// breakdown in `2026-08-17-treeaci-per-evaluation-cost.md`. Reuses the
-    /// same 16-site, bond=128 walk as the wall-time measurement.
-    #[test]
-    fn message_cache_phase_breakdown_on_realistic_floating_zone_walk() {
-        use rand::{Rng, SeedableRng};
-        use rand_chacha::ChaCha8Rng;
-        use tensor4all_core::floating_zone_walk;
-        use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, Tensor3, Tensor3Ops};
-
-        const N_SITES: usize = 16;
-        const LOCAL_DIM: usize = 2;
-        const BOND_DIM: usize = 128;
-        const NSEARCH: usize = 5;
-        const MAX_SWEEPS: usize = 100;
-
-        let mut rng = ChaCha8Rng::seed_from_u64(7);
-        let mut tensors: Vec<Tensor3<f64>> = Vec::with_capacity(N_SITES);
-        for site in 0..N_SITES {
-            let left_dim = if site == 0 { 1 } else { BOND_DIM };
-            let right_dim = if site == N_SITES - 1 { 1 } else { BOND_DIM };
-            let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim);
-            for l in 0..left_dim {
-                for s in 0..LOCAL_DIM {
-                    for r in 0..right_dim {
-                        tensor.set3(l, s, r, rng.random::<f64>());
-                    }
-                }
-            }
-            tensors.push(tensor);
-        }
-        let tt = SimpleTensorTrain::new(tensors).unwrap();
-        let (tree, site_indices) = crate::tensor_train_to_treetn(&tt).unwrap();
-        let mut evaluator =
-            TreeTNCachedEvaluator::new(&tree, &site_indices, CachedEvaluatorOptions::default())
-                .unwrap();
-        let warm_values = vec![0usize; N_SITES];
-        let warm_shape = [N_SITES, 1];
-        evaluator
-            .evaluate_batched(ColMajorArrayRef::new(&warm_values, &warm_shape).unwrap())
-            .unwrap();
-
-        phase_timing::reset_all();
-
-        let site_dims = vec![LOCAL_DIM; N_SITES];
-        let mut start_rng = ChaCha8Rng::seed_from_u64(11);
-        let starts: Vec<Vec<usize>> = (0..NSEARCH)
-            .map(|_| {
-                (0..N_SITES)
-                    .map(|_| start_rng.random_range(0..LOCAL_DIM))
-                    .collect()
-            })
-            .collect();
-        for start in &starts {
-            floating_zone_walk(
-                &site_dims,
-                start,
-                MAX_SWEEPS,
-                f64::INFINITY,
-                |_scan_site: Option<usize>, points: &[Vec<usize>]| -> Result<Vec<f64>> {
-                    let mut values = vec![0usize; N_SITES * points.len()];
-                    for (p, point) in points.iter().enumerate() {
-                        for (site, &v) in point.iter().enumerate() {
-                            values[site + N_SITES * p] = v;
-                        }
-                    }
-                    let shape = [N_SITES, points.len()];
-                    let arr = ColMajorArrayRef::new(&values, &shape).unwrap();
-                    let out = evaluator.evaluate_batched(arr)?;
-                    Ok(out.iter().map(|v| v.real().abs()).collect())
-                },
-            )
-            .unwrap();
-        }
-
-        use std::sync::atomic::Ordering;
-        let key_and_lookup = phase_timing::KEY_AND_LOOKUP_NS.load(Ordering::Relaxed);
-        let contract = phase_timing::CONTRACT_NS.load(Ordering::Relaxed);
-        let tensor_values = phase_timing::TENSOR_VALUES_NS.load(Ordering::Relaxed);
-        let insert = phase_timing::INSERT_NS.load(Ordering::Relaxed);
-        let reconstruct = phase_timing::RECONSTRUCT_NS.load(Ordering::Relaxed);
-        let total = key_and_lookup + contract + tensor_values + insert + reconstruct;
-        println!(
-            "phase breakdown at bond={BOND_DIM}: key_and_lookup={:.1}ms ({:.1}%) contract={:.1}ms ({:.1}%) tensor_values={:.1}ms ({:.1}%) insert={:.1}ms ({:.1}%) reconstruct={:.1}ms ({:.1}%) total={:.1}ms",
-            key_and_lookup as f64 / 1e6, 100.0 * key_and_lookup as f64 / total as f64,
-            contract as f64 / 1e6, 100.0 * contract as f64 / total as f64,
-            tensor_values as f64 / 1e6, 100.0 * tensor_values as f64 / total as f64,
-            insert as f64 / 1e6, 100.0 * insert as f64 / total as f64,
-            reconstruct as f64 / 1e6, 100.0 * reconstruct as f64 / total as f64,
-            total as f64 / 1e6,
-        );
-        assert!(total > 0);
-    }
-
-    /// [AI Supplied] Diagnostic-only split of a fully warm, same-batch call.
-    ///
-    /// The existing floating-zone phase test intentionally changes points and
-    /// therefore measures cache misses.  This fixture repeats exactly one
-    /// 64-point batch after warming it, so any remaining environment or centre
-    /// work is work the persistent cache did not eliminate.
-    #[test]
-    #[ignore]
-    fn diagnostic_same_batch_warm_environment_vs_center_cost() {
-        use std::sync::atomic::Ordering;
-        use std::time::Instant;
-
-        const N_SITES: usize = 16;
-        const LOCAL_DIM: usize = 2;
-        const N_POINTS: usize = 64;
-        const REPEATS: usize = 50;
-        const CENTER: usize = N_SITES / 2;
-
-        // [AI Supplied] Representation census for the packed-cache audit.
-        eprintln!(
-            "representation sizes: f64={} CachedScalar={} IndexKey={} AnyScalar={}",
-            std::mem::size_of::<f64>(),
-            std::mem::size_of::<CachedScalar>(),
-            std::mem::size_of::<IndexKey>(),
-            std::mem::size_of::<AnyScalar>(),
-        );
-
-        for bond_dim in [64usize, 128, 256] {
-            let physical = (0..N_SITES)
-                .map(|_| DynIndex::new_dyn(LOCAL_DIM))
-                .collect::<Vec<_>>();
-            let bonds = (0..N_SITES - 1)
-                .map(|_| DynIndex::new_dyn(bond_dim))
-                .collect::<Vec<_>>();
-            let mut tensors = Vec::with_capacity(N_SITES);
-            for site in 0..N_SITES {
-                let mut indices = vec![physical[site].clone()];
-                if site > 0 {
-                    indices.push(bonds[site - 1].clone());
-                }
-                if site + 1 < N_SITES {
-                    indices.push(bonds[site].clone());
-                }
-                let len = indices.iter().map(IndexLike::dim).product();
-                tensors.push(IdxTensor::from_dense(indices, vec![1.0_f64; len]).unwrap());
-            }
-            let tree = TreeTN::from_tensors(tensors, (0..N_SITES).collect()).unwrap();
-            let mut evaluator = TreeTNCachedEvaluator::new(
-                &tree,
-                &physical,
-                CachedEvaluatorOptions::<usize> {
-                    center: Some(CENTER),
-                    ..CachedEvaluatorOptions::default()
-                },
-            )
-            .unwrap();
-            let mut values = vec![0usize; N_SITES * N_POINTS];
-            for point in 0..N_POINTS {
-                for site in 0..N_SITES {
-                    values[site + N_SITES * point] = (point >> (site % 6)) & 1;
-                }
-            }
-            let shape = [N_SITES, N_POINTS];
-            let points = ColMajorArrayRef::new(&values, &shape).unwrap();
-            evaluator.evaluate_batched(points).unwrap();
-
-            phase_timing::reset_all();
-            let started = Instant::now();
-            for _ in 0..REPEATS {
-                std::hint::black_box(evaluator.evaluate_batched(points).unwrap());
-            }
-            let total_ns = started.elapsed().as_nanos() as u64;
-            let environment_ns = phase_timing::BUILD_ENV_NS.load(Ordering::Relaxed);
-            let center_ns = phase_timing::CENTER_NS.load(Ordering::Relaxed);
-            let raw_capability_ns = phase_timing::RAW_CAPABILITY_NS.load(Ordering::Relaxed);
-            let assignment_batch_ns = phase_timing::ASSIGNMENT_BATCH_NS.load(Ordering::Relaxed);
-            let message_loop_ns = phase_timing::MESSAGE_LOOP_NS.load(Ordering::Relaxed);
-            let component_assembly_ns = phase_timing::COMPONENT_ASSEMBLY_NS.load(Ordering::Relaxed);
-            let raw_prep_ns = phase_timing::RAW_CENTER_PREP_NS.load(Ordering::Relaxed);
-            let raw_contract_ns = phase_timing::RAW_CENTER_CONTRACT_NS.load(Ordering::Relaxed);
-            let raw_dispatch_ns = phase_timing::RAW_CENTER_DISPATCH_NS.load(Ordering::Relaxed);
-            let raw_prelude_ns = phase_timing::RAW_CENTER_PRELUDE_NS.load(Ordering::Relaxed);
-            let raw_result_ns = phase_timing::RAW_CENTER_RESULT_NS.load(Ordering::Relaxed);
-            let raw_values_copied = phase_timing::RAW_CENTER_VALUES_COPIED.load(Ordering::Relaxed);
-            let raw_assignments_copied =
-                phase_timing::RAW_CENTER_ASSIGNMENTS_COPIED.load(Ordering::Relaxed);
-            let key_ns = phase_timing::KEY_AND_LOOKUP_NS.load(Ordering::Relaxed);
-            let reconstruct_ns = phase_timing::RECONSTRUCT_NS.load(Ordering::Relaxed);
-            let reconstructed_values = phase_timing::RECONSTRUCT_VALUES.load(Ordering::Relaxed);
-            let final_env_values = phase_timing::FINAL_ENV_VALUES.load(Ordering::Relaxed);
-            let contract_ns = phase_timing::CONTRACT_NS.load(Ordering::Relaxed);
-            let insert_ns = phase_timing::INSERT_NS.load(Ordering::Relaxed);
-            let stats = evaluator.stats_for_test();
-            assert_eq!(stats.message_cache_misses, 0);
-            assert!(stats.message_cache_hits > 0);
-            assert_eq!(contract_ns, 0);
-            assert_eq!(insert_ns, 0);
-            eprintln!(
-                "warm same-batch bond={bond_dim}: total={:.3}ms/call, environment={:.3}ms/call ({:.1}%) {{raw_capability={:.3}ms/call, assignments={:.3}ms/call, message_loop={:.3}ms/call, component_assembly={:.3}ms/call, reconstructed_values={}/call, final_env_values={}/call}}, center={:.3}ms/call ({:.1}%) {{raw_dispatch={:.3}ms/call: prelude={:.3}ms/call, prep={:.3}ms/call, contract={:.3}ms/call, AnyScalar_wrap={:.3}ms/call, copied_values={}/call, copied_assignments={}/call}}, key={:.3}ms/call, reconstruct={:.3}ms/call, hits/call={}",
-                total_ns as f64 / REPEATS as f64 / 1e6,
-                environment_ns as f64 / REPEATS as f64 / 1e6,
-                100.0 * environment_ns as f64 / total_ns as f64,
-                raw_capability_ns as f64 / REPEATS as f64 / 1e6,
-                assignment_batch_ns as f64 / REPEATS as f64 / 1e6,
-                message_loop_ns as f64 / REPEATS as f64 / 1e6,
-                component_assembly_ns as f64 / REPEATS as f64 / 1e6,
-                reconstructed_values / REPEATS as u64,
-                final_env_values / REPEATS as u64,
-                center_ns as f64 / REPEATS as f64 / 1e6,
-                100.0 * center_ns as f64 / total_ns as f64,
-                raw_dispatch_ns as f64 / REPEATS as f64 / 1e6,
-                raw_prelude_ns as f64 / REPEATS as f64 / 1e6,
-                raw_prep_ns as f64 / REPEATS as f64 / 1e6,
-                raw_contract_ns as f64 / REPEATS as f64 / 1e6,
-                raw_result_ns as f64 / REPEATS as f64 / 1e6,
-                raw_values_copied / REPEATS as u64,
-                raw_assignments_copied / REPEATS as u64,
-                key_ns as f64 / REPEATS as f64 / 1e6,
-                reconstruct_ns as f64 / REPEATS as f64 / 1e6,
-                stats.message_cache_hits,
-            );
-
-            if bond_dim == 256 {
-                // [AI Supplied] Reproduce Guard's moving-center call pattern
-                // and count the rooted metadata retained for an immutable
-                // chain after every site has served as a center.
-                let scan_all_centers = |evaluator: &mut TreeTNCachedEvaluator<'_, usize>| {
-                    for scan_center in 0..N_SITES {
-                        let mut scan_values = vec![0usize; N_SITES * 2];
-                        scan_values[scan_center + N_SITES] = 1;
-                        let scan_shape = [N_SITES, 2usize];
-                        let scan_points = ColMajorArrayRef::new(&scan_values, &scan_shape).unwrap();
-                        evaluator
-                            .evaluate_batched_with_hint(
-                                scan_points,
-                                EvaluationHint::around(scan_center),
-                            )
-                            .unwrap();
-                    }
-                };
-
-                phase_timing::reset_all();
-                let first_scan_started = Instant::now();
-                scan_all_centers(&mut evaluator);
-                let first_scan_ns = first_scan_started.elapsed().as_nanos() as u64;
-                let plan_build_ns = phase_timing::PLAN_BUILD_NS.load(Ordering::Relaxed);
-                let layout_build_ns = phase_timing::LAYOUT_BUILD_NS.load(Ordering::Relaxed);
-                let new_plan_count = phase_timing::PLAN_COUNT.load(Ordering::Relaxed);
-
-                let second_scan_started = Instant::now();
-                scan_all_centers(&mut evaluator);
-                let second_scan_ns = second_scan_started.elapsed().as_nanos() as u64;
-                let retained_layout_refs = evaluator
-                    .directed_component_layouts()
-                    .values()
-                    .map(|layout| layout.layout.input_positions.len())
-                    .sum::<usize>();
-                let unique_directed_components = 2 * (N_SITES - 1);
-                let unique_directed_component_refs = N_SITES * (N_SITES - 1);
-                eprintln!(
-                    "moving-center bond={bond_dim}: first_scan={:.3}ms second_scan={:.3}ms newly_built_plans={} plan_build={:.3}ms layout_build={:.3}ms retained_centers={} retained_directed_layouts={} retained_layout_refs={} unique_directed_components={} unique_directed_component_refs={}",
-                    first_scan_ns as f64 / 1e6,
-                    second_scan_ns as f64 / 1e6,
-                    new_plan_count,
-                    plan_build_ns as f64 / 1e6,
-                    layout_build_ns as f64 / 1e6,
-                    evaluator.rooted_plan_count_for_test(),
-                    evaluator.directed_component_layouts().len(),
-                    retained_layout_refs,
-                    unique_directed_components,
-                    unique_directed_component_refs,
-                );
-                assert_eq!(new_plan_count, (N_SITES - 1) as u64);
-                assert_eq!(evaluator.rooted_plan_count_for_test(), N_SITES);
-                assert_eq!(
-                    evaluator.directed_component_layouts().len(),
-                    unique_directed_components
-                );
-                assert_eq!(retained_layout_refs, unique_directed_component_refs);
-                assert_eq!(unique_directed_component_refs, 240);
-            }
-        }
-    }
-
-    // Measurement tooling rather than a wall-clock regression assertion
-    // (mirroring `message_cache_wall_time_on_realistic_floating_zone_walk`'s
-    // own framing above), kept from the investigation for gw-rs issue
-    // tensor4all-rs#671's downstream follow-up. Compares this evaluator's
-    // realistic floating-zone-walk wall time on a plain 16-site chain
-    // against a same-size comb tree (one degree-3 hub, three 5-site arms),
-    // both at the same bond dimension, under the same cached evaluate_batched
-    // path used by `message_cache_wall_time_on_realistic_floating_zone_walk`
-    // above.
-    //
-    // Read this test's ratio as "does branching cost something at matched
-    // bond dimension," not as a proxy for real downstream wall time: this
-    // investigation measured 25.84x before the two-child raw path
-    // (`try_compute_branch_message_raw`) existed, a regression to 44.24x
-    // from an initial version of that path's wrong point-count-based BLAS
-    // gate, 29.26x after fixing the gate -- yet the real gw-rs downstream
-    // pipeline (which does not have equal bond dimensions between its chain
-    // and comb topologies) measured a genuine 2.96x-3.15x wall-time
-    // improvement per treeaci stage from the same fix. See
-    // `docs/worklogs/2026-08-22-treetn-branch-message-raw-path.md` for the
-    // full trace, including why the same-bond assumption here does not
-    // represent the real workload's shape.
-    #[test]
-    #[ignore]
-    fn diagnostic_chain_vs_comb_wall_time_on_realistic_floating_zone_walk() {
-        use rand::{Rng, SeedableRng};
-        use rand_chacha::ChaCha8Rng;
-        use std::time::Instant;
-        use tensor4all_core::floating_zone_walk;
-        use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, Tensor3, Tensor3Ops};
-
-        const N_SITES: usize = 16;
-        const LOCAL_DIM: usize = 2;
-        const BOND_DIM: usize = 128;
-        const NSEARCH: usize = 5;
-        const MAX_SWEEPS: usize = 100;
-        const ARM_LEN: usize = 5; // hub + 3*5 = 16 sites, matching N_SITES
-
-        fn build_chain(seed: u64) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-            let mut rng = ChaCha8Rng::seed_from_u64(seed);
-            let mut tensors: Vec<Tensor3<f64>> = Vec::with_capacity(N_SITES);
-            for site in 0..N_SITES {
-                let left_dim = if site == 0 { 1 } else { BOND_DIM };
-                let right_dim = if site == N_SITES - 1 { 1 } else { BOND_DIM };
-                let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim);
-                for l in 0..left_dim {
-                    for s in 0..LOCAL_DIM {
-                        for r in 0..right_dim {
-                            tensor.set3(l, s, r, rng.random::<f64>());
-                        }
-                    }
-                }
-                tensors.push(tensor);
-            }
-            let tt = SimpleTensorTrain::new(tensors).unwrap();
-            crate::tensor_train_to_treetn(&tt).unwrap()
-        }
-
-        // Hub (node 0) + three arms of ARM_LEN sites each: arm a's sites are
-        // named `1 + a*ARM_LEN ..= a*ARM_LEN + ARM_LEN`. Center is fixed to
-        // the tip of arm 0, so the hub (rooted toward that tip) has exactly
-        // one parent (arm 0's first site) and two children (arms 1 and 2's
-        // first sites) -- the one node in this tree that cannot use
-        // `try_compute_chain_message_raw`'s single-child fast path.
-        fn build_comb(seed: u64) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>, usize) {
-            let mut rng = ChaCha8Rng::seed_from_u64(seed);
-            let mut gen = |n: usize| -> Vec<f64> { (0..n).map(|_| rng.random::<f64>()).collect() };
-
-            let s_hub = DynIndex::new_dyn(LOCAL_DIM);
-            let hub_bonds: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(BOND_DIM)).collect();
-            let hub = IdxTensor::from_dense(
-                std::iter::once(s_hub.clone())
-                    .chain(hub_bonds.iter().cloned())
-                    .collect(),
-                gen(LOCAL_DIM * BOND_DIM * BOND_DIM * BOND_DIM),
-            )
-            .unwrap();
-
-            let mut tensors = vec![hub];
-            let mut node_labels = vec![0usize];
-            let mut indices = vec![s_hub];
-            let mut next_node = 1usize;
-            let mut center = 0usize;
-
-            for (arm, hub_bond) in hub_bonds.iter().enumerate() {
-                let mut prev_bond = hub_bond.clone();
-                for depth in 0..ARM_LEN {
-                    let s = DynIndex::new_dyn(LOCAL_DIM);
-                    let is_tip = depth == ARM_LEN - 1;
-                    let tensor = if is_tip {
-                        IdxTensor::from_dense(
-                            vec![prev_bond.clone(), s.clone()],
-                            gen(BOND_DIM * LOCAL_DIM),
-                        )
-                        .unwrap()
-                    } else {
-                        let next_bond = DynIndex::new_dyn(BOND_DIM);
-                        let tensor = IdxTensor::from_dense(
-                            vec![prev_bond.clone(), s.clone(), next_bond.clone()],
-                            gen(BOND_DIM * LOCAL_DIM * BOND_DIM),
-                        )
-                        .unwrap();
-                        prev_bond = next_bond;
-                        tensor
-                    };
-                    tensors.push(tensor);
-                    node_labels.push(next_node);
-                    indices.push(s);
-                    if arm == 0 && is_tip {
-                        center = next_node;
-                    }
-                    next_node += 1;
-                }
-            }
-
-            let tree = TreeTN::<_, usize>::from_tensors(tensors, node_labels).unwrap();
-            (tree, indices, center)
-        }
-
-        fn starts(n_sites: usize) -> Vec<Vec<usize>> {
-            let mut rng = ChaCha8Rng::seed_from_u64(11);
-            (0..NSEARCH)
-                .map(|_| {
-                    (0..n_sites)
-                        .map(|_| rng.random_range(0..LOCAL_DIM))
-                        .collect()
-                })
-                .collect()
-        }
-        let site_dims = vec![LOCAL_DIM; N_SITES];
-
-        fn timed_walk(
-            mut evaluator: TreeTNCachedEvaluator<'_, usize>,
-            n_sites: usize,
-        ) -> std::time::Duration {
-            let warm_values = vec![0usize; n_sites];
-            let warm_shape = [n_sites, 1];
-            let warm_points = ColMajorArrayRef::new(&warm_values, &warm_shape).unwrap();
-            evaluator.evaluate_batched(warm_points).unwrap();
-            let start_time = Instant::now();
-            for start in &starts(n_sites) {
-                floating_zone_walk(
-                    &vec![LOCAL_DIM; n_sites],
-                    start,
-                    MAX_SWEEPS,
-                    f64::INFINITY,
-                    |_scan_site: Option<usize>, points: &[Vec<usize>]| -> Result<Vec<f64>> {
-                        let mut values = vec![0usize; n_sites * points.len()];
-                        for (p, point) in points.iter().enumerate() {
-                            for (site, &v) in point.iter().enumerate() {
-                                values[site + n_sites * p] = v;
-                            }
-                        }
-                        let shape = [n_sites, points.len()];
-                        let arr = ColMajorArrayRef::new(&values, &shape).unwrap();
-                        let out = evaluator.evaluate_batched(arr)?;
-                        Ok(out.iter().map(|v| v.real().abs()).collect())
-                    },
-                )
-                .unwrap();
-            }
-            start_time.elapsed()
-        }
-
-        let (chain_tree, chain_indices) = build_chain(7);
-        let chain_evaluator = TreeTNCachedEvaluator::new(
-            &chain_tree,
-            &chain_indices,
-            CachedEvaluatorOptions::default(),
-        )
-        .unwrap();
-        #[cfg(feature = "diagnostics")]
-        contraction_diagnostics::reset_all();
-        let chain_elapsed = timed_walk(chain_evaluator, N_SITES);
-        #[cfg(feature = "diagnostics")]
-        let chain_diagnostics = contraction_diagnostics::summary();
-        #[cfg(not(feature = "diagnostics"))]
-        let chain_diagnostics = "diagnostics feature disabled";
-        let _ = &site_dims;
-
-        let (comb_tree, comb_indices, comb_center) = build_comb(7);
-        let comb_evaluator = TreeTNCachedEvaluator::new(
-            &comb_tree,
-            &comb_indices,
-            CachedEvaluatorOptions {
-                center: Some(comb_center),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        #[cfg(feature = "diagnostics")]
-        contraction_diagnostics::reset_all();
-        let comb_elapsed = timed_walk(comb_evaluator, N_SITES);
-        #[cfg(feature = "diagnostics")]
-        let comb_diagnostics = contraction_diagnostics::summary();
-        #[cfg(not(feature = "diagnostics"))]
-        let comb_diagnostics = "diagnostics feature disabled";
-
-        println!(
-            "chain (N={N_SITES}, bond={BOND_DIM}): {chain_elapsed:?}\n\
-             comb  (N={N_SITES}, bond={BOND_DIM}, 1 hub): {comb_elapsed:?}\n\
-             ratio (comb/chain): {:.2}x\n\
-             chain diagnostics: {chain_diagnostics}\n\
-             comb diagnostics: {comb_diagnostics}",
-            comb_elapsed.as_secs_f64() / chain_elapsed.as_secs_f64()
-        );
-        assert!(chain_elapsed.as_nanos() > 0);
-        assert!(comb_elapsed.as_nanos() > 0);
-    }
-
-    /// Where a hinted two-point Guard evaluation spends its time on a chain
-    /// and on a branched tree of the same site count (tensor4all-rs #727).
-    ///
-    /// The Guard walks one site at a time and hints the varying site as the
-    /// centre, so every call is two points that differ in one coordinate. On a
-    /// 13-site chain that call costs about 20 us; on a 13-site spider it costs
-    /// about 390 us, and the spider's cost does not move when its bonds shrink
-    /// from `8,8,8,8` to `2,2,2,2` -- so the gap is not arithmetic. This
-    /// attributes it. Run with `--ignored --nocapture`.
-    #[test]
-    #[ignore]
-    fn diagnostic_hinted_walk_cost_on_a_chain_versus_a_branched_tree() {
-        use std::sync::atomic::Ordering;
-        use std::time::Instant;
-
-        const N_SITES: usize = 13;
-        const LOCAL_DIM: usize = 2;
-        const SWEEPS: usize = 5;
-        const ARM_LENGTH: usize = 3;
-
-        fn chain(bond_dim: usize) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-            let physical = (0..N_SITES)
-                .map(|_| DynIndex::new_dyn(LOCAL_DIM))
-                .collect::<Vec<_>>();
-            let bonds = (0..N_SITES - 1)
-                .map(|_| DynIndex::new_dyn(bond_dim))
-                .collect::<Vec<_>>();
-            let mut tensors = Vec::with_capacity(N_SITES);
-            for site in 0..N_SITES {
-                let mut indices = vec![physical[site].clone()];
-                if site > 0 {
-                    indices.push(bonds[site - 1].clone());
-                }
-                if site + 1 < N_SITES {
-                    indices.push(bonds[site].clone());
-                }
-                let len: usize = indices.iter().map(IndexLike::dim).product();
-                tensors.push(
-                    IdxTensor::from_dense(
-                        indices,
-                        (0..len)
-                            .map(|flat| 1.0 + (flat % 7) as f64)
-                            .collect::<Vec<f64>>(),
-                    )
-                    .unwrap(),
-                );
-            }
-            (
-                TreeTN::from_tensors(tensors, (0..N_SITES).collect()).unwrap(),
-                physical,
-            )
-        }
-
-        fn spider(bond_dim: usize) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-            let arms = 4;
-            assert_eq!(arms * ARM_LENGTH + 1, N_SITES);
-            let physical = (0..N_SITES)
-                .map(|_| DynIndex::new_dyn(LOCAL_DIM))
-                .collect::<Vec<_>>();
-            let hub_bonds = (0..arms)
-                .map(|_| DynIndex::new_dyn(bond_dim))
-                .collect::<Vec<_>>();
-            let arm_bonds = (0..arms)
-                .map(|_| {
-                    (1..ARM_LENGTH)
-                        .map(|_| DynIndex::new_dyn(bond_dim))
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>();
-            let dense = |indices: Vec<DynIndex>| {
-                let len: usize = indices.iter().map(IndexLike::dim).product();
-                IdxTensor::from_dense(
-                    indices,
-                    (0..len)
-                        .map(|flat| 1.0 + (flat % 7) as f64)
-                        .collect::<Vec<f64>>(),
-                )
-                .unwrap()
-            };
-            let mut hub_indices = vec![physical[0].clone()];
-            hub_indices.extend(hub_bonds.iter().cloned());
-            let mut tensors = vec![dense(hub_indices)];
-            for arm in 0..arms {
-                for position in 0..ARM_LENGTH {
-                    let node = 1 + arm * ARM_LENGTH + position;
-                    let mut indices = vec![physical[node].clone()];
-                    if position == 0 {
-                        indices.push(hub_bonds[arm].clone());
-                    } else {
-                        indices.push(arm_bonds[arm][position - 1].clone());
-                    }
-                    if position + 1 < ARM_LENGTH {
-                        indices.push(arm_bonds[arm][position].clone());
-                    }
-                    tensors.push(dense(indices));
-                }
-            }
-            (
-                TreeTN::from_tensors(tensors, (0..N_SITES).collect()).unwrap(),
-                physical,
-            )
-        }
-
-        for (name, (tree, physical)) in [
-            ("chain_bond8", chain(8)),
-            ("spider_bond2", spider(2)),
-            ("spider_bond8", spider(8)),
-        ] {
-            let mut evaluator =
-                TreeTNCachedEvaluator::new(&tree, &physical, CachedEvaluatorOptions::default())
-                    .unwrap();
-            let warm = vec![0usize; N_SITES];
-            evaluator
-                .evaluate_batched_typed::<f64>(
-                    ColMajorArrayRef::new(&warm, &[N_SITES, 1]).unwrap(),
-                    EvaluationHint::default(),
-                )
-                .unwrap();
-
-            phase_timing::reset_all();
-            let mut calls = 0usize;
-            let started = Instant::now();
-            for sweep in 0..SWEEPS {
-                for site in 0..N_SITES {
-                    let mut values = vec![0usize; N_SITES * LOCAL_DIM];
-                    for point in 0..LOCAL_DIM {
-                        for other in 0..N_SITES {
-                            values[other + N_SITES * point] = if other == site {
-                                point
-                            } else {
-                                (other + sweep) % LOCAL_DIM
-                            };
-                        }
-                    }
-                    let batch = ColMajorArrayRef::new(&values, &[N_SITES, LOCAL_DIM]).unwrap();
-                    std::hint::black_box(
-                        evaluator
-                            .evaluate_batched_typed::<f64>(batch, EvaluationHint::around(site))
-                            .unwrap(),
-                    );
-                    calls += 1;
-                }
-            }
-            let total_ns = started.elapsed().as_nanos() as u64;
-            let per_call = |counter: u64| counter as f64 / calls as f64 / 1.0e3;
-            let stats = evaluator.stats_for_test();
-            eprintln!(
-                "hinted walk {name}: total={:.1}us/call over {calls} calls | environment={:.1}us {{capability={:.1}, assignments={:.1}, message_loop={:.1}, component_assembly={:.1}}}, centre={:.1}us, key_lookup={:.1}us, reconstruct={:.1}us, contract={:.1}us, insert={:.1}us, plan_build={:.1}us, layout_build={:.1}us, plans={}, cache hits/misses={}/{}",
-                per_call(total_ns),
-                per_call(phase_timing::BUILD_ENV_NS.load(Ordering::Relaxed)),
-                per_call(phase_timing::RAW_CAPABILITY_NS.load(Ordering::Relaxed)),
-                per_call(phase_timing::ASSIGNMENT_BATCH_NS.load(Ordering::Relaxed)),
-                per_call(phase_timing::MESSAGE_LOOP_NS.load(Ordering::Relaxed)),
-                per_call(phase_timing::COMPONENT_ASSEMBLY_NS.load(Ordering::Relaxed)),
-                per_call(phase_timing::CENTER_NS.load(Ordering::Relaxed)),
-                per_call(phase_timing::KEY_AND_LOOKUP_NS.load(Ordering::Relaxed)),
-                per_call(phase_timing::RECONSTRUCT_NS.load(Ordering::Relaxed)),
-                per_call(phase_timing::CONTRACT_NS.load(Ordering::Relaxed)),
-                per_call(phase_timing::INSERT_NS.load(Ordering::Relaxed)),
-                per_call(phase_timing::PLAN_BUILD_NS.load(Ordering::Relaxed)),
-                per_call(phase_timing::LAYOUT_BUILD_NS.load(Ordering::Relaxed)),
-                phase_timing::PLAN_COUNT.load(Ordering::Relaxed),
-                stats.message_cache_hits,
-                stats.message_cache_misses,
-            );
-        }
-    }
-}
+mod tests;

@@ -29,16 +29,14 @@ fn test_contract_method_roundtrip() {
 }
 
 #[test]
-fn test_factorize_alg_roundtrip() {
-    for alg in [
-        FactorizeAlg::SVD,
-        FactorizeAlg::QR,
-        FactorizeAlg::LU,
-        FactorizeAlg::CI,
+fn test_factorize_alg_conversion() {
+    for (ffi, expected) in [
+        (t4a_factorize_alg::SVD, FactorizeAlg::SVD),
+        (t4a_factorize_alg::QR, FactorizeAlg::QR),
+        (t4a_factorize_alg::LU, FactorizeAlg::LU),
+        (t4a_factorize_alg::CI, FactorizeAlg::CI),
     ] {
-        let ffi = t4a_factorize_alg::from(alg);
-        let roundtrip = FactorizeAlg::from(ffi);
-        assert_eq!(roundtrip, alg);
+        assert_eq!(FactorizeAlg::from(ffi), expected);
     }
 }
 

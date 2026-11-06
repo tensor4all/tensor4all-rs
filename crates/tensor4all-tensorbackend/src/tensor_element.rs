@@ -21,8 +21,9 @@ pub trait TensorElement: TensorScalar + Copy + Send + Sync + 'static {
     /// Build a dense native tensor from column-major data.
     /// # Errors
     ///
-    /// Returns an error when the data length does not match the dimensions (a
-    /// /// shape mismatch) or the backend conversion fails.
+    /// Returns an error when the shape product would overflow `usize`, when
+    /// `data.len()` does not match the expected shape, or when the backend
+    /// rejects the tensor.
     ///
     fn dense_native_tensor_from_col_major(data: &[Self], dims: &[usize]) -> Result<NativeTensor>;
 
@@ -68,8 +69,9 @@ pub trait TensorElement: TensorScalar + Copy + Send + Sync + 'static {
     /// Build a diagonal native tensor from column-major diagonal payload data.
     /// # Errors
     ///
-    /// Returns an error when the diagonal payload is incompatible (a shape
-    /// /// mismatch) or the backend conversion fails.
+    /// Returns an error when `logical_rank` is zero, when expanding the
+    /// diagonal would overflow `usize`, or when the backend rejects the
+    /// resulting dense tensor.
     ///
     fn diag_native_tensor_from_col_major(
         data: &[Self],
@@ -79,24 +81,58 @@ pub trait TensorElement: TensorScalar + Copy + Send + Sync + 'static {
     /// Build a rank-0 native tensor.
     /// # Errors
     ///
-    /// Returns an error when the scalar cannot be converted (a dtype mismatch or
-    /// /// backend failure).
+    /// Returns an error when the backend rejects the rank-0 tensor as invalid
+    /// input.
     ///
     fn scalar_native_tensor(value: Self) -> Result<NativeTensor>;
 
     /// Materialize dense column-major values from a native tensor.
     /// # Errors
     ///
-    /// Returns an error when the native tensor cannot be materialized (a dtype
-    /// /// mismatch or backend failure).
+    /// Returns an error when `tensor`'s dtype does not match `Self`.
     ///
     fn dense_values_from_native_col_major(tensor: &NativeTensor) -> Result<Vec<Self>>;
+
+    /// Materialize dense column-major values while consuming the native tensor.
+    ///
+    /// This is the ownership-preserving counterpart of
+    /// [`Self::dense_values_from_native_col_major`]: a compact column-major host
+    /// result hands its buffer over instead of being copied, so a caller that
+    /// built the tensor only to read it back pays no extra full-size
+    /// allocation.
+    ///
+    /// # Arguments
+    ///
+    /// * `tensor` - Consumed native tensor whose logical values are returned.
+    ///
+    /// # Returns
+    ///
+    /// The tensor's values in column-major order, in `Self`'s scalar type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on a dtype mismatch between `tensor` and `Self`, and when
+    /// `tensor`'s storage cannot hand over a compact column-major host buffer
+    /// because it is backend-resident or its layout is not compact, instead of
+    /// copying or silently reordering it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::TensorElement;
+    ///
+    /// let tensor =
+    ///     f64::dense_native_tensor_from_col_major(&[1.0, 3.0, 2.0, 4.0], &[2, 2]).unwrap();
+    /// let values = f64::into_dense_values_from_native_col_major(tensor).unwrap();
+    /// assert_eq!(values, vec![1.0, 3.0, 2.0, 4.0]);
+    /// ```
+    fn into_dense_values_from_native_col_major(tensor: NativeTensor) -> Result<Vec<Self>>;
 
     /// Materialize diagonal values from a dense native tensor.
     /// # Errors
     ///
-    /// Returns an error when the native tensor cannot be materialized (a dtype
-    /// /// mismatch or backend failure).
+    /// Returns an error when `tensor` is rank 0, when its dimensions are not
+    /// all equal, or when its dtype does not match `Self`.
     ///
     fn diag_values_from_native_temp(tensor: &NativeTensor) -> Result<Vec<Self>>;
 }
@@ -205,6 +241,31 @@ macro_rules! impl_tensor_element {
                     })
             }
 
+            fn into_dense_values_from_native_col_major(tensor: NativeTensor) -> Result<Vec<Self>> {
+                let actual = tensor.dtype();
+                let typed = Self::into_typed(tensor).map_err(|failure| {
+                    let (_, error) = failure.into_parts();
+                    anyhow!(
+                        "tensor dtype mismatch: expected {}, got {}: {error}",
+                        tensor_dtype_name($dtype),
+                        tensor_dtype_name(actual)
+                    )
+                })?;
+                // `into_vec_col_major` moves a compact column-major host buffer
+                // and rejects a backend-resident or strided one typed, so this
+                // route never copies and never silently reorders a layout.
+                typed
+                    .into_vec_col_major()
+                    .map(|(_shape, values)| values)
+                    .map_err(|failure| {
+                        let (_, error) = failure.into_parts();
+                        anyhow!(
+                            "native {} tensor buffer cannot be transferred: {error}",
+                            tensor_dtype_name($dtype)
+                        )
+                    })
+            }
+
             fn diag_values_from_native_temp(tensor: &NativeTensor) -> Result<Vec<Self>> {
                 let shape = tensor.shape();
                 ensure!(
@@ -237,14 +298,4 @@ impl_tensor_element!(Complex32, DType::C32);
 impl_tensor_element!(Complex64, DType::C64);
 
 #[cfg(test)]
-mod external_dtype_tests {
-    use super::*;
-
-    #[test]
-    fn external_kind_is_named_external() {
-        assert_eq!(
-            tensor_dtype_name(DType::External(core::any::TypeId::of::<u8>())),
-            "external"
-        );
-    }
-}
+mod tests;

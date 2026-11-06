@@ -2,9 +2,8 @@ use std::error::Error;
 use std::fmt;
 
 use crate::traits::TTScalar;
-use tenferro_einsum::Subscripts;
-use tenferro_tensor::{Tensor, TensorScalar, TypedTensor};
-use tensor4all_tensorbackend::einsum_native_tensors;
+use tenferro_tensor::{TensorScalar, TypedTensor};
+use tensor4all_tensorbackend::NativeEinsumPlan;
 
 pub(crate) type Result<T> = std::result::Result<T, EinsumHelperError>;
 
@@ -92,44 +91,24 @@ pub(crate) fn einsum_tensors<T: EinsumScalar>(
     subscripts: &str,
     operands: &[&TypedTensor<T>],
 ) -> Result<TypedTensor<T>> {
-    let parsed = Subscripts::parse(subscripts).map_err(|err| EinsumHelperError::Backend {
+    // Subscript parsing, operand-count validation, and label mapping live in
+    // `NativeEinsumPlan`; this adapter only borrows the operands in and converts
+    // the result back out. The operands are read through their views, so no
+    // operand is copied per call.
+    let backend = |error: &dyn fmt::Display| EinsumHelperError::Backend {
         subscripts: subscripts.to_string(),
-        message: err.to_string(),
-    })?;
-    let tensors: Vec<Tensor> = operands
+        message: error.to_string(),
+    };
+    let plan = NativeEinsumPlan::new(subscripts).map_err(|error| backend(&*error))?;
+    let reads = operands
         .iter()
-        .map(|tensor| {
-            let tensor = tensor
-                .duplicate()
-                .map_err(|error| EinsumHelperError::Backend {
-                    subscripts: subscripts.to_string(),
-                    message: format!("operand duplication failed: {error}"),
-                })?;
-            Ok(T::typed_tensor_into_tensor(tensor))
-        })
-        .collect::<Result<_>>()?;
-    let input_ids = parsed
-        .inputs
-        .iter()
-        .map(|ids| ids.iter().map(|&id| id as usize).collect::<Vec<_>>())
-        .collect::<Vec<_>>();
-    let operand_refs = tensors
-        .iter()
-        .zip(input_ids.iter())
-        .map(|(tensor, ids)| (tensor, ids.as_slice()))
-        .collect::<Vec<_>>();
-    let output_ids = parsed
-        .output
-        .iter()
-        .map(|&id| id as usize)
-        .collect::<Vec<_>>();
+        .map(|tensor| tensor.as_view().into_tensor_read())
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| backend(&error))?;
 
-    let result = einsum_native_tensors(&operand_refs, &output_ids).map_err(|err| {
-        EinsumHelperError::Backend {
-            subscripts: subscripts.to_string(),
-            message: err.to_string(),
-        }
-    })?;
+    let result = plan
+        .execute_reads(&reads)
+        .map_err(|error| backend(&*error))?;
     let actual = result.dtype();
     T::into_typed(result).map_err(|error| EinsumHelperError::Backend {
         subscripts: subscripts.to_string(),

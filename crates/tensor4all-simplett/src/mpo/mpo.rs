@@ -9,6 +9,10 @@ use crate::einsum_helper::{
     einsum_tensors, row_vector_times_matrix, tensor_to_col_major_vec, EinsumScalar,
 };
 use crate::traits::TTScalar;
+use tenferro_tensor::TensorValue;
+use tensor4all_tensorbackend::{
+    einsum_native_tensor_reads, NativeEinsumPlan, NativeTensorReadInput,
+};
 
 /// Matrix Product Operator representation
 /// An MPO represents a high-dimensional operator as a product of
@@ -29,8 +33,9 @@ impl<T: TTScalar> MPO<T> {
     /// where the right_bond of tensor i equals the left_bond of tensor i+1.
     /// # Errors
     ///
-    /// Returns an error when the MPO dimensions are invalid (a shape mismatch) or
-    /// /// the construction fails.
+    /// Returns [`MPOError::BondDimensionMismatch`] when adjacent bond
+    /// dimensions disagree, or [`MPOError::InvalidBoundary`] when the first or
+    /// last tensor does not have a unit boundary bond.
     ///
     pub fn new(tensors: Vec<Tensor4<T>>) -> Result<Self> {
         // Validate dimensions
@@ -66,22 +71,32 @@ impl<T: TTScalar> MPO<T> {
     }
 
     /// Create an MPO representing the zero operator
-    pub fn zeros(site_dims: &[(usize, usize)]) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MPOError::InvalidOperation`] when a site tensor shape product
+    /// overflows `usize`, allocation fails, or the backend rejects the shape.
+    pub fn zeros(site_dims: &[(usize, usize)]) -> Result<Self> {
         let tensors: Vec<Tensor4<T>> = site_dims
             .iter()
             .map(|&(d1, d2)| tensor4_zeros(1, d1, d2, 1))
-            .collect();
-        Self { tensors }
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { tensors })
     }
 
     /// Create an MPO representing a constant operator
     ///
     /// Each element O[i1, j1, i2, j2, ..., iL, jL] = value
-    pub fn constant(site_dims: &[(usize, usize)], value: T) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MPOError::InvalidOperation`] when a site tensor shape product
+    /// overflows `usize`, allocation fails, or the backend rejects the shape.
+    pub fn constant(site_dims: &[(usize, usize)], value: T) -> Result<Self> {
         if site_dims.is_empty() {
-            return Self {
+            return Ok(Self {
                 tensors: Vec::new(),
-            };
+            });
         }
 
         let n = site_dims.len();
@@ -89,7 +104,7 @@ impl<T: TTScalar> MPO<T> {
 
         // First tensor: all ones
         let (d1, d2) = site_dims[0];
-        let mut first = tensor4_zeros(1, d1, d2, 1);
+        let mut first = tensor4_zeros(1, d1, d2, 1)?;
         for s1 in 0..d1 {
             for s2 in 0..d2 {
                 first.set4(0, s1, s2, 0, T::one());
@@ -100,7 +115,7 @@ impl<T: TTScalar> MPO<T> {
         // Middle tensors: all ones (only if n > 2)
         if n > 2 {
             for &(d1, d2) in &site_dims[1..n - 1] {
-                let mut tensor = tensor4_zeros(1, d1, d2, 1);
+                let mut tensor = tensor4_zeros(1, d1, d2, 1)?;
                 for s1 in 0..d1 {
                     for s2 in 0..d2 {
                         tensor.set4(0, s1, s2, 0, T::one());
@@ -113,7 +128,7 @@ impl<T: TTScalar> MPO<T> {
         // Last tensor: multiply by value
         if n > 1 {
             let (d1, d2) = site_dims[n - 1];
-            let mut last = tensor4_zeros(1, d1, d2, 1);
+            let mut last = tensor4_zeros(1, d1, d2, 1)?;
             for s1 in 0..d1 {
                 for s2 in 0..d2 {
                     last.set4(0, s1, s2, 0, value);
@@ -131,7 +146,7 @@ impl<T: TTScalar> MPO<T> {
             }
         }
 
-        Self { tensors }
+        Ok(Self { tensors })
     }
 
     /// Create an identity MPO (only when site_dim_1 == site_dim_2 at each site)
@@ -139,8 +154,8 @@ impl<T: TTScalar> MPO<T> {
     /// The identity operator: O[i1, j1, ...] = delta(i1, j1) * delta(i2, j2) * ...
     /// # Errors
     ///
-    /// Returns an error when the identity MPO construction fails (a shape
-    /// /// mismatch or backend failure).
+    /// Returns [`MPOError::InvalidOperation`] when a site tensor shape product
+    /// overflows `usize`, allocation fails, or the backend rejects the shape.
     ///
     pub fn identity(site_dims: &[usize]) -> Result<Self> {
         if site_dims.is_empty() {
@@ -152,7 +167,7 @@ impl<T: TTScalar> MPO<T> {
         let mut tensors = Vec::with_capacity(site_dims.len());
 
         for &d in site_dims {
-            let mut tensor = tensor4_zeros(1, d, d, 1);
+            let mut tensor = tensor4_zeros(1, d, d, 1)?;
             for s in 0..d {
                 tensor.set4(0, s, s, 0, T::one());
             }
@@ -239,8 +254,10 @@ impl<T: TTScalar> MPO<T> {
     /// [i1, j1, i2, j2, ..., iL, jL]
     /// # Errors
     ///
-    /// Returns an error when the MPO evaluation fails (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// Returns [`MPOError::InvalidOperation`] when `indices` does not have two
+    /// entries per site, when an intermediate contraction fails, or when the
+    /// final contraction is not scalar; [`MPOError::Empty`] for an empty MPO;
+    /// and [`MPOError::IndexOutOfBounds`] for an out-of-range physical index.
     ///
     pub fn evaluate(&self, indices: &[LocalIndex]) -> Result<T>
     where
@@ -318,26 +335,19 @@ impl<T: TTScalar> MPO<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error when the tenferro-backed contraction fails (a backend
-    /// failure) or an internally constructed MPO has inconsistent bond
-    /// dimensions (a shape mismatch).
+    /// Returns [`MPOError::InvalidOperation`] when a tenferro-backed reduction
+    /// or read fails, or when an internally constructed MPO is inconsistent.
     ///
     /// # Examples
     ///
     /// ```
     /// use tensor4all_simplett::mpo::MPO;
     ///
-    /// let mpo = MPO::<f64>::constant(&[(2, 2)], 3.0);
+    /// let mpo = MPO::<f64>::constant(&[(2, 2)], 3.0).unwrap();
     /// let sum = mpo.sum().unwrap();
     /// assert!((sum - 12.0).abs() < 1e-10);
     /// ```
     #[allow(clippy::needless_range_loop)]
-    /// # Errors
-    ///
-    /// Returns an error when the tenferro-backed contraction fails (a backend
-    ///     /// failure) or an internally constructed MPO is inconsistent (an
-    ///     /// invalid-state failure).
-    ///
     pub fn sum(&self) -> Result<T>
     where
         T: EinsumScalar,
@@ -446,32 +456,70 @@ impl<T: TTScalar> MPO<T> {
             return Ok((Vec::new(), shape));
         }
 
-        // Build full tensor by iterating over all indices
-        let mut result = Vec::with_capacity(total_size);
-        let mut indices = vec![0usize; shape.len()];
-
-        loop {
-            // Evaluate at current indices
-            result.push(self.evaluate(&indices)?);
-
-            // Increment indices in column-major order, leftmost index fastest.
-            let mut carry = true;
-            for i in 0..shape.len() {
-                if carry {
-                    indices[i] += 1;
-                    if indices[i] >= shape[i] {
-                        indices[i] = 0;
-                    } else {
-                        carry = false;
-                    }
-                }
+        // Physical strides fit the checked positive total_size; bond extents need separate checks.
+        let first = &self.tensors[0];
+        let mut bond_dim = first
+            .left_dim()
+            .checked_mul(first.right_dim())
+            .ok_or_else(|| MPOError::InvalidOperation {
+                message: "full tensor environment element count overflowed usize".to_string(),
+            })?;
+        let mut stride = first.site_dim_1() * first.site_dim_2();
+        stride
+            .checked_mul(bond_dim)
+            .ok_or_else(|| MPOError::InvalidOperation {
+                message: "full tensor environment element count overflowed usize".to_string(),
+            })?;
+        let backend_error = |message: String| MPOError::InvalidOperation { message };
+        // Seed labr->lrab and fold (l,r) into the bond, retaining the previous
+        // first-left-bond behavior for cores replaced through the mutable API.
+        let first_read = NativeTensorReadInput::Borrowed(T::tensor_read(first.as_inner()));
+        let mut environment =
+            einsum_native_tensor_reads(&[(&first_read, &[0, 1, 2, 3])], &[0, 3, 1, 2])
+                .map(TensorValue::from_tensor)
+                .map_err(|error| backend_error(error.to_string()))?;
+        // E[l,p] * A[l,a,b,r] -> E'[r,p,a,b]. Folding (p,a,b), with
+        // a + d1*b at this site, preserves alternating axes and first-axis-fastest order.
+        let plan = NativeEinsumPlan::new("lp,labr->rpab")
+            .map_err(|error| backend_error(error.to_string()))?;
+        for (site, tensor) in self.tensors.iter().enumerate().skip(1) {
+            let left = tensor.left_dim();
+            let right = tensor.right_dim();
+            if left != bond_dim {
+                return Err(MPOError::InvalidOperation {
+                    message: format!(
+                        "Failed to evaluate MPO at site {site}: bond dimension mismatch"
+                    ),
+                });
             }
-
-            if carry {
-                break; // All indices wrapped around
-            }
+            let dim = tensor.site_dim_1() * tensor.site_dim_2();
+            let next_stride = stride * dim;
+            next_stride
+                .checked_mul(right)
+                .ok_or_else(|| MPOError::InvalidOperation {
+                    message: "full tensor environment element count overflowed usize".to_string(),
+                })?;
+            let prefix = environment
+                .reshape_view([bond_dim, stride])
+                .map_err(|error| backend_error(error.to_string()))?;
+            environment = plan
+                .execute_reads(&[prefix.tensor_read(), T::tensor_read(tensor.as_inner())])
+                .map(TensorValue::from_tensor)
+                .map_err(|error| backend_error(error.to_string()))?;
+            stride = next_stride;
+            bond_dim = right;
+        }
+        if bond_dim != 1 {
+            return Err(MPOError::InvalidOperation {
+                message: format!("Final contraction resulted in {bond_dim} elements, expected 1"),
+            });
         }
 
+        let result = environment
+            .tensor_read()
+            .as_slice::<T>()
+            .map_err(|error| backend_error(error.to_string()))?
+            .to_vec();
         Ok((result, shape))
     }
 }

@@ -5,16 +5,16 @@
 //! than 64 bits, so encoding stays linear in the number of components and the
 //! key stays linear in the number of limbs.
 
-use smallvec::SmallVec;
+use tinyvec::TinyVec;
 
 use super::IndexKeyError;
 
 /// Little-endian `u64` limbs.
-pub(super) type Limbs = SmallVec<[u64; 2]>;
+pub(super) type Limbs = TinyVec<[u64; 2]>;
 
 /// Heap payload owned by the limbs, including spare allocation capacity.
 pub(super) fn owned_heap_bytes(limbs: &Limbs) -> usize {
-    if limbs.spilled() {
+    if limbs.is_heap() {
         limbs.capacity().saturating_mul(std::mem::size_of::<u64>())
     } else {
         0
@@ -51,7 +51,10 @@ pub(super) fn try_limb_count(width_bits: u64) -> Result<usize, IndexKeyError> {
 /// Returns [`IndexKeyError::WidthOverflow`] when the limb count does not fit
 /// `usize` on this target.
 pub(super) fn zeroed(width_bits: u64) -> Result<Limbs, IndexKeyError> {
-    Ok(smallvec::smallvec![0u64; try_limb_count(width_bits)?])
+    let count = try_limb_count(width_bits)?;
+    let mut limbs = TinyVec::<[u64; 2]>::with_capacity(count);
+    limbs.resize(count, 0);
+    Ok(limbs)
 }
 
 /// Copies `source`'s low `width_bits` bits into `limbs` starting at `offset`.

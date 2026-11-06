@@ -80,7 +80,7 @@ mod validate;
 pub use batch::TreeElementwiseBatch;
 pub use elementwise::{
     tree_elementwise, tree_elementwise_batched, tree_elementwise_batched_with_rng,
-    tree_elementwise_with_rng,
+    tree_elementwise_batched_with_rng_in, tree_elementwise_with_rng,
 };
 pub use error::{Result, TreeAciError};
 pub use hadamard::hadamard_many;

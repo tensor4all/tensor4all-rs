@@ -28,8 +28,11 @@ use crate::tensortrain::TensorTrain;
 ///
 /// # Errors
 ///
-/// Returns an error when the solve or sweep fails (a shape or index
-/// /// mismatch, a non-convergence failure, or a backend failure).
+/// Returns [`TensorTrainError::InvalidStructure`] when any input train is
+/// empty or when their lengths differ, [`TensorTrainError::OperationError`]
+/// when an option is invalid or when the operator and initial guess cannot be
+/// index-mapped, and [`TensorTrainError::TreeTn`] when the underlying TreeTN
+/// solve fails.
 ///
 pub fn linsolve(
     operator: &TensorTrain,
@@ -141,9 +144,7 @@ pub fn linsolve(
         input_mapping,
         output_mapping,
     )
-    .map_err(|e| TensorTrainError::OperationError {
-        message: format!("Linsolve failed: {}", e),
-    })?;
+    .map_err(|source| TensorTrainError::tree_tn("Linsolve failed", source))?;
 
     TensorTrain::from_inner(result.solution, Some(CanonicalForm::Unitary))
 }
@@ -276,8 +277,11 @@ impl TensorTrain {
     /// See [`linsolve`] for details.
     /// # Errors
     ///
-    /// Returns an error when the solve or sweep fails (a shape or index
-    /// /// mismatch, a non-convergence failure, or a backend failure).
+    /// Returns [`TensorTrainError::InvalidStructure`] when any input train is
+    /// empty or when their lengths differ, [`TensorTrainError::OperationError`]
+    /// when an option is invalid or when the operator and initial guess cannot
+    /// be index-mapped, and [`TensorTrainError::TreeTn`] when the underlying
+    /// TreeTN solve fails.
     ///
     pub fn linsolve(&self, rhs: &Self, init: Self, options: &LinsolveOptions) -> Result<Self> {
         linsolve(self, rhs, init, options)
@@ -285,54 +289,4 @@ impl TensorTrain {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tensor4all_core::{DynIndex, IdxTensor};
-
-    fn make_tensor(indices: Vec<DynIndex>, data: Vec<f64>) -> IdxTensor {
-        IdxTensor::from_dense(indices, data).unwrap()
-    }
-
-    #[test]
-    fn infer_index_mappings_returns_typed_error() {
-        let op_in = DynIndex::new_dyn(2);
-        let op_out = DynIndex::new_dyn(2);
-        let init_site = DynIndex::new_dyn(2);
-
-        let operator = TensorTrain::new(vec![make_tensor(
-            vec![op_in, op_out],
-            vec![1.0, 0.0, 0.0, 1.0],
-        )])
-        .unwrap();
-        let init = TensorTrain::new(vec![make_tensor(vec![init_site], vec![1.0, 2.0])]).unwrap();
-
-        let result: crate::error::Result<_> = infer_index_mappings(&operator, &init);
-        let err = result.unwrap_err();
-
-        assert!(matches!(err, TensorTrainError::OperationError { .. }));
-        assert!(err.to_string().contains("Cannot auto-infer index mappings"));
-    }
-
-    #[test]
-    fn infer_index_mappings_handles_same_id_primed_output() {
-        let init_site = DynIndex::new_dyn(2);
-        let output_site = init_site.prime();
-
-        let operator = TensorTrain::new(vec![make_tensor(
-            vec![output_site.clone(), init_site.clone()],
-            vec![1.0, 0.0, 0.0, 1.0],
-        )])
-        .unwrap();
-        let init =
-            TensorTrain::new(vec![make_tensor(vec![init_site.clone()], vec![1.0, 2.0])]).unwrap();
-
-        let (input_mapping, output_mapping) = infer_index_mappings(&operator, &init).unwrap();
-        let input_mapping = input_mapping.unwrap();
-        let output_mapping = output_mapping.unwrap();
-
-        assert_eq!(input_mapping[&0].true_index, init_site);
-        assert_eq!(input_mapping[&0].internal_index, init_site);
-        assert_eq!(output_mapping[&0].true_index, init_site);
-        assert_eq!(output_mapping[&0].internal_index, output_site);
-    }
-}
+mod tests;

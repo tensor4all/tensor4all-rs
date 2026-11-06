@@ -10,13 +10,15 @@ use rand::SeedableRng;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use tensor4all_core::{
-    matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix, MatrixLuciScalar, MultiIndex,
-    RrLUOptions, Scalar,
+    matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix_owned,
+    matrix_luci_factors_from_matrix_owned_on_session, MatrixLuciFactors, MatrixLuciScalar,
+    MultiIndex, RrLUOptions, Scalar,
 };
-use tensor4all_simplett::{
-    tensor3_zeros, try_tensor3_zeros, SimpleTensorTrain, TTScalar, Tensor3, Tensor3Ops,
+use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, TTScalar, Tensor3, Tensor3Ops};
+use tensor4all_tensorbackend::invariant_violated;
+use tensor4all_tensorbackend::{
+    explicit::Session, solve_matrix, transpose, BackendLinalgError, Matrix, MatrixSolveScalar,
 };
-use tensor4all_tensorbackend::{solve_matrix, transpose, Matrix};
 
 /// Configuration for the TCI2 algorithm ([`crossinterpolate2`]).
 ///
@@ -369,6 +371,7 @@ pub enum Sweep2Strategy {
 /// You normally do not construct `TensorCI2` directly; use
 /// [`crossinterpolate2`] instead.
 #[derive(Debug, Clone)]
+
 pub struct TensorCI2<T: Scalar + TTScalar> {
     /// Index sets I for each site
     i_set: Vec<Vec<MultiIndex>>,
@@ -390,6 +393,51 @@ pub struct TensorCI2<T: Scalar + TTScalar> {
     j_set_history: Vec<Vec<Vec<MultiIndex>>>,
 }
 
+/// Where this pipeline's matrix products and solves run.
+///
+/// `Global` keeps every compatibility route unchanged; `Session` runs the assembly on a session the caller has
+/// already entered - a worker lane's session, for example - instead of opening one.
+pub(crate) enum TciLinalg<'a, 'session> {
+    Global,
+    Session(&'a mut Session<'session>),
+}
+
+impl TciLinalg<'_, '_> {
+    /// Factorize a dense pivot matrix, consuming its storage.
+    fn luci_factors_owned<T>(
+        &mut self,
+        a: Matrix<T>,
+        options: Option<RrLUOptions>,
+    ) -> tensor4all_core::Result<MatrixLuciFactors<T>>
+    where
+        T: Scalar + MatrixLuciScalar,
+    {
+        match self {
+            Self::Global => matrix_luci_factors_from_matrix_owned(a, options),
+            Self::Session(session) => {
+                matrix_luci_factors_from_matrix_owned_on_session(a, options, session)
+            }
+        }
+    }
+
+    /// Solve `a * x = b` for one site's interpolation.
+    fn solve<T>(
+        &mut self,
+        a: &Matrix<T>,
+        b: &Matrix<T>,
+    ) -> std::result::Result<Matrix<T>, BackendLinalgError>
+    where
+        T: MatrixSolveScalar,
+    {
+        match self {
+            Self::Global => solve_matrix(a, b),
+            Self::Session(session) => {
+                T::solve_matrix_in_impl(session.engine(), a, b).map_err(BackendLinalgError::from)
+            }
+        }
+    }
+}
+
 impl<T> TensorCI2<T>
 where
     T: Scalar + TTScalar + Default + MatrixLuciScalar,
@@ -397,8 +445,8 @@ where
     /// Create a new empty TensorCI2
     /// # Errors
     ///
-    /// Returns an error when the options or input dimensions are invalid (an
-    /// /// invalid-configuration failure).
+    /// Returns [`TCIError::DimensionMismatch`] when `local_dims` has fewer than
+    /// two entries, and [`TCIError::InvalidConfiguration`] when an entry is zero.
     ///
     pub fn new(local_dims: Vec<usize>) -> Result<Self> {
         if local_dims.len() < 2 {
@@ -417,7 +465,10 @@ where
             i_set: (0..n).map(|_| Vec::new()).collect(),
             j_set: (0..n).map(|_| Vec::new()).collect(),
             local_dims: local_dims.clone(),
-            site_tensors: local_dims.iter().map(|&d| tensor3_zeros(0, d, 0)).collect(),
+            site_tensors: local_dims
+                .iter()
+                .map(|&d| tensor3_zeros(0, d, 0))
+                .collect::<std::result::Result<_, _>>()?,
             pivot_errors: Vec::new(),
             bond_errors: vec![0.0; n.saturating_sub(1)],
             max_sample_value: 0.0,
@@ -593,7 +644,10 @@ where
             i_set,
             j_set,
             local_dims: local_dims.clone(),
-            site_tensors: local_dims.iter().map(|&d| tensor3_zeros(0, d, 0)).collect(),
+            site_tensors: local_dims
+                .iter()
+                .map(|&d| tensor3_zeros(0, d, 0))
+                .collect::<std::result::Result<_, _>>()?,
             pivot_errors: Vec::new(),
             bond_errors: vec![0.0; n - 1],
             max_sample_value,
@@ -674,8 +728,8 @@ where
     /// Convert to SimpleTensorTrain
     /// # Errors
     ///
-    /// Returns an error when the conversion fails (a shape or index mismatch, or
-    /// /// a backend failure).
+    /// Returns [`TCIError::SimpleTensorTrain`] when the site tensors do not
+    /// form a valid tensor train.
     ///
     pub fn to_tensor_train(&self) -> Result<SimpleTensorTrain<T>> {
         let tensors = self.site_tensors.clone();
@@ -685,8 +739,9 @@ where
     /// Add global pivots to the TCI
     /// # Errors
     ///
-    /// Returns an error when a pivot is invalid (an invalid-index or
-    /// /// out-of-bounds failure).
+    /// Returns [`TCIError::DimensionMismatch`] when a pivot's length differs
+    /// from the number of sites, and [`TCIError::IndexOutOfBounds`] when a
+    /// pivot value is out of range for its site.
     ///
     pub fn add_global_pivots(&mut self, pivots: &[MultiIndex]) -> Result<()> {
         // Validate the complete batch before mutating any index set.
@@ -746,13 +801,43 @@ where
     /// Invalidate all site tensors
     pub fn invalidate_site_tensors(&mut self) {
         for p in 0..self.len() {
-            self.site_tensors[p] = tensor3_zeros(0, self.local_dims[p], 0);
+            self.site_tensors[p] =
+                tensor3_zeros(0, self.local_dims[p], 0).unwrap_or_else(|error| {
+                    invariant_violated(
+                        "a zero-size site tensor allocates nothing and cannot fail",
+                        error,
+                    )
+                });
         }
     }
 
     /// Flush pivot errors (reset to empty)
     pub fn flush_pivot_errors(&mut self) {
         self.pivot_errors.clear();
+    }
+
+    /// Two-site sweep on the compatibility routes.
+    ///
+    /// Same sweep as the session-taking form this entry delegates to; the factor assembly and the site solves
+    /// run through the process-global routes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TCIError::InvalidConfiguration`] for invalid tolerances, iteration/history limits, or an
+    /// invalid optional bond dimension, and [`TCIError::InvalidOperation`], [`TCIError::MatrixCIError`], or
+    /// [`TCIError::SimpleTensorTrain`] when a candidate matrix, site layout, factorization, or solve fails.
+    pub fn sweep2site<F, B>(
+        &mut self,
+        f: &F,
+        batched_f: &Option<B>,
+        forward: bool,
+        options: &TCI2Options,
+    ) -> Result<()>
+    where
+        F: Fn(&MultiIndex) -> T,
+        B: Fn(&[MultiIndex]) -> Vec<T>,
+    {
+        self.sweep2site_on_session(f, batched_f, forward, options, &mut TciLinalg::Global)
     }
 
     /// Perform one 2-site sweep.
@@ -762,16 +847,18 @@ where
     /// # Errors
     ///
     /// Returns [`TCIError::InvalidConfiguration`] for invalid tolerances,
-    /// iteration/history limits, or an invalid optional bond dimension. It
-    /// also returns an error for a shape or index mismatch, a non-convergence
-    /// failure, or a backend failure.
+    /// iteration/history limits, or an invalid optional bond dimension, and
+    /// [`TCIError::InvalidOperation`], [`TCIError::MatrixCIError`], or
+    /// [`TCIError::SimpleTensorTrain`] when a candidate matrix, site layout,
+    /// factorization, or solve fails.
     ///
-    pub fn sweep2site<F, B>(
+    fn sweep2site_on_session<F, B>(
         &mut self,
         f: &F,
         batched_f: &Option<B>,
         forward: bool,
         options: &TCI2Options,
+        linalg: &mut TciLinalg<'_, '_>,
     ) -> Result<()>
     where
         F: Fn(&MultiIndex) -> T,
@@ -798,6 +885,7 @@ where
                         extra_i_set: &empty,
                         extra_j_set: &empty,
                     },
+                    linalg,
                 )?;
             }
         } else {
@@ -814,12 +902,13 @@ where
                         extra_i_set: &empty,
                         extra_j_set: &empty,
                     },
+                    linalg,
                 )?;
             }
         }
 
         // Fill site tensors after sweep
-        self.fill_site_tensors(f)?;
+        self.fill_site_tensors_on_session(f, linalg)?;
         Ok(())
     }
 
@@ -850,7 +939,7 @@ where
         let ni = i_indices.len();
         let nj = j_indices.len();
         let mut tensor =
-            try_tensor3_zeros(ni, local_dim, nj).map_err(|error| TCIError::InvalidOperation {
+            tensor3_zeros(ni, local_dim, nj).map_err(|error| TCIError::InvalidOperation {
                 message: format!("TensorCI2 site tensor construction failed: {error}"),
             })?;
         for (ii, i_multi) in i_indices.iter().enumerate() {
@@ -875,6 +964,39 @@ where
         Ok(tensor)
     }
 
+    /// One-site sweep on the compatibility routes.
+    ///
+    /// Same sweep as the session-taking form this entry delegates to; the factor assembly and the site solves
+    /// run through the process-global routes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TCIError::InvalidConfiguration`] for negative or non-finite tolerances or a zero bond
+    /// dimension, and [`TCIError::InvalidOperation`], [`TCIError::MatrixCIError`], or
+    /// [`TCIError::SimpleTensorTrain`] when a candidate matrix, site layout, factorization, or solve fails.
+    pub fn sweep1site<F>(
+        &mut self,
+        f: &F,
+        forward: bool,
+        rel_tol: f64,
+        abs_tol: f64,
+        max_bond_dim: usize,
+        update_tensors: bool,
+    ) -> Result<()>
+    where
+        F: Fn(&MultiIndex) -> T,
+    {
+        self.sweep1site_on_session(
+            f,
+            forward,
+            rel_tol,
+            abs_tol,
+            max_bond_dim,
+            update_tensors,
+            &mut TciLinalg::Global,
+        )
+    }
+
     /// Perform a 1-site sweep, updating I/J sets and optionally site tensors.
     ///
     /// This is used for cleanup after adding global pivots, and for computing
@@ -884,11 +1006,14 @@ where
     /// # Errors
     ///
     /// Returns [`TCIError::InvalidConfiguration`] for negative or non-finite
-    /// tolerances or a zero bond dimension. It also returns an error when the
-    /// one-site sweep fails (a shape or index mismatch, a non-convergence
-    /// failure, or a backend failure).
+    /// tolerances or a zero bond dimension, and [`TCIError::InvalidOperation`],
+    /// [`TCIError::MatrixCIError`], or [`TCIError::SimpleTensorTrain`] when a
+    /// candidate matrix, site layout, factorization, or solve fails.
     ///
-    pub fn sweep1site<F>(
+    // INVARIANT: the parameter list is the sweep's boundary (evaluator, direction, tolerance pair, bond cap,
+    // tensor-update flag) plus the optional execution route; grouping them would only add a layer.
+    #[allow(clippy::too_many_arguments)]
+    fn sweep1site_on_session<F>(
         &mut self,
         f: &F,
         forward: bool,
@@ -896,6 +1021,7 @@ where
         abs_tol: f64,
         max_bond_dim: usize,
         update_tensors: bool,
+        linalg: &mut TciLinalg<'_, '_>,
     ) -> Result<()>
     where
         F: Fn(&MultiIndex) -> T,
@@ -916,11 +1042,11 @@ where
 
         if forward {
             for b in 0..n - 1 {
-                self.sweep1site_at_bond(f, b, true, bond_config)?;
+                self.sweep1site_at_bond(f, b, true, bond_config, linalg)?;
             }
         } else {
             for b in (1..n).rev() {
-                self.sweep1site_at_bond(f, b, false, bond_config)?;
+                self.sweep1site_at_bond(f, b, false, bond_config, linalg)?;
             }
         }
 
@@ -947,6 +1073,7 @@ where
         b: usize,
         forward: bool,
         config: Sweep1SiteBondConfig,
+        linalg: &mut TciLinalg<'_, '_>,
     ) -> Result<()>
     where
         F: Fn(&MultiIndex) -> T,
@@ -989,7 +1116,7 @@ where
             abs_tol: config.abs_tol,
             left_orthogonal: forward,
         };
-        let factors = matrix_luci_factors_from_matrix(&pi, Some(lu_options))?;
+        let factors = linalg.luci_factors_owned(pi, Some(lu_options))?;
 
         // The LU can select zero pivots when the submatrix is numerically
         // zero (e.g. the function underflows in a subdomain). Keep at least
@@ -1018,7 +1145,7 @@ where
             if forward {
                 let left_dim = if b == 0 { 1 } else { self.i_set[b].len() };
                 let right_dim = factors.rank.max(1);
-                let mut tensor = try_tensor3_zeros(left_dim, local_dim, right_dim)?;
+                let mut tensor = tensor3_zeros(left_dim, local_dim, right_dim)?;
                 for l in 0..left_dim {
                     for s in 0..local_dim {
                         for r in 0..right_dim {
@@ -1043,7 +1170,7 @@ where
                 } else {
                     self.j_set[b].len()
                 };
-                let mut tensor = try_tensor3_zeros(left_dim, local_dim, right_dim)?;
+                let mut tensor = tensor3_zeros(left_dim, local_dim, right_dim)?;
                 for l in 0..left_dim {
                     for s in 0..local_dim {
                         for r in 0..right_dim {
@@ -1075,6 +1202,24 @@ where
         Ok(())
     }
 
+    /// Fill this state's site tensors on the compatibility routes.
+    ///
+    /// Same one-site LU decomposition per bond as the session-taking form this entry delegates to; the factor
+    /// solves run through the process-global routes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TCIError::InvalidOperation`] when a candidate or pivot matrix
+    /// cannot be built, a site-layout offset overflows, or the one-site solve
+    /// fails, and [`TCIError::SimpleTensorTrain`] when a site core cannot be
+    /// constructed.
+    pub fn fill_site_tensors<F>(&mut self, f: &F) -> Result<()>
+    where
+        F: Fn(&MultiIndex) -> T,
+    {
+        self.fill_site_tensors_on_session(f, &mut TciLinalg::Global)
+    }
+
     /// Fill all site tensors using 1-site LU decomposition at each bond.
     ///
     /// For each site b (except the last), computes the Pi matrix
@@ -1085,10 +1230,16 @@ where
     /// Port of Julia's `fillsitetensors!` / `setsitetensor!`.
     /// # Errors
     ///
-    /// Returns an error when the site tensors cannot be built (a shape or index
-    /// /// mismatch, or a backend failure).
+    /// Returns [`TCIError::InvalidOperation`] when a candidate or pivot matrix
+    /// cannot be built, a site-layout offset overflows, or the one-site solve
+    /// fails, and [`TCIError::SimpleTensorTrain`] when a site core cannot be
+    /// constructed.
     ///
-    pub fn fill_site_tensors<F>(&mut self, f: &F) -> Result<()>
+    fn fill_site_tensors_on_session<F>(
+        &mut self,
+        f: &F,
+        linalg: &mut TciLinalg<'_, '_>,
+    ) -> Result<()>
     where
         F: Fn(&MultiIndex) -> T,
     {
@@ -1113,7 +1264,7 @@ where
                 } else {
                     self.i_set[b + 1].len().max(1)
                 };
-                self.site_tensors[b] = try_tensor3_zeros(left_dim, self.local_dims[b], right_dim)?;
+                self.site_tensors[b] = tensor3_zeros(left_dim, self.local_dims[b], right_dim)?;
                 continue;
             }
 
@@ -1137,7 +1288,7 @@ where
                 let left_dim = if b == 0 { 1 } else { self.i_set[b].len() };
                 let site_dim = self.local_dims[b];
                 let right_dim = 1; // last site
-                let mut tensor = try_tensor3_zeros(left_dim, site_dim, right_dim)?;
+                let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim)?;
                 for l in 0..left_dim {
                     for s in 0..site_dim {
                         let row = l
@@ -1178,19 +1329,21 @@ where
                 // core with the same bond shape. Small nonzero values must
                 // still be interpolated, regardless of their absolute scale.
                 if (0..np).all(|i| (0..nj).all(|j| p_mat[[i, j]].is_zero())) {
-                    self.site_tensors[b] = try_tensor3_zeros(left_dim, site_dim, right_dim)?;
+                    self.site_tensors[b] = tensor3_zeros(left_dim, site_dim, right_dim)?;
                     continue;
                 }
 
                 // Solve P^T * X_t = Pi1^T through the configured tensor backend.
                 let p_t = transpose(&p_mat);
                 let pi1_t = transpose(&pi1);
-                let x_t = solve_matrix(&p_t, &pi1_t).map_err(|err| TCIError::InvalidOperation {
-                    message: format!("one-site interpolation solve failed: {err}"),
-                })?;
+                let x_t = linalg
+                    .solve(&p_t, &pi1_t)
+                    .map_err(|err| TCIError::InvalidOperation {
+                        message: format!("one-site interpolation solve failed: {err}"),
+                    })?;
 
                 // X = X_t^T → shape (ni, np) = (|I_b|*d_b, |I_{b+1}|)
-                let mut tensor = try_tensor3_zeros(left_dim, site_dim, right_dim)?;
+                let mut tensor = tensor3_zeros(left_dim, site_dim, right_dim)?;
                 for l in 0..left_dim {
                     for s in 0..site_dim {
                         for r in 0..right_dim {
@@ -1211,19 +1364,16 @@ where
         Ok(())
     }
 
-    /// Make the TCI canonical by performing 3 one-site sweeps.
+    /// Canonicalize this state on the compatibility routes.
     ///
-    /// 1. Forward sweep (exact, no truncation)
-    /// 2. Backward sweep (with truncation)
-    /// 3. Forward sweep (with truncation + update tensors)
+    /// Same three one-site sweeps as the session-taking form this entry delegates to; the factor assembly runs
+    /// through the process-global routes.
     ///
-    /// Port of Julia's `makecanonical!`.
     /// # Errors
     ///
-    /// Returns [`TCIError::InvalidConfiguration`] for negative or non-finite
-    /// tolerances or a zero bond dimension. It also returns an error when the
-    /// canonicalization fails (a shape or index mismatch or a backend failure).
-    ///
+    /// Returns [`TCIError::InvalidConfiguration`] for negative or non-finite tolerances or a zero bond
+    /// dimension, and [`TCIError::InvalidOperation`], [`TCIError::MatrixCIError`], or
+    /// [`TCIError::SimpleTensorTrain`] when a canonicalization sweep fails.
     pub fn make_canonical<F>(
         &mut self,
         f: &F,
@@ -1234,15 +1384,43 @@ where
     where
         F: Fn(&MultiIndex) -> T,
     {
+        self.make_canonical_on_session(f, rel_tol, abs_tol, max_bond_dim, &mut TciLinalg::Global)
+    }
+
+    /// Make the TCI canonical by performing 3 one-site sweeps.
+    ///
+    /// 1. Forward sweep (exact, no truncation)
+    /// 2. Backward sweep (with truncation)
+    /// 3. Forward sweep (with truncation + update tensors)
+    ///
+    /// Port of Julia's `makecanonical!`.
+    /// # Errors
+    ///
+    /// Returns [`TCIError::InvalidConfiguration`] for negative or non-finite
+    /// tolerances or a zero bond dimension, and [`TCIError::InvalidOperation`],
+    /// [`TCIError::MatrixCIError`], or [`TCIError::SimpleTensorTrain`] when a
+    /// canonicalization sweep fails.
+    ///
+    fn make_canonical_on_session<F>(
+        &mut self,
+        f: &F,
+        rel_tol: f64,
+        abs_tol: f64,
+        max_bond_dim: usize,
+        linalg: &mut TciLinalg<'_, '_>,
+    ) -> Result<()>
+    where
+        F: Fn(&MultiIndex) -> T,
+    {
         validate_nonnegative_finite("rel_tol", rel_tol)?;
         validate_nonnegative_finite("abs_tol", abs_tol)?;
         validate_positive("max_bond_dim", max_bond_dim)?;
         // First half-sweep: exact, no truncation
-        self.sweep1site(f, true, 0.0, 0.0, usize::MAX, false)?;
+        self.sweep1site_on_session(f, true, 0.0, 0.0, usize::MAX, false, linalg)?;
         // Second half-sweep: backward with truncation
-        self.sweep1site(f, false, rel_tol, abs_tol, max_bond_dim, false)?;
+        self.sweep1site_on_session(f, false, rel_tol, abs_tol, max_bond_dim, false, linalg)?;
         // Third half-sweep: forward with truncation and tensor updates
-        self.sweep1site(f, true, rel_tol, abs_tol, max_bond_dim, true)?;
+        self.sweep1site_on_session(f, true, rel_tol, abs_tol, max_bond_dim, true, linalg)?;
         Ok(())
     }
 
@@ -1599,6 +1777,74 @@ where
     B: Fn(&[MultiIndex]) -> Vec<T>,
     R: rand::Rng + ?Sized,
 {
+    crossinterpolate2_with_rng_linalg(
+        f,
+        batched_f,
+        local_dims,
+        initial_pivots,
+        options,
+        rng,
+        &mut TciLinalg::Global,
+    )
+}
+
+/// Cross interpolate on a session the caller has already entered.
+///
+/// The session-taking counterpart of [`crossinterpolate2_with_rng`]: the same algorithm, options and stopping
+/// rule, but every dense pivot factorization and every site solve runs on `session` instead of the process-global
+/// routes. This is the entry a worker owns: the phase that owns the worker enters the session, so this function
+/// neither enters one itself nor consults another backend.
+///
+/// The lazy-block pivot path (`matrix_luci_factors_from_blocks`) still uses the compatibility route; a caller
+/// that must keep it off the global session can avoid it, or wait for its session-taking form.
+///
+/// # Errors
+///
+/// Returns [`TCIError::InvalidConfiguration`] for invalid tolerances, history limits or search parameters,
+/// [`TCIError::DimensionMismatch`] for fewer than two local dimensions or a malformed candidate array,
+/// [`TCIError::InvalidPivot`] when the initial pivots all evaluate to zero, and an operation error when the
+/// supplied session rejects an operation, a factor solve fails, a sweep fails, or the finder's search fails.
+pub fn crossinterpolate2_with_rng_on_session<T, F, B, R>(
+    f: F,
+    batched_f: Option<B>,
+    local_dims: Vec<usize>,
+    initial_pivots: Vec<MultiIndex>,
+    options: TCI2Options,
+    rng: &mut R,
+    session: &mut Session<'_>,
+) -> Result<TCI2OptimizationResult<T>>
+where
+    T: Scalar + TTScalar + Default + MatrixLuciScalar,
+    F: Fn(&MultiIndex) -> T,
+    B: Fn(&[MultiIndex]) -> Vec<T>,
+    R: rand::Rng + ?Sized,
+{
+    crossinterpolate2_with_rng_linalg(
+        f,
+        batched_f,
+        local_dims,
+        initial_pivots,
+        options,
+        rng,
+        &mut TciLinalg::Session(session),
+    )
+}
+
+fn crossinterpolate2_with_rng_linalg<T, F, B, R>(
+    f: F,
+    batched_f: Option<B>,
+    local_dims: Vec<usize>,
+    initial_pivots: Vec<MultiIndex>,
+    options: TCI2Options,
+    rng: &mut R,
+    linalg: &mut TciLinalg<'_, '_>,
+) -> Result<TCI2OptimizationResult<T>>
+where
+    T: Scalar + TTScalar + Default + MatrixLuciScalar,
+    F: Fn(&MultiIndex) -> T,
+    B: Fn(&[MultiIndex]) -> Vec<T>,
+    R: rand::Rng + ?Sized,
+{
     options.validate()?;
     if local_dims.len() < 2 {
         return Err(TCIError::DimensionMismatch {
@@ -1636,7 +1882,7 @@ where
         options.tol_margin_global_search,
     );
 
-    optimize_with_finder_with_rng(tci, f, batched_f, options, finder, rng)
+    optimize_with_finder_with_rng_on_session(tci, f, batched_f, options, finder, rng, linalg)
 }
 
 /// Builds the explicitly named RNG for the seeded production paths.
@@ -1647,67 +1893,52 @@ pub(crate) fn seeded_rng(seed: Option<u64>) -> rand_chacha::ChaCha8Rng {
     }
 }
 
-/// Optimize an existing [`TensorCI2`] state with an injected global pivot finder.
+/// Optimize with a default finder and a caller-owned random stream.
 ///
-/// Use this when the default random global pivot search is not appropriate for
-/// the function being interpolated. The input state must already contain at
-/// least one pivot, usually by calling [`TensorCI2::add_global_pivots`].
-///
-/// # Arguments
-///
-/// * `tci` -- Existing TCI2 state to optimize. It is consumed and returned
-///
-///   after optimization.
-/// * `f` -- Scalar function to interpolate on zero-based multi-indices.
-/// * `batched_f` -- Optional Torch-style batch callback. It receives a slice of
-///
-///   multi-indices and must return one value per input index.
-/// * `options` -- Sweep, convergence, and truncation settings.
-/// * `finder` -- Global pivot finder used after each two-site sweep.
-///
-/// # Returns
-///
-/// Returns a [`TCI2OptimizationResult`], matching [`crossinterpolate2`]. Its
-/// rank and error histories contain one entry per half-sweep.
+/// The compatibility entry: every factor assembly and solve runs through the process-global routes.
 ///
 /// # Errors
 ///
-/// Returns [`TCIError::InvalidConfiguration`] for invalid algorithm options or
-/// [`TCIError::InvalidPivot`] when the input state has no pivots. It also
-/// forwards errors from two-site sweeps, tensor-train conversion, callback
-/// length validation, global pivot search, and final one-site cleanup.
+/// Returns [`TCIError::InvalidConfiguration`] for invalid tolerances, history limits or search parameters,
+/// [`TCIError::InvalidPivot`] when the initial pivots all evaluate to zero, [`TCIError::DimensionMismatch`] for
+/// a malformed grid or candidate array, and an operation error when a sweep, a pivot update or the finder's
+/// search fails.
+pub fn optimize_with_finder_with_rng<T, F, B, G, R>(
+    tci: TensorCI2<T>,
+    f: F,
+    batched_f: Option<B>,
+    options: TCI2Options,
+    finder: G,
+    rng: &mut R,
+) -> Result<TCI2OptimizationResult<T>>
+where
+    T: Scalar + TTScalar + Default + MatrixLuciScalar,
+    F: Fn(&MultiIndex) -> T,
+    B: Fn(&[MultiIndex]) -> Vec<T>,
+    G: GlobalPivotFinder,
+    R: rand::Rng + ?Sized,
+{
+    optimize_with_finder_with_rng_on_session(
+        tci,
+        f,
+        batched_f,
+        options,
+        finder,
+        rng,
+        &mut TciLinalg::Global,
+    )
+}
+
+/// Optimize with a default finder on the compatibility routes.
 ///
-/// # Examples
+/// The compatibility entry: every factor assembly and solve runs through the process-global routes.
 ///
-/// ```
-/// use tensor4all_simplett::AbstractTensorTrain;
-/// use tensor4all_tensorci::{
-///     optimize_with_finder, DefaultGlobalPivotFinder, TCI2Options, TensorCI2,
-/// };
+/// # Errors
 ///
-/// let f = |idx: &Vec<usize>| (idx[0] + idx[1] + 1) as f64;
-/// let mut tci = TensorCI2::<f64>::new(vec![4, 4]).unwrap();
-/// tci.add_global_pivots(&[vec![3, 3]]).unwrap();
-///
-/// let finder = DefaultGlobalPivotFinder::new(0, 0, 10.0);
-/// let result = optimize_with_finder::<f64, _, fn(&[Vec<usize>]) -> Vec<f64>, _>(
-///     tci,
-///     f,
-///     None,
-///     TCI2Options {
-///         tolerance: 1e-10,
-///         max_iter: 5,
-///         ..TCI2Options::default()
-///     },
-///     finder,
-/// )
-/// .unwrap();
-///
-/// assert!(!result.ranks.is_empty());
-/// assert!(!result.errors.is_empty());
-/// let tt = result.tci.to_tensor_train().unwrap();
-/// assert!((tt.evaluate(&[2, 3]).unwrap() - 6.0).abs() < 1e-10);
-/// ```
+/// Returns [`TCIError::InvalidConfiguration`] for invalid tolerances, history limits or search parameters,
+/// [`TCIError::InvalidPivot`] when the initial pivots all evaluate to zero, [`TCIError::DimensionMismatch`] for
+/// a malformed grid or candidate array, and an operation error when a sweep, a pivot update or the finder's
+/// search fails.
 pub fn optimize_with_finder<T, F, B, G>(
     tci: TensorCI2<T>,
     f: F,
@@ -1722,7 +1953,15 @@ where
     G: GlobalPivotFinder,
 {
     let mut rng = seeded_rng(options.seed);
-    optimize_with_finder_with_rng(tci, f, batched_f, options, finder, &mut rng)
+    optimize_with_finder_with_rng_on_session(
+        tci,
+        f,
+        batched_f,
+        options,
+        finder,
+        &mut rng,
+        &mut TciLinalg::Global,
+    )
 }
 
 /// Optimize with a caller-owned random stream.
@@ -1759,13 +1998,14 @@ where
 /// .unwrap();
 /// assert!(result.ranks.last().copied().unwrap() >= 1);
 /// ```
-pub fn optimize_with_finder_with_rng<T, F, B, G, R>(
+fn optimize_with_finder_with_rng_on_session<T, F, B, G, R>(
     mut tci: TensorCI2<T>,
     f: F,
     batched_f: Option<B>,
     options: TCI2Options,
     finder: G,
     rng: &mut R,
+    linalg: &mut TciLinalg<'_, '_>,
 ) -> Result<TCI2OptimizationResult<T>>
 where
     T: Scalar + TTScalar + Default + MatrixLuciScalar,
@@ -1833,6 +2073,7 @@ where
                         extra_i_set: &extra_i_set[b + 1],
                         extra_j_set: &extra_j_set[b],
                     },
+                    linalg,
                 )?;
             }
         } else {
@@ -1849,12 +2090,13 @@ where
                         extra_i_set: &extra_i_set[b + 1],
                         extra_j_set: &extra_j_set[b],
                     },
+                    linalg,
                 )?;
             }
         }
 
         // Fill site tensors after sweep
-        tci.fill_site_tensors(&f)?;
+        tci.fill_site_tensors_on_session(&f, linalg)?;
 
         // Record error
         let error = tci.max_bond_error();
@@ -1911,13 +2153,14 @@ where
     // 1. Remove unnecessary pivots added by global pivots
     // 2. Compute site tensors
     let (_, abs_tol) = options.sweep_tolerance(tci.max_sample_value)?;
-    tci.sweep1site(
+    tci.sweep1site_on_session(
         &f,
         true,
         1e-14,
         abs_tol,
         options.max_bond_dim.unwrap_or(usize::MAX),
         true,
+        linalg,
     )?;
 
     Ok(TCI2OptimizationResult {
@@ -1950,6 +2193,7 @@ fn update_pivots<T, F, B>(
     b: usize,
     f: &F,
     context: PivotUpdateContext<'_, B>,
+    linalg: &mut TciLinalg<'_, '_>,
 ) -> Result<()>
 where
     T: Scalar + TTScalar + Default + MatrixLuciScalar,
@@ -2019,8 +2263,8 @@ where
             }
         }
 
-        matrix_luci_factors_from_matrix(
-            &pi,
+        linalg.luci_factors_owned(
+            pi,
             Some(RrLUOptions {
                 max_bond_dim: context.options.max_bond_dim.unwrap_or(usize::MAX),
                 abs_tol: context.abs_tol,
@@ -2081,7 +2325,7 @@ where
     let site_dim_b = tci.local_dims[b];
     let new_bond_dim = factors.rank.max(1);
 
-    let mut tensor_b = try_tensor3_zeros(left_dim, site_dim_b, new_bond_dim)?;
+    let mut tensor_b = tensor3_zeros(left_dim, site_dim_b, new_bond_dim)?;
     for l in 0..left_dim {
         for s in 0..site_dim_b {
             for r in 0..new_bond_dim {
@@ -2107,7 +2351,7 @@ where
         tci.j_set[b + 1].len()
     };
 
-    let mut tensor_bp1 = try_tensor3_zeros(new_bond_dim, site_dim_bp1, right_dim)?;
+    let mut tensor_bp1 = tensor3_zeros(new_bond_dim, site_dim_bp1, right_dim)?;
     for l in 0..new_bond_dim {
         for s in 0..site_dim_bp1 {
             for r in 0..right_dim {

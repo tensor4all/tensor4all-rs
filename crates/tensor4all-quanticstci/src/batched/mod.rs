@@ -527,7 +527,7 @@ where
         if s == 0 {
             // First site: all components have left_dim = 1.
             // Concatenate along right bond: shape (1, site_dim, total_right).
-            let mut combined = tensor3_zeros_generic::<V>(1, site_dim, total_right);
+            let mut combined = tensor4all_simplett::tensor3_zeros::<V>(1, site_dim, total_right)?;
 
             let mut right_offset = 0;
             for tt in component_tts.iter() {
@@ -551,7 +551,8 @@ where
                 .map(|tt| tt.site_tensor(s).left_dim())
                 .sum();
 
-            let mut combined = tensor3_zeros_generic::<V>(total_left, site_dim, total_right);
+            let mut combined =
+                tensor4all_simplett::tensor3_zeros::<V>(total_left, site_dim, total_right)?;
 
             let mut left_offset = 0;
             let mut right_offset = 0;
@@ -583,7 +584,7 @@ where
         .map(|tt| tt.site_tensor(n_sites - 1).right_dim())
         .sum();
 
-    let mut selector = tensor3_zeros_generic::<V>(total_right, n_components, 1);
+    let mut selector = tensor4all_simplett::tensor3_zeros::<V>(total_right, n_components, 1)?;
 
     let mut offset = 0;
     for (c, tt) in component_tts.iter().enumerate() {
@@ -598,17 +599,6 @@ where
 
     SimpleTensorTrain::new(combined_tensors)
         .map_err(|e| anyhow!("Failed to build combined TT: {}", e))
-}
-
-/// Create a zero-filled Tensor3 using TTScalar bounds (avoids importing tensor3_zeros
-/// which may have different trait bounds).
-fn tensor3_zeros_generic<V: TTScalar + Default + Clone>(
-    left: usize,
-    site: usize,
-    right: usize,
-) -> Tensor3<V> {
-    use tensor4all_simplett::tensor3_zeros;
-    tensor3_zeros(left, site, right)
 }
 
 #[cfg(test)]

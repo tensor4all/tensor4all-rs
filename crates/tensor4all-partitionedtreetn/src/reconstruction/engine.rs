@@ -8,7 +8,7 @@ use super::{
     ReconstructionOptions, ReconstructionReport, ReconstructionTarget, ReconstructionTolerance,
     Region,
 };
-use crate::projector::canonical_index_cmp;
+use crate::subdomain_tree_tn::sort_by_patch_order;
 use crate::{
     DynIndex, PartitionedTreeTNError, PatchSplitStrategy, Projector, Result, SubDomainTreeTN,
 };
@@ -48,6 +48,12 @@ struct WorkingRegion<V: Clone + Hash + Eq + Send + Sync + Debug> {
 /// roundoff; see [`ReconstructionReport`]. The target, inputs, and
 /// caller's options are unchanged. Zero tolerance retains exact terms without
 /// SVD compression. Soft rank/search limits never force extra approximation.
+///
+/// Terms are merged pairwise, in a balanced tree, and every merge decides on
+/// its own whether to keep the two terms combined (only when compression lowers
+/// the rank). No sum of more than two terms is formed, so this routine takes
+/// no [`SumEngine`](tensor4all_treetn::SumEngine): for two terms the binary add
+/// and the N-ary direct sum do the same work.
 ///
 /// # Errors
 /// Returns `InvalidOptions` for invalid tolerances, zero rank/search limits,
@@ -210,18 +216,12 @@ fn validate<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
         return Err(invalid("target_bond_dim and max_regions must be positive"));
     }
     validate_tolerance(tolerance)?;
-    let mut all = Vec::new();
     if let Some(network) = &target.network {
         if network.node_index(center).is_none() {
             return Err(PartitionedTreeTNError::InvalidCenter);
         }
-        for node in network.node_names() {
-            if let Some(indices) = network.site_space(node) {
-                all.extend(indices.iter().cloned());
-            }
-        }
     }
-    all.sort_by(canonical_index_cmp);
+    let all = target.logical_site_indices();
     let mut seen = HashSet::new();
     for requested in &options.patch_order {
         if !seen.insert(requested) {
@@ -264,12 +264,16 @@ fn reduce<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
     let mut current = Vec::with_capacity(originals.len());
     let mut error = 0.0;
     let mut ordered: Vec<_> = originals.iter().collect();
-    ordered.sort_by(|a, b| {
-        b.projector()
-            .len()
-            .cmp(&a.projector().len())
-            .then_with(|| a.projector().canonical_cmp(b.projector()))
-    });
+    sort_by_patch_order(
+        &mut ordered,
+        |a, b| {
+            b.projector()
+                .len()
+                .cmp(&a.projector().len())
+                .then_with(|| a.patch_order_key().cmp(b.patch_order_key()))
+        },
+        |patch| patch.content_digest(),
+    );
     for source in ordered {
         // INVARIANT: source has already been restricted to this region. Forget
         // the finer input support only in metadata; the data remains masked.

@@ -1135,15 +1135,15 @@ fn test_linear_operator_apply_local() {
     // because we only contracted site0's local operator, not the full MPO
     // Result indices: [true_site0, mpo_bond] with shape (2, 1)
     assert_eq!(
-        result_tensor.indices.len(),
+        result_tensor.indices().len(),
         2,
         "Expected 2 indices (site + bond), got {}",
-        result_tensor.indices.len()
+        result_tensor.indices().len()
     );
 
     // Check that output has true site index
     let has_site0 = result_tensor
-        .indices
+        .indices()
         .iter()
         .any(|idx| idx.same_id(&site_indices[0]));
     assert!(has_site0, "Result should have site0's true index");
@@ -1227,15 +1227,15 @@ fn test_linear_operator_apply_local_two_sites() {
 
     // For |00⟩, the diagonal operator gives 2.0 * 3.0 * |00⟩ = 6.0 * |00⟩
     // Result should have TRUE indices
-    assert_eq!(result_tensor.indices.len(), 2);
+    assert_eq!(result_tensor.indices().len(), 2);
 
     // Check that output has true site indices
     let has_site0 = result_tensor
-        .indices
+        .indices()
         .iter()
         .any(|idx| idx.same_id(&site_indices[0]));
     let has_site1 = result_tensor
-        .indices
+        .indices()
         .iter()
         .any(|idx| idx.same_id(&site_indices[1]));
     assert!(has_site0, "Result should have site0's true index");

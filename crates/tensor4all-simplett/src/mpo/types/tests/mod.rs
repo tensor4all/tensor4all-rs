@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn test_tensor4_zeros() {
-    let t: Tensor4<f64> = tensor4_zeros(2, 3, 4, 5);
+    let t: Tensor4<f64> = tensor4_zeros(2, 3, 4, 5).unwrap();
     assert_eq!(t.left_dim(), 2);
     assert_eq!(t.site_dim_1(), 3);
     assert_eq!(t.site_dim_2(), 4);
@@ -22,7 +22,7 @@ fn test_tensor4_zeros() {
 #[test]
 #[allow(clippy::approx_constant)]
 fn test_tensor4_get_set() {
-    let mut t: Tensor4<f64> = tensor4_zeros(2, 2, 2, 2);
+    let mut t: Tensor4<f64> = tensor4_zeros(2, 2, 2, 2).unwrap();
     t.set4(0, 1, 0, 1, 3.14);
     assert_eq!(*t.get4(0, 1, 0, 1), 3.14);
     assert_eq!(*t.get4(0, 0, 0, 0), 0.0);
@@ -57,7 +57,7 @@ fn tensor4_from_data_rejects_length_mismatch() {
 
 #[test]
 fn test_slice_site() {
-    let mut t: Tensor4<f64> = tensor4_zeros(2, 2, 2, 3);
+    let mut t: Tensor4<f64> = tensor4_zeros(2, 2, 2, 3).unwrap();
     for l in 0..2 {
         for r in 0..3 {
             t.set4(l, 1, 0, r, (l * 3 + r) as f64);

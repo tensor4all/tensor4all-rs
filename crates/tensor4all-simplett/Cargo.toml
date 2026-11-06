@@ -12,22 +12,25 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["backend-tenferro", "tenferro-cpu-faer"]
+default = ["backend-tenferro", "tenferro-cpu-platform"]
 backend-tenferro = ["tensor4all-tensorbackend/backend-tenferro"]
+# The platform default: Apple Accelerate on macOS, faer elsewhere
+# (see the `tensor4all-cpu-platform` crate).
+tenferro-cpu-platform = [
+    "tensor4all-core/tenferro-cpu-platform",
+    "tensor4all-tensorbackend/tenferro-cpu-platform",
+]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
     "tensor4all-tensorbackend/tenferro-cpu-faer",
-    "tenferro-einsum/native",
 ]
 tenferro-system-blas = [
     "tensor4all-core/tenferro-system-blas",
     "tensor4all-tensorbackend/tenferro-system-blas",
-    "tenferro-einsum/blas",
 ]
 tenferro-provider-inject = [
     "tensor4all-core/tenferro-provider-inject",
     "tensor4all-tensorbackend/tenferro-provider-inject",
-    "tenferro-einsum/blas",
 ]
 
 [dependencies]
@@ -39,14 +42,24 @@ rand.workspace = true
 bnum.workspace = true
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
-tenferro-einsum.workspace = true
 tenferro-tensor.workspace = true
 
 [dev-dependencies]
 approx.workspace = true
 rand_chacha.workspace = true
 criterion.workspace = true
+# The session tests and the held-session benchmark open an explicit one-worker context, which needs the
+# concrete CPU backend type.
+tenferro-cpu.workspace = true
+
+[[bench]]
+name = "full_tensor"
+harness = false
 
 [[bench]]
 name = "cache_overhead"
+harness = false
+
+[[bench]]
+name = "inner_product_session"
 harness = false

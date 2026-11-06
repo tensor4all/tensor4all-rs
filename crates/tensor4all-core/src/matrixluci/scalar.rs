@@ -6,7 +6,8 @@ use crate::error::Result;
 use crate::matrix_luci::MatrixLuciFactors;
 use crate::matrixlu::RrLUOptions;
 use tensor4all_tensorbackend::{
-    BackendLinalgScalar, Matrix, MatrixSolveScalar, MatrixTriangularSolveScalar,
+    explicit::Session, BackendLinalgError, BackendLinalgScalar, Matrix, MatrixSolveScalar,
+    MatrixTriangularSolveScalar,
 };
 
 /// Scalar types supported by MatrixLUCI factorization.
@@ -34,6 +35,18 @@ pub trait MatrixLuciScalar:
     where
         F: Fn(&[usize], &[usize], &mut [Self]),
         Self: Sized;
+
+    /// Triangular solve on an explicit session (non-unit diagonal, no transpose).
+    #[doc(hidden)]
+    fn matrix_luci_triangular_solve_in(
+        session: &mut Session<'_>,
+        a: &Matrix<Self>,
+        b: &Matrix<Self>,
+        left_side: bool,
+        lower: bool,
+    ) -> std::result::Result<Matrix<Self>, BackendLinalgError>
+    where
+        Self: Sized;
 }
 
 macro_rules! impl_matrix_luci_scalar {
@@ -59,6 +72,16 @@ macro_rules! impl_matrix_luci_scalar {
                     crate::matrix_luci::lazy_matrix_luci_factors_from_blocks(
                         nrows, ncols, fill_block, options,
                     )
+                }
+
+                fn matrix_luci_triangular_solve_in(
+                    session: &mut Session<'_>,
+                    a: &Matrix<Self>,
+                    b: &Matrix<Self>,
+                    left_side: bool,
+                    lower: bool,
+                ) -> std::result::Result<Matrix<Self>, BackendLinalgError> {
+                    session.triangular_solve_matrix(a, b, left_side, lower, false, false)
                 }
             }
         )*

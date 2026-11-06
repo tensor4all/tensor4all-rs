@@ -24,8 +24,8 @@ fn test_contract_naive_identity() {
 #[test]
 fn test_contract_naive_constant() {
     // Constant * Constant
-    let mpo_a = MPO::<f64>::constant(&[(2, 2)], 2.0);
-    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 3.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 2)], 2.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 3.0).unwrap();
 
     let result = contract_naive(&mpo_a, &mpo_b, None).unwrap();
 
@@ -38,8 +38,8 @@ fn test_contract_naive_constant() {
 
 #[test]
 fn test_contract_naive_dimension_mismatch() {
-    let mpo_a = MPO::<f64>::constant(&[(2, 3)], 1.0); // s2 = 3
-    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 1.0); // s1 = 2 ≠ 3
+    let mpo_a = MPO::<f64>::constant(&[(2, 3)], 1.0).unwrap(); // s2 = 3
+    let mpo_b = MPO::<f64>::constant(&[(2, 2)], 1.0).unwrap(); // s1 = 2 ≠ 3
 
     let result = contract_naive(&mpo_a, &mpo_b, None);
     assert!(result.is_err());
@@ -47,8 +47,8 @@ fn test_contract_naive_dimension_mismatch() {
 
 #[test]
 fn test_contract_naive_with_compression() {
-    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
-    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0);
+    let mpo_a = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
+    let mpo_b = MPO::<f64>::constant(&[(2, 2), (2, 2)], 1.0).unwrap();
 
     let options = ContractionOptions {
         tolerance: 1e-10,

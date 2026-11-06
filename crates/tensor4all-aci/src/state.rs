@@ -6,7 +6,8 @@ use crate::{
     initial_guess_with_rng, AciError, AciOptions, ElementwiseBatch, LocalBlockEvaluator, Result,
 };
 use tensor4all_core::{
-    matrix_luci_factors_from_matrix, matrix_luci_factors_from_matrix_owned, RrLUOptions,
+    matrix_luci_factors_from_matrix, matrix_luci_factors_from_matrix_owned,
+    matrix_luci_factors_from_matrix_owned_in, RrLUOptions,
 };
 use tensor4all_simplett::{
     tensor3_from_data, AbstractTensorTrain, EinsumScalar, SimpleTensorTrain, TTCache, Tensor3,
@@ -69,12 +70,16 @@ impl<T: AciScalar> InputCoreMatrices<T> {
 }
 
 impl<T: AciScalar> ElementwiseProblem<T> {
-    pub(crate) fn new(inputs: Vec<SimpleTensorTrain<T>>, options: AciOptions<T>) -> Result<Self>
+    pub(crate) fn new(
+        inputs: Vec<SimpleTensorTrain<T>>,
+        options: AciOptions<T>,
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    ) -> Result<Self>
     where
         T: EinsumScalar,
     {
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rng_seed);
-        Self::new_with_rng(inputs, options, &mut rng)
+        Self::new_with_rng(inputs, options, &mut rng, context)
     }
 
     /// Builds the problem on a caller-owned random stream.
@@ -85,6 +90,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         inputs: Vec<SimpleTensorTrain<T>>,
         options: AciOptions<T>,
         rng: &mut dyn rand::RngCore,
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
     ) -> Result<Self>
     where
         T: EinsumScalar,
@@ -123,7 +129,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             pivot_scales: vec![0.0; n.saturating_sub(1)],
             input_caches,
         };
-        problem.initialize_right_frames()?;
+        problem.initialize_right_frames(context)?;
         Ok(problem)
     }
 
@@ -216,6 +222,9 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         let site_right = col % d_right;
         let right_pivot = col / d_right;
 
+        // Stays a direct loop: this is a per-element lookup (one scalar per
+        // call) on the pivot search path, so `einsum_native_subscripts` would
+        // spend a graph dispatch per element and dwarf the 4-factor sum.
         let mut sum = T::zero();
         for a in 0..context.left_core.left_dim() {
             for m in 0..context.left_core.right_dim() {
@@ -236,6 +245,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         input: usize,
         site: usize,
         row_indices: &[usize],
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
     ) -> Result<()> {
         let n = self.len();
         validate_input_site(input, site, self.n_inputs(), n)?;
@@ -260,7 +270,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         validate_selection("row", row_indices, full_rows)?;
 
         let core_matrix = self.input_core_left_matrix(input, site);
-        let full_frame = frame_matmul_checked(&source, core_matrix, "left", input, site)?;
+        let full_frame = frame_matmul_checked(&source, core_matrix, "left", input, site, context)?;
         let full_data = full_frame.as_col_major_slice();
         let mut selected = Matrix::zeros(row_indices.len(), core.right_dim());
         for (selected_row, &full_row) in row_indices.iter().enumerate() {
@@ -278,6 +288,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         input: usize,
         site: usize,
         col_indices: &[usize],
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
     ) -> Result<()> {
         let n = self.len();
         validate_input_site(input, site, self.n_inputs(), n)?;
@@ -304,7 +315,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         validate_selection("column", col_indices, full_cols)?;
 
         let core_matrix = self.input_core_right_matrix(input, site);
-        let full_frame = frame_matmul_checked(core_matrix, &source, "right", input, site)?;
+        let full_frame = frame_matmul_checked(core_matrix, &source, "right", input, site, context)?;
         let full_data = full_frame.as_col_major_slice();
         let mut selected = Matrix::zeros(core.left_dim(), col_indices.len());
         for (selected_col, &full_col) in col_indices.iter().enumerate() {
@@ -317,7 +328,12 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         Ok(())
     }
 
-    pub(crate) fn update_left_frames(&mut self, site: usize, row_indices: &[usize]) -> Result<()> {
+    pub(crate) fn update_left_frames(
+        &mut self,
+        site: usize,
+        row_indices: &[usize],
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    ) -> Result<()> {
         if frame_batching_enabled()
             && let Some(frames) = self.batched_left_frame_updates(site, row_indices)?
         {
@@ -328,12 +344,17 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         }
 
         for input in 0..self.n_inputs() {
-            self.update_left_frame(input, site, row_indices)?;
+            self.update_left_frame(input, site, row_indices, context)?;
         }
         Ok(())
     }
 
-    pub(crate) fn update_right_frames(&mut self, site: usize, col_indices: &[usize]) -> Result<()> {
+    pub(crate) fn update_right_frames(
+        &mut self,
+        site: usize,
+        col_indices: &[usize],
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    ) -> Result<()> {
         if frame_batching_enabled()
             && let Some(frames) = self.batched_right_frame_updates(site, col_indices)?
         {
@@ -344,7 +365,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         }
 
         for input in 0..self.n_inputs() {
-            self.update_right_frame(input, site, col_indices)?;
+            self.update_right_frame(input, site, col_indices, context)?;
         }
         Ok(())
     }
@@ -751,6 +772,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         left_orthogonal: bool,
         options: &AciOptions<T>,
         op: &mut F,
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
     ) -> Result<()>
     where
         F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
@@ -809,23 +831,29 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             }
 
             let local_matrix = evaluator.materialize_local_matrix()?;
-            let factors_result = matrix_luci_factors_from_matrix_owned(
-                local_matrix,
-                Some(RrLUOptions {
-                    max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
-                    rel_tol: if options.scale_tolerance {
-                        options.tolerance
-                    } else {
-                        0.0
-                    },
-                    abs_tol: if options.scale_tolerance {
-                        0.0
-                    } else {
-                        options.tolerance
-                    },
-                    left_orthogonal,
-                }),
-            );
+            let lu_options = RrLUOptions {
+                max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
+                rel_tol: if options.scale_tolerance {
+                    options.tolerance
+                } else {
+                    0.0
+                },
+                abs_tol: if options.scale_tolerance {
+                    0.0
+                } else {
+                    options.tolerance
+                },
+                left_orthogonal,
+            };
+            // The context-taking twin consumes its matrix, so the caller-owned route keeps the borrowed form.
+            let factors_result = match context {
+                Some(context) => matrix_luci_factors_from_matrix_owned_in(
+                    local_matrix,
+                    Some(lu_options),
+                    context,
+                ),
+                None => matrix_luci_factors_from_matrix_owned(local_matrix, Some(lu_options)),
+            };
             (factors_result?, evaluator.max_output_abs())
         };
 
@@ -868,9 +896,9 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         solution_cores[bond + 1] = new_right_core;
 
         if left_orthogonal {
-            self.update_left_frames(bond, &row_indices)?;
+            self.update_left_frames(bond, &row_indices, context)?;
         } else {
-            self.update_right_frames(bond + 1, &col_indices)?;
+            self.update_right_frames(bond + 1, &col_indices, context)?;
         }
         self.pivot_errors[bond] = pivot_error;
         self.pivot_scales[bond] = sampled_scale;
@@ -878,7 +906,10 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         Ok(())
     }
 
-    fn initialize_right_frames(&mut self) -> Result<()> {
+    fn initialize_right_frames(
+        &mut self,
+        context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    ) -> Result<()> {
         let n = self.solution.len();
         let mut solution_cores = self.solution.site_tensors().to_vec();
 
@@ -887,15 +918,22 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             let site_dim = current.site_dim();
             let right_dim = current.right_dim();
             let matrix = right_matrix_julia_order(current)?;
-            let factors = matrix_luci_factors_from_matrix(
-                &matrix,
-                Some(RrLUOptions {
-                    left_orthogonal: false,
-                    rel_tol: 0.0,
-                    abs_tol: 0.0,
-                    max_bond_dim: usize::MAX,
-                }),
-            )?;
+            let lu_options = RrLUOptions {
+                left_orthogonal: false,
+                rel_tol: 0.0,
+                abs_tol: 0.0,
+                max_bond_dim: usize::MAX,
+            };
+            // The context-taking twins consume their matrix, so the caller-owned route pays one copy here; this
+            // runs once per site while the constructor builds the right frames, not per sweep.
+            let factors = match context {
+                Some(context) => matrix_luci_factors_from_matrix_owned_in(
+                    matrix.clone(),
+                    Some(lu_options),
+                    context,
+                )?,
+                None => matrix_luci_factors_from_matrix(&matrix, Some(lu_options))?,
+            };
 
             let ncols =
                 checked_frame_mul(site_dim, right_dim, "solution right matrix column count")?;
@@ -932,11 +970,11 @@ impl<T: AciScalar> ElementwiseProblem<T> {
             let previous_left_dim = previous.left_dim();
             let previous_site_dim = previous.site_dim();
             let previous_matrix = left_matrix_julia_order(previous)?;
-            let product = matmul_checked_owned(previous_matrix, left_factor, site - 1)?;
+            let product = matmul_checked_owned(previous_matrix, left_factor, site - 1, context)?;
             solution_cores[site - 1] =
                 matrix_into_tensor3(product, previous_left_dim, previous_site_dim, new_rank)?;
 
-            self.update_right_frames(site, &col_indices)?;
+            self.update_right_frames(site, &col_indices, context)?;
         }
 
         self.solution = SimpleTensorTrain::new(solution_cores)?;
@@ -1249,6 +1287,7 @@ fn matmul_checked_owned<T: AciScalar>(
     left: Matrix<T>,
     right: Matrix<T>,
     site: usize,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> Result<Matrix<T>> {
     if left.ncols() != right.nrows() {
         return Err(AciError::InvalidInitialGuess {
@@ -1263,7 +1302,18 @@ fn matmul_checked_owned<T: AciScalar>(
         });
     }
 
-    mat_mul_owned(left, right).map_err(|err| AciError::InvalidInitialGuess {
+    // The caller-owned route multiplies on the supplied context; the compatibility route keeps its own path.
+    let result: std::result::Result<Matrix<T>, String> = match context {
+        Some(context) => {
+            match context.with_concrete_session(|session| session.mat_mul(&left, &right)) {
+                Ok(Ok(product)) => Ok(product),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(error) => Err(error.to_string()),
+            }
+        }
+        None => mat_mul_owned(left, right).map_err(|error| error.to_string()),
+    };
+    result.map_err(|err| AciError::InvalidInitialGuess {
         message: format!("solution core update at site {site} failed: {err}"),
     })
 }
@@ -1274,6 +1324,7 @@ fn frame_matmul_checked<T: AciScalar>(
     direction: &'static str,
     input: usize,
     site: usize,
+    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> Result<Matrix<T>> {
     if left.ncols() != right.nrows() {
         return Err(AciError::InvalidInitialGuess {
@@ -1288,7 +1339,17 @@ fn frame_matmul_checked<T: AciScalar>(
         });
     }
 
-    mat_mul(left, right).map_err(|err| AciError::InvalidInitialGuess {
+    let result: std::result::Result<Matrix<T>, String> = match context {
+        Some(context) => {
+            match context.with_concrete_session(|session| session.mat_mul(left, right)) {
+                Ok(Ok(product)) => Ok(product),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(error) => Err(error.to_string()),
+            }
+        }
+        None => mat_mul(left, right).map_err(|error| error.to_string()),
+    };
+    result.map_err(|err| AciError::InvalidInitialGuess {
         message: format!("{direction} frame update at input {input}, site {site} failed: {err}"),
     })
 }
@@ -1419,12 +1480,4 @@ fn append_col<T: AciScalar>(frame: &mut Matrix<T>, col: &[T]) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{checked_frame_add, checked_frame_mul};
-
-    #[test]
-    fn frame_shape_helpers_reject_overflow() {
-        assert!(checked_frame_mul(usize::MAX, 2, "product").is_err());
-        assert!(checked_frame_add(usize::MAX, 1, "sum").is_err());
-    }
-}
+mod tests;

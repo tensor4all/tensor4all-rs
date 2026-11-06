@@ -48,7 +48,7 @@ Implemented policy:
 
 - Keep raw `ITensor` HDF5 load/store order-preserving.
 - Keep `TensorTrain::new`, `TensorTrain::with_ortho`, `TensorTrain::from_treetn`,
-  and `TensorTrain::set_tensor_checked` order-preserving.
+  and `TensorTrain::set_tensor` order-preserving.
 - Keep chain-order normalization explicit and local to operations that actually
   require it. The current `norm_squared_fast_path` still applies it only to a
   clone before packing sites.

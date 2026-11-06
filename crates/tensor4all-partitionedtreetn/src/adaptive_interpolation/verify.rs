@@ -15,6 +15,8 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use tensor4all_core::{ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor, TensorElement};
+use tensor4all_tensorbackend::explicit::Session;
+use tensor4all_treetn::interpolation::EvalContext;
 use tensor4all_treetn::{
     CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator, TreeTNOperationError,
 };
@@ -38,6 +40,7 @@ pub(super) fn network_values<T, V>(
     network: &TreeTN<IdxTensor, V>,
     sites: &[DynIndex],
     points: &[usize],
+    session: &mut Session<'_>,
 ) -> Result<Vec<T>, TreeTNOperationError>
 where
     T: TensorElement,
@@ -58,9 +61,36 @@ where
         let shape = [n_sites, chunk.len() / n_sites];
         let batch = ColMajorArrayRef::new(chunk, &shape)
             .map_err(|error| TreeTNOperationError::from(anyhow::Error::new(error)))?;
-        values.extend(evaluator.evaluate_batched_typed::<T>(batch, EvaluationHint::default())?);
+        values.extend(evaluator.evaluate_batched_typed_on_session::<T>(
+            session,
+            batch,
+            EvaluationHint::default(),
+        )?);
     }
     Ok(values)
+}
+
+/// Complete a column-major `[n_active, n_points]` list of active coordinates
+/// with the fixed coordinates, in site order. Returns an error if the full
+/// point list cannot be represented or reserved.
+pub(super) fn full_coordinates(
+    active_points: &[usize],
+    n_active: usize,
+    fixed: &[Option<usize>],
+    what: &str,
+) -> Result<Vec<usize>, String> {
+    let stride = n_active.max(1);
+    let n_points = active_points.len() / stride;
+    let mut full = reserve_point_list(fixed.len(), n_points, what)?;
+    for point in active_points.chunks(stride) {
+        let mut active = point.iter().copied();
+        full.extend(
+            fixed
+                .iter()
+                .map(|fixed| fixed.or_else(|| active.next()).unwrap_or_default()),
+        );
+    }
+    Ok(full)
 }
 
 /// Which points a measurement uses.
@@ -109,11 +139,17 @@ pub(super) struct Measured {
     pub(super) points: Vec<Vec<usize>>,
     /// `|f - f~|` at every measured point.
     pub(super) residuals: Vec<f64>,
+    /// The residual run's pivots with a nonzero residual, ranked by `|r|`
+    /// (ties in pivot order), when a residual TT decided the measurement;
+    /// empty otherwise. They are seeds for the next run, not witnesses.
+    pub(super) residual_pivots: Vec<Vec<usize>>,
 }
 
 impl Measured {
-    /// The distinct measured points with a residual above `tau`, largest
-    /// residual first (ties in measurement order), at most `limit`.
+    /// The distinct points that seed the next engine run, truncated to
+    /// `limit`: the measured points with a residual above `tau`, largest
+    /// first (ties in measurement order), then the residual run's nonzero
+    /// pivots ranked by `|r|`.
     pub(super) fn worst_points(&self, tau: f64, limit: usize) -> Vec<Vec<usize>> {
         let mut order: Vec<usize> = (0..self.points.len())
             .filter(|&index| self.residuals[index] > tau)
@@ -121,16 +157,25 @@ impl Measured {
         // A stable sort keeps measurement order among equal residuals.
         order.sort_by(|&left, &right| self.residuals[right].total_cmp(&self.residuals[left]));
         let mut seen = HashSet::new();
-        order
+        let mut points: Vec<Vec<usize>> = Vec::new();
+        for point in order
             .into_iter()
-            .filter(|&index| seen.insert(&self.points[index]))
-            .take(limit)
-            .map(|index| self.points[index].clone())
-            .collect()
+            .map(|index| &self.points[index])
+            .chain(&self.residual_pivots)
+        {
+            if points.len() >= limit {
+                break;
+            }
+            if seen.insert(point.clone()) {
+                points.push(point.clone());
+            }
+        }
+        points
     }
 }
 
 /// Why a measurement failed.
+#[derive(Debug)]
 pub(super) enum MeasureError {
     /// The requested measurement point list cannot be represented or reserved.
     PointList(String),
@@ -138,6 +183,15 @@ pub(super) enum MeasureError {
     Evaluator(anyhow::Error),
     /// The patch network could not be evaluated or gave a non-finite value.
     Network(String),
+}
+
+impl std::fmt::Display for MeasureError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PointList(message) | Self::Network(message) => formatter.write_str(message),
+            Self::Evaluator(source) => write!(formatter, "{source}"),
+        }
+    }
 }
 
 /// What a measurement compares the function with.
@@ -159,14 +213,14 @@ where
 
 /// Measure `f - f~` on the points of `plan`. Values of `f` come through the
 /// patch cache; values of the network from [`network_values`].
-pub(super) fn measure<T, F, V>(
-    sampler: &PatchSampler<'_, T, F>,
+pub(super) fn measure<T, V>(
+    sampler: &PatchSampler<'_, T>,
     target: &MeasureTarget<'_, V>,
     plan: PointPlan,
+    ctx: &mut EvalContext<'_>,
 ) -> Result<Measured, MeasureError>
 where
     T: CommonScalar + TensorElement,
-    F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
 {
     let n_active = target.active_dims.len();
@@ -179,25 +233,19 @@ where
     let shape = [n_active, n_points];
     let batch = ColMajorArrayRef::new(&flat, &shape)
         .map_err(|error| MeasureError::Evaluator(anyhow::anyhow!("{error}")))?;
-    let values = sampler.sample(batch).map_err(MeasureError::Evaluator)?;
+    let values = sampler
+        .sample(batch, ctx)
+        .map_err(MeasureError::Evaluator)?;
 
     let approximations: Option<Vec<T>> = match target.network {
         None => None,
         Some(network) => {
-            let mut full = reserve_point_list(target.fixed.len(), n_points, "full-coordinate")
+            let full = full_coordinates(&flat, n_active, target.fixed, "full-coordinate")
                 .map_err(MeasureError::PointList)?;
-            for point in flat.chunks(n_active.max(1)) {
-                let mut active = point.iter().copied();
-                full.extend(
-                    target
-                        .fixed
-                        .iter()
-                        .map(|fixed| fixed.or_else(|| active.next()).unwrap_or_default()),
-                );
-            }
-            let values = network_values::<T, V>(network, target.sites, &full).map_err(|error| {
-                MeasureError::Network(format!("evaluating the patch network failed: {error}"))
-            })?;
+            let values = network_values::<T, V>(network, target.sites, &full, ctx.session())
+                .map_err(|error| {
+                    MeasureError::Network(format!("evaluating the patch network failed: {error}"))
+                })?;
             if values.len() != n_points {
                 return Err(MeasureError::Network(format!(
                     "the patch network returned {} values for {n_points} points",
@@ -230,6 +278,7 @@ where
         measurement: statistics(&residuals, plan.method(), target.patch_points),
         points,
         residuals,
+        residual_pivots: Vec::new(),
     })
 }
 
@@ -249,6 +298,9 @@ pub(super) fn statistics(
         rms: 0.0,
         mean_square_rel_std_error: 0.0,
         max_residual,
+        residual_rms: None,
+        residual_saturated: false,
+        sample_rms: None,
     };
     if n == 0 || max_residual == 0.0 {
         return measurement;
@@ -268,6 +320,38 @@ pub(super) fn statistics(
         measurement.mean_square_rel_std_error = (variance / n as f64).sqrt() / mean;
     }
     measurement
+}
+
+/// The measurement of a residual TT: the deciding estimate is
+/// `residual_rms`, or `max(residual_rms, sample.rms)` when the residual run
+/// did not converge. The seed sample supplies `points`, `patch_points`,
+/// `max_residual`, and `sample_rms`; its Monte-Carlo standard error is kept
+/// only when the sample decided or co-decided the value.
+pub(super) fn residual_statistics(
+    sample: L2Measurement,
+    residual_rms: f64,
+    saturated: bool,
+) -> L2Measurement {
+    let rms = if saturated {
+        residual_rms.max(sample.rms)
+    } else {
+        residual_rms
+    };
+    L2Measurement {
+        method: MeasurementMethod::ResidualTt,
+        points: sample.points,
+        patch_points: sample.patch_points,
+        rms,
+        mean_square_rel_std_error: if saturated && sample.rms >= residual_rms {
+            sample.mean_square_rel_std_error
+        } else {
+            0.0
+        },
+        max_residual: sample.max_residual,
+        residual_rms: Some(residual_rms),
+        residual_saturated: saturated,
+        sample_rms: Some(sample.rms),
+    }
 }
 
 /// The root-mean-square value of exact values, with scaled accumulation.
@@ -333,7 +417,12 @@ pub(super) fn global_error(
     approximation_rms: Option<f64>,
     epsilon: f64,
 ) -> (GlobalL2Error, f64) {
-    let exact = |m: &L2Measurement| m.method != MeasurementMethod::Sampled;
+    let exact = |m: &L2Measurement| {
+        matches!(
+            m.method,
+            MeasurementMethod::Exact | MeasurementMethod::Exhaustive
+        )
+    };
     let certified_fraction: f64 = contributions
         .iter()
         .filter(|c| c.within_tolerance && exact(c.acceptance))
@@ -397,7 +486,12 @@ fn classify(
     epsilon: f64,
 ) -> (f64, ToleranceNotMetBasis) {
     let weight = |c: &Contribution<'_>| (c.patch_points / domain_points).sqrt();
-    let exact = |m: &L2Measurement| m.method != MeasurementMethod::Sampled;
+    let exact = |m: &L2Measurement| {
+        matches!(
+            m.method,
+            MeasurementMethod::Exact | MeasurementMethod::Exhaustive
+        )
+    };
 
     let mut acceptance = ScaledSquares::default();
     for c in contributions {
@@ -426,9 +520,14 @@ fn classify(
     }
 
     // Audited: exact and exhaustive contributions as measured, sampled ones
-    // from their audits. Each term a_i = sqrt(w_i) rms_i; the variance of
-    // the total mean square is sum (a_i^2 rel_i)^2.
-    let terms: Vec<(f64, f64)> = contributions
+    // from their audits. Each term a_i = sqrt(w_i) rms_i defines the estimate
+    // a_i^2; the relative standard error is a Monte-Carlo diagnostic, so the
+    // variance of a term is measured by its sampled part
+    // (sqrt(w_i) * sample_rms_i) and its relative standard error is zero for a
+    // converged residual-TT estimate. A residual-TT measurement carries the
+    // seed sample's standard error only when the sample co-decided the value
+    // (`L2Measurement::residual_saturated`).
+    let terms: Vec<(f64, f64, f64)> = contributions
         .iter()
         .map(|c| {
             let measurement = if exact(c.acceptance) {
@@ -436,29 +535,33 @@ fn classify(
             } else {
                 c.audit.unwrap_or(c.acceptance)
             };
+            let variance = measurement.sample_rms.unwrap_or(measurement.rms);
             (
                 weight(c) * measurement.rms,
+                weight(c) * variance,
                 measurement.mean_square_rel_std_error,
             )
         })
         .collect();
     let mut estimate = ScaledSquares::default();
-    for &(a, _) in &terms {
+    for &(a, _, _) in &terms {
         estimate.add(a);
     }
     let rms_error_estimate = estimate.norm();
-    let largest = terms.iter().fold(0.0_f64, |m, &(a, _)| m.max(a));
+    let largest = terms.iter().fold(0.0_f64, |m, &(a, _, _)| m.max(a));
     let mean_square_rel_std_error = if rms_error_estimate == 0.0 || !largest.is_finite() {
         0.0
     } else {
-        let mut deviation = ScaledSquares::default();
         let mut total = 0.0;
-        for &(a, rel) in &terms {
-            let q = (a / largest) * (a / largest);
-            total += q;
-            deviation.add(q * rel);
+        for &(a, _, _) in &terms {
+            total += (a / largest) * (a / largest);
         }
-        deviation.norm() / total
+        let mut deviation = ScaledSquares::default();
+        for &(_, variance, rel) in &terms {
+            let share = (variance / largest) * (variance / largest) / total;
+            deviation.add(share * rel);
+        }
+        deviation.norm()
     };
     let relative_bound_estimate = approximation_rms
         .filter(|&rms| rms > rms_error_estimate)
@@ -471,15 +574,15 @@ fn classify(
 }
 
 /// `||f~|| / sqrt(|X|)` from the log-norms of the accepted patches, combined
-/// in the given order; `None` when some log-norm is not finite (`-inf`, a
-/// zero patch, contributes zero).
+/// in the given order; `None` when some log-norm was not measured or is not
+/// finite (`-inf`, a zero patch, contributes zero).
 pub(super) fn approximation_rms(
-    patches: impl Iterator<Item = (Result<f64, TreeTNOperationError>, f64)>,
+    patches: impl Iterator<Item = (Option<f64>, f64)>,
     domain_points: f64,
 ) -> Option<f64> {
     let mut sum = ScaledSquares::default();
     for (log_norm, patch_points) in patches {
-        let log_norm = log_norm.ok()?;
+        let log_norm = log_norm?;
         if log_norm == f64::NEG_INFINITY {
             continue;
         }

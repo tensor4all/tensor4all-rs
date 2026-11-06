@@ -6,13 +6,14 @@ exclude = ["crates/tensor4all-py"]
 members = [
     "crates/tensor4all-aci",
     "crates/tensor4all-treeaci",
+    "crates/tensor4all-treersi",
     "crates/tensor4all-tensorbackend",
+    "crates/tensor4all-cpu-platform",
     "crates/tensor4all-core",
     "crates/tensor4all-treetn",
     "crates/tensor4all-itensorlike",
     "crates/tensor4all-quanticstransform",
     "crates/tensor4all-simplett",
-    "crates/tensor4all-partitionedtt",
     "crates/tensor4all-partitionedtreetn",
     "crates/tensor4all-tensorci",
     "crates/tensor4all-quanticstci",
@@ -20,6 +21,7 @@ members = [
     "crates/tensor4all-treetci",
     "crates/tensor4all-capi",
     "crates/tensor4all-hdf5",
+    "benchmarks/rust",
     "tools/api-dump",
     "tools/library-panic-audit",
     "xtask",
@@ -63,6 +65,16 @@ inherits = "release"
 incremental = false
 strip = "symbols"
 
+# Coverage builds every test binary with instrumentation, so workspace code uses
+# opt-level 1 to cut compile time while dependencies keep release optimization.
+[profile.coverage]
+inherits = "release"
+opt-level = 1
+incremental = false
+
+[profile.coverage.package."*"]
+opt-level = 3
+
 [workspace.dependencies]
 num-complex = "0.4"
 num-traits = "0.2"
@@ -75,7 +87,7 @@ bnum = "0.12"
 uint = "0.10"
 libc = "0.2"
 paste = "1.0"
-smallvec = "1.15"
+tinyvec = { version = "1", features = ["alloc"] }
 thiserror = "2.0"
 rand = "0.9"
 rand_chacha = "0.9"
@@ -83,17 +95,20 @@ rand_distr = "0.5"
 rayon = "1.10"
 mpi = { version = "=0.8.1", default-features = false }
 petgraph = "0.7"
+rustc-hash = "2"
 dyn-clone = "1.0"
 omeco = "0.2.1"
 hdf5-metno = { version = "0.12", default-features = false }
 ndarray = "0.17"
 quanticsgrids = { git = "https://github.com/tensor4all/quanticsgrids-rs", rev = "8214b72" }
 hdf5-rt = { git = "https://github.com/tensor4all/hdf5-rt", default-features = false }
-hataori = { git = "https://github.com/shinaoka/hataori-rs.git", rev = "59d0ccd6b403e285b7e716a8ae6d12d851da13b1", default-features = false }
-tenferro = { package = "tenferro-runtime", git = "https://github.com/tensor4all/tenferro-rs.git", rev = "ff94aeded9cc98d6c49889c8ef6fca365763d93a", default-features = false }
-tenferro-ad = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "ff94aeded9cc98d6c49889c8ef6fca365763d93a", default-features = false }
-tenferro-cpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "ff94aeded9cc98d6c49889c8ef6fca365763d93a", default-features = false }
-tenferro-einsum = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "ff94aeded9cc98d6c49889c8ef6fca365763d93a", default-features = false }
-tenferro-linalg = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "ff94aeded9cc98d6c49889c8ef6fca365763d93a", default-features = false }
-tenferro-tensor = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "ff94aeded9cc98d6c49889c8ef6fca365763d93a", default-features = false }
-tenferro-gpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "ff94aeded9cc98d6c49889c8ef6fca365763d93a", default-features = false }
+hataori = { git = "https://github.com/tensor4all/hataori-rs.git", rev = "b16886cfcb5bf8c103305d464f8a12527fffa74e", default-features = false }
+hataori-tenferro = { git = "https://github.com/tensor4all/hataori-rs.git", rev = "b16886cfcb5bf8c103305d464f8a12527fffa74e" }
+tenferro = { package = "tenferro-runtime", git = "https://github.com/tensor4all/tenferro-rs.git", rev = "bdde3f2b6e82f0c9991f4170a642ad80dca7b707", default-features = false }
+tenferro-ad = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "bdde3f2b6e82f0c9991f4170a642ad80dca7b707", default-features = false }
+tenferro-cpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "bdde3f2b6e82f0c9991f4170a642ad80dca7b707", default-features = false }
+tenferro-einsum = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "bdde3f2b6e82f0c9991f4170a642ad80dca7b707", default-features = false }
+tenferro-linalg = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "bdde3f2b6e82f0c9991f4170a642ad80dca7b707", default-features = false }
+tenferro-tensor = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "bdde3f2b6e82f0c9991f4170a642ad80dca7b707", default-features = false }
+tensor4all-cpu-platform = { path = "crates/tensor4all-cpu-platform" }
+tenferro-gpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "bdde3f2b6e82f0c9991f4170a642ad80dca7b707", default-features = false }

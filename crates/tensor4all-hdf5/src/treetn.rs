@@ -10,8 +10,10 @@
 //! index identity (id + prime level + tags), and every bond index appears in
 //! exactly the two nodes it connects.
 
+use crate::backend;
 use crate::backend::types::VarLenUnicode;
 use crate::backend::Group;
+use crate::mps;
 use anyhow::{Context, Result};
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -25,6 +27,7 @@ use crate::itensor;
 use crate::schema;
 
 const NODE_NAME_ATTR: &str = "node_name";
+const CANONICAL_REGION_ATTR: &str = "canonical_region";
 
 /// Write a [`TreeTN`] to an HDF5 group using the tensor4all-rs TreeTN schema
 /// v1.
@@ -34,12 +37,19 @@ const NODE_NAME_ATTR: &str = "node_name";
 /// with the node name as a `node_name` string attribute. The `node_count`
 /// dataset records the number of nodes.
 ///
+/// When the tree is canonicalized, the optional `canonical_region` attribute
+/// (node names, sorted) and, if set, the optional `canonical_form` attribute
+/// (Int32, same encoding as the MPS schema) are written on the group. Both
+/// are tensor4all-rs extensions; files without them load as non-canonicalized.
+///
 /// # HDF5 Schema
 ///
 /// ```text
 /// <group>/
 ///   @type = "TreeTN"
 ///   @version = 1
+///   @canonical_region: VarLenUnicode[]?  (absent unless canonicalized)
+///   @canonical_form: Int32?              (absent unless a form is set)
 ///   node_count: Int64
 ///   node_1/
 ///     @node_name: VarLenUnicode
@@ -84,6 +94,26 @@ where
         itensor::write_itensor(&node_group, tensor)?;
     }
 
+    if tn.is_canonicalized() {
+        let mut region: Vec<String> = tn
+            .canonical_region()
+            .iter()
+            .map(|v| v.to_string())
+            .collect();
+        region.sort();
+        let region = region
+            .iter()
+            .map(|name| VarLenUnicode::from_str(name).map_err(anyhow::Error::from))
+            .collect::<Result<Vec<_>>>()?;
+        group
+            .new_attr::<VarLenUnicode>()
+            .shape(region.len())
+            .create(CANONICAL_REGION_ATTR)?
+            .as_writer()
+            .write(&region)?;
+    }
+    mps::write_canonical_form(group, tn.canonical_form())?;
+
     Ok(())
 }
 
@@ -95,6 +125,11 @@ where
 /// reconstructed with [`TreeTN::from_tensors`], which reconnects bond indices
 /// by shared [`Index`](tensor4all_core::Index) identity and validates that
 /// the result is a consistent tree.
+///
+/// If present, the optional `canonical_region` and `canonical_form`
+/// attributes are restored as stored, without verifying that the tensors are
+/// actually isometric (matching the MPS loader's trust in `llim`/`rlim`).
+/// Files without them load with an empty region and no form.
 pub(crate) fn read_treetn<V>(group: &Group) -> Result<TreeTN<IdxTensor, V>>
 where
     V: FromStr + Ord + Clone + Hash + Eq + Send + Sync + Debug,
@@ -134,5 +169,34 @@ where
         tensors.push(itensor::read_itensor(&node_group)?);
     }
 
-    TreeTN::from_tensors(tensors, names).context("Failed to reconstruct TreeTN from HDF5 tensors")
+    let mut tn = TreeTN::from_tensors(tensors, names)
+        .context("Failed to reconstruct TreeTN from HDF5 tensors")?;
+
+    if backend::attribute_exists(group, CANONICAL_REGION_ATTR)
+        .context("Failed to check TreeTN canonical_region attribute existence")?
+    {
+        let names: Vec<VarLenUnicode> = group
+            .attr(CANONICAL_REGION_ATTR)
+            .context("Failed to open TreeTN canonical_region attribute")?
+            .as_reader()
+            .read_1d()
+            .context("Failed to read TreeTN canonical_region")?
+            .to_vec();
+        let region = names
+            .iter()
+            .map(|name| {
+                name.as_str().parse::<V>().map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to parse TreeTN canonical_region node name {:?}: {e}",
+                        name.as_str()
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        tn.set_canonical_region(region)
+            .context("Invalid TreeTN canonical_region attribute")?;
+    }
+    tn.set_canonical_form(mps::read_canonical_form(group)?);
+
+    Ok(tn)
 }

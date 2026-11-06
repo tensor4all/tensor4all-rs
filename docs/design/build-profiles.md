@@ -58,15 +58,31 @@ strip = "symbols"
 ```
 
 Run release-equivalent CI tests locally with `cargo test --profile ci` or
-`cargo nextest run --cargo-profile ci`. Coverage remains on its
-instrumentation-owned profile and does not use `ci`.
+`cargo nextest run --cargo-profile ci`. Coverage does not use `ci`; it has
+its own profile:
+
+```toml
+[profile.coverage]
+inherits = "release"
+opt-level = 1
+incremental = false
+
+[profile.coverage.package."*"]
+opt-level = 3
+```
+
+Compiling every instrumented test binary dominates the coverage job, so
+workspace code builds at opt-level 1 while dependencies keep release
+optimization. Each package's integration tests are one `integration` target
+(`tests/main.rs`, `autotests = false`) for the same reason; files that install
+process-global state keep a `[[test]]` target of their own.
 
 Coverage includes ordinary library artifacts, including the C API shared
 library. Check the full C API package, including unit and integration tests,
 when validating coverage locally:
 
 ```bash
-cargo llvm-cov nextest --locked --release -p tensor4all-capi --json --output-path coverage.json
+cargo llvm-cov nextest --locked --cargo-profile coverage -p tensor4all-capi --json --output-path coverage.json
 ```
 
 C API entry points use `#[cfg_attr(not(test), unsafe(no_mangle))]`. This retains
@@ -75,6 +91,70 @@ symbols, so LLVM can combine both builds without collisions between coverage
 records. Integration tests exercise the ordinary library through its public
 boundary; unit tests also cover private validation and error paths. Hosted
 workspace coverage and the unchanged per-file thresholds remain authoritative.
+
+## Backend provider features
+
+Numerical backends are selected per crate through provider features. The CPU
+choices are mutually exclusive because tenferro rejects more than one CPU
+provider in a build, so `--all-features` is not a supported configuration.
+
+| feature | meaning |
+| --- | --- |
+| `tenferro-cpu-platform` | the default for every compute crate: Apple Accelerate (tenferro `blas-accelerate`) on macOS, faer elsewhere |
+| `tenferro-cpu-faer` | pure-Rust faer CPU kernels |
+| `tenferro-system-blas` | system BLAS/LAPACK (OpenBLAS, MKL, Apple Accelerate) |
+| `tenferro-provider-inject` | caller-provided provider on the BLAS-linked tenferro surface |
+| `tenferro-cuda` | CUDA where exposed (currently `tensor4all-core` and `tensor4all-treetn`); implies `tenferro-cpu-faer` for host work |
+
+`tenferro-cpu-platform` is resolved by target in the wiring-only crate
+`tensor4all-cpu-platform`: Cargo features cannot depend on the target, but its
+target-specific dependency tables enable `blas-accelerate` or `native` on
+`tenferro-linalg` and `tenferro-einsum`, which forward the choice to
+`tenferro-cpu` and `tenferro-ad`. Accelerate is linked through `accelerate-src`
+(`-framework Accelerate`), so the macOS default needs no link flags. It binds
+Accelerate's LAPACK 3.2.1 Fortran interface (LP64). tenferro calls only
+subroutines there (results through arguments) and reaches BLAS only through
+CBLAS, so the f2c return convention for scalar-valued functions does not apply.
+Accelerate schedules its own threads outside the tensor4all pool; its limit is
+`VECLIB_MAXIMUM_THREADS`.
+
+Convention:
+
+- Every compute crate exposes the CPU provider features together. A crate that
+exposes `tenferro-cpu-faer` and `tenferro-provider-inject` must also expose
+`tenferro-system-blas`.
+- Each provider feature forwards to the same provider feature on every
+tensor4all dependency that exposes it. Optional dependencies use weak
+forwarding (`tensor4all-simplett?/tenferro-system-blas`), so the feature does
+not switch the optional dependency on by itself.
+- Where a crate's existing CPU provider features forward a route feature (for
+example `tensor4all-core/backend-tenferro`), the new `tenferro-system-blas`
+feature forwards it identically. Provider selection does not change route
+selection.
+- A downstream user who wants a provider other than the platform default
+chooses exactly one CPU provider with `default-features = false` and enables
+that provider on every directly imported compute crate. Enabling two CPU
+providers in one build is not supported. On macOS this includes
+`tenferro-cpu-faer`: with the default features still on, it would combine faer
+with Accelerate.
+`tenferro-cuda` is not combined with `tenferro-system-blas` or
+`tenferro-provider-inject`.
+- `tenferro-system-blas` selects the BLAS/LAPACK-linked tenferro kernels but
+does not bundle a BLAS library. The final link must resolve those symbols, for
+example with `RUSTFLAGS="-L native=<prefix>/lib -l dylib=openblas"` (the
+benchmark commands in `benchmarks/README.md` show the macOS form) or through
+the embedding target's own link flags.
+- `tensor4all-hdf5` also needs one of its I/O features (`link` or
+`runtime-loading`), so its complete configurations are
+`link,tenferro-system-blas`, `link,tenferro-provider-inject` and
+`runtime-loading,tenferro-cpu-faer`. Its integration tests use the
+link-time `hdf5-metno` API and therefore run only in a `link` build.
+
+The supported configurations, their exact Cargo selections, and where each is
+verified (PR CI, the nightly feature matrix, or locally) are declared in
+[CONTRIBUTING.md, "Supported feature configurations"](../../CONTRIBUTING.md#supported-feature-configurations).
+The per-crate feature inventory, including which crates expose which route
+features, is in [859-f7-consumer-inventory.md](./859-f7-consumer-inventory.md).
 
 ## CI artifact reuse and guide verification
 
@@ -93,6 +173,15 @@ builds. Prefix cache restores can contain obsolete workspace binaries that
 The subsequent measurement uses `--no-clean` because this cleanup has already
 run. The generated root `coverage.json` is ignored locally and uploaded as a
 CI artifact rather than tracked in Git.
+
+The Test job persists its kache store with a per-commit key and a prefix
+restore key. Pull requests save too: the snapshot is scoped to the PR's merge
+ref, and the next push to that PR restores it ahead of main's. After saving,
+the job deletes that PR's older snapshots, because only the newest is ever
+restored and the repository cache is capped at 10 GB. `Swatinem/rust-cache`
+saves on main only; pull requests restore main's dependency cache. Coverage
+runs nightly (`.github/workflows/coverage.yml`) and keeps its own
+instrumented store, saved from main.
 
 Test, Doctests, and Coverage retain `build-diagnostics-*` artifacts for seven
 days. Their JSON summaries and timestamped Cargo logs distinguish `Fresh`

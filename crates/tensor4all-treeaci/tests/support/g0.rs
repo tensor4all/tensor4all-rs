@@ -166,6 +166,7 @@ pub(crate) fn fixture(r: usize, mode: &str) -> TestResult<Fixture> {
     Ok((sites, inputs))
 }
 
+#[allow(dead_code)] // used by the g0_convergence integration test
 pub(crate) fn operator(
     batch: tensor4all_treeaci::TreeElementwiseBatch<'_, Complex64>,
     output: &mut [Complex64],
@@ -181,6 +182,7 @@ pub(crate) fn operator(
     Ok(())
 }
 
+#[allow(dead_code)] // used by the g0_convergence integration test
 pub(crate) fn exact(r: usize, x: usize, y: usize, n: usize) -> Complex64 {
     let size = (1usize << r) as f64;
     1.0 / Complex64::new(
@@ -189,6 +191,7 @@ pub(crate) fn exact(r: usize, x: usize, y: usize, n: usize) -> Complex64 {
     )
 }
 
+#[allow(dead_code)] // used by the g0_convergence integration test
 pub(crate) fn options() -> tensor4all_treeaci::TreeAciOptions<usize> {
     tensor4all_treeaci::TreeAciOptions {
         tolerance: 3.183055503898938e-3,

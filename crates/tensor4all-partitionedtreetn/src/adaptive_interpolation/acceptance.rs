@@ -8,14 +8,14 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use tensor4all_core::{ColMajorArrayRef, CommonScalar, TensorElement};
-use tensor4all_treetn::interpolation::{InterpolationTermination, TreeInterpolator};
+use tensor4all_core::{CommonScalar, TensorElement};
+use tensor4all_treetn::interpolation::{EvalContext, InterpolationTermination, TreeInterpolator};
 
-use super::cache::{Counters, PatchSampler};
+use super::cache::PatchSampler;
 use super::options::{CappedPatches, PatchedInterpolationOptions};
 use super::report::PatchStatus;
 use super::verify::MeasureTarget;
-use super::{accepted, internal, Driver, PatchContext, PatchedInterpolationError, Unaccepted};
+use super::{accepted, internal, PatchContext, PatchedInterpolationError, Plan, Tally, Unaccepted};
 use super::{Projector, Verdict};
 
 /// The size bounds of a run, in generalized bits.
@@ -73,24 +73,26 @@ pub(super) fn validate_bounds(options: &PatchedInterpolationOptions) -> Result<(
     }
 }
 
-impl<T, V, E, F> Driver<'_, T, V, E, F>
+impl<T, V, E> Plan<'_, T, V, E>
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
     E: TreeInterpolator<T>,
-    F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
 {
     /// Retain a patch whose split the minimum blocked, with its last engine
     /// run. A run judged already keeps its verdict (no second measurement);
     /// an unjudged one (not converged, not capped-eligible) is checked like
     /// a capped run and judged once: measured on the stream of its attempt
     /// under L2, by its engine estimate under `SampledMax`.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn retain_blocked(
         &self,
-        ctx: &PatchContext<'_>,
+        context: &PatchContext<'_>,
         last: Unaccepted<V>,
-        sampler: &PatchSampler<'_, T, F>,
+        sampler: &PatchSampler<'_, T>,
+        tally: &Tally,
         projector: &Projector,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<Verdict<T, V>, PatchedInterpolationError> {
         let Unaccepted {
             outcome,
@@ -101,16 +103,16 @@ where
         let judged = rejected.is_some();
         let subdomain = match rejected {
             Some(subdomain) => subdomain,
-            None => self.checked_subdomain(&outcome, ctx.fixed, projector)?,
+            None => self.checked_subdomain(&outcome, context.fixed, projector, ctx)?,
         };
         let mut record = self.record(projector, &outcome, &subdomain, attempt);
         let within = if self.is_l2() {
             let target = MeasureTarget {
                 network: Some(subdomain.data()),
                 sites: &self.layout.sites,
-                fixed: ctx.fixed,
-                active_dims: ctx.active_dims,
-                patch_points: ctx.patch_points,
+                fixed: context.fixed,
+                active_dims: context.active_dims,
+                patch_points: context.patch_points,
             };
             let measurement = if judged {
                 failure
@@ -119,25 +121,46 @@ where
                     })?
                     .measurement
             } else {
-                let plan = self.plan(ctx.patch_count, ctx.seeds.verify(attempt));
-                let measured = self.measure(sampler, &target, plan, false, projector)?;
-                if measured.measurement.rms > ctx.tolerance {
-                    Counters::add(&self.verification_failures, 1);
+                let plan = self.plan(context.patch_count, context.seeds.verify(attempt));
+                let measured = self.estimate(
+                    tally,
+                    sampler,
+                    &target,
+                    plan,
+                    context.active,
+                    context.tolerance,
+                    context.seeds.residual(attempt),
+                    true,
+                    projector,
+                    ctx,
+                )?;
+                if measured.measurement.rms > context.tolerance {
+                    Tally::add(&tally.verification_failures, 1);
                 }
                 measured.measurement
             };
             // The audit removes the upward bias of a sample kept because it
             // failed, like that of any sampled contribution.
-            record.audit = self.audit(sampler, &target, &measurement, ctx.seeds, projector)?;
-            let within = measurement.rms <= ctx.tolerance;
+            record.audit = self.audit(
+                tally,
+                sampler,
+                &target,
+                &measurement,
+                context.active,
+                context.tolerance,
+                context.seeds,
+                projector,
+                ctx,
+            )?;
+            let within = measurement.rms <= context.tolerance;
             record.acceptance = Some(measurement);
             within
         } else {
-            !judged && outcome.error_estimate <= ctx.tolerance
+            !judged && outcome.error_estimate <= context.tolerance
         };
         if !within {
             record.status = PatchStatus::ToleranceNotMet;
         }
-        Ok(accepted(record, subdomain, ctx.patch_points))
+        Ok(accepted(record, subdomain, context.patch_points))
     }
 }

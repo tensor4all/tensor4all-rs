@@ -7,6 +7,57 @@
 //! splitting. The result is a [`PartitionedTreeTN`] with disjoint, eagerly
 //! masked patches, together with a [`PatchedInterpolationReport`].
 //!
+//! # Entries
+//!
+//! Three entries run the same driver, which is one wave loop: the BFS
+//! generations of the patch queue are dispatched, merged in canonical path
+//! order, and the splits of a wave form the next one. They differ only in where
+//! a wave runs.
+//!
+//! - [`patched_interpolate`] runs every patch on the caller's session, one
+//!   after another. The evaluator is `FnMut`, because one owner exists for the
+//!   whole run.
+//! - [`patched_interpolate_on_lanes`] fans a wave out over the lanes of a
+//!   caller-owned [`TenferroLanes`](hataori_tenferro::TenferroLanes): each patch
+//!   runs in the child session of the lane that pulled it, and the evaluator
+//!   must be `Fn + Sync`. The root wave and every wave smaller than the lane
+//!   count run one patch at a time, so a single item keeps the backend's whole
+//!   team.
+//! - `patched_interpolate_mpi` (feature `hataori-mpi` or `hataori-mpi-rsmpi-rt`)
+//!   distributes each wave over MPI ranks through `hataori::pmap_lanes`; the
+//!   root owns the queue, the merge, the pinned references and the result.
+//!
+//! # Execution and publication
+//!
+//! Every numerical step of a run - the engine call, the re-embedding of fixed
+//! sites, the measurement of a stored patch and the readout of its norm - runs
+//! on one session: the session of the caller's [`EvalContext`], or the child
+//! session of the lane that runs the patch. The evaluator receives that same
+//! context, so a caller-owned execution capability reaches every stage and an
+//! evaluator that needs numerical work of its own can issue it on the session.
+//! No step enters the process-global session, an eager runtime or a
+//! thread-local default, so a run completes while another thread holds the
+//! process-global backend and needs no warm-up of it.
+//!
+//! The publication boundary is explicit: every patch network is published as
+//! compact dense host storage (`IdxTensor`) on the session that built it, never
+//! adopted into the process-global eager runtime. The returned
+//! [`PartitionedTreeTN`] and [`PatchedInterpolationReport`] are therefore
+//! usable after the session has closed. A patch also reads its own log-norm on
+//! that same session, so the final report assembly is arithmetic only and needs
+//! no session - which is what lets a distributed run assemble on the root
+//! alone.
+//!
+//! # Scheduling and determinism
+//!
+//! The schedule never changes the result contract: every patch derives its
+//! random sub-seeds from the seed and its own path, the wave merge sorts by
+//! canonical path, counters are per patch and summed, and the references are
+//! pinned while the single root patch runs. `max_patches` is checked before a
+//! wave is dispatched: at most the remaining allowance of that wave runs, in
+//! canonical order, and the run then reports the same
+//! [`PatchedInterpolationError::ResourceLimit`] as before.
+//!
 //! # Derivation notice
 //!
 //! The patch queue, the accept-or-split flow, and pivot recycling are derived
@@ -14,7 +65,7 @@
 //! [TCIAlgorithms.jl](https://github.com/tensor4all/TCIAlgorithms.jl) at
 //! commit e501032278c9dd41b46c5851d8238169c8d178c5 (MIT license; Copyright
 //! 2023 Ritter.Marc and contributors), through the chain driver of the
-//! deprecated `tensor4all-partitionedtt` crate. See
+//! retired `tensor4all-partitionedtt` crate (removed in #915 D3). See
 //! `LICENSE-TCIALGORITHMS-MIT` in this crate. The intermediate Rust chain
 //! driver was introduced by Samuel Badr (@SamuelBadr) in
 //! [tensor4all-rs commit 69a24e7e](https://github.com/tensor4all/tensor4all-rs/commit/69a24e7e).
@@ -50,38 +101,50 @@
 //!
 //! **Certified, measured, and estimated errors.** Under L2 the driver
 //! measures every patch error from values of `f` at points chosen
-//! independently of the approximation, by one of three methods
-//! ([`MeasurementMethod`]): `Exact` (the patch was built from all its
-//! values) and `Exhaustive` (the residual was evaluated at every point: exact
-//! up to rounding) are certified; `Sampled` (fresh uniform points) is
-//! measured, not certified, and never a guarantee. A sampled acceptance
-//! measurement is only a decision statistic: it is conditioned on the
-//! acceptance it decided, and a residual concentrated on unsampled points is
-//! missed. With [`VerificationOptions::audit`], an independent audit sample
-//! drawn after the decision gives an unbiased estimate of the mean square
-//! residual (its square root, the reported RMS, is not unbiased) with a
-//! standard error; it is never a bound. No finite sample bounds the L2 error
-//! of a black-box function.
+//! independently of the approximation, by one of the methods of
+//! [`MeasurementMethod`]: `Exact` (the patch was built from all its values)
+//! and `Exhaustive` (the residual was evaluated at every point: exact up to
+//! rounding) are certified; `Sampled` (fresh uniform points) and
+//! `ResidualTt` (a residual TT) are estimates, not certified, and never a
+//! guarantee. A uniform acceptance measurement is only a decision statistic:
+//! it is conditioned on the acceptance it decided, and a residual concentrated
+//! on unsampled points is missed. With [`VerificationOptions::audit`], an
+//! independent audit measurement drawn after the decision gives a second
+//! estimate; under `Sampled` its mean square is unbiased and carries a
+//! standard error, but it is never a bound. No finite sample bounds the L2
+//! error of a black-box function.
 //!
-//! **Known limitation: localized features.** The acceptance sample and the
-//! audit are both uniform, so both can miss a localized feature that enters
-//! a patch only through a corner or an edge; the engine may also never
-//! sample it there and converge at a low rank. The audit's standard error is
-//! computed from the same points and says nothing about a residual
-//! concentrated on a small set it did not draw: the audited estimate can then
-//! be orders of magnitude below the true error with a small standard error.
-//! More [`VerificationOptions::samples`] make such a miss less likely but do
-//! not exclude it. The opt-in
-//! [`PatchedInterpolationOptions::cache_candidates`] starts child patches on
-//! values the parent already evaluated in them, so it can prevent a miss
-//! where the parent sampled the feature but the child's engine would not; it
-//! does not help when the parent never sampled the feature, nor when the
-//! acceptance sample and the audit miss a feature the engine saw but did not
-//! resolve. Only a `Certified` result (every contribution exact or
-//! exhaustive) is a guarantee. The limitation is recorded, with a
-//! reproduction and the measured effect of the option, under "Known
-//! limitation: corner-localized misses" in
-//! `docs/design/tree-patching-error-contract.md`.
+//! **Estimating a sampled patch error.** A patch too large for exhaustive
+//! measurement is estimated by
+//! [`VerificationOptions::estimator`]:
+//!
+//! - [`L2Estimator::ResidualTt`] (the default) interpolates the residual
+//!   `r = f - f~` with the same engine and takes
+//!   `||TT_r||_2 / sqrt(|P|)` from an exact contraction. The residual run
+//!   starts from the largest residuals of a small uniform seed sample
+//!   together with the patch corners and edges (grouped by
+//!   [`PatchedInterpolationOptions::variables`]), so a feature that enters
+//!   the patch only through a corner or an edge is reached even when the
+//!   uniform points miss it. Its bond cap is
+//!   `max(ceil(chi_patch * residual_bond_ratio), residual_bond_floor)` with
+//!   `chi_patch` the largest bond dimension of the measured patch. A run that
+//!   does not converge makes the estimate the larger of the residual norm and
+//!   the seed sample's RMS, because a capped residual TT captures the largest
+//!   components first.
+//! - [`L2Estimator::UniformMonteCarlo`] reproduces the M3 behaviour: the
+//!   uniform sample alone decides.
+//!
+//! The `ResidualTt` estimate is not an unbiased sample statistic, so a run
+//! with such a contribution is never certified: it is `Audited` with an audit
+//! and `AcceptanceOnly` without one. Its limits: if every initial pivot of the
+//! residual run is exactly zero the engine returns
+//! `InterpolationError::AllSamplesZero` before its global pivot search and the
+//! estimate is taken as zero; and the norm is read from `TreeTN::log_norm`, so
+//! a residual norm above about `1.34e154` overflows the estimate and one
+//! below about `1e-154` underflows it to zero. Under `UniformMonteCarlo`, the
+//! acceptance sample and the audit are both uniform and can both miss a
+//! localized feature, and their standard error does not reveal the miss. Only
+//! a `Certified` result is a guarantee.
 //!
 //! The report's [`GlobalL2Error`] says what the run can claim:
 //!
@@ -97,10 +160,10 @@
 //!   `relative_error_bound` bounds `E / ||f||` from the computable side,
 //!   `E / ||f|| <= E / (||f~|| - E)`, with conservative margins; it is `None`
 //!   when the denominator is not positive.
-//! - `Audited` when every sampled contribution has an audit: an estimate of
-//!   `E` with its standard error, and a plug-in estimate of the relative
-//!   bound. Neither is a guarantee: both can be far too small when a
-//!   localized feature was missed (see above).
+//! - `Audited` when every non-exact contribution has an audit: an estimate
+//!   of `E` with its standard error, and a plug-in estimate of the relative
+//!   bound. Neither is a guarantee: the residual TT is capped, and a uniform
+//!   sample can miss a localized feature (see above).
 //! - `AcceptanceOnly` otherwise: the combined acceptance statistics, neither a
 //!   bound nor an estimate; no relative statement exists.
 //!
@@ -116,8 +179,10 @@
 //!    `patch_order`, the tolerance, the reference, the other options, the
 //!    verification options, the initial pivots, and under L2 the domain size
 //!    and whether a reference is required.
-//! 2. Patches are processed in FIFO order, starting from the whole domain.
-//!    The reference is pinned at the root and never changes.
+//! 2. Patches are processed wave by wave in the FIFO order of the queue,
+//!    starting from the whole domain. The reference is pinned while the root
+//!    patch runs and never changes; because the root is the only patch of wave
+//!    0, a fan-out can pin it once and share it with every later wave.
 //! 3. Each patch owns an evaluation cache of its points; a split hands every
 //!    cached value (measured values included) to the child that contains it,
 //!    so no point is evaluated twice.
@@ -138,14 +203,16 @@
 //!    cap is re-embedded (every fixed site re-attached by a one-hot factor)
 //!    and, under L2, measured on the stored network: exhaustively when the
 //!    patch has at most `max(max_exhaustive_points, samples)` points,
-//!    otherwise on `samples` fresh uniform points. It is accepted when
-//!    `rms <= tau`. With [`CappedPatches::AcceptUpTo`], a
+//!    otherwise by [`VerificationOptions::estimator`] - the residual TT, or
+//!    the uniform Monte Carlo sample. It is accepted when the estimate is at
+//!    most `tau`. With [`CappedPatches::AcceptUpTo`], a
 //!    [`InterpolationTermination::BondCapReached`] outcome of a patch with at
 //!    most that many active sites (generalized bits) is checked against the
 //!    cap and judged the same way (by the engine estimate under
 //!    `SampledMax`).
 //! 6. A failed verification of a converged run reruns the engine (up to
 //!    [`VerificationOptions::retries`] times) with the worst measured points
+//!    (under the residual estimator also its pivots with a nonzero residual)
 //!    and the outcome's pivots added to the initial pivots; a failed capped
 //!    run is not rerun. Then the patch splits at the next unfixed site of
 //!    [`PatchedInterpolationOptions::patch_order`], passing the worst points
@@ -164,8 +231,9 @@
 //! Every patch derives its sub-seeds from [`PatchedInterpolationOptions::seed`]
 //! and its path, the (position in the derived site order, coordinate) pairs
 //! of its fixed sites: one for its random candidate pivots, one per engine
-//! run, and one stream each for the zero screen, every verification, the
-//! audit, and (at the root) the Monte Carlo reference. The generator is
+//! run, one stream each for the zero screen, every verification, the audit,
+//! and (at the root) the Monte Carlo reference, and one stream each for the
+//! zero screen's, every verification's, and the audit's residual-TT run. The generator is
 //! SplitMix64, and a coordinate in `0..d` is drawn with Lemire's unbiased
 //! multiply-shift method with rejection. Unlike other randomized algorithms
 //! of this workspace, the driver offers no API taking a caller-owned
@@ -175,7 +243,10 @@
 //! For a fixed seed, a deterministic evaluator, and a deterministic engine,
 //! the report and every stored node tensor (values and positional axis order)
 //! are identical across runs on fresh threads within one process, provided
-//! every measured network value is reproducible; this is tested for `f64` on
+//! every measured network value is reproducible. The schedule is not part of
+//! that contract either: the wave merge sorts by canonical path, the counters
+//! are per patch, and a lanes run at one or two lanes reproduces the serial
+//! report on such fixtures. This is tested for `f64` on
 //! trees where every node carries exactly one site, where the measurement
 //! takes the cached evaluator's raw kernels. Each measurement uses a fresh
 //! `TreeTNCachedEvaluator` centered at the smallest node name, the default
@@ -213,7 +284,9 @@
 //!     patched_interpolate, GlobalL2Error, PatchedInterpolationOptions,
 //! };
 //! use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference};
+//! use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 //! use tensor4all_treetci::TreeTciInterpolator;
+//! use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 //! use tensor4all_treetn::NodeNameNetwork;
 //!
 //! let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
@@ -229,20 +302,26 @@
 //! let values: Vec<f64> = (0..8).map(|x| 1.0 / (1.0 + x as f64)).collect();
 //! let norm = values.iter().map(|v| v * v).sum::<f64>().sqrt();
 //! let f = |point: &[usize]| 1.0 / (1.0 + (point[0] + 2 * point[1] + 4 * point[2]) as f64);
-//! let evaluate = |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+//! let evaluate = |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 //!     Ok(batch.data().chunks(3).map(f).collect())
 //! };
 //! let options = PatchedInterpolationOptions::new(2)
 //!     .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
 //!     .with_tolerance(ErrorTolerance { rtol: 1e-12, atol: 0.0 });
-//! let result = patched_interpolate(
-//!     &TreeTciInterpolator::default(),
-//!     topology,
-//!     node_sites,
-//!     ColMajorArray::new(vec![0, 0, 0], vec![3, 1])?,
-//!     evaluate,
-//!     &options,
-//! )?;
+//! let pivots = ColMajorArray::new(vec![0, 0, 0], vec![3, 1])?;
+//! let result = {
+//!     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+//!     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+//!         patched_interpolate(
+//!             &TreeTciInterpolator::default(),
+//!             topology,
+//!             node_sites,
+//!             pivots,
+//!             &mut ctx,
+//!             evaluate,
+//!             &options,
+//!         )
+//! }?;
 //!
 //! // The splits fix sites 0 and 1; every patch then has one active site.
 //! assert_eq!(result.report.splits, 3);
@@ -260,17 +339,22 @@
 
 mod acceptance;
 mod cache;
+mod corners;
 mod embed;
+mod fan_out;
 mod layout;
+#[cfg(any(feature = "hataori-mpi", feature = "hataori-mpi-rsmpi-rt"))]
+mod mpi;
 mod options;
 mod report;
+mod residual;
 mod sampling;
 #[cfg(test)]
 mod tests;
 mod verify;
 
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -280,8 +364,8 @@ use tensor4all_core::{
     ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor, TensorElement,
 };
 use tensor4all_treetn::interpolation::{
-    InterpolationError, InterpolationOutcome, InterpolationProblem, InterpolationTermination,
-    TreeInterpolator,
+    EvalContext, InterpolationError, InterpolationOutcome, InterpolationProblem,
+    InterpolationTermination, TreeInterpolator,
 };
 use tensor4all_treetn::{NodeNameNetwork, TreeTN};
 
@@ -297,7 +381,10 @@ use layout::SiteLayout;
 use sampling::{patch_candidates, patch_seeds, PatchDomain, PatchSeeds};
 use verify::{Contribution, MeasureError, MeasureTarget, Measured, PointPlan};
 
-pub use options::{CappedPatches, PatchedInterpolationOptions, VerificationOptions};
+pub use fan_out::patched_interpolate_on_lanes;
+#[cfg(any(feature = "hataori-mpi", feature = "hataori-mpi-rsmpi-rt"))]
+pub use mpi::patched_interpolate_mpi;
+pub use options::{CappedPatches, L2Estimator, PatchedInterpolationOptions, VerificationOptions};
 pub use report::{
     GlobalL2Error, L2ErrorReport, L2Measurement, L2ReferenceSource, MaxReferenceSource,
     MeasurementMethod, NormReport, PatchRecord, PatchStatus, PatchedInterpolationReport,
@@ -310,6 +397,8 @@ pub use report::{
 /// # Examples
 ///
 /// ```
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -324,16 +413,20 @@ pub use report::{
 ///  -> Result<PatchedInterpolationResult<usize>, PatchedInterpolationError> {
 ///     let mut topology = NodeNameNetwork::new();
 ///     topology.add_node(0usize).unwrap();
-///     patched_interpolate(
+///     {
+///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+///         patched_interpolate(
 ///         &TreeTciInterpolator::default(),
 ///         topology,
 ///         BTreeMap::from([(0usize, vec![DynIndex::new_dyn(2)])]),
-///         ColMajorArray::new(vec![], vec![1, 0]).unwrap(),
-///         |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///         ColMajorArray::new(vec![], vec![1, 0]).unwrap(), &mut ctx,
+///         |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///             Ok(vec![1.0; batch.shape()[1]])
 ///         },
 ///         options,
 ///     )
+/// }
 /// };
 /// // A cap of one could only accept patches nonzero on a single node.
 /// let error = run(&PatchedInterpolationOptions::new(1)).unwrap_err();
@@ -407,20 +500,24 @@ pub enum PatchedInterpolationError {
     },
     /// The last engine run of a patch was measured (it converged below the
     /// cap, or reached the cap within [`CappedPatches::AcceptUpTo`]), its L2
-    /// error exceeded its allowance after the retries, and every site of
+    /// estimate exceeded its allowance after the retries, and every site of
     /// `patch_order` is already fixed in it. The minimum patch size never
     /// turns this into an acceptance.
     #[error(
-        "the measured L2 error of the patch {projector:?} (rms {}) exceeds its allowance and \
-         every site of patch_order is fixed; list more sites in patch_order, raise rtol or atol, \
-         or check the reference norm",
-        measurement.rms
+        "the L2 verification of the patch {projector:?} failed with measurement method \
+         {measurement_method:?}: estimate {} (residual {}, seed-sample {}) exceeds its \
+         allowance, and every site of patch_order is fixed; list more sites in patch_order, \
+         raise rtol or atol, or check the reference norm",
+        measurement.rms,
+        measurement.residual_text(),
+        measurement.sample_text(),
+        measurement_method = measurement.method
     )]
     VerificationFailed {
         /// Projector of the patch.
         projector: Projector,
-        /// Its last failed measurement.
-        measurement: L2Measurement,
+        /// Its last failed measurement, boxed to keep the error small.
+        measurement: Box<L2Measurement>,
     },
     /// A resource limit of the options was exceeded.
     #[error(
@@ -432,6 +529,16 @@ pub enum PatchedInterpolationError {
         resource: &'static str,
         /// The limit.
         limit: usize,
+    },
+    /// The scheduler fan-out failed: a lane executor that could not run, join,
+    /// or clean up a lane, or an MPI transport, placement, or wire failure. A
+    /// patch failure caused by the inputs, the evaluator, or an option is
+    /// reported under its own variant, and a distributed run reports a
+    /// root-side failure here on every rank that is not the root.
+    #[error("the patched interpolation fan-out failed: {message}")]
+    FanOut {
+        /// The failure message the fan-out converged on.
+        message: String,
     },
 }
 
@@ -457,15 +564,25 @@ impl From<PartitionedTreeTNError> for PatchedInterpolationError {
 ///   full-domain points in site order; zero columns are allowed. Each patch
 ///   starts from those compatible with it. Pivots where the function is large
 ///   make the zero screening reliable.
+/// * `ctx` - The run's explicit execution capability, forwarded to every
+///   engine call. The driver opens no session, installs no pool and consults no
+///   process-global or thread-local default; pass the held session's context
+///   ([`EvalContext::new`]) for a serial run, or a scheduler lane's context once
+///   the caller owns the lanes.
 /// * `evaluate` - Batch evaluator. It receives a column-major
-///   `[n_sites, n_points]` array of full-domain points in site order and
-///   returns one finite value per point, with a finite magnitude.
+///   `[n_sites, n_points]` array of full-domain points in site order and the
+///   run's context, and returns one finite value per point, with a finite
+///   magnitude. An evaluator that needs numerical work of its own issues it
+///   through the context's session; an evaluator that only computes host
+///   values can ignore the context.
 /// * `options` - See [`PatchedInterpolationOptions`].
 ///
 /// # Returns
 ///
 /// The partition of accepted patches (eagerly masked, every site index
-/// retained, one dtype `T`) and a [`PatchedInterpolationReport`].
+/// retained, one dtype `T`) and a [`PatchedInterpolationReport`]. Both are
+/// published as compact dense host storage on the caller's session, so they
+/// stay usable after the session closes.
 ///
 /// # Errors
 ///
@@ -524,6 +641,8 @@ impl From<PartitionedTreeTNError> for PatchedInterpolationError {
 /// so the run is certified.
 ///
 /// ```
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// use tensor4all_treetn::interpolation::{EvalContext, Parallelism};
 /// use std::collections::BTreeMap;
 /// use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::{
@@ -555,16 +674,20 @@ impl From<PartitionedTreeTNError> for PatchedInterpolationError {
 ///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
 ///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
 ///     .with_patch_order(vec![x.clone(), y.clone()]);
-/// let result = patched_interpolate(
+/// let result = {
+///     let mut backend = CpuBackend::with_threads(1).expect("1T CPU backend");
+///     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+///         patched_interpolate(
 ///     &TreeTciInterpolator::default(),
 ///     topology,
 ///     node_sites,
-///     ColMajorArray::new(vec![1, 2, 2], vec![3, 1])?,
-///     |batch: ColMajorArrayRef<'_, usize>| -> anyhow::Result<Vec<f64>> {
+///     ColMajorArray::new(vec![1, 2, 2], vec![3, 1]).unwrap(), &mut ctx,
+///     |batch: ColMajorArrayRef<'_, usize>, _ctx: &mut EvalContext<'_>| -> anyhow::Result<Vec<f64>> {
 ///         Ok(batch.data().chunks(3).map(f).collect())
 ///     },
 ///     &options,
-/// )?;
+/// )
+/// }?;
 /// let zero = &result.report.zero_patches[0];
 /// assert_eq!(zero.projector.get(&x), Some(0));
 /// assert_eq!(zero.acceptance.as_ref().unwrap().method, MeasurementMethod::Exhaustive);
@@ -582,6 +705,7 @@ pub fn patched_interpolate<T, V, E, F>(
     topology: NodeNameNetwork<V>,
     node_sites: BTreeMap<V, Vec<DynIndex>>,
     initial_pivots: ColMajorArray<usize>,
+    ctx: &mut EvalContext<'_>,
     evaluate: F,
     options: &PatchedInterpolationOptions,
 ) -> Result<PatchedInterpolationResult<V>, PatchedInterpolationError>
@@ -589,40 +713,70 @@ where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
     E: TreeInterpolator<T> + Sync,
-    F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>> + Send + Sync,
+    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
-    if matches!(
-        options.error_norm,
-        ErrorNorm::MaxAbs | ErrorNorm::WeightedL2
-    ) {
-        return Err(PatchedInterpolationError::UnsupportedNorm {
-            norm: options.error_norm,
-        });
-    }
-    let layout = SiteLayout::validated(topology, node_sites, &initial_pivots, options)?;
-    let driver = Driver {
-        engine,
-        evaluate: &evaluate,
-        layout,
-        initial_pivots,
-        options,
-        policy: SizePolicy::new(options),
-        max_reference: Cell::new(None),
-        l2: Cell::new(None),
-        counters: Counters::default(),
-        measurement_evaluations: Cell::new(0),
-        audit_evaluations: Cell::new(0),
-        verification_failures: Cell::new(0),
-        engine_retries: Cell::new(0),
-        scalar: PhantomData,
+    let plan = Plan::validated(engine, topology, node_sites, initial_pivots, options)?;
+    let mut waves = SerialWaves {
+        ctx,
+        evaluate: RefCell::new(evaluate),
     };
-    driver.pin_references_known_in_advance();
-    driver.run()
+    let merged = run_waves(&plan, &mut waves)?;
+    assemble(&plan, merged)
 }
 
 fn invalid(message: impl Into<String>) -> PatchedInterpolationError {
     PatchedInterpolationError::InvalidInput {
         message: message.into(),
+    }
+}
+
+/// The caller's evaluator as one patch uses it.
+///
+/// A serial run has one mutable owner for the whole run, which a [`RefCell`]
+/// lends to each patch in turn; a fanned-out run shares an immutable evaluator
+/// across its lanes. Both reach a patch's sampler through this one trait, so
+/// the per-patch body - engine, measurement, audit, publication - has a single
+/// implementation for every entry.
+trait Evaluate<T> {
+    /// The values of the evaluator at a column-major
+    /// `[n_sites, n_points]` batch of full-domain points.
+    fn evaluate(
+        &self,
+        batch: ColMajorArrayRef<'_, usize>,
+        ctx: &mut EvalContext<'_>,
+    ) -> anyhow::Result<Vec<T>>;
+}
+
+/// A serial run's evaluator: one `FnMut` behind its cell.
+struct Exclusive<'a, F>(&'a RefCell<F>);
+
+impl<T, F> Evaluate<T> for Exclusive<'_, F>
+where
+    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
+{
+    fn evaluate(
+        &self,
+        batch: ColMajorArrayRef<'_, usize>,
+        ctx: &mut EvalContext<'_>,
+    ) -> anyhow::Result<Vec<T>> {
+        let mut evaluate = self.0.borrow_mut();
+        (*evaluate)(batch, ctx)
+    }
+}
+
+/// A fanned-out run's evaluator: one `Fn` shared by the lanes.
+struct Shared<'a, F>(&'a F);
+
+impl<T, F> Evaluate<T> for Shared<'_, F>
+where
+    F: Fn(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
+{
+    fn evaluate(
+        &self,
+        batch: ColMajorArrayRef<'_, usize>,
+        ctx: &mut EvalContext<'_>,
+    ) -> anyhow::Result<Vec<T>> {
+        (*self.0)(batch, ctx)
     }
 }
 
@@ -639,7 +793,15 @@ struct Patch<T> {
     worst: Vec<Vec<usize>>,
 }
 
-/// An accepted patch: its record, network, and `|P|`.
+/// An accepted patch with its canonical path.
+#[allow(clippy::type_complexity)]
+type AcceptedPatch<V> = (Vec<(usize, usize)>, Accepted<V>);
+
+/// A zero patch with its canonical path and volume.
+type ZeroPatch = (Vec<(usize, usize)>, ZeroPatchRecord, f64);
+
+/// An accepted patch: its record, network, `|P|`, and the log-norm of its
+/// network when the run reports an L2 error.
 struct Accepted<V>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
@@ -647,6 +809,9 @@ where
     record: PatchRecord,
     subdomain: SubDomainTreeTN<V>,
     patch_points: f64,
+    /// `log ||f~_P||`, measured on the session that built the patch; `None`
+    /// when the run has no L2 report or the norm overflowed.
+    log_norm: Option<f64>,
 }
 
 /// What processing one patch produced.
@@ -660,18 +825,252 @@ where
 }
 
 /// The pinned L2 reference and allowance.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct L2Pin {
     reference_rms: Option<f64>,
     source: L2ReferenceSource,
     tau: f64,
 }
 
-/// A failed verification: its measurement and its worst points in active
-/// coordinates.
-struct Failure {
-    measurement: L2Measurement,
-    worst: Vec<Vec<usize>>,
+/// The reference norms of a run.
+///
+/// A run pins its references from its root patch, so the fields are still empty
+/// while wave 0 runs and complete afterwards; every later wave reads them. The
+/// order of the wave merge is what makes the pinned values a function of the
+/// problem, not of the schedule.
+#[derive(Clone, Copy, Debug, Default)]
+struct References {
+    /// Under L2: the pinned reference and allowance.
+    l2: Option<L2Pin>,
+    /// Under `SampledMax`: the given reference, or the one pinned from the root.
+    max_reference: Option<(f64, MaxReferenceSource)>,
+}
+
+impl References {
+    /// Adopt the pins of `other` this state does not hold yet.
+    ///
+    /// Two wave members can only disagree if the driver pinned a reference
+    /// twice, which wave 0 (one root patch) cannot do; a disagreement is an
+    /// internal error rather than a silently different run.
+    fn merge(&mut self, other: Self) -> Result<(), PatchedInterpolationError> {
+        match (self.l2, other.l2) {
+            (None, Some(pin)) => self.l2 = Some(pin),
+            (Some(mine), Some(theirs)) if mine != theirs => {
+                return Err(internal(anyhow::anyhow!(
+                    "two patches pinned different L2 references"
+                )));
+            }
+            _ => {}
+        }
+        match (self.max_reference, other.max_reference) {
+            (None, Some(reference)) => self.max_reference = Some(reference),
+            (Some(mine), Some(theirs)) if mine != theirs => {
+                return Err(internal(anyhow::anyhow!(
+                    "two patches pinned different max references"
+                )));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+/// One patch's access to the run's references.
+enum Pins<'a> {
+    /// A patch of wave 0, which is the only wave that pins a reference.
+    Root(&'a mut References),
+    /// A patch of any later wave: the references are pinned and read-only.
+    Later(&'a References),
+}
+
+impl Pins<'_> {
+    fn l2(&self) -> Option<L2Pin> {
+        match self {
+            Self::Root(references) => references.l2,
+            Self::Later(references) => references.l2,
+        }
+    }
+
+    fn max_reference(&self) -> Option<(f64, MaxReferenceSource)> {
+        match self {
+            Self::Root(references) => references.max_reference,
+            Self::Later(references) => references.max_reference,
+        }
+    }
+
+    fn l2_pin(&self) -> Result<L2Pin, PatchedInterpolationError> {
+        self.l2()
+            .ok_or_else(|| internal(anyhow::anyhow!("the L2 reference is not pinned")))
+    }
+
+    /// Pin the L2 reference unless one is pinned already.
+    fn pin_l2(&mut self, pin: L2Pin) -> Result<(), PatchedInterpolationError> {
+        match self {
+            Self::Root(references) => {
+                if references.l2.is_none() {
+                    references.l2 = Some(pin);
+                }
+                Ok(())
+            }
+            Self::Later(references) => {
+                if references.l2.is_none() {
+                    return Err(internal(anyhow::anyhow!(
+                        "a wave after the root pinned an L2 reference"
+                    )));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Pin the max reference unless one is pinned already.
+    fn pin_max_reference(
+        &mut self,
+        reference: (f64, MaxReferenceSource),
+    ) -> Result<(), PatchedInterpolationError> {
+        match self {
+            Self::Root(references) => {
+                if references.max_reference.is_none() {
+                    references.max_reference = Some(reference);
+                }
+                Ok(())
+            }
+            Self::Later(references) => {
+                if references.max_reference.is_none() {
+                    return Err(internal(anyhow::anyhow!(
+                        "a wave after the root pinned a max reference"
+                    )));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// The references as this patch sees them, for a wave merge.
+    fn snapshot(&self) -> References {
+        match self {
+            Self::Root(references) => **references,
+            Self::Later(references) => **references,
+        }
+    }
+}
+
+/// The references a wave starts from, with the write access wave 0 needs.
+enum WavePins<'a> {
+    /// Wave 0: the root patch may still pin.
+    Root(&'a mut References),
+    /// Any later wave: the pinned references, read-only.
+    Later(&'a References),
+}
+
+impl<'a> WavePins<'a> {
+    /// The references the wave starts from.
+    fn start(&self) -> References {
+        match self {
+            Self::Root(references) => **references,
+            Self::Later(references) => **references,
+        }
+    }
+
+    /// Whether this wave may still pin a reference: only the root wave can.
+    fn writable(&self) -> bool {
+        matches!(self, Self::Root(_))
+    }
+
+    /// The access one patch of this wave sees.
+    fn patch(&mut self) -> Pins<'_> {
+        match self {
+            Self::Root(references) => Pins::Root(references),
+            Self::Later(references) => Pins::Later(references),
+        }
+    }
+}
+
+/// Evaluations and retries of one run, summed over its waves.
+#[derive(Clone, Copy, Debug, Default)]
+struct Totals {
+    evaluations: usize,
+    cache_hits: usize,
+    measurement_evaluations: usize,
+    audit_evaluations: usize,
+    residual_evaluations: usize,
+    residual_saturations: usize,
+    verification_failures: usize,
+    engine_retries: usize,
+}
+
+impl Totals {
+    fn add(&mut self, other: Self) {
+        self.evaluations = self.evaluations.saturating_add(other.evaluations);
+        self.cache_hits = self.cache_hits.saturating_add(other.cache_hits);
+        self.measurement_evaluations = self
+            .measurement_evaluations
+            .saturating_add(other.measurement_evaluations);
+        self.audit_evaluations = self
+            .audit_evaluations
+            .saturating_add(other.audit_evaluations);
+        self.residual_evaluations = self
+            .residual_evaluations
+            .saturating_add(other.residual_evaluations);
+        self.residual_saturations = self
+            .residual_saturations
+            .saturating_add(other.residual_saturations);
+        self.verification_failures = self
+            .verification_failures
+            .saturating_add(other.verification_failures);
+        self.engine_retries = self.engine_retries.saturating_add(other.engine_retries);
+    }
+}
+
+/// The counters of one patch while it runs.
+///
+/// One patch runs on one thread - on the caller's session or on one scheduler
+/// lane - so its counters stay cell-based. They become a [`Totals`] delta when
+/// the wave is merged, which keeps a run's report independent of the number of
+/// lanes and of the assignment of patches to lanes.
+#[derive(Default)]
+struct Tally {
+    counters: Counters,
+    measurement_evaluations: Cell<usize>,
+    audit_evaluations: Cell<usize>,
+    residual_evaluations: Cell<usize>,
+    /// `1` once any decisive residual run of the patch saturated.
+    residual_saturations: Cell<usize>,
+    verification_failures: Cell<usize>,
+    engine_retries: Cell<usize>,
+}
+
+impl Tally {
+    fn add(counter: &Cell<usize>, amount: usize) {
+        Counters::add(counter, amount);
+    }
+
+    fn totals(&self) -> Totals {
+        Totals {
+            evaluations: self.counters.evaluations.get(),
+            cache_hits: self.counters.cache_hits.get(),
+            measurement_evaluations: self.measurement_evaluations.get(),
+            audit_evaluations: self.audit_evaluations.get(),
+            residual_evaluations: self.residual_evaluations.get(),
+            residual_saturations: self.residual_saturations.get(),
+            verification_failures: self.verification_failures.get(),
+            engine_retries: self.engine_retries.get(),
+        }
+    }
+}
+
+/// What processing one patch produced, in the form a wave merge consumes.
+struct PatchRun<T, V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    /// (position, coordinate) of every fixed site, in split order.
+    path: Vec<(usize, usize)>,
+    verdict: Verdict<T, V>,
+    /// The counter deltas of this patch.
+    totals: Totals,
+    /// The references after this patch; only wave 0 can add a pin.
+    references: References,
 }
 
 /// What resolving an unaccepted patch needs from its processing.
@@ -704,6 +1103,42 @@ where
     /// `rejected` is set under L2, possibly of an earlier run when it is not,
     /// and `None` under `SampledMax`.
     failure: Option<Failure>,
+}
+
+/// A failed verification: its measurement and its worst points in active
+/// coordinates.
+struct Failure {
+    measurement: L2Measurement,
+    worst: Vec<Vec<usize>>,
+}
+
+/// Largest distinct nonzero residuals of a uniform sample used as residual-run
+/// initial pivots.
+const RESIDUAL_PIVOTS: usize = 4;
+
+/// The distinct measured points with a nonzero residual, in residual order
+/// (measurement order among ties), at most `limit`.
+fn largest_residual_points(measured: &Measured, limit: usize) -> Vec<Vec<usize>> {
+    let mut order: Vec<usize> = (0..measured.points.len())
+        .filter(|&index| measured.residuals[index] > 0.0)
+        .collect();
+    order.sort_by(|&left, &right| measured.residuals[right].total_cmp(&measured.residuals[left]));
+    let mut seen = HashSet::new();
+    order
+        .into_iter()
+        .filter(|&index| seen.insert(measured.points[index].clone()))
+        .take(limit)
+        .map(|index| measured.points[index].clone())
+        .collect()
+}
+
+/// The points of `points` without duplicates, in first-occurrence order.
+fn merged_points<'a>(points: impl Iterator<Item = &'a Vec<usize>>) -> Vec<Vec<usize>> {
+    let mut seen = HashSet::new();
+    points
+        .filter(|point| seen.insert((*point).clone()))
+        .cloned()
+        .collect()
 }
 
 fn max_magnitude<T: CommonScalar>(values: &[T]) -> f64 {
@@ -824,299 +1259,310 @@ fn added_pivots(
         .collect()
 }
 
-/// State of one [`patched_interpolate`] run.
-struct Driver<'a, T, V, E, F>
+/// The validated configuration of one run: everything a patch needs that does
+/// not change between waves.
+///
+/// One `Plan` is shared by every wave and, when the run fans out, by every
+/// lane: it holds no counter and no reference, so it is immutable for the whole
+/// run.
+struct Plan<'a, T, V, E>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
     engine: &'a E,
-    evaluate: &'a F,
     layout: SiteLayout<V>,
     initial_pivots: ColMajorArray<usize>,
     options: &'a PatchedInterpolationOptions,
     policy: SizePolicy,
-    /// SampledMax: the given reference, or the one pinned from the root.
-    max_reference: Cell<Option<(f64, MaxReferenceSource)>>,
-    /// L2: the pinned reference and allowance.
-    l2: Cell<Option<L2Pin>>,
-    counters: Counters,
-    measurement_evaluations: Cell<usize>,
-    audit_evaluations: Cell<usize>,
-    verification_failures: Cell<usize>,
-    engine_retries: Cell<usize>,
     scalar: PhantomData<T>,
 }
 
-impl<T, V, E, F> Driver<'_, T, V, E, F>
+impl<'a, T, V, E> Plan<'a, T, V, E>
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
     E: TreeInterpolator<T>,
-    F: Fn(ColMajorArrayRef<'_, usize>) -> anyhow::Result<Vec<T>>,
 {
+    /// Validate the inputs and options in their documented order.
+    fn validated(
+        engine: &'a E,
+        topology: NodeNameNetwork<V>,
+        node_sites: BTreeMap<V, Vec<DynIndex>>,
+        initial_pivots: ColMajorArray<usize>,
+        options: &'a PatchedInterpolationOptions,
+    ) -> Result<Self, PatchedInterpolationError> {
+        if matches!(
+            options.error_norm,
+            ErrorNorm::MaxAbs | ErrorNorm::WeightedL2
+        ) {
+            return Err(PatchedInterpolationError::UnsupportedNorm {
+                norm: options.error_norm,
+            });
+        }
+        let layout = SiteLayout::validated(topology, node_sites, &initial_pivots, options)?;
+        Ok(Self {
+            engine,
+            layout,
+            initial_pivots,
+            options,
+            policy: SizePolicy::new(options),
+            scalar: PhantomData,
+        })
+    }
+
     fn is_l2(&self) -> bool {
         matches!(self.options.error_norm, ErrorNorm::L2 { .. })
     }
 
-    /// Pin the references that do not depend on the root before any
+    /// The references that do not depend on the root, pinned before any
     /// evaluation: a given L2 norm, no L2 reference when `rtol = 0`, and a
     /// given `max_reference`.
-    fn pin_references_known_in_advance(&self) {
+    fn initial_references(&self) -> References {
         let tolerance = self.options.tolerance;
+        let mut references = References::default();
         match self.options.error_norm {
             ErrorNorm::L2 {
                 reference: L2Reference::Given(norm),
                 ..
             } => {
-                self.pin_l2(
+                references.l2 = Some(self.l2_pin(
                     Some(norm / self.layout.domain_points.sqrt()),
                     L2ReferenceSource::Given,
-                );
+                ));
             }
             ErrorNorm::L2 { .. } if tolerance.rtol == 0.0 => {
-                self.pin_l2(None, L2ReferenceSource::NotNeeded);
+                references.l2 = Some(self.l2_pin(None, L2ReferenceSource::NotNeeded));
             }
             ErrorNorm::SampledMax {
                 max_reference: Some(scale),
                 ..
-            } => self
-                .max_reference
-                .set(Some((scale, MaxReferenceSource::Given))),
+            } => references.max_reference = Some((scale, MaxReferenceSource::Given)),
             _ => {}
         }
+        references
     }
 
-    /// Pin the L2 reference and `tau`, unless already pinned:
-    /// `tau = max(atol / sqrt(|X|), rtol * reference_rms)`.
-    fn pin_l2(&self, reference_rms: Option<f64>, source: L2ReferenceSource) {
-        if self.l2.get().is_some() {
-            return;
-        }
+    /// The L2 reference and allowance: `tau = max(atol / sqrt(|X|), rtol *
+    /// reference_rms)`.
+    fn l2_pin(&self, reference_rms: Option<f64>, source: L2ReferenceSource) -> L2Pin {
         let tolerance = self.options.tolerance;
         let floor = tolerance.atol / self.layout.domain_points.sqrt();
         let tau = match reference_rms {
             Some(rms) => floor.max(tolerance.rtol * rms),
             None => floor,
         };
-        self.l2.set(Some(L2Pin {
+        L2Pin {
             reference_rms,
             source,
             tau,
-        }));
+        }
     }
 
-    fn l2_pin(&self) -> Result<L2Pin, PatchedInterpolationError> {
-        self.l2
-            .get()
-            .ok_or_else(|| internal(anyhow::anyhow!("the L2 reference is not pinned")))
+    /// Whether every reference this run needs is pinned.
+    ///
+    /// True once wave 0 has run: the root patch is the only patch whose
+    /// evaluation can pin a reference, so a later wave that meets an unpinned
+    /// run would be a driver bug.
+    fn is_pinned(&self, references: &References) -> bool {
+        if self.is_l2() {
+            references.l2.is_some()
+        } else {
+            references.max_reference.is_some()
+        }
     }
+}
 
-    fn run(self) -> Result<PatchedInterpolationResult<V>, PatchedInterpolationError> {
-        let mut queue = VecDeque::from([Patch {
-            path: Vec::new(),
-            fixed: vec![None; self.layout.sites.len()],
-            cache: PatchCache::new(self.layout.dims.clone()),
-            recycled: Vec::new(),
-            worst: Vec::new(),
-        }]);
-        let mut processed = 0usize;
-        let mut splits = 0usize;
-        let mut accepted = Vec::new();
-        let mut zeros = Vec::new();
-        while let Some(patch) = queue.pop_front() {
-            if let Some(limit) = self.options.max_patches {
-                if processed == limit {
-                    return Err(PatchedInterpolationError::ResourceLimit {
-                        resource: "max_patches",
-                        limit,
-                    });
-                }
-            }
-            processed += 1;
-            let path = patch.path.clone();
-            let projector = self.layout.projector(&path)?;
-            match self.process(patch, &projector)? {
-                Verdict::Accepted(entry) => accepted.push((path, *entry)),
-                Verdict::Zero(record, patch_points) => zeros.push((path, record, patch_points)),
-                Verdict::Split(children) => {
-                    splits += 1;
-                    queue.extend(children);
-                }
-            }
-        }
-
-        // Canonical order: lexicographic over the (position, coordinate) path.
-        accepted.sort_by(|left, right| left.0.cmp(&right.0));
-        zeros.sort_by(|left, right| left.0.cmp(&right.0));
-        let norm = self.norm_report(&accepted, &zeros)?;
-        let mut records = Vec::with_capacity(accepted.len());
-        let mut subdomains = Vec::with_capacity(accepted.len());
-        for (_, entry) in accepted {
-            records.push(entry.record);
-            subdomains.push(entry.subdomain);
-        }
-        let partition = PartitionedTreeTN::from_disjoint_subdomains(subdomains)?;
-        Ok(PatchedInterpolationResult {
-            partition,
-            report: PatchedInterpolationReport {
-                tolerance: self.options.tolerance,
-                norm,
-                accepted: records,
-                zero_patches: zeros.into_iter().map(|(_, record, _)| record).collect(),
-                splits,
-                function_evaluations: self.counters.evaluations.get(),
-                cache_hits: self.counters.cache_hits.get(),
-                measurement_evaluations: self.measurement_evaluations.get(),
-                audit_evaluations: self.audit_evaluations.get(),
-                verification_failures: self.verification_failures.get(),
-                engine_retries: self.engine_retries.get(),
-            },
-        })
-    }
-
-    /// The norm part of the report. Under L2 the global error and the
-    /// approximation norm are combined in canonical path order.
-    #[allow(clippy::type_complexity)]
-    fn norm_report(
-        &self,
-        accepted: &[(Vec<(usize, usize)>, Accepted<V>)],
-        zeros: &[(Vec<(usize, usize)>, ZeroPatchRecord, f64)],
-    ) -> Result<NormReport, PatchedInterpolationError> {
-        if !self.is_l2() {
-            let (max_reference, source) = self
-                .max_reference
-                .get()
-                .unwrap_or((0.0, MaxReferenceSource::ExactRoot));
-            return Ok(NormReport::SampledMax {
-                max_reference,
-                source,
-                engine_tolerance: self.options.tolerance.allowance(max_reference),
-            });
-        }
-        let pin = self.l2_pin()?;
-        let domain_points = self.layout.domain_points;
-        let missing = || internal(anyhow::anyhow!("an L2 patch has no acceptance measurement"));
-
-        // Accepted and zero patches merged in canonical path order.
-        let mut contributions: Vec<(&[(usize, usize)], Contribution<'_>)> = Vec::new();
-        for (path, entry) in accepted {
-            contributions.push((
-                path,
-                Contribution {
-                    patch_points: entry.patch_points,
-                    acceptance: entry.record.acceptance.as_ref().ok_or_else(missing)?,
-                    audit: entry.record.audit.as_ref(),
-                    within_tolerance: entry.record.status == PatchStatus::WithinTolerance,
-                },
-            ));
-        }
-        for (path, record, patch_points) in zeros {
-            contributions.push((
-                path,
-                Contribution {
-                    patch_points: *patch_points,
-                    acceptance: record.acceptance.as_ref().ok_or_else(missing)?,
-                    audit: record.audit.as_ref(),
-                    within_tolerance: true,
-                },
-            ));
-        }
-        contributions.sort_by(|left, right| left.0.cmp(right.0));
-        let contributions: Vec<Contribution<'_>> =
-            contributions.into_iter().map(|(_, c)| c).collect();
-
-        let approximation_rms = verify::approximation_rms(
-            accepted.iter().map(|(_, entry)| {
-                (
-                    entry.subdomain.data().clone().log_norm(),
-                    entry.patch_points,
-                )
-            }),
-            domain_points,
-        );
-        // The rounding model scales with the coarsest precision the patch
-        // networks were evaluated in.
-        let mut epsilon = f64::EPSILON;
-        for (_, entry) in accepted {
-            let kind = entry
-                .subdomain
-                .scalar_kind()
-                .map_err(|source| PatchedInterpolationError::Partition { source })?;
-            epsilon = epsilon.max(kind.map_or(f64::EPSILON, ScalarKind::epsilon));
-        }
-        let (global, certified_fraction) = verify::global_error(
-            &contributions,
-            domain_points,
-            pin.tau,
-            approximation_rms,
-            epsilon,
-        );
-        Ok(NormReport::L2 {
-            reference_rms: pin.reference_rms,
-            source: pin.source,
-            tau: pin.tau,
-            error: L2ErrorReport {
-                domain_points,
-                global,
-                certified_fraction,
-                approximation_rms,
-            },
-        })
-    }
-
+impl<T, V, E> Plan<'_, T, V, E>
+where
+    T: CommonScalar + TensorElement,
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    E: TreeInterpolator<T>,
+{
     fn sampler<'s>(
         &'s self,
+        evaluate: &'s dyn Evaluate<T>,
+        tally: &'s Tally,
         fixed: &'s [Option<usize>],
         n_active: usize,
         cache: PatchCache<T>,
-    ) -> PatchSampler<'s, T, F> {
+    ) -> PatchSampler<'s, T> {
         PatchSampler {
-            evaluate: self.evaluate,
+            evaluate,
             fixed,
             n_active,
-            counters: &self.counters,
+            counters: &tally.counters,
             cache: RefCell::new(cache),
         }
     }
 
     /// Measure `f - f~` (or `f` for the zero approximation) on a patch and
-    /// count its new evaluations as measurement (and audit) evaluations.
+    /// count its new evaluations as measurement evaluations.
+    #[allow(clippy::too_many_arguments)]
     fn measure(
         &self,
-        sampler: &PatchSampler<'_, T, F>,
+        tally: &Tally,
+        sampler: &PatchSampler<'_, T>,
         target: &MeasureTarget<'_, V>,
         plan: PointPlan,
-        audit: bool,
         projector: &Projector,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<Measured, PatchedInterpolationError> {
-        let before = self.counters.evaluations.get();
-        let measured = verify::measure(sampler, target, plan);
-        let added = self.counters.evaluations.get() - before;
-        Counters::add(&self.measurement_evaluations, added);
-        if audit {
-            Counters::add(&self.audit_evaluations, added);
-        }
+        let before = tally.counters.evaluations.get();
+        let measured = verify::measure(sampler, target, plan, ctx);
+        let added = tally.counters.evaluations.get().saturating_sub(before);
+        Tally::add(&tally.measurement_evaluations, added);
         measured.map_err(|error| measure_error(projector, error))
     }
 
+    /// Estimate the error of one patch with the selected estimator.
+    ///
+    /// An exhaustive plan and
+    /// [`L2Estimator::UniformMonteCarlo`] measure as before. Under
+    /// [`L2Estimator::ResidualTt`] the uniform sample is only the seed of a
+    /// residual run and the saturation fallback; the deciding value is the
+    /// residual TT's RMS (or the larger of the two when the run did not
+    /// converge). `residual_seed` is the residual run's stream; `decisive`
+    /// says whether this measurement decides the patch (`true` for a zero
+    /// screen or a verification, `false` for an audit).
+    #[allow(clippy::too_many_arguments)]
+    fn estimate(
+        &self,
+        tally: &Tally,
+        sampler: &PatchSampler<'_, T>,
+        target: &MeasureTarget<'_, V>,
+        plan: PointPlan,
+        active: &[usize],
+        tolerance: f64,
+        residual_seed: u64,
+        decisive: bool,
+        projector: &Projector,
+        ctx: &mut EvalContext<'_>,
+    ) -> Result<Measured, PatchedInterpolationError> {
+        let sampled = matches!(plan, PointPlan::Sampled { .. });
+        if !sampled || self.options.verification.estimator != L2Estimator::ResidualTt {
+            return self.measure(tally, sampler, target, plan, projector, ctx);
+        }
+        let sample = self.measure(tally, sampler, target, plan, projector, ctx)?;
+        let before = tally.counters.evaluations.get();
+        let estimate = residual::estimate(
+            self.engine,
+            &self.residual_problem(target, active, &sample, tolerance, residual_seed, projector)?,
+            sampler,
+            target,
+            target.patch_points,
+            ctx,
+        );
+        let added = tally.counters.evaluations.get().saturating_sub(before);
+        Tally::add(&tally.measurement_evaluations, added);
+        Tally::add(&tally.residual_evaluations, added);
+        let estimate = estimate.map_err(|error| measure_error(projector, error))?;
+        if decisive && estimate.bond_capped {
+            tally.residual_saturations.set(1);
+        }
+        let mut measured = sample;
+        measured.measurement =
+            verify::residual_statistics(measured.measurement, estimate.rms, estimate.saturated);
+        measured.residual_pivots = estimate.pivots;
+        Ok(measured)
+    }
+
+    /// The residual run's problem: the patch topology and active node sites,
+    /// the sample's largest residuals followed by the patch corners and
+    /// edges as initial pivots, the corners and edges followed by those
+    /// residual points as global-search starts, a tenth of `tau` as its
+    /// absolute tolerance, and the residual bond cap.
+    #[allow(clippy::too_many_arguments)]
+    fn residual_problem(
+        &self,
+        target: &MeasureTarget<'_, V>,
+        active: &[usize],
+        sample: &Measured,
+        tolerance: f64,
+        seed: u64,
+        projector: &Projector,
+    ) -> Result<InterpolationProblem<V>, PatchedInterpolationError> {
+        let starts = corners::corner_and_edge_starts(
+            &self.layout.sites,
+            active,
+            target.active_dims,
+            &self.options.variables,
+            seed,
+        );
+        let residuals = largest_residual_points(sample, RESIDUAL_PIVOTS);
+        let initial = merged_points(residuals.iter().chain(&starts));
+        let search = merged_points(starts.iter().chain(&residuals));
+        let n_active = active.len();
+        let initial = ColMajorArray::new(initial.concat(), vec![n_active, initial.len()])
+            .map_err(internal)?;
+        let search =
+            ColMajorArray::new(search.concat(), vec![n_active, search.len()]).map_err(internal)?;
+        let chi_patch = target
+            .network
+            .map(|network| network.link_dims().into_iter().fold(1, usize::max))
+            .unwrap_or(0);
+        let ratio = self.options.verification.residual_bond_ratio;
+        let floor = self.options.verification.residual_bond_floor;
+        let cap = NonZeroUsize::new(residual::bond_cap(chi_patch, ratio, floor))
+            .unwrap_or(NonZeroUsize::MIN);
+        let problem = InterpolationProblem::new(
+            self.layout.topology.clone(),
+            self.layout.active_node_sites(target.fixed),
+            initial,
+            residual::RESIDUAL_TOLERANCE_FACTOR * tolerance,
+            Some(cap),
+            seed,
+        )
+        .and_then(|problem| problem.with_global_search_starts(search))
+        .map_err(|source| PatchedInterpolationError::Interpolation {
+            projector: projector.clone(),
+            source,
+        })?;
+        Ok(problem)
+    }
+
     /// The audit of a sampled acceptance, if enabled. Audit points never
-    /// become pivots: the patch is accepted, and its cache is dropped.
+    /// become pivots: the patch is accepted, and its cache is dropped. The
+    /// audit uses the acceptance's estimator on its own streams and never
+    /// decides the patch.
+    #[allow(clippy::too_many_arguments)]
     fn audit(
         &self,
-        sampler: &PatchSampler<'_, T, F>,
+        tally: &Tally,
+        sampler: &PatchSampler<'_, T>,
         target: &MeasureTarget<'_, V>,
         acceptance: &L2Measurement,
+        active: &[usize],
+        tolerance: f64,
         seeds: &PatchSeeds,
         projector: &Projector,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<Option<L2Measurement>, PatchedInterpolationError> {
-        if acceptance.method != MeasurementMethod::Sampled || !self.options.verification.audit {
+        if matches!(
+            acceptance.method,
+            MeasurementMethod::Exact | MeasurementMethod::Exhaustive
+        ) || !self.options.verification.audit
+        {
             return Ok(None);
         }
         let plan = PointPlan::Sampled {
             count: self.options.verification.samples,
             seed: seeds.audit(),
         };
-        let audit = self.measure(sampler, target, plan, true, projector)?;
+        let before = tally.counters.evaluations.get();
+        let audit = self.estimate(
+            tally,
+            sampler,
+            target,
+            plan,
+            active,
+            tolerance,
+            seeds.residual_audit(),
+            false,
+            projector,
+            ctx,
+        )?;
+        let added = tally.counters.evaluations.get().saturating_sub(before);
+        Tally::add(&tally.audit_evaluations, added);
         Ok(Some(audit.measurement))
     }
 
@@ -1133,12 +1579,16 @@ where
 
     /// Pin the L2 reference of a root that needs the engine from a Monte
     /// Carlo estimate on the root's reference stream.
+    #[allow(clippy::too_many_arguments)]
     fn pin_monte_carlo(
         &self,
-        sampler: &PatchSampler<'_, T, F>,
+        pins: &mut Pins<'_>,
+        tally: &Tally,
+        sampler: &PatchSampler<'_, T>,
         zero_target: &MeasureTarget<'_, V>,
         seeds: &PatchSeeds,
         projector: &Projector,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<(), PatchedInterpolationError> {
         let samples = self.options.verification.samples;
         let plan = PointPlan::Sampled {
@@ -1146,7 +1596,7 @@ where
             seed: seeds.scale(),
         };
         // The residual of the zero approximation is |f|.
-        let estimate = self.measure(sampler, zero_target, plan, false, projector)?;
+        let estimate = self.measure(tally, sampler, zero_target, plan, projector, ctx)?;
         let reference_rms = estimate.measurement.rms;
         if reference_rms == 0.0 && self.options.tolerance.atol == 0.0 {
             return Err(invalid(format!(
@@ -1155,20 +1605,25 @@ where
                  more verification.samples"
             )));
         }
-        self.pin_l2(
+        pins.pin_l2(self.l2_pin(
             Some(reference_rms),
             L2ReferenceSource::MonteCarlo {
                 samples,
                 mean_square_rel_std_error: estimate.measurement.mean_square_rel_std_error,
             },
-        );
-        Ok(())
+        ))
     }
 
+    /// Process one patch: accept it, prove it zero, or split it.
+    #[allow(clippy::too_many_arguments)]
     fn process(
         &self,
         patch: Patch<T>,
         projector: &Projector,
+        pins: &mut Pins<'_>,
+        evaluate: &dyn Evaluate<T>,
+        tally: &Tally,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<Verdict<T, V>, PatchedInterpolationError> {
         let Patch {
             path,
@@ -1182,7 +1637,9 @@ where
             .filter(|&position| fixed[position].is_none())
             .collect();
         if active.len() <= 1 {
-            return self.exact_patch(&fixed, &active, cache, projector);
+            return self.exact_patch(
+                pins, evaluate, tally, &fixed, &active, cache, projector, ctx,
+            );
         }
         let active_dims: Vec<usize> = active.iter().map(|&p| layout.dims[p]).collect();
         let patch_points: f64 = active_dims.iter().map(|&dim| dim as f64).product();
@@ -1219,7 +1676,7 @@ where
             seeds.candidates,
         )
         .map_err(invalid)?;
-        let sampler = self.sampler(&fixed, active.len(), cache);
+        let sampler = self.sampler(evaluate, tally, &fixed, active.len(), cache);
         let zero_target = MeasureTarget {
             network: None,
             sites: &layout.sites,
@@ -1227,13 +1684,13 @@ where
             active_dims: &active_dims,
             patch_points,
         };
-        if self.is_l2() && self.l2.get().is_none() {
-            self.pin_monte_carlo(&sampler, &zero_target, &seeds, projector)?;
+        if self.is_l2() && pins.l2().is_none() {
+            self.pin_monte_carlo(pins, tally, &sampler, &zero_target, &seeds, projector, ctx)?;
         }
         let shape = [active.len(), candidates.count];
         let batch = ColMajorArrayRef::new(&candidates.points, &shape).map_err(internal)?;
         let samples = sampler
-            .sample(batch)
+            .sample(batch, ctx)
             .map_err(|source| evaluator_error(projector, source))?;
         let largest = max_magnitude(&samples);
         let mut base: Vec<Vec<usize>> = candidates
@@ -1244,18 +1701,33 @@ where
         let limit = self.options.max_bond_dim - 1;
 
         let tolerance = if self.is_l2() {
-            let tau = self.l2_pin()?.tau;
+            let tau = pins.l2_pin()?.tau;
             if largest == 0.0 {
                 // Zero screen: measure the zero approximation.
                 let plan = self.plan(patch_count, seeds.zero_screen());
-                let screen = self.measure(&sampler, &zero_target, plan, false, projector)?;
+                let screen = self.estimate(
+                    tally,
+                    &sampler,
+                    &zero_target,
+                    plan,
+                    &active,
+                    tau,
+                    seeds.residual_zero_screen(),
+                    true,
+                    projector,
+                    ctx,
+                )?;
                 if screen.measurement.rms <= tau {
                     let audit = self.audit(
+                        tally,
                         &sampler,
                         &zero_target,
                         &screen.measurement,
+                        &active,
+                        tau,
                         &seeds,
                         projector,
+                        ctx,
                     )?;
                     let record = ZeroPatchRecord {
                         projector: projector.clone(),
@@ -1271,20 +1743,19 @@ where
             }
             tau
         } else {
-            let scale = match self.max_reference.get() {
+            let scale = match pins.max_reference() {
                 Some((scale, _)) => scale,
                 None if largest == 0.0 => {
                     return Err(invalid(format!(
                         "the max_reference of ErrorNorm::SampledMax cannot be pinned: all {} \
                          candidate samples of the root patch are exactly zero; give \
-                         ErrorNorm::sampled_max_with_reference(max_abs) or initial pivots in \
-                         the support of the function",
+                         ErrorNorm::sampled_max_with_reference(max_abs) or initial pivots in the \
+                         support of the function",
                         candidates.count
                     )));
                 }
                 None => {
-                    self.max_reference
-                        .set(Some((largest, MaxReferenceSource::MaxOfRootCandidates)));
+                    pins.pin_max_reference((largest, MaxReferenceSource::MaxOfRootCandidates))?;
                     largest
                 }
             };
@@ -1322,7 +1793,7 @@ where
             .map_err(interpolation_error)?;
             let outcome = self
                 .engine
-                .interpolate(&problem, |batch| sampler.sample(batch))
+                .interpolate(&problem, ctx, |batch, ctx| sampler.sample(batch, ctx))
                 .map_err(interpolation_error)?;
             let converged = outcome.termination == InterpolationTermination::Converged;
             if !converged
@@ -1332,7 +1803,7 @@ where
             {
                 break (outcome, None);
             }
-            let subdomain = self.checked_subdomain(&outcome, &fixed, projector)?;
+            let subdomain = self.checked_subdomain(&outcome, &fixed, projector, ctx)?;
             let mut record = self.record(projector, &outcome, &subdomain, attempt);
             if !self.is_l2() {
                 // A capped-eligible run is judged by the engine estimate.
@@ -1351,14 +1822,34 @@ where
                 patch_points,
             };
             let plan = self.plan(patch_count, seeds.verify(attempt));
-            let measured = self.measure(&sampler, &target, plan, false, projector)?;
+            let measured = self.estimate(
+                tally,
+                &sampler,
+                &target,
+                plan,
+                &active,
+                tolerance,
+                seeds.residual(attempt),
+                true,
+                projector,
+                ctx,
+            )?;
             if measured.measurement.rms <= tolerance {
-                record.audit =
-                    self.audit(&sampler, &target, &measured.measurement, &seeds, projector)?;
+                record.audit = self.audit(
+                    tally,
+                    &sampler,
+                    &target,
+                    &measured.measurement,
+                    &active,
+                    tolerance,
+                    &seeds,
+                    projector,
+                    ctx,
+                )?;
                 record.acceptance = Some(measured.measurement);
                 return Ok(accepted(record, subdomain, patch_points));
             }
-            Counters::add(&self.verification_failures, 1);
+            Tally::add(&tally.verification_failures, 1);
             // Every distinct worst point, largest first: a rerun drops the
             // base candidates before truncating (step 9); a split passes the
             // first `max_bond_dim - 1` of them (step 10).
@@ -1374,7 +1865,7 @@ where
                 let pivots = active_pivots(outcome.pivots.as_ref(), &active, &layout.dims)
                     .map_err(|message| engine_error(projector, message))?;
                 added = added_pivots(&base_set, &all_worst, &pivots, limit);
-                Counters::add(&self.engine_retries, 1);
+                Tally::add(&tally.engine_retries, 1);
                 attempt += 1;
                 continue;
             }
@@ -1396,7 +1887,7 @@ where
             rejected,
             failure,
         };
-        self.resolve(context, last, sampler, projector)
+        self.resolve(context, last, sampler, tally, projector, ctx)
     }
 
     /// The layout-checked, re-embedded network of an outcome the driver may
@@ -1407,10 +1898,11 @@ where
         outcome: &InterpolationOutcome<V>,
         fixed: &[Option<usize>],
         projector: &Projector,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<SubDomainTreeTN<V>, PatchedInterpolationError> {
         embed::check_outcome_layout(&outcome.network, &self.layout, fixed)
             .map_err(|message| engine_error(projector, message))?;
-        let subdomain = self.subdomain(&outcome.network, fixed, projector)?;
+        let subdomain = self.subdomain(&outcome.network, fixed, projector, ctx)?;
         let cap = self.options.max_bond_dim;
         let bond = subdomain.max_bond_dim();
         if outcome.termination == InterpolationTermination::Converged && bond >= cap {
@@ -1459,12 +1951,15 @@ where
     /// Resolve a patch that was not accepted: split it at the next unfixed
     /// site of the split order, retain it when the minimum blocks that
     /// split, or fail when no split site is left.
+    #[allow(clippy::too_many_arguments)]
     fn resolve(
         &self,
         context: PatchContext<'_>,
         last: Unaccepted<V>,
-        sampler: PatchSampler<'_, T, F>,
+        sampler: PatchSampler<'_, T>,
+        tally: &Tally,
         projector: &Projector,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<Verdict<T, V>, PatchedInterpolationError> {
         let layout = &self.layout;
         let fixed = context.fixed;
@@ -1479,7 +1974,7 @@ where
             return Err(match (last.rejected, last.failure) {
                 (Some(_), Some(failure)) => PatchedInterpolationError::VerificationFailed {
                     projector: projector.clone(),
-                    measurement: failure.measurement,
+                    measurement: Box::new(failure.measurement),
                 },
                 _ => PatchedInterpolationError::NoSplitIndexLeft {
                     projector: projector.clone(),
@@ -1487,7 +1982,7 @@ where
             });
         };
         if self.policy.split_blocked(active.len()) {
-            return self.retain_blocked(&context, last, &sampler, projector);
+            return self.retain_blocked(&context, last, &sampler, tally, projector, ctx);
         }
         let Unaccepted {
             outcome, failure, ..
@@ -1535,12 +2030,17 @@ where
 
     /// Evaluate a patch with at most one active site on all its points and
     /// build its network without the engine.
+    #[allow(clippy::too_many_arguments)]
     fn exact_patch(
         &self,
+        pins: &mut Pins<'_>,
+        evaluate: &dyn Evaluate<T>,
+        tally: &Tally,
         fixed: &[Option<usize>],
         active: &[usize],
         cache: PatchCache<T>,
         projector: &Projector,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<Verdict<T, V>, PatchedInterpolationError> {
         // Every point of the patch: `0..d` for one active site of dimension
         // `d`, or the single empty point when no site is active.
@@ -1548,10 +2048,10 @@ where
         let active_dims: Vec<usize> = active.iter().map(|&p| self.layout.dims[p]).collect();
         let points = sampling::all_points(&active_dims, n_points).map_err(invalid)?;
         let shape = [active.len(), n_points];
-        let sampler = self.sampler(fixed, active.len(), cache);
+        let sampler = self.sampler(evaluate, tally, fixed, active.len(), cache);
         let batch = ColMajorArrayRef::new(&points, &shape).map_err(internal)?;
         let values = sampler
-            .sample(batch)
+            .sample(batch, ctx)
             .map_err(|source| evaluator_error(projector, source))?;
         let largest = max_magnitude(&values);
         let patch_points = n_points as f64;
@@ -1559,10 +2059,10 @@ where
             // Only the root can be exact before the reference is pinned; the
             // network multiplies the exact values by one-hot factors, so the
             // error is exactly zero and no measurement runs.
-            self.pin_l2(
+            pins.pin_l2(self.l2_pin(
                 Some(verify::rms_of(values.iter().map(|value| value.abs_val()))),
                 L2ReferenceSource::ExactRoot,
-            );
+            ))?;
             Some(L2Measurement {
                 method: MeasurementMethod::Exact,
                 points: n_points,
@@ -1570,11 +2070,13 @@ where
                 rms: 0.0,
                 mean_square_rel_std_error: 0.0,
                 max_residual: 0.0,
+                residual_rms: None,
+                residual_saturated: false,
+                sample_rms: None,
             })
         } else {
-            if self.max_reference.get().is_none() {
-                self.max_reference
-                    .set(Some((largest, MaxReferenceSource::ExactRoot)));
+            if pins.max_reference().is_none() {
+                pins.pin_max_reference((largest, MaxReferenceSource::ExactRoot))?;
             }
             None
         };
@@ -1587,7 +2089,7 @@ where
             return Ok(Verdict::Zero(record, patch_points));
         }
         let network = embed::exact_active_network(&self.layout, active, values)?;
-        let subdomain = self.subdomain(&network, fixed, projector)?;
+        let subdomain = self.subdomain(&network, fixed, projector, ctx)?;
         let record = PatchRecord {
             projector: projector.clone(),
             termination: InterpolationTermination::Converged,
@@ -1609,13 +2111,103 @@ where
         network: &TreeTN<IdxTensor, V>,
         fixed: &[Option<usize>],
         projector: &Projector,
+        ctx: &mut EvalContext<'_>,
     ) -> Result<SubDomainTreeTN<V>, PatchedInterpolationError> {
-        let data = embed::embed_fixed_sites::<T, V>(network, &self.layout, fixed)?;
+        let data = embed::embed_fixed_sites::<T, V>(network, &self.layout, fixed, ctx.session())?;
         Ok(SubDomainTreeTN::from_masked_data(
             data,
             projector.clone(),
             None,
         )?)
+    }
+
+    /// The norm part of the report. Under L2 the global error and the
+    /// approximation norm are combined in canonical path order; the assembly
+    /// is arithmetic only, because every patch measured its own network on the
+    /// session that built it.
+    #[allow(clippy::type_complexity)]
+    fn norm_report(
+        &self,
+        references: &References,
+        accepted: &[(Vec<(usize, usize)>, Accepted<V>)],
+        zeros: &[(Vec<(usize, usize)>, ZeroPatchRecord, f64)],
+    ) -> Result<NormReport, PatchedInterpolationError> {
+        if !self.is_l2() {
+            let (max_reference, source) = references
+                .max_reference
+                .unwrap_or((0.0, MaxReferenceSource::ExactRoot));
+            return Ok(NormReport::SampledMax {
+                max_reference,
+                source,
+                engine_tolerance: self.options.tolerance.allowance(max_reference),
+            });
+        }
+        let pin = references
+            .l2
+            .ok_or_else(|| internal(anyhow::anyhow!("the L2 reference is not pinned")))?;
+        let domain_points = self.layout.domain_points;
+        let missing = || internal(anyhow::anyhow!("an L2 patch has no acceptance measurement"));
+
+        // Accepted and zero patches merged in canonical path order.
+        let mut contributions: Vec<(&[(usize, usize)], Contribution<'_>)> = Vec::new();
+        for (path, entry) in accepted {
+            contributions.push((
+                path,
+                Contribution {
+                    patch_points: entry.patch_points,
+                    acceptance: entry.record.acceptance.as_ref().ok_or_else(missing)?,
+                    audit: entry.record.audit.as_ref(),
+                    within_tolerance: entry.record.status == PatchStatus::WithinTolerance,
+                },
+            ));
+        }
+        for (path, record, patch_points) in zeros {
+            contributions.push((
+                path,
+                Contribution {
+                    patch_points: *patch_points,
+                    acceptance: record.acceptance.as_ref().ok_or_else(missing)?,
+                    audit: record.audit.as_ref(),
+                    within_tolerance: true,
+                },
+            ));
+        }
+        contributions.sort_by(|left, right| left.0.cmp(right.0));
+        let contributions: Vec<Contribution<'_>> =
+            contributions.into_iter().map(|(_, c)| c).collect();
+
+        let approximations = accepted
+            .iter()
+            .map(|(_, entry)| (entry.log_norm, entry.patch_points));
+        let approximation_rms = verify::approximation_rms(approximations, domain_points);
+        // The rounding model scales with the coarsest precision the patch
+        // networks were evaluated in.
+        let mut epsilon = f64::EPSILON;
+        for (_, entry) in accepted {
+            let kind = entry
+                .subdomain
+                .scalar_kind()
+                .map_err(|source| PatchedInterpolationError::Partition { source })?;
+            epsilon = epsilon.max(kind.map_or(f64::EPSILON, ScalarKind::epsilon));
+        }
+        let (global, certified_fraction) = verify::global_error(
+            &contributions,
+            domain_points,
+            pin.tau,
+            approximation_rms,
+            epsilon,
+        );
+        Ok(NormReport::L2 {
+            reference_rms: pin.reference_rms,
+            source: pin.source,
+            tau: pin.tau,
+            error: L2ErrorReport {
+                domain_points,
+                global,
+                certified_fraction,
+                approximation_rms,
+            },
+        })
     }
 }
 
@@ -1631,5 +2223,352 @@ where
         record,
         subdomain,
         patch_points,
+        log_norm: None,
     }))
+}
+
+/// The root patch: the whole domain, with no fixed site.
+fn root_patch<T, V>(layout: &SiteLayout<V>) -> Patch<T>
+where
+    T: CommonScalar,
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    Patch {
+        path: Vec::new(),
+        fixed: vec![None; layout.sites.len()],
+        cache: PatchCache::new(layout.dims.clone()),
+        recycled: Vec::new(),
+        worst: Vec::new(),
+    }
+}
+
+/// Process one patch: everything a run does per patch, on the session it is
+/// given.
+///
+/// This is the body every entry shares: the serial driver calls it on the
+/// caller's session, a lane calls it on the lane's session, and an MPI rank
+/// calls it on the session behind its own lane. It owns one patch's counters
+/// and never touches another patch's state, so a wave of patches is
+/// independent work.
+#[allow(clippy::too_many_arguments)]
+fn patch_outcome<T, V, E>(
+    plan: &Plan<'_, T, V, E>,
+    mut pins: Pins<'_>,
+    evaluate: &dyn Evaluate<T>,
+    patch: Patch<T>,
+    ctx: &mut EvalContext<'_>,
+) -> Result<PatchRun<T, V>, PatchedInterpolationError>
+where
+    T: CommonScalar + TensorElement,
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    E: TreeInterpolator<T>,
+{
+    let tally = Tally::default();
+    let path = patch.path.clone();
+    let projector = plan.layout.projector(&path)?;
+    let mut verdict = plan.process(patch, &projector, &mut pins, evaluate, &tally, ctx)?;
+    if plan.is_l2() {
+        if let Verdict::Accepted(entry) = &mut verdict {
+            // The log-norm of the stored network is measured here, on the
+            // session that built the patch: the final report is then pure
+            // arithmetic and needs no session of its own.
+            let mut data = entry.subdomain.data().clone();
+            entry.log_norm = data.log_norm_on_session(ctx.session()).ok();
+        }
+    }
+    Ok(PatchRun {
+        path,
+        verdict,
+        totals: tally.totals(),
+        references: pins.snapshot(),
+    })
+}
+
+/// The driver's decision after one wave, which a distributed dispatcher must
+/// agree on collectively.
+#[derive(Clone, Debug)]
+enum WaveControl {
+    /// Another wave follows.
+    Continue,
+    /// The queue is empty: assemble the result.
+    Stop,
+    /// The run failed; every rank reports this message.
+    Fail(String),
+}
+
+/// How the wave loop runs its waves.
+///
+/// The serial entry runs every wave on the caller's session; the lanes entry
+/// spreads a wave over a scheduler's lanes; the MPI entry distributes a wave
+/// over ranks. All three consume and produce the same records, so the patch
+/// body and the wave merge have one implementation.
+trait Waves<T, V, E>
+where
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+{
+    /// Run one wave and return one outcome per patch, in wave order.
+    ///
+    /// Non-root participants of a distributed run receive an empty wave and
+    /// must still take part in the collective; only the root's outcomes enter
+    /// the wave merge.
+    fn run_wave(
+        &mut self,
+        plan: &Plan<'_, T, V, E>,
+        patches: Vec<Patch<T>>,
+        pins: WavePins<'_>,
+    ) -> Result<Vec<PatchRun<T, V>>, PatchedInterpolationError>;
+
+    /// Agree on `control` after a wave.
+    ///
+    /// Returns the control every participant observed and the references every
+    /// participant uses for the next wave: a distributed dispatcher broadcasts
+    /// the root's control and its pinned references, a local one returns them.
+    fn agree(
+        &mut self,
+        control: WaveControl,
+        references: References,
+    ) -> Result<(WaveControl, References), PatchedInterpolationError>;
+}
+
+/// Merge one wave's outcomes in canonical path order.
+///
+/// Counters are summed, references are pinned (wave 0 only), accepted and zero
+/// patches are collected, and the children of the wave's splits form the next
+/// wave, again in canonical path order so that the schedule is a function of
+/// the problem.
+#[allow(clippy::type_complexity)]
+fn merge_wave<T, V>(
+    runs: Vec<PatchRun<T, V>>,
+    references: &mut References,
+    totals: &mut Totals,
+    accepted: &mut Vec<AcceptedPatch<V>>,
+    zeros: &mut Vec<ZeroPatch>,
+    splits: &mut usize,
+) -> Result<Vec<Patch<T>>, PatchedInterpolationError>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    let mut runs = runs;
+    // Canonical order: lexicographic over the (position, coordinate) path.
+    runs.sort_by(|left, right| left.path.cmp(&right.path));
+    let mut next = Vec::new();
+    for run in runs {
+        totals.add(run.totals);
+        references.merge(run.references)?;
+        let PatchRun { path, verdict, .. } = run;
+        match verdict {
+            Verdict::Accepted(entry) => accepted.push((path, *entry)),
+            Verdict::Zero(record, patch_points) => zeros.push((path, record, patch_points)),
+            Verdict::Split(children) => {
+                *splits += 1;
+                next.extend(children);
+            }
+        }
+    }
+    next.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(next)
+}
+
+/// Everything a finished wave loop produced, before the report is assembled.
+///
+/// A distributed run merges on its root only, so the merge and the assembly are
+/// separate steps: every participant runs the waves, and only the root turns the
+/// merged records into a result.
+struct RunMerged<T, V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    references: References,
+    totals: Totals,
+    accepted: Vec<AcceptedPatch<V>>,
+    zeros: Vec<ZeroPatch>,
+    splits: usize,
+    scalar: PhantomData<T>,
+}
+
+/// Assemble the result of a finished run from its wave merges.
+fn assemble<T, V, E>(
+    plan: &Plan<'_, T, V, E>,
+    merged: RunMerged<T, V>,
+) -> Result<PatchedInterpolationResult<V>, PatchedInterpolationError>
+where
+    T: CommonScalar + TensorElement,
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    E: TreeInterpolator<T>,
+{
+    let RunMerged {
+        references,
+        totals,
+        mut accepted,
+        mut zeros,
+        splits,
+        scalar: _,
+    } = merged;
+    // Canonical order: lexicographic over the (position, coordinate) path.
+    accepted.sort_by(|left, right| left.0.cmp(&right.0));
+    zeros.sort_by(|left, right| left.0.cmp(&right.0));
+    let norm = plan.norm_report(&references, &accepted, &zeros)?;
+    let mut records = Vec::with_capacity(accepted.len());
+    let mut subdomains = Vec::with_capacity(accepted.len());
+    for (_, entry) in accepted {
+        records.push(entry.record);
+        subdomains.push(entry.subdomain);
+    }
+    let partition = PartitionedTreeTN::from_disjoint_subdomains(subdomains)?;
+    Ok(PatchedInterpolationResult {
+        partition,
+        report: PatchedInterpolationReport {
+            tolerance: plan.options.tolerance,
+            norm,
+            accepted: records,
+            zero_patches: zeros.into_iter().map(|(_, record, _)| record).collect(),
+            splits,
+            function_evaluations: totals.evaluations,
+            cache_hits: totals.cache_hits,
+            measurement_evaluations: totals.measurement_evaluations,
+            audit_evaluations: totals.audit_evaluations,
+            residual_evaluations: totals.residual_evaluations,
+            residual_saturations: totals.residual_saturations,
+            verification_failures: totals.verification_failures,
+            engine_retries: totals.engine_retries,
+        },
+    })
+}
+
+/// Run the patch waves of a validated plan through `waves`.
+///
+/// Waves are the BFS generations of the patch queue. One wave is dispatched at
+/// a time, its outcomes are merged in canonical path order, and the splits of
+/// the wave form the next one. The `max_patches` allowance is checked before a
+/// wave is dispatched: at most the remaining number of patches run (in
+/// canonical order) and the run then reports the same
+/// [`PatchedInterpolationError::ResourceLimit`] as a per-patch check.
+fn run_waves<T, V, E, W>(
+    plan: &Plan<'_, T, V, E>,
+    waves: &mut W,
+) -> Result<RunMerged<T, V>, PatchedInterpolationError>
+where
+    T: CommonScalar + TensorElement,
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    E: TreeInterpolator<T>,
+    W: Waves<T, V, E>,
+{
+    let mut references = plan.initial_references();
+    let mut wave: Vec<Patch<T>> = vec![root_patch(&plan.layout)];
+    let mut wave_index = 0usize;
+    let mut processed = 0usize;
+    let mut splits = 0usize;
+    let mut totals = Totals::default();
+    let mut accepted = Vec::new();
+    let mut zeros = Vec::new();
+    loop {
+        // The allowance is checked before the wave is dispatched, so a wave
+        // that does not fit runs its remaining patches and then fails.
+        let mut resource_limit = None;
+        if let Some(limit) = plan.options.max_patches {
+            let remaining = limit.saturating_sub(processed);
+            if wave.len() > remaining {
+                wave.truncate(remaining);
+                resource_limit = Some(limit);
+            }
+        }
+        processed = processed.saturating_add(wave.len());
+        let runs = {
+            let pins = if wave_index == 0 {
+                WavePins::Root(&mut references)
+            } else {
+                WavePins::Later(&references)
+            };
+            waves.run_wave(plan, std::mem::take(&mut wave), pins)?
+        };
+        let merged = merge_wave(
+            runs,
+            &mut references,
+            &mut totals,
+            &mut accepted,
+            &mut zeros,
+            &mut splits,
+        );
+        let mut next = match merged {
+            Ok(next) => next,
+            Err(error) => {
+                // A distributed dispatcher has to agree before a root-side
+                // failure returns here; a local one returns the control as it
+                // received it.
+                waves.agree(WaveControl::Fail(error.to_string()), references)?;
+                return Err(error);
+            }
+        };
+        wave_index += 1;
+        let typed = resource_limit.map(|limit| PatchedInterpolationError::ResourceLimit {
+            resource: "max_patches",
+            limit,
+        });
+        let control = match &typed {
+            Some(error) => WaveControl::Fail(error.to_string()),
+            None if next.is_empty() => WaveControl::Stop,
+            None => WaveControl::Continue,
+        };
+        let (control, agreed) = waves.agree(control, references)?;
+        references = agreed;
+        if wave_index == 1 && !plan.is_pinned(&references) {
+            return Err(internal(anyhow::anyhow!(
+                "the root wave pinned no reference for a run that needs one"
+            )));
+        }
+        match control {
+            WaveControl::Continue => wave = std::mem::take(&mut next),
+            WaveControl::Stop => break,
+            WaveControl::Fail(message) => {
+                return Err(typed.unwrap_or(PatchedInterpolationError::FanOut { message }));
+            }
+        }
+    }
+    Ok(RunMerged {
+        references,
+        totals,
+        accepted,
+        zeros,
+        splits,
+        scalar: PhantomData,
+    })
+}
+
+/// The serial driver: every wave runs on the caller's session, one patch after
+/// another.
+struct SerialWaves<'a, 'ctx, F> {
+    ctx: &'a mut EvalContext<'ctx>,
+    /// The caller's evaluator, lent to one patch at a time.
+    evaluate: RefCell<F>,
+}
+
+impl<T, V, E, F> Waves<T, V, E> for SerialWaves<'_, '_, F>
+where
+    T: CommonScalar + TensorElement,
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    E: TreeInterpolator<T>,
+    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
+{
+    fn run_wave(
+        &mut self,
+        plan: &Plan<'_, T, V, E>,
+        patches: Vec<Patch<T>>,
+        mut pins: WavePins<'_>,
+    ) -> Result<Vec<PatchRun<T, V>>, PatchedInterpolationError> {
+        let evaluate = Exclusive(&self.evaluate);
+        let mut runs = Vec::with_capacity(patches.len());
+        for patch in patches {
+            let pins = pins.patch();
+            runs.push(patch_outcome(plan, pins, &evaluate, patch, self.ctx)?);
+        }
+        Ok(runs)
+    }
+
+    fn agree(
+        &mut self,
+        control: WaveControl,
+        references: References,
+    ) -> Result<(WaveControl, References), PatchedInterpolationError> {
+        Ok((control, references))
+    }
 }

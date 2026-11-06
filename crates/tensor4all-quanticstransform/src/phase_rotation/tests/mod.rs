@@ -63,9 +63,13 @@ fn test_phase_rotation_error_zero_sites() {
 }
 
 #[test]
-fn test_phase_rotation_error_oversized_site_list() {
-    let error = phase_rotation_operator(usize::MAX, PI).unwrap_err();
-    assert!(error.to_string().contains("site list"));
+fn test_phase_rotation_error_oversized_site_count() {
+    // 2^(r-1) overflows f64 long before the site list could be allocated,
+    // and would turn every high site phase into NaN (even for theta = 0).
+    for theta in [PI, 0.0] {
+        let error = phase_rotation_operator(usize::MAX, theta).unwrap_err();
+        assert!(error.to_string().contains("theta * 2^(r-1) must be finite"));
+    }
 }
 
 #[test]
@@ -99,6 +103,23 @@ fn test_phase_rotation_error_inf() {
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(msg.contains("finite"), "unexpected error: {msg}");
+}
+
+#[test]
+fn test_phase_rotation_error_scaled_angle_overflow() {
+    // theta itself is finite, but the most significant site phase
+    // theta * 2^(r-1) is not (#961 computes it before reducing mod 2π).
+    for result in [
+        phase_rotation_operator(2, f64::MAX),
+        phase_rotation_operator_multivar(2, -f64::MAX, 2, 0),
+    ] {
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("theta * 2^(r-1) must be finite"),
+            "unexpected error: {msg}"
+        );
+    }
+    assert!(phase_rotation_operator(1, f64::MAX).is_ok());
 }
 
 #[test]

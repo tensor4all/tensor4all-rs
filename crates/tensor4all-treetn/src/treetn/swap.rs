@@ -10,7 +10,7 @@ use std::hash::Hash;
 use anyhow::Result;
 use petgraph::stable_graph::NodeIndex;
 
-use tensor4all_core::TensorLike;
+use tensor4all_core::{SvdTruncationPolicy, TensorLike};
 
 use crate::node_name_network::NodeNameNetwork;
 
@@ -22,17 +22,66 @@ use super::{localupdate::LocalUpdateSweepPlan, TreeTN};
 
 /// Options for site index swap (truncation during SVD).
 ///
-/// When `max_bond_dim` or `rtol` are set, the swap may introduce approximation error
-/// by truncating bond dimension. Default (both `None`) allows rank growth to preserve
-/// the tensor exactly: `None` is an explicit "no truncation" request and does
-/// *not* fall back to the process-global SVD truncation policy.
+/// When `max_bond_dim` or `svd_policy` are set, the swap may introduce
+/// approximation error by truncating bond dimension. Default (both `None`)
+/// allows rank growth to preserve the tensor exactly: `None` is an explicit
+/// "no truncation" request and does *not* fall back to the process-global SVD
+/// truncation policy.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::SvdTruncationPolicy;
+/// use tensor4all_treetn::SwapOptions;
+///
+/// let exact = SwapOptions::default();
+/// assert_eq!(exact.max_bond_dim, None);
+/// assert_eq!(exact.svd_policy, None);
+///
+/// let policy = SvdTruncationPolicy::new(1e-10).with_squared_values();
+/// let truncated = SwapOptions {
+///     max_bond_dim: Some(16),
+///     svd_policy: None,
+/// }
+/// .with_svd_policy(policy);
+/// assert_eq!(truncated.max_bond_dim, Some(16));
+/// assert_eq!(truncated.svd_policy, Some(policy));
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct SwapOptions {
     /// Maximum bond dimension after each SVD (None = no limit).
     pub max_bond_dim: Option<usize>,
-    /// Relative tolerance for singular value truncation (None = no truncation,
-    /// equivalent to `Some(0.0)`).
-    pub rtol: Option<f64>,
+    /// SVD truncation policy (None = no truncation, equivalent to
+    /// `Some(SvdTruncationPolicy::new(0.0))`).
+    pub svd_policy: Option<SvdTruncationPolicy>,
+}
+
+impl SwapOptions {
+    /// Set the SVD truncation policy applied to each swap factorization.
+    ///
+    /// # Arguments
+    /// * `policy` - Scale, measure, and rank-selection rule forwarded whole to
+    ///   the per-edge SVD.
+    ///
+    /// # Returns
+    /// Updated options using `policy` for truncation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::SvdTruncationPolicy;
+    /// use tensor4all_treetn::SwapOptions;
+    ///
+    /// let policy = SvdTruncationPolicy::new(1e-8).with_discarded_tail_sum();
+    /// let options = SwapOptions::default().with_svd_policy(policy);
+    ///
+    /// assert_eq!(options.svd_policy, Some(policy));
+    /// ```
+    #[must_use]
+    pub fn with_svd_policy(mut self, policy: SvdTruncationPolicy) -> Self {
+        self.svd_policy = Some(policy);
+        self
+    }
 }
 
 // ============================================================================

@@ -20,7 +20,12 @@ use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
 use tensor4all_treetn::tensor_train_to_treetn;
 
 /// Build a random chain TT: n_sites sites, local dim `local_dim`, bond `bond_dim`.
-fn random_chain_tt(n_sites: usize, local_dim: usize, bond_dim: usize, seed: u64) -> SimpleTensorTrain<f64> {
+fn random_chain_tt(
+    n_sites: usize,
+    local_dim: usize,
+    bond_dim: usize,
+    seed: u64,
+) -> SimpleTensorTrain<f64> {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut tensors = Vec::with_capacity(n_sites);
     for site in 0..n_sites {
@@ -38,7 +43,11 @@ fn random_chain_tt(n_sites: usize, local_dim: usize, bond_dim: usize, seed: u64)
 fn random_points(n_sites: usize, local_dim: usize, n_points: usize, seed: u64) -> Vec<Vec<usize>> {
     let mut rng = StdRng::seed_from_u64(seed);
     (0..n_points)
-        .map(|_| (0..n_sites).map(|_| rng.random_range(0..local_dim)).collect())
+        .map(|_| {
+            (0..n_sites)
+                .map(|_| rng.random_range(0..local_dim))
+                .collect()
+        })
         .collect()
 }
 
@@ -49,9 +58,17 @@ fn main() {
             println!("hw: {line}");
         }
     }
-    println!("hw: logical CPUs: {}", std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0));
+    println!(
+        "hw: logical CPUs: {}",
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(0)
+    );
     println!("hw: backend: default CPU/faer (no T4A_TT_BACKEND override)");
-    println!("hw: T4A_PROFILE_CONTRACT set: {}", std::env::var("T4A_PROFILE_CONTRACT").is_ok());
+    println!(
+        "hw: T4A_PROFILE_CONTRACT set: {}",
+        std::env::var("T4A_PROFILE_CONTRACT").is_ok()
+    );
 
     let n_sites = 32usize;
     let local_dim = 2usize;
@@ -100,14 +117,22 @@ fn main() {
         .collect::<Vec<usize>>();
     let t0 = Instant::now();
     for i in 0..n_single_reps {
-        let values_ref = ColMajorArrayRef::new(&single_values[i * n_sites..(i + 1) * n_sites], &single_shape).unwrap();
+        let values_ref = ColMajorArrayRef::new(
+            &single_values[i * n_sites..(i + 1) * n_sites],
+            &single_shape,
+        )
+        .unwrap();
         std::hint::black_box(tree.evaluate(&site_indices, values_ref).unwrap());
     }
     let t_per_point_evaluate = t0.elapsed();
 
     let t0 = Instant::now();
     for i in 0..n_single_reps {
-        let values_ref = ColMajorArrayRef::new(&single_values[i * n_sites..(i + 1) * n_sites], &single_shape).unwrap();
+        let values_ref = ColMajorArrayRef::new(
+            &single_values[i * n_sites..(i + 1) * n_sites],
+            &single_shape,
+        )
+        .unwrap();
         std::hint::black_box(evaluator.evaluate_batched(values_ref).unwrap());
     }
     let t_per_point_reused = t0.elapsed();
@@ -127,7 +152,10 @@ fn main() {
         let _ = rep;
     }
     let t_simplett_eval = t0.elapsed();
-    println!("candidate4 SimpleTT evaluate ({} x {} points): {t_simplett_eval:?} (sink={sink:.2})", n_reps, n_points);
+    println!(
+        "candidate4 SimpleTT evaluate ({} x {} points): {t_simplett_eval:?} (sink={sink:.2})",
+        n_reps, n_points
+    );
 
     // --- Candidate 5: contract_profile_enabled env lookup cost ---
     let t0 = Instant::now();
@@ -141,7 +169,7 @@ fn main() {
     );
 
     // contract() cost for comparison: contract two 4x4 matrices a few times
-        let i = tensor4all_core::DynIndex::new_dyn(4);
+    let i = tensor4all_core::DynIndex::new_dyn(4);
     let j = tensor4all_core::DynIndex::new_dyn(4);
     let k = tensor4all_core::DynIndex::new_dyn(4);
     let a = tensor4all_core::IdxTensor::from_dense(

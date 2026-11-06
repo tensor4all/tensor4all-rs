@@ -1,10 +1,23 @@
 use super::*;
-use crate::storage::Storage;
+use crate::storage::{Storage, StorageRepr};
 use crate::tensor_element::TensorElement;
 use num_complex::{Complex32, Complex64};
+use tenferro::TensorView;
 
 fn assert_storage_eq(lhs: &Storage, rhs: &Storage) {
     match (lhs.repr(), rhs.repr()) {
+        (StorageRepr::F32(a), StorageRepr::F32(b)) => {
+            assert_eq!(a.payload_dims(), b.payload_dims());
+            assert_eq!(a.strides(), b.strides());
+            assert_eq!(a.axis_classes(), b.axis_classes());
+            assert_eq!(a.data(), b.data());
+        }
+        (StorageRepr::C32(a), StorageRepr::C32(b)) => {
+            assert_eq!(a.payload_dims(), b.payload_dims());
+            assert_eq!(a.strides(), b.strides());
+            assert_eq!(a.axis_classes(), b.axis_classes());
+            assert_eq!(a.data(), b.data());
+        }
         (StorageRepr::F64(a), StorageRepr::F64(b)) => {
             assert_eq!(a.payload_dims(), b.payload_dims());
             assert_eq!(a.strides(), b.strides());
@@ -38,19 +51,15 @@ fn recorded_native_einsum_call_count(path: NativeEinsumPath) -> usize {
 
 /// Whether the process-global graph runtime currently reports prepared plans.
 ///
-/// A tenferro CPU engine reports its cache statistics as unavailable while one of
-/// its sessions owns the engine's resources, and every session on this backend does,
-/// so a concurrently running test can make the aggregate report a busy owner. That
-/// is the documented "management does not wait on a session" behaviour, not a
-/// failure of this test, so a busy owner is retried briefly and only a persistent
-/// failure is reported.
+/// The context builds its graph runtime lazily, so this also pays the first
+/// initialization. The aggregate cache statistics can be unavailable while
+/// another test owns a cache owner, which is the documented "management does not
+/// wait on a run" behaviour rather than a failure here, so a busy owner is
+/// retried briefly.
 fn default_graph_runtime_has_prepared_plan_cache_entries() -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        let stats =
-            crate::context::with_default_graph_runtime(|_, runtime, _| runtime.cache_stats())
-                .expect("default graph runtime should be available");
-        match stats {
+        match crate::context::default_context().graph_cache_stats() {
             Ok(stats) => return stats.prepared_plans.entries > 0,
             Err(error) if std::time::Instant::now() < deadline => {
                 let _ = error;
@@ -84,6 +93,52 @@ fn storage_native_roundtrip_dense_f64() {
     let native = storage_to_native_tensor(&storage, &[2, 2]).unwrap();
     let roundtrip = native_tensor_primal_to_storage(&native).unwrap();
     assert_storage_eq(&roundtrip, &storage);
+}
+
+#[test]
+fn storage_native_roundtrip_keeps_the_narrow_dtypes() {
+    // The session route consumes compact storage through these bridges, so a narrow payload must reach
+    // the session as its own dtype instead of a widened one.
+    let f32_storage =
+        Storage::from_dense_col_major(vec![1.5_f32, -2.5, 3.25, 4.0], &[2, 2]).unwrap();
+    let native = storage_to_native_tensor(&f32_storage, &[2, 2]).unwrap();
+    assert_eq!(native.dtype(), tenferro::DType::F32);
+    assert_eq!(
+        native.as_slice::<f32>().unwrap(),
+        &[1.5_f32, -2.5, 3.25, 4.0]
+    );
+    assert_storage_eq(
+        &native_tensor_primal_to_storage(&native).unwrap(),
+        &f32_storage,
+    );
+
+    let c32_storage = Storage::from_dense_col_major(
+        vec![Complex32::new(1.0, -1.0), Complex32::new(0.5, 2.0)],
+        &[2],
+    )
+    .unwrap();
+    let native = storage_to_native_tensor(&c32_storage, &[2]).unwrap();
+    assert_eq!(native.dtype(), tenferro::DType::C32);
+    assert_storage_eq(
+        &native_tensor_primal_to_storage(&native).unwrap(),
+        &c32_storage,
+    );
+
+    // The payload bridge preserves the dtype and, for a contiguous payload, borrows it.
+    let payload = storage_payload_native(&f32_storage).unwrap();
+    assert_eq!(payload.dtype(), tenferro::DType::F32);
+    assert_eq!(payload.shape(), &[2, 2]);
+    match storage_payload_native_read_input(&f32_storage).unwrap() {
+        NativeTensorReadInput::Borrowed(read) => {
+            assert_eq!(read.dtype(), tenferro::DType::F32);
+        }
+        NativeTensorReadInput::Owned(_) => panic!("a contiguous f32 payload is borrowed"),
+    }
+
+    // Rebuilding storage from a narrow native payload keeps the dtype.
+    let rebuilt = storage_from_payload_native(payload, &[2, 2], vec![0, 1]).unwrap();
+    assert!(rebuilt.is_f32());
+    assert_storage_eq(&rebuilt, &f32_storage);
 }
 
 #[test]
@@ -251,9 +306,12 @@ fn dense_native_tensor_from_col_major_f32_roundtrip() {
         vec![1.25_f32, -2.5_f32]
     );
     let snapshot = native_tensor_primal_to_storage(&native).unwrap();
+    // Snapshot materialization is dtype preserving: the compact payload stays
+    // f32 instead of widening to f64.
+    assert!(snapshot.is_f32());
     assert_storage_eq(
         &snapshot,
-        &Storage::from_dense_col_major(vec![1.25, -2.5], &[2]).unwrap(),
+        &Storage::from_dense_col_major(vec![1.25_f32, -2.5], &[2]).unwrap(),
     );
 }
 
@@ -299,14 +357,17 @@ fn diag_native_tensor_from_col_major_c32_promotes_to_c64_values() {
         vec![Complex64::new(1.0, -0.5), Complex64::new(-2.0, 0.25)]
     );
 
+    // Snapshot materialization is dtype preserving: the compact payload stays
+    // Complex32 instead of widening to Complex64.
+    assert!(snapshot.is_c32());
     assert_storage_eq(
         &snapshot,
         &Storage::from_dense_col_major(
             vec![
-                Complex64::new(1.0, -0.5),
-                Complex64::new(0.0, 0.0),
-                Complex64::new(0.0, 0.0),
-                Complex64::new(-2.0, 0.25),
+                Complex32::new(1.0, -0.5),
+                Complex32::new(0.0, 0.0),
+                Complex32::new(0.0, 0.0),
+                Complex32::new(-2.0, 0.25),
             ],
             &[2, 2],
         )
@@ -439,6 +500,271 @@ fn einsum_native_tensors_supports_retained_shared_nary_label() {
         native_tensor_primal_to_dense_col_major::<f64>(&session_out).unwrap(),
         values
     );
+}
+
+#[test]
+fn einsum_native_subscripts_matches_known_matmul_trace_and_reduction() {
+    // Column-major A = [[1, 2], [3, 4]], B = [[5, 6], [7, 8]].
+    let lhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])
+        .expect("valid lhs");
+    let rhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0])
+        .expect("valid rhs");
+
+    let product = einsum_native_subscripts("ij,jk->ik", &[&lhs, &rhs])
+        .expect("string-subscript matmul should succeed");
+    assert_eq!(product.shape(), &[2, 2]);
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<f64>(&product).unwrap(),
+        vec![19.0, 43.0, 22.0, 50.0]
+    );
+
+    let trace =
+        einsum_native_subscripts("ii->", &[&lhs]).expect("string-subscript trace should succeed");
+    assert_eq!(trace.shape(), &[] as &[usize]);
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<f64>(&trace).unwrap(),
+        vec![5.0]
+    );
+
+    let column_sums = einsum_native_subscripts("ij->j", &[&lhs])
+        .expect("string-subscript reduction should succeed");
+    assert_eq!(column_sums.shape(), &[2]);
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<f64>(&column_sums).unwrap(),
+        vec![4.0, 6.0]
+    );
+}
+
+#[test]
+fn einsum_native_subscripts_matches_known_complex_matmul_and_trace() {
+    // Column-major A = [[1+2i, 0], [0, 1]], B = [[1, 1], [1, 1]].
+    let lhs = NativeTensor::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(1.0, 2.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ],
+    )
+    .expect("valid complex lhs");
+    let rhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![Complex64::new(1.0, 0.0); 4])
+        .expect("valid complex rhs");
+
+    let product = einsum_native_subscripts("ij,jk->ik", &[&lhs, &rhs])
+        .expect("complex string-subscript matmul should succeed");
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<Complex64>(&product).unwrap(),
+        vec![
+            Complex64::new(1.0, 2.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 2.0),
+            Complex64::new(1.0, 0.0),
+        ]
+    );
+
+    let trace = einsum_native_subscripts("ii->", &[&lhs])
+        .expect("complex string-subscript trace should succeed");
+    assert_eq!(
+        native_tensor_primal_to_dense_col_major::<Complex64>(&trace).unwrap(),
+        vec![Complex64::new(2.0, 2.0)]
+    );
+}
+
+#[test]
+fn parsed_einsum_plan_reuses_spec_across_prefix_shapes() {
+    reset_concrete_einsum_plan_cache();
+    let plan = NativeEinsumPlan::new("lp,lsr->rps").unwrap();
+    let core_data: Vec<_> = (1..=12).map(f64::from).collect();
+    let core = NativeTensor::from_vec_col_major(vec![2, 3, 2], core_data.clone()).unwrap();
+    for prefix in [2, 3, 2, 3] {
+        let data: Vec<_> = (0..2 * prefix).map(|i| i as f64 + 1.0).collect();
+        let environment = NativeTensor::from_vec_col_major(vec![2, prefix], data.clone()).unwrap();
+        let output = plan
+            .execute_reads(&[
+                TensorRead::from_tensor(&environment),
+                TensorRead::from_tensor(&core),
+            ])
+            .unwrap();
+        assert_eq!(output.shape(), &[2, prefix, 3]);
+        for s in 0..3 {
+            for p in 0..prefix {
+                for r in 0..2 {
+                    let expected: f64 = (0..2)
+                        .map(|l| data[l + 2 * p] * core_data[l + 2 * (s + 3 * r)])
+                        .sum();
+                    assert_eq!(
+                        output.as_slice::<f64>().unwrap()[r + 2 * (p + prefix * s)],
+                        expected
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(concrete_einsum_plan_cache_len(), 2);
+}
+
+#[test]
+fn plan_reused_over_sites_matches_repeated_string_calls() {
+    // #1065 acceptance: one plan built outside the loop and reused over N sites
+    // must produce exactly what N string calls produce.
+    let plan = NativeEinsumPlan::new("lp,lsr->rps").unwrap();
+    let core_data: Vec<f64> = (1..=12).map(f64::from).collect();
+    let core = NativeTensor::from_vec_col_major(vec![2, 3, 2], core_data).unwrap();
+    for prefix in [1usize, 2, 3, 4, 2, 1] {
+        let data: Vec<f64> = (0..2 * prefix).map(|i| i as f64 * 0.5 - 1.0).collect();
+        let environment = NativeTensor::from_vec_col_major(vec![2, prefix], data).unwrap();
+        let reads = [
+            TensorRead::from_tensor(&environment),
+            TensorRead::from_tensor(&core),
+        ];
+        let from_plan = plan.execute_reads(&reads).unwrap();
+        let from_string = einsum_native_subscripts("lp,lsr->rps", &[&environment, &core]).unwrap();
+        assert_eq!(from_plan.shape(), from_string.shape());
+        assert_eq!(
+            from_plan.as_slice::<f64>().unwrap(),
+            from_string.as_slice::<f64>().unwrap(),
+            "prefix {prefix} differs between the reused plan and the string call"
+        );
+    }
+}
+
+#[test]
+fn parsed_einsum_plan_parses_each_expression_once() {
+    // The string form is the convenience form; it must not re-parse a literal
+    // expression on every call.
+    let before = native_einsum_spec_cache_len();
+    let first = NativeEinsumPlan::new("ab,bc->ac").unwrap();
+    let after_first = native_einsum_spec_cache_len();
+    let second = NativeEinsumPlan::new("ab,bc->ac").unwrap();
+    assert_eq!(native_einsum_spec_cache_len(), after_first);
+    assert_eq!(after_first, before + 1);
+    assert!(Arc::ptr_eq(&first.spec, &second.spec));
+
+    // Two plans built from the same string execute identically.
+    let lhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
+    let rhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]).unwrap();
+    let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
+    let from_first = first.execute_reads(&reads).unwrap();
+    let from_second = second.execute_reads(&reads).unwrap();
+    assert_eq!(
+        from_first.as_slice::<f64>().unwrap(),
+        from_second.as_slice::<f64>().unwrap()
+    );
+
+    // A different expression is a different entry, and an invalid one is not cached.
+    let _ = NativeEinsumPlan::new("ab,bc->ca").unwrap();
+    assert_eq!(native_einsum_spec_cache_len(), after_first + 1);
+    assert!(NativeEinsumPlan::new("ab,bc").is_err());
+    assert_eq!(native_einsum_spec_cache_len(), after_first + 1);
+}
+
+#[test]
+fn parsed_einsum_plan_preserves_promotion_and_rejects_invalid_inputs() {
+    let plan = NativeEinsumPlan::new("ij,jk->ik").unwrap();
+    let lhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 3.0, 2.0, 4.0]).unwrap();
+    let rhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]).unwrap();
+    let output = plan
+        .execute_reads(&[TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)])
+        .unwrap();
+    assert_eq!(output.dtype(), DType::F64);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[19.0, 43.0, 22.0, 50.0]);
+    assert!(plan.execute_reads(&[]).is_err());
+    assert!(plan
+        .execute_reads(&[TensorRead::from_tensor(&lhs)])
+        .is_err());
+    let vector = NativeTensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
+    assert!(plan
+        .execute_reads(&[
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&vector)
+        ])
+        .is_err());
+    let wrong_extent = NativeTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
+    assert!(plan
+        .execute_reads(&[
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&wrong_extent)
+        ])
+        .is_err());
+}
+
+#[test]
+fn einsum_native_subscripts_rejects_operand_count_mismatch_and_parse_errors() {
+    let lhs = NativeTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])
+        .expect("valid lhs");
+
+    let too_few = einsum_native_subscripts("ij,jk->ik", &[&lhs]).unwrap_err();
+    let message = too_few.to_string();
+    assert!(message.contains("2 input term(s)"), "unexpected: {message}");
+    assert!(message.contains("1 operand(s)"), "unexpected: {message}");
+
+    let too_many = einsum_native_subscripts("ij->ij", &[&lhs, &lhs]).unwrap_err();
+    let message = too_many.to_string();
+    assert!(message.contains("1 input term(s)"), "unexpected: {message}");
+    assert!(message.contains("2 operand(s)"), "unexpected: {message}");
+
+    let parse = einsum_native_subscripts("ij,jk", &[&lhs, &lhs]).unwrap_err();
+    assert!(
+        parse.to_string().contains("invalid einsum subscripts"),
+        "unexpected: {parse}"
+    );
+}
+
+#[test]
+fn dense_native_tensor_read_input_from_col_major_borrows_the_caller_slice() {
+    reset_concrete_einsum_plan_cache();
+    let stage = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let frame = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let stage_read = dense_native_tensor_read_input_from_col_major(&stage, &[3, 2, 1]).unwrap();
+    let frame_read = dense_native_tensor_read_input_from_col_major(&frame, &[2, 3]).unwrap();
+    assert!(matches!(stage_read, NativeTensorReadInput::Borrowed(_)));
+    assert_eq!(stage_read.shape(), &[3, 2, 1]);
+    assert_eq!(frame_read.shape(), &[2, 3]);
+    assert_eq!(stage_read.dtype(), tenferro::DType::F64);
+
+    // The view borrows the slice: a shared operand reaches the contraction
+    // without an allocation of its own.
+    let stage_pointer = stage.as_ptr();
+    let borrowed_pointer = match &stage_read {
+        NativeTensorReadInput::Borrowed(TensorRead::View(TensorView::F64(view))) => {
+            view.host_storage().expect("host slice").as_ptr()
+        }
+        _ => panic!("a slice-backed input must be a borrowed view"),
+    };
+    assert_eq!(stage_pointer, borrowed_pointer);
+
+    // `rkb,kc->rcb` over the borrowed views matches the same contraction over
+    // owned operands, so the borrow route is numerically identical.
+    let stage_owned = f64::dense_native_tensor_from_col_major(&stage, &[3, 2, 1]).unwrap();
+    let frame_owned = f64::dense_native_tensor_from_col_major(&frame, &[2, 3]).unwrap();
+    let expected = einsum_native_tensors_owned(
+        vec![(stage_owned, vec![0, 1, 2]), (frame_owned, vec![1, 3])],
+        &[0, 3, 2],
+    )
+    .unwrap();
+    let contracted = einsum_native_tensor_reads(
+        &[(&stage_read, &[0, 1, 2]), (&frame_read, &[1, 3])],
+        &[0, 3, 2],
+    )
+    .unwrap();
+    assert_eq!(contracted.shape(), &[3, 3, 1]);
+    assert_eq!(
+        f64::into_dense_values_from_native_col_major(contracted).unwrap(),
+        f64::into_dense_values_from_native_col_major(expected).unwrap()
+    );
+}
+
+#[test]
+fn dense_native_tensor_read_input_from_col_major_rejects_a_shape_mismatch() {
+    let data = [1.0_f64, 2.0, 3.0];
+    match dense_native_tensor_read_input_from_col_major(&data, &[2, 2]) {
+        Err(error) => assert!(
+            error.to_string().contains("native tensor view rejected"),
+            "unexpected error: {error}"
+        ),
+        Ok(_) => panic!("a 3-element payload must not become a 2x2 view"),
+    }
 }
 
 #[test]
@@ -1002,4 +1328,55 @@ fn build_binary_einsum_ids_rejects_duplicate_axis() {
     let result = build_binary_einsum_ids(3, &[0, 0], 3, &[0, 1]);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("duplicate"));
+}
+
+#[test]
+fn concrete_einsum_plan_cache_keeps_issue_891_working_set_resident() {
+    reset_concrete_einsum_plan_cache();
+    // 400 distinct A[i,j] B[j,k] C[k,l] complex shapes: the churn cycle from
+    // issue #891, which the old 256-entry clear-on-full bound re-prepared on
+    // every call. Two passes must keep all 400 plans resident.
+    const SIGNATURES: usize = 400;
+    let tensors = (0..SIGNATURES)
+        .map(|k| {
+            let shape = [
+                2 + k % 7,
+                2 + (k / 7) % 7,
+                2 + (k / 49) % 7,
+                2 + (k / 343) % 7,
+            ];
+            [
+                complex_test_tensor(&[shape[0], shape[1]], 0),
+                complex_test_tensor(&[shape[1], shape[2]], 1),
+                complex_test_tensor(&[shape[2], shape[3]], 2),
+            ]
+        })
+        .collect::<Vec<_>>();
+    for _ in 0..2 {
+        for t in &tensors {
+            let reads = [
+                NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&t[0])),
+                NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&t[1])),
+                NativeTensorReadInput::Borrowed(TensorRead::from_tensor(&t[2])),
+            ];
+            einsum_native_tensor_reads(
+                &[
+                    (&reads[0], &[0, 1]),
+                    (&reads[1], &[1, 2]),
+                    (&reads[2], &[2, 3]),
+                ],
+                &[0, 3],
+            )
+            .expect("working-set contraction should succeed");
+        }
+    }
+    assert_eq!(concrete_einsum_plan_cache_len(), SIGNATURES);
+}
+
+fn complex_test_tensor(shape: &[usize], seed: usize) -> NativeTensor {
+    let len: usize = shape.iter().product();
+    let values = (0..len)
+        .map(|index| Complex64::new(((index + seed) % 13) as f64 * 0.1, 0.0))
+        .collect::<Vec<_>>();
+    NativeTensor::from_vec_col_major(shape.to_vec(), values).expect("valid complex test tensor")
 }

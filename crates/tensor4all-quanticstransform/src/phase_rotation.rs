@@ -33,8 +33,9 @@ use crate::common::{
 ///
 /// # Errors
 ///
-/// Returns an error when the operator construction fails (an overflow or
-/// /// invalid-configuration failure, or a shape mismatch).
+/// Returns an error when `r == 0`, and
+/// [`QuanticsTransformError::InvalidConfiguration`] when `theta` is not finite
+/// or the most significant site phase `theta * 2^(r-1)` overflows `f64`.
 ///
 /// # Examples
 ///
@@ -58,14 +59,7 @@ pub fn phase_rotation_operator(
     r: usize,
     theta: f64,
 ) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
-    if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive").into());
-    }
-    if !theta.is_finite() {
-        return Err(QuanticsTransformError::InvalidConfiguration {
-            message: format!("theta must be finite, got {theta}"),
-        });
-    }
+    validate_phase_rotation_input(r, theta)?;
 
     let mpo = phase_rotation_mpo(r, theta)?;
     let mut site_dims =
@@ -88,8 +82,10 @@ pub fn phase_rotation_operator(
 ///
 /// # Errors
 ///
-/// Returns an error when the operator construction fails (an overflow or
-/// /// invalid-configuration failure, or a shape mismatch).
+/// Returns an error when `r == 0`;
+/// [`QuanticsTransformError::InvalidConfiguration`] when `theta` is not finite
+/// or `theta * 2^(r-1)` overflows `f64`; and an error when `nvariables` or
+/// `target_var` is invalid or the embedded site dimension overflows.
 ///
 /// # Examples
 ///
@@ -107,14 +103,7 @@ pub fn phase_rotation_operator_multivar(
     nvariables: usize,
     target_var: usize,
 ) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
-    if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive").into());
-    }
-    if !theta.is_finite() {
-        return Err(QuanticsTransformError::InvalidConfiguration {
-            message: format!("theta must be finite, got {theta}"),
-        });
-    }
+    validate_phase_rotation_input(r, theta)?;
 
     let (dim_multi, _) = checked_multivar_dims(nvariables)?;
     let mpo = phase_rotation_mpo(r, theta)?;
@@ -125,6 +114,30 @@ pub fn phase_rotation_operator_multivar(
     tensortrain_to_linear_operator_asymmetric(&embedded, &dims, &dims)
 }
 
+/// Validate the inputs shared by the phase rotation entry points.
+///
+/// The site phases are `theta * 2^(r-1-n)`, computed exactly before a single
+/// reduction mod 2π, so the largest one (`n = 0`) must be finite as well.
+fn validate_phase_rotation_input(r: usize, theta: f64) -> Result<(), QuanticsTransformError> {
+    if r == 0 {
+        return Err(anyhow::anyhow!("Number of sites must be positive").into());
+    }
+    if !theta.is_finite() {
+        return Err(QuanticsTransformError::InvalidConfiguration {
+            message: format!("theta must be finite, got {theta}"),
+        });
+    }
+    let max_site_phase = theta * 2.0_f64.powf((r - 1) as f64);
+    if !max_site_phase.is_finite() {
+        return Err(QuanticsTransformError::InvalidConfiguration {
+            message: format!(
+                "theta * 2^(r-1) must be finite, got theta = {theta}, r = {r}; use a smaller theta or fewer sites"
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Create the phase rotation MPO as a SimpleTensorTrain.
 ///
 /// Each site tensor is diagonal with entries:
@@ -133,16 +146,9 @@ pub fn phase_rotation_operator_multivar(
 ///
 /// Uses big-endian convention: site n corresponds to bit 2^(R-1-n) (MSB at site 0).
 /// This matches Julia Quantics.jl's convention.
+///
+/// Callers validate `r` and `theta` with [`validate_phase_rotation_input`].
 fn phase_rotation_mpo(r: usize, theta: f64) -> Result<SimpleTensorTrain<Complex64>> {
-    if r == 0 {
-        return Err(anyhow::anyhow!("Number of sites must be positive"));
-    }
-    if !theta.is_finite() {
-        return Err(anyhow::anyhow!("theta must be finite, got {theta}"));
-    }
-
-    // Normalize theta to [0, 2π)
-    let theta_mod = theta.rem_euclid(2.0 * PI);
     let mut tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
         "phase rotation MPO site list",
         r,
@@ -152,11 +158,14 @@ fn phase_rotation_mpo(r: usize, theta: f64) -> Result<SimpleTensorTrain<Complex6
         // Phase for this site: θ * 2^(R-1-n) (big-endian: site 0 = MSB)
         // This matches Julia's convention: site n=1 (Julia) has power R-n
         let power = (r - 1 - n) as f64;
-        let site_phase = (theta_mod * 2.0_f64.powf(power)).rem_euclid(2.0 * PI);
+        // Multiply first, then reduce once: `theta * 2^power` is exact, while
+        // reducing `theta` first would amplify its rounding error by 2^power
+        // for negative angles (#961).
+        let site_phase = (theta * 2.0_f64.powf(power)).rem_euclid(2.0 * PI);
 
         // Diagonal MPO tensor: out_bit == in_bit
         // Shape: (1, 4, 1) where 4 = 2*2 for (out, in)
-        let mut t = tensor3_zeros(1, 4, 1);
+        let mut t = tensor3_zeros(1, 4, 1)?;
 
         // s = out_bit * 2 + in_bit
         // Diagonal entries: out_bit == in_bit

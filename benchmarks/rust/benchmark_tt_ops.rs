@@ -1,7 +1,7 @@
 // Benchmark TensorTrain-level operations against ITensorMPS.jl.
 //
 // Run:
-//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-itensorlike --example benchmark_tt_ops --release
+//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tt_ops --release
 //
 // Optional args:
 //   --L N
@@ -19,15 +19,16 @@ use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use num_complex::Complex64;
-use tensor4all_core::{
-    contract, contract_pair, print_and_reset_pairwise_contract_profile,
-    reset_pairwise_contract_profile, AnyScalar, DynIndex, SvdTruncationPolicy,
-    TensorContractionLike, IdxTensor,
-};
-use tensor4all_itensorlike::{CanonicalForm, ContractOptions, TensorTrain};
 use tenferro::{DotGeneralConfig, Tensor};
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::CpuEngine;
+use tensor4all_core::{
+    contract, contract_pair, print_and_reset_pairwise_contract_profile,
+    reset_pairwise_contract_profile, AnyScalar, DynIndex, IdxTensor, SvdTruncationPolicy,
+    TensorContractionLike,
+};
+use tensor4all_itensorlike::{CanonicalForm, ContractOptions, TensorTrain};
+use tensor4all_tensorbackend::CpuBackend;
 
 #[derive(Debug, Clone)]
 struct Options {
@@ -168,9 +169,7 @@ fn deterministic_native_tensor(shape: Vec<usize>, seed: usize) -> Result<Tensor>
 }
 
 fn make_sites(length: usize, phys_dim: usize) -> Vec<DynIndex> {
-    (0..length)
-        .map(|_| DynIndex::new_dyn(phys_dim))
-        .collect()
+    (0..length).map(|_| DynIndex::new_dyn(phys_dim)).collect()
 }
 
 fn make_mps(sites: &[DynIndex], chi: usize, seed_offset: usize) -> Result<TensorTrain> {
@@ -235,30 +234,34 @@ impl RawEagerInnerConfigs {
     fn new() -> Self {
         Self {
             first_site: DotGeneralConfig {
-                lhs_contracting_dims: vec![0].into(),
-                rhs_contracting_dims: vec![0].into(),
-                lhs_batch_dims: Vec::new().into(),
-                rhs_batch_dims: Vec::new().into(),
+                lhs_contracting_dims: [0].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
             env_bra: DotGeneralConfig {
-                lhs_contracting_dims: vec![0].into(),
-                rhs_contracting_dims: vec![0].into(),
-                lhs_batch_dims: Vec::new().into(),
-                rhs_batch_dims: Vec::new().into(),
+                lhs_contracting_dims: [0].as_slice().into(),
+                rhs_contracting_dims: [0].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
             tmp_ket: DotGeneralConfig {
-                lhs_contracting_dims: vec![0, 1].into(),
-                rhs_contracting_dims: vec![0, 1].into(),
-                lhs_batch_dims: Vec::new().into(),
-                rhs_batch_dims: Vec::new().into(),
+                lhs_contracting_dims: [0, 1].as_slice().into(),
+                rhs_contracting_dims: [0, 1].as_slice().into(),
+                lhs_batch_dims: [].as_slice().into(),
+                rhs_batch_dims: [].as_slice().into(),
             },
         }
     }
 }
 
-fn maybe_snapshot_output(tensor: &EagerTensor, snapshot_outputs: bool) -> Result<()> {
+fn maybe_snapshot_output(
+    tensor: &EagerTensor,
+    engine: &mut CpuEngine,
+    snapshot_outputs: bool,
+) -> Result<()> {
     if snapshot_outputs {
-        black_box(tensor.duplicate_value()?);
+        black_box(tensor.duplicate_value(engine)?);
     }
     Ok(())
 }
@@ -267,6 +270,7 @@ fn raw_eager_inner_t4a_shapes(
     bra: &[EagerTensor],
     ket: &[EagerTensor],
     configs: &RawEagerInnerConfigs,
+    engine: &mut CpuEngine,
     snapshot_outputs: bool,
 ) -> Result<Complex64> {
     if bra.len() != ket.len() {
@@ -282,22 +286,16 @@ fn raw_eager_inner_t4a_shapes(
 
     let mut env = bra[0]
         .runtime()
-        .with_eager_session(|session| {
-            session.dot_general_with_conj(
-                &bra[0],
-                &ket[0],
-                configs.first_site.clone(),
-                true,
-                false,
-            )
+        .with_eager_session(engine, |session| {
+            session.dot_general_with_conj(&bra[0], &ket[0], configs.first_site.clone(), true, false)
         })
         .context("failed raw eager first-site contraction")?;
-    maybe_snapshot_output(&env, snapshot_outputs)?;
+    maybe_snapshot_output(&env, engine, snapshot_outputs)?;
 
     for site in 1..bra.len() {
         env = env
             .runtime()
-            .with_eager_session(|session| {
+            .with_eager_session(engine, |session| {
                 session.dot_general_with_conj(
                     &env,
                     &bra[site],
@@ -307,11 +305,11 @@ fn raw_eager_inner_t4a_shapes(
                 )
             })
             .with_context(|| format!("failed raw eager env-bra contraction at site {site}"))?;
-        maybe_snapshot_output(&env, snapshot_outputs)?;
+        maybe_snapshot_output(&env, engine, snapshot_outputs)?;
 
         env = env
             .runtime()
-            .with_eager_session(|session| {
+            .with_eager_session(engine, |session| {
                 session.dot_general_with_conj(
                     &env,
                     &ket[site],
@@ -321,7 +319,7 @@ fn raw_eager_inner_t4a_shapes(
                 )
             })
             .with_context(|| format!("failed raw eager tmp-ket contraction at site {site}"))?;
-        maybe_snapshot_output(&env, snapshot_outputs)?;
+        maybe_snapshot_output(&env, engine, snapshot_outputs)?;
     }
 
     let scalar = env
@@ -500,14 +498,18 @@ fn inner_sitewise_nary_no_sim(bra: &TensorTrain, ket: &TensorTrain) -> Result<An
 
     for site in 1..bra.len() {
         let ai_conj = bra.tensor(site)?.conj();
-        env = contract(&[&env, &ai_conj, ket.tensor(site)?])
-            .with_context(|| format!("failed to contract three-tensor environment at site {site}"))?;
+        env = contract(&[&env, &ai_conj, ket.tensor(site)?]).with_context(|| {
+            format!("failed to contract three-tensor environment at site {site}")
+        })?;
     }
 
     env.sum().map_err(anyhow::Error::from)
 }
 
-fn inner_sitewise_binary_contract_no_sim(bra: &TensorTrain, ket: &TensorTrain) -> Result<AnyScalar> {
+fn inner_sitewise_binary_contract_no_sim(
+    bra: &TensorTrain,
+    ket: &TensorTrain,
+) -> Result<AnyScalar> {
     if bra.len() != ket.len() {
         bail!(
             "Tensor trains must have the same length for inner product: {} vs {}",
@@ -520,8 +522,8 @@ fn inner_sitewise_binary_contract_no_sim(bra: &TensorTrain, ket: &TensorTrain) -
     }
 
     let a0_conj = bra.tensor(0)?.conj();
-    let mut env =
-        contract(&[&a0_conj, ket.tensor(0)?]).context("failed to contract leftmost site tensors")?;
+    let mut env = contract(&[&a0_conj, ket.tensor(0)?])
+        .context("failed to contract leftmost site tensors")?;
 
     for site in 1..bra.len() {
         let ai_conj = bra.tensor(site)?.conj();
@@ -624,8 +626,9 @@ fn inner_sitewise_nary_breakdown_no_sim(
         breakdown.conj_ms += started.elapsed().as_secs_f64() * 1.0e3;
 
         let started = Instant::now();
-        env = contract(&[&env, &ai_conj, ket.tensor(site)?])
-            .with_context(|| format!("failed to contract three-tensor environment at site {site}"))?;
+        env = contract(&[&env, &ai_conj, ket.tensor(site)?]).with_context(|| {
+            format!("failed to contract three-tensor environment at site {site}")
+        })?;
         breakdown.nary_contract_ms += started.elapsed().as_secs_f64() * 1.0e3;
     }
 
@@ -695,7 +698,8 @@ fn main() -> Result<()> {
         let bra = make_mps(&sites, chi, 0)?;
         let ket = make_mps(&sites, chi, opts.length)?;
         let bra_conj = preconjugate_sites(&bra)?;
-        let raw_ctx = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1)?)?;
+        let mut backend = CpuBackend::with_threads(1)?;
+        let raw_ctx = EagerRuntime::new()?;
         let raw_bra = eager_mps_tensors(
             &raw_ctx,
             make_native_mps_t4a_shapes(opts.length, opts.phys_dim, chi, 0)?,
@@ -753,6 +757,7 @@ fn main() -> Result<()> {
                     black_box(&raw_bra),
                     black_box(&raw_ket),
                     black_box(&raw_configs),
+                    backend.engine_mut(),
                     false,
                 )
             },
@@ -774,6 +779,7 @@ fn main() -> Result<()> {
                     black_box(&raw_bra),
                     black_box(&raw_ket),
                     black_box(&raw_configs),
+                    backend.engine_mut(),
                     true,
                 )
             },

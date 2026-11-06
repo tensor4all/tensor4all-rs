@@ -13,8 +13,16 @@
 //! transcribers are likewise scanned only for those literal assertion calls;
 //! no semantic macro resolver is attempted. The public-path assertion scanner
 //! covers public free functions, public inherent methods, trait defaults, and
-//! trait-implementation methods; assertions in private helpers are classified
-//! as outside that surface.
+//! trait-implementation methods. Assertions in other private helpers are
+//! outside that surface, with one exception: a private free function or
+//! private inherent method whose entire body is a single `assert!`-family call
+//! on a runtime value is recorded, because that helper is the laundering route
+//! for a panic the public-path scan cannot see. The single sanctioned
+//! `panic!` inside `tensor4all_tensorbackend::invariant_violated` is
+//! allowlisted by exact normalized path and top-level function name only while
+//! that body holds exactly one direct `panic!`; every call to that helper is
+//! printed for review. Any additional or nested panic in that file or function
+//! remains a finding.
 
 use anyhow::{anyhow, bail, Context, Result};
 use proc_macro2::{TokenStream, TokenTree};
@@ -46,6 +54,10 @@ const ASSERTION_KINDS: [&str; 6] = [
     "debug_assert_eq",
     "debug_assert_ne",
 ];
+/// Exact normalized path of the one sanctioned invariant-panic helper.
+const SANCTIONED_INVARIANT_PATH: &str = "crates/tensor4all-tensorbackend/src/lib.rs";
+/// Top-level function whose single direct `panic!` is allowlisted.
+const SANCTIONED_INVARIANT_FUNCTION: &str = "invariant_violated";
 const PRODUCTION_KINDS: [&str; 7] = [
     "lib",
     "rlib",
@@ -74,16 +86,25 @@ impl Finding {
 
 #[derive(Debug)]
 pub(crate) struct AuditReport {
+    configuration: Option<String>,
     matched: Vec<Finding>,
     unbaselined: Vec<Finding>,
     stale: Vec<Finding>,
     forbidden_baseline: Vec<Finding>,
+    sanctioned: Vec<Finding>,
+    invariant_calls: Vec<(String, usize)>,
 }
 
 impl AuditReport {
     pub(crate) fn exit_code_and_print(&self) -> i32 {
+        if let Some(configuration) = &self.configuration {
+            println!("Audit configuration: `{configuration}`");
+        }
         for finding in &self.matched {
             println!("Baseline matched: {}", finding.entry());
+        }
+        for finding in &self.sanctioned {
+            println!("Sanctioned invariant panic: {}", finding.entry());
         }
         for finding in &self.unbaselined {
             println!("{}", finding.entry());
@@ -96,6 +117,14 @@ impl AuditReport {
                 "Baseline contains forbidden raw panic-style entry: {}",
                 finding.entry()
             );
+        }
+
+        println!(
+            "invariant_violated call sites: {}",
+            self.invariant_calls.len()
+        );
+        for (path, line) in &self.invariant_calls {
+            println!("invariant_violated call site: {path}:{line}");
         }
 
         if !self.unbaselined.is_empty()
@@ -115,7 +144,10 @@ impl AuditReport {
             );
             1
         } else {
-            println!("Audit passed: 0 unbaselined findings, 0 stale baseline entries");
+            println!(
+                "Audit passed: 0 unbaselined findings, {} stale baseline entries",
+                self.stale.len()
+            );
             0
         }
     }
@@ -167,17 +199,83 @@ struct CompilerArtifact {
 type CompilerArtifacts = Vec<CompilerArtifact>;
 type ClippyParse = (HashSet<TargetKey>, CompilerArtifacts, BTreeSet<Finding>);
 
+/// One Cargo feature configuration selected by the caller.
+///
+/// The default pass audits every workspace production target with its default
+/// features. A configuration pass instead audits exactly the listed packages
+/// with one explicit Cargo feature selection, because this workspace's CPU
+/// backend features are mutually exclusive and no single all-features build
+/// exists (issue #915 D6).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Configuration {
+    pub(crate) name: String,
+    pub(crate) packages: Vec<String>,
+    pub(crate) no_default_features: bool,
+    pub(crate) features: Option<String>,
+}
+
+impl Configuration {
+    /// Build one named feature configuration from parsed command-line values.
+    pub(crate) fn new(
+        name: String,
+        packages: Vec<String>,
+        no_default_features: bool,
+        features: Option<String>,
+    ) -> Result<Self> {
+        let name = name.trim().to_owned();
+        if name.is_empty() {
+            bail!("--config-name must not be empty");
+        }
+        if packages.is_empty() {
+            bail!("--config-name {name} requires at least one --package");
+        }
+        let packages = packages
+            .into_iter()
+            .map(|package| package.trim().to_owned())
+            .collect::<Vec<_>>();
+        if packages.iter().any(String::is_empty) {
+            bail!("--package must not be empty");
+        }
+        let features = match features {
+            Some(features) => {
+                let features = features.trim().to_owned();
+                if features.is_empty() {
+                    bail!("--features must list at least one feature");
+                }
+                Some(features)
+            }
+            None => None,
+        };
+        Ok(Self {
+            name,
+            packages,
+            no_default_features,
+            features,
+        })
+    }
+
+    fn label(&self) -> String {
+        let mut selection = format!("configuration `{}`", self.name);
+        if self.no_default_features {
+            selection.push_str(" --no-default-features");
+        }
+        if let Some(features) = &self.features {
+            selection.push_str(&format!(" --features {features}"));
+        }
+        selection.push_str(&format!(" -p {}", self.packages.join(" -p ")));
+        selection
+    }
+}
+
 #[derive(Debug)]
 struct ProductionSelection {
     root: PathBuf,
     targets: Vec<ProductionTarget>,
     excluded_packages: Vec<String>,
-    all_features: bool,
-    feature_names: Vec<String>,
 }
 
 impl ProductionSelection {
-    fn load(root: &Path) -> Result<Self> {
+    fn load(root: &Path, configuration: Option<&Configuration>) -> Result<Self> {
         let root = canonical_root(root)?;
         let output = Command::new("cargo")
             .args(["metadata", "--format-version", "1", "--no-deps"])
@@ -211,10 +309,15 @@ impl ProductionSelection {
             .ok_or_else(|| anyhow!("cargo metadata omitted packages"))?;
 
         let crates_root = root.join("crates");
+        let requested_packages = configuration.map(|configuration| {
+            configuration
+                .packages
+                .iter()
+                .map(|package| package.trim().to_owned())
+                .collect::<BTreeSet<_>>()
+        });
         let mut targets = Vec::new();
         let mut all_workspace_packages = Vec::new();
-        let mut all_features = false;
-        let mut feature_names = BTreeSet::new();
         for package in packages {
             let package_id = package
                 .get("id")
@@ -228,20 +331,11 @@ impl ProductionSelection {
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("cargo metadata package omitted name"))?;
             all_workspace_packages.push(package_name.to_owned());
-            let feature_map = package
-                .get("features")
-                .and_then(Value::as_object)
-                .ok_or_else(|| anyhow!("cargo metadata package omitted features"))?;
-            let package_has_nondefault_features = feature_map.keys().any(|name| name != "default");
-            // Cargo's `--features` accepts a union of names that exist in any
-            // selected package, so the workspace union is what the all-features
-            // pass enables apart from the excluded names.
-            feature_names.extend(
-                feature_map
-                    .keys()
-                    .filter(|name| name.as_str() != "default")
-                    .cloned(),
-            );
+            if let Some(requested) = &requested_packages {
+                if !requested.contains(package_name) {
+                    continue;
+                }
+            }
             let manifest = package
                 .get("manifest_path")
                 .and_then(Value::as_str)
@@ -266,7 +360,6 @@ impl ProductionSelection {
                     .get("name")
                     .and_then(Value::as_str)
                     .ok_or_else(|| anyhow!("cargo metadata target omitted name"))?;
-                all_features |= package_has_nondefault_features;
                 targets.push(ProductionTarget {
                     package_id: package_id.to_owned(),
                     package_name: package_name.to_owned(),
@@ -276,6 +369,24 @@ impl ProductionSelection {
             }
         }
 
+        if let (Some(configuration), Some(requested)) = (configuration, &requested_packages) {
+            let selected_package_names = targets
+                .iter()
+                .map(|target| target.package_name.as_str())
+                .collect::<HashSet<_>>();
+            let missing = requested
+                .iter()
+                .filter(|name| !selected_package_names.contains(name.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                bail!(
+                    "configuration `{}` names packages without production targets under crates/: {}",
+                    configuration.name,
+                    missing.join(", ")
+                );
+            }
+        }
         if targets.is_empty() {
             bail!("cargo metadata selected no production Cargo targets under crates/");
         }
@@ -292,8 +403,6 @@ impl ProductionSelection {
             root,
             targets,
             excluded_packages,
-            all_features,
-            feature_names: feature_names.into_iter().collect(),
         })
     }
 
@@ -353,105 +462,33 @@ fn command_detail(stdout: &[u8], stderr: &[u8]) -> String {
     String::from_utf8_lossy(stdout).trim().to_string()
 }
 
-/// Which Cargo feature selection one Clippy pass audits.
-#[derive(Clone, Copy, Debug)]
-enum FeaturePass<'a> {
-    /// The workspace's default features.
-    Default,
-    /// Every workspace feature, or every feature except the excluded names.
-    All(Option<&'a str>),
-}
-
-impl FeaturePass<'_> {
-    fn label(self) -> String {
-        match self {
-            Self::Default => "(default features)".to_owned(),
-            Self::All(None) => "(--all-features)".to_owned(),
-            Self::All(Some(features)) => format!("(--features {features})"),
-        }
-    }
-}
-
-/// Skip the second Clippy pass entirely.
-///
-/// Set to `1` when the workspace has no single buildable "all features"
-/// configuration, so only the default-feature pass runs. Record why in the
-/// repository that sets it; the audit no longer covers feature-gated code.
-const SKIP_ALL_FEATURES_ENV: &str = "T4A_PANIC_AUDIT_SKIP_ALL_FEATURES";
-
-fn skip_all_features() -> bool {
-    std::env::var(SKIP_ALL_FEATURES_ENV).is_ok_and(|value| value == "1")
-}
-
-/// Comma- or semicolon-separated workspace feature names to leave out of the
-/// `--all-features` pass.
-///
-/// A workspace whose features cannot all be enabled at once (for example
-/// mutually exclusive CPU backend features) lists the features that would make
-/// the single pass fail; every other workspace feature is still enabled, so a
-/// crate that needs a non-default feature to build keeps it.
-const EXCLUDED_FEATURES_ENV: &str = "T4A_PANIC_AUDIT_EXCLUDED_FEATURES";
-
-fn configured_excluded_features() -> Result<BTreeSet<String>> {
-    let Ok(raw) = std::env::var(EXCLUDED_FEATURES_ENV) else {
-        return Ok(BTreeSet::new());
-    };
-    let excluded = raw
-        .split([';', ','])
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-    if excluded.is_empty() {
-        bail!("{EXCLUDED_FEATURES_ENV} is set but lists no feature name");
-    }
-    Ok(excluded)
-}
-
-/// Every workspace feature except the excluded names, as one `--features` list.
-fn enabled_features(available: &[String], excluded: &BTreeSet<String>) -> Result<String> {
-    let unknown = excluded
-        .iter()
-        .filter(|name| !available.iter().any(|feature| feature == *name))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !unknown.is_empty() {
-        bail!(
-            "{EXCLUDED_FEATURES_ENV} names features this workspace does not define: {}",
-            unknown.join(", ")
-        );
-    }
-    let enabled = available
-        .iter()
-        .filter(|name| !excluded.contains(*name))
-        .cloned()
-        .collect::<Vec<_>>();
-    if enabled.is_empty() {
-        bail!("every workspace feature is excluded; nothing left to audit");
-    }
-    Ok(enabled.join(","))
-}
-
 fn run_clippy(
     selection: &ProductionSelection,
-    pass: FeaturePass<'_>,
+    configuration: Option<&Configuration>,
 ) -> Result<(BTreeSet<PathBuf>, BTreeSet<Finding>)> {
     let mut command = Command::new("cargo");
-    command.args(["clippy", "--workspace"]);
-    for package in &selection.excluded_packages {
-        command.args(["--exclude", package]);
+    command.arg("clippy");
+    match configuration {
+        Some(configuration) => {
+            for package in &configuration.packages {
+                command.args(["--package", package.trim()]);
+            }
+        }
+        None => {
+            command.arg("--workspace");
+            for package in &selection.excluded_packages {
+                command.args(["--exclude", package]);
+            }
+        }
     }
     command.args(["--lib", "--bins", "--message-format=json"]);
-    match pass {
-        FeaturePass::Default => {}
-        FeaturePass::All(features) => match features {
-            None => {
-                command.arg("--all-features");
-            }
-            Some(features) => {
-                command.args(["--features", features]);
-            }
-        },
+    if let Some(configuration) = configuration {
+        if configuration.no_default_features {
+            command.arg("--no-default-features");
+        }
+        if let Some(features) = &configuration.features {
+            command.args(["--features", features]);
+        }
     }
     command.args(["--"]);
     command.args(["-A", "clippy::all", "--cap-lints", "warn"]);
@@ -465,9 +502,10 @@ fn run_clippy(
     let output = command_output_with_timeout(&mut command, CLIPPY_TIMEOUT)
         .context("failed to execute cargo clippy")?;
     if !output.status.success() {
+        let label =
+            configuration.map_or_else(|| "(default features)".to_owned(), Configuration::label);
         bail!(
-            "cargo clippy {} failed: {}",
-            pass.label(),
+            "cargo clippy {label} failed: {}",
             command_detail(&output.stdout, &output.stderr)
         );
     }
@@ -1528,6 +1566,117 @@ struct PublicAssertionVisitor<'a> {
     error: Option<anyhow::Error>,
 }
 
+/// Does a token stream mention an identifier other than the boolean literals
+/// `true`/`false`? Only such a helper can launder a runtime invariant through
+/// an assertion.
+fn tokens_name_runtime_value(tokens: TokenStream) -> bool {
+    tokens.into_iter().any(|token| match token {
+        TokenTree::Ident(ident) => !matches!(ident.to_string().as_str(), "true" | "false"),
+        TokenTree::Group(group) => tokens_name_runtime_value(group.stream()),
+        TokenTree::Punct(_) | TokenTree::Literal(_) => false,
+    })
+}
+
+/// The first `count` top-level comma-separated arguments of a macro.
+fn assertion_operands(tokens: TokenStream, count: usize) -> Vec<TokenStream> {
+    let mut operands = vec![TokenStream::new()];
+    for token in tokens {
+        if matches!(&token, TokenTree::Punct(punct) if punct.as_char() == ',') {
+            if operands.len() == count {
+                break;
+            }
+            operands.push(TokenStream::new());
+            continue;
+        }
+        if let Some(current) = operands.last_mut() {
+            current.extend(std::iter::once(token));
+        }
+    }
+    operands
+}
+
+/// Lines of every `name!` or `name(` occurrence in a token stream (including
+/// nested groups), where `bang` selects the macro form.
+fn token_occurrences(tokens: TokenStream, name: &str, bang: bool, lines: &mut Vec<usize>) {
+    let mut iter = tokens.into_iter().peekable();
+    while let Some(token) = iter.next() {
+        match token {
+            TokenTree::Ident(ident) if ident == name => {
+                let follows = match iter.peek() {
+                    Some(TokenTree::Punct(punct)) => bang && punct.as_char() == '!',
+                    Some(TokenTree::Group(group)) => {
+                        !bang && group.delimiter() == proc_macro2::Delimiter::Parenthesis
+                    }
+                    _ => false,
+                };
+                let line = ident.span().start().line;
+                if follows && line != 0 {
+                    lines.push(line);
+                }
+            }
+            TokenTree::Group(group) => token_occurrences(group.stream(), name, bang, lines),
+            _ => {}
+        }
+    }
+}
+
+/// The `Macro` of a statement that is a single assertion invocation, whether
+/// written with a trailing semicolon or as the block's tail expression.
+fn assertion_macro_statement(stmt: &Stmt) -> Option<&syn::Macro> {
+    match stmt {
+        Stmt::Expr(Expr::Macro(expr_macro), _) => Some(&expr_macro.mac),
+        Stmt::Macro(stmt_macro) => Some(&stmt_macro.mac),
+        _ => None,
+    }
+}
+
+/// A private helper whose entire body is one assertion on a runtime value is
+/// the laundering route for an invisible panic, so record that assertion.
+/// Literal-only helpers and helpers with any other statement are left to the
+/// public-path scanner.
+fn assertion_only_helper(path: &str, block: &syn::Block) -> Option<Finding> {
+    if block.stmts.len() != 1 {
+        return None;
+    }
+    let mac = assertion_macro_statement(&block.stmts[0])?;
+    let kind = assertion_kind(&mac.path.segments.last()?.ident.to_string())?;
+    // Only the condition decides whether the assertion can fail: the first
+    // argument of `assert!`, the first two of `assert_eq!`/`assert_ne!`.
+    // Format arguments after them never do.
+    let operands = if kind.ends_with("_eq") || kind.ends_with("_ne") {
+        2
+    } else {
+        1
+    };
+    if !assertion_operands(mac.tokens.clone(), operands)
+        .into_iter()
+        .any(tokens_name_runtime_value)
+    {
+        return None;
+    }
+    let line = mac.span().start().line;
+    if line == 0 {
+        return None;
+    }
+    Some(Finding {
+        path: path.to_owned(),
+        line,
+        kind: kind.to_owned(),
+    })
+}
+
+fn skip_test_only_attrs(attrs: &[Attribute], error: &mut Option<anyhow::Error>) -> bool {
+    match definitely_test_only(attrs) {
+        Ok(skip) => skip,
+        Err(err) => {
+            if error.is_none() {
+                *error = Some(err);
+            }
+            true
+        }
+    }
+}
+
 impl PublicAssertionVisitor<'_> {
     fn scan_items(&mut self, items: &[Item]) -> Result<()> {
         for item in items {
@@ -1537,6 +1686,11 @@ impl PublicAssertionVisitor<'_> {
             match item {
                 Item::Fn(function) if is_public(&function.vis) => {
                     self.scan_block(&function.block)?;
+                }
+                Item::Fn(function) => {
+                    if let Some(finding) = assertion_only_helper(self.path, &function.block) {
+                        self.findings.insert(finding);
+                    }
                 }
                 Item::Trait(trait_item) if is_public(&trait_item.vis) => {
                     for trait_item in &trait_item.items {
@@ -1559,6 +1713,10 @@ impl PublicAssertionVisitor<'_> {
                         if let ImplItem::Fn(function) = impl_item {
                             if trait_impl || is_public(&function.vis) {
                                 self.scan_block(&function.block)?;
+                            } else if let Some(finding) =
+                                assertion_only_helper(self.path, &function.block)
+                            {
+                                self.findings.insert(finding);
                             }
                         }
                     }
@@ -1589,15 +1747,7 @@ impl PublicAssertionVisitor<'_> {
     }
 
     fn skip_attrs(&mut self, attrs: &[Attribute]) -> bool {
-        match definitely_test_only(attrs) {
-            Ok(skip) => skip,
-            Err(error) => {
-                if self.error.is_none() {
-                    self.error = Some(error);
-                }
-                true
-            }
-        }
+        skip_test_only_attrs(attrs, &mut self.error)
     }
 }
 
@@ -1653,8 +1803,173 @@ impl<'ast> Visit<'ast> for PublicAssertionVisitor<'_> {
     }
 }
 
-fn scan_assertions(root: &Path, source_files: &BTreeSet<PathBuf>) -> Result<BTreeSet<Finding>> {
-    let mut findings = BTreeSet::new();
+/// Collects the assertion findings, the sanctioned invariant panic, and every
+/// `invariant_violated` call site found while parsing the production sources.
+#[derive(Debug, Default)]
+struct SourceScan {
+    assertions: BTreeSet<Finding>,
+    sanctioned_invariant_panics: BTreeSet<Finding>,
+    invariant_calls: BTreeSet<(String, usize)>,
+}
+
+fn is_panic_macro(mac: &syn::Macro) -> bool {
+    mac.path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "panic")
+}
+
+/// The line of a `panic!` statement written directly in a block.
+fn direct_panic_line(stmt: &Stmt) -> Option<usize> {
+    let mac = match stmt {
+        Stmt::Expr(Expr::Macro(expr_macro), _) => &expr_macro.mac,
+        Stmt::Macro(stmt_macro) => &stmt_macro.mac,
+        _ => return None,
+    };
+    if !is_panic_macro(mac) {
+        return None;
+    }
+    let line = mac.span().start().line;
+    (line != 0).then_some(line)
+}
+
+/// Every `panic!` occurrence (not distinct lines): parsed macro invocations
+/// plus `panic!` tokens hidden inside other macros' arguments, which `syn`
+/// does not parse.
+#[derive(Debug, Default)]
+struct PanicMacroVisitor {
+    lines: Vec<usize>,
+}
+
+impl<'ast> Visit<'ast> for PanicMacroVisitor {
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        if is_panic_macro(node) {
+            let line = node.span().start().line;
+            if line != 0 {
+                self.lines.push(line);
+            }
+        }
+        token_occurrences(node.tokens.clone(), "panic", true, &mut self.lines);
+        syn::visit::visit_macro(self, node);
+    }
+}
+
+/// The single direct `panic!` of the sanctioned invariant helper, if the body
+/// still holds exactly one panic and it is a direct statement. An extra direct
+/// panic or a panic nested in a closure, block, or nested item makes the
+/// function unsanctioned, so every panic it contains stays a finding.
+fn sanctioned_invariant_panic(path: &str, items: &[Item]) -> Option<Finding> {
+    let function = items.iter().find_map(|item| match item {
+        Item::Fn(function) if function.sig.ident == SANCTIONED_INVARIANT_FUNCTION => Some(function),
+        _ => None,
+    })?;
+    let mut visitor = PanicMacroVisitor::default();
+    visitor.visit_block(&function.block);
+    let direct = function
+        .block
+        .stmts
+        .iter()
+        .filter_map(direct_panic_line)
+        .collect::<Vec<_>>();
+    if visitor.lines.len() != 1 || direct != visitor.lines {
+        return None;
+    }
+    let line = visitor.lines[0];
+    Some(Finding {
+        path: path.to_owned(),
+        line,
+        kind: "panic".to_owned(),
+    })
+}
+
+struct InvariantCallVisitor<'a> {
+    path: &'a str,
+    calls: &'a mut BTreeSet<(String, usize)>,
+    error: Option<anyhow::Error>,
+}
+
+impl<'ast> Visit<'ast> for InvariantCallVisitor<'_> {
+    fn visit_item(&mut self, node: &'ast Item) {
+        if skip_test_only_attrs(item_attrs(node), &mut self.error) {
+            return;
+        }
+        syn::visit::visit_item(self, node);
+    }
+
+    fn visit_stmt(&mut self, node: &'ast Stmt) {
+        let attrs = match node {
+            Stmt::Local(local) => &local.attrs,
+            Stmt::Item(item) => item_attrs(item),
+            Stmt::Expr(expr, _) => expr_attrs(expr),
+            Stmt::Macro(mac) => &mac.attrs,
+        };
+        if skip_test_only_attrs(attrs, &mut self.error) {
+            return;
+        }
+        syn::visit::visit_stmt(self, node);
+    }
+
+    fn visit_expr(&mut self, node: &'ast Expr) {
+        if skip_test_only_attrs(expr_attrs(node), &mut self.error) {
+            return;
+        }
+        syn::visit::visit_expr(self, node);
+    }
+
+    fn visit_arm(&mut self, node: &'ast Arm) {
+        if skip_test_only_attrs(&node.attrs, &mut self.error) {
+            return;
+        }
+        syn::visit::visit_arm(self, node);
+    }
+
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        // `syn` does not parse macro arguments, so find calls in their tokens.
+        let mut lines = Vec::new();
+        token_occurrences(
+            node.tokens.clone(),
+            SANCTIONED_INVARIANT_FUNCTION,
+            false,
+            &mut lines,
+        );
+        for line in lines {
+            self.calls.insert((self.path.to_owned(), line));
+        }
+        syn::visit::visit_macro(self, node);
+    }
+
+    fn visit_use_rename(&mut self, node: &'ast syn::UseRename) {
+        // A renamed import would hide call sites from this report.
+        if node.ident == SANCTIONED_INVARIANT_FUNCTION && self.error.is_none() {
+            self.error = Some(anyhow!(
+                "{}: `{}` must not be imported under another name",
+                self.path,
+                SANCTIONED_INVARIANT_FUNCTION
+            ));
+        }
+        syn::visit::visit_use_rename(self, node);
+    }
+
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let Expr::Path(function) = &*node.func {
+            if function
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == SANCTIONED_INVARIANT_FUNCTION)
+            {
+                let line = node.span().start().line;
+                if line != 0 {
+                    self.calls.insert((self.path.to_owned(), line));
+                }
+            }
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+}
+
+fn scan_sources(root: &Path, source_files: &BTreeSet<PathBuf>) -> Result<SourceScan> {
+    let mut scan = SourceScan::default();
     for path in source_files {
         let bytes = fs::read(path)
             .with_context(|| format!("failed to read production source {}", path.display()))?;
@@ -1672,11 +1987,27 @@ fn scan_assertions(root: &Path, source_files: &BTreeSet<PathBuf>) -> Result<BTre
                 }
                 let mut visitor = PublicAssertionVisitor {
                     path: &relative,
-                    findings: &mut findings,
+                    findings: &mut scan.assertions,
                     in_public_context: false,
                     error: None,
                 };
                 visitor.scan_items(&file.items)?;
+                {
+                    let mut call_visitor = InvariantCallVisitor {
+                        path: &relative,
+                        calls: &mut scan.invariant_calls,
+                        error: None,
+                    };
+                    call_visitor.visit_file(&file);
+                    if let Some(error) = call_visitor.error.take() {
+                        return Err(error);
+                    }
+                }
+                if relative == SANCTIONED_INVARIANT_PATH {
+                    if let Some(finding) = sanctioned_invariant_panic(&relative, &file.items) {
+                        scan.sanctioned_invariant_panics.insert(finding);
+                    }
+                }
             }
             Err(_) => {
                 // Dep-info includes include! fragments and .rs data files in
@@ -1685,14 +2016,14 @@ fn scan_assertions(root: &Path, source_files: &BTreeSet<PathBuf>) -> Result<BTre
                 // Scan tokens when possible and fall back to a string/comment
                 // aware lexical check for incomplete fragments.
                 if let Ok(tokens) = source.parse::<TokenStream>() {
-                    scan_assertion_tokens(&relative, tokens, &mut findings);
+                    scan_assertion_tokens(&relative, tokens, &mut scan.assertions);
                 } else {
-                    scan_literal_assertions_text(&source, &relative, &mut findings);
+                    scan_literal_assertions_text(&source, &relative, &mut scan.assertions);
                 }
             }
         }
     }
-    Ok(findings)
+    Ok(scan)
 }
 
 fn expr_attrs(expr: &Expr) -> &[Attribute] {
@@ -1842,593 +2173,61 @@ fn load_baseline(path: &Path) -> Result<BTreeSet<Finding>> {
     Ok(baseline)
 }
 
-fn build_report(actual: &BTreeSet<Finding>, baseline: &BTreeSet<Finding>) -> AuditReport {
-    let matched = baseline.intersection(actual).cloned().collect::<Vec<_>>();
+fn build_report(
+    actual: &BTreeSet<Finding>,
+    baseline: &BTreeSet<Finding>,
+    sanctioned: &BTreeSet<Finding>,
+    invariant_calls: BTreeSet<(String, usize)>,
+    configuration: Option<&Configuration>,
+) -> AuditReport {
+    let actual = actual
+        .difference(sanctioned)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let matched = baseline.intersection(&actual).cloned().collect::<Vec<_>>();
     let unbaselined = actual.difference(baseline).cloned().collect::<Vec<_>>();
-    let stale = baseline.difference(actual).cloned().collect::<Vec<_>>();
+    // A configuration selects a subset of the workspace, so baseline entries
+    // outside that selection are expected to stay unmatched; only the default
+    // pass owns the completeness of the baseline.
+    let stale = if configuration.is_some() {
+        Vec::new()
+    } else {
+        baseline.difference(&actual).cloned().collect::<Vec<_>>()
+    };
     let forbidden_baseline = baseline
         .iter()
         .filter(|finding| RAW_KINDS.contains(&finding.kind.as_str()))
         .cloned()
         .collect::<Vec<_>>();
     AuditReport {
+        configuration: configuration.map(|configuration| configuration.name.clone()),
         matched,
         unbaselined,
         stale,
         forbidden_baseline,
+        sanctioned: sanctioned.iter().cloned().collect(),
+        invariant_calls: invariant_calls.into_iter().collect(),
     }
 }
 
-pub(crate) fn audit(root_arg: &Path, baseline_path: &Path) -> Result<AuditReport> {
-    let selection = ProductionSelection::load(root_arg)?;
+pub(crate) fn audit(
+    root_arg: &Path,
+    baseline_path: &Path,
+    configuration: Option<&Configuration>,
+) -> Result<AuditReport> {
+    let selection = ProductionSelection::load(root_arg, configuration)?;
     let baseline = load_baseline(baseline_path)?;
-    let (default_sources, mut actual) = run_clippy(&selection, FeaturePass::Default)?;
-    let mut source_files = default_sources;
-    if selection.all_features && !skip_all_features() {
-        let excluded = configured_excluded_features()?;
-        let features = if excluded.is_empty() {
-            None
-        } else {
-            Some(enabled_features(&selection.feature_names, &excluded)?)
-        };
-        let (all_feature_sources, all_feature_findings) =
-            run_clippy(&selection, FeaturePass::All(features.as_deref()))?;
-        source_files.extend(all_feature_sources);
-        actual.extend(all_feature_findings);
-    }
-    actual.extend(scan_assertions(&selection.root, &source_files)?);
-    Ok(build_report(&actual, &baseline))
+    let (source_files, mut actual) = run_clippy(&selection, configuration)?;
+    let scan = scan_sources(&selection.root, &source_files)?;
+    actual.extend(scan.assertions);
+    Ok(build_report(
+        &actual,
+        &baseline,
+        &scan.sanctioned_invariant_panics,
+        scan.invariant_calls,
+        configuration,
+    ))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn enabled_features_drops_only_the_excluded_names() {
-        let available = ["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()];
-        let excluded = BTreeSet::from(["beta".to_owned()]);
-        assert_eq!(
-            enabled_features(&available, &excluded).unwrap(),
-            "alpha,gamma"
-        );
-        assert!(enabled_features(&available, &BTreeSet::new()).is_ok());
-    }
-
-    #[test]
-    fn enabled_features_rejects_unknown_or_complete_exclusions() {
-        let available = ["alpha".to_owned()];
-        let unknown = BTreeSet::from(["nope".to_owned()]);
-        let error = enabled_features(&available, &unknown)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("does not define"), "{error}");
-        let everything = BTreeSet::from(["alpha".to_owned()]);
-        let error = enabled_features(&available, &everything)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("nothing left"), "{error}");
-    }
-    use serde_json::json;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    struct TempRoot {
-        path: PathBuf,
-    }
-
-    impl TempRoot {
-        fn new() -> Self {
-            let nonce = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock before epoch")
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!("t4a-panic-audit-{nonce}"));
-            fs::create_dir_all(path.join("crates/demo/src")).expect("create fixture root");
-            fs::write(path.join("crates/demo/src/lib.rs"), "pub fn demo() {}\n")
-                .expect("write fixture source");
-            Self { path }
-        }
-    }
-
-    impl Drop for TempRoot {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-
-    fn diagnostic(code: &str, span: Value) -> Value {
-        json!({
-            "reason": "compiler-message",
-            "message": {
-                "code": {"code": code},
-                "spans": [span]
-            }
-        })
-    }
-
-    fn local_span(file_name: &str, line: u64) -> Value {
-        json!({
-            "file_name": file_name,
-            "line_start": line,
-            "line_end": line,
-            "is_primary": true
-        })
-    }
-
-    fn artifact() -> Value {
-        json!({
-            "reason": "compiler-artifact",
-            "package_id": "pkg",
-            "target": {"name": "demo", "kind": ["cdylib", "rlib"]},
-            "profile": {"opt_level": "0"},
-            "filenames": ["target/debug/deps/libdemo-hash.rmeta"]
-        })
-    }
-
-    #[test]
-    fn cargo_json_boundary_is_strict_and_tracks_lib_like_targets() {
-        let root = TempRoot::new();
-        let expected = HashSet::from([TargetKey {
-            package_id: "pkg".to_owned(),
-            target_name: "demo".to_owned(),
-            kind: "cdylib".to_owned(),
-        }]);
-        let finished = json!({"reason": "build-finished", "success": true});
-        let output = format!("{}\n{}\n", artifact(), finished);
-        let (seen, artifacts, findings) =
-            parse_clippy_output(output.as_bytes(), &root.path, &expected)
-                .expect("valid Cargo JSON");
-        assert_eq!(seen, expected);
-        assert_eq!(artifacts.len(), 1);
-        assert!(findings.is_empty());
-
-        for malformed in [
-            b"\xff".as_slice(),
-            b"null\n".as_slice(),
-            b"{}\n".as_slice(),
-            b"{\"reason\":null}\n".as_slice(),
-            b"{\"reason\":\"unknown\"}\n".as_slice(),
-            b"{\"reason\":\"build-finished\",\"success\":null}\n".as_slice(),
-        ] {
-            assert!(parse_clippy_output(malformed, &root.path, &HashSet::new()).is_err());
-        }
-
-        let missing_message =
-            br#"{"reason":"compiler-message","package_id":"pkg","target":{"name":"demo","kind":["cdylib"]},"message":null}
-"#;
-        assert!(parse_clippy_output(missing_message, &root.path, &HashSet::new()).is_err());
-        let missing_finished = serde_json::to_vec(&artifact()).expect("serialize artifact");
-        assert!(parse_clippy_output(&missing_finished, &root.path, &expected).is_err());
-    }
-
-    #[test]
-    fn compiler_json_accepts_only_exact_codes() {
-        let root = TempRoot::new();
-        let message = diagnostic(
-            "clippy::unwrap_used",
-            local_span("crates/demo/src/lib.rs", 1),
-        );
-        let finding = parse_compiler_message(&message, &root.path)
-            .expect("valid diagnostic")
-            .expect("known code");
-        assert_eq!(finding.entry(), "crates/demo/src/lib.rs:1:unwrap");
-        let unknown = diagnostic("clippy::unwrap", local_span("crates/demo/src/lib.rs", 1));
-        assert!(parse_compiler_message(&unknown, &root.path).is_err());
-    }
-
-    #[test]
-    fn compiler_json_follows_expansion_to_local_call_site() {
-        let root = TempRoot::new();
-        let message = diagnostic(
-            "clippy::panic",
-            json!({
-                "file_name": "/rustc/library/std/src/panic.rs",
-                "line_start": 7,
-                "is_primary": true,
-                "expansion": {
-                    "span": local_span("crates/demo/src/lib.rs", 1)
-                }
-            }),
-        );
-        let finding = parse_compiler_message(&message, &root.path)
-            .expect("valid expansion")
-            .expect("known code");
-        assert_eq!(finding.entry(), "crates/demo/src/lib.rs:1:panic");
-    }
-
-    #[test]
-    fn compiler_json_rejects_missing_or_outside_local_span() {
-        let root = TempRoot::new();
-        for span in [
-            json!({"file_name": "crates/demo/src/lib.rs", "is_primary": false}),
-            local_span("/tmp/outside.rs", 1),
-        ] {
-            let message = diagnostic("clippy::expect_used", span);
-            assert!(parse_compiler_message(&message, &root.path).is_err());
-        }
-    }
-
-    #[test]
-    fn dep_info_parser_handles_make_escapes_and_filters_external_sources() {
-        let root = TempRoot::new();
-        let spaced = root.path.join("crates/demo/src/with space.rs");
-        let hashed = root.path.join("crates/demo/src/with#hash.rs");
-        fs::write(&spaced, "pub fn spaced() {}\n").expect("write spaced source");
-        fs::write(&hashed, "pub fn hashed() {}\n").expect("write hashed source");
-        let dep_info = root.path.join("demo.d");
-        fs::write(
-            &dep_info,
-            "demo: crates/demo/src/lib.rs crates/demo/src/with\\ space.rs \\\n crates/demo/src/with#hash.rs /outside/external.rs Cargo.toml\n",
-        )
-        .expect("write dep-info");
-        let parsed = parse_make_dep_info(&dep_info, &root.path).expect("parse dep-info");
-        let sources = parsed.all_sources();
-        assert_eq!(sources.len(), 3);
-        assert!(sources.contains(&fs::canonicalize(spaced).unwrap()));
-        assert!(sources.contains(&fs::canonicalize(hashed).unwrap()));
-    }
-
-    #[test]
-    fn dep_info_parser_handles_rustc_encoded_paths() {
-        let root = TempRoot::new();
-        let dollar = root.path.join("crates/demo/src/with$dollar.rs");
-        let colon = root.path.join("crates/demo/src/with:colon.rs");
-        let hashed = root.path.join("crates/demo/src/with#hash.rs");
-        for path in [&dollar, &colon, &hashed] {
-            fs::write(path, "pub fn selected() {}\n").expect("write selected source");
-        }
-        let dep_info = root.path.join("demo.d");
-        // This is rustc's Make encoding: '$' is written as '$$', while '#'
-        // is an ordinary path character and spaces/colons are backslash escaped.
-        fs::write(
-            &dep_info,
-            "demo: crates/demo/src/with$$dollar.rs crates/demo/src/with\\:colon.rs crates/demo/src/with#hash.rs\\\n",
-        )
-        .expect("write rustc-style dep-info");
-        let parsed = parse_make_dep_info(&dep_info, &root.path).expect("parse dep-info");
-        let sources = parsed.all_sources();
-        assert!(sources.contains(&fs::canonicalize(dollar).unwrap()));
-        assert!(sources.contains(&fs::canonicalize(colon).unwrap()));
-        assert!(sources.contains(&fs::canonicalize(hashed).unwrap()));
-    }
-
-    #[test]
-    fn dep_info_continuation_separates_adjacent_paths_without_spaces() {
-        let root = TempRoot::new();
-        let first = root.path.join("crates/demo/src/first.rs");
-        let second = root.path.join("crates/demo/src/second.rs");
-        fs::write(&first, "pub fn first() {}\n").expect("write first source");
-        fs::write(&second, "pub fn second() {}\n").expect("write second source");
-        let dep_info = root.path.join("demo.d");
-        fs::write(
-            &dep_info,
-            "target/debug/deps/libdemo.rmeta: crates/demo/src/first.rs\\\ncrates/demo/src/second.rs\n",
-        )
-        .expect("write continuation dep-info");
-
-        let parsed = parse_make_dep_info(&dep_info, &root.path).expect("parse dep-info");
-        assert_eq!(
-            parsed.all_sources(),
-            BTreeSet::from([
-                fs::canonicalize(first).unwrap(),
-                fs::canonicalize(second).unwrap(),
-            ])
-        );
-    }
-
-    #[test]
-    fn dep_info_candidates_cover_hashed_artifact_names() {
-        let root = TempRoot::new();
-        for artifact_name in [
-            "libdemo-hash.rlib",
-            "libdemo-hash.rmeta",
-            "libdemo-hash.so",
-            "demo-hash",
-            "libdemo-hash.dll",
-        ] {
-            let artifact = root.path.join(artifact_name);
-            let candidates = dep_info_candidates(&artifact);
-            assert!(candidates.iter().any(|candidate| {
-                candidate.file_name().and_then(|name| name.to_str()) == Some("demo-hash.d")
-            }));
-        }
-    }
-
-    #[test]
-    fn dep_info_lookup_rejects_stale_heuristic_targets() {
-        let root = TempRoot::new();
-        let stale_source = root.path.join("crates/demo/src/stale.rs");
-        let valid_source = root.path.join("crates/demo/src/valid.rs");
-        fs::write(&stale_source, "pub fn stale() {}\n").expect("write stale source");
-        fs::write(&valid_source, "pub fn valid() {}\n").expect("write valid source");
-        let deps = root.path.join("target/debug/deps");
-        fs::create_dir_all(&deps).expect("create target deps");
-        fs::write(
-            deps.join("demo-hash.d"),
-            "target/debug/deps/demo-hash.d: crates/demo/src/stale.rs\n",
-        )
-        .expect("write stale self-rule dep-info");
-        fs::write(
-            deps.join("libdemo-hash.d"),
-            "target/debug/deps/libdemo-hash.rlib: crates/demo/src/valid.rs\n",
-        )
-        .expect("write valid artifact dep-info");
-        let key = TargetKey {
-            package_id: "pkg".to_owned(),
-            target_name: "demo".to_owned(),
-            kind: "rlib".to_owned(),
-        };
-        let artifacts = vec![CompilerArtifact {
-            key: key.clone(),
-            filenames: BTreeSet::from([PathBuf::from("target/debug/deps/libdemo-hash.rlib")]),
-            target: json!({"name": "demo", "kind": ["rlib"], "src_path": "crates/demo/src/valid.rs"}),
-            profile: json!({"opt_level": "0"}),
-        }];
-        let sources = dep_info_sources(&root.path, &artifacts, &HashSet::from([key]))
-            .expect("select matching dep-info");
-        assert!(sources.contains(&fs::canonicalize(valid_source).unwrap()));
-        assert!(!sources.contains(&fs::canonicalize(stale_source).unwrap()));
-    }
-
-    #[test]
-    fn dep_info_rejects_artifact_output_without_its_own_sources() {
-        // The rule whose output matches the artifact carries no sources, and
-        // the real origins live only on an unrelated self-rule. The unrelated
-        // rule must not satisfy the artifact's source validation.
-        let root = TempRoot::new();
-        let unrelated = root.path.join("crates/demo/src/unrelated.rs");
-        fs::write(&unrelated, "pub fn unrelated() {}\n").expect("write unrelated source");
-        let deps = root.path.join("target/debug/deps");
-        fs::create_dir_all(&deps).expect("create target deps");
-        fs::write(
-            deps.join("libdemo-hash.d"),
-            "target/debug/deps/libdemo-hash.rlib:\ntarget/debug/deps/demo-hash.d: crates/demo/src/unrelated.rs\n",
-        )
-        .expect("write flattened dep-info");
-        let key = TargetKey {
-            package_id: "pkg".to_owned(),
-            target_name: "demo".to_owned(),
-            kind: "rlib".to_owned(),
-        };
-        let artifacts = vec![CompilerArtifact {
-            key: key.clone(),
-            filenames: BTreeSet::from([PathBuf::from("target/debug/deps/libdemo-hash.rlib")]),
-            target: json!({"name": "demo", "kind": ["rlib"], "src_path": "crates/demo/src/lib.rs"}),
-            profile: json!({"opt_level": "0"}),
-        }];
-        let error = dep_info_sources(&root.path, &artifacts, &HashSet::from([key]))
-            .expect_err("artifact rule with no sources must fail closed");
-        assert!(error
-            .to_string()
-            .contains("contained no workspace-local Rust sources"));
-    }
-
-    #[test]
-    fn dep_info_lookup_requires_artifact_source_in_selected_sources() {
-        let root = TempRoot::new();
-        let selected = root.path.join("crates/demo/src/selected.rs");
-        fs::write(&selected, "pub fn selected() {}\n").expect("write selected source");
-        let deps = root.path.join("target/debug/deps");
-        fs::create_dir_all(&deps).expect("create target deps");
-        fs::write(
-            deps.join("libdemo-hash.d"),
-            "target/debug/deps/libdemo-hash.rlib: crates/demo/src/selected.rs\n",
-        )
-        .expect("write dep-info");
-        let key = TargetKey {
-            package_id: "pkg".to_owned(),
-            target_name: "demo".to_owned(),
-            kind: "rlib".to_owned(),
-        };
-        let artifacts = vec![CompilerArtifact {
-            key: key.clone(),
-            filenames: BTreeSet::from([PathBuf::from("target/debug/deps/libdemo-hash.rlib")]),
-            target: json!({"name": "demo", "kind": ["rlib"], "src_path": "crates/demo/src/lib.rs"}),
-            profile: json!({"opt_level": "0"}),
-        }];
-        let error = dep_info_sources(&root.path, &artifacts, &HashSet::from([key]))
-            .expect_err("missing artifact source must fail closed");
-        assert!(error
-            .to_string()
-            .contains("dep-info sources omitted compiler artifact source"));
-    }
-
-    #[test]
-    fn cargo_json_preserves_each_artifact_record() {
-        let root = TempRoot::new();
-        let expected = HashSet::from([TargetKey {
-            package_id: "pkg".to_owned(),
-            target_name: "demo".to_owned(),
-            kind: "cdylib".to_owned(),
-        }]);
-        let first = json!({
-            "reason": "compiler-artifact",
-            "package_id": "pkg",
-            "target": {"name": "demo", "kind": ["cdylib", "rlib"], "src_path": "crates/demo/src/lib.rs"},
-            "profile": {"opt_level": "0"},
-            "filenames": ["target/debug/deps/libdemo-debug.rmeta"]
-        });
-        let second = json!({
-            "reason": "compiler-artifact",
-            "package_id": "pkg",
-            "target": {"name": "demo", "kind": ["cdylib", "rlib"], "src_path": "crates/demo/src/lib.rs"},
-            "profile": {"opt_level": "3"},
-            "filenames": ["target/release/deps/libdemo-release.rmeta"]
-        });
-        let artifact_source = root.path.join("crates/demo/src/lib.rs");
-        let debug_source = root.path.join("crates/demo/src/debug.rs");
-        let release_source = root.path.join("crates/demo/src/release.rs");
-        fs::write(&artifact_source, "pub fn artifact() {}\n").expect("write artifact source");
-        fs::write(&debug_source, "pub fn debug() {}\n").expect("write debug source");
-        fs::write(&release_source, "pub fn release() {}\n").expect("write release source");
-        fs::create_dir_all(root.path.join("target/debug/deps")).expect("create debug deps");
-        fs::create_dir_all(root.path.join("target/release/deps")).expect("create release deps");
-        fs::write(
-            root.path.join("target/debug/deps/libdemo-debug.d"),
-            "target/debug/deps/libdemo-debug.rmeta: crates/demo/src/debug.rs crates/demo/src/lib.rs\n",
-        )
-        .expect("write debug dep-info");
-        fs::write(
-            root.path.join("target/release/deps/libdemo-release.d"),
-            "target/release/deps/libdemo-release.rmeta: crates/demo/src/release.rs crates/demo/src/lib.rs\n",
-        )
-        .expect("write release dep-info");
-        let output = format!(
-            "{}\n{}\n{}\n",
-            first,
-            second,
-            json!({"reason": "build-finished", "success": true})
-        );
-        let (_, artifacts, _) = parse_clippy_output(output.as_bytes(), &root.path, &expected)
-            .expect("valid duplicate-key artifact records");
-        assert_eq!(artifacts.len(), 2);
-        let sources =
-            dep_info_sources(&root.path, &artifacts, &expected).expect("union dep-info sources");
-        assert!(sources.contains(&fs::canonicalize(debug_source).unwrap()));
-        assert!(sources.contains(&fs::canonicalize(release_source).unwrap()));
-    }
-
-    #[test]
-    fn dep_info_parser_and_artifact_lookup_fail_closed() {
-        let root = TempRoot::new();
-        let malformed = root.path.join("malformed.d");
-        fs::write(&malformed, b"target crates/demo/src/lib.rs\n")
-            .expect("write malformed dep-info");
-        assert!(parse_make_dep_info(&malformed, &root.path).is_err());
-        fs::write(&malformed, b"target: crates/demo/src/lib.rs \\").expect("write dangling escape");
-        assert!(parse_make_dep_info(&malformed, &root.path).is_err());
-
-        let key = TargetKey {
-            package_id: "pkg".to_owned(),
-            target_name: "demo".to_owned(),
-            kind: "rlib".to_owned(),
-        };
-        let artifacts = vec![CompilerArtifact {
-            key: key.clone(),
-            filenames: BTreeSet::from([PathBuf::from("target/debug/deps/libdemo-missing.rmeta")]),
-            target: json!({"name": "demo", "kind": ["rlib"], "src_path": "crates/demo/src/lib.rs"}),
-            profile: json!({"opt_level": "0"}),
-        }];
-        let expected = HashSet::from([key]);
-        let error = dep_info_sources(&root.path, &artifacts, &expected).unwrap_err();
-        assert!(error.to_string().contains("no dep-info"));
-    }
-
-    #[test]
-    fn assertion_scan_handles_fragments_and_macro_tokens() {
-        let root = TempRoot::new();
-        let parsed = root.path.join("crates/demo/src/lib.rs");
-        let fragment = root.path.join("crates/demo/src/fragment.rs");
-        let source = r#"macro_rules! matcher_only {
-    (assert!($($argument:tt)*)) => { () };
-}
-macro_rules! transcriber {
-    ($assert:ident) => {
-        $assert!();
-        assert!(true);
-    };
-}
-macro_rules! passthrough { ($value:expr) => { $value }; }
-pub fn public() { passthrough!(assert!(true)); }
-macro_rules! nested_outer {
-    () => {
-        macro_rules! nested_inner {
-            (assert!($value:expr)) => { assert!($value); };
-        }
-    };
-}
-pub fn nested_use() { assert!(true); }
-"#;
-        fs::write(&parsed, source).expect("write parsed source");
-        fs::write(&fragment, "let value = assert!(true);\n").expect("write included fragment");
-        let sources = BTreeSet::from([
-            fs::canonicalize(parsed).unwrap(),
-            fs::canonicalize(fragment).unwrap(),
-        ]);
-        let findings = scan_assertions(&root.path, &sources).expect("scan selected sources");
-        let parsed_findings = findings
-            .iter()
-            .filter(|finding| finding.path.ends_with("lib.rs"))
-            .map(Finding::entry)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            parsed_findings,
-            vec![
-                "crates/demo/src/lib.rs:7:assert",
-                "crates/demo/src/lib.rs:11:assert",
-                "crates/demo/src/lib.rs:15:assert",
-                "crates/demo/src/lib.rs:19:assert",
-            ]
-        );
-        assert!(findings
-            .iter()
-            .any(|finding| finding.path.ends_with("fragment.rs") && finding.kind == "assert"));
-    }
-
-    #[test]
-    fn cfg_evaluator_only_skips_definitely_test_only_content() {
-        let parse = |source: &str| syn::parse_file(source).expect("parse source");
-        assert!(definitely_test_only(&parse("#![cfg(test)]\npub fn f() {}\n").attrs).unwrap());
-        let nested =
-            parse("#[cfg_attr(not(test), cfg_attr(not(test), cfg(test)))]\npub fn f() {}\n");
-        assert!(definitely_test_only(item_attrs(&nested.items[0])).unwrap());
-        let unknown = parse("#[cfg(target_arch = \"never\")]\npub fn f() {}\n");
-        assert!(!definitely_test_only(item_attrs(&unknown.items[0])).unwrap());
-    }
-
-    #[test]
-    fn assertion_kind_recognizes_all_macro_variants() {
-        for name in [
-            "assert",
-            "assert_eq",
-            "assert_ne",
-            "debug_assert",
-            "debug_assert_eq",
-            "debug_assert_ne",
-        ] {
-            assert_eq!(assertion_kind(name), Some(name));
-            // Raw identifiers keep the same classification.
-            assert_eq!(assertion_kind(&format!("r#{name}")), Some(name));
-        }
-        assert_eq!(assertion_kind("assert_ge"), None);
-        assert_eq!(assertion_kind("unwrap"), None);
-    }
-
-    #[test]
-    fn baseline_lines_reject_noncanonical_numbers() {
-        assert!(parse_entry("crates/demo/src/lib.rs:01:assert").is_err());
-        assert!(parse_entry("crates/demo/src/lib.rs:0:assert").is_err());
-        assert!(parse_entry("crates/demo/src/lib.rs:1:unknown").is_err());
-        assert!(parse_entry("demo/src/lib.rs:1:assert").is_err());
-    }
-
-    #[test]
-    fn report_marks_new_and_stale_entries_without_baselining_raw_paths() {
-        let matched = parse_entry("crates/demo/src/lib.rs:1:assert").expect("matched");
-        let stale = parse_entry("crates/demo/src/lib.rs:2:assert").expect("stale");
-        let raw = parse_entry("crates/demo/src/lib.rs:3:panic").expect("raw");
-        let new = parse_entry("crates/demo/src/lib.rs:4:unwrap").expect("new");
-        let actual = [matched.clone(), new].into_iter().collect::<BTreeSet<_>>();
-        let baseline = [matched, stale, raw].into_iter().collect::<BTreeSet<_>>();
-        let report = build_report(&actual, &baseline);
-        assert_eq!(
-            report.matched,
-            vec![parse_entry("crates/demo/src/lib.rs:1:assert").unwrap()]
-        );
-        assert_eq!(
-            report.unbaselined,
-            vec![parse_entry("crates/demo/src/lib.rs:4:unwrap").unwrap()]
-        );
-        assert_eq!(
-            report.stale,
-            vec![
-                parse_entry("crates/demo/src/lib.rs:2:assert").unwrap(),
-                parse_entry("crates/demo/src/lib.rs:3:panic").unwrap()
-            ]
-        );
-        assert_eq!(
-            report.forbidden_baseline,
-            vec![parse_entry("crates/demo/src/lib.rs:3:panic").unwrap()]
-        );
-    }
-}
+mod tests;

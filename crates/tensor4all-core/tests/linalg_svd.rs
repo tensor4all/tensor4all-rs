@@ -16,11 +16,11 @@ fn dense_c64(indices: Vec<DynIndex>, data: Vec<Complex64>) -> IdxTensor {
 
 fn vh_from_v(v: &IdxTensor) -> IdxTensor {
     assert!(
-        !v.indices.is_empty(),
+        !v.indices().is_empty(),
         "V tensor must have at least one (bond) index"
     );
     let v_conj = v.conj();
-    let ndim = v_conj.indices.len();
+    let ndim = v_conj.indices().len();
     let mut perm = vec![ndim - 1];
     perm.extend(0..(ndim - 1));
     v_conj.permute(&perm).unwrap()
@@ -55,9 +55,9 @@ fn test_svd_identity() {
     assert_eq!(v.dims(), vec![2, 2]);
 
     // Check indices
-    assert_eq!(u.indices.len(), 2);
-    assert_eq!(s.indices.len(), 2);
-    assert_eq!(v.indices.len(), 2);
+    assert_eq!(u.indices().len(), 2);
+    assert_eq!(s.indices().len(), 2);
+    assert_eq!(v.indices().len(), 2);
 
     // For identity matrix, singular values should be [1, 1].
     // We avoid direct storage slice inspection and verify through tensor invariants.
@@ -82,22 +82,22 @@ fn test_svd_simple_matrix() {
     assert_eq!(v.dims(), vec![3, 2]);
 
     // Check indices
-    assert_eq!(u.indices.len(), 2);
-    assert_eq!(s.indices.len(), 2);
-    assert_eq!(v.indices.len(), 2);
+    assert_eq!(u.indices().len(), 2);
+    assert_eq!(s.indices().len(), 2);
+    assert_eq!(v.indices().len(), 2);
 
     // Check that U and V share the bond index with S
-    assert_eq!(u.indices[1].id, s.indices[0].id);
+    assert_eq!(u.indices()[1].id, s.indices()[0].id);
     // S tensor has two indices with same dimension and tags but different IDs (to avoid duplicate IDs)
-    assert_eq!(s.indices[0].size(), s.indices[1].size());
-    assert_eq!(s.indices[0].tags(), s.indices[1].tags());
+    assert_eq!(s.indices()[0].size(), s.indices()[1].size());
+    assert_eq!(s.indices()[0].tags(), s.indices()[1].tags());
     // V carries S's `sim` leg, so S and V share the second bond index
-    assert_eq!(s.indices[1].id, v.indices[1].id);
+    assert_eq!(s.indices()[1].id, v.indices()[1].id);
 
     // Check that bond index has "Link" tag
-    assert!(u.indices[1].tags().has_tag("Link"));
-    assert!(s.indices[0].tags().has_tag("Link"));
-    assert!(v.indices[1].tags().has_tag("Link"));
+    assert!(u.indices()[1].tags().has_tag("Link"));
+    assert!(s.indices()[0].tags().has_tag("Link"));
+    assert!(v.indices()[1].tags().has_tag("Link"));
 }
 
 #[test]
@@ -184,29 +184,29 @@ fn test_svd_rank3() {
     assert_eq!(v.dims(), vec![3, 4, 2]);
 
     // Check indices
-    assert_eq!(u.indices.len(), 2);
-    assert_eq!(s.indices.len(), 2);
-    assert_eq!(v.indices.len(), 3);
+    assert_eq!(u.indices().len(), 2);
+    assert_eq!(s.indices().len(), 2);
+    assert_eq!(v.indices().len(), 3);
 
     // Check that U has left index first, then bond
-    assert_eq!(u.indices[0].id, i.id);
+    assert_eq!(u.indices()[0].id, i.id);
 
     // Check that V has right indices first, then bond
-    assert_eq!(v.indices[0].id, j.id);
-    assert_eq!(v.indices[1].id, k.id);
+    assert_eq!(v.indices()[0].id, j.id);
+    assert_eq!(v.indices()[1].id, k.id);
 
     // Check that U and S share the bond index
-    assert_eq!(u.indices[1].id, s.indices[0].id);
+    assert_eq!(u.indices()[1].id, s.indices()[0].id);
     // S tensor has two indices with same dimension and tags but different IDs (to avoid duplicate IDs)
-    assert_eq!(s.indices[0].size(), s.indices[1].size());
-    assert_eq!(s.indices[0].tags(), s.indices[1].tags());
+    assert_eq!(s.indices()[0].size(), s.indices()[1].size());
+    assert_eq!(s.indices()[0].tags(), s.indices()[1].tags());
     // V carries S's `sim` leg, so S and V share the second bond index
-    assert_eq!(s.indices[1].id, v.indices[2].id);
+    assert_eq!(s.indices()[1].id, v.indices()[2].id);
 
     // Check that bond index has "Link" tag
-    assert!(u.indices[1].tags().has_tag("Link"));
-    assert!(s.indices[0].tags().has_tag("Link"));
-    assert!(v.indices[2].tags().has_tag("Link"));
+    assert!(u.indices()[1].tags().has_tag("Link"));
+    assert!(s.indices()[0].tags().has_tag("Link"));
+    assert!(v.indices()[2].tags().has_tag("Link"));
 }
 
 #[test]
@@ -477,7 +477,7 @@ fn test_svd_tall_matrix_preserves_left_axis_order() {
 
     let norm = 30.0_f64.sqrt();
     let expected = dense_f64(
-        vec![i2, i3, u.indices[2].clone()],
+        vec![i2, i3, u.indices()[2].clone()],
         vec![1.0 / norm, 2.0 / norm, 3.0 / norm, 4.0 / norm],
     );
 
@@ -508,5 +508,29 @@ fn test_svd_reconstruction_with_multiple_unit_dims() {
     assert!(
         err < 1e-10,
         "SVD multi-unit-dim [i2,i4] vs [i1,i3] error: {err:.3e}"
+    );
+}
+
+/// Regression for #836: a 1000×3 matrix whose third singular value has ratio
+/// `sigma_3 / sigma_1 = 1.2903e-12` must keep all 3 singular values at a
+/// `1e-12` per-value relative threshold. The default faer-backed SVD used to
+/// return rank 2 because its Householder QR skips nearly dependent columns.
+#[test]
+fn svd_with_keeps_singular_value_just_above_relative_threshold() {
+    let i = Index::new_dyn(1000);
+    let j = Index::new_dyn(3);
+    // Column-major `A = [a, a + 1e-10 e_0, a + 1e-6 e_1]`, `a = (1, ..., 1)`.
+    let mut a = vec![1.0_f64; 3000];
+    a[1000] += 1e-10;
+    a[2001] += 1e-6;
+    let tensor = dense_f64(vec![i.clone(), j], a);
+
+    let opts = SvdOptions::new().with_policy(SvdTruncationPolicy::new(1e-12));
+    let (_u, s, _v) = svd_with::<f64>(&tensor, std::slice::from_ref(&i), &opts).unwrap();
+
+    assert_eq!(
+        s.dims()[0],
+        3,
+        "sigma_3/sigma_1 = 1.2903e-12 exceeds the 1e-12 threshold, so rank 3 must be kept"
     );
 }

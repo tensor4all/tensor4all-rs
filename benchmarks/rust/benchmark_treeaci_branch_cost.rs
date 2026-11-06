@@ -314,11 +314,19 @@ fn main() -> Result<()> {
         "OMP_NUM_THREADS",
         "OPENBLAS_NUM_THREADS",
         "MKL_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
     ] {
         if std::env::var(key).as_deref() != Ok("1") {
             return Err(format!("set {key}=1").into());
         }
     }
+    // This package forwards no backend feature, so it always builds the
+    // platform default of the tensor4all crates (`tensor4all-cpu-platform`).
+    const CPU_BACKEND: &str = if cfg!(target_os = "macos") {
+        "tenferro-blas-accelerate"
+    } else {
+        "tenferro-cpu-faer"
+    };
     let mut result = match args[3].as_str() {
         "f64" => run::<f64>(degree, profile, d, &args[4], batch, repeats)?,
         "c64" => run::<Complex64>(degree, profile, d, &args[4], batch, repeats)?,
@@ -328,7 +336,7 @@ fn main() -> Result<()> {
         "mode":args[4],"batch":batch,"repeats":repeats,"seed":SEED,"tolerance":TOLERANCE,
         "message_cache_budget":CACHE_BYTES,"diagnostics":cfg!(feature="diagnostics"),
         "build_commit":option_env!("T4A_BENCH_GIT_COMMIT").unwrap_or("unrecorded"),
-        "release":true,"backend":"tenferro-cpu-faer"});
+        "release":true,"backend":CPU_BACKEND});
     println!("{result}");
     Ok(())
 }

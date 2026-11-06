@@ -23,8 +23,9 @@ use crate::common::{
 ///
 /// # Errors
 ///
-/// Returns an error when the operator construction fails (an overflow or
-/// /// invalid-configuration failure, or a shape mismatch).
+/// Returns [`QuanticsTransformError::Operation`] when `f` is empty, when
+/// `boundary` is [`BoundaryCondition::Open`], when a core is not
+/// two-dimensional, or when the affine or MPO construction fails.
 ///
 pub fn difference_kernel_mpo(
     f: &SimpleTensorTrain<Complex64>,
@@ -130,8 +131,8 @@ fn checked_difference_tensor_dims(
 ///
 /// # Errors
 ///
-/// Returns an error when the operator construction fails (an overflow or
-/// /// invalid-configuration failure, or a shape mismatch).
+/// Returns [`QuanticsTransformError::Operation`] under the same conditions as
+/// [`difference_kernel_mpo`], or when the operator conversion fails.
 ///
 pub fn difference_kernel_operator(
     f: &SimpleTensorTrain<Complex64>,
@@ -145,25 +146,4 @@ pub fn difference_kernel_operator(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn difference_tensor_dimensions_reject_product_overflow() {
-        let error = checked_difference_tensor_dims(usize::MAX, 2, 1, 1).unwrap_err();
-        assert!(error.to_string().contains("left bond product"));
-
-        let error = checked_difference_tensor_dims(1, 1, usize::MAX, 2).unwrap_err();
-        assert!(error.to_string().contains("right bond product"));
-    }
-
-    #[test]
-    fn difference_tensor_backing_reservation_reports_failure() {
-        let error =
-            try_vec_with_capacity::<Complex64>("difference-kernel tensor", usize::MAX).unwrap_err();
-        assert!(
-            error.to_string().contains("allocation failed"),
-            "unexpected error: {error}"
-        );
-    }
-}
+mod tests;

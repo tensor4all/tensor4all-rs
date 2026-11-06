@@ -45,8 +45,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error when the operation fails (a shape or index mismatch, an
-    /// SVD or non-convergence failure, or a backend failure). The network is
+    /// Returns [`TreeTNOperationError`] when `options` is not forced and the
+    /// network is already canonical in a different form, when a swept tensor has
+    /// a shape or index mismatch, or when a factorization fails. The network is
     /// left unchanged when an error is returned.
     ///
     /// Under [`CanonicalForm::LU`] and [`CanonicalForm::CI`], canonicalization
@@ -148,10 +149,9 @@ where
     /// Returns a [`TreeTNOperationError`] in the same cases as
     /// [`Self::canonicalize`]: a form mismatch when the network is already
     /// canonical in a different form and `options` is not forced, a shape or
-    /// index mismatch, an SVD or non-convergence failure, a backend failure,
-    /// and, under [`CanonicalForm::LU`] and [`CanonicalForm::CI`], a zero tensor
-    /// that has to be factorized. The network is left unchanged when an error
-    /// is returned.
+    /// index mismatch, a factorization failure, and, under
+    /// [`CanonicalForm::LU`] and [`CanonicalForm::CI`], a zero tensor that has to
+    /// be factorized. The network is left unchanged when an error is returned.
     pub fn canonicalize_mut(
         &mut self,
         canonical_region: impl IntoIterator<Item = V>,
@@ -259,6 +259,201 @@ where
         // Set the canonical form
         self.canonical_form = Some(form);
 
+        Ok(())
+    }
+}
+
+impl<V> TreeTN<tensor4all_core::IdxTensor, V>
+where
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    /// Canonicalize a dense [`tensor4all_core::IdxTensor`] network on a caller-owned explicit `Session`.
+    ///
+    /// The runtime-free counterpart of [`TreeTN::canonicalize`]: the sweep order,
+    /// the region validation, the full-rank factorization and the dst absorption
+    /// are the shared code paths, while every numerical leaf runs on `session`
+    /// and publishes plain host-storage tensors. Nothing here enters another
+    /// session or the process-global eager runtime, so a caller that already owns
+    /// a caller with a live `Session` can call it directly.
+    ///
+    /// Only [`CanonicalForm::Unitary`] (QR) has an explicit-session path; the
+    /// LU and CI forms return a typed error instead of running on another
+    /// runtime. The smart no-op and form-mismatch behavior of
+    /// [`TreeTN::canonicalize`] is preserved when `options.force` is false.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeTNOperationError`] under the same conditions as
+    /// [`TreeTN::canonicalize`] for the supported form, when a non-unitary form
+    /// is requested, and when the supplied session rejects a leaf.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    /// use tensor4all_treetn::{CanonicalizationOptions, TreeTN};
+    ///
+    /// let left = DynIndex::new_dyn(2);
+    /// let bond = DynIndex::new_dyn(2);
+    /// let right = DynIndex::new_dyn(2);
+    /// let tree = TreeTN::<_, usize>::from_tensors(
+    ///     vec![
+    ///         IdxTensor::from_dense(vec![left, bond.clone()], vec![1.0, 0.0, 0.0, 1.0])?,
+    ///         IdxTensor::from_dense(vec![bond, right], vec![1.0, 0.0, 0.0, 1.0])?,
+    ///     ],
+    ///     vec![0, 1],
+    /// )?;
+    ///
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let mut session = Session::new(backend.engine_mut());
+    /// let mut tree =
+    ///     tree.canonicalize_on_session([0], CanonicalizationOptions::default(), &mut session)?;
+    /// let norm = tree.norm_on_session(&mut session)?;
+    /// assert_eq!(tree.canonical_region().iter().copied().collect::<Vec<_>>(), vec![0]);
+    /// // The two contraction identities represent one 2x2 identity, norm sqrt(2).
+    /// assert!((norm - 2.0_f64.sqrt()).abs() < 1e-12);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn canonicalize_on_session(
+        mut self,
+        canonical_region: impl IntoIterator<Item = V>,
+        options: CanonicalizationOptions,
+        session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    ) -> std::result::Result<Self, TreeTNOperationError> {
+        let center_v: HashSet<V> = canonical_region.into_iter().collect();
+
+        if !options.force {
+            if let Some(current_form) = self.canonical_form {
+                if current_form != options.form {
+                    return Err(TreeTNOperationError::from(
+                        anyhow::anyhow!(
+                            "Cannot move ortho center: current form is {:?} but {:?} was requested. \
+                             Use CanonicalizationOptions::forced() to re-canonicalize with a different form.",
+                            current_form,
+                            options.form
+                        )
+                        .context("canonicalize_on_session: form mismatch"),
+                    ));
+                }
+            }
+            if self.canonical_region == center_v && self.canonical_form == Some(options.form) {
+                return Ok(self);
+            }
+        }
+
+        self.canonicalize_impl_on_session(
+            center_v,
+            options.form,
+            "canonicalize_on_session",
+            session,
+        )?;
+        Ok(self)
+    }
+
+    /// Canonicalize in place on a caller-owned explicit `Session`.
+    ///
+    /// The `&mut self` version of [`Self::canonicalize_on_session`]. Like
+    /// [`TreeTN::canonicalize_mut`], the network is left unchanged when an error
+    /// is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeTNOperationError`] under the same conditions as
+    /// [`Self::canonicalize_on_session`].
+    pub fn canonicalize_mut_on_session(
+        &mut self,
+        canonical_region: impl IntoIterator<Item = V>,
+        options: CanonicalizationOptions,
+        session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    ) -> std::result::Result<(), TreeTNOperationError> {
+        let original = self.clone();
+        let taken = std::mem::take(self);
+        match taken.canonicalize_on_session(canonical_region, options, session) {
+            Ok(result) => {
+                *self = result;
+                Ok(())
+            }
+            Err(error) => {
+                *self = original;
+                Err(error)
+            }
+        }
+    }
+
+    /// Session-scoped canonicalization body for the concrete frontend.
+    ///
+    /// Only the unitary (QR) form has an explicit-session path, so the LU/CI
+    /// zero-tensor failure cannot occur here.
+    pub(crate) fn canonicalize_impl_on_session(
+        &mut self,
+        canonical_region: impl IntoIterator<Item = V>,
+        form: CanonicalForm,
+        context_name: &str,
+        session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    ) -> Result<()> {
+        if form != CanonicalForm::Unitary {
+            return Err(anyhow::anyhow!(
+                "{}: unsupported canonical form (only unitary has an explicit-session path)",
+                context_name
+            ));
+        }
+        let alg = FactorizeAlg::QR;
+
+        let sweep_ctx = self.prepare_sweep_to_center(canonical_region, context_name)?;
+        let sweep_ctx = match sweep_ctx {
+            Some(ctx) => ctx,
+            None => return Ok(()),
+        };
+
+        let session = std::cell::RefCell::new(session);
+        for (src, dst) in &sweep_ctx.edges {
+            self.sweep_edge_full_rank_with(
+                *src,
+                *dst,
+                alg,
+                context_name,
+                |tensor, left| {
+                    tensor4all_core::factorize_full_rank_on_session(
+                        &mut session.borrow_mut(),
+                        tensor,
+                        left,
+                        alg,
+                        Canonical::Left,
+                    )
+                    .map_err(anyhow::Error::from)
+                },
+                |lhs, rhs| {
+                    tensor4all_core::contract_pair_on_session(
+                        &mut session.borrow_mut(),
+                        lhs,
+                        rhs,
+                        tensor4all_core::PairwiseContractionOptions::new(),
+                    )
+                    .map_err(anyhow::Error::from)
+                },
+                |tensor, index, axis| {
+                    tensor4all_core::stack_along_new_index_on_session(
+                        &mut session.borrow_mut(),
+                        &[tensor],
+                        index,
+                        axis,
+                    )
+                    .map_err(anyhow::Error::from)
+                },
+                |tensor, index, position| {
+                    tensor4all_core::select_indices_on_session(
+                        &mut session.borrow_mut(),
+                        tensor,
+                        std::slice::from_ref(index),
+                        &[position],
+                    )
+                    .map_err(anyhow::Error::from)
+                },
+            )?;
+        }
+
+        self.canonical_form = Some(form);
         Ok(())
     }
 }

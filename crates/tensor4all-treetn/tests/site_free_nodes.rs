@@ -7,13 +7,17 @@
 //! each network once and compares it with a dense reference via `maxabs()`.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use num_complex::Complex64;
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TagSet, TensorContractionLike, TensorIndex};
 use tensor4all_treetn::contraction::{contract, ContractionOptions};
 use tensor4all_treetn::{
-    factorize_tensor_to_treetn, fit_sum, CanonicalForm, CanonicalizationOptions, FitOptions,
-    SwapOptions, TreeTN, TreeTopology, TruncationOptions,
+    dmrg, factorize_tensor_to_treetn, fit_sum, global_subspace_expand_with_references,
+    relative_linear_system_residual, square_linsolve, tdvp, ApplyOptions, CanonicalForm,
+    CanonicalizationOptions, DmrgError, DmrgOptions, FitOptions, GseError, GseOptions,
+    IndexMapping, LinearOperator, LinsolveOptions, SiteIndexNetwork, SplitOptions, SwapOptions,
+    TdvpError, TdvpOptions, TreeTN, TreeTopology, TruncationOptions,
 };
 
 type Network = TreeTN<IdxTensor, String>;
@@ -512,6 +516,74 @@ fn site_free_y_contraction_pair() -> (Network, Network) {
     (state, operator)
 }
 
+/// A star around a **site-free** hub `m` whose three leaves carry sites:
+///
+/// ```text
+/// a - m - b
+///     |
+///     c
+/// ```
+///
+/// Exercises the internal site-free node of the tree SRC path, whose
+/// messages get the batch axis from the incoming leaf messages.
+fn site_free_hub_contraction_pair() -> (Network, Network) {
+    let sites: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    let outputs: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    let build = |with_outputs: bool, seed: f64| {
+        let bonds: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+        let mut tensors: Vec<IdxTensor> = (0..3)
+            .map(|leaf| {
+                let mut indices = vec![sites[leaf].clone()];
+                if with_outputs {
+                    indices.push(outputs[leaf].clone());
+                }
+                indices.push(bonds[leaf].clone());
+                let len = indices.iter().map(|index| index.dim()).product();
+                dense(
+                    indices,
+                    &sample_values(len, seed + 0.37 * leaf as f64),
+                    None,
+                )
+            })
+            .collect();
+        tensors.push(dense(bonds, &sample_values(8, seed + 1.9), None));
+        TreeTN::from_tensors(tensors, names(&["a", "b", "c", "m"])).unwrap()
+    };
+    let state = build(false, 0.4);
+    let operator = build(true, 0.9);
+    assert!(is_site_free(&state, &"m".to_string()));
+    assert!(is_site_free(&operator, &"m".to_string()));
+    (state, operator)
+}
+
+#[test]
+fn src_contraction_with_site_free_hub_matches_dense_reference() {
+    let (state, operator) = site_free_hub_contraction_pair();
+    let expected = state
+        .to_dense()
+        .unwrap()
+        .contract_pair(&operator.to_dense().unwrap())
+        .unwrap();
+    for center in state.node_names() {
+        let result = contract(
+            &state,
+            &operator,
+            &center,
+            ContractionOptions::src().with_max_bond_dim(16),
+        )
+        .unwrap();
+        assert_values(&result, &expected, &format!("SRC to {center}"));
+    }
+}
+
+#[test]
+fn inner_with_site_free_hub_matches_dense_reference() {
+    let (state, _) = site_free_hub_contraction_pair();
+    let expected = state.to_dense().unwrap().norm().unwrap().powi(2);
+    let inner = state.inner(&state).unwrap();
+    assert!((inner.real() - expected).abs() <= EXACT_TOL * expected);
+}
+
 /// Run `contract_fit` towards every center, as the zip-up initializer alone
 /// (`nfullsweeps = 0`) and with variational sweeps, and compare each result
 /// with the dense contraction.
@@ -669,11 +741,10 @@ fn lu_and_ci_canonicalization_preserve_zero_tensor_value() {
 }
 
 // ============================================================================
-// Known failures with site-free nodes, tracked in issue #797
+// Operations on site-free nodes
 // ============================================================================
 
 #[test]
-#[ignore = "known bug, tracked in #797: inner fails with \"Disconnected tensor network\" on site-free nodes"]
 fn inner_with_site_free_leaf_matches_dense_reference() {
     let x = direct_sum_network(false);
     let expected = x.to_dense().unwrap().norm().unwrap().powi(2);
@@ -682,7 +753,6 @@ fn inner_with_site_free_leaf_matches_dense_reference() {
 }
 
 #[test]
-#[ignore = "known bug, tracked in #797: SRC contraction fails on site-free nodes"]
 fn src_contraction_with_site_free_leaf_matches_dense_reference() {
     let (state, operator) = site_free_contraction_pair();
     let expected = state
@@ -703,7 +773,6 @@ fn src_contraction_with_site_free_leaf_matches_dense_reference() {
 }
 
 #[test]
-#[ignore = "known bug, tracked in #797: factorize_tensor_to_treetn rejects site-free nodes"]
 fn factorize_tensor_to_treetn_with_site_free_leaf_matches_dense_reference() {
     let (site_a, site_b) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
     let expected = dense(
@@ -726,4 +795,510 @@ fn factorize_tensor_to_treetn_with_site_free_leaf_matches_dense_reference() {
         let tn = factorize_tensor_to_treetn(&expected, &topology, &root.to_string()).unwrap();
         assert_values(&tn, &expected, &format!("decompose from {root}"));
     }
+}
+
+/// A node that requests a site index the tensor does not carry is an
+/// inconsistent topology, not a site-free node: the up-front topology check
+/// rejects it before any empty-side factorization.
+#[test]
+fn factorize_tensor_to_treetn_rejects_requested_index_missing_from_tensor() {
+    let (site_a, site_b) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let tensor = dense(
+        vec![site_a.clone(), site_b.clone()],
+        &sample_values(4, 0.9),
+        None,
+    );
+    let topology = TreeTopology::new(
+        HashMap::from([
+            ("a".to_string(), vec![site_a]),
+            ("b".to_string(), vec![site_b.prime()]),
+        ]),
+        vec![("a".to_string(), "b".to_string())],
+    );
+    for root in ["a", "b"] {
+        let error = factorize_tensor_to_treetn(&tensor, &topology, &root.to_string()).unwrap_err();
+        assert!(
+            error.to_string().contains("not found in tensor"),
+            "root {root}: unexpected error: {error}"
+        );
+    }
+}
+
+// ============================================================================
+// Single-site sweeps reject site-free states
+// ============================================================================
+
+/// `e - a - b` with the site-free `e` inserted first, so the single-site
+/// sweep validators reach it before any node that carries a site.
+fn state_with_site_free_node_first() -> Network {
+    let (site_a, site_b) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let (bond_ea, bond_ab) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    TreeTN::from_tensors(
+        vec![
+            dense(vec![bond_ea.clone()], &[1.0, 1.0], None),
+            dense(
+                vec![bond_ea, site_a, bond_ab.clone()],
+                &sample_values(8, 0.5),
+                None,
+            ),
+            dense(vec![bond_ab, site_b], &sample_values(4, 0.9), None),
+        ],
+        names(&["e", "a", "b"]),
+    )
+    .unwrap()
+}
+
+#[test]
+fn dmrg_rejects_state_with_site_free_node() {
+    let state = state_with_site_free_node_first();
+    // The operator only has to share the state graph: the validator rejects the
+    // site-free state node before it reads any mapping.
+    let operator = LinearOperator::new(
+        state.clone(),
+        HashMap::<String, IndexMapping<DynIndex>>::new(),
+        HashMap::<String, IndexMapping<DynIndex>>::new(),
+    );
+    let err = dmrg(&operator, state, &"a".to_string(), DmrgOptions::default()).unwrap_err();
+    assert!(matches!(
+        err,
+        DmrgError::UnsupportedStateSiteCount { node, count }
+            if node == "\"e\"" && count == 0
+    ));
+}
+
+#[test]
+fn tdvp_rejects_state_with_site_free_node() {
+    let state = state_with_site_free_node_first();
+    let operator = LinearOperator::new(
+        state.clone(),
+        HashMap::<String, IndexMapping<DynIndex>>::new(),
+        HashMap::<String, IndexMapping<DynIndex>>::new(),
+    );
+    let err = tdvp(&operator, state, &"a".to_string(), TdvpOptions::default()).unwrap_err();
+    assert!(matches!(
+        err,
+        TdvpError::UnsupportedStateSiteCount { node, count }
+            if node == "\"e\"" && count == 0
+    ));
+}
+
+#[test]
+fn gse_rejects_state_with_site_free_node() {
+    let state = state_with_site_free_node_first();
+    let err = global_subspace_expand_with_references(
+        state,
+        Vec::new(),
+        &"a".to_string(),
+        GseOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        GseError::UnsupportedStateSiteCount { node, count }
+            if node == "\"e\"" && count == 0
+    ));
+}
+
+#[test]
+fn split_to_rejects_site_free_current_node() {
+    // A site-free current node has no site index that can be assigned to a
+    // target node, so `split_to` reports it instead of silently dropping it.
+    let site_a = DynIndex::new_dyn(2);
+    let bond_ae = DynIndex::new_dyn(2);
+    let tn: Network = TreeTN::from_tensors(
+        vec![
+            dense(
+                vec![site_a.clone(), bond_ae.clone()],
+                &sample_values(4, 0.5),
+                None,
+            ),
+            dense(vec![bond_ae], &[1.0, 1.0], None),
+        ],
+        names(&["a", "e"]),
+    )
+    .unwrap();
+    assert!(is_site_free(&tn, &"e".to_string()));
+
+    let mut target = SiteIndexNetwork::<String, DynIndex>::new();
+    target
+        .add_node("a".to_string(), HashSet::from([site_a]))
+        .unwrap();
+
+    let err = tn.split_to(&target, &SplitOptions::default()).unwrap_err();
+    assert!(
+        err.to_string().contains('e'),
+        "split_to must name the site-free node it cannot place: {err}"
+    );
+}
+
+// ============================================================================
+// Square linsolve on states with a site-free node (#987)
+// ============================================================================
+
+/// Column-major site-diagonal operator data for a `phys x phys` leg ordered
+/// `[out, in]`: `data[i + phys * i] = diag[i]`.
+fn diagonal_data(diag: &[f64]) -> Vec<f64> {
+    let phys = diag.len();
+    let mut data = vec![0.0; phys * phys];
+    for (i, value) in diag.iter().enumerate() {
+        data[i + phys * i] = *value;
+    }
+    data
+}
+
+/// One site-free linsolve fixture: a right-hand side, a starting guess that is
+/// not a solution, the product operator, its index mappings, and the site
+/// diagonals of the operator.
+struct LinsolveFixture {
+    rhs: Network,
+    init: Network,
+    operator: Network,
+    input_mapping: HashMap<String, IndexMapping<DynIndex>>,
+    output_mapping: HashMap<String, IndexMapping<DynIndex>>,
+    site_a: DynIndex,
+    diag_a: Vec<f64>,
+    site_b: DynIndex,
+    diag_b: Vec<f64>,
+}
+
+/// Dense `A^{-1} b` for the site-diagonal product operator
+/// `A = diag_a[site_a] * diag_b[site_b]`.
+///
+/// The fixtures use bond-dimension-one product operators, so the exact solution
+/// is the elementwise inverse scaling of the dense right-hand side along its two
+/// physical axes.
+fn inverse_diagonal_solution(
+    rhs: &IdxTensor,
+    site_a: &DynIndex,
+    diag_a: &[f64],
+    site_b: &DynIndex,
+    diag_b: &[f64],
+) -> IdxTensor {
+    let indices = rhs.indices().to_vec();
+    let dims: Vec<usize> = indices.iter().map(DynIndex::dim).collect();
+    let mut data = rhs.to_vec::<f64>().unwrap();
+    for (flat, value) in data.iter_mut().enumerate() {
+        let mut remaining = flat;
+        let (mut value_a, mut value_b) = (0usize, 0usize);
+        for (axis, &dim) in dims.iter().enumerate() {
+            let coordinate = remaining % dim;
+            remaining /= dim;
+            if indices[axis] == *site_a {
+                value_a = coordinate;
+            } else if indices[axis] == *site_b {
+                value_b = coordinate;
+            }
+        }
+        *value /= diag_a[value_a] * diag_b[value_b];
+    }
+    IdxTensor::from_dense(indices, data).unwrap()
+}
+
+/// `e - a - b` with the site-free leaf `e` inserted first, plus a non-identity
+/// site-diagonal product operator whose `e` node is a site-free spectator
+/// carrying only MPO bonds. The initial guess is a different nonzero state with
+/// the same topology, so the solver cannot take the zero-residual shortcut.
+fn site_free_leaf_linsolve_system() -> LinsolveFixture {
+    let (site_a, site_b) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let (bond_ea, bond_ab) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let rhs = TreeTN::from_tensors(
+        vec![
+            dense(vec![bond_ea.clone()], &[1.0, 1.0], None),
+            dense(
+                vec![bond_ea.clone(), site_a.clone(), bond_ab.clone()],
+                &sample_values(8, 0.5),
+                None,
+            ),
+            dense(
+                vec![bond_ab.clone(), site_b.clone()],
+                &sample_values(4, 0.9),
+                None,
+            ),
+        ],
+        names(&["e", "a", "b"]),
+    )
+    .unwrap();
+    let init = TreeTN::from_tensors(
+        vec![
+            dense(vec![bond_ea.clone()], &[1.0, 1.0], None),
+            dense(
+                vec![bond_ea, site_a.clone(), bond_ab.clone()],
+                &sample_values(8, 1.7),
+                None,
+            ),
+            dense(vec![bond_ab, site_b.clone()], &sample_values(4, 2.3), None),
+        ],
+        names(&["e", "a", "b"]),
+    )
+    .unwrap();
+
+    let (diag_a, diag_b) = ([2.0, 3.0], [1.5, -0.5]);
+
+    // The MPO bonds are independent of the state bonds and kept at dim one.
+    let (m_ea, m_ab) = (DynIndex::new_dyn(1), DynIndex::new_dyn(1));
+    let (s_a_in, s_b_in) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let (s_a_out, s_b_out) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let operator = TreeTN::from_tensors(
+        vec![
+            dense(vec![m_ea.clone()], &[1.0], None),
+            dense(
+                vec![m_ea, s_a_out.clone(), s_a_in.clone(), m_ab.clone()],
+                &diagonal_data(&diag_a),
+                None,
+            ),
+            dense(
+                vec![m_ab, s_b_out.clone(), s_b_in.clone()],
+                &diagonal_data(&diag_b),
+                None,
+            ),
+        ],
+        names(&["e", "a", "b"]),
+    )
+    .unwrap();
+
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+    input_mapping.insert(
+        "a".to_string(),
+        IndexMapping {
+            true_index: site_a.clone(),
+            internal_index: s_a_in,
+        },
+    );
+    input_mapping.insert(
+        "b".to_string(),
+        IndexMapping {
+            true_index: site_b.clone(),
+            internal_index: s_b_in,
+        },
+    );
+    output_mapping.insert(
+        "a".to_string(),
+        IndexMapping {
+            true_index: site_a.clone(),
+            internal_index: s_a_out,
+        },
+    );
+    output_mapping.insert(
+        "b".to_string(),
+        IndexMapping {
+            true_index: site_b.clone(),
+            internal_index: s_b_out,
+        },
+    );
+    LinsolveFixture {
+        rhs,
+        init,
+        operator,
+        input_mapping,
+        output_mapping,
+        site_a,
+        diag_a: diag_a.to_vec(),
+        site_b,
+        diag_b: diag_b.to_vec(),
+    }
+}
+
+/// `a - m - b` with the site-free internal node `m`, plus a non-identity
+/// site-diagonal product operator whose `m` node is a site-free spectator
+/// carrying only MPO bonds. As for the leaf fixture the initial guess is a
+/// different nonzero state with the same topology.
+fn site_free_internal_linsolve_system() -> LinsolveFixture {
+    let (site_a, site_b) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3));
+    let (bond_am, bond_mb) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let rhs = TreeTN::from_tensors(
+        vec![
+            dense(
+                vec![site_a.clone(), bond_am.clone()],
+                &sample_values(4, 0.5),
+                None,
+            ),
+            dense(
+                vec![bond_am.clone(), bond_mb.clone()],
+                &sample_values(4, 0.7),
+                None,
+            ),
+            dense(
+                vec![bond_mb.clone(), site_b.clone()],
+                &sample_values(6, 0.9),
+                None,
+            ),
+        ],
+        names(&["a", "m", "b"]),
+    )
+    .unwrap();
+    let init = TreeTN::from_tensors(
+        vec![
+            dense(
+                vec![site_a.clone(), bond_am.clone()],
+                &sample_values(4, 1.5),
+                None,
+            ),
+            dense(vec![bond_am, bond_mb.clone()], &sample_values(4, 2.1), None),
+            dense(vec![bond_mb, site_b.clone()], &sample_values(6, 0.3), None),
+        ],
+        names(&["a", "m", "b"]),
+    )
+    .unwrap();
+
+    let diag_a = [2.0, 3.0];
+    let diag_b = [1.0, -0.5, 0.25];
+
+    let (m_am, m_mb) = (DynIndex::new_dyn(1), DynIndex::new_dyn(1));
+    let (s_a_in, s_b_in) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3));
+    let (s_a_out, s_b_out) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3));
+    let operator = TreeTN::from_tensors(
+        vec![
+            dense(
+                vec![m_am.clone(), s_a_out.clone(), s_a_in.clone()],
+                &diagonal_data(&diag_a),
+                None,
+            ),
+            dense(vec![m_am, m_mb.clone()], &[1.0], None),
+            dense(
+                vec![m_mb, s_b_out.clone(), s_b_in.clone()],
+                &diagonal_data(&diag_b),
+                None,
+            ),
+        ],
+        names(&["a", "m", "b"]),
+    )
+    .unwrap();
+
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+    input_mapping.insert(
+        "a".to_string(),
+        IndexMapping {
+            true_index: site_a.clone(),
+            internal_index: s_a_in,
+        },
+    );
+    input_mapping.insert(
+        "b".to_string(),
+        IndexMapping {
+            true_index: site_b.clone(),
+            internal_index: s_b_in,
+        },
+    );
+    output_mapping.insert(
+        "a".to_string(),
+        IndexMapping {
+            true_index: site_a.clone(),
+            internal_index: s_a_out,
+        },
+    );
+    output_mapping.insert(
+        "b".to_string(),
+        IndexMapping {
+            true_index: site_b.clone(),
+            internal_index: s_b_out,
+        },
+    );
+    LinsolveFixture {
+        rhs,
+        init,
+        operator,
+        input_mapping,
+        output_mapping,
+        site_a,
+        diag_a: diag_a.to_vec(),
+        site_b,
+        diag_b: diag_b.to_vec(),
+    }
+}
+
+/// Solve a site-free fixture and check, against a dense reference, that the
+/// initial guess is not already a solution and that the solver drives the
+/// relative residual and the solution values down.
+fn assert_square_linsolve_system(fixture: LinsolveFixture, center: &str, label: &str) {
+    let LinsolveFixture {
+        rhs,
+        init,
+        operator,
+        input_mapping,
+        output_mapping,
+        site_a,
+        diag_a,
+        site_b,
+        diag_b,
+    } = fixture;
+
+    // Exact solution of the site-diagonal product operator.
+    let expected =
+        inverse_diagonal_solution(&rhs.to_dense().unwrap(), &site_a, &diag_a, &site_b, &diag_b);
+
+    let options = LinsolveOptions::default()
+        .with_nfullsweeps(5)
+        .with_gmres_tol(1e-12)
+        .with_gmres_restart_dim(30)
+        .with_gmres_max_restarts(100)
+        .with_max_bond_dim(16);
+
+    // The initial residual must be nonzero: otherwise the solve could pass
+    // through the initial-residual shortcut without a GMRES correction.
+    let residual_operator = LinearOperator::new(
+        operator.clone(),
+        input_mapping.clone(),
+        output_mapping.clone(),
+    );
+    let initial_residual = relative_linear_system_residual(
+        &residual_operator,
+        &init,
+        &rhs,
+        options.a0.clone(),
+        options.a1.clone(),
+        ApplyOptions::naive(),
+    )
+    .unwrap();
+    assert!(
+        initial_residual > 1.0e-3,
+        "{label}: initial guess already near a solution, relative residual {initial_residual}"
+    );
+
+    let result = square_linsolve(
+        &operator,
+        &rhs,
+        init,
+        &center.to_string(),
+        options,
+        Some(input_mapping),
+        Some(output_mapping),
+    )
+    .unwrap();
+    result.solution.verify_internal_consistency().unwrap();
+
+    // `SquareLinsolveResult` exposes no per-solve GMRES iteration count, so the
+    // nonzero initial residual above together with this small final residual
+    // show the correction actually ran.
+    assert!(result.sweeps > 0, "{label}: no sweeps performed");
+    let final_residual = result.residual.expect("residual is computed by default");
+    assert!(
+        final_residual < EXACT_TOL,
+        "{label}: final relative residual {final_residual} is too large"
+    );
+
+    let difference = relative_maxabs_difference(&result.solution.to_dense().unwrap(), &expected);
+    assert!(
+        difference < EXACT_TOL,
+        "{label}: dense solution mismatch, relative maxabs difference {difference}"
+    );
+}
+
+#[test]
+fn square_linsolve_with_site_free_leaf_state_matches_dense_solve() {
+    assert_square_linsolve_system(
+        site_free_leaf_linsolve_system(),
+        "a",
+        "square linsolve with a site-free leaf",
+    );
+}
+
+#[test]
+fn square_linsolve_with_site_free_internal_state_matches_dense_solve() {
+    assert_square_linsolve_system(
+        site_free_internal_linsolve_system(),
+        "a",
+        "square linsolve with a site-free internal node",
+    );
 }

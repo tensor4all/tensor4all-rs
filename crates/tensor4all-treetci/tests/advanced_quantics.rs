@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use anyhow::Result;
 use common::assert_real_samples_close;
@@ -93,11 +93,12 @@ fn quantics_grid_polynomial_matches_all_points_on_branching_tree() {
             tolerance: 1e-10,
             max_iter: 12,
             max_bond_dim: Some(8),
-            normalize_error: true,
+            scale_tolerance: true,
             ..Default::default()
         },
         Some(1),
         &SimpleProposer::seeded(0),
+        &mut (),
     )
     .unwrap();
 
@@ -146,7 +147,7 @@ fn quantics_grid_batch_evaluator_matches_point_evaluator() {
         tolerance: 1e-10,
         max_iter: 12,
         max_bond_dim: Some(8),
-        normalize_error: true,
+        scale_tolerance: true,
         ..Default::default()
     };
 
@@ -161,6 +162,7 @@ fn quantics_grid_batch_evaluator_matches_point_evaluator() {
         options.clone(),
         Some(1),
         &SimpleProposer::seeded(0),
+        &mut (),
     )
     .unwrap();
 
@@ -188,6 +190,7 @@ fn quantics_grid_batch_evaluator_matches_point_evaluator() {
         options,
         Some(1),
         &SimpleProposer::seeded(0),
+        &mut (),
     )
     .unwrap();
 
