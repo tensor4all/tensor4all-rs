@@ -272,15 +272,51 @@ fn cg_zero_rhs_with_nonzero_initial_guess() {
     let initial = PlainVector {
         data: vec![1.0, -2.0],
     };
-    let options = CgOptions {
-        atol: 1e-12,
-        ..CgOptions::default()
+    let calls = AtomicUsize::new(0);
+    let counted = |x: &PlainVector| {
+        calls.fetch_add(1, Ordering::Relaxed);
+        diagonal(x)
     };
-    let result = cg(diagonal, &rhs, &initial, &options).unwrap();
+    let result = cg(counted, &rhs, &initial, &CgOptions::default()).unwrap();
     assert!(result.converged);
-    assert!(result.iterations > 0);
-    assert!(result.solution.maxabs().unwrap() < 1e-12);
-    assert!(diagonal(&result.solution).unwrap().norm().unwrap() <= options.atol);
+    assert_eq!(result.iterations, 0);
+    assert_eq!(result.residual_norm, 0.0);
+    assert_eq!(result.solution.data, rhs.data);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn cg_wraps_krylov_errors_from_the_operator_callback() {
+    let rhs = PlainVector {
+        data: vec![1.0, 2.0],
+    };
+    let initial = PlainVector {
+        data: vec![0.0, 0.0],
+    };
+    for fail_at in [0, 1] {
+        let calls = AtomicUsize::new(0);
+        let apply = |x: &PlainVector| -> Result<PlainVector> {
+            if calls.fetch_add(1, Ordering::Relaxed) == fail_at {
+                return Err(KrylovError::NonPositiveCurvature {
+                    solver: "cg",
+                    iteration: 7,
+                    curvature: -1.0,
+                }
+                .into());
+            }
+            diagonal(x)
+        };
+        match cg(apply, &rhs, &initial, &CgOptions::default()).unwrap_err() {
+            KrylovError::Operation {
+                solver: "cg",
+                source,
+            } => assert!(matches!(
+                source.downcast_ref::<KrylovError>(),
+                Some(KrylovError::NonPositiveCurvature { iteration: 7, .. })
+            )),
+            other => panic!("callback error was not wrapped: {other:?}"),
+        }
+    }
 }
 
 #[test]

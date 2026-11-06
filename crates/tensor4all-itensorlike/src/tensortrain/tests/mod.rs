@@ -1825,3 +1825,80 @@ fn norm_environment_shape_overflow_is_reported() {
     assert!(TensorTrain::checked_norm_square(usize::MAX).is_err());
     assert!(TensorTrain::checked_norm_square(0).is_err());
 }
+
+fn two_site_chain(scale: f64) -> TensorTrain {
+    let (s0, link, s1) = (
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+    );
+    let t0 = IdxTensor::from_dense(
+        vec![s0, link.clone()],
+        [1.0, 2.0, -0.5, 3.0].map(|v| v * scale).to_vec(),
+    )
+    .unwrap();
+    let t1 = IdxTensor::from_dense(
+        vec![link, s1],
+        [0.25, -1.0, 2.0, 0.5].map(|v| v * scale).to_vec(),
+    )
+    .unwrap();
+    TensorTrain::new(vec![t0, t1]).unwrap()
+}
+
+#[test]
+fn norm_preserves_extreme_scales_beyond_norm_squared_range() {
+    for scale in [1e-150_f64, 1e150] {
+        let tt = two_site_chain(scale);
+        let expected = tt.to_dense().unwrap().norm().unwrap();
+        assert!((tt.norm().unwrap() / expected - 1.0).abs() < 1e-13);
+        assert!((TensorVectorSpace::norm(&tt).unwrap() / expected - 1.0).abs() < 1e-13);
+        let squared = tt.norm_squared().unwrap();
+        assert!(squared == 0.0 || squared.is_infinite(), "{squared:e}");
+    }
+    let tt = two_site_chain(1.0);
+    assert_eq!(tt.norm().unwrap(), tt.norm_squared().unwrap().sqrt());
+}
+
+#[test]
+fn norm_of_long_chain_falls_back_when_rescaled_square_overflows() {
+    // 1100 all-ones sites of dimension 2: ||tt|| = 2^550, ||tt||^2 = 2^1100.
+    let n = 1100;
+    let links: Vec<_> = (0..n - 1).map(|_| DynIndex::new_dyn(1)).collect();
+    let tensors = (0..n)
+        .map(|site| {
+            let mut indices = Vec::new();
+            if site > 0 {
+                indices.push(links[site - 1].clone());
+            }
+            indices.push(DynIndex::new_dyn(2));
+            if site + 1 < n {
+                indices.push(links[site].clone());
+            }
+            IdxTensor::from_dense(indices, vec![1.0_f64; 2]).unwrap()
+        })
+        .collect();
+    let tt = TensorTrain::new(tensors).unwrap();
+    assert!(tt.norm_squared().unwrap().is_infinite());
+    assert!((tt.norm().unwrap() / 2.0_f64.powi(550) - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn cg_solves_tiny_scale_tensor_train_identity_system() {
+    use tensor4all_core::krylov::{cg, CgOptions};
+    let rhs = two_site_chain(1e-150);
+    let initial = rhs.scale(AnyScalar::new_real(0.0)).unwrap();
+    let result = cg(
+        |x: &TensorTrain| Ok(x.clone()),
+        &rhs,
+        &initial,
+        &CgOptions::default(),
+    )
+    .unwrap();
+    assert!(result.converged);
+    assert!(result.iterations > 0);
+    let error = result.solution.sub(&rhs).unwrap().norm().unwrap();
+    assert!(
+        error / rhs.norm().unwrap() < 1e-12,
+        "relative error {error:e}"
+    );
+}

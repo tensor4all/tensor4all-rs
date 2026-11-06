@@ -1477,7 +1477,12 @@ impl TensorTrain {
 
     /// Compute the norm of the tensor train.
     ///
-    /// Returns ||self|| = sqrt(<self | self>).
+    /// Returns ||self|| = sqrt(<self | self>). Each site tensor is first
+    /// rescaled by an exact power of two near its largest entry, and the
+    /// exponents are reapplied to the norm rather than to its square. A finite
+    /// norm is therefore preserved even when [`Self::norm_squared`] would
+    /// underflow or overflow `f64`. Within the ordinary range the result equals
+    /// `self.norm_squared()?.sqrt()`.
     ///
     /// # Errors
     /// Returns a [`TensorTrainError`] when storage or contraction diagnostics
@@ -1497,7 +1502,40 @@ impl TensorTrain {
     /// # }
     /// ```
     pub fn norm(&self) -> Result<f64> {
-        Ok(self.norm_squared()?.sqrt())
+        if self.is_empty() {
+            return Ok(self.norm_squared()?.sqrt());
+        }
+        let mut scaled = self.clone();
+        let mut exponent = 0_i64;
+        for site in 0..self.len() {
+            let tensor = self.tensor(site)?;
+            let maxabs = tensor.maxabs()?;
+            if maxabs == 0.0 {
+                return Ok(0.0);
+            }
+            if !maxabs.is_finite() {
+                return Ok(self.norm_squared()?.sqrt());
+            }
+            // Two half steps keep each factor representable, including for
+            // subnormal f64 entries and for f32 storage.
+            let site_exponent = maxabs.log2().floor() as i32;
+            let half = site_exponent / 2;
+            let rescaled = tensor
+                .scale(AnyScalar::new_real(2.0_f64.powi(-half)))?
+                .scale(AnyScalar::new_real(2.0_f64.powi(half - site_exponent)))?;
+            scaled.set_tensor(site, rescaled)?;
+            exponent += i64::from(site_exponent);
+        }
+        let squared = scaled.norm_squared()?;
+        let norm = if squared == 0.0 || squared.is_infinite() {
+            // The rescaled chain can still leave f64 range through its own
+            // structure; the center of a unitary canonical form carries the norm.
+            scaled.orthogonalize(0)?;
+            scaled.tensor(0)?.norm()?
+        } else {
+            squared.sqrt()
+        };
+        Ok(scale_f64_pow2(norm, exponent))
     }
 
     fn norm_squared_fast_path(&self) -> Result<Option<f64>> {
@@ -2180,6 +2218,16 @@ impl TensorIndex for TensorTrain {
 // TensorLike implementation for TensorTrain
 // ============================================================================
 
+/// Multiply by `2^exponent` in steps whose factors are finite `f64` values.
+fn scale_f64_pow2(mut value: f64, mut exponent: i64) -> f64 {
+    while exponent != 0 && value != 0.0 && value.is_finite() {
+        let chunk = exponent.clamp(-1000, 1000);
+        value *= 2.0_f64.powi(chunk as i32);
+        exponent -= chunk;
+    }
+    value
+}
+
 impl TensorVectorSpace for TensorTrain {
     // ========================================================================
     // GMRES-required methods (fully supported)
@@ -2204,6 +2252,10 @@ impl TensorVectorSpace for TensorTrain {
 
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         TensorTrain::norm_squared(self)
+    }
+
+    fn norm(&self) -> std::result::Result<f64, Self::Error> {
+        TensorTrain::norm(self)
     }
 
     fn maxabs(&self) -> std::result::Result<f64, Self::Error> {

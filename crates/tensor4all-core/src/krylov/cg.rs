@@ -39,8 +39,8 @@ pub struct CgOptions {
     /// Default: `1e-10`. The stopping threshold is `max(atol, rtol * ||b||)`.
     pub rtol: f64,
     /// Nonnegative, finite absolute residual tolerance; default: `0.0`.
-    /// Set a positive value when a zero or very small RHS needs an absolute
-    /// error target. With both tolerances zero, only an exact residual passes.
+    /// Set a positive value when a very small RHS needs an absolute error
+    /// target. With both tolerances zero, only an exact residual passes.
     pub atol: f64,
     /// Nonnegative, finite allowance for the imaginary part of the directional
     /// Rayleigh quotient `q = p^H A p / p^H p`:
@@ -98,8 +98,9 @@ pub struct CgResult<T> {
 ///   The caller must supply a Hermitian positive-definite operator; checking
 ///   visited curvatures cannot certify the full matrix-free operator.
 /// * `b` - Right-hand side, in the same vector space as `x0`.
-/// * `x0` - Initial guess, which may be zero. A zero RHS still uses this guess
-///   and evaluates the true initial residual.
+/// * `x0` - Initial guess, which may be zero. A zero-norm RHS returns the zero
+///   vector, the exact solution, after the initial residual confirms that `x0`
+///   and `b` share a vector space.
 /// * `options` - Iteration budget and finite, nonnegative tolerances. In doubt,
 ///   start with [`CgOptions::default`] for double precision.
 ///
@@ -125,7 +126,9 @@ pub struct CgResult<T> {
 /// [`KrylovError::NumericalBreakdown`] for nonfinite or unusable recurrence
 /// quantities, and [`KrylovError::Operation`] for incompatible vector spaces,
 /// invalid tensor structures, operator errors, or failed tensor operations.
-/// Underlying operation errors retain their source chains.
+/// Underlying operation errors retain their source chains; an error returned by
+/// `apply_a`, including a `KrylovError` from a nested solve, is always wrapped in
+/// [`KrylovError::Operation`].
 ///
 /// # Examples
 /// ```
@@ -190,10 +193,28 @@ where
         }
         .into());
     }
+    // A KrylovError from the callback belongs to the callback, not to this
+    // solver; wrapping it keeps it from being reported as CG's own failure.
+    let apply_a = |x: &T| {
+        apply_a(x).map_err(|source| {
+            anyhow::Error::new(KrylovError::Operation {
+                solver: "cg",
+                source,
+            })
+        })
+    };
     let mut x = x0.clone();
     let mut r = true_residual(&apply_a, b, &x)?;
     let mut residual_norm = finite_norm(&r, 0, "initial residual norm")?;
     let mut iterations = 0;
+    if b_norm == 0.0 {
+        return Ok(CgResult {
+            solution: b.scale(AnyScalar::new_real(0.0))?,
+            iterations,
+            residual_norm: 0.0,
+            converged: true,
+        });
+    }
     if residual_norm <= threshold || options.max_iter == 0 {
         return Ok(CgResult {
             solution: x,
