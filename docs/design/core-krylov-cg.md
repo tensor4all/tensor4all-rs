@@ -17,8 +17,10 @@ with upstream copyright and license retained in the core crate.
   the **absolute true residual**, completed CG steps, and convergence flag.
   This matches the absolute residual convention of Hermitian Lanczos rather
   than GMRES's default relative-residual diagnostic.
-- A zero RHS follows the same validation and initial-residual path as any
-  other RHS; a nonzero initial guess is not discarded.
+- A zero-norm RHS returns the zero vector, the exact solution, after the
+  initial residual confirms that `x0` and `b` share a vector space.
+- Errors returned by the operator callback, including a `KrylovError` from a
+  nested solve, are wrapped in `KrylovError::Operation`.
 - Iteration exhaustion returns an approximate solution with the true residual
   and `converged = false`, unless the final true residual meets the threshold.
 - Invalid options, detected non-Hermitian curvature, nonpositive curvature,
