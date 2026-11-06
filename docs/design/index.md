@@ -18,6 +18,7 @@
 | [tenferro_ad_scalar_operator_extension_note.md](./tenferro_ad_scalar_operator_extension_note.md) | Tenferro AD scalar operator extension notes |
 | [build-profiles.md](./build-profiles.md) | Debug-free ordinary Cargo profiles, the opt-in full-debug release profile, and the backend-provider feature convention and supported configurations |
 | [core-krylov-cg.md](./core-krylov-cg.md) | Matrix-free conjugate gradients, true-residual convergence, breakdown errors, and KrylovKit provenance |
+| [core-krylov-bicgstab.md](./core-krylov-bicgstab.md) | Matrix-free BiCGSTAB, scaled short recurrence, true-residual restarts, and breakdown semantics |
 | [repository-growth-review.md](./repository-growth-review.md) | Issue #917 advisory file-size review, shared reviewer/backtest logic and rollout evidence |
 
 ## Tensor Networks
@@ -43,6 +44,7 @@
 | [gse-chain-mps-algorithm.md](./gse-chain-mps-algorithm.md) | Chain MPS global subspace expansion analysis for TreeTN GSE-TDVP planning |
 | [itensormps-compatible-zipup.md](./itensormps-compatible-zipup.md) | ITensorMPS-compatible chain zip-up contraction schedule and policy-aware decomposition follow-up |
 | [fit-sum.md](./fit-sum.md) | Variational fitting of compatible TreeTN sums without exact direct-sum materialization |
+| [linsolve-one-site-als.md](./linsolve-one-site-als.md) | One-site ALS linear solves: fixed ranks, exact QR transport, and validation scope |
 
 ## Automatic Differentiation
 

@@ -24,9 +24,9 @@ coincide (`V_in = V_out`).
   local external-index identity precheck (init vs RHS, `<ref|b>` conventions)
   happens inside `SquareLinsolveUpdater` (see the index-structure mismatch
   diagnostics in `crates/tensor4all-treetn/src/linsolve/square/updater.rs`).
-- One-site systems are rejected with an explicit error: the two-site sweep
-  planner produces an empty plan on a one-node network, which would otherwise
-  silently return the initial guess.
+- Single-node systems use one-site ALS with `LinsolveOptions::with_nsite(1)`.
+  The default two-site mode still rejects them rather than silently returning
+  the initial guess. See [One-site ALS linear solves](linsolve-one-site-als.md).
 
 ## Verification
 
@@ -36,6 +36,5 @@ coincide (`V_in = V_out`).
 - Matching/mismatching MPO-like structures:
   `crates/tensor4all-treetn/tests/linsolve_mpo_xb.rs`.
 
-## Follow-up
-
-- A real one-site local solve (rather than rejection) is not implemented.
+- One-site ALS dense references, rank limits, and transport/cache regressions:
+  `crates/tensor4all-treetn/tests/linsolve_one_site.rs`.

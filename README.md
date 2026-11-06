@@ -55,7 +55,7 @@ validated in CI. Longer runnable examples live in the
 | [tensor4all-treeaci](crates/tensor4all-treeaci/) | Experimental native TreeTN ACI and simultaneous n-way Hadamard products |
 | [tensor4all-treersi](crates/tensor4all-treersi/) | Experimental CPU RSI Hadamard products on TreeTN; validate actual output error |
 | [tensor4all-itensorlike](crates/tensor4all-itensorlike/) | ITensors.jl-like TensorTrain API |
-| [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology |
+| [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology, one-site ALS and two-site MALS linear solves |
 | [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI2 primary, TCI1 legacy) |
 | [tensor4all-quanticstci](crates/tensor4all-quanticstci/) | High-level Quantics TCI interface |
 | [tensor4all-interpolativeqtt](crates/tensor4all-interpolativeqtt/) | Interpolative QTT construction |

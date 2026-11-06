@@ -109,3 +109,59 @@ fn local_gmres_options_reject_zero_iteration_parameters() {
     assert!(local_gmres_options(&LinsolveOptions::default().with_gmres_restart_dim(0)).is_err());
     assert!(local_gmres_options(&LinsolveOptions::default().with_gmres_max_restarts(0)).is_err());
 }
+
+#[test]
+fn one_site_update_rejects_malformed_transport_regions() {
+    let mut updater = SquareLinsolveUpdater::<IdxTensor, usize>::new(
+        TreeTN::new(),
+        TreeTN::new(),
+        LinsolveOptions::default().with_nsite(1),
+    );
+    for (nodes, new_center) in [
+        (vec![], 0),
+        (vec![0, 1, 2], 2),
+        (vec![0, 1], 0),
+        (vec![0], 1),
+    ] {
+        let error = updater
+            .update(
+                TreeTN::new(),
+                &LocalUpdateStep { nodes, new_center },
+                &TreeTN::new(),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("oriented transport edge"));
+    }
+}
+
+#[test]
+fn one_site_update_requires_source_at_orthogonality_center() {
+    let bond = DynIndex::new_dyn(2);
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let t0 = IdxTensor::from_dense(vec![s0, bond.clone()], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let t1 = IdxTensor::from_dense(vec![bond, s1], vec![5.0_f64, 6.0, 7.0, 8.0]).unwrap();
+    let state = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0, t1], vec![0, 1])
+        .unwrap()
+        .canonicalize([1], crate::CanonicalizationOptions::default())
+        .unwrap();
+    let mut updater = SquareLinsolveUpdater::<IdxTensor, usize>::new(
+        TreeTN::new(),
+        TreeTN::new(),
+        LinsolveOptions::default().with_nsite(1),
+    );
+    let error = updater
+        .update(
+            state.clone(),
+            &LocalUpdateStep {
+                nodes: vec![0, 1],
+                new_center: 1,
+            },
+            &state,
+        )
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("orthogonality center"),
+        "{error}"
+    );
+}

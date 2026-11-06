@@ -15,7 +15,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 
 use tensor4all_core::krylov::{gmres_affine, gmres_affine_with_absolute_tolerance, GmresOptions};
-use tensor4all_core::{FactorizeOptions, IndexLike, TensorLike};
+use tensor4all_core::{Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
 
 use super::local_linop::LocalLinOp;
 use super::projected_state::ProjectedState;
@@ -116,7 +116,12 @@ impl<V: std::fmt::Debug> std::fmt::Display for LinsolveVerifyReport<V> {
 /// 1. Compute local operator (from ProjectedOperator environments)
 /// 2. Compute local RHS (from ProjectedState environments)
 /// 3. Solve local linear system using GMRES
-/// 4. Factorize the result and update the state
+/// 4. Transport the center by QR (one-site ALS) or split by SVD (two-site MALS).
+///
+/// Prefer [`super::square_linsolve`] to construct the sweep. For direct one-site
+/// use, supply oriented two-node steps `[source, destination]`, with
+/// `new_center = destination`, so both QR-modified tensors are synchronized by
+/// `after_step`. A single-node problem uses `[node]` with `new_center = node`.
 ///
 /// This is the V_in = V_out specialized version. The current solution x is used
 /// with a separate reference state (with different bond indices) for stable
@@ -528,6 +533,7 @@ where
         step: &LocalUpdateStep<V>,
         full_treetn_before: &TreeTN<T, V>,
     ) -> std::result::Result<(), TreeTNOperationError> {
+        self.options.validate_update_mode()?;
         // Initialize reference_state lazily on first call
         self.ensure_reference_state_initialized(full_treetn_before)?;
 
@@ -552,6 +558,52 @@ where
         step: &LocalUpdateStep<V>,
         full_treetn: &TreeTN<T, V>,
     ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError> {
+        if self.options.nsite == 1 {
+            if !(matches!(step.nodes.as_slice(), [node] if node == &step.new_center)
+                || matches!(step.nodes.as_slice(), [src, dst] if src != dst && dst == &step.new_center))
+            {
+                return Err(anyhow::anyhow!(
+                    "one-site ALS requires a single node or an oriented transport edge"
+                )
+                .into());
+            }
+            let node = step
+                .nodes
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("empty ALS update region"))?;
+            // The local problem is a valid projection only when the solved
+            // tensor is the orthogonality center.
+            let center = full_treetn.canonical_region();
+            if center.len() != 1 || !center.contains(node) {
+                return Err(anyhow::anyhow!(
+                    "one-site ALS must solve at the orthogonality center: \
+                     source {node:?}, canonical region {center:?}"
+                )
+                .into());
+            }
+            let src = subtree
+                .node_index(node)
+                .ok_or_else(|| anyhow::anyhow!("ALS source node missing"))?;
+            let init = subtree
+                .tensor(src)
+                .ok_or_else(|| anyhow::anyhow!("ALS source tensor missing"))?;
+            let solved = self.solve_local(std::slice::from_ref(node), init, full_treetn)?;
+            subtree.replace_tensor(src, solved)?;
+            if step.nodes.len() == 2 {
+                let dst = subtree
+                    .node_index(&step.new_center)
+                    .ok_or_else(|| anyhow::anyhow!("ALS destination node missing"))?;
+                subtree.sweep_edge_full_rank(
+                    src,
+                    dst,
+                    FactorizeAlg::QR,
+                    Canonical::Left,
+                    "ALS center transport",
+                )?;
+            }
+            subtree.set_canonical_region([step.new_center.clone()])?;
+            return Ok(subtree);
+        }
         // Contract tensors in the region into a single local tensor
         let init_local = self.contract_region(&subtree, &step.nodes)?;
         // Solve local linear problem using GMRES

@@ -7,11 +7,8 @@
 //!
 //! - [`gmres`]: Generalized Minimal Residual Method (GMRES) for non-symmetric systems
 //! - [`cg`]: Conjugate gradients for Hermitian positive-definite systems
+//! - [`bicgstab`]: BiCGSTAB for real nonsymmetric and complex non-Hermitian systems
 //! - [`hermitian_lanczos_lowest_eigenpair`]: Matrix-free lowest eigenpair solver for Hermitian operators
-//!
-//! # Future Extensions
-//!
-//! - BiCGSTAB for non-symmetric systems with better convergence properties
 //!
 //! # Example
 //!
@@ -46,7 +43,10 @@ use tensor4all_tensorbackend::{
 };
 
 mod cg;
+mod vector_ops;
 pub use cg::{cg, CgOptions, CgResult};
+mod bicgstab;
+pub use bicgstab::{bicgstab, BiCgStabOptions, BiCgStabResult};
 
 /// Error returned by the matrix-free Krylov solvers.
 #[derive(Debug, thiserror::Error)]
@@ -994,6 +994,7 @@ where
 }
 
 /// Solve `A x = b` using GMRES with an absolute residual tolerance.
+/// A zero-norm RHS returns the zero vector rather than the initial guess.
 /// This variant stops when `||b - A*x|| < atol`. The default [`gmres`] API uses
 /// relative residual tolerance and is preferred for scale-independent solves.
 /// # Errors
@@ -1028,6 +1029,7 @@ where
 }
 
 /// Solve `(a0 I + a1 A) x = b` using GMRES with relative residual tolerance.
+/// A zero-norm RHS returns the zero vector after validating the affine coefficients.
 /// The Arnoldi basis is built from the unshifted `A` callback, while affine
 /// coefficients are applied in the projected Hessenberg problem, matching
 /// KrylovKit's affine linear-solve convention.
@@ -1139,21 +1141,22 @@ where
         }};
     }
 
+    if a0.is_zero() && a1.is_zero() {
+        return Err(anyhow::Error::new(KrylovError::NoAffineCoefficient));
+    }
+
     let started = Instant::now();
     let b_norm = b.norm()?;
     if profile_enabled {
         profile.b_norm += started.elapsed();
     }
-    if b_norm < 1e-15 {
+    if b_norm == 0.0 {
         finish!(GmresResult {
-            solution: x0.clone(),
+            solution: b.scale(AnyScalar::new_real(0.0))?,
             iterations: 0,
             residual_norm: 0.0,
             converged: true,
         });
-    }
-    if a0.is_zero() && a1.is_zero() {
-        return Err(anyhow::Error::new(KrylovError::NoAffineCoefficient));
     }
     if a1.is_zero() {
         let started = Instant::now();
@@ -1563,10 +1566,10 @@ where
     x0.validate()?;
 
     let b_norm = b.norm()?;
-    if b_norm < 1e-15 {
-        // b is effectively zero, return x0
+    if b_norm == 0.0 {
+        // The zero vector solves every homogeneous linear system.
         return Ok(GmresResult {
-            solution: x0.clone(),
+            solution: b.scale(AnyScalar::new_real(0.0))?,
             iterations: 0,
             residual_norm: 0.0,
             converged: true,
@@ -1874,9 +1877,9 @@ where
     x0.validate()?;
 
     let b_norm = b.norm()?;
-    if b_norm < 1e-15 {
+    if b_norm == 0.0 {
         return Ok(GmresResult {
-            solution: x0.clone(),
+            solution: b.scale(AnyScalar::new_real(0.0))?,
             iterations: 0,
             residual_norm: 0.0,
             converged: true,
@@ -2376,12 +2379,8 @@ where
     }
 
     let b_norm = b.norm()?;
-    if b_norm < 1e-15 {
-        // b is effectively zero, return x0 or zero
-        let solution = match x0 {
-            Some(x) => x.clone(),
-            None => b.scale(AnyScalar::new_real(0.0))?,
-        };
+    if b_norm == 0.0 {
+        let solution = b.scale(AnyScalar::new_real(0.0))?;
         return Ok(RestartGmresResult {
             solution,
             iterations: 0,

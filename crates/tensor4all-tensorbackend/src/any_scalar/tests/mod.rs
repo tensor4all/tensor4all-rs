@@ -2,6 +2,60 @@ use super::*;
 use tenferro::DType;
 
 #[test]
+fn complex_division_preserves_finite_extreme_quotients() {
+    let c = Complex64::new;
+    let tiny = f64::from_bits(1);
+    for (lhs, rhs, expected) in [
+        (c(2.0, 4.0), c(0.0, 2.0), c(2.0, -1.0)),
+        (c(2.0, 4.0), c(-2.0, 0.0), c(-1.0, -2.0)),
+        (c(2.0, -1.0), c(3.0, 4.0), c(0.08, -0.44)),
+        (c(1e-200, 1e-200), c(1e-200, 1e-200), c(1.0, 0.0)),
+        (c(1e200, 1e200), c(1e200, 1e200), c(1.0, 0.0)),
+        (c(tiny, tiny), c(tiny, tiny), c(1.0, 0.0)),
+        (c(f64::MAX, f64::MAX), c(f64::MAX, f64::MAX), c(1.0, 0.0)),
+        (c(1.0, 0.0), c(1e-200, 1e-200), c(5e199, -5e199)),
+        (c(1.0, 0.0), c(1e200, 1e200), c(5e-201, -5e-201)),
+        (c(f64::MAX, f64::MAX), c(1.0, 1.0), c(f64::MAX, 0.0)),
+        (c(f64::MAX, tiny), c(1.0, 0.0), c(f64::MAX, tiny)),
+        (
+            c(f64::MAX, 0.0),
+            c(2.0, tiny),
+            c(f64::MAX / 2.0, -(f64::MAX * tiny) / 4.0),
+        ),
+        (c(0.0, 0.0), c(1e-200, -1e-200), c(0.0, 0.0)),
+        (c(1e200, 1e-200), c(1e-200, 1e200), c(0.0, -1.0)),
+    ] {
+        let actual: Complex64 =
+            (BackendScalar::from_value(lhs) / BackendScalar::from_value(rhs)).into();
+        for (got, want) in [(actual.re, expected.re), (actual.im, expected.im)] {
+            if want == 0.0 {
+                assert_eq!(got, 0.0, "{lhs:?}/{rhs:?}");
+            } else {
+                assert!(
+                    (got / want - 1.0).abs() < 1e-14,
+                    "{lhs:?}/{rhs:?}: {actual:?} != {expected:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn complex_division_retains_exceptional_value_classification() {
+    let c = Complex64::new;
+    for (lhs, rhs) in [(c(1.0, 1.0), c(0.0, 0.0)), (c(f64::NAN, 1.0), c(1.0, 1.0))] {
+        let actual: Complex64 =
+            (BackendScalar::from_value(lhs) / BackendScalar::from_value(rhs)).into();
+        assert!(actual.re.is_nan() && actual.im.is_nan());
+    }
+    let actual: Complex64 = (BackendScalar::new_complex(f64::INFINITY, 1.0)
+        / BackendScalar::new_complex(1.0, 1.0))
+    .into();
+    assert_eq!(actual.re, f64::INFINITY);
+    assert_eq!(actual.im, f64::NEG_INFINITY);
+}
+
+#[test]
 fn external_target_dtype_is_rejected_as_unsupported() {
     let native = NativeTensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     let error = promote_scalar_native(&native, DType::External(core::any::TypeId::of::<u8>()))

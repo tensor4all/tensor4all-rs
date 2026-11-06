@@ -116,6 +116,17 @@ This skill is for *using* the library. If the working tree is the tensor4all-rs 
 - Run `cargo fmt --all` and `cargo clippy` before committing. Doc examples must run with real assertions (no `ignore`/`no_run`); verify with `cargo test --doc --release --workspace` and `./scripts/test-mdbook.sh`.
 - Dense linalg, SVD/QR/einsum go through `tensor4all-tensorbackend` wrappers (don't write hand-rolled matrix kernels, don't form explicit inverses — use solves). Graph traversals use `petgraph` (via `node_name_network` / `site_index_network`).
 
+## Linear solves
+
+`tensor4all_treetn::square_linsolve` and `tensor4all_itensorlike::linsolve`
+solve `(a0 I + a1 A)x = b` with projected GMRES. Their `LinsolveOptions`
+default to two-site MALS (`nsite=2`), which can adapt ranks by SVD. Use
+`.with_nsite(1)` for one-site ALS and single-node systems: exact QR transports
+the center, ranks cannot grow, and redundant dimensions may shrink. Supply a
+sufficient initial bond space. Explicit bond caps/SVD policies are invalid in
+one-site mode. TreeTN results expose the true residual and convergence status;
+the MPS facade returns the swept state.
+
 ## Sources of truth
 
 - Library APIs: source + rustdoc (online rustdoc at `https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_core/`).
