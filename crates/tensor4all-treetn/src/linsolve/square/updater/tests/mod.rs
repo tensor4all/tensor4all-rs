@@ -109,3 +109,27 @@ fn local_gmres_options_reject_zero_iteration_parameters() {
     assert!(local_gmres_options(&LinsolveOptions::default().with_gmres_restart_dim(0)).is_err());
     assert!(local_gmres_options(&LinsolveOptions::default().with_gmres_max_restarts(0)).is_err());
 }
+
+#[test]
+fn one_site_update_rejects_malformed_transport_regions() {
+    let mut updater = SquareLinsolveUpdater::<IdxTensor, usize>::new(
+        TreeTN::new(),
+        TreeTN::new(),
+        LinsolveOptions::default().with_nsite(1),
+    );
+    for (nodes, new_center) in [
+        (vec![], 0),
+        (vec![0, 1, 2], 2),
+        (vec![0, 1], 0),
+        (vec![0], 1),
+    ] {
+        let error = updater
+            .update(
+                TreeTN::new(),
+                &LocalUpdateStep { nodes, new_center },
+                &TreeTN::new(),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("oriented transport edge"));
+    }
+}

@@ -12,14 +12,32 @@ pub enum GmresToleranceMode {
     Absolute,
 }
 
-/// Options for the linsolve algorithm.
+/// Options for one-site ALS or two-site MALS linear solves.
+///
+/// Two-site updates can adapt bond dimensions; one-site updates keep the initial
+/// bond spaces and cannot recover a solution requiring larger ranks.
+///
+/// # Examples
+/// ```
+/// use tensor4all_treetn::LinsolveOptions;
+/// let options = LinsolveOptions::new(3).with_nsite(1);
+/// assert_eq!(options.nsite, 1);
+/// assert_eq!(options.nfullsweeps, 3);
+/// ```
 #[derive(Debug, Clone)]
 pub struct LinsolveOptions {
     /// Number of full sweeps to perform.
     ///
     /// A full sweep visits each edge twice (forward and backward) using an Euler tour.
     pub nfullsweeps: usize,
-    /// Truncation options for factorization.
+    /// Number of tensors optimized at once: `1` for ALS, `2` for MALS (default).
+    ///
+    /// One-site ALS does not grow bonds. Exact QR may remove structurally
+    /// redundant dimensions. Use two-site updates when the required ranks are unknown.
+    pub nsite: usize,
+    /// Truncation options for two-site factorization.
+    ///
+    /// Explicit bond caps or SVD policies are invalid with `nsite = 1`.
     pub truncation: TruncationOptions,
     /// Tolerance for GMRES convergence.
     pub gmres_tol: f64,
@@ -50,6 +68,7 @@ impl Default for LinsolveOptions {
     fn default() -> Self {
         Self {
             nfullsweeps: 5,
+            nsite: 2,
             truncation: TruncationOptions::default(),
             gmres_tol: 1e-10,
             gmres_tolerance_mode: GmresToleranceMode::Relative,
@@ -76,6 +95,38 @@ impl LinsolveOptions {
     pub fn with_nfullsweeps(mut self, nfullsweeps: usize) -> Self {
         self.nfullsweeps = nfullsweeps;
         self
+    }
+
+    /// Choose one-site ALS (`1`) or two-site MALS (`2`, the default).
+    ///
+    /// One-site ALS uses the initial bond spaces without SVD truncation or bond
+    /// growth; it can fail to converge if those spaces are too small. QR can
+    /// remove structurally redundant dimensions. Invalid values and one-site
+    /// truncation controls are rejected by [`crate::square_linsolve`].
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_treetn::LinsolveOptions;
+    /// assert_eq!(LinsolveOptions::default().with_nsite(1).nsite, 1);
+    /// ```
+    pub fn with_nsite(mut self, nsite: usize) -> Self {
+        self.nsite = nsite;
+        self
+    }
+
+    pub(crate) fn validate_update_mode(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            matches!(self.nsite, 1 | 2),
+            "linsolve supports nsite=1 or nsite=2, got nsite={}",
+            self.nsite
+        );
+        anyhow::ensure!(
+            self.nsite != 1
+                || (self.truncation.max_bond_dim().is_none()
+                    && self.truncation.svd_policy().is_none()),
+            "one-site ALS does not truncate bonds; use nsite=2 for max_bond_dim or svd_policy"
+        );
+        Ok(())
     }
 
     /// Set truncation options.

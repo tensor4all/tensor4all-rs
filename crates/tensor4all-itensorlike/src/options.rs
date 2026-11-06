@@ -463,7 +463,8 @@ impl ContractOptions {
 
 /// Options for the linear solver.
 ///
-/// Solves `(a₀ + a₁ * A) * x = b` using DMRG-like sweeps with local GMRES.
+/// Solves `(a₀ + a₁ * A) * x = b` using two-site MALS sweeps with local GMRES
+/// by default. Use [`Self::with_nsite`] for one-site ALS without bond growth.
 ///
 /// # Examples
 ///
@@ -484,6 +485,7 @@ impl ContractOptions {
 #[derive(Debug, Clone)]
 pub struct LinsolveOptions {
     nhalfsweeps: usize,
+    nsite: usize,
     max_bond_dim: Option<usize>,
     svd_policy: Option<SvdTruncationPolicy>,
     gmres_tol: f64,
@@ -499,6 +501,7 @@ impl Default for LinsolveOptions {
     fn default() -> Self {
         Self {
             nhalfsweeps: 10,
+            nsite: 2,
             max_bond_dim: None,
             svd_policy: None,
             gmres_tol: 1e-10,
@@ -522,6 +525,33 @@ impl LinsolveOptions {
             nhalfsweeps: nsweeps.saturating_mul(2),
             ..Default::default()
         }
+    }
+
+    /// Choose one-site ALS (`1`) or two-site MALS (`2`, the default).
+    ///
+    /// One-site ALS uses the initial bond spaces without bond growth. Exact QR
+    /// can remove redundant dimensions. Bond caps and SVD policies are invalid
+    /// in this mode. Invalid values are rejected when solving.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_itensorlike::LinsolveOptions;
+    /// assert_eq!(LinsolveOptions::new(3).with_nsite(1).nsite(), 1);
+    /// ```
+    pub fn with_nsite(mut self, nsite: usize) -> Self {
+        self.nsite = nsite;
+        self
+    }
+
+    /// Get the number of optimized tensors per update (`1` for ALS, `2` for MALS).
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_itensorlike::LinsolveOptions;
+    /// assert_eq!(LinsolveOptions::default().nsite(), 2);
+    /// ```
+    pub fn nsite(&self) -> usize {
+        self.nsite
     }
 
     /// Set the explicit SVD truncation policy.
