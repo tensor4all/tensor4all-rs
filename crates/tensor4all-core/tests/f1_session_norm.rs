@@ -15,6 +15,57 @@ fn session_context() -> CpuExecutionContext {
 }
 
 #[test]
+fn norm_extreme_scales_match_known_values_on_session() {
+    let context = session_context();
+    for scale in [1e-200_f64, 1e200] {
+        let index = Index::new_dyn(2);
+        let real =
+            IdxTensor::from_dense(vec![index.clone()], vec![3.0 * scale, 4.0 * scale]).unwrap();
+        let complex = IdxTensor::from_dense(
+            vec![index],
+            vec![
+                Complex64::new(3.0 * scale, 4.0 * scale),
+                Complex64::new(0.0, 0.0),
+            ],
+        )
+        .unwrap();
+        for tensor in [&real, &complex] {
+            let norm = context
+                .with_concrete_session(|session| norm_on_session(session, tensor))
+                .unwrap()
+                .unwrap();
+            assert!((norm / scale - 5.0).abs() < 1e-14);
+        }
+    }
+}
+
+#[test]
+fn session_norm_serves_small_and_large_single_precision_payloads() {
+    use num_complex::Complex32;
+    let context = session_context();
+    for scale in [1e-30_f32, 1e20] {
+        let index = Index::new_dyn(2);
+        let real =
+            IdxTensor::from_dense(vec![index.clone()], vec![3.0 * scale, 4.0 * scale]).unwrap();
+        let complex = IdxTensor::from_dense(
+            vec![index],
+            vec![
+                Complex32::new(3.0 * scale, 4.0 * scale),
+                Complex32::new(0.0, 0.0),
+            ],
+        )
+        .unwrap();
+        for tensor in [real, complex] {
+            let norm = context
+                .with_concrete_session(|session| norm_on_session(session, &tensor))
+                .unwrap()
+                .unwrap();
+            assert!((norm / f64::from(scale) - 5.0).abs() < 1e-6);
+        }
+    }
+}
+
+#[test]
 fn norm_squared_matches_the_compatibility_route_for_both_served_dtypes() {
     let context = session_context();
     let i = Index::new_dyn(2);

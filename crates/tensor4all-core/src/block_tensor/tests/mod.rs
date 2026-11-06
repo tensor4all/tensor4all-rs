@@ -2,12 +2,68 @@ use super::*;
 use crate::defaults::idx_tensor::IdxTensor;
 use crate::defaults::DynIndex;
 use crate::index_like::IndexLike;
-use crate::krylov::{gmres, GmresOptions};
+use crate::krylov::{cg, gmres, CgOptions, GmresOptions};
 use crate::tensor_like::TensorContractionLike;
 
 /// Helper to create a 1D tensor (vector) with given data and shared index.
 fn make_vector_with_index(data: Vec<f64>, idx: &DynIndex) -> IdxTensor {
     IdxTensor::from_dense(vec![idx.clone()], data).unwrap()
+}
+
+#[test]
+fn norm_extreme_scales_combine_block_norms_without_squaring() {
+    for scale in [1e-200_f64, 1e200] {
+        let index = DynIndex::new_dyn(1);
+        let blocks = vec![
+            make_vector_with_index(vec![3.0 * scale], &index),
+            make_vector_with_index(vec![4.0 * scale], &index),
+        ];
+        let tensor = BlockTensor::new(blocks, (2, 1)).unwrap();
+        assert!((tensor.norm().unwrap() / scale - 5.0).abs() < 1e-14);
+    }
+}
+
+#[test]
+fn norm_propagates_nan_errors_and_preserves_zero_and_infinity() {
+    let index = DynIndex::new_dyn(1);
+    for value in [0.0, f64::INFINITY] {
+        let blocks = vec![
+            make_vector_with_index(vec![value], &index),
+            make_vector_with_index(vec![0.0], &index),
+        ];
+        assert_eq!(
+            BlockTensor::new(blocks, (2, 1)).unwrap().norm().unwrap(),
+            value
+        );
+    }
+    let blocks = vec![make_vector_with_index(vec![f64::NAN], &index)];
+    assert!(BlockTensor::new(blocks, (1, 1)).unwrap().norm().is_err());
+}
+
+#[test]
+fn cg_solves_extreme_scale_block_identity_systems() {
+    for scale in [1e-200_f64, 1e200] {
+        let index = DynIndex::new_dyn(1);
+        let rhs = BlockTensor::new(
+            vec![
+                make_vector_with_index(vec![3.0 * scale], &index),
+                make_vector_with_index(vec![4.0 * scale], &index),
+            ],
+            (2, 1),
+        )
+        .unwrap();
+        let initial = rhs.scale(AnyScalar::new_real(0.0)).unwrap();
+        let result = cg(
+            |x: &BlockTensor<IdxTensor>| Ok(x.clone()),
+            &rhs,
+            &initial,
+            &CgOptions::default(),
+        )
+        .unwrap();
+        assert!(result.converged);
+        assert!(result.solution.sub(&rhs).unwrap().maxabs().unwrap() / scale < 1e-12);
+        assert!(result.residual_norm / scale <= 5e-10);
+    }
 }
 
 // ========================================================================

@@ -10,6 +10,9 @@ Core tensor library: Index system, dynamic-rank Tensor, contraction, SVD/QR/LU f
   `Complex64`; `f32` and `Complex32` tensors retain eager authoritative payloads
 - `contract()` / `contract_with_options()` — connected tensor-network contraction
 - `svd()` / `qr()` — factorizations with truncation support
+- `krylov::cg()` — matrix-free conjugate gradients for Hermitian
+  positive-definite systems, with true-residual convergence checks
+- `krylov::gmres()` — restarted matrix-free GMRES for general linear systems
 
 ## Example
 

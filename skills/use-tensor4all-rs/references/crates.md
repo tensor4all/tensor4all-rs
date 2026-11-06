@@ -8,6 +8,16 @@ All `tensor4all_*` crate names map to `tensor4all-<name>` packages.
 
 Indices, dynamic-rank tensors, contraction, factorization. Most other crates re-export from here.
 
+- `krylov::cg(apply_a, &b, &x0, &CgOptions) -> Result<CgResult<T>, KrylovError>` —
+  matrix-free conjugate gradients over `TensorVectorSpace` for Hermitian
+  positive-definite operators. `CgOptions { max_iter, rtol, atol, hermitian_tol }`;
+  defaults `100`, `1e-10`, `0`, `1e-10`. Convergence uses the true residual
+  `||b-Ax|| <= max(atol, rtol*||b||)`. `CgResult::residual_norm` is absolute;
+  `GmresResult::residual_norm` is relative by default. No preconditioning,
+  truncation, or TreeTN local-solver selection is included.
+  Working vectors are rescaled by powers of two. The Hermitian check applies
+  `hermitian_tol * max(1, |q|)` to `q = p^H A p / p^H p`.
+
 - `Index` (alias `DynIndex = Index<DynId, TagSet>`) — identifies a tensor axis by unique identity, optional tags, optional prime level.
   - `Index::new_dyn(dim)` — site index, auto id, no tags.
   - `Index::new_dyn_with_tag(dim, tag) -> Result` — named index.
@@ -19,6 +29,8 @@ Indices, dynamic-rank tensors, contraction, factorization. Most other crates re-
   - `IdxTensor::from_dense(indices, data)` — column-major `data`; first index varies fastest.
   - `IdxTensor::zeros::<f64>(indices)`, `::random::<f64, _>(&mut rng, indices)`.
   - `.to_vec::<f32>()` / `.to_vec::<f64>()` / `.to_vec::<Complex32>()` / `.to_vec::<Complex64>()`, `.sum()`, `.dims()`.
+  - `.norm()` uses scaled accumulation directly. Prefer it to
+    `.norm_squared()?.sqrt()` when the norm's square might underflow or overflow.
 - `contract(&[&a, &b, ...])` — sum over all shared indices; inputs must be connected (else error). `outer_product(&a, &b)` for disconnected products.
 - `factorize(&t, &[left_indices], &opts) -> FactorizeResult { left, right, rank, singular_values }`.
   - `FactorizeOptions::svd().with_svd_policy(SvdTruncationPolicy::new(rtol))` / `.with_max_bond_dim(n)`.

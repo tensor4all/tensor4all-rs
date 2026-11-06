@@ -378,9 +378,7 @@ fn idx_tensor_distance_uses_typed_metric_error() {
     let result: Result<f64, IdxTensorError> = tensor.distance(&tensor);
     assert!(matches!(
         result,
-        Err(IdxTensorError::NaNInput {
-            operation: "norm_squared"
-        })
+        Err(IdxTensorError::NaNInput { operation: "norm" })
     ));
 }
 

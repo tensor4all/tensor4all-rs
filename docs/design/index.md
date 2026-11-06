@@ -17,6 +17,7 @@
 | [torch_backend.md](./torch_backend.md) | PyTorch backend design exploration |
 | [tenferro_ad_scalar_operator_extension_note.md](./tenferro_ad_scalar_operator_extension_note.md) | Tenferro AD scalar operator extension notes |
 | [build-profiles.md](./build-profiles.md) | Debug-free ordinary Cargo profiles, the opt-in full-debug release profile, and the backend-provider feature convention and supported configurations |
+| [core-krylov-cg.md](./core-krylov-cg.md) | Matrix-free conjugate gradients, true-residual convergence, breakdown errors, and KrylovKit provenance |
 | [repository-growth-review.md](./repository-growth-review.md) | Issue #917 advisory file-size review, shared reviewer/backtest logic and rollout evidence |
 
 ## Tensor Networks

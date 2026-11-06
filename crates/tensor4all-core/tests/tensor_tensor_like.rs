@@ -120,6 +120,34 @@ fn tensor_vector_space_fallible_metrics_propagate_nan_inputs() {
 }
 
 #[test]
+fn norm_extreme_scales_preserve_finite_nonzero_values() {
+    use num_complex::Complex64;
+    for scale in [1e-200_f64, 1e200] {
+        let i = DynIndex::new_dyn(2);
+        let real = IdxTensor::from_dense(vec![i.clone()], vec![3.0 * scale, 4.0 * scale]).unwrap();
+        let complex = IdxTensor::from_dense(
+            vec![i],
+            vec![
+                Complex64::new(3.0 * scale, 4.0 * scale),
+                Complex64::new(0.0, 0.0),
+            ],
+        )
+        .unwrap();
+        for tensor in [real, complex] {
+            assert!((tensor.norm().unwrap() / scale - 5.0).abs() < 1e-14);
+            assert!((TensorVectorSpace::norm(&tensor).unwrap() / scale - 5.0).abs() < 1e-14);
+            // Squared norms retain their documented floating-point range.
+            let squared = tensor.norm_squared().unwrap();
+            if scale < 1.0 {
+                assert_eq!(squared, 0.0);
+            } else {
+                assert!(squared.is_infinite());
+            }
+        }
+    }
+}
+
+#[test]
 fn test_contract_three_tensor_chain() {
     // Create three tensors: A(i,j), B(j,k), C(k,l)
     // j is shared between A and B, k is shared between B and C.
