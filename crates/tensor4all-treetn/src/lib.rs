@@ -106,6 +106,7 @@ pub use treetn::{
     low_rank_initializer_tree_tn,
     partial_contract,
     partial_contract_to_site_network,
+    partial_contract_with_outcome,
     sum_over_indices,
     weighted_sum_over_index_pairs,
     BoundaryEdge,

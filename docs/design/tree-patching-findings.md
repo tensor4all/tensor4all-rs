@@ -50,6 +50,9 @@ Exact detection of whether a cap discarded nonzero weight needs core
 - Each pair attaches a structured copy tensor (`IdxTensor::copy_tensor`,
   diagonal storage) and runs the contraction selected by
   `ContractionOptions`; nothing is materialized densely.
+- `partial_contract_with_outcome` exposes ranks and saturation for the same
+  specifications, including diagonal-only Hadamard operations. Its tree hook
+  is limited to equal input topologies without requested output ordering.
 - Patch compatibility for pairs of distinct index identities is not defined
   yet; that rule belongs to M6.
 

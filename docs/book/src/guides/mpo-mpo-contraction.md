@@ -32,6 +32,14 @@ methods classify after completion. The FLOP counts below describe completed
 runs. Stored-rank saturation is not an error estimate or evidence that the
 truncation cap discarded weight.
 
+For selected site contractions or Hadamard products, use
+`tensor4all_treetn::partial_contract_with_outcome` with a
+`PartialContractionSpec`; diagonal pairs keep the left index. It shares the
+ordinary partial-contraction preparation and restoration. Equal topologies
+without `output_order` may use the tree hook. Ordered outputs and mismatched
+topologies finish before classification so output validation, final report
+order and the explicitly bounded dense/reference fallback retain their semantics.
+
 ## 1. Setup and notation
 
 Consider two MPOs \\(A\\) and \\(B\\) of length \\(L\\) and their compressed

@@ -23,6 +23,9 @@ use tensor4all_core::{
     TensorConstructionLike, TensorContractionLike, TensorIndex, TensorLike,
 };
 
+mod outcome;
+pub use outcome::partial_contract_with_outcome;
+
 type DiagonalPairApplication<V> = (
     TreeTN<IdxTensor, V>,
     TreeTN<IdxTensor, V>,
@@ -870,11 +873,41 @@ where
     V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
 {
+    let (mut a_modified, mut b_modified, restore_from, restore_to) =
+        prepare_partial_operands(a, b, spec, &options)?;
+
+    let result = if a_modified.same_topology(&b_modified) {
+        align_contract_pair_site_nodes(&a_modified, &mut b_modified, &spec.contract_pairs)?;
+        connect_nodewise_outer_product_spectators(&mut a_modified, &mut b_modified)?;
+        contract(&a_modified, &b_modified, center, options)
+            .context("partial_contract: contraction failed")?
+    } else {
+        contract_mismatched_topologies(&a_modified, &b_modified, center, options)?
+    };
+
+    finish_partial_result(
+        result,
+        &restore_from,
+        &restore_to,
+        spec.output_order.as_deref(),
+    )
+    .map_err(Into::into)
+}
+
+fn prepare_partial_operands<V>(
+    a: &TreeTN<IdxTensor, V>,
+    b: &TreeTN<IdxTensor, V>,
+    spec: &PartialContractionSpec<DynIndex>,
+    options: &ContractionOptions,
+) -> Result<DiagonalPairApplication<V>>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+{
     // before any preparation, so that no fallback path can skip the option checks
-    super::contraction::validate_contract_options(&options)?;
+    super::contraction::validate_contract_options(options)?;
     validate_partial_contraction_spec(a, b, spec)?;
 
-    let (mut a_modified, mut b_modified, restore_from, restore_to) =
+    let (a_modified, mut b_modified, restore_from, restore_to) =
         apply_diagonal_pairs(a, b, &spec.diagonal_pairs)?;
 
     for (idx_a, idx_b) in &spec.contract_pairs {
@@ -887,23 +920,26 @@ where
         })?;
     }
 
-    let mut result = if a_modified.same_topology(&b_modified) {
-        align_contract_pair_site_nodes(&a_modified, &mut b_modified, &spec.contract_pairs)?;
-        connect_nodewise_outer_product_spectators(&mut a_modified, &mut b_modified)?;
-        contract(&a_modified, &b_modified, center, options)
-            .context("partial_contract: contraction failed")?
-    } else {
-        contract_mismatched_topologies(&a_modified, &b_modified, center, options)?
-    };
+    Ok((a_modified, b_modified, restore_from, restore_to))
+}
 
+fn finish_partial_result<V>(
+    mut result: TreeTN<IdxTensor, V>,
+    restore_from: &[DynIndex],
+    restore_to: &[DynIndex],
+    output_order: Option<&[DynIndex]>,
+) -> Result<TreeTN<IdxTensor, V>>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug + Ord,
+{
     if !restore_from.is_empty() {
-        result = result.replace_indices(&restore_from, &restore_to).context(
+        result = result.replace_indices(restore_from, restore_to).context(
             "partial_contract: failed to restore surviving left-hand indices after diagonal pairing",
         )?;
     }
 
-    if let Some(output_order) = &spec.output_order {
-        apply_output_order(result, output_order).map_err(TreeTNOperationError::from)
+    if let Some(output_order) = output_order {
+        apply_output_order(result, output_order)
     } else {
         Ok(result)
     }

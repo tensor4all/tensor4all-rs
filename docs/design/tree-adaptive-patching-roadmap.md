@@ -359,8 +359,8 @@ unresolved-issue list is in this roadmap or the findings record.
 ### M6. Adaptive patched contraction (L)
 
 Status: **partially implemented.** Existing project-first and selected-output
-contraction are reusable. Outcome reporting and the general-tree SVD zip-up
-abort hook are implemented. The remaining [M6 proposal](./tree-patched-contraction.md)
+contraction are reusable. Outcome reporting, the general-tree SVD zip-up
+abort hook and the partial-contraction outcome adapter are implemented. The remaining [M6 proposal](./tree-patched-contraction.md)
 covers adaptive adoption, Hadamard and sibling merging; those stages retain their
 own design and numerical validation gates.
 

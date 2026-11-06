@@ -6,7 +6,9 @@ Reporting and deterministic general-tree SVD zip-up cancellation are implemented
 on 2026-11-06 against `097e2927`, following the approved implementation slices.
 `contract_with_outcome` and its context counterpart can stop at a retained
 tree edge; the chain path and other methods still classify completed results.
-Caller-RNG entries remain post-hoc. Adaptive-driver adoption remains future work.
+Caller-RNG entries remain post-hoc. `partial_contract_with_outcome` also reuses
+the hook for equal topologies without `output_order`; its other paths are
+post-hoc. Adaptive-driver adoption remains future work.
 Part of milestone M6 (adaptive patched contraction) of
 [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md);
 background in section 1 of
@@ -49,10 +51,10 @@ the separate chain schedule performs canonicalization and final truncation.
   first version (see Method coverage). The former Fit initializer dependency
   #656 landed through #981; it is no longer an external blocker. Fit's
   reporting is now implemented; early abort for Fit is still out of scope.
-- Outcome variants of `partial_contract` and `hadamard`, and of the low-level
-  SRC entry points `contract_src_with_rng` and `contract_src_with_rng_in`.
-  Patched element-wise products are an M6 item and will reuse the entry point
-  below.
+- Outcome variants of the low-level SRC entry points `contract_src_with_rng`
+  and `contract_src_with_rng_in`. Partial/Hadamard operations use the implemented
+  `partial_contract_with_outcome` with diagonal pairs; no separate Hadamard
+  outcome convenience function or partial context/caller-RNG entry is added.
 
 ## Public surface
 
@@ -245,6 +247,43 @@ implementation's analytical baselines and post-hoc reports are software
 oracles; they are not additional claims made by the papers.
 
 ## Adoption in `partitionedtreetn`
+
+### Partial-contraction adapter
+
+`partial_contract_with_outcome` shares ordinary partial contraction's option
+and pair validation, diagonal preparation, site alignment, spectator handling
+and output restoration. It is available from the crate root and the
+`partial_contraction` module. A diagonal-only specification is the existing
+Hadamard operation expressed through this entry.
+
+This is an **independent adapter argument**, additional to the literature
+and tree-loop proof above. Copy tensors are contracted into existing local
+tensors, not inserted as graph vertices. Alignment and spectator preparation
+finish before the outcome call. For a valid completed result, restoring the
+temporary kept indices only renames external legs with equal dimensions:
+it cannot resize the retained links or change their node names. Thus reports
+on this prepared network describe the restored network, and the tree hook's
+retained-edge argument applies without excluding imaginary auxiliary edges.
+
+Two paths deliberately remain post-hoc:
+
+- `output_order` validates and rebuilds the final node enumeration. The current
+  implementation does not change ranks, but its validation must finish before
+  reporting saturation, and reports must follow the rebuilt network's order.
+- Mismatched input topologies use ordinary structural alignment and its optional,
+  explicitly bounded dense/reference fallback. A structural failure can cause
+  a different result to be constructed, so intermediate ranks cannot determine
+  the final classification. Reports include the final union topology's retained
+  dimension-one structural links, as well as other links.
+
+The compatibility entry preserves existing seeded RSVD/SRC and context
+acceptance/refusal. The existing partial API has no caller-owned-context or
+caller-RNG counterpart; adding those requires preparation/restore operations
+with the same execution ownership, not merely delegating the middle contraction.
+Preprocessing costs are always paid. The paper motivates local rank-cap
+stopping; it does not establish this adapter's index or topology equivalence.
+
+### Adaptive-driver adoption
 
 The former #788 prerequisite is resolved. Adoption preserves the existing
 ordinary and selected baselines described below.

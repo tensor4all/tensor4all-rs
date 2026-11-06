@@ -412,7 +412,7 @@ fn tree_abort_threshold(
     }
 }
 
-pub(super) fn finish<T, V>(
+pub(in crate::treetn) fn finish<T, V>(
     network: TreeTN<T, V>,
     center: &V,
     threshold: Option<NonZeroUsize>,

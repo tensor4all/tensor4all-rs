@@ -10,7 +10,7 @@ pub(in crate::treetn::contraction) fn record_factorization() {
     FACTORIZATIONS.with(|count| count.set(count.get() + 1));
 }
 
-pub(in crate::treetn::contraction) fn measure<R>(run: impl FnOnce() -> R) -> (R, usize) {
+pub(in crate::treetn) fn measure<R>(run: impl FnOnce() -> R) -> (R, usize) {
     FACTORIZATIONS.with(|count| count.set(0));
     let output = run();
     (output, FACTORIZATIONS.with(Cell::get))

@@ -34,6 +34,14 @@ entry's dtype and AD behavior. Errors from skipped work are not evaluated;
 option validation and explicit-context ownership validation happen first.
 Existing `contract` calls collect no report.
 
+`partial_contract_with_outcome` applies the same outcome contract to selected
+contracted/diagonal site pairs. Diagonal pairs express a Hadamard product while
+preserving the left indices. Equal-topology inputs without `output_order` may
+reuse the tree hook; ordered outputs and mismatched topologies complete their
+existing validation/alignment/fallback pipeline before classification. Reports
+describe every retained edge of the final network. This entry preserves the
+existing partial API's seeded methods and compatibility-context boundary.
+
 ## Example
 
 ```rust

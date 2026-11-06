@@ -10,8 +10,9 @@ before implementation. It builds on, and does not replace, the
 the implemented rank reporting API and general-tree SVD zip-up abort hook
 for `tensor4all-treetn`.
 
-The outcome API, its context/caller-RNG companions and deterministic general-tree
-SVD zip-up abort are implemented. Adaptive adoption, partitioned Hadamard and
+The outcome API, its context/caller-RNG companions, deterministic general-tree
+SVD zip-up abort and partial-contraction outcome adapter are implemented.
+Adaptive adoption, partitioned Hadamard and
 sibling merging are not implemented. This record was
 originally written against `4d4fb6fc` and synchronized on 2026-11-06 against
 `origin/main` at `097e2927`. Existing adaptive contraction and subsequently
@@ -145,8 +146,9 @@ translation of the right index `b` to the surviving `a`. The rule is computed
 from projectors only, so every pair's output projector is known before any
 contraction.
 
-Contraction pairs of distinct identity (`partial_contract`'s
-`contract_pairs`) follow the same rule but get no public entry point in M6;
+Partitioned operations with contraction pairs of distinct identity
+(`partial_contract`'s `contract_pairs`) follow the same rule but get no new
+partitioned public entry point in M6;
 see [Non-goals](#non-goals).
 
 ### 2. Early abort in the probe
@@ -158,10 +160,11 @@ amendments:
 - **Element-wise products.** `partial_contract` contracts through
   `contraction::contract` after attaching the diagonal copy tensors
   (`partial_contraction.rs`), so an outcome variant is a thin wrapper. This
-  record adds `partial_contract_with_outcome` with the same `abort_at_rank`
-  semantics, which reverses the outcome record's non-goal for
-  `partial_contract` and `hadamard` (that non-goal deferred exactly this
-  case to M6). The SRC entry points stay out of scope.
+  record's `partial_contract_with_outcome` is implemented with the same
+  `abort_at_rank` semantics. Equal topologies without `output_order` reuse the
+  tree hook; ordered outputs and mismatched topologies classify only after
+  completion. The outcome record documents this adapter's independent proof
+  and limits. The low-level SRC entry points stay out of scope.
 - **Grouping before contraction.** Section 1 makes the output projector of a
   pair computable from projectors, so groups (section 3) are formed without
   contracting, and a group's contributions are contracted lazily, in
@@ -414,8 +417,8 @@ pushes and PR creation still require the user's approval:
 1. Golden data for ordinary/selected `contract_adaptive`; reuse current
    logical ordering, `exact_sum`, and the section 1 pair metadata. Norm reuse
    is a separate performance candidate and needs evidence before adoption.
-2. `contract_with_outcome` reporting and the tree zip-up early-abort hook are
-   implemented. Next come `partial_contract_with_outcome` and adaptive
+2. `contract_with_outcome`, the tree zip-up early-abort hook and
+   `partial_contract_with_outcome` are implemented. Next comes adaptive
    adoption, with the outcome record plus the amendment above.
 3. The reviewed adaptive overlap policy, reusing bounded refinement or
    introducing explicitly reviewed fusion; preserve shipped non-adaptive

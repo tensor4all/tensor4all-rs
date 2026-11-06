@@ -1,4 +1,5 @@
 use super::*;
+mod outcome;
 use crate::treetn::contraction::{ContractionMethod, ContractionOptions, SrcOptions};
 use crate::{
     factorize_tensor_to_treetn, RestructureOptions, SelectedIndexContractionError,
