@@ -4,8 +4,10 @@
 
 Facts about the current code that the milestones of
 [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md)
-depend on, verified against `main` at `9316c500`. Each section names the
-milestone that consumes it. This record contains no performance estimates;
+depend on. Milestone dependencies, public patch APIs, and issue dispositions
+were synchronized on 2026-11-06 against `main` at `097e2927`; older
+representation/storage observations retain their exploratory scope. Each
+section names the milestone that consumes it. This record contains no performance estimates;
 decisions that need numbers are made in their milestone on real data.
 
 ## 1. Contraction outcome and early abort (consumed by M6)
@@ -24,6 +26,15 @@ decisions that need numbers are made in their milestone on real data.
 - `partitionedtreetn::contract_adaptive` contracts every compatible pair,
   then compares bond dimensions with the patch cap; a saturated group is
   discarded and recomputed on projected children.
+- Non-adaptive `PartitionedTreeTN::contract` now refines operands when their
+  predicted output regions overlap (#1093), subject to the default
+  4096-atom bound (#1143/#1144). `contract_selected` and both adaptive entries
+  use the pair-selection path without that wrapper. M6 still needs a
+  reviewed overlap rule for adaptive groups and paired distinct indices;
+  it must preserve the existing bounded non-adaptive contract.
+- Groups use `SubDomainTreeTN::exact_sum` with the selected `SumEngine`, then
+  truncate once. Approximate sum engines (#1125/#1126/#1129) are not a
+  prerequisite for the M6 outcome seam.
 
 Design: [treetn-contraction-outcome.md](./treetn-contraction-outcome.md).
 Exact detection of whether a cap discarded nonzero weight needs core
@@ -68,13 +79,12 @@ Exact detection of whether a cap discarded nonzero weight needs core
   (an element-wise product with a dense one-hot vector) and rebuilds the
   TreeTN. No node is inserted; the projected index keeps its full dimension
   and its zero entries are stored.
-- The deprecated chain crate embeds fixed middle sites with a compact
+- The removed chain crate embedded fixed middle sites with a compact
   copy-selector (`from_copy_selector`) and boundary fixed sites with unit
   bonds. Core factorization accepts dense storage only.
-- The TreeTCI prototype branch performs no tensor embedding.
 - `PartitionedTreeTN::to_treetn` sums all patches by direct sum, so bond
-  dimensions add. No library code calls it; reconstruction avoids a global
-  direct sum.
+  dimensions add. This explicit conversion is not the compact representation
+  candidate; reconstruction avoids a global direct sum.
 
 ### Compact candidate
 
@@ -99,10 +109,11 @@ The site-free-leaf robustness issue is fixed in `tensor4all-treetn` by PR #799
 (merged to `main` as 8379852e): every empty-side split (canonicalization,
 truncation, fit, swap, topology-preserving zip-up) goes through one helper,
 `factorize_allowing_empty_side`, and canonicalization replaces a site-free
-leaf's bond by a fresh dimension-one link. Remaining site-free-node failures
-(`inner`, SRC contraction, `factorize_tensor_to_treetn`) are tracked in #797;
-compact patches would create site-free nodes, so #797 is an adoption
-precondition.
+leaf's bond by a fresh dimension-one link. The subsequently reported failures
+of `inner`, SRC contraction, and `factorize_tensor_to_treetn` (#797) were
+fixed in #986. That issue is closed, rather than an outstanding adoption
+blocker. This does not select compact storage: M4 still requires representative
+producer and consumer measurements.
 
 No representation decision has been made; see the M4 status in the roadmap.
 
@@ -143,22 +154,32 @@ its own merits (for example quantum-number symmetries).
 
 ## 7. Interpolation checkpoint follow-ups
 
-Issue states checked on 2026-10-04. These are recorded limitations or deferred
+Issue states checked on 2026-11-06. These are recorded limitations or deferred
 work, not newly approved implementation tasks. The checkpoint corrections are
 recorded in the [work log](../worklogs/2026-10-04-interpolation-checkpoint-review.md).
 
 | Work | Owner | State and constraint |
 |---|---|---|
 | Patch representation | M4 | Deferred; downstream-scale measurements of real interpolated patches and M6 consumers are required before choosing eager or compact storage. |
-| Site-free-node operations, [#797](https://github.com/tensor4all/tensor4all-rs/issues/797) | M4 adoption / treetn | Open: `inner`, SRC contraction, and `factorize_tensor_to_treetn` fail on site-free nodes; other solver paths remain suspected. This blocks compact adoption, not the interpolation checkpoint. |
-| Generic cached-evaluator determinism | M7 prerequisite / treetn | Local steps (c), raw messages for site-free nodes, then (a), positional generic contractions, remain unimplemented. The fresh-thread generic-path regressions remain ignored with their documented reason. |
-| Planner tie-breaking, [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963) | M7 prerequisite / upstream | Open. [#795](https://github.com/tensor4all/tensor4all-rs/issues/795) is closed through #816 because the tracking/test gap is resolved; that closure does not fix cross-process values. The two-process CI gate is still absent. |
-| Corner-localized misses | M9 global review | Sampled acceptance and audit can miss concentrated residuals. `cache_candidates` mitigated three seeds of one workload but did not fix the error criterion; both failing reproductions remain ignored. Exact/exhaustive results are outside this sampled limitation. |
-| Thread control and scaling, [#670](https://github.com/tensor4all/tensor4all-rs/issues/670) | M9 / TreeTCI | Open; downstream G0 compression lacks stage-local thread control. Measurements remain deferred to the downstream protocol. |
+| Site-free-node operations, [#797](https://github.com/tensor4all/tensor4all-rs/issues/797) | M4 adoption / treetn | Closed by #986; not a remaining blocker for M4 or M6. |
+| Generic cached-evaluator determinism | M7 qualification / treetn | The fresh-thread generic-path regressions remain ignored; interpolation lanes exist, but full bitwise parity is not established. This does not block serial M6 contraction. |
+| Planner tie-breaking, [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963) | M7 qualification / upstream | Closed by upstream #2014 for default non-annealed options, with an annealing caveat. Downstream generic-path interpolation qualification remains separate. The two-process patch-contraction test does not cover that interpolation path. |
+| Corner-localized misses | M9 global review | #1034 added the default residual-TT estimator and Monte Carlo fallback. The regressions now run as scheduled heavy tests; their ignore marker denotes suite cost, not an unresolved reproduction. Sampled estimates still are not certificates. |
+| Thread control and scaling, [#670](https://github.com/tensor4all/tensor4all-rs/issues/670) | M9 / TreeTCI | Closed after the thread-budget diagnosis and recommendation; representative scaling measurements remain a separate M9 task. |
 | Overpatching and optional selector | M9 / study deferred from M5 | Downstream-scale, matched-accuracy measurements remain outstanding; the edge-pivot proposal is unimplemented and not an approved selector. |
 | Blocked, unconverged patch precedence | M5 provisional contract | Patch-size plan open issue 1 remains provisional: the current rule judges a previously unjudged retained run once and reports whether it met its allowance. No final user decision is inferred here. |
 | Reference/default and norm reservations | M3 decisions | Error-contract questions 3, 6, and 7 remain with the user: automatic reference policy, the separate M3b scope, and placeholder norm selection. The implemented defaults remain unchanged. |
-| Contraction outcomes, sibling merging, algebra error accounting | M6 / M3b | Deferred until after this checkpoint; M3b needs its own design after the M6 outcome seam. |
+| Contraction outcomes, sibling merging, algebra error accounting | M6 / M3b | The checkpoint and #900 are complete. The [M6 proposal](./tree-patched-contraction.md) still needs review, including its overlap policy and multi-level merge ledger; M3b remains separate. |
+
+## 8. M6 issue dependency review
+
+The [M6 readiness review](./tree-patched-contraction.md#issue-dependencies-and-implementation-gates)
+compares current issues and their comments with the synchronized implementation.
+No existing open issue must be closed before the serial contraction outcome
+work can start. The proposal's unresolved API, overlap, merge-budget and
+validation decisions still gate their respective implementation steps.
+An unassigned issue is not evidence of availability: #1026 is explicitly
+claimed, the #1125/#1126/#1129 sum work is queued, and #627 has draft #1146.
 
 Resolved history: [#791](https://github.com/tensor4all/tensor4all-rs/issues/791)
 was fixed by #793 (stable TreeTN site/edge construction order), and

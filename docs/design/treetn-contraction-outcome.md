@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposal, revised after two design reviews. Part of milestone M6 (adaptive
+Review candidate synchronized on 2026-11-06 with `097e2927`, following the
+earlier two design reviews. The API below is proposed, not implemented. Part of milestone M6 (adaptive
 patched contraction) of
 [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md);
 background in section 1 of
@@ -42,8 +43,9 @@ canonicalization, and reindexing of both operands is always paid.
   core `factorize` to expose the discarded tail and is deferred to a core
   issue.
 - Early abort on the chain zip-up path, for Src, for Naive, and for Fit in the
-  first version (see Method coverage). Fit also waits for the open draft
-  PR #656, which restructures `fit.rs`.
+  first version (see Method coverage). The former Fit initializer dependency
+  #656 landed through #981; it is no longer an external blocker. Fit's
+  outcome/report coverage remains an unimplemented part of this proposal.
 - Outcome variants of `partial_contract` and `hadamard`, and of the low-level
   SRC entry points `contract_src_with_rng` and `contract_src_with_rng_in`.
   Patched element-wise products are an M6 item and will reuse the entry point
@@ -101,6 +103,11 @@ pub fn contract_with_outcome<T, V>(
   `partitionedtreetn`: a capped result cannot distinguish an exact rank equal
   to the cap from a truncated one. With `None` the outcome is always
   `Completed`.
+  This describes the stored result's link dimensions, not the tensor's
+  mathematical Schmidt rank, discarded weight, convergence, or accuracy.
+  An edgeless result has an empty report and is always `Completed`, including
+  with a threshold of one; the adaptive caller's separate rank-one predicate
+  remains necessary.
 - **Which edge is named.** With post-hoc detection, `edge` is the first edge
   at or above the threshold in report order, with its final rank. With early
   abort (tree zip-up path only, where `center` is always kept), `edge` is the
@@ -116,13 +123,43 @@ pub fn contract_with_outcome<T, V>(
 - **No invalid state.** `NonZeroUsize` makes a zero threshold
   unrepresentable, so no validation error path exists for it. All other
   option validation happens before any shortcut, as in `contract`.
-- **Unchanged options.** `ContractionOptions` gains no field. `contract`
-  delegates to `contract_with_outcome(..., None)` and returns the network.
+- **Unchanged options.** `ContractionOptions` gains no field. Existing
+  `contract`/`contract_in` and the outcome entries share an internal execution
+  seam. Ordinary calls do not build a report or pay a new per-edge report
+  allocation. Outcome entries alone collect the final-edge metadata.
 - **Why `Saturated` carries no network.** An early-aborted contraction has no
   network, and for post-hoc detection every current caller discards it; one
   shape for both keeps callers simple and frees memory early.
 - `#[non_exhaustive]` on the enum follows the existing precedent in the
   workspace (`EvaluationHint` in treetn, `FactorizeResult` in core).
+
+### Execution and RNG parity
+
+The public entry above is the existing generic compatibility route with a
+report. Its proposed `contract_with_outcome_in` counterpart accepts
+`TreeTN<IdxTensor, V>` inputs and the caller's `ExecutionContext`, matching
+`contract_in`. Both return `TreeTNOperationError`, preserve source chains,
+and reuse current option/context/layout validation. A foreign context or an
+invalid dense-reference limit must not be hidden by a rank shortcut. No new
+backend, host readback, dense fallback, or AD-detaching path is introduced.
+
+Randomized dispatch already exists: RSVD for Zipup/Fit and seeded SRC. The
+outcome route must preserve that dispatch rather than treating every Zipup
+as deterministic SVD. Caller-RNG companions, proposed as
+`contract_with_outcome_with_rng` and `contract_with_outcome_with_rng_in`,
+follow `contract_with_rng*`: consume the supplied stream directly, never
+derive a private seed. Seed-based entries use the same named RNG and seed
+fields as their current counterparts. Randomized methods complete before
+threshold detection in this version, so the same seed/stream produces the
+same full result and RNG consumption as the matching ordinary entry.
+
+The first implementation establishes post-hoc reports on the existing
+dispatch; the second adds early abort only to deterministic SVD on the
+general-tree zip-up path. The abort hook is selected at the schedule boundary,
+shared by compatibility and context routes. It may skip numerical work after
+the decisive edge, so errors that would occur only in that unexecuted work
+are not promised. Required input validation precedes the abort; an error from
+any operation actually executed is propagated, never converted to saturation.
 
 ### Report shape by method
 
@@ -140,11 +177,12 @@ differ in shape:
 
 | Method | Report | Early abort in this proposal |
 |---|---|---|
-| Zipup, tree path | Final link dimensions | Yes. Each edge's factorization rank is its final link dimension (no truncation pass follows the edge loop), so the contraction stops after the first edge whose rank reaches the threshold |
+| Zipup, deterministic SVD, tree path | Final link dimensions | Yes. Each retained edge's factorization rank is its final link dimension (no truncation pass follows the edge loop), so the contraction stops after the first retained edge whose rank reaches the threshold |
 | Zipup, chain path | Final link dimensions | No; saturation is evaluated after completion. The edge loop runs in a non-orthogonal gauge and a final truncation sweep follows, so per-edge factorization ranks are only upper bounds on the final dimensions; aborting on them would report saturation that `contract` does not show |
+| Zipup/Fit with RSVD | Final link dimensions | No; preserve current RNG consumption and detect saturation after completion |
 | Src | Final link dimensions | No; evaluated after completion |
-| Naive | Final link dimensions | No; evaluated after completion. Naive ignores `max_bond_dim`, `svd_policy`, and `qr_rtol` and decomposes with default SVD options, so its ranks are untruncated and saturate under different conditions than the other methods |
-| Fit | Final link dimensions | No; evaluated after completion (deferred, see non-goals) |
+| Naive | Final link dimensions | No; preserve the explicit dense-reference guard and current SVD decomposition with `max_bond_dim` and `svd_policy`. The reference helper rejects any supplied `qr_rtol` |
+| Fit | Final link dimensions | No; evaluated after completion on the current initializer/sweep path |
 
 Post-hoc detection saves no work but gives the same answer as early abort
 would, so callers see one contract for every method. Chain-path early abort
@@ -153,9 +191,10 @@ would need a separate opt-in because it changes which contractions saturate.
 
 ## Adoption in `partitionedtreetn`
 
-This depends on #788 (PR #789) being merged.
+The former #788 prerequisite is resolved. Adoption preserves the existing
+ordinary and selected baselines described below.
 
-- Today `contract_adaptive` contracts all compatible pairs before grouping
+- Today `contract_adaptive` contracts selected compatible pairs before grouping
   them by output projector, so no contraction can be skipped at the top
   level. The adoption groups pairs first: the output projector of a pair is
   computed from the operands (projector intersection filtered to the surviving
@@ -173,9 +212,12 @@ This depends on #788 (PR #789) being merged.
   fallback returns the full group sum.
 - With `ExactParameterGain` the split decision needs the full group sum, so
   contributions are contracted without a threshold, as today.
-- Because saturation is defined on final bond dimensions, the partition
-  layout and values are unchanged; only contractions whose results would have
-  been discarded are skipped or cut short.
+- Layout and value preservation is checked against the baseline, rather
+  than inferred from rank predicates alone. Keep the existing logical
+  ordering and content-digest tie-break, exact `SumEngine`, selected top-level
+  projector matching, and project-first child recomputation. Selecting a
+  parent group includes its split descendants; requesting only a descendant
+  projector does not select an unmatched ancestor group.
 - Chain-shaped inputs that keep output sites always take the chain zip-up
   path, which detects saturation after completion, so they gain only the
   skipped remaining pairs of a group, not a shortened contraction. Tests of
@@ -210,6 +252,41 @@ This depends on #788 (PR #789) being merged.
 - Drift check: `skills/use-tensor4all-rs/` and the TreeTN guide pages that
   mention contraction options.
 
-## Open questions for review
+## Review choices and implementation order
 
-1. Name: `abort_at_rank` versus `rank_budget` or `saturation_threshold`.
+The concrete candidate keeps `abort_at_rank: Option<NonZeroUsize>` as a
+separate argument. Equality saturates, `None` completes normally, and the
+existing contraction options and return types remain unchanged. These are
+review choices for the first outcome slice; accepting this document does not
+decide adaptive overlap, merge placement or the sibling-merge error ledger.
+
+1. Preserve ordinary/selected adaptive baselines, including threshold
+   equality and exhausted split orders; establish post-hoc report and
+   context/RNG parity through the shared dispatch.
+2. Add the deterministic tree zip-up abort hook. Tests compare its retained
+   edge to the completed report and count executed factorizations. No skipped
+   work is claimed for the chain or randomized paths.
+3. Adopt lazy grouping in the Sequential adaptive path, preserving the
+   selected and ordinary baselines. `ExactParameterGain` retains full probes.
+
+### Existing adaptive baselines
+
+`tests/adaptive_contraction_baseline.rs` uses a true degree-three tree with
+analytically known values. Two contributions cancel from `3 F - 2 F` to
+`F(w, x) = (w + 1) (2 |000> + 4 |111>)`; the complex case carries the same
+nonzero phase through contraction without conjugation. The spectator and
+contracted indices share an ID but differ in prime level.
+
+For Sequential/ExactParameterGain and Binary/Nary exact sums, the baseline
+pins these known outputs for both ordinary and selected calls:
+
+| Patch cap / split availability | Ordinary partition | Selected `w = 1` |
+|---|---|---|
+| 2, split `x0` available | Four `(w, x0)` patches, rank one | Two descendants, rank one |
+| 3 or no cap | Two `w` patches, rank two | One `w` patch, rank two |
+| 2, only already-fixed `w` in the split order | Two `w` patches, rank two | One `w` patch, rank two |
+
+Dense values are checked against the analytical tensor after one whole-result
+materialization. Duplicate selections do not duplicate contributions. An
+empty selection or unmatched descendant selection returns an empty partition;
+invalid contraction options are still rejected before those shortcuts.

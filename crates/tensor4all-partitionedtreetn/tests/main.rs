@@ -6,6 +6,7 @@
 mod adaptive_common;
 
 mod adaptive_cache_candidates;
+mod adaptive_contraction_baseline;
 mod adaptive_interpolation;
 mod adaptive_interpolation_engines;
 mod adaptive_l2;

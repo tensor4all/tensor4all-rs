@@ -2,8 +2,9 @@
 
 ## Status
 
-Planning record. This document orders the long-term goal into medium-sized
-milestones by their data dependencies. It is not an implementation contract:
+Planning and implementation record, synchronized on 2026-11-06 against
+`origin/main` at `097e2927`. This document orders the long-term goal into
+medium-sized milestones by their data dependencies. It is not an implementation contract:
 each milestone that changes public API or algorithm semantics needs its own
 design record (or an update of an existing one) and a review before
 implementation.
@@ -42,19 +43,35 @@ Record any new port, derivation, or algorithm origin in
 
 ## Current state
 
-| Capability | Chain (`tensor4all-partitionedtt`, deprecated) | Tree (`tensor4all-partitionedtreetn`) |
-|---|---|---|
-| Projector, subdomain, disjoint partition | yes | yes (eagerly masked, arbitrary named trees, multiple sites per node) |
-| `add_with_patching`, `truncate_adaptive` | yes (`rtol`) | yes (local discarded-weight `cutoff`) |
-| `contract_adaptive` (project-first recursion) | yes | yes |
-| Split strategies | `Sequential`, `ExactParameterGain` | same |
-| Adaptive patched interpolation | yes (`adaptiveinterpolate`) | sequential, generic over the M1 engine trait (`adaptive_interpolation::patched_interpolate`, M2) |
-| Global L2 reconstruction and merge | no | yes ([orthogonal-target-reconstruction.md](./orthogonal-target-reconstruction.md)) |
-| Parallel patch execution | Hataori Rayon/MPI for interpolation ([adaptive-tci-parallel-execution.md](./adaptive-tci-parallel-execution.md)) | none |
+| Capability | Tree implementation |
+|---|---|
+| Projector, subdomain, disjoint partition | Eagerly masked, arbitrary named trees, multiple sites per node |
+| `add_with_patching`, `truncate_adaptive` | Implemented; local discarded-weight `cutoff`, volume or norm allocation; addition projects the original addends before splitting (#1132) |
+| `contract_adaptive`, `contract_adaptive_selected` | Project-first recursion; selected top-level output groups can be filtered before contraction (#1076) |
+| Split strategies | `Sequential`, `ExactParameterGain` |
+| Adaptive patched interpolation | Engine-generic serial, caller-owned lanes, and feature-gated MPI entries |
+| Global L2 reconstruction | Separate [reconstruction path](./orthogonal-target-reconstruction.md); does not implement M3b for adaptive algebra |
+| Unequal overlapping layouts | Non-adaptive `add`/`contract` refine automatically (#1093), with a default 4096-atom limit (#1143/#1144); selected/adaptive contraction do not use that automatic-refinement wrapper |
+| General sibling merge and contraction early abort | Proposed under M6; no public implementation |
 
-The deprecated chain crate is design lineage only, not a verification
-baseline. Branch `feat/treetci-adaptive-patching` holds a sequential TreeTCI
-patching prototype; it is reference material for M2, not a merge candidate.
+The chain crate `tensor4all-partitionedtt` was removed in #1005. Its
+algorithms remain design lineage, not a verification baseline. M1–M3's
+interpolation side and M5 landed in #900. Later work added lanes/MPI (#1005)
+and the residual-TT estimator (#1034); these capabilities landed without
+completing every exit criterion of M6–M9.
+
+| Milestone | Current disposition |
+|---|---|
+| M0 | Decisions recorded |
+| M1, M2 | Implemented in #900 |
+| M3 | Interpolation implemented; M3b adaptive-algebra budget remains proposed |
+| M4 | Representation decision deferred; #797's site-free-node defects are fixed |
+| M5 | Complete under its recorded completion rule; optional studies remain with M9 |
+| M6 | Existing adaptive contraction plus an unimplemented [completion proposal](./tree-patched-contraction.md) |
+| M7 | Interpolation lanes implemented; contraction fan-out, generic-path determinism qualification and representative scaling remain |
+| M8 | Interpolation MPI and world-size 1/2 smoke verification implemented; the full distributed exit remains open |
+| M9 | Continuous; residual corner regressions are scheduled heavy tests, and downstream-scale measurements remain |
+| M10 | Deferred; no patched-interpolation binding entry |
 
 ## Decisions
 
@@ -85,8 +102,9 @@ patching prototype; it is reference material for M2, not a merge candidate.
    sampled max-norm used by TCI) are user-selectable. A selectable norm
    without an implementation is a placeholder returning an explicit typed
    "not implemented" error; it never falls back silently to another norm.
-4. **Chain crate retirement.** Out of scope. `tensor4all-partitionedtt` is
-   left untouched until a future repository-wide restructuring.
+4. **Chain crate retirement.** Originally outside this roadmap; superseded
+   by #915 D3 / #1005, which removed `tensor4all-partitionedtt` after adding
+   the tree driver's lanes and MPI routes.
 
 ## Ordering principle
 
@@ -202,10 +220,10 @@ Scope (unchanged goal, corrected method):
   The three-dimensional tight-binding spectral function used so far has a
   delocalized singular surface, so fixing high-order bits lowers the patch
   rank only slowly and it over-patches without M5;
-- preconditions for adoption: the site-free-node failures of `inner` and SRC
-  contraction (issue #797), since compact patches create site-free nodes; the
-  M6 consumers (patched addition and contraction) measured as well as norm and
-  truncation; and an amendment of the full-site-index invariant of
+- preconditions for adoption: the site-free-node failures of `inner`, SRC
+  contraction, and factorization were fixed by #986 (closing #797); the
+  M6 consumers (patched addition and contraction) still need measuring as
+  well as norm and truncation; and an amendment of the full-site-index invariant of
   [partitioned-treetn.md](./partitioned-treetn.md).
 
 Ordering: re-measure after the patching performance defects found on
@@ -339,6 +357,11 @@ unresolved-issue list is in this roadmap or the findings record.
 
 ### M6. Adaptive patched contraction (L)
 
+Status: **partially implemented.** Existing project-first and selected-output
+contraction are reusable. The [M6 proposal](./tree-patched-contraction.md)
+and [contraction outcome proposal](./treetn-contraction-outcome.md) remain
+unimplemented and need design review; synchronization does not approve them.
+
 Design: [tree-patched-contraction.md](./tree-patched-contraction.md)
 (proposal).
 
@@ -373,28 +396,36 @@ trees; a benchmark reproduces their qualitative ordering.
 
 ### M7. Shared-memory parallel execution (L)
 
+Status: **interpolation fan-out implemented in #1005** as
+`patched_interpolate_on_lanes`, using caller-owned `TenferroLanes` and a
+shared wave driver. Serial/lane report parity is tested at one and two lanes
+on raw-kernel fixtures. Parallel adaptive contraction, generic-path
+determinism qualification, and representative scaling remain open.
+
 Outcome: interpolation and contraction run patch-parallel on one node with
 reproducible results.
 
 Scope:
 
-- Hataori Rayon domains supplied explicitly by the caller, following
-  [adaptive-tci-parallel-execution.md](./adaptive-tci-parallel-execution.md);
-  Hataori becomes an optional dependency of `tensor4all-partitionedtreetn`;
+- caller-owned Hataori/tenferro lanes for interpolation (implemented;
+  Hataori is a normal dependency and MPI backends are feature-gated);
 - dynamic scheduling of patches with very different costs;
 - parallel contraction over independent output-projector groups;
 - the pinned reference scale of M3, so acceptance does not depend on
   execution order;
 - a documented outer/inner parallelism policy.
 
-Prerequisite: deterministic cached-evaluator contraction paths, in the order
-decided under M3 open question 8: (c) raw kernels of `TreeTNCachedEvaluator`
-for site-free nodes, then (a) pairwise positional contraction on the generic
-path; (b), upstream tie-breaking in omeco or tenferro, is long term and tracked by
-[tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
-Issue #795 closed the tracking/test gap through #816, not this prerequisite. Until
-then, L2 measurements on trees with a site-free or multi-site node, or with
-`f32`/`c32` data, are not reproducible across threads.
+Remaining qualification: generic cached-evaluator contraction paths. The
+fresh-thread generic-path tests in `tests/adaptive_l2.rs` and
+`tests/adaptive_l2_treetci.rs` remain ignored. Upstream
+[tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963)
+is closed: #2014 made the default non-annealed planner deterministic across
+processes; its closing comment retains an annealing caveat. This removes the
+old default-planner blocker, but does not establish downstream bitwise parity.
+The driver still qualifies its generic-path determinism claims. A two-process
+test of non-adaptive patch contraction exists in
+`tests/patch_order_determinism.rs`; it does not validate interpolation's
+generic cached-evaluator path.
 
 Exit: parallel and sequential runs produce identical partitions for fixed
 seeds and deterministic callbacks; scaling is measured on M9 workloads.
@@ -403,6 +434,14 @@ and build across threads and thread counts, and across processes once a
 two-process CI test passes; no cross-machine promise.
 
 ### M8. Distributed execution (L)
+
+Status: **interpolation MPI entry and host wire records implemented in
+#1005.** `patched_interpolate_mpi` shares the wave body and canonical merge
+with the serial/lane entries. `scripts/check-mpi-smoke.sh` defaults to world
+sizes one and two; #1005 records both passing. The root orchestrates waves
+and owns the result. A versioned public wire contract, projector-prefix
+ownership, distributed adaptive contraction, and a representative multi-rank
+benchmark are not established by that smoke verification.
 
 Outcome: opt-in MPI execution for large workloads: a versioned wire format for
 `TreeTN`/`IdxTensor` patches, patch ownership by projector prefix, and
@@ -442,10 +481,12 @@ their own issues.
 ## Dependencies
 
 ```text
-M0 ──► M1 ──► M2 ──► M3 ──► M4 ──► M5 ──► Checkpoint review
-                      │                          │
-                      └──────────► M7 ──► M8     ▼
-M6 (independent of M1/M2; starts after the checkpoint) ──► M7
+M0 ──► M1 ──► M2 ──► M3 interpolation ──► M5 ──► Checkpoint review
+                         │
+                         └──► M7 interpolation ──► M8 interpolation
+Checkpoint review ──► M6 contraction ──► M7/M8 contraction
+                         ├──► M3b algebra error contract
+                         └──► M4 representation decision (also needs M9 data)
 M9: continuous, each item gated on its producer
 M10: deferred
 ```

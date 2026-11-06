@@ -10,8 +10,11 @@ before implementation. It builds on, and does not replace, the
 early-abort entry point to `tensor4all-treetn`; that record is still a
 proposal and its approval is a prerequisite of step 2 below.
 
-No code has been written for M6. The facts below were checked against `main`
-at `4d4fb6fc`.
+The completion APIs proposed here have not been implemented. This record was
+originally written against `4d4fb6fc` and synchronized on 2026-11-06 against
+`origin/main` at `097e2927`. Existing adaptive contraction and subsequently
+merged refinement, selection and exact-sum work are reusable foundations;
+their presence does not approve the new contracts below.
 
 ## Goal
 
@@ -34,23 +37,34 @@ ordering.
 `contract_adaptive` (`crates/tensor4all-partitionedtreetn/src/patching.rs`)
 already implements the project-first rule of `PartitionedMPSs.jl`:
 
-1. Every pair of left and right patches is contracted
-   (`SubDomainTreeTN::contract`, `N_A * N_B` calls). An incompatible pair
-   returns `None` after validation; a compatible pair is contracted in full.
+1. `PartitionedTreeTN::contract_pairs` validates the operand templates,
+   enumerates pairs in logical patch order, and predicts each output
+   projector before tensor work. Incompatible pairs and unselected outputs
+   are skipped. Remaining compatible pairs are contracted in full.
 2. Contributions are grouped by their exact output projector (the
    intersection of the operand projectors, filtered to surviving site
    indices).
 3. Each group runs `contract_group_project_first`:
    - with `Sequential`, if one contribution already reaches the cap and a
      split index exists, the group splits without forming the sum (#788);
-   - otherwise the contributions are added exactly, truncated once with the
-     contraction options, and checked against the cap (equality counts);
+   - otherwise `SubDomainTreeTN::exact_sum` uses the caller's `SumEngine`,
+     the result is truncated once with the contraction options, and checked
+     against the cap (equality counts);
    - a saturated group chooses a split index among the unprojected output
      indices, projects the original operands of its pairs to each child
      coordinate (`project_if_present`, with a `64 * eps` compression), and
      recurses on the child groups.
 4. The result is validated as a partition and passed through
-   `truncate_adaptive` with volume-proportional cutoffs.
+   `truncate_adaptive` with the selected volume or norm allocation.
+
+`contract_adaptive_selected` shares this implementation and filters the
+top-level output groups before contraction (#1076). Non-adaptive
+`PartitionedTreeTN::contract` additionally predicts overlapping outputs and
+refines its operands first (#1093), subject to
+`AUTOMATIC_REFINEMENT_LIMIT = 4096` (#1143/#1144). The selected and adaptive
+entries do not call that automatic-refinement wrapper. `add_with_patching`
+now projects original addends before splitting (#1132), and non-adaptive
+`add` is exact with a separate `add_truncated` entry (#1142).
 
 So the paper's steps "refine only the contributors of unconverged outputs"
 and "recompute only those outputs" are already met: the recursion is per
@@ -58,16 +72,17 @@ group and projects only that group's operands. What is missing:
 
 | Gap | Effect |
 |---|---|
-| All pairs are contracted before grouping | Saturated contributions are paid in full, then discarded |
+| Every selected compatible pair is contracted before grouping | Saturated contributions are paid in full, then discarded |
 | No early abort inside a contraction | Each saturated probe runs to completion |
-| Overlapping output projectors are rejected | `from_subdomains` returns `OverlappingProjectors` whenever two groups' outputs overlap without being equal, for example a left partition split on its output index `x` and a right partition split on its output index `y` |
+| Adaptive groups have no shared overlap-resolution policy | Adaptive/selected output assembly can still reject unequal overlapping projectors; non-adaptive `contract` already has bounded operand refinement |
 | No element-wise product | `tensor4all_treetn::hadamard` exists, but there is no partitioned or adaptive version and no projector rule for paired indices of distinct identity |
 | No merging | Overpatched outputs keep all their patches |
 | Quadratic bookkeeping | Pair enumeration is `N_A * N_B`; `validate_candidate_set` checks disjointness pairwise on every construction |
 | Repeated norms | `SubDomainTreeTN::norm_squared` clones and canonicalizes on every call; one operation can ask for the same patch's norm several times |
 
-`PartitionedTreeTN::contract` (non-adaptive) shares the pair loop and the
-overlap rejection.
+Non-adaptive `contract` shares the selected-compatible-pair contraction loop,
+but its bounded refinement must not be removed or silently replaced by the
+unapproved fusion proposal.
 
 ## Reference implementations
 
@@ -151,15 +166,18 @@ amendments:
   canonical pair order, with `abort_at_rank = cap` whenever the group can
   split. This is the lazy-task structure of both Julia packages.
 
-Saturation keeps its current meaning: final bond dimension `>= cap`. The
-partition layout and values therefore do not change for inputs whose output
-projectors do not overlap; only discarded work is cut short. A golden-data
-test frozen before the change checks this.
+Saturation keeps its current meaning: final bond dimension `>= cap`. Layout
+and value preservation on inputs already accepted by the baseline is an
+acceptance condition, not a consequence proved by the threshold alone. Lazy
+grouping must retain the existing content-derived contribution order and the
+exact-sum-then-truncate contract. Frozen baseline tests check both the
+ordinary and selected adaptive entries before any skipped-work claim.
 
 ### 3. Overlapping output projectors
 
-Today two groups whose output projectors overlap make the result invalid. The
-proposal follows `PartitionedMPSs.jl`: overlapping output projectors are fused
+Adaptive output groups can still overlap. Non-adaptive `contract` already
+handles this class through bounded operand refinement. For the adaptive
+path, the original proposal follows `PartitionedMPSs.jl`: overlapping output projectors are fused
 into their common restriction (`Projector::common_restriction`, the
 coordinates both fix with equal values) and their pairs form one group.
 Fusing repeats until the group projectors are pairwise disjoint; the result is
@@ -169,18 +187,15 @@ their exact sum is the correct product on the fused region; if it saturates,
 the project-first recursion refines it along the patch order like any other
 group.
 
-This replaces a recorded maintainer decision of the partition migration
-("contraction output regions are not refined; overlapping outputs remain a
-rejected, documented limitation",
-[partitioned-treetn.md](./partitioned-treetn.md)), so it is
-[open question 1](#open-questions-for-the-user). The alternative is to keep
-the rejection, which leaves `contract_adaptive` unusable for operands
-patched on different output indices, the general layout of the exit
-criterion.
-
-The non-adaptive `PartitionedTreeTN::contract` has no cap and cannot refine;
-under the proposal it fuses the same way and returns the fused groups' sums
-truncated with its options.
+This is still [open question 1](#open-questions-for-the-user), now a choice
+between reusing the shipped bounded refinement for adaptive groups and
+introducing coarser fusion. #1088's earlier rejection/opt-in discussion was
+superseded for non-adaptive operations by #1093 and #1143; it is not a reason
+to restore the old rejection. Fusion changes region layout and summation
+order, so it requires an explicit reviewed contract and a resource bound.
+Whichever adaptive policy is chosen must preserve `contract_selected`'s
+documented selection semantics and typed `RefinementTooLarge` diagnostics.
+This synchronization makes no change to non-adaptive dispatch.
 
 ### 4. Patched element-wise products
 
@@ -238,7 +253,8 @@ Algorithm, bottom-up as in `_mergesmallpatches`:
    (`is_subset_of`). The merge is not attempted if any other patch overlaps
    `Q` without lying inside it, so the result stays a disjoint partition, or
    if any member is in the excluded set.
-3. **Probe.** The exact direct sum `S_Q` of the members (`SubDomainTreeTN::add`)
+3. **Probe.** The exact direct sum `S_Q` of the members
+   (`SubDomainTreeTN::exact_sum` with an existing exact `SumEngine`)
    is truncated to `T_Q` with the cap. The merge is kept only if
    - the largest bond of `T_Q` is strictly below the cap (equality is unsafe,
      as in the reference), and
@@ -252,15 +268,32 @@ Algorithm, bottom-up as in `_mergesmallpatches`:
 Bottom-up order keeps each probe small: a merge usually combines the children
 of one split (`dim` of the split index, typically two).
 
-**Error accounting.** Members are disjoint and each residual is supported in
-its own region, so the residuals of all merges add in squares:
-`||F_merged - F|| <= ||F_partition - F|| + delta_m`, where the first term is
-whatever the partition's own error is (measured by M3 for interpolation
-outputs, best effort for algebra outputs). The merge does not re-measure
-against `f`; it reports `sqrt(sum t_Q^2)`. `delta_m` comes from an
-`ErrorTolerance` (`rtol`, `atol`) resolved against the partition's norm,
-computed once per call. How `delta_m` relates to an interpolation run's
-`delta` is [open question 3](#open-questions-for-the-user).
+**Error accounting: unresolved implementation gate.** Residuals of disjoint
+merges in one level add in squares, but a later parent merge overlaps the
+regions merged at earlier levels. The original claim that all accepted
+`t_Q` values add in squares is invalid: two nested aligned residuals of norm
+`e` can accumulate to `2e`, exceeding `sqrt(2) * e`. Step 3's local test alone
+therefore does not establish a global merge allowance.
+
+The required contract is a reported bound `E_m >= ||F_after - F_before||`
+with `E_m <= delta_m`. Candidate designs are a ledger that adds level bounds
+linearly (using squared sums only within disjoint levels), or a final
+difference-network check against the original partition. The latter must
+also specify rejection/rollback and peak-memory behavior. This is
+[open question 7](#open-questions-for-the-user); do not implement the old
+`sqrt(sum t_Q^2)` report. A multi-level cancellation/alignment regression is
+required before claiming a bound. The existing reconstruction scheduler
+already uses squared accumulation within disjoint levels and linear
+accumulation across levels (`reconstruction/schedule.rs`, the final
+`level_bounds` reduction); reuse that accounting pattern where applicable.
+The reconstruction engine measures final disjoint regions against their
+original target. Neither path justifies summing nested merge errors in squares.
+
+`delta_m` comes from an `ErrorTolerance` (`rtol`, `atol`) resolved against the
+partition's norm, computed once per call. The composed error is bounded by
+the input partition's actual error plus `E_m`; a sampled interpolation error
+remains an estimate. How `delta_m` relates to an interpolation run's `delta`
+is [open question 3](#open-questions-for-the-user).
 
 **Patch-size bounds.** A merged patch is strictly below the cap, so the
 capped-patch size bound of M5 does not apply to it. Whether a
@@ -297,12 +330,14 @@ producers is the alternative ([open question 2](#open-questions-for-the-user)).
 
 ### 7. Determinism and the path to M7
 
-Pairs, groups, fused groups, and merge candidates are visited in canonical
-projector order, and every sum is formed in that order, so results do not
-depend on `HashMap` iteration. After fusion, groups are independent and their
-recursions share no state; M7 can schedule them as tasks without changing
-results. The cached-evaluator determinism prerequisite of M7 does not affect
-M6, which evaluates no networks pointwise.
+Pairs, groups, fused groups, and merge candidates retain the existing logical
+patch order and content-digest tie-break (#1087/#1100/#1101), rather than
+introducing raw index IDs or `HashMap` iteration as an ordering rule.
+Post-group recursions can become independent tasks, but contraction fan-out
+and bitwise validation remain later M7 work. Interpolation lanes and MPI
+already exist (#1005), so M6 must leave their shared driver unchanged. The
+cached-evaluator interpolation qualification does not block serial M6,
+which evaluates no networks pointwise.
 
 ## Non-goals
 
@@ -343,7 +378,9 @@ M6, which evaluates no networks pointwise.
   reaches the cap is refused; a merge whose residual exceeds its share is
   refused; a region partly covered by an outside patch is not merged; excluded
   projectors are never merged; dense values change by at most the reported
-  residual.
+  residual. Nested parent/child merges with aligned and cancelling residuals
+  check the final bound against the original partition, not just the local
+  truncation ledger.
 - Layouts, on a branched tree (one node of degree three, from the gw-rs
   topologies): patches only on contracted indices (best), only on external
   indices (worst), and on both (general), each checked against a dense
@@ -369,23 +406,73 @@ reported residual before and after.
 
 ## Implementation plan
 
-Each step is one PR on `feat/tree-patching-m6-m10`, after review of this
-record:
+Proposed slices on `feat/tree-patching-m6-m10`, after review of this record;
+pushes and PR creation still require the user's approval:
 
-1. Golden data for `contract_adaptive`; norm reuse; the internal pairwise
-   driver with the section 1 rule (no behavior change).
+1. Golden data for ordinary/selected `contract_adaptive`; reuse current
+   logical ordering, `exact_sum`, and the section 1 pair metadata. Norm reuse
+   is a separate performance candidate and needs evidence before adoption.
 2. `contract_with_outcome` and `partial_contract_with_outcome` in
    `tensor4all-treetn` (the outcome record plus the amendment above), and
    their adoption in the driver.
-3. Output-projector fusion in `contract_adaptive` and
-   `PartitionedTreeTN::contract`.
+3. The reviewed adaptive overlap policy, reusing bounded refinement or
+   introducing explicitly reviewed fusion; preserve shipped non-adaptive
+   refinement and selected-output semantics.
 4. `hadamard_adaptive` and `PartitionedTreeTN::hadamard`.
-5. `merge_patches`, `MergeOptions`, `MergeReport`.
+5. `merge_patches`, `MergeOptions`, `MergeReport`, after the multi-level
+   error-ledger gate is settled.
 6. Layout tests and the benchmark; the projector index only if the benchmark
    shows a gain.
 
 Public-surface updates (rustdoc examples, the partitioned TreeTN guide,
 `llms.txt`, `skills/use-tensor4all-rs/`) go with the step that adds the API.
+
+## Issue dependencies and implementation gates
+
+Review date: 2026-11-06, baseline `097e2927`. All 25 open repository issues
+and the four open PRs were inventoried; relevant comments were read for scope,
+decisions and ownership. An empty assignee field is not evidence that work
+is unclaimed. This is a dependency assessment for serial M6, not a request to
+take over the issues below.
+
+**No currently open issue is a mandatory prerequisite to the first serial
+M6 outcome slice.** The proposal itself still has design gates. Dependencies
+of optional optimizations, MPI, or M3b must not become blanket prerequisites
+for the outcome seam.
+
+| Issue or work | Relationship to M6 | Disposition |
+|---|---|---|
+| [#1088](https://github.com/tensor4all/tensor4all-rs/issues/1088), refinement | Non-adaptive unequal-layout contraction is already implemented in #1093. Its outstanding size-bound follow-up #1095 closed through #1143/#1144. | No external blocker. Reuse the bound; decide the adaptive policy in question 1. Do not restore the obsolete rejection contract. |
+| [#1125](https://github.com/tensor4all/tensor4all-rs/issues/1125#issuecomment-6616854981), [#1126](https://github.com/tensor4all/tensor4all-rs/issues/1126#issuecomment-6616855437), [#1129](https://github.com/tensor4all/tensor4all-rs/issues/1129#issuecomment-6616856683), approximate sums | The maintainer has queued these in dependency order. Existing exact `SumEngine` / `SubDomainTreeTN::exact_sum` suffices for the baseline and merge probes. | Not prerequisites. Do not add intermediate approximate sums to an exact M6 probe or duplicate the queued fitting work. |
+| [#1130](https://github.com/tensor4all/tensor4all-rs/issues/1130#issuecomment-6616857097), tolerance-driven merge-refine; [#777](https://github.com/tensor4all/tensor4all-rs/issues/777#issuecomment-6259153774), reconstruction follow-ups | These concern the reconstruction scheduler, not the proposed general sibling post-processing call. They share the need to account for errors across levels. | No outcome blocker; do not merge the APIs or change exact-mode semantics. Resolve question 7 before claiming a bound for M6 merging. |
+| [#549](https://github.com/tensor4all/tensor4all-rs/issues/549), dense-growth audit | New copy/diagonal helpers must stay structured and resource growth must be checked. The open GSE, quantics and TCI2 items are separate paths. | A constraint on the changed paths, not a requirement to close the whole audit. An unbounded dense bridge in a proposed M6 path would block that path. |
+| [#696](https://github.com/tensor4all/tensor4all-rs/issues/696#issuecomment-6234670890), SRC state copying; [#691](https://github.com/tensor4all/tensor4all-rs/issues/691), parallel SRC | The first early-abort implementation targets tree zip-up. SRC stays post-hoc in the outcome proposal. | Not prerequisites; no SRC capacity redesign or parallel sketching is part of this slice. |
+| [#859](https://github.com/tensor4all/tensor4all-rs/issues/859), execution frontends | Caller-owned engines and the interpolation lane/session route have shipped (#1009/#1005), although the umbrella remains open. | Use the current backend/context seams and preserve AD behavior. Do not wait for the entire umbrella or introduce an ambient fallback. |
+| [#1023](https://github.com/tensor4all/tensor4all-rs/issues/1023#issuecomment-6556027238), typed errors | The staged migration policy and callback/source exceptions are recorded in `AGENTS.md`. | New M6 APIs return the owning crate's typed errors; no prerequisite whole-workspace migration. |
+| [#1046](https://github.com/tensor4all/tensor4all-rs/issues/1046), per-call overhead | Existing call overhead matters to the exit benchmark. | No functional dependency. Norm caching and projector indexing need workload evidence before implementation. |
+| [#1020](https://github.com/tensor4all/tensor4all-rs/issues/1020), [#1026](https://github.com/tensor4all/tensor4all-rs/issues/1026#issuecomment-6619123346), [#1027](https://github.com/tensor4all/tensor4all-rs/issues/1027), [#899](https://github.com/tensor4all/tensor4all-rs/issues/899) | Cache/interpolation performance can affect M2-produced benchmark inputs. #1026 is explicitly claimed by shinaoka. | Not prerequisites for serial contraction on existing partitions. Record the producer revision; do not absorb these tasks into M6. |
+| [#854](https://github.com/tensor4all/tensor4all-rs/issues/854), [#627](https://github.com/tensor4all/tensor4all-rs/issues/627), [#148](https://github.com/tensor4all/tensor4all-rs/issues/148) | TreeACI, simplett cache and solver/API work are outside the first M6 slice; #627's key work already has draft #1146. | No dependency on those features or their active PRs. CG/BiCGSTAB/ALS PRs #1147–#1149 also are not prerequisites. |
+| #848, #1025, #1119, #1120, #1121 | CI efficiency, releases and review-bot follow-ups. | No M6 algorithm dependency; normal repository validation still applies. |
+
+Resolved historical prerequisites: #797 (site-free nodes) closed via #986,
+#656 (Fit initialization) landed via #981, and #670 (thread-budget diagnosis)
+is closed. Upstream tenferro-rs#1963 is closed for the default non-annealed
+planner. Interpolation's downstream generic-path determinism qualification
+remains open in the tests; serial M6 does not depend on that pointwise
+evaluator. The earlier interpolation checkpoint is complete.
+
+Implementation gates that remain inside M6:
+
+1. Review the outcome API, rank-threshold semantics and method coverage
+   (question 6); freeze current ordinary/selected outputs before refactoring.
+2. Review adaptive overlap handling (question 1) against the shipped bounded
+   refinement and selected-output contracts before changing layouts.
+3. Settle merge placement, tolerance and excluded-patch behavior (questions
+   2–4), and the multi-level error ledger (question 7), before implementing
+   `merge_patches`.
+4. Fix the representative benchmark workload/protocol before collecting
+   timing evidence (question 5). Small dense references establish correctness,
+   not the M6 performance exit.
 
 ## Provenance
 
@@ -400,10 +487,10 @@ the user in the PR that adds it.
 
 ## Open questions for the user
 
-1. **Overlapping outputs.** Replace the recorded rejection of overlapping
-   contraction outputs with fusion into the common restriction (section 3,
-   as in `PartitionedMPSs.jl`)? Recommended: yes, since the general layout of
-   the exit criterion produces such outputs.
+1. **Overlapping outputs.** Reuse the shipped bounded operand-refinement
+   machinery for adaptive groups, or adopt the coarser fusion of section 3?
+   Preserve non-adaptive refinement, selection semantics and resource bounds;
+   the former "replace rejection everywhere" question is obsolete.
 2. **Merge placement.** A separate `merge_patches` call (recommended), or a
    merge step inside `contract_adaptive` (as in `TCIAlgorithms.jl`) and
    optionally inside `patched_interpolate`?
@@ -417,6 +504,12 @@ the user in the PR that adds it.
    matrix product the right workloads, or is there a downstream contraction
    (for example a bubble in gw-rs) that should be the benchmark instead?
 6. **Outcome record.** The [contraction outcome proposal](./treetn-contraction-outcome.md)
-   still has its naming question open (`abort_at_rank` versus
-   `rank_budget` or `saturation_threshold`) and has not been approved. Approve
-   it with the amendment in section 2?
+   now has a concrete review candidate: `abort_at_rank`, stored-rank semantics,
+   context/RNG parity, post-hoc reporting before deterministic tree zip-up
+   abort, and the ordinary/selected analytical baselines. Review that contract
+   with the amendment in section 2 before adding the public API.
+7. **Multi-level merge error.** Choose a conservative level-wise ledger or
+   a final residual check against the original partition, with explicit
+   rejection/rollback and resource behavior. The old sum of squared local
+   residuals cannot certify nested merges (section 5). This gates merging,
+   not the independent contraction outcome slice.

@@ -109,8 +109,9 @@ and edges instead, but its capped residual TT is still an estimate. Only
 See "Patch L2 estimators" in
 [`docs/design/tree-patching-error-contract.md`](../../docs/design/tree-patching-error-contract.md).
 
-- Patches are processed sequentially in FIFO order; each has an evaluation
-  cache, so no point is evaluated twice, and measured values reach the
+- The serial entry processes patches in canonical BFS waves; lanes and MPI
+  dispatch each wave concurrently and merge it in canonical path order. Each
+  patch has an evaluation cache, and measured values reach the
   children of a split. Patches with at most one active site are evaluated
   exactly without the engine.
 - A patch whose candidate samples are all exactly zero is a zero patch under
@@ -124,10 +125,11 @@ See "Patch L2 estimators" in
   provided the measured network values are reproducible. This is tested for
   `f64` on trees with exactly one site per node. The cached evaluator's
   generic path (a site-free node, a node with several sites, or `f32`/`c32`
-  data) can differ at rounding level between threads and processes, an open
-  limitation tracked in
-  [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963).
-  Issue #795 closed the tracking/test gap through #816, not the planner fix.
+  data) retains a qualified reproducibility contract; its fresh-thread
+  regressions remain ignored. Upstream
+  [tenferro-rs#1963](https://github.com/tensor4all/tenferro-rs/issues/1963)
+  is closed for the default non-annealed planner, with an annealing caveat.
+  That upstream fix does not by itself validate the downstream generic path.
   The intended scope is bitwise identical results on the same machine and
   build across threads, thread counts, and processes, with no cross-machine
   promise; generic-path measurements still need deterministic contraction
