@@ -13,7 +13,7 @@ fn complex_division_preserves_extreme_self_quotients() {
 
 #[test]
 fn tracked_complex_division_retains_range_and_graph() {
-    for scale in [1e-200, 1e200] {
+    for scale in [f64::from_bits(1), 1e-200, 1e200, f64::MAX] {
         let z = AnyScalar::new_complex(scale, scale).enable_grad().unwrap();
         let ratio = &z / &z;
         assert!((ratio.real() - 1.0).abs() < 1e-14);
@@ -21,6 +21,38 @@ fn tracked_complex_division_retains_range_and_graph() {
         assert!(ratio.tracks_grad());
         assert!(ratio.as_tensor().is_ok());
     }
+}
+
+#[test]
+fn tracked_and_untracked_complex_division_agree_at_extreme_scales() {
+    // Excluded: the tracked backend division flushes a subnormal component
+    // that sits beside one near f64::MAX, e.g. (MAX + 5e-324i) / 1.
+    let tiny = f64::from_bits(1);
+    let mut mismatches = Vec::new();
+    for (lhs, rhs) in [
+        ((1.0, 0.0), (1e-200, 1e-200)),
+        ((1.0, 0.0), (1e200, 1e200)),
+        ((f64::MAX, f64::MAX), (1.0, 1.0)),
+        ((f64::MAX, 0.0), (2.0, tiny)),
+        ((1e200, 1e-200), (1e-200, 1e200)),
+    ] {
+        let untracked =
+            &AnyScalar::new_complex(lhs.0, lhs.1) / &AnyScalar::new_complex(rhs.0, rhs.1);
+        let tracked = &AnyScalar::new_complex(lhs.0, lhs.1).enable_grad().unwrap()
+            / &AnyScalar::new_complex(rhs.0, rhs.1);
+        assert!(tracked.tracks_grad());
+        for (got, want) in [
+            (tracked.real(), untracked.real()),
+            (tracked.imag(), untracked.imag()),
+        ] {
+            if !(got == want || (got / want - 1.0).abs() < 1e-14) {
+                mismatches.push(format!(
+                    "{lhs:?}/{rhs:?}: tracked {got:e}, untracked {want:e}"
+                ));
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
 }
 
 fn with_forced_tensor_initialization_failure<T>(f: impl FnOnce() -> T) -> T {

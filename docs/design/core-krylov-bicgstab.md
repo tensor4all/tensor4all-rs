@@ -20,7 +20,8 @@ with the upstream MIT notice retained in the core crate.
 - One iteration is one consumed BiCGSTAB cycle. Convergence at the
   intermediate BiCG step counts as that cycle. Residual-replacement restarts
   consume the same original cycle budget. Zero cycles check the initial
-  residual only; zero RHS and nonzero guesses use the same path.
+  residual only. A zero-norm RHS returns the zero vector after the initial
+  residual confirms that `x0` and `b` share a vector space.
 - Iteration exhaustion returns the final true residual and convergence flag.
   Invalid options use `InvalidOptions`; unusable recurrence arithmetic uses
   `NumericalBreakdown` with the cycle and quantity; tensor/operator failures

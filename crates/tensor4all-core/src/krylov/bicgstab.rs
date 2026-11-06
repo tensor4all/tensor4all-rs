@@ -40,7 +40,7 @@ pub struct BiCgStabOptions {
     /// The stopping threshold is `max(atol, rtol * ||b||)`.
     pub rtol: f64,
     /// Finite, nonnegative absolute tolerance. Default: `0.0`.
-    /// Set a positive value for an absolute target with a zero or tiny RHS.
+    /// Set a positive value for an absolute target with a tiny RHS.
     /// Both tolerances zero require an exactly zero true residual.
     pub atol: f64,
 }
@@ -92,7 +92,8 @@ pub struct BiCgStabResult<T> {
 /// * `apply_a` - Fixed linear operator preserving the vector space. It may be
 ///   nonsymmetric or complex non-Hermitian.
 /// * `b` - Right-hand side in the same vector space as `x0`.
-/// * `x0` - Initial guess, also used when the RHS is zero.
+/// * `x0` - Initial guess. A zero-norm RHS returns the zero vector, the exact
+///   solution, after checking that `x0` and `b` share a vector space.
 /// * `options` - Cycle budget and tolerances; start with the defaults for
 ///   double precision.
 ///
@@ -179,9 +180,8 @@ where
     }
     b.validate()?;
     x0.validate()?;
-    let threshold = options
-        .atol
-        .max(options.rtol * finite_norm(b, "bicgstab", 0, "right-hand-side norm")?);
+    let b_norm = finite_norm(b, "bicgstab", 0, "right-hand-side norm")?;
+    let threshold = options.atol.max(options.rtol * b_norm);
     if !threshold.is_finite() {
         return Err(KrylovError::InvalidOptions {
             solver: "bicgstab",
@@ -202,6 +202,14 @@ where
     let mut x = x0.clone();
     let mut r = true_residual(&apply_a, b, &x)?;
     let mut residual_norm = finite_norm(&r, "bicgstab", 0, "initial residual norm")?;
+    if b_norm == 0.0 {
+        return Ok(BiCgStabResult {
+            solution: b.scale(AnyScalar::new_real(0.0))?,
+            iterations: 0,
+            residual_norm: 0.0,
+            converged: true,
+        });
+    }
     if residual_norm <= threshold || options.max_iter == 0 {
         return Ok(BiCgStabResult {
             solution: x,
@@ -339,11 +347,20 @@ where
                     solver: "bicgstab", ..
                 },
             ) => {
-                // A rounded recurrence can break down after reaching a true solution.
-                let r = true_residual(&apply_a, b, &x)?;
-                residual_norm = finite_norm(&r, "bicgstab", iteration, "true residual norm")?;
-                if residual_norm > threshold {
-                    return Err(error.into());
+                // A rounded recurrence can break down after reaching a true
+                // solution. Only a callback failure outranks the breakdown; a
+                // residual that cannot be evaluated reports the breakdown.
+                let check = true_residual(&apply_a, b, &x)
+                    .and_then(|r| finite_norm(&r, "bicgstab", iteration, "true residual norm"));
+                match check {
+                    Ok(norm) if norm <= threshold => residual_norm = norm,
+                    Ok(_) => return Err(error.into()),
+                    Err(check) => {
+                        return Err(match check.downcast::<KrylovError>() {
+                            Ok(callback @ KrylovError::Operation { .. }) => callback.into(),
+                            _ => error.into(),
+                        })
+                    }
                 }
             }
             Ok(error) => return Err(error.into()),
