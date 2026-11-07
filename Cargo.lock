@@ -2571,6 +2571,7 @@ dependencies = [
  "rand",
  "rand_chacha",
  "rand_distr",
+ "rustc-hash",
  "tenferro-ad",
  "tenferro-cpu",
  "tenferro-einsum",
