@@ -652,3 +652,53 @@ fn interpolation_size_helpers_reject_overflow() {
     assert!(flatten_index(&[usize::MAX, usize::MAX], 2).is_err());
     assert!(dense_test_points(usize::MAX).is_err());
 }
+
+/// Degree 1: the two stored samples determine the whole cell polynomial, so
+/// the finest matrix is exact at every node, for compressed and uncompressed
+/// trains alike. Small `r` keeps `h` large, so no tolerance can hide an error.
+#[test]
+fn invert_qtt_degree1_exact_at_every_node() {
+    let r = 3;
+    let f = |x: f64| 2.0 * x + 1.0;
+    let basis = get_chebyshev_grid(1).unwrap();
+    for tolerance in [0.0, 1.0e-12] {
+        let opts = InterpolativeQttOptions::default().with_tolerance(tolerance);
+        let tt = interpolate_single_scale(f, 0.0, 1.0, r, 1, &opts).unwrap();
+        let s = &invert_qtt(&tt, &basis, 1).unwrap()[r - 2];
+        for i in 0..(1usize << (r - 1)) {
+            for beta in 0..=1 {
+                let x = (i as f64 + basis.grid()[beta]) / (1usize << (r - 1)) as f64;
+                assert!((s[[i, beta]] - f(x)).abs() < 1.0e-12, "tol {tolerance}");
+            }
+        }
+    }
+}
+
+/// Degree 2 at small `r`: nodes `c = 0, 1/2` are exact (exact comparison), and
+/// the `c = 1` node is the documented two-sample blend `2 p(1/2) - p(0)` of the
+/// samples the QTT stores, for compressed and uncompressed trains alike.
+#[test]
+fn invert_qtt_degree2_finest_level_is_documented_two_sample_blend() {
+    let r = 3;
+    let degree = 2;
+    let f = |x: f64| x * x;
+    let basis = get_chebyshev_grid(degree).unwrap();
+    let grid = grid_1d(r, 0.0, 1.0);
+    for tolerance in [0.0, 1.0e-12] {
+        let opts = InterpolativeQttOptions::default().with_tolerance(tolerance);
+        let tt = interpolate_single_scale(f, 0.0, 1.0, r, degree, &opts).unwrap();
+        let s = &invert_qtt(&tt, &basis, 1).unwrap()[r - 2];
+        for i in 0..(1usize << (r - 1)) {
+            let sample = |idx: usize| {
+                let q = grid.grididx_to_quantics(&[idx]).unwrap();
+                tt.evaluate(&quantics_to_indices(&q)).unwrap()
+            };
+            let (p0, p_half) = (sample(2 * i), sample(2 * i + 1));
+            let h = 1.0 / (1usize << (r - 1)) as f64;
+            assert!((p0 - f(i as f64 * h)).abs() < 1.0e-12);
+            assert!((s[[i, 0]] - p0).abs() < 1.0e-12);
+            assert!((s[[i, 1]] - p_half).abs() < 1.0e-12);
+            assert!((s[[i, 2]] - (2.0 * p_half - p0)).abs() < 1.0e-12);
+        }
+    }
+}
