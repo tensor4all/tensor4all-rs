@@ -96,7 +96,7 @@ described in [README.md](README.md).
   `hascommoninds` to `has_common_inds` (the old spellings survive only as
   `#[doc(alias)]`).
 - `928c567b922e`, #589 — `try_norm_squared` removed; `norm_squared` now returns
-  `Result` instead of `f64`.
+  `Result` instead of `f64`, as do `norm` and `maxabs`.
 - `53763172f65c`, #593 — `build_diag_union` removed (now internal to the
   contraction planner).
 
@@ -143,8 +143,10 @@ described in [README.md](README.md).
 #### tensor4all-simplett
 
 - `7d263fadb7ef`, #595 — `TensorTrain` renamed to `SimpleTensorTrain`; `dot`
-  renamed to `inner_product`, `fulltensor` to `full_tensor`, `scaled` to
-  `scale_mut`.
+  renamed to `inner_product`, `fulltensor` to `full_tensor`. Scaling was split:
+  the old mutating `scale(&mut self, factor)` is now `scale_mut`, and the old
+  copy-producing `scaled(&self, factor)` is now `scale(&self, factor) -> Self`,
+  so an uncorrected `tt.scale(f)` call silently drops the scaled copy.
 - `6c71bccb09a9`, #681 — `TensorTrainError` renamed to `SimpleTensorTrainError`
   with unchanged variants, so it no longer collides with
   `tensor4all_itensorlike::TensorTrainError`.
@@ -217,6 +219,10 @@ described in [README.md](README.md).
 - `89d78b9c26cf`, #992 — `fix_and_remove_site_from_treetn_chain` renamed to
   `fix_and_remove_site`.
 - `efd88be287fc`, #1002 — `TreeTN::site_index_network_mut` removed.
+- `7d263fadb7ef`, #595 — `TreeTN::scale(&mut self)` became the fallible
+  mutating `scale_mut`, and `scale(&self)` now returns a scaled copy. An
+  uncorrected `tn.scale(x)?;` call discards the copy; keep the old behaviour by
+  renaming the call to `scale_mut`.
 
 #### tensor4all-aci, tensor4all-interpolativeqtt, tensor4all-tensorci
 
