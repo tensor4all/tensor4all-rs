@@ -1017,11 +1017,91 @@ impl Div for BackendScalar {
         match (self.value(), rhs.value()) {
             (ScalarValue::F32(lhs), ScalarValue::F32(rhs)) => Self::from_value(lhs / rhs),
             (lhs, rhs) if lhs.is_complex() || rhs.is_complex() => {
-                Self::from_value(lhs.into_complex() / rhs.into_complex())
+                Self::from_value(divide_complex(lhs.into_complex(), rhs.into_complex()))
             }
             (lhs, rhs) => Self::from_real(lhs.real() / rhs.real()),
         }
     }
+}
+
+fn divide_complex(lhs: Complex64, rhs: Complex64) -> Complex64 {
+    if ![lhs.re, lhs.im, rhs.re, rhs.im]
+        .iter()
+        .all(|x| x.is_finite())
+        || (rhs.re == 0.0 && rhs.im == 0.0)
+    {
+        return lhs / rhs;
+    }
+    if rhs.im == 0.0 {
+        return Complex64::new(lhs.re / rhs.re, lhs.im / rhs.re);
+    }
+    if rhs.re == 0.0 {
+        return Complex64::new(lhs.im / rhs.im, -lhs.re / rhs.im);
+    }
+    if [lhs.re, lhs.im, rhs.re, rhs.im]
+        .iter()
+        .all(|&x| has_plain_division_exponent(x))
+    {
+        return lhs / rhs;
+    }
+    // Keep each component's exponent: scaling a whole complex number can erase
+    // a tiny component whose contribution to the quotient is representable.
+    let (a, ae) = split_binary(lhs.re);
+    let (b, be) = split_binary(lhs.im);
+    let (c, ce) = split_binary(rhs.re);
+    let (d, de) = split_binary(rhs.im);
+    let (denominator, exponent) = add_scaled((c * c, 2 * ce), (d * d, 2 * de));
+    let (real, re) = add_scaled((a * c, ae + ce), (b * d, be + de));
+    let (imag, im) = add_scaled((b * c, be + ce), (-a * d, ae + de));
+    Complex64::new(
+        scale_binary(real / denominator, re - exponent),
+        scale_binary(imag / denominator, im - exponent),
+    )
+}
+
+/// Whether `value` is zero or has magnitude in `[2^-500, 2^501)`.
+///
+/// When all four components satisfy this, every product in the textbook
+/// formula and the denominator `c^2 + d^2` lie in `[2^-1000, 2^1003)`, so
+/// none of them overflows or loses precision to subnormal rounding, and plain
+/// division is at least as accurate as the exponent-splitting path.
+fn has_plain_division_exponent(value: f64) -> bool {
+    const BIAS: u64 = 1023;
+    let biased = (value.to_bits() >> 52) & 0x7ff;
+    value == 0.0 || (BIAS - 500..=BIAS + 500).contains(&biased)
+}
+
+fn split_binary(value: f64) -> (f64, i32) {
+    if value == 0.0 {
+        return (value, 0);
+    }
+    // INVARIANT: divide_complex checked finite inputs; the exponent is in
+    // [-1074, 1024], so product exponents and their differences fit in i32.
+    let exponent = value.abs().log2().floor() as i32;
+    (scale_binary(value, -exponent), exponent)
+}
+
+fn add_scaled((x, xe): (f64, i32), (y, ye): (f64, i32)) -> (f64, i32) {
+    let exponent = if x == 0.0 {
+        ye
+    } else if y == 0.0 {
+        xe
+    } else {
+        xe.max(ye)
+    };
+    (
+        scale_binary(x, xe - exponent) + scale_binary(y, ye - exponent),
+        exponent,
+    )
+}
+
+fn scale_binary(mut value: f64, mut exponent: i32) -> f64 {
+    while exponent != 0 {
+        let chunk = exponent.clamp(-512, 512);
+        value *= 2.0_f64.powi(chunk);
+        exponent -= chunk;
+    }
+    value
 }
 
 impl Neg for BackendScalar {

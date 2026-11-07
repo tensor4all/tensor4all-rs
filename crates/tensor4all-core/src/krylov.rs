@@ -7,11 +7,8 @@
 //!
 //! - [`gmres`]: Generalized Minimal Residual Method (GMRES) for non-symmetric systems
 //! - [`cg`]: Conjugate gradients for Hermitian positive-definite systems
+//! - [`bicgstab`]: BiCGSTAB for real nonsymmetric and complex non-Hermitian systems
 //! - [`hermitian_lanczos_lowest_eigenpair`]: Matrix-free lowest eigenpair solver for Hermitian operators
-//!
-//! # Future Extensions
-//!
-//! - BiCGSTAB for non-symmetric systems with better convergence properties
 //!
 //! # Example
 //!
@@ -46,7 +43,10 @@ use tensor4all_tensorbackend::{
 };
 
 mod cg;
+mod vector_ops;
 pub use cg::{cg, CgOptions, CgResult};
+mod bicgstab;
+pub use bicgstab::{bicgstab, BiCgStabOptions, BiCgStabResult};
 
 /// Error returned by the matrix-free Krylov solvers.
 #[derive(Debug, thiserror::Error)]

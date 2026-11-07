@@ -112,6 +112,10 @@ harness = false
 name = "direct_sum"
 harness = false
 
+[[bench]]
+name = "krylov_nonsymmetric"
+harness = false
+
 [[test]]
 name = "integration"
 path = "tests/main.rs"
