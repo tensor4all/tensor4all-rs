@@ -22,6 +22,9 @@ with the upstream MIT notice retained in the core crate.
   consume the same original cycle budget. Zero cycles check the initial
   residual only. A zero-norm RHS returns the zero vector after the initial
   residual confirms that `x0` and `b` share a vector space.
+- `iterations` counts cycles, not operator applications. A full cycle applies
+  the operator twice and each true-residual check once more, whereas GMRES's
+  `iterations` counts one application per inner step.
 - Iteration exhaustion returns the final true residual and convergence flag.
   Invalid options use `InvalidOptions`; unusable recurrence arithmetic uses
   `NumericalBreakdown` with the cycle and quantity; tensor/operator failures
@@ -89,9 +92,13 @@ boundaries; a differentiable solve is not promised. The solver materializes
 no dense operator. Preconditioning, affine convenience APIs, compression-aware
 variants, and TreeTN solver selection are separate extensions.
 
-Native complex scalar division is handled in the shared tensor backend. Its
-real and imaginary products carry separate binary exponents, so denominator
+Native complex scalar division is handled in the shared tensor backend. When
+every component is zero or has magnitude in `[2^-500, 2^501)`, all products and
+the denominator are normal, and it uses the textbook formula directly. Otherwise
+its real and imaginary products carry separate binary exponents, so denominator
 squares and intermediate numerators stay in range without erasing a small
-component beside a large one. Nonfinite inputs and zero divisors retain the
+component beside a large one. A normal denominator alone does not select the
+textbook formula: `(1e-200 + 1e-200i) / (1e-150 + 1e-150i)` has a normal
+denominator but numerator products that underflow to zero. Nonfinite inputs and zero divisors retain the
 existing native classification. The separately implemented traced division
 path already handles the reviewed tiny/huge cases and retains its graph.

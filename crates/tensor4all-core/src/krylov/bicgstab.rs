@@ -79,6 +79,11 @@ pub struct BiCgStabResult<T> {
     pub solution: T,
     /// Consumed cycles, bounded by [`BiCgStabOptions::max_iter`].
     /// Convergence at the intermediate BiCG step counts as one cycle.
+    ///
+    /// This counts cycles, not operator applications. A full cycle applies
+    /// the operator twice, and each true-residual check applies it once more.
+    /// [`super::GmresResult::iterations`] counts inner GMRES steps, one
+    /// operator application each, so compare the two by operator applications.
     pub iterations: usize,
     /// Absolute true residual norm `||b - A*x||`, also on budget exhaustion.
     pub residual_norm: f64,

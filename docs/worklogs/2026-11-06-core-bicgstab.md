@@ -51,3 +51,25 @@
 - Direct integration review found no remaining implementation findings.
   No performance or differentiability claim is made. The maintainer makes all
   commits and approves later publication of this branch.
+
+## Review follow-up
+
+- Complex division takes the textbook formula when all components are zero or
+  in `[2^-500, 2^501)`; a regression covers a normal denominator whose
+  numerator products underflow. Over 1,027 in-range samples the result is
+  bit-identical to `Complex64` division. In a release build, one
+  `BackendScalar` complex division takes about 160 ns on the fast path and
+  190 ns on the exponent-splitting path, against about 8 ns for `Complex64`
+  division, so the scalar wrapper dominates the cost.
+- A shadow-inner-product breakdown test relative to `||shadow|| ||r||` at f64
+  rounding was tried and not adopted. On a perturbed 3x3 system it turned
+  solves that reach a verified true residual near `1e-15` into breakdown
+  errors. Convergence is always confirmed by the true residual, so a noisy
+  `beta` cannot produce a false `converged`.
+- `benches/krylov_nonsymmetric.rs` compares BiCGSTAB and GMRES on a
+  diagonally dominant nonsymmetric tridiagonal system with `rtol = 1e-10`.
+  On one local run: at `n = 64`, BiCGSTAB used 19 cycles and 39 operator
+  applications in 2.9 ms, GMRES 36 steps and 37 applications in 35 ms; at
+  `n = 512`, BiCGSTAB used 18 cycles and 38 applications in 3.7 ms, GMRES 35
+  steps and 36 applications in 32 ms. The dense operator is cheap here, so
+  GMRES orthogonalization dominates its time.

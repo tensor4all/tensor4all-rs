@@ -24,6 +24,9 @@ fn complex_division_preserves_finite_extreme_quotients() {
         ),
         (c(0.0, 0.0), c(1e-200, -1e-200), c(0.0, 0.0)),
         (c(1e200, 1e-200), c(1e-200, 1e200), c(0.0, -1.0)),
+        // A normal denominator with underflowing numerator products.
+        (c(1e-200, 1e-200), c(1e-150, 1e-150), c(1e-50, 0.0)),
+        (c(1e-200, 3e-200), c(1e-150, 1e-150), c(2e-50, 1e-50)),
     ] {
         let actual: Complex64 =
             (BackendScalar::from_value(lhs) / BackendScalar::from_value(rhs)).into();
@@ -37,6 +40,34 @@ fn complex_division_preserves_finite_extreme_quotients() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn complex_division_matches_plain_division_for_moderate_exponents() {
+    let c = Complex64::new;
+    let edge = 2.0_f64.powi(500);
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next = || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let mantissa = (state >> 11) as f64 / (1u64 << 53) as f64 - 0.5;
+        let exponent = ((state >> 1) % 1001) as i32 - 500;
+        mantissa.signum() * (1.0 + mantissa.abs()) * 2.0_f64.powi(exponent)
+    };
+    let mut samples = vec![
+        (c(1.0 / edge, -1.0 / edge), c(edge, edge)),
+        (c(edge, edge), c(1.0 / edge, 1.0 / edge)),
+        (c(0.0, 3.0), c(1.5, -2.5)),
+    ];
+    samples.extend((0..1024).map(|_| (c(next(), next()), c(next(), next()))));
+    for (lhs, rhs) in samples {
+        let actual: Complex64 =
+            (BackendScalar::from_value(lhs) / BackendScalar::from_value(rhs)).into();
+        let plain = lhs / rhs;
+        assert_eq!(actual.re.to_bits(), plain.re.to_bits(), "{lhs:?}/{rhs:?}");
+        assert_eq!(actual.im.to_bits(), plain.im.to_bits(), "{lhs:?}/{rhs:?}");
     }
 }
 

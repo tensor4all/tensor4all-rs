@@ -1038,6 +1038,12 @@ fn divide_complex(lhs: Complex64, rhs: Complex64) -> Complex64 {
     if rhs.re == 0.0 {
         return Complex64::new(lhs.im / rhs.im, -lhs.re / rhs.im);
     }
+    if [lhs.re, lhs.im, rhs.re, rhs.im]
+        .iter()
+        .all(|&x| has_plain_division_exponent(x))
+    {
+        return lhs / rhs;
+    }
     // Keep each component's exponent: scaling a whole complex number can erase
     // a tiny component whose contribution to the quotient is representable.
     let (a, ae) = split_binary(lhs.re);
@@ -1051,6 +1057,18 @@ fn divide_complex(lhs: Complex64, rhs: Complex64) -> Complex64 {
         scale_binary(real / denominator, re - exponent),
         scale_binary(imag / denominator, im - exponent),
     )
+}
+
+/// Whether `value` is zero or has magnitude in `[2^-500, 2^501)`.
+///
+/// When all four components satisfy this, every product in the textbook
+/// formula and the denominator `c^2 + d^2` lie in `[2^-1000, 2^1003)`, so
+/// none of them overflows or loses precision to subnormal rounding, and plain
+/// division is at least as accurate as the exponent-splitting path.
+fn has_plain_division_exponent(value: f64) -> bool {
+    const BIAS: u64 = 1023;
+    let biased = (value.to_bits() >> 52) & 0x7ff;
+    value == 0.0 || (BIAS - 500..=BIAS + 500).contains(&biased)
 }
 
 fn split_binary(value: f64) -> (f64, i32) {
