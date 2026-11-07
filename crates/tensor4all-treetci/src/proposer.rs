@@ -152,7 +152,21 @@ impl PivotCandidateProposer for DefaultProposer {
         let pivots = &state.ijset;
         let icombined = union_with_pivots(iset, pivots, &ikey)?;
         let jcombined = union_with_pivots(jset, pivots, &jkey)?;
-        Ok((icombined, jcombined))
+        // Around a vertex of local dimension 1 the enriched pivots stay
+        // candidates for good, as in xfac's pivot history (#1159).
+        // Other keys skip the second deduplication pass.
+        let enriched = &state.enrichment_candidates;
+        let with_enriched = |combined: Vec<MultiIndex>, key: &SubtreeKey| {
+            if enriched.contains_key(key) {
+                union_with_pivots(combined, enriched, key)
+            } else {
+                Ok(combined)
+            }
+        };
+        Ok((
+            with_enriched(icombined, &ikey)?,
+            with_enriched(jcombined, &jkey)?,
+        ))
     }
 }
 

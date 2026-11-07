@@ -49,6 +49,15 @@
 //! lookups of enriched candidates already in the evaluation memo. Function
 //! evaluations, terminations, bond dimensions, and floats are unchanged, and
 //! `treetci_quantics_tree` is unchanged.
+//!
+//! Both TreeTCI scenarios were re-recorded when the enriched pivots became
+//! permanent candidates of the junction side (#1159); the dense scenarios
+//! were kept as recorded. Cache hits went from 8350 to 10196 and from 8314 to
+//! 10081, from lookups of those candidates in the evaluation memo. The error
+//! estimates of the four `Converged` engine calls of each scenario (and of
+//! their accepted patches) went from 0.0 to values of order 1e-17, and two
+//! other estimates moved within 1e-16. Function evaluations, terminations,
+//! bond dimensions, and node data are unchanged.
 
 use crate::adaptive_common;
 
