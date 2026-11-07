@@ -1,0 +1,13 @@
+diff --git a/crates/tensor4all-core/src/tensor.rs b/crates/tensor4all-core/src/tensor.rs
+index e11d8ef..b94d490 100644
+--- a/crates/tensor4all-core/src/tensor.rs
++++ b/crates/tensor4all-core/src/tensor.rs
+@@ -5,6 +5,6 @@ impl Tensor {
+     for (dim, step) in shape.iter().zip(stride.iter()) {
+         total += dim * step.unsigned_abs();
+     }
+-    let value = 1;
+-    value + total
++    let added_marker = total * 2;
++    added_marker
+ }
