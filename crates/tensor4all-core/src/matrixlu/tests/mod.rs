@@ -1,4 +1,6 @@
 use super::*;
+
+mod fused_argmax;
 use num_complex::Complex64;
 use tensor4all_tensorbackend::{from_vec2d, mat_mul, transpose, Matrix};
 
