@@ -160,7 +160,8 @@ pub struct TreeTciOptions {
 
     /// Maximum number of edge-order iterations (outer sweeps).
     ///
-    /// Each iteration visits all edges twice (two inner passes) and updates
+    /// Each iteration visits all edges twice (two inner passes, in opposite
+    /// directions with the default [`AllEdges`](crate::AllEdges)) and updates
     /// pivot sets. Typical values: 10--50. Default: `20`.
     pub max_iter: usize,
 
@@ -408,7 +409,9 @@ where
 /// [`TreeTciError::InvalidConfiguration`](crate::TreeTciError::InvalidConfiguration).
 /// Different valid orders generally reach different approximations; the
 /// documented sequence is exactly the order returned by the visitor's
-/// [`EdgeVisitor::visit_order`] on each pass.
+/// [`EdgeVisitor::visit_order_in_pass`] on each pass. [`AllEdges`] sweeps the
+/// sorted edges forward on the first pass of an iteration and backward on the
+/// second.
 ///
 /// # Observing iterations
 ///
@@ -830,7 +833,7 @@ where
     const NCHECK_HISTORY: usize = 3;
 
     for iteration in 0..options.max_iter {
-        for _pass in 0..INNER_EDGE_PASSES {
+        for pass in 0..INNER_EDGE_PASSES {
             let error_scale = if options.scale_tolerance && state.max_sample_value > 0.0 {
                 state.max_sample_value
             } else {
@@ -849,7 +852,7 @@ where
             // convergence falsely. The two subtree keys of an edge are not
             // changed by updates of other edges, so proposers can retain the
             // edge's current pivots without a full snapshot.
-            let order = visitor.visit_order(state);
+            let order = visitor.visit_order_in_pass(state, pass);
             validate_edge_order(state, &order)?;
             state.flush_pivot_errors();
 
