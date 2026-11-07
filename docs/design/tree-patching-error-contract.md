@@ -1248,17 +1248,42 @@ unimplemented, and the upstream planner fix is tracked by
 
 The driver does not work around it.
 
-**Scope (decided, [open question 9](#open-questions-for-the-user)).** The
-target: for a fixed seed, a deterministic evaluator, and a deterministic
-engine, results are bitwise identical on the same machine and build across
-threads and thread counts, and across processes once a two-process CI test
-(the same test binary run twice, comparing digests) passes. There is no
-cross-machine promise; M8 (MPI) states its own contract. The current tested
-state is narrower: fresh threads within one process, on `f64` trees whose
-nodes carry exactly one site each (the raw kernels). Until the local steps (c) and (a)
-land, generic-path trees (a site-free node, a multi-site node, or `f32`/`c32`
-data) are not reproducible across threads, and the two-process CI test does
-not exist yet, so no cross-process claim is made.
+**Scope (decided, [open question 9](#open-questions-for-the-user); tiered
+2026-11-08 after #1162).** The promise has two tiers, because the second one
+is not free and must not be claimed before it is measured:
+
+- **Tier 1, enforced in CI**: for a fixed seed, a deterministic evaluator and a
+  deterministic engine, results are bitwise identical on the same machine and
+  build **at a fixed thread count**, across fresh threads, across processes,
+  and across repeated runs. The CI test pins the thread count and asserts a
+  digest, so a change that alters numerics cannot pass silently.
+- **Tier 2, an observed property, not a commitment**: bitwise identity
+  **across thread counts**. Some paths have it already, and the document
+  records that as a fact about them rather than as a promise: every path built
+  on `tenferro-einsum` contractions and on the elementwise/reduction kernels,
+  including `contract` at large sizes. `qr` and `svd` (and therefore
+  `TreeTN::canonicalize`, `truncate`, and operator applications that truncate)
+  do not have it above roughly `m*n ~ 16k` elements, where the blocked
+  Householder work is partitioned by the available parallelism; the observed
+  spread is round-off (`|dQ|, |dR| <= 8.9e-15` at `224x112`, `c64`).
+
+  **Whether an operation should acquire Tier 2 is a performance decision, made
+  per operation** (`#1162`): making the partition independent of the thread
+  count constrains how the work is split, and the constraint is only accepted
+  if it is free. Frozen bar, set 2026-11-08 before any such measurement: adopt
+  it for an operation only if the cost is within 2% at 1, 4 and 8 threads on
+  the deciding host, measured with the existing protocol (5 repetitions,
+  median). Above that, the operation keeps Tier 1 and the 2% figure is recorded
+  with the measurement so the trade-off can be revisited deliberately instead
+  of by drift. Tier 2 is therefore never a blanket promise, and no operation
+  may claim it in rustdoc until such a measurement exists.
+
+There is no cross-machine promise; M8 (MPI) states its own contract. What is
+tested today is narrower still than Tier 1: fresh threads within one process,
+on `f64` trees whose nodes carry exactly one site each (the raw kernels).
+Until the local steps (c) and (a) land, generic-path trees (a site-free node, a
+multi-site node, or `f32`/`c32` data) are not reproducible across threads, and
+the two-process CI test does not exist yet, so no cross-process claim is made.
 
 The test (a unit test of the measurement): build patches on two trees, a
 branched tree with a multi-site node and a site-free junction (generic path)
@@ -1788,6 +1813,30 @@ defaults reproduce M3 exactly.
    process, on `f64` trees with exactly one site per node. Until the local steps (c) and
    (a) land, generic-path trees are not reproducible across threads, and the
    two-process CI test does not exist yet.
+
+   **Tiered 2026-11-08 (user, after #1162).** The target above is kept, but it
+   is split into what CI enforces and what is still a goal, because `qr`/`svd`
+   do not meet the cross-thread half and the document claimed they did:
+
+   - Tier 1 (enforced): bitwise identical at a **fixed thread count**, across
+     fresh threads, processes and repeated runs. The CI test pins the thread
+     count.
+   - Tier 2 (observed where it happens, not promised): identical **across
+     thread counts**. Present today in the einsum contraction paths and the
+     elementwise/reduction kernels, including `contract`; absent from
+     `qr`/`svd` above `m*n ~ 16k` elements, where the blocked Householder
+     partition follows the available parallelism.
+
+   **Tier 2 is decided per operation by measured cost, not adopted as a
+   target.** Making a parallel reduction or a blocked factorization
+   thread-count independent constrains the partition, and the constraint is
+   accepted only when it is free: within 2% at 1, 4 and 8 threads on the
+   deciding host, 5 repetitions, median. The bar is frozen as of 2026-11-08,
+   before any measurement, so that a later result cannot redefine it. Above
+   2%, the operation promises Tier 1 and the measurement is recorded in #1162.
+   Until such a measurement exists, no operation's rustdoc may claim Tier 2.
+   The narrowing here is a correction of this document, not a retreat from the
+   2026-10-03 decision about *which machine* the promise covers.
 
 ## Implementation decisions
 
