@@ -73,9 +73,11 @@ fn decode(point: &[usize]) -> [usize; 3] {
 ///
 /// # Errors
 ///
-/// [`TreeTciError::InvalidGraph`] if an edge names a site outside `0..N_SITES`
-/// or repeats one, or if the edge list is disconnected, missing a vertex, or
-/// otherwise not a tree.
+/// `TreeTciError::InvalidGraph` from `TreeTciGraph::new` (wrapped in
+/// `anyhow`) if the edge list is not a tree on `N_SITES` sites: a self-loop,
+/// an out-of-bounds endpoint, a repeated edge, or a disconnected edge set.
+/// The constants above always build a valid comb, so this signals an edited
+/// `R` or edge construction.
 pub fn comb_graph() -> Result<TreeTciGraph> {
     let mut edges = Vec::new();
     for axis in 0..3 {
@@ -106,8 +108,23 @@ pub struct Run {
 ///
 /// # Errors
 ///
-/// Returns an error if the graph cannot be built ([`comb_graph`]), if the
-/// optimizer reports a failure, or if the sampled relative error is not finite.
+/// Returns, wrapped in `anyhow`, the error of the step that failed:
+/// - `TreeTciError::InvalidGraph` from [`comb_graph`];
+/// - `TreeTciError::Operation` from `TreeTCI2::new` (local dimensions do not
+///   match the graph) or `add_global_pivots` (start pivot out of range);
+/// - `TreeTciError::InvalidConfiguration` or `TreeTciError::Operation` from
+///   `optimize_with_proposer` (invalid options, candidate or LU failure,
+///   memo setup);
+/// - `TreeTciError::Operation` from `subregion_vertices` when a junction
+///   edge is absent from the graph;
+/// - an error from `to_treetn` when the state cannot be materialized, or a
+///   "no site index" error when a materialized site has no site index;
+/// - a `TreeTNOperationError` from `TreeTNCachedEvaluator::new` or
+///   `evaluate_batched`, or a shape mismatch from `ColMajorArrayRef::new`,
+///   while evaluating the test points.
+///
+/// The target never fails, and no accuracy check is made here: the callers
+/// assert on the returned [`Run`].
 pub fn run<P: PivotCandidateProposer>(
     target: Target,
     enable_global_pivots: bool,
