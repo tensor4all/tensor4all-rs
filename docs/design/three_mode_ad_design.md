@@ -22,6 +22,25 @@ This document defines:
 
 It does not prescribe migration steps.
 
+## Status
+
+This is a design proposal. What exists today is the reverse-mode API and the
+eager dtype rules:
+
+- `AnyScalar` is a struct, not the enum shown under "Mode-preserving scalar": it
+  owns a rank-0 `IdxTensor`, a private `ScalarValue` (`f32`/`f64`/`c32`/`c64`)
+  and a `tracks_grad` flag (`crates/tensor4all-core/src/any_scalar.rs:240-244`).
+- Reverse mode is the eager `IdxTensor`/`AnyScalar` API: `enable_grad`,
+  `tracks_grad`, `backward`, `grad` and `detach`
+  (`crates/tensor4all-core/src/any_scalar.rs:507-653`,
+  `crates/tensor4all-core/src/defaults/idx_tensor.rs:3930-4092`).
+- Dtype promotion is `IdxTensor::common_eager_dtype` and
+  `promote_eager_operands` (`crates/tensor4all-core/src/defaults/idx_tensor.rs:2159-2200`);
+  it is not the uniform widening rule stated below.
+- `BaseScalar`, the mode-carrying `AnyScalar` enum, the `Primal`/`Dual`/`Tracked`
+  wrappers, `TensorKernel`, `OpRule`, forward mode (JVP), HVP and `DiffPolicy`
+  are proposals only. There is no forward-mode or HVP implementation in the tree.
+
 ## Design Principles
 
 1. `AnyScalar` remains, but must preserve AD mode metadata.
@@ -32,7 +51,9 @@ It does not prescribe migration steps.
 
 ## Core Value Model
 
-### Base scalar domain
+### Base scalar domain (proposed)
+
+There is no `BaseScalar` type in the tree today; it is part of this proposal.
 
 ```rust
 pub enum BaseScalar {
@@ -41,7 +62,7 @@ pub enum BaseScalar {
 }
 ```
 
-### Mode-preserving scalar
+### Mode-preserving scalar (proposed; today `AnyScalar` is a struct)
 
 ```rust
 pub enum AnyScalar {
@@ -64,7 +85,7 @@ Rationale:
 - If scalar results are downgraded to primal, AD paths are broken.
 - Therefore scalar values must carry the same mode semantics as tensors.
 
-### Tensor wrappers
+### Tensor wrappers (proposed)
 
 ```rust
 pub struct Primal<T> {
@@ -86,7 +107,7 @@ pub struct Tracked<T> {
 
 ## Trait Boundaries
 
-### Primal kernel trait
+### Primal kernel trait (proposed)
 
 Primal kernels are pure numeric operations. No tape logic, no AD branching.
 
@@ -106,7 +127,7 @@ pub trait TensorKernel: Clone {
 }
 ```
 
-### Rule trait for AD
+### Rule trait for AD (proposed)
 
 Each operation is defined by evaluation and AD rules.
 
@@ -151,10 +172,27 @@ Promotion is centralized, not scattered across operators.
 
 ### DType promotion
 
-- `F64 + F64 -> F64`
-- any combination including `C64 -> C64`
+Today the eager path promotes through `IdxTensor::common_eager_dtype`
+(`crates/tensor4all-core/src/defaults/idx_tensor.rs:2159-2181`), applied by
+`promote_eager_operands` (`:2193`):
 
-### AD mode promotion
+- `F32 + F32 -> F32`
+- `F32 + F64`, `F64 + F64 -> F64`
+- `C32 + F32`, `C32 + C32 -> C32`
+- `C32 + F64`, `C64 + any supported dtype -> C64`
+
+This is not uniformly widening. Scalar-tensor arithmetic keeps the tensor's
+32-bit width: scaling an `f32` tensor by an `f64` `AnyScalar` stays `f32`, and
+the same with a complex `f64` scalar stays `c32`
+(`crates/tensor4all-core/tests/tensor_api_correction.rs:57`,
+`arithmetic_does_not_promote_32_bit_tensors`). The uniformly-widening rule this
+document proposes (including "any combination including `C64` goes to `C64`")
+is not what runs.
+
+### AD mode promotion (proposed)
+
+Today there is a single `tracks_grad` flag, not an ordered mode lattice.
+The proposal is:
 
 - `Primal < Dual < Tracked`
 - Mixed-mode ops promote to the maximum mode.
@@ -181,11 +219,12 @@ Mode behavior:
 - `Dual`: keep primal, set tangent to zero / `None`
 - `Tracked`: keep primal, drop tape connection (`requires_grad = false`)
 
-## Non-Smooth Operations Policy
+## Non-Smooth Operations Policy (proposed)
 
 Operations with discrete decisions (pivoting, rank selection, truncation) are not smoothly differentiable in general.
 
-Define explicit policy:
+There is no `DiffPolicy` type in the tree today, and no selectable
+`Strict`/`StopGradient` behaviour. The policy below is a proposal:
 
 ```rust
 pub enum DiffPolicy {
@@ -262,14 +301,15 @@ where \(C\) is the forward computational cost for the network.
    - `hvp` vs finite-difference of gradient.
 4. Detach semantics:
    - primal equality holds, derivatives are zero.
-5. Policy checks:
+5. Policy checks (once `DiffPolicy` exists):
    - non-smooth ops respect `DiffPolicy` exactly.
 
 ## Summary
 
 The key architectural decision is:
 
-- keep `AnyScalar`, but make it AD-mode preserving;
+- keep `AnyScalar`, but make it AD-mode preserving (proposal; today it carries
+  only a `tracks_grad` flag);
 - keep primal kernels simple;
 - express AD via operation rules;
 - treat `detach` and non-smooth behavior explicitly.
