@@ -302,6 +302,53 @@ fn cached_walk_readout_on_session<T: tensor4all_core::TensorElement>(
         .map_err(anyhow::Error::from)
 }
 
+/// Total scalar payload an equivalent of the materialized tree would occupy.
+///
+/// One element per stored tensor entry, widened by [`core::mem::size_of`] of the
+/// scalar type. Saturating throughout: a shape whose element count or byte size
+/// would exceed `usize::MAX` answers `usize::MAX` rather than panicking in a
+/// debug build.
+fn materialized_tree_bytes<T>(treetn: &TreeTN<IdxTensor, usize>) -> usize {
+    treetn
+        .node_indices()
+        .into_iter()
+        .fold(0usize, |bytes, node| {
+            let elements = treetn.tensor(node).map_or(0, |tensor| {
+                tensor
+                    .dims()
+                    .into_iter()
+                    .fold(1usize, |count, dim| count.saturating_mul(dim))
+            });
+            bytes.saturating_add(elements.saturating_mul(core::mem::size_of::<T>()))
+        })
+}
+
+/// Byte cap for the prepared branch-slice cache of one global pivot search.
+///
+/// A prepared branch slice is a re-layout of one branching site tensor: one
+/// `child_dim_1 x parent_dim` matrix per value of the third leg. With both
+/// non-parent legs at bond dimension `chi` a single slice is therefore
+/// `chi^2 * size_of::<T>()` bytes, and retaining every slice of that site costs
+/// `chi^3 * size_of::<T>()`: 34.6 MB at `chi = 163`, 1.07 GB at `chi = 512`, and
+/// 8.6 GB at `chi = 1024` for `f64`. Those sums are per branching site, so a
+/// tree with several branching sites multiplies them.
+///
+/// A fixed 32 MiB cap is a cubic bond of only ~160, so every search above it
+/// rebuilt every slice on every readout; `usize::MAX` avoids that by retaining
+/// without bound. Neither is a size. The cap is computed from the materialized
+/// tree instead: the slices a search can visit are re-layouts of the tree's own
+/// site tensors, so all of them together are bounded by
+/// [`materialized_tree_bytes`]. "One more copy of the tree" is finite and still
+/// admits every slice, which is the invariant this cap encodes — in the tree's
+/// own size rather than in the third power of a bond dimension.
+///
+/// The [`CachedEvaluatorOptions::branch_slice_cache_max_bytes`] default stays as
+/// a floor so that a small tree does not turn retention off.
+fn branch_slice_cache_max_bytes<T>(treetn: &TreeTN<IdxTensor, usize>) -> usize {
+    materialized_tree_bytes::<T>(treetn)
+        .max(CachedEvaluatorOptions::<usize>::default().branch_slice_cache_max_bytes)
+}
+
 /// [`find_global_pivots`] with the approximation readout supplied by the
 /// caller. Production passes [`cached_walk_readout`]; tests also pass the
 /// pointwise [`TreeTN::evaluate`] to check that the readout does not change
@@ -389,12 +436,14 @@ where
     // A prepared branch slice is a re-layout of one branching site tensor, so
     // retaining all of them costs at most the materialized tree once more. A
     // byte cap below one slice (the default 32 MiB is a cubic bond of ~160)
-    // makes every readout rebuild the slice.
+    // makes every readout rebuild the slice, so the cap is sized from the tree
+    // instead of removed: see `branch_slice_cache_max_bytes`.
+    let branch_slice_cache_cap = branch_slice_cache_max_bytes::<T>(&treetn);
     let mut cache = TreeTNCachedEvaluator::new(
         &treetn,
         &site_indices,
         CachedEvaluatorOptions {
-            branch_slice_cache_max_bytes: usize::MAX,
+            branch_slice_cache_max_bytes: branch_slice_cache_cap,
             ..CachedEvaluatorOptions::default()
         },
     )
