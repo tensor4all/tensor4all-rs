@@ -54,6 +54,26 @@ fn configuration_flags_without_a_name_are_rejected() {
 }
 
 #[test]
+fn update_baseline_parses_but_rejects_a_configuration_selection() {
+    let args = parse(&["--update-baseline"]).unwrap().unwrap();
+    assert!(args.update_baseline);
+    assert!(!parse(&[]).unwrap().unwrap().update_baseline);
+    let error = parse(&[
+        "--update-baseline",
+        "--config-name",
+        "production",
+        "--package",
+        "demo",
+    ])
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("cannot be combined with --config-name"),
+        "{error}"
+    );
+}
+
+#[test]
 fn unknown_arguments_still_fail() {
     let error = parse(&["--workspace"]).unwrap_err().to_string();
     assert!(error.contains("unknown argument"), "{error}");

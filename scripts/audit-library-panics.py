@@ -5,6 +5,10 @@ Without a configuration selection the wrapper runs the default pass: every
 workspace production target with its default features, compared against the
 reviewed baseline.
 
+``--update-baseline`` rewrites the recorded lines and assertion text of the
+current tree and prints what it changed; it refuses to run in CI. It cannot be
+combined with ``--config-name``, because a configuration audits a subset.
+
 Pass ``--config-name`` together with ``--package``/``-p``,
 ``--no-default-features``, and ``--features`` to audit one explicit feature
 configuration instead. The workspace's CPU backend features are mutually
@@ -13,7 +17,8 @@ configuration names the packages and Cargo feature selection worth auditing
 (for example ``--config-name system-blas -p tensor4all-core ...
 --no-default-features --features tenferro-system-blas``). Because a
 configuration selects a subset of the workspace, unmatched baseline entries are
-not reported as stale; only newly uncovered findings fail the pass. The
+not reported as stale; newly uncovered findings and assertions whose reviewed
+text changed still fail the pass. The
 nightly ``.github/workflows/feature-matrix.yml`` runs these passes.
 
 This wrapper keeps the historical ``--root``/``--baseline`` interface and
@@ -158,6 +163,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--config-name")
+    parser.add_argument("--update-baseline", action="store_true")
     parser.add_argument("--package", "-p", action="append", default=[])
     parser.add_argument("--no-default-features", action="store_true")
     parser.add_argument("--features", action="append")
@@ -188,6 +194,8 @@ def main(argv: list[str] | None = None) -> int:
         "--baseline",
         str(baseline),
     ]
+    if args.update_baseline:
+        command.append("--update-baseline")
     if args.config_name:
         command += ["--config-name", args.config_name]
     for package in args.package:
