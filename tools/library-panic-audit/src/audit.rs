@@ -23,11 +23,22 @@
 //! that body holds exactly one direct `panic!`; every call to that helper is
 //! printed for review. Any additional or nested panic in that file or function
 //! remains a finding.
+//!
+//! A baseline entry is keyed on the normalized path, the kind, the enclosing
+//! item, and the ordinal of that kind inside the item, ordered by line. The line
+//! is recorded but never matched on: code inserted above an assertion keeps the
+//! entry, which is reported as moved, while an added or a deleted assertion
+//! still fails. The normalized assertion text is the secondary check, so an
+//! assertion whose arguments changed is reported as changed rather than
+//! accepted. `--update-baseline` rewrites the recorded lines and text; the
+//! previous `path:line:kind` shape is still read and is migrated to the keyed
+//! shape while it still matches the finding at its line.
 
 use anyhow::{anyhow, bail, Context, Result};
 use proc_macro2::{TokenStream, TokenTree};
 use serde_json::Value;
-use std::collections::{BTreeSet, HashSet};
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -71,31 +82,150 @@ const PRODUCTION_KINDS: [&str; 7] = [
 // CI step leaves room for the wrapper build and process teardown.
 const CLIPPY_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// One discovered panic-path or assertion location, before it is keyed.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) struct Finding {
+pub(crate) struct Location {
     path: String,
     line: usize,
+    /// Source column, used to place the finding inside its item. Two assertions
+    /// written on one line stay distinct because their columns differ.
+    column: usize,
     kind: String,
+    /// Normalized assertion argument tokens, empty for Clippy findings and for
+    /// text-scanned fragments where no token stream is available.
+    content: String,
 }
 
-impl Finding {
+impl Location {
     fn entry(&self) -> String {
         format!("{}:{}:{}", self.path, self.line, self.kind)
     }
 }
 
+/// The reviewed identity of a finding: an entry keeps it when code above it
+/// moves, and loses it when the assertion is added or deleted. The line number
+/// is deliberately absent.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct FindingKey {
+    path: String,
+    kind: String,
+    item: String,
+    index: usize,
+}
+
+/// A keyed finding: the stable identity plus the reported line and the
+/// normalized assertion text used as the secondary check.
+#[derive(Clone, Debug)]
+pub(crate) struct Finding {
+    key: FindingKey,
+    line: usize,
+    content: String,
+}
+
+impl Finding {
+    fn entry(&self) -> String {
+        format!("{}:{}:{}", self.key.path, self.line, self.key.kind)
+    }
+
+    /// The key as reported next to a finding, e.g. `IdxTensor::permute#0`.
+    fn key_text(&self) -> String {
+        format!("{}#{}", self.key.item, self.key.index)
+    }
+
+    /// The baseline spelling of this entry.
+    fn json(&self) -> String {
+        serde_json::json!({
+            "path": &self.key.path,
+            "kind": &self.key.kind,
+            "item": &self.key.item,
+            "index": self.key.index,
+            "line": self.line,
+            "content": &self.content,
+        })
+        .to_string()
+    }
+}
+
+// The line and the assertion text are reported, not matched on: set operations
+// compare the key alone, so a baseline entry and the finding it still describes
+// stay equal after the code above them moves.
+impl Ord for Finding {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.key.cmp(&other.key)
+    }
+}
+
+impl PartialOrd for Finding {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Finding {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl Eq for Finding {}
+
+/// One reviewed baseline entry. `Legacy` is the previous `path:line:kind`
+/// shape, accepted for one release and resolved on load.
+#[derive(Clone, Debug)]
+enum BaselineEntry {
+    Legacy(Location),
+    Keyed(Finding),
+}
+
+impl BaselineEntry {
+    /// How the entry is spelled in the baseline file.
+    fn previous(&self) -> String {
+        match self {
+            BaselineEntry::Legacy(location) => location.entry(),
+            BaselineEntry::Keyed(finding) => finding.json(),
+        }
+    }
+
+    fn kind(&self) -> &str {
+        match self {
+            BaselineEntry::Legacy(location) => &location.kind,
+            BaselineEntry::Keyed(finding) => &finding.key.kind,
+        }
+    }
+}
+
+/// A baseline entry together with the finding it describes today.
+#[derive(Debug)]
+struct ResolvedEntry {
+    previous: String,
+    current: Finding,
+}
+
 #[derive(Debug)]
 pub(crate) struct AuditReport {
     configuration: Option<String>,
+    baseline_path: PathBuf,
     matched: Vec<Finding>,
+    /// Findings that kept their entry but moved: reported, never fatal.
+    moved: Vec<(Finding, usize)>,
+    /// Same key, different assertion text: the reviewed assertion changed.
+    changed: Vec<(Finding, Finding)>,
     unbaselined: Vec<Finding>,
-    stale: Vec<Finding>,
-    forbidden_baseline: Vec<Finding>,
+    stale: Vec<String>,
+    forbidden_baseline: Vec<String>,
     sanctioned: Vec<Finding>,
     invariant_calls: Vec<(String, usize)>,
+    resolved: Vec<ResolvedEntry>,
 }
 
 impl AuditReport {
+    fn failed(&self) -> bool {
+        !self.unbaselined.is_empty()
+            || !self.stale.is_empty()
+            || !self.changed.is_empty()
+            || !self.forbidden_baseline.is_empty()
+    }
+
     pub(crate) fn exit_code_and_print(&self) -> i32 {
         if let Some(configuration) = &self.configuration {
             println!("Audit configuration: `{configuration}`");
@@ -103,20 +233,33 @@ impl AuditReport {
         for finding in &self.matched {
             println!("Baseline matched: {}", finding.entry());
         }
+        for (finding, baseline_line) in &self.moved {
+            println!(
+                "Moved baseline entry: {} [{}] (baseline recorded line {baseline_line})",
+                finding.entry(),
+                finding.key_text()
+            );
+        }
+        for (finding, baseline) in &self.changed {
+            println!(
+                "Changed assertion: {} [{}] (baseline `{}`, now `{}`)",
+                finding.entry(),
+                finding.key_text(),
+                baseline.content,
+                finding.content
+            );
+        }
         for finding in &self.sanctioned {
             println!("Sanctioned invariant panic: {}", finding.entry());
         }
         for finding in &self.unbaselined {
             println!("{}", finding.entry());
         }
-        for finding in &self.stale {
-            println!("Stale baseline: {}", finding.entry());
+        for entry in &self.stale {
+            println!("Stale baseline: {entry}");
         }
-        for finding in &self.forbidden_baseline {
-            eprintln!(
-                "Baseline contains forbidden raw panic-style entry: {}",
-                finding.entry()
-            );
+        for entry in &self.forbidden_baseline {
+            eprintln!("Baseline contains forbidden raw panic-style entry: {entry}");
         }
 
         println!(
@@ -126,13 +269,16 @@ impl AuditReport {
         for (path, line) in &self.invariant_calls {
             println!("invariant_violated call site: {path}:{line}");
         }
+        if !self.unbaselined.is_empty() {
+            println!("Unbaselined baseline entries:");
+            for finding in &self.unbaselined {
+                println!("  {}", finding.json());
+            }
+        }
 
-        if !self.unbaselined.is_empty()
-            || !self.stale.is_empty()
-            || !self.forbidden_baseline.is_empty()
-        {
-            eprintln!(
-                "Audit failed: {} {}, {} {}.",
+        if self.failed() {
+            let mut message = format!(
+                "Audit failed: {} {}, {} {}",
                 self.unbaselined.len(),
                 plural(self.unbaselined.len(), "unbaselined finding", None),
                 self.stale.len(),
@@ -142,15 +288,88 @@ impl AuditReport {
                     Some("stale baseline entries")
                 )
             );
+            if !self.changed.is_empty() {
+                message.push_str(&format!(
+                    ", {} {}",
+                    self.changed.len(),
+                    plural(self.changed.len(), "changed assertion", None)
+                ));
+            }
+            eprintln!("{message}.");
             1
         } else {
-            println!(
+            let mut message = format!(
                 "Audit passed: 0 unbaselined findings, {} stale baseline entries",
                 self.stale.len()
             );
+            if !self.moved.is_empty() {
+                message.push_str(&format!(
+                    ", {} moved {}",
+                    self.moved.len(),
+                    plural(self.moved.len(), "entry", None)
+                ));
+            }
+            println!("{message}");
             0
         }
     }
+
+    /// Rewrites the baseline in the keyed format, printing every entry it
+    /// changed and returning those lines. Line movement and format migration are
+    /// mechanical; a changed set of keys is not, so that case is refused.
+    pub(crate) fn update_baseline(&self, ci: Option<&str>) -> Result<Vec<String>> {
+        if ci_environment(ci) {
+            bail!(
+                "refusing to update {} in CI: run it locally and commit the result",
+                self.baseline_path.display()
+            );
+        }
+        if self.failed() {
+            bail!(
+                "refusing to update {}: the baseline keys changed; resolve the added, stale, \
+                 changed, and forbidden entries by hand first",
+                self.baseline_path.display()
+            );
+        }
+        let mut entries = Vec::new();
+        let mut diff = Vec::new();
+        for entry in &self.resolved {
+            let current = entry.current.json();
+            if entry.previous != current {
+                diff.push(format!("- {}", entry.previous));
+                diff.push(format!("+ {current}"));
+            }
+            entries.push(current);
+        }
+        let text = format!("[\n  {}\n]\n", entries.join(",\n  "));
+        fs::write(&self.baseline_path, text).with_context(|| {
+            format!(
+                "failed to write panic baseline {}",
+                self.baseline_path.display()
+            )
+        })?;
+        for line in &diff {
+            println!("{line}");
+        }
+        println!(
+            "Baseline updated: {} of {} entries rewritten in {}",
+            diff.len() / 2,
+            self.resolved.len(),
+            self.baseline_path.display()
+        );
+        Ok(diff)
+    }
+}
+
+/// CI is detected from the conventional `CI` variable: any non-empty value
+/// other than `0` or `false`.
+fn ci_environment(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        let value = value.trim();
+        !value.is_empty()
+            && !value.eq_ignore_ascii_case("0")
+            && !value.eq_ignore_ascii_case("false")
+    })
 }
 
 fn plural(count: usize, singular: &str, plural: Option<&str>) -> String {
@@ -197,7 +416,7 @@ struct CompilerArtifact {
 }
 
 type CompilerArtifacts = Vec<CompilerArtifact>;
-type ClippyParse = (HashSet<TargetKey>, CompilerArtifacts, BTreeSet<Finding>);
+type ClippyParse = (HashSet<TargetKey>, CompilerArtifacts, BTreeSet<Location>);
 
 /// One Cargo feature configuration selected by the caller.
 ///
@@ -465,7 +684,7 @@ fn command_detail(stdout: &[u8], stderr: &[u8]) -> String {
 fn run_clippy(
     selection: &ProductionSelection,
     configuration: Option<&Configuration>,
-) -> Result<(BTreeSet<PathBuf>, BTreeSet<Finding>)> {
+) -> Result<(BTreeSet<PathBuf>, BTreeSet<Location>)> {
     let mut command = Command::new("cargo");
     command.arg("clippy");
     match configuration {
@@ -720,7 +939,7 @@ fn selected_target_key(
     Ok(expected.get(&key).cloned())
 }
 
-fn parse_compiler_message(message: &Value, root: &Path) -> Result<Option<Finding>> {
+fn parse_compiler_message(message: &Value, root: &Path) -> Result<Option<Location>> {
     let diagnostic = message
         .get("message")
         .ok_or_else(|| anyhow!("cargo compiler-message record omitted message"))?;
@@ -750,18 +969,28 @@ fn parse_compiler_message(message: &Value, root: &Path) -> Result<Option<Finding
         bail!("{code:?} diagnostic has no primary span");
     }
     for span in primary_spans {
-        if let Some((path, line)) = resolve_call_site(span, root)? {
-            return Ok(Some(Finding {
-                path,
-                line,
+        if let Some(position) = resolve_call_site(span, root)? {
+            return Ok(Some(Location {
+                path: position.path,
+                line: position.line,
+                column: position.column,
                 kind: (*kind).to_owned(),
+                content: String::new(),
             }));
         }
     }
     bail!("{code:?} diagnostic has no local primary or expansion call-site span")
 }
 
-fn resolve_call_site(span: &Value, root: &Path) -> Result<Option<(String, usize)>> {
+/// A resolved call site: the normalized path, and the position Clippy reported
+/// (column 0 when the diagnostic carried none).
+struct CallSite {
+    path: String,
+    line: usize,
+    column: usize,
+}
+
+fn resolve_call_site(span: &Value, root: &Path) -> Result<Option<CallSite>> {
     if let Some(expansion) = span.get("expansion").and_then(Value::as_object) {
         if let Some(call_site) = expansion.get("span") {
             if let Some(found) = resolve_call_site(call_site, root)? {
@@ -778,6 +1007,13 @@ fn resolve_call_site(span: &Value, root: &Path) -> Result<Option<(String, usize)
     if line == 0 || line > usize::MAX as u64 {
         bail!("diagnostic span has invalid line number: {line}");
     }
+    // Clippy reports 1-based columns; proc-macro2 counts from 0.
+    let column = span
+        .get("column_start")
+        .and_then(Value::as_u64)
+        .and_then(|column| usize::try_from(column).ok())
+        .unwrap_or(1)
+        .saturating_sub(1);
     let path = Path::new(file_name);
     let candidate = if path.is_absolute() {
         path.to_path_buf()
@@ -803,7 +1039,11 @@ fn resolve_call_site(span: &Value, root: &Path) -> Result<Option<(String, usize)
     if source.lines().count() < line {
         bail!("diagnostic span line is outside source file: {relative}:{line}");
     }
-    Ok(Some((relative, line)))
+    Ok(Some(CallSite {
+        path: relative,
+        line,
+        column,
+    }))
 }
 
 #[derive(Debug, Default)]
@@ -1291,17 +1531,109 @@ fn assertion_kind(name: &str) -> Option<&'static str> {
     }
 }
 
-fn record_assertion(path: &str, line: usize, kind: &str, findings: &mut BTreeSet<Finding>) {
-    if line != 0 {
-        findings.insert(Finding {
+/// The normalized assertion arguments. `TokenStream` re-renders its tokens, so
+/// source formatting and line breaks never reach the reviewed text.
+fn assertion_content(tokens: Option<&TokenTree>) -> String {
+    match tokens {
+        Some(TokenTree::Group(group)) => render_tokens(&group.stream()),
+        _ => String::new(),
+    }
+}
+
+fn record_assertion(
+    path: &str,
+    position: proc_macro2::LineColumn,
+    kind: &str,
+    content: String,
+    findings: &mut BTreeSet<Location>,
+) {
+    if position.line != 0 {
+        findings.insert(Location {
             path: path.to_owned(),
-            line,
+            line: position.line,
+            column: position.column,
             kind: kind.to_owned(),
+            content,
         });
     }
 }
 
-fn scan_assertion_tokens(path: &str, tokens: TokenStream, findings: &mut BTreeSet<Finding>) {
+/// The two-character punctuation pairs that spell one Rust operator. Only these
+/// keep the token boundary in the rendering, so an accidental adjacency such as
+/// `|&` renders the same however it is spaced.
+const COMPOUND_PUNCT: [(char, char); 20] = [
+    ('&', '&'),
+    ('&', '='),
+    ('*', '='),
+    ('+', '='),
+    ('-', '='),
+    ('-', '>'),
+    ('.', '.'),
+    ('/', '='),
+    (':', ':'),
+    ('<', '<'),
+    ('<', '='),
+    ('=', '='),
+    ('=', '>'),
+    ('>', '='),
+    ('>', '>'),
+    ('%', '='),
+    ('^', '='),
+    ('|', '='),
+    ('|', '|'),
+    ('!', '='),
+];
+
+/// Renders tokens with a single space only where two tokens would otherwise
+/// merge: between two word-like tokens, and where two standalone punctuation
+/// characters spell a compound operator. The result never depends on source
+/// layout (`|&row|` and `| & row |` render alike), a literal keeps its exact
+/// text, and `&&` stays distinct from `& &`.
+fn render_tokens(tokens: &TokenStream) -> String {
+    fn word(token: &TokenTree) -> bool {
+        matches!(token, TokenTree::Ident(_) | TokenTree::Literal(_))
+    }
+    let mut rendered = String::new();
+    let mut previous_word = false;
+    let mut previous_punct: Option<(char, proc_macro2::Spacing)> = None;
+    for token in tokens.clone() {
+        let text = match &token {
+            TokenTree::Group(group) => {
+                let inner = render_tokens(&group.stream());
+                match group.delimiter() {
+                    proc_macro2::Delimiter::Parenthesis => format!("({inner})"),
+                    proc_macro2::Delimiter::Brace => format!("{{{inner}}}"),
+                    proc_macro2::Delimiter::Bracket => format!("[{inner}]"),
+                    proc_macro2::Delimiter::None => inner,
+                }
+            }
+            TokenTree::Ident(ident) => ident.to_string(),
+            TokenTree::Literal(literal) => literal.to_string(),
+            TokenTree::Punct(punct) => punct.as_char().to_string(),
+        };
+        let current_word = word(&token);
+        if previous_word && current_word {
+            rendered.push(' ');
+        } else if let TokenTree::Punct(punct) = &token {
+            let separates = previous_punct.is_some_and(|(previous, spacing)| {
+                spacing == proc_macro2::Spacing::Alone
+                    && COMPOUND_PUNCT.contains(&(previous, punct.as_char()))
+            });
+            if separates {
+                rendered.push(' ');
+            }
+        }
+        rendered.push_str(&text);
+        previous_word = current_word;
+        previous_punct = match &token {
+            TokenTree::Punct(punct) => Some((punct.as_char(), punct.spacing())),
+            _ => None,
+        };
+    }
+    rendered
+}
+
+fn scan_assertion_tokens(path: &str, tokens: TokenStream, findings: &mut BTreeSet<Location>) {
     let tokens = tokens.into_iter().collect::<Vec<_>>();
     for (index, token) in tokens.iter().enumerate() {
         match token {
@@ -1311,7 +1643,13 @@ fn scan_assertion_tokens(path: &str, tokens: TokenStream, findings: &mut BTreeSe
                     if let Some(kind) = assertion_kind(&ident.to_string()) {
                         if matches!(tokens.get(index + 1), Some(TokenTree::Punct(p)) if p.as_char() == '!')
                         {
-                            record_assertion(path, ident.span().start().line, kind, findings);
+                            record_assertion(
+                                path,
+                                ident.span().start(),
+                                kind,
+                                assertion_content(tokens.get(index + 2)),
+                                findings,
+                            );
                         }
                     }
                 }
@@ -1324,7 +1662,7 @@ fn scan_assertion_tokens(path: &str, tokens: TokenStream, findings: &mut BTreeSe
     }
 }
 
-fn scan_macro_rules(path: &str, tokens: TokenStream, findings: &mut BTreeSet<Finding>) {
+fn scan_macro_rules(path: &str, tokens: TokenStream, findings: &mut BTreeSet<Location>) {
     let tokens = tokens.into_iter().collect::<Vec<_>>();
     let mut index = 0;
     while index + 2 < tokens.len() {
@@ -1348,7 +1686,7 @@ fn scan_macro_rules(path: &str, tokens: TokenStream, findings: &mut BTreeSet<Fin
 /// recognizing nested `macro_rules!` definitions: a nested name in matcher
 /// position is a pattern, not a call, so only the nested rules' transcribers
 /// are scanned.
-fn scan_macro_transcriber(path: &str, tokens: TokenStream, findings: &mut BTreeSet<Finding>) {
+fn scan_macro_transcriber(path: &str, tokens: TokenStream, findings: &mut BTreeSet<Location>) {
     let tokens = tokens.into_iter().collect::<Vec<_>>();
     let mut index = 0;
     while index < tokens.len() {
@@ -1384,7 +1722,13 @@ fn scan_macro_transcriber(path: &str, tokens: TokenStream, findings: &mut BTreeS
                     if let Some(kind) = assertion_kind(&ident.to_string()) {
                         if matches!(tokens.get(index + 1), Some(TokenTree::Punct(p)) if p.as_char() == '!')
                         {
-                            record_assertion(path, ident.span().start().line, kind, findings);
+                            record_assertion(
+                                path,
+                                ident.span().start(),
+                                kind,
+                                assertion_content(tokens.get(index + 2)),
+                                findings,
+                            );
                         }
                     }
                 }
@@ -1395,7 +1739,7 @@ fn scan_macro_transcriber(path: &str, tokens: TokenStream, findings: &mut BTreeS
     }
 }
 
-fn scan_item_macro(path: &str, item: &syn::ItemMacro, findings: &mut BTreeSet<Finding>) {
+fn scan_item_macro(path: &str, item: &syn::ItemMacro, findings: &mut BTreeSet<Location>) {
     if item
         .mac
         .path
@@ -1504,7 +1848,7 @@ fn skip_space_and_comments(bytes: &[u8], mut index: usize) -> usize {
     }
 }
 
-fn scan_literal_assertions_text(source: &str, path: &str, findings: &mut BTreeSet<Finding>) {
+fn scan_literal_assertions_text(source: &str, path: &str, findings: &mut BTreeSet<Location>) {
     let bytes = source.as_bytes();
     let starts = line_starts(source);
     let mut index = 0;
@@ -1550,7 +1894,17 @@ fn scan_literal_assertions_text(source: &str, path: &str, findings: &mut BTreeSe
             if let Some(kind) = assertion_kind(name) {
                 let bang = skip_space_and_comments(bytes, index);
                 if bytes.get(bang) == Some(&b'!') {
-                    record_assertion(path, source_line(&starts, start), kind, findings);
+                    let line = source_line(&starts, start);
+                    record_assertion(
+                        path,
+                        proc_macro2::LineColumn {
+                            line,
+                            column: start - starts[line - 1],
+                        },
+                        kind,
+                        String::new(),
+                        findings,
+                    );
                 }
             }
             continue;
@@ -1561,7 +1915,7 @@ fn scan_literal_assertions_text(source: &str, path: &str, findings: &mut BTreeSe
 
 struct PublicAssertionVisitor<'a> {
     path: &'a str,
-    findings: &'a mut BTreeSet<Finding>,
+    findings: &'a mut BTreeSet<Location>,
     in_public_context: bool,
     error: Option<anyhow::Error>,
 }
@@ -1634,7 +1988,7 @@ fn assertion_macro_statement(stmt: &Stmt) -> Option<&syn::Macro> {
 /// the laundering route for an invisible panic, so record that assertion.
 /// Literal-only helpers and helpers with any other statement are left to the
 /// public-path scanner.
-fn assertion_only_helper(path: &str, block: &syn::Block) -> Option<Finding> {
+fn assertion_only_helper(path: &str, block: &syn::Block) -> Option<Location> {
     if block.stmts.len() != 1 {
         return None;
     }
@@ -1654,14 +2008,16 @@ fn assertion_only_helper(path: &str, block: &syn::Block) -> Option<Finding> {
     {
         return None;
     }
-    let line = mac.span().start().line;
-    if line == 0 {
+    let position = mac.span().start();
+    if position.line == 0 {
         return None;
     }
-    Some(Finding {
+    Some(Location {
         path: path.to_owned(),
-        line,
+        line: position.line,
+        column: position.column,
         kind: kind.to_owned(),
+        content: render_tokens(&mac.tokens),
     })
 }
 
@@ -1796,19 +2152,213 @@ impl<'ast> Visit<'ast> for PublicAssertionVisitor<'_> {
         }
         if let Some(segment) = node.path.segments.last() {
             if let Some(kind) = assertion_kind(&segment.ident.to_string()) {
-                record_assertion(self.path, node.span().start().line, kind, self.findings);
+                record_assertion(
+                    self.path,
+                    node.span().start(),
+                    kind,
+                    render_tokens(&node.tokens),
+                    self.findings,
+                );
             }
         }
         scan_assertion_tokens(self.path, node.tokens.clone(), self.findings);
     }
 }
 
+/// One named Rust item and the source positions it covers.
+#[derive(Debug)]
+struct ItemRange {
+    start: proc_macro2::LineColumn,
+    end: proc_macro2::LineColumn,
+    name: String,
+}
+
+/// Item name for a file whose syntax tree could not be parsed, and for a
+/// finding outside every item.
+const FILE_SCOPE: &str = "<file>";
+
+/// The name of the item a finding sits in. A trait implementation carries the
+/// trait as well, because one type can implement the same method name both
+/// inherently and through a trait.
+fn item_segment(item: &Item) -> Option<String> {
+    Some(match item {
+        Item::Const(item) => item.ident.to_string(),
+        Item::Enum(item) => item.ident.to_string(),
+        Item::Fn(item) => item.sig.ident.to_string(),
+        Item::Impl(item) => {
+            let ty = tokens_label(item.self_ty.as_ref());
+            match &item.trait_ {
+                Some((_, path, _)) => format!("{ty} as {}", tokens_label(path)),
+                None => ty,
+            }
+        }
+        Item::Macro(item) => item.ident.as_ref()?.to_string(),
+        Item::Mod(item) => item.ident.to_string(),
+        Item::Static(item) => item.ident.to_string(),
+        Item::Struct(item) => item.ident.to_string(),
+        Item::Trait(item) => item.ident.to_string(),
+        Item::Type(item) => item.ident.to_string(),
+        Item::Union(item) => item.ident.to_string(),
+        _ => return None,
+    })
+}
+
+/// Renders a syntactic fragment completely, then collapses the whitespace
+/// `TokenStream` adds around punctuation. Keeping the full syntax means
+/// `Foo<u8>::check`, `&mut u8`, and `[u8; 4]` stay different items.
+fn tokens_label(tokens: impl quote::ToTokens) -> String {
+    render_tokens(&tokens.to_token_stream())
+}
+
+fn collect_block_items(block: &syn::Block, prefix: &str, ranges: &mut Vec<ItemRange>) {
+    for statement in &block.stmts {
+        if let Stmt::Item(item) = statement {
+            collect_items(std::slice::from_ref(item), prefix, ranges);
+        }
+    }
+}
+
+fn qualified(prefix: &str, segment: &str) -> String {
+    if prefix.is_empty() {
+        segment.to_owned()
+    } else {
+        format!("{prefix}::{segment}")
+    }
+}
+
+fn push_range(prefix: &str, segment: &str, span: proc_macro2::Span, ranges: &mut Vec<ItemRange>) {
+    let start = span.start();
+    let end = span.end();
+    if start.line != 0 && end >= start {
+        ranges.push(ItemRange {
+            start,
+            end,
+            name: qualified(prefix, segment),
+        });
+    }
+}
+
+fn push_function(
+    prefix: &str,
+    ident: &proc_macro2::Ident,
+    span: proc_macro2::Span,
+    block: &syn::Block,
+    ranges: &mut Vec<ItemRange>,
+) {
+    let segment = ident.to_string();
+    push_range(prefix, &segment, span, ranges);
+    collect_block_items(block, &qualified(prefix, &segment), ranges);
+}
+
+fn collect_items(items: &[Item], prefix: &str, ranges: &mut Vec<ItemRange>) {
+    for item in items {
+        let Some(segment) = item_segment(item) else {
+            continue;
+        };
+        push_range(prefix, &segment, item.span(), ranges);
+        let name = qualified(prefix, &segment);
+        match item {
+            Item::Fn(function) => {
+                collect_block_items(&function.block, &name, ranges);
+            }
+            Item::Impl(impl_item) => {
+                for impl_item in &impl_item.items {
+                    if let ImplItem::Fn(function) = impl_item {
+                        let segment = function.sig.ident.to_string();
+                        push_range(&name, &segment, function.span(), ranges);
+                        collect_block_items(&function.block, &qualified(&name, &segment), ranges);
+                    }
+                }
+            }
+            Item::Mod(module) => {
+                if let Some((_, items)) = &module.content {
+                    collect_items(items, &name, ranges);
+                }
+            }
+            Item::Trait(trait_item) => {
+                for trait_item in &trait_item.items {
+                    if let TraitItem::Fn(function) = trait_item {
+                        if let Some(block) = &function.default {
+                            push_function(
+                                &name,
+                                &function.sig.ident,
+                                function.span(),
+                                block,
+                                ranges,
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The innermost item whose span contains `position`. Comparing positions, not
+/// lines, keeps two items written on one line apart.
+fn enclosing_item(ranges: &[ItemRange], position: proc_macro2::LineColumn) -> Option<&str> {
+    ranges
+        .iter()
+        .filter(|range| range.start <= position && position <= range.end)
+        .max_by_key(|range| range.start)
+        .map(|range| range.name.as_str())
+}
+
+/// Gives every discovered location its reviewed key: the enclosing item and the
+/// ordinal of the finding among the same kind inside that item, ordered by line.
+/// Only the relative order matters, so code inserted above an assertion cannot
+/// change its key.
+fn key_findings(
+    items: &BTreeMap<String, Vec<ItemRange>>,
+    locations: BTreeSet<Location>,
+) -> BTreeSet<Finding> {
+    let mut grouped: BTreeMap<(String, String, String), Vec<Location>> = BTreeMap::new();
+    for location in locations {
+        let item = items
+            .get(&location.path)
+            .and_then(|ranges| {
+                enclosing_item(
+                    ranges,
+                    proc_macro2::LineColumn {
+                        line: location.line,
+                        column: location.column,
+                    },
+                )
+            })
+            .unwrap_or(FILE_SCOPE)
+            .to_owned();
+        grouped
+            .entry((location.path.clone(), location.kind.clone(), item))
+            .or_default()
+            .push(location);
+    }
+    let mut findings = BTreeSet::new();
+    for ((_, _, item), mut group) in grouped {
+        group.sort_by_key(|location| (location.line, location.column));
+        for (index, location) in group.into_iter().enumerate() {
+            findings.insert(Finding {
+                key: FindingKey {
+                    path: location.path,
+                    kind: location.kind,
+                    item: item.clone(),
+                    index,
+                },
+                line: location.line,
+                content: location.content,
+            });
+        }
+    }
+    findings
+}
+
 /// Collects the assertion findings, the sanctioned invariant panic, and every
 /// `invariant_violated` call site found while parsing the production sources.
 #[derive(Debug, Default)]
 struct SourceScan {
-    assertions: BTreeSet<Finding>,
-    sanctioned_invariant_panics: BTreeSet<Finding>,
+    assertions: BTreeSet<Location>,
+    items: BTreeMap<String, Vec<ItemRange>>,
+    sanctioned_invariant_panics: BTreeSet<Location>,
     invariant_calls: BTreeSet<(String, usize)>,
 }
 
@@ -1819,8 +2369,8 @@ fn is_panic_macro(mac: &syn::Macro) -> bool {
         .is_some_and(|segment| segment.ident == "panic")
 }
 
-/// The line of a `panic!` statement written directly in a block.
-fn direct_panic_line(stmt: &Stmt) -> Option<usize> {
+/// The position of a `panic!` statement written directly in a block.
+fn direct_panic_position(stmt: &Stmt) -> Option<proc_macro2::LineColumn> {
     let mac = match stmt {
         Stmt::Expr(Expr::Macro(expr_macro), _) => &expr_macro.mac,
         Stmt::Macro(stmt_macro) => &stmt_macro.mac,
@@ -1829,8 +2379,8 @@ fn direct_panic_line(stmt: &Stmt) -> Option<usize> {
     if !is_panic_macro(mac) {
         return None;
     }
-    let line = mac.span().start().line;
-    (line != 0).then_some(line)
+    let position = mac.span().start();
+    (position.line != 0).then_some(position)
 }
 
 /// Every `panic!` occurrence (not distinct lines): parsed macro invocations
@@ -1858,7 +2408,7 @@ impl<'ast> Visit<'ast> for PanicMacroVisitor {
 /// still holds exactly one panic and it is a direct statement. An extra direct
 /// panic or a panic nested in a closure, block, or nested item makes the
 /// function unsanctioned, so every panic it contains stays a finding.
-fn sanctioned_invariant_panic(path: &str, items: &[Item]) -> Option<Finding> {
+fn sanctioned_invariant_panic(path: &str, items: &[Item]) -> Option<Location> {
     let function = items.iter().find_map(|item| match item {
         Item::Fn(function) if function.sig.ident == SANCTIONED_INVARIANT_FUNCTION => Some(function),
         _ => None,
@@ -1869,16 +2419,25 @@ fn sanctioned_invariant_panic(path: &str, items: &[Item]) -> Option<Finding> {
         .block
         .stmts
         .iter()
-        .filter_map(direct_panic_line)
+        .filter_map(direct_panic_position)
         .collect::<Vec<_>>();
-    if visitor.lines.len() != 1 || direct != visitor.lines {
+    if visitor.lines.len() != 1
+        || direct
+            .iter()
+            .map(|position| position.line)
+            .ne(visitor.lines.iter().copied())
+    {
         return None;
     }
-    let line = visitor.lines[0];
-    Some(Finding {
+    // The real position, so this entry keys like the Clippy finding for the same
+    // panic even when the function shares a line with another item.
+    let position = direct.first()?;
+    Some(Location {
         path: path.to_owned(),
-        line,
+        line: position.line,
+        column: position.column,
         kind: "panic".to_owned(),
+        content: String::new(),
     })
 }
 
@@ -1985,6 +2544,9 @@ fn scan_sources(root: &Path, source_files: &BTreeSet<PathBuf>) -> Result<SourceS
                 if definitely_test_only(&file.attrs)? {
                     continue;
                 }
+                let mut ranges = Vec::new();
+                collect_items(&file.items, "", &mut ranges);
+                scan.items.insert(relative.clone(), ranges);
                 let mut visitor = PublicAssertionVisitor {
                     path: &relative,
                     findings: &mut scan.assertions,
@@ -2120,14 +2682,17 @@ fn is_public(visibility: &Visibility) -> bool {
     matches!(visibility, Visibility::Public(_))
 }
 
-fn parse_entry(value: &str) -> Result<Finding> {
-    let parts = value.split(':').collect::<Vec<_>>();
-    if parts.len() != 3 {
-        bail!("invalid baseline entry: {value:?}");
+/// One reviewed baseline entry: the legacy `path:line:kind` string or the keyed
+/// object. Both shapes are accepted for one release of the keyed format.
+fn parse_baseline_entry(value: &Value) -> Result<BaselineEntry> {
+    match value {
+        Value::String(text) => Ok(BaselineEntry::Legacy(parse_legacy_entry(text)?)),
+        Value::Object(map) => Ok(BaselineEntry::Keyed(parse_keyed_entry(map)?)),
+        _ => bail!("invalid baseline entry: {value}"),
     }
-    let path = parts[0];
-    let line = parts[1];
-    let kind = parts[2];
+}
+
+fn validate_path(path: &str, value: &Value) -> Result<()> {
     if !path.starts_with("crates/")
         || path.contains('\\')
         || path.contains("//")
@@ -2136,78 +2701,391 @@ fn parse_entry(value: &str) -> Result<Finding> {
             .any(|part| part.is_empty() || part == "." || part == "..")
         || Path::new(path).is_absolute()
     {
-        bail!("baseline path is not normalized: {value:?}");
+        bail!("baseline path is not normalized: {value}");
     }
+    Ok(())
+}
+
+fn validate_kind(kind: &str, value: &Value) -> Result<()> {
+    if !RAW_KINDS.contains(&kind) && !ASSERTION_KINDS.contains(&kind) {
+        bail!("invalid baseline entry: {value}");
+    }
+    Ok(())
+}
+
+fn parse_legacy_entry(value: &str) -> Result<Location> {
+    let parts = value.split(':').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        bail!("invalid baseline entry: {value:?}");
+    }
+    let (path, line, kind) = (parts[0], parts[1], parts[2]);
+    let parsed = Value::String(value.to_owned());
+    validate_path(path, &parsed)?;
     let parsed_line = line.parse::<usize>().ok();
     if parsed_line.filter(|line| *line > 0).is_none()
         || parsed_line.map(|line| line.to_string()).as_deref() != Some(line)
     {
         bail!("invalid baseline entry: {value:?}");
     }
-    if !RAW_KINDS.contains(&kind) && !ASSERTION_KINDS.contains(&kind) {
-        bail!("invalid baseline entry: {value:?}");
-    }
-    Ok(Finding {
+    validate_kind(kind, &parsed)?;
+    Ok(Location {
         path: path.to_owned(),
         line: parsed_line.ok_or_else(|| anyhow!("invalid baseline entry: {value:?}"))?,
+        column: 0,
         kind: kind.to_owned(),
+        content: String::new(),
     })
 }
 
-fn load_baseline(path: &Path) -> Result<BTreeSet<Finding>> {
+fn entry_field<'a>(map: &'a serde_json::Map<String, Value>, name: &str) -> Result<&'a Value> {
+    map.get(name)
+        .ok_or_else(|| anyhow!("baseline entry omitted {name:?}"))
+}
+
+fn entry_number(map: &serde_json::Map<String, Value>, name: &str) -> Result<usize> {
+    let value = entry_field(map, name)?;
+    let number = value
+        .as_u64()
+        .and_then(|number| usize::try_from(number).ok())
+        .ok_or_else(|| anyhow!("baseline entry {name:?} is not a non-negative integer"))?;
+    Ok(number)
+}
+
+fn entry_text<'a>(map: &'a serde_json::Map<String, Value>, name: &str) -> Result<&'a str> {
+    entry_field(map, name)?
+        .as_str()
+        .ok_or_else(|| anyhow!("baseline entry {name:?} is not a string"))
+}
+
+fn parse_keyed_entry(map: &serde_json::Map<String, Value>) -> Result<Finding> {
+    let known = ["path", "kind", "item", "index", "line", "content"];
+    if let Some(unknown) = map.keys().find(|key| !known.contains(&key.as_str())) {
+        bail!("baseline entry has an unknown field: {unknown:?}");
+    }
+    let previous = Value::Object(map.clone());
+    let path = entry_text(map, "path")?;
+    let kind = entry_text(map, "kind")?;
+    let item = entry_text(map, "item")?;
+    let content = entry_text(map, "content")?;
+    let index = entry_number(map, "index")?;
+    let line = entry_number(map, "line")?;
+    validate_path(path, &previous)?;
+    validate_kind(kind, &previous)?;
+    if item.is_empty() {
+        bail!("baseline entry item is empty: {previous}");
+    }
+    if line == 0 {
+        bail!("baseline entry line is not positive: {previous}");
+    }
+    Ok(Finding {
+        key: FindingKey {
+            path: path.to_owned(),
+            kind: kind.to_owned(),
+            item: item.to_owned(),
+            index,
+        },
+        line,
+        content: content.to_owned(),
+    })
+}
+
+fn load_baseline(path: &Path) -> Result<Vec<BaselineEntry>> {
     let source = fs::read_to_string(path)
         .with_context(|| format!("failed to read panic baseline {}", path.display()))?;
-    let values: Vec<String> = serde_json::from_str(&source).with_context(|| {
+    let values: Vec<Value> = serde_json::from_str(&source).with_context(|| {
         format!(
-            "panic baseline is not a JSON array of strings: {}",
+            "panic baseline is not a JSON array of baseline entries: {}",
             path.display()
         )
     })?;
-    let mut baseline = BTreeSet::new();
+    let mut baseline = Vec::new();
+    let mut keys = BTreeSet::new();
+    let mut legacy = BTreeSet::new();
     for value in values {
-        let finding = parse_entry(&value)?;
-        if !baseline.insert(finding) {
+        let entry = parse_baseline_entry(&value)?;
+        let duplicate = match &entry {
+            BaselineEntry::Keyed(finding) => !keys.insert(finding.clone()),
+            BaselineEntry::Legacy(location) => {
+                !legacy.insert((location.path.clone(), location.line, location.kind.clone()))
+            }
+        };
+        if duplicate {
             bail!("panic baseline contains duplicate entries");
         }
+        baseline.push(entry);
     }
     Ok(baseline)
 }
 
+/// Resolves each baseline entry to the finding it describes now. A legacy entry
+/// has no item or ordinal to key on, so it can only be migrated while it still
+/// matches the finding at its line; otherwise it is reported stale rather than
+/// guessed, because the line alone no longer identifies an assertion. Keyed
+/// entries claim their identity first, so mixing the two shapes in one file
+/// cannot make the outcome depend on the order of the entries.
+fn resolve_baseline(
+    entries: Vec<BaselineEntry>,
+    actual: &BTreeSet<Finding>,
+) -> (BTreeMap<Finding, String>, Vec<BaselineEntry>) {
+    let mut resolved = BTreeMap::new();
+    let mut legacy = Vec::new();
+    for entry in entries {
+        match entry {
+            BaselineEntry::Keyed(finding) => {
+                let previous = finding.json();
+                resolved.insert(finding, previous);
+            }
+            BaselineEntry::Legacy(location) => legacy.push(location),
+        }
+    }
+    let mut unresolved = Vec::new();
+    for location in legacy {
+        let found = actual.iter().find(|finding| {
+            finding.key.path == location.path
+                && finding.line == location.line
+                && finding.key.kind == location.kind
+                && !resolved.contains_key(*finding)
+        });
+        match found {
+            Some(finding) => {
+                resolved.insert(finding.clone(), location.entry());
+            }
+            None => unresolved.push(BaselineEntry::Legacy(location)),
+        }
+    }
+    (resolved, unresolved)
+}
+
+#[derive(Debug, Default)]
+struct Paired {
+    /// A current finding and the baseline entry it keeps.
+    kept: Vec<(Finding, Finding)>,
+    added: Vec<Finding>,
+    stale: Vec<Finding>,
+}
+
+fn group_key(finding: &Finding) -> (&str, &str, &str) {
+    (&finding.key.path, &finding.key.kind, &finding.key.item)
+}
+
+/// Actual findings and baseline entries sharing one (path, kind, item).
+type FindingGroups<'a> =
+    BTreeMap<(&'a str, &'a str, &'a str), (Vec<&'a Finding>, Vec<&'a Finding>)>;
+
+/// One item's findings and entries while they are being paired.
+struct GroupPairing<'a> {
+    actuals: Vec<&'a Finding>,
+    entries: Vec<&'a Finding>,
+    actual_used: Vec<bool>,
+    entry_used: Vec<bool>,
+}
+
+impl<'a> GroupPairing<'a> {
+    /// Pairs every still-unpaired entry with the finding of the same recorded
+    /// ordinal, when that finding is still free.
+    fn pair_ordinals(&mut self, paired: &mut Paired) {
+        for entry_index in 0..self.entries.len() {
+            if self.entry_used[entry_index] {
+                continue;
+            }
+            let index = self.entries[entry_index].key.index;
+            let found = self
+                .actuals
+                .iter()
+                .enumerate()
+                .position(|(position, actual)| {
+                    !self.actual_used[position] && actual.key.index == index
+                });
+            self.pair(entry_index, found, paired);
+        }
+    }
+
+    /// Pairs every still-unpaired entry carrying the same normalized assertion
+    /// text, which is how an insertion or a deletion is told apart from its
+    /// neighbours.
+    fn pair_text(&mut self, paired: &mut Paired) {
+        for entry_index in 0..self.entries.len() {
+            let content = &self.entries[entry_index].content;
+            if self.entry_used[entry_index] || content.is_empty() {
+                continue;
+            }
+            let found = self
+                .actuals
+                .iter()
+                .enumerate()
+                .position(|(position, actual)| {
+                    !self.actual_used[position] && actual.content == *content
+                });
+            self.pair(entry_index, found, paired);
+        }
+    }
+
+    fn pair(&mut self, entry_index: usize, found: Option<usize>, paired: &mut Paired) {
+        if let Some(actual_index) = found {
+            self.actual_used[actual_index] = true;
+            self.entry_used[entry_index] = true;
+            paired.kept.push((
+                (*self.actuals[actual_index]).clone(),
+                (*self.entries[entry_index]).clone(),
+            ));
+        }
+    }
+
+    fn record_leftovers(&mut self, paired: &mut Paired) {
+        for (index, actual) in self.actuals.iter().enumerate() {
+            if !self.actual_used[index] {
+                paired.added.push((*actual).clone());
+            }
+        }
+        for (index, entry) in self.entries.iter().enumerate() {
+            if !self.entry_used[index] {
+                paired.stale.push((*entry).clone());
+            }
+        }
+    }
+}
+
+/// Pairs baseline entries with actual findings. With as many findings as
+/// entries, the recorded ordinal decides, so a rewrite or a reordering inside
+/// one item is visible. When the counts differ, equal normalized assertion text
+/// pairs first, so an insertion or a deletion reports the assertion that
+/// actually appeared or disappeared instead of blaming a neighbour.
+fn pair_findings(actual: &BTreeSet<Finding>, baseline: &BTreeSet<Finding>) -> Paired {
+    let mut groups = FindingGroups::new();
+    for finding in actual {
+        groups
+            .entry(group_key(finding))
+            .or_default()
+            .0
+            .push(finding);
+    }
+    for finding in baseline {
+        groups
+            .entry(group_key(finding))
+            .or_default()
+            .1
+            .push(finding);
+    }
+    let mut paired = Paired::default();
+    for (_, (actuals, entries)) in groups {
+        let mut group = GroupPairing {
+            actual_used: vec![false; actuals.len()],
+            entry_used: vec![false; entries.len()],
+            actuals,
+            entries,
+        };
+        if group.actuals.len() == group.entries.len() {
+            group.pair_ordinals(&mut paired);
+        } else {
+            group.pair_text(&mut paired);
+            group.pair_ordinals(&mut paired);
+        }
+        group.record_leftovers(&mut paired);
+    }
+    paired
+}
+
 fn build_report(
     actual: &BTreeSet<Finding>,
-    baseline: &BTreeSet<Finding>,
+    entries: Vec<BaselineEntry>,
     sanctioned: &BTreeSet<Finding>,
     invariant_calls: BTreeSet<(String, usize)>,
     configuration: Option<&Configuration>,
+    baseline_path: &Path,
 ) -> AuditReport {
+    // The sanction is one exact source location. Keys alone cannot carry it,
+    // because two same-named functions in one file share an item name.
     let actual = actual
-        .difference(sanctioned)
+        .iter()
+        .filter(|finding| {
+            !sanctioned
+                .iter()
+                .any(|sanctioned| sanctioned.key == finding.key && sanctioned.line == finding.line)
+        })
         .cloned()
         .collect::<BTreeSet<_>>();
-    let matched = baseline.intersection(&actual).cloned().collect::<Vec<_>>();
-    let unbaselined = actual.difference(baseline).cloned().collect::<Vec<_>>();
+    let (resolved_map, unresolved) = resolve_baseline(entries, &actual);
+    let baseline = resolved_map.keys().cloned().collect::<BTreeSet<_>>();
+    let paired = pair_findings(&actual, &baseline);
+
+    let mut matched = Vec::new();
+    let mut moved = Vec::new();
+    let mut changed = Vec::new();
+    let mut resolved = Vec::new();
+    for (current, recorded) in paired.kept {
+        if current.content != recorded.content {
+            changed.push((current, recorded));
+            continue;
+        }
+        if current.line != recorded.line || current.key.index != recorded.key.index {
+            moved.push((current.clone(), recorded.line));
+        } else {
+            matched.push(current.clone());
+        }
+        let previous = resolved_map.get(&recorded).cloned().unwrap_or_default();
+        resolved.push(ResolvedEntry { previous, current });
+    }
+
     // A configuration selects a subset of the workspace, so baseline entries
     // outside that selection are expected to stay unmatched; only the default
     // pass owns the completeness of the baseline.
-    let stale = if configuration.is_some() {
+    let mut stale = if configuration.is_some() {
         Vec::new()
     } else {
-        baseline.difference(&actual).cloned().collect::<Vec<_>>()
+        paired
+            .stale
+            .iter()
+            .map(|finding| finding.json())
+            .collect::<Vec<_>>()
     };
-    let forbidden_baseline = baseline
-        .iter()
-        .filter(|finding| RAW_KINDS.contains(&finding.kind.as_str()))
-        .cloned()
+    if configuration.is_none() {
+        stale.extend(unresolved.iter().map(BaselineEntry::previous));
+    }
+    stale.sort();
+
+    let mut forbidden_baseline = resolved_map
+        .keys()
+        .filter(|finding| RAW_KINDS.contains(&finding.key.kind.as_str()))
+        .map(|finding| finding.json())
+        .chain(
+            unresolved
+                .iter()
+                .filter(|entry| RAW_KINDS.contains(&entry.kind()))
+                .map(BaselineEntry::previous),
+        )
         .collect::<Vec<_>>();
+    forbidden_baseline.sort();
+
+    let mut unbaselined = paired.added;
+    sort_by_location(&mut unbaselined);
+    sort_by_location(&mut matched);
+    moved.sort_by(|left, right| location_order(&left.0, &right.0));
+    changed.sort_by(|left, right| location_order(&left.0, &right.0));
+    resolved.sort_by(|left, right| left.current.cmp(&right.current));
+
     AuditReport {
         configuration: configuration.map(|configuration| configuration.name.clone()),
+        baseline_path: baseline_path.to_path_buf(),
         matched,
+        moved,
+        changed,
         unbaselined,
         stale,
         forbidden_baseline,
         sanctioned: sanctioned.iter().cloned().collect(),
         invariant_calls: invariant_calls.into_iter().collect(),
+        resolved,
     }
+}
+
+/// Prints findings in `path:line:kind` order, with the line compared as a
+/// number rather than as text.
+fn location_order(left: &Finding, right: &Finding) -> Ordering {
+    (&left.key.path, left.line, &left.key.kind).cmp(&(&right.key.path, right.line, &right.key.kind))
+}
+
+fn sort_by_location(findings: &mut [Finding]) {
+    findings.sort_by(location_order);
 }
 
 pub(crate) fn audit(
@@ -2217,15 +3095,18 @@ pub(crate) fn audit(
 ) -> Result<AuditReport> {
     let selection = ProductionSelection::load(root_arg, configuration)?;
     let baseline = load_baseline(baseline_path)?;
-    let (source_files, mut actual) = run_clippy(&selection, configuration)?;
+    let (source_files, mut locations) = run_clippy(&selection, configuration)?;
     let scan = scan_sources(&selection.root, &source_files)?;
-    actual.extend(scan.assertions);
+    locations.extend(scan.assertions);
+    let actual = key_findings(&scan.items, locations);
+    let sanctioned = key_findings(&scan.items, scan.sanctioned_invariant_panics);
     Ok(build_report(
         &actual,
-        &baseline,
-        &scan.sanctioned_invariant_panics,
+        baseline,
+        &sanctioned,
         scan.invariant_calls,
         configuration,
+        baseline_path,
     ))
 }
 

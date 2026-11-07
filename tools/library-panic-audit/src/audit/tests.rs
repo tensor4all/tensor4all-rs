@@ -50,11 +50,17 @@ struct TempRoot {
 
 impl TempRoot {
     fn new() -> Self {
+        // Tests run in parallel, so the clock alone is not a unique name.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock before epoch")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("t4a-panic-audit-{nonce}"));
+        let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "t4a-panic-audit-{}-{nonce}-{sequence}",
+            std::process::id()
+        ));
         fs::create_dir_all(path.join("crates/demo/src")).expect("create fixture root");
         fs::write(path.join("crates/demo/src/lib.rs"), "pub fn demo() {}\n")
             .expect("write fixture source");
@@ -484,7 +490,7 @@ pub fn nested_use() { assert!(true); }
     let parsed_findings = findings
         .iter()
         .filter(|finding| finding.path.ends_with("lib.rs"))
-        .map(Finding::entry)
+        .map(Location::entry)
         .collect::<Vec<_>>();
     assert_eq!(
         parsed_findings,
@@ -698,97 +704,549 @@ fn scan_sources_sanctions_the_helper_and_reports_production_call_sites() {
     assert!(scanned.assertions.is_empty());
 }
 
+/// A keyed baseline entry, spelled the way a reviewed baseline holds it.
+fn keyed(path: &str, kind: &str, item: &str, index: usize, line: usize, content: &str) -> Finding {
+    Finding {
+        key: FindingKey {
+            path: path.to_owned(),
+            kind: kind.to_owned(),
+            item: item.to_owned(),
+            index,
+        },
+        line,
+        content: content.to_owned(),
+    }
+}
+
+fn legacy(value: &str) -> BaselineEntry {
+    BaselineEntry::Legacy(parse_legacy_entry(value).expect("valid legacy entry"))
+}
+
+/// The baseline a reviewer would commit for this fixture: the findings it
+/// produces today.
+fn reviewed_baseline(root: &TempRoot, source: &str) -> Vec<BaselineEntry> {
+    scanned_findings(root, source)
+        .into_iter()
+        .map(BaselineEntry::Keyed)
+        .collect()
+}
+
+fn scanned_findings(root: &TempRoot, source: &str) -> BTreeSet<Finding> {
+    let path = root.path.join("crates/demo/src/lib.rs");
+    fs::write(&path, source).expect("write fixture source");
+    let sources = BTreeSet::from([fs::canonicalize(&path).expect("canonicalize fixture source")]);
+    let scan = scan_sources(&root.path, &sources).expect("scan fixture source");
+    key_findings(&scan.items, scan.assertions)
+}
+
+fn report_for(root: &TempRoot, source: &str, entries: Vec<BaselineEntry>) -> AuditReport {
+    let path = root.path.join("crates/demo/src/lib.rs");
+    fs::write(&path, source).expect("write fixture source");
+    let sources = BTreeSet::from([fs::canonicalize(&path).expect("canonicalize fixture source")]);
+    let scan = scan_sources(&root.path, &sources).expect("scan fixture source");
+    let actual = key_findings(&scan.items, scan.assertions);
+    build_report(
+        &actual,
+        entries,
+        &BTreeSet::new(),
+        BTreeSet::new(),
+        None,
+        &root.path.join("baseline.json"),
+    )
+}
+
+const FIXTURE_ASSERTION: &str = "pub fn check(value: usize, limit: usize) -> usize {\n    \
+                                  assert!(value > 0);\n    assert!(value < limit);\n    value\n}\n";
+
+const FIXTURE_TWO_ITEMS: &str = "pub fn first(ok: bool) { assert!(ok); }\n\n\
+                                 pub fn second(ok: bool) { assert!(ok); }\n";
+
+const FIXTURE_TWO_ITEMS_SWAPPED: &str = "pub fn first() {}\n\n\
+                                         pub fn second(ok: bool) {\n    assert!(ok);\n    assert!(ok);\n}\n";
+
+const FIXTURE_ONE_LINE: &str =
+    "pub fn check(ok: bool, other: bool) { assert!(ok); assert!(other); }\n";
+
+const FIXTURE_ONE_LINE_INSERTED: &str = "// inserted\n\
+                                         pub fn check(ok: bool, other: bool) { assert!(ok); assert!(other); }\n";
+
+const FIXTURE_ONE_LINE_SWAPPED: &str =
+    "pub fn check(ok: bool, other: bool) { assert!(other); assert!(ok); }\n";
+
+#[test]
+fn rendering_ignores_layout_but_keeps_literal_text() {
+    let render = |source: &str| render_tokens(&source.parse::<TokenStream>().expect("tokens"));
+    assert_eq!(render("|& row | row < m . nrows"), "|&row|row<m.nrows");
+    assert_eq!(render("|\n&row|\nrow < m.nrows"), "|&row|row<m.nrows");
+    assert_eq!(render("a as u8"), "a as u8");
+    assert_eq!(render("value<=limit"), "value<=limit");
+    assert_eq!(render("ok && probe()"), "ok&&probe()");
+    assert_eq!(render("ok & &probe()"), "ok& &probe()");
+    assert_ne!(
+        render("ok && probe()"),
+        render("ok & &probe()"),
+        "a compound operator must not fuse into two standalone tokens"
+    );
+    assert_ne!(
+        render("\"a + b\""),
+        render("\"a+b\""),
+        "a literal keeps its exact text"
+    );
+}
+
+#[test]
+fn reviewed_baseline_entries_carry_the_enclosing_item_and_ordinal() {
+    let root = TempRoot::new();
+    let keys = |entries: &[BaselineEntry]| {
+        entries
+            .iter()
+            .map(|entry| match entry {
+                BaselineEntry::Keyed(finding) => finding.key_text(),
+                BaselineEntry::Legacy(_) => "<legacy>".to_owned(),
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        keys(&reviewed_baseline(&root, FIXTURE_ASSERTION)),
+        vec!["check#0".to_owned(), "check#1".to_owned()]
+    );
+    assert_eq!(
+        keys(&reviewed_baseline(&root, FIXTURE_TWO_ITEMS)),
+        vec!["first#0".to_owned(), "second#0".to_owned()],
+        "each item keeps its own key; findings must not all land in one scope"
+    );
+}
+
+#[test]
+fn an_assertion_moved_between_items_fails() {
+    let root = TempRoot::new();
+    let entries = reviewed_baseline(&root, FIXTURE_TWO_ITEMS);
+    let report = report_for(&root, FIXTURE_TWO_ITEMS_SWAPPED, entries);
+    assert_eq!(report.stale.len(), 1, "{:?}", report.stale);
+    assert!(
+        report.stale[0].contains("\"item\":\"first\""),
+        "the entry of the item the assertion left is stale: {:?}",
+        report.stale
+    );
+    assert_eq!(
+        report
+            .unbaselined
+            .iter()
+            .map(Finding::key_text)
+            .collect::<Vec<_>>(),
+        vec!["second#1".to_owned()],
+        "the copy that appeared in the other item is added"
+    );
+    assert_eq!(report.exit_code_and_print(), 1);
+}
+
+#[test]
+fn assertions_on_one_line_keep_their_own_keys() {
+    let root = TempRoot::new();
+    let entries = reviewed_baseline(&root, FIXTURE_ONE_LINE);
+    assert_eq!(entries.len(), 2, "both assertions on the line are reviewed");
+    let moved = report_for(&root, FIXTURE_ONE_LINE_INSERTED, entries);
+    assert!(
+        moved.unbaselined.is_empty() && moved.stale.is_empty(),
+        "a line inserted above the item is not a change: {:?}",
+        moved.stale
+    );
+    assert_eq!(moved.moved.len(), 2, "both entries moved");
+    let swapped = report_for(
+        &root,
+        FIXTURE_ONE_LINE_SWAPPED,
+        reviewed_baseline(&root, FIXTURE_ONE_LINE),
+    );
+    assert_eq!(
+        swapped.changed.len(),
+        2,
+        "swapping the two assertions on one line changes both keys"
+    );
+    assert_eq!(swapped.exit_code_and_print(), 1);
+}
+
+#[test]
+fn an_unaligned_recorded_ordinal_is_not_accepted() {
+    let root = TempRoot::new();
+    let mut entries = reviewed_baseline(&root, FIXTURE_ASSERTION);
+    for entry in &mut entries {
+        if let BaselineEntry::Keyed(finding) = entry {
+            if finding.key.index == 0 {
+                finding.key.index = 7;
+            }
+        }
+    }
+    let report = report_for(&root, FIXTURE_ASSERTION, entries);
+    assert_eq!(
+        report.unbaselined.len(),
+        1,
+        "the finding whose ordinal no longer matches is added"
+    );
+    assert_eq!(report.stale.len(), 1, "and its entry is stale");
+    assert_eq!(report.exit_code_and_print(), 1);
+    assert!(
+        report.update_baseline(None).is_err(),
+        "the updater must not silently renumber a changed key set"
+    );
+}
+
+#[test]
+fn assertions_swapped_inside_one_item_are_reported_as_changed() {
+    let root = TempRoot::new();
+    let entries = reviewed_baseline(&root, FIXTURE_ASSERTION);
+    let swapped = FIXTURE_ASSERTION
+        .replace("assert!(value > 0)", "assert!(TMP)")
+        .replace("assert!(value < limit)", "assert!(value > 0)")
+        .replace("assert!(TMP)", "assert!(value < limit)");
+    let report = report_for(&root, &swapped, entries);
+    assert_eq!(report.changed.len(), 2, "a reordering is not line movement");
+    assert_eq!(report.exit_code_and_print(), 1);
+}
+
+#[test]
+fn lines_inserted_above_a_baselined_assertion_are_green_and_reported_as_moved() {
+    let root = TempRoot::new();
+    let entries = reviewed_baseline(&root, FIXTURE_ASSERTION);
+    assert_eq!(entries.len(), 2, "both fixture assertions are reviewed");
+    let moved_source =
+        format!("// inserted line\n// inserted line\n// inserted line\n{FIXTURE_ASSERTION}");
+    let report = report_for(&root, &moved_source, entries);
+    assert!(
+        report.unbaselined.is_empty() && report.stale.is_empty() && report.changed.is_empty(),
+        "a pure line shift must not add, stale, or change an entry"
+    );
+    assert_eq!(
+        report
+            .moved
+            .iter()
+            .map(|(finding, baseline_line)| (finding.entry(), *baseline_line))
+            .collect::<Vec<_>>(),
+        vec![
+            ("crates/demo/src/lib.rs:5:assert".to_owned(), 2),
+            ("crates/demo/src/lib.rs:6:assert".to_owned(), 3),
+        ]
+    );
+    assert_eq!(report.exit_code_and_print(), 0);
+}
+
+#[test]
+fn an_added_assertion_fails_and_names_the_new_assertion_only() {
+    let root = TempRoot::new();
+    let entries = reviewed_baseline(&root, FIXTURE_ASSERTION);
+    let with_new = FIXTURE_ASSERTION.replace(
+        "    assert!(value < limit);\n",
+        "    assert!(limit > 0);\n    assert!(value < limit);\n",
+    );
+    let report = report_for(&root, &with_new, entries);
+    assert_eq!(
+        report
+            .unbaselined
+            .iter()
+            .map(|finding| (finding.entry(), finding.key_text()))
+            .collect::<Vec<_>>(),
+        vec![(
+            "crates/demo/src/lib.rs:3:assert".to_owned(),
+            "check#1".to_owned()
+        )]
+    );
+    assert!(
+        report.stale.is_empty(),
+        "the reviewed assertions kept their entries; only the new one is added"
+    );
+    assert_eq!(report.exit_code_and_print(), 1);
+}
+
+#[test]
+fn a_deleted_assertion_fails_as_stale() {
+    let root = TempRoot::new();
+    let entries = reviewed_baseline(&root, FIXTURE_ASSERTION);
+    let without_one = FIXTURE_ASSERTION.replace("    assert!(value < limit);\n", "");
+    let report = report_for(&root, &without_one, entries);
+    assert!(report.unbaselined.is_empty());
+    assert_eq!(
+        report.stale,
+        vec![keyed(
+            "crates/demo/src/lib.rs",
+            "assert",
+            "check",
+            1,
+            3,
+            "value<limit"
+        )
+        .json()]
+    );
+    assert_eq!(report.exit_code_and_print(), 1);
+}
+
+#[test]
+fn a_rewritten_assertion_fails_as_changed() {
+    let root = TempRoot::new();
+    let entries = reviewed_baseline(&root, FIXTURE_ASSERTION);
+    let rewritten = FIXTURE_ASSERTION.replace("assert!(value < limit)", "assert!(value <= limit)");
+    let report = report_for(&root, &rewritten, entries);
+    assert!(report.unbaselined.is_empty() && report.stale.is_empty());
+    assert_eq!(report.changed.len(), 1);
+    assert_eq!(report.changed[0].0.content, "value<=limit");
+    assert_eq!(report.exit_code_and_print(), 1);
+}
+
+#[test]
+fn a_legacy_entry_migrates_while_it_matches_its_line() {
+    let root = TempRoot::new();
+    let report = report_for(
+        &root,
+        FIXTURE_ASSERTION,
+        vec![legacy("crates/demo/src/lib.rs:2:assert")],
+    );
+    assert_eq!(report.matched.len(), 1);
+    assert_eq!(report.resolved.len(), 1);
+    assert_eq!(
+        report.resolved[0].previous, "crates/demo/src/lib.rs:2:assert",
+        "the diff of a migrated entry shows the shape it replaced"
+    );
+    // The other fixture assertion has no entry, so the run still fails.
+    assert_eq!(report.unbaselined.len(), 1);
+}
+
+#[test]
+fn a_legacy_entry_that_moved_without_matching_is_stale() {
+    let root = TempRoot::new();
+    let report = report_for(
+        &root,
+        FIXTURE_ASSERTION,
+        vec![legacy("crates/demo/src/lib.rs:99:assert")],
+    );
+    assert_eq!(report.stale, vec!["crates/demo/src/lib.rs:99:assert"]);
+    assert!(report.matched.is_empty());
+}
+
+#[test]
+fn legacy_entries_cannot_collapse_onto_one_finding() {
+    let root = TempRoot::new();
+    // Both legacy entries claim the same line, so only one may migrate; the
+    // other stays stale instead of silently duplicating the survivor.
+    let report = report_for(
+        &root,
+        FIXTURE_ASSERTION,
+        vec![
+            legacy("crates/demo/src/lib.rs:2:assert"),
+            legacy("crates/demo/src/lib.rs:2:assert"),
+        ],
+    );
+    assert_eq!(report.matched.len(), 1);
+    assert_eq!(report.stale.len(), 1);
+}
+
 #[test]
 fn report_removes_sanctioned_panics_before_baselining() {
-    let sanctioned =
-        parse_entry("crates/tensor4all-tensorbackend/src/lib.rs:150:panic").expect("sanctioned");
-    let extra = parse_entry("crates/tensor4all-tensorbackend/src/lib.rs:151:panic").expect("extra");
+    let sanctioned = keyed(
+        "crates/tensor4all-tensorbackend/src/lib.rs",
+        "panic",
+        "invariant_violated",
+        0,
+        150,
+        "",
+    );
+    let extra = keyed(
+        "crates/tensor4all-tensorbackend/src/lib.rs",
+        "panic",
+        "invariant_violated",
+        1,
+        151,
+        "",
+    );
     let actual = [sanctioned.clone(), extra.clone()]
         .into_iter()
         .collect::<BTreeSet<_>>();
     let report = build_report(
         &actual,
-        &BTreeSet::new(),
+        Vec::new(),
         &BTreeSet::from([sanctioned.clone()]),
         BTreeSet::new(),
         None,
+        Path::new("baseline.json"),
     );
     assert_eq!(report.sanctioned, vec![sanctioned]);
     assert_eq!(report.unbaselined, vec![extra]);
 }
 
 #[test]
-fn baseline_lines_reject_noncanonical_numbers() {
-    assert!(parse_entry("crates/demo/src/lib.rs:01:assert").is_err());
-    assert!(parse_entry("crates/demo/src/lib.rs:0:assert").is_err());
-    assert!(parse_entry("crates/demo/src/lib.rs:1:unknown").is_err());
-    assert!(parse_entry("demo/src/lib.rs:1:assert").is_err());
+fn a_sanctioned_key_at_another_line_is_not_subtracted() {
+    let sanctioned = keyed(
+        "crates/tensor4all-tensorbackend/src/lib.rs",
+        "panic",
+        "invariant_violated",
+        0,
+        150,
+        "",
+    );
+    let unsanctioned = keyed(
+        "crates/tensor4all-tensorbackend/src/lib.rs",
+        "panic",
+        "invariant_violated",
+        0,
+        151,
+        "",
+    );
+    let actual = BTreeSet::from([unsanctioned.clone()]);
+    let report = build_report(
+        &actual,
+        Vec::new(),
+        &BTreeSet::from([sanctioned]),
+        BTreeSet::new(),
+        None,
+        Path::new("baseline.json"),
+    );
+    assert_eq!(
+        report.unbaselined,
+        vec![unsanctioned],
+        "only the exact sanctioned location is allowlisted"
+    );
+}
+
+#[test]
+fn baseline_entries_reject_noncanonical_numbers_and_unknown_fields() {
+    let parse = |value: Value| parse_baseline_entry(&value);
+    assert!(parse(json!("crates/demo/src/lib.rs:01:assert")).is_err());
+    assert!(parse(json!("crates/demo/src/lib.rs:0:assert")).is_err());
+    assert!(parse(json!("crates/demo/src/lib.rs:1:unknown")).is_err());
+    assert!(parse(json!("demo/src/lib.rs:1:assert")).is_err());
+    assert!(parse(json!({
+        "path": "crates/demo/src/lib.rs", "kind": "assert", "item": "check",
+        "index": 0, "line": 0, "content": "value > 0"
+    }))
+    .is_err());
+    assert!(parse(json!({
+        "path": "crates/demo/src/lib.rs", "kind": "assert", "item": "",
+        "index": 0, "line": 1, "content": "value > 0"
+    }))
+    .is_err());
+    assert!(parse(json!({
+        "path": "crates/demo/src/lib.rs", "kind": "assert", "item": "check",
+        "index": 0, "line": 1,
+    }))
+    .is_err());
+    assert!(parse(json!({
+        "path": "crates/demo/src/lib.rs", "kind": "assert", "item": "check",
+        "index": 0, "line": 1, "content": "value > 0", "extra": 1
+    }))
+    .is_err());
 }
 
 #[test]
 fn report_prints_sanctioned_and_call_sites_without_failing() {
-    let sanctioned =
-        parse_entry("crates/tensor4all-tensorbackend/src/lib.rs:150:panic").expect("panic");
+    let sanctioned = keyed(
+        "crates/tensor4all-tensorbackend/src/lib.rs",
+        "panic",
+        "invariant_violated",
+        0,
+        150,
+        "",
+    );
     let passing = AuditReport {
         configuration: None,
+        baseline_path: PathBuf::from("baseline.json"),
         matched: Vec::new(),
+        moved: Vec::new(),
+        changed: Vec::new(),
         unbaselined: Vec::new(),
         stale: Vec::new(),
         forbidden_baseline: Vec::new(),
         sanctioned: vec![sanctioned],
         invariant_calls: vec![("crates/demo/src/lib.rs".to_owned(), 9)],
+        resolved: Vec::new(),
     };
     assert_eq!(passing.exit_code_and_print(), 0);
     let failing = AuditReport {
         configuration: None,
+        baseline_path: PathBuf::from("baseline.json"),
         matched: Vec::new(),
-        unbaselined: vec![parse_entry("crates/demo/src/lib.rs:1:assert").expect("new")],
+        moved: Vec::new(),
+        changed: Vec::new(),
+        unbaselined: vec![keyed(
+            "crates/demo/src/lib.rs",
+            "assert",
+            "check",
+            0,
+            1,
+            "value > 0",
+        )],
         stale: Vec::new(),
         forbidden_baseline: Vec::new(),
         sanctioned: Vec::new(),
         invariant_calls: Vec::new(),
+        resolved: Vec::new(),
     };
     assert_eq!(failing.exit_code_and_print(), 1);
 }
 
 #[test]
 fn report_marks_new_and_stale_entries_without_baselining_raw_paths() {
-    let matched = parse_entry("crates/demo/src/lib.rs:1:assert").expect("matched");
-    let stale = parse_entry("crates/demo/src/lib.rs:2:assert").expect("stale");
-    let raw = parse_entry("crates/demo/src/lib.rs:3:panic").expect("raw");
-    let new = parse_entry("crates/demo/src/lib.rs:4:unwrap").expect("new");
-    let actual = [matched.clone(), new].into_iter().collect::<BTreeSet<_>>();
-    let baseline = [matched, stale, raw].into_iter().collect::<BTreeSet<_>>();
-    let report = build_report(&actual, &baseline, &BTreeSet::new(), BTreeSet::new(), None);
-    assert_eq!(
-        report.matched,
-        vec![parse_entry("crates/demo/src/lib.rs:1:assert").unwrap()]
+    let matched = keyed(
+        "crates/demo/src/lib.rs",
+        "assert",
+        "check",
+        0,
+        1,
+        "value > 0",
     );
-    assert_eq!(
-        report.unbaselined,
-        vec![parse_entry("crates/demo/src/lib.rs:4:unwrap").unwrap()]
+    let stale = keyed(
+        "crates/demo/src/lib.rs",
+        "assert",
+        "check",
+        1,
+        2,
+        "value < limit",
     );
-    assert_eq!(
-        report.stale,
-        vec![
-            parse_entry("crates/demo/src/lib.rs:2:assert").unwrap(),
-            parse_entry("crates/demo/src/lib.rs:3:panic").unwrap()
-        ]
+    let raw = keyed("crates/demo/src/lib.rs", "panic", "check", 0, 3, "");
+    let new = keyed("crates/demo/src/lib.rs", "unwrap", "check", 0, 4, "");
+    let actual = [matched.clone(), new.clone()]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let baseline = [matched.clone(), stale.clone(), raw.clone()]
+        .into_iter()
+        .map(BaselineEntry::Keyed)
+        .collect::<Vec<_>>();
+    let report = build_report(
+        &actual,
+        baseline,
+        &BTreeSet::new(),
+        BTreeSet::new(),
+        None,
+        Path::new("baseline.json"),
     );
+    assert_eq!(report.matched, vec![matched]);
+    assert_eq!(report.unbaselined, vec![new]);
     assert_eq!(
-        report.forbidden_baseline,
-        vec![parse_entry("crates/demo/src/lib.rs:3:panic").unwrap()]
+        report.stale.into_iter().collect::<BTreeSet<_>>(),
+        BTreeSet::from([stale.json(), raw.json()])
     );
+    assert_eq!(report.forbidden_baseline, vec![raw.json()]);
 }
 
 #[test]
 fn configuration_selection_does_not_report_unmatched_baseline_entries() {
-    let matched = parse_entry("crates/demo/src/lib.rs:1:assert").expect("matched");
-    let out_of_selection = parse_entry("crates/demo/src/lib.rs:2:assert").expect("outside");
+    let matched = keyed(
+        "crates/demo/src/lib.rs",
+        "assert",
+        "check",
+        0,
+        1,
+        "value > 0",
+    );
+    let out_of_selection = keyed(
+        "crates/demo/src/lib.rs",
+        "assert",
+        "check",
+        1,
+        2,
+        "value < limit",
+    );
     let actual = [matched.clone()].into_iter().collect::<BTreeSet<_>>();
     let baseline = [matched, out_of_selection]
         .into_iter()
-        .collect::<BTreeSet<_>>();
+        .map(BaselineEntry::Keyed)
+        .collect::<Vec<_>>();
     let configuration = Configuration::new(
         "diagnostics".to_owned(),
         vec!["tensor4all-treetn".to_owned()],
@@ -798,11 +1256,71 @@ fn configuration_selection_does_not_report_unmatched_baseline_entries() {
     .unwrap();
     let report = build_report(
         &actual,
-        &baseline,
+        baseline,
         &BTreeSet::new(),
         BTreeSet::new(),
         Some(&configuration),
+        Path::new("baseline.json"),
     );
     assert!(report.stale.is_empty());
     assert_eq!(report.configuration.as_deref(), Some("diagnostics"));
+}
+
+#[test]
+fn update_baseline_rewrites_moved_entries_and_prints_the_diff() {
+    let root = TempRoot::new();
+    let entries = reviewed_baseline(&root, FIXTURE_ASSERTION);
+    let moved_source = format!("// inserted line\n// inserted line\n{FIXTURE_ASSERTION}");
+    let report = report_for(&root, &moved_source, entries);
+    let baseline = root.path.join("baseline.json");
+    fs::write(&baseline, "[]\n").expect("write baseline");
+    let diff = report
+        .update_baseline(None)
+        .expect("baseline update succeeds");
+    assert_eq!(
+        diff.len(),
+        4,
+        "one removed and one added line per entry whose recorded line moved: {diff:?}"
+    );
+    assert!(diff[0].starts_with("- {"), "{diff:?}");
+    assert!(diff[1].starts_with("+ {"), "{diff:?}");
+    assert!(diff[1].contains("\"line\":4"), "{diff:?}");
+    let text = fs::read_to_string(&baseline).expect("read baseline");
+    let values: Vec<Value> = serde_json::from_str(&text).expect("keyed baseline");
+    assert_eq!(values.len(), 2);
+    assert_eq!(
+        values
+            .iter()
+            .map(|value| value["line"].as_u64())
+            .collect::<Vec<_>>(),
+        vec![Some(4), Some(5)],
+        "the rewritten baseline records the current lines"
+    );
+}
+
+#[test]
+fn update_baseline_refuses_in_ci_and_when_the_keys_changed() {
+    let root = TempRoot::new();
+    let entries = reviewed_baseline(&root, FIXTURE_ASSERTION);
+    let baseline = root.path.join("baseline.json");
+    fs::write(&baseline, "[]\n").expect("write baseline");
+    let unchanged = report_for(&root, FIXTURE_ASSERTION, entries.clone());
+    let error = unchanged
+        .update_baseline(Some("true"))
+        .expect_err("CI must refuse the update");
+    assert!(error.to_string().contains("in CI"), "{error}");
+    assert!(
+        unchanged.update_baseline(Some("0")).is_ok(),
+        "an explicit non-CI value is not CI"
+    );
+
+    let with_new = FIXTURE_ASSERTION.replace(
+        "    assert!(value < limit);\n",
+        "    assert!(limit > 0);\n    assert!(value < limit);\n",
+    );
+    let changed = report_for(&root, &with_new, entries);
+    let error = changed
+        .update_baseline(None)
+        .expect_err("an added assertion must not be absorbed into the baseline");
+    assert!(error.to_string().contains("keys changed"), "{error}");
 }

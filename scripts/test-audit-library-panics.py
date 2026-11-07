@@ -405,8 +405,11 @@ def test_dep_info_selects_each_production_source_once() -> None:
         f"crates/demo/src/macro_fixture.rs:{_line(FIXTURE_MACRO, 'pub fn nested_macro_use() { assert!(true); }')}:assert",
         f"crates/demo/src/shared.rs:{bin_panic_line}:panic",
     ]
-    # The call-site report is informational and prints even when empty.
-    assert findings[len(baseline) :][14:] == ["invariant_violated call sites: 0"]
+    # The call-site report is informational and prints even when empty. The
+    # pastable baseline entries follow it, one per unbaselined finding.
+    assert findings[len(baseline) :][14] == "invariant_violated call sites: 0"
+    assert findings[len(baseline) :][15] == "Unbaselined baseline entries:"
+    assert len(findings[len(baseline) :]) == 16 + 14
     assert {finding.rsplit(':', 1)[-1] for finding in findings[len(baseline) :][:14]} >= {
         "panic",
         "unreachable",
@@ -774,6 +777,75 @@ def test_stale_baseline_entry_fails() -> None:
     assert "1 stale baseline entry" in result.stderr
 
 
+def test_update_baseline_refuses_in_ci() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        _write_minimal_fixture(fixture, 'pub fn check(ok: bool) { assert!(ok); }\n')
+        baseline_path = fixture / "baseline.json"
+        baseline_path.write_text("[]", encoding="utf-8")
+        environment = dict(os.environ, CI="true")
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--root",
+                str(fixture),
+                "--baseline",
+                str(baseline_path),
+                "--update-baseline",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=300,
+            env=environment,
+        )
+    # A refused update is a configuration error, like the other tool bails.
+    assert result.returncode == 2, result.stderr
+    assert "refusing to update" in result.stderr
+    assert "in CI" in result.stderr
+
+
+def test_update_baseline_writes_the_keyed_format() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture = Path(directory)
+        lib = 'pub fn check(ok: bool) { assert!(ok); }\n'
+        _write_minimal_fixture(fixture, lib)
+        baseline_path = fixture / "baseline.json"
+        baseline_path.write_text(
+            json.dumps([f"crates/demo/src/lib.rs:{_line(lib, 'assert!(ok);')}:assert"]),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--root",
+                str(fixture),
+                "--baseline",
+                str(baseline_path),
+                "--update-baseline",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=300,
+            env={key: value for key, value in os.environ.items() if key != "CI"},
+        )
+        entries = json.loads(baseline_path.read_text(encoding="utf-8"))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("- crates/demo/src/lib.rs:1:assert") == 1, result.stdout
+    assert len(entries) == 1
+    assert entries[0] == {
+        "path": "crates/demo/src/lib.rs",
+        "kind": "assert",
+        "item": "check",
+        "index": 0,
+        "line": 1,
+        "content": "ok",
+    }
+
+
 def test_missing_build_finished_fails_closed() -> None:
     wrapper_spec = importlib.util.spec_from_file_location("panic_wrapper", SCRIPT)
     assert wrapper_spec and wrapper_spec.loader
@@ -905,6 +977,8 @@ def main() -> int:
         test_nested_same_name_function_is_not_sanctioned,
         test_stale_baseline_entry_fails,
         test_macro_assertion_arguments_and_transcribers_are_reported,
+        test_update_baseline_refuses_in_ci,
+        test_update_baseline_writes_the_keyed_format,
         test_timeout_nesting_leaves_margin_for_ci,
         test_missing_build_finished_fails_closed,
         test_wrapper_discovers_custom_target_artifact,
