@@ -2497,7 +2497,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-aci"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "approx 0.5.1",
  "criterion",
@@ -2542,7 +2542,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-capi"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libc",
  "num-complex 0.4.6",
@@ -2556,7 +2556,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "approx 0.5.1",
@@ -2585,7 +2585,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-cpu-platform"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "tenferro-einsum",
  "tenferro-linalg",
@@ -2593,7 +2593,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-hdf5"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "approx 0.5.1",
@@ -2612,7 +2612,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-interpolativeqtt"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "approx 0.5.1",
  "quanticsgrids",
@@ -2624,7 +2624,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-itensorlike"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "approx 0.5.1",
@@ -2642,7 +2642,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-partitionedtreetn"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "criterion",
@@ -2666,7 +2666,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-quanticstci"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "approx 0.5.1",
@@ -2687,7 +2687,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-quanticstransform"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "approx 0.5.1",
@@ -2706,7 +2706,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-simplett"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "approx 0.5.1",
@@ -2725,7 +2725,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-tensorbackend"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "approx 0.5.1",
@@ -2750,7 +2750,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-tensorci"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "approx 0.5.1",
@@ -2769,7 +2769,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-treeaci"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "criterion",
  "num-complex 0.4.6",
@@ -2786,7 +2786,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-treersi"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "num-complex 0.4.6",
  "rand",
@@ -2800,7 +2800,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-treetci"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "approx 0.5.1",
@@ -2821,7 +2821,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-treetn"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "criterion",
@@ -2842,7 +2842,7 @@ dependencies = [
 
 [[package]]
 name = "tensor4all-tutorial-code"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "num-complex 0.4.6",
  "tensor4all-core",
