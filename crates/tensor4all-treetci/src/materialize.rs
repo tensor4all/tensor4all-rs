@@ -1,8 +1,11 @@
 use crate::error::{Result as TreeTciResult, TreeTciError};
 use crate::evaluation::{BatchExecution, Compatibility, Explicit};
 use crate::{
+    assemble::MultiIndex,
     batch::{evaluate_points_chunked, EVALUATION_CHUNK_POINTS},
-    ncols_2d, GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge,
+    ncols_2d,
+    update::evaluate_candidate_matrix,
+    GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge,
 };
 use anyhow::{ensure, Result};
 
@@ -464,37 +467,80 @@ where
         ));
     }
 
-    let n_points = factors.iter().try_fold(1usize, |count, factor| {
-        count
-            .checked_mul(factor.count)
-            .ok_or_else(|| anyhow::anyhow!("materialization point count overflowed usize"))
-    })?;
-
-    // Mixed-radix counter over the factors, first factor fastest.
-    let mut digits = vec![0usize; factors.len()];
-    evaluate_points_chunked(
+    // A site tensor is the product of its factors, first factor fastest: the
+    // candidate matrix whose left side is every factor but the last (first
+    // fastest) and whose right side is the last factor. Its entries come in the
+    // same order, so the evaluator sees the same points in the same batches, while
+    // a memoized run keys each side once and composes the two keys per entry
+    // instead of re-encoding every full point.
+    let Some((right, left)) = factors.split_last() else {
+        return Err(index_error(
+            "a site tensor needs at least one factor".to_string(),
+        ));
+    };
+    if left.is_empty() {
+        let (key, fragments) = factor_side(std::slice::from_ref(right), n_sites);
+        let mut fill = fragments.iter();
+        return evaluate_points_chunked(
+            n_sites,
+            fragments.len(),
+            chunk_points,
+            |point| {
+                if let Some(fragment) = fill.next() {
+                    for (&site, &value) in key.as_slice().iter().zip(fragment) {
+                        point[site] = value;
+                    }
+                }
+            },
+            &mut |batch| execution.call(batch),
+            "fill-tensor points",
+        );
+    }
+    let (left_key, left_fragments) = factor_side(left, n_sites);
+    let (right_key, right_fragments) = factor_side(std::slice::from_ref(right), n_sites);
+    evaluate_candidate_matrix(
         n_sites,
-        n_points,
+        &left_key,
+        &left_fragments,
+        &right_key,
+        &right_fragments,
+        &state.local_dims,
+        execution,
         chunk_points,
-        |point| {
-            for (factor, &digit) in factors.iter().zip(&digits) {
-                let width = factor.sites.len();
-                let column = &factor.columns[digit * width..(digit + 1) * width];
-                for (&site, &value) in factor.sites.iter().zip(column) {
-                    point[site] = value;
-                }
-            }
-            for (digit, factor) in digits.iter_mut().zip(&factors) {
-                *digit += 1;
-                if *digit < factor.count {
-                    break;
-                }
-                *digit = 0;
-            }
-        },
-        &mut |batch| execution.call(batch),
-        "fill-tensor points",
     )
+}
+
+/// The sites of `factors` as one subtree key, and every combination of their
+/// columns (first factor fastest) as fragments in that key's site order.
+fn factor_side(factors: &[PointFactor<'_>], n_sites: usize) -> (SubtreeKey, Vec<MultiIndex>) {
+    let key = SubtreeKey::new(
+        factors
+            .iter()
+            .flat_map(|factor| factor.sites.iter().copied())
+            .collect(),
+    );
+    let mut position = vec![0; n_sites];
+    for (slot, &site) in key.as_slice().iter().enumerate() {
+        position[site] = slot;
+    }
+    let (position, width) = (&position, key.as_slice().len());
+    let mut fragments = vec![vec![0; width]];
+    for factor in factors {
+        let columns = factor.columns.chunks_exact(factor.sites.len().max(1));
+        fragments = columns
+            .take(factor.count)
+            .flat_map(|column| {
+                fragments.iter().map(move |base| {
+                    let mut fragment = base.clone();
+                    for (&site, &value) in factor.sites.iter().zip(column) {
+                        fragment[position[site]] = value;
+                    }
+                    fragment
+                })
+            })
+            .collect();
+    }
+    (key, fragments)
 }
 
 #[cfg(test)]

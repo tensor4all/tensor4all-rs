@@ -185,7 +185,7 @@ where
 /// `n_sites * n_left * n_right` (gigabytes at a branching vertex).
 /// The values, and their order, do not depend on `chunk_points`.
 #[allow(clippy::too_many_arguments)]
-fn evaluate_candidate_matrix<T>(
+pub(crate) fn evaluate_candidate_matrix<T>(
     n_sites: usize,
     left_key: &crate::SubtreeKey,
     left_candidates: &[MultiIndex],
