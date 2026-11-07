@@ -296,6 +296,51 @@ fn fill_tensor_values_matches_reference_point_order() {
     }
 }
 
+/// The memoized route keys the factors as the two sides of a candidate matrix; a
+/// cold memo must pass the evaluator the same points, in the same order, and give
+/// the same bits as the plain route, and a warm one must not call it at all.
+#[test]
+fn memoized_fill_tensor_values_matches_the_plain_route() {
+    for (graph, local_dims) in [
+        (chain_graph(), vec![2, 3, 2, 3, 2, 3]),
+        (branched_graph(), vec![2, 3, 2, 2, 3, 2, 3]),
+    ] {
+        let state = converged_state(graph, local_dims);
+        for (in_keys, out_keys, central) in fill_configurations(&state) {
+            let fill = |execution: &mut dyn crate::evaluation::BatchExecution<f64>| {
+                fill_tensor_values(&state, &in_keys, &out_keys, &central, execution, 7).unwrap()
+            };
+            let mut plain_eval = smooth_eval;
+            let plain = fill(&mut crate::evaluation::Compatibility::new(&mut plain_eval));
+
+            let recorded = RefCell::new(Vec::new());
+            let mut record = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+                recorded.borrow_mut().extend_from_slice(batch.data());
+                smooth_eval(batch)
+            };
+            let mut source = crate::evaluation::Compatibility::new(&mut record);
+            let mut memo = crate::evaluation::CachedExecution::new(
+                &mut source,
+                &state.local_dims,
+                Some(1 << 20),
+            )
+            .unwrap();
+            let cold = fill(&mut memo);
+            let warm = fill(&mut memo);
+            drop(memo);
+
+            let bits = |values: &[f64]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+            assert_eq!(bits(&cold), bits(&plain));
+            assert_eq!(bits(&warm), bits(&plain));
+            assert_eq!(
+                recorded.into_inner(),
+                reference_fill_points(&state, &in_keys, &out_keys, &central),
+                "in {in_keys:?} out {out_keys:?} central {central:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn fill_tensor_values_rejects_invalid_partitions() {
     let state = converged_state(two_site_graph(), vec![2, 2]);
