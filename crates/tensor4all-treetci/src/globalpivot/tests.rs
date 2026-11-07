@@ -760,8 +760,23 @@ fn cached_readout_rejects_mismatched_indices_and_shapes() {
 /// Pivots returned by the fixed-seed searches of
 /// `global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree`
 /// on the one-sweep states of the two fixtures. Re-recorded from the
-/// pointwise readout on the b1bb828d base with #812's retained-coordinate
-/// walk, `ChaCha8Rng`, and `search_params` (`nsearch = 4`).
+/// pointwise readout after `AllEdges` started sweeping the second inner pass
+/// backward (#899), with #812's retained-coordinate walk, `ChaCha8Rng`, and
+/// `search_params` (`nsearch = 4`).
+///
+/// The previous recording (b1bb828d, both inner passes in sorted edge
+/// order) was:
+///
+/// - chain, seed 3: `[0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]`,
+///   `[1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]`;
+/// - branched, seed 3: `[0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]`,
+///   `[0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0]`,
+///   `[1, 0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0, 0]`,
+///   `[1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0]`;
+/// - branched, seed 11: `[0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0]`,
+///   `[0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1]`,
+///   `[1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0]`,
+///   `[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]`.
 ///
 /// These lists lock the search trajectory on purpose: any change to the
 /// starting points, the local search, the tie-breaking or the sweep that
@@ -771,20 +786,21 @@ fn cached_readout_rejects_mismatched_indices_and_shapes() {
 fn recorded_pivots(fixture: &str, seed: u64) -> Vec<Vec<usize>> {
     match (fixture, seed) {
         ("chain", 3) => vec![
-            vec![0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            vec![1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            vec![1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            vec![1, 0, 0, 1, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0],
+            vec![1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],
         ],
         ("branched", 3) => vec![
-            vec![0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            vec![0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0],
-            vec![1, 0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0, 0],
-            vec![1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0],
+            vec![0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0],
+            vec![0, 1, 0, 1, 0, 1, 1, 0, 0, 1, 0, 1, 1],
+            vec![0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0],
+            vec![1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0],
         ],
         ("branched", 11) => vec![
-            vec![0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0],
-            vec![0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1],
-            vec![1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0],
-            vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            vec![0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0],
+            vec![0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 1],
+            vec![0, 1, 0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0],
+            vec![1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0],
         ],
         _ => unreachable!("no recording for {fixture} seed {seed}"),
     }
@@ -834,18 +850,24 @@ fn global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree() {
 
 #[test]
 fn full_runs_reproduce_recorded_ranks_and_errors() {
-    // Re-recorded on b1bb828d with #812's retained-coordinate search:
-    // default options, seed 1, global search enabled. No tolerance changed. Like
+    // Re-recorded after `AllEdges` started sweeping the second inner pass
+    // backward (#899), with #812's retained-coordinate search: default
+    // options, seed 1, global search enabled. No tolerance changed. Like
     // `recorded_pivots`, these values lock the whole optimization trajectory
     // on purpose and must be re-recorded deliberately when the search, the
     // sweep or the RNG legitimately changes.
+    //
+    // The previous recording (b1bb828d, both inner passes in sorted edge
+    // order): chain ranks [4, 8, 8, 8], errors [4.210785455368414e-9,
+    // 7.104994852102056e-9, 6.760951106568071e-9, 6.850685368779623e-9];
+    // branched ranks [4, 16, 16, 16].
     let (ranks, errors, _) = chain_fixture().full_run();
     assert_eq!(ranks, vec![4, 8, 8, 8]);
     let recorded = [
-        4.210785455368414e-9,
-        7.104994852102056e-9,
-        6.760951106568071e-9,
-        6.850685368779623e-9,
+        2.5205315287054708e-9,
+        6.416958743885642e-9,
+        9.666884024209921e-9,
+        9.666884024209921e-9,
     ];
     assert_eq!(errors.len(), recorded.len());
     for (error, expected) in errors.iter().zip(recorded) {
@@ -857,7 +879,7 @@ fn full_runs_reproduce_recorded_ranks_and_errors() {
 
     let fixture = branched_fixture();
     let (ranks, errors, state) = fixture.full_run();
-    assert_eq!(ranks, vec![4, 16, 16, 16]);
+    assert_eq!(ranks, vec![8, 16, 16, 16]);
     // At rank 16 the branched fixture is represented exactly, so the error
     // estimates are rounding-level and alone say little about the run.
     assert_eq!(errors.len(), 4);
