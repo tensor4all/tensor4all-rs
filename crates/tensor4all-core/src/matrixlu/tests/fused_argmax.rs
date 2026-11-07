@@ -108,6 +108,59 @@ fn two_pass_factorize<T: Scalar>(
     })
 }
 
+/// The real component types the kernel is generic over, with the magnitudes
+/// that decide its fallback.
+trait TestReal: Scalar + std::fmt::LowerExp {
+    /// A value whose square is a non-zero sub-normal of this type.
+    const SQUARE_SUBNORMAL: Self;
+    /// A sub-normal value (its square underflows to zero).
+    const SUBNORMAL: Self;
+    const NAN: Self;
+    const INFINITY: Self;
+    fn of(value: f64) -> Self;
+    fn up(self) -> Self;
+    fn is_nan_value(self) -> bool;
+    fn bits(self) -> u64;
+}
+
+impl TestReal for f64 {
+    const SQUARE_SUBNORMAL: Self = 1e-160;
+    const SUBNORMAL: Self = 1e-310;
+    const NAN: Self = f64::NAN;
+    const INFINITY: Self = f64::INFINITY;
+    fn of(value: f64) -> Self {
+        value
+    }
+    fn up(self) -> Self {
+        self.next_up()
+    }
+    fn is_nan_value(self) -> bool {
+        self.is_nan()
+    }
+    fn bits(self) -> u64 {
+        self.to_bits()
+    }
+}
+
+impl TestReal for f32 {
+    const SQUARE_SUBNORMAL: Self = 1e-20;
+    const SUBNORMAL: Self = 1e-42;
+    const NAN: Self = f32::NAN;
+    const INFINITY: Self = f32::INFINITY;
+    fn of(value: f64) -> Self {
+        value as f32
+    }
+    fn up(self) -> Self {
+        self.next_up()
+    }
+    fn is_nan_value(self) -> bool {
+        self.is_nan()
+    }
+    fn bits(self) -> u64 {
+        u64::from(self.to_bits())
+    }
+}
+
 /// xorshift64: deterministic inputs without a dependency on the rand stream.
 struct Gen(u64);
 
@@ -130,7 +183,7 @@ impl Gen {
 }
 
 /// The value families that decide the scan's semantics.
-const FAMILIES: [&str; 11] = [
+const FAMILIES: [&str; 12] = [
     "small integers",
     "wide exponents",
     "signed zeros",
@@ -138,82 +191,88 @@ const FAMILIES: [&str; 11] = [
     "NaN at the largest entry",
     "NaN and inf",
     "inf only",
-    "sub-normals",
-    "equal maxima in two columns",
+    "sub-normals (squares underflow to zero)",
+    "equal maxima in two columns (positions may coincide)",
     "all-zero column",
     "all zero",
+    "sub-normal squares (non-zero, equal for neighbouring values)",
 ];
 
-fn matrix_of(family: usize, nrows: usize, ncols: usize, g: &mut Gen) -> Vec<f64> {
+fn matrix_of<T: TestReal>(family: usize, nrows: usize, ncols: usize, g: &mut Gen) -> Vec<T> {
     let len = nrows * ncols;
-    let mut data: Vec<f64> = (0..len).map(|_| g.small()).collect();
+    let mut data: Vec<T> = (0..len).map(|_| T::of(g.small())).collect();
     let at = |g: &mut Gen| g.below(len);
     match family {
-        0 => {}
         1 => {
             for v in &mut data {
-                let exponent = g.below(81) as i32 - 40;
-                *v = (g.small() + 0.5) * 2f64.powi(exponent);
+                let exponent = g.below(61) as i32 - 30;
+                *v = T::of((g.small() + 0.5) * 2f64.powi(exponent));
             }
         }
         2 => {
             for v in &mut data {
-                *v = [0.0, -0.0, 1.0, -1.0][g.below(4)];
+                *v = T::of([0.0, -0.0, 1.0, -1.0][g.below(4)]);
             }
         }
         3 => {
             for _ in 0..=g.below(2) {
                 let i = at(g);
-                data[i] = f64::NAN;
+                data[i] = T::NAN;
             }
         }
         4 => {
             let i = at(g);
-            data[i] = f64::NAN;
-            data.iter_mut()
-                .filter(|v| !v.is_nan())
-                .for_each(|v| *v *= 0.5);
+            data[i] = T::NAN;
+            for v in data.iter_mut().filter(|v| !v.is_nan_value()) {
+                *v = *v * T::of(0.5);
+            }
         }
         5 => {
             let (i, j) = (at(g), at(g));
-            data[i] = f64::NAN;
+            data[i] = T::NAN;
             data[j] = if g.below(2) == 0 {
-                f64::INFINITY
+                T::INFINITY
             } else {
-                f64::NEG_INFINITY
+                T::of(-1.0) * T::INFINITY
             };
         }
         6 => {
             let i = at(g);
-            data[i] = f64::INFINITY;
+            data[i] = T::INFINITY;
         }
         7 => {
             for v in &mut data {
-                *v *= 1e-310;
+                *v = *v * T::SUBNORMAL;
             }
         }
         8 if ncols >= 2 => {
             let (c1, c2) = (g.below(ncols), g.below(ncols));
             let (r1, r2) = (g.below(nrows), g.below(nrows));
-            let value = if g.below(2) == 0 { 9.0 } else { -9.0 };
+            let value = T::of(if g.below(2) == 0 { 9.0 } else { -9.0 });
             data[r1 + nrows * c1] = value;
-            data[r2 + nrows * c2] = -value;
+            data[r2 + nrows * c2] = T::of(-1.0) * value;
         }
         9 => {
             let c = g.below(ncols);
-            data[c * nrows..(c + 1) * nrows].fill(0.0);
+            data[c * nrows..(c + 1) * nrows].fill(T::of(0.0));
         }
-        10 => data.fill(0.0),
+        10 => data.fill(T::of(0.0)),
+        11 => {
+            let a = T::SQUARE_SUBNORMAL;
+            for v in &mut data {
+                *v = [T::of(0.0), a, a.up(), T::of(-1.0) * a, T::of(-1.0) * a.up()][g.below(5)];
+            }
+        }
         _ => {}
     }
     data
 }
 
-fn same_bits(a: f64, b: f64) -> bool {
-    (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits()
+fn same_bits<T: TestReal>(a: T, b: T) -> bool {
+    (a.is_nan_value() && b.is_nan_value()) || a.bits() == b.bits()
 }
 
-fn assert_same_data(fused: &[f64], reference: &[f64], what: &str) {
+fn assert_same_data<T: TestReal>(fused: &[T], reference: &[T], what: &str) {
     for (i, (&a, &b)) in fused.iter().zip(reference).enumerate() {
         assert!(
             same_bits(a, b),
@@ -222,8 +281,10 @@ fn assert_same_data(fused: &[f64], reference: &[f64], what: &str) {
     }
 }
 
-/// Random shapes, including one row, one column and fewer rows than the 8 lanes.
-fn shapes(g: &mut Gen) -> impl Iterator<Item = (usize, usize)> + '_ {
+/// One shape list for every comparison: 1 × 1, one row, one column, fewer rows
+/// than the 8 lanes and around them, and 150 random shapes up to 40 × 12.
+fn shapes() -> Vec<(usize, usize)> {
+    let mut g = Gen(0x2545_f491_4f6c_dd1d);
     let fixed = [
         (1, 1),
         (1, 9),
@@ -237,16 +298,20 @@ fn shapes(g: &mut Gen) -> impl Iterator<Item = (usize, usize)> + '_ {
     fixed
         .into_iter()
         .chain((0..150).map(|_| (1 + g.below(40), 1 + g.below(12))))
+        .collect()
 }
 
-#[test]
-fn fused_kernel_matches_two_pass_update_and_sequential_scan() {
-    let mut g = Gen(0x9e37_79b9_7f4a_7c15);
+/// The kernel at every pivot of every generated matrix: position, value and the
+/// updated block equal the two-pass code's; a fallback (`None`) only where the
+/// sequential scan's fast path leaves the normal range. Returns, per family, how
+/// many cases fell back.
+fn compare_kernel<T: TestReal>(seed: u64) -> [usize; FAMILIES.len()] {
+    let mut g = Gen(seed);
     let mut fallbacks = [0usize; FAMILIES.len()];
     let mut cases = 0usize;
-    for (nrows, ncols) in shapes(&mut Gen(0x2545_f491_4f6c_dd1d)) {
+    for (nrows, ncols) in shapes() {
         for (family, name) in FAMILIES.iter().enumerate() {
-            let original = matrix_of(family, nrows, ncols, &mut g);
+            let original = matrix_of::<T>(family, nrows, ncols, &mut g);
             for pivot in 0..nrows.min(ncols) {
                 let what = format!("{name} {nrows}x{ncols} pivot {pivot}");
                 let mut reference = original.clone();
@@ -268,12 +333,10 @@ fn fused_kernel_matches_two_pass_update_and_sequential_scan() {
                         assert_eq!((found_row, found_col), (row, col), "{what}");
                         assert!(same_bits(found_value, value), "{what}");
                     }
-                    // The fallback runs exactly when the sequential scan's fast path
-                    // leaves its normal range; the caller then runs that scan itself.
                     None => {
                         let max = value.abs_sq();
                         assert!(
-                            !max.is_finite() || max < f64::MIN_POSITIVE,
+                            !max.is_finite() || max < T::min_positive(),
                             "{what}: fused fell back with a normal maximum {value:e}"
                         );
                         fallbacks[family] += 1;
@@ -283,14 +346,98 @@ fn fused_kernel_matches_two_pass_update_and_sequential_scan() {
         }
     }
     assert!(cases > 5_000, "{cases} cases");
-    // Every fallback family is exercised, so the fallback is not the untested half.
-    for family in [3, 4, 5, 6, 7, 10] {
-        assert!(
-            fallbacks[family] > 0,
-            "no fallback for {}",
-            FAMILIES[family]
-        );
+    fallbacks
+}
+
+#[test]
+fn fused_kernel_matches_two_pass_update_and_sequential_scan() {
+    for fallbacks in [
+        compare_kernel::<f64>(0x9e37_79b9_7f4a_7c15),
+        compare_kernel::<f32>(0x6a09_e667_f3bc_c908),
+    ] {
+        // Every fallback family is exercised, so the fallback is not the untested half.
+        for family in [3, 4, 5, 6, 7, 10, 11] {
+            assert!(
+                fallbacks[family] > 0,
+                "no fallback for {}",
+                FAMILIES[family]
+            );
+        }
     }
+}
+
+/// #1178 review: squares that round to the same non-zero sub-normal. The robust
+/// scan tells `a` from `a.next_up()`; the fast path's squares cannot, so the
+/// kernel must fall back below the component type's normal range.
+fn subnormal_square_tie<T: TestReal>() {
+    let a = T::SQUARE_SUBNORMAL;
+    let b = a.up();
+    assert!(a.abs_sq() == b.abs_sq() && a.abs_sq() > 0.0);
+    assert!(a.abs_sq() < T::min_positive());
+    let zero = T::of(0.0);
+    // The first pivot is small enough that the default rel_tol (1e-14 × it) lets
+    // the factorization take a second pivot from the sub-normal-square block.
+    let first = a * T::of(1e10);
+    let original = vec![first, zero, zero, a, zero, b];
+    let mut fused = original.clone();
+    let found = update_trailing_submatrix_with_argmax(&mut fused, 2, 3, 0);
+    assert!(found.is_none(), "a sub-normal maximum falls back");
+    let mut reference = original.clone();
+    two_pass_update(&mut reference, 2, 3, 0);
+    assert_same_data(&fused, &reference, "sub-normal squares");
+    let (row, col, _) = submatrix_argmax_col_major(&reference, 2, 3, 1, 2, 1, 3);
+    assert_eq!((row, col), (1, 2), "the robust scan picks b");
+
+    // And through the whole factorization, where the fallback is the caller's scan.
+    let mut fused = Matrix::from_col_major_vec(2, 3, original.clone());
+    let mut reference = Matrix::from_col_major_vec(2, 3, original);
+    let f = factorize_validated_in_place(&mut fused, RrLUOptions::default()).unwrap();
+    let r = two_pass_factorize(&mut reference, RrLUOptions::default()).unwrap();
+    assert_eq!((f.n_pivot, &f.col_permutation), (2, &r.col_permutation));
+    assert_eq!(r.col_permutation, [0, 2, 1]);
+}
+
+#[test]
+fn subnormal_square_ties_fall_back_for_f64() {
+    subnormal_square_tie::<f64>();
+}
+
+#[test]
+fn subnormal_square_ties_fall_back_for_f32() {
+    subnormal_square_tie::<f32>();
+}
+
+/// Equal maxima in two distinct columns, the later column holding the earlier
+/// row, in a block the update leaves unchanged (the pivot column's tail is zero):
+/// the first column wins, as in the column-major sequential scan. Signed values
+/// and signed zeros around them.
+#[test]
+fn equal_maxima_in_distinct_columns_keep_the_first_column() {
+    let mut g = Gen(0x3c6e_f372_fe94_f82b);
+    let mut checked = 0;
+    for (nrows, ncols) in shapes().into_iter().filter(|&(r, c)| r >= 3 && c >= 3) {
+        let mut data: Vec<f64> = (0..nrows * ncols).map(|_| g.small()).collect();
+        data[1..nrows].fill(if g.below(2) == 0 { 0.0 } else { -0.0 });
+        let (c1, c2) = (1 + g.below(ncols - 2), 0);
+        let c2 = c2.max(c1 + 1 + g.below(ncols - 1 - c1));
+        let r1 = 2 + g.below(nrows - 2);
+        let r2 = 1 + g.below(r1 - 1);
+        let value = if g.below(2) == 0 { 9.0 } else { -9.0 };
+        data[r1 + nrows * c1] = value;
+        data[r2 + nrows * c2] = -value;
+        let mut fused = data.clone();
+        let found = update_trailing_submatrix_with_argmax(&mut fused, nrows, ncols, 0);
+        assert_eq!(fused, data, "the block is unchanged");
+        assert_eq!(found, Some((r1, c1, value)), "{nrows}x{ncols}");
+        assert_eq!(
+            found,
+            Some(submatrix_argmax_col_major(
+                &data, nrows, ncols, 1, nrows, 1, ncols
+            ))
+        );
+        checked += 1;
+    }
+    assert!(checked > 100, "{checked} shapes");
 }
 
 fn options() -> [RrLUOptions; 4] {
@@ -313,14 +460,13 @@ fn options() -> [RrLUOptions; 4] {
     ]
 }
 
-/// The whole factorization, fallbacks included: permutations, rank, error and
-/// the factored data equal those of the two-pass loop.
-#[test]
-fn fused_factorization_matches_two_pass_factorization() {
-    let mut g = Gen(0xd1b5_4a32_d192_ed03);
-    for (nrows, ncols) in shapes(&mut Gen(0x94d0_49bb_1331_11eb)) {
+/// The whole factorization: permutations, rank, error and the factored data equal
+/// those of the two-pass loop, over the same shapes and families as the kernel.
+fn compare_factorization<T: TestReal>(seed: u64) {
+    let mut g = Gen(seed);
+    for (nrows, ncols) in shapes() {
         for (family, name) in FAMILIES.iter().enumerate() {
-            let values = matrix_of(family, nrows, ncols, &mut g);
+            let values = matrix_of::<T>(family, nrows, ncols, &mut g);
             for opts in options() {
                 let what = format!("{name} {nrows}x{ncols} {opts:?}");
                 let mut fused = Matrix::from_col_major_vec(nrows, ncols, values.clone());
@@ -347,11 +493,17 @@ fn fused_factorization_matches_two_pass_factorization() {
     }
 }
 
+#[test]
+fn fused_factorization_matches_two_pass_factorization() {
+    compare_factorization::<f64>(0xd1b5_4a32_d192_ed03);
+    compare_factorization::<f32>(0x510e_527f_ade6_82d1);
+}
+
 /// The kernel is generic: complex entries tie on |z|² with different phases.
 #[test]
 fn fused_factorization_matches_two_pass_on_complex_ties() {
     let mut g = Gen(0x5851_f42d_4c95_7f2d);
-    for (nrows, ncols) in shapes(&mut Gen(0x1405_7b7e_f767_814f)) {
+    for (nrows, ncols) in shapes() {
         let values: Vec<Complex64> = (0..nrows * ncols)
             .map(|_| Complex64::new(g.small(), g.small()))
             .collect();
