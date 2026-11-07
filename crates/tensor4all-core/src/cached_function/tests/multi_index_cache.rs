@@ -152,10 +152,14 @@ fn insertion_overwrites_and_clear_keeps_counters() {
 fn values_that_are_not_send_are_rejected_at_compile_time_but_plain_values_work() {
     // `V` must be `Clone + Send + Sync + 'static` (the key backend stores it),
     // while the callback stays free: this test documents the value bound by
-    // using a value type with heap payload and confirming its accounting.
+    // using a value type with heap payload and confirming its accounting (the
+    // table holds the `Vec` headers; their heap payload is not counted).
     let mut cache: MultiIndexCache<Vec<f64>> = MultiIndexCache::new(&[2, 2]).unwrap();
     cache.insert(&[0, 1], vec![1.0, 2.0]).unwrap();
-    assert_eq!(cache.retained_bytes(), 8 + std::mem::size_of::<Vec<f64>>());
+    assert_eq!(
+        cache.retained_bytes(),
+        crate::cached_function::memo_table::table_bytes::<u64, Vec<f64>>(4)
+    );
     assert_eq!(cache.get(&[0, 1]).unwrap(), Some(vec![1.0, 2.0]));
 }
 
@@ -203,37 +207,45 @@ fn mixed_radix_keys_do_not_collide_between_index_shapes() {
 }
 
 #[test]
-fn the_payload_limit_skips_insertions_without_evicting_or_corrupting() {
-    // Room for exactly two entries of (u64 key + f64 value).
+fn the_limit_evicts_the_oldest_entries_without_corrupting() {
+    // Room for one table of 4 buckets: 3 entries of (u64 key, f64 value).
+    let limit = crate::cached_function::memo_table::table_bytes::<u64, f64>(4);
     let mut cache: MultiIndexCache<f64> =
-        MultiIndexCache::with_retained_byte_limit(&[4], 32).unwrap();
-    cache.insert(&[0], 0.0).unwrap();
-    cache.insert(&[1], 1.0).unwrap();
-    assert_eq!(cache.retained_bytes(), 32);
-    cache.insert(&[2], 2.0).unwrap();
-    assert_eq!(cache.dropped_inserts(), 1);
-    assert_eq!(cache.len(), 2);
-    assert_eq!(cache.get(&[0]).unwrap(), Some(0.0));
+        MultiIndexCache::with_retained_byte_limit(&[8], limit).unwrap();
+    for i in 0..3 {
+        cache.insert(&[i], i as f64).unwrap();
+    }
+    assert_eq!((cache.len(), cache.retained_bytes()), (3, limit));
+    cache.insert(&[3], 3.0).unwrap();
+    assert_eq!((cache.evicted_entries(), cache.dropped_inserts()), (3, 0));
+    assert_eq!(cache.len(), 1);
     assert_eq!(
-        cache.get(&[2]).unwrap(),
+        cache.get(&[3]).unwrap(),
+        Some(3.0),
+        "the new entry is cached"
+    );
+    assert_eq!(
+        cache.get(&[0]).unwrap(),
         None,
-        "a skipped insert is not cached"
+        "an evicted entry is not served"
     );
 
-    // Overwriting an existing entry is always allowed.
-    cache.insert(&[1], 10.0).unwrap();
-    assert_eq!(cache.get(&[1]).unwrap(), Some(10.0));
-    assert_eq!(cache.dropped_inserts(), 1);
+    // Overwriting an existing entry never evicts.
+    cache.insert(&[3], 30.0).unwrap();
+    assert_eq!(cache.get(&[3]).unwrap(), Some(30.0));
+    assert_eq!(cache.evicted_entries(), 3);
 
-    // Raising the limit lets the next insertion through.
+    // Raising the limit lets the table grow instead of evicting.
     cache.set_retained_byte_limit(1024);
-    cache.insert(&[2], 2.0).unwrap();
-    assert_eq!(cache.len(), 3);
+    for i in 4..8 {
+        cache.insert(&[i], i as f64).unwrap();
+    }
+    assert_eq!((cache.len(), cache.evicted_entries()), (5, 3));
 
-    // `clear` frees the budget without resetting the counters.
+    // `clear` frees the tables without resetting the counters.
     cache.clear();
     assert_eq!(cache.retained_bytes(), 0);
-    assert_eq!(cache.dropped_inserts(), 1);
+    assert_eq!(cache.evicted_entries(), 3);
     assert_eq!(cache.hits(), 2);
 }
 
@@ -681,9 +693,10 @@ fn wide_caches_have_no_side_keys() {
 
 #[test]
 fn keyed_inserts_respect_the_payload_limit() {
-    // Room for exactly one entry of (u64 key + f64 value).
+    // Below the smallest table: nothing can be retained.
+    let limit = crate::cached_function::memo_table::table_bytes::<u64, f64>(4) - 1;
     let mut cache: MultiIndexCache<f64> =
-        MultiIndexCache::with_retained_byte_limit(&[2, 2], 16).unwrap();
+        MultiIndexCache::with_retained_byte_limit(&[2, 2], limit).unwrap();
     let left = cache.left_keys(&[0], &[vec![0usize], vec![1]]).unwrap();
     let right = cache.right_keys(&[1], &[vec![0usize]]).unwrap();
     cache
@@ -694,9 +707,9 @@ fn keyed_inserts_respect_the_payload_limit() {
                 .collect())
         })
         .unwrap();
-    assert_eq!(cache.len(), 1);
-    assert_eq!(cache.dropped_inserts(), 1, "the second insert is skipped");
-    assert_eq!(cache.retained_bytes(), 16);
+    assert_eq!(cache.len(), 0);
+    assert_eq!(cache.dropped_inserts(), 2, "both inserts are skipped");
+    assert_eq!(cache.retained_bytes(), 0);
 
     // The skipped entry is evaluated again rather than served wrongly.
     let mut evaluated = 0;

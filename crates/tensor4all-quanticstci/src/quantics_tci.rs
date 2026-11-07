@@ -46,11 +46,13 @@ where
     V: Clone + Send + Sync + 'static,
 {
     let cache = cache.borrow();
+    // Every evaluated value is retained, evicted later, or dropped at once.
     CacheStats {
-        num_evals: cache.len(),
+        num_evals: cache.len() + cache.evicted_entries() + cache.dropped_inserts(),
         num_cache_hits: cache.hits(),
         num_cache_misses: cache.misses(),
         dropped_inserts: cache.dropped_inserts(),
+        evicted_entries: cache.evicted_entries(),
     }
 }
 
@@ -309,8 +311,8 @@ pub struct QuanticsTensorCI2<V: TTScalar> {
 /// target is called only for points it has not seen. The counters separate the
 /// quantities an optimization needs: how many requests were cached, how many
 /// were not, how many distinct points the target evaluated, and how many
-/// evaluations could not be retained because the memo cache reached its
-/// logical payload limit.
+/// evaluations could not be retained or were evicted because the memo cache
+/// reached its byte limit.
 ///
 /// # Examples
 ///
@@ -322,22 +324,27 @@ pub struct QuanticsTensorCI2<V: TTScalar> {
 ///     num_cache_hits: 5,
 ///     num_cache_misses: 3,
 ///     dropped_inserts: 0,
+///     evicted_entries: 0,
 /// };
 /// assert!((stats.hit_ratio() - 5.0 / 8.0).abs() < 1e-12);
 /// assert_eq!(CacheStats::default().hit_ratio(), 0.0);
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CacheStats {
-    /// Distinct points the target function evaluated.
+    /// Evaluations of the target function. Without eviction these are distinct
+    /// points; a point evicted from a full memo and requested again counts twice.
     pub num_evals: usize,
     /// Point requests served from the cache.
     pub num_cache_hits: usize,
     /// Point requests that were not cached and had to be evaluated.
     pub num_cache_misses: usize,
-    /// Successful evaluations that were not retained because the memo cache was
-    /// at its logical payload limit. Such a point is evaluated again if it is
+    /// Successful evaluations that were not retained because the memo's limit is
+    /// below its smallest table. Such a point is evaluated again if it is
     /// requested later; no returned value changes.
     pub dropped_inserts: usize,
+    /// Retained evaluations evicted later to keep the memo within its limit
+    /// (oldest first); evaluated again if requested.
+    pub evicted_entries: usize,
 }
 
 impl CacheStats {
@@ -354,6 +361,7 @@ impl CacheStats {
     ///     num_cache_hits: 1,
     ///     num_cache_misses: 1,
     ///     dropped_inserts: 0,
+    ///     evicted_entries: 0,
     /// };
     /// assert!((stats.hit_ratio() - 0.5).abs() < 1e-12);
     /// ```
@@ -622,7 +630,7 @@ where
         self.cache_stats
     }
 
-    /// Distinct points the target function evaluated.
+    /// Evaluations of the target function (see [`CacheStats::num_evals`]).
     ///
     /// # Examples
     ///

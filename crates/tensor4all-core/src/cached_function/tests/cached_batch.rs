@@ -118,7 +118,9 @@ fn cached_batch_rejects_shape_and_late_invalid_points_before_callback() {
 
 #[test]
 fn cached_batch_limits_skip_only_distinct_inserts_and_preserve_values() {
-    for (limit, retained, skipped) in [(0, 0, 2), (16, 1, 1), (32, 2, 0)] {
+    // The smallest table holds 3 entries; below it nothing can be retained.
+    let smallest = crate::cached_function::memo_table::table_bytes::<u64, f64>(4);
+    for (limit, retained, skipped) in [(0, 0, 2), (smallest - 1, 0, 2), (smallest, 2, 0)] {
         let mut cache = MultiIndexCache::<f64>::with_retained_byte_limit(&[2], limit).unwrap();
         let values = cache
             .evaluate_batched(
@@ -204,11 +206,19 @@ fn cached_batch_encodes_each_request_only_once() {
 }
 
 #[test]
-fn cached_batch_wide_keys_preserve_budget_order_and_failure_accounting() {
-    for (n_sites, key_bytes) in [(1, 8), (65, 16), (129, 32), (257, 64), (513, 128)] {
+fn cached_batch_wide_keys_account_their_tables_and_failures() {
+    use crate::cached_function::memo_table::table_bytes;
+    use bnum::types::{U1024, U256, U512};
+    // The smallest table of each key width: (key, f64) entries, alignment included.
+    for (n_sites, smallest) in [
+        (1, table_bytes::<u64, f64>(4)),
+        (65, table_bytes::<u128, f64>(4)),
+        (129, table_bytes::<U256, f64>(4)),
+        (257, table_bytes::<U512, f64>(4)),
+        (513, table_bytes::<U1024, f64>(4)),
+    ] {
         let dims = vec![2; n_sites];
-        let mut cache =
-            MultiIndexCache::<f64>::with_retained_byte_limit(&dims, key_bytes + 8).unwrap();
+        let mut cache = MultiIndexCache::<f64>::with_retained_byte_limit(&dims, smallest).unwrap();
         let mut data = vec![0; 3 * n_sites];
         data[n_sites - 1] = 1;
         data[3 * n_sites - 1] = 1;
@@ -224,11 +234,11 @@ fn cached_batch_wide_keys_preserve_budget_order_and_failure_accounting() {
         assert_eq!(out, vec![30.0, 20.0, 30.0]);
         assert_eq!(
             (cache.hits(), cache.misses(), cache.dropped_inserts()),
-            (0, 3, 1)
+            (0, 3, 0)
         );
-        assert_eq!(cache.retained_bytes(), key_bytes + 8);
+        assert_eq!(cache.retained_bytes(), smallest);
         assert_eq!(cache.get(&data[..n_sites]).unwrap(), Some(30.0));
-        assert_eq!(cache.get(&data[n_sites..2 * n_sites]).unwrap(), None);
+        assert_eq!(cache.get(&data[n_sites..2 * n_sites]).unwrap(), Some(20.0));
         // A hit and a miss precede an invalid coordinate. Neither the missing
         // value nor the invalid point may be retained or sent to the callback.
         data[3 * n_sites - 1] = 2;
@@ -243,8 +253,8 @@ fn cached_batch_wide_keys_preserve_budget_order_and_failure_accounting() {
         ));
         assert_eq!(
             (cache.hits(), cache.misses(), cache.dropped_inserts()),
-            (2, 5, 1)
+            (4, 3, 0)
         );
-        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.len(), 2);
     }
 }

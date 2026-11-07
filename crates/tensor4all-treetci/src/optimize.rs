@@ -262,12 +262,14 @@ pub struct TreeTciOptions {
     /// is `true`. Default: `None`.
     pub seed: Option<u64>,
 
-    /// Optional logical key/value byte budget for target memoization.
+    /// Optional byte limit on the hash tables of the target memo.
     ///
     /// `None` (default) evaluates every request and preserves callback semantics.
     /// Use `Some(256 * 1024 * 1024)` for expensive deterministic targets.
     /// `Some(0)` deduplicates only within each batch and retains no values.
-    /// At capacity, inserts are skipped and reported; no entries are evicted.
+    /// At the limit the oldest generation of entries is evicted (reported as
+    /// `evicted_entries`) and the new value is kept; while a table grows, the
+    /// outgoing one is alive too, so the transient peak is at most 1.5× the limit.
     /// Memoization requires a fixed value for each point throughout the call.
     /// Edge candidate matrices are looked up through cache-owned side keys,
     /// which exist for the `u64` and `u128` key widths only, so an index space
@@ -278,7 +280,8 @@ pub struct TreeTciOptions {
     /// construction with `CacheKeyError::Overflow`. Callback errors and wrong
     /// output lengths are never cached. The cache belongs to this run, is
     /// shared across updates/searches/final materialization, and is dropped
-    /// at return. Bytes exclude allocator overhead and do not bound total RSS.
+    /// at return. Bytes count the tables (buckets, entries, control bytes) but
+    /// not allocator overhead, so they bound the memo's share of RSS, not RSS.
     pub evaluation_cache_bytes: Option<usize>,
 }
 
