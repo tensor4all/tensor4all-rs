@@ -386,9 +386,19 @@ where
 
     // Cache ownership is one search, across every start/site/sweep. Scratch
     // is bounded by one site scan rather than nsearch * sum(local_dims).
-    let mut cache =
-        TreeTNCachedEvaluator::new(&treetn, &site_indices, CachedEvaluatorOptions::default())
-            .map_err(anyhow::Error::from)?;
+    // A prepared branch slice is a re-layout of one branching site tensor, so
+    // retaining all of them costs at most the materialized tree once more. A
+    // byte cap below one slice (the default 32 MiB is a cubic bond of ~160)
+    // makes every readout rebuild the slice.
+    let mut cache = TreeTNCachedEvaluator::new(
+        &treetn,
+        &site_indices,
+        CachedEvaluatorOptions {
+            branch_slice_cache_max_bytes: usize::MAX,
+            ..CachedEvaluatorOptions::default()
+        },
+    )
+    .map_err(anyhow::Error::from)?;
     let max_points = state
         .local_dims
         .iter()
