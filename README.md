@@ -19,12 +19,15 @@ Related project: [tenferro-rs](https://github.com/tensor4all/tenferro-rs) provid
 ## Quick Start
 
 The crates are not published to crates.io yet. Use git dependencies from an
-external project:
+external project, pinned to a release tag such as `v0.3.0`:
 
 ```toml
 [dependencies]
-tensor4all-simplett = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-simplett" }
+tensor4all-simplett = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-simplett", tag = "v0.3.0" }
 ```
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the public-API renames and removals in
+each tag.
 
 When working from a local checkout, use a path dependency instead:
 
