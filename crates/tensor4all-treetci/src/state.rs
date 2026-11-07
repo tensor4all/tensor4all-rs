@@ -224,6 +224,11 @@ impl<T> TreeTCI2<T> {
     /// has a side with at most one pivot, when fewer than two such adjacent
     /// vertices exist, or when the state holds no pivots yet.
     ///
+    /// Reference: xfac's [`enrich_pivot1`] and its call site
+    /// `addPivotsAllBonds(enrich_pivot1())` in the constructor.
+    ///
+    /// [`enrich_pivot1`]: https://github.com/tensor4all/xfac/blob/da5ff8f9b25ad1e3ebdcece9bd1d2d214441296b/include/xfac/tree/tensor_tree_ci.h#L185
+    ///
     /// Returns the number of pivots passed to the projection (before
     /// per-side deduplication).
     pub(crate) fn enrich_pivots_around_unit_vertices(&mut self) -> TreeTciResult<usize> {
