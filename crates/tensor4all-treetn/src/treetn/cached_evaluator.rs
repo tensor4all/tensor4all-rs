@@ -6134,6 +6134,13 @@ where
 /// nesting simply continues for a center of higher coordination. Components
 /// arrive sorted by descending axis, so the innermost loop is the
 /// smallest-stride one.
+///
+/// The level just outside the innermost one computes the inner sums of
+/// [`STRIDED_DOT_LANES`] consecutive bonds in one pass over the innermost
+/// component: each inner sum is its own accumulator, fed its terms in the same
+/// order as one at a time, and they are then added to the outer sum in bond
+/// order. Only independent additions are interleaved, so the bits are those of
+/// the plain nesting while the additions no longer wait on one another.
 fn fold_raw_center_components<T>(
     core: &[T],
     strides: &[usize],
@@ -6148,32 +6155,112 @@ where
 {
     let component = &components[level];
     let assignment = component.point_to_assignment[point];
-    let innermost = level + 1 == components.len();
+    let values = &component.values[assignment * component.dim..(assignment + 1) * component.dim];
+    let stride = strides[component.axis];
     let mut sum = T::default();
-    for bond in 0..component.dim {
-        let value = component.values[assignment * component.dim + bond];
-        let offset = offset + bond * strides[component.axis];
-        let inner = if innermost {
+    match &components[level + 1..] {
+        [] => {
             #[cfg(test)]
             {
-                *core_visits += 1;
+                *core_visits += component.dim;
             }
-            core[offset]
-        } else {
-            fold_raw_center_components(
-                core,
-                strides,
-                components,
-                point,
-                level + 1,
-                offset,
+            sum = strided_dot(core, offset, stride, values);
+        }
+        [innermost] => {
+            let inner_values = &innermost.values[innermost.point_to_assignment[point]
+                * innermost.dim
+                ..(innermost.point_to_assignment[point] + 1) * innermost.dim];
+            let inner_stride = strides[innermost.axis];
+            let (lanes, rest) = values.as_chunks::<STRIDED_DOT_LANES>();
+            for (chunk, lane_values) in lanes.iter().enumerate() {
+                let first = offset + chunk * STRIDED_DOT_LANES * stride;
                 #[cfg(test)]
-                core_visits,
-            )
-        };
-        sum += inner * value;
+                {
+                    *core_visits += STRIDED_DOT_LANES * innermost.dim;
+                }
+                let inner = strided_dots(core, first, stride, inner_stride, inner_values);
+                for (inner, &value) in inner.into_iter().zip(lane_values) {
+                    sum += inner * value;
+                }
+            }
+            let done = lanes.len() * STRIDED_DOT_LANES;
+            for (bond, &value) in rest.iter().enumerate() {
+                #[cfg(test)]
+                {
+                    *core_visits += innermost.dim;
+                }
+                let inner = strided_dot(
+                    core,
+                    offset + (done + bond) * stride,
+                    inner_stride,
+                    inner_values,
+                );
+                sum += inner * value;
+            }
+        }
+        _ => {
+            for (bond, &value) in values.iter().enumerate() {
+                let inner = fold_raw_center_components(
+                    core,
+                    strides,
+                    components,
+                    point,
+                    level + 1,
+                    offset + bond * stride,
+                    #[cfg(test)]
+                    core_visits,
+                );
+                sum += inner * value;
+            }
+        }
     }
     sum
+}
+
+/// Independent sums [`strided_dots`] computes per pass, for the raw center fold and the scalar chain kernel.
+const STRIDED_DOT_LANES: usize = 4;
+
+/// `Σ_j data[offset + j·stride] · values[j]`, added in ascending `j`.
+fn strided_dot<T>(core: &[T], offset: usize, stride: usize, values: &[T]) -> T
+where
+    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
+    let mut sum = T::default();
+    for (&entry, &value) in core[offset..].iter().step_by(stride).zip(values) {
+        sum += entry * value;
+    }
+    sum
+}
+
+/// [`strided_dot`] at the [`STRIDED_DOT_LANES`] offsets `first + lane·lane_stride`,
+/// in one pass over `values`; each lane adds its terms in ascending `j`, so each
+/// lane has the bits of [`strided_dot`] while the lanes' additions overlap.
+fn strided_dots<T>(
+    data: &[T],
+    first: usize,
+    lane_stride: usize,
+    stride: usize,
+    values: &[T],
+) -> [T; STRIDED_DOT_LANES]
+where
+    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
+    let lane = |k: usize| data[first + k * lane_stride..].iter().step_by(stride);
+    let mut sums = [T::default(); STRIDED_DOT_LANES];
+    let [s0, s1, s2, s3] = &mut sums;
+    for ((((&value, &e0), &e1), &e2), &e3) in values
+        .iter()
+        .zip(lane(0))
+        .zip(lane(1))
+        .zip(lane(2))
+        .zip(lane(3))
+    {
+        *s0 += e0 * value;
+        *s1 += e1 * value;
+        *s2 += e2 * value;
+        *s3 += e3 * value;
+    }
+    sums
 }
 
 /// One arbitrary-degree branch node's contraction geometry.
@@ -6707,15 +6794,30 @@ where
         // `parent < parent_dim` and `child < child_dim`, so it is at most `last`, which is checked above.
         let columns = &child_columns[point * child_dim..(point + 1) * child_dim];
         let sums = &mut output[point * parent_dim..(point + 1) * parent_dim];
-        for (child, &child_value) in columns.iter().enumerate() {
-            let start = base + child * child_stride;
-            if parent_stride == 1 {
-                for (sum, &value) in sums.iter_mut().zip(&raw[start..start + parent_dim]) {
+        if child_stride < parent_stride {
+            // Parent-major walk along the shorter stride. Each sum still adds its child terms in ascending child
+            // order, as the child-major walk below does, so both walks give the same bits; this one reads the
+            // tensor in memory order instead of jumping a whole parent stride per term.
+            let (lanes, rest) = sums.as_chunks_mut::<STRIDED_DOT_LANES>();
+            for (chunk, lane_sums) in lanes.iter_mut().enumerate() {
+                let first = base + chunk * STRIDED_DOT_LANES * parent_stride;
+                *lane_sums = strided_dots(raw, first, parent_stride, child_stride, columns);
+            }
+            let done = lanes.len() * STRIDED_DOT_LANES;
+            for (parent, sum) in rest.iter_mut().enumerate() {
+                *sum = strided_dot(
+                    raw,
+                    base + (done + parent) * parent_stride,
+                    child_stride,
+                    columns,
+                );
+            }
+        } else {
+            for (child, &child_value) in columns.iter().enumerate() {
+                let start = base + child * child_stride;
+                let row = &raw[start..=start + (parent_dim - 1) * parent_stride];
+                for (sum, &value) in sums.iter_mut().zip(row.iter().step_by(parent_stride)) {
                     *sum += value * child_value;
-                }
-            } else {
-                for (parent, sum) in sums.iter_mut().enumerate() {
-                    *sum += raw[start + parent * parent_stride] * child_value;
                 }
             }
         }

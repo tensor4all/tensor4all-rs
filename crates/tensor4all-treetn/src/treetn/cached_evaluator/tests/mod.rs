@@ -14,6 +14,7 @@ mod evaluation;
 mod grouped_contraction;
 mod measurements;
 mod message_cache;
+mod raw_center_kernel;
 mod raw_messages;
 mod scalar_chain_kernel;
 mod scalar_kinds;
