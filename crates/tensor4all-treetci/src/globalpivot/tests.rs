@@ -1,6 +1,6 @@
 use super::{
-    cached_walk_readout, cached_walk_readout_on_session, find_global_pivots, search_with_readout,
-    ScalarParts, SearchParams,
+    branch_slice_cache_max_bytes, cached_walk_readout, cached_walk_readout_on_session,
+    find_global_pivots, materialized_tree_bytes, search_with_readout, ScalarParts, SearchParams,
 };
 use crate::{
     materialize::to_treetn, optimize_with_proposer, AllEdges, DefaultProposer, GlobalIndexBatch,
@@ -1307,4 +1307,84 @@ fn global_search_rejects_malformed_starts_before_evaluation() {
         assert!(error.to_string().contains("out of range"), "{error}");
         assert_eq!(calls.get(), 0);
     }
+}
+
+/// One-node tree whose tensor has the given leg dimensions, filled with zeros.
+///
+/// The branch-slice cap is a function of shapes only, so the payload is never
+/// read; a zero fill keeps the fixture cheap to build.
+fn shaped_tree(dims: &[usize]) -> TreeTN<IdxTensor, usize> {
+    let indices: Vec<DynIndex> = dims.iter().map(|&dim| DynIndex::new_dyn(dim)).collect();
+    let elements = dims.iter().product();
+    let tensor = IdxTensor::from_dense(indices, vec![0.0_f64; elements]).unwrap();
+    TreeTN::from_tensors(vec![tensor], vec![0usize]).unwrap()
+}
+
+/// Largest payload one prepared branch slice can have on a 3-leg site whose
+/// legs are `dims`: the slice is `child_dim_1 x parent_dim`, and the parent leg
+/// is whichever leg the contraction routes through, so the bound over every
+/// orientation divides by the smallest leg.
+fn largest_branch_slice_bytes(dims: &[usize], scalar_bytes: usize) -> usize {
+    let elements: usize = dims.iter().product();
+    elements / dims.iter().copied().min().expect("nonempty dims") * scalar_bytes
+}
+
+#[test]
+fn branch_slice_cache_cap_is_finite_and_above_a_branch_slice() {
+    let dims = [3usize, 4, 5];
+    let tree = shaped_tree(&dims);
+    let scalar_bytes = core::mem::size_of::<f64>();
+
+    let cap = branch_slice_cache_max_bytes::<f64>(&tree);
+    let floor = CachedEvaluatorOptions::<usize>::default().branch_slice_cache_max_bytes;
+
+    // A tree this small is sized by the floor, not by its own bytes.
+    assert_eq!(
+        materialized_tree_bytes::<f64>(&tree),
+        3 * 4 * 5 * scalar_bytes
+    );
+    assert_eq!(cap, floor);
+    // The defect this cap replaces was `usize::MAX`; the replacement is finite.
+    assert_ne!(cap, usize::MAX);
+    assert!(cap < usize::MAX);
+    // Still wide enough for one slice, so no readout rebuilds it.
+    assert!(cap >= largest_branch_slice_bytes(&dims, scalar_bytes));
+}
+
+#[test]
+fn branch_slice_cache_cap_tracks_the_tree_above_the_default_floor() {
+    // Bond dimension 163 is where the 32 MiB default became a full rebuild per
+    // readout: one slice is 163^2 * 8 B and the site's slices sum to 163^3 * 8 B.
+    let chi = 163usize;
+    let dims = [chi, chi, chi];
+    let tree = shaped_tree(&dims);
+    let scalar_bytes = core::mem::size_of::<f64>();
+    let tree_bytes = chi * chi * chi * scalar_bytes;
+    let slice_bytes = largest_branch_slice_bytes(&dims, scalar_bytes);
+    let floor = CachedEvaluatorOptions::<usize>::default().branch_slice_cache_max_bytes;
+
+    // 34,645,976 B, above the 32 MiB (33,554,432 B) floor, so the tree decides.
+    assert_eq!(tree_bytes, 34_645_976);
+    assert!(tree_bytes > floor);
+    assert_eq!(materialized_tree_bytes::<f64>(&tree), tree_bytes);
+
+    let cap = branch_slice_cache_max_bytes::<f64>(&tree);
+    assert_eq!(cap, tree_bytes);
+    assert!(cap < usize::MAX);
+
+    // No cliff: the cap holds every one of the site's `chi` slices, and holds
+    // one more than the largest single slice by a factor of `chi`.
+    assert_eq!(slice_bytes, 212_552);
+    assert!(cap >= slice_bytes);
+    assert_eq!(cap / slice_bytes, chi);
+
+    // The boundary is measured, not padded: one byte less and the last slice no
+    // longer fits, which is exactly the rebuild-per-readout cliff.
+    assert_eq!((cap - 1) / slice_bytes, chi - 1);
+
+    // The cap follows the scalar width; the evaluator keeps one cache per kind.
+    assert_eq!(
+        branch_slice_cache_max_bytes::<Complex64>(&tree),
+        tree_bytes * 2
+    );
 }
