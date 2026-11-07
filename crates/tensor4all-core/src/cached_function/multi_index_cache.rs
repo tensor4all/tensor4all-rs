@@ -15,7 +15,8 @@
 use super::error;
 use super::{cache_key::CacheKey, flat_index, IndexInt, InnerCache};
 use crate::ColMajorArrayRef;
-use std::collections::{hash_map::Entry, HashMap};
+use rustc_hash::FxHashMap;
+use std::collections::hash_map::Entry;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Marker for the left side of an additive site split.
@@ -1096,7 +1097,7 @@ fn validate_index<I: IndexInt>(
 // grouping the borrowed fields would add an otherwise unused state type.
 #[allow(clippy::too_many_arguments)]
 fn evaluate_encoded_batch<K, V, I, F>(
-    cache: &mut HashMap<K, V>,
+    cache: &mut FxHashMap<K, V>,
     coeffs: &[K],
     local_dims: &[usize],
     retained_byte_limit: usize,
@@ -1114,7 +1115,7 @@ where
 {
     let n_sites = local_dims.len();
     let n_points = indices.shape()[1];
-    let mut pending = HashMap::new();
+    let mut pending = FxHashMap::default();
     let mut miss_keys = Vec::new();
     let mut miss_data = Vec::new();
     let mut slots = Vec::with_capacity(n_points);
@@ -1197,7 +1198,7 @@ fn validate_side_sites(local_dims: &[usize], sites: &[usize]) -> Result<(), erro
 /// re-validated on a hit, and the caller sees only the distinct missing entries.
 #[allow(clippy::too_many_arguments)]
 fn evaluate_keyed_requests<K, V, F>(
-    cache: &mut HashMap<K, V>,
+    cache: &mut FxHashMap<K, V>,
     left: &[K],
     right: &[K],
     requests: &[(usize, usize)],
@@ -1231,7 +1232,7 @@ where
             .into());
         }
     }
-    let mut pending = HashMap::new();
+    let mut pending = FxHashMap::default();
     let mut miss_keys = Vec::new();
     let mut miss_entries = Vec::new();
     let mut slots = Vec::with_capacity(requests.len());

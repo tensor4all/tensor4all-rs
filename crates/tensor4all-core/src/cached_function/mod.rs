@@ -31,7 +31,7 @@ pub mod error;
 pub mod index_int;
 pub mod multi_index_cache;
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -119,23 +119,23 @@ fn flat_index<K: CacheKey, I: IndexInt>(idx: &[I], coeffs: &[K]) -> K {
 /// Internal cache with automatically selected key type.
 enum InnerCache<V> {
     U64 {
-        cache: RwLock<HashMap<u64, V>>,
+        cache: RwLock<FxHashMap<u64, V>>,
         coeffs: Vec<u64>,
     },
     U128 {
-        cache: RwLock<HashMap<u128, V>>,
+        cache: RwLock<FxHashMap<u128, V>>,
         coeffs: Vec<u128>,
     },
     U256 {
-        cache: RwLock<HashMap<U256, V>>,
+        cache: RwLock<FxHashMap<U256, V>>,
         coeffs: Vec<U256>,
     },
     U512 {
-        cache: RwLock<HashMap<U512, V>>,
+        cache: RwLock<FxHashMap<U512, V>>,
         coeffs: Vec<U512>,
     },
     U1024 {
-        cache: RwLock<HashMap<U1024, V>>,
+        cache: RwLock<FxHashMap<U1024, V>>,
         coeffs: Vec<U1024>,
     },
 }
@@ -157,27 +157,27 @@ impl<V: Clone + Send + Sync> InnerCache<V> {
         let bits = total_bits(local_dims);
         if bits <= 64 {
             Ok(Self::U64 {
-                cache: RwLock::new(HashMap::new()),
+                cache: RwLock::new(FxHashMap::default()),
                 coeffs: compute_coeffs::<u64>(local_dims)?,
             })
         } else if bits <= 128 {
             Ok(Self::U128 {
-                cache: RwLock::new(HashMap::new()),
+                cache: RwLock::new(FxHashMap::default()),
                 coeffs: compute_coeffs::<u128>(local_dims)?,
             })
         } else if bits <= 256 {
             Ok(Self::U256 {
-                cache: RwLock::new(HashMap::new()),
+                cache: RwLock::new(FxHashMap::default()),
                 coeffs: compute_coeffs::<U256>(local_dims)?,
             })
         } else if bits <= 512 {
             Ok(Self::U512 {
-                cache: RwLock::new(HashMap::new()),
+                cache: RwLock::new(FxHashMap::default()),
                 coeffs: compute_coeffs::<U512>(local_dims)?,
             })
         } else if bits <= 1024 {
             Ok(Self::U1024 {
-                cache: RwLock::new(HashMap::new()),
+                cache: RwLock::new(FxHashMap::default()),
                 coeffs: compute_coeffs::<U1024>(local_dims)?,
             })
         } else {
@@ -318,14 +318,14 @@ trait DynCache<V>: Send + Sync {
 
 /// Generic cache for user-specified key types.
 struct GenericCache<K: CacheKey, V> {
-    cache: RwLock<HashMap<K, V>>,
+    cache: RwLock<FxHashMap<K, V>>,
     coeffs: Vec<K>,
 }
 
 impl<K: CacheKey, V: Clone + Send + Sync> GenericCache<K, V> {
     fn new(local_dims: &[usize]) -> Result<Self, error::CacheKeyError> {
         Ok(Self {
-            cache: RwLock::new(HashMap::new()),
+            cache: RwLock::new(FxHashMap::default()),
             coeffs: compute_coeffs::<K>(local_dims)?,
         })
     }
