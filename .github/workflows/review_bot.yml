@@ -6,8 +6,8 @@ name: review bot
 # head for git diffs, but never checks out or executes files from the PR branch.
 #
 # The external LLM review was permanently removed (2026-08-10): the
-# deterministic diff/section/rule checks run for every same-repo PR, and the
-# maintainer waive label remains the only override.
+# deterministic diff/section/rule checks run for every PR, including forks, and
+# the maintainer waive label remains the only override.
 
 on:
   pull_request_target:
@@ -29,10 +29,11 @@ env:
 jobs:
   review-bot:
     name: repository rules review
+    # Deterministic pass only: base revision checkout, PR head fetched for the diff
+    # only, base tree's review script, no secret. The author's association is not a
+    # trust boundary here, and gating on it left every fork PR without a verdict
+    # (#2510, ported from tensor4all/tenferro-rs).
     if: |
-      (github.event.pull_request.author_association == 'OWNER' ||
-       github.event.pull_request.author_association == 'MEMBER' ||
-       github.event.pull_request.author_association == 'COLLABORATOR') &&
       !contains(github.event.pull_request.labels.*.name, 'rules-review:waive')
     runs-on: ubuntu-latest
     timeout-minutes: 20
