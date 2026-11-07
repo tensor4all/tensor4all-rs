@@ -172,7 +172,8 @@ assert_eq!(evaluate(&mut cache, target, &[1, 1]).unwrap(), 3.0);
 assert_eq!(evaluate(&mut cache, target, &[1, 1]).unwrap(), 3.0);
 assert_eq!(cache.hits(), 1);
 assert_eq!(cache.misses(), 1);
-assert_eq!(cache.retained_bytes(), 8 + std::mem::size_of::<f64>());
+// The first table: 4 buckets of a u64 key, an f64 value and a control byte, plus 16 control bytes.
+assert_eq!(cache.retained_bytes(), 4 * (8 + 8 + 1) + 16);
 ```
 
 When your requests are entries of a structure whose keys add -- a matrix over
