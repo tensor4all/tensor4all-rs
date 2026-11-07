@@ -30,6 +30,9 @@ jobs:
   review-bot:
     name: repository rules review
     if: |
+      (github.event.pull_request.author_association == 'OWNER' ||
+       github.event.pull_request.author_association == 'MEMBER' ||
+       github.event.pull_request.author_association == 'COLLABORATOR') &&
       !contains(github.event.pull_request.labels.*.name, 'rules-review:waive')
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -169,7 +172,6 @@ jobs:
           # Still fail when a fork PR arrives with no verdict at all.
           if [ "${IS_FORK_PR}" = "true" ] &&
              [ "${REVIEW_RESULT}" = "skipped" ] &&
-             [ "${NO_LLM_RESULT}" = "skipped" ] &&
              [ "${WAIVED_RESULT}" = "skipped" ]; then
             echo "Fork PR with no review verdict: all three review jobs were skipped, so there is nothing to gate on. Check that the workflow on the base branch still runs them for forks."
             exit 1
