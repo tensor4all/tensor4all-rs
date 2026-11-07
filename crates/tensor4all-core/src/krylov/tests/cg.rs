@@ -1,5 +1,6 @@
 use super::*;
 use crate::{contract, TensorElement};
+use std::sync::Arc;
 
 fn check_hpd_solution<S: TensorElement>(
     matrix: Vec<S>,
@@ -622,4 +623,426 @@ fn cg_rejects_nonfinite_inputs_and_operator_outputs() {
             Err(KrylovError::NumericalBreakdown { .. })
         ));
     }
+}
+
+/// Vector-space operation that a [`FaultyVector`] can be told to reject.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FailingOp {
+    Validate,
+    Scale,
+    Axpby,
+    InnerProduct,
+}
+
+/// Way in which a [`FaultyVector`] misbehaves.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Fault {
+    /// Reject the `at`-th call of `op` with a backend error.
+    FailAt { op: FailingOp, at: usize },
+    /// Return `value` from every self-inner-product instead of `||x||^2`.
+    SelfProduct(f64),
+    /// Drop the update from the `from`-th `axpby` call onwards, the way a
+    /// backend that truncates its result to zero would.
+    DropUpdatesFrom { from: usize },
+}
+
+/// Per-operation call counters, shared through every clone of a
+/// [`FaultyVector`].
+#[derive(Debug, Default)]
+struct CallCounts {
+    validate: AtomicUsize,
+    scale: AtomicUsize,
+    axpby: AtomicUsize,
+    inner_product: AtomicUsize,
+}
+
+impl CallCounts {
+    fn op(&self, op: FailingOp) -> &AtomicUsize {
+        match op {
+            FailingOp::Validate => &self.validate,
+            FailingOp::Scale => &self.scale,
+            FailingOp::Axpby => &self.axpby,
+            FailingOp::InnerProduct => &self.inner_product,
+        }
+    }
+}
+
+/// Vector-space double that misbehaves in one configured way.
+///
+/// The operator callback clones its input, so one shared counter follows the
+/// residual through every recurrence stage. Walking the rejection point over
+/// the call count of a clean run therefore fails each stage in turn without
+/// hard-coding the solver's call order.
+#[derive(Debug, Clone)]
+struct FaultyVector {
+    data: Vec<f64>,
+    fault: Fault,
+    calls: Arc<CallCounts>,
+}
+
+impl FaultyVector {
+    fn new(data: Vec<f64>, fault: Fault) -> Self {
+        Self {
+            data,
+            fault,
+            calls: Arc::new(CallCounts::default()),
+        }
+    }
+
+    /// Same fault and counters, different payload: what the operator callback
+    /// returns so the next stage is still armed.
+    fn derived(&self, data: Vec<f64>) -> Self {
+        Self {
+            data,
+            ..self.clone()
+        }
+    }
+
+    /// Number of calls made so far to `op`.
+    fn count(&self, op: FailingOp) -> usize {
+        self.calls.op(op).load(Ordering::Relaxed)
+    }
+
+    /// Count a call of `op`, rejecting it when it is the configured failure.
+    fn check(&self, op: FailingOp) -> std::result::Result<usize, TensorVectorSpaceError> {
+        let call = self.calls.op(op).fetch_add(1, Ordering::Relaxed);
+        match self.fault {
+            Fault::FailAt { op: failed, at } if failed == op && at == call => Err(
+                TensorVectorSpaceError::from(anyhow::anyhow!("injected {op:?} failure")),
+            ),
+            _ => Ok(call),
+        }
+    }
+}
+
+impl TensorIndex for FaultyVector {
+    type Index = DynIndex;
+    type Error = TensorVectorSpaceError;
+
+    fn external_indices(&self) -> Vec<Self::Index> {
+        Vec::new()
+    }
+
+    fn replaceind(
+        &self,
+        _old_index: &Self::Index,
+        _new_index: &Self::Index,
+    ) -> std::result::Result<Self, Self::Error> {
+        Ok(self.clone())
+    }
+
+    fn replace_indices(
+        &self,
+        _old_indices: &[Self::Index],
+        _new_indices: &[Self::Index],
+    ) -> std::result::Result<Self, Self::Error> {
+        Ok(self.clone())
+    }
+}
+
+impl TensorVectorSpace for FaultyVector {
+    fn validate(&self) -> std::result::Result<(), Self::Error> {
+        self.check(FailingOp::Validate).map(|_| ())
+    }
+
+    fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
+        Ok(self.data.iter().map(|x| x * x).sum())
+    }
+
+    fn axpby(
+        &self,
+        a: AnyScalar,
+        other: &Self,
+        b: AnyScalar,
+    ) -> std::result::Result<Self, Self::Error> {
+        let call = self.check(FailingOp::Axpby)?;
+        if let Fault::DropUpdatesFrom { from } = self.fault {
+            if call >= from {
+                return Ok(self.derived(vec![0.0; self.data.len()]));
+            }
+        }
+        let data = self
+            .data
+            .iter()
+            .zip(other.data.iter())
+            .map(|(&x, &y)| a.real() * x + b.real() * y)
+            .collect();
+        Ok(self.derived(data))
+    }
+
+    fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error> {
+        self.check(FailingOp::Scale)?;
+        Ok(self.derived(self.data.iter().map(|&x| scalar.real() * x).collect()))
+    }
+
+    fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, Self::Error> {
+        self.check(FailingOp::InnerProduct)?;
+        if let (Fault::SelfProduct(value), true) = (self.fault, std::ptr::eq(self, other)) {
+            return Ok(AnyScalar::new_real(value));
+        }
+        Ok(AnyScalar::new_real(
+            self.data
+                .iter()
+                .zip(other.data.iter())
+                .map(|(&x, &y)| x * y)
+                .sum(),
+        ))
+    }
+
+    fn maxabs(&self) -> std::result::Result<f64, Self::Error> {
+        Ok(self.data.iter().map(|x| x.abs()).fold(0.0, f64::max))
+    }
+}
+
+/// A solve whose recurrence stages exercise a distinct scaling branch.
+struct Scenario {
+    name: &'static str,
+    rhs: Vec<f64>,
+    diagonal: Vec<f64>,
+    options: CgOptions,
+}
+
+impl Scenario {
+    /// Solve `diag(diagonal) x = rhs` with misbehaving vectors and return the
+    /// result with the per-operation call counters, so a caller can walk every
+    /// rejection point of this scenario.
+    fn run(
+        &self,
+        fault: Fault,
+    ) -> (
+        std::result::Result<CgResult<FaultyVector>, KrylovError>,
+        Arc<CallCounts>,
+    ) {
+        let rhs = FaultyVector::new(self.rhs.clone(), fault);
+        let calls = Arc::clone(&rhs.calls);
+        let initial = rhs.derived(vec![0.0; self.rhs.len()]);
+        let apply = |x: &FaultyVector| -> Result<FaultyVector> {
+            Ok(x.derived(
+                x.data
+                    .iter()
+                    .zip(self.diagonal.iter())
+                    .map(|(&value, &scale)| scale * value)
+                    .collect(),
+            ))
+        };
+        (cg(apply, &rhs, &initial, &self.options), calls)
+    }
+}
+
+/// Scenarios that reach every recurrence stage: a two-step solve whose
+/// residual norm is at least one, a sub-unit residual that makes the
+/// power-of-two rescaling non-trivial, the zero-right-hand-side shortcut, and
+/// the true-residual restart after an optimistic recursive residual.
+fn scenarios() -> Vec<Scenario> {
+    vec![
+        Scenario {
+            name: "two-step",
+            rhs: vec![2.0, 6.0],
+            diagonal: vec![2.0, 3.0],
+            options: CgOptions::default(),
+        },
+        Scenario {
+            name: "sub-unit residual",
+            rhs: vec![0.2, 0.6],
+            diagonal: vec![2.0, 3.0],
+            options: CgOptions::default(),
+        },
+        Scenario {
+            name: "zero right-hand side",
+            rhs: vec![0.0, 0.0],
+            diagonal: vec![2.0, 3.0],
+            options: CgOptions::default(),
+        },
+        Scenario {
+            name: "true-residual restart",
+            rhs: vec![1.0, 1.0, 1.0],
+            diagonal: vec![1.0, 2.0, 3.0],
+            options: CgOptions {
+                max_iter: 4,
+                rtol: 0.0,
+                atol: 5e-17,
+                ..CgOptions::default()
+            },
+        },
+    ]
+}
+
+#[test]
+fn cg_forwards_every_vector_space_failure_as_an_operation_error() {
+    for scenario in scenarios() {
+        for op in [
+            FailingOp::Validate,
+            FailingOp::Scale,
+            FailingOp::Axpby,
+            FailingOp::InnerProduct,
+        ] {
+            let clean_fault = Fault::FailAt { op, at: usize::MAX };
+            let (clean, calls) = scenario.run(clean_fault);
+            let clean = clean.unwrap_or_else(|error| {
+                panic!("clean run failed for {} / {op:?}: {error}", scenario.name)
+            });
+            if scenario.rhs == [0.0, 0.0] {
+                assert!(clean.converged);
+                assert_eq!(clean.iterations, 0);
+            } else {
+                assert!(clean.iterations > 0, "{} stopped early", scenario.name);
+            }
+            let total = calls.op(op).load(Ordering::Relaxed);
+            // The zero right-hand side returns after its initial residual, so
+            // it reaches only the stages before the iteration begins.
+            if total == 0 {
+                assert_eq!(scenario.name, "zero right-hand side");
+                continue;
+            }
+            for at in 0..total {
+                let (result, _) = scenario.run(Fault::FailAt { op, at });
+                match result {
+                    Err(KrylovError::Operation {
+                        solver: "cg",
+                        source,
+                    }) => assert!(
+                        format!("{source:#}").contains("injected"),
+                        "{} / {op:?} call {at} lost the backend error: {source:#}",
+                        scenario.name
+                    ),
+                    other => panic!(
+                        "{} / {op:?} call {at} did not surface as an operation failure: {other:?} \
+                         (clean run made {total} calls)",
+                        scenario.name
+                    ),
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn cg_rejects_degenerate_residual_inner_products() {
+    // A backend whose self-inner-product is non-positive or nonfinite cannot
+    // define a CG recurrence; report it instead of iterating on garbage.
+    let scenario = Scenario {
+        name: "two-step",
+        rhs: vec![2.0, 6.0],
+        diagonal: vec![2.0, 3.0],
+        options: CgOptions::default(),
+    };
+    for value in [-1.0, 0.0, f64::NAN, f64::INFINITY] {
+        let (result, _) = scenario.run(Fault::SelfProduct(value));
+        match result {
+            Err(KrylovError::NumericalBreakdown {
+                solver: "cg",
+                iteration: 0,
+                quantity: "residual inner product",
+            }) => {}
+            other => panic!("self-product {value} was not rejected: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn cg_reports_a_vanishing_search_direction() {
+    // A backend that drops the update leaves the conjugacy recurrence with a
+    // zero direction. CG must report it at the next step instead of dividing
+    // by a zero curvature or looping on a stale residual.
+    let rhs = FaultyVector::new(vec![2.0, 6.0], Fault::DropUpdatesFrom { from: 3 });
+    let initial = rhs.derived(vec![0.0, 0.0]);
+    let apply = |x: &FaultyVector| -> Result<FaultyVector> {
+        Ok(x.derived(vec![2.0 * x.data[0], 3.0 * x.data[1]]))
+    };
+    match cg(apply, &rhs, &initial, &CgOptions::default()) {
+        Err(KrylovError::NumericalBreakdown {
+            solver: "cg",
+            iteration: 2,
+            quantity: "search direction norm",
+        }) => {}
+        other => panic!("vanishing direction was not reported: {other:?}"),
+    }
+    assert_eq!(
+        rhs.count(FailingOp::Axpby),
+        4,
+        "the vanished direction must be reported before another update"
+    );
+}
+
+#[test]
+fn cg_reports_an_unrepresentable_physical_residual() {
+    // A rotational (non-normal) operator keeps the quadratic form positive, so
+    // the Hermitian and curvature checks accept it, but CG diverges on it. At
+    // unit scale the divergence is merely non-convergence; scaling the right-
+    // hand side to the top of the f64 range pushes the physical residual past
+    // f64::MAX, which the solver must report rather than return as a norm.
+    let index = DynIndex::new_dyn(2);
+    let input = index.prime();
+    let omega = 1e6;
+    let matrix = IdxTensor::from_dense(
+        vec![index.clone(), input.clone()],
+        vec![1.0, omega, -omega, 1.0],
+    )
+    .unwrap();
+    let apply = |x: &IdxTensor| -> Result<IdxTensor> {
+        Ok(contract(&[&matrix, &x.replaceind(&index, &input)?])?)
+    };
+    let solve = |magnitude: f64| {
+        let rhs = IdxTensor::from_dense(vec![index.clone()], vec![magnitude, magnitude]).unwrap();
+        let initial = IdxTensor::zeros::<f64>(vec![index.clone()]).unwrap();
+        cg(apply, &rhs, &initial, &CgOptions::default())
+    };
+    let moderate = solve(1.0).expect("a representable residual must not error");
+    assert!(!moderate.converged);
+    assert!(moderate.residual_norm.is_finite());
+    assert!(moderate.residual_norm > 1.0, "CG diverges on this operator");
+    match solve(1e305) {
+        Err(KrylovError::NumericalBreakdown {
+            solver: "cg",
+            iteration: 1,
+            quantity: "physical residual norm",
+        }) => {}
+        other => panic!("unrepresentable residual was not reported: {other:?}"),
+    }
+}
+
+#[test]
+fn cg_reports_the_true_residual_when_the_iteration_budget_runs_out() {
+    // On a system spanning twelve decades the recursive residual drifts from
+    // the true one. Stopping before either meets the tolerance must still
+    // report `||b - A x||`, not the recurrence's estimate.
+    let diagonal: Vec<f64> = (0..4)
+        .map(|site| 1e12_f64.powf(-(site as f64) / 3.0))
+        .collect();
+    let spectrum = diagonal.clone();
+    let apply = move |x: &PlainVector| -> Result<PlainVector> {
+        Ok(PlainVector {
+            data: x
+                .data
+                .iter()
+                .zip(spectrum.iter())
+                .map(|(&value, &scale)| scale * value)
+                .collect(),
+        })
+    };
+    let rhs = PlainVector {
+        data: vec![1.0; diagonal.len()],
+    };
+    let initial = PlainVector {
+        data: vec![0.0; diagonal.len()],
+    };
+    let options = CgOptions {
+        max_iter: 5,
+        rtol: 1e-14,
+        ..CgOptions::default()
+    };
+    let result = cg(&apply, &rhs, &initial, &options).unwrap();
+    assert!(!result.converged);
+    assert_eq!(result.iterations, options.max_iter);
+    let true_residual = rhs
+        .sub(&apply(&result.solution).unwrap())
+        .unwrap()
+        .norm()
+        .unwrap();
+    let drift = (result.residual_norm - true_residual).abs() / true_residual;
+    assert!(
+        drift <= 1e-13,
+        "reported {:e} but b - A x has norm {true_residual:e} (relative drift {drift:e})",
+        result.residual_norm
+    );
 }
