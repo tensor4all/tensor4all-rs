@@ -68,6 +68,14 @@ fn decode(point: &[usize]) -> [usize; 3] {
     n
 }
 
+/// The comb graph of the reproducer: three chains of `R` binary sites meeting at
+/// one junction of local dimension 1.
+///
+/// # Errors
+///
+/// [`TreeTciError::InvalidGraph`] if an edge names a site outside `0..N_SITES`
+/// or repeats one, or if the edge list is disconnected, missing a vertex, or
+/// otherwise not a tree.
 pub fn comb_graph() -> Result<TreeTciGraph> {
     let mut edges = Vec::new();
     for axis in 0..3 {
@@ -95,6 +103,11 @@ pub struct Run {
 /// Run the reproducer (`sorted` order, seed 11, `max_iter = 30`, memo on)
 /// from the grid centre and measure the maximum relative error of the
 /// materialized tree on 2000 random points.
+///
+/// # Errors
+///
+/// Returns an error if the graph cannot be built ([`comb_graph`]), if the
+/// optimizer reports a failure, or if the sampled relative error is not finite.
 pub fn run<P: PivotCandidateProposer>(
     target: Target,
     enable_global_pivots: bool,
