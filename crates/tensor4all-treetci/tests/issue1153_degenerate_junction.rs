@@ -191,8 +191,9 @@ fn check(delta: f64) -> Result<()> {
         run.junction_ranks
     );
     // With the enriched initial pivots the local updates grow the junction
-    // bonds and the run converges near the tolerance (measured: 1.43e-6 for
-    // `delta = 4`, 1.45e-6 for `delta = 1`; the issue reported 1.68 / 1.32).
+    // bonds and the run converges near the tolerance (measured: 1.62e-6 for
+    // `delta = 4`, 1.20e-6 for `delta = 1`; the issue reported 1.68 / 1.32,
+    // which the backward second pass of #1154 alone does not change).
     assert_eq!(run.result.termination, TreeTciTermination::Converged);
     assert!(
         run.max_rel_error < 10.0 * TOLERANCE,

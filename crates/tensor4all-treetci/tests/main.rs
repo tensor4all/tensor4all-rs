@@ -8,6 +8,7 @@ mod common;
 mod advanced_quantics;
 mod assembly_error_paths;
 mod continuation;
+mod edge_visitor_passes;
 mod evaluation_memo;
 mod external_proposer;
 mod issue1078_context_adoption;

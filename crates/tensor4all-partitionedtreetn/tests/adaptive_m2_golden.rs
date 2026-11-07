@@ -34,6 +34,21 @@
 //!
 //! Re-recording is an explicit, reviewed step: run the ignored test
 //! `record_m2_golden` with `T4A_RECORD_M2_GOLDEN=1`.
+//!
+//! The two TreeTCI scenarios were re-recorded when `AllEdges` started
+//! sweeping the second inner pass backward (#899); the dense scenarios were
+//! kept as recorded. With both inner passes in sorted edge order,
+//! `treetci_quantics_tree` had 8401 cache hits and
+//! `treetci_quantics_tree_recycled` 8204; now 8350 and 8188. Function
+//! evaluations, terminations, bond dimensions, and every nonzero float are
+//! unchanged; 40 stored zeros changed sign (`-0.0` to `0.0`).
+//!
+//! `treetci_quantics_tree_recycled` was re-recorded again when TreeTCI began
+//! enriching the initial pivots around vertices of local dimension 1 (#1153;
+//! the junction `r` carries no site): 8188 cache hits became 8314, from
+//! lookups of enriched candidates already in the evaluation memo. Function
+//! evaluations, terminations, bond dimensions, and floats are unchanged, and
+//! `treetci_quantics_tree` is unchanged.
 
 use crate::adaptive_common;
 
