@@ -56,6 +56,19 @@ fn map_termination_applies_the_cap_precedence() {
             None,
             InterpolationTermination::IterationLimit,
         ),
+        // An unmeasured error is never accepted, below the cap or not.
+        (
+            TreeTciTermination::DegenerateCandidateSet,
+            1,
+            cap,
+            InterpolationTermination::ErrorNotMeasured,
+        ),
+        (
+            TreeTciTermination::DegenerateCandidateSet,
+            1,
+            None,
+            InterpolationTermination::ErrorNotMeasured,
+        ),
     ];
     for (reason, rank, cap, expected) in cases {
         assert_eq!(

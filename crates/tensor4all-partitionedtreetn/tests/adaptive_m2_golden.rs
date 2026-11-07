@@ -42,6 +42,13 @@
 //! `treetci_quantics_tree_recycled` 8204; now 8350 and 8188. Function
 //! evaluations, terminations, bond dimensions, and every nonzero float are
 //! unchanged; 40 stored zeros changed sign (`-0.0` to `0.0`).
+//!
+//! `treetci_quantics_tree_recycled` was re-recorded again when TreeTCI began
+//! enriching the initial pivots around vertices of local dimension 1 (#1153;
+//! the junction `r` carries no site): 8188 cache hits became 8314, from
+//! lookups of enriched candidates already in the evaluation memo. Function
+//! evaluations, terminations, bond dimensions, and floats are unchanged, and
+//! `treetci_quantics_tree` is unchanged.
 
 use crate::adaptive_common;
 

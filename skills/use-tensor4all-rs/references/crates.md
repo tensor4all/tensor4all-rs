@@ -173,10 +173,11 @@ Ports TreeTCI.jl. Cross interpolation on tree-structured graphs → TreeTN.
 - Tree entry points return `TreeTciRunResult`: access `result.treetn`,
   `result.ranks`, `result.errors`, and `result.termination`. Optimizers return
   `TreeTciOptimizationResult` with the same diagnostics. `TreeTciTermination`
-  distinguishes `Converged`, `MaxBondDimension`, and `MaxIterations`; convergence
+  distinguishes `Converged`, `MaxBondDimension`, `MaxIterations`, and
+  `DegenerateCandidateSet` (a bond error could not be measured); convergence
   describes sampled errors, not a full-network residual bound.
 - `tensor4all_treetci::materialize::to_treetn(tci_state, batch_eval, Some(root))` — materialize as TreeTN with a batched evaluator.
-- `optimize_with_proposer` / `optimize_default` return `TreeTciOptimizationResult { ranks, errors, termination, evaluation }`; only `TreeTciTermination::Converged` is convergence (`MaxBondDimension` / `MaxIterations` are stops).
+- `optimize_with_proposer` / `optimize_default` return `TreeTciOptimizationResult { ranks, errors, termination, evaluation }`; only `TreeTciTermination::Converged` is convergence (`MaxBondDimension` / `MaxIterations` / `DegenerateCandidateSet` are stops).
 - `TreeTciInterpolator` — implements `tensor4all_treetn::interpolation::TreeInterpolator` (validated `InterpolationProblem` with named nodes, several or zero active sites per node, absolute tolerance, bond cap, seed). Accept a result only on `InterpolationTermination::Converged`.
 
 ## tensor4all-interpolativeqtt — interpolative QTT

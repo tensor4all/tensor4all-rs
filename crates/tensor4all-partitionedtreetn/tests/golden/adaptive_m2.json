@@ -3949,7 +3949,7 @@
             "termination": "Converged"
           }
         ],
-        "cache_hits": 8188,
+        "cache_hits": 8314,
         "engine_terminations": [
           "BondCapReached",
           "BondCapReached",

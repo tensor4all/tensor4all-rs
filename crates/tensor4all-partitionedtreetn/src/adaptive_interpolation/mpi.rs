@@ -181,6 +181,7 @@ enum WireTermination {
     Converged,
     BondCapReached,
     IterationLimit,
+    ErrorNotMeasured,
 }
 
 /// Whether a retained patch meets its allowance.
@@ -351,6 +352,7 @@ fn encode_termination(
         InterpolationTermination::Converged => Ok(WireTermination::Converged),
         InterpolationTermination::BondCapReached => Ok(WireTermination::BondCapReached),
         InterpolationTermination::IterationLimit => Ok(WireTermination::IterationLimit),
+        InterpolationTermination::ErrorNotMeasured => Ok(WireTermination::ErrorNotMeasured),
         // `InterpolationTermination` is non-exhaustive; a verdict this build
         // does not know cannot be reported faithfully on another rank.
         _ => Err(wire_error(format!(
@@ -364,6 +366,7 @@ fn decode_termination(termination: WireTermination) -> InterpolationTermination 
         WireTermination::Converged => InterpolationTermination::Converged,
         WireTermination::BondCapReached => InterpolationTermination::BondCapReached,
         WireTermination::IterationLimit => InterpolationTermination::IterationLimit,
+        WireTermination::ErrorNotMeasured => InterpolationTermination::ErrorNotMeasured,
     }
 }
 

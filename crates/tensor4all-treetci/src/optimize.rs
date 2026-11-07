@@ -34,8 +34,9 @@ use tensor4all_treetn::interpolation::EvalContext;
 #[non_exhaustive]
 pub enum TreeTciTermination {
     /// Three trailing iterations have error strictly below `tolerance`,
-    /// final maximum rank equal to the minimum rank in that window, and
-    /// no newly accepted global pivots.
+    /// final maximum rank equal to the minimum rank in that window, no newly
+    /// accepted global pivots, and every edge's most recent update measured
+    /// its bond error (see [`TreeTciTermination::DegenerateCandidateSet`]).
     ///
     /// Errors use the running maximum sample magnitude as their scale only
     /// when `scale_tolerance` is enabled.
@@ -53,6 +54,19 @@ pub enum TreeTciTermination {
     ///
     /// A low error in the last iteration alone is insufficient for convergence.
     MaxIterations,
+    /// The convergence criterion of [`TreeTciTermination::Converged`] held on
+    /// the recorded errors, but at least one edge could not measure its bond
+    /// error in its most recent update.
+    ///
+    /// An edge's error is unmeasurable when one side of its candidate matrix
+    /// holds a single candidate while both sides of the edge have more than
+    /// one configuration. The first pivot then exhausts that side, and the
+    /// recorded error is zero by construction rather than by measurement.
+    /// This happens, for example, around a vertex of local dimension 1 whose
+    /// adjacent bonds all have rank 1 (issue #1153). The approximation may
+    /// be inaccurate; enabling the global pivot search or supplying more
+    /// initial pivots can let the bonds grow.
+    DegenerateCandidateSet,
 }
 
 /// Iteration diagnostics and stopping reason from optimizing a TreeTCI state.
@@ -818,6 +832,11 @@ where
     options.validate()?;
     validate_global_search_starts(options, &state.local_dims)?;
 
+    // Bonds around a vertex of local dimension 1 cannot grow from rank 1 by
+    // local updates (#1153); enrich them before the first sweep, as xfac does
+    // when it builds a `TensorTreeCI`.
+    state.enrich_pivots_around_unit_vertices()?;
+
     let mut ranks = Vec::new();
     let mut errors = Vec::new();
     let mut nglobal_pivots_history: Vec<usize> = Vec::new();
@@ -964,7 +983,14 @@ where
             let rank_stable = last_ranks.iter().min().copied().unwrap_or(0)
                 == last_ranks.last().copied().unwrap_or(0);
             if errors_converged && no_global_pivots && rank_stable {
-                termination = TreeTciTermination::Converged;
+                // A zero error from an exhausted single-candidate side is not
+                // evidence of convergence (#1153). Stop where `Converged`
+                // would have stopped and report that the error was not seen.
+                termination = if state.unmeasured_bonds.is_empty() {
+                    TreeTciTermination::Converged
+                } else {
+                    TreeTciTermination::DegenerateCandidateSet
+                };
                 break;
             }
         }

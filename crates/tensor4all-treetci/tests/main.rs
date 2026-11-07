@@ -12,6 +12,7 @@ mod edge_visitor_passes;
 mod evaluation_memo;
 mod external_proposer;
 mod issue1078_context_adoption;
+mod issue1153_degenerate_junction;
 mod iteration_visitor;
 mod materialize_context;
 mod optimizer_context;

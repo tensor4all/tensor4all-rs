@@ -14,6 +14,7 @@ The reasons describe the existing optimization loop, in its decision order:
 | --- | --- | --- |
 | `MaxBondDimension` | The maximum rank is at the configured cap throughout three trailing iterations. | Checked before global search and convergence, even if the sampled error is small. It does not mean all edges are saturated. |
 | `Converged` | Three trailing errors are strictly below `tolerance`, the final maximum rank equals the minimum in that window, and no global pivots were accepted in that window. | Describes the sampled criterion, not an exhaustive error bound. |
+| `DegenerateCandidateSet` | The `Converged` condition holds on the recorded errors, but the most recent update of at least one edge could not measure its bond error. | The run stops where it would have reported `Converged`. The approximation may be inaccurate. |
 | `MaxIterations` | The requested iterations completed without either stopping condition. | A small final error alone does not establish convergence. |
 
 The error is `max_bond_error / max_sample_value` when normalization is enabled
@@ -32,6 +33,32 @@ The same applies when search is enabled but `nsearch` or `max_nglobal_pivot`
 is zero. If the convergence window is not yet available, the result is
 `MaxIterations`, including a one-iteration call on an exactly representable
 function.
+
+## Unmeasured bond errors
+
+An edge update measures nothing when one side of its candidate matrix has a
+single candidate while both sides of the edge have more than one
+configuration: the first pivot exhausts that side and the LU stops with a zero
+residual whatever the function is. Around a vertex of local dimension 1 whose
+adjacent bonds have rank 1, the junction-side candidate set of each adjacent
+bond is the product of the other bonds' single pivots, so every one of those
+bonds is in this state and none can grow
+([#1153](https://github.com/tensor4all/tensor4all-rs/issues/1153)). Such an
+error does not count toward `Converged`; the run reports
+`DegenerateCandidateSet` instead. An edge whose one side has only one
+configuration (all its sites of local dimension 1) has rank 1 exactly and is
+measured.
+
+To let those bonds grow, each optimization call first enriches the pivots
+around vertices of local dimension 1, following xfac's
+`TensorTreeCI::addPivotsAllBonds(enrich_pivot1())`: it collects the vertices of
+local dimension greater than 1 adjacent to a vertex of local dimension 1 and,
+for every unordered pair of them, adds the base pivot with those two sites set
+to every pair of local values. The base pivot is the first pivot pair of the
+first edge adjacent to a vertex of local dimension 1. The enrichment runs only
+when some bond around such a vertex has a side with at most one pivot. A
+function that is exactly rank 1 around the vertex collapses back to rank 1
+after the first sweep and is reported as `DegenerateCandidateSet`.
 
 ## Continued optimization
 

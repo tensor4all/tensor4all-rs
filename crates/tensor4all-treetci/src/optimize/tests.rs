@@ -12,6 +12,8 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
     // Deliberately restrict local updates to the initial cross. Its local
     // pivot error is zero, but f = 1 + i + j has residual i*j against the
     // rank-1 approximation (1+i)(1+j). Global search must keep the run open.
+    // Without it, the zero error comes from a 1 x 1 candidate matrix and is
+    // not a measurement, so the run must not report `Converged` (#1153).
     struct InitialCrossOnly;
 
     impl crate::PivotCandidateProposer for InitialCrossOnly {
@@ -64,7 +66,7 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
             (crate::TreeTciTermination::MaxIterations, 4)
         } else {
             assert_eq!(residual_points_seen.get(), 0);
-            (crate::TreeTciTermination::Converged, 3)
+            (crate::TreeTciTermination::DegenerateCandidateSet, 3)
         };
         assert_eq!(result.termination, reason);
         assert_eq!(result.ranks, vec![1; iterations]);
