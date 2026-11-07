@@ -208,7 +208,9 @@ described in [README.md](README.md).
 - `7d263fadb7ef`, #595 — the public modules `algorithm`, `dmrg`, `error`,
   `link_index_network`, `linsolve`, `named_graph`, `node_name_network`,
   `operator`, `options`, `random`, `site_index_network`, `tdvp` and `treetn`
-  became private; reach their items through the crate root.
+  became private; reach their items through the crate root, except
+  `random::DefaultIndex`, which is not re-exported: use
+  `tensor4all_core::DynIndex`, the same `Index<DynId, TagSet>`.
   `DefaultSiteIndexNetwork` removed. `evaluate_batch` renamed to
   `evaluate_batched`, `sim_linkinds` and `sim_linkinds_mut` to
   `sim_link_indices` and `sim_link_indices_mut`, and the `evaluate_at` alias
