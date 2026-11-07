@@ -173,7 +173,41 @@ where
         Err(anyhow::anyhow!("Index {:?} not found in TreeTN", old_index.id()).into())
     }
 
-    /// Replace multiple indices in this TreeTN.
+    /// Replace multiple indices simultaneously, including swaps and cycles.
+    ///
+    /// Old and new identities must each be unique, pair dimensions must match,
+    /// and a target already present must itself be among the replaced indices.
+    /// Invalid mappings return [`TreeTNOperationError`] without changing `self`.
+    ///
+    /// # Arguments
+    ///
+    /// * `old_indices`, `new_indices` - Equally sized lists of unique full
+    ///   identities; each pair must have the same dimension. Sites and bonds
+    ///   may both be replaced, and targets may permute the source identities.
+    ///
+    /// # Returns
+    ///
+    /// A renamed network with tensor coordinates and index roles preserved.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeTNOperationError`] for length/dimension mismatch, duplicate
+    /// source/target identities, missing sources, occupied targets not included
+    /// in the mapping, or a lower-layer tensor/metadata replacement failure.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorIndex};
+    /// use tensor4all_treetn::TreeTN;
+    /// let a = DynIndex::new_dyn(2);
+    /// let b = a.prime();
+    /// let tree = TreeTN::from_tensors(vec![IdxTensor::from_dense(vec![a.clone(), b.clone()], vec![1.0_f64, 2.0, 3.0, 5.0])?], vec![0usize])?;
+    /// let swapped = tree.replace_indices(&[a.clone(), b.clone()], &[b.clone(), a.clone()])?;
+    /// let expected = IdxTensor::from_dense(vec![b, a], vec![1.0_f64, 2.0, 3.0, 5.0])?;
+    /// assert_eq!(swapped.to_dense()?.sub(&expected)?.maxabs()?, 0.0);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     fn replace_indices(
         &self,
         old_indices: &[Self::Index],
@@ -188,9 +222,51 @@ where
             .into());
         }
 
+        let old_set: std::collections::HashSet<_> = old_indices.iter().collect();
+        let new_set: std::collections::HashSet<_> = new_indices.iter().collect();
+        if old_set.len() != old_indices.len() || new_set.len() != new_indices.len() {
+            return Err(anyhow::anyhow!(
+                "Index replacements must have unique old and new identities"
+            )
+            .into());
+        }
+        for (old, new) in old_indices.iter().zip(new_indices) {
+            if old.dim() != new.dim() {
+                return Err(
+                    anyhow::anyhow!("Index space mismatch in simultaneous replacement").into(),
+                );
+            }
+            if !old_set.contains(new)
+                && (self.site_index_network.find_node_by_index(new).is_some()
+                    || self.link_index_network.find_edge(new).is_some())
+            {
+                return Err(anyhow::anyhow!(
+                    "Replacement target is already present and is not being replaced"
+                )
+                .into());
+            }
+        }
+        // INVARIANT: overlapping mappings must read every source identity from
+        // the original network. Fresh intermediate identities prevent a later
+        // replacement from consuming the result of an earlier one. Disjoint
+        // mappings retain the existing one-pass metadata schedule.
+        let intermediate = old_indices
+            .iter()
+            .zip(new_indices)
+            .any(|(old, new)| old != new && old_set.contains(new))
+            .then(|| old_indices.iter().map(IndexLike::sim).collect::<Vec<_>>());
         let mut result = self.clone();
-        for (old, new) in old_indices.iter().zip(new_indices.iter()) {
-            result = result.replaceind(old, new)?;
+        if let Some(intermediate) = intermediate {
+            for (old, temporary) in old_indices.iter().zip(&intermediate) {
+                result = result.replaceind(old, temporary)?;
+            }
+            for (temporary, new) in intermediate.iter().zip(new_indices) {
+                result = result.replaceind(temporary, new)?;
+            }
+        } else {
+            for (old, new) in old_indices.iter().zip(new_indices) {
+                result = result.replaceind(old, new)?;
+            }
         }
         Ok(result)
     }

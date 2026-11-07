@@ -2,6 +2,7 @@ use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TagSet, TensorIndex};
 
 use crate::treetn::TreeTN;
 use crate::NumberedTagSelectionError;
+mod simultaneous;
 
 /// Helper to create a simple 2-node TreeTN: A -- bond -- B
 fn make_two_node_treetn() -> (
