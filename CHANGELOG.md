@@ -55,9 +55,8 @@ literals, or named public types:
 The sections above record release impact; this one is the porting list. It names
 the public Rust API and C API items that existed at `v0.2.0` and no longer exist
 at this tag, grouped by crate. Each entry cites the commit that made the change
-(12 hex digits) and the pull request; the tip of `main` is 386 commits past
-`v0.2.0`, 23 of which removed public items. Additions are not listed here — read
-the rustdoc for those. Nothing is published to crates.io; depend on the tag as
+(12 hex digits) and the pull request. Additions are not listed here — read the
+rustdoc for those. Nothing is published to crates.io; depend on the tag as
 described in [README.md](README.md).
 
 #### Crate-level changes
@@ -80,9 +79,6 @@ described in [README.md](README.md).
   methods are gone. Before that removal: `data_mut`, `get_mut`, `values_mut` —
   `2b11f7fe564a`, #649; `SubDomainTT::siteinds` — `7d263fadb7ef`, #595;
   `PartitionedTTError::TensorTrainError` — `928c567b922e`, #589.
-- New crates in this cycle, which is not a change for existing users:
-  `tensor4all-treeaci`, `tensor4all-treersi`, `tensor4all-cpu-platform`,
-  `tensor4all-partitionedtreetn`, `tensor4all-py`.
 
 #### tensor4all-core
 
@@ -91,8 +87,9 @@ described in [README.md](README.md).
   `as_slice_c64` (use the generic `to_vec::<f64>()` / `to_vec::<Complex64>()`).
 - `a93f582c202f`, #612 — `TensorDynLen` renamed to `IdxTensor`, the module
   `tensordynlen` to `idx_tensor`, and the constructor `diag_tensor_dyn_len` to
-  `diag_idx_tensor`. The `indices` field is public on `IdxTensor` under the same
-  name.
+  `diag_idx_tensor`. The `indices` field is a separate change, below.
+- `6e0d55800018`, #1024 — the `indices` field of `IdxTensor` (public at
+  `v0.2.0`) became `pub(crate)`; read it through `IdxTensor::indices()`.
 - `9a77ac651643`, #599 — `SvdOptions::max_rank` and `FactorizeOptions::max_rank`
   renamed to `max_bond_dim`; `with_max_rank` renamed to `with_max_bond_dim`.
 - `2c972983e594`, #616, #643 — `index_ops::hasinds` renamed to `has_inds` and
@@ -131,9 +128,9 @@ described in [README.md](README.md).
 - `f04320320afb`, #650 — `QtciOptions::nsearch`, `nsearchglobalpivot`,
   `with_nsearch` and `with_nsearchglobalpivot` removed; the fields were never
   wired to the quantics TCI run.
-- `b881f39d9e72`, #828 — `cachedata` and `cachedata_origcoord` removed. Read
-  evaluation points from the returned tensor train, or use `cache_stats()` /
-  `CacheStats`.
+- `b881f39d9e72`, #828 — `cachedata` and `cachedata_origcoord` removed. The
+  run no longer exports the points it evaluated; `cache_stats()` / `CacheStats`
+  report counters only.
 
 #### tensor4all-quanticstransform
 
