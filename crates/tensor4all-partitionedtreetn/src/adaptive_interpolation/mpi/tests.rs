@@ -353,3 +353,16 @@ fn a_root_only_result_converges_through_the_agreed_control() {
         Err(PatchedInterpolationError::FanOut { .. })
     ));
 }
+
+#[test]
+fn every_known_termination_crosses_the_wire() {
+    for termination in [
+        InterpolationTermination::Converged,
+        InterpolationTermination::BondCapReached,
+        InterpolationTermination::IterationLimit,
+        InterpolationTermination::ErrorNotMeasured,
+    ] {
+        let wire = encode_termination(termination).unwrap();
+        assert_eq!(decode_termination(wire), termination);
+    }
+}

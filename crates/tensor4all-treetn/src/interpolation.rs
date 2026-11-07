@@ -840,6 +840,7 @@ fn validate_point_columns(
 /// assert!(accepted(InterpolationTermination::Converged));
 /// assert!(!accepted(InterpolationTermination::BondCapReached));
 /// assert!(!accepted(InterpolationTermination::IterationLimit));
+/// assert!(!accepted(InterpolationTermination::ErrorNotMeasured));
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -854,6 +855,10 @@ pub enum InterpolationTermination {
     BondCapReached,
     /// The run stopped at the engine's iteration limit.
     IterationLimit,
+    /// The engine's error criterion held on its recorded estimates, but some
+    /// of those estimates were not measurements (for example a candidate set
+    /// too small to reveal a residual). The result may be inaccurate.
+    ErrorNotMeasured,
 }
 
 /// Result of one interpolation run.

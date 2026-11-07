@@ -111,6 +111,24 @@ where
 
     let last_error = selection.pivot_errors.last().copied().unwrap_or(0.0);
     state.update_bond_error(edge, last_error);
+    // A side with a single candidate is exhausted by the first pivot, so the
+    // LU stops with a zero residual whatever the function is. That zero is a
+    // property of the candidate set, not a measurement (#1153), unless the
+    // bond's rank is 1 anyway because one side of the edge has only one
+    // configuration (every site of local dimension 1).
+    let has_several_configurations = |key: &crate::SubtreeKey| {
+        key.as_slice()
+            .iter()
+            .any(|&site| state.local_dims[site] > 1)
+    };
+    let unmeasured = (left_candidates.len() == 1 || right_candidates.len() == 1)
+        && has_several_configurations(&left_key)
+        && has_several_configurations(&right_key);
+    if unmeasured {
+        state.unmeasured_bonds.insert(edge);
+    } else {
+        state.unmeasured_bonds.remove(&edge);
+    }
     state.update_pivot_errors(&selection.pivot_errors);
 
     Ok(selection)

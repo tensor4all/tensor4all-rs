@@ -3,7 +3,7 @@ use crate::{assemble::MultiIndex, column_2d, ncols_2d, SubtreeKey, TreeTciEdge, 
 use anyhow::Result;
 
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::marker::PhantomData;
 use tensor4all_core::ColMajorArray;
 
@@ -74,6 +74,12 @@ pub struct TreeTCI2<T> {
     pub(crate) graph: TreeTciGraph,
     /// Error estimate per edge bipartition.
     pub(crate) bond_errors: BTreeMap<TreeTciEdge, f64>,
+    /// Edges whose most recent update could not measure a bond error: one
+    /// side of the candidate matrix held a single candidate although both
+    /// sides of the edge have more than one configuration, so the selected
+    /// pivot exhausted that side and the recorded error is zero by
+    /// construction (issue #1153).
+    pub(crate) unmeasured_bonds: BTreeSet<TreeTciEdge>,
     /// Back-truncation style pivot errors.
     pub(crate) pivot_errors: Vec<f64>,
     /// Maximum observed sample magnitude for normalization.
@@ -120,6 +126,7 @@ impl<T> TreeTCI2<T> {
             local_dims,
             graph,
             bond_errors,
+            unmeasured_bonds: BTreeSet::new(),
             pivot_errors: Vec::new(),
             max_sample_value: 0.0,
             marker: PhantomData,
@@ -195,6 +202,94 @@ impl<T> TreeTCI2<T> {
             entry.insert(empty_2d(n_sites)?);
         }
         Ok(())
+    }
+
+    /// Enrich the pivots around vertices of local dimension 1, as xfac's
+    /// `TensorTreeCI` does with `addPivotsAllBonds(enrich_pivot1())`.
+    ///
+    /// A vertex of local dimension 1 carries no site, so the junction-side
+    /// candidate set of an adjacent bond is the product of the other adjacent
+    /// bonds' pivot sets. When those bonds have rank 1 the product has a single
+    /// candidate and no local update can grow them (issue #1153).
+    ///
+    /// The rule: collect the vertices of local dimension greater than 1 that
+    /// are adjacent to a vertex of local dimension 1. For every unordered pair
+    /// `(i, j)` of them, add one pivot per pair of local values `(x_i, x_j)`:
+    /// the base pivot with sites `i` and `j` set to `x_i` and `x_j`. The base
+    /// pivot is the first pivot pair of the first edge adjacent to a vertex of
+    /// local dimension 1. The pivots are projected like
+    /// [`TreeTCI2::add_global_pivots`], so the next sweep must process them.
+    ///
+    /// Nothing is added when no edge adjacent to a vertex of local dimension 1
+    /// has a side with at most one pivot, when fewer than two such adjacent
+    /// vertices exist, or when the state holds no pivots yet.
+    ///
+    /// Returns the number of pivots passed to the projection (before
+    /// per-side deduplication).
+    pub(crate) fn enrich_pivots_around_unit_vertices(&mut self) -> TreeTciResult<usize> {
+        let n_sites = self.local_dims.len();
+        let mut unit_edges = Vec::new();
+        let mut neighbours = BTreeSet::new();
+        for vertex in (0..n_sites).filter(|&v| self.local_dims[v] == 1) {
+            for neighbour in self.graph.neighbors(vertex)? {
+                unit_edges.push(self.graph.edge_between(vertex, neighbour)?);
+                if self.local_dims[neighbour] > 1 {
+                    neighbours.insert(neighbour);
+                }
+            }
+        }
+        if neighbours.len() < 2 {
+            return Ok(0);
+        }
+        unit_edges.sort();
+        unit_edges.dedup();
+
+        let mut base: Option<MultiIndex> = None;
+        let mut pinned = false;
+        for &edge in &unit_edges {
+            let (left_key, right_key) = self.graph.subregion_vertices(edge)?;
+            let (Some(left), Some(right)) = (self.ijset.get(&left_key), self.ijset.get(&right_key))
+            else {
+                return Ok(0);
+            };
+            let (n_left, n_right) = (ncols_2d(left)?, ncols_2d(right)?);
+            if n_left == 0 || n_right == 0 {
+                return Ok(0);
+            }
+            pinned |= n_left <= 1 || n_right <= 1;
+            if base.is_none() {
+                let mut pivot = vec![0; n_sites];
+                for (key, array) in [(&left_key, left), (&right_key, right)] {
+                    for (&site, &value) in key.as_slice().iter().zip(column_2d(array, 0)?) {
+                        pivot[site] = value;
+                    }
+                }
+                base = Some(pivot);
+            }
+        }
+        let Some(base) = base else {
+            return Ok(0);
+        };
+        if !pinned {
+            return Ok(0);
+        }
+
+        let neighbours: Vec<usize> = neighbours.into_iter().collect();
+        let mut pivots = Vec::new();
+        for (a, &i) in neighbours.iter().enumerate() {
+            for &j in &neighbours[a + 1..] {
+                for xi in 0..self.local_dims[i] {
+                    for xj in 0..self.local_dims[j] {
+                        let mut pivot = base.clone();
+                        pivot[i] = xi;
+                        pivot[j] = xj;
+                        pivots.push(pivot);
+                    }
+                }
+            }
+        }
+        self.add_global_pivots(&pivots)?;
+        Ok(pivots.len())
     }
 
     /// Reset the sweep-local pivot error accumulator.

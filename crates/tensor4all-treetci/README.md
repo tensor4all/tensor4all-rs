@@ -14,7 +14,8 @@ Computes tensor cross interpolation on tree-structured graphs, producing TreeTN 
   `tensor4all_treetn::interpolation::TreeInterpolator` contract
 - `TreeTciRunResult` — `treetn`, per-iteration `ranks` and `errors`, and `termination`
 - `TreeTciOptimizationResult` — diagnostics from optimizing a caller-owned state
-- `TreeTciTermination` — `Converged`, `MaxBondDimension`, or `MaxIterations`
+- `TreeTciTermination` — `Converged`, `MaxBondDimension`, `MaxIterations`, or
+  `DegenerateCandidateSet`
 - `TreeTciEvaluationStats` — oracle requests, successful evaluations and memo payload accounting
 
 The entry points return named results rather than tuples. `Converged` means

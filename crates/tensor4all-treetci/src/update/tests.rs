@@ -401,3 +401,65 @@ fn keyed_candidate_matrix_serves_duplicate_entries_from_one_evaluation() {
     assert_eq!(stats.cache_hits, 6);
     assert_eq!(stats.cache_misses, 6);
 }
+
+/// Star tree: vertex 0 of local dimension 1 joined to three leaves of
+/// local dimension 2, seeded with one pivot (rank 1 on every edge).
+fn rank_one_star() -> TreeTCI2<f64> {
+    let graph = TreeTciGraph::new(
+        4,
+        &[
+            TreeTciEdge::new(0, 1),
+            TreeTciEdge::new(0, 2),
+            TreeTciEdge::new(0, 3),
+        ],
+    )
+    .unwrap();
+    let mut tci = TreeTCI2::<f64>::new(vec![1, 2, 2, 2], graph).unwrap();
+    tci.add_global_pivots(&[vec![0, 0, 0, 0]]).unwrap();
+    tci
+}
+
+fn sum_plus_one(batch: GlobalIndexBatch<'_>) -> Result<Vec<f64>> {
+    Ok((0..batch.n_points())
+        .map(|point| {
+            1.0 + (0..batch.n_sites())
+                .map(|site| batch.get(site, point).unwrap() as f64)
+                .sum::<f64>()
+        })
+        .collect())
+}
+
+#[test]
+fn update_edge_marks_single_candidate_side_as_unmeasured() {
+    // Around a vertex of local dimension 1 with rank-1 neighbours, the
+    // junction side of each edge has one candidate: the zero error is not a
+    // measurement (#1153).
+    let mut tci = rank_one_star();
+    let edge = TreeTciEdge::new(0, 1);
+    update_edge_default(&mut tci, edge, sum_plus_one, &no_truncation_options()).unwrap();
+    assert_eq!(tci.bond_errors()[&edge], 0.0);
+    assert!(tci.unmeasured_bonds.contains(&edge));
+}
+
+#[test]
+fn update_edge_clears_unmeasured_mark_once_both_sides_have_candidates() {
+    let mut tci = rank_one_star();
+    let edge = TreeTciEdge::new(0, 1);
+    tci.unmeasured_bonds.insert(edge);
+    // A second pivot on the other two leaves gives the junction side of
+    // edge (0, 1) more than one candidate.
+    tci.add_global_pivots(&[vec![0, 0, 1, 1]]).unwrap();
+    update_edge_default(&mut tci, edge, sum_plus_one, &no_truncation_options()).unwrap();
+    assert!(!tci.unmeasured_bonds.contains(&edge));
+}
+
+#[test]
+fn update_edge_measures_bond_whose_side_has_one_configuration() {
+    // Site 0 has local dimension 1, so edge (0, 1) has rank 1 exactly; its
+    // single left candidate is the subtree's only configuration.
+    let mut tci = TreeTCI2::<f64>::new(vec![1, 2], two_site_graph()).unwrap();
+    tci.add_global_pivots(&[vec![0, 0]]).unwrap();
+    let edge = TreeTciEdge::new(0, 1);
+    update_edge_default(&mut tci, edge, sum_plus_one, &no_truncation_options()).unwrap();
+    assert!(!tci.unmeasured_bonds.contains(&edge));
+}
