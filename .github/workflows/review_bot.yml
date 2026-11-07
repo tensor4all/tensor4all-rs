@@ -35,10 +35,12 @@ env:
 jobs:
   review-bot:
     name: repository rules review
+    # No author gate: this job checks out the *base* revision, fetches the PR head for the diff
+    # only, and runs the base tree's `scripts/repository-rules-review.py --dry-run` with no
+    # secrets and no LLM, so a fork PR is reviewed from the same trusted code as an in-repo one.
+    # Gating it on `author_association` left every outside contributor with no verdict at all,
+    # and `review-bot-gate` then failed a required check nobody from a fork could satisfy.
     if: |
-      (github.event.pull_request.author_association == 'OWNER' ||
-       github.event.pull_request.author_association == 'MEMBER' ||
-       github.event.pull_request.author_association == 'COLLABORATOR') &&
       !contains(github.event.pull_request.labels.*.name, 'rules-review:waive')
     runs-on: ubuntu-latest
     timeout-minutes: 20
