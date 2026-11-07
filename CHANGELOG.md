@@ -98,7 +98,9 @@ described in [README.md](README.md).
 - `928c567b922e`, #589 — `try_norm_squared` removed; `norm_squared` now returns
   `Result` instead of `f64`, as do `norm` and `maxabs`.
 - `53763172f65c`, #593 — `build_diag_union` removed (now internal to the
-  contraction planner).
+  contraction planner), and `AxisUnionFind`, `remap_tensor_ids`,
+  `remap_output_ids` and `collect_sizes` in `defaults::contract` became
+  `pub(crate)`.
 
 #### tensor4all-itensorlike
 
@@ -138,8 +140,8 @@ described in [README.md](README.md).
   `n`) and `UnfusedTensorInfo` (`m`, `n`, `num_physical_dims`, `physical_dim`)
   became accessor methods of the same names.
 - `7d263fadb7ef`, #595 — `FourierOptions::maxbonddim` renamed to `max_bond_dim`.
-- `89d78b9c26cf`, #992 — `common::scalar_mpo` removed.
-
+    relative_linear_system_residual, square_linsolve, EnvironmentCache, GmresToleranceMode,
+    LinsolveOptions,
 #### tensor4all-simplett
 
 - `7d263fadb7ef`, #595 — `TensorTrain` renamed to `SimpleTensorTrain`; `dot`

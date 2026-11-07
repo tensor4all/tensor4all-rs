@@ -138,9 +138,9 @@ pub use treetn::{
 
 // Re-export linsolve types from new location
 pub use linsolve::{
-    relative_linear_system_residual, square_linsolve, EnvironmentCache, LinsolveOptions,
-    LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator, ProjectedState,
-    SquareLinsolveResult, SquareLinsolveUpdater,
+    relative_linear_system_residual, square_linsolve, EnvironmentCache, GmresToleranceMode,
+    LinsolveOptions, LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator,
+    ProjectedState, SquareLinsolveResult, SquareLinsolveUpdater,
 };
 
 use petgraph::graph::NodeIndex;
