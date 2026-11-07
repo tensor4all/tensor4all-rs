@@ -5586,13 +5586,13 @@ impl IdxTensor {
     }
 }
 
-/// The compatibility `norm_squared` accumulation over host values, for the session route.
+/// The compatibility norm accumulation over host values, for the session route.
 ///
 /// The same [`Lassq`] accumulator the compatibility entry point uses, so the session route reproduces its
 /// scaled accumulation exactly. The accumulator scales before squaring, so individually underflowing squares
 /// can still add up to a representable result; `None` means a NaN was observed, which the compatibility route
 /// reports as [`IdxTensorError::NaNInput`].
-pub(crate) fn lassq_norm_squared(
+pub(crate) fn lassq_norm<const SQUARED: bool>(
     values: impl IntoIterator<Item = Complex64>,
 ) -> std::option::Option<f64> {
     let mut norm = Lassq::default();
@@ -5602,8 +5602,12 @@ pub(crate) fn lassq_norm_squared(
         }
         norm.add_complex(value);
     }
-    let squared = norm.norm_squared();
-    (!squared.is_nan()).then_some(squared)
+    let value = if SQUARED {
+        norm.norm_squared()
+    } else {
+        norm.norm()
+    };
+    (!value.is_nan()).then_some(value)
 }
 
 #[derive(Debug, Default)]
@@ -5736,6 +5740,11 @@ impl IdxTensor {
     /// assert!((tensor.norm_squared().unwrap() - 91.0).abs() < 1e-10);
     /// ```
     pub fn norm_squared(&self) -> std::result::Result<f64, IdxTensorError> {
+        self.norm_impl::<true>()
+    }
+
+    fn norm_impl<const SQUARED: bool>(&self) -> std::result::Result<f64, IdxTensorError> {
+        let operation = if SQUARED { "norm_squared" } else { "norm" };
         let dtype = self
             .scalar_dtype()
             .map_err(IdxTensorError::scalar_extraction)?;
@@ -5749,25 +5758,28 @@ impl IdxTensor {
             .compact_nonfinite_flags()
             .map_err(IdxTensorError::materialization)?;
         if flags.has_nan {
-            return Err(IdxTensorError::NaNInput {
-                operation: "norm_squared",
-            });
+            return Err(IdxTensorError::NaNInput { operation });
         }
 
         let mut norm = Lassq::default();
         self.storage
             .for_each_payload_value(|value| norm.add_complex(value))
             .map_err(IdxTensorError::materialization)?;
-        let value = norm.norm_squared();
+        let value = if SQUARED {
+            norm.norm_squared()
+        } else {
+            norm.norm()
+        };
         if value.is_nan() {
-            return Err(IdxTensorError::NaNInput {
-                operation: "norm_squared",
-            });
+            return Err(IdxTensorError::NaNInput { operation });
         }
         Ok(value)
     }
 
     /// Compute the Frobenius norm of the tensor: ||T|| = sqrt(Σ|T_ijk...|²)
+    ///
+    /// Scaled accumulation finishes directly as a norm, so a finite norm is
+    /// preserved even when its square would underflow or overflow `f64`.
     ///
     /// # Errors
     /// Returns [`IdxTensorError`] when norm evaluation fails or when the
@@ -5785,7 +5797,7 @@ impl IdxTensor {
     /// assert!((tensor.norm().unwrap() - 5.0).abs() < 1e-10);
     /// ```
     pub fn norm(&self) -> std::result::Result<f64, IdxTensorError> {
-        Ok(self.norm_squared()?.sqrt())
+        self.norm_impl::<false>()
     }
 
     /// Maximum absolute value of all elements (L-infinity norm).
@@ -6692,6 +6704,10 @@ use crate::tensor_like::{
 impl TensorVectorSpace for IdxTensor {
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         IdxTensor::norm_squared(self)
+    }
+
+    fn norm(&self) -> std::result::Result<f64, Self::Error> {
+        IdxTensor::norm(self)
     }
 
     fn maxabs(&self) -> std::result::Result<f64, Self::Error> {

@@ -7,6 +7,8 @@ use num_complex::Complex64;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+mod cg;
+
 static GMRES_PROFILE_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 struct GmresProfileEnvGuard;

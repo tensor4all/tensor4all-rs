@@ -121,7 +121,7 @@ fn every_indexed_session_entry_refuses_a_tracked_operand() {
         );
         assert_indexed_refusal(
             norm_on_session(&mut session, &tracked).expect_err("norm_on_session"),
-            "norm_squared_on_session",
+            "norm_on_session",
         );
         assert_indexed_refusal(
             select_indices_on_session(&mut session, &tracked, std::slice::from_ref(&k), &[1])
