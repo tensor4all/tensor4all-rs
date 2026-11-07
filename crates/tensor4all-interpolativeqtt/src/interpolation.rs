@@ -470,6 +470,18 @@ where
 /// The returned vector has one matrix per coarse level. Matrix `k - 1` has
 /// `2^k` rows and `basis.len()` columns, where each row corresponds to one
 /// subinterval and each column to one local Chebyshev-Lobatto node.
+///
+/// # Accuracy of the finest level
+/// The last QTT core only holds the interpolant of each finest subinterval at
+/// the two local points `t = 0` and `t = 1/2`; the inverse is also required to
+/// work on SVD-compressed trains, whose last bond is in an arbitrary gauge, so
+/// no more than these two samples per subinterval can be used. The finest
+/// matrix is therefore the linear blend of those two samples,
+/// `(1 - 2c) p(0) + 2c p(1/2)` for node `c`. It reproduces the exact node
+/// values for `c = 0` and `c = 1/2`, and for every node when
+/// `basis.len() == 2` (degree 1). For degree >= 2 the other nodes carry an
+/// `O(h^2)` error with `h = 2^-(k_out)` times the subinterval width; the
+/// coarser matrices inherit it through the restriction step.
 /// # Errors
 /// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when `q` is
 /// not in `1..tt.len()`, when the sites are not binary, when the decode matrix
@@ -491,6 +503,8 @@ where
 /// let values = invert_qtt(&tt, &basis, 1).unwrap();
 /// assert_eq!(values.len(), 4);
 /// assert_eq!(values[3].ncols(), basis.len());
+/// // Node `c = 0` of the first finest subinterval is the point x = 0.
+/// assert!((values[3][[0, 0]] - 1.0).abs() < 1.0e-6);
 /// ```
 pub fn invert_qtt(
     tt: &SimpleTensorTrain<f64>,
