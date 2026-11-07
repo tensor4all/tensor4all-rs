@@ -289,6 +289,9 @@ jobs:
       - name: Test the repository-rules review script
         run: python3 scripts/test-repository-rules-review.py
 
+      - name: Test the review waiver verifier
+        run: node --test scripts/test-review-waiver.js
+
       - name: Test library panic audit
         run: python3 scripts/test-audit-library-panics.py
 

@@ -1,0 +1,19 @@
+diff --git a/crates/tensor4all-core/src/tensor.rs b/crates/tensor4all-core/src/tensor.rs
+index e11d8ef..370901e 100644
+--- a/crates/tensor4all-core/src/tensor.rs
++++ b/crates/tensor4all-core/src/tensor.rs
+@@ -5,6 +5,13 @@ impl Tensor {
+     for (dim, step) in shape.iter().zip(stride.iter()) {
+         total += dim * step.unsigned_abs();
+     }
+-    let value = 1;
++    /*
++++ b/review-notes.txt
++    */
++    #[cfg(test)]
++    mod tests {
++        #[test]
++        fn it_works() {}
++    }
+     value + total
+ }

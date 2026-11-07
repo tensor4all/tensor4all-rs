@@ -7,7 +7,13 @@ name: review bot
 #
 # The external LLM review was permanently removed (2026-08-10): the
 # deterministic diff/section/rule checks run for every same-repo PR, and the
-# maintainer waive label remains the only override.
+# maintainer waiver remains the only override.
+#
+# A waiver is a maintainer comment `waive-review <40-char head sha>`, verified by
+# `scripts/review-waiver.js`. The `rules-review:waive` label only makes the
+# request visible and triggers this workflow; it grants nothing on its own, so a
+# label left in place across a push no longer skips the review. After pushing,
+# post the comment for the new head and toggle the label to re-run the job.
 
 on:
   pull_request_target:
@@ -106,7 +112,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify label actor can waive review
+      - name: Verify a maintainer waived review for this head sha
         uses: ./.github/actions/verify-review-label
         with:
           label: ${{ env.REVIEW_WAIVE_LABEL }}

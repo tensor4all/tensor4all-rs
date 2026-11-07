@@ -1,80 +1,35 @@
-name: Verify review label
+name: Verify review waiver
 description: >-
-  Fail unless the named label was applied by a maintain/admin collaborator
-  after the latest PR head update. Prevents a stale or non-maintainer label
-  from skipping the repository-rules review.
+  Fail unless a maintain/admin collaborator commented `waive-review <sha>` naming
+  the pull request's current head. Prevents a stale, abbreviated or
+  non-maintainer waiver from skipping the repository-rules review.
 
 inputs:
   label:
-    description: Label name that grants the skip or waiver
+    description: Label name that requests the waiver (a pointer for humans)
     required: true
 
 runs:
   using: composite
   steps:
+    # The decision lives in scripts/review-waiver.js so this action and any
+    # future caller cannot drift apart, and so it can be tested offline against
+    # recorded comment sets (`node --test scripts/test-review-waiver.js`).
+    #
+    # The label no longer grants anything on its own: it only makes a human's
+    # request visible. The exemption is bound to a commit, which is why a push
+    # revokes it and a close/reopen that keeps the same head does not.
     - uses: actions/github-script@v7
       env:
         REVIEW_LABEL: ${{ inputs.label }}
       with:
         script: |
-          const owner = context.repo.owner;
-          const repo = context.repo.repo;
-          const issue_number = context.payload.pull_request.number;
-          const labelName = process.env.REVIEW_LABEL;
-          const allowed = new Set(["admin", "maintain"]);
-
-          const events = await github.paginate(github.rest.issues.listEventsForTimeline, {
-            owner,
-            repo,
-            issue_number,
-            per_page: 100,
-          });
-          const labeledEvents = events.filter(
-            (event) =>
-              event.event === "labeled" &&
-              event.label?.name === labelName &&
-              event.actor?.login
+          const { run } = require(
+            `${process.env.GITHUB_WORKSPACE}/scripts/review-waiver.js`
           );
-          const labelEvent = labeledEvents.length
-            ? labeledEvents[labeledEvents.length - 1]
-            : null;
-          if (!labelEvent) {
-            core.setFailed(`Could not find a timeline event for ${labelName}; remove and reapply the label.`);
-            return;
-          }
-          if (context.payload.action === "synchronize") {
-            core.setFailed(`The ${labelName} label must be reapplied after the latest PR push.`);
-            return;
-          }
-          const labelTime = Date.parse(labelEvent.created_at);
-          if (!Number.isFinite(labelTime)) {
-            core.setFailed(`Could not determine when ${labelName} was applied; remove and reapply the label.`);
-            return;
-          }
-          const headUpdateTimes = events
-            .filter(
-              (event) =>
-                ["committed", "head_ref_force_pushed"].includes(event.event) &&
-                event.created_at
-            )
-            .map((event) => Date.parse(event.created_at))
-            .filter((time) => Number.isFinite(time));
-          const latestHeadUpdate = headUpdateTimes.length
-            ? Math.max(...headUpdateTimes)
-            : null;
-          if (latestHeadUpdate !== null && labelTime <= latestHeadUpdate) {
-            core.setFailed(`The ${labelName} label is older than the latest PR head update; reapply it.`);
-            return;
-          }
-          const labelActor = labelEvent.actor.login;
-          const {data} = await github.rest.repos.getCollaboratorPermissionLevel({
-            owner,
-            repo,
-            username: labelActor,
+          await run({
+            github,
+            core,
+            context,
+            labelName: process.env.REVIEW_LABEL,
           });
-          if (!allowed.has(data.role_name)) {
-            core.setFailed(
-              `Actor ${labelActor} has ${data.role_name} repository role; ` +
-              `the ${labelName} label requires the maintain or admin role.`
-            );
-          }
