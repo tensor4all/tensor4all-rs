@@ -728,24 +728,109 @@ fn scale_row_tail<T: Scalar>(
     }
 }
 
-fn update_trailing_submatrix<T: Scalar>(data: &mut [T], nrows: usize, ncols: usize, pivot: usize) {
-    let tail_row_start = pivot + 1;
-    let tail_col_start = pivot + 1;
-    if tail_row_start >= nrows || tail_col_start >= ncols {
-        return;
+/// Lanes of the fused update-and-argmax loop; eight `f64` fill one AVX-512
+/// register or two AVX2 registers.
+const ARGMAX_LANES: usize = 8;
+
+/// Apply the rank-1 update of pivot step `pivot` to the trailing block and return
+/// the argmax of the updated block, as [`submatrix_argmax_col_major`] would find it
+/// on rows and columns `pivot + 1..`.
+///
+/// One pass over the block instead of an update pass followed by an argmax pass:
+/// the block is usually larger than the caches, so both passes were bound by memory
+/// traffic. Each column's largest squared magnitude is reduced over independent
+/// lanes (vectorizable), then the first column whose maximum strictly exceeds the
+/// running maximum wins, and its first row holding that value is returned. That is
+/// exactly the column-major first strict maximum of the sequential scan, so the
+/// selected pivot, and every result downstream, is bitwise unchanged.
+///
+/// Returns `None` when the trailing block is empty, or when its largest squared
+/// magnitude is non-finite or below the normal range: the caller then runs
+/// [`submatrix_argmax_col_major`], whose robust-magnitude path owns those cases.
+fn update_trailing_submatrix_with_argmax<T: Scalar>(
+    data: &mut [T],
+    nrows: usize,
+    ncols: usize,
+    pivot: usize,
+) -> Option<(usize, usize, T)> {
+    let tail_start = pivot + 1;
+    if tail_start >= nrows || tail_start >= ncols {
+        return None;
     }
 
-    let tail_len = nrows - tail_row_start;
-    let pivot_col_tail_start = col_major_offset(nrows, tail_row_start, pivot);
-    for col in tail_col_start..ncols {
-        let y = col_major_get(data, nrows, pivot, col);
-        let target_start = col_major_offset(nrows, tail_row_start, col);
-        let (before_target, target_and_after) = data.split_at_mut(target_start);
-        let pivot_col_tail = &before_target[pivot_col_tail_start..pivot_col_tail_start + tail_len];
-        let target_tail = &mut target_and_after[..tail_len];
-        for (target, &x) in target_tail.iter_mut().zip(pivot_col_tail.iter()) {
-            *target = *target - x * y;
+    // Columns 0..=pivot stay untouched; the pivot column's tail is the update's `x`.
+    let (head, trailing) = data.split_at_mut(tail_start * nrows);
+    let x = &head[pivot * nrows + tail_start..];
+    let mut columns = trailing.chunks_exact_mut(nrows);
+
+    // The sequential scan starts from the block's first entry, so a NaN there
+    // stays the maximum (nothing compares greater) and the fallback takes over.
+    let first = columns.next()?;
+    let first_max = update_column_tail(first, x, pivot, tail_start);
+    let (max_col, max_val) = columns.enumerate().fold(
+        (0, strict_max(first[tail_start].abs_sq(), first_max)),
+        |(best_col, best), (col, column)| {
+            let col_max = update_column_tail(column, x, pivot, tail_start);
+            if col_max > best {
+                (col + 1, col_max)
+            } else {
+                (best_col, best)
+            }
+        },
+    );
+
+    if !max_val.is_finite() || max_val < T::min_positive() {
+        return None;
+    }
+    let max_col = tail_start + max_col;
+    let column = &data[max_col * nrows..(max_col + 1) * nrows];
+    let max_row = tail_start
+        + column[tail_start..]
+            .iter()
+            .position(|value| value.abs_sq() == max_val)?;
+    Some((max_row, max_col, column[max_row]))
+}
+
+/// `column[tail_start..] -= x * column[pivot]`, returning the largest squared
+/// magnitude written (`-inf` for an empty tail; NaNs never win).
+///
+/// The maximum is reduced over [`ARGMAX_LANES`] independent lanes so the loop
+/// vectorizes; a maximum does not depend on the reduction order.
+fn update_column_tail<T: Scalar>(
+    column: &mut [T],
+    x: &[T],
+    pivot: usize,
+    tail_start: usize,
+) -> f64 {
+    let y = column[pivot];
+    let target = &mut column[tail_start..];
+    let mut lanes = [f64::NEG_INFINITY; ARGMAX_LANES];
+    let (target_chunks, target_rest) = target.as_chunks_mut::<ARGMAX_LANES>();
+    let (x_chunks, x_rest) = x.as_chunks::<ARGMAX_LANES>();
+    for (target, x) in target_chunks.iter_mut().zip(x_chunks) {
+        for ((lane, t), &x) in lanes.iter_mut().zip(target).zip(x) {
+            *t = *t - x * y;
+            *lane = strict_max(*lane, t.abs_sq());
         }
+    }
+    let remainder = target_rest
+        .iter_mut()
+        .zip(x_rest)
+        .fold(f64::NEG_INFINITY, |max, (t, &x)| {
+            *t = *t - x * y;
+            strict_max(max, t.abs_sq())
+        });
+    lanes.into_iter().fold(remainder, strict_max)
+}
+
+/// `candidate` if it is strictly greater than `current`, else `current`: the
+/// comparison of the sequential argmax scan (a NaN candidate never wins).
+#[inline]
+fn strict_max(current: f64, candidate: f64) -> f64 {
+    if candidate > current {
+        candidate
+    } else {
+        current
     }
 }
 
@@ -907,6 +992,8 @@ fn factorize_validated_in_place<T: Scalar>(
     let mut n_pivot = 0;
     let mut error = f64::NAN;
     let mut max_error = 0.0f64;
+    // The argmax of the trailing block, found by the previous step's update.
+    let mut next_argmax = None;
 
     while n_pivot < max_bond_dim {
         let k = n_pivot;
@@ -914,8 +1001,10 @@ fn factorize_validated_in_place<T: Scalar>(
             break;
         }
 
-        let (pivot_row, pivot_col, pivot_val) =
-            submatrix_argmax_col_major(data, nr, nc, k, nr, k, nc);
+        let (pivot_row, pivot_col, pivot_val) = match next_argmax.take() {
+            Some(found) => found,
+            None => submatrix_argmax_col_major(data, nr, nc, k, nr, k, nc),
+        };
         let pivot_abs = pivot_val.abs_val();
         error = pivot_abs;
         if !pivot_abs.is_finite() {
@@ -954,7 +1043,7 @@ fn factorize_validated_in_place<T: Scalar>(
             scale_row_tail(data, nr, nc, k, k + 1, pivot);
         }
 
-        update_trailing_submatrix(data, nr, nc, k);
+        next_argmax = update_trailing_submatrix_with_argmax(data, nr, nc, k);
         n_pivot += 1;
     }
 

@@ -636,3 +636,79 @@ fn input_validation_decisions_and_error_kinds() {
     assert!(validate_luci_matrix(&matrix(f32::MAX)).is_ok());
     assert!(validate_luci_matrix(&matrix(1e30_f32)).is_ok());
 }
+
+/// The sequential update the fused kernel replaces: `block -= x * y` per column.
+fn reference_trailing_update(data: &mut [f64], nrows: usize, ncols: usize, pivot: usize) {
+    for col in pivot + 1..ncols {
+        let y = data[pivot + nrows * col];
+        for row in pivot + 1..nrows {
+            let x = data[row + nrows * pivot];
+            data[row + nrows * col] -= x * y;
+        }
+    }
+}
+
+#[test]
+fn fused_trailing_update_matches_update_then_sequential_argmax() {
+    // Small integers make ties frequent; the sizes cross the lane remainder.
+    let mut state = 0x2545_f491_4f6c_dd1du64;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state % 7) as f64 - 3.0
+    };
+    for nrows in 1..=19 {
+        for ncols in 1..=5 {
+            for pivot in 0..nrows.min(ncols) {
+                let original: Vec<f64> = (0..nrows * ncols).map(|_| next()).collect();
+                let mut expected = original.clone();
+                reference_trailing_update(&mut expected, nrows, ncols, pivot);
+                let mut fused = original;
+                let found = update_trailing_submatrix_with_argmax(&mut fused, nrows, ncols, pivot);
+                assert_eq!(
+                    fused.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                    expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+                );
+                let tail = pivot + 1;
+                if tail >= nrows || tail >= ncols {
+                    assert!(found.is_none());
+                    continue;
+                }
+                let reference =
+                    submatrix_argmax_col_major(&expected, nrows, ncols, tail, nrows, tail, ncols);
+                match found {
+                    Some(found) => assert_eq!(found, reference, "{nrows}x{ncols} pivot {pivot}"),
+                    // Only an all-zero block leaves the fast path (below the normal range).
+                    None => assert!(expected
+                        .chunks_exact(nrows)
+                        .skip(tail)
+                        .all(|column| column[tail..].iter().all(|&v| v == 0.0))),
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn fused_trailing_update_defers_nan_and_subnormal_blocks_to_the_robust_scan() {
+    // 3x3, pivot 0: the trailing block is rows/cols 1..3. x = column 0 is zero,
+    // so the update leaves the block as given.
+    let block = |values: [f64; 4]| {
+        vec![
+            1.0, 0.0, 0.0, 0.0, values[0], values[1], 0.0, values[2], values[3],
+        ]
+    };
+    let mut nan_first = block([f64::NAN, 5.0, 1.0, 2.0]);
+    assert!(update_trailing_submatrix_with_argmax(&mut nan_first, 3, 3, 0).is_none());
+    let mut subnormal = block([1e-310, 0.0, -3e-310, 0.0]);
+    assert!(update_trailing_submatrix_with_argmax(&mut subnormal, 3, 3, 0).is_none());
+    // A NaN after the first entry never wins, as in the sequential scan.
+    let mut nan_later = block([1.0, f64::NAN, -4.0, 4.0]);
+    let found = update_trailing_submatrix_with_argmax(&mut nan_later, 3, 3, 0);
+    assert_eq!(found, Some((1, 2, -4.0)));
+    assert_eq!(
+        found,
+        Some(submatrix_argmax_col_major(&nan_later, 3, 3, 1, 3, 1, 3))
+    );
+}
