@@ -1064,7 +1064,10 @@ pub struct CachedEvaluatorOptions<V> {
     ///
     /// A value of `0` disables retention while preserving the same numerical
     /// result: each branch slice is prepared for the current group and then
-    /// released. The default is 32 MiB per scalar kind. Use `usize::MAX` only
+    /// released. The default is 32 MiB per scalar kind. A positive value below
+    /// the largest tensor of a node with three bonds (all of its physical
+    /// slices, at the scalar kind's size) is raised to that size, so that the
+    /// slices of any one branching node can be retained. Use `usize::MAX` only
     /// when retaining every visited physical slice is intentional.
     /// Setting a finite value bounds retained slice payloads across directed
     /// orientations and scalar kinds; cache metadata is not included in this
@@ -1829,7 +1832,15 @@ where
             }
         };
         let center = options.center.clone();
-        let branch_slice_cache_max_bytes = options.branch_slice_cache_max_bytes;
+        // A positive budget below one branching node's tensor could never retain that node's slices, so every
+        // readout through it would rebuild them; raise it to the largest such tensor (per scalar kind).
+        let largest_branch_tensor =
+            largest_branch_tensor_elements(tree, &plan.inner.sorted_node_names)?;
+        let budget = options.branch_slice_cache_max_bytes;
+        let slice_cache_bytes = move |scalar_bytes: usize| match budget {
+            0 => 0,
+            budget => budget.max(largest_branch_tensor.saturating_mul(scalar_bytes)),
+        };
         Ok(Self {
             tree,
             plan: plan.clone(),
@@ -1839,8 +1850,12 @@ where
             last_stats: CachedEvaluationStats::default(),
             message_caches: HashMap::default(),
             parent_bond_indices: HashMap::default(),
-            prepared_branch_slices_f64: PreparedBranchSliceCache::new(branch_slice_cache_max_bytes),
-            prepared_branch_slices_c64: PreparedBranchSliceCache::new(branch_slice_cache_max_bytes),
+            prepared_branch_slices_f64: PreparedBranchSliceCache::new(slice_cache_bytes(
+                std::mem::size_of::<f64>(),
+            )),
+            prepared_branch_slices_c64: PreparedBranchSliceCache::new(slice_cache_bytes(
+                std::mem::size_of::<Complex64>(),
+            )),
             raw_messages: false,
         })
     }
@@ -7020,6 +7035,32 @@ where
         bail!("{context} {:?} is not present in TreeTN", node);
     }
     Ok(())
+}
+
+/// The element count of the largest tensor of a node with exactly three bonds: the nodes whose physical slices
+/// the prepared branch-slice cache holds (one slice per physical value and parent orientation).
+fn largest_branch_tensor_elements<V>(tree: &TreeTN<IdxTensor, V>, nodes: &[V]) -> Result<usize>
+where
+    V: Clone + Eq + Hash + Debug + Send + Sync,
+{
+    nodes.iter().try_fold(0, |largest, node| {
+        let tensor = tensor_for_node(tree, node)?;
+        let sites = tree.site_space(node);
+        let bonds = tensor
+            .indices()
+            .iter()
+            .filter(|index| sites.is_none_or(|sites| !sites.contains(*index)))
+            .count();
+        let elements = tensor
+            .indices()
+            .iter()
+            .fold(1_usize, |n, index| n.saturating_mul(index.dim()));
+        Ok(if bonds == 3 {
+            largest.max(elements)
+        } else {
+            largest
+        })
+    })
 }
 
 fn tensor_for_node<'a, V>(tree: &'a TreeTN<IdxTensor, V>, node: &V) -> Result<&'a IdxTensor>

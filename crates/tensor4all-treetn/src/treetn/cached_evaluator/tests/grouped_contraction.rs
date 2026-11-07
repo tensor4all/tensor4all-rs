@@ -964,6 +964,41 @@ fn evaluator_reuses_unequal_branch_slices_and_zero_budget_falls_back() {
     assert_eq!(zero_budget.prepared_branch_slices_f64.retained_bytes(), 0);
 }
 
+/// A positive budget smaller than the branching tensor is raised to it: the slices are retained, and the values are
+/// bitwise those of the zero-budget route, which prepares every slice afresh.
+#[test]
+fn small_positive_branch_slice_budget_still_retains_the_branching_slices() {
+    let (tree, indices) = unequal_branch_tree();
+    let values = unequal_branch_values(0);
+    let points = ColMajorArrayRef::new(&values, &[4, 64]).unwrap();
+    let evaluate = |budget: usize| {
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                max_batch_points: Some(usize::MAX),
+                branch_slice_cache_max_bytes: budget,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let actual = evaluator
+            .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
+            .unwrap();
+        (actual, evaluator.prepared_branch_slices_f64.len())
+    };
+    let (small, small_len) = evaluate(1);
+    let (zero, zero_len) = evaluate(0);
+    assert_eq!(
+        small_len, 3,
+        "all three physical slices of the branching node are retained"
+    );
+    assert_eq!(zero_len, 0);
+    let bits = |values: &[f64]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&small), bits(&zero));
+}
+
 #[test]
 fn stack_tensors_adds_trailing_assignment_axis_in_column_major_order() {
     let batch = DynIndex::new_dyn(2);
