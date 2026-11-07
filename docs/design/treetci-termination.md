@@ -56,9 +56,25 @@ local dimension greater than 1 adjacent to a vertex of local dimension 1 and,
 for every unordered pair of them, adds the base pivot with those two sites set
 to every pair of local values. The base pivot is the first pivot pair of the
 first edge adjacent to a vertex of local dimension 1. The enrichment runs only
-when some bond around such a vertex has a side with at most one pivot. A
-function that is exactly rank 1 around the vertex collapses back to rank 1
-after the first sweep and is reported as `DegenerateCandidateSet`.
+when some bond around such a vertex has a side with at most one pivot.
+
+A function that is exactly rank 1 around the vertex collapses back to rank 1
+after the first update of each bond. If the enriched pivots lived only in the
+pivot sets, the junction side would again be a single candidate and the run
+would end in `DegenerateCandidateSet` although rank 1 is the right answer
+([#1159](https://github.com/tensor4all/tensor4all-rs/issues/1159)). xfac
+avoids this because its candidate set is
+`set_union(I0[{from,to}], kronecker(from,to))`, where the history `I0` holds
+the enriched pivots. tensor4all-rs keeps no pivot history; instead the first
+call that builds the enrichment pivots records their projections onto the
+junction side (the side holding the vertex of local dimension 1) of each
+adjacent bond, whether or not the pivots are added, and `DefaultProposer`
+(and through it `TruncatedDefaultProposer`) appends them to that side's
+candidates on every update. The junction side then keeps at least as many
+candidates as there are distinct projections, so a rank-1 bond error is
+measured. Later calls record nothing more, so the candidate count grows by a
+fixed amount. A custom proposer that does not offer them can still reach
+`DegenerateCandidateSet`.
 
 ## Continued optimization
 

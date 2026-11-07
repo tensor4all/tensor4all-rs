@@ -13,6 +13,7 @@ mod evaluation_memo;
 mod external_proposer;
 mod issue1078_context_adoption;
 mod issue1153_degenerate_junction;
+mod issue1159_rank1_junction;
 mod iteration_visitor;
 mod materialize_context;
 mod optimizer_context;

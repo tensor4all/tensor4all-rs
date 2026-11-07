@@ -80,6 +80,13 @@ pub struct TreeTCI2<T> {
     /// pivot exhausted that side and the recorded error is zero by
     /// construction (issue #1153).
     pub(crate) unmeasured_bonds: BTreeSet<TreeTciEdge>,
+    /// Permanent pivot candidates of the junction-side subtrees of the bonds
+    /// around vertices of local dimension 1: the projections of the pivots
+    /// added by [`TreeTCI2::enrich_pivots_around_unit_vertices`]. They play
+    /// the role of the enriched part of xfac's pivot history `I0`, so the
+    /// junction side keeps more than one candidate after the pivots collapse
+    /// to rank 1 and the bond error stays measured (issue #1159).
+    pub(crate) enrichment_candidates: HashMap<SubtreeKey, ColMajorArray<usize>>,
     /// Back-truncation style pivot errors.
     pub(crate) pivot_errors: Vec<f64>,
     /// Maximum observed sample magnitude for normalization.
@@ -127,6 +134,7 @@ impl<T> TreeTCI2<T> {
             graph,
             bond_errors,
             unmeasured_bonds: BTreeSet::new(),
+            enrichment_candidates: HashMap::new(),
             pivot_errors: Vec::new(),
             max_sample_value: 0.0,
             marker: PhantomData,
@@ -224,6 +232,17 @@ impl<T> TreeTCI2<T> {
     /// has a side with at most one pivot, when fewer than two such adjacent
     /// vertices exist, or when the state holds no pivots yet.
     ///
+    /// The first call that builds the pivots also records their projections
+    /// onto the junction side of every edge adjacent to such a vertex (the
+    /// side holding the unit vertex) as permanent candidates, whether or not
+    /// the pivots are added. [`crate::DefaultProposer`] offers
+    /// them on every later update, as xfac keeps the enriched pivots in its
+    /// pivot history `I0`: when the bonds collapse to rank 1 (an exactly
+    /// separable target), the junction side still has more than one
+    /// candidate and the rank-1 bond error is measured (issue #1159). Later
+    /// calls do not record more, so the candidate count grows by a fixed
+    /// amount, at most the number of enriched pivots per junction side.
+    ///
     /// Reference: xfac's [`enrich_pivot1`] and its call site
     /// `addPivotsAllBonds(enrich_pivot1())` in the constructor.
     ///
@@ -275,9 +294,6 @@ impl<T> TreeTCI2<T> {
         let Some(base) = base else {
             return Ok(0);
         };
-        if !pinned {
-            return Ok(0);
-        }
 
         let neighbours: Vec<usize> = neighbours.into_iter().collect();
         let mut pivots = Vec::new();
@@ -293,8 +309,40 @@ impl<T> TreeTCI2<T> {
                 }
             }
         }
+        if self.enrichment_candidates.is_empty() {
+            self.record_enrichment_candidates(&unit_edges, &pivots)?;
+        }
+        if !pinned {
+            return Ok(0);
+        }
         self.add_global_pivots(&pivots)?;
         Ok(pivots.len())
+    }
+
+    /// Record the projections of `pivots` onto the side of each edge in
+    /// `unit_edges` that holds its endpoint of local dimension 1.
+    fn record_enrichment_candidates(
+        &mut self,
+        unit_edges: &[TreeTciEdge],
+        pivots: &[MultiIndex],
+    ) -> Result<()> {
+        for &edge in unit_edges {
+            let (left_key, right_key) = self.graph.subregion_vertices(edge)?;
+            for key in [left_key, right_key] {
+                let holds_unit_endpoint = [edge.u(), edge.v()]
+                    .into_iter()
+                    .any(|v| self.local_dims[v] == 1 && key.as_slice().contains(&v));
+                if !holds_unit_endpoint {
+                    continue;
+                }
+                let mut array = empty_2d(key.as_slice().len())?;
+                for pivot in pivots {
+                    push_unique_column(&mut array, &project_pivot(pivot, &key))?;
+                }
+                self.enrichment_candidates.insert(key, array);
+            }
+        }
+        Ok(())
     }
 
     /// Reset the sweep-local pivot error accumulator.

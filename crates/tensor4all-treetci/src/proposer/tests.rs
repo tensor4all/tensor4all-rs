@@ -357,3 +357,25 @@ fn deterministic_proposer_does_not_consume_caller_randomness() {
     );
     assert_eq!(rng.next_u64(), reference.next_u64());
 }
+
+#[test]
+fn default_proposer_offers_enrichment_candidates_of_the_junction_side() {
+    // Rank 1 on every bond around a junction of local dimension 1: without
+    // the recorded candidates the junction side of edge (0, 1) would hold
+    // the single product pivot (#1159).
+    let mut tci = star_state(1, &[vec![0, 0, 0, 0]]);
+    let edge = TreeTciEdge::new(0, 1);
+    let (junction_key, _) = tci.graph.subregion_vertices(edge).unwrap();
+    let (before, _) = DefaultProposer.candidates(&tci, edge).unwrap();
+    assert_eq!(before, vec![vec![0, 0, 0]]);
+
+    tci.enrichment_candidates.insert(
+        junction_key,
+        ColMajorArray::new(vec![0, 0, 0, 0, 3, 2], vec![3, 2]).unwrap(),
+    );
+    let (after, leaf) = DefaultProposer.candidates(&tci, edge).unwrap();
+    // Deduplicated against the product candidate, appended in order.
+    assert_eq!(after, vec![vec![0, 0, 0], vec![0, 3, 2]]);
+    // The leaf side has no recorded candidates and is unchanged.
+    assert_eq!(leaf, vec![vec![0], vec![1], vec![2], vec![3]]);
+}

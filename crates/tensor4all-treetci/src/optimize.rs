@@ -62,10 +62,15 @@ pub enum TreeTciTermination {
     /// holds a single candidate while both sides of the edge have more than
     /// one configuration. The first pivot then exhausts that side, and the
     /// recorded error is zero by construction rather than by measurement.
-    /// This happens, for example, around a vertex of local dimension 1 whose
-    /// adjacent bonds all have rank 1 (issue #1153). The approximation may
-    /// be inaccurate; enabling the global pivot search or supplying more
-    /// initial pivots can let the bonds grow.
+    /// Around a vertex of local dimension 1 whose adjacent bonds all have
+    /// rank 1, the junction side is the product of single pivots (issue
+    /// #1153). [`crate::DefaultProposer`] and
+    /// [`crate::TruncatedDefaultProposer`] keep the pivots enriched there as
+    /// permanent candidates, so an exactly rank-1 bond is measured and can be
+    /// reported `Converged` (issue #1159); a custom proposer that drops them
+    /// can reach this state. The approximation may be inaccurate; enabling
+    /// the global pivot search, supplying more initial pivots, or offering
+    /// more candidates on that side can let the bonds grow.
     DegenerateCandidateSet,
 }
 
