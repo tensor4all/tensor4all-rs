@@ -527,7 +527,7 @@ fn gmres_affine_profile_and_zero_rhs_paths() {
 
     assert!(result.converged);
     assert_eq!(result.iterations, 0);
-    assert!(result.solution.sub(&x0).unwrap().maxabs().unwrap() < 1e-12);
+    assert!(result.solution.sub(&b).unwrap().maxabs().unwrap() < 1e-12);
 }
 
 #[test]
@@ -1318,7 +1318,7 @@ fn test_gmres_zero_rhs() {
 
     let result = gmres(apply_a, &b, &x0, &options).unwrap();
 
-    // With zero RHS, should return initial guess immediately
+    // The zero vector solves the homogeneous system.
     assert!(result.converged);
 }
 
@@ -1886,8 +1886,8 @@ fn test_restart_gmres_zero_rhs_with_x0() {
     let result = restart_gmres_with_truncation(apply_a, &b, Some(&x0), &options, truncate).unwrap();
     assert!(result.converged);
     assert_eq!(result.iterations, 0);
-    // Solution should be x0 when b is zero
-    assert!(result.solution.distance(&x0).unwrap() < 1e-12);
+    // The initial guess must not survive a homogeneous solve.
+    assert!(result.solution.distance(&b).unwrap() < 1e-12);
 }
 
 #[test]
@@ -1963,3 +1963,5 @@ fn gmres_rejects_maximum_iteration_capacity_without_invoking_operator() {
     ));
     assert_eq!(called.load(Ordering::Relaxed), 0);
 }
+
+mod gmres_zero_rhs;

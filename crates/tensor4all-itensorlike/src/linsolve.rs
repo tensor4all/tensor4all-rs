@@ -17,6 +17,31 @@ use crate::tensortrain::TensorTrain;
 
 /// Solve `(a₀ + a₁ * A) * x = b` for `x`.
 ///
+/// The default two-site MALS updates can adapt bond dimensions. Use
+/// [`LinsolveOptions::with_nsite(1)`](LinsolveOptions::with_nsite) for one-site
+/// ALS without bond growth or SVD truncation. One-site mode also supports
+/// single-tensor trains. Choose sufficient initial ranks for the solution.
+///
+/// # Examples
+/// ```
+/// use tensor4all_core::{DynIndex, IdxTensor};
+/// use tensor4all_itensorlike::{linsolve, LinsolveOptions, TensorTrain};
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let s = DynIndex::new_dyn(2);
+/// // Column-major diagonal operator diag(2, 3).
+/// let a = TensorTrain::new(vec![IdxTensor::from_dense(
+///     vec![s.prime(), s.clone()], vec![2.0_f64, 0.0, 0.0, 3.0],
+/// )?])?;
+/// let b = TensorTrain::new(vec![IdxTensor::from_dense(vec![s.clone()], vec![4.0_f64, 9.0])?])?;
+/// let x0 = TensorTrain::new(vec![IdxTensor::from_dense(vec![s], vec![0.0_f64, 0.0])?])?;
+/// let x = linsolve(&a, &b, x0, &LinsolveOptions::new(1).with_nsite(1))?;
+/// let values = x.to_dense()?.to_vec::<f64>()?;
+/// assert!((values[0] - 2.0).abs() < 1e-10);
+/// assert!((values[1] - 3.0).abs() < 1e-10);
+/// # Ok(())
+/// # }
+/// ```
+///
 /// # Arguments
 /// * `operator` - The operator `A` (MPO as TensorTrain)
 /// * `rhs` - The right-hand side `b` (MPS as TensorTrain)
@@ -30,9 +55,9 @@ use crate::tensortrain::TensorTrain;
 ///
 /// Returns [`TensorTrainError::InvalidStructure`] when any input train is
 /// empty or when their lengths differ, [`TensorTrainError::OperationError`]
-/// when an option is invalid or when the operator and initial guess cannot be
-/// index-mapped, and [`TensorTrainError::TreeTn`] when the underlying TreeTN
-/// solve fails.
+/// when a sweep, GMRES, or SVD option is invalid or when the operator and initial
+/// guess cannot be index-mapped, and [`TensorTrainError::TreeTn`] when the update
+/// mode is invalid or the underlying TreeTN solve fails.
 ///
 pub fn linsolve(
     operator: &TensorTrain,
@@ -101,6 +126,7 @@ pub fn linsolve(
 
     let (a0, a1) = options.coefficients();
     let treetn_options = tensor4all_treetn::LinsolveOptions::new(nfullsweeps)
+        .with_nsite(options.nsite())
         .with_truncation(TruncationOptions::new())
         .with_gmres_tol(options.gmres_tol())
         .with_gmres_max_restarts(options.gmres_max_restarts())

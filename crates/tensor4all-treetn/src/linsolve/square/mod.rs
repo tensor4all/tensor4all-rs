@@ -9,7 +9,7 @@
 //! The algorithm uses alternating updates (sweeping) similar to DMRG:
 //! 1. Position environments to expose a local region
 //! 2. Solve the local linear problem using GMRES (through `tensor4all_core::krylov::gmres`)
-//! 3. Factorize the result and move the orthogonality center
+//! 3. Move the center by exact QR (one-site ALS), or split by SVD (two-site MALS)
 //! 4. Update environment caches
 //!
 //! # Inspired By
@@ -39,7 +39,10 @@ use tensor4all_core::{AnyScalar, IndexLike, TensorLike};
 
 use crate::linsolve::common::LinsolveOptions;
 use crate::operator::{apply_linear_operator, ApplyOptions, IndexMapping, LinearOperator};
-use crate::{apply_local_update_sweep, CanonicalizationOptions, LocalUpdateSweepPlan, TreeTN};
+use crate::{
+    apply_local_update_sweep, CanonicalizationOptions, LocalUpdateStep, LocalUpdateSweepPlan,
+    TreeTN,
+};
 
 /// Result of square_linsolve operation.
 #[derive(Debug, Clone)]
@@ -53,6 +56,7 @@ where
     /// Number of sweeps performed
     pub sweeps: usize,
     /// Final relative residual norm `||(a0 I + a1 A)x - b|| / ||b||`.
+    /// For an RHS with zero norm, this is the absolute residual norm.
     pub residual: Option<f64>,
     /// Converged flag
     pub converged: bool,
@@ -78,13 +82,8 @@ where
     let op_network = operator.site_index_network();
     let rhs_network = rhs.site_index_network();
 
-    // The sweep planner builds two-site updates only; a one-node network yields
-    // an empty plan and the solver would silently return the initial guess.
-    if rhs_network.node_count() < 2 {
-        return Err(anyhow::anyhow!(
-            "square_linsolve requires at least two sites; the one-site local \
-             solve is not implemented"
-        ));
+    if rhs_network.node_count() == 0 {
+        bail!("square_linsolve requires a nonempty network");
     }
 
     // Check 1: Operator can act on init
@@ -105,6 +104,12 @@ where
 /// Solve the linear system `(a₀ + a₁ * H) |x⟩ = |b⟩` for TreeTN.
 ///
 /// This solver is for the square case where V_in = V_out (input and output spaces are the same).
+/// Use [`LinsolveOptions::with_nsite(1)`](LinsolveOptions::with_nsite) for one-site
+/// ALS, which optimizes one tensor at a time and transports the center by exact
+/// QR. Its bond dimensions cannot grow; insufficient initial ranks can prevent
+/// convergence. Redundant dimensions may shrink during QR. Explicit bond caps
+/// and SVD policies are rejected in this mode. The default two-site MALS mode
+/// can adapt ranks using SVD. A single-node network requires one-site mode.
 ///
 /// # Arguments
 ///
@@ -126,7 +131,9 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`TreeTNOperationError`] when only one of `input_mapping` and `output_mapping` is
+/// Returns [`TreeTNOperationError`] for an unsupported `nsite`, one-site truncation
+/// controls, an empty network, a single-node network in two-site mode, or when
+/// only one of `input_mapping` and `output_mapping` is
 /// provided, when the initial guess cannot be canonicalized, when the sweep plan
 /// cannot be built, or when an update or residual evaluation fails. Reaching the
 /// sweep limit without meeting `convergence_tol` returns `converged = false`,
@@ -248,10 +255,15 @@ where
         Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
-    // Validate inputs before proceeding
+    options.validate_update_mode()?;
     validate_linsolve_inputs(operator, rhs, &init)?;
+    if options.nsite == 2 && rhs.node_count() < 2 {
+        return Err(anyhow::anyhow!("square_linsolve requires at least two sites with nsite=2; use nsite=1 for a single-node solve").into());
+    }
 
-    if options.a1.is_zero() || operator_is_zero(operator)? {
+    let identity_only = options.a1.is_zero() || operator_is_zero(operator)?;
+    // ALS must project even an identity solve into the initial bond spaces.
+    if identity_only && (options.nsite == 2 || options.a0.is_zero()) {
         return solve_identity_term_only(
             operator,
             rhs,
@@ -296,9 +308,20 @@ where
         }
     };
 
-    // Create sweep plan (nsite=2 for 2-site updates)
-    let plan = LocalUpdateSweepPlan::from_treetn(&x, center, 2)
-        .ok_or_else(|| anyhow::anyhow!("Failed to create sweep plan"))?;
+    // Each edge includes the neighbor receiving the QR factor in one-site ALS.
+    // Both changed tensors then participate in reference/cache synchronization.
+    let plan = if x.node_count() == 1 {
+        LocalUpdateSweepPlan {
+            nsite: 1,
+            steps: vec![LocalUpdateStep {
+                nodes: vec![center.clone()],
+                new_center: center.clone(),
+            }],
+        }
+    } else {
+        LocalUpdateSweepPlan::from_treetn(&x, center, 2)
+            .ok_or_else(|| anyhow::anyhow!("Failed to create sweep plan"))?
+    };
 
     let mut final_sweeps = 0;
 
@@ -359,7 +382,7 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
     let mut operator = operator.clone();
-    Ok(operator.norm()? <= 1.0e-15)
+    Ok(operator.norm()? == 0.0)
 }
 
 fn solve_identity_term_only<T, V>(
@@ -436,8 +459,9 @@ where
 ///
 /// This evaluates `||(a0 I + a1 A)x - b|| / ||b||` by applying `operator` to
 /// `solution`, combining the identity and operator terms, and measuring the
-/// TreeTN norm of the resulting residual. When `||b||` is numerically zero, the
-/// absolute residual norm is returned to avoid division by zero.
+/// TreeTN norm of the resulting residual. When `||b||` is exactly zero, the
+/// absolute residual norm is returned; a small nonzero `||b||` still yields the
+/// relative residual.
 ///
 /// # Arguments
 /// * `operator` - Linear operator `A` including any input/output index mappings.
@@ -523,7 +547,7 @@ where
     let mut residual = lhs.add_reindexed_like_self(&negative_rhs)?;
 
     let rhs_norm = rhs.clone().norm()?;
-    if rhs_norm <= 1.0e-15 {
+    if rhs_norm == 0.0 {
         return residual.norm();
     }
     Ok(residual.norm()? / rhs_norm)
