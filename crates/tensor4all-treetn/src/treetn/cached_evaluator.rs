@@ -1680,6 +1680,12 @@ where
     /// Monotonic use stamp for `message_caches`, so the shared budget is
     /// reclaimed from the least recently used edge first.
     message_cache_epoch: u64,
+    /// Logical payload retained by all of `message_caches`, kept in step with
+    /// the map so one admission costs O(1) instead of re-summing every edge's
+    /// payload. Retention changes in exactly two places -- the admission in the
+    /// stacked-message path and [`PackedMessageCache::evict_oldest_bytes`] --
+    /// and both update this.
+    message_cache_retained_bytes: usize,
     /// Each node's parent-bond `DynIndex`, memoized: it never changes for a
     /// fixed rooting, but `TreeTN::edge_between`/`bond_index` are graph
     /// lookups that cost real time if repeated on every call.
@@ -1868,6 +1874,7 @@ where
             last_stats: CachedEvaluationStats::default(),
             message_caches: HashMap::default(),
             message_cache_epoch: 0,
+            message_cache_retained_bytes: 0,
             parent_bond_indices: HashMap::default(),
             prepared_branch_slices_f64: PreparedBranchSliceCache::new(slice_cache_bytes(
                 std::mem::size_of::<f64>(),
@@ -2583,14 +2590,13 @@ where
         self.message_cache_epoch
     }
 
-    /// Total logical payload currently retained by every directed message
-    /// cache except `edge`.
-    fn message_cache_bytes_excluding(&self, edge: &(V, V)) -> usize {
+    /// Retained payload of one directed cache. This is the only payload
+    /// accounting one admission does, so its cost does not grow with the number
+    /// of edges the evaluator has seen.
+    fn message_cache_edge_bytes(&self, edge: &(V, V)) -> usize {
         self.message_caches
-            .iter()
-            .filter(|(other, _)| *other != edge)
-            .map(|(_, cache)| cache.logical_payload_bytes())
-            .sum()
+            .get(edge)
+            .map_or(0, PackedMessageCache::logical_payload_bytes)
     }
 
     /// Makes room in the evaluator-wide message-cache budget for `needed`
@@ -2614,12 +2620,15 @@ where
         needed: usize,
         bytes_per_column: usize,
     ) -> usize {
-        let own = self
-            .message_caches
-            .get(edge)
-            .map_or(0, PackedMessageCache::logical_payload_bytes);
-        let mut others = self.message_cache_bytes_excluding(edge);
-        let room = self.options.message_cache_max_bytes.saturating_sub(own);
+        let total = self.options.message_cache_max_bytes;
+        // Disabled and unbounded retention have nothing to give back, and
+        // accounting for them would read every edge's payload on every miss.
+        if total == 0 || total == usize::MAX {
+            return total;
+        }
+        let own = self.message_cache_edge_bytes(edge);
+        let mut others = self.message_cache_retained_bytes.saturating_sub(own);
+        let room = total.saturating_sub(own);
         // Round the reservation down to whole columns, so a neighbour is never
         // charged for capacity that admission cannot use.
         let wanted = match bytes_per_column {
@@ -2629,7 +2638,7 @@ where
         let mut over = own
             .saturating_add(wanted)
             .saturating_add(others)
-            .saturating_sub(self.options.message_cache_max_bytes);
+            .saturating_sub(total);
         if over > 0 {
             let mut order: Vec<((V, V), u64)> = self
                 .message_caches
@@ -2648,10 +2657,23 @@ where
                     let released = cache.evict_oldest_bytes(over);
                     others = others.saturating_sub(released);
                     over = over.saturating_sub(released);
+                    self.message_cache_retained_bytes =
+                        self.message_cache_retained_bytes.saturating_sub(released);
                 }
             }
         }
-        self.options.message_cache_max_bytes.saturating_sub(others)
+        total.saturating_sub(others)
+    }
+
+    /// Recomputes the retained total from the map. Only tests insert caches
+    /// outside the admission path, so only they need it.
+    #[cfg(test)]
+    fn resync_message_cache_retained_bytes(&mut self) {
+        self.message_cache_retained_bytes = self
+            .message_caches
+            .values()
+            .map(PackedMessageCache::logical_payload_bytes)
+            .sum();
     }
 
     fn build_message_assignment_batches(
@@ -5037,6 +5059,7 @@ where
             .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_budget_bytes));
         cache.max_bytes = cap;
         cache.touch(epoch);
+        let retained_before = cache.logical_payload_bytes();
         let missing_slots = cache.get_or_compute_batch(&missing_keys, |request_keys| {
             request_keys
                 .iter()
@@ -5049,7 +5072,15 @@ where
                     Ok(missing_values[index * bond_dim..(index + 1) * bond_dim].to_vec())
                 })
                 .collect::<Result<Vec<_>>>()
-        })?;
+        });
+        // Admission is where retention grows, so the shared total is kept in
+        // step here rather than recomputed from the map on every miss.
+        self.message_cache_retained_bytes = self.message_cache_retained_bytes.saturating_add(
+            cache
+                .logical_payload_bytes()
+                .saturating_sub(retained_before),
+        );
+        let missing_slots = missing_slots?;
 
         // Merge cached and uncached columns in the original point order. A
         // finite budget may return `CacheSlot::Uncached`; those values are
@@ -7836,6 +7867,16 @@ struct PackedMessageCache<K, T> {
 // allocator-specific byte measurement.
 const HASH_MAP_BUCKET_OVERHEAD_ESTIMATE_BYTES: usize = 16;
 
+// Payload reads on this thread, counted only for the regression test that
+// pins "one read per admission, however many edges there are". Every payload
+// read goes through `PackedMessageCache::logical_payload_bytes`, so a re-added
+// full-map scan cannot pass unnoticed. Thread-local, because tests run in
+// parallel threads.
+#[cfg(test)]
+thread_local! {
+    static MESSAGE_CACHE_PAYLOAD_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[cfg(any(test, feature = "diagnostics"))]
 fn hash_map_owned_bytes_estimate<K, V>(map: &HashMap<K, V>) -> usize {
     let per_bucket = std::mem::size_of::<K>()
@@ -8008,6 +8049,12 @@ where
     /// directed edges is exhausted and this edge is the least recently used
     /// one. Columns keep their insertion order in `columns`, so dropping a
     /// prefix leaves every surviving position shifted by a constant.
+    ///
+    /// A cache emptied by this releases its packed buffer too: the budget
+    /// bounds logical payload rather than allocation capacity, so an edge that
+    /// gave every column back must not keep the high-water buffer of the
+    /// columns it no longer has. A partially drained cache keeps its buffer
+    /// (its high-water mark), which the documented budget does not cover.
     fn evict_oldest_bytes(&mut self, bytes: usize) -> usize {
         let per_column = self.bytes_per_column();
         if per_column == 0 || bytes == 0 {
@@ -8024,15 +8071,20 @@ where
             .map(|(key, _)| key.owned_heap_bytes())
             .sum();
         self.key_heap_bytes = self.key_heap_bytes.saturating_sub(dropped_key_heap_bytes);
-        self.columns.drain(..dropped * self.bond_dim);
-        self.positions.retain(|_, position| {
-            if *position < dropped {
-                false
-            } else {
-                *position -= dropped;
-                true
-            }
-        });
+        if dropped == self.positions.len() {
+            self.columns = Vec::new();
+            self.positions = HashMap::default();
+        } else {
+            self.columns.drain(..dropped * self.bond_dim);
+            self.positions.retain(|_, position| {
+                if *position < dropped {
+                    false
+                } else {
+                    *position -= dropped;
+                    true
+                }
+            });
+        }
         dropped * per_column
     }
 
@@ -8094,6 +8146,8 @@ where
     }
 
     fn logical_payload_bytes(&self) -> usize {
+        #[cfg(test)]
+        MESSAGE_CACHE_PAYLOAD_READS.with(|reads| reads.set(reads.get() + 1));
         self.columns.len().saturating_mul(std::mem::size_of::<T>())
     }
 

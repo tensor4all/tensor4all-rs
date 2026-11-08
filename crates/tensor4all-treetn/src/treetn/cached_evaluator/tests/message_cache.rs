@@ -565,10 +565,14 @@ fn packed_message_cache_evicts_oldest_columns_first() {
     assert_eq!(cache.position(&3), Some(1));
     assert_eq!(cache.column(1), &[3, 13]);
 
-    // Evicting past the end empties the buffer and frees nothing more.
+    // Evicting past the end empties the buffer and frees nothing more. An
+    // emptied cache also gives back its packed buffer: the budget bounds
+    // logical payload, so a released edge must not keep the allocation of the
+    // columns it no longer has.
     assert_eq!(cache.evict_oldest_bytes(1024), 16);
     assert_eq!(cache.key_count(), 0);
     assert_eq!(cache.logical_payload_bytes(), 0);
+    assert_eq!(cache.columns.capacity(), 0);
     assert_eq!(cache.evict_oldest_bytes(1024), 0);
 
     // A wide key takes its key-owned heap payload with it.
@@ -844,6 +848,7 @@ fn message_cache_partially_cached_parent_survives_child_admission() {
     )
     .unwrap();
     tight.message_caches.insert((1, 0), seeded);
+    tight.resync_message_cache_retained_bytes();
 
     let wide_actual = tight.evaluate_batched(wide).unwrap();
     assert_scalars_close(&wide_actual, &tree.evaluate(&indices, wide).unwrap());
@@ -1012,6 +1017,7 @@ fn insert_packed_columns(
         .unwrap();
     cache.touch(last_used);
     evaluator.message_caches.insert(edge, cache);
+    evaluator.resync_message_cache_retained_bytes();
 }
 
 /// [AI Supplied] #1183: the shared budget reclaims columns from the least
@@ -1126,4 +1132,66 @@ fn message_cache_evicts_only_once_the_total_is_exceeded_by_one_byte() {
         "the surviving total stays at or below the budget"
     );
     assert_eq!(cap, 2 * column_bytes - 1);
+}
+
+/// [AI Supplied] #1183: one admission reads one edge's payload. Summing every
+/// directed cache instead made a cold sweep over `edges` caches read
+/// `edges * (edges - 1)` payloads, and did so even when retention was disabled
+/// (`0`) or unbounded (`usize::MAX`), where nothing can be reclaimed at all.
+#[test]
+fn message_cache_accounting_does_not_scan_every_edge() {
+    let (tree, indices) = five_node_chain();
+    let column_bytes = std::mem::size_of::<CachedScalar>() * 2;
+    let edges = 1024usize;
+    for total in [0usize, usize::MAX, 64 << 20] {
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(2),
+                message_cache_max_bytes: total,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for edge in 0..edges {
+            evaluator.message_caches.insert(
+                (edge, edges + edge),
+                PackedMessageCache::<IndexKey, CachedScalar>::new(2, 0),
+            );
+        }
+        evaluator.resync_message_cache_retained_bytes();
+        reset_message_cache_payload_reads();
+        for edge in 0..edges {
+            evaluator.reserve_message_cache_bytes(
+                &(edge, edges + edge),
+                column_bytes,
+                column_bytes,
+            );
+        }
+
+        let reads = message_cache_payload_reads();
+        let limit = if total == 0 || total == usize::MAX {
+            0
+        } else {
+            edges
+        };
+        assert!(
+            reads <= limit,
+            "budget {total}: {reads} payload reads for {edges} edges"
+        );
+        let summed = retained_message_cache_bytes(&evaluator);
+        assert_eq!(
+            evaluator.message_cache_retained_bytes, summed,
+            "the running total must match the caches it mirrors"
+        );
+    }
+}
+
+fn reset_message_cache_payload_reads() {
+    MESSAGE_CACHE_PAYLOAD_READS.with(|reads| reads.set(0));
+}
+
+fn message_cache_payload_reads() -> usize {
+    MESSAGE_CACHE_PAYLOAD_READS.with(std::cell::Cell::get)
 }
