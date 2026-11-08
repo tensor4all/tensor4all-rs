@@ -1252,11 +1252,14 @@ The driver does not work around it.
 2026-11-08 after #1162).** The promise has two tiers, because the second one
 is not free and must not be claimed before it is measured:
 
-- **Tier 1, enforced in CI**: for a fixed seed, a deterministic evaluator and a
-  deterministic engine, results are bitwise identical on the same machine and
-  build **at a fixed thread count**, across fresh threads, across processes,
-  and across repeated runs. The CI test pins the thread count and asserts a
-  digest, so a change that alters numerics cannot pass silently.
+- **Tier 1, the target, enforced in CI for the same-process half**: for a fixed
+  seed, a deterministic evaluator and a deterministic engine, results are
+  to be bitwise identical on the same machine and build **at a fixed thread
+  count**, across fresh threads, across processes, and across repeated runs. What
+  CI checks today is narrower: the digest tests run two calls inside one process
+  at a pinned thread count, so a change that alters numerics cannot pass
+  silently, while the fresh-caller-thread and second-process halves have no test
+  yet (see [Determinism](#determinism)).
 - **Tier 2, an observed property, not a commitment**: bitwise identity
   **across thread counts**. Some paths have it already, and the document
   records that as a fact about them rather than as a promise: on the
@@ -1881,7 +1884,7 @@ defaults reproduce M3 exactly.
   results are to be bitwise identical on the same machine and build **at a fixed
   thread count**, across fresh threads and repeated runs, and across processes
   once a two-process CI test passes (the same test binary run twice). The
-  cross-thread half of the 2026-10-03 decision is withdrawn (2026-11-08): it is
+  cross-thread-count half of the 2026-10-03 decision is withdrawn (2026-11-08): it is
   no longer a target, a goal or a cost decision, and no operation may claim it
   (see [Determinism](#determinism) and the Tier 2 entry below). There is no
   cross-machine promise; M8 (MPI) must state its own contract. The current
@@ -1893,9 +1896,10 @@ defaults reproduce M3 exactly.
   **Tiered 2026-11-08 (user, after #1162, revised later the same day).** The
   target above is split into what CI enforces and what was only ever observed:
 
-  - Tier 1 (enforced): bitwise identical at a **fixed thread count**, across
-    fresh threads, processes and repeated runs. The CI test pins the thread
-    count.
+  - Tier 1 (the target; CI enforces the same-process half): bitwise identical
+    at a **fixed thread count**, across fresh threads, processes and repeated
+    runs. The test pins the thread count and compares two calls in one process;
+    the fresh-caller-thread and second-process halves have no test yet.
   - Tier 2 (withdrawn 2026-11-08): identical **across thread counts**. It was
     recorded, never promised, and is now not pursued at all: cross-count
     identity is not required anywhere in the stack, so the per-operation cost
