@@ -291,12 +291,10 @@ impl ContractOptions {
 
     /// Set the fit initializer strategy.
     ///
-    /// Ignored for `Zipup` and `Naive` methods. The default is
-    /// [`FitInitializer::ZipUp`], the compatibility choice that keeps a caller
-    /// who never asked for an initializer on the behaviour it already had; see
-    /// [`FitInitializer::default`](Default::default) for the reason, and
-    /// [`FitInitializer::ZipUp`] for what it costs (it materialises the exact
-    /// product bond up to `chi_A * chi_B`). Pass
+    /// Ignored for `Zipup` and `Naive` methods. A fit contraction with no
+    /// explicit initializer starts from [`FitInitializer::default()`]: the
+    /// compatibility choice, documented on that `Default` implementation, that
+    /// materialises the exact product bond up to `chi_A * chi_B`. Pass
     /// [`FitInitializer::LowRankRandom`] with a small `bond_dim` to start from a
     /// random state instead and let the fit grow ranks adaptively.
     ///
