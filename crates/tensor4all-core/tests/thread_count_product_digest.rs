@@ -12,10 +12,10 @@
 //! counts for `f64` and are not for `Complex64`: one worker and a team take
 //! different kernels (a fused complex gemm against the packed driver's real-`f64`
 //! planar kernels), so their rounding differs. The `f64` cells therefore have Tier 2 on
-//! this host as an observation, and the `Complex64` cells meet Tier 1 and do not
-//! have Tier 2. Neither is a broken promise; the second test records the current
-//! state instead of asserting a direction, so it passes wherever another host's
-//! split starts.
+//! this host as an observation, and the `Complex64` cells meet the within-process
+//! half of Tier 1 and do not have Tier 2. Neither is a broken promise; the second
+//! test records the current state instead of asserting a direction, so it passes
+//! wherever another host's split begins.
 //!
 //! The thread count comes from an explicit `CpuBackend::with_threads`, never from
 //! `RAYON_NUM_THREADS`, so the environment cannot change what a cell means. A
@@ -33,7 +33,7 @@ use num_complex::Complex64;
 use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor, TensorContractionLike};
 use tensor4all_tensorbackend::{BlasMul, CpuBackend, CpuExecutionContext, Matrix};
 
-const THREAD_COUNTS: [usize; 3] = [1, 2, 8];
+const THREAD_COUNTS: [usize; 4] = [1, 2, 4, 8];
 
 /// The shapes #1192 reported the divergence at: a cube, a tall-skinny pair, two
 /// uneven pairs, and two large cubes.
