@@ -15,9 +15,11 @@ literals, or named public types:
   `InvalidConfiguration`, `InvalidGraph`, `IndexOutOfBounds` and
   `ScalarKindMismatch` are typed, and `Operation { source: anyhow::Error }` is
   the catch-all. A caller matches the variant instead of downcasting a public
-  field, and reads the cause through `std::error::Error::source()`. `Display`
-  now prints the whole source chain, so one `format!("{error}")` keeps the
-  context lines that the former `{source}` placeholder dropped. When
+  field, and reads the cause through `std::error::Error::source()`. The
+  `Operation` catch-all's `Display` still renders one level (`{source}`), so
+  repeated propagation does not grow the message; the rest of its chain is
+  read through `source()`. The three typed-cause variants render their whole
+  chain. When
   `From<anyhow::Error>` recovers a classified variant from an `anyhow` chain, the
   context layers around it are re-rendered onto the variant as text, so a typed
   context cannot be downcast after that conversion; the `Operation` catch-all

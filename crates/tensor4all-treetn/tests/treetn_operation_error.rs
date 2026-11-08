@@ -166,12 +166,12 @@ fn source_chain(error: &TreeTNOperationError) -> Vec<String> {
 }
 
 #[test]
-fn operation_stays_the_catch_all_and_renders_the_whole_chain() {
+fn operation_stays_the_catch_all_and_renders_one_level() {
     // Any failure this boundary cannot classify keeps the catch-all and the
-    // full source chain, which is what `From<anyhow::Error>` promises. The
-    // cause is wrapped in a context on purpose: the alternate (`{source:#}`)
-    // form is the only one that renders the root as well, so a formatter that
-    // drops it loses the outermost classification *and* the root text.
+    // full source chain, which is what `From<anyhow::Error>` promises. Its
+    // `Display` renders only the outermost link (`{source}`, as on `main`); the
+    // rest of the chain is read through `Error::source()`. Rendering the whole
+    // chain (`{source:#}`) made repeated propagation re-expand it every time.
     let error = TreeTNOperationError::from(anyhow::anyhow!("root cause").context("outer context"));
     assert!(
         matches!(error, TreeTNOperationError::Operation { .. }),
@@ -179,10 +179,17 @@ fn operation_stays_the_catch_all_and_renders_the_whole_chain() {
     );
     assert_eq!(
         error.to_string(),
-        "TreeTN operation failed: outer context: root cause",
-        "the catch-all must render the context and the root, not only the context"
+        "TreeTN operation failed: outer context",
+        "the catch-all renders one level; the root stays in the source chain"
     );
     assert_eq!(source_chain(&error), vec!["outer context", "root cause"]);
+
+    // Repeated typed -> `anyhow` -> typed propagation keeps the message bounded.
+    let mut error = TreeTNOperationError::from(anyhow::anyhow!("root"));
+    for _ in 0..15 {
+        error = TreeTNOperationError::from(anyhow::Error::new(error).context("outer"));
+    }
+    assert_eq!(error.to_string(), "TreeTN operation failed: outer");
 }
 
 #[test]

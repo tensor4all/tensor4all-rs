@@ -318,7 +318,7 @@ pub enum TreeTNOperationError {
     },
     /// An underlying tensor, storage, or backend operation failed, or an
     /// internal invariant was violated.
-    #[error("TreeTN operation failed: {source:#}")]
+    #[error("TreeTN operation failed: {source}")]
     Operation {
         /// Original diagnostic, preserving the full source chain.
         #[source]

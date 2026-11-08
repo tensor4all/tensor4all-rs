@@ -953,7 +953,14 @@ where
             stack,
             select,
         )
-        .map_err(|error| error.context(format!("{context_name}: factorization failed")))?;
+        .map_err(|error| {
+            // Keep the whole chain as the source, and name its root cause
+            // (for example the rank-zero bond of an LU/CI split of a zero
+            // tensor) in the top-level message, which is all that
+            // `TreeTNOperationError::Operation`'s `Display` shows.
+            let cause = error.root_cause().to_string();
+            error.context(format!("{context_name}: factorization failed: {cause}"))
+        })?;
 
         let left_tensor = factorize_result.left;
         let right_tensor = factorize_result.right;
