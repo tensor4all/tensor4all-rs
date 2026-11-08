@@ -8,11 +8,11 @@ use tensor4all_treetn::interpolation::EvalContext;
 use crate::assemble::MultiIndex;
 use crate::batch::{assemble_candidate_points, candidate_entries};
 
-/// Target evaluation and logical memo payload accounting for one TreeTCI run.
+/// Target evaluation and memo accounting for one TreeTCI run.
 ///
 /// Counts oracle requests and successful evaluations, not FLOPs or avoided
-/// contractions. Payload bytes exclude allocator/hash-table overhead and are
-/// not a bound on process RSS. Continued optimization starts a new run cache.
+/// contractions. Memo bytes are those of its hash tables, excluding allocator
+/// overhead. Continued optimization starts a new run cache.
 ///
 /// # Examples
 /// ```
@@ -39,11 +39,13 @@ pub struct TreeTciEvaluationStats {
     pub cache_misses: usize,
     /// Entries retained at the end of this call, before the run cache is dropped.
     pub cached_entries: usize,
-    /// Logical retained key/value bytes, excluding hash-table and allocator overhead.
+    /// Bytes of the memo's hash tables at the end of this call, excluding allocator overhead.
     pub retained_bytes: usize,
-    /// Successful unique-value insertions skipped at the retained-byte limit.
+    /// Insertions skipped because the limit is below the smallest table.
     pub dropped_inserts: usize,
-    /// Configured logical byte limit; `None` means memoization was disabled.
+    /// Entries evicted to keep the memo within its limit (oldest first).
+    pub evicted_entries: usize,
+    /// Configured byte limit of the tables; `None` means memoization was disabled.
     pub retained_byte_limit: Option<usize>,
 }
 
@@ -470,6 +472,7 @@ where
             stats.cached_entries = cache.len();
             stats.retained_bytes = cache.retained_bytes();
             stats.dropped_inserts = cache.dropped_inserts();
+            stats.evicted_entries = cache.evicted_entries();
             stats.retained_byte_limit = Some(cache.retained_byte_limit());
         }
         stats
