@@ -667,7 +667,9 @@ fn cached_values_into_typed<T: TensorElement>(
 /// let error = evaluator
 ///     .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
 ///     .unwrap_err();
-/// let tensor4all_treetn::TreeTNOperationError::ScalarKindMismatch(mismatch) = error else {
+/// let tensor4all_treetn::TreeTNOperationError::ScalarKindMismatch { payload: mismatch, .. } =
+///     error
+/// else {
 ///     panic!("expected the dtype variant, got {error:?}");
 /// };
 /// assert_eq!(mismatch.stored, "c64");

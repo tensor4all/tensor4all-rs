@@ -29,8 +29,8 @@ pub(crate) fn ensure_finite_values<T: TreeAciScalar>(
 /// evaluator failure keeps propagating as the wrapped TreeTN error.
 pub(crate) fn typed_evaluation_error(error: TreeTNOperationError) -> TreeAciError {
     match error {
-        TreeTNOperationError::ScalarKindMismatch(mismatch) => TreeAciError::ScalarKind {
-            message: mismatch.to_string(),
+        TreeTNOperationError::ScalarKindMismatch { payload, .. } => TreeAciError::ScalarKind {
+            message: payload.to_string(),
         },
         error => TreeAciError::from(error),
     }

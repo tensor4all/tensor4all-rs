@@ -17,7 +17,11 @@ literals, or named public types:
   the catch-all. A caller matches the variant instead of downcasting a public
   field, and reads the cause through `std::error::Error::source()`. `Display`
   now prints the whole source chain, so one `format!("{error}")` keeps the
-  context lines that the former `{source}` placeholder dropped. Failures that
+  context lines that the former `{source}` placeholder dropped. When
+  `From<anyhow::Error>` recovers a classified variant from an `anyhow` chain, the
+  context layers around it are re-rendered onto the variant as text, so a typed
+  context cannot be downcast after that conversion; the `Operation` catch-all
+  keeps the typed chain. Failures that
   reach the boundary through an internal `anyhow` helper - tensor, storage and
   backend failures, the option checks the factorization runs in
   `tensor4all-core`, and every diagnostic an internal helper raises - keep the

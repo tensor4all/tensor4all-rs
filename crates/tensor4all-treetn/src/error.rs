@@ -305,12 +305,17 @@ pub enum TreeTNOperationError {
     /// the payload's own `Display`, named here instead of forwarded through
     /// `#[error(transparent)]`, because transparent forwarding exposes the
     /// payload's `source()` (which it does not have) instead of the payload.
-    #[error("{0}")]
-    ScalarKindMismatch(
-        #[from]
+    ///
+    /// `context` prefixes the layers [`From<anyhow::Error>`] found around the
+    /// payload, already rendered as text.
+    #[error("{context}{payload}")]
+    ScalarKindMismatch {
+        /// The dtype mismatch.
         #[source]
-        crate::EvaluatedScalarKindMismatch,
-    ),
+        payload: crate::EvaluatedScalarKindMismatch,
+        /// Rendered `anyhow` context layers, each followed by `": "`.
+        context: String,
+    },
     /// An underlying tensor, storage, or backend operation failed, or an
     /// internal invariant was violated.
     #[error("TreeTN operation failed: {source:#}")]
@@ -342,16 +347,64 @@ impl TreeTNOperationError {
             source: source.into(),
         }
     }
+
+    /// Prefixes whatever diagnostic the variant carries with `context`, keeping
+    /// the variant: the classified counterpart of `anyhow::Context`. The
+    /// context is kept as rendered text, not as its original type.
+    pub(crate) fn with_context(self, context: impl std::fmt::Display) -> Self {
+        let context = context.to_string();
+        match self {
+            Self::InvalidConfiguration { source } => Self::InvalidConfiguration {
+                source: source.context(context),
+            },
+            Self::InvalidGraph { source } => Self::InvalidGraph {
+                source: source.context(context),
+            },
+            Self::IndexOutOfBounds { source } => Self::IndexOutOfBounds {
+                source: source.context(context),
+            },
+            Self::Operation { source } => Self::Operation {
+                source: source.context(context),
+            },
+            Self::ScalarKindMismatch {
+                payload,
+                context: outer,
+            } => Self::ScalarKindMismatch {
+                payload,
+                context: format!("{context}: {outer}"),
+            },
+        }
+    }
+}
+
+impl From<crate::EvaluatedScalarKindMismatch> for TreeTNOperationError {
+    fn from(payload: crate::EvaluatedScalarKindMismatch) -> Self {
+        Self::ScalarKindMismatch {
+            payload,
+            context: String::new(),
+        }
+    }
 }
 
 impl From<anyhow::Error> for TreeTNOperationError {
     /// Internal `?` conversions land in the catch-all variant with their chain
-    /// intact — unless the chain already carries a classified variant, which is
-    /// returned as it is so a wrapper that added context does not erase the
-    /// classification the caller acts on.
+    /// intact. A chain that already carries a classified variant keeps that
+    /// variant, and the `anyhow` context layers around it are rendered back onto
+    /// the variant diagnostic: `downcast` reaches the variant but drops them.
+    /// Those layers are kept as text, so a typed context (`io::Error` and the
+    /// like) can no longer be downcast after this conversion; the catch-all
+    /// keeps it typed.
     fn from(source: anyhow::Error) -> Self {
+        let outer: Vec<String> = source
+            .chain()
+            .take_while(|cause| cause.downcast_ref::<Self>().is_none())
+            .map(|cause| cause.to_string())
+            .collect();
         match source.downcast::<Self>() {
-            Ok(classified) => classified,
+            Ok(classified) => outer
+                .into_iter()
+                .rev()
+                .fold(classified, |error, text| error.with_context(text)),
             Err(source) => Self::Operation { source },
         }
     }

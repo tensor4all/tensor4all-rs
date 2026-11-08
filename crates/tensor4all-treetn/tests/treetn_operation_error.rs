@@ -146,7 +146,10 @@ fn scalar_kind_mismatch_covers_stored_dtype_refusals() {
         "the mismatch payload must be the source link, not a None from transparent forwarding"
     );
     assert_eq!(error.to_string(), "cannot decode a c64 TreeTN value as f64");
-    let TreeTNOperationError::ScalarKindMismatch(mismatch) = error else {
+    let TreeTNOperationError::ScalarKindMismatch {
+        payload: mismatch, ..
+    } = error
+    else {
         panic!("a complex payload must not answer a real request, got {error:?}");
     };
     assert_eq!((mismatch.stored, mismatch.requested), ("c64", "f64"));
@@ -203,5 +206,53 @@ fn wrappers_keep_the_classification() {
     assert!(
         matches!(error, TreeTNOperationError::InvalidGraph { .. }),
         "canonicalize must keep the unknown-node classification, got {error:?}"
+    );
+}
+
+#[test]
+fn a_dtype_mismatch_keeps_the_anyhow_context() {
+    // Same contract as `a_classified_error_keeps_the_anyhow_context`, for the
+    // variant whose payload is not an `anyhow::Error`: the context layers are
+    // rendered back onto it instead of being dropped.
+    let mismatch = tensor4all_treetn::EvaluatedScalarKindMismatch {
+        stored: "c64",
+        requested: "f64",
+    };
+    let wrapped = anyhow::Error::new(TreeTNOperationError::from(mismatch)).context("request 42");
+    let converted = TreeTNOperationError::from(wrapped);
+    let TreeTNOperationError::ScalarKindMismatch { payload, .. } = &converted else {
+        panic!("the dtype variant must survive the conversion, got {converted:?}");
+    };
+    assert_eq!((payload.stored, payload.requested), ("c64", "f64"));
+    let text = format!("{converted:#}");
+    assert!(
+        text.contains("request 42"),
+        "the outer context was dropped: {text}"
+    );
+    assert!(
+        text.contains("cannot decode a c64 TreeTN value as f64"),
+        "the diagnostic was dropped: {text}"
+    );
+}
+
+#[test]
+fn a_classified_error_keeps_the_anyhow_context() {
+    let original = TreeTNOperationError::InvalidGraph {
+        source: anyhow::anyhow!("missing node"),
+    };
+    let wrapped = anyhow::Error::new(original).context("request 42");
+    let converted = TreeTNOperationError::from(wrapped);
+    assert!(
+        matches!(converted, TreeTNOperationError::InvalidGraph { .. }),
+        "the variant must survive the conversion, got {converted:?}"
+    );
+    let text = format!("{converted:#}");
+    assert!(
+        text.contains("request 42"),
+        "the outer context was dropped: {text}"
+    );
+    assert!(
+        text.contains("missing node"),
+        "the diagnostic was dropped: {text}"
     );
 }
