@@ -1059,6 +1059,194 @@ fn small_positive_branch_slice_budget_still_retains_the_branching_slices() {
     );
 }
 
+/// A budget above the one-branching-tensor floor is used as requested (never replaced by an unbounded sentinel) and is
+/// still enforced: a readout that crosses two branching nodes prepares twice the floor, and the slices that would
+/// cross the budget are refused instead of retained. Values are bitwise those of the zero-budget route.
+#[test]
+fn oversized_branch_slice_budget_is_kept_as_requested_and_still_caps_retention() {
+    let (tree, indices) = two_branch_tree_of(|value| value);
+    let values = two_branch_values();
+    let points = ColMajorArrayRef::new(&values, &[6, 64]).unwrap();
+    let evaluator = |budget: usize| {
+        TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(0),
+                max_batch_points: Some(usize::MAX),
+                branch_slice_cache_max_bytes: budget,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    // Each branching tensor has 3 × 6 × 6 × 6 = 648 entries: 5184 B as f64, 10368 B as Complex64. Its three physical
+    // slices are 216 entries each (1728 B / 3456 B), and one readout prepares the slices of both branching nodes: six
+    // of them, 10368 B as f64 and 20736 B as Complex64.
+    let (tensor_f64, slice_f64, total_f64) = (5184, 1728, 10368);
+    let (tensor_c64, slice_c64, total_c64) = (10368, 3456, 20736);
+
+    // An oversized budget is kept verbatim for both scalar kinds, not replaced by an unbounded sentinel.
+    for budget in [1 << 40, usize::MAX] {
+        assert_eq!(
+            evaluator(budget).prepared_branch_slices_f64.max_bytes,
+            budget
+        );
+        assert_eq!(
+            evaluator(budget).prepared_branch_slices_c64.max_bytes,
+            budget
+        );
+    }
+
+    // The floor budget retains exactly three of the six visited slices and refuses the rest, so retained bytes stop
+    // at the budget rather than following the readout.
+    let mut capped = evaluator(tensor_f64);
+    let capped_values = capped
+        .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(capped.prepared_branch_slices_f64.max_bytes, tensor_f64);
+    assert_eq!(capped.prepared_branch_slices_f64.slices.len(), 3);
+    assert_eq!(
+        capped.prepared_branch_slices_f64.retained_bytes(),
+        3 * slice_f64
+    );
+
+    // A budget covering every visited slice retains all six, so the ceiling follows the requested budget.
+    let mut full = evaluator(total_f64);
+    let full_values = full
+        .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(full.prepared_branch_slices_f64.slices.len(), 6);
+    assert_eq!(full.prepared_branch_slices_f64.retained_bytes(), total_f64);
+
+    let mut zero = evaluator(0);
+    let zero_values = zero
+        .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(zero.prepared_branch_slices_f64.slices.len(), 0);
+    let bits = |values: &[f64]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&capped_values), bits(&zero_values));
+    assert_eq!(bits(&full_values), bits(&zero_values));
+
+    // Complex64 tree: the same two numbers per slice, twice as many bytes, and the same ceiling behaviour.
+    let (complex_tree, complex_indices) =
+        two_branch_tree_of(|value| Complex64::new(value, 0.5 * value - 0.1));
+    let complex_evaluator = |budget: usize| {
+        TreeTNCachedEvaluator::new(
+            &complex_tree,
+            &complex_indices,
+            CachedEvaluatorOptions {
+                center: Some(0),
+                max_batch_points: Some(usize::MAX),
+                branch_slice_cache_max_bytes: budget,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    let mut complex_capped = complex_evaluator(tensor_c64);
+    let complex_capped_values = complex_capped
+        .evaluate_batched_typed::<Complex64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(
+        complex_capped.prepared_branch_slices_c64.max_bytes,
+        tensor_c64
+    );
+    assert_eq!(complex_capped.prepared_branch_slices_c64.slices.len(), 3);
+    assert_eq!(
+        complex_capped.prepared_branch_slices_c64.retained_bytes(),
+        3 * slice_c64
+    );
+    let mut complex_full = complex_evaluator(total_c64);
+    let complex_full_values = complex_full
+        .evaluate_batched_typed::<Complex64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(complex_full.prepared_branch_slices_c64.slices.len(), 6);
+    assert_eq!(
+        complex_full.prepared_branch_slices_c64.retained_bytes(),
+        total_c64
+    );
+    let mut complex_zero = complex_evaluator(0);
+    let complex_zero_values = complex_zero
+        .evaluate_batched_typed::<Complex64>(points, EvaluationHint::default())
+        .unwrap();
+    let complex_bits = |values: &[Complex64]| {
+        values
+            .iter()
+            .map(|z| (z.re.to_bits(), z.im.to_bits()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        complex_bits(&complex_capped_values),
+        complex_bits(&complex_zero_values)
+    );
+    assert_eq!(
+        complex_bits(&complex_full_values),
+        complex_bits(&complex_zero_values)
+    );
+}
+
+/// Two degree-three nodes, so one readout prepares more physical-slice bytes than one branching tensor holds:
+/// 0 - 1 - {2 - {4, 5}, 3}. Every bond has dimension 6 and every physical site dimension 3.
+fn two_branch_tree_of<T: tensor4all_core::TensorElement>(
+    entry: impl Fn(f64) -> T,
+) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+    let physical_1 = DynIndex::new_dyn(3);
+    let physical_2 = DynIndex::new_dyn(3);
+    let sites: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(4)).collect();
+    let bond_01 = DynIndex::new_dyn(6);
+    let bond_12 = DynIndex::new_dyn(6);
+    let bond_13 = DynIndex::new_dyn(6);
+    let bond_24 = DynIndex::new_dyn(6);
+    let bond_25 = DynIndex::new_dyn(6);
+    let values = |len: usize| -> Vec<T> {
+        (0..len)
+            .map(|value| entry((value % 29) as f64 / 13.0 - 0.6))
+            .collect()
+    };
+    let tensors = vec![
+        IdxTensor::from_dense(vec![bond_01.clone(), sites[0].clone()], values(24)).unwrap(),
+        IdxTensor::from_dense(
+            vec![
+                bond_01,
+                bond_12.clone(),
+                bond_13.clone(),
+                physical_1.clone(),
+            ],
+            values(648),
+        )
+        .unwrap(),
+        IdxTensor::from_dense(
+            vec![
+                bond_12,
+                bond_24.clone(),
+                bond_25.clone(),
+                physical_2.clone(),
+            ],
+            values(648),
+        )
+        .unwrap(),
+        IdxTensor::from_dense(vec![bond_13, sites[1].clone()], values(24)).unwrap(),
+        IdxTensor::from_dense(vec![bond_24, sites[2].clone()], values(24)).unwrap(),
+        IdxTensor::from_dense(vec![bond_25, sites[3].clone()], values(24)).unwrap(),
+    ];
+    let tree = TreeTN::from_tensors(tensors, vec![0, 1, 2, 3, 4, 5]).unwrap();
+    let mut indices = vec![physical_1, physical_2];
+    indices.extend(sites);
+    (tree, indices)
+}
+
+fn two_branch_values() -> Vec<usize> {
+    let (point_count, dims) = (64, [3usize, 3, 4, 4, 4, 4]);
+    let mut values = vec![0usize; dims.len() * point_count];
+    for point in 0..point_count {
+        for (axis, &dim) in dims.iter().enumerate() {
+            values[dims.len() * point + axis] = (point / (axis + 1)) % dim;
+        }
+    }
+    values
+}
+
 #[test]
 fn stack_tensors_adds_trailing_assignment_axis_in_column_major_order() {
     let batch = DynIndex::new_dyn(2);
