@@ -183,16 +183,27 @@ fn largest(values: impl Iterator<Item = f64>) -> f64 {
 /// carry different index identities and eager contexts, so a tensor subtraction
 /// would reject them (or answer `false`) before comparing anything.
 fn payload_difference(a: &IdxTensor, b: &IdxTensor) -> (f64, f64) {
-    let (a, b) = (payload(a), payload(b));
+    let (a_values, b_values) = (payload(a), payload(b));
     assert_eq!(
-        a.len(),
-        b.len(),
+        a_values.len(),
+        b_values.len(),
         "different payload lengths ({}/{}): a shortened result must fail here, not compare short",
-        a.len(),
-        b.len()
+        a_values.len(),
+        b_values.len()
     );
-    let magnitude = largest(a.iter().map(|v| v.norm()));
-    let difference = largest(a.iter().zip(&b).map(|(x, y)| (x - y).norm()));
+    // The same values in the same order can still describe another matrix: a
+    // `[2, 3]` and a `[3, 2]` payload have one length. Compare the shape too, so a
+    // wrong unfold or a transposed result fails instead of comparing flat.
+    assert_eq!(
+        a.dims(),
+        b.dims(),
+        "different payload shapes ({:?}/{:?}, {} elements each)",
+        a.dims(),
+        b.dims(),
+        a_values.len()
+    );
+    let magnitude = largest(a_values.iter().map(|v| v.norm()));
+    let difference = largest(a_values.iter().zip(&b_values).map(|(x, y)| (x - y).norm()));
     (magnitude, difference)
 }
 
@@ -274,9 +285,9 @@ fn thread_count_may_change_the_last_bits_today() {
             for (&threads, (input, factors)) in THREAD_COUNTS.iter().zip(&runs) {
                 let rebuilt = reconstruction(kind, factors);
                 // `payload_difference` asserts that the rebuilt payload has the
-                // input's element count, so a truncated result fails here instead
-                // of comparing short. The input, not another thread count, is the
-                // reference.
+                // input's element count **and shape**, so a truncated or
+                // mis-shaped result fails here instead of comparing short or flat.
+                // The input, not another thread count, is the reference.
                 let (magnitude, difference) = payload_difference(input, &rebuilt);
                 assert!(
                     difference.is_finite() && magnitude.is_finite(),
@@ -369,4 +380,19 @@ fn a_short_payload_is_rejected() {
     let one = IdxTensor::from_dense(vec![short], vec![1.0_f64]).expect("dense");
     let two = IdxTensor::from_dense(vec![long], vec![1.0_f64, 2.0]).expect("dense");
     let _ = payload_difference(&one, &two);
+}
+
+/// The same values in the same order, but a different shape, must fail: an
+/// element count alone does not say which matrix a payload is.
+#[test]
+#[should_panic(expected = "different payload shapes")]
+fn a_payload_with_a_different_shape_is_rejected() {
+    let (two, three) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3));
+    let values = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let two_by_three =
+        IdxTensor::from_dense(vec![two.clone(), three.clone()], values.clone()).expect("dense");
+    let three_by_two = IdxTensor::from_dense(vec![three, two], values).expect("dense");
+    assert_eq!(two_by_three.dims(), vec![2, 3]);
+    assert_eq!(three_by_two.dims(), vec![3, 2]);
+    let _ = payload_difference(&two_by_three, &three_by_two);
 }
