@@ -88,51 +88,32 @@ pub(crate) fn zipup_identity_node_skips() -> usize {
     ZIPUP_IDENTITY_NODE_SKIPS.with(std::cell::Cell::get)
 }
 
-/// Whether the network certifies `source`'s tensor as an isometry toward
-/// `destination`, i.e. as isometric on the side facing away from the parent.
+/// Whether emitting `source` instead of contracting and factorizing it is exact.
 ///
-/// `ortho_towards` records, per edge, the node the canonical form is centred on;
-/// a tensor on the far side of that direction is an isometry toward it. A network
-/// that is not in canonical form certifies nothing.
-fn is_isometric_toward_parent<T, V>(tn: &TreeTN<T, V>, source: &V, destination: &V) -> bool
-where
-    T: TensorLike,
-    V: Clone + std::hash::Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
-{
-    tn.edge_between(source, destination)
-        .and_then(|edge| tn.ortho_towards_node(edge))
-        .is_some_and(|toward| toward == destination)
-}
-
-/// Whether emitting `source` instead of contracting and factorizing it is exact,
-/// i.e. whether the factorization this replaces would not have truncated.
+/// The pass-through is an **opt-in for exactness**, never an inference from the
+/// caller's silence. It is allowed only when the caller asks for an SVD policy
+/// whose threshold is exactly zero (no truncation is possible anywhere in the
+/// zip-up) and sets no [`max_bond_dim`]. Anything else — an absent policy, which
+/// resolves to the process-wide default cutoff at the factorizer, or a cap, which
+/// truncates the block itself — keeps the ordinary contraction and factorization,
+/// so no caller's numerics change without them asking for it.
 ///
-/// With no truncation control at all, every factorization is exact, so the skip is
-/// exact wherever the node is a zip-up leaf. With a *relative* policy an isometric
-/// node qualifies too: its block is full rank with all singular values one, so the
-/// policy drops nothing there, and its remainder is unitary, so the parent's cutoff
-/// sees the same spectrum it would without the node.
+/// The earlier form of this guard derived exactness from `svd_policy.is_none()`,
+/// which is vacuous: `None` means "resolve the default", and the default is a
+/// relative `1e-12` cutoff (`core::defaults::svd`), itself a mutable global that
+/// another part of the program can change.
 ///
-/// A `max_bond_dim` never qualifies: the cap truncates the block itself rather than
-/// a relative tail, and the pass-through cannot express that truncation. Measured on
-/// a canonical comb, a cap of two moves the truncated result by `7e-4` even where it
-/// covers the skipped node's own bond.
-fn zipup_skip_is_exact<T, V>(
-    tn: &TreeTN<T, V>,
-    source: &V,
-    destination: &V,
+/// `form` must be [`CanonicalForm::Unitary`]: the zip-up's own QR/LU forms do not
+/// emit a node as a plain relabeling.
+fn zipup_skip_is_exact(
     form: CanonicalForm,
     svd_policy: Option<SvdTruncationPolicy>,
     max_bond_dim: Option<usize>,
-) -> bool
-where
-    T: TensorLike,
-    V: Clone + std::hash::Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
-{
+) -> bool {
     if form != CanonicalForm::Unitary || max_bond_dim.is_some() {
         return false;
     }
-    svd_policy.is_none() || is_isometric_toward_parent(tn, source, destination)
+    svd_policy.is_some_and(|policy| policy.threshold == 0.0)
 }
 
 /// Sum out the identity bonds of skipped nodes that the given block still
@@ -1664,16 +1645,7 @@ where
             // The parent's copy of the emitted node's identity bond is left
             // without a partner, so it is recorded and summed out when the parent
             // is processed.
-            if is_leaf
-                && zipup_skip_is_exact(
-                    self,
-                    source_name,
-                    destination_name,
-                    form,
-                    svd_policy,
-                    max_bond_dim,
-                )
-            {
+            if is_leaf && zipup_skip_is_exact(form, svd_policy, max_bond_dim) {
                 if let Some(pairs) = identity_nodes
                     .get(source_name)
                     .filter(|pairs| !pairs.is_empty())

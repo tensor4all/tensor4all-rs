@@ -2529,6 +2529,10 @@ fn apply_zipup_skips_the_nodes_its_operator_does_not_touch() {
         &state,
         ApplyOptions {
             center: Some("hub".to_string()),
+            // The skip is an opt-in for exactness: a zero threshold means the
+            // factorizations it replaces cannot cut anything. An absent policy
+            // does not qualify (it resolves to the default cutoff).
+            svd_policy: Some(SvdTruncationPolicy::new(0.0)),
             ..ApplyOptions::zipup()
         },
     )
@@ -2693,64 +2697,68 @@ fn apply_without_identity_skip(
     transform_output_to_true(&full_operator, contracted).unwrap()
 }
 
-/// The reviewer's counterexample (#1197): a four-node star whose untouched
-/// branch is not an isometry toward the centre, with an SVD truncation policy.
+/// The reviewer's four-node counterexample (#1197), kept as a fence.
 ///
-/// The untouched leaf carries `diag(1e-8, 1e8)` and the hub `diag(1, 1e-8)`, so
-/// factorizing the leaf does not leave a unitary remainder: skipping it would
-/// hand the hub's cutoff a differently scaled block, and the cutoff can drop a
-/// direction that carries amplitude 1.
-fn build_anisotropic_star() -> (TreeTN<IdxTensor, String>, LinearOperator<IdxTensor, String>) {
-    let s_hub = make_index(1);
-    let s_a = make_index(2);
+/// Nodes `a` (site dim 1), `x` (1), `b` (2), `r` (2); bonds `a-x = 1`,
+/// `b-x = 2`, `x-r = 2`. The untouched leaf carries `diag(1, 1e10)` and the hub
+/// `diag(1, 1e-14)`, so the state's exact amplitudes on `b`'s site are `(1, 1e-4)`.
+/// The network is deliberately **not** canonicalized: a canonical form is what
+/// hid this from the existing fixtures.
+///
+/// If the node is passed through, its weights never reach `x`, and `x`'s cutoff
+/// (`rtol = 1e-6`) drops the direction carrying `1e-4`: the result becomes
+/// `(1, 0)`, an error of `1e-4`. This test asserts `(1, 1e-4)`, so widening the
+/// skip back over a truncating policy fails here.
+fn build_four_node_star() -> (TreeTN<IdxTensor, String>, LinearOperator<IdxTensor, String>) {
+    let s_a = make_index(1);
+    let s_x = make_index(1);
     let s_b = make_index(2);
-    let s_c = make_index(2);
-    let bond_a = make_index(1);
-    let bond_b = make_index(2);
-    let bond_c = make_index(2);
+    let s_r = make_index(2);
+    let bond_ax = make_index(1);
+    let bond_bx = make_index(2);
+    let bond_xr = make_index(2);
 
-    // Column-major over [site, bond_a, bond_b, bond_c] with dims [1, 1, 2, 2]:
-    // the flat position of (0, 0, bond_b, bond_c) is `bond_b + 2 * bond_c`, so
-    // `diag(1, 1e-8)` over (bond_b, bond_c) is this.
-    let hub = IdxTensor::from_dense(
+    // Amplitude = a * x * b * r with `x` and `b` diagonal over their bond pair,
+    // so the state reduces to a diagonal in `(s_b, s_r)`: 1 and 1e10 * 1e-14.
+    let t_a = IdxTensor::from_dense(vec![s_a.clone(), bond_ax.clone()], vec![1.0]).unwrap();
+    // Column-major over [site, bond_ax, bond_bx, bond_xr] with dims
+    // [1, 1, 2, 2]: the flat position of (0, 0, i, j) is `i + 2 * j`, so
+    // `diag(1, 1e-14)` is this.
+    let t_x = IdxTensor::from_dense(
         vec![
-            s_hub.clone(),
-            bond_a.clone(),
-            bond_b.clone(),
-            bond_c.clone(),
+            s_x.clone(),
+            bond_ax.clone(),
+            bond_bx.clone(),
+            bond_xr.clone(),
         ],
-        vec![1.0, 0.0, 0.0, 1.0e-8],
+        vec![1.0, 0.0, 0.0, 1.0e-14],
     )
     .unwrap();
-    let t_a = IdxTensor::from_dense(vec![s_a.clone(), bond_a.clone()], vec![1.0, 1.0]).unwrap();
+    // Column-major over [site, bond_bx] with dims [2, 2]: `diag(1, 1e10)`.
     let t_b = IdxTensor::from_dense(
-        vec![s_b.clone(), bond_b.clone()],
-        vec![1.0e-8, 0.0, 0.0, 1.0e8],
+        vec![s_b.clone(), bond_bx.clone()],
+        vec![1.0, 0.0, 0.0, 1.0e10],
     )
     .unwrap();
-    let t_c =
-        IdxTensor::from_dense(vec![s_c.clone(), bond_c.clone()], vec![1.0, 0.0, 0.0, 1.0]).unwrap();
+    let t_r = IdxTensor::from_dense(vec![bond_xr.clone(), s_r.clone()], vec![1.0, 0.0, 0.0, 1.0])
+        .unwrap();
 
     let state = TreeTN::from_tensors(
-        vec![hub, t_a, t_b, t_c],
+        vec![t_a, t_x, t_b, t_r],
         vec![
-            "hub".to_string(),
             "a".to_string(),
+            "x".to_string(),
             "b".to_string(),
-            "c".to_string(),
+            "r".to_string(),
         ],
     )
     .unwrap();
 
-    // Identity on `a` only; a single-node MPO has no bonds.
-    let input_a = make_index(2);
-    let output_a = make_index(2);
+    // Identity on `a` only: a single-node MPO with no bonds.
+    let input_a = make_index(1);
+    let output_a = make_index(1);
     let mpo = TreeTN::from_tensors(
-        vec![IdxTensor::from_dense(
-            vec![input_a.clone(), output_a.clone()],
-            vec![1.0, 0.0, 0.0, 1.0],
-        )
-        .unwrap()],
+        vec![IdxTensor::from_dense(vec![input_a.clone(), output_a.clone()], vec![1.0]).unwrap()],
         vec!["a".to_string()],
     )
     .unwrap();
@@ -2783,121 +2791,115 @@ fn apply_zipup_does_not_skip_a_node_that_is_not_isometric_toward_the_center() {
     use crate::operator::ApplyOptions;
     use crate::treetn::contraction::zipup_identity_node_skips;
 
-    let (state, operator) = build_anisotropic_star();
+    let (state, operator) = build_four_node_star();
     let options = ApplyOptions {
-        center: Some("c".to_string()),
-        svd_policy: Some(SvdTruncationPolicy::new(1.0e-6)),
+        center: Some("r".to_string()),
+        svd_policy: Some(SvdTruncationPolicy::new(1.0e-12)),
         ..ApplyOptions::zipup()
     };
 
     let skipped_before = zipup_identity_node_skips();
     let result = apply_linear_operator(&operator, &state, options.clone()).unwrap();
     let skipped = zipup_identity_node_skips() - skipped_before;
-    let reference = apply_without_identity_skip(&operator, &state, "c", &options);
 
-    let deviation = dense_deviation(&result, &reference);
-    assert!(
-        deviation <= 1.0e-12,
-        "skipping a non-isometric untouched node changed the truncated result by {deviation:e}"
-    );
-    // The network is not in canonical form, so nothing certifies the untouched
-    // leaf as an isometry toward the centre and it is factorized as before.
-    assert_eq!(skipped, 0, "an uncertified untouched node is not skipped");
-}
-
-/// The pass-through stands in for a factorization, so it is allowed only where
-/// that factorization was exact: always with no truncation requested, and with a
-/// truncation requested only for a node the state certifies as isometric toward
-/// the centre, whose bond a cap still covers.
-#[test]
-fn apply_zipup_skips_only_where_the_factorization_it_replaces_is_exact() {
-    use crate::operator::apply_linear_operator;
-    use crate::operator::ApplyOptions;
-    use crate::treetn::contraction::zipup_identity_node_skips;
-
-    let (state, sites) = build_comb_state();
-    let state = state
-        .canonicalize(["hub".to_string()], Default::default())
-        .unwrap();
-    let operator = build_branch_operator(&sites);
-
-    // (cap, policy, expected skips). The comb is canonical at `hub`, so every
-    // untouched node is certified isometric toward it and a relative policy alone
-    // leaves the skip allowed. A bond cap never does: it truncates the block
-    // itself, which the pass-through cannot express.
-    let cases = [
-        (None, None, 4),
-        (None, Some(SvdTruncationPolicy::new(1.0e-6)), 4),
-        (None, Some(SvdTruncationPolicy::new(1.0e-8)), 4),
-        (None, Some(SvdTruncationPolicy::new(1.0e-12)), 4),
-        (Some(3), None, 0),
-        (Some(2), None, 0),
-        (Some(3), Some(SvdTruncationPolicy::new(1.0e-6)), 0),
-        (Some(2), Some(SvdTruncationPolicy::new(1.0e-6)), 0),
-    ];
-    for (max_bond_dim, svd_policy, expected_skips) in cases {
-        let options = ApplyOptions {
-            center: Some("hub".to_string()),
-            max_bond_dim,
-            svd_policy,
-            ..ApplyOptions::zipup()
-        };
-        let skipped_before = zipup_identity_node_skips();
-        let result = apply_linear_operator(&operator, &state, options.clone()).unwrap();
-        let skipped = zipup_identity_node_skips() - skipped_before;
-        assert_eq!(
-            skipped, expected_skips,
-            "skip count for cap {max_bond_dim:?} and policy {:?}",
-            options.svd_policy
-        );
-
-        // Whatever the skip does, the result must be the same apply without it.
-        let reference = apply_without_identity_skip(&operator, &state, "hub", &options);
-        let deviation = dense_deviation(&result, &reference);
+    // The fence, asserted first because it is the consequence that matters: the
+    // exact amplitudes are 1 and 1e-4. Pass `b` through and its weights never
+    // reach `x`, whose cutoff then drops the direction carrying 1e-4 and returns
+    // (1, 0) — a deviation of 1e-4, which this assertion catches before anyone
+    // looks at a skip counter. Sorted-abs so the check does not depend on the
+    // dense leg order; the two zeros are structural.
+    let mut dense = result.to_dense().unwrap().to_vec::<f64>().unwrap();
+    assert_eq!(dense.len(), 4, "the star's dense size");
+    dense.iter_mut().for_each(|value| *value = value.abs());
+    dense.sort_by(f64::total_cmp);
+    let expected = [0.0, 0.0, 1.0e-4, 1.0];
+    for (got, want) in dense.iter().zip(expected.iter()) {
         assert!(
-            deviation <= 1.0e-12,
-            "skipping changed the result by {deviation:e} for cap {max_bond_dim:?} and policy {:?}",
-            options.svd_policy
+            (got - want).abs() <= 1.0e-12 * want.max(1.0),
+            "amplitude {got:e} against the exact answer {want:e} — this input loses the \
+             dominant amplitude if the skip is enabled over a non-zero threshold"
         );
-        assert_eq!(result.node_count(), state.node_count());
     }
-}
 
-/// With no truncation control the pass-through is exact wherever the node is a
-/// zip-up leaf, certified or not: every factorization it replaces keeps its full
-/// rank. On a fixture with a 1e16 dynamic range the pass-through is also more
-/// accurate than the factorize-and-contract round trip it replaces.
-#[test]
-fn apply_zipup_passes_through_without_truncation_controls_even_uncertified() {
-    use crate::operator::apply_linear_operator;
-    use crate::operator::ApplyOptions;
-    use crate::treetn::contraction::zipup_identity_node_skips;
-
-    let (state, operator) = build_anisotropic_star();
-    let options = ApplyOptions {
-        center: Some("c".to_string()),
-        ..ApplyOptions::zipup()
-    };
-
-    let skipped_before = zipup_identity_node_skips();
-    let result = apply_linear_operator(&operator, &state, options.clone()).unwrap();
+    // A non-zero threshold is not an exactness opt-in, so nothing is skipped even
+    // though `b` is a zip-up leaf the operator does not touch.
     assert_eq!(
-        zipup_identity_node_skips() - skipped_before,
-        1,
-        "without truncation controls the untouched leaf passes through"
+        skipped, 0,
+        "a non-zero threshold must not enable the pass-through"
     );
 
     let exact = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
-    let reference = apply_without_identity_skip(&operator, &state, "c", &options);
-    let skipped_deviation = dense_deviation(&result, &exact);
-    let factorized_deviation = dense_deviation(&reference, &exact);
+    let deviation = dense_deviation(&result, &exact);
     assert!(
-        skipped_deviation <= 1.0e-15,
-        "the pass-through deviates from the exact local apply by {skipped_deviation:e}"
+        deviation <= 1.0e-12,
+        "the truncated result deviates from the exact local apply by {deviation:e}"
+    );
+    let reference = apply_without_identity_skip(&operator, &state, "r", &options);
+    let deviation_to_reference = dense_deviation(&result, &reference);
+    assert!(
+        deviation_to_reference <= 1.0e-12,
+        "the truncated result changed against the same apply with the skip off by \
+         {deviation_to_reference:e}"
+    );
+}
+
+/// The pass-through stands in for a factorization, so it is allowed only where
+/// the caller has asked for that factorization to be exact. An absent policy is
+/// not such a request: it resolves to the process-wide default cutoff.
+#[test]
+fn apply_zipup_never_skips_without_an_explicit_exact_policy() {
+    use crate::operator::apply_linear_operator;
+    use crate::operator::ApplyOptions;
+    use crate::treetn::contraction::zipup_identity_node_skips;
+
+    let (state, operator) = build_four_node_star();
+
+    // Default path: no policy, no cap. Nothing may be skipped, so a caller who
+    // never opted in keeps exactly the numerics it had before #1197.
+    let default_options = ApplyOptions {
+        center: Some("r".to_string()),
+        ..ApplyOptions::zipup()
+    };
+    let skipped_before = zipup_identity_node_skips();
+    let default_result = apply_linear_operator(&operator, &state, default_options.clone()).unwrap();
+    assert_eq!(
+        zipup_identity_node_skips() - skipped_before,
+        0,
+        "an absent policy is not an exactness opt-in"
+    );
+
+    // An explicit zero threshold is the same request for exactness, and buys the
+    // skip.
+    let exact_options = ApplyOptions {
+        center: Some("r".to_string()),
+        svd_policy: Some(SvdTruncationPolicy::new(0.0)),
+        ..ApplyOptions::zipup()
+    };
+    let skipped_before = zipup_identity_node_skips();
+    let exact_result = apply_linear_operator(&operator, &state, exact_options.clone()).unwrap();
+    assert_eq!(
+        zipup_identity_node_skips() - skipped_before,
+        1,
+        "a zero threshold opts the untouched leaf into the pass-through"
+    );
+
+    // Both are exact against the naive apply, and the opted-in path is not less
+    // accurate: skipping a node whose factorization cannot cut anything removes a
+    // round trip instead of adding error.
+    let naive = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+    let default_deviation = dense_deviation(&default_result, &naive);
+    let exact_deviation = dense_deviation(&exact_result, &naive);
+    assert!(
+        default_deviation <= 1.0e-15,
+        "the default path deviates from the exact local apply by {default_deviation:e}"
     );
     assert!(
-        skipped_deviation <= factorized_deviation,
-        "the pass-through ({skipped_deviation:e}) must not be less accurate than the \
-         factorized path ({factorized_deviation:e})"
+        exact_deviation <= 1.0e-15,
+        "the opted-in pass-through deviates from the exact local apply by {exact_deviation:e}"
+    );
+    assert!(
+        exact_deviation <= default_deviation,
+        "the pass-through ({exact_deviation:e}) must not be less accurate than the \
+         factorized path ({default_deviation:e})"
     );
 }

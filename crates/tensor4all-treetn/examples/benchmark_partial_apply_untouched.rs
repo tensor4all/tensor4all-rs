@@ -197,8 +197,11 @@ fn main() {
         .canonicalize(["hub".to_string()], Default::default())
         .unwrap();
     let operator = build_branch_operator(&sites, 0, 0, 4, 4);
+    // The pass-through is an opt-in for exactness (a zero threshold), so the
+    // "after" numbers are what asking for exactness buys, not the default path.
     let options = ApplyOptions {
         center: Some("hub".to_string()),
+        svd_policy: Some(SvdTruncationPolicy::new(0.0)),
         ..ApplyOptions::zipup()
     };
     let result = apply_linear_operator(&operator, &state, options).unwrap();
@@ -227,7 +230,9 @@ fn main() {
         let operator = build_branch_operator(&sites, 0, 0, covered, MPO_BOND);
         let options = ApplyOptions {
             center: Some("hub".to_string()),
-            svd_policy: Some(SvdTruncationPolicy::new(1.0e-8)),
+            // Exact opt-in: the skip is not available under a non-zero
+            // threshold, which is what makes it safe.
+            svd_policy: Some(SvdTruncationPolicy::new(0.0)),
             ..ApplyOptions::zipup()
         };
         let started = Instant::now();

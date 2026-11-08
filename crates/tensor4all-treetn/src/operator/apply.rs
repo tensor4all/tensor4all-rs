@@ -305,19 +305,23 @@ impl<V> ApplyOptions<V> {
 /// emits the bond the state already has there; the skip keeps that bond instead
 /// of rebuilding it.
 ///
-/// The pass-through requires the state to certify the node as isometric toward
-/// the center of the apply, i.e. to be in canonical form with the center on the
-/// parent's side. An isometric node leaves its parent a unitary remainder, so the
-/// parent's factorization and its truncation cutoff see the same spectrum either
-/// way; an uncertified node is contracted and factorized as before, because
-/// skipping it would hand the cutoff a differently scaled block. Truncation
-/// (`max_bond_dim`, `svd_policy`) is consequently not applied inside an untouched
-/// region — the pre-skip path could still round a rank-deficient block there — so
-/// truncate the result if that region should be compressed as well. Only the
-/// general tree schedule passes nodes through; a chain-shaped state keeps the
-/// chain schedule, which is the one that conditions both operands up front and
-/// truncates at the centre afterwards, and factorizes every node. The `Fit`,
-/// `Src` and `Naive` methods contract every filled-in node too.
+/// The pass-through is an opt-in for exactness and nothing else. It happens only
+/// when `options.svd_policy` is `Some(policy)` with `policy.threshold == 0.0`
+/// (so no factorization in the zip-up can drop a direction) and
+/// `options.max_bond_dim` is `None`; a zero threshold under either scaling
+/// qualifies. An absent policy does **not** qualify: it resolves to the
+/// process-wide default cutoff, which is a mutable global, so reading silence as
+/// "no truncation" would let the skip change a caller's numerics without them
+/// asking. A non-zero threshold does not qualify either, even on a node the state
+/// certifies as isometric toward the centre: the isometry argument holds for that
+/// node, but it is not a property the caller requested.
+///
+/// Consequently the untouched region is left at its input bond dimensions, which
+/// is what "exact" means here; compress the result afterwards if that region
+/// should be smaller. Only the general tree schedule passes nodes through; a
+/// chain-shaped state keeps the chain schedule, which conditions both operands up
+/// front and shrinks at the centre afterwards, and factorizes every node. The
+/// `Fit`, `Src` and `Naive` methods contract every filled-in node too.
 ///
 /// # Arguments
 ///
