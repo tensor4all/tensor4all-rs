@@ -377,6 +377,64 @@ impl TreeTNOperationError {
     }
 }
 
+/// Which variant an error reports, without the `anyhow` chain it carries.
+///
+/// Lets the classification be taken from a failure that `anyhow` only lends by
+/// reference and then rebuilt around the chain that failure already holds.
+#[derive(Clone)]
+enum Class {
+    InvalidConfiguration,
+    InvalidGraph,
+    IndexOutOfBounds,
+    Operation,
+    ScalarKindMismatch {
+        payload: crate::EvaluatedScalarKindMismatch,
+        context: String,
+    },
+}
+
+impl Class {
+    fn of(error: &TreeTNOperationError) -> Self {
+        match error {
+            TreeTNOperationError::InvalidConfiguration { .. } => Self::InvalidConfiguration,
+            TreeTNOperationError::InvalidGraph { .. } => Self::InvalidGraph,
+            TreeTNOperationError::IndexOutOfBounds { .. } => Self::IndexOutOfBounds,
+            TreeTNOperationError::Operation { .. } => Self::Operation,
+            TreeTNOperationError::ScalarKindMismatch { payload, context } => {
+                Self::ScalarKindMismatch {
+                    payload: *payload,
+                    context: context.clone(),
+                }
+            }
+        }
+    }
+
+    /// The variant around `source`, with `notes` joined in front of what it
+    /// cannot hold: only `ScalarKindMismatch` has no chain of its own.
+    fn into_error(self, source: anyhow::Error, notes: &[String]) -> TreeTNOperationError {
+        match self {
+            Self::InvalidConfiguration => TreeTNOperationError::InvalidConfiguration { source },
+            Self::InvalidGraph => TreeTNOperationError::InvalidGraph { source },
+            Self::IndexOutOfBounds => TreeTNOperationError::IndexOutOfBounds { source },
+            Self::Operation => TreeTNOperationError::Operation { source },
+            Self::ScalarKindMismatch { payload, context } => {
+                TreeTNOperationError::ScalarKindMismatch {
+                    payload,
+                    context: prefix_notes(notes, &context),
+                }
+            }
+        }
+    }
+}
+
+/// `notes`, outermost first, joined in front of `inline` as `note: inline`.
+fn prefix_notes(notes: &[String], inline: &str) -> String {
+    match notes.join(": ") {
+        prefix if prefix.is_empty() => inline.to_string(),
+        prefix => format!("{prefix}: {inline}"),
+    }
+}
+
 impl From<crate::EvaluatedScalarKindMismatch> for TreeTNOperationError {
     fn from(payload: crate::EvaluatedScalarKindMismatch) -> Self {
         Self::ScalarKindMismatch {
@@ -388,50 +446,51 @@ impl From<crate::EvaluatedScalarKindMismatch> for TreeTNOperationError {
 
 impl From<anyhow::Error> for TreeTNOperationError {
     /// Internal `?` conversions land in the catch-all variant with their chain
-    /// intact. Only an error that *is* a classified variant keeps that variant;
-    /// the `anyhow` context layers above it are rendered back onto the variant
-    /// diagnostic as text (a typed context cannot be recovered from `anyhow`, so
-    /// the catch-all is the variant that keeps types).
+    /// intact. An error that carries a classified variant keeps that variant;
+    /// the `anyhow` context layers above it are recorded as the message they
+    /// render (a typed context cannot be recovered from `anyhow`).
     ///
-    /// A `TreeTNOperationError` attached with `.context(..)` is *not* taken:
-    /// `anyhow::downcast` returns it too, and it is a note about some other
-    /// failure, not the failure itself.
+    /// The classification is taken from the error object, never from a layer
+    /// above it: `anyhow::downcast` prefers a typed context over the object, and
+    /// such a context is a note about the call, not the failure.
     fn from(source: anyhow::Error) -> Self {
-        let mut layers: Vec<String> = Vec::new();
-        let (found, is_operation, same_object) = {
-            // anyhow's own match can be a value attached with `.context(..)`;
-            // std's `dyn Error::downcast_ref` only matches a concrete chain link.
-            let outer_match = source.downcast_ref::<Self>();
-            let mut concrete: Option<&Self> = None;
-            for cause in source.chain() {
-                if let Some(error) = cause.downcast_ref::<Self>() {
-                    concrete = Some(error);
+        // `chain()` runs outside in: the `anyhow` contexts above the error
+        // object, then the object. A context link is not downcastable to `Self`
+        // (it is a `ContextError`), so the first match is the failure.
+        let mut notes: Vec<String> = Vec::new();
+        let mut failure = None;
+        for cause in source.chain() {
+            match cause.downcast_ref::<Self>() {
+                Some(error) => {
+                    failure = Some(error);
                     break;
                 }
-                layers.push(cause.to_string());
+                None => notes.push(cause.to_string()),
             }
-            match (outer_match, concrete) {
-                (Some(outer), Some(inner)) => (
-                    true,
-                    matches!(outer, Self::Operation { .. }),
-                    std::ptr::eq(outer, inner),
-                ),
-                _ => (false, false, false),
-            }
-        };
-        // Not classified, the catch-all itself, or the extraction would pick a
-        // different object than the chain link (a class used as a context): keep the
-        // whole chain, which is the variant that keeps typed contexts.
-        if !found || is_operation || !same_object {
+        }
+        let Some(failure) = failure else {
             return Self::Operation { source };
+        };
+        let Some(outer) = source.downcast_ref::<Self>() else {
+            // A classified error below an unclassified wrapper: the wrapper is
+            // what this boundary saw, so the catch-all keeps both.
+            return Self::Operation { source };
+        };
+        if !std::ptr::eq(outer, failure) {
+            // A typed context sits above the failure and `anyhow` hands that one
+            // out instead, so the failure is only reachable by reference. Keep
+            // the variant and the chain it already holds; the note stays in it.
+            let class = Class::of(failure);
+            return class.into_error(source, &notes);
         }
-        match source.downcast::<Self>() {
-            Ok(variant) => layers
-                .into_iter()
-                .rev()
-                .fold(variant, |error, text| error.with_context(text)),
-            Err(source) => Self::Operation { source },
-        }
+        let variant = match source.downcast::<Self>() {
+            Ok(variant) => variant,
+            Err(source) => return Self::Operation { source },
+        };
+        notes
+            .into_iter()
+            .rev()
+            .fold(variant, |error, text| error.with_context(text))
     }
 }
 

@@ -209,9 +209,12 @@ fn a_classified_error_used_as_context_does_not_replace_the_real_cause() {
 }
 
 #[test]
-fn the_catch_all_keeps_the_typed_context_of_the_original_error() {
-    // The `Operation` arm must not re-render its chain as text: a caller that wrapped a
-    // typed context around an unclassified failure can still downcast it afterwards.
+fn a_typed_note_keeps_its_message_without_nesting_the_catch_all() {
+    // A layer attached with `.context(..)` is a note about the call, so its
+    // message is what survives (as it already does for every other variant).
+    // The failure's own payload stays as the source chain, and the note is not
+    // wrapped around it as a second `Operation`, which is what made the chain
+    // grow on every pass through the boundary.
     let wrapped = anyhow::Error::new(TreeTNOperationError::Operation {
         source: anyhow::anyhow!("root"),
     })
@@ -220,21 +223,18 @@ fn the_catch_all_keeps_the_typed_context_of_the_original_error() {
         "retry later",
     ));
     let error = TreeTNOperationError::from(wrapped);
-    let TreeTNOperationError::Operation { source } = &error else {
-        panic!("an unclassified failure stays in the catch-all, got {error:?}");
-    };
     assert!(
-        source.downcast_ref::<std::io::Error>().is_some(),
-        "the typed context must survive the conversion, got {error:?}"
+        matches!(error, TreeTNOperationError::Operation { .. }),
+        "an unclassified failure stays in the catch-all, got {error:?}"
     );
+    assert_eq!(source_chain(&error), vec!["retry later", "root"]);
 }
 
 #[test]
-fn a_classification_in_the_context_does_not_replace_the_propagated_classification() {
+fn a_typed_context_does_not_replace_the_propagated_classification() {
     // Both the failure and the layer attached with `.context(..)` are classified.
-    // `anyhow` returns the context value from `downcast`, so the extraction cannot
-    // name the inner variant without taking it from the wrong object; the contract
-    // here is only that the failure survives, not that it keeps its variant.
+    // The failure is the error object; a typed context is a note about the call,
+    // so taking it as the variant would report the note as the failure.
     let wrapped = anyhow::Error::new(TreeTNOperationError::InvalidGraph {
         source: anyhow::anyhow!("real root"),
     })
@@ -243,8 +243,103 @@ fn a_classification_in_the_context_does_not_replace_the_propagated_classificatio
     });
     let error = TreeTNOperationError::from(wrapped);
     assert!(
-        matches!(&error, TreeTNOperationError::Operation { source } if format!("{source:#}").contains("real root")),
-        "the propagated failure must survive, got {error:?}"
+        matches!(error, TreeTNOperationError::InvalidGraph { .. }),
+        "a typed context must not replace the propagated classification, got {error:?}"
+    );
+    let text = format!("{error:#}");
+    assert!(
+        text.contains("real root"),
+        "the failure was dropped: {text}"
+    );
+    assert!(
+        text.contains("context note"),
+        "the context was dropped: {text}"
+    );
+}
+
+#[test]
+fn a_typed_context_above_the_failure_keeps_the_failure_chain() {
+    // The note above the failure keeps `anyhow` from handing the failure back by
+    // value, so the failure is only reachable by reference. Its own payload must
+    // still be there afterwards: a typed source may not be flattened to text.
+    let wrapped = anyhow::Error::new(TreeTNOperationError::InvalidGraph {
+        source: anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "missing input",
+        )),
+    })
+    .context(TreeTNOperationError::InvalidConfiguration {
+        source: anyhow::anyhow!("context note"),
+    });
+    let error = TreeTNOperationError::from(wrapped);
+    assert!(
+        matches!(error, TreeTNOperationError::InvalidGraph { .. }),
+        "the failure keeps its variant, got {error:?}"
+    );
+    let TreeTNOperationError::InvalidGraph { source } = &error else {
+        unreachable!("checked above")
+    };
+    assert!(
+        source
+            .chain()
+            .any(|link| link.downcast_ref::<std::io::Error>().is_some()),
+        "the failure's typed source must survive, got {error:?}"
+    );
+}
+
+#[test]
+fn a_classified_error_below_an_unclassified_wrapper_is_not_reclassified() {
+    // The wrapper is what the boundary saw; the classified error below it is not
+    // a note about the call, so promoting it would drop the wrapper's own
+    // message and repeat the payload it already renders.
+    #[derive(Debug)]
+    struct Wrapper(TreeTNOperationError);
+
+    impl std::fmt::Display for Wrapper {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "wrapper: {}", self.0)
+        }
+    }
+
+    impl std::error::Error for Wrapper {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    let error = TreeTNOperationError::from(anyhow::Error::new(Wrapper(
+        TreeTNOperationError::InvalidGraph {
+            source: anyhow::anyhow!("real root"),
+        },
+    )));
+    assert!(
+        matches!(error, TreeTNOperationError::Operation { .. }),
+        "an unclassified wrapper stays the catch-all, got {error:?}"
+    );
+    assert_eq!(
+        source_chain(&error).first().map(String::as_str),
+        Some("wrapper: invalid TreeTN graph: real root"),
+        "the wrapper's own message is not repeated, got {:?}",
+        source_chain(&error)
+    );
+}
+
+#[test]
+fn a_boundary_does_not_rewrap_the_chain_it_already_holds() {
+    // `Operation` already carries the whole chain, so wrapping it again at each
+    // boundary would nest one copy of the chain inside the next. One crossing may
+    // add the note it was given, and nothing else.
+    let mut error = TreeTNOperationError::Operation {
+        source: anyhow::anyhow!("root"),
+    };
+    for hop in 0..3 {
+        error =
+            TreeTNOperationError::from(anyhow::Error::new(error).context(format!("note {hop}")));
+    }
+    assert_eq!(
+        source_chain(&error),
+        vec!["note 2", "note 1", "note 0", "root"],
+        "each boundary may add its own note, not another copy of the chain"
     );
 }
 
