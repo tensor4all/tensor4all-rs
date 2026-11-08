@@ -23,7 +23,8 @@ With CG or BiCGSTAB selected the `gmres_*` controls would have no effect, so
 they must keep their default values; a changed value is an error rather than a
 silently ignored setting.
 
-Invalid options are always errors; no value is clamped or replaced. Zero
+Invalid options are always errors; no value is clamped or replaced. The affine
+coefficients `a0` and `a1` must be finite, and not both zero. Zero
 CG/BiCGSTAB tolerances are valid because those solvers stop when the residual
 is at most the threshold. `gmres_tol` must be positive because GMRES stops when
 the residual is strictly below it, so zero could never be met.

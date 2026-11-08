@@ -306,3 +306,47 @@ fn exactly_one_accepts_real_and_complex_spellings_only() {
     assert!(!is_exactly_one(&AnyScalar::new_real(-1.0)));
     assert!(!is_exactly_one(&AnyScalar::new_real(1.0 + f64::EPSILON)));
 }
+
+#[test]
+fn local_solver_rejects_non_finite_affine_coefficients_for_every_solver() {
+    for solver in choices() {
+        for (a0, a1, name) in [
+            (
+                AnyScalar::new_real(f64::NAN),
+                AnyScalar::new_real(1.0),
+                "a0",
+            ),
+            (
+                AnyScalar::new_real(f64::INFINITY),
+                AnyScalar::new_real(1.0),
+                "a0",
+            ),
+            (
+                AnyScalar::new_complex(1.0, f64::NAN),
+                AnyScalar::new_real(1.0),
+                "a0",
+            ),
+            (
+                AnyScalar::new_real(1.0),
+                AnyScalar::new_real(f64::NEG_INFINITY),
+                "a1",
+            ),
+            (
+                AnyScalar::new_real(1.0),
+                AnyScalar::new_complex(f64::NAN, 0.0),
+                "a1",
+            ),
+        ] {
+            let options = LinsolveOptions::new(1)
+                .with_coefficients(a0, a1)
+                .with_local_solver(solver.clone());
+            let error = options.validate_local_solver().unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("{name} must be finite")),
+                "{error}"
+            );
+        }
+    }
+}

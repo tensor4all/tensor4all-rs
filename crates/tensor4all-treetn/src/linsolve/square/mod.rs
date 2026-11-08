@@ -142,9 +142,9 @@ where
 /// - `nsite` is not 1 or 2, or one-site mode has a bond cap or SVD policy;
 /// - `convergence_tol` is negative or not finite;
 /// - [`LinsolveOptions::validate_local_solver`] rejects the coefficients or the
-///   local solver options (`a0 = a1 = 0`, invalid active GMRES controls,
-///   changed `gmres_*` controls with CG or BiCGSTAB, invalid native CG/BiCGSTAB
-///   options);
+///   local solver options (a non-finite `a0` or `a1`, `a0 = a1 = 0`, invalid
+///   active GMRES controls, changed `gmres_*` controls with CG or BiCGSTAB,
+///   invalid native CG/BiCGSTAB options);
 /// - the network is empty, the operator cannot act on `init`, or its result is
 ///   incompatible with `rhs`;
 /// - two-site mode is requested for a single-node network;

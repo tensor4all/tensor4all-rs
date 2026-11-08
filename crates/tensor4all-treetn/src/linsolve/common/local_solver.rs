@@ -71,6 +71,7 @@ impl LinsolveOptions {
     ///
     /// # Errors
     /// Returns [`TreeTNOperationError`] when
+    /// - `a0` or `a1` has a NaN or infinite real or imaginary part;
     /// - `a0` and `a1` are both zero;
     /// - GMRES is selected and `gmres_tol` is not finite and positive (GMRES
     ///   stops when the residual is strictly below `gmres_tol`, so zero can never
@@ -111,6 +112,12 @@ pub(crate) struct LocalSolveResult<T> {
 }
 
 pub(crate) fn validate_local_options(options: &LinsolveOptions) -> Result<()> {
+    for (name, coefficient) in [("a0", &options.a0), ("a1", &options.a1)] {
+        anyhow::ensure!(
+            coefficient.real().is_finite() && coefficient.imag().is_finite(),
+            "LinsolveOptions::{name} must be finite, got {coefficient:?}"
+        );
+    }
     // CG/BiCGSTAB would otherwise see a zero operator and report a curvature
     // or breakdown error, or "solve" 0 x = 0 when the RHS is zero.
     anyhow::ensure!(

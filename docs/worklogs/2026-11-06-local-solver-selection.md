@@ -43,7 +43,11 @@ branch can be rebased onto main once the prerequisites land.
 - Existing GMRES option-conversion tests moved to their new common owner.
   No assertion tolerances, dependencies or lint configuration changed.
 
-## Validation
+## Validation of the pre-rebase branch
+
+These counts were recorded from local runs on `2e2f3294` and its prerequisite
+merge, before the rebase onto main. No logs were kept, and they cannot be
+reproduced from this branch; the counts in the last section are current.
 
 - Prerequisite baseline: 203 focused Krylov/linsolve tests passed.
 - Changed-crate Nextest (`--lib --tests`): 2,377 passed, 10 existing skips.
@@ -76,8 +80,9 @@ inside CG/BiCGSTAB and automatic fallback remain out of scope.
 
 - a0 = a1 = 0 is rejected during option validation for every local solver.
 - The identity-only closed form no longer depends on the selected solver.
-- TreeTN and itensorlike Nextest: 1,194 passed, 7 skipped; doctests: 241
-  passed; Clippy on both crates reported no new findings.
+- TreeTN and itensorlike Nextest on the pre-rebase branch (local, no logs
+  kept): 1,194 passed, 7 skipped; doctests: 241 passed; Clippy on both crates
+  reported no new findings.
 
 ## Integration with merged prerequisites
 
@@ -110,6 +115,8 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   shortcut, which skips the mappings when no residual is requested.
 - The MPS `linsolve` documents that it does not report non-convergence and
   points to `square_linsolve` for `converged` and the residual.
+- `validate_local_solver` rejects a NaN or infinite `a0` or `a1`, which could
+  otherwise reach the identity-only closed form unchecked.
 
 The counts below are from local runs (not CI), on macOS, of the commands listed
 with each count; they are not reproducible from the diff alone.
@@ -117,8 +124,8 @@ with each count; they are not reproducible from the diff alone.
 Validation on the branch merged with main `e38a7498`:
 
 - `cargo test -p tensor4all-core --lib krylov`: 121 passed, 553 filtered out
-- `cargo test -p tensor4all-treetn --lib linsolve`: 33 passed, 630 filtered out
-- `cargo test -p tensor4all-treetn --test integration linsolve`: 71 passed, 305 filtered out
+- `cargo test -p tensor4all-treetn --lib linsolve`: 34 passed, 630 filtered out
+- `cargo test -p tensor4all-treetn --test integration linsolve`: 72 passed, 305 filtered out
 - `cargo test -p tensor4all-itensorlike --lib`: 139 passed
 - Doctests: `cargo test -p tensor4all-core --doc krylov` 21 passed (383 filtered out),
   `cargo test -p tensor4all-treetn --doc linsolve` 8 passed (197 filtered out),
@@ -128,4 +135,7 @@ Validation on the branch merged with main `e38a7498`:
 - `python3 scripts/repository-rules-review.py --base origin/main --worktree --dry-run --file-growth`: pass
 
 Full-workspace, release, alternate-backend, binding and benchmark checks were
-not run locally; hosted CI covers them.
+not run locally. Hosted PR CI runs the workspace `--lib --bins --tests` and
+doctests on Linux and macOS (Accelerate); the non-default feature matrix runs
+on a schedule, and the Python bindings (outside the workspace) and benchmarks
+are not run by PR CI.
