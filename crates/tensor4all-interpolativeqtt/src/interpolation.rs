@@ -482,10 +482,13 @@ where
 /// `basis.len() == 2` (degree 1). For degree >= 2 the other nodes carry an
 /// `O(h^2)` error with `h = 2^-(k_out)` times the subinterval width; the
 /// coarser matrices inherit it through the restriction step.
+/// For an uncompressed single-scale train, use [`invert_qtt_uncompressed`]
+/// to recover the full parent polynomial without this two-sample error.
 /// # Errors
 /// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when `q` is
-/// not in `1..tt.len()`, when the sites are not binary, when the decode matrix
-/// shapes disagree, or when the decode multiply fails.
+/// not `1` or not in `1..tt.len()`, when the sites are not binary, when the
+/// core dimensions or decode matrix shapes disagree, or when the decode
+/// multiply fails.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::{
@@ -511,6 +514,59 @@ pub fn invert_qtt(
     basis: &LagrangePolynomials,
     q: usize,
 ) -> Result<Vec<Matrix<f64>>> {
+    invert_qtt_impl(tt, basis, q, false)
+}
+
+/// Recover multiresolution node values exactly from an uncompressed single-scale QTT.
+///
+/// `tt` must come from [`interpolate_single_scale`] with `tolerance = 0.0`
+/// and `max_bond_dim = None`, without subsequent compression or changes to its
+/// bond basis. `basis` must have the same ordered nodes used for construction;
+/// rebuilding it from identical nodes is supported. `q` must be `1`. The final
+/// core is checked against the canonical construction basis, but this check
+/// cannot establish the train's construction history.
+/// Use [`invert_qtt`] for compressed or otherwise transformed trains.
+///
+/// Returns the same column-major matrix layout as [`invert_qtt`]: matrix
+/// `k - 1` has `2^k` subinterval rows and `basis.len()` node columns.
+/// The finest matrix recovers the parent interpolant at every node, up to
+/// floating-point rounding; it introduces no two-sample blending error.
+/// Interpolation error relative to the original function remains, and coarse
+/// levels use the same restriction as [`invert_qtt`].
+///
+/// # Errors
+/// Returns [`crate::InterpolativeQttError::InvalidArgument`] when `q` is
+/// invalid, the sites are not binary, the core dimensions are inconsistent,
+/// the basis nodes differ from the construction grid, or the final core is
+/// not in the uncompressed construction basis.
+///
+/// # Examples
+/// ```
+/// use tensor4all_interpolativeqtt::prelude::*;
+/// # fn main() -> tensor4all_interpolativeqtt::Result<()> {
+/// let basis = get_chebyshev_grid(2)?;
+/// let options = InterpolativeQttOptions::default().with_tolerance(0.0);
+/// let tt = interpolate_single_scale(|x| x * x, 0.0, 1.0, 3, 2, &options)?;
+/// let values = invert_qtt_uncompressed(&tt, &basis, 1)?;
+/// // The rightmost node of the last finest cell is x = 1.
+/// assert_eq!(values[1][[3, 2]], 1.0);
+/// # Ok(())
+/// # }
+/// ```
+pub fn invert_qtt_uncompressed(
+    tt: &SimpleTensorTrain<f64>,
+    basis: &LagrangePolynomials,
+    q: usize,
+) -> Result<Vec<Matrix<f64>>> {
+    invert_qtt_impl(tt, basis, q, true)
+}
+
+fn invert_qtt_impl(
+    tt: &SimpleTensorTrain<f64>,
+    basis: &LagrangePolynomials,
+    q: usize,
+    uncompressed: bool,
+) -> Result<Vec<Matrix<f64>>> {
     let num_sites = tt.len();
     if !(1..num_sites).contains(&q) {
         return Err(invalid_argument(format!(
@@ -525,9 +581,20 @@ pub fn invert_qtt(
             "invert_qtt currently requires binary site dimensions",
         ));
     }
+    let cores = tt.site_tensors();
+    if cores[0].left_dim() != 1
+        || cores[num_sites - 1].right_dim() != 1
+        || cores
+            .windows(2)
+            .any(|pair| pair[0].right_dim() != pair[1].left_dim())
+    {
+        return Err(invalid_argument(
+            "inverse QTT core dimensions are inconsistent",
+        ));
+    }
 
     let k_out = num_sites - q;
-    let fine = invert_stage1(tt, basis)?;
+    let fine = invert_stage1(tt, basis, uncompressed)?;
     let (r_left, r_right) = build_restriction(basis)?;
 
     let mut results = vec![Matrix::zeros(0, 0); k_out];
@@ -1107,7 +1174,11 @@ fn matrix_from_fn(
     Ok(Matrix::from_col_major_vec(nrows, ncols, data))
 }
 
-fn invert_stage1(tt: &SimpleTensorTrain<f64>, basis: &LagrangePolynomials) -> Result<Matrix<f64>> {
+fn invert_stage1(
+    tt: &SimpleTensorTrain<f64>,
+    basis: &LagrangePolynomials,
+    uncompressed: bool,
+) -> Result<Matrix<f64>> {
     let cores = tt.site_tensors();
     let num_sites = cores.len();
     let k_out = num_sites - 1;
@@ -1115,13 +1186,28 @@ fn invert_stage1(tt: &SimpleTensorTrain<f64>, basis: &LagrangePolynomials) -> Re
     let last = &cores[num_sites - 1];
     let r_last = last.left_dim();
 
-    let mut decode = Matrix::zeros(r_last, basis_len);
-    for left in 0..r_last {
-        for beta in 0..basis_len {
-            let c = basis.grid()[beta];
-            let value =
-                *last.get3(left, 0, 0) * (1.0 - 2.0 * c) + *last.get3(left, 1, 0) * (2.0 * c);
-            decode[[left, beta]] = value;
+    if uncompressed {
+        if r_last != basis_len {
+            return Err(invalid_argument(
+                "final bond dimension does not match the uncompressed basis; use invert_qtt",
+            ));
+        }
+        let construction_basis = get_chebyshev_grid(basis_len - 1)?;
+        if basis.grid() != construction_basis.grid() {
+            return Err(invalid_argument(
+                "basis nodes do not match the single-scale construction grid; use get_chebyshev_grid with the construction degree",
+            ));
+        }
+        for left in 0..basis_len {
+            for site in 0..2 {
+                if *last.get3(left, site, 0)
+                    != construction_basis.evaluate(left, site as f64 / 2.0)?
+                {
+                    return Err(invalid_argument(
+                        "final core is not in the uncompressed interpolation basis; use invert_qtt",
+                    ));
+                }
+            }
         }
     }
 
@@ -1148,6 +1234,21 @@ fn invert_stage1(tt: &SimpleTensorTrain<f64>, basis: &LagrangePolynomials) -> Re
             }
         }
         current = next;
+    }
+
+    if uncompressed {
+        // The untouched final bond labels the parent polynomial's node values.
+        return Ok(current);
+    }
+
+    let mut decode = Matrix::zeros(r_last, basis_len);
+    for left in 0..r_last {
+        for beta in 0..basis_len {
+            let c = basis.grid()[beta];
+            let value =
+                *last.get3(left, 0, 0) * (1.0 - 2.0 * c) + *last.get3(left, 1, 0) * (2.0 * c);
+            decode[[left, beta]] = value;
+        }
     }
 
     if current.ncols() != decode.nrows() {

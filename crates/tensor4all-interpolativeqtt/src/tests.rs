@@ -702,3 +702,162 @@ fn invert_qtt_degree2_finest_level_is_documented_two_sample_blend() {
         }
     }
 }
+
+#[test]
+fn invert_qtt_uncompressed_degree2_exact_at_every_level() {
+    let basis = get_chebyshev_grid(2).unwrap();
+    let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
+    for r in [2, 3, 4] {
+        let tt = interpolate_single_scale(|x| x * x, 0.0, 1.0, r, 2, &opts).unwrap();
+        let values = invert_qtt_uncompressed(&tt, &basis, 1).unwrap();
+        for (level, matrix) in values.iter().enumerate() {
+            let cells = 1usize << (level + 1);
+            let mut max_error = 0.0_f64;
+            for row in 0..cells {
+                for (col, &c) in basis.grid().iter().enumerate() {
+                    let x = (row as f64 + c) / cells as f64;
+                    max_error = max_error.max((matrix[[row, col]] - x * x).abs());
+                }
+            }
+            assert!(max_error < 1.0e-12, "r={r}, level={level}: {max_error}");
+        }
+        assert_eq!(values[r - 2][[(1usize << (r - 1)) - 1, 2]], 1.0);
+    }
+}
+
+#[test]
+fn invert_qtt_uncompressed_recovers_higher_degree_parent_polynomials() {
+    let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
+    let f = |x: f64| x * x * x - 2.0 * x + 1.0;
+    for degree in [3, 6] {
+        let basis = get_chebyshev_grid(degree).unwrap();
+        for r in [2, 3, 4] {
+            let tt = interpolate_single_scale(f, -1.0, 2.0, r, degree, &opts).unwrap();
+            let values = invert_qtt_uncompressed(&tt, &basis, 1).unwrap();
+            for (level, matrix) in values.iter().enumerate() {
+                let mut max_error = 0.0_f64;
+                for row in 0..matrix.nrows() {
+                    for (col, &c) in basis.grid().iter().enumerate() {
+                        let x = -1.0 + 3.0 * (row as f64 + c) / matrix.nrows() as f64;
+                        max_error = max_error.max((matrix[[row, col]] - f(x)).abs());
+                    }
+                }
+                assert!(
+                    max_error < 1.0e-12,
+                    "degree={degree}, r={r}, level={level}: {max_error}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn invert_qtt_uncompressed_accepts_basis_rebuilt_from_identical_nodes() {
+    let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
+    for degree in [3, 5, 7] {
+        let original = get_chebyshev_grid(degree).unwrap();
+        let rebuilt = LagrangePolynomials::new(original.grid().to_vec()).unwrap();
+        assert_eq!(original.grid(), rebuilt.grid());
+        let tt = interpolate_single_scale(|x| x * x, 0.0, 1.0, 3, degree, &opts).unwrap();
+        let values = invert_qtt_uncompressed(&tt, &rebuilt, 1).unwrap();
+        for matrix in &values {
+            for row in 0..matrix.nrows() {
+                for (col, &c) in rebuilt.grid().iter().enumerate() {
+                    let x = (row as f64 + c) / matrix.nrows() as f64;
+                    assert!((matrix[[row, col]] - x * x).abs() < 1.0e-12);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn invert_qtt_uncompressed_rejects_compressed_or_mismatched_basis() {
+    let basis = get_chebyshev_grid(2).unwrap();
+    for opts in [
+        InterpolativeQttOptions::default(),
+        InterpolativeQttOptions::default()
+            .with_tolerance(0.0)
+            .with_max_bond_dim(2),
+    ] {
+        let tt = interpolate_single_scale(|x| x * x, 0.0, 1.0, 3, 2, &opts).unwrap();
+        assert!(matches!(
+            invert_qtt_uncompressed(&tt, &basis, 1),
+            Err(InterpolativeQttError::InvalidArgument { .. })
+        ));
+    }
+
+    let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
+    let tt = interpolate_single_scale(|x| x * x, 0.0, 1.0, 3, 2, &opts).unwrap();
+    for wrong_basis in [
+        get_chebyshev_grid(3).unwrap(),
+        LagrangePolynomials::new(vec![0.0, 0.25, 1.0]).unwrap(),
+        LagrangePolynomials::new(vec![0.0, 0.5, 0.75]).unwrap(),
+    ] {
+        assert!(matches!(
+            invert_qtt_uncompressed(&tt, &wrong_basis, 1),
+            Err(InterpolativeQttError::InvalidArgument { .. })
+        ));
+    }
+}
+
+#[test]
+fn invert_qtt_uncompressed_rejects_changed_gauge_with_unchanged_bond_dimensions() {
+    let basis = get_chebyshev_grid(2).unwrap();
+    let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
+    let mut tt = interpolate_single_scale(|x| x * x, 0.0, 1.0, 3, 2, &opts).unwrap();
+    let before = invert_qtt(&tt, &basis, 1).unwrap();
+    for (site, factor) in [(1, 0.5), (2, 2.0)] {
+        let core = &mut tt.site_tensors_mut()[site];
+        for left in 0..core.left_dim() {
+            for digit in 0..core.site_dim() {
+                for right in 0..core.right_dim() {
+                    core.set3(left, digit, right, *core.get3(left, digit, right) * factor);
+                }
+            }
+        }
+    }
+    assert_eq!(tt.link_dims(), vec![3, 3]);
+    let after = invert_qtt(&tt, &basis, 1).unwrap();
+    for (before, after) in before.iter().zip(&after) {
+        for row in 0..before.nrows() {
+            for col in 0..before.ncols() {
+                assert_eq!(before[[row, col]], after[[row, col]]);
+            }
+        }
+    }
+    assert!(matches!(
+        invert_qtt_uncompressed(&tt, &basis, 1),
+        Err(InterpolativeQttError::InvalidArgument { .. })
+    ));
+}
+
+#[test]
+fn invert_qtt_entry_points_reject_invalid_inputs() {
+    let basis = get_chebyshev_grid(2).unwrap();
+    let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
+    let tt = interpolate_single_scale(|x| x * x, 0.0, 1.0, 3, 2, &opts).unwrap();
+    for inverse in [invert_qtt, invert_qtt_uncompressed] {
+        for q in [0, 2, 3] {
+            assert!(matches!(
+                inverse(&tt, &basis, q),
+                Err(InterpolativeQttError::InvalidArgument { .. })
+            ));
+        }
+        for dims in [&[][..], &[2][..], &[2, 3][..]] {
+            let invalid = SimpleTensorTrain::constant(dims, 1.0);
+            assert!(matches!(
+                inverse(&invalid, &basis, 1),
+                Err(InterpolativeQttError::InvalidArgument { .. })
+            ));
+        }
+        for (site, shape) in [(0, [2, 2, 3]), (2, [3, 2, 2]), (1, [4, 2, 3])] {
+            let mut invalid = tt.clone();
+            invalid.site_tensors_mut()[site] = Tensor3::from_elem(shape, 1.0).unwrap();
+            assert!(matches!(
+                inverse(&invalid, &basis, 1),
+                Err(InterpolativeQttError::InvalidArgument { .. })
+            ));
+        }
+    }
+}

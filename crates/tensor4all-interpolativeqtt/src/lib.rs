@@ -47,7 +47,7 @@ pub use interpolation::{
     estimate_interpolation_error, estimate_interpolation_error_nd, interpolate_adaptive,
     interpolate_adaptive_nd, interpolate_multi_scale, interpolate_multi_scale_nd,
     interpolate_single_scale, interpolate_single_scale_nd, interpolate_single_scale_sparse,
-    interpolate_single_scale_sparse_nd, invert_qtt,
+    interpolate_single_scale_sparse_nd, invert_qtt, invert_qtt_uncompressed,
 };
 pub use options::InterpolativeQttOptions;
 pub use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};

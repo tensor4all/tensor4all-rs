@@ -6,6 +6,12 @@ This crate ports the tested public algorithms from
 `InterpolativeQTT.jl` to Rust and returns `tensor4all-simplett`
 `SimpleTensorTrain<f64>` values.
 
+`invert_qtt` recovers multiresolution node matrices from binary trains,
+including compressed trains, using a two-sample linear blend at the finest
+level. For an untouched single-scale train built with `tolerance = 0.0` and
+`max_bond_dim = None`, use `invert_qtt_uncompressed` to recover the parent
+interpolant at every finest-level node without the blend's extra error.
+
 ```rust
 use tensor4all_interpolativeqtt::prelude::*;
 

@@ -184,7 +184,13 @@ Ports TreeTCI.jl. Cross interpolation on tree-structured graphs → TreeTN.
 
 Ports InterpolativeQTT.jl; returns `SimpleTensorTrain<f64>`.
 
-- `interpolate_single_scale(f, x_min, x_max, R, oversampling, &InterpolativeQttOptions::default())`.
+- `interpolate_single_scale(f, x_min, x_max, R, polynomial_degree, &InterpolativeQttOptions::default())`.
+- `invert_qtt(&tt, &basis, 1)` recovers multiresolution node matrices using a
+  two-sample blend, including for compressed trains.
+- `invert_qtt_uncompressed(&tt, &basis, 1)` recovers the parent interpolant
+  at every finest-level node for an untouched single-scale train built with
+  `tolerance = 0.0` and `max_bond_dim = None`. Pass the construction basis;
+  compression or a change of bond basis invalidates this entry point.
 
 ## tensor4all-partitionedtreetn — named TreeTN subdomains + adaptive patching
 

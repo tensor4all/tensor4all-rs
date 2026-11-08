@@ -13,6 +13,15 @@ Use `interpolate_single_scale` for a smooth one-dimensional function on one
 interval. The result is a binary `SimpleTensorTrain`, so the site index `[0, 0, ...]`
 evaluates the left endpoint of the sampled interval.
 
+For multiresolution node matrices, `invert_qtt(&tt, &basis, 1)` supports
+compressed trains and uses a two-sample linear blend at the finest level.
+If you need all finest-level nodes of the parent interpolant, construct the
+single-scale train with `tolerance = 0.0` and `max_bond_dim = None`, then call
+`invert_qtt_uncompressed(&tt, &basis, 1)` before any compression or change of
+bond basis. Here `basis` is `get_chebyshev_grid(polynomial_degree)` from the
+construction. Exact recovery removes the blend error; the original polynomial
+interpolation error remains.
+
 ```rust
 # fn main() -> anyhow::Result<()> {
 use tensor4all_interpolativeqtt::{
