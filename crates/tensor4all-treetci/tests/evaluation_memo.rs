@@ -37,7 +37,11 @@ where
         ),
     ] {
         let mut reference = None;
-        for limit in [None, Some(0), Some(16), Some(1024)] {
+        // One table of 4 buckets of (u64 key, T value) pairs, padding included:
+        // it holds three entries,
+        // so a run that evaluates more points evicts.
+        let evicting = 4 * (std::mem::size_of::<(u64, T)>() + 1) + 16;
+        for limit in [None, Some(0), Some(16), Some(evicting), Some(1024)] {
             let mut evaluated = 0;
             let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<T>> {
                 evaluated += batch.n_points(); // FnMut, no RefCell wrapper required.
@@ -70,6 +74,16 @@ where
             assert!(result.evaluation.requested_points >= evaluated);
             if let Some(limit) = limit {
                 assert!(result.evaluation.retained_bytes <= limit);
+                // Every evaluated value is retained, evicted later, or refused.
+                let e = &result.evaluation;
+                assert_eq!(
+                    e.evaluated_points,
+                    e.cached_entries + e.evicted_entries + e.dropped_inserts,
+                    "limit {limit}"
+                );
+                if limit == evicting {
+                    assert!(e.evicted_entries > 0, "limit {limit}: no eviction");
+                }
                 if limit == 1024 {
                     assert!(result.evaluation.cache_hits > 0);
                     assert!(evaluated < result.evaluation.requested_points);

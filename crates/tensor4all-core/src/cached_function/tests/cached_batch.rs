@@ -239,8 +239,8 @@ fn cached_batch_wide_keys_account_their_tables_and_failures() {
         assert_eq!(cache.retained_bytes(), smallest);
         assert_eq!(cache.get(&data[..n_sites]).unwrap(), Some(30.0));
         assert_eq!(cache.get(&data[n_sites..2 * n_sites]).unwrap(), Some(20.0));
-        // A hit and a miss precede an invalid coordinate. Neither the missing
-        // value nor the invalid point may be retained or sent to the callback.
+        // Both points are retained, so this batch is a hit, a hit and an
+        // invalid coordinate: nothing reaches the callback and nothing changes.
         data[3 * n_sites - 1] = 2;
         assert!(matches!(
             cache.evaluate_batched(
@@ -256,5 +256,24 @@ fn cached_batch_wide_keys_account_their_tables_and_failures() {
             (4, 3, 0)
         );
         assert_eq!(cache.len(), 2);
+
+        // A cache holding only the first point: the same batch is a hit, a
+        // miss and an invalid coordinate. The pending miss must not be
+        // retained or sent to the callback when validation fails.
+        let mut partial =
+            MultiIndexCache::<f64>::with_retained_byte_limit(&dims, smallest).unwrap();
+        partial.insert(&data[..n_sites], 30.0).unwrap();
+        assert!(matches!(
+            partial.evaluate_batched(
+                ColMajorArrayRef::new(&data, &[n_sites, 3]).unwrap(),
+                |_| panic!("invalid input reached callback")
+            ),
+            Err(CachedBatchError::Index(
+                CacheKeyError::IndexOutOfBounds { .. }
+            ))
+        ));
+        assert_eq!((partial.hits(), partial.misses()), (1, 1));
+        assert_eq!(partial.len(), 1);
+        assert_eq!(partial.get(&data[n_sites..2 * n_sites]).unwrap(), None);
     }
 }
