@@ -784,23 +784,7 @@ fn message_cache_does_not_evict_for_a_column_that_cannot_fit() {
         },
     )
     .unwrap();
-    let indexer = FlatIndexer::try_new(&[8]).unwrap();
-    let mut cache = PackedMessageCache::<IndexKey, CachedScalar>::new(2, usize::MAX);
-    let keys = (0..2)
-        .map(|key| indexer.encode(&[key]).unwrap())
-        .collect::<Vec<_>>();
-    cache
-        .get_or_compute_batch(&keys, |missing| {
-            Ok::<_, anyhow::Error>(
-                missing
-                    .iter()
-                    .map(|_| vec![CachedScalar::F64(1.0), CachedScalar::F64(2.0)])
-                    .collect(),
-            )
-        })
-        .unwrap();
-    cache.touch(1);
-    evaluator.message_caches.insert((1, 2), cache);
+    insert_packed_columns(&mut evaluator, (1, 2), 2, 2, 1);
 
     // One column is five times the whole total, so it can never be retained.
     let cap = evaluator.reserve_message_cache_bytes(&(2, 3), 5 * column_bytes, 5 * column_bytes);
@@ -891,26 +875,111 @@ fn message_cache_stays_correct_while_the_shared_budget_is_exhausted() {
         .evaluate_batched_with_hint(points, EvaluationHint::around(0))
         .unwrap();
     assert_scalars_close(&first, &expected);
-    assert!(
-        evaluator
-            .message_caches
-            .values()
-            .any(|cache| cache.key_count() > 0),
-        "the cold call must retain columns"
-    );
+    let populated = evaluator
+        .message_caches
+        .iter()
+        .filter(|(_, cache)| cache.key_count() > 0)
+        .map(|(edge, _)| *edge)
+        .collect::<Vec<_>>();
+    assert!(!populated.is_empty(), "the cold call must retain columns");
 
     let second = evaluator
         .evaluate_batched_with_hint(points, EvaluationHint::around(4))
         .unwrap();
     assert_scalars_close(&second, &expected);
     assert!(
-        evaluator
+        populated.iter().any(|edge| evaluator
             .message_caches
-            .values()
-            .any(|cache| cache.key_count() == 0),
+            .get(edge)
+            .is_none_or(|cache| cache.key_count() == 0)),
         "the exhausted budget must release a previous rooting's columns"
     );
     assert!(retained_message_cache_bytes(&evaluator) <= evaluator.options.message_cache_max_bytes);
+}
+
+/// [AI Supplied] #1183: a warm hit is a use of the edge that served it.
+/// Without the stamp the steady branch of a plane would look stale to the shared
+/// budget's least-recently-used eviction and lose its columns to a churning
+/// neighbour.
+#[test]
+fn message_cache_warm_hits_refresh_the_use_stamp() {
+    let (tree, indices) = five_node_chain();
+    let values = alternating_points(&indices, 8);
+    let shape = [indices.len(), 8];
+    let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+    let mut evaluator = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            center: Some(2),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    evaluator.evaluate_batched(points).unwrap();
+    for cache in evaluator.message_caches.values_mut() {
+        cache.last_used = 0;
+    }
+
+    let warm = evaluator.evaluate_batched(points).unwrap();
+    assert_scalars_close(&warm, &tree.evaluate(&indices, points).unwrap());
+    assert_eq!(evaluator.stats_for_test().message_cache_misses, 0);
+    assert!(
+        evaluator
+            .message_caches
+            .values()
+            .any(|cache| cache.last_used() > 0),
+        "the edges that served the all-hit call must be re-stamped as used"
+    );
+}
+
+/// [AI Supplied] #1183: the all-hit cut path re-stamps both directions it
+/// serves. It is the plane's hot path -- the same x values, the hint at the top
+/// of the x branch -- so without the stamp the branch that is reused on every
+/// line looks stale next to a churning neighbour and loses its columns.
+#[test]
+fn message_cache_warm_cut_refreshes_both_directions() {
+    let s0 = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])
+        .unwrap();
+    let t1 = IdxTensor::from_dense(vec![bond, s1.clone()], vec![0.5_f64, 1.5, 2.5, 3.5]).unwrap();
+    let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
+    let indices = vec![s0, s1];
+    let values = alternating_points(&indices, 4);
+    let shape = [indices.len(), 4];
+    let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+    let mut evaluator = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            center: Some(1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    evaluator
+        .evaluate_batched_with_hint(points, EvaluationHint::around(1))
+        .unwrap();
+    for cache in evaluator.message_caches.values_mut() {
+        cache.last_used = 0;
+    }
+
+    let warm = evaluator
+        .evaluate_batched_with_hint(points, EvaluationHint::around(1))
+        .unwrap();
+    assert_scalars_close(&warm, &tree.evaluate(&indices, points).unwrap());
+    let stats = evaluator.stats_for_test();
+    assert_eq!(stats.message_cache_misses, 0, "{stats:?}");
+    assert!(stats.warm_edge_cut_assembly_visits > 0, "{stats:?}");
+    assert!(
+        [(0, 1), (1, 0)].iter().all(|edge| evaluator
+            .message_caches
+            .get(edge)
+            .is_none_or(|cache| cache.last_used() > 0)),
+        "both directions of the warm cut must be re-stamped as used"
+    );
 }
 
 /// Inserts a packed cache holding `keys` columns of `bond_dim` elements on
