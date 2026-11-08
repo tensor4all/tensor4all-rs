@@ -388,23 +388,41 @@ impl From<crate::EvaluatedScalarKindMismatch> for TreeTNOperationError {
 
 impl From<anyhow::Error> for TreeTNOperationError {
     /// Internal `?` conversions land in the catch-all variant with their chain
-    /// intact. A chain that already carries a classified variant keeps that
-    /// variant, and the `anyhow` context layers around it are rendered back onto
-    /// the variant diagnostic: `downcast` reaches the variant but drops them.
-    /// Those layers are kept as text, so a typed context (`io::Error` and the
-    /// like) can no longer be downcast after this conversion; the catch-all
-    /// keeps it typed.
+    /// intact. Only an error that *is* a classified variant keeps that variant;
+    /// the `anyhow` context layers above it are rendered back onto the variant
+    /// diagnostic as text (a typed context cannot be recovered from `anyhow`, so
+    /// the catch-all is the variant that keeps types).
+    ///
+    /// A `TreeTNOperationError` attached with `.context(..)` is *not* taken:
+    /// `anyhow::downcast` returns it too, and it is a note about some other
+    /// failure, not the failure itself.
     fn from(source: anyhow::Error) -> Self {
-        let outer: Vec<String> = source
-            .chain()
-            .take_while(|cause| cause.downcast_ref::<Self>().is_none())
-            .map(|cause| cause.to_string())
-            .collect();
+        // `anyhow::downcast` also returns a `TreeTNOperationError` that was attached with
+        // `.context(..)`; that one is a note about a different failure, not the failure.
+        // std's `dyn Error::downcast_ref` below checks the concrete type of each link,
+        // which is what tells the two apart: a context value is not a chain link.
+        let mut layers: Vec<String> = Vec::new();
+        let mut found = false;
+        let mut is_operation = false;
+        for cause in source.chain() {
+            if let Some(error) = cause.downcast_ref::<Self>() {
+                found = true;
+                is_operation = matches!(error, Self::Operation { .. });
+                break;
+            }
+            layers.push(cause.to_string());
+        }
+        // The catch-all is the variant that keeps types: unwrapping it would re-render
+        // the contexts wrapped around it as text, and an `io::Error` context could no
+        // longer be downcast, so the whole chain is kept instead.
+        if !found || is_operation {
+            return Self::Operation { source };
+        }
         match source.downcast::<Self>() {
-            Ok(classified) => outer
+            Ok(variant) => layers
                 .into_iter()
                 .rev()
-                .fold(classified, |error, text| error.with_context(text)),
+                .fold(variant, |error, text| error.with_context(text)),
             Err(source) => Self::Operation { source },
         }
     }

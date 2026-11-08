@@ -21,7 +21,9 @@ literals, or named public types:
   `From<anyhow::Error>` recovers a classified variant from an `anyhow` chain, the
   context layers around it are re-rendered onto the variant as text, so a typed
   context cannot be downcast after that conversion; the `Operation` catch-all
-  keeps the typed chain. Failures that
+  keeps the typed chain. Only an error that *is* a classified variant is recovered:
+  a variant attached with `.context(..)` is a note about another failure, so it is
+  not taken as the failure. Failures that
   reach the boundary through an internal `anyhow` helper - tensor, storage and
   backend failures, the option checks the factorization runs in
   `tensor4all-core`, and every diagnostic an internal helper raises - keep the

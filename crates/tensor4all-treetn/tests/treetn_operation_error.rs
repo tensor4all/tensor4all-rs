@@ -186,6 +186,50 @@ fn operation_stays_the_catch_all_and_renders_the_whole_chain() {
 }
 
 #[test]
+fn a_classified_error_used_as_context_does_not_replace_the_real_cause() {
+    // `anyhow::downcast` also returns a `TreeTNOperationError` attached with
+    // `.context(..)`. Taking it would drop the actual failure and rebuild the message around
+    // an unrelated classification, so only the error itself may be classified.
+    let error = TreeTNOperationError::from(
+        anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "missing input",
+        ))
+        .context(TreeTNOperationError::InvalidGraph {
+            source: anyhow::anyhow!("graph request"),
+        }),
+    );
+    let TreeTNOperationError::Operation { source } = &error else {
+        panic!("a context-provided classification must not be taken, got {error:?}");
+    };
+    assert!(
+        source.downcast_ref::<std::io::Error>().is_some(),
+        "the real cause must stay typed and reachable, got {error:?}"
+    );
+}
+
+#[test]
+fn the_catch_all_keeps_the_typed_context_of_the_original_error() {
+    // The `Operation` arm must not re-render its chain as text: a caller that wrapped a
+    // typed context around an unclassified failure can still downcast it afterwards.
+    let wrapped = anyhow::Error::new(TreeTNOperationError::Operation {
+        source: anyhow::anyhow!("root"),
+    })
+    .context(std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "retry later",
+    ));
+    let error = TreeTNOperationError::from(wrapped);
+    let TreeTNOperationError::Operation { source } = &error else {
+        panic!("an unclassified failure stays in the catch-all, got {error:?}");
+    };
+    assert!(
+        source.downcast_ref::<std::io::Error>().is_some(),
+        "the typed context must survive the conversion, got {error:?}"
+    );
+}
+
+#[test]
 fn wrappers_keep_the_classification() {
     // `rename_node` adds an `anyhow` context internally; the variant must survive it.
     let (mut tree, _site) = one_site_f64_tree();
