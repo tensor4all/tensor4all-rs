@@ -119,7 +119,11 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   otherwise reach the identity-only closed form unchecked.
 - The identity-only closed form divides by `a0` without forming `1 / a0`, so a
   subnormal `a0` such as `3 * 2^-1070`, or a complex `a0` whose `|a0|^2`
-  overflows or underflows, gives the finite quotient.
+  overflows or underflows, gives the finite quotient. A small `a0` is applied
+  power of two first with a factor of four of headroom, so a complex quotient
+  whose magnitude exceeds `f64::MAX` keeps finite components
+  (`0.51 * f64::MAX / (0.35 + 0.35i)`); a large `a0` applies the power of two
+  last in one step, so `from_bits(2) / 3` rounds once to `from_bits(1)`.
 
 The counts below are from local runs (not CI), on macOS, of the commands listed
 with each count; they are not reproducible from the diff alone.
@@ -127,7 +131,7 @@ with each count; they are not reproducible from the diff alone.
 Validation on the branch merged with main `e38a7498`:
 
 - `cargo test -p tensor4all-core --lib krylov`: 121 passed, 553 filtered out
-- `cargo test -p tensor4all-treetn --lib linsolve`: 36 passed, 630 filtered out
+- `cargo test -p tensor4all-treetn --lib linsolve`: 38 passed, 630 filtered out
 - `cargo test -p tensor4all-treetn --test integration linsolve`: 73 passed, 305 filtered out
 - `cargo test -p tensor4all-itensorlike --lib`: 139 passed
 - Doctests: `cargo test -p tensor4all-core --doc krylov` 21 passed (383 filtered out),

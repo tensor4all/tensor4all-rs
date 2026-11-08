@@ -440,15 +440,31 @@ fn scalar_times_pow2(value: &AnyScalar, k: i32) -> AnyScalar {
     })
 }
 
-/// Multiply `tn` by `1 / divisor` without an out-of-range intermediate.
+/// Largest exponent magnitude of `divisor` for which `1 / divisor` and the
+/// complex `|divisor|^2` stay comfortably inside the normal `f64` range.
+const DIRECT_RECIPROCAL_EXPONENT: i32 = 500;
+
+/// Multiply `tn` by `1 / divisor`.
 ///
-/// `divisor` is normalized by an exact power of two `2^k`, so only the
-/// reciprocal of a scalar of magnitude in `[0.5, 2)` is formed. The power of
-/// two and that reciprocal are applied in the order that keeps every
-/// intermediate magnitude between `|tn|` and `|tn / divisor|`, so the result
-/// overflows or underflows only where the quotient itself does. Forming
-/// `1 / divisor` directly overflows for subnormal divisors, and a complex
-/// reciprocal fails once `|divisor|^2` leaves the `f64` range.
+/// When the largest component of `divisor` lies in `[2^-500, 2^500]` this is
+/// one multiplication by the reciprocal. Outside that range the reciprocal (or
+/// the complex `|divisor|^2`) can leave the `f64` range, so `divisor` is
+/// normalized by an exact power of two `2^k` with `|divisor| * 2^k` in `[1, 2)`:
+///
+/// - small divisors: `tn` is first multiplied by `2^(k-2)`, which is exact,
+///   then once by `1 / (divisor * 2^(k-2))`, whose magnitude is in `(2, 4]`.
+///   Withholding the factor of four keeps every component of the intermediate
+///   below the largest component of the quotient.
+/// - large divisors: `tn` is first multiplied once by
+///   `1 / (divisor * 2^(k+2))`, whose magnitude is in `(1/8, 1/4]`, then by
+///   `2^(k+2)` as a single normal factor, so a subnormal quotient is rounded
+///   once.
+///
+/// Each entry therefore gets the same two roundings (reciprocal and product)
+/// as a single reciprocal multiplication. When `tn` or `divisor` is real, an
+/// intermediate overflows only when a component of the quotient does; a
+/// complex-by-complex product can also overflow inside the multiplication, as
+/// it can with a direct reciprocal.
 fn divide_by_scalar<T, V>(tn: &mut TreeTN<T, V>, divisor: &AnyScalar) -> Result<()>
 where
     T: TensorLike,
@@ -459,30 +475,35 @@ where
         largest.is_finite() && largest > 0.0,
         "square_linsolve: cannot divide by {divisor:?}"
     );
-    // `|divisor| * 2^k` lies in [0.5, 1) after these loops; each step is exact.
-    let mut k = -(largest.log2().floor() as i32) - 1;
+    let exponent = largest.log2().floor() as i32;
+    if exponent.abs() <= DIRECT_RECIPROCAL_EXPONENT {
+        tn.scale_mut(AnyScalar::new_real(1.0) / divisor.clone())?;
+        return Ok(());
+    }
+    // `|divisor| * 2^k` lies in [1, 2) after these loops; each step is exact.
+    let mut k = -exponent;
     let mut magnitude = scalar_times_pow2(divisor, k).abs();
-    while magnitude >= 1.0 {
+    while magnitude >= 2.0 {
         magnitude *= 0.5;
         k -= 1;
     }
-    while magnitude < 0.5 {
+    while magnitude < 1.0 {
         magnitude *= 2.0;
         k += 1;
     }
-    if k >= 0 {
-        // |divisor| < 1: grow by 2^k first, then apply a reciprocal in (1, 2].
+    if k > 0 {
+        let k = k - 2;
         for factor in pow2_factors(k) {
             tn.scale_mut(AnyScalar::new_real(factor))?;
         }
         tn.scale_mut(AnyScalar::new_real(1.0) / scalar_times_pow2(divisor, k))?;
     } else {
-        // |divisor| >= 1: apply a reciprocal in (0.5, 1] first, then shrink.
-        let k = k + 1;
+        // |divisor| < 2^1025 gives k >= -1024, so 2^(k+2) is one normal f64.
+        let k = k + 2;
         tn.scale_mut(AnyScalar::new_real(1.0) / scalar_times_pow2(divisor, k))?;
-        for factor in pow2_factors(k) {
-            tn.scale_mut(AnyScalar::new_real(factor))?;
-        }
+        tn.scale_mut(AnyScalar::new_real(f64::from_bits(
+            ((1023 + k) as u64) << 52,
+        )))?;
     }
     Ok(())
 }

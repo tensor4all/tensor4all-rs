@@ -243,3 +243,50 @@ fn divide_by_scalar_rejects_zero_and_non_finite_divisors() {
         assert!(error.to_string().contains("cannot divide by"), "{error}");
     }
 }
+
+fn divide_single_entry<E>(value: E, divisor: AnyScalar) -> E
+where
+    E: tensor4all_core::TensorElement + Copy,
+{
+    let s = DynIndex::new_dyn(1);
+    let tensor = IdxTensor::from_dense(vec![s], vec![value]).unwrap();
+    let mut tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
+    divide_by_scalar(&mut tn, &divisor).unwrap();
+    tn.to_dense().unwrap().to_vec::<E>().unwrap()[0]
+}
+
+#[test]
+fn divide_by_scalar_keeps_finite_components_of_a_rotated_quotient() {
+    use num_complex::Complex64;
+    // |quotient| exceeds f64::MAX but both components are finite, so no
+    // intermediate may grow the real entry past f64::MAX before the rotation.
+    let entry = Complex64::new(0.51 * f64::MAX, 0.0);
+    let divisor = Complex64::new(0.35, 0.35);
+    let expected = entry * (Complex64::new(1.0, 0.0) / divisor);
+    assert!(expected.re.is_finite() && expected.im.is_finite());
+    // k = 0 takes the direct reciprocal, k = 600 the small-divisor path.
+    for k in [0, 600] {
+        let actual = divide_single_entry(
+            entry * pow2(-k),
+            AnyScalar::new_complex(divisor.re * pow2(-k), divisor.im * pow2(-k)),
+        );
+        let error = (actual - expected).norm();
+        assert!(
+            actual.re.is_finite() && actual.im.is_finite() && error <= 1e-15 * expected.norm(),
+            "2^{k}: {actual} vs {expected}"
+        );
+    }
+}
+
+#[test]
+fn divide_by_scalar_rounds_a_subnormal_quotient_once() {
+    // from_bits(2) / 3 is 2/3 of the smallest subnormal, which rounds to it.
+    // k = 0 takes the direct reciprocal, k = 600 the large-divisor path.
+    for k in [0, 600] {
+        let actual = divide_single_entry(
+            f64::from_bits(2) * pow2(k),
+            AnyScalar::new_real(3.0 * pow2(k)),
+        );
+        assert_eq!(actual.to_bits(), 1, "2^{k}: {actual:e}");
+    }
+}

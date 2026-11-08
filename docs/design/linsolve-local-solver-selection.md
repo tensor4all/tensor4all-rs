@@ -64,10 +64,11 @@ another solver.
 - A `gmres_restart_dim` (or core GMRES/Lanczos `max_iter`) whose Krylov
   workspace cannot be allocated returns `KrylovError::InvalidOptions` instead
   of aborting on a capacity overflow.
-- The identity-only closed form returns a finite `rhs / a0` for subnormal or
-  very large `a0`, where it previously formed an infinite `1 / a0` (or a
-  complex reciprocal from an out-of-range `|a0|^2`) and returned `inf` or
-  `NaN` entries.
+- The identity-only closed form returns a finite `rhs / a0` for `a0` whose
+  largest component is below `2^-500` or above `2^500`, where it previously
+  formed an infinite `1 / a0` (or a complex reciprocal from an out-of-range
+  `|a0|^2`) and returned `inf` or `NaN` entries. Other `a0` are unchanged: one
+  multiplication by `1 / a0`.
 
 ## Implementation
 
@@ -97,10 +98,15 @@ and whether the reported local residual is relative or absolute.
 
 The identity-only closed form does not depend on the local solver: two-site
 MALS returns `rhs / a0` for every choice, and one-site ALS sweeps so the
-solution stays in the initial bond spaces. The closed form normalizes `a0` by
-an exact power of two before taking a reciprocal, so it stays finite whenever
-`rhs / a0` is, including subnormal and complex `a0` whose `1 / a0` or
-`|a0|^2` leaves the `f64` range.
+solution stays in the initial bond spaces. The closed form multiplies by
+`1 / a0` when the largest component of `a0` is in `[2^-500, 2^500]`. Outside
+that range it normalizes `a0` by an exact power of two: for a small `a0` the
+power of two is applied first, with a factor of four withheld so that every
+component of the intermediate stays below the largest component of the
+quotient; for a large `a0` the
+reciprocal is applied first and the power of two last, in one step, so a
+subnormal quotient is rounded once. Each entry gets the same two roundings as
+a direct reciprocal multiplication.
 
 ## Tests
 
