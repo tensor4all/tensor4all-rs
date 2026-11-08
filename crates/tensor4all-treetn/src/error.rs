@@ -345,11 +345,15 @@ impl TreeTNOperationError {
 }
 
 impl From<anyhow::Error> for TreeTNOperationError {
-    /// Internal `?` conversions, and any failure that reaches this boundary
-    /// through an `anyhow` helper, land in the catch-all variant with their
-    /// chain intact.
+    /// Internal `?` conversions land in the catch-all variant with their chain
+    /// intact — unless the chain already carries a classified variant, which is
+    /// returned as it is so a wrapper that added context does not erase the
+    /// classification the caller acts on.
     fn from(source: anyhow::Error) -> Self {
-        Self::Operation { source }
+        match source.downcast::<Self>() {
+            Ok(classified) => classified,
+            Err(source) => Self::Operation { source },
+        }
     }
 }
 

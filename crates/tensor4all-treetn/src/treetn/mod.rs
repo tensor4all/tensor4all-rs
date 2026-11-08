@@ -735,13 +735,11 @@ where
         context_name: &str,
     ) -> Result<Option<SweepContext>> {
         // 1. Validate tree structure
-        self.validate_tree()
-            .with_context(|| format!("{}: graph must be a tree", context_name))?;
+        self.validate_tree()?;
 
         // 2. Set canonical_region
         let canonical_region_v: Vec<V> = canonical_region.into_iter().collect();
-        self.set_canonical_region(canonical_region_v)
-            .with_context(|| format!("{}: failed to set canonical_region", context_name))?;
+        self.set_canonical_region(canonical_region_v)?;
 
         if self.canonical_region.is_empty() {
             return Ok(None); // Nothing to do if no centers
@@ -1453,12 +1451,9 @@ where
             return Ok(());
         }
 
-        self.graph
-            .rename_node(old_name, new_name.clone())
-            .context("rename_node: failed to rename graph node")?;
+        self.graph.rename_node(old_name, new_name.clone())?;
         self.site_index_network
-            .rename_node(old_name, new_name.clone())
-            .context("rename_node: failed to rename site-index node")?;
+            .rename_node(old_name, new_name.clone())?;
 
         if self.canonical_region.remove(old_name) {
             self.canonical_region.insert(new_name.clone());

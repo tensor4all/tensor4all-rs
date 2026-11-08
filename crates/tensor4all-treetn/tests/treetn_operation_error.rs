@@ -181,3 +181,27 @@ fn operation_stays_the_catch_all_and_renders_the_whole_chain() {
     );
     assert_eq!(source_chain(&error), vec!["outer context", "root cause"]);
 }
+
+#[test]
+fn wrappers_keep_the_classification() {
+    // `rename_node` adds an `anyhow` context internally; the variant must survive it.
+    let (mut tree, _site) = one_site_f64_tree();
+    let error = tree.rename_node(&404usize, 405usize).unwrap_err();
+    assert!(
+        matches!(error, TreeTNOperationError::InvalidGraph { .. }),
+        "rename_node must keep the unknown-node classification, got {error:?}"
+    );
+
+    // `canonicalize` goes through `setup_sweep_context`, which used to add a context too.
+    let (tree, _site) = one_site_f64_tree();
+    let error = tree
+        .canonicalize(
+            [404usize],
+            tensor4all_treetn::CanonicalizationOptions::default(),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(error, TreeTNOperationError::InvalidGraph { .. }),
+        "canonicalize must keep the unknown-node classification, got {error:?}"
+    );
+}
