@@ -78,7 +78,7 @@ request order. Failed callbacks and incorrect output lengths insert nothing.
 The limit counts the memo's hash tables (buckets, entries and control bytes).
 At the limit the oldest generation of entries is evicted and new values are kept;
 while a table grows the outgoing one is alive too, so the transient peak is at
-most 1.5x the limit. `Some(0)` deduplicates within each batch but retains no
+most 1.5x the limit + 8 bytes. `Some(0)` deduplicates within each batch but retains no
 values. `Some(usize::MAX)` explicitly removes the bound. Packed keys support index
 spaces up to 1024 bits, but edge candidate matrices are looked up through the
 cache's own per-side keys, which exist for the `u64` and `u128` widths only. With

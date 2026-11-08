@@ -26,7 +26,9 @@ pub(crate) struct Inserted {
 ///
 /// Bytes are those of the tables themselves, from their capacities: buckets ×
 /// (`size_of::<(K, V)>()` + 1 control byte) + one group of trailing control bytes.
-/// During a growth the outgoing table is alive next to the new one.
+/// During a growth the outgoing table is alive next to the new one: both tables
+/// fit the limit afterwards and the outgoing one is half the new one plus half a
+/// group, so the transient peak is at most 1.5 × limit + `GROUP_WIDTH` / 2.
 #[derive(Debug, Clone)]
 pub(crate) struct MemoTable<K, V> {
     current: FxHashMap<K, V>,
@@ -147,6 +149,12 @@ impl<K: Hash + Eq, V> MemoTable<K, V> {
     #[cfg(test)]
     pub(crate) fn capacities(&self) -> (usize, usize) {
         (self.current.capacity(), self.previous.capacity())
+    }
+
+    /// Entries of the previous generation, for tests of the rotation.
+    #[cfg(test)]
+    pub(crate) fn previous_len(&self) -> usize {
+        self.previous.len()
     }
 }
 

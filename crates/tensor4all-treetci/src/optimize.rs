@@ -269,7 +269,8 @@ pub struct TreeTciOptions {
     /// `Some(0)` deduplicates only within each batch and retains no values.
     /// At the limit the oldest generation of entries is evicted (reported as
     /// `evicted_entries`) and the new value is kept; while a table grows, the
-    /// outgoing one is alive too, so the transient peak is at most 1.5× the limit.
+    /// outgoing one is alive too, so the transient peak is at most 1.5 × the
+    /// limit + 8 bytes.
     /// Memoization requires a fixed value for each point throughout the call.
     /// Edge candidate matrices are looked up through cache-owned side keys,
     /// which exist for the `u64` and `u128` key widths only, so an index space

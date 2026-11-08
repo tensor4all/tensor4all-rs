@@ -195,9 +195,11 @@ pub const DEFAULT_RETAINED_BYTE_LIMIT: usize = 256 * 1024 * 1024;
 /// and an evicted point is simply evaluated again if asked for;
 /// [`Self::evicted_entries`] counts them. [`Self::retained_bytes`] is the size of
 /// both tables from their capacities: buckets × (key + value + 1 control byte),
-/// plus one group of control bytes. While a table grows, the outgoing table is
-/// alive next to the new one, so the transient peak is at most the limit plus
-/// half of it. Allocator overhead and heap payload owned by values are excluded.
+/// plus one group of control bytes. While a table grows, the outgoing table
+/// (half the new one's buckets) is alive next to the new one, so the transient
+/// peak is at most 1.5 × the limit + 8 bytes (half a control group); a limit of
+/// 152 bytes peaks at 236 for `f64` values. Allocator overhead and heap payload
+/// owned by values are excluded.
 ///
 /// Key width is selected automatically from the index space (up to 1024 bits,
 /// as in [`CachedFunction`](super::CachedFunction)); an index space that needs

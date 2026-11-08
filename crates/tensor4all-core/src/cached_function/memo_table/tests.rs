@@ -109,3 +109,48 @@ fn overwriting_never_evicts() {
     assert_eq!((table.len(), table.bytes()), (len, bytes));
     assert!(kept.iter().all(|key| table.get(key) == Some(&1.0)));
 }
+
+/// The sizes the accounting assumes, written out: `(u128, f64)` is 32 B with its
+/// alignment, not 24, so its smallest table is 148 B.
+#[test]
+fn smallest_tables_have_the_aligned_entry_size() {
+    assert_eq!(table_bytes::<u64, f64>(4), 4 * (16 + 1) + 16);
+    assert_eq!(table_bytes::<u128, f64>(4), 4 * (32 + 1) + 16);
+    assert_eq!(
+        table_bytes::<u64, num_complex::Complex64>(4),
+        4 * (24 + 1) + 16
+    );
+}
+
+/// The transient peak of a growth: the previous table, the outgoing current
+/// table and the new one together. Never above 1.5 × limit + half a group, and
+/// reached exactly by the #1180 review case (limit 152, keys 0..4: 84 + 152).
+#[test]
+fn growth_peaks_stay_within_one_and_a_half_limits_plus_half_a_group() {
+    let peak_of = |limit: usize, keys: u64| {
+        let mut table = MemoTable::<u64, f64>::default();
+        let mut peak = 0;
+        for key in 0..keys {
+            let (before_current, _) = table.capacities();
+            let before_previous_len = table.previous_len();
+            let before = table_bytes::<u64, f64>(buckets_of_capacity(before_current));
+            let inserted = table.insert(key, 0.0, limit);
+            let (after_current, _) = table.capacities();
+            // A rotation moves the current table to the previous one (dropping the
+            // older) before the new key goes in; a growth without one keeps the
+            // outgoing table alive while the new one is filled.
+            let rotated = inserted.evicted > 0 || table.previous_len() != before_previous_len;
+            let grew = !rotated && after_current != before_current;
+            peak = peak.max(table.bytes() + if grew { before } else { 0 });
+        }
+        peak
+    };
+    assert_eq!(peak_of(152, 4), 236);
+    for limit in [100, 152, 1_000, 10_000, 100_000, 1 << 20] {
+        let peak = peak_of(limit, 50_000);
+        assert!(
+            peak <= limit * 3 / 2 + GROUP_WIDTH / 2,
+            "limit {limit}: peak {peak}"
+        );
+    }
+}

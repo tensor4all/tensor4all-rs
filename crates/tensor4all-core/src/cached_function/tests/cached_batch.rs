@@ -207,15 +207,15 @@ fn cached_batch_encodes_each_request_only_once() {
 
 #[test]
 fn cached_batch_wide_keys_account_their_tables_and_failures() {
-    use crate::cached_function::memo_table::table_bytes;
-    use bnum::types::{U1024, U256, U512};
-    // The smallest table of each key width: (key, f64) entries, alignment included.
+    // The smallest table of each key width, written out independently of the
+    // accounting code: 4 buckets × (size of the (key, f64) pair, alignment
+    // included, + 1 control byte) + 16 control bytes. `(u128, f64)` is 32 B.
     for (n_sites, smallest) in [
-        (1, table_bytes::<u64, f64>(4)),
-        (65, table_bytes::<u128, f64>(4)),
-        (129, table_bytes::<U256, f64>(4)),
-        (257, table_bytes::<U512, f64>(4)),
-        (513, table_bytes::<U1024, f64>(4)),
+        (1, 4 * (16 + 1) + 16),
+        (65, 4 * (32 + 1) + 16),
+        (129, 4 * (40 + 1) + 16),
+        (257, 4 * (72 + 1) + 16),
+        (513, 4 * (136 + 1) + 16),
     ] {
         let dims = vec![2; n_sites];
         let mut cache = MultiIndexCache::<f64>::with_retained_byte_limit(&dims, smallest).unwrap();
