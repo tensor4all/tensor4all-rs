@@ -360,13 +360,8 @@ where
             // from two runtimes. Adopt the whole tree first, exactly as the
             // context-scoped unfold adopts a host tensor.
             if let Err(error) = self.adopt_into_in(execution) {
-                // Name the root cause in the top-level message: it is all that
-                // `TreeTNOperationError`'s `Display` shows.
-                let error = anyhow::Error::new(error);
-                let cause = error.root_cause().to_string();
-                return Err(
-                    error.context(format!("{context_name}: context adoption failed: {cause}"))
-                );
+                return Err(anyhow::Error::new(error)
+                    .context(format!("{context_name}: context adoption failed")));
             }
         }
         match context {

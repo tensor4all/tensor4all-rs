@@ -637,17 +637,16 @@ fn cached_values_into_typed<T: TensorElement>(
 ///
 /// This is the one dtype rule
 /// [`TreeTNCachedEvaluator::evaluate_batched_typed`] enforces: a complex
-/// payload is never silently narrowed into a real request. It is wrapped in a
-/// [`TreeTNOperationError`], so a caller that needs to distinguish a dtype
-/// mismatch from a shape or backend failure can downcast the error source.
+/// payload is never silently narrowed into a real request. It is reported as
+/// [`TreeTNOperationError::ScalarKindMismatch`], so a caller distinguishes a
+/// dtype mismatch from a shape or backend failure by matching the variant.
 ///
 /// # Examples
 ///
 /// ```
 /// use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
 /// use tensor4all_treetn::{
-///     CachedEvaluatorOptions, EvaluatedScalarKindMismatch, EvaluationHint, TreeTN,
-///     TreeTNCachedEvaluator,
+///     CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator,
 /// };
 ///
 /// let s = DynIndex::new_dyn(2);
@@ -668,10 +667,9 @@ fn cached_values_into_typed<T: TensorElement>(
 /// let error = evaluator
 ///     .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
 ///     .unwrap_err();
-/// let mismatch = error
-///     .source
-///     .downcast_ref::<EvaluatedScalarKindMismatch>()
-///     .expect("dtype mismatch");
+/// let tensor4all_treetn::TreeTNOperationError::ScalarKindMismatch(mismatch) = error else {
+///     panic!("expected the dtype variant, got {error:?}");
+/// };
 /// assert_eq!(mismatch.stored, "c64");
 /// assert_eq!(mismatch.requested, "f64");
 ///
@@ -1803,9 +1801,9 @@ where
     ) -> std::result::Result<Self, TreeTNOperationError> {
         plan.ensure_matches(tree)?;
         if options.max_batch_points == Some(0) {
-            return Err(TreeTNOperationError::from(anyhow::anyhow!(
-                "TreeTNCachedEvaluator: max_batch_points must be positive"
-            )));
+            return Err(TreeTNOperationError::invalid_configuration(
+                anyhow::anyhow!("TreeTNCachedEvaluator: max_batch_points must be positive"),
+            ));
         }
         if let Some(center) = &options.center {
             ensure_node_exists(tree, center, "TreeTNCachedEvaluator::new: center")?;
@@ -2075,7 +2073,8 @@ where
     /// Precision conversion within a kind (`f32` to `f64`) and widening a real
     /// payload into a complex request are permitted; narrowing a complex
     /// payload into a real request is not, and reports
-    /// [`EvaluatedScalarKindMismatch`] as the error source.
+    /// [`TreeTNOperationError::ScalarKindMismatch`] carrying the
+    /// [`EvaluatedScalarKindMismatch`].
     ///
     /// # Examples
     ///
@@ -2117,8 +2116,7 @@ where
         hint: EvaluationHint<V>,
     ) -> std::result::Result<Vec<T>, TreeTNOperationError> {
         let cached = self.evaluate_batched_cached(values, hint)?;
-        cached_values_into_typed(cached)
-            .map_err(|error| TreeTNOperationError::from(anyhow::Error::new(error)))
+        cached_values_into_typed(cached).map_err(TreeTNOperationError::from)
     }
 
     /// Evaluates a hinted batch and returns typed scalars on a caller-owned explicit `Session`.
@@ -2144,8 +2142,7 @@ where
     ) -> std::result::Result<Vec<T>, TreeTNOperationError> {
         let mut route = CachedEvaluationRoute::on_session(session);
         let cached = self.evaluate_batched_cached_with_route(values, hint, &mut route)?;
-        cached_values_into_typed(cached)
-            .map_err(|error| TreeTNOperationError::from(anyhow::Error::new(error)))
+        cached_values_into_typed(cached).map_err(TreeTNOperationError::from)
     }
 
     /// Shared batch evaluation returning the evaluator's internal lightweight
@@ -2186,7 +2183,7 @@ where
         let center = match hint.center {
             Some(node) => {
                 if self.tree.node_index(&node).is_none() {
-                    return Err(TreeTNOperationError::from(anyhow::anyhow!(
+                    return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
                         "TreeTNCachedEvaluator: hinted centre {:?} is not a node of this tree",
                         node
                     )));

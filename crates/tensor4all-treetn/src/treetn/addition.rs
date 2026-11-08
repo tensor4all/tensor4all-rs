@@ -597,13 +597,17 @@ where
         V: Ord,
         T::Index: Eq + Hash,
     {
-        let (first, rest) = terms
-            .split_first()
-            .ok_or_else(|| anyhow::anyhow!("add_many requires at least one term"))?;
+        let (first, rest) = terms.split_first().ok_or_else(|| {
+            TreeTNOperationError::invalid_configuration(anyhow::anyhow!(
+                "add_many requires at least one term"
+            ))
+        })?;
         for term in rest {
             // Verify same topology
             if !first.same_topology(term) {
-                return Err(anyhow::anyhow!("Cannot add TreeTNs with different topologies").into());
+                return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
+                    "Cannot add TreeTNs with different topologies"
+                )));
             }
             first.ensure_same_site_spaces(term)?;
         }

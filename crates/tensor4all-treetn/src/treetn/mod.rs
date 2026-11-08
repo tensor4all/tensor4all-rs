@@ -955,14 +955,7 @@ where
             stack,
             select,
         )
-        .map_err(|error| {
-            // Keep the whole chain as the source, and name its root cause
-            // (for example the rank-zero bond of an LU/CI split of a zero
-            // tensor) in the top-level message, which is all that
-            // `TreeTNOperationError`'s `Display` shows.
-            let cause = error.root_cause().to_string();
-            error.context(format!("{context_name}: factorization failed: {cause}"))
-        })?;
+        .map_err(|error| error.context(format!("{context_name}: factorization failed")))?;
 
         let left_tensor = factorize_result.left;
         let right_tensor = factorize_result.right;
@@ -1053,7 +1046,7 @@ where
         let new_tensor_indices = new_tensor.external_indices();
         let common = common_inds(&connection_indices, &new_tensor_indices);
         if common.len() != connection_indices.len() {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!(
                     "New tensor is missing {} connection index(es): found {} out of {} required indices",
                     connection_indices.len() - common.len(),
@@ -1338,7 +1331,7 @@ where
             let target_name = self.graph.node_name(target);
 
             if source_name != Some(node_name) && target_name != Some(node_name) {
-                return Err(TreeTNOperationError::from(
+                return Err(TreeTNOperationError::invalid_graph(
                     anyhow::anyhow!(
                         "ortho_towards node {:?} must be one of the edge endpoints",
                         node_name
@@ -1402,7 +1395,7 @@ where
         }
 
         if visited.len() != g.node_count() {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!(
                     "Graph is not connected: {} nodes reachable out of {}",
                     visited.len(),
@@ -1417,7 +1410,7 @@ where
         let edge_count = g.edge_count();
 
         if edge_count != node_count - 1 {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!(
                     "Graph does not satisfy tree condition: {} edges != {} nodes - 1",
                     edge_count,
@@ -1539,15 +1532,17 @@ where
     ) -> std::result::Result<(), TreeTNOperationError> {
         for node in self.graph.graph().node_indices() {
             let tensor = self.tensor(node).ok_or_else(|| {
-                TreeTNOperationError::from(anyhow::anyhow!(
+                TreeTNOperationError::invalid_graph(anyhow::anyhow!(
                     "context validation: node {node:?} has no tensor"
                 ))
             })?;
             tensor.validate_context(context).map_err(|error| {
                 let name = self.graph.node_name(node);
-                TreeTNOperationError::from(anyhow::anyhow!(
-                    "context validation: node {name:?} does not belong to the supplied execution context: {error}"
-                ))
+                // A rejected context can be an unsupported runtime rather than a
+                // graph problem, so this stays in the catch-all with its cause.
+                TreeTNOperationError::from(anyhow::Error::new(error).context(format!(
+                    "context validation: node {name:?} does not belong to the supplied execution context"
+                )))
             })?;
         }
         Ok(())
@@ -1614,7 +1609,7 @@ where
         // Validate that all nodes exist in the graph
         for node_name in &region {
             if !self.graph.has_node(node_name) {
-                return Err(TreeTNOperationError::from(
+                return Err(TreeTNOperationError::invalid_graph(
                     anyhow::anyhow!("Node {:?} does not exist in the graph", node_name)
                         .context("set_canonical_region: all nodes must be valid"),
                 ));
@@ -1684,7 +1679,7 @@ where
         node_name: V,
     ) -> std::result::Result<(), TreeTNOperationError> {
         if !self.graph.has_node(&node_name) {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!("Node {:?} does not exist in the graph", node_name)
                     .context("add_to_canonical_region: node must be valid"),
             ));
@@ -2315,7 +2310,7 @@ where
                     visited_count += 1;
                 }
                 if visited_count != num_nodes {
-                    return Err(TreeTNOperationError::from(anyhow::anyhow!(
+                    return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
                         "TreeTN is disconnected: DFS visited {} of {} nodes. All tensors must be connected.",
                         visited_count,
                         num_nodes
@@ -2341,7 +2336,7 @@ where
         for (index, nodes) in &index_to_nodes {
             if nodes.len() > 2 {
                 // More than 2 nodes share the same index - always invalid for tree structure.
-                return Err(TreeTNOperationError::from(
+                return Err(TreeTNOperationError::invalid_graph(
                     anyhow::anyhow!(
                         "Index {:?} is shared by {} nodes, but tree structure allows at most 2",
                         index,
@@ -2359,7 +2354,7 @@ where
                 {
                     let name_a = self.graph.node_name(node_a);
                     let name_b = self.graph.node_name(node_b);
-                    return Err(TreeTNOperationError::from(
+                    return Err(TreeTNOperationError::invalid_graph(
                         anyhow::anyhow!(
                             "Non-adjacent nodes {:?} and {:?} share index {:?}. \
                         Only adjacent (edge-connected) nodes may share full bond indices.",

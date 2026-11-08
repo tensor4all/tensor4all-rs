@@ -114,7 +114,7 @@ where
         indices: &[T::Index],
     ) -> std::result::Result<Self, TreeTNOperationError> {
         if tree.node_count() == 0 {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!("Cannot evaluate empty TreeTN")
                     .context("TreeTNEvaluator::new: network must have at least one node"),
             ));

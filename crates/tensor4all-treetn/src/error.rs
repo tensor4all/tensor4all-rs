@@ -255,32 +255,98 @@ mod tests;
 
 /// Error returned by general TreeTN and operator index operations.
 ///
-/// Wraps the source diagnostic from the underlying tensor operation, so
-/// callers propagating into `anyhow::Result` keep the full source chain.
+/// Types the failures a caller can act on, and keeps `Operation` as the
+/// catch-all for everything else (an invariant, storage or backend failure).
+/// This mirrors `TreeTciError` in `tensor4all-treetci`.
+///
+/// The wrapped diagnostic is reachable through [`std::error::Error::source`], not
+/// through a public field, so callers that still propagate into `anyhow::Result`
+/// keep the full source chain.
 ///
 /// # Remedies
-/// - Index binding/selection failures: verify the index set against the
-///   network's site indices and tags before binding or applying operators.
-/// - Shape/dtype failures: check site tensor dims against the network
-///   topology.
-/// - Backend failures: the wrapped source chain identifies the failing stage.
+/// - [`Self::InvalidConfiguration`]: correct the option or argument value the
+///   message names.
+/// - [`Self::InvalidGraph`]: the network cannot serve the request - a node, edge
+///   or index is not part of it, or its structure is not a tree. Fix the network
+///   or the names passed with it.
+/// - [`Self::IndexOutOfBounds`]: the index or coordinate is outside the
+///   dimension it is read from.
+/// - [`Self::ScalarKindMismatch`]: request the element type the network stores.
+/// - [`Self::Operation`]: the wrapped source chain identifies the failing stage.
 #[derive(Debug, thiserror::Error)]
-#[error("TreeTN operation failed: {source}")]
-pub struct TreeTNOperationError {
-    /// Original tensor/network diagnostic.
-    #[source]
-    pub source: anyhow::Error,
+pub enum TreeTNOperationError {
+    /// An option or argument value supplied by the caller is invalid or
+    /// unsupported.
+    #[error("invalid TreeTN operation configuration: {source:#}")]
+    InvalidConfiguration {
+        /// Original diagnostic.
+        #[source]
+        source: anyhow::Error,
+    },
+    /// The network cannot serve the request: an unknown node, edge or index, or
+    /// a structure that is not a tree.
+    #[error("invalid TreeTN graph: {source:#}")]
+    InvalidGraph {
+        /// Original diagnostic.
+        #[source]
+        source: anyhow::Error,
+    },
+    /// An index, coordinate or count is outside the dimension it is read from.
+    #[error("index out of bounds: {source:#}")]
+    IndexOutOfBounds {
+        /// Original diagnostic.
+        #[source]
+        source: anyhow::Error,
+    },
+    /// The requested element type cannot represent the values the network
+    /// stores.
+    #[error(transparent)]
+    ScalarKindMismatch(#[from] crate::EvaluatedScalarKindMismatch),
+    /// An underlying tensor, storage, or backend operation failed, or an
+    /// internal invariant was violated.
+    #[error("TreeTN operation failed: {source:#}")]
+    Operation {
+        /// Original diagnostic, preserving the full source chain.
+        #[source]
+        source: anyhow::Error,
+    },
+}
+
+impl TreeTNOperationError {
+    /// An invalid option or argument value chosen by the caller.
+    pub(crate) fn invalid_configuration(source: impl Into<anyhow::Error>) -> Self {
+        Self::InvalidConfiguration {
+            source: source.into(),
+        }
+    }
+
+    /// The network or a name selected from it cannot serve the request.
+    pub(crate) fn invalid_graph(source: impl Into<anyhow::Error>) -> Self {
+        Self::InvalidGraph {
+            source: source.into(),
+        }
+    }
+
+    /// An index, coordinate or count outside the dimension it is read from.
+    pub(crate) fn index_out_of_bounds(source: impl Into<anyhow::Error>) -> Self {
+        Self::IndexOutOfBounds {
+            source: source.into(),
+        }
+    }
 }
 
 impl From<anyhow::Error> for TreeTNOperationError {
+    /// Internal `?` conversions, and any failure that reaches this boundary
+    /// through an `anyhow` helper, land in the catch-all variant with their
+    /// chain intact.
     fn from(source: anyhow::Error) -> Self {
-        Self { source }
+        Self::Operation { source }
     }
 }
 
 impl From<tensor4all_core::IdxTensorError> for TreeTNOperationError {
     fn from(source: tensor4all_core::IdxTensorError) -> Self {
-        Self {
+        Self::Operation {
             source: anyhow::Error::new(source),
         }
     }

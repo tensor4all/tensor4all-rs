@@ -87,7 +87,7 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     let node_index = treetn.node_index(node).ok_or_else(|| {
-        TreeTNOperationError::from(anyhow::anyhow!(
+        TreeTNOperationError::invalid_graph(anyhow::anyhow!(
             "fix_and_remove_site: node {node:?} is not part of the TreeTN"
         ))
     })?;
@@ -99,7 +99,7 @@ where
         .site_space(node)
         .unwrap_or_else(|| invariant_violated(INVARIANT, format!("no site space for {node:?}")));
     if site_space.len() != 1 {
-        return Err(TreeTNOperationError::from(anyhow::anyhow!(
+        return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
             "fix_and_remove_site: node {node:?} must carry exactly one site index, got {}",
             site_space.len()
         )));
@@ -110,7 +110,7 @@ where
         .unwrap_or_else(|| invariant_violated(INVARIANT, "a one-element site space is empty"))
         .clone();
     if value >= site_index.dim() {
-        return Err(TreeTNOperationError::from(anyhow::anyhow!(
+        return Err(TreeTNOperationError::index_out_of_bounds(anyhow::anyhow!(
             "fix_and_remove_site: value {value} is out of range for site dimension {}",
             site_index.dim()
         )));
@@ -118,7 +118,7 @@ where
 
     let neighbors: Vec<V> = treetn.site_index_network().neighbors(node).collect();
     if neighbors.is_empty() {
-        return Err(TreeTNOperationError::from(anyhow::anyhow!(
+        return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
             "fix_and_remove_site: node {node:?} is isolated; removing it would leave an empty network"
         )));
     }

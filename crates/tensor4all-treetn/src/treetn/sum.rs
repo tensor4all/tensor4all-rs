@@ -412,7 +412,7 @@ where
     <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
 {
     let first = terms.first().ok_or_else(|| {
-        TreeTNOperationError::from(anyhow::anyhow!(
+        TreeTNOperationError::invalid_configuration(anyhow::anyhow!(
             "pairwise_sum: at least one term is required"
         ))
     })?;
@@ -444,7 +444,7 @@ where
                 .pop()
                 .map(std::borrow::Cow::into_owned)
                 .ok_or_else(|| {
-                    TreeTNOperationError::from(anyhow::anyhow!(
+                    TreeTNOperationError::invalid_configuration(anyhow::anyhow!(
                         "pairwise_sum: at least one term is required"
                     ))
                 })

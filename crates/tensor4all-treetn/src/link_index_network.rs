@@ -114,7 +114,7 @@ where
                 if old_edge != edge {
                     // Restore and return error
                     self.index_to_edge.insert(old_index.clone(), old_edge);
-                    return Err(TreeTNOperationError::from(anyhow::anyhow!(
+                    return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
                         "Edge mismatch: old_index was on edge {:?}, not {:?}",
                         old_edge,
                         edge
@@ -123,7 +123,7 @@ where
                 self.index_to_edge.insert(new_index.clone(), edge);
                 Ok(())
             }
-            None => Err(TreeTNOperationError::from(anyhow::anyhow!(
+            None => Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
                 "Index {:?} not found in link_index_network",
                 old_index.id()
             ))),

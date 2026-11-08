@@ -5,7 +5,7 @@ use std::{fmt::Debug, hash::Hash};
 use num_complex::{Complex32, Complex64};
 use tensor4all_core::AnyScalar;
 use tensor4all_tensorbackend::TensorElement;
-use tensor4all_treetn::{EvaluatedScalarKindMismatch, TreeTNOperationError};
+use tensor4all_treetn::TreeTNOperationError;
 
 use crate::TreeAciError;
 
@@ -28,11 +28,11 @@ pub(crate) fn ensure_finite_values<T: TreeAciScalar>(
 /// change how a caller classifies a real run over complex inputs. Every other
 /// evaluator failure keeps propagating as the wrapped TreeTN error.
 pub(crate) fn typed_evaluation_error(error: TreeTNOperationError) -> TreeAciError {
-    match error.source.downcast_ref::<EvaluatedScalarKindMismatch>() {
-        Some(mismatch) => TreeAciError::ScalarKind {
+    match error {
+        TreeTNOperationError::ScalarKindMismatch(mismatch) => TreeAciError::ScalarKind {
             message: mismatch.to_string(),
         },
-        None => TreeAciError::from(error),
+        error => TreeAciError::from(error),
     }
 }
 

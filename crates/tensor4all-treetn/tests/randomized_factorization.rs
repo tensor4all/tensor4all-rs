@@ -213,8 +213,8 @@ fn context_refuses_tracked_networks_before_rng_consumption() {
             .with_max_bond_dim(2);
         let error = contract_with_rng_in(&a, &b, &0, options, &mut rng, &context).unwrap_err();
         assert!(matches!(
-            error
-                .source
+            std::error::Error::source(&error)
+                .expect("operation error has a source")
                 .downcast_ref::<tensor4all_core::FactorizeError>(),
             Some(tensor4all_core::FactorizeError::UnsupportedStorage(_))
         ));

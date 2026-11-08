@@ -419,14 +419,16 @@ where
     let center: V = match options.center.as_ref() {
         Some(center) => {
             if state.node_index(center).is_none() {
-                return Err(TreeTNOperationError::from(anyhow::anyhow!(
+                return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
                     "apply_linear_operator: contraction center {center:?} is not a node of the state"
                 )));
             }
             center.clone()
         }
         None => state.preferred_contraction_center().ok_or_else(|| {
-            TreeTNOperationError::from(anyhow::anyhow!("apply_linear_operator: empty state"))
+            TreeTNOperationError::invalid_configuration(anyhow::anyhow!(
+                "apply_linear_operator: empty state"
+            ))
         })?,
     };
 
