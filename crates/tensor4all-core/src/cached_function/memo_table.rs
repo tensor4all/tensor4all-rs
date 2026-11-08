@@ -1,16 +1,19 @@
 //! The bounded table behind the caches: two generations of one hash map, sized
-//! by the bytes their tables really occupy.
+//! by an upper bound on the bytes their tables occupy.
 
 use rustc_hash::FxHashMap;
 use std::hash::Hash;
 
-/// Control bytes past the last bucket (hashbrown's widest group, SSE2).
+/// Control bytes past the last bucket, counted at hashbrown's widest group (SSE2,
+/// 16): exact on x86_64, 8 bytes more than a NEON target's 8-byte group, so the
+/// accounting is an upper bound there.
 const GROUP_WIDTH: usize = 16;
 
 /// What [`MemoTable::insert`] did with an entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Inserted {
-    /// False when the limit is below the smallest table that holds one entry.
+    /// False when the limit is below the accounted size (an upper bound) of the
+    /// smallest table that holds one entry.
     pub(crate) stored: bool,
     /// Older entries dropped to make room.
     pub(crate) evicted: usize,
@@ -24,8 +27,9 @@ pub(crate) struct Inserted {
 /// always stay. Entries are never removed from a live table, so no tombstone can
 /// force a growth. Lookups check both generations.
 ///
-/// Bytes are those of the tables themselves, from their capacities: buckets ×
-/// (`size_of::<(K, V)>()` + 1 control byte) + one group of trailing control bytes.
+/// Bytes are an upper bound on the tables themselves, from their capacities:
+/// buckets × (`size_of::<(K, V)>()` + 1 control byte) + one 16-byte group of
+/// trailing control bytes (exact with SSE2 groups, 8 bytes over on NEON targets).
 /// During a growth the outgoing table is alive next to the new one: both tables
 /// fit the limit afterwards and the outgoing one is half the new one plus half a
 /// group, so the transient peak is at most 1.5 × limit + `GROUP_WIDTH` / 2.

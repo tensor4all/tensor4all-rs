@@ -40,6 +40,38 @@ fn num_evals_counts_evaluations_a_full_memo_evicted() {
     );
 }
 
+/// A limit below the smallest table retains nothing: one point requested in two
+/// batches is evaluated twice with no eviction, both inserts refused.
+#[test]
+fn num_evals_counts_evaluations_whose_insert_was_refused() {
+    let calls = std::cell::Cell::new(0usize);
+    let cache: MemoCache<f64> = Rc::new(RefCell::new(
+        MultiIndexCache::with_retained_byte_limit(&[4], 0).unwrap(),
+    ));
+    let evaluate = site_evaluator(
+        |point: &[usize]| Ok(vec![point[0] as f64]),
+        |batch: QuanticsBatch<'_, f64>| {
+            calls.set(calls.get() + batch.n_points());
+            Ok(vec![0.0; batch.n_points()])
+        },
+        Rc::clone(&cache),
+    );
+    for _ in 0..2 {
+        let batch = GlobalIndexBatch::new(&[0], 1, 1).unwrap();
+        assert_eq!(evaluate(batch).unwrap(), vec![0.0]);
+    }
+    let stats = memo_cache_stats(&cache);
+    assert_eq!(calls.get(), 2);
+    assert_eq!(
+        (
+            stats.num_evals,
+            stats.dropped_inserts,
+            stats.evicted_entries
+        ),
+        (2, 2, 0)
+    );
+}
+
 #[test]
 fn site_evaluator_propagates_coordinate_conversion_failure() {
     let called = std::cell::Cell::new(false);

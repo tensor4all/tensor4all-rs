@@ -309,7 +309,8 @@ pub struct QuanticsTensorCI2<V: TTScalar> {
 ///
 /// The run memoizes target evaluations on the quantics multi-index, so the
 /// target is called only for points that are not in the memo: a point is
-/// evaluated again only after a full memo evicted it. The counters separate the
+/// evaluated again only after a full memo evicted it, or when its insert was
+/// refused because the limit is below the smallest table. The counters separate the
 /// quantities an optimization needs: how many requests were cached, how many
 /// were not, how many evaluations the target performed, and how many of them
 /// could not be retained or were evicted because the memo cache reached its
@@ -332,8 +333,9 @@ pub struct QuanticsTensorCI2<V: TTScalar> {
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CacheStats {
-    /// Evaluations of the target function. Without eviction these are distinct
-    /// points; a point evicted from a full memo and requested again counts twice.
+    /// Evaluations of the target function. Without eviction or refused inserts
+    /// (`dropped_inserts == 0`) these are distinct points; a point evicted from a
+    /// full memo, or refused, and requested again counts twice.
     pub num_evals: usize,
     /// Point requests served from the cache.
     pub num_cache_hits: usize,

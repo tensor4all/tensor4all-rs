@@ -194,12 +194,13 @@ pub const DEFAULT_RETAINED_BYTE_LIMIT: usize = 256 * 1024 * 1024;
 /// generation cannot grow within the limit, the older generation is evicted and
 /// the current one takes its place, so the most recent insertions always stay
 /// and an evicted point is simply evaluated again if asked for;
-/// [`Self::evicted_entries`] counts them. [`Self::retained_bytes`] is the size of
-/// both tables from their capacities: buckets × (key + value + 1 control byte),
-/// plus one group of control bytes. While a table grows, the outgoing table
+/// [`Self::evicted_entries`] counts them. [`Self::retained_bytes`] is an upper
+/// bound on both tables, from their capacities: buckets × (key + value + 1
+/// control byte), plus one 16-byte group of control bytes (exact on x86_64, 8
+/// bytes over on targets with 8-byte groups such as aarch64). While a table grows, the outgoing table
 /// (half the new one's buckets) is alive next to the new one, so the transient
 /// peak is at most 1.5 × the limit + 8 bytes (half a control group); a limit of
-/// 152 bytes peaks at 236 for `f64` values. Allocator overhead and heap payload
+/// 152 bytes peaks at 236 accounted bytes for `f64` values. Allocator overhead and heap payload
 /// owned by values are excluded.
 ///
 /// Key width is selected automatically from the index space (up to 1024 bits,
@@ -976,9 +977,10 @@ where
     /// Bytes of the cache's hash tables: buckets × (key + value + 1 control
     /// byte) plus one group of control bytes, for both generations.
     ///
-    /// Computed from the tables' capacities, so it never undercounts the
-    /// buckets they hold. It excludes allocator overhead and any heap payload
-    /// reachable from a value.
+    /// Computed from the tables' capacities with a 16-byte control group, an
+    /// upper bound on the bytes they hold (exact on x86_64, 8 bytes over on
+    /// targets with 8-byte groups). It excludes allocator overhead and any heap
+    /// payload reachable from a value.
     ///
     /// # Examples
     ///

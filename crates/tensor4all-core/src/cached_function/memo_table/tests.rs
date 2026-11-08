@@ -122,9 +122,10 @@ fn smallest_tables_have_the_aligned_entry_size() {
     );
 }
 
-/// The transient peak of a growth: the previous table, the outgoing current
-/// table and the new one together. Never above 1.5 × limit + half a group, and
-/// reached exactly by the #1180 review case (limit 152, keys 0..4: 84 + 152).
+/// The transient peak of a growth, in the accounting model (not observed from
+/// the allocator): the previous table, the outgoing current table and the new
+/// one together. Never above 1.5 × limit + half a group, and reached by the
+/// #1180 review case (limit 152, keys 0..4: 84 + 152 accounted bytes).
 #[test]
 fn growth_peaks_stay_within_one_and_a_half_limits_plus_half_a_group() {
     let peak_of = |limit: usize, keys: u64| {
