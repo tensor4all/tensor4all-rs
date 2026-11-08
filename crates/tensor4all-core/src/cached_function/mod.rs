@@ -29,8 +29,10 @@
 pub mod cache_key;
 pub mod error;
 pub mod index_int;
+mod memo_table;
 pub mod multi_index_cache;
 
+use memo_table::MemoTable;
 use rustc_hash::FxHashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -119,65 +121,54 @@ fn flat_index<K: CacheKey, I: IndexInt>(idx: &[I], coeffs: &[K]) -> K {
 /// Internal cache with automatically selected key type.
 enum InnerCache<V> {
     U64 {
-        cache: RwLock<FxHashMap<u64, V>>,
+        cache: RwLock<MemoTable<u64, V>>,
         coeffs: Vec<u64>,
     },
     U128 {
-        cache: RwLock<FxHashMap<u128, V>>,
+        cache: RwLock<MemoTable<u128, V>>,
         coeffs: Vec<u128>,
     },
     U256 {
-        cache: RwLock<FxHashMap<U256, V>>,
+        cache: RwLock<MemoTable<U256, V>>,
         coeffs: Vec<U256>,
     },
     U512 {
-        cache: RwLock<FxHashMap<U512, V>>,
+        cache: RwLock<MemoTable<U512, V>>,
         coeffs: Vec<U512>,
     },
     U1024 {
-        cache: RwLock<FxHashMap<U1024, V>>,
+        cache: RwLock<MemoTable<U1024, V>>,
         coeffs: Vec<U1024>,
     },
 }
 
 impl<V: Clone + Send + Sync> InnerCache<V> {
-    /// Size in bytes of one key of the selected key type.
-    fn key_bytes(&self) -> usize {
-        match self {
-            Self::U64 { .. } => std::mem::size_of::<u64>(),
-            Self::U128 { .. } => std::mem::size_of::<u128>(),
-            Self::U256 { .. } => std::mem::size_of::<U256>(),
-            Self::U512 { .. } => std::mem::size_of::<U512>(),
-            Self::U1024 { .. } => std::mem::size_of::<U1024>(),
-        }
-    }
-
     /// Create a new cache, automatically selecting the key type.
     fn new(local_dims: &[usize]) -> Result<Self, error::CacheKeyError> {
         let bits = total_bits(local_dims);
         if bits <= 64 {
             Ok(Self::U64 {
-                cache: RwLock::new(FxHashMap::default()),
+                cache: RwLock::new(MemoTable::default()),
                 coeffs: compute_coeffs::<u64>(local_dims)?,
             })
         } else if bits <= 128 {
             Ok(Self::U128 {
-                cache: RwLock::new(FxHashMap::default()),
+                cache: RwLock::new(MemoTable::default()),
                 coeffs: compute_coeffs::<u128>(local_dims)?,
             })
         } else if bits <= 256 {
             Ok(Self::U256 {
-                cache: RwLock::new(FxHashMap::default()),
+                cache: RwLock::new(MemoTable::default()),
                 coeffs: compute_coeffs::<U256>(local_dims)?,
             })
         } else if bits <= 512 {
             Ok(Self::U512 {
-                cache: RwLock::new(FxHashMap::default()),
+                cache: RwLock::new(MemoTable::default()),
                 coeffs: compute_coeffs::<U512>(local_dims)?,
             })
         } else if bits <= 1024 {
             Ok(Self::U1024 {
-                cache: RwLock::new(FxHashMap::default()),
+                cache: RwLock::new(MemoTable::default()),
                 coeffs: compute_coeffs::<U1024>(local_dims)?,
             })
         } else {
@@ -204,20 +195,57 @@ impl<V: Clone + Send + Sync> InnerCache<V> {
     fn insert<I: IndexInt>(&self, idx: &[I], value: V) {
         match self {
             Self::U64 { cache, coeffs } => {
-                write_lock(cache).insert(flat_index(idx, coeffs), value);
+                write_lock(cache).insert(flat_index(idx, coeffs), value, usize::MAX);
             }
             Self::U128 { cache, coeffs } => {
-                write_lock(cache).insert(flat_index(idx, coeffs), value);
+                write_lock(cache).insert(flat_index(idx, coeffs), value, usize::MAX);
             }
             Self::U256 { cache, coeffs } => {
-                write_lock(cache).insert(flat_index(idx, coeffs), value);
+                write_lock(cache).insert(flat_index(idx, coeffs), value, usize::MAX);
             }
             Self::U512 { cache, coeffs } => {
-                write_lock(cache).insert(flat_index(idx, coeffs), value);
+                write_lock(cache).insert(flat_index(idx, coeffs), value, usize::MAX);
             }
             Self::U1024 { cache, coeffs } => {
-                write_lock(cache).insert(flat_index(idx, coeffs), value);
+                write_lock(cache).insert(flat_index(idx, coeffs), value, usize::MAX);
             }
+        }
+    }
+
+    /// Insert within `limit` bytes of table (see [`MemoTable::insert`]).
+    fn insert_bounded<I: IndexInt>(
+        &self,
+        idx: &[I],
+        value: V,
+        limit: usize,
+    ) -> memo_table::Inserted {
+        match self {
+            Self::U64 { cache, coeffs } => {
+                write_lock(cache).insert(flat_index(idx, coeffs), value, limit)
+            }
+            Self::U128 { cache, coeffs } => {
+                write_lock(cache).insert(flat_index(idx, coeffs), value, limit)
+            }
+            Self::U256 { cache, coeffs } => {
+                write_lock(cache).insert(flat_index(idx, coeffs), value, limit)
+            }
+            Self::U512 { cache, coeffs } => {
+                write_lock(cache).insert(flat_index(idx, coeffs), value, limit)
+            }
+            Self::U1024 { cache, coeffs } => {
+                write_lock(cache).insert(flat_index(idx, coeffs), value, limit)
+            }
+        }
+    }
+
+    /// Bytes of the tables (see [`MemoTable::bytes`]).
+    fn bytes(&self) -> usize {
+        match self {
+            Self::U64 { cache, .. } => read_lock(cache).bytes(),
+            Self::U128 { cache, .. } => read_lock(cache).bytes(),
+            Self::U256 { cache, .. } => read_lock(cache).bytes(),
+            Self::U512 { cache, .. } => read_lock(cache).bytes(),
+            Self::U1024 { cache, .. } => read_lock(cache).bytes(),
         }
     }
 
