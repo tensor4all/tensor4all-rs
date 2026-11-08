@@ -517,7 +517,8 @@ struct HermitianRitzState {
 /// The lowest Ritz eigenpair and the true residual norm.
 /// # Errors
 /// Returns [`KrylovError::NonHermitian`] when the projected operator is not
-/// Hermitian, [`KrylovError::InvalidOptions`] when an option is invalid,
+/// Hermitian, [`KrylovError::InvalidOptions`] when an option is invalid
+/// (including a `max_iter` whose Krylov workspace cannot be allocated),
 /// [`KrylovError::ZeroInitialVector`] when `initial` is numerically zero, and
 /// [`KrylovError::Operation`] when an operator application or backend call
 /// fails. Non-convergence is reported through
@@ -568,9 +569,10 @@ where
         }));
     }
 
-    let mut basis = Vec::with_capacity(basis_capacity);
+    let mut basis = krylov_workspace(basis_capacity, "hermitian_lanczos_lowest_eigenpair")?;
     basis.push(initial.scale(AnyScalar::new_real(1.0 / initial_norm))?);
-    let mut h_cols: Vec<Vec<Complex64>> = Vec::with_capacity(options.max_iter);
+    let mut h_cols: Vec<Vec<Complex64>> =
+        krylov_workspace(options.max_iter, "hermitian_lanczos_lowest_eigenpair")?;
     let mut last_ritz: Option<HermitianRitzState> = None;
 
     for j in 0..options.max_iter {
@@ -668,7 +670,8 @@ where
 /// A [`HermitianKrylovExpmResult`] containing the evolved vector and diagnostics.
 /// # Errors
 /// Returns [`KrylovError::NonHermitian`] when the projected operator is not
-/// Hermitian, [`KrylovError::InvalidOptions`] when an option is invalid,
+/// Hermitian, [`KrylovError::InvalidOptions`] when an option is invalid
+/// (including a `max_iter` whose Krylov workspace cannot be allocated),
 /// [`KrylovError::ZeroInitialVector`] when `initial` is numerically zero, and
 /// [`KrylovError::Operation`] when an operator application or backend call
 /// fails. Non-convergence is reported through
@@ -832,9 +835,10 @@ where
 
     let basis_capacity =
         checked_krylov_capacity(options.max_iter, "hermitian_krylov_expm_multiply")?;
-    let mut basis = Vec::with_capacity(basis_capacity);
+    let mut basis = krylov_workspace(basis_capacity, "hermitian_krylov_expm_multiply")?;
     basis.push(initial.scale(AnyScalar::new_real(1.0 / initial_norm))?);
-    let mut h_cols: Vec<Vec<Complex64>> = Vec::with_capacity(options.max_iter);
+    let mut h_cols: Vec<Vec<Complex64>> =
+        krylov_workspace(options.max_iter, "hermitian_krylov_expm_multiply")?;
     let mut last_coefficients: Option<Vec<Complex64>> = None;
     let mut last_error_estimate = f64::INFINITY;
     let mut last_subspace_dim = 0usize;
@@ -964,8 +968,8 @@ where
 /// # Returns
 /// A `GmresResult` containing the solution and convergence information.
 /// # Errors
-/// Returns an error when the options have an overflowing capacity (a
-/// [`KrylovError::InvalidOptions`]), when the operator and vectors have
+/// Returns an error when `max_iter` needs a Krylov workspace whose capacity
+/// overflows or cannot be allocated (a [`KrylovError::InvalidOptions`]), when the operator and vectors have
 /// incompatible shapes, when the affine coefficients are all zero (a
 /// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
@@ -998,8 +1002,8 @@ where
 /// This variant stops when `||b - A*x|| < atol`. The default [`gmres`] API uses
 /// relative residual tolerance and is preferred for scale-independent solves.
 /// # Errors
-/// Returns an error when the options have an overflowing capacity (a
-/// [`KrylovError::InvalidOptions`]), when the operator and vectors have
+/// Returns an error when `max_iter` needs a Krylov workspace whose capacity
+/// overflows or cannot be allocated (a [`KrylovError::InvalidOptions`]), when the operator and vectors have
 /// incompatible shapes, when the affine coefficients are all zero (a
 /// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
@@ -1034,7 +1038,8 @@ where
 /// coefficients are applied in the projected Hessenberg problem, matching
 /// KrylovKit's affine linear-solve convention.
 /// # Errors
-/// Returns [`KrylovError::InvalidOptions`] when an option is invalid,
+/// Returns [`KrylovError::InvalidOptions`] when an option is invalid
+/// (including a `max_iter` whose Krylov workspace cannot be allocated),
 /// [`KrylovError::NoAffineCoefficient`] when both affine coefficients are zero,
 /// and [`KrylovError::Operation`] when the operator application, vector-space
 /// arithmetic, or a backend call fails. Non-convergence is reported through the
@@ -1070,7 +1075,8 @@ where
 /// KrylovKit's `linsolve(operator, b, a0, a1)` algorithm and avoids changing the
 /// Krylov basis when affine coefficients are present.
 /// # Errors
-/// Returns [`KrylovError::InvalidOptions`] when an option is invalid,
+/// Returns [`KrylovError::InvalidOptions`] when an option is invalid
+/// (including a `max_iter` whose Krylov workspace cannot be allocated),
 /// [`KrylovError::NoAffineCoefficient`] when both affine coefficients are zero,
 /// and [`KrylovError::Operation`] when the operator application, vector-space
 /// arithmetic, or a backend call fails. Non-convergence is reported through the
@@ -1225,7 +1231,7 @@ where
 
         let cycle_max_iter = options.max_iter;
         let mut v_basis: Vec<T> =
-            Vec::with_capacity(checked_krylov_capacity(cycle_max_iter, "gmres")?);
+            krylov_workspace(checked_krylov_capacity(cycle_max_iter, "gmres")?, "gmres")?;
         let started = Instant::now();
         v_basis.push(r.scale(AnyScalar::new_real(1.0 / r_norm))?);
         if profile_enabled {
@@ -1233,9 +1239,9 @@ where
             profile.scale_calls += 1;
         }
 
-        let mut h_matrix: Vec<Vec<AnyScalar>> = Vec::with_capacity(cycle_max_iter);
-        let mut cs: Vec<AnyScalar> = Vec::with_capacity(cycle_max_iter);
-        let mut sn: Vec<AnyScalar> = Vec::with_capacity(cycle_max_iter);
+        let mut h_matrix: Vec<Vec<AnyScalar>> = krylov_workspace(cycle_max_iter, "gmres")?;
+        let mut cs: Vec<AnyScalar> = krylov_workspace(cycle_max_iter, "gmres")?;
+        let mut sn: Vec<AnyScalar> = krylov_workspace(cycle_max_iter, "gmres")?;
         let mut g: Vec<AnyScalar> = vec![AnyScalar::new_real(r_norm)];
         let mut solution_already_updated = false;
 
@@ -1517,8 +1523,8 @@ where
 /// `max_total_iter` caps the total number of Arnoldi steps across all restart
 /// cycles; the final cycle is shortened when necessary.
 /// # Errors
-/// Returns an error when the options have an overflowing capacity (a
-/// [`KrylovError::InvalidOptions`]), when the operator and vectors have
+/// Returns an error when `max_iter` needs a Krylov workspace whose capacity
+/// overflows or cannot be allocated (a [`KrylovError::InvalidOptions`]), when the operator and vectors have
 /// incompatible shapes, when the affine coefficients are all zero (a
 /// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
@@ -1623,16 +1629,16 @@ where
 
         // Arnoldi process with modified Gram-Schmidt
         let mut v_basis: Vec<T> =
-            Vec::with_capacity(checked_krylov_capacity(cycle_max_iter, "gmres")?);
-        let mut h_matrix: Vec<Vec<AnyScalar>> = Vec::with_capacity(cycle_max_iter);
+            krylov_workspace(checked_krylov_capacity(cycle_max_iter, "gmres")?, "gmres")?;
+        let mut h_matrix: Vec<Vec<AnyScalar>> = krylov_workspace(cycle_max_iter, "gmres")?;
 
         // v_0 = r / ||r||
         let v0 = r.scale(AnyScalar::new_real(1.0 / r_norm))?;
         v_basis.push(v0);
 
         // Initialize Givens rotation storage
-        let mut cs: Vec<AnyScalar> = Vec::with_capacity(cycle_max_iter);
-        let mut sn: Vec<AnyScalar> = Vec::with_capacity(cycle_max_iter);
+        let mut cs: Vec<AnyScalar> = krylov_workspace(cycle_max_iter, "gmres")?;
+        let mut sn: Vec<AnyScalar> = krylov_workspace(cycle_max_iter, "gmres")?;
         let mut g: Vec<AnyScalar> = vec![AnyScalar::new_real(r_norm)]; // residual in upper Hessenberg space
         let mut solution_already_updated = false;
 
@@ -1815,8 +1821,8 @@ where
 /// and after the final solution update. This helps control the bond dimension
 /// growth that would otherwise occur in MPS/MPO representations.
 /// # Errors
-/// Returns an error when the options have an overflowing capacity (a
-/// [`KrylovError::InvalidOptions`]), when the operator and vectors have
+/// Returns an error when `max_iter` needs a Krylov workspace whose capacity
+/// overflows or cannot be allocated (a [`KrylovError::InvalidOptions`]), when the operator and vectors have
 /// incompatible shapes, when the affine coefficients are all zero (a
 /// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
@@ -1916,11 +1922,12 @@ where
             });
         }
 
-        let mut v_basis: Vec<T> = Vec::with_capacity(checked_krylov_capacity(
-            options.max_iter,
+        let mut v_basis: Vec<T> = krylov_workspace(
+            checked_krylov_capacity(options.max_iter, "gmres_with_truncation")?,
             "gmres_with_truncation",
-        )?);
-        let mut h_matrix: Vec<Vec<AnyScalar>> = Vec::with_capacity(options.max_iter);
+        )?;
+        let mut h_matrix: Vec<Vec<AnyScalar>> =
+            krylov_workspace(options.max_iter, "gmres_with_truncation")?;
 
         let mut v0 = r.scale(AnyScalar::new_real(1.0 / r_norm))?;
         truncate(&mut v0)?;
@@ -1940,8 +1947,8 @@ where
         };
         v_basis.push(v0);
 
-        let mut cs: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
-        let mut sn: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
+        let mut cs: Vec<AnyScalar> = krylov_workspace(options.max_iter, "gmres_with_truncation")?;
+        let mut sn: Vec<AnyScalar> = krylov_workspace(options.max_iter, "gmres_with_truncation")?;
         let mut g: Vec<AnyScalar> = vec![AnyScalar::new_real(effective_g0)];
         let mut solution_already_updated = false;
 
@@ -2319,8 +2326,8 @@ pub struct RestartGmresResult<T> {
 /// # Returns
 /// A `RestartGmresResult` containing the solution and convergence information.
 /// # Errors
-/// Returns an error when the options have an overflowing capacity (a
-/// [`KrylovError::InvalidOptions`]), when the operator and vectors have
+/// Returns an error when `max_iter` needs a Krylov workspace whose capacity
+/// overflows or cannot be allocated (a [`KrylovError::InvalidOptions`]), when the operator and vectors have
 /// incompatible shapes, when the affine coefficients are all zero (a
 /// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
@@ -2584,6 +2591,24 @@ fn projected_matrix_from_columns(
         }
     }
     Ok(Matrix::from_col_major_vec(dim, dim, data))
+}
+
+/// Allocate an empty Krylov workspace with room for `capacity` entries.
+///
+/// The capacity follows from a user-supplied iteration count, so an allocation
+/// that cannot be satisfied is reported as invalid options instead of aborting.
+fn krylov_workspace<T>(capacity: usize, solver: &'static str) -> Result<Vec<T>> {
+    let mut workspace = Vec::new();
+    workspace.try_reserve_exact(capacity).map_err(|source| {
+        anyhow::Error::new(KrylovError::InvalidOptions {
+            solver,
+            reason: format!(
+                "max_iter requires a Krylov workspace of {capacity} entries, which cannot be \
+                 allocated: {source}"
+            ),
+        })
+    })?;
+    Ok(workspace)
 }
 
 fn checked_krylov_capacity(max_iter: usize, solver: &'static str) -> Result<usize> {

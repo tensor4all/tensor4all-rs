@@ -590,9 +590,11 @@ impl LinsolveOptions {
     ///
     /// CG requires a Hermitian positive-definite effective operator `a0 I + a1 A`.
     /// CG/BiCGSTAB use their native tolerances and budgets. The `gmres_*`
-    /// controls apply only when GMRES is selected; with CG or BiCGSTAB they must
-    /// keep their defaults, and [`crate::linsolve`] rejects changed values. No
-    /// automatic fallback is performed.
+    /// controls apply only when GMRES is selected. With CG or BiCGSTAB a
+    /// `gmres_*` setting would have no effect, so it must keep its default: a
+    /// changed value, set before or after this call, makes [`crate::linsolve`]
+    /// fail with [`crate::TensorTrainError::TreeTn`]. No automatic fallback is
+    /// performed.
     ///
     /// # Examples
     /// ```

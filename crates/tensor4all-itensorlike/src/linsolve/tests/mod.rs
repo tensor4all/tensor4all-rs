@@ -300,3 +300,49 @@ fn local_solver_selection_wrapper_reports_invalid_gmres_options_as_treetn_errors
         );
     }
 }
+
+#[test]
+fn local_solver_selection_wrapper_cg_fails_on_an_indefinite_operator() {
+    use crate::{CgOptions, LocalSolver};
+    use tensor4all_core::krylov::KrylovError;
+    // A = diag(3, -2) is Hermitian but indefinite; the first CG direction
+    // b = (3, 4) has curvature 3 * 9 - 2 * 16 = -5.
+    let site = DynIndex::new_dyn(2);
+    let operator = TensorTrain::new(vec![make_tensor(
+        vec![site.prime(), site.clone()],
+        vec![3.0, 0.0, 0.0, -2.0],
+    )])
+    .unwrap();
+    let rhs = TensorTrain::new(vec![make_tensor(vec![site.clone()], vec![3.0, 4.0])]).unwrap();
+    let init = TensorTrain::new(vec![make_tensor(vec![site], vec![0.0, 0.0])]).unwrap();
+    let options = LinsolveOptions::new(1)
+        .with_nsite(1)
+        .with_local_solver(LocalSolver::Cg(CgOptions::default()));
+    let error = linsolve(&operator, &rhs, init, &options).unwrap_err();
+    assert!(
+        treetn_error_chain_has::<KrylovError>(&error, |e| matches!(
+            e,
+            KrylovError::NonPositiveCurvature { solver: "cg", .. }
+        )),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn tensor_train_linsolve_method_reports_invalid_local_solver_options_as_treetn_errors() {
+    let (operator, rhs) = identity_problem();
+    let options = LinsolveOptions::new(2)
+        .with_nsite(1)
+        .with_gmres_tol(f64::NAN);
+    let error = operator.linsolve(&rhs, rhs.clone(), &options).unwrap_err();
+    let TensorTrainError::TreeTn { source, .. } = &error else {
+        panic!("expected TensorTrainError::TreeTn, got {error:?}");
+    };
+    assert!(
+        source
+            .source
+            .chain()
+            .any(|e| e.to_string().contains("gmres_tol must be finite")),
+        "{error:?}"
+    );
+}

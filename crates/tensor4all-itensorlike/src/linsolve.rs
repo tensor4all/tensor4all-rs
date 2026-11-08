@@ -291,13 +291,15 @@ impl TensorTrain {
     /// `self` is the operator `A`, `rhs` is `b`, `init` is the initial guess.
     ///
     /// See [`linsolve`] for details.
+    ///
     /// # Errors
     ///
-    /// Returns [`TensorTrainError::InvalidStructure`] when any input train is
-    /// empty or when their lengths differ, [`TensorTrainError::OperationError`]
-    /// when an option is invalid or when the operator and initial guess cannot
-    /// be index-mapped, and [`TensorTrainError::TreeTn`] when the underlying
-    /// TreeTN solve fails.
+    /// The same as [`linsolve`]: [`TensorTrainError::InvalidStructure`] when any
+    /// input train is empty or when their lengths differ,
+    /// [`TensorTrainError::OperationError`] when a sweep or SVD option is
+    /// invalid or when the operator and initial guess cannot be index-mapped, and
+    /// [`TensorTrainError::TreeTn`] when the update mode or the local solver
+    /// options are invalid or the underlying TreeTN solve fails.
     ///
     pub fn linsolve(&self, rhs: &Self, init: Self, options: &LinsolveOptions) -> Result<Self> {
         linsolve(self, rhs, init, options)

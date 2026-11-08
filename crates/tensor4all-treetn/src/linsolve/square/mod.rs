@@ -137,23 +137,33 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`TreeTNOperationError`] for an unsupported `nsite`, one-site truncation
-/// controls, an empty network, a single-node network in two-site mode, or when
-/// only one of `input_mapping` and `output_mapping` is
-/// provided, when the initial guess cannot be canonicalized, when the sweep plan
-/// cannot be built, or when an update or residual evaluation fails.
+/// Invalid options are always errors; no value is clamped. Before any sweep or
+/// shortcut, [`TreeTNOperationError`] is returned when
+/// - `nsite` is not 1 or 2, or one-site mode has a bond cap or SVD policy;
+/// - `convergence_tol` is negative or not finite;
+/// - [`LinsolveOptions::validate_local_solver`] rejects the coefficients or the
+///   local solver options (`a0 = a1 = 0`, invalid active GMRES controls,
+///   changed `gmres_*` controls with CG or BiCGSTAB, invalid native CG/BiCGSTAB
+///   options);
+/// - the network is empty, the operator cannot act on `init`, or its result is
+///   incompatible with `rhs`;
+/// - two-site mode is requested for a single-node network;
+/// - only one of `input_mapping` and `output_mapping` is provided;
+/// - `a0` is zero and the operator term is zero (`a1 = 0` or a zero operator),
+///   so the system is singular.
 ///
-/// Local solver options are checked by
-/// [`LinsolveOptions::validate_local_solver`] before any sweep or shortcut:
-/// `a0 = a1 = 0`, invalid active GMRES controls, changed `gmres_*` controls with
-/// CG or BiCGSTAB, and invalid native CG/BiCGSTAB options are errors. During
-/// the sweep, a local CG solve that detects a non-Hermitian operator or
-/// non-positive curvature, and a BiCGSTAB breakdown, are returned as errors
-/// with the [`tensor4all_core::krylov::KrylovError`] in the source chain; no
-/// other solver is tried.
+/// During the solve it is returned when the initial guess cannot be
+/// canonicalized, the sweep plan cannot be built, or an update or residual
+/// evaluation fails. Local solver failures carry the
+/// [`tensor4all_core::krylov::KrylovError`] in the source chain:
+/// `InvalidOptions` for a GMRES restart length whose Krylov workspace cannot be
+/// allocated or a CG/BiCGSTAB stopping threshold that overflows,
+/// `NonHermitian` and `NonPositiveCurvature` from CG, and `NumericalBreakdown`
+/// from BiCGSTAB. No other solver is tried.
 ///
-/// Reaching the sweep limit without meeting `convergence_tol` returns
-/// `converged = false`, not an error.
+/// Reaching the sweep limit without meeting `convergence_tol`, including local
+/// solves that exhaust their iteration budgets, returns `converged = false`,
+/// not an error.
 ///
 /// # Example
 ///
@@ -272,6 +282,7 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
     options.validate_update_mode()?;
+    options.validate_convergence_tol()?;
     validate_local_options(&options)?;
     validate_linsolve_inputs(operator, rhs, &init)?;
     if options.nsite == 2 && rhs.node_count() < 2 {

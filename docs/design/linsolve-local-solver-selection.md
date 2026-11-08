@@ -15,9 +15,18 @@ select the solver for each projected local equation with
 
 CG and BiCGSTAB use the core option types directly, so their `rtol`, `atol` and
 `max_iter` keep the meaning they have in `tensor4all_core::krylov`. A zero
-native iteration budget still checks the initial residual. With CG or BiCGSTAB
-selected, the `gmres_*` controls must keep their default values; a changed
-value is an error rather than a silently ignored setting.
+native iteration budget still checks the initial residual.
+
+Each solver's settings have exactly one owner: the `gmres_*` fields for GMRES,
+the variant's options for CG and BiCGSTAB. Neither is a view of the other.
+With CG or BiCGSTAB selected the `gmres_*` controls would have no effect, so
+they must keep their default values; a changed value is an error rather than a
+silently ignored setting.
+
+Invalid options are always errors; no value is clamped or replaced. Zero
+CG/BiCGSTAB tolerances are valid because those solvers stop when the residual
+is at most the threshold. `gmres_tol` must be positive because GMRES stops when
+the residual is strictly below it, so zero could never be met.
 
 Every choice works with one-site ALS and two-site MALS, affine coefficients,
 explicit and inferred index mappings, and real and complex data. The selector
@@ -28,9 +37,29 @@ reporting are unchanged.
 CG requires the effective operator `a0 I + a1 A` to be Hermitian
 positive-definite. The core CG checks (Hermitian consistency along search
 directions, positive curvature) report violations as errors, but they do not
-certify that the whole operator is HPD. GMRES and BiCGSTAB accept general
-operators. There is no automatic solver selection and no fallback to another
-solver.
+certify that the whole operator is HPD. The Hermitian-consistency check
+measures the imaginary part of the directional curvature, which is zero for
+real scalars, so a real non-symmetric operator is reported either as a
+non-positive-curvature error or as local non-convergence; the sweep then
+reports `converged = false` with its true residual. GMRES and BiCGSTAB accept
+general operators. There is no automatic solver selection and no fallback to
+another solver.
+
+### Behavior changes for existing callers
+
+- `tensor4all_treetn::square_linsolve` rejects `a0 = a1 = 0` during option
+  validation, for every solver, before the inputs are checked. It was already
+  an error in both sweep modes, raised later by the identity-only closed form
+  with a different message.
+- `tensor4all_treetn::square_linsolve` rejects `gmres_tol` that is not finite
+  and positive (for example `0.0`), and `convergence_tol` that is negative or
+  not finite. Both were previously accepted by TreeTN; the MPS facade already
+  rejected them.
+- `tensor4all_itensorlike::linsolve` reports invalid GMRES and local solver
+  options as `TensorTrainError::TreeTn` instead of `OperationError`.
+- A `gmres_restart_dim` (or core GMRES/Lanczos `max_iter`) whose Krylov
+  workspace cannot be allocated returns `KrylovError::InvalidOptions` instead
+  of aborting on a capacity overflow.
 
 ## Implementation
 
@@ -38,8 +67,8 @@ GMRES solves the affine system through its projected Hessenberg problem, so
 the local operator passed to it stays unshifted. CG and BiCGSTAB receive a
 matrix-free callback that applies `a0 x + a1 A_local x` with
 `TensorVectorSpace` operations. The callback skips a zero `a0` or `a1` term and
-returns `A_local x` without a scaling copy when `a0 = 0` and `a1 = 1`. No dense
-operator is formed.
+returns `A_local x` without a scaling copy when `a0 = 0` and `a1` is exactly
+one, whether given as a real or a complex scalar. No dense operator is formed.
 
 `LinsolveOptions::validate_local_solver` is the single owner of local solver
 validation. `square_linsolve` calls it before the zero-sweep and identity-only
@@ -75,7 +104,10 @@ The tests run the actual dispatch rather than option storage:
 - zero and tiny right-hand sides, exact and zero initial guesses;
 - exhausted and zero native budgets, and local versus sweep tolerances;
 - invalid selected options, and changed inactive GMRES controls;
-- CG non-HPD errors and BiCGSTAB breakdown;
+- CG errors on negative-definite, indefinite and non-Hermitian operators, CG
+  non-convergence on a real non-symmetric operator that BiCGSTAB and GMRES
+  solve, and BiCGSTAB breakdown;
+- an unallocatable GMRES restart length and invalid convergence tolerances;
 - residual units and callback error source chains.
 
 ## Not covered

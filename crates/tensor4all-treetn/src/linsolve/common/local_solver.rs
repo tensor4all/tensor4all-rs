@@ -34,8 +34,16 @@ pub enum LocalSolver {
     #[default]
     Gmres,
     /// Conjugate gradients; the effective operator `a0 I + a1 A` must be
-    /// Hermitian positive-definite. Core directional checks are retained, but
-    /// do not certify the full operator. Start with [`CgOptions::default`].
+    /// Hermitian positive-definite. Start with [`CgOptions::default`].
+    ///
+    /// The core CG checks only the directions it visits and does not certify
+    /// the whole operator. Its Hermitian-consistency check measures the
+    /// imaginary part of the directional curvature, which is zero for real
+    /// scalars: a real non-symmetric operator is reported as a
+    /// [`KrylovError::NonPositiveCurvature`](tensor4all_core::krylov::KrylovError::NonPositiveCurvature)
+    /// error when a visited curvature is not positive, and otherwise as local
+    /// non-convergence, which the sweep reports through its true residual
+    /// rather than as an error.
     Cg(CgOptions),
     /// BiCGSTAB for general real/complex systems using a fixed number of vectors.
     /// Start with [`BiCgStabOptions::default`]. Breakdown is returned as an error.
@@ -56,15 +64,26 @@ impl LinsolveOptions {
     /// Check the affine coefficients and the selected local solver's controls.
     ///
     /// [`crate::square_linsolve`] runs this check before any sweep or shortcut;
-    /// call it directly to validate options without building a problem.
+    /// call it directly to validate options without building a problem. Invalid
+    /// options are always reported as errors; no value is clamped or replaced.
     ///
     /// # Errors
-    /// Returns [`TreeTNOperationError`] when `a0` and `a1` are both zero, when
-    /// an active GMRES control is invalid (`gmres_tol` not finite and positive,
-    /// `gmres_restart_dim` or `gmres_max_restarts` zero), when CG or BiCGSTAB is
-    /// selected and a `gmres_*` control differs from its default, or when the
-    /// native CG/BiCGSTAB options are invalid. In the last case the error source
-    /// chain contains [`tensor4all_core::krylov::KrylovError::InvalidOptions`].
+    /// Returns [`TreeTNOperationError`] when
+    /// - `a0` and `a1` are both zero;
+    /// - GMRES is selected and `gmres_tol` is not finite and positive (GMRES
+    ///   stops when the residual is strictly below `gmres_tol`, so zero can never
+    ///   be met), `gmres_restart_dim` is zero or `usize::MAX`, or
+    ///   `gmres_max_restarts` is zero;
+    /// - CG or BiCGSTAB is selected and a `gmres_*` control (including
+    ///   `gmres_tolerance_mode`) differs from its default;
+    /// - the native CG/BiCGSTAB options are invalid (a negative or non-finite
+    ///   tolerance); the error source chain then contains
+    ///   [`tensor4all_core::krylov::KrylovError::InvalidOptions`].
+    ///
+    /// Conditions that depend on the problem, such as a `gmres_restart_dim` whose
+    /// Krylov workspace cannot be allocated or an RHS-dependent CG/BiCGSTAB
+    /// threshold that overflows, are detected by the local solve and reported by
+    /// [`crate::square_linsolve`].
     ///
     /// # Examples
     /// ```
@@ -165,6 +184,10 @@ fn local_gmres_options(options: &LinsolveOptions) -> Result<GmresOptions> {
     })
 }
 
+fn is_exactly_one(value: &AnyScalar) -> bool {
+    value.real() == 1.0 && value.imag() == 0.0
+}
+
 pub(crate) fn solve_local_system<T, F>(
     options: &LinsolveOptions,
     apply_a: F,
@@ -183,8 +206,8 @@ where
         }
         let ax = apply_a(x)?;
         if options.a0.is_zero() {
-            // The default `a1 = 1` needs no scaling copy of `A x`.
-            if options.a1 == AnyScalar::new_real(1.0) {
+            // `a1 = 1`, real or complex, needs no scaling copy of `A x`.
+            if is_exactly_one(&options.a1) {
                 Ok(ax)
             } else {
                 Ok(ax.scale(options.a1.clone())?)

@@ -1964,4 +1964,77 @@ fn gmres_rejects_maximum_iteration_capacity_without_invoking_operator() {
     assert_eq!(called.load(Ordering::Relaxed), 0);
 }
 
+#[test]
+fn krylov_workspace_too_large_to_allocate_is_an_invalid_options_error() {
+    // `max_iter + 1` fits in usize, but no allocator can provide that many
+    // entries; every iteration-sized workspace must fail with a typed error.
+    let max_iter = usize::MAX - 1;
+    let b = PlainVector {
+        data: vec![1.0, 2.0],
+    };
+    let x0 = PlainVector {
+        data: vec![0.0, 0.0],
+    };
+    let apply = |x: &PlainVector| -> Result<PlainVector> {
+        Ok(PlainVector {
+            data: x.data.iter().map(|v| 2.0 * v).collect(),
+        })
+    };
+    let gmres_options = GmresOptions {
+        max_iter,
+        max_restarts: 1,
+        ..GmresOptions::default()
+    };
+    let is_invalid_options = |error: &KrylovError, expected: &str| matches!(error, KrylovError::InvalidOptions { solver, .. } if *solver == expected);
+    let error = gmres(apply, &b, &x0, &gmres_options).err().unwrap();
+    assert!(is_invalid_options(&error, "gmres"), "{error:?}");
+    let error = gmres_affine(
+        apply,
+        &b,
+        &x0,
+        AnyScalar::new_real(0.5),
+        AnyScalar::new_real(1.0),
+        &gmres_options,
+    )
+    .err()
+    .unwrap();
+    assert!(is_invalid_options(&error, "gmres"), "{error:?}");
+    let error = gmres_with_truncation(apply, &b, &x0, &gmres_options, |_| Ok(()))
+        .err()
+        .unwrap();
+    assert!(
+        is_invalid_options(&error, "gmres_with_truncation"),
+        "{error:?}"
+    );
+    let error = hermitian_lanczos_lowest_eigenpair(
+        apply,
+        &b,
+        &HermitianLanczosOptions {
+            max_iter,
+            ..HermitianLanczosOptions::default()
+        },
+    )
+    .err()
+    .unwrap();
+    assert!(
+        is_invalid_options(&error, "hermitian_lanczos_lowest_eigenpair"),
+        "{error:?}"
+    );
+    let error = hermitian_krylov_expm_multiply(
+        apply,
+        Complex64::new(0.0, -0.1),
+        &b,
+        &HermitianKrylovExpmOptions {
+            max_iter,
+            ..HermitianKrylovExpmOptions::default()
+        },
+    )
+    .err()
+    .unwrap();
+    assert!(
+        is_invalid_options(&error, "hermitian_krylov_expm_multiply"),
+        "{error:?}"
+    );
+}
+
 mod gmres_zero_rhs;

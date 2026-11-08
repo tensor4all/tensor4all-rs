@@ -218,6 +218,32 @@ fn local_solver_rejects_invalid_active_gmres_options() {
 }
 
 #[test]
+fn local_solver_reports_unallocatable_gmres_restart_dim_as_invalid_options() {
+    use tensor4all_core::krylov::KrylovError;
+    use tensor4all_core::{DynIndex, IdxTensor};
+    // `usize::MAX - 1` passes the overflow check above, but its Krylov
+    // workspace cannot be allocated; the solve fails instead of panicking.
+    let options = LinsolveOptions::default().with_gmres_restart_dim(usize::MAX - 1);
+    validate_local_options(&options).unwrap();
+    let i = DynIndex::new_dyn(2);
+    let b = IdxTensor::from_dense(vec![i.clone()], vec![1.0, -2.0]).unwrap();
+    let init = IdxTensor::from_dense(vec![i], vec![0.0; 2]).unwrap();
+    let error = solve_local_system(&options, |x: &IdxTensor| Ok(x.clone()), &b, &init, false)
+        .err()
+        .unwrap();
+    assert!(
+        error.chain().any(|e| matches!(
+            e.downcast_ref::<KrylovError>(),
+            Some(KrylovError::InvalidOptions {
+                solver: "gmres",
+                ..
+            })
+        )),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn local_solver_rejects_changed_gmres_controls_for_other_solvers() {
     for solver in [
         LocalSolver::Cg(CgOptions::default()),
@@ -270,4 +296,13 @@ fn local_solver_applies_the_operator_coefficient_when_a0_is_zero() {
             assert!(error < 1e-10, "a1 = {a1}: {error}");
         }
     }
+}
+
+#[test]
+fn exactly_one_accepts_real_and_complex_spellings_only() {
+    assert!(is_exactly_one(&AnyScalar::new_real(1.0)));
+    assert!(is_exactly_one(&AnyScalar::new_complex(1.0, 0.0)));
+    assert!(!is_exactly_one(&AnyScalar::new_complex(1.0, 1e-300)));
+    assert!(!is_exactly_one(&AnyScalar::new_real(-1.0)));
+    assert!(!is_exactly_one(&AnyScalar::new_real(1.0 + f64::EPSILON)));
 }

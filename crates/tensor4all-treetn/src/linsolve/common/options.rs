@@ -18,6 +18,14 @@ pub enum GmresToleranceMode {
 /// Two-site updates can adapt bond dimensions; one-site updates keep the initial
 /// bond spaces and cannot recover a solution requiring larger ranks.
 ///
+/// Each local solver's settings have exactly one owner: GMRES is configured by
+/// the `gmres_*` fields, CG and BiCGSTAB by the options inside
+/// [`LocalSolver::Cg`] and [`LocalSolver::BiCgStab`]. Neither is a view of the
+/// other. Because the `gmres_*` fields would have no effect with another
+/// solver, [`Self::validate_local_solver`] rejects changed `gmres_*` values
+/// when CG or BiCGSTAB is selected. Invalid options are always errors; no value
+/// is clamped.
+///
 /// # Examples
 /// ```
 /// use tensor4all_treetn::LinsolveOptions;
@@ -43,7 +51,8 @@ pub struct LinsolveOptions {
     /// Local Krylov solver; GMRES by default. CG requires the effective
     /// operator `a0 I + a1 A` to be Hermitian positive-definite.
     pub local_solver: LocalSolver,
-    /// Tolerance for GMRES convergence.
+    /// Tolerance for GMRES convergence; must be finite and positive, because a
+    /// GMRES solve stops when its residual is strictly below this value.
     ///
     /// The `gmres_*` fields configure [`LocalSolver::Gmres`] only. With any other
     /// local solver they must keep their default values; a changed value is
@@ -127,6 +136,16 @@ impl LinsolveOptions {
         self
     }
 
+    pub(crate) fn validate_convergence_tol(&self) -> anyhow::Result<()> {
+        if let Some(tol) = self.convergence_tol {
+            anyhow::ensure!(
+                tol.is_finite() && tol >= 0.0,
+                "LinsolveOptions::convergence_tol must be finite and nonnegative, got {tol}"
+            );
+        }
+        Ok(())
+    }
+
     pub(crate) fn validate_update_mode(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             matches!(self.nsite, 1 | 2),
@@ -164,17 +183,25 @@ impl LinsolveOptions {
     ///
     /// CG requires a Hermitian positive-definite effective operator; BiCGSTAB
     /// and GMRES accept general systems. Native CG/BiCGSTAB options determine
-    /// tolerances and budgets. The `gmres_*` settings apply only to GMRES; with
-    /// CG or BiCGSTAB they must keep their defaults, and
-    /// [`Self::validate_local_solver`] rejects changed values.
+    /// tolerances and budgets. The `gmres_*` settings apply only to GMRES. With
+    /// CG or BiCGSTAB a `gmres_*` setting would have no effect, so it must keep
+    /// its default: a changed value, set before or after this call, makes
+    /// [`Self::validate_local_solver`] and [`crate::square_linsolve`] fail.
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::krylov::BiCgStabOptions;
+    /// use tensor4all_core::krylov::{BiCgStabOptions, CgOptions};
     /// use tensor4all_treetn::{LinsolveOptions, LocalSolver};
     /// let options = LinsolveOptions::new(3)
     ///     .with_local_solver(LocalSolver::BiCgStab(BiCgStabOptions::default()));
     /// assert!(matches!(options.local_solver, LocalSolver::BiCgStab(_)));
+    ///
+    /// // A GMRES tolerance cannot apply to CG, so it is rejected, not ignored.
+    /// let mixed = LinsolveOptions::new(2)
+    ///     .with_gmres_tol(1e-12)
+    ///     .with_local_solver(LocalSolver::Cg(CgOptions::default()));
+    /// let error = mixed.validate_local_solver().unwrap_err();
+    /// assert!(format!("{error:?}").contains("gmres_tol configures LocalSolver::Gmres only"));
     /// ```
     pub fn with_local_solver(mut self, local_solver: LocalSolver) -> Self {
         self.local_solver = local_solver;
@@ -231,6 +258,10 @@ impl LinsolveOptions {
     }
 
     /// Set convergence tolerance for early termination.
+    ///
+    /// The sweep stops once the relative true residual is below `tol`, which
+    /// must be finite and nonnegative; [`crate::square_linsolve`] rejects other
+    /// values.
     pub fn with_convergence_tol(mut self, tol: f64) -> Self {
         self.convergence_tol = Some(tol);
         self

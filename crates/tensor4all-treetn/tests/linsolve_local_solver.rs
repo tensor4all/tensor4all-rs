@@ -257,6 +257,66 @@ fn local_solver_selection_uses_effective_affine_operator_for_cg() {
 }
 
 #[test]
+fn local_solver_selection_cg_fails_on_an_indefinite_operator() {
+    // A = diag(3, -2) is Hermitian but indefinite. With x = (1, -2), b = (3, 4)
+    // and the first CG direction b has curvature 3 * 9 - 2 * 16 = -5, so the
+    // solve must stop with a typed error rather than return an iterate.
+    let z = |re| Complex64::new(re, 0.0);
+    let p = Problem::new([z(3.0), z(0.0), z(0.0), z(-2.0)], false, z(0.0), z(1.0));
+    let error = p
+        .solve(p.with_solver(LocalSolver::Cg(CgOptions::default())))
+        .unwrap_err();
+    assert!(
+        has_krylov_error(&error, |e| matches!(
+            e,
+            KrylovError::NonPositiveCurvature { solver: "cg", .. }
+        )),
+        "{error:?}"
+    );
+    // GMRES solves the same indefinite system.
+    p.assert_solution(&p.solve(p.with_solver(LocalSolver::Gmres)).unwrap());
+}
+
+#[test]
+fn local_solver_selection_cg_does_not_converge_on_a_real_non_symmetric_operator() {
+    // A = [[2, 1], [0, 2]] is real, non-symmetric, and has a positive symmetric
+    // part. For real scalars CG's Hermitian-consistency check has nothing to
+    // measure, and every visited curvature is positive, so CG exhausts its
+    // budget. The sweep reports that through `converged = false` and its true
+    // residual instead of returning a plausible solution as converged.
+    let z = |re| Complex64::new(re, 0.0);
+    let p = Problem::new([z(2.0), z(0.0), z(1.0), z(2.0)], false, z(0.0), z(1.0));
+    let result = p
+        .solve(p.with_solver(LocalSolver::Cg(CgOptions::default())))
+        .unwrap();
+    assert!(!result.converged);
+    assert!(result.residual.unwrap() > 1e-3, "{:?}", result.residual);
+    // BiCGSTAB and GMRES solve the same operator.
+    p.assert_solution(
+        &p.solve(p.with_solver(LocalSolver::BiCgStab(BiCgStabOptions::default())))
+            .unwrap(),
+    );
+    p.assert_solution(&p.solve(p.with_solver(LocalSolver::Gmres)).unwrap());
+}
+
+#[test]
+fn local_solver_selection_rejects_invalid_convergence_tolerance() {
+    let p = Problem::hpd(false);
+    for tol in [f64::NAN, -1.0] {
+        let error = p
+            .solve(p.options.clone().with_convergence_tol(tol))
+            .unwrap_err();
+        assert!(
+            error
+                .source
+                .chain()
+                .any(|e| e.to_string().contains("convergence_tol must be finite")),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
 fn local_solver_selection_propagates_bicgstab_breakdown_without_fallback() {
     let z = |re| Complex64::new(re, 0.0);
     let p = Problem::new([z(0.0), z(-1.0), z(1.0), z(0.0)], false, z(0.0), z(1.0));
@@ -417,4 +477,22 @@ fn local_solver_selection_keeps_local_and_sweep_tolerances_separate() {
             0.0
         );
     }
+}
+
+#[test]
+fn local_solver_selection_reports_unallocatable_gmres_restart_dim() {
+    let p = Problem::hpd(false);
+    let error = p
+        .solve(p.options.clone().with_gmres_restart_dim(usize::MAX - 1))
+        .unwrap_err();
+    assert!(
+        has_krylov_error(&error, |e| matches!(
+            e,
+            KrylovError::InvalidOptions {
+                solver: "gmres",
+                ..
+            }
+        )),
+        "{error:?}"
+    );
 }

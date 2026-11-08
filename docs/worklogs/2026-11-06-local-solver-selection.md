@@ -86,13 +86,38 @@ onto main. The integration conflicts kept both the newer CG failure-path tests
 and the option-validation test, and kept `GmresToleranceMode` alongside the
 `LocalSolver` exports.
 
-Validation on main `8b756648` with the final change:
+## Review responses on #1199
 
-- TreeTN `--lib linsolve`: 30 passed. TreeTN integration `linsolve`: 66 passed.
-- itensorlike `--lib`: 137 passed.
-- Doctests: 8 TreeTN `linsolve`, 37 itensorlike and 21 core `krylov` passed.
-- Clippy on TreeTN and itensorlike (`--lib --tests`): no findings.
-- Deterministic repository rules with file growth: pass.
+- Iteration-sized Krylov workspaces in core GMRES, Lanczos and Krylov `expm`
+  are allocated with `try_reserve_exact`; a `max_iter` (or
+  `gmres_restart_dim`) whose workspace cannot be allocated returns
+  `KrylovError::InvalidOptions` instead of aborting. `usize::MAX - 1` is
+  tested at the core, local-dispatch and `square_linsolve` levels.
+- `# Errors` sections of `square_linsolve`, `validate_local_solver`, the MPS
+  `linsolve` function and method, and core GMRES/Lanczos list the conditions a
+  caller can observe.
+- `square_linsolve` rejects a negative or non-finite `convergence_tol`, so
+  every invalid option is an error.
+- `LocalSolver::Cg` and the design note state that CG's Hermitian check cannot
+  fire for real scalars; a test records CG non-convergence on a real
+  non-symmetric operator that BiCGSTAB and GMRES solve, and indefinite
+  operators fail with `NonPositiveCurvature` through TreeTN and the MPS wrapper.
+- The `a1 = 1` shortcut recognizes real and complex spellings of one.
+
+The counts below are from local runs (not CI), on macOS, of the commands listed
+with each count; they are not reproducible from the diff alone.
+
+Validation on main `8b756648`:
+
+- `cargo test -p tensor4all-core --lib krylov`: 121 passed, 545 filtered out
+- `cargo test -p tensor4all-treetn --lib linsolve`: 33 passed, 618 filtered out
+- `cargo test -p tensor4all-treetn --test integration linsolve`: 70 passed, 305 filtered out
+- `cargo test -p tensor4all-itensorlike --lib`: 139 passed
+- Doctests: `cargo test -p tensor4all-core --doc krylov` 21 passed (382 filtered out),
+  `cargo test -p tensor4all-treetn --doc linsolve` 8 passed (197 filtered out),
+  `cargo test -p tensor4all-itensorlike --doc` 37 passed.
+- `cargo clippy -p tensor4all-core -p tensor4all-treetn -p tensor4all-itensorlike --lib --tests`: no findings
+- `python3 scripts/repository-rules-review.py --base origin/main --worktree --dry-run --file-growth`: pass
 
 Full-workspace, release, alternate-backend, binding and benchmark checks were
-not run; local disk space did not allow full builds.
+not run locally; hosted CI covers them.
