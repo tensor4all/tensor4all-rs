@@ -3,6 +3,9 @@
 //! `contract_raw_center` serves every point evaluated around an internal center. Its value must not depend on how
 //! the loops are arranged: each level's sum adds, in ascending bond order, the inner sum times its component value,
 //! started from zero, and the innermost sum adds the core entries times its component values the same way.
+//! Every non-NaN result is compared bit for bit (signed zeros and infinities included). A NaN result is NaN in
+//! both, but its sign and payload follow the operand order inside each addition and the target's floating-point
+//! unit (they differ between x86_64 and aarch64), so they are not part of the contract.
 
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -152,21 +155,9 @@ fn raw_center_fold_is_bitwise_the_original_recursion_for_complex64() {
     );
 }
 
-#[test]
-fn raw_center_fold_keeps_non_finite_values_and_signed_zero() {
-    // Two components of dimension 5 (one full lane pass and a remainder), entries that make the order visible.
-    let specials = [
-        f64::INFINITY,
-        -0.0,
-        0.0,
-        f64::NAN,
-        1.0,
-        -0.0,
-        f64::NEG_INFINITY,
-        2.0,
-        -1e300,
-        1e300,
-    ];
+/// The fold and the reference on one point of a 5 × 5 centre (one full lane pass and a remainder) whose core and
+/// component entries cycle through `specials`.
+fn fold_and_reference(specials: &[f64]) -> (f64, f64) {
     let dims = [1, 5, 5];
     let core: Vec<f64> = (0..25)
         .map(|k| specials[(k * 7) % specials.len()])
@@ -186,5 +177,42 @@ fn raw_center_fold_keeps_non_finite_values_and_signed_zero() {
     let expected = reference_fold(&core, &strides, &components, 0, 0, 0);
     let actual = contract_raw_center(&core, &dims, 0, &[0], &components).unwrap();
     assert_eq!(actual.len(), 1);
-    assert_eq!(actual[0].to_bits(), expected.to_bits());
+    (actual[0], expected)
+}
+
+#[test]
+fn raw_center_fold_keeps_non_finite_values_and_signed_zero() {
+    // NaN anywhere: the result is NaN in both (sign and payload are not specified).
+    let (actual, expected) = fold_and_reference(&[
+        f64::INFINITY,
+        -0.0,
+        0.0,
+        f64::NAN,
+        1.0,
+        -0.0,
+        f64::NEG_INFINITY,
+        2.0,
+        -1e300,
+        1e300,
+    ]);
+    assert!(actual.is_nan() && expected.is_nan(), "{actual} {expected}");
+
+    // Without NaN, bit for bit: signed zeros, products that overflow to ±inf, and +inf with positive weights.
+    for specials in [
+        &[-0.0, 0.0, 1.0, -0.0, 2.0, -1.0][..],
+        &[-0.0, -1.0, -0.0, -2.0][..],
+        &[1e300, 2.0, 1e300, 1.0, 3.0][..],
+        &[f64::INFINITY, 1.0, 2.0, 0.5][..],
+    ] {
+        let (actual, expected) = fold_and_reference(specials);
+        assert!(
+            !expected.is_nan(),
+            "{specials:?} gives NaN; use a NaN-free case"
+        );
+        assert_eq!(
+            actual.to_bits(),
+            expected.to_bits(),
+            "{specials:?}: {actual} {expected}"
+        );
+    }
 }
