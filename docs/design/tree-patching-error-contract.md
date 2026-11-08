@@ -1264,8 +1264,11 @@ is not free and must not be claimed before it is measured:
   including `contract` at large sizes. `qr` and `svd` (and therefore
   `TreeTN::canonicalize`, `truncate`, and operator applications that truncate)
   do not have it above roughly `m*n ~ 16k` elements, where the blocked
-  Householder work is partitioned by the available parallelism; the observed
-  spread is round-off (`|dQ|, |dR| <= 8.9e-15` at `224x112`, `c64`).
+  Householder work is partitioned by the available parallelism. How far that
+  reaches is host- and shape-dependent: the spread reported in #1162 was
+  round-off for `qr` (`|dQ|, |dR| <= 8.9e-15` at `224x112`, `c64`), and that
+  host showed a phase-level `svd` difference at `448x224` (see the record
+  below).
 
   **Whether an operation should acquire Tier 2 is a performance decision, made
   per operation** (`#1162`): making the partition independent of the thread
@@ -1277,6 +1280,21 @@ is not free and must not be claimed before it is measured:
   with the measurement so the trade-off can be revisited deliberately instead
   of by drift. Tier 2 is therefore never a blanket promise, and no operation
   may claim it in rustdoc until such a measurement exists.
+
+  Recorded 2026-11-08 at this head on `broccoli` (x86-64, 64 cores) by
+  `crates/tensor4all-core/tests/thread_count_factorization_digest.rs --
+  --nocapture` (`c64`, seed 7): `qr` is bitwise identical at `8`--`224x112` and
+  differs at `448x224` (`max|diff|` `7.1e-15` at 1T vs 4T, `6.6e-14` at 1T vs
+  8T, `6.0e-14` at 4T vs 8T). `svd` is identical at all six shapes on this host,
+  `448x224` included. Both outcomes are what the second test is for: it prints
+  this record instead of asserting a direction, because the divergence starts at
+  a different size on a different host. An AMD host (#1162) saw the split from
+  `m*n ~ 25k` with a phase-level `svd` difference at `448x224`; that observation
+  is not reproduced here and is not a cross-machine claim.
+  `a_fixed_thread_count_repeats_the_factorization_bits` checks within-process
+  repeatability at each of 1, 4 and 8 threads (not fresh caller threads, not a
+  second process); `thread_count_may_change_the_last_bits_today` prints the state
+  above and asserts only the shapes and the reconstruction.
 
 There is no cross-machine promise; M8 (MPI) states its own contract. What is
 tested today is narrower still than Tier 1: fresh threads within one process,
