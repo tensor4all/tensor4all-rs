@@ -277,7 +277,7 @@ mod tests;
 pub enum TreeTNOperationError {
     /// An option or argument value supplied by the caller is invalid or
     /// unsupported.
-    #[error("invalid TreeTN operation configuration: {source:#}")]
+    #[error("invalid TreeTN operation configuration: {source}")]
     InvalidConfiguration {
         /// Original diagnostic.
         #[source]
@@ -285,14 +285,14 @@ pub enum TreeTNOperationError {
     },
     /// The network cannot serve the request: an unknown node, edge or index, or
     /// a structure that is not a tree.
-    #[error("invalid TreeTN graph: {source:#}")]
+    #[error("invalid TreeTN graph: {source}")]
     InvalidGraph {
         /// Original diagnostic.
         #[source]
         source: anyhow::Error,
     },
     /// An index, coordinate or count is outside the dimension it is read from.
-    #[error("index out of bounds: {source:#}")]
+    #[error("index out of bounds: {source}")]
     IndexOutOfBounds {
         /// Original diagnostic.
         #[source]
@@ -450,9 +450,11 @@ impl From<anyhow::Error> for TreeTNOperationError {
     /// the `anyhow` context layers above it are recorded as the message they
     /// render (a typed context cannot be recovered from `anyhow`).
     ///
-    /// The classification is taken from the error object, never from a layer
-    /// above it: `anyhow::downcast` prefers a typed context over the object, and
-    /// such a context is a note about the call, not the failure.
+    /// The classification is taken from the first `TreeTNOperationError` in the
+    /// source chain (the failure), never from a typed context above it:
+    /// `anyhow::downcast` prefers such a context over the object, and it is a
+    /// note about the call, not the failure. A foreign wrapper whose `source()`
+    /// exposes the failure classifies the same way, with or without a note.
     fn from(source: anyhow::Error) -> Self {
         // `chain()` runs outside in: the `anyhow` contexts above the error
         // object, then the object. A context link is not downcastable to `Self`
@@ -471,17 +473,18 @@ impl From<anyhow::Error> for TreeTNOperationError {
         let Some(failure) = failure else {
             return Self::Operation { source };
         };
-        let Some(outer) = source.downcast_ref::<Self>() else {
-            // A classified error below an unclassified wrapper: the wrapper is
-            // what this boundary saw, so the catch-all keeps both.
-            return Self::Operation { source };
-        };
-        if !std::ptr::eq(outer, failure) {
-            // A typed context sits above the failure and `anyhow` hands that one
-            // out instead, so the failure is only reachable by reference. Keep
-            // the variant and the chain it already holds; the note stays in it.
-            let class = Class::of(failure);
-            return class.into_error(source, &notes);
+        // `anyhow::downcast_ref` returns the outermost typed context before the
+        // error object, so it equals `failure` only when the failure is the
+        // object itself. Otherwise something sits between them: a typed context
+        // or a foreign wrapper whose `source()` exposes the failure. `anyhow`
+        // cannot tell those two apart, so both keep the failure's variant (a
+        // note never changes the classification) around the chain `source`
+        // already holds once, with nothing re-rendered into it.
+        let is_object = source
+            .downcast_ref::<Self>()
+            .is_some_and(|outer| std::ptr::eq(outer, failure));
+        if !is_object {
+            return Class::of(failure).into_error(source, &notes);
         }
         let variant = match source.downcast::<Self>() {
             Ok(variant) => variant,

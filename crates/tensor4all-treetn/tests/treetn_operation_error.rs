@@ -60,7 +60,11 @@ fn invalid_graph_covers_unknown_and_duplicate_node_names() {
         "an unknown node must be an invalid graph, got {error:?}"
     );
     // The offending name is still readable through the source chain.
-    assert!(error.to_string().contains("does not exist"), "{error}");
+    assert!(
+        report(&error).contains("does not exist"),
+        "{}",
+        report(&error)
+    );
     assert!(error.source().is_some());
 
     // A duplicate node name is the same class: the network cannot serve it.
@@ -153,6 +157,15 @@ fn scalar_kind_mismatch_covers_stored_dtype_refusals() {
         panic!("a complex payload must not answer a real request, got {error:?}");
     };
     assert_eq!((mismatch.stored, mismatch.requested), ("c64", "f64"));
+}
+
+/// This error's own line followed by every link of its source chain: the
+/// explicit full rendering, since `Display` prints one error only.
+fn report(error: &TreeTNOperationError) -> String {
+    std::iter::once(error.to_string())
+        .chain(source_chain(error))
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 fn source_chain(error: &TreeTNOperationError) -> Vec<String> {
@@ -253,7 +266,7 @@ fn a_typed_context_does_not_replace_the_propagated_classification() {
         matches!(error, TreeTNOperationError::InvalidGraph { .. }),
         "a typed context must not replace the propagated classification, got {error:?}"
     );
-    let text = format!("{error:#}");
+    let text = report(&error);
     assert!(
         text.contains("real root"),
         "the failure was dropped: {text}"
@@ -295,10 +308,12 @@ fn a_typed_context_above_the_failure_keeps_the_failure_chain() {
 }
 
 #[test]
-fn a_classified_error_below_an_unclassified_wrapper_is_not_reclassified() {
-    // The wrapper is what the boundary saw; the classified error below it is not
-    // a note about the call, so promoting it would drop the wrapper's own
-    // message and repeat the payload it already renders.
+fn a_classified_error_below_an_unclassified_wrapper_keeps_its_variant_and_the_wrapper() {
+    // `anyhow` cannot tell a foreign wrapper from a typed `.context(..)` above
+    // the failure, and a note must not change the classification
+    // (`a_typed_context_does_not_change_how_a_wrapped_failure_is_classified`),
+    // so the failure's variant is kept here too. The wrapper is not dropped: it
+    // stays the first link of the chain, rendered once.
     #[derive(Debug)]
     struct Wrapper(TreeTNOperationError);
 
@@ -320,8 +335,8 @@ fn a_classified_error_below_an_unclassified_wrapper_is_not_reclassified() {
         },
     )));
     assert!(
-        matches!(error, TreeTNOperationError::Operation { .. }),
-        "an unclassified wrapper stays the catch-all, got {error:?}"
+        matches!(error, TreeTNOperationError::InvalidGraph { .. }),
+        "the failure below the wrapper keeps its variant, got {error:?}"
     );
     assert_eq!(
         source_chain(&error).first().map(String::as_str),
@@ -411,7 +426,7 @@ fn a_classified_error_keeps_the_anyhow_context() {
         matches!(converted, TreeTNOperationError::InvalidGraph { .. }),
         "the variant must survive the conversion, got {converted:?}"
     );
-    let text = format!("{converted:#}");
+    let text = report(&converted);
     assert!(
         text.contains("request 42"),
         "the outer context was dropped: {text}"
@@ -419,5 +434,71 @@ fn a_classified_error_keeps_the_anyhow_context() {
     assert!(
         text.contains("missing node"),
         "the diagnostic was dropped: {text}"
+    );
+}
+
+#[test]
+fn repeated_typed_context_crossings_keep_the_message_bounded() {
+    // Each crossing wraps the previous error under a classified `.context(..)`.
+    // `Display` prints this error's own line only, so the message stays bounded
+    // while `source()` keeps every crossing reachable.
+    let mut e = TreeTNOperationError::InvalidGraph {
+        source: anyhow::anyhow!("root"),
+    };
+    for _ in 0..12 {
+        e = TreeTNOperationError::from(anyhow::Error::new(e).context(
+            TreeTNOperationError::InvalidConfiguration {
+                source: anyhow::anyhow!("note"),
+            },
+        ));
+    }
+    let len = e.to_string().len();
+    eprintln!("message bytes after 12 typed-context crossings: {len}");
+    assert!(len < 4096, "message grew to {len} bytes");
+    assert!(
+        matches!(e, TreeTNOperationError::InvalidGraph { .. }),
+        "the failure's variant survives every crossing, got {e:?}"
+    );
+    let chain = source_chain(&e);
+    assert_eq!(
+        chain.last().map(String::as_str),
+        Some("root"),
+        "the root stays reachable through source(): {chain:?}"
+    );
+}
+
+#[test]
+fn a_typed_context_does_not_change_how_a_wrapped_failure_is_classified() {
+    // Adding a note above the same error must not change its variant: the
+    // classification is taken from the first `TreeTNOperationError` in the
+    // source chain whether or not a typed context sits above it.
+    #[derive(Debug)]
+    struct Wrapper(TreeTNOperationError);
+
+    impl std::fmt::Display for Wrapper {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "wrapper: {}", self.0)
+        }
+    }
+
+    impl std::error::Error for Wrapper {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    let failure = || TreeTNOperationError::InvalidGraph {
+        source: anyhow::anyhow!("root"),
+    };
+    let bare = TreeTNOperationError::from(anyhow::Error::new(Wrapper(failure())));
+    let noted = TreeTNOperationError::from(anyhow::Error::new(Wrapper(failure())).context(
+        TreeTNOperationError::InvalidConfiguration {
+            source: anyhow::anyhow!("note"),
+        },
+    ));
+    assert_eq!(
+        std::mem::discriminant(&bare),
+        std::mem::discriminant(&noted),
+        "a note changed the classification: {bare:?} vs {noted:?}"
     );
 }
