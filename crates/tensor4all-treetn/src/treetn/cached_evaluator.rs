@@ -5972,13 +5972,19 @@ thread_local! {
     /// threads of one process.
     static MULTI_BRANCH_ROUTES: std::cell::Cell<(usize, usize)> =
         const { std::cell::Cell::new((0, 0)) };
+    /// Points (columns of the right operand) of the widest grouped call so far,
+    /// so a test can pin that the grouped kernel received one column per point
+    /// instead of a batch that assignment deduplication collapsed.
+    static MULTI_BRANCH_GROUPED_COLUMNS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
-fn record_multi_branch_route(grouped: bool) {
+fn record_multi_branch_route(grouped: bool, columns: usize) {
     let (grouped_calls, flat_calls) = MULTI_BRANCH_ROUTES.get();
     if grouped {
         MULTI_BRANCH_ROUTES.set((grouped_calls + 1, flat_calls));
+        MULTI_BRANCH_GROUPED_COLUMNS.set(MULTI_BRANCH_GROUPED_COLUMNS.get().max(columns));
     } else {
         MULTI_BRANCH_ROUTES.set((grouped_calls, flat_calls + 1));
     }
@@ -5987,6 +5993,12 @@ fn record_multi_branch_route(grouped: bool) {
 #[cfg(test)]
 fn reset_multi_branch_routes_for_test() {
     MULTI_BRANCH_ROUTES.set((0, 0));
+    MULTI_BRANCH_GROUPED_COLUMNS.set(0);
+}
+
+#[cfg(test)]
+fn multi_branch_grouped_columns_for_test() -> usize {
+    MULTI_BRANCH_GROUPED_COLUMNS.get()
 }
 
 #[cfg(test)]
@@ -6760,11 +6772,11 @@ where
             ..Default::default()
         });
         #[cfg(test)]
-        record_multi_branch_route(false);
+        record_multi_branch_route(false, physical_values.len());
         return scalar_multi_branch_message_contraction(spec, raw, physical_values, child_columns);
     }
     #[cfg(test)]
-    record_multi_branch_route(true);
+    record_multi_branch_route(true, physical_values.len());
     grouped_multi_branch_message_contraction(route, spec, raw, physical_values, child_columns)
 }
 
@@ -7309,6 +7321,13 @@ where
 /// This is the term that a per-node element count does not see: with bonds
 /// 1024/1/2048 a node's rows are `1024 x 2048`, twice its own larger bond, so the
 /// estimate has to come from the geometry rather than from the local tensors.
+///
+/// A node whose prepared slice exceeds [`MULTI_BRANCH_MAX_PREPARED_ELEMENTS`]
+/// never reaches the grouped kernel at all, so its orientation contributes
+/// nothing: the flat kernel's only allocation is its output, and the
+/// message-column term already charges one column per directed message. Charging
+/// the grouped rows there cost a bonds-`[2, 2, 1024, 2048]` hub the whole budget
+/// and left the automatic batch at a single point (#1194).
 fn grouped_message_intermediate_per_point<V>(
     tree: &TreeTN<IdxTensor, V>,
     plan: &CachedEvaluatorPlanInner<V>,
@@ -7339,11 +7358,22 @@ where
                 None => 0,
                 // One child: the message is that child's column.
                 Some((_, [])) => 0,
-                Some((shared, rest)) => rest
-                    .iter()
-                    .try_fold(parent_dim, |rows, dim| rows.checked_mul(*dim))
-                    .ok_or_else(|| anyhow::anyhow!("grouped message rows overflow usize"))?
-                    .saturating_add(*shared),
+                Some((shared, rest)) => {
+                    let rows = rest
+                        .iter()
+                        .try_fold(parent_dim, |rows, dim| rows.checked_mul(*dim))
+                        .ok_or_else(|| anyhow::anyhow!("grouped message rows overflow usize"))?;
+                    // `multi_branch_message_contraction` takes the grouped kernel
+                    // only while its prepared slice fits `MULTI_BRANCH_MAX_PREPARED_ELEMENTS`
+                    // (`parent x product(children)`); above that cap the flat kernel
+                    // runs, allocates nothing beyond its output, and the message-column
+                    // term is the whole per-point charge.
+                    if rows.saturating_mul(*shared) > MULTI_BRANCH_MAX_PREPARED_ELEMENTS {
+                        0
+                    } else {
+                        rows.saturating_add(*shared)
+                    }
+                }
             };
             worst = worst.max(per_point);
         }

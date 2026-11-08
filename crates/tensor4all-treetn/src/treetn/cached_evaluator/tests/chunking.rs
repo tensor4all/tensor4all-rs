@@ -259,15 +259,29 @@ fn automatic_chunk_limit_bounds_the_multi_branch_message_intermediate() {
     let hub_indices = std::iter::once(hub_site.clone())
         .chain(bonds.iter().cloned())
         .collect::<Vec<_>>();
-    let hub = IdxTensor::from_dense(hub_indices, vec![1.0_f64; 32 * 32 * 32 * 32]).unwrap();
+    // Non-constant values: with all-ones tensors every expectation was the same
+    // number, so a grouped contraction that selected the wrong columns still
+    // matched (#1194).
+    let hub = IdxTensor::from_dense(
+        hub_indices,
+        (0..32 * 32 * 32 * 32)
+            .map(|value| 0.5 + (value % 97) as f64 * 0.125)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
     let mut tensors = vec![hub];
     let mut indices = vec![hub_site];
-    for bond in &bonds {
-        let site = DynIndex::new_dyn(2);
+    for (leaf, bond) in bonds.iter().enumerate() {
+        // Leaf 1 is the hinted centre: a dim-1 site there keeps the hub's message
+        // batch whole, because the evaluator keys that batch by the arm the centre
+        // sits on. The other three leaves carry the eight distinct patterns below.
+        let site = DynIndex::new_dyn(if leaf == 0 { 1 } else { 2 });
         tensors.push(
             IdxTensor::from_dense(
                 vec![bond.clone(), site.clone()],
-                vec![1.0_f64; bond.dim() * 2],
+                (0..bond.dim() * site.dim())
+                    .map(|value| 0.75 + (value % 11) as f64 * 0.5)
+                    .collect::<Vec<_>>(),
             )
             .unwrap(),
         );
@@ -288,9 +302,11 @@ fn automatic_chunk_limit_bounds_the_multi_branch_message_intermediate() {
         "one batch asks for {intermediate_bytes} intermediate bytes"
     );
 
-    // Eight points with distinct leaf assignments, the centre hinted at leaf 1: the
-    // hub is then a branch with three children, so its message runs the grouped
-    // multi-branch kernel with eight columns inside **one** batch.
+    // Eight points with **eight distinct** leaf assignments, the centre hinted at
+    // leaf 1: the hub is then a branch with three children, so its message runs the
+    // grouped multi-branch kernel with one column per point inside **one** batch.
+    // `(point + leaf) % 2` repeated with period two, so assignment deduplication
+    // left two columns and the row could not see a column-selection error (#1194).
     let n_points = 8;
     let mut values = vec![0_usize; indices.len() * n_points];
     for point in 0..n_points {
@@ -302,9 +318,26 @@ fn automatic_chunk_limit_bounds_the_multi_branch_message_intermediate() {
             .enumerate()
             .skip(1)
         {
-            *slot = (point + leaf) % 2;
+            // The three non-centre leaves carry the three-bit pattern of the point,
+            // so the hub's subtree has eight distinct assignments; the centre leaf's
+            // site has one value.
+            *slot = if leaf == 1 {
+                0
+            } else {
+                (point >> (leaf - 2)) & 1
+            };
         }
     }
+    // Read the assignments back out of the fixture's own values, so the check covers
+    // what the evaluator sees rather than the pattern this loop meant to write.
+    let assignment_count = (0..n_points)
+        .map(|point| values[point * indices.len() + 1..(point + 1) * indices.len()].to_vec())
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    assert_eq!(
+        assignment_count, n_points,
+        "the fixture must assign {n_points} distinct subtrees, or the row cannot see a column error"
+    );
     let shape = [indices.len(), n_points];
     let points = ColMajorArrayRef::new(&values, &shape).unwrap();
     let expected = tree.evaluate(&indices, points).unwrap();
@@ -315,6 +348,96 @@ fn automatic_chunk_limit_bounds_the_multi_branch_message_intermediate() {
     assert_eq!(evaluator.stats_for_test().batched_center_contract_count, 1);
     let (grouped, _flat) = multi_branch_routes_for_test();
     assert!(grouped > 0, "the grouped multi-branch kernel did not run");
+    assert_eq!(
+        multi_branch_grouped_columns_for_test(),
+        n_points,
+        "the grouped contraction must receive one column per point"
+    );
+    // The non-constant tensors keep the eight expectations apart, so a mixed-up
+    // column shows up in the comparison below instead of averaging to the same 1.
+    let mut reals: Vec<f64> = expected.iter().map(|value| value.real()).collect();
+    reals.sort_by(|left, right| left.partial_cmp(right).unwrap());
+    reals.dedup_by(|left, right| (*left - *right).abs() <= 1.0e-12);
+    assert!(
+        reals.len() >= 2,
+        "the fixture's expectations are all equal, so it cannot detect a column mix-up"
+    );
+    assert_typed_results::<f64>(&actual, &expected);
+}
+
+/// A four-bond hub whose grouped prepared slice is above
+/// [`MULTI_BRANCH_MAX_PREPARED_ELEMENTS`] in **every** parent orientation, so the
+/// arbitrary-degree kernel must take its flat route, which allocates nothing
+/// beyond its output.
+fn capped_multi_branch_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+    let hub_site = DynIndex::new_dyn(1);
+    let bonds: Vec<DynIndex> = [2_usize, 2, 1024, 2048]
+        .into_iter()
+        .map(DynIndex::new_dyn)
+        .collect();
+    let hub_indices = std::iter::once(hub_site.clone())
+        .chain(bonds.iter().cloned())
+        .collect::<Vec<_>>();
+    let hub = IdxTensor::from_dense(hub_indices, vec![1.0_f64; 2 * 2 * 1024 * 2048]).unwrap();
+    let mut tensors = vec![hub];
+    let mut indices = vec![hub_site];
+    for bond in &bonds {
+        let site = DynIndex::new_dyn(2);
+        tensors.push(
+            IdxTensor::from_dense(
+                vec![bond.clone(), site.clone()],
+                vec![1.0_f64; bond.dim() * site.dim()],
+            )
+            .unwrap(),
+        );
+        indices.push(site);
+    }
+    let tree = TreeTN::from_tensors(tensors, vec![0_usize, 1, 2, 3, 4]).unwrap();
+    (tree, indices)
+}
+
+/// The estimator may charge only the buffers the kernel actually allocates: a hub
+/// whose grouped prepared slice is above the cap runs the flat kernel, so charging
+/// its grouped rows left the automatic batch at a single point (#1194).
+#[test]
+fn automatic_chunk_limit_does_not_charge_the_grouped_rows_the_flat_route_skips() {
+    let (tree, indices) = capped_multi_branch_tree();
+    let plan = CachedEvaluatorPlan::new(&tree, &indices).unwrap();
+    // Every orientation prepares `parent x product(children)` = 2 x 2 x 1024 x 2048
+    // elements, above the 4,194,304-element admission of the grouped kernel.
+    let prepared_per_orientation = 2_usize * 2 * 1024 * 2048;
+    assert!(
+        prepared_per_orientation > MULTI_BRANCH_MAX_PREPARED_ELEMENTS,
+        "the fixture must exceed the grouped admission in every orientation"
+    );
+    assert_eq!(
+        grouped_message_intermediate_per_point(&tree, &plan.inner).unwrap(),
+        0,
+        "the flat route allocates no grouped intermediate, so nothing may be charged"
+    );
+    let mut evaluator =
+        TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
+    // The message columns are the whole charge here: 6,162 scalars at 24 B is
+    // 147,888 B, so the 32 MiB budget holds 226 points. Charging the 4,194,306
+    // grouped scalars the flat route never allocates left this at 1.
+    assert_eq!(evaluator.batch_point_limit, 226);
+
+    // Two points, the centre hinted at a leaf: the hub is a branch node whose
+    // message runs the flat kernel, once per point, so no grouped call happens.
+    let values = vec![0_usize; indices.len() * 2];
+    let shape = [indices.len(), 2];
+    let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+    let expected = tree.evaluate(&indices, points).unwrap();
+    reset_multi_branch_routes_for_test();
+    let actual = evaluator
+        .evaluate_batched_with_hint(points, EvaluationHint::around(1))
+        .unwrap();
+    let (grouped, flat) = multi_branch_routes_for_test();
+    assert_eq!(
+        grouped, 0,
+        "a prepared slice above the cap must not reach the grouped kernel"
+    );
+    assert!(flat > 0, "the flat multi-branch kernel did not run");
     assert_typed_results::<f64>(&actual, &expected);
 }
 
