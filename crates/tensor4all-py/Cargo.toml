@@ -1,6 +1,6 @@
 [package]
 name = "tensor4all-py"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["tensor4all collaboration"]
 license = "MIT"
