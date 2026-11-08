@@ -1340,9 +1340,9 @@ products agree, and `qr` splits above `m*n ~ 16k` elements.
   alive).
 
   `a_fixed_thread_count_repeats_the_product_bits` checks within-process
-  repeatability of both products at each of 1, 2, 4 and 8 workers (not fresh caller
   repeatability of both products at each of 1, 2, 4 and 8 workers (not fresh
   caller threads, not a second process);
+  `thread_count_may_change_the_complex_product_bits_today` prints the record
   above and asserts only the shape, finiteness, and four sampled entries against
   a sequential accumulation.
 
