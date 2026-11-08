@@ -300,8 +300,17 @@ pub enum TreeTNOperationError {
     },
     /// The requested element type cannot represent the values the network
     /// stores.
-    #[error(transparent)]
-    ScalarKindMismatch(#[from] crate::EvaluatedScalarKindMismatch),
+    ///
+    /// The mismatch payload is reachable through `Error::source`; the message is
+    /// the payload's own `Display`, named here instead of forwarded through
+    /// `#[error(transparent)]`, because transparent forwarding exposes the
+    /// payload's `source()` (which it does not have) instead of the payload.
+    #[error("{0}")]
+    ScalarKindMismatch(
+        #[from]
+        #[source]
+        crate::EvaluatedScalarKindMismatch,
+    ),
     /// An underlying tensor, storage, or backend operation failed, or an
     /// internal invariant was violated.
     #[error("TreeTN operation failed: {source:#}")]

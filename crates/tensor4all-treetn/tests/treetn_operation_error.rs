@@ -85,10 +85,30 @@ fn index_out_of_bounds_covers_out_of_range_coordinates() {
 
     // A coordinate list outside the index list is the same class.
     let (tree, site) = one_site_f64_tree();
-    let error = tree.evaluate_point(&[site], &[]).unwrap_err();
+    let error = tree
+        .evaluate_point(std::slice::from_ref(&site), &[])
+        .unwrap_err();
     assert!(
         matches!(error, TreeTNOperationError::IndexOutOfBounds { .. }),
         "a coordinate count outside the index count must be out of bounds, got {error:?}"
+    );
+
+    // The count is the only coordinate mistake `evaluate_point` classifies: a
+    // correctly sized list holding an out-of-range value still reaches the
+    // one-hot construction and keeps the catch-all. This pins the current
+    // boundary, so a change that starts classifying it must update this test.
+    let (tree, site) = one_site_f64_tree();
+    let error = tree.evaluate_point(&[site], &[2]).unwrap_err();
+    assert!(
+        matches!(error, TreeTNOperationError::Operation { .. }),
+        "an out-of-range coordinate value is not classified at this boundary, got {error:?}"
+    );
+    assert!(
+        source_chain(&error)
+            .last()
+            .is_some_and(|link: &String| link.contains("onehot")),
+        "the catch-all must keep the one-hot diagnostic, got {:?}",
+        source_chain(&error)
     );
 }
 
@@ -120,27 +140,44 @@ fn scalar_kind_mismatch_covers_stored_dtype_refusals() {
     let error = evaluator
         .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
         .unwrap_err();
+    assert_eq!(
+        source_chain(&error),
+        vec!["cannot decode a c64 TreeTN value as f64"],
+        "the mismatch payload must be the source link, not a None from transparent forwarding"
+    );
+    assert_eq!(error.to_string(), "cannot decode a c64 TreeTN value as f64");
     let TreeTNOperationError::ScalarKindMismatch(mismatch) = error else {
         panic!("a complex payload must not answer a real request, got {error:?}");
     };
     assert_eq!((mismatch.stored, mismatch.requested), ("c64", "f64"));
 }
 
+fn source_chain(error: &TreeTNOperationError) -> Vec<String> {
+    let mut chain = Vec::new();
+    let mut current = error.source();
+    while let Some(link) = current {
+        chain.push(link.to_string());
+        current = link.source();
+    }
+    chain
+}
+
 #[test]
-fn operation_stays_the_catch_all_for_unclassified_failures() {
+fn operation_stays_the_catch_all_and_renders_the_whole_chain() {
     // Any failure this boundary cannot classify keeps the catch-all and the
-    // full source chain, which is what `From<anyhow::Error>` promises.
-    let error = TreeTNOperationError::from(anyhow::anyhow!("root cause"));
+    // full source chain, which is what `From<anyhow::Error>` promises. The
+    // cause is wrapped in a context on purpose: the alternate (`{source:#}`)
+    // form is the only one that renders the root as well, so a formatter that
+    // drops it loses the outermost classification *and* the root text.
+    let error = TreeTNOperationError::from(anyhow::anyhow!("root cause").context("outer context"));
     assert!(
         matches!(error, TreeTNOperationError::Operation { .. }),
         "an unclassified failure must stay in the catch-all, got {error:?}"
     );
-    assert_eq!(error.to_string(), "TreeTN operation failed: root cause");
     assert_eq!(
-        error
-            .source()
-            .expect("the catch-all keeps its source")
-            .to_string(),
-        "root cause"
+        error.to_string(),
+        "TreeTN operation failed: outer context: root cause",
+        "the catch-all must render the context and the root, not only the context"
     );
+    assert_eq!(source_chain(&error), vec!["outer context", "root cause"]);
 }
