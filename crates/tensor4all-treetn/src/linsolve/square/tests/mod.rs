@@ -264,17 +264,18 @@ fn divide_by_scalar_keeps_finite_components_of_a_rotated_quotient() {
     let divisor = Complex64::new(0.35, 0.35);
     let expected = entry * (Complex64::new(1.0, 0.0) / divisor);
     assert!(expected.re.is_finite() && expected.im.is_finite());
+    let scale = expected.re.abs().max(expected.im.abs());
     // k = 0 takes the direct reciprocal, k = 600 the small-divisor path.
     for k in [0, 600] {
         let actual = divide_single_entry(
             entry * pow2(-k),
             AnyScalar::new_complex(divisor.re * pow2(-k), divisor.im * pow2(-k)),
         );
-        let error = (actual - expected).norm();
-        assert!(
-            actual.re.is_finite() && actual.im.is_finite() && error <= 1e-15 * expected.norm(),
-            "2^{k}: {actual} vs {expected}"
-        );
+        // Componentwise: |expected| itself overflows, but its components do not.
+        let error = (actual.re - expected.re)
+            .abs()
+            .max((actual.im - expected.im).abs());
+        assert!(error <= 1e-15 * scale, "2^{k}: {actual} vs {expected}");
     }
 }
 

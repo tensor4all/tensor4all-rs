@@ -581,7 +581,7 @@ where
             w.validate()?;
         }
 
-        let mut h_col = Vec::with_capacity(j + 2);
+        let mut h_col = krylov_workspace(j + 2, "hermitian_lanczos_lowest_eigenpair")?;
         let mut w_orth = w;
 
         for v_i in basis.iter().take(j + 1) {
@@ -603,7 +603,11 @@ where
         h_cols.push(h_col);
 
         let subspace_dim = j + 1;
-        let projected = projected_matrix_from_columns(&h_cols, subspace_dim)?;
+        let projected = projected_matrix_from_columns(
+            &h_cols,
+            subspace_dim,
+            "hermitian_lanczos_lowest_eigenpair",
+        )?;
         let ritz =
             lowest_hermitian_eigenpair(&projected, options.hermitian_tol).map_err(|err| {
                 anyhow::Error::new(KrylovError::NonHermitian {
@@ -850,7 +854,7 @@ where
             w.validate()?;
         }
         let mut w_orth = w;
-        let mut h_col = Vec::with_capacity(j + 2);
+        let mut h_col = krylov_workspace(j + 2, "hermitian_krylov_expm_multiply")?;
 
         for v_i in basis.iter().take(j + 1) {
             let h_ij = v_i.inner_product(&w_orth)?;
@@ -871,7 +875,8 @@ where
         h_cols.push(h_col);
 
         let subspace_dim = j + 1;
-        let projected = projected_matrix_from_columns(&h_cols, subspace_dim)?;
+        let projected =
+            projected_matrix_from_columns(&h_cols, subspace_dim, "hermitian_krylov_expm_multiply")?;
         let coefficients =
             hermitian_exponential_first_column(&projected, exponent, options.hermitian_tol)
                 .map_err(|err| anyhow::anyhow!("projected operator is not Hermitian: {err}"))?;
@@ -1242,7 +1247,9 @@ where
         let mut h_matrix: Vec<Vec<AnyScalar>> = krylov_workspace(cycle_max_iter, "gmres")?;
         let mut cs: Vec<AnyScalar> = krylov_workspace(cycle_max_iter, "gmres")?;
         let mut sn: Vec<AnyScalar> = krylov_workspace(cycle_max_iter, "gmres")?;
-        let mut g: Vec<AnyScalar> = vec![AnyScalar::new_real(r_norm)];
+        let mut g: Vec<AnyScalar> =
+            krylov_workspace(checked_krylov_capacity(cycle_max_iter, "gmres")?, "gmres")?;
+        g.push(AnyScalar::new_real(r_norm));
         let mut solution_already_updated = false;
 
         for j in 0..cycle_max_iter {
@@ -1254,7 +1261,7 @@ where
                 profile.apply += started.elapsed();
                 profile.apply_calls += 1;
             }
-            let mut h_a_col: Vec<AnyScalar> = Vec::with_capacity(j + 2);
+            let mut h_a_col: Vec<AnyScalar> = krylov_workspace(j + 2, "gmres")?;
             let mut w_orth = w;
 
             for v_i in v_basis.iter().take(j + 1) {
@@ -1298,7 +1305,7 @@ where
             }
             h_a_col.push(AnyScalar::new_real(h_jp1_j_real));
 
-            let mut h_col: Vec<AnyScalar> = Vec::with_capacity(j + 2);
+            let mut h_col: Vec<AnyScalar> = krylov_workspace(j + 2, "gmres")?;
             for h in h_a_col.iter().take(j) {
                 h_col.push(a1.clone() * h.clone());
             }
@@ -1337,7 +1344,7 @@ where
 
             if tolerance.is_converged(res_norm, b_norm) {
                 let started = Instant::now();
-                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                let y = solve_upper_triangular(&h_matrix, &g[..=j], "gmres")?;
                 if profile_enabled {
                     profile.triangular_solve += started.elapsed();
                     profile.triangular_solve_calls += 1;
@@ -1413,7 +1420,7 @@ where
                 }
             } else {
                 let started = Instant::now();
-                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                let y = solve_upper_triangular(&h_matrix, &g[..=j], "gmres")?;
                 if profile_enabled {
                     profile.triangular_solve += started.elapsed();
                     profile.triangular_solve_calls += 1;
@@ -1465,7 +1472,7 @@ where
         if !solution_already_updated {
             let actual_iters = h_matrix.len();
             let started = Instant::now();
-            let y = solve_upper_triangular(&h_matrix, &g[..actual_iters])?;
+            let y = solve_upper_triangular(&h_matrix, &g[..actual_iters], "gmres")?;
             if profile_enabled {
                 profile.triangular_solve += started.elapsed();
                 profile.triangular_solve_calls += 1;
@@ -1639,7 +1646,9 @@ where
         // Initialize Givens rotation storage
         let mut cs: Vec<AnyScalar> = krylov_workspace(cycle_max_iter, "gmres")?;
         let mut sn: Vec<AnyScalar> = krylov_workspace(cycle_max_iter, "gmres")?;
-        let mut g: Vec<AnyScalar> = vec![AnyScalar::new_real(r_norm)]; // residual in upper Hessenberg space
+        let mut g: Vec<AnyScalar> =
+            krylov_workspace(checked_krylov_capacity(cycle_max_iter, "gmres")?, "gmres")?;
+        g.push(AnyScalar::new_real(r_norm)); // residual in upper Hessenberg space
         let mut solution_already_updated = false;
 
         for j in 0..cycle_max_iter {
@@ -1649,7 +1658,7 @@ where
             let w = apply_a(&v_basis[j])?;
 
             // Modified Gram-Schmidt orthogonalization
-            let mut h_col: Vec<AnyScalar> = Vec::with_capacity(j + 2);
+            let mut h_col: Vec<AnyScalar> = krylov_workspace(j + 2, "gmres")?;
             let mut w_orth = w;
 
             for v_i in v_basis.iter().take(j + 1) {
@@ -1713,7 +1722,7 @@ where
 
             if tolerance.is_converged(res_norm, b_norm) {
                 // Solve upper triangular system and update x
-                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                let y = solve_upper_triangular(&h_matrix, &g[..=j], "gmres")?;
                 x = update_solution(&x, &v_basis[..=j], &y)?;
                 if options.check_true_residual {
                     let ax_check = apply_a(&x)?;
@@ -1758,7 +1767,7 @@ where
                 v_basis.push(v_jp1);
             } else {
                 // Lucky breakdown - we've found the exact solution in the Krylov subspace
-                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                let y = solve_upper_triangular(&h_matrix, &g[..=j], "gmres")?;
                 x = update_solution(&x, &v_basis[..=j], &y)?;
                 let ax_final = apply_a(&x)?;
                 let r_final = b.axpby(
@@ -1780,7 +1789,7 @@ where
         // End of restart cycle - update x with current solution
         if !solution_already_updated {
             let actual_iters = h_matrix.len();
-            let y = solve_upper_triangular(&h_matrix, &g[..actual_iters])?;
+            let y = solve_upper_triangular(&h_matrix, &g[..actual_iters], "gmres")?;
             x = update_solution(&x, &v_basis[..actual_iters], &y)?;
         }
     }
@@ -1949,7 +1958,11 @@ where
 
         let mut cs: Vec<AnyScalar> = krylov_workspace(options.max_iter, "gmres_with_truncation")?;
         let mut sn: Vec<AnyScalar> = krylov_workspace(options.max_iter, "gmres_with_truncation")?;
-        let mut g: Vec<AnyScalar> = vec![AnyScalar::new_real(effective_g0)];
+        let mut g: Vec<AnyScalar> = krylov_workspace(
+            checked_krylov_capacity(options.max_iter, "gmres_with_truncation")?,
+            "gmres_with_truncation",
+        )?;
+        g.push(AnyScalar::new_real(effective_g0));
         let mut solution_already_updated = false;
 
         for j in 0..options.max_iter {
@@ -1957,7 +1970,7 @@ where
 
             let w = apply_a(&v_basis[j])?;
 
-            let mut h_col: Vec<AnyScalar> = Vec::with_capacity(j + 2);
+            let mut h_col: Vec<AnyScalar> = krylov_workspace(j + 2, "gmres_with_truncation")?;
             let mut w_orth = w;
 
             for v_i in v_basis.iter().take(j + 1) {
@@ -2050,7 +2063,7 @@ where
             }
 
             if rel_res < options.rtol {
-                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                let y = solve_upper_triangular(&h_matrix, &g[..=j], "gmres_with_truncation")?;
                 x = update_solution_truncated(&x, &v_basis[..=j], &y, &truncate)?;
 
                 if options.check_true_residual {
@@ -2102,7 +2115,7 @@ where
                 // The Arnoldi relation h_{j+1,j} * v_{j+1} = w_orth is maintained exactly
                 v_basis.push(v_jp1);
             } else {
-                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                let y = solve_upper_triangular(&h_matrix, &g[..=j], "gmres_with_truncation")?;
                 x = update_solution_truncated(&x, &v_basis[..=j], &y, &truncate)?;
                 let ax_final = apply_a(&x)?;
                 let r_final = b.axpby(
@@ -2122,7 +2135,7 @@ where
 
         if !solution_already_updated {
             let actual_iters = v_basis.len().min(options.max_iter);
-            let y = solve_upper_triangular(&h_matrix, &g[..actual_iters])?;
+            let y = solve_upper_triangular(&h_matrix, &g[..actual_iters], "gmres_with_truncation")?;
             x = update_solution_truncated(&x, &v_basis[..actual_iters], &y, &truncate)?;
         }
     }
@@ -2578,11 +2591,13 @@ fn validate_hermitian_krylov_expm_options(options: &HermitianKrylovExpmOptions) 
 fn projected_matrix_from_columns(
     h_cols: &[Vec<Complex64>],
     dim: usize,
+    solver: &'static str,
 ) -> Result<Matrix<Complex64>> {
     let matrix_len = dim.checked_mul(dim).ok_or_else(|| {
         anyhow::anyhow!("Krylov projected matrix shape ({dim}, {dim}) overflows usize")
     })?;
-    let mut data = vec![Complex64::new(0.0, 0.0); matrix_len];
+    let mut data = krylov_workspace(matrix_len, solver)?;
+    data.resize(matrix_len, Complex64::new(0.0, 0.0));
     for col in 0..dim {
         for row in 0..dim {
             if let Some(value) = h_cols.get(col).and_then(|h_col| h_col.get(row)) {
@@ -2595,16 +2610,19 @@ fn projected_matrix_from_columns(
 
 /// Allocate an empty Krylov workspace with room for `capacity` entries.
 ///
-/// The capacity follows from a user-supplied iteration count, so an allocation
-/// that cannot be satisfied is reported as invalid options instead of aborting.
+/// Every iteration-sized buffer the solvers own (Krylov basis, Hessenberg
+/// columns, Givens rotations, projected residual and matrix, back-substitution
+/// result) is allocated here. Its size follows from a user-supplied iteration
+/// count, so an allocation that cannot be satisfied is reported as invalid
+/// options instead of aborting.
 fn krylov_workspace<T>(capacity: usize, solver: &'static str) -> Result<Vec<T>> {
     let mut workspace = Vec::new();
     workspace.try_reserve_exact(capacity).map_err(|source| {
         anyhow::Error::new(KrylovError::InvalidOptions {
             solver,
             reason: format!(
-                "max_iter requires a Krylov workspace of {capacity} entries, which cannot be \
-                 allocated: {source}"
+                "a Krylov workspace of {capacity} entries cannot be allocated ({source}); \
+                 reduce max_iter or the restart length"
             ),
         })
     })?;
@@ -2784,13 +2802,18 @@ fn apply_givens_rotation(
 }
 
 /// Solve upper triangular system R y = g using back substitution.
-fn solve_upper_triangular(h: &[Vec<AnyScalar>], g: &[AnyScalar]) -> Result<Vec<AnyScalar>> {
+fn solve_upper_triangular(
+    h: &[Vec<AnyScalar>],
+    g: &[AnyScalar],
+    solver: &'static str,
+) -> Result<Vec<AnyScalar>> {
     let n = g.len();
     if n == 0 {
         return Ok(vec![]);
     }
 
-    let mut y = vec![AnyScalar::new_real(0.0); n];
+    let mut y = krylov_workspace(n, solver)?;
+    y.resize(n, AnyScalar::new_real(0.0));
 
     for i in (0..n).rev() {
         let mut sum = g[i].clone();

@@ -808,12 +808,13 @@ fn gmres_private_helpers_cover_edge_paths() {
     assert_eq!(c.real(), 1.0);
     assert_eq!(s.real(), 0.0);
 
-    let empty = solve_upper_triangular(&[], &[]).unwrap();
+    let empty = solve_upper_triangular(&[], &[], "gmres").unwrap();
     assert!(empty.is_empty());
 
     let singular = solve_upper_triangular(
         &[vec![AnyScalar::new_real(0.0)]],
         &[AnyScalar::new_real(1.0)],
+        "gmres",
     )
     .unwrap_err();
     assert!(singular.to_string().contains("Near-singular"));
@@ -1932,8 +1933,15 @@ fn krylov_capacity_overflow_is_reported_before_allocation() {
         Some(KrylovError::InvalidOptions { solver: "test", .. })
     ));
 
-    let error = projected_matrix_from_columns(&[], usize::MAX).unwrap_err();
+    let error = projected_matrix_from_columns(&[], usize::MAX, "test").unwrap_err();
     assert!(error.to_string().contains("overflows usize"));
+
+    // 2^62 complex entries fit in usize but not in memory.
+    let error = projected_matrix_from_columns(&[], 1 << 31, "test").unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<KrylovError>(),
+        Some(KrylovError::InvalidOptions { solver: "test", .. })
+    ));
 }
 
 #[test]
