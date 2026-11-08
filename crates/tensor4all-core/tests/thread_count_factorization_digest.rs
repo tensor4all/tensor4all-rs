@@ -1,17 +1,16 @@
 //! Which determinism `qr` and `svd` actually deliver, measured (#1162).
 //!
-//! `docs/design/tree-patching-error-contract.md` splits the promise in two:
-//!
-//! - **Tier 1** (enforced): bitwise identical on the same machine and build at a
-//!   **fixed thread count**, across fresh threads, processes and repeated runs.
-//! - **Tier 2** (observed where it happens, not promised): identical **across
-//!   thread counts**.
+//! `docs/design/tree-patching-error-contract.md` promises one thing about
+//! numerics, **Tier 1**: bitwise identical on the same machine and build at a
+//! **fixed thread count**, across fresh threads, processes and repeated runs.
+//! Bitwise identity **across** thread counts is not promised for any operation
+//! (owner decision after #1202).
 //!
 //! The two tests here are the two halves. The first one checks within-process
 //! repeatability at a fixed thread count for `qr` and `svd`; that is the Tier 1
 //! half this file can exercise, and it must always pass. Fresh caller threads and
 //! a second process are not covered here, so no cross-process claim is made. The
-//! second test records the current Tier 2 state instead of asserting a direction,
+//! second test records the current cross-count state instead of asserting a direction,
 //! so it passes whether the factorizations agree across thread counts or not;
 //! what it does assert is what holds either way: the factor shapes do not move
 //! with the thread count, and every factorization reconstructs the input to
@@ -267,8 +266,8 @@ fn a_fixed_thread_count_repeats_the_factorization_bits() {
     }
 }
 
-/// Tier 2, recorded rather than promised: today the digests may or may not agree
-/// between 1, 4 and 8 threads.
+/// Recorded rather than promised: today the digests may or may not agree between
+/// 1, 4 and 8 threads, and no direction is promised (owner decision after #1202).
 ///
 /// The direction is not asserted, because neither direction is a promise. What is
 /// asserted holds whichever way it goes: the factor shapes do not move with the

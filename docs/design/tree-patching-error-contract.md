@@ -1248,40 +1248,32 @@ unimplemented, and the upstream planner fix is tracked by
 
 The driver does not work around it.
 
-**Scope (decided, [open question 9](#open-questions-for-the-user); tiered
-2026-11-08 after #1162).** The promise has two tiers, because the second one
-is not free and must not be claimed before it is measured:
+**Scope (decided, [open question 9](#open-questions-for-the-user); narrowed to
+one tier 2026-11-09, owner decision after #1202).** There is one promise:
 
-- **Tier 1, enforced in CI**: for a fixed seed, a deterministic evaluator and a
-  deterministic engine, results are bitwise identical on the same machine and
-  build **at a fixed thread count**, across fresh threads, across processes,
-  and across repeated runs. The CI test pins the thread count and asserts a
-  digest, so a change that alters numerics cannot pass silently.
-- **Tier 2, an observed property, not a commitment**: bitwise identity
-  **across thread counts**. Some paths have it already, and the document
-  records that as a fact about them rather than as a promise: on the
-  configurations recorded below, the `f64` dense products (`mat_mul`,
-  `IdxTensor::contract_pair`) and the elementwise/reduction kernels. The
-  `Complex64` products lack it on that configuration (#1192, recorded below),
-  and so do `qr` and `svd` (and therefore
-  `TreeTN::canonicalize`, `truncate`, and operator applications that truncate)
-  above roughly `m*n ~ 16k` elements, where the blocked
-  Householder work is partitioned by the available parallelism. How far that
-  reaches is host- and shape-dependent: the spread reported in #1162 was
-  round-off for `qr` (`|dQ|, |dR| <= 8.9e-15` at `224x112`, `c64`), and that
-  host showed a phase-level `svd` difference at `448x224` (see the record
-  below).
+- **Tier 1**: for a fixed seed, a deterministic evaluator and a deterministic
+  engine, results are bitwise identical on the same machine and build **at a
+  fixed thread count**, across fresh threads, across processes, and across
+  repeated runs. What CI enforces today is the same-process half: the digest
+  tests pin the thread count and assert that two runs agree, so a result that
+  depends on anything but the pinned count fails there. They compare two runs of
+  the same build rather than a stored constant, so a numerically *different but
+  stable* implementation passes them and is the ordinary numerical tests' job.
+  The two-process half has no CI test yet (see the end of this section).
 
-  **Whether an operation should acquire Tier 2 is a performance decision, made
-  per operation** (`#1162`): making the partition independent of the thread
-  count constrains how the work is split, and the constraint is only accepted
-  if it is free. Frozen bar, set 2026-11-08 before any such measurement: adopt
-  it for an operation only if the cost is within 2% at 1, 4 and 8 threads on
-  the deciding host, measured with the existing protocol (5 repetitions,
-  median). Above that, the operation keeps Tier 1 and the 2% figure is recorded
-  with the measurement so the trade-off can be revisited deliberately instead
-  of by drift. Tier 2 is therefore never a blanket promise, and no operation
-  may claim it in rustdoc until such a measurement exists.
+Bitwise identity **across** thread counts is not promised, for any operation.
+The owner decided this after #1202: making a partition independent of the thread
+count removes parallel freedom, and no caller needs the same bits at one thread
+and at eight. The configurations recorded below are **observations under Tier 1**:
+they say what this host does today, and how far it reaches.
+
+**When results are compared, pin the thread count — also when a cache is shared
+across runs.** A digest, a stored baseline, or a cache key computed at one thread
+count is not comparable with one computed at another. The difference is round-off
+in a different kernel or partition, not a bug in either run, and it is wide enough
+to flip an equality check where two kernels meet: the `Complex64` dense products
+below differ between one worker and a team at every recorded shape while the `f64`
+products agree, and `qr` splits above `m*n ~ 16k` elements.
 
   Recorded 2026-11-08 at this head on `broccoli` (x86-64, 64 cores) by
   `crates/tensor4all-core/tests/thread_count_factorization_digest.rs --
@@ -1290,7 +1282,7 @@ is not free and must not be claimed before it is measured:
   8T, `6.0e-14` at 4T vs 8T). `svd` is identical at all six shapes on this host,
   `448x224` included. Both outcomes are what the second test is for: it prints
   this record instead of asserting a direction, because the divergence starts at
-  a different size on a different host. An AMD host (#1162) saw the split from
+  a different size on a different host and no direction is promised. An AMD host (#1162) saw the split from
   `m*n ~ 25k` with a phase-level `svd` difference at `448x224`; that observation
   is not reproduced here and is not a cross-machine claim.
   `a_fixed_thread_count_repeats_the_factorization_bits` checks within-process
@@ -1304,13 +1296,13 @@ is not free and must not be claimed before it is measured:
   `CpuBackend::with_threads(1|2|8)` rather than `RAYON_NUM_THREADS`, at `64^3`,
   `58x58x128`, `145x145x128`, `165x151x128`, `256^3` and `500^3`. `f64`
   `mat_mul` and `IdxTensor::contract_pair` are bitwise identical at every pair
-  of worker counts, so the `f64` products **have** Tier 2 on this host as an
-  observation. `Complex64` products are identical between 2 and 8 workers and
+  of worker counts, so the `f64` products are cross-count identical on this host
+  (an observation under Tier 1, not a promise). `Complex64` products are identical between 2 and 8 workers and
   differ between 1 worker and either of them at **every** one of those shapes:
   the first differing element is index 0 (index 2 at `145x145x128`) and the
   largest difference grows with the shape, `1.3e-15` at `64^3` and `3.2e-14` at
-  `500^3`. The split is serial against parallel, not one width against another,
-  so the `Complex64` products meet Tier 1 and **do not have** Tier 2.
+  `500^3`. The split is serial against parallel, not one width against another:
+  two kernels, not a thread-count-dependent summation order.
 
   Why, for `Complex64`: one worker and a team take different kernels. Sampling
   the stacks of a repeated `Complex64` `mat_mul` on this host's faer
@@ -1333,10 +1325,9 @@ is not free and must not be claimed before it is measured:
   wherever those paths run, even where the factorization digests are
   reproducible; no evaluator-level measurement of that was made here. `f64`
   readouts meet the same call site, whose product is cross-count identical on
-  this host. Acquiring cross-count identity for the `Complex64`
-  products would be the per-operation 2% decision above (#1162), not part of
-  #1192: #1192 records the state and leaves the kernel's accumulation order
-  alone, so the `Complex64` products stay Tier 1 with no cross-count promise.
+  this host. Acquiring cross-count identity for the `Complex64` products is not a
+  goal (owner decision after #1202): the record leaves the kernel's accumulation
+  order alone, and a comparison that spans runs pins the thread count instead.
   `IdxTensor::contract_pair` runs on the engine its operands' eager runtime
   carries, and that runtime table holds weak handles, so the caller's context
   must outlive the contraction; otherwise it falls back to the process-global
@@ -1886,32 +1877,19 @@ defaults reproduce M3 exactly.
    (a) land, generic-path trees are not reproducible across threads, and the
    two-process CI test does not exist yet.
 
-   **Tiered 2026-11-08 (user, after #1162).** The target above is kept, but it
-   is split into what CI enforces and what is still a goal, because `qr`/`svd`
-   do not meet the cross-thread half and the document claimed they did:
-
-   - Tier 1 (enforced): bitwise identical at a **fixed thread count**, across
-     fresh threads, processes and repeated runs. The CI test pins the thread
-     count.
-   - Tier 2 (observed where it happens, not promised): identical **across
-     thread counts**. Present today, on the configurations recorded in
-     [Determinism](#determinism), in the `f64` dense products and the
-     elementwise/reduction kernels; absent from the `Complex64` products
-     (#1192) and from `qr`/`svd` above `m*n ~ 16k` elements, where the blocked
-     Householder partition follows the available parallelism. Every entry is an
-     observation about the host and provider named with it, not a promise for
-     another build.
-
-   **Tier 2 is decided per operation by measured cost, not adopted as a
-   target.** Making a parallel reduction or a blocked factorization
-   thread-count independent constrains the partition, and the constraint is
-   accepted only when it is free: within 2% at 1, 4 and 8 threads on the
-   deciding host, 5 repetitions, median. The bar is frozen as of 2026-11-08,
-   before any measurement, so that a later result cannot redefine it. Above
-   2%, the operation promises Tier 1 and the measurement is recorded in #1162.
-   Until such a measurement exists, no operation's rustdoc may claim Tier 2.
-   The narrowing here is a correction of this document, not a retreat from the
-   2026-10-03 decision about *which machine* the promise covers.
+   **Narrowed to Tier 1, 2026-11-08 (after #1162) and to Tier 1 only,
+   2026-11-09 (owner decision, after #1202).** What CI enforces, and the whole of
+   the promise, is bitwise identity at a **fixed thread count**, across fresh
+   threads, processes and repeated runs. Identity **across** thread counts is not
+   promised for any operation: making a partition independent of the thread count
+   removes parallel freedom and no caller needs the same bits at one thread and
+   at eight, so a comparison that spans runs pins the thread count instead.
+   [Determinism](#determinism) records what the observed cross-count behaviour is
+   — `qr`/`svd` above `m*n ~ 16k`, and the `Complex64` dense products at every
+   recorded shape, where the serial and the parallel path take different kernels —
+   as observations about the host and provider named with them. This narrowing is
+   a correction of this document, not a retreat from the 2026-10-03 decision about
+   *which machine* the promise covers.
 
 ## Implementation decisions
 

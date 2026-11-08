@@ -1,21 +1,19 @@
 //! Which thread-count determinism the dense products deliver, per scalar type
 //! (#1192).
 //!
-//! `docs/design/tree-patching-error-contract.md` splits the promise in two:
-//!
-//! - **Tier 1** (enforced): bitwise identical on the same machine and build at a
-//!   **fixed thread count**, across fresh threads, processes and repeated runs.
-//! - **Tier 2** (observed where it happens, not promised): identical **across
-//!   thread counts**.
+//! `docs/design/tree-patching-error-contract.md` promises one thing about
+//! numerics, **Tier 1**: bitwise identical on the same machine and build at a
+//! **fixed thread count**, across fresh threads, processes and repeated runs.
+//! Bitwise identity **across** thread counts is not promised for any operation
+//! (owner decision after #1202), so nothing here fails when a thread count moves
+//! the bits.
 //!
 //! `mat_mul` and `IdxTensor::contract_pair` are bitwise identical across thread
 //! counts for `f64` and are not for `Complex64`: one worker and a team take
 //! different kernels (a fused complex gemm against the packed driver's real-`f64`
-//! planar kernels), so their rounding differs. The `f64` cells therefore have Tier 2 on
-//! this host as an observation, and the `Complex64` cells meet Tier 1 and do not
-//! have Tier 2. Neither is a broken promise; the second test records the current
-//! state instead of asserting a direction, so it passes wherever another host's
-//! split starts.
+//! planar kernels), so their rounding differs. Both are observations under Tier 1,
+//! recorded by the second test instead of asserted, so it passes wherever another
+//! host's split starts.
 //!
 //! The thread count comes from an explicit `CpuBackend::with_threads`, never from
 //! `RAYON_NUM_THREADS`, so the environment cannot change what a cell means. A
@@ -350,7 +348,7 @@ fn a_fixed_thread_count_repeats_the_product_bits() {
     }
 }
 
-/// Tier 2, recorded rather than promised: today the `f64` digests agree across
+/// Recorded rather than promised: today the `f64` digests agree across
 /// thread counts and the `Complex64` ones need not.
 ///
 /// The direction is not asserted, because neither direction is a promise on
