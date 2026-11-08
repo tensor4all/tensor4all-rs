@@ -154,3 +154,16 @@ fn growth_peaks_stay_within_one_and_a_half_limits_plus_half_a_group() {
         );
     }
 }
+
+/// #1180 review: the accounting counts both generations. With a 1000-byte limit,
+/// keys 0..29 leave a previous table of 32 buckets and a current one of 4, both
+/// non-empty: 32 × 17 + 16 = 560 and 4 × 17 + 16 = 84 bytes, written out here.
+#[test]
+fn accounted_bytes_include_the_previous_generation() {
+    let mut table = MemoTable::<u64, f64>::default();
+    for key in 0..29u64 {
+        assert!(table.insert(key, 0.0, 1000).stored);
+    }
+    assert!(table.previous_len() > 0 && table.len() > table.previous_len());
+    assert_eq!(table.bytes(), (32 * 17 + 16) + (4 * 17 + 16));
+}
