@@ -745,7 +745,7 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
             .flat_map(|physical| physical.indices.iter().cloned())
             .collect::<Vec<_>>();
         let options = CachedEvaluatorOptions {
-            message_cache_max_bytes: message_cache_max_bytes / problem.directed_edges.len().max(1),
+            message_cache_max_bytes,
             ..CachedEvaluatorOptions::<V>::default()
         };
         let first_input = inputs.first().ok_or(TreeAciError::InternalInvariant {
@@ -977,20 +977,13 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
         plan: &CachedEvaluatorPlan<V>,
         message_cache_max_bytes: usize,
     ) -> Result<Self> {
-        let directed_caches =
-            output
-                .edge_count()
-                .checked_mul(2)
-                .ok_or(TreeAciError::SizeOverflow {
-                    context: "guard directed message cache count",
-                })?;
         let evaluator = TreeTNCachedEvaluator::with_plan(
             output,
             plan,
             CachedEvaluatorOptions {
                 #[cfg(feature = "diagnostics")]
                 diagnostic_namespace: "output".to_owned(),
-                message_cache_max_bytes: message_cache_max_bytes / directed_caches.max(1),
+                message_cache_max_bytes,
                 ..CachedEvaluatorOptions::<V>::default()
             },
         )?;
