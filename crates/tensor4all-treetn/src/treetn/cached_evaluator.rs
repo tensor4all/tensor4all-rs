@@ -2631,11 +2631,21 @@ where
             .saturating_add(others)
             .saturating_sub(total);
         if over > 0 {
+            // A cache that holds no payload cannot release anything: dismissing
+            // the historical empty ones here keeps a pressured admission
+            // proportional to the edges that retain columns, not to every edge
+            // the evaluator has ever visited.
             let mut order: Vec<((V, V), u64)> = self
                 .message_caches
                 .iter()
-                .filter(|(other, _)| *other != edge)
-                .map(|(other, cache)| (other.clone(), cache.last_used()))
+                .filter(|(other, cache)| *other != edge && cache.key_count() > 0)
+                .map(|(other, cache)| {
+                    #[cfg(test)]
+                    MESSAGE_CACHE_VICTIM_CANDIDATES.with(|candidates| {
+                        candidates.set(candidates.get() + 1);
+                    });
+                    (other.clone(), cache.last_used())
+                })
                 .collect();
             order.sort_by_key(|(_, last_used)| *last_used);
             for (other, _) in order {
@@ -8089,6 +8099,10 @@ const HASH_MAP_BUCKET_OVERHEAD_ESTIMATE_BYTES: usize = 16;
 #[cfg(test)]
 thread_local! {
     static MESSAGE_CACHE_PAYLOAD_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Caches offered as eviction candidates on this thread. Counted only for
+    /// the regression test that pins "a victim search considers the edges that
+    /// hold payload, not every edge the evaluator has ever seen".
+    static MESSAGE_CACHE_VICTIM_CANDIDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(any(test, feature = "diagnostics"))]
@@ -8503,16 +8517,20 @@ where
                 if would_retain_bytes.is_some_and(|bytes| bytes <= self.max_bytes) {
                     let position = self.columns.len() / self.bond_dim;
                     self.columns.extend(column);
-                    self.key_heap_bytes =
-                        self.key_heap_bytes.saturating_add(key.owned_heap_bytes());
+                    let owned_heap_bytes = key.owned_heap_bytes();
                     // Re-admitting a key released with the dead prefix replaces
-                    // its stale entry rather than adding a live one.
-                    if self
-                        .positions
-                        .insert(key, position)
-                        .is_some_and(|released| released < self.head)
-                    {
-                        self.released_keys = self.released_keys.saturating_sub(1);
+                    // its stale entry rather than adding a live one, and its heap
+                    // bytes are already in `key_heap_bytes` from the first
+                    // admission, so only a key new to the map is charged.
+                    match self.positions.insert(key, position) {
+                        None => {
+                            self.key_heap_bytes =
+                                self.key_heap_bytes.saturating_add(owned_heap_bytes);
+                        }
+                        Some(released) if released < self.head => {
+                            self.released_keys = self.released_keys.saturating_sub(1);
+                        }
+                        Some(_) => {}
                     }
                 } else {
                     computed_values.insert(key, column);

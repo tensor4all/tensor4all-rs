@@ -1271,3 +1271,69 @@ fn reset_message_cache_payload_reads() {
 fn message_cache_payload_reads() -> usize {
     MESSAGE_CACHE_PAYLOAD_READS.with(std::cell::Cell::get)
 }
+
+/// [AI Supplied] #1183 review: a victim search considers the caches that hold
+/// payload, not every edge the evaluator has ever visited, and a key re-admitted
+/// after its column was released is not charged its heap bytes twice.
+#[test]
+fn message_cache_victim_search_skips_caches_that_hold_nothing() {
+    let (tree, indices) = five_node_chain();
+    let column_bytes = std::mem::size_of::<CachedScalar>() * 2;
+    let narrow_values = alternating_points(&indices, 2);
+    let narrow_shape = [indices.len(), 2];
+    let narrow = ColMajorArrayRef::new(&narrow_values, &narrow_shape).unwrap();
+
+    // One live cache, then 1 024 historical empty ones on the same evaluator.
+    let mut evaluator = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            center: Some(0),
+            message_cache_max_bytes: usize::MAX,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    evaluator.evaluate_batched(narrow).unwrap();
+    let live = evaluator
+        .message_caches
+        .remove(&(1, 0))
+        .expect("the narrow batch must cache node 1's message to node 0");
+    assert!(live.key_count() > 0);
+    let edges = 1024usize;
+    let mut shared = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            center: Some(0),
+            message_cache_max_bytes: live.logical_payload_bytes(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    shared.message_caches.insert((1, 0), live);
+    for edge in 0..edges {
+        shared.message_caches.insert(
+            (edge, edges + edge),
+            PackedMessageCache::<IndexKey, CachedScalar>::new(2, 0),
+        );
+    }
+    shared.resync_message_cache_retained_bytes();
+
+    reset_message_cache_victim_candidates();
+    // One column for another edge, against a total the live cache already fills.
+    shared.reserve_message_cache_bytes(&(edges, 2 * edges), column_bytes, column_bytes);
+    assert_eq!(
+        message_cache_victim_candidates(),
+        1,
+        "a victim search must consider only the one cache that holds payload"
+    );
+}
+
+fn reset_message_cache_victim_candidates() {
+    MESSAGE_CACHE_VICTIM_CANDIDATES.with(|candidates| candidates.set(0));
+}
+
+fn message_cache_victim_candidates() -> usize {
+    MESSAGE_CACHE_VICTIM_CANDIDATES.with(std::cell::Cell::get)
+}
