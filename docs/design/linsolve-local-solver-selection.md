@@ -100,13 +100,15 @@ The identity-only closed form does not depend on the local solver: two-site
 MALS returns `rhs / a0` for every choice, and one-site ALS sweeps so the
 solution stays in the initial bond spaces. The closed form multiplies by
 `1 / a0` when the largest component of `a0` is in `[2^-500, 2^500]`. Outside
-that range it normalizes `a0` by an exact power of two: for a small `a0` the
-power of two is applied first, with a factor of four withheld so that every
-component of the intermediate stays below the largest component of the
-quotient; for a large `a0` the
-reciprocal is applied first and the power of two last, in one step, so a
-subnormal quotient is rounded once. Each entry gets the same two roundings as
-a direct reciprocal multiplication.
+that range it first multiplies the solution by an exact power of two `2^j` and
+then once by `1 / (a0 * 2^j)`. For a small `a0`, `|a0 * 2^j|` is in
+`[1/4, 1/2)`, so every component of the scaled entry stays below the largest
+component of the quotient. For a large `a0`, `|a0 * 2^j|` is in
+`[2^64, 2^65)`, so scaling an entry down loses bits only for a quotient below
+`2^-1086`, where they cannot change the rounded result. For a real `a0`, every
+component equals `fl(x * fl(1 / a0))` with the reciprocal rounded as if the
+exponent range were unbounded: one rounding for the reciprocal and one for the
+product, also for a subnormal quotient.
 
 ## Tests
 

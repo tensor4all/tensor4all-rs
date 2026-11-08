@@ -271,6 +271,8 @@ fn divide_by_scalar_keeps_finite_components_of_a_rotated_quotient() {
         "reference must be finite: {scale:e}"
     );
     let error_of = |actual: Complex64| {
+        // `f64::max` drops a NaN operand, so check finiteness separately.
+        assert!(actual.re.is_finite() && actual.im.is_finite(), "{actual}");
         (actual.re - expected.re)
             .abs()
             .max((actual.im - expected.im).abs())
@@ -298,5 +300,37 @@ fn divide_by_scalar_rounds_a_subnormal_quotient_once() {
             AnyScalar::new_real(3.0 * pow2(k)),
         );
         assert_eq!(actual.to_bits(), 1, "2^{k}: {actual:e}");
+    }
+}
+
+#[test]
+fn divide_by_scalar_rounds_a_quotient_above_the_subnormal_midpoint_up() {
+    // x / d lies just above 2^-1075, half the smallest subnormal, and `d` is
+    // about 2^600, outside the direct-reciprocal range. Rounding the product
+    // before scaling it down would land exactly on 2^-1075 and round to zero.
+    let x = f64::from_bits(0x224d_82c0_7cc5_3ee0);
+    let d = f64::from_bits(0x657d_82c0_7cc5_3edf);
+    assert_eq!((x / d).to_bits(), 1);
+    assert_eq!(divide_single_entry(x, AnyScalar::new_real(d)).to_bits(), 1);
+}
+
+#[test]
+fn divide_by_scalar_matches_the_direct_reciprocal_outside_its_range() {
+    // Scaling entry and divisor by the same 2^s leaves fl(x * fl(1/d))
+    // unchanged while it stays normal, so every path must give the bits of
+    // the direct reciprocal multiplication.
+    for (x, d) in [
+        (1.0, 3.0),
+        (5.5, 7.0),
+        (1.0, 0.1),
+        (-2.75, 1.7),
+        (1.0, 1.0 / 3.0_f64),
+    ] {
+        let direct: f64 = divide_single_entry(x, AnyScalar::new_real(d));
+        assert_eq!(direct.to_bits(), (x * (1.0 / d)).to_bits());
+        for s in [-1000, -600, 600, 1000] {
+            let actual: f64 = divide_single_entry(x * pow2(s), AnyScalar::new_real(d * pow2(s)));
+            assert_eq!(actual.to_bits(), direct.to_bits(), "{x} / {d} at 2^{s}");
+        }
     }
 }

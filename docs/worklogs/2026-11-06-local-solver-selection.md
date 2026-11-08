@@ -119,11 +119,17 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   otherwise reach the identity-only closed form unchecked.
 - The identity-only closed form divides by `a0` without forming `1 / a0`, so a
   subnormal `a0` such as `3 * 2^-1070`, or a complex `a0` whose `|a0|^2`
-  overflows or underflows, gives the finite quotient. A small `a0` is applied
-  power of two first with a factor of four of headroom, so a complex quotient
-  whose magnitude exceeds `f64::MAX` keeps finite components
-  (`0.51 * f64::MAX / (0.35 + 0.35i)`); a large `a0` applies the power of two
-  last in one step, so `from_bits(2) / 3` rounds once to `from_bits(1)`.
+  overflows or underflows, gives the finite quotient. The power of two is
+  applied before the reciprocal for both a small and a large `a0`. For a small
+  `a0` a factor of four of headroom keeps the finite components of a complex
+  quotient whose magnitude exceeds `f64::MAX`
+  (`0.51 * f64::MAX / (0.35 + 0.35i)`). For a large `a0` the scaled divisor
+  is near `2^64`, so the product is rounded once even when it is subnormal:
+  `from_bits(2) / 3` gives `from_bits(1)`, and a quotient just above
+  `2^-1075` (`from_bits(0x224d82c07cc53ee0) / from_bits(0x657d82c07cc53edf)`)
+  rounds up to `from_bits(1)` rather than to zero. Results with a real `a0`
+  match the direct reciprocal multiplication bit for bit after scaling the
+  entry and `a0` by `2^±600` and `2^±1000`.
 - `validate_local_solver` and the option, mapping and site-count checks at the
   start of `square_linsolve` return `TreeTNOperationError::InvalidConfiguration`.
 - Every solver-owned Krylov workspace (basis, Hessenberg columns, Givens
