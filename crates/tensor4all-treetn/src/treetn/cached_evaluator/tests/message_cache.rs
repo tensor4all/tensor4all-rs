@@ -1272,9 +1272,8 @@ fn message_cache_payload_reads() -> usize {
     MESSAGE_CACHE_PAYLOAD_READS.with(std::cell::Cell::get)
 }
 
-/// [AI Supplied] #1183 review: a victim search considers the caches that hold
-/// payload, not every edge the evaluator has ever visited, and a key re-admitted
-/// after its column was released is not charged its heap bytes twice.
+/// [AI Supplied] #1183 review: a victim search skips the caches that hold no
+/// payload instead of collecting and sorting them.
 #[test]
 fn message_cache_victim_search_skips_caches_that_hold_nothing() {
     let (tree, indices) = five_node_chain();
@@ -1336,4 +1335,52 @@ fn reset_message_cache_victim_candidates() {
 
 fn message_cache_victim_candidates() -> usize {
     MESSAGE_CACHE_VICTIM_CANDIDATES.with(std::cell::Cell::get)
+}
+
+/// [AI Supplied] #1183 review: re-admitting a key released with the dead prefix
+/// replaces its stale entry, so its heap bytes are charged once, not twice.
+#[test]
+fn packed_message_cache_charges_a_readmitted_key_once() {
+    // 129-bit keys live on the heap (`IndexKey::owned_heap_bytes`), 64-bit ones
+    // do not, so this uses wide keys to observe the counter.
+    let indexer = FlatIndexer::try_new(&vec![2usize; 129]).expect("a 129-bit index space");
+    let key_at = |mut value: usize| {
+        let mut bits = vec![1usize; 129];
+        for bit in bits.iter_mut().skip(64) {
+            *bit = value & 1;
+            value >>= 1;
+        }
+        indexer.encode(&bits).expect("one key")
+    };
+    let (first, second, third) = (key_at(0), key_at(1), key_at(2));
+    let per_column = tree_bytes(2);
+    let mut cache = PackedMessageCache::<IndexKey, CachedScalar>::new(2, 3 * per_column);
+    cache.max_bytes = 3 * per_column;
+    let compute = |keys: &[IndexKey]| -> Result<Vec<Vec<CachedScalar>>> {
+        Ok(keys
+            .iter()
+            .map(|_| vec![CachedScalar::F64(1.0); 2])
+            .collect())
+    };
+    cache
+        .get_or_compute_batch(&[first.clone(), second.clone(), third.clone()], compute)
+        .expect("three columns cache");
+    let charged = cache.key_heap_bytes;
+    assert_eq!(charged, 3 * first.owned_heap_bytes());
+
+    // Release exactly one column: the dead prefix keeps the released key's map
+    // entry until a reclaim, so re-admitting it replaces a stale entry.
+    cache.evict_oldest_bytes(per_column);
+    assert_eq!(cache.key_count(), 2);
+    cache
+        .get_or_compute_batch(std::slice::from_ref(&first), compute)
+        .expect("the released key is admitted again");
+    assert_eq!(
+        cache.key_heap_bytes, charged,
+        "a re-admitted key must not be charged its heap bytes twice"
+    );
+}
+
+fn tree_bytes(bond_dim: usize) -> usize {
+    bond_dim * std::mem::size_of::<CachedScalar>()
 }

@@ -2631,10 +2631,10 @@ where
             .saturating_add(others)
             .saturating_sub(total);
         if over > 0 {
-            // A cache that holds no payload cannot release anything: dismissing
-            // the historical empty ones here keeps a pressured admission
-            // proportional to the edges that retain columns, not to every edge
-            // the evaluator has ever visited.
+            // A cache that holds no payload cannot release anything, so it is not
+            // a candidate: skipping it here keeps the collection and the sort
+            // proportional to the caches that retain columns. The map walk itself
+            // remains O(E) in the edges the evaluator has seen.
             let mut order: Vec<((V, V), u64)> = self
                 .message_caches
                 .iter()
