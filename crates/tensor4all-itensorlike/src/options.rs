@@ -297,7 +297,8 @@ impl ContractOptions {
     /// materialises the exact product bond up to `chi_A * chi_B`. Pass
     /// [`FitInitializer::LowRankRandom`] with a small `bond_dim`, a truncation
     /// tolerance and no `max_bond_dim` to start from a random state instead and
-    /// let the fit grow ranks adaptively.
+    /// let the fit grow ranks adaptively — on the `contract` path;
+    /// `contract_in` builds the zip-up start whatever the initializer says.
     ///
     /// # Examples
     ///
