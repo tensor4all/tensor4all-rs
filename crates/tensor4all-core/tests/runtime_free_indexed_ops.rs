@@ -176,3 +176,38 @@ fn scale_in_adopts_runtime_free_storage_without_the_default_engine() {
     });
     assert_eq!(scaled.to_vec::<f64>().unwrap(), vec![3.0, 6.0, 9.0, 12.0]);
 }
+
+/// Boundary selections on the dense host route: nothing selected, every axis,
+/// and one point on one axis. Each result must match the column-major source.
+#[test]
+fn dense_host_select_boundaries_keep_the_source_values() {
+    let i = DynIndex::new_dyn(2);
+    let j = DynIndex::new_dyn(3);
+    let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let tensor = compact_pair(i.clone(), j.clone(), data.clone());
+
+    // Selecting no index returns the tensor unchanged.
+    let unchanged = tensor.select_indices(&[], &[]).expect("empty selection");
+    assert_eq!(unchanged.dims(), vec![2, 3]);
+    assert_eq!(unchanged.dense_host_values::<f64>().expect("values"), data);
+
+    // Selecting every axis collapses to the rank-0 value at those coordinates.
+    let scalar = tensor
+        .select_indices(&[i, j.clone()], &[1, 2])
+        .expect("full selection");
+    assert!(scalar.dims().is_empty());
+    assert_eq!(
+        scalar.dense_host_values::<f64>().expect("values"),
+        vec![6.0]
+    );
+
+    // One point on one axis keeps the other axis: j = 2 is the last row.
+    let single = tensor
+        .select_indices(std::slice::from_ref(&j), &[2])
+        .expect("single point");
+    assert_eq!(single.dims(), vec![2]);
+    assert_eq!(
+        single.dense_host_values::<f64>().expect("values"),
+        vec![5.0, 6.0]
+    );
+}
