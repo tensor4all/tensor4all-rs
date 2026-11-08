@@ -361,7 +361,7 @@ where
             // context-scoped unfold adopts a host tensor.
             if let Err(error) = self.adopt_into_in(execution) {
                 // Name the root cause in the top-level message: it is all that
-                // `TreeTNOperationError`'s `Display` shows.
+                // `TreeTNOperationError::Operation`'s `Display` shows.
                 let error = anyhow::Error::new(error);
                 let cause = error.root_cause().to_string();
                 return Err(

@@ -42,7 +42,7 @@
 //! };
 //!
 //! let options = TreeTciOptions { tolerance: 1e-10, max_iter: 5, ..Default::default() };
-//! let result = crossinterpolate2::<f64, _, _, _>(
+//! let result = crossinterpolate2::<f64, _, _, _, _>(
 //!     evaluate, vec![2, 2], graph, vec![], options, None, &DefaultProposer, &mut (),
 //! ).unwrap();
 //!

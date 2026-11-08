@@ -255,32 +255,249 @@ mod tests;
 
 /// Error returned by general TreeTN and operator index operations.
 ///
-/// Wraps the source diagnostic from the underlying tensor operation, so
-/// callers propagating into `anyhow::Result` keep the full source chain.
+/// Types the failures a caller can act on, and keeps `Operation` as the
+/// catch-all for everything else (an invariant, storage or backend failure).
+/// This mirrors `TreeTciError` in `tensor4all-treetci`.
+///
+/// The wrapped diagnostic stays reachable through both [`std::error::Error::source`] and
+/// the variants' `source` field, so callers that still propagate into `anyhow::Result`
+/// keep the full source chain.
 ///
 /// # Remedies
-/// - Index binding/selection failures: verify the index set against the
-///   network's site indices and tags before binding or applying operators.
-/// - Shape/dtype failures: check site tensor dims against the network
-///   topology.
-/// - Backend failures: the wrapped source chain identifies the failing stage.
+/// - [`Self::InvalidConfiguration`]: correct the option or argument value the
+///   message names.
+/// - [`Self::InvalidGraph`]: the network cannot serve the request - a node, edge
+///   or index is not part of it, or its structure is not a tree. Fix the network
+///   or the names passed with it.
+/// - [`Self::IndexOutOfBounds`]: the index or coordinate is outside the
+///   dimension it is read from.
+/// - [`Self::ScalarKindMismatch`]: request the element type the network stores.
+/// - [`Self::Operation`]: the wrapped source chain identifies the failing stage.
 #[derive(Debug, thiserror::Error)]
-#[error("TreeTN operation failed: {source}")]
-pub struct TreeTNOperationError {
-    /// Original tensor/network diagnostic.
-    #[source]
-    pub source: anyhow::Error,
+pub enum TreeTNOperationError {
+    /// An option or argument value supplied by the caller is invalid or
+    /// unsupported.
+    #[error("invalid TreeTN operation configuration: {source}")]
+    InvalidConfiguration {
+        /// Original diagnostic.
+        #[source]
+        source: anyhow::Error,
+    },
+    /// The network cannot serve the request: an unknown node, edge or index, or
+    /// a structure that is not a tree.
+    #[error("invalid TreeTN graph: {source}")]
+    InvalidGraph {
+        /// Original diagnostic.
+        #[source]
+        source: anyhow::Error,
+    },
+    /// An index, coordinate or count is outside the dimension it is read from.
+    #[error("index out of bounds: {source}")]
+    IndexOutOfBounds {
+        /// Original diagnostic.
+        #[source]
+        source: anyhow::Error,
+    },
+    /// The requested element type cannot represent the values the network
+    /// stores.
+    ///
+    /// The mismatch payload is reachable through `Error::source`; the message is
+    /// the payload's own `Display`, named here instead of forwarded through
+    /// `#[error(transparent)]`, because transparent forwarding exposes the
+    /// payload's `source()` (which it does not have) instead of the payload.
+    ///
+    /// `context` prefixes the layers [`From<anyhow::Error>`] found around the
+    /// payload, already rendered as text, when the payload was the `anyhow`
+    /// error object. Layers above a typed context or a foreign wrapper are not
+    /// kept here (see [`From<anyhow::Error>`]).
+    #[error("{context}{payload}")]
+    ScalarKindMismatch {
+        /// The dtype mismatch.
+        #[source]
+        payload: crate::EvaluatedScalarKindMismatch,
+        /// Rendered `anyhow` context layers, each followed by `": "`.
+        context: String,
+    },
+    /// An underlying tensor, storage, or backend operation failed, or an
+    /// internal invariant was violated.
+    #[error("TreeTN operation failed: {source}")]
+    Operation {
+        /// Original diagnostic, preserving the full source chain.
+        #[source]
+        source: anyhow::Error,
+    },
+}
+
+impl TreeTNOperationError {
+    /// An invalid option or argument value chosen by the caller.
+    pub(crate) fn invalid_configuration(source: impl Into<anyhow::Error>) -> Self {
+        Self::InvalidConfiguration {
+            source: source.into(),
+        }
+    }
+
+    /// The network or a name selected from it cannot serve the request.
+    pub(crate) fn invalid_graph(source: impl Into<anyhow::Error>) -> Self {
+        Self::InvalidGraph {
+            source: source.into(),
+        }
+    }
+
+    /// An index, coordinate or count outside the dimension it is read from.
+    pub(crate) fn index_out_of_bounds(source: impl Into<anyhow::Error>) -> Self {
+        Self::IndexOutOfBounds {
+            source: source.into(),
+        }
+    }
+
+    /// Prefixes whatever diagnostic the variant carries with `context`, keeping
+    /// the variant: the classified counterpart of `anyhow::Context`. The
+    /// context is kept as rendered text, not as its original type.
+    pub(crate) fn with_context(self, context: impl std::fmt::Display) -> Self {
+        let context = context.to_string();
+        match self {
+            Self::InvalidConfiguration { source } => Self::InvalidConfiguration {
+                source: source.context(context),
+            },
+            Self::InvalidGraph { source } => Self::InvalidGraph {
+                source: source.context(context),
+            },
+            Self::IndexOutOfBounds { source } => Self::IndexOutOfBounds {
+                source: source.context(context),
+            },
+            Self::Operation { source } => Self::Operation {
+                source: source.context(context),
+            },
+            Self::ScalarKindMismatch {
+                payload,
+                context: outer,
+            } => Self::ScalarKindMismatch {
+                payload,
+                context: format!("{context}: {outer}"),
+            },
+        }
+    }
+}
+
+/// Which variant an error reports, without the `anyhow` chain it carries.
+///
+/// Lets the classification be taken from a failure that `anyhow` only lends by
+/// reference and then rebuilt around the chain that failure already holds.
+#[derive(Clone)]
+enum Class {
+    InvalidConfiguration,
+    InvalidGraph,
+    IndexOutOfBounds,
+    Operation,
+    ScalarKindMismatch {
+        payload: crate::EvaluatedScalarKindMismatch,
+        context: String,
+    },
+}
+
+impl Class {
+    fn of(error: &TreeTNOperationError) -> Self {
+        match error {
+            TreeTNOperationError::InvalidConfiguration { .. } => Self::InvalidConfiguration,
+            TreeTNOperationError::InvalidGraph { .. } => Self::InvalidGraph,
+            TreeTNOperationError::IndexOutOfBounds { .. } => Self::IndexOutOfBounds,
+            TreeTNOperationError::Operation { .. } => Self::Operation,
+            TreeTNOperationError::ScalarKindMismatch { payload, context } => {
+                Self::ScalarKindMismatch {
+                    payload: *payload,
+                    context: context.clone(),
+                }
+            }
+        }
+    }
+
+    /// The variant around `source`. `ScalarKindMismatch` has no chain to hold
+    /// it, so it keeps the failure's own payload and context unchanged: the
+    /// links above it may be wrappers that already render the failure, and
+    /// prefixing their text would repeat it on every crossing.
+    fn into_error(self, source: anyhow::Error) -> TreeTNOperationError {
+        match self {
+            Self::InvalidConfiguration => TreeTNOperationError::InvalidConfiguration { source },
+            Self::InvalidGraph => TreeTNOperationError::InvalidGraph { source },
+            Self::IndexOutOfBounds => TreeTNOperationError::IndexOutOfBounds { source },
+            Self::Operation => TreeTNOperationError::Operation { source },
+            Self::ScalarKindMismatch { payload, context } => {
+                TreeTNOperationError::ScalarKindMismatch { payload, context }
+            }
+        }
+    }
+}
+
+impl From<crate::EvaluatedScalarKindMismatch> for TreeTNOperationError {
+    fn from(payload: crate::EvaluatedScalarKindMismatch) -> Self {
+        Self::ScalarKindMismatch {
+            payload,
+            context: String::new(),
+        }
+    }
 }
 
 impl From<anyhow::Error> for TreeTNOperationError {
+    /// Internal `?` conversions land in the catch-all variant with their chain
+    /// intact. An error that carries a classified variant keeps that variant.
+    /// When it is the `anyhow` error object, the context layers above it are
+    /// recorded as the message they render (a typed context cannot be recovered
+    /// from `anyhow`). When a typed context or a foreign wrapper sits between,
+    /// the variant holds the received chain unchanged, except
+    /// `ScalarKindMismatch`, which has no chain: it keeps its own payload and
+    /// context, and the links above it are dropped rather than re-rendered,
+    /// because a wrapper may already render the mismatch.
+    ///
+    /// The classification is taken from the first `TreeTNOperationError` in the
+    /// source chain (the failure), never from a typed context above it:
+    /// `anyhow::downcast` prefers such a context over the object, and it is a
+    /// note about the call, not the failure. A foreign wrapper whose `source()`
+    /// exposes the failure classifies the same way, with or without a note.
     fn from(source: anyhow::Error) -> Self {
-        Self { source }
+        // `chain()` runs outside in: the `anyhow` contexts above the error
+        // object, then the object. A context link is not downcastable to `Self`
+        // (it is a `ContextError`), so the first match is the failure.
+        let mut notes: Vec<String> = Vec::new();
+        let mut failure = None;
+        for cause in source.chain() {
+            match cause.downcast_ref::<Self>() {
+                Some(error) => {
+                    failure = Some(error);
+                    break;
+                }
+                None => notes.push(cause.to_string()),
+            }
+        }
+        let Some(failure) = failure else {
+            return Self::Operation { source };
+        };
+        // `anyhow::downcast_ref` returns the outermost typed context before the
+        // error object, so it equals `failure` only when the failure is the
+        // object itself. Otherwise something sits between them: a typed context
+        // or a foreign wrapper whose `source()` exposes the failure. `anyhow`
+        // cannot tell those two apart, so both keep the failure's variant (a
+        // note never changes the classification) around the chain `source`
+        // already holds once, with nothing re-rendered into it.
+        let is_object = source
+            .downcast_ref::<Self>()
+            .is_some_and(|outer| std::ptr::eq(outer, failure));
+        if !is_object {
+            return Class::of(failure).into_error(source);
+        }
+        let variant = match source.downcast::<Self>() {
+            Ok(variant) => variant,
+            Err(source) => return Self::Operation { source },
+        };
+        notes
+            .into_iter()
+            .rev()
+            .fold(variant, |error, text| error.with_context(text))
     }
 }
 
 impl From<tensor4all_core::IdxTensorError> for TreeTNOperationError {
     fn from(source: tensor4all_core::IdxTensorError) -> Self {
-        Self {
+        Self::Operation {
             source: anyhow::Error::new(source),
         }
     }

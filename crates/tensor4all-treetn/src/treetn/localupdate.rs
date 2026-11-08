@@ -390,13 +390,13 @@ where
         // Validate: canonical_region must be a single node within the step's nodes
         let canonical_region = staged.canonical_region();
         if canonical_region.is_empty() {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!("TreeTN is not canonicalized: canonical_region is empty")
                     .context("apply_local_update_sweep: TreeTN must be canonicalized before sweep"),
             ));
         }
         if canonical_region.len() != 1 {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_configuration(
                 anyhow::anyhow!(
                     "canonical_region must be a single node, got {} nodes",
                     canonical_region.len()
@@ -409,7 +409,7 @@ where
         })?;
         let step_nodes_set: HashSet<V> = step.nodes.iter().cloned().collect();
         if !step_nodes_set.contains(center_node) {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!(
                     "canonical_region {:?} is not within the extracted subtree {:?}",
                     center_node,
@@ -691,13 +691,15 @@ where
         V: Ord,
     {
         if node_names.is_empty() {
-            return Err(anyhow::anyhow!("Cannot extract empty subtree").into());
+            return Err(TreeTNOperationError::invalid_configuration(
+                anyhow::anyhow!("Cannot extract empty subtree"),
+            ));
         }
 
         // Validate all nodes exist
         for name in node_names {
             if self.graph.node_index(name).is_none() {
-                return Err(TreeTNOperationError::from(
+                return Err(TreeTNOperationError::invalid_graph(
                     anyhow::anyhow!("Node {:?} does not exist", name)
                         .context("extract_subtree: invalid node name"),
                 ));
@@ -711,7 +713,7 @@ where
             .collect();
 
         if !self.site_index_network.is_connected_subset(&node_indices) {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!("Specified nodes do not form a connected subtree")
                     .context("extract_subtree: nodes must be connected"),
             ));
@@ -873,7 +875,7 @@ where
         // Verify that replacement has the same topology (nodes and edges)
         // Note: site index network may differ due to bond dimension changes in truncation
         if !current_subtree.same_topology(replacement) {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!(
                     "Replacement TreeTN does not have the same topology as the current subtree"
                 )

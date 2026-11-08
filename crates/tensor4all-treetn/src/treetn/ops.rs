@@ -132,7 +132,7 @@ where
     pub fn log_norm(&mut self) -> std::result::Result<f64, TreeTNOperationError> {
         let n = self.node_count();
         if n == 0 {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!("Cannot compute log_norm of empty TreeTN")
                     .context("log_norm: network must have at least one node"),
             ));
@@ -426,7 +426,7 @@ where
             return Ok(AnyScalar::new_real(0.0));
         }
         if !self.share_equivalent_site_index_network(other) {
-            return Err(TreeTNOperationError::from(anyhow::anyhow!(
+            return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
                 "inner: TreeTNs must have the same topology and site indices"
             )));
         }
@@ -716,7 +716,7 @@ where
         <T::Index as IndexLike>::Id: Ord,
     {
         if values.len() != indices.len() {
-            return Err(TreeTNOperationError::from(anyhow::anyhow!(
+            return Err(TreeTNOperationError::index_out_of_bounds(anyhow::anyhow!(
                 "TreeTN::evaluate_point: values.len() ({}) != indices.len() ({})",
                 values.len(),
                 indices.len()
@@ -893,7 +893,7 @@ where
     ) -> std::result::Result<f64, TreeTNOperationError> {
         let n = self.node_count();
         if n == 0 {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!("Cannot compute log_norm of empty TreeTN")
                     .context("log_norm_on_session: network must have at least one node"),
             ));

@@ -88,7 +88,7 @@ fn the_context_entry_computes_what_the_plain_entry_computes() {
     let pivots = vec![vec![0usize; sites]];
     let context = context_with_workers(1);
 
-    let plain = crossinterpolate2::<f64, _, _, _>(
+    let plain = crossinterpolate2::<f64, _, _, _, _>(
         real_oracle(sites),
         dims.clone(),
         graph.clone(),
@@ -99,7 +99,7 @@ fn the_context_entry_computes_what_the_plain_entry_computes() {
         &mut (),
     )
     .expect("plain run");
-    let in_context = crossinterpolate2_in::<f64, _, _, _>(
+    let in_context = crossinterpolate2_in::<f64, _, _, _, _>(
         real_oracle(sites),
         dims,
         graph,
@@ -157,7 +157,7 @@ fn complex_and_rank_capped_runs_agree_between_the_entries() {
             .collect())
     };
 
-    let plain = crossinterpolate2::<Complex64, _, _, _>(
+    let plain = crossinterpolate2::<Complex64, _, _, _, _>(
         complex_oracle,
         dims.clone(),
         graph.clone(),
@@ -168,7 +168,7 @@ fn complex_and_rank_capped_runs_agree_between_the_entries() {
         &mut (),
     )
     .expect("plain run");
-    let in_context = crossinterpolate2_in::<Complex64, _, _, _>(
+    let in_context = crossinterpolate2_in::<Complex64, _, _, _, _>(
         complex_oracle,
         dims,
         graph,
@@ -202,7 +202,7 @@ fn an_all_zero_sample_fails_the_same_way_through_both_entries() {
         Ok(vec![0.0; batch.n_points()])
     };
 
-    let plain = crossinterpolate2::<f64, _, _, _>(
+    let plain = crossinterpolate2::<f64, _, _, _, _>(
         zero,
         dims.clone(),
         graph.clone(),
@@ -213,7 +213,7 @@ fn an_all_zero_sample_fails_the_same_way_through_both_entries() {
         &mut (),
     )
     .expect_err("an all-zero sample is refused");
-    let in_context = crossinterpolate2_in::<f64, _, _, _>(
+    let in_context = crossinterpolate2_in::<f64, _, _, _, _>(
         zero,
         dims,
         graph,

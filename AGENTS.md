@@ -136,15 +136,18 @@ not a cleanup.
 
 ### Documented exceptions
 
-Two public shapes stay on `anyhow` for now; a reviewer should not ask for them
-to change without reopening this policy.
+One public shape stays on `anyhow` for now; a reviewer should not ask for it to
+change without reopening this policy.
 
-- The cross-interpolation callback (`crossinterpolate2*`,
-  `MultiIndexCache::evaluate_batched`). The error type belongs to the caller, so
-  a typed error would force every callback author to adopt our enum.
 - `pub source: anyhow::Error` on the existing operation errors (`Hdf5Error`,
-  `AnyScalarError`, `TreeTNOperationError`). Replacing it with a typed source is
-  part of each crate conversion in item 2 above, not a separate change.
+  `AnyScalarError`). Replacing it with a typed source is part of each crate
+  conversion in item 2 above, not a separate change.
+
+The public batch callbacks (`crossinterpolate2*`,
+`MultiIndexCache::evaluate_batched`) are no longer an exception: their bound is
+`E: Into<anyhow::Error>`, so a caller returns its own error type and recovers it
+from the source chain. `anyhow` there is an internal choice, not the caller's
+obligation (#1023).
 
 ### C API Error Handling
 

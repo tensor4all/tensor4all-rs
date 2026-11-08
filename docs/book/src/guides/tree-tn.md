@@ -148,7 +148,8 @@ still grow with the point count, and temporary memory depends on bond ranks.
 An automatic contraction center is chosen using the first internal batch;
 pin `center` when the workload has a known favorable contraction direction.
 
-Persistent message payloads default to 8 MiB per directed edge, and prepared
+Persistent message payloads default to 64 MiB per evaluator, shared by its
+directed-edge caches rather than split evenly between them, and prepared
 branch slices default to 32 MiB per scalar kind. The existing byte-budget
 options can disable retention with `0` or deliberately permit unlimited
 retention with `usize::MAX`. Budgets account for logical payloads, excluding
