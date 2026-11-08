@@ -113,6 +113,8 @@ fn two_pass_factorize<T: Scalar>(
 trait TestReal: Scalar + std::fmt::LowerExp {
     /// A value whose square is a non-zero sub-normal of this type.
     const SQUARE_SUBNORMAL: Self;
+    /// A finite value whose square overflows to infinity in this type.
+    const SQUARE_OVERFLOW: Self;
     /// A sub-normal value (its square underflows to zero).
     const SUBNORMAL: Self;
     const NAN: Self;
@@ -125,6 +127,7 @@ trait TestReal: Scalar + std::fmt::LowerExp {
 
 impl TestReal for f64 {
     const SQUARE_SUBNORMAL: Self = 1e-160;
+    const SQUARE_OVERFLOW: Self = 1e160;
     const SUBNORMAL: Self = 1e-310;
     const NAN: Self = f64::NAN;
     const INFINITY: Self = f64::INFINITY;
@@ -144,6 +147,7 @@ impl TestReal for f64 {
 
 impl TestReal for f32 {
     const SQUARE_SUBNORMAL: Self = 1e-20;
+    const SQUARE_OVERFLOW: Self = 1e20;
     const SUBNORMAL: Self = 1e-42;
     const NAN: Self = f32::NAN;
     const INFINITY: Self = f32::INFINITY;
@@ -221,7 +225,12 @@ fn matrix_of<T: TestReal>(family: usize, nrows: usize, ncols: usize, g: &mut Gen
             }
         }
         4 => {
-            let i = at(g);
+            // NaN where the largest magnitude was (its first position, column-major).
+            let largest = data.iter().map(|v| v.abs_val()).fold(0.0, f64::max);
+            let i = data
+                .iter()
+                .position(|v| v.abs_val() == largest)
+                .unwrap_or(0);
             data[i] = T::NAN;
             for v in data.iter_mut().filter(|v| !v.is_nan_value()) {
                 *v = *v * T::of(0.5);
@@ -395,6 +404,56 @@ fn subnormal_square_tie<T: TestReal>() {
     let r = two_pass_factorize(&mut reference, RrLUOptions::default()).unwrap();
     assert_eq!((f.n_pivot, &f.col_permutation), (2, &r.col_permutation));
     assert_eq!(r.col_permutation, [0, 2, 1]);
+}
+
+/// #1185: finite entries whose squares overflow to infinity. The fast path's
+/// squares are all `inf`, so the kernel must fall back; the robust scan compares
+/// magnitudes and picks `2a` over `a`.
+fn overflowing_square_tie<T: TestReal>() {
+    let a = T::SQUARE_OVERFLOW;
+    let b = a * T::of(2.0);
+    assert!(a.abs_sq() == f64::INFINITY && b.abs_val().is_finite());
+    let zero = T::of(0.0);
+    let original = vec![a * T::of(1e10), zero, zero, a, zero, b];
+    let mut fused = original.clone();
+    let found = update_trailing_submatrix_with_argmax(&mut fused, 2, 3, 0);
+    assert!(found.is_none(), "an infinite squared maximum falls back");
+    let mut reference = original.clone();
+    two_pass_update(&mut reference, 2, 3, 0);
+    assert_same_data(&fused, &reference, "overflowing squares");
+    let (row, col, _) = submatrix_argmax_col_major(&reference, 2, 3, 1, 2, 1, 3);
+    assert_eq!((row, col), (1, 2), "the robust scan picks 2a");
+
+    let mut fused = Matrix::from_col_major_vec(2, 3, original.clone());
+    let mut reference = Matrix::from_col_major_vec(2, 3, original);
+    let f = factorize_validated_in_place(&mut fused, RrLUOptions::default()).unwrap();
+    let r = two_pass_factorize(&mut reference, RrLUOptions::default()).unwrap();
+    assert_eq!((f.n_pivot, &f.col_permutation), (2, &r.col_permutation));
+    assert_eq!(r.col_permutation, [0, 2, 1]);
+}
+
+#[test]
+fn overflowing_square_ties_fall_back_for_f64() {
+    overflowing_square_tie::<f64>();
+}
+
+#[test]
+fn overflowing_square_ties_fall_back_for_f32() {
+    overflowing_square_tie::<f32>();
+}
+
+/// #1185: the "NaN at the largest entry" family puts the NaN where the largest
+/// magnitude was.
+#[test]
+fn nan_family_replaces_the_largest_entry() {
+    let mut g = Gen(2);
+    let data = matrix_of::<f64>(4, 2, 2, &mut g);
+    let mut g = Gen(2);
+    let before = matrix_of::<f64>(0, 2, 2, &mut g);
+    let largest = before.iter().map(|v| v.abs()).fold(0.0, f64::max);
+    let i = before.iter().position(|v| v.abs() == largest).unwrap();
+    assert!(data[i].is_nan(), "{before:?} -> {data:?}");
+    assert_eq!(data.iter().filter(|v| v.is_nan()).count(), 1);
 }
 
 #[test]
