@@ -1129,6 +1129,24 @@ fn branch_slice_budget_zero_is_raised_below_the_floor_and_honoured_above_it() {
     let bits = |values: &[f64]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
     assert_eq!(bits(&below_floor_values), bits(&zero_values));
     assert_eq!(bits(&above_floor_values), bits(&zero_values));
+    // A budget that is not a whole number of slices must stop at the last slice that fits: 6048 B is three and a
+    // half f64 slices, so three fit and the fourth (6912 B) does not. An admission test written as
+    // `retained_bytes < max_bytes` instead of `retained_bytes + payload <= max_bytes` takes the fourth here, and
+    // only a budget between multiples of the slice size can see that.
+    let mut partial = evaluator(floor_f64 + slice_f64 / 2);
+    let partial_values = partial
+        .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(
+        partial.prepared_branch_slices_f64.max_bytes,
+        floor_f64 + slice_f64 / 2
+    );
+    assert_eq!(partial.prepared_branch_slices_f64.slices.len(), 3);
+    assert_eq!(
+        partial.prepared_branch_slices_f64.retained_bytes(),
+        3 * slice_f64
+    );
+    assert_eq!(bits(&partial_values), bits(&zero_values));
 
     // Complex64 tree: the same three regimes with twice the bytes per entry.
     let (complex_tree, complex_indices) =
@@ -1204,6 +1222,25 @@ fn branch_slice_budget_zero_is_raised_below_the_floor_and_honoured_above_it() {
     );
     assert_eq!(
         complex_bits(&complex_above_floor_values),
+        complex_bits(&complex_zero_values)
+    );
+
+    // The same half-slice budget for Complex64: 12096 B is three and a half 3456 B slices.
+    let mut complex_partial = complex_evaluator(floor_c64 + slice_c64 / 2);
+    let complex_partial_values = complex_partial
+        .evaluate_batched_typed::<Complex64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(
+        complex_partial.prepared_branch_slices_c64.max_bytes,
+        floor_c64 + slice_c64 / 2
+    );
+    assert_eq!(complex_partial.prepared_branch_slices_c64.slices.len(), 3);
+    assert_eq!(
+        complex_partial.prepared_branch_slices_c64.retained_bytes(),
+        3 * slice_c64
+    );
+    assert_eq!(
+        complex_bits(&complex_partial_values),
         complex_bits(&complex_zero_values)
     );
 }
