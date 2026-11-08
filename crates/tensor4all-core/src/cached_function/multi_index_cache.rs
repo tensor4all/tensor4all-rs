@@ -196,8 +196,9 @@ pub const DEFAULT_RETAINED_BYTE_LIMIT: usize = 256 * 1024 * 1024;
 /// and an evicted point is simply evaluated again if asked for;
 /// [`Self::evicted_entries`] counts them. [`Self::retained_bytes`] is an upper
 /// bound on both tables, from their capacities: buckets × (key + value + 1
-/// control byte), plus one 16-byte group of control bytes (exact on x86_64, 8
-/// bytes over on targets with 8-byte groups such as aarch64). While a table grows, the outgoing table
+/// control byte), plus one 16-byte group of control bytes per table (exact on
+/// x86_64; on targets with 8-byte groups such as aarch64, 8 bytes over per
+/// allocated generation, so up to 16). While a table grows, the outgoing table
 /// (half the new one's buckets) is alive next to the new one, so the transient
 /// peak is at most 1.5 × the limit + 8 bytes (half a control group); a limit of
 /// 152 bytes peaks at 236 accounted bytes for `f64` values. Allocator overhead and heap payload
@@ -978,8 +979,8 @@ where
     /// byte) plus one group of control bytes, for both generations.
     ///
     /// Computed from the tables' capacities with a 16-byte control group, an
-    /// upper bound on the bytes they hold (exact on x86_64, 8 bytes over on
-    /// targets with 8-byte groups). It excludes allocator overhead and any heap
+    /// upper bound on the bytes they hold (exact on x86_64; on targets with
+    /// 8-byte groups, 8 bytes over per allocated generation, so up to 16). It excludes allocator overhead and any heap
     /// payload reachable from a value.
     ///
     /// # Examples

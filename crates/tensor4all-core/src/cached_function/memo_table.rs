@@ -5,8 +5,8 @@ use rustc_hash::FxHashMap;
 use std::hash::Hash;
 
 /// Control bytes past the last bucket, counted at hashbrown's widest group (SSE2,
-/// 16): exact on x86_64, 8 bytes more than a NEON target's 8-byte group, so the
-/// accounting is an upper bound there.
+/// 16): exact on x86_64, 8 bytes more per allocated table than a NEON target's
+/// 8-byte group, so the accounting is an upper bound there.
 const GROUP_WIDTH: usize = 16;
 
 /// What [`MemoTable::insert`] did with an entry.
@@ -29,7 +29,8 @@ pub(crate) struct Inserted {
 ///
 /// Bytes are an upper bound on the tables themselves, from their capacities:
 /// buckets × (`size_of::<(K, V)>()` + 1 control byte) + one 16-byte group of
-/// trailing control bytes (exact with SSE2 groups, 8 bytes over on NEON targets).
+/// trailing control bytes (exact with SSE2 groups, 8 bytes over per allocated
+/// table, so up to 16 for the two generations, on NEON targets).
 /// During a growth the outgoing table is alive next to the new one: both tables
 /// fit the limit afterwards and the outgoing one is half the new one plus half a
 /// group, so the transient peak is at most 1.5 × limit + `GROUP_WIDTH` / 2.
