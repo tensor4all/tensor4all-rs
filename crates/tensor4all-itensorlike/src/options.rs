@@ -191,7 +191,10 @@ pub enum FitInitializer {
     /// No term of dimension χ_A·χ_B is ever formed: each output tensor is an
     /// independent random tensor of bond dimension [`bond_dim`](Self::LowRankRandom::bond_dim).
     /// With `max_bond_dim = None` and an SVD truncation tolerance, the sweeps
-    /// grow the ranks adaptively as required.
+    /// grow the ranks adaptively as required. Honoured by the `contract` fit path;
+    /// `contract_in` builds the zip-up start and ignores this
+    /// initializer, so the memory guarantee above does not hold
+    /// there.
     LowRankRandom {
         /// Initial bond dimension of every edge (`1` = start as small as
         /// possible and let the sweeps grow it).
