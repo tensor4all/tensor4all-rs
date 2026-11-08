@@ -825,3 +825,34 @@ fn bicgstab_longer_nonsymmetric_recurrence_all_scalar_types() {
         1e-5,
     );
 }
+
+#[test]
+fn bicgstab_static_options_validation() {
+    BiCgStabOptions {
+        max_iter: 0,
+        rtol: 0.0,
+        atol: 0.0,
+    }
+    .validate()
+    .unwrap();
+    for invalid in [f64::NAN, f64::INFINITY, -1.0] {
+        for options in [
+            BiCgStabOptions {
+                rtol: invalid,
+                ..BiCgStabOptions::default()
+            },
+            BiCgStabOptions {
+                atol: invalid,
+                ..BiCgStabOptions::default()
+            },
+        ] {
+            assert!(matches!(
+                options.validate(),
+                Err(KrylovError::InvalidOptions {
+                    solver: "bicgstab",
+                    ..
+                })
+            ));
+        }
+    }
+}

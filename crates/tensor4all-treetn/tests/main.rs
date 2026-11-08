@@ -21,6 +21,7 @@ mod heavy_pairwise_sum;
 mod issue192_regression;
 mod issue695_zipup_max_rank;
 mod linsolve;
+mod linsolve_local_solver;
 mod linsolve_mpo_xb;
 mod linsolve_one_site;
 mod ops;

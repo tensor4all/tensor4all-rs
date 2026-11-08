@@ -119,8 +119,19 @@ This skill is for *using* the library. If the working tree is the tensor4all-rs 
 ## Linear solves
 
 `tensor4all_treetn::square_linsolve` and `tensor4all_itensorlike::linsolve`
-solve `(a0 I + a1 A)x = b` with projected GMRES. Their `LinsolveOptions`
-default to two-site MALS (`nsite=2`), which can adapt ranks by SVD. Use
+solve `(a0 I + a1 A)x = b`. Both `LinsolveOptions` types default to two-site
+MALS (`nsite=2`) with projected GMRES as the local solver.
+
+The local solver is chosen with
+`.with_local_solver(LocalSolver::Cg(CgOptions::default()))` or
+`LocalSolver::BiCgStab(BiCgStabOptions::default())`; `tensor4all-itensorlike`
+re-exports `LocalSolver`, `CgOptions` and `BiCgStabOptions`. CG requires the
+effective affine operator to be HPD. CG/BiCGSTAB use their native tolerances
+and budgets, and the `gmres_*` controls must keep their defaults with them
+(changed values are rejected). Core breakdown and operation errors propagate;
+no other solver is tried.
+
+Two-site MALS can adapt ranks by SVD. Use
 `.with_nsite(1)` for one-site ALS and single-node systems: exact QR transports
 the center, ranks cannot grow, and redundant dimensions may shrink. Supply a
 sufficient initial bond space. Explicit bond caps/SVD policies are invalid in

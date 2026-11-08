@@ -65,6 +65,40 @@ impl Default for CgOptions {
     }
 }
 
+impl CgOptions {
+    /// Validate finite, nonnegative static tolerances without applying an operator.
+    ///
+    /// A zero iteration budget and zero tolerances are valid. The RHS-dependent
+    /// stopping threshold is checked when solving.
+    ///
+    /// # Errors
+    /// Returns [`KrylovError::InvalidOptions`] when a tolerance is negative or
+    /// non-finite.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::krylov::{CgOptions, KrylovError};
+    /// let options = CgOptions { rtol: f64::NAN, ..Default::default() };
+    /// assert!(matches!(options.validate(), Err(KrylovError::InvalidOptions { .. })));
+    /// assert!(CgOptions::default().validate().is_ok());
+    /// ```
+    pub fn validate(&self) -> std::result::Result<(), KrylovError> {
+        for (name, tolerance) in [
+            ("rtol", self.rtol),
+            ("atol", self.atol),
+            ("hermitian_tol", self.hermitian_tol),
+        ] {
+            if !tolerance.is_finite() || tolerance < 0.0 {
+                return Err(KrylovError::InvalidOptions {
+                    solver: "cg",
+                    reason: format!("{name} must be finite and nonnegative"),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Solution and true-residual diagnostics returned by [`cg`].
 /// As with [`super::HermitianLanczosResult`], `residual_norm` is an absolute
 /// norm; [`super::GmresResult`] instead reports a relative norm by default.
@@ -172,19 +206,7 @@ where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
 {
-    for (name, tolerance) in [
-        ("rtol", options.rtol),
-        ("atol", options.atol),
-        ("hermitian_tol", options.hermitian_tol),
-    ] {
-        if !tolerance.is_finite() || tolerance < 0.0 {
-            return Err(KrylovError::InvalidOptions {
-                solver: "cg",
-                reason: format!("{name} must be finite and nonnegative"),
-            }
-            .into());
-        }
-    }
+    options.validate()?;
     b.validate()?;
     x0.validate()?;
     let b_norm = finite_norm(b, "cg", 0, "right-hand-side norm")?;
