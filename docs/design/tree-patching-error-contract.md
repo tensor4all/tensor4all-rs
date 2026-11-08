@@ -1293,7 +1293,7 @@ products agree, and `qr` splits above `m*n ~ 16k` elements.
   **The dense products, per scalar type (#1192).** Recorded 2026-11-08 on the
   same host by `crates/tensor4all-core/tests/thread_count_product_digest.rs --
   --nocapture`, with the worker count set per cell by
-  `CpuBackend::with_threads(1|2|4|8)` rather than `RAYON_NUM_THREADS`, at `64^3`,
+  `CpuBackend::with_threads(1|2|8)` rather than `RAYON_NUM_THREADS`, at `64^3`,
   `58x58x128`, `145x145x128`, `165x151x128`, `256^3` and `500^3`. `f64`
   `mat_mul` and `IdxTensor::contract_pair` are bitwise identical at every pair of
   the counts recorded on that host, `1`, `2` and `8`, so the `f64` products are
@@ -1340,9 +1340,9 @@ products agree, and `qr` splits above `m*n ~ 16k` elements.
   alive).
 
   `a_fixed_thread_count_repeats_the_product_bits` checks within-process
-  repeatability of both products at each of 1, 2 and 8 workers (not fresh caller
-  threads, not a second process);
-  `thread_count_may_change_the_complex_product_bits_today` prints the record
+  repeatability of both products at each of 1, 2, 4 and 8 workers (not fresh caller
+  repeatability of both products at each of 1, 2, 4 and 8 workers (not fresh
+  caller threads, not a second process);
   above and asserts only the shape, finiteness, and four sampled entries against
   a sequential accumulation.
 
