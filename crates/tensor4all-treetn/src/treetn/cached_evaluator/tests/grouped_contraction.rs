@@ -1059,9 +1059,10 @@ fn small_positive_branch_slice_budget_still_retains_the_branching_slices() {
     );
 }
 
-/// A budget above the one-branching-tensor floor is used as requested (never replaced by an unbounded sentinel) and is
-/// still enforced: a readout that crosses two branching nodes prepares twice the floor, and the slices that would
-/// cross the budget are refused instead of retained. Values are bitwise those of the zero-budget route.
+/// The one-branching-tensor floor is a lower bound on the request, not a cap: a budget below it is raised to it, and a
+/// budget above it is kept as requested. Retention is then bounded by that requested budget - a readout crossing two
+/// branching nodes prepares twice the floor, and the slices that would pass the budget are refused instead of
+/// retained. Values are bitwise those of the zero-budget route.
 #[test]
 fn oversized_branch_slice_budget_is_kept_as_requested_and_still_caps_retention() {
     let (tree, indices) = two_branch_tree_of(|value| value);
@@ -1086,8 +1087,10 @@ fn oversized_branch_slice_budget_is_kept_as_requested_and_still_caps_retention()
     let (tensor_f64, slice_f64, total_f64) = (5184, 1728, 10368);
     let (tensor_c64, slice_c64, total_c64) = (10368, 3456, 20736);
 
-    // An oversized budget is kept verbatim for both scalar kinds, not replaced by an unbounded sentinel.
-    for budget in [1 << 40, usize::MAX] {
+    // An oversized budget is kept verbatim for both scalar kinds: the one-branching-tensor floor raises a smaller
+    // request and never lowers a larger one. `usize::MAX / 2` rather than a literal shift, which overflows a 32-bit
+    // `usize`.
+    for budget in [usize::MAX / 2, usize::MAX] {
         assert_eq!(
             evaluator(budget).prepared_branch_slices_f64.max_bytes,
             budget
@@ -1111,7 +1114,7 @@ fn oversized_branch_slice_budget_is_kept_as_requested_and_still_caps_retention()
         3 * slice_f64
     );
 
-    // A budget covering every visited slice retains all six, so the ceiling follows the requested budget.
+    // A budget covering every visited slice retains all six, so retained bytes follow the requested budget.
     let mut full = evaluator(total_f64);
     let full_values = full
         .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
@@ -1187,7 +1190,8 @@ fn oversized_branch_slice_budget_is_kept_as_requested_and_still_caps_retention()
 }
 
 /// Two degree-three nodes, so one readout prepares more physical-slice bytes than one branching tensor holds:
-/// 0 - 1 - {2 - {4, 5}, 3}. Every bond has dimension 6 and every physical site dimension 3.
+/// 0 - 1 - {2 - {4, 5}, 3}. Every bond has dimension 6; the two branching nodes carry a physical site of dimension 3
+/// and each of the four leaves one of dimension 4.
 fn two_branch_tree_of<T: tensor4all_core::TensorElement>(
     entry: impl Fn(f64) -> T,
 ) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
