@@ -145,10 +145,10 @@ fn optimize_rejects_invalid_options_before_callback() {
 #[test]
 fn api_crossinterpolate2_rejects_invalid_options_before_callback() {
     let calls = std::cell::Cell::new(0);
-    let error = crate::crossinterpolate2::<f64, _, _, _>(
+    let error = crate::crossinterpolate2::<f64, _, _, _, _>(
         |_| {
             calls.set(calls.get() + 1);
-            Ok(vec![1.0])
+            Ok::<_, anyhow::Error>(vec![1.0])
         },
         vec![2, 2],
         two_site_graph(),
@@ -509,17 +509,18 @@ fn capped_sparse_chain_with_global_pivots_stops_on_swept_state() {
     );
 
     // The public entry point from the issue report succeeds as well.
-    let crate::TreeTciRunResult { treetn, ranks, .. } = crate::crossinterpolate2::<f64, _, _, _>(
-        evaluate,
-        vec![4; N_SITES],
-        TreeTciGraph::linear_chain(N_SITES).unwrap(),
-        pivots,
-        options,
-        None,
-        &crate::DefaultProposer,
-        &mut (),
-    )
-    .unwrap();
+    let crate::TreeTciRunResult { treetn, ranks, .. } =
+        crate::crossinterpolate2::<f64, _, _, _, _>(
+            evaluate,
+            vec![4; N_SITES],
+            TreeTciGraph::linear_chain(N_SITES).unwrap(),
+            pivots,
+            options,
+            None,
+            &crate::DefaultProposer,
+            &mut (),
+        )
+        .unwrap();
     assert!(ranks.iter().all(|&rank| rank <= 8));
     assert!(treetn.link_dims().iter().all(|&dim| dim <= 8));
 }

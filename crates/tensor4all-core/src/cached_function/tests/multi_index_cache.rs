@@ -315,9 +315,13 @@ fn assert_routes_agree(
         let point_values = by_points
             .evaluate_batched(ColMajorArrayRef::new(&flat, &shape).unwrap(), |misses| {
                 let n_sites = misses.shape()[0];
-                Ok((0..misses.shape()[1])
-                    .map(|column| target(&misses.data()[column * n_sites..(column + 1) * n_sites]))
-                    .collect())
+                Ok::<_, anyhow::Error>(
+                    (0..misses.shape()[1])
+                        .map(|column| {
+                            target(&misses.data()[column * n_sites..(column + 1) * n_sites])
+                        })
+                        .collect(),
+                )
             })
             .unwrap();
         let key_values = by_keys
@@ -505,7 +509,7 @@ fn a_failed_batch_matches_the_point_route_and_inserts_nothing() {
     ));
     let error = by_points
         .evaluate_batched(ColMajorArrayRef::new(&flat, &shape).unwrap(), |_| {
-            Ok(vec![1.0])
+            Ok::<_, anyhow::Error>(vec![1.0])
         })
         .unwrap_err();
     assert!(matches!(

@@ -17,8 +17,8 @@ use crate::batch::{assemble_candidate_points, candidate_entries};
 /// # Examples
 /// ```
 /// use tensor4all_treetci::{crossinterpolate2, DefaultProposer, TreeTciGraph, TreeTciOptions};
-/// let result = crossinterpolate2::<f64, _, _, _>(
-///     |batch| Ok(vec![2.0; batch.n_points()]), vec![2, 2],
+/// let result = crossinterpolate2::<f64, _, _, _, _>(
+///     |batch| Ok::<_, anyhow::Error>(vec![2.0; batch.n_points()]), vec![2, 2],
 ///     TreeTciGraph::linear_chain(2)?, vec![vec![0, 0]],
 ///     TreeTciOptions { evaluation_cache_bytes: Some(1024), seed: Some(0),
 ///         ..Default::default() }, None, &DefaultProposer, &mut ())?;

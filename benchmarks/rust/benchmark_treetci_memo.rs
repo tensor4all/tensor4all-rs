@@ -32,29 +32,31 @@ fn main() -> Result<()> {
                     vec![2; n_sites]
                 };
                 let started = Instant::now();
-                let result = crossinterpolate2::<f64, _, _, _>(
+                let result = crossinterpolate2::<f64, _, _, _, _>(
                     |batch: GlobalIndexBatch<'_>| {
-                        Ok(batch
-                            .data()
-                            .chunks_exact(batch.n_sites())
-                            .map(|point| {
-                                let x = point
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(i, &b)| b as f64 / (i + 1) as f64)
-                                    .sum::<f64>();
-                                if expensive {
-                                    // Fixed synthetic oracle cost, independent of grouping and memo.
-                                    // Black-box intermediates keep the compiler from eliding the work.
-                                    let mut work = x;
-                                    for _ in 0..1024 {
-                                        work = black_box(work.sin() + 0.2);
+                        Ok::<_, anyhow::Error>(
+                            batch
+                                .data()
+                                .chunks_exact(batch.n_sites())
+                                .map(|point| {
+                                    let x = point
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, &b)| b as f64 / (i + 1) as f64)
+                                        .sum::<f64>();
+                                    if expensive {
+                                        // Fixed synthetic oracle cost, independent of grouping and memo.
+                                        // Black-box intermediates keep the compiler from eliding the work.
+                                        let mut work = x;
+                                        for _ in 0..1024 {
+                                            work = black_box(work.sin() + 0.2);
+                                        }
+                                        black_box(work);
                                     }
-                                    black_box(work);
-                                }
-                                2.0 + x.cos()
-                            })
-                            .collect())
+                                    2.0 + x.cos()
+                                })
+                                .collect(),
+                        )
                     },
                     dims,
                     TreeTciGraph::new(n_sites, &edges)?,

@@ -188,7 +188,7 @@ fn crossinterpolate(
                 )
             };
             catch_unwind(AssertUnwindSafe(|| {
-                crossinterpolate2::<f64, _, _, _>(
+                crossinterpolate2::<f64, _, _, _, _>(
                     evaluate_fn,
                     local_dims,
                     graph,
@@ -218,7 +218,7 @@ fn crossinterpolate(
                 )
             };
             catch_unwind(AssertUnwindSafe(|| {
-                crossinterpolate2::<Complex64, _, _, _>(
+                crossinterpolate2::<Complex64, _, _, _, _>(
                     evaluate_fn,
                     local_dims,
                     graph,

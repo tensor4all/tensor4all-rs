@@ -400,6 +400,11 @@ where
     /// Scratch consists of one flat miss buffer, integer keys and result slots,
     /// bounded by the input batch; it is released after this call.
     ///
+    /// The callback error type is the caller's: any `Error + Send + Sync +
+    /// 'static` reaches [`CachedBatchError::Evaluation`] unchanged, so the
+    /// caller recovers its own type with `source().downcast_ref()`. Returning
+    /// `anyhow::Result` remains one option, not a requirement.
+    ///
     /// # Errors
     /// Returns [`CachedBatchError`] for invalid batch shape or coordinates,
     /// callback failure, or a callback result with the wrong length.
@@ -412,20 +417,22 @@ where
     /// let values = cache.evaluate_batched(
     ///     ColMajorArrayRef::new(&[2, 1, 2], &[1, 3])?, |misses| {
     ///         evaluated += misses.shape()[1];
-    ///         Ok(misses.data().iter().map(|&i| 10.0 * i as f64).collect())
+    ///         Ok::<_, std::convert::Infallible>(
+    ///             misses.data().iter().map(|&i| 10.0 * i as f64).collect())
     ///     })?;
     /// assert_eq!(values, vec![20.0, 10.0, 20.0]);
     /// assert_eq!(evaluated, 2);
     /// assert_eq!(cache.len(), 2);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn evaluate_batched<F>(
+    pub fn evaluate_batched<F, E>(
         &mut self,
         indices: ColMajorArrayRef<'_, I>,
         evaluate: F,
     ) -> Result<Vec<V>, CachedBatchError>
     where
-        F: FnOnce(ColMajorArrayRef<'_, I>) -> anyhow::Result<Vec<V>>,
+        F: FnOnce(ColMajorArrayRef<'_, I>) -> Result<Vec<V>, E>,
+        E: Into<anyhow::Error>,
     {
         if indices.ndim() != 2 {
             return Err(error::CacheKeyError::InvalidTensorDim {
@@ -1096,7 +1103,7 @@ fn validate_index<I: IndexInt>(
 // INVARIANT: These are disjoint fields of one cache plus its batch and callback;
 // grouping the borrowed fields would add an otherwise unused state type.
 #[allow(clippy::too_many_arguments)]
-fn evaluate_encoded_batch<K, V, I, F>(
+fn evaluate_encoded_batch<K, V, I, F, E>(
     cache: &mut FxHashMap<K, V>,
     coeffs: &[K],
     local_dims: &[usize],
@@ -1111,7 +1118,8 @@ where
     K: CacheKey,
     V: Clone,
     I: IndexInt,
-    F: FnOnce(ColMajorArrayRef<'_, I>) -> anyhow::Result<Vec<V>>,
+    F: FnOnce(ColMajorArrayRef<'_, I>) -> Result<Vec<V>, E>,
+    E: Into<anyhow::Error>,
 {
     let n_sites = local_dims.len();
     let n_points = indices.shape()[1];
@@ -1149,7 +1157,7 @@ where
     } else {
         let shape = [n_sites, n_misses];
         let values = evaluate(ColMajorArrayRef::new(&miss_data, &shape)?)
-            .map_err(CachedBatchError::Evaluation)?;
+            .map_err(|error| CachedBatchError::Evaluation(error.into()))?;
         if values.len() != n_misses {
             return Err(error::CacheKeyError::BatchResultLength {
                 expected: n_misses,

@@ -7,6 +7,7 @@ mod common;
 
 mod advanced_quantics;
 mod assembly_error_paths;
+mod callback_error_type;
 mod continuation;
 mod edge_visitor_passes;
 mod evaluation_memo;

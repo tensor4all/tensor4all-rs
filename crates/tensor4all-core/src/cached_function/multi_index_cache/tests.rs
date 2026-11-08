@@ -12,7 +12,7 @@ fn full_cache_batch_does_not_grow_persistent_capacity() {
     let out = cache
         .evaluate_batched(
             ColMajorArrayRef::new(&points, &[1, 127]).unwrap(),
-            |misses| Ok(misses.data().iter().map(|&i| i as f64).collect()),
+            |misses| Ok::<_, anyhow::Error>(misses.data().iter().map(|&i| i as f64).collect()),
         )
         .unwrap();
     assert_eq!(out, points.iter().map(|&i| i as f64).collect::<Vec<_>>());
