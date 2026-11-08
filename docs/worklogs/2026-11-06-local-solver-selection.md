@@ -126,11 +126,16 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   last in one step, so `from_bits(2) / 3` rounds once to `from_bits(1)`.
 - `validate_local_solver` and the option, mapping and site-count checks at the
   start of `square_linsolve` return `TreeTNOperationError::InvalidConfiguration`.
+- Every solver-owned Krylov workspace (basis, Hessenberg columns, Givens
+  rotations, projected residual and matrix, back-substitution result) is
+  reserved with `try_reserve_exact`. Allocations made by the operator callback
+  and by vector operations, and the dense eigendecomposition of the projected
+  matrix in the backend, are outside the solver and still abort on failure.
 
 The counts below are from local runs (not CI), on macOS, of the commands listed
 with each count; they are not reproducible from the diff alone.
 
-Validation on the branch merged with main `af980a54`:
+Validation at `92fddf6e` (branch merged with main `af980a54`):
 
 - `cargo test -p tensor4all-core --lib krylov`: 121 passed, 553 filtered out
 - `cargo test -p tensor4all-treetn --lib linsolve`: 38 passed, 646 filtered out
@@ -139,7 +144,8 @@ Validation on the branch merged with main `af980a54`:
 - Doctests: `cargo test -p tensor4all-core --doc krylov` 21 passed (383 filtered out),
   `cargo test -p tensor4all-treetn --doc linsolve` 8 passed (197 filtered out),
   `cargo test -p tensor4all-itensorlike --doc` 37 passed.
-- `cargo clippy -p tensor4all-core -p tensor4all-treetn -p tensor4all-itensorlike --lib --tests`: no findings
+- `cargo fmt --all -- --check`: clean
+- `cargo clippy -p tensor4all-core -p tensor4all-treetn -p tensor4all-itensorlike --all-targets -- -D warnings`: no findings
 - `cargo clippy -p tensor4all-treetn -p tensor4all-itensorlike --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc`: no findings
 - `python3 scripts/repository-rules-review.py --base origin/main --worktree --dry-run --file-growth`: pass
 
