@@ -161,10 +161,19 @@ fn global_built_inputs_are_refused_with_a_typed_error() {
     let (a, b) = global_fixture();
     let context = one_thread_context();
     let error = contract_in(&a, &b, &src_options(), &context).unwrap_err();
-    let message = format!("{error}");
+    // `Display` prints one level; the provenance diagnostic is the root of the
+    // chain, which is read through `source()`.
+    let mut chain = vec![error.to_string()];
+    let mut current = std::error::Error::source(&error);
+    while let Some(link) = current {
+        chain.push(link.to_string());
+        current = link.source();
+    }
     assert!(
-        message.contains("different CPU eager context"),
-        "expected a provenance error, got: {message}"
+        chain
+            .iter()
+            .any(|link| link.contains("different CPU eager context")),
+        "expected a provenance error, got: {chain:?}"
     );
 }
 
