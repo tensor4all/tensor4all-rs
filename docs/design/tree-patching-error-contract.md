@@ -1273,7 +1273,7 @@ is not free and must not be claimed before it is measured:
   below).
 
   **Tier 2 is withdrawn (owner decision, 2026-11-08).** No operation may claim
-  cross-count identity, and the 2% adoption bar that previously decided whether
+  cross-count identity, and the adoption bar that previously decided whether
   to buy it (`#1162`) is withdrawn with it: there is no cost to trade against,
   because the property is not wanted anywhere in the stack. The records below
   stay as observations of what the kernels happen to do on a named host.
@@ -1876,43 +1876,34 @@ defaults reproduce M3 exactly.
    alone does not suffice for either scope. The choice sets whether the
    determinism tests also run in separate processes.
 
-   **Decided (user, 2026-10-03): same machine and build.** For a fixed seed,
-   a deterministic evaluator, and a deterministic engine, results are to be
-   bitwise identical on the same machine and build across threads and
-   thread counts, and across processes once a two-process CI test passes
-   (the same test binary run twice). There is no cross-machine promise; M8
-   (MPI) must state its own contract. This is the target; the current tested
-   state is recorded in [Determinism](#determinism): fresh threads within one
-   process, on `f64` trees with exactly one site per node. Until the local steps (c) and
-   (a) land, generic-path trees are not reproducible across threads, and the
-   two-process CI test does not exist yet.
+  **Decided (user, 2026-10-03, narrowed 2026-11-08): same machine and build.**
+  For a fixed seed, a deterministic evaluator, and a deterministic engine,
+  results are to be bitwise identical on the same machine and build **at a fixed
+  thread count**, across fresh threads and repeated runs, and across processes
+  once a two-process CI test passes (the same test binary run twice). The
+  cross-thread half of the 2026-10-03 decision is withdrawn (2026-11-08): it is
+  no longer a target, a goal or a cost decision, and no operation may claim it
+  (see [Determinism](#determinism) and the Tier 2 entry below). There is no
+  cross-machine promise; M8 (MPI) must state its own contract. The current
+  tested state is recorded in [Determinism](#determinism): fresh threads within
+  one process, on `f64` trees with exactly one site per node. Until the local
+  steps (c) and (a) land, generic-path trees are not reproducible across
+  threads, and the two-process CI test does not exist yet.
 
-   **Tiered 2026-11-08 (user, after #1162).** The target above is kept, but it
-   is split into what CI enforces and what is still a goal, because `qr`/`svd`
-   do not meet the cross-thread half and the document claimed they did:
+  **Tiered 2026-11-08 (user, after #1162, revised later the same day).** The
+  target above is split into what CI enforces and what was only ever observed:
 
-   - Tier 1 (enforced): bitwise identical at a **fixed thread count**, across
-     fresh threads, processes and repeated runs. The CI test pins the thread
-     count.
-   - Tier 2 (observed where it happens, not promised): identical **across
-     thread counts**. Present today, on the configurations recorded in
-     [Determinism](#determinism), in the `f64` dense products and the
-     elementwise/reduction kernels; absent from the `Complex64` products
-     (#1192) and from `qr`/`svd` above `m*n ~ 16k` elements, where the blocked
-     Householder partition follows the available parallelism. Every entry is an
-     observation about the host and provider named with it, not a promise for
-     another build.
-
-   **Tier 2 is decided per operation by measured cost, not adopted as a
-   target.** Making a parallel reduction or a blocked factorization
-   thread-count independent constrains the partition, and the constraint is
-   accepted only when it is free: within 2% at 1, 4 and 8 threads on the
-   deciding host, 5 repetitions, median. The bar is frozen as of 2026-11-08,
-   before any measurement, so that a later result cannot redefine it. Above
-   2%, the operation promises Tier 1 and the measurement is recorded in #1162.
-   Until such a measurement exists, no operation's rustdoc may claim Tier 2.
-   The narrowing here is a correction of this document, not a retreat from the
-   2026-10-03 decision about *which machine* the promise covers.
+  - Tier 1 (enforced): bitwise identical at a **fixed thread count**, across
+    fresh threads, processes and repeated runs. The CI test pins the thread
+    count.
+  - Tier 2 (withdrawn 2026-11-08): identical **across thread counts**. It was
+    recorded, never promised, and is now not pursued at all: cross-count
+    identity is not required anywhere in the stack, so the per-operation cost
+    bar that used to decide whether to buy it is withdrawn with it. The entries
+    under [Determinism](#determinism) stay as observations: the `f64` dense
+    products and the elementwise/reduction kernels happen to agree across
+    counts, `Complex64` products (#1192) and `qr`/`svd` above `m*n ~ 16k` do
+    not, and every entry belongs to the host and provider named with it.
 
 ## Implementation decisions
 
