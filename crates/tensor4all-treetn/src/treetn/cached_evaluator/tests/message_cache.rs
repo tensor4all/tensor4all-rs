@@ -959,6 +959,18 @@ fn message_cache_stays_correct_while_the_shared_budget_is_exhausted() {
         "the exhausted budget must release a previous rooting's columns"
     );
     assert!(retained_message_cache_bytes(&evaluator) <= evaluator.options.message_cache_max_bytes);
+    // The accounting must be exercised after real admissions: the other test in
+    // this file that compares the running total with a fresh sum only reserves
+    // against empty caches, so it compares 0 with 0.
+    let summed = retained_message_cache_bytes(&evaluator);
+    assert!(
+        evaluator.message_cache_retained_bytes > 0,
+        "admissions that retained a column must be accounted in the running total"
+    );
+    assert_eq!(
+        evaluator.message_cache_retained_bytes, summed,
+        "the running total must match the caches it mirrors after real admissions"
+    );
 }
 
 /// [AI Supplied] #1183: a warm hit is a use of the edge that served it.
