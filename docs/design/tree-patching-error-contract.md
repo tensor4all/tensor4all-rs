@@ -1272,16 +1272,11 @@ is not free and must not be claimed before it is measured:
   host showed a phase-level `svd` difference at `448x224` (see the record
   below).
 
-  **Whether an operation should acquire Tier 2 is a performance decision, made
-  per operation** (`#1162`): making the partition independent of the thread
-  count constrains how the work is split, and the constraint is only accepted
-  if it is free. Frozen bar, set 2026-11-08 before any such measurement: adopt
-  it for an operation only if the cost is within 2% at 1, 4 and 8 threads on
-  the deciding host, measured with the existing protocol (5 repetitions,
-  median). Above that, the operation keeps Tier 1 and the 2% figure is recorded
-  with the measurement so the trade-off can be revisited deliberately instead
-  of by drift. Tier 2 is therefore never a blanket promise, and no operation
-  may claim it in rustdoc until such a measurement exists.
+  **Tier 2 is withdrawn (owner decision, 2026-11-08).** No operation may claim
+  cross-count identity, and the 2% adoption bar that previously decided whether
+  to buy it (`#1162`) is withdrawn with it: there is no cost to trade against,
+  because the property is not wanted anywhere in the stack. The records below
+  stay as observations of what the kernels happen to do on a named host.
 
   Recorded 2026-11-08 at this head on `broccoli` (x86-64, 64 cores) by
   `crates/tensor4all-core/tests/thread_count_factorization_digest.rs --
@@ -1303,9 +1298,10 @@ is not free and must not be claimed before it is measured:
   --nocapture`, with the worker count set per cell by
   `CpuBackend::with_threads(1|2|4|8)` rather than `RAYON_NUM_THREADS`, at `64^3`,
   `58x58x128`, `145x145x128`, `165x151x128`, `256^3` and `500^3`. `f64`
-  `mat_mul` and `IdxTensor::contract_pair` are bitwise identical at every pair
-  of worker counts, so the `f64` products **have** Tier 2 on this host as an
-  observation. `Complex64` products are identical between 2 and 8 workers and
+  `mat_mul` and `IdxTensor::contract_pair` are bitwise identical at every pair of
+  the worker counts recorded on that host, `1`, `2` and `8`, so the `f64`
+  products **have** Tier 2 there as an observation. `Complex64` products are
+  identical between 2 and 8 workers and
   differ between 1 worker and either of them at **every** one of those shapes:
   the first differing element is index 0 (index 2 at `145x145x128`) and the
   largest difference grows with the shape, `1.3e-15` at `64^3` and `3.2e-14` at
