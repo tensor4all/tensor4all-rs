@@ -281,8 +281,9 @@ pub struct TreeTciOptions {
     /// construction with `CacheKeyError::Overflow`. Callback errors and wrong
     /// output lengths are never cached. The cache belongs to this run, is
     /// shared across updates/searches/final materialization, and is dropped
-    /// at return. Bytes count the tables (buckets, entries, control bytes) but
-    /// not allocator overhead, so they bound the memo's share of RSS, not RSS.
+    /// at return. Bytes count the retained tables (buckets, entries, control
+    /// bytes): the limit bounds those tables, not the transient per-call batch
+    /// buffers (which grow with the points of one call), and not RSS overall.
     pub evaluation_cache_bytes: Option<usize>,
 }
 

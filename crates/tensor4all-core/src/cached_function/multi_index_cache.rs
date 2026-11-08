@@ -174,7 +174,8 @@ pub enum CachedBatchError {
 /// The limit bounds the tables themselves (buckets, entries and control bytes),
 /// not a per-entry estimate. When a run needs to keep more distinct points than
 /// that, the oldest entries are evicted and re-evaluated if asked again, rather
-/// than memory growing without bound.
+/// than memory growing without bound. While a table grows the transient peak is
+/// at most 1.5 × the limit + 8 bytes (see [`MultiIndexCache`]).
 pub const DEFAULT_RETAINED_BYTE_LIMIT: usize = 256 * 1024 * 1024;
 
 /// A persistent cache that maps multi-indices to values through mixed-radix
@@ -312,7 +313,11 @@ where
     /// At the limit the oldest generation of entries is evicted
     /// ([`Self::evicted_entries`]) and the new entry is stored; an insertion is
     /// skipped ([`Self::dropped_inserts`]) only when the limit is below the
-    /// smallest table that holds one entry.
+    /// smallest table that holds one entry. While a table grows, the outgoing
+    /// table is alive next to the new one: see the type-level documentation for
+    /// the transient peak (1.5 × the limit + 8 bytes; 236 bytes at a limit of
+    /// 152). The limit bounds the retained tables, not the per-call batch
+    /// buffers.
     ///
     /// # Errors
     ///
