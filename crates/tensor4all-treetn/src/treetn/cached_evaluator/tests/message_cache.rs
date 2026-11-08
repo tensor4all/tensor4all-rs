@@ -39,20 +39,18 @@ fn assert_cache_capacity_and_clear_reuse<T: CachedEvaluatorTestScalar>() {
         &indices,
         CachedEvaluatorOptions {
             center: Some(1),
-            message_cache_max_bytes: one_column_bytes,
+            message_cache_max_bytes: 2 * one_column_bytes,
             ..Default::default()
         },
     )
     .unwrap();
     let bounded_result = bounded.evaluate_batched(points).unwrap();
     assert_typed_results::<T>(&bounded_result, &expected);
-    assert!(bounded
-        .message_caches
-        .values()
-        .all(|cache| cache.retained_bytes() <= one_column_bytes));
+    let budget = bounded.options.message_cache_max_bytes;
+    assert_eq!(budget, 2 * one_column_bytes);
     let bounded_stats = bounded.stats_for_test();
     assert!(bounded_stats.message_cache_key_count > 0);
-    assert!(bounded_stats.message_cache_logical_bytes <= one_column_bytes * 2);
+    assert!(bounded_stats.message_cache_logical_bytes <= budget);
     assert!(
         bounded_stats.message_cache_owned_bytes_estimate
             >= bounded_stats.message_cache_logical_bytes
@@ -541,4 +539,426 @@ fn zero_message_cache_budget_preserves_results_without_retaining_payload() {
         .values()
         .all(|cache| cache.retained_bytes() == 0));
     assert_eq!(evaluator.stats_for_test().message_cache_hits, 0);
+}
+
+/// [AI Supplied] #1183: the shared budget reclaims whole columns from one
+/// edge's cache oldest first, and every surviving position still points at
+/// its own column in the packed buffer.
+#[test]
+fn packed_message_cache_evicts_oldest_columns_first() {
+    let mut cache = PackedMessageCache::<u32, u32>::new(2, usize::MAX);
+    let keys = [0_u32, 1, 2, 3];
+    cache
+        .get_or_compute_batch(&keys, |missing| {
+            Ok::<_, anyhow::Error>(missing.iter().map(|key| vec![*key, key + 10]).collect())
+        })
+        .unwrap();
+    assert_eq!(cache.key_count(), 4);
+
+    // Nine bytes of an eight-byte column rounds up to two whole columns.
+    assert_eq!(cache.evict_oldest_bytes(9), 16);
+    assert_eq!(cache.key_count(), 2);
+    assert_eq!(cache.logical_payload_bytes(), 16);
+    assert!(!cache.contains(&0) && !cache.contains(&1));
+    assert_eq!(cache.position(&2), Some(0));
+    assert_eq!(cache.column(0), &[2, 12]);
+    assert_eq!(cache.position(&3), Some(1));
+    assert_eq!(cache.column(1), &[3, 13]);
+
+    // Evicting past the end empties the buffer and frees nothing more.
+    assert_eq!(cache.evict_oldest_bytes(1024), 16);
+    assert_eq!(cache.key_count(), 0);
+    assert_eq!(cache.logical_payload_bytes(), 0);
+    assert_eq!(cache.evict_oldest_bytes(1024), 0);
+
+    // A wide key takes its key-owned heap payload with it.
+    let indexer = FlatIndexer::try_new(&vec![2; 130]).unwrap();
+    let kept = indexer.encode(&vec![1; 130]).unwrap();
+    let mut dropped_values = vec![1; 130];
+    dropped_values[0] = 0;
+    let dropped = indexer.encode(&dropped_values).unwrap();
+    let mut wide = PackedMessageCache::<IndexKey, u32>::new(2, usize::MAX);
+    wide.get_or_compute_batch(&[dropped, kept.clone()], |missing| {
+        Ok::<_, anyhow::Error>(missing.iter().map(|_| vec![1, 2]).collect())
+    })
+    .unwrap();
+    let kept_heap_bytes = kept.owned_heap_bytes();
+    assert_eq!(wide.key_heap_bytes, kept_heap_bytes + kept_heap_bytes);
+    wide.evict_oldest_bytes(1);
+    assert_eq!(wide.key_count(), 1);
+    assert_eq!(wide.key_heap_bytes, kept_heap_bytes);
+}
+
+fn retained_message_cache_bytes(evaluator: &TreeTNCachedEvaluator<'_, usize>) -> usize {
+    evaluator
+        .message_caches
+        .values()
+        .map(PackedMessageCache::logical_payload_bytes)
+        .sum()
+}
+
+fn alternating_points(indices: &[DynIndex], point_count: usize) -> Vec<usize> {
+    let mut values = Vec::with_capacity(indices.len() * point_count);
+    for point in 0..point_count {
+        for site in 0..indices.len() {
+            values.push((point >> site) & 1);
+        }
+    }
+    values
+}
+
+/// [AI Supplied] #1183: the message-cache budget is one total for the
+/// evaluator, not an allowance per directed edge: adding edges does not grow it.
+#[test]
+fn message_cache_budget_does_not_grow_with_edge_count() {
+    let column_bytes = std::mem::size_of::<CachedScalar>() * 2;
+    let option = 4 * column_bytes;
+    for ((tree, indices), center) in [
+        (varied_three_node_chain(), 1usize),
+        (five_node_chain(), 2usize),
+        (four_arm_star_tree(), 0usize),
+    ] {
+        let values = alternating_points(&indices, 8);
+        let shape = [indices.len(), 8];
+        let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+        let mut evaluator = TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(center),
+                message_cache_max_bytes: option,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // Two, four and four undirected edges respectively: the total stays put
+        // instead of scaling with them.
+        assert_eq!(
+            evaluator.options.message_cache_max_bytes, option,
+            "the budget must not depend on the edge count"
+        );
+
+        let actual = evaluator.evaluate_batched(points).unwrap();
+        assert_scalars_close(&actual, &tree.evaluate(&indices, points).unwrap());
+        assert!(retained_message_cache_bytes(&evaluator) <= option);
+    }
+
+    // A ten-arm star: ten undirected (twenty directed) edges. Under the old
+    // per-edge default this evaluator's ceiling was 8 MiB times twenty.
+    let spine_site = DynIndex::new_dyn(2);
+    let arms = 10usize;
+    let bonds: Vec<DynIndex> = (0..arms).map(|_| DynIndex::new_dyn(2)).collect();
+    let leaf_sites: Vec<DynIndex> = (0..arms).map(|_| DynIndex::new_dyn(2)).collect();
+    let mut spine_indices = vec![spine_site.clone()];
+    spine_indices.extend(bonds.iter().cloned());
+    let spine_elements = spine_indices
+        .iter()
+        .map(|index| index.dim())
+        .product::<usize>();
+    let spine = IdxTensor::from_dense(spine_indices, vec![1.0_f64; spine_elements]).unwrap();
+    let mut tensors = vec![spine];
+    for (bond, site) in bonds.into_iter().zip(leaf_sites.iter().cloned()) {
+        tensors.push(IdxTensor::from_dense(vec![bond, site], vec![1.0_f64; 4]).unwrap());
+    }
+    let wide_tree = TreeTN::<_, usize>::from_tensors(tensors, (0..=arms).collect()).unwrap();
+    let wide_indices = std::iter::once(spine_site)
+        .chain(leaf_sites.iter().cloned())
+        .collect::<Vec<_>>();
+    let mut wide_evaluator = TreeTNCachedEvaluator::new(
+        &wide_tree,
+        &wide_indices,
+        CachedEvaluatorOptions {
+            center: Some(0),
+            message_cache_max_bytes: option,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        wide_evaluator.options.message_cache_max_bytes, option,
+        "ten edges must not multiply the budget"
+    );
+    let wide_values = alternating_points(&wide_indices, 8);
+    let wide_shape = [wide_indices.len(), 8];
+    let wide_points = ColMajorArrayRef::new(&wide_values, &wide_shape).unwrap();
+    let wide_actual = wide_evaluator.evaluate_batched(wide_points).unwrap();
+    assert_scalars_close(
+        &wide_actual,
+        &wide_tree.evaluate(&wide_indices, wide_points).unwrap(),
+    );
+    assert!(retained_message_cache_bytes(&wide_evaluator) <= option);
+}
+
+/// [AI Supplied] #1183: the total is shared, so one reused edge may keep the
+/// whole budget rather than an equal split of it.
+#[test]
+fn message_cache_lets_one_edge_use_the_whole_total() {
+    // One undirected edge, so two directed ones: an equal split would give this
+    // edge one of the budget's two columns.
+    let s0 = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let t0 = IdxTensor::from_dense(vec![s0.clone(), bond.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])
+        .unwrap();
+    let t1 = IdxTensor::from_dense(vec![bond, s1.clone()], vec![0.5_f64, 1.5, 2.5, 3.5]).unwrap();
+    let tree = TreeTN::<_, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
+    let indices = vec![s0, s1];
+    let column_bytes = std::mem::size_of::<CachedScalar>() * 2;
+    let values = alternating_points(&indices, 4);
+    let shape = [indices.len(), 4];
+    let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+    let mut evaluator = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            center: Some(1),
+            message_cache_max_bytes: 2 * column_bytes,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let actual = evaluator.evaluate_batched(points).unwrap();
+    assert_scalars_close(&actual, &tree.evaluate(&indices, points).unwrap());
+    assert_eq!(evaluator.options.message_cache_max_bytes, 2 * column_bytes);
+    assert_eq!(
+        retained_message_cache_bytes(&evaluator),
+        2 * column_bytes,
+        "one edge must be able to hold the whole shared total"
+    );
+    assert!(
+        evaluator
+            .message_caches
+            .values()
+            .any(|cache| cache.key_count() >= 2),
+        "an equal split would have given this edge a single column"
+    );
+}
+
+/// [AI Supplied] #1183: a budget with room for every column keeps the previous
+/// behaviour -- the second call is all hits and nothing is recomputed.
+#[test]
+fn message_cache_ample_budget_keeps_every_column_warm() {
+    let (tree, indices) = five_node_chain();
+    let values = alternating_points(&indices, 8);
+    let shape = [indices.len(), 8];
+    let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+    let mut evaluator = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            center: Some(2),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let expected = tree.evaluate(&indices, points).unwrap();
+
+    let cold = evaluator.evaluate_batched(points).unwrap();
+    assert_scalars_close(&cold, &expected);
+    assert!(evaluator.stats_for_test().message_cache_misses > 0);
+
+    let warm = evaluator.evaluate_batched(points).unwrap();
+    assert_scalars_close(&warm, &expected);
+    let stats = evaluator.stats_for_test();
+    assert_eq!(stats.message_cache_misses, 0, "{stats:?}");
+    assert_eq!(
+        stats.message_cache_hits, stats.directed_message_count,
+        "{stats:?}"
+    );
+}
+
+/// [AI Supplied] #1183: a request that could not be retained even with the
+/// whole budget must not evict a neighbour's columns.
+#[test]
+fn message_cache_does_not_evict_for_a_column_that_cannot_fit() {
+    let (tree, indices) = five_node_chain();
+    let column_bytes = std::mem::size_of::<CachedScalar>() * 2;
+    let mut evaluator = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            center: Some(2),
+            message_cache_max_bytes: 2 * column_bytes,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let indexer = FlatIndexer::try_new(&[8]).unwrap();
+    let mut cache = PackedMessageCache::<IndexKey, CachedScalar>::new(2, usize::MAX);
+    let keys = (0..2)
+        .map(|key| indexer.encode(&[key]).unwrap())
+        .collect::<Vec<_>>();
+    cache
+        .get_or_compute_batch(&keys, |missing| {
+            Ok::<_, anyhow::Error>(
+                missing
+                    .iter()
+                    .map(|_| vec![CachedScalar::F64(1.0), CachedScalar::F64(2.0)])
+                    .collect(),
+            )
+        })
+        .unwrap();
+    cache.touch(1);
+    evaluator.message_caches.insert((1, 2), cache);
+
+    // One column is five times the whole total, so it can never be retained.
+    let cap = evaluator.reserve_message_cache_bytes(&(2, 3), 5 * column_bytes, 5 * column_bytes);
+    assert_eq!(
+        cap, 0,
+        "no room can exist for a column larger than the total"
+    );
+    assert_eq!(
+        evaluator.message_caches[&(1, 2)].key_count(),
+        2,
+        "a request that cannot be retained must not evict anything"
+    );
+}
+
+/// [AI Supplied] #1183: a parent whose columns were already hits must survive
+/// its children's admissions: computing a child can now evict columns of the
+/// message being assembled, so the merge may not look up an evicted key.
+#[test]
+fn message_cache_partially_cached_parent_survives_child_admission() {
+    let (tree, indices) = five_node_chain();
+    let column_bytes = std::mem::size_of::<CachedScalar>() * 2;
+    let narrow_values = alternating_points(&indices, 2);
+    let narrow_shape = [indices.len(), 2];
+    let narrow = ColMajorArrayRef::new(&narrow_values, &narrow_shape).unwrap();
+    let wide_values = alternating_points(&indices, 8);
+    let wide_shape = [indices.len(), 8];
+    let wide = ColMajorArrayRef::new(&wide_values, &wide_shape).unwrap();
+
+    // Unbounded retention gives the real columns of node 1's message to node 0
+    // for the narrow batch. Its keys are a subset of the wide batch's keys.
+    let mut generous = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            center: Some(0),
+            message_cache_max_bytes: usize::MAX,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    generous.evaluate_batched(narrow).unwrap();
+    let seeded = generous
+        .message_caches
+        .remove(&(1, 0))
+        .expect("the narrow batch must cache node 1's message to node 0");
+    assert!(seeded.key_count() > 0);
+
+    // The same total, all of it already taken by that parent message.
+    let mut tight = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            center: Some(0),
+            message_cache_max_bytes: 2 * column_bytes,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    tight.message_caches.insert((1, 0), seeded);
+
+    let wide_actual = tight.evaluate_batched(wide).unwrap();
+    assert_scalars_close(&wide_actual, &tree.evaluate(&indices, wide).unwrap());
+    assert!(retained_message_cache_bytes(&tight) <= 2 * column_bytes);
+}
+
+/// [AI Supplied] #1183: with the budget exhausted, a re-rooting call still
+/// returns exact values, keeps the retained payload within the budget, and
+/// releases the previous rooting's columns instead of refusing everything.
+#[test]
+fn message_cache_stays_correct_while_the_shared_budget_is_exhausted() {
+    let (tree, indices) = five_node_chain();
+    let column_bytes = std::mem::size_of::<CachedScalar>() * 2;
+    let values = alternating_points(&indices, 8);
+    let shape = [indices.len(), 8];
+    let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+    let mut evaluator = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            message_cache_max_bytes: column_bytes,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let expected = tree.evaluate(&indices, points).unwrap();
+
+    let first = evaluator
+        .evaluate_batched_with_hint(points, EvaluationHint::around(0))
+        .unwrap();
+    assert_scalars_close(&first, &expected);
+    assert!(
+        evaluator
+            .message_caches
+            .values()
+            .any(|cache| cache.key_count() > 0),
+        "the cold call must retain columns"
+    );
+
+    let second = evaluator
+        .evaluate_batched_with_hint(points, EvaluationHint::around(4))
+        .unwrap();
+    assert_scalars_close(&second, &expected);
+    assert!(
+        evaluator
+            .message_caches
+            .values()
+            .any(|cache| cache.key_count() == 0),
+        "the exhausted budget must release a previous rooting's columns"
+    );
+    assert!(retained_message_cache_bytes(&evaluator) <= evaluator.options.message_cache_max_bytes);
+}
+
+/// [AI Supplied] #1183: the shared budget reclaims columns from the least
+/// recently used edge first, never from the edge that is being used.
+#[test]
+fn message_cache_reclaims_the_least_recently_used_edge_first() {
+    let (tree, indices) = five_node_chain();
+    let column_bytes = std::mem::size_of::<CachedScalar>() * 2;
+    let mut evaluator = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            center: Some(2),
+            message_cache_max_bytes: 4 * column_bytes,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let fill = |evaluator: &mut TreeTNCachedEvaluator<'_, usize>,
+                edge: (usize, usize),
+                keys: usize,
+                last_used: u64| {
+        let indexer = FlatIndexer::try_new(&[8]).unwrap();
+        let key_list = (0..keys)
+            .map(|key| indexer.encode(&[key]).unwrap())
+            .collect::<Vec<_>>();
+        let mut cache = PackedMessageCache::<IndexKey, CachedScalar>::new(2, usize::MAX);
+        cache
+            .get_or_compute_batch(&key_list, |missing| {
+                Ok::<_, anyhow::Error>(
+                    missing
+                        .iter()
+                        .map(|_| vec![CachedScalar::F64(1.0), CachedScalar::F64(2.0)])
+                        .collect(),
+                )
+            })
+            .unwrap();
+        cache.touch(last_used);
+        evaluator.message_caches.insert(edge, cache);
+    };
+    // The shared total is four columns, filled by these two-column edges.
+    fill(&mut evaluator, (0, 1), 2, 1);
+    fill(&mut evaluator, (1, 2), 2, 2);
+    assert_eq!(retained_message_cache_bytes(&evaluator), 4 * column_bytes);
+
+    // A new edge's two columns have to come out of the older edge only.
+    let cap = evaluator.reserve_message_cache_bytes(&(2, 3), 2 * column_bytes, column_bytes);
+    assert!(cap >= 2 * column_bytes, "{cap}");
+    assert_eq!(evaluator.message_caches[&(0, 1)].key_count(), 0);
+    assert_eq!(evaluator.message_caches[&(1, 2)].key_count(), 2);
 }

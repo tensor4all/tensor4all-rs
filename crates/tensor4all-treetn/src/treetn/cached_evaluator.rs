@@ -1027,7 +1027,7 @@ where
 /// assert!(options.initial_centers.is_empty());
 /// assert!(options.max_greedy_steps_per_start.is_none());
 /// assert_eq!(options.max_batch_points, None);
-/// assert_eq!(options.message_cache_max_bytes, 8 * 1024 * 1024);
+/// assert_eq!(options.message_cache_max_bytes, 64 * 1024 * 1024);
 /// assert_eq!(options.branch_slice_cache_max_bytes, 32 * 1024 * 1024);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1060,12 +1060,19 @@ pub struct CachedEvaluatorOptions<V> {
     /// together and can require very large buffers. Input and returned scalars
     /// still occupy O(number of points) memory.
     pub max_batch_points: Option<usize>,
-    /// Maximum logical payload bytes retained by each directed message cache.
+    /// Maximum logical payload bytes the evaluator retains in its message
+    /// caches, **as one total shared by all of its directed edges**.
+    ///
+    /// The total does not scale with the number of edges: one edge whose
+    /// messages are actually reused -- the branch a plane read walks, say --
+    /// may retain most of it while the idle edges retain nothing. When the
+    /// total is exhausted, whole columns are released from the least recently
+    /// used other edge, oldest first.
     ///
     /// A value of `0` disables retention while preserving the same evaluation
-    /// results. The default is 8 MiB per directed edge. Use `usize::MAX` only
-    /// when unbounded retention is intentional; the budget excludes key/map
-    /// metadata and spare allocation capacity.
+    /// results. The default is 64 MiB for the evaluator as a whole. Use
+    /// `usize::MAX` only when unbounded retention is intentional; the budget
+    /// excludes key/map metadata and spare allocation capacity.
     pub message_cache_max_bytes: usize,
     /// Maximum logical payload bytes retained by the evaluator's prepared
     /// branch physical-slice cache.
@@ -1092,7 +1099,7 @@ impl<V> Default for CachedEvaluatorOptions<V> {
             initial_centers: Vec::new(),
             max_greedy_steps_per_start: None,
             max_batch_points: None,
-            message_cache_max_bytes: 8 * 1024 * 1024,
+            message_cache_max_bytes: 64 * 1024 * 1024,
             branch_slice_cache_max_bytes: 32 * 1024 * 1024,
         }
     }
@@ -1670,6 +1677,9 @@ where
     /// is the minimal assignment set on which a directed message depends;
     /// changing a site in another component must not invalidate this entry.
     message_caches: HashMap<(V, V), PackedMessageCache<IndexKey, CachedScalar>>,
+    /// Monotonic use stamp for `message_caches`, so the shared budget is
+    /// reclaimed from the least recently used edge first.
+    message_cache_epoch: u64,
     /// Each node's parent-bond `DynIndex`, memoized: it never changes for a
     /// fixed rooting, but `TreeTN::edge_between`/`bond_index` are graph
     /// lookups that cost real time if repeated on every call.
@@ -1857,6 +1867,7 @@ where
             batch_point_limit,
             last_stats: CachedEvaluationStats::default(),
             message_caches: HashMap::default(),
+            message_cache_epoch: 0,
             parent_bond_indices: HashMap::default(),
             prepared_branch_slices_f64: PreparedBranchSliceCache::new(slice_cache_bytes(
                 std::mem::size_of::<f64>(),
@@ -2516,14 +2527,21 @@ where
         }
         // Tentative all-hit probes do not count. Commit hits only after both
         // directions and their checked assembly have succeeded.
-        self.message_caches
-            .get_mut(&left_edge)
-            .ok_or_else(|| anyhow::anyhow!("cached cut disappeared"))?
-            .record_hits(left_batch.keys.len());
-        self.message_caches
-            .get_mut(&right_edge)
-            .ok_or_else(|| anyhow::anyhow!("cached reverse cut disappeared"))?
-            .record_hits(right_batch.keys.len());
+        let epoch = self.next_message_cache_epoch();
+        for (edge, hits) in [
+            (left_edge, left_batch.keys.len()),
+            (right_edge, right_batch.keys.len()),
+        ] {
+            let cache = self
+                .message_caches
+                .get_mut(&edge)
+                .ok_or_else(|| anyhow::anyhow!("cached cut disappeared"))?;
+            cache.record_hits(hits);
+            // A warm cut is a use of both directions: without this, columns
+            // that are reused on every call would look stale to the shared
+            // budget's least-recently-used eviction.
+            cache.touch(epoch);
+        }
         self.last_stats = CachedEvaluationStats {
             subtree_environment_count: left_batch.keys.len(),
             directed_message_count: left_batch.keys.len() + right_batch.keys.len(),
@@ -2557,6 +2575,82 @@ where
 
     fn rooted_plan_for_center(&mut self, center: &V) -> Result<Arc<RootedMessagePlan<V>>> {
         self.plan.rooted_plan_for_center(center)
+    }
+
+    /// Advances the message-cache use stamp and returns it.
+    fn next_message_cache_epoch(&mut self) -> u64 {
+        self.message_cache_epoch = self.message_cache_epoch.wrapping_add(1);
+        self.message_cache_epoch
+    }
+
+    /// Total logical payload currently retained by every directed message
+    /// cache except `edge`.
+    fn message_cache_bytes_excluding(&self, edge: &(V, V)) -> usize {
+        self.message_caches
+            .iter()
+            .filter(|(other, _)| *other != edge)
+            .map(|(_, cache)| cache.logical_payload_bytes())
+            .sum()
+    }
+
+    /// Makes room in the evaluator-wide message-cache budget for `needed`
+    /// payload bytes of `bytes_per_column` each on `edge`, and returns the
+    /// absolute payload cap that edge's cache may retain afterwards.
+    ///
+    /// The budget is shared, so an edge whose batch is wider than the whole
+    /// total remains admissible up to that total. When the budget is exhausted,
+    /// whole columns are released from the least recently used *other* edges,
+    /// oldest column first -- the edge being used keeps the columns it already
+    /// has, matching the no-eviction-on-miss design (#646, #1167), and the
+    /// column it is about to store was just computed.
+    ///
+    /// Only the part of `needed` that can fit is reclaimed, and nothing at all
+    /// when not even one column of this edge fits the total: evicting a
+    /// neighbour for a column that admission would refuse anyway loses reuse on
+    /// both edges.
+    fn reserve_message_cache_bytes(
+        &mut self,
+        edge: &(V, V),
+        needed: usize,
+        bytes_per_column: usize,
+    ) -> usize {
+        let own = self
+            .message_caches
+            .get(edge)
+            .map_or(0, PackedMessageCache::logical_payload_bytes);
+        let mut others = self.message_cache_bytes_excluding(edge);
+        let room = self.options.message_cache_max_bytes.saturating_sub(own);
+        let wanted = if room < bytes_per_column {
+            0
+        } else {
+            needed.min(room)
+        };
+        let mut over = own
+            .saturating_add(wanted)
+            .saturating_add(others)
+            .saturating_sub(self.options.message_cache_max_bytes);
+        if over > 0 {
+            let mut order: Vec<((V, V), u64)> = self
+                .message_caches
+                .iter()
+                .filter(|(other, _)| *other != edge)
+                .map(|(other, cache)| (other.clone(), cache.last_used()))
+                .collect();
+            order.sort_by_key(|(_, last_used)| *last_used);
+            for (other, _) in order {
+                if over == 0 {
+                    break;
+                }
+                if let Some(cache) = self.message_caches.get_mut(&other) {
+                    // A whole column is the eviction grain, so this can release
+                    // more than the remaining shortfall.
+                    let released = cache.evict_oldest_bytes(over);
+                    others = others.saturating_sub(released);
+                    over = over.saturating_sub(released);
+                }
+            }
+        }
+        self.options.message_cache_max_bytes.saturating_sub(others)
     }
 
     fn build_message_assignment_batches(
@@ -4674,17 +4768,19 @@ where
         };
         let bond_dim = bond_index.dim();
         let assignment_index = DynIndex::new_dyn(keys.len());
-        let message_cache_max_bytes = self.options.message_cache_max_bytes;
+        let message_cache_budget_bytes = self.options.message_cache_max_bytes;
+        let epoch = self.next_message_cache_epoch();
 
-        // Split into hits and misses without computing anything yet. The
-        // cache borrow must not outlive this block: `compute_stacked_message`
-        // below needs `&self`, which conflicts with a live `&mut
-        // self.message_caches` entry.
-        let (hit_keys, missing_indices) = {
+        // A full hit returns before any child is consulted. The cache borrow
+        // must not outlive this block: `compute_stacked_message` below needs
+        // `&self`, which conflicts with a live `&mut self.message_caches`
+        // entry.
+        {
             let cache = self
                 .message_caches
                 .entry(directed_edge.clone())
-                .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_max_bytes));
+                .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_budget_bytes));
+            cache.touch(epoch);
             if let Some(positions) = cache.get_all_cached(&keys) {
                 let mut data = Vec::with_capacity(bond_dim * keys.len());
                 for position in positions {
@@ -4719,32 +4815,6 @@ where
                     raw_values,
                 });
             }
-            let mut hit_keys = Vec::new();
-            let mut missing_indices = Vec::new();
-            for (i, key) in keys.iter().enumerate() {
-                if cache.contains(key) {
-                    hit_keys.push(key.clone());
-                } else {
-                    missing_indices.push(i);
-                }
-            }
-            (hit_keys, missing_indices)
-        };
-        self.last_stats.message_cache_hits += hit_keys.len();
-        self.last_stats.message_cache_misses += missing_indices.len();
-        #[cfg(feature = "diagnostics")]
-        let (diag_hits, diag_misses) = (hit_keys.len() as u64, missing_indices.len() as u64);
-        if !hit_keys.is_empty() {
-            // `entry().or_insert_with()` rather than `get_mut().expect(...)`:
-            // the entry for `node` was inserted above and nothing removes
-            // entries from `message_caches`. `or_insert_with`'s closure is
-            // never invoked here, so this cannot fail rather than merely
-            // being checked not to.
-            let cache = self
-                .message_caches
-                .entry(directed_edge.clone())
-                .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_max_bytes));
-            cache.record_hits(hit_keys.len());
         }
 
         // A parent cache hit returned above before this point, so descendants
@@ -4772,6 +4842,30 @@ where
         let children_elapsed = children_started.elapsed();
         #[cfg(feature = "diagnostics")]
         let children_kernel = diagnostics::kernel_snapshot().since(children_kernel_start);
+
+        // Split into hits and misses only now: computing the children above can
+        // exhaust the shared message-cache budget and evict columns of this
+        // very edge, so a key that was cached before them may be gone. The use
+        // stamp is taken here too, so this edge stays newer than children that
+        // were computed for it.
+        let epoch = self.next_message_cache_epoch();
+        let (hit_count, missing_indices) = {
+            let cache = self
+                .message_caches
+                .entry(directed_edge.clone())
+                .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_budget_bytes));
+            cache.touch(epoch);
+            let missing_indices = (0..keys.len())
+                .filter(|index| !cache.contains(&keys[*index]))
+                .collect::<Vec<_>>();
+            let hit_count = keys.len() - missing_indices.len();
+            cache.record_hits(hit_count);
+            (hit_count, missing_indices)
+        };
+        self.last_stats.message_cache_hits += hit_count;
+        self.last_stats.message_cache_misses += missing_indices.len();
+        #[cfg(feature = "diagnostics")]
+        let (diag_hits, diag_misses) = (hit_count as u64, missing_indices.len() as u64);
 
         // Compute only the missing points, as a batch of just that size.
         let missing_points = missing_indices
@@ -4923,10 +5017,25 @@ where
         // `node` was inserted at the top of this function and nothing
         // between there and here removes it, so `entry().or_insert_with()`
         // cannot fail rather than merely being checked not to.
+        //
+        // The cap is the shared budget minus what the other edges retain, so
+        // this edge's batch fits whenever the pool has room for it; making
+        // that room possibly evicts the least recently used other edges.
+        let needed = missing_keys
+            .len()
+            .saturating_mul(bond_dim.saturating_mul(std::mem::size_of::<CachedScalar>()));
+        let cap = self.reserve_message_cache_bytes(
+            &directed_edge,
+            needed,
+            bond_dim.saturating_mul(std::mem::size_of::<CachedScalar>()),
+        );
+        let epoch = self.next_message_cache_epoch();
         let cache = self
             .message_caches
             .entry(directed_edge)
-            .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_max_bytes));
+            .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_budget_bytes));
+        cache.max_bytes = cap;
+        cache.touch(epoch);
         let missing_slots = cache.get_or_compute_batch(&missing_keys, |request_keys| {
             request_keys
                 .iter()
@@ -7695,15 +7804,16 @@ impl MessageCacheKey for u32 {
 /// A run-scoped, append-only cache of packed message columns for one
 /// directed edge.
 ///
-/// Per Hiroshi's #646 review design: entries are never evicted individually
-/// and there is no public `clear` -- the cache lives no longer than the
-/// evaluator that owns it, so nothing outside can hold a handle that would
-/// need clearing. Columns are stored contiguously in a single flat buffer
-/// (column-major: column `i` occupies `columns[i * bond_dim .. (i+1) *
-/// bond_dim]`) instead of one heap allocation per message. The configured
-/// budget applies to logical column payload; observability separately reports
-/// an owned-storage estimate that includes retained vector capacity, the
-/// key map, and key-owned heap payloads.
+/// Per Hiroshi's #646 review design: entries are never evicted to admit a
+/// *later* column of the same edge, and there is no public `clear` -- the
+/// cache lives no longer than the evaluator that owns it, so nothing outside
+/// can hold a handle that would need clearing. Columns are stored
+/// contiguously in a single flat buffer (column-major: column `i` occupies
+/// `columns[i * bond_dim .. (i+1) * bond_dim]`) instead of one heap
+/// allocation per message. The configured budget applies to logical column
+/// payload; observability separately reports an owned-storage estimate that
+/// includes retained vector capacity, the key map, and key-owned heap
+/// payloads.
 struct PackedMessageCache<K, T> {
     bond_dim: usize,
     max_bytes: usize,
@@ -7712,6 +7822,11 @@ struct PackedMessageCache<K, T> {
     key_heap_bytes: usize,
     hits: usize,
     misses: usize,
+    /// Monotonic stamp of the last use of this edge's cache, owned by the
+    /// evaluator that shares one byte budget across its edges. Only that
+    /// cross-edge eviction reads it; within one edge, columns are already in
+    /// insertion order.
+    last_used: u64,
 }
 
 // A deterministic estimate for the control bytes and bucket bookkeeping of
@@ -7867,7 +7982,57 @@ where
             key_heap_bytes: 0,
             hits: 0,
             misses: 0,
+            last_used: 0,
         }
+    }
+
+    /// Marks this edge as used by the evaluator at `epoch`.
+    fn touch(&mut self, epoch: u64) {
+        self.last_used = epoch;
+    }
+
+    fn last_used(&self) -> u64 {
+        self.last_used
+    }
+
+    fn bytes_per_column(&self) -> usize {
+        self.bond_dim.saturating_mul(std::mem::size_of::<T>())
+    }
+
+    /// Releases whole columns from the front of the packed buffer, oldest
+    /// first, until at least `bytes` of payload are freed or the cache is
+    /// empty. Returns the payload bytes actually released.
+    ///
+    /// Called only by the owner evaluator, when the budget shared by all
+    /// directed edges is exhausted and this edge is the least recently used
+    /// one. Columns keep their insertion order in `columns`, so dropping a
+    /// prefix leaves every surviving position shifted by a constant.
+    fn evict_oldest_bytes(&mut self, bytes: usize) -> usize {
+        let per_column = self.bytes_per_column();
+        if per_column == 0 || bytes == 0 {
+            return 0;
+        }
+        let dropped = bytes.div_ceil(per_column).min(self.positions.len());
+        if dropped == 0 {
+            return 0;
+        }
+        let dropped_key_heap_bytes: usize = self
+            .positions
+            .iter()
+            .filter(|(_, position)| **position < dropped)
+            .map(|(key, _)| key.owned_heap_bytes())
+            .sum();
+        self.key_heap_bytes = self.key_heap_bytes.saturating_sub(dropped_key_heap_bytes);
+        self.columns.drain(..dropped * self.bond_dim);
+        self.positions.retain(|_, position| {
+            if *position < dropped {
+                false
+            } else {
+                *position -= dropped;
+                true
+            }
+        });
+        dropped * per_column
     }
 
     fn column(&self, position: usize) -> &[T] {

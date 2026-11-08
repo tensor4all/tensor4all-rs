@@ -122,9 +122,11 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// message caches combined. Default: 256 MiB.
     ///
     /// The budget is divided evenly among all input evaluators and the output
-    /// evaluator used by global-pivot searches, then among each evaluator's
-    /// directed-edge caches. Integer rounding may disable retention for very
-    /// small budgets. A finite nonzero value retains
+    /// evaluator used by global-pivot searches. Each of those evaluators then
+    /// spends its portion as one total shared by its directed-edge caches, so a
+    /// branch that is actually reused may retain most of the portion while the
+    /// idle edges retain nothing. Integer rounding may disable retention for
+    /// very small budgets. A finite nonzero value retains
     /// useful reuse while preventing repeated floating-zone scans from
     /// retaining an unbounded set of message payloads. Set it to zero to
     /// disable message retention without disabling the guard itself.
