@@ -421,6 +421,72 @@ where
     Ok(operator.norm()? == 0.0)
 }
 
+/// Exact powers of two whose product is `2^k`, each a normal `f64`.
+fn pow2_factors(mut k: i32) -> impl Iterator<Item = f64> {
+    const STEP: i32 = 1000;
+    std::iter::from_fn(move || {
+        if k == 0 {
+            return None;
+        }
+        let j = k.clamp(-STEP, STEP);
+        k -= j;
+        Some(f64::from_bits(((1023 + j) as u64) << 52))
+    })
+}
+
+fn scalar_times_pow2(value: &AnyScalar, k: i32) -> AnyScalar {
+    pow2_factors(k).fold(value.clone(), |acc, factor| {
+        acc * AnyScalar::new_real(factor)
+    })
+}
+
+/// Multiply `tn` by `1 / divisor` without an out-of-range intermediate.
+///
+/// `divisor` is normalized by an exact power of two `2^k`, so only the
+/// reciprocal of a scalar of magnitude in `[0.5, 2)` is formed. The power of
+/// two and that reciprocal are applied in the order that keeps every
+/// intermediate magnitude between `|tn|` and `|tn / divisor|`, so the result
+/// overflows or underflows only where the quotient itself does. Forming
+/// `1 / divisor` directly overflows for subnormal divisors, and a complex
+/// reciprocal fails once `|divisor|^2` leaves the `f64` range.
+fn divide_by_scalar<T, V>(tn: &mut TreeTN<T, V>, divisor: &AnyScalar) -> Result<()>
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let largest = divisor.real().abs().max(divisor.imag().abs());
+    anyhow::ensure!(
+        largest.is_finite() && largest > 0.0,
+        "square_linsolve: cannot divide by {divisor:?}"
+    );
+    // `|divisor| * 2^k` lies in [0.5, 1) after these loops; each step is exact.
+    let mut k = -(largest.log2().floor() as i32) - 1;
+    let mut magnitude = scalar_times_pow2(divisor, k).abs();
+    while magnitude >= 1.0 {
+        magnitude *= 0.5;
+        k -= 1;
+    }
+    while magnitude < 0.5 {
+        magnitude *= 2.0;
+        k += 1;
+    }
+    if k >= 0 {
+        // |divisor| < 1: grow by 2^k first, then apply a reciprocal in (1, 2].
+        for factor in pow2_factors(k) {
+            tn.scale_mut(AnyScalar::new_real(factor))?;
+        }
+        tn.scale_mut(AnyScalar::new_real(1.0) / scalar_times_pow2(divisor, k))?;
+    } else {
+        // |divisor| >= 1: apply a reciprocal in (0.5, 1] first, then shrink.
+        let k = k + 1;
+        tn.scale_mut(AnyScalar::new_real(1.0) / scalar_times_pow2(divisor, k))?;
+        for factor in pow2_factors(k) {
+            tn.scale_mut(AnyScalar::new_real(factor))?;
+        }
+    }
+    Ok(())
+}
+
 fn solve_identity_term_only<T, V>(
     operator: &TreeTN<T, V>,
     rhs: &TreeTN<T, V>,
@@ -440,7 +506,7 @@ where
     }
 
     let mut solution = rhs.clone();
-    solution.scale_mut(AnyScalar::new_real(1.0) / options.a0.clone())?;
+    divide_by_scalar(&mut solution, &options.a0)?;
     let residual = if options.check_residual || options.convergence_tol.is_some() {
         let residual_operator =
             linear_operator_for_residual(operator, init, input_mapping, output_mapping)?;

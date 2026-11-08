@@ -773,3 +773,66 @@ fn non_finite_coefficients_are_rejected_before_the_identity_shortcut() {
         assert!(error.to_string().contains("a0 must be finite"), "{error}");
     }
 }
+
+#[test]
+fn identity_shortcut_divides_by_a_tiny_or_huge_a0_without_overflow() {
+    // Two-site MALS with a1 = 0 and no residual returns rhs / a0 in closed
+    // form. For these coefficients 1 / a0, or |a0|^2 for complex a0, leaves
+    // the f64 range although rhs / a0 is of order 2^70 or 2^-18.
+    // Split the exponent: 2^-1070 itself is subnormal but 1 / 2^1070 overflows.
+    let pow2 = |k: i32| 2.0_f64.powi(k / 2) * 2.0_f64.powi(k - k / 2);
+    // (complex problem, a0, rhs scale, rhs scale / a0)
+    let cases = [
+        (
+            false,
+            Complex64::new(3.0 * pow2(-1070), 0.0),
+            pow2(-1000),
+            Complex64::new(pow2(70) / 3.0, 0.0),
+        ),
+        (
+            true,
+            Complex64::new(3.0, 4.0) * pow2(-1070),
+            pow2(-1000),
+            Complex64::new(3.0, -4.0) * (pow2(70) / 25.0),
+        ),
+        (
+            true,
+            Complex64::new(3.0, 4.0) * pow2(1018),
+            pow2(1000),
+            Complex64::new(3.0, -4.0) * (pow2(-18) / 25.0),
+        ),
+    ];
+    for (complex, a0, rhs_scale, quotient) in cases {
+        let mut p = Problem::new(&[(0, 1)], complex);
+        let expected = p
+            .rhs
+            .contract_to_tensor()
+            .unwrap()
+            .scale(AnyScalar::new_complex(quotient.re, quotient.im))
+            .unwrap();
+        p.rhs.scale_mut(AnyScalar::new_real(rhs_scale)).unwrap();
+        let options = LinsolveOptions {
+            convergence_tol: None,
+            ..p.options(1)
+                .with_nsite(2)
+                .with_coefficients(AnyScalar::new_complex(a0.re, a0.im), 0.0)
+                .with_residual_check(false)
+        };
+        let result = p.solve(p.init.clone(), 0, options);
+        assert_eq!(result.sweeps, 0);
+        assert!(result.residual.is_none());
+        let error = result
+            .solution
+            .contract_to_tensor()
+            .unwrap()
+            .sub(&expected)
+            .unwrap()
+            .maxabs()
+            .unwrap();
+        let scale = expected.maxabs().unwrap();
+        assert!(
+            error.is_finite() && error <= 1e-14 * scale,
+            "{a0:?}: {error} vs {scale}"
+        );
+    }
+}

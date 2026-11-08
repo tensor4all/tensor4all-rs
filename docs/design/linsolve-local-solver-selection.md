@@ -64,6 +64,10 @@ another solver.
 - A `gmres_restart_dim` (or core GMRES/Lanczos `max_iter`) whose Krylov
   workspace cannot be allocated returns `KrylovError::InvalidOptions` instead
   of aborting on a capacity overflow.
+- The identity-only closed form returns a finite `rhs / a0` for subnormal or
+  very large `a0`, where it previously formed an infinite `1 / a0` (or a
+  complex reciprocal from an out-of-range `|a0|^2`) and returned `inf` or
+  `NaN` entries.
 
 ## Implementation
 
@@ -93,7 +97,10 @@ and whether the reported local residual is relative or absolute.
 
 The identity-only closed form does not depend on the local solver: two-site
 MALS returns `rhs / a0` for every choice, and one-site ALS sweeps so the
-solution stays in the initial bond spaces.
+solution stays in the initial bond spaces. The closed form normalizes `a0` by
+an exact power of two before taking a reciprocal, so it stays finite whenever
+`rhs / a0` is, including subnormal and complex `a0` whose `1 / a0` or
+`|a0|^2` leaves the `f64` range.
 
 ## Tests
 
