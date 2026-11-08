@@ -10,7 +10,7 @@ mod projected_operator;
 
 pub(crate) use environment::CachedTopology;
 pub use environment::{EnvironmentCache, NetworkTopology};
-pub use local_solver::LocalSolver;
 pub(crate) use local_solver::solve_local_system;
+pub use local_solver::LocalSolver;
 pub use options::{GmresToleranceMode, LinsolveOptions};
 pub use projected_operator::ProjectedOperator;
