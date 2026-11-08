@@ -132,8 +132,16 @@ Its input is a column-major `[number_of_indices, number_of_points]` array;
 the result follows the input column order, including duplicate points.
 
 `CachedEvaluatorOptions::max_batch_points` defaults to `None`, choosing up to
-256 points and reducing that limit for large local tensors using a 32 MiB
-local-buffer estimate. This estimate is a sizing heuristic, not an RSS limit.
+256 points and reducing that limit when a batch's per-point buffers would pass a
+32 MiB estimate: the largest local tensor where the generic centre contraction
+stacks a core slice per point, the message columns plus one grouped branch GEMM's
+rows where the raw centre kernels read the core in place. A node with three or
+more rooted children falls back to the flat kernel above that GEMM's
+4,194,304-element admission, so its rows are charged only below the admission; the
+two-child kernel has no such admission and is charged at every size. The
+raw-centre sizes apply only where the core-based estimate holds a single point; a
+larger core-based estimate is kept as it is. This estimate is a sizing heuristic, not an
+RSS limit.
 Set `Some(n)` for a fixed positive point limit. You can submit a larger batch directly: temporary contraction
 buffers are released between internal batches. The input and result vectors
 still grow with the point count, and temporary memory depends on bond ranks.

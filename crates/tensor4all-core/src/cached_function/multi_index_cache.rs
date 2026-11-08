@@ -13,6 +13,7 @@
 //! evaluation cached.
 
 use super::error;
+use super::memo_table::MemoTable;
 use super::{cache_key::CacheKey, flat_index, IndexInt, InnerCache};
 use crate::ColMajorArrayRef;
 use rustc_hash::FxHashMap;
@@ -168,11 +169,13 @@ pub enum CachedBatchError {
     Evaluation(#[source] anyhow::Error),
 }
 
-/// Logical payload bytes a [`MultiIndexCache`] retains by default.
+/// Bytes of hash table a [`MultiIndexCache`] may occupy by default.
 ///
-/// The limit bounds the sum of one key and one value per entry. When a run
-/// needs to keep more distinct points than that, its memoization degrades to
-/// re-evaluation rather than unbounded memory growth.
+/// The limit bounds the tables themselves (buckets, entries and control bytes),
+/// not a per-entry estimate. When a run needs to keep more distinct points than
+/// that, the oldest entries are evicted and re-evaluated if asked again, rather
+/// than memory growing without bound. While a table grows the transient peak is
+/// at most 1.5 × the limit + 8 bytes (see [`MultiIndexCache`]).
 pub const DEFAULT_RETAINED_BYTE_LIMIT: usize = 256 * 1024 * 1024;
 
 /// A persistent cache that maps multi-indices to values through mixed-radix
@@ -184,22 +187,29 @@ pub const DEFAULT_RETAINED_BYTE_LIMIT: usize = 256 * 1024 * 1024;
 /// borrowed, fallible, or thread-affine. Only successful evaluations are
 /// stored: an evaluation that fails is never turned into a cached value.
 ///
-/// Retained storage is bounded by
-/// [`DEFAULT_RETAINED_BYTE_LIMIT`] logical payload bytes by default
-/// ([`Self::with_retained_byte_limit`] changes it, [`Self::set_retained_byte_limit`]
-/// at run time, [`Self::clear`] drops every entry). Once the limit is reached,
-/// further insertions are skipped instead of evicting entries: the value is
-/// simply not cached, the caller re-evaluates that point if it asks again, and
-/// [`Self::dropped_inserts`] counts the skipped insertions. The accounting in
-/// [`Self::retained_bytes`] is the cache's own logical payload estimate and
-/// excludes allocator overhead.
+/// Retained storage is bounded by [`DEFAULT_RETAINED_BYTE_LIMIT`] bytes of hash
+/// table by default ([`Self::with_retained_byte_limit`] changes it,
+/// [`Self::set_retained_byte_limit`] at run time, [`Self::clear`] drops every
+/// entry). The entries live in two generations of one table. When the current
+/// generation cannot grow within the limit, the older generation is evicted and
+/// the current one takes its place, so the most recent insertions always stay
+/// and an evicted point is simply evaluated again if asked for;
+/// [`Self::evicted_entries`] counts them. [`Self::retained_bytes`] is an upper
+/// bound on both tables, from their capacities: buckets × (key + value + 1
+/// control byte), plus one 16-byte group of control bytes per table (exact on
+/// x86_64; on targets with 8-byte groups such as aarch64, 8 bytes over per
+/// allocated generation, so up to 16). While a table grows, the outgoing table
+/// (half the new one's buckets) is alive next to the new one, so the transient
+/// peak is at most 1.5 × the limit + 8 bytes (half a control group); a limit of
+/// 152 bytes peaks at 236 accounted bytes for `f64` values. Allocator overhead and heap payload
+/// owned by values are excluded.
 ///
 /// Key width is selected automatically from the index space (up to 1024 bits,
 /// as in [`CachedFunction`](super::CachedFunction)); an index space that needs
 /// more bits is rejected by [`MultiIndexCache::new`] with
-/// [`error::CacheKeyError::Overflow`]. Keys are the cache's only payload, so
-/// [`MultiIndexCache::retained_bytes`] reports a logical estimate of the
-/// retained key and value storage.
+/// [`error::CacheKeyError::Overflow`]. The key width sets the size of each
+/// table entry, and so the table bytes [`MultiIndexCache::retained_bytes`]
+/// reports (an upper bound on the allocated tables, see above).
 ///
 /// # Examples
 ///
@@ -237,7 +247,6 @@ where
 {
     backend: InnerCache<V>,
     local_dims: Vec<usize>,
-    key_bytes: usize,
     /// Process-unique identity, so side keys of one cache cannot key another.
     id: u64,
     /// Advanced by [`Self::clear`]; side keys of an earlier generation are stale.
@@ -246,6 +255,7 @@ where
     misses: usize,
     retained_byte_limit: usize,
     dropped_inserts: usize,
+    evicted_entries: usize,
     _phantom: std::marker::PhantomData<I>,
 }
 
@@ -262,6 +272,7 @@ where
             .field("misses", &self.misses)
             .field("retained_byte_limit", &self.retained_byte_limit)
             .field("dropped_inserts", &self.dropped_inserts)
+            .field("evicted_entries", &self.evicted_entries)
             .field("key_type", &self.backend.key_type_name())
             .finish()
     }
@@ -299,11 +310,16 @@ where
         Self::with_retained_byte_limit(local_dims, DEFAULT_RETAINED_BYTE_LIMIT)
     }
 
-    /// Create an empty cache with an explicit logical payload limit.
+    /// Create an empty cache with an explicit limit on its hash-table bytes.
     ///
-    /// Use this to cap the retained key and value storage more tightly than
-    /// [`DEFAULT_RETAINED_BYTE_LIMIT`]. Insertions that would exceed the limit
-    /// are skipped and counted by [`Self::dropped_inserts`].
+    /// At the limit the oldest generation of entries is evicted
+    /// ([`Self::evicted_entries`]) and the new entry is stored; an insertion is
+    /// skipped ([`Self::dropped_inserts`]) only when the limit is below the
+    /// smallest table that holds one entry. While a table grows, the outgoing
+    /// table is alive next to the new one: see the type-level documentation for
+    /// the transient peak (1.5 × the limit + 8 bytes; 236 bytes at a limit of
+    /// 152). The limit bounds the retained tables, not the per-call batch
+    /// buffers.
     ///
     /// # Errors
     ///
@@ -315,31 +331,33 @@ where
     /// ```
     /// use tensor4all_core::MultiIndexCache;
     ///
-    /// // Room for exactly one u64 key plus one f64 value.
-    /// let mut cache: MultiIndexCache<f64> = MultiIndexCache::with_retained_byte_limit(&[4], 16).unwrap();
-    /// assert_eq!(cache.retained_byte_limit(), 16);
-    /// cache.insert(&[0], 1.0).unwrap();
-    /// cache.insert(&[1], 2.0).unwrap(); // skipped: the limit is reached
-    /// assert_eq!(cache.dropped_inserts(), 1);
-    /// assert_eq!(cache.get(&[0]).unwrap(), Some(1.0));
-    /// assert_eq!(cache.get(&[1]).unwrap(), None);
+    /// // Room for one table of 4 buckets (3 entries) of u64 keys and f64 values.
+    /// let mut cache: MultiIndexCache<f64> = MultiIndexCache::with_retained_byte_limit(&[8], 100).unwrap();
+    /// assert_eq!(cache.retained_byte_limit(), 100);
+    /// for i in 0..8 {
+    ///     cache.insert(&[i], i as f64).unwrap();
+    /// }
+    /// // The oldest entries were evicted; the latest is still answered.
+    /// assert!(cache.retained_bytes() <= 100);
+    /// assert_eq!(cache.evicted_entries() + cache.len(), 8);
+    /// assert_eq!(cache.get(&[7]).unwrap(), Some(7.0));
+    /// assert_eq!(cache.get(&[0]).unwrap(), None);
     /// ```
     pub fn with_retained_byte_limit(
         local_dims: &[usize],
         retained_byte_limit: usize,
     ) -> Result<Self, error::CacheKeyError> {
         let backend = InnerCache::<V>::new(local_dims)?;
-        let key_bytes = backend.key_bytes();
         Ok(Self {
             backend,
             local_dims: local_dims.to_vec(),
-            key_bytes,
             id: NEXT_CACHE_ID.fetch_add(1, Ordering::Relaxed),
             generation: 0,
             hits: 0,
             misses: 0,
             retained_byte_limit,
             dropped_inserts: 0,
+            evicted_entries: 0,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -453,6 +471,7 @@ where
                     &mut self.hits,
                     &mut self.misses,
                     &mut self.dropped_inserts,
+                    &mut self.evicted_entries,
                     indices,
                     evaluate,
                 )
@@ -678,7 +697,6 @@ where
         F: FnOnce(&[(usize, usize)]) -> anyhow::Result<Vec<V>>,
     {
         self.check_side_pair(left, right)?;
-        let entry_bytes = self.key_bytes + std::mem::size_of::<V>();
         macro_rules! keyed_with {
             ($cache:expr, $left:expr, $right:expr) => {
                 evaluate_keyed_requests(
@@ -688,11 +706,11 @@ where
                     $left,
                     $right,
                     requests,
-                    entry_bytes,
                     self.retained_byte_limit,
                     &mut self.hits,
                     &mut self.misses,
                     &mut self.dropped_inserts,
+                    &mut self.evicted_entries,
                     evaluate,
                 )
             };
@@ -815,14 +833,13 @@ where
     /// ```
     pub fn insert(&mut self, idx: &[I], value: V) -> Result<(), error::CacheKeyError> {
         self.validate(idx)?;
-        if !self.backend.contains(idx) {
-            let entry_bytes = self.key_bytes + std::mem::size_of::<V>();
-            if self.retained_bytes().saturating_add(entry_bytes) > self.retained_byte_limit {
-                self.dropped_inserts += 1;
-                return Ok(());
-            }
+        let inserted = self
+            .backend
+            .insert_bounded(idx, value, self.retained_byte_limit);
+        self.evicted_entries += inserted.evicted;
+        if !inserted.stored {
+            self.dropped_inserts += 1;
         }
-        self.backend.insert(idx, value);
         Ok(())
     }
 
@@ -958,10 +975,13 @@ where
         }
     }
 
-    /// Logical estimate of the retained payload: one key and one value per entry.
+    /// Bytes of the cache's hash tables: buckets × (key + value + 1 control
+    /// byte) plus one group of control bytes, for both generations.
     ///
-    /// This is the cache's own accounting, not process memory. It excludes
-    /// allocator overhead and any heap payload reachable from a value.
+    /// Computed from the tables' capacities with a 16-byte control group, an
+    /// upper bound on the bytes they hold (exact on x86_64; on targets with
+    /// 8-byte groups, 8 bytes over per allocated generation, so up to 16). It excludes allocator overhead and any heap
+    /// payload reachable from a value.
     ///
     /// # Examples
     ///
@@ -971,11 +991,11 @@ where
     /// let mut cache: MultiIndexCache<f64> = MultiIndexCache::new(&[2, 2]).unwrap();
     /// assert_eq!(cache.retained_bytes(), 0);
     /// cache.insert(&[0, 0], 1.0).unwrap();
-    /// // one u64 key plus one f64 value
-    /// assert_eq!(cache.retained_bytes(), 8 + std::mem::size_of::<f64>());
+    /// // the first table has 4 buckets of a u64 key, an f64 value and a control byte
+    /// assert_eq!(cache.retained_bytes(), 4 * (8 + 8 + 1) + 16);
     /// ```
     pub fn retained_bytes(&self) -> usize {
-        self.backend.len() * (self.key_bytes + std::mem::size_of::<V>())
+        self.backend.bytes()
     }
 
     /// The configured local dimensions.
@@ -1010,7 +1030,7 @@ where
         self.backend.key_type_name()
     }
 
-    /// Logical payload limit in bytes that this cache enforces.
+    /// Limit in bytes of hash table that this cache enforces.
     ///
     /// # Examples
     ///
@@ -1024,11 +1044,10 @@ where
         self.retained_byte_limit
     }
 
-    /// Change the logical payload limit at run time.
+    /// Change the table byte limit at run time.
     ///
-    /// Shrinking the limit below [`Self::retained_bytes`] does not evict
-    /// entries; it only prevents further insertions until the cache falls below
-    /// the limit again.
+    /// Shrinking the limit below [`Self::retained_bytes`] evicts nothing at once;
+    /// the next new entry evicts generations until the tables fit.
     ///
     /// # Examples
     ///
@@ -1038,18 +1057,20 @@ where
     /// let mut cache: MultiIndexCache<f64> = MultiIndexCache::new(&[2]).unwrap();
     /// cache.insert(&[0], 1.0).unwrap();
     /// cache.set_retained_byte_limit(0);
-    /// cache.insert(&[1], 2.0).unwrap(); // skipped
-    /// assert_eq!(cache.len(), 1);
-    /// assert_eq!(cache.dropped_inserts(), 1);
+    /// assert_eq!(cache.len(), 1); // nothing evicted yet
+    /// cache.insert(&[1], 2.0).unwrap(); // evicts [0]; no table fits in 0 bytes
+    /// assert_eq!((cache.len(), cache.evicted_entries(), cache.dropped_inserts()), (0, 1, 1));
     /// ```
     pub fn set_retained_byte_limit(&mut self, limit: usize) {
         self.retained_byte_limit = limit;
     }
 
-    /// Number of insertions skipped because the cache was at its payload limit.
+    /// Number of insertions skipped because the limit is below the smallest
+    /// table that holds one entry.
     ///
     /// A skipped insertion only means the point will be evaluated again if it is
-    /// requested later; it never makes a lookup return a wrong value.
+    /// requested later; it never makes a lookup return a wrong value. A cache at
+    /// its limit evicts instead (see [`Self::evicted_entries`]).
     ///
     /// # Examples
     ///
@@ -1063,6 +1084,28 @@ where
     /// ```
     pub fn dropped_inserts(&self) -> usize {
         self.dropped_inserts
+    }
+
+    /// Number of entries evicted to keep the tables within the limit.
+    ///
+    /// A saturated cache evicts its oldest generation of entries each time the
+    /// current one fills up; an evicted point is evaluated again if requested.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::MultiIndexCache;
+    ///
+    /// let mut cache: MultiIndexCache<f64> = MultiIndexCache::with_retained_byte_limit(&[64], 1024).unwrap();
+    /// for i in 0..64 {
+    ///     cache.insert(&[i], i as f64).unwrap();
+    /// }
+    /// assert!(cache.evicted_entries() > 0);
+    /// assert_eq!(cache.evicted_entries() + cache.len(), 64);
+    /// assert_eq!(cache.get(&[63]).unwrap(), Some(63.0)); // the latest stays
+    /// ```
+    pub fn evicted_entries(&self) -> usize {
+        self.evicted_entries
     }
 
     fn validate(&self, idx: &[I]) -> Result<(), error::CacheKeyError> {
@@ -1097,13 +1140,14 @@ fn validate_index<I: IndexInt>(
 // grouping the borrowed fields would add an otherwise unused state type.
 #[allow(clippy::too_many_arguments)]
 fn evaluate_encoded_batch<K, V, I, F>(
-    cache: &mut FxHashMap<K, V>,
+    cache: &mut MemoTable<K, V>,
     coeffs: &[K],
     local_dims: &[usize],
     retained_byte_limit: usize,
     hits: &mut usize,
     misses: &mut usize,
     dropped_inserts: &mut usize,
+    evicted_entries: &mut usize,
     indices: ColMajorArrayRef<'_, I>,
     evaluate: F,
 ) -> Result<Vec<V>, CachedBatchError>
@@ -1157,12 +1201,11 @@ where
             }
             .into());
         }
-        let entry_bytes = std::mem::size_of::<K>() + std::mem::size_of::<V>();
         for (key, value) in miss_keys.into_iter().zip(&values) {
-            if (cache.len() * entry_bytes).saturating_add(entry_bytes) > retained_byte_limit {
+            let inserted = cache.insert(key, value.clone(), retained_byte_limit);
+            *evicted_entries += inserted.evicted;
+            if !inserted.stored {
                 *dropped_inserts += 1;
-            } else {
-                cache.insert(key, value.clone());
             }
         }
         values
@@ -1198,15 +1241,15 @@ fn validate_side_sites(local_dims: &[usize], sites: &[usize]) -> Result<(), erro
 /// re-validated on a hit, and the caller sees only the distinct missing entries.
 #[allow(clippy::too_many_arguments)]
 fn evaluate_keyed_requests<K, V, F>(
-    cache: &mut FxHashMap<K, V>,
+    cache: &mut MemoTable<K, V>,
     left: &[K],
     right: &[K],
     requests: &[(usize, usize)],
-    entry_bytes: usize,
     retained_byte_limit: usize,
     hits: &mut usize,
     misses: &mut usize,
     dropped_inserts: &mut usize,
+    evicted_entries: &mut usize,
     evaluate: F,
 ) -> Result<Vec<V>, CachedBatchError>
 where
@@ -1269,10 +1312,10 @@ where
             .into());
         }
         for (key, value) in miss_keys.into_iter().zip(&values) {
-            if (cache.len() * entry_bytes).saturating_add(entry_bytes) > retained_byte_limit {
+            let inserted = cache.insert(key, value.clone(), retained_byte_limit);
+            *evicted_entries += inserted.evicted;
+            if !inserted.stored {
                 *dropped_inserts += 1;
-            } else {
-                cache.insert(key, value.clone());
             }
         }
         values
