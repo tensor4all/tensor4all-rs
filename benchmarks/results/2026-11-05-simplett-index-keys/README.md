@@ -130,15 +130,27 @@ observed paired ratio range across all three rounds.
 - [Failed fixed idle check](idle-check.json)
 - [Generated summary](summary.json)
 
-Build `cache_overhead` at each pinned revision with the identical harness
-above. Build once before measuring, retain each executable separately, then run
-these commands for all three arm orders, with the thread environment above:
+[`benchmarks/rust/run_simplett_index_key_pairs.py`](../../rust/run_simplett_index_key_pairs.py)
+runs the whole experiment from a checkout that contains the three pinned
+revisions. It exports each revision with `git archive`, copies the harness onto
+the original revision, builds each `cache_overhead` executable once with
+`--locked` in its own target directory, stops if any two executables are
+identical, runs the fixed 120-second idle check, then times the
+`cache_keys` group in the three rotated arm orders under the thread
+environment above. It records the toolchain, host, binary hashes, load and
+thermal observations, raw Criterion samples, and applies the gates:
 
 ```sh
-cargo bench -p tensor4all-simplett --bench cache_overhead --no-run
-# Run each retained executable; labels must be unique per arm/round.
-<retained-executable> cache_keys --bench --noplot --save-baseline <arm-round>
+python3 benchmarks/rust/run_simplett_index_key_pairs.py --output <new-directory>
 ```
+
+On Linux, `--cpu N` pins each timed run to one CPU. The driver evaluates the
+CI-width gate on the two-sided half-width; the experiments above used the
+upward half-width. "Batch" routes are `cold_fixed`, `warm_fixed` and
+`warm_auto`; "warm hit" routes are `left_hit` and `right_hit`. A failed idle
+check stops before timing, a failed noise gate makes the decision
+INCONCLUSIVE, and a narrower `--filter` produces a PARTIAL result that does not
+count toward signoff.
 
 Before timing, a quiet-host run must pass the recorded idle and noise checks.
 Preserve full suites, confidence intervals, host observations and invalid runs;
