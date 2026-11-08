@@ -57,10 +57,11 @@ where
         &[2, 5, 3, 8],
         &[6, 1, 9, 4],
     ];
-    // 1, 4, 6, 9 and 13 points: zero to three full four-point blocks and every remainder.
+    // 1, 2, 3, 4, 6, 7, 9 and 13 points: zero to three full four-point blocks, and remainders 0 to 3 both alone and
+    // after full blocks (7 = 4 + 3).
     for (bonds, point_count) in bond_sets
         .iter()
-        .flat_map(|&bonds| [1, 4, 6, 9, 13].map(|points| (bonds, points)))
+        .flat_map(|&bonds| [1, 2, 3, 4, 6, 7, 9, 13].map(|points| (bonds, points)))
     {
         for physical_last in [false, true] {
             for descending in [true, false] {
