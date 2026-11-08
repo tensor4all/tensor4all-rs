@@ -1059,12 +1059,13 @@ fn small_positive_branch_slice_budget_still_retains_the_branching_slices() {
     );
 }
 
-/// The one-branching-tensor floor is a lower bound on the request, not a cap: a budget below it is raised to it, and a
-/// budget above it is kept as requested. Retention is then bounded by that requested budget - a readout crossing two
-/// branching nodes prepares twice the floor, and the slices that would pass the budget are refused instead of
-/// retained. Values are bitwise those of the zero-budget route.
+/// The one-branching-tensor floor is a lower bound on the request, not a cap: `0` disables retention, a positive
+/// budget below the floor is raised to it, and a budget above the floor is kept as requested. Retention is then
+/// bounded by that budget - a readout crossing two branching nodes prepares twice the floor, so the raised and the
+/// requested budget hold different numbers of slices. Values are bitwise those of the zero-budget route in every
+/// regime.
 #[test]
-fn oversized_branch_slice_budget_is_kept_as_requested_and_still_caps_retention() {
+fn branch_slice_budget_zero_is_raised_below_the_floor_and_honoured_above_it() {
     let (tree, indices) = two_branch_tree_of(|value| value);
     let values = two_branch_values();
     let points = ColMajorArrayRef::new(&values, &[6, 64]).unwrap();
@@ -1084,54 +1085,52 @@ fn oversized_branch_slice_budget_is_kept_as_requested_and_still_caps_retention()
     // Each branching tensor has 3 × 6 × 6 × 6 = 648 entries: 5184 B as f64, 10368 B as Complex64. Its three physical
     // slices are 216 entries each (1728 B / 3456 B), and one readout prepares the slices of both branching nodes: six
     // of them, 10368 B as f64 and 20736 B as Complex64.
-    let (tensor_f64, slice_f64, total_f64) = (5184, 1728, 10368);
-    let (tensor_c64, slice_c64, total_c64) = (10368, 3456, 20736);
+    let (floor_f64, slice_f64, visited_f64) = (5184, 1728, 10368);
+    let (floor_c64, slice_c64, visited_c64) = (10368, 3456, 20736);
 
-    // An oversized budget is kept verbatim for both scalar kinds: the one-branching-tensor floor raises a smaller
-    // request and never lowers a larger one. `usize::MAX / 2` rather than a literal shift, which overflows a 32-bit
-    // `usize`.
-    for budget in [usize::MAX / 2, usize::MAX] {
-        assert_eq!(
-            evaluator(budget).prepared_branch_slices_f64.max_bytes,
-            budget
-        );
-        assert_eq!(
-            evaluator(budget).prepared_branch_slices_c64.max_bytes,
-            budget
-        );
-    }
-
-    // The floor budget retains exactly three of the six visited slices and refuses the rest, so retained bytes stop
-    // at the budget rather than following the readout.
-    let mut capped = evaluator(tensor_f64);
-    let capped_values = capped
-        .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
-        .unwrap();
-    assert_eq!(capped.prepared_branch_slices_f64.max_bytes, tensor_f64);
-    assert_eq!(capped.prepared_branch_slices_f64.slices.len(), 3);
-    assert_eq!(
-        capped.prepared_branch_slices_f64.retained_bytes(),
-        3 * slice_f64
-    );
-
-    // A budget covering every visited slice retains all six, so retained bytes follow the requested budget.
-    let mut full = evaluator(total_f64);
-    let full_values = full
-        .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
-        .unwrap();
-    assert_eq!(full.prepared_branch_slices_f64.slices.len(), 6);
-    assert_eq!(full.prepared_branch_slices_f64.retained_bytes(), total_f64);
-
+    // Zero disables retention: nothing is kept.
     let mut zero = evaluator(0);
     let zero_values = zero
         .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
         .unwrap();
+    assert_eq!(zero.prepared_branch_slices_f64.max_bytes, 0);
     assert_eq!(zero.prepared_branch_slices_f64.slices.len(), 0);
-    let bits = |values: &[f64]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
-    assert_eq!(bits(&capped_values), bits(&zero_values));
-    assert_eq!(bits(&full_values), bits(&zero_values));
+    assert_eq!(zero.prepared_branch_slices_f64.retained_bytes(), 0);
 
-    // Complex64 tree: the same two numbers per slice, twice as many bytes, and the same ceiling behaviour.
+    // A positive budget below the floor is raised to it rather than taken literally, and the raised budget is what
+    // the cache enforces: it holds exactly one branching tensor's three slices and refuses the other three.
+    let mut below_floor = evaluator(1);
+    let below_floor_values = below_floor
+        .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(below_floor.prepared_branch_slices_f64.max_bytes, floor_f64);
+    assert_eq!(below_floor.prepared_branch_slices_f64.slices.len(), 3);
+    assert_eq!(
+        below_floor.prepared_branch_slices_f64.retained_bytes(),
+        3 * slice_f64
+    );
+
+    // A budget above the floor is kept as requested and is not capped back to the floor: it retains all six visited
+    // slices, twice the floor.
+    let mut above_floor = evaluator(4 * floor_f64);
+    let above_floor_values = above_floor
+        .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(
+        above_floor.prepared_branch_slices_f64.max_bytes,
+        4 * floor_f64
+    );
+    assert_eq!(above_floor.prepared_branch_slices_f64.slices.len(), 6);
+    assert_eq!(
+        above_floor.prepared_branch_slices_f64.retained_bytes(),
+        visited_f64
+    );
+
+    let bits = |values: &[f64]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&below_floor_values), bits(&zero_values));
+    assert_eq!(bits(&above_floor_values), bits(&zero_values));
+
+    // Complex64 tree: the same three regimes with twice the bytes per entry.
     let (complex_tree, complex_indices) =
         two_branch_tree_of(|value| Complex64::new(value, 0.5 * value - 0.1));
     let complex_evaluator = |budget: usize| {
@@ -1147,32 +1146,52 @@ fn oversized_branch_slice_budget_is_kept_as_requested_and_still_caps_retention()
         )
         .unwrap()
     };
-    let mut complex_capped = complex_evaluator(tensor_c64);
-    let complex_capped_values = complex_capped
-        .evaluate_batched_typed::<Complex64>(points, EvaluationHint::default())
-        .unwrap();
-    assert_eq!(
-        complex_capped.prepared_branch_slices_c64.max_bytes,
-        tensor_c64
-    );
-    assert_eq!(complex_capped.prepared_branch_slices_c64.slices.len(), 3);
-    assert_eq!(
-        complex_capped.prepared_branch_slices_c64.retained_bytes(),
-        3 * slice_c64
-    );
-    let mut complex_full = complex_evaluator(total_c64);
-    let complex_full_values = complex_full
-        .evaluate_batched_typed::<Complex64>(points, EvaluationHint::default())
-        .unwrap();
-    assert_eq!(complex_full.prepared_branch_slices_c64.slices.len(), 6);
-    assert_eq!(
-        complex_full.prepared_branch_slices_c64.retained_bytes(),
-        total_c64
-    );
     let mut complex_zero = complex_evaluator(0);
     let complex_zero_values = complex_zero
         .evaluate_batched_typed::<Complex64>(points, EvaluationHint::default())
         .unwrap();
+    assert_eq!(complex_zero.prepared_branch_slices_c64.max_bytes, 0);
+    assert_eq!(complex_zero.prepared_branch_slices_c64.slices.len(), 0);
+    assert_eq!(complex_zero.prepared_branch_slices_c64.retained_bytes(), 0);
+
+    let mut complex_below_floor = complex_evaluator(1);
+    let complex_below_floor_values = complex_below_floor
+        .evaluate_batched_typed::<Complex64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(
+        complex_below_floor.prepared_branch_slices_c64.max_bytes,
+        floor_c64
+    );
+    assert_eq!(
+        complex_below_floor.prepared_branch_slices_c64.slices.len(),
+        3
+    );
+    assert_eq!(
+        complex_below_floor
+            .prepared_branch_slices_c64
+            .retained_bytes(),
+        3 * slice_c64
+    );
+
+    let mut complex_above_floor = complex_evaluator(4 * floor_c64);
+    let complex_above_floor_values = complex_above_floor
+        .evaluate_batched_typed::<Complex64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(
+        complex_above_floor.prepared_branch_slices_c64.max_bytes,
+        4 * floor_c64
+    );
+    assert_eq!(
+        complex_above_floor.prepared_branch_slices_c64.slices.len(),
+        6
+    );
+    assert_eq!(
+        complex_above_floor
+            .prepared_branch_slices_c64
+            .retained_bytes(),
+        visited_c64
+    );
+
     let complex_bits = |values: &[Complex64]| {
         values
             .iter()
@@ -1180,11 +1199,11 @@ fn oversized_branch_slice_budget_is_kept_as_requested_and_still_caps_retention()
             .collect::<Vec<_>>()
     };
     assert_eq!(
-        complex_bits(&complex_capped_values),
+        complex_bits(&complex_below_floor_values),
         complex_bits(&complex_zero_values)
     );
     assert_eq!(
-        complex_bits(&complex_full_values),
+        complex_bits(&complex_above_floor_values),
         complex_bits(&complex_zero_values)
     );
 }
