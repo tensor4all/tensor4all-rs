@@ -213,6 +213,13 @@ fn identity_problem() -> (TensorTrain, TensorTrain) {
     (operator, rhs)
 }
 
+/// `error` followed by each error in its `Error::source` chain.
+fn error_chain<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> impl Iterator<Item = &'a (dyn std::error::Error + 'static)> {
+    std::iter::successors(Some(error), |e| e.source())
+}
+
 fn treetn_error_chain_has<E: std::error::Error + 'static>(
     error: &TensorTrainError,
     predicate: impl Fn(&E) -> bool,
@@ -220,9 +227,7 @@ fn treetn_error_chain_has<E: std::error::Error + 'static>(
     let TensorTrainError::TreeTn { source, .. } = error else {
         return false;
     };
-    source
-        .source
-        .chain()
+    error_chain(source)
         .filter_map(|e| e.downcast_ref::<E>())
         .any(predicate)
 }
@@ -292,10 +297,7 @@ fn local_solver_selection_wrapper_reports_invalid_gmres_options_as_treetn_errors
             panic!("expected TensorTrainError::TreeTn, got {error:?}");
         };
         assert!(
-            source
-                .source
-                .chain()
-                .any(|e| e.to_string().contains(expected)),
+            error_chain(source).any(|e| e.to_string().contains(expected)),
             "{expected}: {error:?}"
         );
     }
@@ -339,10 +341,7 @@ fn tensor_train_linsolve_method_reports_invalid_local_solver_options_as_treetn_e
         panic!("expected TensorTrainError::TreeTn, got {error:?}");
     };
     assert!(
-        source
-            .source
-            .chain()
-            .any(|e| e.to_string().contains("gmres_tol must be finite")),
+        error_chain(source).any(|e| e.to_string().contains("gmres_tol must be finite")),
         "{error:?}"
     );
 }

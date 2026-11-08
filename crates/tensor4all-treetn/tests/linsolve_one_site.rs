@@ -7,7 +7,7 @@ use tensor4all_core::{
 };
 use tensor4all_treetn::{
     factorize_tensor_to_treetn_with, square_linsolve, IndexMapping, LinsolveOptions,
-    SquareLinsolveResult, TreeTN, TreeTopology,
+    SquareLinsolveResult, TreeTN, TreeTNOperationError, TreeTopology,
 };
 
 type State = TreeTN<IdxTensor, usize>;
@@ -738,6 +738,10 @@ fn a_single_index_mapping_is_rejected_before_the_identity_shortcut() {
         )
         .unwrap_err();
         assert!(
+            matches!(error, TreeTNOperationError::InvalidConfiguration { .. }),
+            "{error:?}"
+        );
+        assert!(
             error
                 .to_string()
                 .contains("must both be Some or both be None"),
@@ -770,6 +774,10 @@ fn non_finite_coefficients_are_rejected_before_the_identity_shortcut() {
             Some(p.output.clone()),
         )
         .unwrap_err();
+        assert!(
+            matches!(error, TreeTNOperationError::InvalidConfiguration { .. }),
+            "{error:?}"
+        );
         assert!(error.to_string().contains("a0 must be finite"), "{error}");
     }
 }

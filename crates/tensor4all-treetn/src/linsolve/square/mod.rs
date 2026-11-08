@@ -37,7 +37,7 @@ use anyhow::{bail, Result};
 
 use tensor4all_core::{AnyScalar, IndexLike, TensorLike};
 
-use crate::linsolve::common::{validate_local_options, LinsolveOptions};
+use crate::linsolve::common::LinsolveOptions;
 use crate::operator::{apply_linear_operator, ApplyOptions, IndexMapping, LinearOperator};
 use crate::{
     apply_local_update_sweep, CanonicalizationOptions, LocalUpdateStep, LocalUpdateSweepPlan,
@@ -138,17 +138,19 @@ where
 /// # Errors
 ///
 /// Invalid options are always errors; no value is clamped. Before any sweep or
-/// shortcut, [`TreeTNOperationError`] is returned when
+/// shortcut, [`TreeTNOperationError::InvalidConfiguration`] is returned when
 /// - `nsite` is not 1 or 2, or one-site mode has a bond cap or SVD policy;
 /// - `convergence_tol` is negative or not finite;
 /// - [`LinsolveOptions::validate_local_solver`] rejects the coefficients or the
 ///   local solver options (a non-finite `a0` or `a1`, `a0 = a1 = 0`, invalid
 ///   active GMRES controls, changed `gmres_*` controls with CG or BiCGSTAB,
 ///   invalid native CG/BiCGSTAB options);
+/// - only one of `input_mapping` and `output_mapping` is provided;
+/// - two-site mode is requested for a single-node network.
+///
+/// Also before any sweep, [`TreeTNOperationError`] is returned when
 /// - the network is empty, the operator cannot act on `init`, or its result is
 ///   incompatible with `rhs`;
-/// - two-site mode is requested for a single-node network;
-/// - only one of `input_mapping` and `output_mapping` is provided;
 /// - `a0` is zero and the operator term is zero (`a1 = 0` or a zero operator),
 ///   so the system is singular.
 ///
@@ -282,18 +284,23 @@ where
         Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
-    options.validate_update_mode()?;
-    options.validate_convergence_tol()?;
-    validate_local_options(&options)?;
+    options
+        .validate_update_mode()
+        .map_err(TreeTNOperationError::invalid_configuration)?;
+    options
+        .validate_convergence_tol()
+        .map_err(TreeTNOperationError::invalid_configuration)?;
+    options.validate_local_solver()?;
+    if input_mapping.is_some() != output_mapping.is_some() {
+        return Err(TreeTNOperationError::invalid_configuration(
+            anyhow::anyhow!("input_mapping and output_mapping must both be Some or both be None"),
+        ));
+    }
     validate_linsolve_inputs(operator, rhs, &init)?;
     if options.nsite == 2 && rhs.node_count() < 2 {
-        return Err(anyhow::anyhow!("square_linsolve requires at least two sites with nsite=2; use nsite=1 for a single-node solve").into());
-    }
-    if input_mapping.is_some() != output_mapping.is_some() {
-        return Err(anyhow::anyhow!(
-            "input_mapping and output_mapping must both be Some or both be None"
-        )
-        .into());
+        return Err(TreeTNOperationError::invalid_configuration(anyhow::anyhow!(
+            "square_linsolve requires at least two sites with nsite=2; use nsite=1 for a single-node solve"
+        )));
     }
 
     let identity_only = options.a1.is_zero() || operator_is_zero(operator)?;

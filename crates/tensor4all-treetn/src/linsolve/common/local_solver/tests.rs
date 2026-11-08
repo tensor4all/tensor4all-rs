@@ -265,6 +265,10 @@ fn local_solver_rejects_changed_gmres_controls_for_other_solvers() {
             (base.clone().with_gmres_restart_dim(5), "gmres_restart_dim"),
         ] {
             let error = options.validate_local_solver().unwrap_err();
+            assert!(
+                matches!(error, TreeTNOperationError::InvalidConfiguration { .. }),
+                "{error:?}"
+            );
             let message = format!("{name} configures LocalSolver::Gmres only");
             assert!(error.to_string().contains(&message), "{error}");
         }

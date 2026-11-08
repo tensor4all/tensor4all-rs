@@ -157,13 +157,18 @@ impl Problem {
     }
 }
 
+/// `error` followed by each error in its `Error::source` chain.
+fn error_chain<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> impl Iterator<Item = &'a (dyn std::error::Error + 'static)> {
+    std::iter::successors(Some(error), |e| e.source())
+}
+
 fn has_krylov_error(
     error: &TreeTNOperationError,
     predicate: impl Fn(&KrylovError) -> bool,
 ) -> bool {
-    error
-        .source
-        .chain()
+    error_chain(error)
         .filter_map(|e| e.downcast_ref::<KrylovError>())
         .any(predicate)
 }
@@ -308,10 +313,11 @@ fn local_solver_selection_rejects_invalid_convergence_tolerance() {
             .solve(p.options.clone().with_convergence_tol(tol))
             .unwrap_err();
         assert!(
-            error
-                .source
-                .chain()
-                .any(|e| e.to_string().contains("convergence_tol must be finite")),
+            matches!(error, TreeTNOperationError::InvalidConfiguration { .. }),
+            "{error:?}"
+        );
+        assert!(
+            error_chain(&error).any(|e| e.to_string().contains("convergence_tol must be finite")),
             "{error:?}"
         );
     }
@@ -362,12 +368,13 @@ fn local_solver_selection_rejects_changed_inactive_gmres_controls() {
             ),
         ] {
             let error = p.solve(options).unwrap_err();
+            assert!(
+                matches!(error, TreeTNOperationError::InvalidConfiguration { .. }),
+                "{error:?}"
+            );
             let message = format!("{name} configures LocalSolver::Gmres only");
             assert!(
-                error
-                    .source
-                    .chain()
-                    .any(|e| e.to_string().contains(&message)),
+                error_chain(&error).any(|e| e.to_string().contains(&message)),
                 "{message}: {error:?}"
             );
         }

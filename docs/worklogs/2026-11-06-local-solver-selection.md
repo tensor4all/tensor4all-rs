@@ -124,15 +124,17 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   whose magnitude exceeds `f64::MAX` keeps finite components
   (`0.51 * f64::MAX / (0.35 + 0.35i)`); a large `a0` applies the power of two
   last in one step, so `from_bits(2) / 3` rounds once to `from_bits(1)`.
+- `validate_local_solver` and the option, mapping and site-count checks at the
+  start of `square_linsolve` return `TreeTNOperationError::InvalidConfiguration`.
 
 The counts below are from local runs (not CI), on macOS, of the commands listed
 with each count; they are not reproducible from the diff alone.
 
-Validation on the branch merged with main `e38a7498`:
+Validation on the branch merged with main `af980a54`:
 
 - `cargo test -p tensor4all-core --lib krylov`: 121 passed, 553 filtered out
-- `cargo test -p tensor4all-treetn --lib linsolve`: 38 passed, 630 filtered out
-- `cargo test -p tensor4all-treetn --test integration linsolve`: 73 passed, 305 filtered out
+- `cargo test -p tensor4all-treetn --lib linsolve`: 38 passed, 646 filtered out
+- `cargo test -p tensor4all-treetn --test integration linsolve`: 73 passed, 322 filtered out
 - `cargo test -p tensor4all-itensorlike --lib`: 139 passed
 - Doctests: `cargo test -p tensor4all-core --doc krylov` 21 passed (383 filtered out),
   `cargo test -p tensor4all-treetn --doc linsolve` 8 passed (197 filtered out),

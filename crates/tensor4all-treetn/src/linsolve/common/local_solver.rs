@@ -70,7 +70,7 @@ impl LinsolveOptions {
     /// options are always reported as errors; no value is clamped or replaced.
     ///
     /// # Errors
-    /// Returns [`TreeTNOperationError`] when
+    /// Returns [`TreeTNOperationError::InvalidConfiguration`] when
     /// - `a0` or `a1` has a NaN or infinite real or imaginary part;
     /// - `a0` and `a1` are both zero;
     /// - GMRES is selected and `gmres_tol` is not finite and positive (GMRES
@@ -99,7 +99,7 @@ impl LinsolveOptions {
     /// assert!(LinsolveOptions::new(2).with_gmres_restart_dim(0).validate_local_solver().is_err());
     /// ```
     pub fn validate_local_solver(&self) -> std::result::Result<(), TreeTNOperationError> {
-        Ok(validate_local_options(self)?)
+        validate_local_options(self).map_err(TreeTNOperationError::invalid_configuration)
     }
 }
 
