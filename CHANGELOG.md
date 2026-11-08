@@ -140,8 +140,7 @@ described in [README.md](README.md).
   `n`) and `UnfusedTensorInfo` (`m`, `n`, `num_physical_dims`, `physical_dim`)
   became accessor methods of the same names.
 - `7d263fadb7ef`, #595 — `FourierOptions::maxbonddim` renamed to `max_bond_dim`.
-    relative_linear_system_residual, square_linsolve, EnvironmentCache, GmresToleranceMode,
-    LinsolveOptions,
+
 #### tensor4all-simplett
 
 - `7d263fadb7ef`, #595 — `TensorTrain` renamed to `SimpleTensorTrain`; `dot`
@@ -211,7 +210,10 @@ described in [README.md](README.md).
   became private; reach their items through the crate root, except
   `random::DefaultIndex`, which is not re-exported: use
   `tensor4all_core::DynIndex`, the same `Index<DynId, TagSet>`.
-  `DefaultSiteIndexNetwork` removed. `evaluate_batch` renamed to
+  `DefaultSiteIndexNetwork` removed. The `site_index_network` re-export alias
+  `CanonicalizeEdgesType` is gone with the module; the type is
+  `tensor4all_treetn::CanonicalizeEdges` (`lib.rs:73`).
+  `evaluate_batch` renamed to
   `evaluate_batched`, `sim_linkinds` and `sim_linkinds_mut` to
   `sim_link_indices` and `sim_link_indices_mut`, and the `evaluate_at` alias
   removed (use `evaluate`).
