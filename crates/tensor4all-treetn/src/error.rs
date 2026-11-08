@@ -397,25 +397,32 @@ impl From<anyhow::Error> for TreeTNOperationError {
     /// `anyhow::downcast` returns it too, and it is a note about some other
     /// failure, not the failure itself.
     fn from(source: anyhow::Error) -> Self {
-        // `anyhow::downcast` also returns a `TreeTNOperationError` that was attached with
-        // `.context(..)`; that one is a note about a different failure, not the failure.
-        // std's `dyn Error::downcast_ref` below checks the concrete type of each link,
-        // which is what tells the two apart: a context value is not a chain link.
         let mut layers: Vec<String> = Vec::new();
-        let mut found = false;
-        let mut is_operation = false;
-        for cause in source.chain() {
-            if let Some(error) = cause.downcast_ref::<Self>() {
-                found = true;
-                is_operation = matches!(error, Self::Operation { .. });
-                break;
+        let (found, is_operation, same_object) = {
+            // anyhow's own match can be a value attached with `.context(..)`;
+            // std's `dyn Error::downcast_ref` only matches a concrete chain link.
+            let outer_match = source.downcast_ref::<Self>();
+            let mut concrete: Option<&Self> = None;
+            for cause in source.chain() {
+                if let Some(error) = cause.downcast_ref::<Self>() {
+                    concrete = Some(error);
+                    break;
+                }
+                layers.push(cause.to_string());
             }
-            layers.push(cause.to_string());
-        }
-        // The catch-all is the variant that keeps types: unwrapping it would re-render
-        // the contexts wrapped around it as text, and an `io::Error` context could no
-        // longer be downcast, so the whole chain is kept instead.
-        if !found || is_operation {
+            match (outer_match, concrete) {
+                (Some(outer), Some(inner)) => (
+                    true,
+                    matches!(outer, Self::Operation { .. }),
+                    std::ptr::eq(outer, inner),
+                ),
+                _ => (false, false, false),
+            }
+        };
+        // Not classified, the catch-all itself, or the extraction would pick a
+        // different object than the chain link (a class used as a context): keep the
+        // whole chain, which is the variant that keeps typed contexts.
+        if !found || is_operation || !same_object {
             return Self::Operation { source };
         }
         match source.downcast::<Self>() {

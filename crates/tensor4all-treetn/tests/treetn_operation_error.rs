@@ -230,6 +230,25 @@ fn the_catch_all_keeps_the_typed_context_of_the_original_error() {
 }
 
 #[test]
+fn a_classification_in_the_context_does_not_replace_the_propagated_classification() {
+    // Both the failure and the layer attached with `.context(..)` are classified.
+    // `anyhow` returns the context value from `downcast`, so the extraction cannot
+    // name the inner variant without taking it from the wrong object; the contract
+    // here is only that the failure survives, not that it keeps its variant.
+    let wrapped = anyhow::Error::new(TreeTNOperationError::InvalidGraph {
+        source: anyhow::anyhow!("real root"),
+    })
+    .context(TreeTNOperationError::InvalidConfiguration {
+        source: anyhow::anyhow!("context note"),
+    });
+    let error = TreeTNOperationError::from(wrapped);
+    assert!(
+        matches!(&error, TreeTNOperationError::Operation { source } if format!("{source:#}").contains("real root")),
+        "the propagated failure must survive, got {error:?}"
+    );
+}
+
+#[test]
 fn wrappers_keep_the_classification() {
     // `rename_node` adds an `anyhow` context internally; the variant must survive it.
     let (mut tree, _site) = one_site_f64_tree();
