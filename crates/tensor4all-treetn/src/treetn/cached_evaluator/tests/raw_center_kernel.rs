@@ -215,46 +215,59 @@ fn raw_center_fold_numbers_the_points_of_every_block() {
     assert_eq!(actual, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
 }
 
+/// Special values through the four-point path, against literals computed independently (same IEEE operations and
+/// order): every non-NaN result bit for bit, sign included. Sums start from +0.0, so a zero result is +0.0 even when
+/// every term is ±0.0; a NaN result is NaN in both, its sign and payload are not part of the contract.
 #[test]
 fn raw_center_fold_keeps_non_finite_values_and_signed_zero() {
-    // NaN anywhere: the result is NaN in both (sign and payload are not specified).
-    let results = fold_and_reference(&[
-        f64::INFINITY,
-        -0.0,
-        0.0,
-        f64::NAN,
-        1.0,
-        -0.0,
-        f64::NEG_INFINITY,
-        2.0,
-        -1e300,
-        1e300,
-    ]);
-    for (actual, expected) in results {
-        if expected.is_nan() {
-            assert!(actual.is_nan(), "{actual} {expected}");
-        } else {
-            assert_eq!(actual.to_bits(), expected.to_bits(), "{actual} {expected}");
-        }
-    }
-
-    // Without NaN, bit for bit: signed zeros, products that overflow to ±inf, and +inf with positive weights.
-    for specials in [
-        &[-0.0, 0.0, 1.0, -0.0, 2.0, -1.0][..],
-        &[-0.0, -1.0, -0.0, -2.0][..],
-        &[1e300, 2.0, 1e300, 1.0, 3.0][..],
-        &[f64::INFINITY, 1.0, 2.0, 0.5][..],
-    ] {
-        for (actual, expected) in fold_and_reference(specials) {
-            assert!(
-                !expected.is_nan(),
-                "{specials:?} gives NaN; use a NaN-free case"
-            );
-            assert_eq!(
-                actual.to_bits(),
-                expected.to_bits(),
-                "{specials:?}: {actual} {expected}"
-            );
+    let inf = f64::INFINITY;
+    let cases: [(&[f64], [f64; 5]); 8] = [
+        (
+            &[-0.0, 0.0, 1.0, -0.0, 2.0, -1.0],
+            [-10.0, -22.0, -10.0, -22.0, -10.0],
+        ),
+        (
+            &[-0.0, -1.0, -0.0, -2.0],
+            [-18.0, -18.0, -24.0, -21.0, -18.0],
+        ),
+        (&[-0.0, 0.0, -0.0], [0.0; 5]),
+        (&[1e300, 2.0, 1e300, 1.0, 3.0], [inf; 5]),
+        (&[inf, 1.0, 2.0, 0.5], [inf; 5]),
+        (&[1e300, -1.0], [-inf; 5]),
+        (&[-inf, 1.0, 2.0], [-inf; 5]),
+        (
+            &[
+                inf,
+                -0.0,
+                0.0,
+                f64::NAN,
+                1.0,
+                -0.0,
+                -inf,
+                2.0,
+                -1e300,
+                1e300,
+            ],
+            [f64::NAN; 5],
+        ),
+    ];
+    for (specials, literal) in cases {
+        for (point, ((actual, reference), literal)) in fold_and_reference(specials)
+            .into_iter()
+            .zip(literal)
+            .enumerate()
+        {
+            for (what, value) in [("fold", actual), ("reference", reference)] {
+                if literal.is_nan() {
+                    assert!(value.is_nan(), "{specials:?} point {point}: {what} {value}");
+                } else {
+                    assert_eq!(
+                        value.to_bits(),
+                        literal.to_bits(),
+                        "{specials:?} point {point}: {what} {value}, expected {literal}"
+                    );
+                }
+            }
         }
     }
 }
