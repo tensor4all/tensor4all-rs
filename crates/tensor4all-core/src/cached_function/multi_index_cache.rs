@@ -1310,8 +1310,7 @@ where
     let values = if n_misses == 0 {
         Vec::new()
     } else {
-        let values =
-            evaluate(&miss_entries).map_err(|error| CachedBatchError::Evaluation(error.into()))?;
+        let values = evaluate(&miss_entries).map_err(CachedBatchError::Evaluation)?;
         if values.len() != n_misses {
             return Err(error::CacheKeyError::BatchResultLength {
                 expected: n_misses,
