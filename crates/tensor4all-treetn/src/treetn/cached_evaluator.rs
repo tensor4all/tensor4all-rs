@@ -6243,8 +6243,7 @@ where
 ///
 /// Each point keeps its own sums, nested and ordered exactly as in
 /// [`fold_raw_center_components`]; the points only share the walk over the core,
-/// so a core entry is read once for all of them (once per distinct physical
-/// value) and their additions overlap.
+/// so one pass serves four points and their additions overlap.
 fn fold_raw_center_points<T>(
     core: &[T],
     strides: &[usize],
@@ -6339,8 +6338,7 @@ where
 }
 
 /// [`strided_dot`] of each lane (`offsets[k]`, `values[k]`), all lanes in one
-/// pass, with the same guarantee as [`strided_dots`]. Lanes that share an
-/// offset read the same entries once.
+/// pass, with the same guarantee as [`strided_dots`].
 fn strided_dots_per_lane<T>(
     data: &[T],
     offsets: [usize; STRIDED_DOT_LANES],

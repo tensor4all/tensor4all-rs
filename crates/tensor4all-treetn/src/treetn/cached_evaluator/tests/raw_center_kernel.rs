@@ -57,7 +57,11 @@ where
         &[2, 5, 3, 8],
         &[6, 1, 9, 4],
     ];
-    for bonds in bond_sets {
+    // 1, 4, 6, 9 and 13 points: zero to three full four-point blocks and every remainder.
+    for (bonds, point_count) in bond_sets
+        .iter()
+        .flat_map(|&bonds| [1, 4, 6, 9, 13].map(|points| (bonds, points)))
+    {
         for physical_last in [false, true] {
             for descending in [true, false] {
                 let physical_dim = 3;
@@ -80,7 +84,6 @@ where
                 let core: Vec<T> = (0..dims.iter().product::<usize>())
                     .map(|_| random(&mut rng))
                     .collect();
-                let point_count = 6;
                 let physical_values: Vec<usize> = (0..point_count)
                     .map(|_| rng.random_range(0..physical_dim))
                     .collect();
@@ -88,7 +91,8 @@ where
                     .iter()
                     .zip(bonds)
                     .map(|(&axis, &dim)| {
-                        let assignments = 2;
+                        // Up to one assignment per point, so no block can reuse another's values unnoticed.
+                        let assignments = point_count;
                         RawCenterComponent {
                             axis,
                             dim,
@@ -120,9 +124,11 @@ where
                 let actual =
                     contract_raw_center(&core, &dims, physical_axis, &physical_values, &components)
                         .unwrap();
+                // Debug formatting is the shortest exact representation, so it tells -0.0 from +0.0.
                 assert_eq!(
-                    actual, expected,
-                    "bonds {bonds:?}, physical axis {physical_axis}, descending {descending}"
+                    format!("{actual:?}"),
+                    format!("{expected:?}"),
+                    "bonds {bonds:?}, {point_count} points, physical axis {physical_axis}, descending {descending}"
                 );
                 assert_eq!(
                     raw_center_core_visits_for_test(),
@@ -155,9 +161,10 @@ fn raw_center_fold_is_bitwise_the_original_recursion_for_complex64() {
     );
 }
 
-/// The fold and the reference on one point of a 5 × 5 centre (one full lane pass and a remainder) whose core and
-/// component entries cycle through `specials`.
-fn fold_and_reference(specials: &[f64]) -> (f64, f64) {
+/// The fold and the reference on five points (one four-point block and one point alone) of a 5 × 5 centre (one
+/// full lane pass and a remainder); the core and each point's component values cycle through `specials`.
+fn fold_and_reference(specials: &[f64]) -> Vec<(f64, f64)> {
+    let points = 5;
     let dims = [1, 5, 5];
     let core: Vec<f64> = (0..25)
         .map(|k| specials[(k * 7) % specials.len()])
@@ -167,23 +174,51 @@ fn fold_and_reference(specials: &[f64]) -> (f64, f64) {
         .map(|axis| RawCenterComponent {
             axis,
             dim: 5,
-            point_to_assignment: vec![0],
-            values: (0..5)
+            point_to_assignment: (0..points).collect(),
+            values: (0..points * 5)
                 .map(|k| specials[(k * 3 + axis) % specials.len()])
                 .collect(),
         })
         .collect();
     let strides = [1, 1, 5];
-    let expected = reference_fold(&core, &strides, &components, 0, 0, 0);
-    let actual = contract_raw_center(&core, &dims, 0, &[0], &components).unwrap();
-    assert_eq!(actual.len(), 1);
-    (actual[0], expected)
+    let actual = contract_raw_center(&core, &dims, 0, &[0; 5], &components).unwrap();
+    assert_eq!(actual.len(), points);
+    (0..points)
+        .map(|point| {
+            (
+                actual[point],
+                reference_fold(&core, &strides, &components, point, 0, 0),
+            )
+        })
+        .collect()
+}
+
+/// #1181 review: eight points in two four-point blocks, each with its own value. A block that took its points'
+/// assignments from the first block would give [1, 2, 3, 4, 1, 2, 3, 4].
+#[test]
+fn raw_center_fold_numbers_the_points_of_every_block() {
+    let components = vec![
+        RawCenterComponent {
+            axis: 2,
+            dim: 1,
+            point_to_assignment: (0..8).collect(),
+            values: (1..=8).map(f64::from).collect(),
+        },
+        RawCenterComponent {
+            axis: 1,
+            dim: 1,
+            point_to_assignment: vec![0; 8],
+            values: vec![1.0],
+        },
+    ];
+    let actual = contract_raw_center(&[1.0], &[1, 1, 1], 0, &[0; 8], &components).unwrap();
+    assert_eq!(actual, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
 }
 
 #[test]
 fn raw_center_fold_keeps_non_finite_values_and_signed_zero() {
     // NaN anywhere: the result is NaN in both (sign and payload are not specified).
-    let (actual, expected) = fold_and_reference(&[
+    let results = fold_and_reference(&[
         f64::INFINITY,
         -0.0,
         0.0,
@@ -195,7 +230,13 @@ fn raw_center_fold_keeps_non_finite_values_and_signed_zero() {
         -1e300,
         1e300,
     ]);
-    assert!(actual.is_nan() && expected.is_nan(), "{actual} {expected}");
+    for (actual, expected) in results {
+        if expected.is_nan() {
+            assert!(actual.is_nan(), "{actual} {expected}");
+        } else {
+            assert_eq!(actual.to_bits(), expected.to_bits(), "{actual} {expected}");
+        }
+    }
 
     // Without NaN, bit for bit: signed zeros, products that overflow to ±inf, and +inf with positive weights.
     for specials in [
@@ -204,15 +245,16 @@ fn raw_center_fold_keeps_non_finite_values_and_signed_zero() {
         &[1e300, 2.0, 1e300, 1.0, 3.0][..],
         &[f64::INFINITY, 1.0, 2.0, 0.5][..],
     ] {
-        let (actual, expected) = fold_and_reference(specials);
-        assert!(
-            !expected.is_nan(),
-            "{specials:?} gives NaN; use a NaN-free case"
-        );
-        assert_eq!(
-            actual.to_bits(),
-            expected.to_bits(),
-            "{specials:?}: {actual} {expected}"
-        );
+        for (actual, expected) in fold_and_reference(specials) {
+            assert!(
+                !expected.is_nan(),
+                "{specials:?} gives NaN; use a NaN-free case"
+            );
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "{specials:?}: {actual} {expected}"
+            );
+        }
     }
 }
