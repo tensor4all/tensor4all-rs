@@ -2060,10 +2060,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "t4a-faer-traits"
-version = "0.24.2"
+name = "t4a-faer"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e518a21025297df2986819d8691cc590e473dc8676316895bfeecddffad0d52"
+checksum = "fbb418322be3bde5413613ec9dfcaa8c7e764ac8e17fd513ceba6942e9bfcbc7"
+dependencies = [
+ "bytemuck",
+ "dyn-stack",
+ "equator 0.6.0",
+ "generativity",
+ "libm",
+ "nano-gemm",
+ "num-complex 0.4.6",
+ "num-traits",
+ "pulp",
+ "reborrow",
+ "t4a-faer-traits",
+ "t4a-gemm",
+ "t4a-private-gemm-x86",
+]
+
+[[package]]
+name = "t4a-faer-traits"
+version = "0.24.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d0ac00f8eac55b87f2609e232ed97179783cd57a14ce3a007e6c45b2bda0b84"
 dependencies = [
  "bytemuck",
  "dyn-stack",
@@ -2197,9 +2218,9 @@ dependencies = [
 
 [[package]]
 name = "t4a-private-gemm-x86"
-version = "0.1.27"
+version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1cf8bd6ed6e33736dc1b242a6521e234a5d968a14faa634b15ee086ea39ef995"
+checksum = "90295f48b59ab213a5fa840a0342d7a16cfc71bb5905070414fd105fcc0fcba7"
 dependencies = [
  "crossbeam",
  "defer",
@@ -2221,7 +2242,7 @@ dependencies = [
  "num-traits",
  "strided-basic",
  "strided-view",
- "t4a-faer",
+ "t4a-faer 0.28.2",
  "tcontract-exec",
  "tcontract-kernel",
  "thiserror 1.0.69",
@@ -2235,7 +2256,7 @@ version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9582710f3bd710d535d673014054f6b9057bf0e8f5bf5fddcab6ad423911ccb"
 dependencies = [
- "t4a-faer",
+ "t4a-faer 0.28.2",
  "thiserror 1.0.69",
  "threadteam",
 ]
@@ -2306,7 +2327,7 @@ dependencies = [
  "strided-basic",
  "strided-kernel",
  "strided-nn",
- "t4a-faer",
+ "t4a-faer 0.28.2",
  "tenferro-core-ops",
  "tenferro-cpu-basic",
  "tenferro-cpu-fused",
@@ -2440,7 +2461,7 @@ dependencies = [
  "num-complex 0.4.6",
  "num-traits",
  "strided-view",
- "t4a-faer",
+ "t4a-faer 0.28.2",
  "tcontract-exec",
  "tenferro-ad",
  "tenferro-cpu",
@@ -2572,6 +2593,7 @@ dependencies = [
  "rand_chacha",
  "rand_distr",
  "rustc-hash",
+ "t4a-faer 0.33.0",
  "tenferro-ad",
  "tenferro-cpu",
  "tenferro-einsum",
@@ -2938,7 +2960,7 @@ checksum = "28db4ec533b9ff9c90df170527f3e45cd21cfe3630e74d8123fafa6014af2b5a"
 dependencies = [
  "num-complex 0.4.6",
  "strided-view",
- "t4a-faer",
+ "t4a-faer 0.28.2",
  "tcontract-exec",
  "thiserror 2.0.20",
  "threadteam",
