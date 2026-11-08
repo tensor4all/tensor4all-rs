@@ -31,7 +31,7 @@ use num_complex::Complex64;
 use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor, TensorContractionLike};
 use tensor4all_tensorbackend::{BlasMul, CpuBackend, CpuExecutionContext, Matrix};
 
-const THREAD_COUNTS: [usize; 3] = [1, 2, 8];
+const THREAD_COUNTS: [usize; 4] = [1, 2, 4, 8];
 
 /// The shapes #1192 reported the divergence at: a cube, a tall-skinny pair, two
 /// uneven pairs, and two large cubes.

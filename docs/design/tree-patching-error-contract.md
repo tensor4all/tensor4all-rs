@@ -1295,14 +1295,19 @@ products agree, and `qr` splits above `m*n ~ 16k` elements.
   --nocapture`, with the worker count set per cell by
   `CpuBackend::with_threads(1|2|8)` rather than `RAYON_NUM_THREADS`, at `64^3`,
   `58x58x128`, `145x145x128`, `165x151x128`, `256^3` and `500^3`. `f64`
-  `mat_mul` and `IdxTensor::contract_pair` are bitwise identical at every pair
-  of worker counts, so the `f64` products are cross-count identical on this host
-  (an observation under Tier 1, not a promise). `Complex64` products are identical between 2 and 8 workers and
+  `mat_mul` and `IdxTensor::contract_pair` are bitwise identical at every pair of
+  the counts recorded on that host, `1`, `2` and `8`, so the `f64` products are
+  cross-count identical there (an observation under Tier 1, not a promise).
+  `Complex64` products are identical between 2 and 8 workers and
   differ between 1 worker and either of them at **every** one of those shapes:
   the first differing element is index 0 (index 2 at `145x145x128`) and the
   largest difference grows with the shape, `1.3e-15` at `64^3` and `3.2e-14` at
   `500^3`. The split is serial against parallel, not one width against another:
   two kernels, not a thread-count-dependent summation order.
+
+  The 4-worker column was added after the ruling in #1192; on `aarch64-apple`
+  all four columns agree for both types, so the split above belongs to the
+  x86-64 faer-backed configuration, not to a width as such.
 
   Why, for `Complex64`: one worker and a team take different kernels. Sampling
   the stacks of a repeated `Complex64` `mat_mul` on this host's faer
@@ -1335,8 +1340,8 @@ products agree, and `qr` splits above `m*n ~ 16k` elements.
   alive).
 
   `a_fixed_thread_count_repeats_the_product_bits` checks within-process
-  repeatability of both products at each of 1, 2 and 8 workers (not fresh caller
-  threads, not a second process);
+  repeatability of both products at each of 1, 2, 4 and 8 workers (not fresh
+  caller threads, not a second process);
   `thread_count_may_change_the_complex_product_bits_today` prints the record
   above and asserts only the shape, finiteness, and four sampled entries against
   a sequential accumulation.
