@@ -6004,6 +6004,8 @@ fn tensor_from_cached_values_compact(
 #[cfg(test)]
 thread_local! {
     static RAW_CENTER_CORE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Entries read by the strided-dot helpers, counted where they read them.
+    static STRIDED_DOT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// `(grouped, flat)` calls of the arbitrary-degree branch kernel, so a
     /// test can pin which route a configuration actually takes. Thread-local
     /// rather than atomic because the test harness runs tests in parallel
@@ -6108,7 +6110,7 @@ where
     }
 
     #[cfg(test)]
-    let mut core_visits = 0usize;
+    let reads_before = STRIDED_DOT_READS.get();
     ensure!(
         physical_values
             .iter()
@@ -6128,8 +6130,6 @@ where
             points,
             0,
             physicals.map(|physical| physical * physical_stride),
-            #[cfg(test)]
-            &mut core_visits,
         ));
     }
     let done = blocks.len() * STRIDED_DOT_LANES;
@@ -6141,12 +6141,12 @@ where
             point,
             0,
             physical * physical_stride,
-            #[cfg(test)]
-            &mut core_visits,
         ));
     }
+    // The core entries the dot helpers actually read during this call (test builds only).
     #[cfg(test)]
-    RAW_CENTER_CORE_VISITS.set(core_visits);
+    RAW_CENTER_CORE_VISITS
+        .set(RAW_CENTER_CORE_VISITS.get() + STRIDED_DOT_READS.get() - reads_before);
     Ok(output)
 }
 
@@ -6173,7 +6173,6 @@ fn fold_raw_center_components<T>(
     point: usize,
     level: usize,
     offset: usize,
-    #[cfg(test)] core_visits: &mut usize,
 ) -> T
 where
     T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
@@ -6184,10 +6183,6 @@ where
     let mut sum = T::default();
     match &components[level + 1..] {
         [] => {
-            #[cfg(test)]
-            {
-                *core_visits += component.dim;
-            }
             sum = strided_dot(core, offset, stride, values);
         }
         [innermost] => {
@@ -6196,10 +6191,6 @@ where
             let (lanes, rest) = values.as_chunks::<STRIDED_DOT_LANES>();
             for (chunk, lane_values) in lanes.iter().enumerate() {
                 let first = offset + chunk * STRIDED_DOT_LANES * stride;
-                #[cfg(test)]
-                {
-                    *core_visits += STRIDED_DOT_LANES * innermost.dim;
-                }
                 let inner = strided_dots(core, first, stride, inner_stride, inner_values);
                 for (inner, &value) in inner.into_iter().zip(lane_values) {
                     sum += inner * value;
@@ -6207,10 +6198,6 @@ where
             }
             let done = lanes.len() * STRIDED_DOT_LANES;
             for (bond, &value) in rest.iter().enumerate() {
-                #[cfg(test)]
-                {
-                    *core_visits += innermost.dim;
-                }
                 let inner = strided_dot(
                     core,
                     offset + (done + bond) * stride,
@@ -6229,8 +6216,6 @@ where
                     point,
                     level + 1,
                     offset + bond * stride,
-                    #[cfg(test)]
-                    core_visits,
                 );
                 sum += inner * value;
             }
@@ -6251,7 +6236,6 @@ fn fold_raw_center_points<T>(
     points: [usize; STRIDED_DOT_LANES],
     level: usize,
     offsets: [usize; STRIDED_DOT_LANES],
-    #[cfg(test)] core_visits: &mut usize,
 ) -> [T; STRIDED_DOT_LANES]
 where
     T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
@@ -6260,10 +6244,6 @@ where
     let values = points.map(|point| component.values_of(point));
     let stride = strides[component.axis];
     if level + 1 == components.len() {
-        #[cfg(test)]
-        {
-            *core_visits += STRIDED_DOT_LANES * component.dim;
-        }
         return strided_dots_per_lane(core, offsets, stride, values);
     }
     let mut sums = [T::default(); STRIDED_DOT_LANES];
@@ -6275,8 +6255,6 @@ where
             points,
             level + 1,
             offsets.map(|offset| offset + bond * stride),
-            #[cfg(test)]
-            core_visits,
         );
         for ((sum, inner), lane_values) in sums.iter_mut().zip(inner).zip(values) {
             *sum += inner * lane_values[bond];
@@ -6300,6 +6278,8 @@ where
     let mut sum = T::default();
     // INVARIANT: stride ≥ 1 (see above).
     for (&entry, &value) in data[offset..].iter().step_by(stride).zip(values) {
+        #[cfg(test)]
+        STRIDED_DOT_READS.set(STRIDED_DOT_READS.get() + 1);
         sum += entry * value;
     }
     sum
@@ -6329,6 +6309,8 @@ where
         .zip(lane(2))
         .zip(lane(3))
     {
+        #[cfg(test)]
+        STRIDED_DOT_READS.set(STRIDED_DOT_READS.get() + STRIDED_DOT_LANES);
         *s0 += e0 * value;
         *s1 += e1 * value;
         *s2 += e2 * value;
@@ -6352,6 +6334,8 @@ where
     let mut sums = [T::default(); STRIDED_DOT_LANES];
     let [s0, s1, s2, s3] = &mut sums;
     for (((l0, l1), l2), l3) in lane(0).zip(lane(1)).zip(lane(2)).zip(lane(3)) {
+        #[cfg(test)]
+        STRIDED_DOT_READS.set(STRIDED_DOT_READS.get() + STRIDED_DOT_LANES);
         *s0 += *l0.0 * *l0.1;
         *s1 += *l1.0 * *l1.1;
         *s2 += *l2.0 * *l2.1;
