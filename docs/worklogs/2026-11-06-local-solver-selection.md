@@ -103,20 +103,28 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   non-symmetric operator that BiCGSTAB and GMRES solve, and indefinite
   operators fail with `NonPositiveCurvature` through TreeTN and the MPS wrapper.
 - The `a1 = 1` shortcut recognizes real and complex spellings of one.
+- The CG docs do not promise non-convergence for real non-symmetric
+  operators: CG can converge when the Krylov space suits it, for example
+  `A = [[2, 1], [0, 2]]` with `b = (2, 0)`.
+- `square_linsolve` rejects a single index mapping before the identity-only
+  shortcut, which skips the mappings when no residual is requested.
+- The MPS `linsolve` documents that it does not report non-convergence and
+  points to `square_linsolve` for `converged` and the residual.
 
 The counts below are from local runs (not CI), on macOS, of the commands listed
 with each count; they are not reproducible from the diff alone.
 
-Validation on main `8b756648`:
+Validation on the branch merged with main `e38a7498`:
 
-- `cargo test -p tensor4all-core --lib krylov`: 121 passed, 545 filtered out
-- `cargo test -p tensor4all-treetn --lib linsolve`: 33 passed, 618 filtered out
-- `cargo test -p tensor4all-treetn --test integration linsolve`: 70 passed, 305 filtered out
+- `cargo test -p tensor4all-core --lib krylov`: 121 passed, 553 filtered out
+- `cargo test -p tensor4all-treetn --lib linsolve`: 33 passed, 630 filtered out
+- `cargo test -p tensor4all-treetn --test integration linsolve`: 71 passed, 305 filtered out
 - `cargo test -p tensor4all-itensorlike --lib`: 139 passed
-- Doctests: `cargo test -p tensor4all-core --doc krylov` 21 passed (382 filtered out),
+- Doctests: `cargo test -p tensor4all-core --doc krylov` 21 passed (383 filtered out),
   `cargo test -p tensor4all-treetn --doc linsolve` 8 passed (197 filtered out),
   `cargo test -p tensor4all-itensorlike --doc` 37 passed.
 - `cargo clippy -p tensor4all-core -p tensor4all-treetn -p tensor4all-itensorlike --lib --tests`: no findings
+- `cargo clippy -p tensor4all-treetn -p tensor4all-itensorlike --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc`: no findings
 - `python3 scripts/repository-rules-review.py --base origin/main --worktree --dry-run --file-growth`: pass
 
 Full-workspace, release, alternate-backend, binding and benchmark checks were

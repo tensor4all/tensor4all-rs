@@ -39,11 +39,13 @@ pub enum LocalSolver {
     /// The core CG checks only the directions it visits and does not certify
     /// the whole operator. Its Hermitian-consistency check measures the
     /// imaginary part of the directional curvature, which is zero for real
-    /// scalars: a real non-symmetric operator is reported as a
+    /// scalars, so a real non-symmetric operator is not detected as such. CG
+    /// then returns a
     /// [`KrylovError::NonPositiveCurvature`](tensor4all_core::krylov::KrylovError::NonPositiveCurvature)
-    /// error when a visited curvature is not positive, and otherwise as local
-    /// non-convergence, which the sweep reports through its true residual
-    /// rather than as an error.
+    /// error when a visited curvature is not positive; otherwise it may still
+    /// converge (for example when the right-hand side spans an invariant
+    /// subspace) or it exhausts its budget, which the sweep reports through
+    /// its true residual rather than as an error.
     Cg(CgOptions),
     /// BiCGSTAB for general real/complex systems using a fixed number of vectors.
     /// Start with [`BiCgStabOptions::default`]. Breakdown is returned as an error.

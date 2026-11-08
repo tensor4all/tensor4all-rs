@@ -52,7 +52,11 @@ use crate::tensortrain::TensorTrain;
 /// * `options` - Solver options
 ///
 /// # Returns
-/// The solution `x` as a TensorTrain.
+/// The state after the requested sweeps as a TensorTrain. Non-convergence is
+/// not an error and is not reported: neither a local CG/BiCGSTAB/GMRES solve
+/// that exhausts its budget nor a sweep that stops above `convergence_tol` is
+/// visible in the result. Use [`tensor4all_treetn::square_linsolve`], whose
+/// result carries `converged` and the true residual, when that is needed.
 ///
 /// # Errors
 ///
@@ -63,7 +67,8 @@ use crate::tensortrain::TensorTrain;
 /// or the local solver options are invalid (see
 /// [`tensor4all_treetn::LinsolveOptions::validate_local_solver`]) or the
 /// underlying TreeTN solve fails. Invalid native CG/BiCGSTAB options, CG
-/// non-Hermitian or non-positive-curvature errors and BiCGSTAB breakdown carry a
+/// non-Hermitian or non-positive-curvature errors, CG or BiCGSTAB breakdown and
+/// local operator failures carry a
 /// [`KrylovError`](tensor4all_core::krylov::KrylovError) in the source chain.
 ///
 pub fn linsolve(
@@ -299,7 +304,8 @@ impl TensorTrain {
     /// [`TensorTrainError::OperationError`] when a sweep or SVD option is
     /// invalid or when the operator and initial guess cannot be index-mapped, and
     /// [`TensorTrainError::TreeTn`] when the update mode or the local solver
-    /// options are invalid or the underlying TreeTN solve fails.
+    /// options are invalid or the underlying TreeTN solve fails. As for
+    /// [`linsolve`], non-convergence is not an error and is not reported.
     ///
     pub fn linsolve(&self, rhs: &Self, init: Self, options: &LinsolveOptions) -> Result<Self> {
         linsolve(self, rhs, init, options)

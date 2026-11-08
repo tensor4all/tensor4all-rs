@@ -281,9 +281,10 @@ fn local_solver_selection_cg_fails_on_an_indefinite_operator() {
 fn local_solver_selection_cg_does_not_converge_on_a_real_non_symmetric_operator() {
     // A = [[2, 1], [0, 2]] is real, non-symmetric, and has a positive symmetric
     // part. For real scalars CG's Hermitian-consistency check has nothing to
-    // measure, and every visited curvature is positive, so CG exhausts its
-    // budget. The sweep reports that through `converged = false` and its true
-    // residual instead of returning a plausible solution as converged.
+    // measure; with this right-hand side, b = A (1, -2) = (0, -4), every visited
+    // curvature is positive and CG exhausts its budget. The sweep reports that
+    // through `converged = false` and its true residual instead of returning a
+    // plausible solution as converged.
     let z = |re| Complex64::new(re, 0.0);
     let p = Problem::new([z(2.0), z(0.0), z(1.0), z(2.0)], false, z(0.0), z(1.0));
     let result = p

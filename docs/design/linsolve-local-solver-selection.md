@@ -39,9 +39,12 @@ positive-definite. The core CG checks (Hermitian consistency along search
 directions, positive curvature) report violations as errors, but they do not
 certify that the whole operator is HPD. The Hermitian-consistency check
 measures the imaginary part of the directional curvature, which is zero for
-real scalars, so a real non-symmetric operator is reported either as a
-non-positive-curvature error or as local non-convergence; the sweep then
-reports `converged = false` with its true residual. GMRES and BiCGSTAB accept
+real scalars, so a real non-symmetric operator is not detected as such. CG
+then reports a non-positive-curvature error if a visited curvature is not
+positive; otherwise it may still converge when the Krylov space happens to
+suit CG (for example `A = [[2, 1], [0, 2]]` with `b = (2, 0)`), and otherwise it
+does not converge and the sweep reports `converged = false` with its true
+residual. GMRES and BiCGSTAB accept
 general operators. There is no automatic solver selection and no fallback to
 another solver.
 

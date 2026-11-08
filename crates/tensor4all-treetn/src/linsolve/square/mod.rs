@@ -158,8 +158,9 @@ where
 /// [`tensor4all_core::krylov::KrylovError`] in the source chain:
 /// `InvalidOptions` for a GMRES restart length whose Krylov workspace cannot be
 /// allocated or a CG/BiCGSTAB stopping threshold that overflows,
-/// `NonHermitian` and `NonPositiveCurvature` from CG, and `NumericalBreakdown`
-/// from BiCGSTAB. No other solver is tried.
+/// `NonHermitian` and `NonPositiveCurvature` from CG, `NumericalBreakdown` from
+/// CG or BiCGSTAB, and `Operation` from any solver when the local operator or a
+/// tensor operation fails. No other solver is tried.
 ///
 /// Reaching the sweep limit without meeting `convergence_tol`, including local
 /// solves that exhaust their iteration budgets, returns `converged = false`,
@@ -287,6 +288,12 @@ where
     validate_linsolve_inputs(operator, rhs, &init)?;
     if options.nsite == 2 && rhs.node_count() < 2 {
         return Err(anyhow::anyhow!("square_linsolve requires at least two sites with nsite=2; use nsite=1 for a single-node solve").into());
+    }
+    if input_mapping.is_some() != output_mapping.is_some() {
+        return Err(anyhow::anyhow!(
+            "input_mapping and output_mapping must both be Some or both be None"
+        )
+        .into());
     }
 
     let identity_only = options.a1.is_zero() || operator_is_zero(operator)?;

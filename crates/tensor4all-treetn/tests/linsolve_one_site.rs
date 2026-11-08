@@ -706,3 +706,42 @@ fn local_solver_selection_zero_and_tiny_rhs_across_sweep_modes() {
         }
     }
 }
+
+#[test]
+fn a_single_index_mapping_is_rejected_before_the_identity_shortcut() {
+    // Two-site MALS with a1 = 0 takes the identity-only closed form, which does
+    // not use the mappings when no residual is requested; the mismatch must
+    // still be reported.
+    let p = Problem::new(&[(0, 1)], false);
+    let options = p
+        .options(1)
+        .with_nsite(2)
+        .with_coefficients(2.0, 0.0)
+        .with_residual_check(false);
+    assert!(options.convergence_tol.is_some());
+    let options = LinsolveOptions {
+        convergence_tol: None,
+        ..options
+    };
+    for (input, output) in [
+        (Some(p.input.clone()), None),
+        (None, Some(p.output.clone())),
+    ] {
+        let error = square_linsolve(
+            &p.operator,
+            &p.rhs,
+            p.init.clone(),
+            &0,
+            options.clone(),
+            input,
+            output,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("must both be Some or both be None"),
+            "{error}"
+        );
+    }
+}
