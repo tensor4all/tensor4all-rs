@@ -259,8 +259,8 @@ mod tests;
 /// catch-all for everything else (an invariant, storage or backend failure).
 /// This mirrors `TreeTciError` in `tensor4all-treetci`.
 ///
-/// The wrapped diagnostic is reachable through [`std::error::Error::source`], not
-/// through a public field, so callers that still propagate into `anyhow::Result`
+/// The wrapped diagnostic stays reachable through both [`std::error::Error::source`] and
+/// the variants' `source` field, so callers that still propagate into `anyhow::Result`
 /// keep the full source chain.
 ///
 /// # Remedies
