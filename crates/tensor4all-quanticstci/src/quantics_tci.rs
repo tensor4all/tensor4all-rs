@@ -308,11 +308,12 @@ pub struct QuanticsTensorCI2<V: TTScalar> {
 /// Target-evaluation accounting for one quantics interpolation run.
 ///
 /// The run memoizes target evaluations on the quantics multi-index, so the
-/// target is called only for points it has not seen. The counters separate the
+/// target is called only for points that are not in the memo: a point is
+/// evaluated again only after a full memo evicted it. The counters separate the
 /// quantities an optimization needs: how many requests were cached, how many
-/// were not, how many distinct points the target evaluated, and how many
-/// evaluations could not be retained or were evicted because the memo cache
-/// reached its byte limit.
+/// were not, how many evaluations the target performed, and how many of them
+/// could not be retained or were evicted because the memo cache reached its
+/// byte limit.
 ///
 /// # Examples
 ///

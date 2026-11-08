@@ -2,6 +2,44 @@ use super::*;
 use approx::assert_relative_eq;
 use quanticsgrids::UnfoldingScheme;
 
+/// `num_evals` counts every evaluation of the target, also those a full memo
+/// evicted later: an 84-byte limit holds one table of three entries, so after
+/// points 0, 1, 2, 3 the memo keeps one entry (the old `len()` count), and 0
+/// requested again is evaluated a fifth time.
+#[test]
+fn num_evals_counts_evaluations_a_full_memo_evicted() {
+    let calls = std::cell::Cell::new(0usize);
+    let cache: MemoCache<f64> = Rc::new(RefCell::new(
+        MultiIndexCache::with_retained_byte_limit(&[4], 84).unwrap(),
+    ));
+    let evaluate = site_evaluator(
+        |point: &[usize]| Ok(vec![point[0] as f64]),
+        |batch: QuanticsBatch<'_, f64>| {
+            calls.set(calls.get() + batch.n_points());
+            Ok((0..batch.n_points())
+                .map(|p| batch.get(0, p).unwrap())
+                .collect())
+        },
+        Rc::clone(&cache),
+    );
+    for point in [0usize, 1, 2, 3] {
+        let batch = GlobalIndexBatch::new(std::slice::from_ref(&point), 1, 1).unwrap();
+        assert_eq!(evaluate(batch).unwrap(), vec![point as f64]);
+    }
+    let stats = memo_cache_stats(&cache);
+    assert_eq!((calls.get(), stats.num_evals), (4, 4));
+    assert_eq!((cache.borrow().len(), stats.evicted_entries), (1, 3));
+
+    let batch = GlobalIndexBatch::new(&[0], 1, 1).unwrap();
+    assert_eq!(evaluate(batch).unwrap(), vec![0.0]);
+    let stats = memo_cache_stats(&cache);
+    assert_eq!(
+        (calls.get(), stats.num_evals),
+        (5, 5),
+        "the evicted 0 is evaluated again"
+    );
+}
+
 #[test]
 fn site_evaluator_propagates_coordinate_conversion_failure() {
     let called = std::cell::Cell::new(false);
