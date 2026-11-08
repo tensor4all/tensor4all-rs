@@ -383,10 +383,20 @@ fn square_selection<T: crate::MatrixLuciScalar + faer::traits::ComplexField>(
     DenseLuKernel::factorize_square_with_faer(data, n, options).unwrap()
 }
 
-fn assert_selection_bits_equal(actual: &PivotSelectionCore, expected: &PivotSelectionCore, what: &str) {
+fn assert_selection_bits_equal(
+    actual: &PivotSelectionCore,
+    expected: &PivotSelectionCore,
+    what: &str,
+) {
     assert_eq!(actual.rank, expected.rank, "{what}: rank");
-    assert_eq!(actual.row_indices, expected.row_indices, "{what}: row pivots");
-    assert_eq!(actual.col_indices, expected.col_indices, "{what}: column pivots");
+    assert_eq!(
+        actual.row_indices, expected.row_indices,
+        "{what}: row pivots"
+    );
+    assert_eq!(
+        actual.col_indices, expected.col_indices,
+        "{what}: column pivots"
+    );
     assert_eq!(
         actual.pivot_errors.len(),
         expected.pivot_errors.len(),
@@ -418,7 +428,11 @@ fn square_kernel_keeps_the_previous_selection_bit_for_bit() {
             let what = format!("f64 n={n} max_bond_dim={}", options.max_bond_dim);
             let (actual, pivots) = square_selection(&data, n, &options);
             assert_eq!(pivots, n, "{what}: an uncapped run takes every pivot");
-            assert_selection_bits_equal(&actual, &previous_square_selection(&data, n, &options), &what);
+            assert_selection_bits_equal(
+                &actual,
+                &previous_square_selection(&data, n, &options),
+                &what,
+            );
 
             let what = format!("c64 n={n} max_bond_dim={}", options.max_bond_dim);
             let (actual, _) = square_selection(&phased, n, &options);
@@ -447,7 +461,10 @@ fn rank_cap_stops_the_square_factorization_at_the_cap() {
         };
         let (selection, pivots) = square_selection(&data, n, &options);
         assert_eq!(pivots, cap, "cap={cap}: the factorization stops at the cap");
-        assert_eq!(selection.rank, cap, "cap={cap}: the selection is the capped rank");
+        assert_eq!(
+            selection.rank, cap,
+            "cap={cap}: the selection is the capped rank"
+        );
         assert_selection_bits_equal(
             &selection,
             &previous_square_selection(&data, n, &options),
