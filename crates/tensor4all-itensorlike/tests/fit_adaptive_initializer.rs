@@ -4,8 +4,9 @@
 //!
 //! 1. No `max_bond_dim` is required: ranks grow adaptively from a numerical
 //!    tolerance (`svd_policy`) when starting from a small `C₀`.
-//! 2. The default low-rank initializer never constructs a χ_A·χ_B product bond
-//!    (`low_rank_initializer_tree_tn` keeps every bond at the requested small
+//! 2. The opt-in low-rank initializer (`FitInitializer::LowRankRandom`, selected
+//!    explicitly below; the default is `ZipUp`) never constructs a χ_A·χ_B
+//!    product bond (`low_rank_initializer_tree_tn` keeps every bond at the requested small
 //!    dimension; the treetn structural tests pin that directly).
 //! 3. Tighter tolerances give equal-or-larger ranks and equal-or-better error.
 //!
