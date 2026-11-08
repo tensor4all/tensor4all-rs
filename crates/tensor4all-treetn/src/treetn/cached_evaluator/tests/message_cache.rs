@@ -593,6 +593,65 @@ fn packed_message_cache_evicts_oldest_columns_first() {
     assert_eq!(wide.key_heap_bytes, kept_heap_bytes);
 }
 
+/// [AI Supplied] #1183: releasing a few columns from a large cache is not a
+/// copy of the cache. Every release used to shift the surviving columns down
+/// and renumber their positions, so 4 096 one-column releases of a
+/// 4 096-column cache moved 201 277 440 bytes; releasing one column now only
+/// advances `head`.
+#[test]
+fn packed_message_cache_releases_a_prefix_without_moving_the_survivors() {
+    const BOND_DIM: usize = 3;
+    let total = 4096usize;
+    let column_bytes = BOND_DIM * std::mem::size_of::<u64>();
+    let mut cache = PackedMessageCache::<u32, u64>::new(BOND_DIM, usize::MAX);
+    let keys = (0..total as u32).collect::<Vec<_>>();
+    cache
+        .get_or_compute_batch(&keys, |missing| {
+            Ok::<_, anyhow::Error>(
+                missing
+                    .iter()
+                    .map(|key| vec![*key as u64; BOND_DIM])
+                    .collect(),
+            )
+        })
+        .unwrap();
+    let newest = keys[total - 1];
+    let address = cache.column(cache.position(&newest).unwrap()).as_ptr();
+
+    // Half the buffer may still be dead prefix before it is reclaimed, so
+    // these releases leave both the survivors and their addresses alone.
+    for _ in 0..total / 2 - 1 {
+        assert_eq!(cache.evict_oldest_bytes(column_bytes), column_bytes);
+    }
+    assert_eq!(cache.key_count(), total - (total / 2 - 1));
+    assert_eq!(cache.head, total / 2 - 1);
+    // The dead prefix is not retained payload and a released key is not served.
+    assert_eq!(
+        cache.logical_payload_bytes(),
+        cache.key_count() * column_bytes
+    );
+    assert!(cache.position(&keys[0]).is_none());
+    let position = cache.position(&newest).expect("the newest column survives");
+    assert_eq!(cache.column(position), &[newest as u64; BOND_DIM]);
+    assert_eq!(
+        cache.column(position).as_ptr(),
+        address,
+        "a release must not move the surviving columns"
+    );
+
+    // Crossing that point reclaims the dead prefix once, and the survivors
+    // still read back.
+    assert_eq!(cache.evict_oldest_bytes(column_bytes), column_bytes);
+    assert_eq!(
+        cache.head, 0,
+        "the released prefix is reclaimed once it is as large as the survivors"
+    );
+    assert_eq!(
+        cache.column(cache.position(&newest).unwrap()),
+        &[newest as u64; BOND_DIM]
+    );
+}
+
 fn retained_message_cache_bytes(evaluator: &TreeTNCachedEvaluator<'_, usize>) -> usize {
     evaluator
         .message_caches

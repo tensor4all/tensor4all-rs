@@ -2614,6 +2614,10 @@ where
     /// and nothing at all when not even one column of this edge fits the total:
     /// evicting a neighbour for a column, or a fraction of one, that admission
     /// would refuse anyway loses reuse on both edges.
+    ///
+    /// The payload accounting is one read of this edge's cache plus the running
+    /// total. Choosing victims walks the evaluator's directed-edge caches (as
+    /// many as the tree has edges), and only when the total is exceeded.
     fn reserve_message_cache_bytes(
         &mut self,
         edge: &(V, V),
@@ -7846,11 +7850,30 @@ impl MessageCacheKey for u32 {
 /// payload; observability separately reports an owned-storage estimate that
 /// includes retained vector capacity, the key map, and key-owned heap
 /// payloads.
+///
+/// Released columns leave a dead prefix at the front of `columns`: a release
+/// advances `head` instead of shifting the surviving columns and renumbering
+/// their positions, so releasing a few columns from a large cache does not
+/// cost a copy of the whole buffer.
 struct PackedMessageCache<K, T> {
     bond_dim: usize,
     max_bytes: usize,
+    /// Column position per key, counted from the start of `columns`, so a live
+    /// position is `>= head`. Entries released with the dead prefix stay here
+    /// until [`PackedMessageCache::reclaim_evicted_prefix`] drops them.
     positions: HashMap<K, usize>,
+    /// Whole columns of `bond_dim` elements, the live ones after the first
+    /// `head`.
     columns: Vec<T>,
+    /// Columns already released from the front of `columns`. Their keys are
+    /// still in `positions` and are dropped with the dead prefix, so
+    /// `released_keys` of the entries are stale.
+    head: usize,
+    released_keys: usize,
+    /// Key-owned heap payload of the keys in `positions`. Exact after a prefix
+    /// reclaim; between reclaims it still counts the keys released with the
+    /// dead prefix, so the owned-storage estimate can exceed the live total
+    /// until then.
     key_heap_bytes: usize,
     hits: usize,
     misses: usize,
@@ -8021,6 +8044,8 @@ where
             max_bytes,
             positions: HashMap::default(),
             columns: Vec::new(),
+            head: 0,
+            released_keys: 0,
             key_heap_bytes: 0,
             hits: 0,
             misses: 0,
@@ -8047,8 +8072,12 @@ where
     ///
     /// Called only by the owner evaluator, when the budget shared by all
     /// directed edges is exhausted and this edge is the least recently used
-    /// one. Columns keep their insertion order in `columns`, so dropping a
-    /// prefix leaves every surviving position shifted by a constant.
+    /// one. Columns keep their insertion order in `columns`, so a release only
+    /// advances `head` over the dead prefix: neither the surviving columns nor
+    /// their positions move, so releasing a few columns from a large cache
+    /// costs the release, not a copy of the cache. The dead prefix and the
+    /// keys released with it are reclaimed once they are at least as large as
+    /// the survivors, which keeps the amortized cost of a release O(1).
     ///
     /// A cache emptied by this releases its packed buffer too: the budget
     /// bounds logical payload rather than allocation capacity, so an edge that
@@ -8060,34 +8089,59 @@ where
         if per_column == 0 || bytes == 0 {
             return 0;
         }
-        let dropped = bytes.div_ceil(per_column).min(self.positions.len());
+        let live = self.key_count();
+        let dropped = bytes.div_ceil(per_column).min(live);
         if dropped == 0 {
             return 0;
         }
-        let dropped_key_heap_bytes: usize = self
-            .positions
-            .iter()
-            .filter(|(_, position)| **position < dropped)
-            .map(|(key, _)| key.owned_heap_bytes())
-            .sum();
-        self.key_heap_bytes = self.key_heap_bytes.saturating_sub(dropped_key_heap_bytes);
-        if dropped == self.positions.len() {
+        self.head += dropped;
+        self.released_keys += dropped;
+        if dropped == live {
             self.columns = Vec::new();
             self.positions = HashMap::default();
-        } else {
-            self.columns.drain(..dropped * self.bond_dim);
-            self.positions.retain(|_, position| {
-                if *position < dropped {
-                    false
-                } else {
-                    *position -= dropped;
-                    true
-                }
-            });
+            self.key_heap_bytes = 0;
+            self.head = 0;
+            self.released_keys = 0;
+        } else if self.head.saturating_mul(2) >= self.positions.len() {
+            self.reclaim_evicted_prefix();
         }
         dropped * per_column
     }
 
+    /// Drops the released prefix of `columns` and the map entries that point
+    /// into it, and renumbers the survivors back to a zero `head`.
+    fn reclaim_evicted_prefix(&mut self) {
+        self.columns.drain(..self.head * self.bond_dim);
+        let head = std::mem::take(&mut self.head);
+        self.positions
+            .retain(|_, position| match position.checked_sub(head) {
+                Some(live) => {
+                    *position = live;
+                    true
+                }
+                None => false,
+            });
+        self.key_heap_bytes = self
+            .positions
+            .keys()
+            .map(|key| key.owned_heap_bytes())
+            .sum();
+        self.released_keys = 0;
+    }
+
+    /// Position of `key` while its column is live, i.e. not part of the dead
+    /// prefix. A released key's entry waits for the next prefix reclaim and
+    /// must not be served.
+    fn live_position(&self, key: &K) -> Option<usize> {
+        self.positions
+            .get(key)
+            .copied()
+            .filter(|position| *position >= self.head)
+    }
+
+    /// Column at a position as [`Self::position`] reports it. Positions count
+    /// from the start of `columns`, so a released column's slot stays where it
+    /// was until [`Self::reclaim_evicted_prefix`] shifts the survivors down.
     fn column(&self, position: usize) -> &[T] {
         &self.columns[position * self.bond_dim..(position + 1) * self.bond_dim]
     }
@@ -8113,7 +8167,7 @@ where
     fn get_all_cached(&mut self, keys: &[K]) -> Option<Vec<usize>> {
         let positions = keys
             .iter()
-            .map(|key| self.positions.get(key).copied())
+            .map(|key| self.live_position(key))
             .collect::<Option<Vec<_>>>()?;
         self.hits += keys.len();
         Some(positions)
@@ -8125,21 +8179,21 @@ where
     }
 
     fn contains(&self, key: &K) -> bool {
-        self.positions.contains_key(key)
+        self.live_position(key).is_some()
     }
 
     /// Looks up one key's column position without touching the hit/miss
     /// counters -- for reassembling a merged result after the counted
     /// lookup/insert calls that drove the merge have already run.
     fn position(&self, key: &K) -> Option<usize> {
-        self.positions.get(key).copied()
+        self.live_position(key)
     }
 
     /// Logical payload bytes admitted by the cache budget.
     ///
-    /// This intentionally uses the vector length, not capacity: it describes
-    /// the message columns that are logically retained. Use
-    /// [`Self::owned_retained_bytes_estimate`] for the storage estimate that
+    /// This intentionally counts the live columns, not the buffer length or
+    /// capacity: it describes the message columns that are logically retained.
+    /// [`Self::owned_retained_bytes_estimate`] is the storage estimate, which
     /// also includes spare vector capacity and the key map.
     fn retained_bytes(&self) -> usize {
         self.logical_payload_bytes()
@@ -8148,11 +8202,16 @@ where
     fn logical_payload_bytes(&self) -> usize {
         #[cfg(test)]
         MESSAGE_CACHE_PAYLOAD_READS.with(|reads| reads.set(reads.get() + 1));
-        self.columns.len().saturating_mul(std::mem::size_of::<T>())
+        // Released columns still occupy the dead prefix of the buffer but are
+        // no longer retained, so the budget does not count them.
+        self.columns
+            .len()
+            .saturating_sub(self.head.saturating_mul(self.bond_dim))
+            .saturating_mul(std::mem::size_of::<T>())
     }
 
     fn key_count(&self) -> usize {
-        self.positions.len()
+        self.positions.len().saturating_sub(self.released_keys)
     }
 
     /// Estimates bytes owned by this cache, including vector capacity, key
@@ -8209,7 +8268,7 @@ where
         let mut missing_keys = Vec::new();
         let mut missing_seen = HashSet::default();
         for key in keys {
-            if self.positions.contains_key(key) {
+            if self.contains(key) {
                 self.hits += 1;
             } else {
                 self.misses += 1;
@@ -8255,7 +8314,15 @@ where
                     self.columns.extend(column);
                     self.key_heap_bytes =
                         self.key_heap_bytes.saturating_add(key.owned_heap_bytes());
-                    self.positions.insert(key, position);
+                    // Re-admitting a key released with the dead prefix replaces
+                    // its stale entry rather than adding a live one.
+                    if self
+                        .positions
+                        .insert(key, position)
+                        .is_some_and(|released| released < self.head)
+                    {
+                        self.released_keys = self.released_keys.saturating_sub(1);
+                    }
                 } else {
                     computed_values.insert(key, column);
                 }
@@ -8268,8 +8335,8 @@ where
         // which is a caller contract violation this type cannot prevent, so
         // it is reported as an error rather than assumed impossible.
         keys.iter()
-            .map(|key| match self.positions.get(key) {
-                Some(&position) => Ok(CacheSlot::Cached(position)),
+            .map(|key| match self.live_position(key) {
+                Some(position) => Ok(CacheSlot::Cached(position)),
                 None => computed_values
                     .get(key)
                     .cloned()
