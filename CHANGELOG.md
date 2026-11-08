@@ -9,6 +9,46 @@ enum are breaking pre-1.0 Rust API changes designated for the next minor
 release. The following changes break exhaustive matches, complete struct
 literals, or named public types:
 
+- `tensor4all-treetn`: `TreeTNOperationError` is an enum, and its public
+  `source` field is gone. It mirrors `TreeTciError` from
+  `tensor4all-treetci`:
+  `InvalidConfiguration`, `InvalidGraph`, `IndexOutOfBounds` and
+  `ScalarKindMismatch` are typed, and `Operation { source: anyhow::Error }` is
+  the catch-all. A caller matches the variant instead of downcasting a public
+  field, and reads the cause through `std::error::Error::source()`. The
+  `Display` of every variant renders one level (`{source}`, as `Operation` did
+  on `main`), so repeated propagation does not grow the message; the rest of
+  the chain is read through `source()`. When
+  `From<anyhow::Error>` recovers a classified variant that is the `anyhow` error
+  object, the context layers around it are re-rendered onto the variant as text, so a typed
+  context cannot be downcast after that conversion; the `Operation` catch-all
+  keeps the typed chain. Only an error that *is* a classified variant is recovered:
+  a variant attached with `.context(..)` is a note about another failure, so it is
+  not taken as the failure. The first classified error in the source chain keeps
+  its variant whether a typed context or a foreign wrapper sits above it, since
+  `anyhow` cannot tell the two apart; such a variant holds the received chain
+  unchanged, except `ScalarKindMismatch`, which has no chain and keeps only its
+  own payload and context (the links above it are dropped, not re-rendered, so
+  a wrapper that renders the mismatch does not repeat it). Failures that
+  reach the boundary through an internal `anyhow` helper - tensor, storage and
+  backend failures, the option checks the factorization runs in
+  `tensor4all-core`, and every diagnostic an internal helper raises - keep the
+  `Operation` variant with their typed cause in the chain.
+- `tensor4all-treetci`, `tensor4all-core`: the batch callbacks of
+  `crossinterpolate2`, `crossinterpolate2_in`, `crossinterpolate2_with_rng`,
+  `crossinterpolate2_with_rng_in` and `MultiIndexCache::evaluate_batched` no
+  longer require `anyhow::Result`. Each takes `E: Into<anyhow::Error>`, so a
+  callback returns its own error type and the caller recovers it from the source
+  chain without boxing it into `anyhow` itself. Two source changes follow. A
+  callback that only ever returns `Ok` now needs its error type written
+  (`Ok::<_, anyhow::Error>(..)`, `anyhow::Ok(..)`, or a
+  `-> anyhow::Result<Vec<T>>` closure signature), because nothing else
+  constrains `E`; a callback that already returns an explicitly typed
+  `anyhow::Result` compiles unchanged. The `crossinterpolate2*` entries gain one
+  generic parameter, so an explicit turbofish adds one `_`:
+  `crossinterpolate2::<f64, _, _, _>` becomes
+  `crossinterpolate2::<f64, _, _, _, _>`.
+
 - `tensor4all-partitionedtreetn`: `PartitionedTreeTNError` gained the
   `RefinementTooLarge { atoms, limit }` variant (#1143) and is now
   `#[non_exhaustive]`. Both land in this release, so an exhaustive match breaks
@@ -204,6 +244,12 @@ described in [README.md](README.md).
 
 #### tensor4all-treetn
 
+- `TreeTNOperationError` is an enum (`InvalidConfiguration`, `InvalidGraph`,
+  `IndexOutOfBounds`, `ScalarKindMismatch`, `Operation`) instead of a struct
+  with a public `source: anyhow::Error` field, and `std::error::Error::source()`
+  replaces that field — #1023. `crossinterpolate2*` and
+  `MultiIndexCache::evaluate_batched` live in the crates above, but their
+  relaxed callback bound is the same change.
 - `7d263fadb7ef`, #595 — the public modules `algorithm`, `dmrg`, `error`,
   `link_index_network`, `linsolve`, `named_graph`, `node_name_network`,
   `operator`, `options`, `random`, `site_index_network`, `tdvp` and `treetn`

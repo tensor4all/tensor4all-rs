@@ -93,8 +93,21 @@ fn resolve_fit_nfullsweeps(nfullsweeps: usize) -> usize {
     }
 }
 
-fn orthogonalize_error_message(force: libc::c_int, err: impl std::fmt::Display) -> String {
-    let mut msg = format!("{err:#}");
+/// Renders the cause chain of `err` (without its own variant line) joined by
+/// `": "`, the message `{:#}` gave for the `anyhow` source before #1023.
+/// `TreeTNOperationError`'s `Display` prints one level only, so the full
+/// diagnostic has to be read through `source()` at this message-only boundary.
+fn orthogonalize_error_message(
+    force: libc::c_int,
+    err: &tensor4all_treetn::TreeTNOperationError,
+) -> String {
+    let mut links = Vec::new();
+    let mut current = std::error::Error::source(err);
+    while let Some(link) = current {
+        links.push(link.to_string());
+        current = link.source();
+    }
+    let mut msg = links.join(": ");
     if force == 0 {
         msg = msg.replace("CanonicalizationOptions::forced()", "force=1");
         if msg == "canonicalize: form mismatch" {
@@ -1144,7 +1157,7 @@ pub extern "C" fn t4a_treetn_orthogonalize(
             .map_err(|err| {
                 capi_error(
                     T4A_INVALID_ARGUMENT,
-                    orthogonalize_error_message(force, err.source),
+                    orthogonalize_error_message(force, &err),
                 )
             })?;
         *tn.inner_mut() = canonicalized;

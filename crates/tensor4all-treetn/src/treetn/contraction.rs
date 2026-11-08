@@ -923,15 +923,17 @@ where
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::{DynIndex, FactorizeError, IdxTensor, SvdTruncationPolicy};
+    /// use tensor4all_core::{DynIndex, IdxTensor, SvdTruncationPolicy};
     /// use tensor4all_treetn::{CanonicalForm, TreeTN};
     /// let site = DynIndex::new_dyn(2);
     /// let tree = TreeTN::from_tensors(vec![
     ///     IdxTensor::from_dense(vec![site], vec![1.0, 2.0]).unwrap()], vec![0]).unwrap();
     /// let error = tree.contract_zipup_with(
     ///     &tree, &0, CanonicalForm::LU, Some(SvdTruncationPolicy::new(1e-8)), None).unwrap_err();
-    /// assert!(matches!(error.source.downcast_ref::<FactorizeError>(),
-    ///     Some(FactorizeError::InvalidOptions(_))));
+    /// // The factorization validates its options in the tensor layer, so it keeps
+    /// // the catch-all variant; the message carries the typed cause.
+    /// assert!(matches!(error, tensor4all_treetn::TreeTNOperationError::Operation { .. }));
+    /// assert!(error.to_string().contains("factorization options"), "{error}");
     /// ```
     pub fn contract_zipup_with(
         &self,
@@ -1939,7 +1941,7 @@ where
         // If not canonicalized, require no ortho_towards at all
         if self.canonical_region.is_empty() {
             if !self.ortho_towards.is_empty() {
-                return Err(TreeTNOperationError::from(
+                return Err(TreeTNOperationError::invalid_graph(
                     anyhow::anyhow!(
                         "Found {} ortho_towards entries but canonical_region is empty",
                         self.ortho_towards.len()
@@ -1964,7 +1966,7 @@ where
 
         // Check canonical_region connectivity
         if !self.site_index_network.is_connected_subset(&center_indices) {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!("canonical_region is not connected").context(
                     "validate_ortho_consistency: canonical_region must form a connected subtree",
                 ),
@@ -2007,7 +2009,7 @@ where
             match self.ortho_towards.get(bond) {
                 Some(actual_dir) => {
                     if actual_dir != expected_dir {
-                        return Err(TreeTNOperationError::from(
+                        return Err(TreeTNOperationError::invalid_graph(
                             anyhow::anyhow!(
                                 "ortho_towards for bond {:?} points to {:?} but expected {:?}",
                                 bond,
@@ -2019,7 +2021,7 @@ where
                     }
                 }
                 None => {
-                    return Err(TreeTNOperationError::from(
+                    return Err(TreeTNOperationError::invalid_graph(
                         anyhow::anyhow!(
                             "ortho_towards for bond {:?} is missing, expected to point to {:?}",
                             bond,
@@ -2044,7 +2046,7 @@ where
         for idx in self.ortho_towards.keys() {
             if bond_indices.contains(idx) && !expected_directions.contains_key(idx) {
                 // This is a bond inside the canonical_region - should not have ortho_towards
-                return Err(TreeTNOperationError::from(
+                return Err(TreeTNOperationError::invalid_graph(
                     anyhow::anyhow!(
                         "Unexpected ortho_towards for bond {:?} (inside canonical_region)",
                         idx
@@ -2133,7 +2135,7 @@ where
         V: Ord,
     {
         if form != CanonicalForm::Unitary {
-            return Err(TreeTNOperationError::from(anyhow::anyhow!(
+            return Err(TreeTNOperationError::invalid_configuration(anyhow::anyhow!(
                 "contract_zipup_with_in: the {form:?} form has no context-scoped                  factorization path; use contract_zipup_with() or the Unitary form"
             )));
         }
@@ -3049,9 +3051,9 @@ where
     R: Rng + ?Sized,
 {
     if options.method != ContractionMethod::Src {
-        return Err(TreeTNOperationError::from(anyhow::anyhow!(
-            "contract_src_with_rng requires ContractionMethod::Src"
-        )));
+        return Err(TreeTNOperationError::invalid_configuration(
+            anyhow::anyhow!("contract_src_with_rng requires ContractionMethod::Src"),
+        ));
     }
     validate_svd_truncation_options(options.max_bond_dim, options.svd_policy)
         .context("contract_src_with_rng: invalid contraction options")?;
@@ -3143,9 +3145,9 @@ where
     R: Rng + ?Sized,
 {
     if options.method != ContractionMethod::Src {
-        return Err(TreeTNOperationError::from(anyhow::anyhow!(
-            "contract_src_with_rng_in requires ContractionMethod::Src"
-        )));
+        return Err(TreeTNOperationError::invalid_configuration(
+            anyhow::anyhow!("contract_src_with_rng_in requires ContractionMethod::Src"),
+        ));
     }
     validate_svd_truncation_options(options.max_bond_dim, options.svd_policy)
         .context("contract_src_with_rng_in: invalid contraction options")?;
@@ -3176,14 +3178,18 @@ where
     // before RNG advancement or contraction: mixed host/CUDA inputs and
     // foreign CUDA contexts fail here with the offending node identified.
     tn_a.validate_context(context).map_err(|error| {
-        TreeTNOperationError::from(anyhow::anyhow!(
-            "contract_src: input A validation failed: {error}"
-        ))
+        // A rejected context can be an unsupported runtime rather than a graph
+        // problem, so this stays in the catch-all with its cause.
+        TreeTNOperationError::from(
+            anyhow::Error::new(error).context("contract_src: input A validation failed"),
+        )
     })?;
     tn_b.validate_context(context).map_err(|error| {
-        TreeTNOperationError::from(anyhow::anyhow!(
-            "contract_src: input B validation failed: {error}"
-        ))
+        // A rejected context can be an unsupported runtime rather than a graph
+        // problem, so this stays in the catch-all with its cause.
+        TreeTNOperationError::from(
+            anyhow::Error::new(error).context("contract_src: input B validation failed"),
+        )
     })?;
     let output_rank = options
         .max_bond_dim

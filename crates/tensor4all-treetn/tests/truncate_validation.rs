@@ -12,13 +12,20 @@ use tensor4all_treetn::{
 };
 
 fn assert_invalid_factorization_options(error: TreeTNOperationError) {
-    assert!(
-        matches!(
-            error.source.downcast_ref::<FactorizeError>(),
+    // The option validation runs inside the tensor factorization, so it reaches
+    // this boundary through the `Operation` catch-all with its typed cause in the
+    // source chain.
+    let mut source = std::error::Error::source(&error);
+    while let Some(current) = source {
+        if matches!(
+            current.downcast_ref::<FactorizeError>(),
             Some(FactorizeError::InvalidOptions(_))
-        ),
-        "expected the typed factorization error, got {error:?}"
-    );
+        ) {
+            return;
+        }
+        source = current.source();
+    }
+    panic!("expected the typed factorization error, got {error:?}");
 }
 
 fn one_site(name: usize, dim: usize) -> TreeTN<IdxTensor, usize> {

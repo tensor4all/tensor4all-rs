@@ -12,7 +12,7 @@ fn bitwise_batch<V: Clone + Send + Sync + 'static>(values: Vec<V>, bits: impl Fn
             calls += 1;
             assert_eq!(misses.shape(), &[2, 2]);
             assert_eq!(misses.data(), &[1, 0, 0, 1]);
-            Ok(vec![values[1].clone(), values[2].clone()])
+            Ok::<_, anyhow::Error>(vec![values[1].clone(), values[2].clone()])
         })
         .unwrap();
     let expected = [0, 1, 2, 1].map(|i| bits(&values[i]));
@@ -92,7 +92,7 @@ fn cached_batch_failure_and_wrong_lengths_do_not_insert_partial_results() {
         assert!(!cache.is_cached(&[1]).unwrap());
         assert!(!cache.is_cached(&[2]).unwrap());
         let retry = cache
-            .evaluate_batched(points, |_| Ok(vec![20.0, 30.0]))
+            .evaluate_batched(points, |_| Ok::<_, anyhow::Error>(vec![20.0, 30.0]))
             .unwrap();
         assert_eq!(retry, vec![10.0, 20.0, 30.0, 20.0]);
     }
@@ -107,9 +107,10 @@ fn cached_batch_rejects_shape_and_late_invalid_points_before_callback() {
         (vec![0, 2], vec![1, 2]),
     ] {
         let error = cache
-            .evaluate_batched(ColMajorArrayRef::new(&data, &shape).unwrap(), |_| {
-                panic!("invalid batch reached the callback")
-            })
+            .evaluate_batched(
+                ColMajorArrayRef::new(&data, &shape).unwrap(),
+                |_| -> anyhow::Result<Vec<f64>> { panic!("invalid batch reached the callback") },
+            )
             .unwrap_err();
         assert!(matches!(error, CachedBatchError::Index(_)));
         assert!(cache.is_empty());
@@ -127,7 +128,7 @@ fn cached_batch_limits_skip_only_distinct_inserts_and_preserve_values() {
                 ColMajorArrayRef::new(&[1, 0, 1], &[1, 3]).unwrap(),
                 |misses| {
                     assert_eq!(misses.data(), &[1, 0]);
-                    Ok(vec![20.0, 10.0])
+                    Ok::<_, anyhow::Error>(vec![20.0, 10.0])
                 },
             )
             .unwrap();
@@ -142,9 +143,10 @@ fn cached_batch_empty_scalar_and_extended_integer_keys() {
     let mut cache = MultiIndexCache::<f64, u8>::new(&[2]).unwrap();
     assert_eq!(
         cache
-            .evaluate_batched(ColMajorArrayRef::new(&[], &[1, 0]).unwrap(), |_| panic!(
-                "empty callback"
-            ))
+            .evaluate_batched(
+                ColMajorArrayRef::new(&[], &[1, 0]).unwrap(),
+                |_| -> anyhow::Result<Vec<f64>> { panic!("empty callback") },
+            )
             .unwrap(),
         Vec::<f64>::new()
     );
@@ -153,7 +155,7 @@ fn cached_batch_empty_scalar_and_extended_integer_keys() {
         scalar
             .evaluate_batched(ColMajorArrayRef::new(&[], &[0, 3]).unwrap(), |misses| {
                 assert_eq!(misses.shape(), &[0, 1]);
-                Ok(vec![7.0])
+                Ok::<_, anyhow::Error>(vec![7.0])
             })
             .unwrap(),
         vec![7.0; 3]
@@ -168,7 +170,7 @@ fn cached_batch_empty_scalar_and_extended_integer_keys() {
                 ColMajorArrayRef::new(&data, &[n_sites, 3]).unwrap(),
                 |misses| {
                     assert_eq!(misses.shape(), &[n_sites, 2]);
-                    Ok(vec![2.0, 3.0])
+                    Ok::<_, anyhow::Error>(vec![2.0, 3.0])
                 },
             )
             .unwrap();
@@ -196,7 +198,7 @@ fn cached_batch_encodes_each_request_only_once() {
     let data = [0, 1, 1, 0, 0, 1].map(Counted);
     let values = cache
         .evaluate_batched(ColMajorArrayRef::new(&data, &[2, 3]).unwrap(), |_| {
-            Ok(vec![10.0, 20.0])
+            Ok::<_, anyhow::Error>(vec![10.0, 20.0])
         })
         .unwrap();
     assert_eq!(values, vec![10.0, 20.0, 10.0]);
@@ -228,7 +230,7 @@ fn cached_batch_wide_keys_account_their_tables_and_failures() {
             .evaluate_batched(batch, |misses| {
                 assert_eq!(misses.shape(), &[n_sites, 2]);
                 assert_eq!(misses.data(), &data[..2 * n_sites]);
-                Ok(vec![30.0, 20.0])
+                Ok::<_, anyhow::Error>(vec![30.0, 20.0])
             })
             .unwrap();
         assert_eq!(out, vec![30.0, 20.0, 30.0]);
@@ -245,7 +247,7 @@ fn cached_batch_wide_keys_account_their_tables_and_failures() {
         assert!(matches!(
             cache.evaluate_batched(
                 ColMajorArrayRef::new(&data, &[n_sites, 3]).unwrap(),
-                |_| panic!("invalid input reached callback")
+                |_| -> anyhow::Result<Vec<f64>> { panic!("invalid input reached callback") }
             ),
             Err(CachedBatchError::Index(
                 CacheKeyError::IndexOutOfBounds { .. }
@@ -266,7 +268,9 @@ fn cached_batch_wide_keys_account_their_tables_and_failures() {
         assert!(matches!(
             partial.evaluate_batched(
                 ColMajorArrayRef::new(&data, &[n_sites, 3]).unwrap(),
-                |_| panic!("invalid input reached callback")
+                |_| -> Result<Vec<f64>, std::convert::Infallible> {
+                    panic!("invalid input reached callback")
+                }
             ),
             Err(CachedBatchError::Index(
                 CacheKeyError::IndexOutOfBounds { .. }

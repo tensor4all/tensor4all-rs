@@ -73,7 +73,7 @@ where
         data: NodeData,
     ) -> std::result::Result<NodeIndex, TreeTNOperationError> {
         if self.node_name_to_index.contains_key(&node_name) {
-            return Err(TreeTNOperationError::from(anyhow::anyhow!(
+            return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
                 "Node already exists: {:?}",
                 node_name
             )));
@@ -116,16 +116,15 @@ where
             return Ok(());
         }
         if self.node_name_to_index.contains_key(&new_name) {
-            return Err(TreeTNOperationError::from(anyhow::anyhow!(
+            return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
                 "Node already exists: {:?}",
                 new_name
             )));
         }
 
-        let node_idx = self
-            .node_name_to_index
-            .remove(old_name)
-            .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", old_name))?;
+        let node_idx = self.node_name_to_index.remove(old_name).ok_or_else(|| {
+            TreeTNOperationError::invalid_graph(anyhow::anyhow!("Node not found: {:?}", old_name))
+        })?;
 
         self.node_name_to_index.insert(new_name.clone(), node_idx);
         self.index_to_node_name.insert(node_idx, new_name);
@@ -172,14 +171,12 @@ where
     where
         EdgeData: Clone,
     {
-        let node1 = self
-            .node_name_to_index
-            .get(n1)
-            .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", n1))?;
-        let node2 = self
-            .node_name_to_index
-            .get(n2)
-            .ok_or_else(|| anyhow::anyhow!("Node not found: {:?}", n2))?;
+        let node1 = self.node_name_to_index.get(n1).ok_or_else(|| {
+            TreeTNOperationError::invalid_graph(anyhow::anyhow!("Node not found: {:?}", n1))
+        })?;
+        let node2 = self.node_name_to_index.get(n2).ok_or_else(|| {
+            TreeTNOperationError::invalid_graph(anyhow::anyhow!("Node not found: {:?}", n2))
+        })?;
         Ok(self.graph.add_edge(*node1, *node2, weight))
     }
 

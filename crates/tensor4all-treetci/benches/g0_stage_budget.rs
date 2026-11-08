@@ -129,7 +129,7 @@ fn main() {
         let cpu_before = read_cpu_ticks();
         let start = Instant::now();
         let result = match &caller_context {
-            Some(context) => crossinterpolate2_in::<f64, _, _, _>(
+            Some(context) => crossinterpolate2_in::<f64, _, _, _, _>(
                 oracle,
                 local_dims.clone(),
                 graph.clone(),
@@ -140,7 +140,7 @@ fn main() {
                 &mut (),
                 context,
             ),
-            None => crossinterpolate2::<f64, _, _, _>(
+            None => crossinterpolate2::<f64, _, _, _, _>(
                 oracle,
                 local_dims.clone(),
                 graph.clone(),
