@@ -295,8 +295,9 @@ impl ContractOptions {
     /// explicit initializer starts from [`FitInitializer::default()`]: the
     /// compatibility choice, documented on that `Default` implementation, that
     /// materialises the exact product bond up to `chi_A * chi_B`. Pass
-    /// [`FitInitializer::LowRankRandom`] with a small `bond_dim` to start from a
-    /// random state instead and let the fit grow ranks adaptively.
+    /// [`FitInitializer::LowRankRandom`] with a small `bond_dim`, a truncation
+    /// tolerance and no `max_bond_dim` to start from a random state instead and
+    /// let the fit grow ranks adaptively.
     ///
     /// # Examples
     ///
