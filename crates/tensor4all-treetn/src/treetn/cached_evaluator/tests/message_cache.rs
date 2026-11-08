@@ -1170,14 +1170,19 @@ fn message_cache_accounting_does_not_scan_every_edge() {
             );
         }
 
+        // Exactly one payload read per reservation under a finite budget -- the
+        // edge being admitted -- and none at all when retention is disabled or
+        // unbounded, where nothing can be reclaimed. A per-other-edge scan puts
+        // `edges * (edges - 1)` more reads here, and dropping the one own read
+        // would stop the running total from tracking admissions.
         let reads = message_cache_payload_reads();
-        let limit = if total == 0 || total == usize::MAX {
+        let expected = if total == 0 || total == usize::MAX {
             0
         } else {
             edges
         };
-        assert!(
-            reads <= limit,
+        assert_eq!(
+            reads, expected,
             "budget {total}: {reads} payload reads for {edges} edges"
         );
         let summed = retained_message_cache_bytes(&evaluator);
