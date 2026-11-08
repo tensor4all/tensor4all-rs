@@ -913,6 +913,33 @@ fn message_cache_stays_correct_while_the_shared_budget_is_exhausted() {
     assert!(retained_message_cache_bytes(&evaluator) <= evaluator.options.message_cache_max_bytes);
 }
 
+/// Inserts a packed cache holding `keys` two-element columns on `edge`, stamped
+/// `last_used` so the cross-edge LRU order is deterministic.
+fn insert_packed_columns(
+    evaluator: &mut TreeTNCachedEvaluator<'_, usize>,
+    edge: (usize, usize),
+    keys: usize,
+    last_used: u64,
+) {
+    let indexer = FlatIndexer::try_new(&[8]).unwrap();
+    let key_list = (0..keys)
+        .map(|key| indexer.encode(&[key]).unwrap())
+        .collect::<Vec<_>>();
+    let mut cache = PackedMessageCache::<IndexKey, CachedScalar>::new(2, usize::MAX);
+    cache
+        .get_or_compute_batch(&key_list, |missing| {
+            Ok::<_, anyhow::Error>(
+                missing
+                    .iter()
+                    .map(|_| vec![CachedScalar::F64(1.0), CachedScalar::F64(2.0)])
+                    .collect(),
+            )
+        })
+        .unwrap();
+    cache.touch(last_used);
+    evaluator.message_caches.insert(edge, cache);
+}
+
 /// [AI Supplied] #1183: the shared budget reclaims columns from the least
 /// recently used edge first, never from the edge that is being used.
 #[test]
@@ -929,31 +956,9 @@ fn message_cache_reclaims_the_least_recently_used_edge_first() {
         },
     )
     .unwrap();
-    let fill = |evaluator: &mut TreeTNCachedEvaluator<'_, usize>,
-                edge: (usize, usize),
-                keys: usize,
-                last_used: u64| {
-        let indexer = FlatIndexer::try_new(&[8]).unwrap();
-        let key_list = (0..keys)
-            .map(|key| indexer.encode(&[key]).unwrap())
-            .collect::<Vec<_>>();
-        let mut cache = PackedMessageCache::<IndexKey, CachedScalar>::new(2, usize::MAX);
-        cache
-            .get_or_compute_batch(&key_list, |missing| {
-                Ok::<_, anyhow::Error>(
-                    missing
-                        .iter()
-                        .map(|_| vec![CachedScalar::F64(1.0), CachedScalar::F64(2.0)])
-                        .collect(),
-                )
-            })
-            .unwrap();
-        cache.touch(last_used);
-        evaluator.message_caches.insert(edge, cache);
-    };
     // The shared total is four columns, filled by these two-column edges.
-    fill(&mut evaluator, (0, 1), 2, 1);
-    fill(&mut evaluator, (1, 2), 2, 2);
+    insert_packed_columns(&mut evaluator, (0, 1), 2, 1);
+    insert_packed_columns(&mut evaluator, (1, 2), 2, 2);
     assert_eq!(retained_message_cache_bytes(&evaluator), 4 * column_bytes);
 
     // A new edge's two columns have to come out of the older edge only.
@@ -961,4 +966,55 @@ fn message_cache_reclaims_the_least_recently_used_edge_first() {
     assert!(cap >= 2 * column_bytes, "{cap}");
     assert_eq!(evaluator.message_caches[&(0, 1)].key_count(), 0);
     assert_eq!(evaluator.message_caches[&(1, 2)].key_count(), 2);
+}
+
+/// [AI Supplied] #1183: the total is a byte budget, so its boundary is exact. A
+/// column that lands on the total is retained and nothing is evicted; the same
+/// column one byte past the total releases a whole neighbour column. This is the
+/// off-by-one the column-granular eviction has to get right.
+#[test]
+fn message_cache_evicts_only_once_the_total_is_exceeded_by_one_byte() {
+    let (tree, indices) = five_node_chain();
+    let column_bytes = std::mem::size_of::<CachedScalar>() * 2;
+    let evaluator_with = |total: usize| {
+        TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(2),
+                message_cache_max_bytes: total,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+
+    // Exactly the total: two neighbour columns plus the one being admitted are
+    // the whole budget, so the neighbour keeps both of its columns.
+    let mut exact = evaluator_with(3 * column_bytes);
+    insert_packed_columns(&mut exact, (0, 1), 2, 1);
+    let cap = exact.reserve_message_cache_bytes(&(1, 2), column_bytes, column_bytes);
+    assert_eq!(cap, column_bytes, "the admitted column must fit exactly");
+    assert_eq!(
+        exact.message_caches[&(0, 1)].key_count(),
+        2,
+        "landing exactly on the total must not evict"
+    );
+
+    // One byte short of the total: the same column overshoots by exactly one
+    // byte, which releases a whole neighbour column rather than a byte of it.
+    let mut one_byte_over = evaluator_with(3 * column_bytes - 1);
+    insert_packed_columns(&mut one_byte_over, (0, 1), 2, 1);
+    let cap = one_byte_over.reserve_message_cache_bytes(&(1, 2), column_bytes, column_bytes);
+    assert_eq!(
+        one_byte_over.message_caches[&(0, 1)].key_count(),
+        1,
+        "one byte over the total must release a whole neighbour column"
+    );
+    assert_eq!(
+        retained_message_cache_bytes(&one_byte_over),
+        column_bytes,
+        "the surviving total stays at or below the budget"
+    );
+    assert_eq!(cap, 2 * column_bytes - 1);
 }
