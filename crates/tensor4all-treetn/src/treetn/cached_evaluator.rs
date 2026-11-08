@@ -1053,9 +1053,14 @@ pub struct CachedEvaluatorOptions<V> {
     pub max_greedy_steps_per_start: Option<usize>,
     /// Explicit maximum points processed together in one internal batch.
     ///
-    /// `None` (recommended) chooses at most 256 points, reducing the limit
-    /// for large local tensors using a 32 MiB local-buffer estimate. This is
-    /// a sizing heuristic, not a bound on total RSS. `Some(n)` must be positive
+    /// `None` (recommended) chooses at most 256 points and reduces the limit
+    /// when a batch's per-point buffers would pass a 32 MiB estimate: the
+    /// largest local tensor where the generic centre contraction stacks a core
+    /// slice per point, and the message columns plus one grouped branch GEMM's
+    /// rows where the raw centre kernels read the core in place. The raw-centre
+    /// sizes apply **only where the core-based estimate holds a single point**;
+    /// every larger core-based estimate is kept as it is. This is a sizing
+    /// heuristic, not a bound on the total resident memory. `Some(n)` must be positive
     /// and fixes the limit to `n`; `Some(usize::MAX)` processes the whole input
     /// together and can require very large buffers. Input and returned scalars
     /// still occupy O(number of points) memory.
@@ -1819,25 +1824,7 @@ where
         }
         let batch_point_limit = match options.max_batch_points {
             Some(limit) => limit,
-            None => {
-                // Bound the largest local tensor's per-point scalar buffer
-                // estimate; small/raw paths keep larger groups to amortize setup.
-                let largest_local = plan.inner.sorted_node_names.iter().try_fold(
-                    1_usize,
-                    |largest, node| -> Result<usize> {
-                        let tensor = tensor_for_node(tree, node)?;
-                        let elements = tensor
-                            .indices()
-                            .iter()
-                            .fold(1_usize, |n, index| n.saturating_mul(index.dim()));
-                        Ok(largest.max(elements))
-                    },
-                )?;
-                let per_point = largest_local
-                    .saturating_mul(std::mem::size_of::<CachedScalar>())
-                    .max(1);
-                (32 * 1024 * 1024 / per_point).clamp(1, 256)
-            }
+            None => automatic_batch_point_limit(tree, &plan.inner)?,
         };
         let center = options.center.clone();
         // A positive budget below one branching node's tensor could never retain that node's slices, so every
@@ -2763,52 +2750,10 @@ where
     }
 
     fn can_use_raw_messages(&self, center: &V) -> Result<bool> {
-        #[cfg(test)]
-        if raw_message_kernels_disabled_for_test() {
+        if !self.plan.inner.neighbors.contains_key(center) {
             return Ok(false);
         }
-        let neighbors = &self.plan.inner.neighbors;
-        if !neighbors.contains_key(center) {
-            return Ok(false);
-        }
-        // Coordination is no longer a condition: a non-center node with three
-        // or more children is covered by
-        // `try_compute_multi_branch_message_raw` and the center of any degree
-        // by the raw center kernel. Refusing a single high-coordination node
-        // used to push *every* message of the whole tree onto the generic
-        // `IdxTensor` path, which measured ~20x per hinted evaluation on a
-        // 13-site spider against a chain of the same size, independently of
-        // bond dimension (tensor4all-rs #727).
-        if self
-            .layout()
-            .entries_by_node
-            .values()
-            .any(|entries| entries.len() != 1)
-        {
-            return Ok(false);
-        }
-        let mut scalar_kind = None;
-        for (node, node_neighbors) in neighbors {
-            let tensor = tensor_for_node(self.tree, node)?;
-            if tensor.indices().len() != node_neighbors.len() + 1 {
-                return Ok(false);
-            }
-            let kind = tensor_scalar_kind(tensor)?;
-            if let Some(previous) = scalar_kind {
-                if previous != kind {
-                    return Ok(false);
-                }
-            } else {
-                scalar_kind = Some(kind);
-            }
-        }
-        // The specialized raw kernels currently operate on the two 64-bit
-        // scalar kinds. The generic contraction path below preserves f32/c32;
-        // do not route those tensors through mismatched f64/c64 readers.
-        Ok(matches!(
-            scalar_kind,
-            Some(ScalarKind::F64 | ScalarKind::C64)
-        ))
+        raw_centre_route_available(self.tree, &self.plan.inner)
     }
 
     /// Computes a leaf node's message directly from the tree tensor's raw
@@ -7218,6 +7163,206 @@ where
         bail!("{context} {:?} is not present in TreeTN", node);
     }
     Ok(())
+}
+
+/// Whether the plan's messages and centre contract from raw host buffers, which
+/// is what [`automatic_batch_point_limit`] needs to know: a property of the
+/// plan's degrees, single-entry layouts and scalar kind, not of one centre.
+///
+/// Coordination is not a condition: a non-center node with three or more
+/// children is covered by `try_compute_multi_branch_message_raw` and the center
+/// of any degree by the raw center kernel. Refusing a single high-coordination
+/// node used to push *every* message of the whole tree onto the generic
+/// `IdxTensor` path, which measured ~20x per hinted evaluation on a 13-site
+/// spider against a chain of the same size, independently of bond dimension
+/// (tensor4all-rs #727).
+fn raw_centre_route_available<V>(
+    tree: &TreeTN<IdxTensor, V>,
+    plan: &CachedEvaluatorPlanInner<V>,
+) -> Result<bool>
+where
+    V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
+{
+    #[cfg(test)]
+    if raw_message_kernels_disabled_for_test() {
+        return Ok(false);
+    }
+    // A centre with no neighbour (a single-node tree) takes
+    // `contract_center_for_points`, which stacks the core per point: the raw
+    // centre kernels need at least one component.
+    if plan.neighbors.values().all(Vec::is_empty) {
+        return Ok(false);
+    }
+    if plan
+        .layout
+        .entries_by_node
+        .values()
+        .any(|entries| entries.len() != 1)
+    {
+        return Ok(false);
+    }
+    let mut scalar_kind = None;
+    for (node, node_neighbors) in &plan.neighbors {
+        let tensor = tensor_for_node(tree, node)?;
+        if tensor.indices().len() != node_neighbors.len() + 1 {
+            return Ok(false);
+        }
+        let kind = tensor_scalar_kind(tensor)?;
+        if let Some(previous) = scalar_kind {
+            if previous != kind {
+                return Ok(false);
+            }
+        } else {
+            scalar_kind = Some(kind);
+        }
+    }
+    // The specialized raw kernels currently operate on the two 64-bit scalar
+    // kinds. The generic contraction path below preserves f32/c32; do not route
+    // those tensors through mismatched f64/c64 readers.
+    Ok(matches!(
+        scalar_kind,
+        Some(ScalarKind::F64 | ScalarKind::C64)
+    ))
+}
+
+/// The most bytes one internal batch may allocate for the per-point buffers of
+/// the centre route it takes. The batch size is derived from it, so a wide or
+/// asymmetric tree gets fewer points rather than more memory.
+const BATCH_POINT_BUDGET_BYTES: usize = 32 * 1024 * 1024;
+
+/// The most points one automatic batch may hold.
+const BATCH_POINT_MAX: usize = 256;
+
+/// The points one internal batch may hold so that `points x per_point_bytes`
+/// stays within [`BATCH_POINT_BUDGET_BYTES`], in `1..=BATCH_POINT_MAX`.
+///
+/// Two routes reach the centre and allocate differently:
+///
+/// * the generic `contract_center_for_points` slices the centre core once per
+///   point and stacks the slices, so one point holds the largest local tensor;
+/// * the raw centre kernels (`try_contract_leaf_center_raw`,
+///   `contract_raw_center`) read the core in place, so one point holds a column of
+///   each directed message, the centre's own scalar, and the rows of a grouped
+///   message GEMM for the node whose message is being computed
+///   ([`grouped_message_intermediate_per_point`]; the allocation is the
+///   `intermediate` of `grouped_branch_message_from_gemm` and of
+///   `contract_multi_branch_typed`). That last term is bounded by no local tensor:
+///   an outer bond times a wide sibling is larger than both, and for bonds
+///   1024/1/2048 it is `1024 x 2048` rows per point.
+///
+/// Two conditions keep every other shape where it was:
+///
+/// * the core-based estimate is returned unchanged whenever it already allows
+///   more than one point (`core_bound > 1`), so **the raw-route formula applies
+///   only where the core-based estimate holds a single point** — that is where
+///   charging the core to a route that does not copy it collapsed a batch that
+///   the raw kernels exist to serve (tensor4all-rs #1184);
+/// * a plan that does not route its centre through the raw kernels
+///   ([`raw_centre_route_available`]) keeps the core-based estimate at every
+///   size.
+fn automatic_batch_point_limit<V>(
+    tree: &TreeTN<IdxTensor, V>,
+    plan: &CachedEvaluatorPlanInner<V>,
+) -> Result<usize>
+where
+    V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
+{
+    let scalar_bytes = std::mem::size_of::<CachedScalar>().max(1);
+    let mut largest_local = 1_usize;
+    // One column per directed message, and the centre's own result: summing one
+    // node's axes counts each of its bonds once, so the sum over all nodes counts
+    // every bond twice, once per direction.
+    let mut message_columns = 1_usize;
+    for node in &plan.sorted_node_names {
+        let tensor = tensor_for_node(tree, node)?;
+        let dims = tensor.indices().iter().map(DynIndex::dim);
+        message_columns =
+            message_columns.saturating_add(dims.fold(0_usize, |sum, dim| sum.saturating_add(dim)));
+        let elements = tensor
+            .indices()
+            .iter()
+            .fold(1_usize, |n, index| n.saturating_mul(index.dim()));
+        largest_local = largest_local.max(elements);
+    }
+    let core_per_point = largest_local.saturating_mul(scalar_bytes).max(1);
+    let core_bound = (BATCH_POINT_BUDGET_BYTES / core_per_point).clamp(1, BATCH_POINT_MAX);
+    if core_bound > 1 || !raw_centre_route_available(tree, plan)? {
+        return Ok(core_bound);
+    }
+    let per_point_scalars =
+        message_columns.saturating_add(grouped_message_intermediate_per_point(tree, plan)?);
+    let per_point_bytes = per_point_scalars.saturating_mul(scalar_bytes).max(1);
+    Ok((BATCH_POINT_BUDGET_BYTES / per_point_bytes).clamp(1, BATCH_POINT_MAX))
+}
+
+/// The most scalars one point adds to a grouped branch message GEMM: the rows of
+/// its intermediate plus the shared child column it multiplies them by.
+///
+/// The geometry depends on which neighbour a node's message is directed away
+/// from, and the centre that decides that is only known at evaluation time, so
+/// this takes the worst neighbour as the parent. The rooted plan lists a node's
+/// children in label order, folds the *first* of them with the shared GEMM, and
+/// keeps `parent x product(other children)` rows per point: for `child_1` in the
+/// degree-three kernel and for the multi-branch kernel alike. A node with one
+/// child needs no GEMM at all, because its message is that child's column.
+///
+/// This is the term that a per-node element count does not see: with bonds
+/// 1024/1/2048 a node's rows are `1024 x 2048`, twice its own larger bond, so the
+/// estimate has to come from the geometry rather than from the local tensors.
+fn grouped_message_intermediate_per_point<V>(
+    tree: &TreeTN<IdxTensor, V>,
+    plan: &CachedEvaluatorPlanInner<V>,
+) -> Result<usize>
+where
+    V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
+{
+    let mut worst = 0_usize;
+    for node in &plan.sorted_node_names {
+        let Some(neighbours) = plan.neighbors.get(node) else {
+            continue;
+        };
+        let dims = neighbours
+            .iter()
+            .map(|neighbour| bond_dim_between(tree, node, neighbour))
+            .collect::<Result<Vec<usize>>>()?;
+        for (parent, _) in neighbours.iter().enumerate() {
+            let mut children: Vec<(usize, &V)> = neighbours
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != parent)
+                .map(|(other, neighbour)| (dims[other], neighbour))
+                .collect();
+            children.sort_by(|left, right| left.1.cmp(right.1));
+            let parent_dim = dims[parent];
+            let child_dims: Vec<usize> = children.iter().map(|(dim, _)| *dim).collect();
+            let per_point = match child_dims.split_first() {
+                None => 0,
+                // One child: the message is that child's column.
+                Some((_, [])) => 0,
+                Some((shared, rest)) => rest
+                    .iter()
+                    .try_fold(parent_dim, |rows, dim| rows.checked_mul(*dim))
+                    .ok_or_else(|| anyhow::anyhow!("grouped message rows overflow usize"))?
+                    .saturating_add(*shared),
+            };
+            worst = worst.max(per_point);
+        }
+    }
+    Ok(worst)
+}
+
+/// The dimension of the bond between two adjacent nodes.
+fn bond_dim_between<V>(tree: &TreeTN<IdxTensor, V>, node: &V, neighbour: &V) -> Result<usize>
+where
+    V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
+{
+    let edge = tree.edge_between(node, neighbour).ok_or_else(|| {
+        anyhow::anyhow!("TreeTNCachedEvaluator: no edge between {node:?} and {neighbour:?}")
+    })?;
+    let bond = tree.bond_index(edge).ok_or_else(|| {
+        anyhow::anyhow!("TreeTNCachedEvaluator: no bond index between {node:?} and {neighbour:?}")
+    })?;
+    Ok(bond.dim())
 }
 
 /// The element count of the largest tensor of a node with exactly three bonds: the nodes whose physical slices
