@@ -913,25 +913,30 @@ fn message_cache_stays_correct_while_the_shared_budget_is_exhausted() {
     assert!(retained_message_cache_bytes(&evaluator) <= evaluator.options.message_cache_max_bytes);
 }
 
-/// Inserts a packed cache holding `keys` two-element columns on `edge`, stamped
-/// `last_used` so the cross-edge LRU order is deterministic.
+/// Inserts a packed cache holding `keys` columns of `bond_dim` elements on
+/// `edge`, stamped `last_used` so the cross-edge LRU order is deterministic.
 fn insert_packed_columns(
     evaluator: &mut TreeTNCachedEvaluator<'_, usize>,
     edge: (usize, usize),
     keys: usize,
+    bond_dim: usize,
     last_used: u64,
 ) {
     let indexer = FlatIndexer::try_new(&[8]).unwrap();
     let key_list = (0..keys)
         .map(|key| indexer.encode(&[key]).unwrap())
         .collect::<Vec<_>>();
-    let mut cache = PackedMessageCache::<IndexKey, CachedScalar>::new(2, usize::MAX);
+    let mut cache = PackedMessageCache::<IndexKey, CachedScalar>::new(bond_dim, usize::MAX);
     cache
         .get_or_compute_batch(&key_list, |missing| {
             Ok::<_, anyhow::Error>(
                 missing
                     .iter()
-                    .map(|_| vec![CachedScalar::F64(1.0), CachedScalar::F64(2.0)])
+                    .map(|_| {
+                        (0..bond_dim)
+                            .map(|element| CachedScalar::F64(1.0 + element as f64))
+                            .collect()
+                    })
                     .collect(),
             )
         })
@@ -957,8 +962,8 @@ fn message_cache_reclaims_the_least_recently_used_edge_first() {
     )
     .unwrap();
     // The shared total is four columns, filled by these two-column edges.
-    insert_packed_columns(&mut evaluator, (0, 1), 2, 1);
-    insert_packed_columns(&mut evaluator, (1, 2), 2, 2);
+    insert_packed_columns(&mut evaluator, (0, 1), 2, 2, 1);
+    insert_packed_columns(&mut evaluator, (1, 2), 2, 2, 2);
     assert_eq!(retained_message_cache_bytes(&evaluator), 4 * column_bytes);
 
     // A new edge's two columns have to come out of the older edge only.
@@ -966,6 +971,41 @@ fn message_cache_reclaims_the_least_recently_used_edge_first() {
     assert!(cap >= 2 * column_bytes, "{cap}");
     assert_eq!(evaluator.message_caches[&(0, 1)].key_count(), 0);
     assert_eq!(evaluator.message_caches[&(1, 2)].key_count(), 2);
+}
+
+/// [AI Supplied] #1183: a reservation is whole incoming columns, so a neighbour
+/// is never evicted for part of a column that admission cannot retain anyway.
+#[test]
+fn message_cache_does_not_evict_for_a_partial_incoming_column() {
+    let (tree, indices) = five_node_chain();
+    let column_bytes = std::mem::size_of::<CachedScalar>() * 2;
+    // One two-element neighbour column plus one four-element incoming column is
+    // the whole total, so exactly one of the two requested columns fits beside
+    // the neighbour.
+    let mut evaluator = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            center: Some(2),
+            message_cache_max_bytes: 3 * column_bytes,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    insert_packed_columns(&mut evaluator, (0, 1), 1, 2, 1);
+
+    let cap = evaluator.reserve_message_cache_bytes(&(1, 2), 4 * column_bytes, 2 * column_bytes);
+    assert_eq!(
+        cap,
+        2 * column_bytes,
+        "only the one column that fits may be reserved"
+    );
+    assert_eq!(
+        evaluator.message_caches[&(0, 1)].key_count(),
+        1,
+        "a partial incoming column must not evict the neighbour's column"
+    );
+    assert_eq!(retained_message_cache_bytes(&evaluator), column_bytes);
 }
 
 /// [AI Supplied] #1183: the total is a byte budget, so its boundary is exact. A
@@ -992,7 +1032,7 @@ fn message_cache_evicts_only_once_the_total_is_exceeded_by_one_byte() {
     // Exactly the total: two neighbour columns plus the one being admitted are
     // the whole budget, so the neighbour keeps both of its columns.
     let mut exact = evaluator_with(3 * column_bytes);
-    insert_packed_columns(&mut exact, (0, 1), 2, 1);
+    insert_packed_columns(&mut exact, (0, 1), 2, 2, 1);
     let cap = exact.reserve_message_cache_bytes(&(1, 2), column_bytes, column_bytes);
     assert_eq!(cap, column_bytes, "the admitted column must fit exactly");
     assert_eq!(
@@ -1004,7 +1044,7 @@ fn message_cache_evicts_only_once_the_total_is_exceeded_by_one_byte() {
     // One byte short of the total: the same column overshoots by exactly one
     // byte, which releases a whole neighbour column rather than a byte of it.
     let mut one_byte_over = evaluator_with(3 * column_bytes - 1);
-    insert_packed_columns(&mut one_byte_over, (0, 1), 2, 1);
+    insert_packed_columns(&mut one_byte_over, (0, 1), 2, 2, 1);
     let cap = one_byte_over.reserve_message_cache_bytes(&(1, 2), column_bytes, column_bytes);
     assert_eq!(
         one_byte_over.message_caches[&(0, 1)].key_count(),

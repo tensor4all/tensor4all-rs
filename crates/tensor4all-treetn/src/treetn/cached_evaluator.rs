@@ -2604,10 +2604,10 @@ where
     /// has, matching the no-eviction-on-miss design (#646, #1167), and the
     /// column it is about to store was just computed.
     ///
-    /// Only the part of `needed` that can fit is reclaimed, and nothing at all
-    /// when not even one column of this edge fits the total: evicting a
-    /// neighbour for a column that admission would refuse anyway loses reuse on
-    /// both edges.
+    /// Only whole columns of the part of `needed` that can fit are reclaimed,
+    /// and nothing at all when not even one column of this edge fits the total:
+    /// evicting a neighbour for a column, or a fraction of one, that admission
+    /// would refuse anyway loses reuse on both edges.
     fn reserve_message_cache_bytes(
         &mut self,
         edge: &(V, V),
@@ -2620,10 +2620,11 @@ where
             .map_or(0, PackedMessageCache::logical_payload_bytes);
         let mut others = self.message_cache_bytes_excluding(edge);
         let room = self.options.message_cache_max_bytes.saturating_sub(own);
-        let wanted = if room < bytes_per_column {
-            0
-        } else {
-            needed.min(room)
+        // Round the reservation down to whole columns, so a neighbour is never
+        // charged for capacity that admission cannot use.
+        let wanted = match bytes_per_column {
+            0 => 0,
+            per_column => needed.min(room) / per_column * per_column,
         };
         let mut over = own
             .saturating_add(wanted)
