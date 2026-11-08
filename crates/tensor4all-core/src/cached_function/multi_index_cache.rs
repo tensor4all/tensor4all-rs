@@ -207,9 +207,9 @@ pub const DEFAULT_RETAINED_BYTE_LIMIT: usize = 256 * 1024 * 1024;
 /// Key width is selected automatically from the index space (up to 1024 bits,
 /// as in [`CachedFunction`](super::CachedFunction)); an index space that needs
 /// more bits is rejected by [`MultiIndexCache::new`] with
-/// [`error::CacheKeyError::Overflow`]. Keys are the cache's only payload, so
-/// [`MultiIndexCache::retained_bytes`] reports a logical estimate of the
-/// retained key and value storage.
+/// [`error::CacheKeyError::Overflow`]. The key width sets the size of each
+/// table entry, and so the table bytes [`MultiIndexCache::retained_bytes`]
+/// reports (an upper bound on the allocated tables, see above).
 ///
 /// # Examples
 ///
