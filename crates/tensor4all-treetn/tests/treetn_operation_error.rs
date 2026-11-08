@@ -502,3 +502,48 @@ fn a_typed_context_does_not_change_how_a_wrapped_failure_is_classified() {
         "a note changed the classification: {bare:?} vs {noted:?}"
     );
 }
+
+#[test]
+fn a_dtype_mismatch_below_a_wrapper_is_not_rendered_twice() {
+    // A wrapper whose `Display` includes its inner error already renders the
+    // mismatch, so it must not be prefixed onto the payload again: repeated
+    // crossings would double the message each time.
+    #[derive(Debug)]
+    struct Wrapper(TreeTNOperationError);
+
+    impl std::fmt::Display for Wrapper {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "wrapper: {}", self.0)
+        }
+    }
+
+    impl std::error::Error for Wrapper {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    let mismatch = tensor4all_treetn::EvaluatedScalarKindMismatch {
+        stored: "c64",
+        requested: "f64",
+    };
+    let mut error = TreeTNOperationError::from(mismatch);
+    for _ in 0..15 {
+        error = TreeTNOperationError::from(anyhow::Error::new(Wrapper(error)));
+    }
+    let TreeTNOperationError::ScalarKindMismatch { payload, .. } = &error else {
+        panic!("the dtype variant must survive the wrapper, got {error:?}");
+    };
+    assert_eq!((payload.stored, payload.requested), ("c64", "f64"));
+    let text = error.to_string();
+    eprintln!(
+        "dtype message bytes after 15 wrapper crossings: {}",
+        text.len()
+    );
+    assert_eq!(
+        text.matches("cannot decode a c64 TreeTN value as f64")
+            .count(),
+        1,
+        "the mismatch is rendered more than once: {text}"
+    );
+}

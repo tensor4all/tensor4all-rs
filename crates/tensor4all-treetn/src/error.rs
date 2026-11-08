@@ -409,29 +409,20 @@ impl Class {
         }
     }
 
-    /// The variant around `source`, with `notes` joined in front of what it
-    /// cannot hold: only `ScalarKindMismatch` has no chain of its own.
-    fn into_error(self, source: anyhow::Error, notes: &[String]) -> TreeTNOperationError {
+    /// The variant around `source`. `ScalarKindMismatch` has no chain to hold
+    /// it, so it keeps the failure's own payload and context unchanged: the
+    /// links above it may be wrappers that already render the failure, and
+    /// prefixing their text would repeat it on every crossing.
+    fn into_error(self, source: anyhow::Error) -> TreeTNOperationError {
         match self {
             Self::InvalidConfiguration => TreeTNOperationError::InvalidConfiguration { source },
             Self::InvalidGraph => TreeTNOperationError::InvalidGraph { source },
             Self::IndexOutOfBounds => TreeTNOperationError::IndexOutOfBounds { source },
             Self::Operation => TreeTNOperationError::Operation { source },
             Self::ScalarKindMismatch { payload, context } => {
-                TreeTNOperationError::ScalarKindMismatch {
-                    payload,
-                    context: prefix_notes(notes, &context),
-                }
+                TreeTNOperationError::ScalarKindMismatch { payload, context }
             }
         }
-    }
-}
-
-/// `notes`, outermost first, joined in front of `inline` as `note: inline`.
-fn prefix_notes(notes: &[String], inline: &str) -> String {
-    match notes.join(": ") {
-        prefix if prefix.is_empty() => inline.to_string(),
-        prefix => format!("{prefix}: {inline}"),
     }
 }
 
@@ -484,7 +475,7 @@ impl From<anyhow::Error> for TreeTNOperationError {
             .downcast_ref::<Self>()
             .is_some_and(|outer| std::ptr::eq(outer, failure));
         if !is_object {
-            return Class::of(failure).into_error(source, &notes);
+            return Class::of(failure).into_error(source);
         }
         let variant = match source.downcast::<Self>() {
             Ok(variant) => variant,
