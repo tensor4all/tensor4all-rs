@@ -964,6 +964,101 @@ fn evaluator_reuses_unequal_branch_slices_and_zero_budget_falls_back() {
     assert_eq!(zero_budget.prepared_branch_slices_f64.retained_bytes(), 0);
 }
 
+/// A positive budget smaller than the branching tensor is raised to it: the slices are retained, and the values are
+/// bitwise those of the zero-budget route, which prepares every slice afresh.
+#[test]
+fn small_positive_branch_slice_budget_still_retains_the_branching_slices() {
+    let (tree, indices) = unequal_branch_tree();
+    let values = unequal_branch_values(0);
+    let points = ColMajorArrayRef::new(&values, &[4, 64]).unwrap();
+    let evaluator = |budget: usize| {
+        TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                max_batch_points: Some(usize::MAX),
+                branch_slice_cache_max_bytes: budget,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    // The branching tensor has 4 × 3 × 6 × 8 = 576 entries: 4608 B as f64, 9216 B as Complex64. Its three physical
+    // slices are 192 entries each.
+    let (tensor_f64, tensor_c64, slice_f64) = (576 * 8, 576 * 16, 192 * 8);
+
+    // f64: a one-byte budget is raised to the tensor and retains its three slices, exactly that many bytes.
+    let mut small = evaluator(1);
+    assert_eq!(small.prepared_branch_slices_f64.max_bytes, tensor_f64);
+    assert_eq!(small.prepared_branch_slices_c64.max_bytes, tensor_c64);
+    let small_values = small
+        .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(small.prepared_branch_slices_f64.slices.len(), 3);
+    assert_eq!(
+        small.prepared_branch_slices_f64.retained_bytes(),
+        3 * slice_f64
+    );
+
+    // A budget above the tensor is kept as given, and zero still disables retention.
+    assert_eq!(
+        evaluator(5 * tensor_f64)
+            .prepared_branch_slices_f64
+            .max_bytes,
+        5 * tensor_f64
+    );
+    let mut zero = evaluator(0);
+    assert_eq!(zero.prepared_branch_slices_f64.max_bytes, 0);
+    let zero_values = zero
+        .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(zero.prepared_branch_slices_f64.slices.len(), 0);
+    let bits = |values: &[f64]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&small_values), bits(&zero_values));
+
+    // Complex64 tree: a budget of two complex slices is raised to the complex tensor, so all three are retained.
+    let (complex_tree, complex_indices) =
+        unequal_branch_tree_of(|value| Complex64::new(value, 0.5 * value - 0.1));
+    let complex_evaluator = |budget: usize| {
+        TreeTNCachedEvaluator::new(
+            &complex_tree,
+            &complex_indices,
+            CachedEvaluatorOptions {
+                center: Some(1),
+                max_batch_points: Some(usize::MAX),
+                branch_slice_cache_max_bytes: budget,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    let mut complex = complex_evaluator(2 * 192 * 16);
+    assert_eq!(complex.prepared_branch_slices_c64.max_bytes, tensor_c64);
+    let complex_values = complex
+        .evaluate_batched_typed::<Complex64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(complex.prepared_branch_slices_c64.slices.len(), 3);
+    assert_eq!(
+        complex.prepared_branch_slices_c64.retained_bytes(),
+        tensor_c64
+    );
+    let mut complex_zero = complex_evaluator(0);
+    let complex_zero_values = complex_zero
+        .evaluate_batched_typed::<Complex64>(points, EvaluationHint::default())
+        .unwrap();
+    let complex_bits = |values: &[Complex64]| {
+        values
+            .iter()
+            .map(|z| (z.re.to_bits(), z.im.to_bits()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        complex_bits(&complex_values),
+        complex_bits(&complex_zero_values)
+    );
+}
+
 #[test]
 fn stack_tensors_adds_trailing_assignment_axis_in_column_major_order() {
     let batch = DynIndex::new_dyn(2);
@@ -1007,6 +1102,13 @@ fn gather_stacked_tensor_remaps_trailing_assignment_axis() {
 }
 
 fn unequal_branch_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+    unequal_branch_tree_of(|value| value)
+}
+
+/// [`unequal_branch_tree`] with every entry mapped by `entry` (a complex copy, say).
+fn unequal_branch_tree_of<T: tensor4all_core::TensorElement>(
+    entry: impl Fn(f64) -> T,
+) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
     let physical = DynIndex::new_dyn(3);
     let parent_site = DynIndex::new_dyn(2);
     let child1_site = DynIndex::new_dyn(4);
@@ -1017,8 +1119,8 @@ fn unequal_branch_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
 
     // Axis order is [child1, physical, child2, parent], deliberately
     // non-canonical. The three incident bonds have unequal dimensions.
-    let center_data: Vec<f64> = (0..3 * 4 * 6 * 8)
-        .map(|value| (value % 31) as f64 / 17.0 - 0.8)
+    let center_data: Vec<T> = (0..3 * 4 * 6 * 8)
+        .map(|value| entry((value % 31) as f64 / 17.0 - 0.8))
         .collect();
     let center = IdxTensor::from_dense(
         vec![
@@ -1033,21 +1135,21 @@ fn unequal_branch_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
     let parent = IdxTensor::from_dense(
         vec![parent_bond, parent_site.clone()],
         (0..16)
-            .map(|value| (value % 7) as f64 / 5.0 - 0.4)
+            .map(|value| entry((value % 7) as f64 / 5.0 - 0.4))
             .collect(),
     )
     .unwrap();
     let child1 = IdxTensor::from_dense(
         vec![child1_bond, child1_site.clone()],
         (0..16)
-            .map(|value| (value % 5) as f64 / 3.0 - 0.5)
+            .map(|value| entry((value % 5) as f64 / 3.0 - 0.5))
             .collect(),
     )
     .unwrap();
     let child2 = IdxTensor::from_dense(
         vec![child2_bond, child2_site.clone()],
         (0..24)
-            .map(|value| (value % 11) as f64 / 7.0 - 0.7)
+            .map(|value| entry((value % 11) as f64 / 7.0 - 0.7))
             .collect(),
     )
     .unwrap();
