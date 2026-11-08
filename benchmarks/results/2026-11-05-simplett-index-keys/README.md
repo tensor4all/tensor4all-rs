@@ -48,6 +48,11 @@ performance promotion gate.
 - Predeclared noise limits: one-minute load at most 8 at run boundaries,
   relative Criterion mean CI half-width at most 25%, per-arm/case mean CV across
   repetitions at most 20%, and no CPU speed limit below 100 when available.
+  The CI limit was evaluated on the upward half-width, `(ci95_high - mean) /
+  mean`; Criterion's bootstrap intervals are asymmetric, and this is the larger
+  side. The conventional two-sided half-width is `(ci95_high - ci95_low) /
+  (2 * mean)`. The CV uses the sample standard deviation (divisor n - 1) of
+  the three round means.
   macOS reported no thermal/performance warning and no CPU power status; CPU
   speed-limit verification is therefore unavailable.
 
@@ -58,10 +63,14 @@ load reached 8.13. Automatic-split medians were 14–20% slower than original in
 five cases, motivating removal of disposable candidate-key encoding. It was not
 promoted as a successful result.
 
-Experiment 2 is also inconclusive: its initial load was 22.49 after validation,
-the largest relative CI half-width was 25.77%, and the largest repetition CV
-was 24.04%. The observed paired ratios meet the numerical timing thresholds,
-but **the failed noise gates invalidate a performance conclusion**. The final
+Experiment 2 is also inconclusive: its initial load was 22.49 after validation
+and the largest repetition CV was 24.04% (`warm_fixed/n32_chi1_batch64`,
+shared-only arm). The largest upward CI half-width was
+25.77% of the mean, one cell over the 25% limit; the largest two-sided
+half-width over all 270 cells was 19.83%, within it (both in
+`cold_fixed/n300_chi1_batch64`, final arm, round 2). The observed paired ratios
+meet the numerical timing thresholds, but **the failed load and CV gates
+invalidate a performance conclusion** under either CI definition. The final
 idle check recorded load 5.28 before and
 6.86 after 120 seconds, above its maximum of 6.
 No samples from different experiments are combined or selectively retained.
@@ -69,7 +78,10 @@ No samples from different experiments are combined or selectively retained.
 In experiment 2, observed cold-batch ratios span 0.40–0.67, automatic-split
 ratios 0.66–0.89, fixed-split warm ratios 0.86–1.05, and environment-hit ratios
 0.53–0.89. These are diagnostics for choosing the implementation, not certified
-speedups. A fixed-split warm case was about 5% slower; no regression is omitted.
+speedups. Three of six fixed-split warm cases are slower than original by
+median ratio (1.037, 1.044, 1.050), and single rounds reach 1.176. The
+shared-only arm is slower than original in every fixed-split warm case, and the
+final arm recovers part of that cost. No regression is omitted.
 
 ## Complete experiment 2 observations
 

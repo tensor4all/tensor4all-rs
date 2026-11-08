@@ -33,10 +33,10 @@
   lengths, boundary splits, warm reuse, and clearing preserve known values
   and errors. The core singleton regression independently reproduced a shift
   overflow before the offset fix.
-- Core/simplett Nextest: 1,373 passed, three existing ignored tests skipped.
-  TreeTN cache regression selection: 102 passed. Core/simplett doctests:
-  395 + 51 passed. Simplett strict Clippy with dependency linting disabled
-  passes; dependency linting encounters 43 existing errors in core.
+- Local suites run: `cargo nextest run -p tensor4all-core -p
+  tensor4all-simplett`, `cargo nextest run -p tensor4all-treetn -E
+  'test(cached_evaluator)'`, and `cargo test --doc -p tensor4all-core -p
+  tensor4all-simplett`. Hosted CI on the pushed head is the record of results.
 - Removed code paths were reviewed for coverage impact. Private-indexer unit
   tests were replaced by cache-level wide-key/value regressions; core retains
   the encoder's width, injectivity, and boundary tests at its owner.
