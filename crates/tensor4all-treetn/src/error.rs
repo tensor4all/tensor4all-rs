@@ -307,7 +307,9 @@ pub enum TreeTNOperationError {
     /// payload's `source()` (which it does not have) instead of the payload.
     ///
     /// `context` prefixes the layers [`From<anyhow::Error>`] found around the
-    /// payload, already rendered as text.
+    /// payload, already rendered as text, when the payload was the `anyhow`
+    /// error object. Layers above a typed context or a foreign wrapper are not
+    /// kept here (see [`From<anyhow::Error>`]).
     #[error("{context}{payload}")]
     ScalarKindMismatch {
         /// The dtype mismatch.
@@ -437,9 +439,14 @@ impl From<crate::EvaluatedScalarKindMismatch> for TreeTNOperationError {
 
 impl From<anyhow::Error> for TreeTNOperationError {
     /// Internal `?` conversions land in the catch-all variant with their chain
-    /// intact. An error that carries a classified variant keeps that variant;
-    /// the `anyhow` context layers above it are recorded as the message they
-    /// render (a typed context cannot be recovered from `anyhow`).
+    /// intact. An error that carries a classified variant keeps that variant.
+    /// When it is the `anyhow` error object, the context layers above it are
+    /// recorded as the message they render (a typed context cannot be recovered
+    /// from `anyhow`). When a typed context or a foreign wrapper sits between,
+    /// the variant holds the received chain unchanged, except
+    /// `ScalarKindMismatch`, which has no chain: it keeps its own payload and
+    /// context, and the links above it are dropped rather than re-rendered,
+    /// because a wrapper may already render the mismatch.
     ///
     /// The classification is taken from the first `TreeTNOperationError` in the
     /// source chain (the failure), never from a typed context above it:

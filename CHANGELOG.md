@@ -19,14 +19,17 @@ literals, or named public types:
   `Display` of every variant renders one level (`{source}`, as `Operation` did
   on `main`), so repeated propagation does not grow the message; the rest of
   the chain is read through `source()`. When
-  `From<anyhow::Error>` recovers a classified variant from an `anyhow` chain, the
-  context layers around it are re-rendered onto the variant as text, so a typed
+  `From<anyhow::Error>` recovers a classified variant that is the `anyhow` error
+  object, the context layers around it are re-rendered onto the variant as text, so a typed
   context cannot be downcast after that conversion; the `Operation` catch-all
   keeps the typed chain. Only an error that *is* a classified variant is recovered:
   a variant attached with `.context(..)` is a note about another failure, so it is
   not taken as the failure. The first classified error in the source chain keeps
   its variant whether a typed context or a foreign wrapper sits above it, since
-  `anyhow` cannot tell the two apart. Failures that
+  `anyhow` cannot tell the two apart; such a variant holds the received chain
+  unchanged, except `ScalarKindMismatch`, which has no chain and keeps only its
+  own payload and context (the links above it are dropped, not re-rendered, so
+  a wrapper that renders the mismatch does not repeat it). Failures that
   reach the boundary through an internal `anyhow` helper - tensor, storage and
   backend failures, the option checks the factorization runs in
   `tensor4all-core`, and every diagnostic an internal helper raises - keep the
