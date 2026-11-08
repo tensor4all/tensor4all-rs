@@ -1285,8 +1285,9 @@ is not free and must not be claimed before it is measured:
   `3.0e-14` at 1T vs 4T, `6.9e-14` at 4T vs 8T). `svd` is identical up to
   `224x112`; at `448x224` it differs by `0.43` at 1T vs 4T and that is not
   round-off — singular values agree to `4.8e-14`, both factorizations rebuild the
-  input to `1.5e-14`, and a separate one-off overlap check gave
-  `|<u_c(1T), u_c(4T)>| = 1` for every `c`, so the columns differ by a phase.
+  input to `<= 1.5e-14` (measured `1.48e-14` at 1T, `1.45e-14` at 4T), and a
+  separate one-off overlap check gave min `|<u_c(1T), u_c(4T)>| = 1.000000` over
+  all `c`, so the columns differ by a phase.
   `a_fixed_thread_count_repeats_the_factorization_bits` checks within-process
   repeatability at each of 1, 4 and 8 threads (not fresh caller threads, not a
   second process); `thread_count_may_change_the_last_bits_today` prints the state
