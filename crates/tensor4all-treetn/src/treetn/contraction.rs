@@ -72,6 +72,96 @@ fn indices_except_exact<I: IndexLike>(indices: &[I], excluded: &[I]) -> Vec<I> {
     tensor4all_core::index_ops::unique_inds(indices, excluded)
 }
 
+thread_local! {
+    /// How many zip-up nodes this thread has emitted without a contraction or
+    /// factorization because the second operand is the identity there (see
+    /// [`TreeTN::contract_zipup_skipping_identity_nodes`]).
+    ///
+    /// A per-thread diagnostic for tests: they assert that a partial apply skips
+    /// the nodes its operator does not touch and that the skipped nodes come out
+    /// unchanged. It counts work avoided and never affects a result.
+    static ZIPUP_IDENTITY_NODE_SKIPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Value of this thread's [`ZIPUP_IDENTITY_NODE_SKIPS`] counter.
+pub(crate) fn zipup_identity_node_skips() -> usize {
+    ZIPUP_IDENTITY_NODE_SKIPS.with(std::cell::Cell::get)
+}
+
+/// Whether the network certifies `source`'s tensor as an isometry toward
+/// `destination`, i.e. as isometric on the side facing away from the parent.
+///
+/// `ortho_towards` records, per edge, the node the canonical form is centred on;
+/// a tensor on the far side of that direction is an isometry toward it. A network
+/// that is not in canonical form certifies nothing.
+fn is_isometric_toward_parent<T, V>(tn: &TreeTN<T, V>, source: &V, destination: &V) -> bool
+where
+    T: TensorLike,
+    V: Clone + std::hash::Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    tn.edge_between(source, destination)
+        .and_then(|edge| tn.ortho_towards_node(edge))
+        .is_some_and(|toward| toward == destination)
+}
+
+/// Whether emitting `source` instead of contracting and factorizing it is exact,
+/// i.e. whether the factorization this replaces would not have truncated.
+///
+/// With no truncation control at all, every factorization is exact, so the skip is
+/// exact wherever the node is a zip-up leaf. With a *relative* policy an isometric
+/// node qualifies too: its block is full rank with all singular values one, so the
+/// policy drops nothing there, and its remainder is unitary, so the parent's cutoff
+/// sees the same spectrum it would without the node.
+///
+/// A `max_bond_dim` never qualifies: the cap truncates the block itself rather than
+/// a relative tail, and the pass-through cannot express that truncation. Measured on
+/// a canonical comb, a cap of two moves the truncated result by `7e-4` even where it
+/// covers the skipped node's own bond.
+fn zipup_skip_is_exact<T, V>(
+    tn: &TreeTN<T, V>,
+    source: &V,
+    destination: &V,
+    form: CanonicalForm,
+    svd_policy: Option<SvdTruncationPolicy>,
+    max_bond_dim: Option<usize>,
+) -> bool
+where
+    T: TensorLike,
+    V: Clone + std::hash::Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    if form != CanonicalForm::Unitary || max_bond_dim.is_some() {
+        return false;
+    }
+    svd_policy.is_none() || is_isometric_toward_parent(tn, source, destination)
+}
+
+/// Sum out the identity bonds of skipped nodes that the given block still
+/// carries. Every such bond is an edge the operator extension created outside
+/// the operator's own support, so it is one of its dimension-one dummy links and
+/// summing it out drops the leg exactly; a wider leg would mean the caller
+/// handed in a bond of the operator itself, and a silent sum would be wrong.
+fn sum_out_identity_legs<T: TensorLike>(tensor: &T, legs: &[T::Index]) -> Result<T> {
+    if legs.is_empty() {
+        return Ok(tensor.clone());
+    }
+    if let Some(wide) = legs.iter().find(|leg| leg.dim() != 1) {
+        return Err(anyhow::anyhow!(
+            "contract_zipup_with: identity bond {:?} has dimension {} instead of one",
+            wide.id(),
+            wide.dim()
+        ));
+    }
+    let ones = T::ones(legs).context("Failed to build the identity legs' ones tensor")?;
+    T::contract_pair(&ones, tensor).context("Failed to sum out an identity leg")
+}
+
+/// The node-local identities an [`apply`](crate::operator::apply_linear_operator)
+/// adds to a partial operator, as `(input internal, output internal)` site index
+/// pairs per node.
+///
+/// Empty for every other contract caller.
+pub(crate) type IdentityNodes<I, V> = HashMap<V, Vec<(I, I)>>;
+
 fn zipup_factorize_options(
     alg: FactorizeAlg,
     canonical: Canonical,
@@ -882,6 +972,55 @@ where
             svd_policy,
             max_bond_dim,
             ZipupTopologyMode::PruneScalarSubtrees,
+            &IdentityNodes::new(),
+            &GlobalLeaves,
+        )
+        .map_err(TreeTNOperationError::from)
+    }
+
+    /// The same zip-up as [`Self::contract_zipup`] for a second operand that is
+    /// the identity on the nodes in `identity_nodes` (the gap nodes
+    /// [`apply_linear_operator`](crate::operator::apply_linear_operator) extends
+    /// a partial operator with).
+    ///
+    /// Each such node is emitted as its first operand's tensor with the
+    /// identity's input site indices renamed to its output ones, without
+    /// contraction or factorization, and it passes no remainder to its parent.
+    /// An identity factor adds no rank, so factorizing such a node cannot create
+    /// a wider bond than the first operand already has on that edge; it rebuilds
+    /// that bond (or a truncation of it, when the block is rank-deficient or a
+    /// cap is set) as an isometry times a remainder. Skipping it keeps the bond
+    /// and the node's amplitudes bit for bit (issue #1186). Its own bond indices
+    /// stay on the edges they came from, so the untouched region of the result
+    /// carries the first operand's tensors and bonds unchanged. A node that
+    /// receives a remainder from an operator-carrying child is contracted and
+    /// factorized as usual.
+    ///
+    /// Only the general tree schedule takes this path. The chain schedule hands
+    /// one remainder per edge to its successor and cannot emit a node without
+    /// one, so a chain-shaped first operand keeps its own schedule and
+    /// factorizes every node.
+    pub(crate) fn contract_zipup_skipping_identity_nodes(
+        &self,
+        other: &Self,
+        center: &V,
+        svd_policy: Option<SvdTruncationPolicy>,
+        max_bond_dim: Option<usize>,
+        identity_nodes: &IdentityNodes<T::Index, V>,
+    ) -> std::result::Result<Self, TreeTNOperationError>
+    where
+        V: Ord,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
+        self.contract_zipup_impl(
+            other,
+            center,
+            CanonicalForm::Unitary,
+            svd_policy,
+            max_bond_dim,
+            ZipupTopologyMode::PruneScalarSubtrees,
+            identity_nodes,
             &GlobalLeaves,
         )
         .map_err(TreeTNOperationError::from)
@@ -934,6 +1073,7 @@ where
             svd_policy,
             max_bond_dim,
             ZipupTopologyMode::PreserveInputTopology,
+            &IdentityNodes::new(),
             leaves,
         )
     }
@@ -1352,6 +1492,7 @@ where
         svd_policy: Option<SvdTruncationPolicy>,
         max_bond_dim: Option<usize>,
         topology_mode: ZipupTopologyMode,
+        identity_nodes: &IdentityNodes<T::Index, V>,
         leaves: &dyn LeafOps<T>,
     ) -> Result<Self>
     where
@@ -1386,6 +1527,11 @@ where
             });
             if has_output_sites {
                 if let Some(chain) = self.chain_order(center) {
+                    // The chain schedule hands exactly one remainder per edge to
+                    // its successor, so it cannot emit a node without one and
+                    // does not take `identity_nodes` into account; a chain-shaped
+                    // first operand therefore keeps this schedule and factorizes
+                    // every node.
                     return self.contract_zipup_chain(
                         other,
                         center,
@@ -1440,6 +1586,11 @@ where
         // 5. Initialize intermediate tensors storage: HashMap<node_name, Vec<intermediate_tensor>>
         let mut intermediate_tensors: HashMap<V, Vec<T>> = HashMap::new();
 
+        // Identity bonds of skipped nodes, per parent: nothing will contract the
+        // parent's copy of such a bond, so it is summed out when the parent is
+        // processed instead of surviving as a stray leg of the result.
+        let mut orphan_identity_legs: HashMap<V, Vec<T::Index>> = HashMap::new();
+
         // 6. Initialize result tensors: HashMap<node_name, tensor>
         let mut result_tensors: HashMap<V, T> = HashMap::new();
 
@@ -1486,7 +1637,66 @@ where
                     .map(|v| v.is_empty())
                     .unwrap_or(true);
 
-            let c_temp = if is_leaf {
+            // Factorize child tensor and pass the right factor to destination (even if destination is root)
+            let bond_to_dest_a = get_bond_index(&tn_a, source_name, destination_name)
+                .context("Failed to get bond index to destination in tn_a")?;
+            let bond_to_dest_b = get_bond_index(&tn_b, source_name, destination_name)
+                .context("Failed to get bond index to destination in tn_b")?;
+
+            // A node whose second operand is the identity on its site space
+            // (an `apply` gap node, `identity_nodes`) carries no bond and no
+            // remainder of its own: it only relabels its site legs from the
+            // identity's input to its output indices. Contracting it would copy
+            // the tensor, and factorizing the block would emit an isometry plus a
+            // remainder over a bond that is the state's own, because an identity
+            // factor adds no rank.
+            //
+            // That is only a relabeling of the parent's view where the
+            // factorization it replaces was exact (issue #1197). Skipping a node
+            // whose remainder is not unitary hands the parent's cutoff a
+            // differently scaled matrix and can drop a direction the untouched
+            // subtree makes dominant — a leaf with `diag(1e-8, 1e8)` under a hub
+            // with `diag(1, 1e-8)` then loses an amplitude of 1 at `rtol = 1e-6`.
+            // `zipup_skip_is_exact` decides; a node it rejects keeps the ordinary
+            // contraction and factorization, as does a node that receives a
+            // remainder from an operator-bearing child.
+            //
+            // The parent's copy of the emitted node's identity bond is left
+            // without a partner, so it is recorded and summed out when the parent
+            // is processed.
+            if is_leaf
+                && zipup_skip_is_exact(
+                    self,
+                    source_name,
+                    destination_name,
+                    form,
+                    svd_policy,
+                    max_bond_dim,
+                )
+            {
+                if let Some(pairs) = identity_nodes
+                    .get(source_name)
+                    .filter(|pairs| !pairs.is_empty())
+                {
+                    let mut emitted = tensor_a.clone();
+                    for (input, output) in pairs {
+                        emitted = emitted.replaceind(input, output).with_context(|| {
+                            format!(
+                                "Failed to relabel the identity site indices of {source_name:?}"
+                            )
+                        })?;
+                    }
+                    result_tensors.insert(source_name.clone(), emitted);
+                    orphan_identity_legs
+                        .entry(destination_name.clone())
+                        .or_default()
+                        .push(bond_to_dest_b);
+                    ZIPUP_IDENTITY_NODE_SKIPS.set(ZIPUP_IDENTITY_NODE_SKIPS.get() + 1);
+                    continue;
+                }
+            }
+
+            let mut c_temp = if is_leaf {
                 // Leaf node: contract A[source] * B[source]
                 leaves
                     .contract_pair(&tensor_a, &tensor_b)
@@ -1503,12 +1713,9 @@ where
                     .contract_list(&tensor_list)
                     .context("Failed to contract internal node tensors")?
             };
-
-            // Factorize child tensor and pass the right factor to destination (even if destination is root)
-            let bond_to_dest_a = get_bond_index(&tn_a, source_name, destination_name)
-                .context("Failed to get bond index to destination in tn_a")?;
-            let bond_to_dest_b = get_bond_index(&tn_b, source_name, destination_name)
-                .context("Failed to get bond index to destination in tn_b")?;
+            if let Some(legs) = orphan_identity_legs.remove(source_name) {
+                c_temp = sum_out_identity_legs(&c_temp, &legs)?;
+            }
 
             // left_inds = all indices except the two parent bonds (keep site + child bonds)
             let c_temp_indices = c_temp.external_indices();
@@ -1569,9 +1776,12 @@ where
             let mut tensor_list = r_list;
             tensor_list.push(root_tensor_a);
             tensor_list.push(root_tensor_b);
-            let root_result = leaves
+            let mut root_result = leaves
                 .contract_list(&tensor_list)
                 .context("Failed to contract root node tensors")?;
+            if let Some(legs) = orphan_identity_legs.remove(&root_name) {
+                root_result = sum_out_identity_legs(&root_result, &legs)?;
+            }
 
             // Store root result (no factorization needed)
             result_tensors.insert(root_name.clone(), root_result);
@@ -1593,8 +1803,11 @@ where
                     .tensor(root_b_idx)
                     .ok_or_else(|| anyhow::anyhow!("Root tensor not found in tn_b"))?;
 
-                let root_result = T::contract(&[root_tensor_a, root_tensor_b])
+                let mut root_result = T::contract(&[root_tensor_a, root_tensor_b])
                     .context("Failed to contract root node tensors")?;
+                if let Some(legs) = orphan_identity_legs.remove(&root_name) {
+                    root_result = sum_out_identity_legs(&root_result, &legs)?;
+                }
 
                 result_tensors.insert(root_name.clone(), root_result);
             }
@@ -1959,6 +2172,7 @@ where
             svd_policy,
             max_bond_dim,
             ZipupTopologyMode::PruneScalarSubtrees,
+            &IdentityNodes::new(),
             &SessionLeaves(context.clone()),
         )
         .map_err(TreeTNOperationError::from)
