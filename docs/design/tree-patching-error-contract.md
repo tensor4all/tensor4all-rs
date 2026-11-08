@@ -1259,11 +1259,13 @@ is not free and must not be claimed before it is measured:
   digest, so a change that alters numerics cannot pass silently.
 - **Tier 2, an observed property, not a commitment**: bitwise identity
   **across thread counts**. Some paths have it already, and the document
-  records that as a fact about them rather than as a promise: every path built
-  on `tenferro-einsum` contractions and on the elementwise/reduction kernels,
-  including `contract` at large sizes. `qr` and `svd` (and therefore
+  records that as a fact about them rather than as a promise: on the
+  configurations recorded below, the `f64` dense products (`mat_mul`,
+  `IdxTensor::contract_pair`) and the elementwise/reduction kernels. The
+  `Complex64` products lack it on that configuration (#1192, recorded below),
+  and so do `qr` and `svd` (and therefore
   `TreeTN::canonicalize`, `truncate`, and operator applications that truncate)
-  do not have it above roughly `m*n ~ 16k` elements, where the blocked
+  above roughly `m*n ~ 16k` elements, where the blocked
   Householder work is partitioned by the available parallelism. How far that
   reaches is host- and shape-dependent: the spread reported in #1162 was
   round-off for `qr` (`|dQ|, |dR| <= 8.9e-15` at `224x112`, `c64`), and that
@@ -1295,6 +1297,58 @@ is not free and must not be claimed before it is measured:
   repeatability at each of 1, 4 and 8 threads (not fresh caller threads, not a
   second process); `thread_count_may_change_the_last_bits_today` prints the state
   above and asserts only the shapes and the reconstruction.
+
+  **The dense products, per scalar type (#1192).** Recorded 2026-11-08 on the
+  same host by `crates/tensor4all-core/tests/thread_count_product_digest.rs --
+  --nocapture`, with the worker count set per cell by
+  `CpuBackend::with_threads(1|2|8)` rather than `RAYON_NUM_THREADS`, at `64^3`,
+  `58x58x128`, `145x145x128`, `165x151x128`, `256^3` and `500^3`. `f64`
+  `mat_mul` and `IdxTensor::contract_pair` are bitwise identical at every pair
+  of worker counts, so the `f64` products **have** Tier 2 on this host as an
+  observation. `Complex64` products are identical between 2 and 8 workers and
+  differ between 1 worker and either of them at **every** one of those shapes:
+  the first differing element is index 0 (index 2 at `145x145x128`) and the
+  largest difference grows with the shape, `1.3e-15` at `64^3` and `3.2e-14` at
+  `500^3`. The split is serial against parallel, not one width against another,
+  so the `Complex64` products meet Tier 1 and **do not have** Tier 2.
+
+  Why, for `Complex64`: one worker and a team take different kernels. Sampling
+  the stacks of a repeated `Complex64` `mat_mul` on this host's faer
+  configuration shows the vendor gemm's fused complex microkernels
+  (`t4a_gemm_v0_gemm_microkernel_c64_simd256_*`) for a serial token, and the
+  packed `tcontract` driver (`tcontract::driver::static_grid::run_strip`, with
+  its real-`f64` `avx2` planar kernels over the interleaved complex storage) for
+  a team. Two kernels with different blocking and FMA grouping round
+  differently, and the packed route's result does not move between 2 and 8
+  workers. The choice is inside the pinned dependency stack (`tcontract`'s
+  fused-versus-packed strategy, which both `mat_mul` and
+  `IdxTensor::contract_pair` reach through the tenferro contraction); this
+  record did not trace which input flips it. The host is faer-backed: a
+  provider that schedules its own threads can make the same cells mean
+  something else, so the observation is about this configuration, not about
+  every build.
+
+  What inherits it, per type: `TreeTNCachedEvaluator`'s grouped paths call
+  `mat_mul`, so a `Complex64` readout may inherit the serial/parallel split
+  wherever those paths run, even where the factorization digests are
+  reproducible; no evaluator-level measurement of that was made here. `f64`
+  readouts meet the same call site, whose product is cross-count identical on
+  this host. Acquiring cross-count identity for the `Complex64`
+  products would be the per-operation 2% decision above (#1162), not part of
+  #1192: #1192 records the state and leaves the kernel's accumulation order
+  alone, so the `Complex64` products stay Tier 1 with no cross-count promise.
+  `IdxTensor::contract_pair` runs on the engine its operands' eager runtime
+  carries, and that runtime table holds weak handles, so the caller's context
+  must outlive the contraction; otherwise it falls back to the process-global
+  engine and the cell no longer means one worker count (the test keeps it
+  alive).
+
+  `a_fixed_thread_count_repeats_the_product_bits` checks within-process
+  repeatability of both products at each of 1, 2 and 8 workers (not fresh caller
+  threads, not a second process);
+  `thread_count_may_change_the_complex_product_bits_today` prints the record
+  above and asserts only the shape, finiteness, and four sampled entries against
+  a sequential accumulation.
 
 There is no cross-machine promise; M8 (MPI) states its own contract. What is
 tested today is narrower still than Tier 1: fresh threads within one process,
@@ -1840,10 +1894,13 @@ defaults reproduce M3 exactly.
      fresh threads, processes and repeated runs. The CI test pins the thread
      count.
    - Tier 2 (observed where it happens, not promised): identical **across
-     thread counts**. Present today in the einsum contraction paths and the
-     elementwise/reduction kernels, including `contract`; absent from
-     `qr`/`svd` above `m*n ~ 16k` elements, where the blocked Householder
-     partition follows the available parallelism.
+     thread counts**. Present today, on the configurations recorded in
+     [Determinism](#determinism), in the `f64` dense products and the
+     elementwise/reduction kernels; absent from the `Complex64` products
+     (#1192) and from `qr`/`svd` above `m*n ~ 16k` elements, where the blocked
+     Householder partition follows the available parallelism. Every entry is an
+     observation about the host and provider named with it, not a promise for
+     another build.
 
    **Tier 2 is decided per operation by measured cost, not adopted as a
    target.** Making a parallel reduction or a blocked factorization
