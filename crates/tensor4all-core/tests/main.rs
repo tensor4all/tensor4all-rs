@@ -49,3 +49,4 @@ mod tensor_shape_packing;
 mod tensor_tensor_like;
 mod tensor_unfuse;
 mod thread_count_factorization_digest;
+mod thread_count_product_digest;
