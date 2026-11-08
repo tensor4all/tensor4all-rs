@@ -441,6 +441,69 @@ fn automatic_chunk_limit_does_not_charge_the_grouped_rows_the_flat_route_skips()
     assert_typed_results::<f64>(&actual, &expected);
 }
 
+/// A three-bond hub whose grouped prepared slice is above
+/// [`MULTI_BRANCH_MAX_PREPARED_ELEMENTS`]: the specialized two-child kernel has no
+/// such admission, so its intermediate is built at every size.
+fn capped_three_bond_tree() -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+    let hub_site = DynIndex::new_dyn(1);
+    let bonds: Vec<DynIndex> = [2048_usize, 1, 4096]
+        .into_iter()
+        .map(DynIndex::new_dyn)
+        .collect();
+    let hub_indices = std::iter::once(hub_site.clone())
+        .chain(bonds.iter().cloned())
+        .collect::<Vec<_>>();
+    let hub = IdxTensor::from_dense(hub_indices, vec![1.0_f64; 2048 * 4096]).unwrap();
+    let mut tensors = vec![hub];
+    let mut indices = vec![hub_site];
+    for bond in &bonds {
+        let site = DynIndex::new_dyn(256);
+        tensors.push(
+            IdxTensor::from_dense(
+                vec![bond.clone(), site.clone()],
+                vec![1.0_f64; bond.dim() * site.dim()],
+            )
+            .unwrap(),
+        );
+        indices.push(site);
+    }
+    let tree = TreeTN::from_tensors(tensors, vec![0_usize, 1, 2, 3]).unwrap();
+    (tree, indices)
+}
+
+/// The arbitrary-degree admission does not apply to the three-bond kernel: it
+/// allocates its `parent x child_2` rows whatever their size, so the estimator has to
+/// keep charging them (#1194 review). Exempting them sized this shape from a 6.7 GiB
+/// intermediate the kernel does allocate — 107 points instead of 1.
+#[test]
+fn automatic_chunk_limit_keeps_charging_the_three_bond_intermediate_above_the_cap() {
+    let (tree, indices) = capped_three_bond_tree();
+    let plan = CachedEvaluatorPlan::new(&tree, &indices).unwrap();
+    let rows = grouped_message_intermediate_per_point(&tree, &plan.inner).unwrap();
+    // The 2048 x 4096 rows a `parent x child_2` intermediate holds, plus the
+    // one-wide shared child column.
+    assert_eq!(rows, 2048 * 4096 + 1);
+    let prepared_per_orientation = 2048_usize * 4096;
+    assert!(
+        prepared_per_orientation > MULTI_BRANCH_MAX_PREPARED_ELEMENTS,
+        "the fixture must sit above the arbitrary-degree admission"
+    );
+    let mut evaluator =
+        TreeTNCachedEvaluator::new(&tree, &indices, CachedEvaluatorOptions::default()).unwrap();
+    // 13,060 message columns plus 8,388,609 rows at 24 B is 201,640,056 B per point,
+    // so one point is what the 32 MiB budget holds.
+    assert_eq!(evaluator.batch_point_limit, 1);
+
+    // Two points therefore run in two batches, each building that intermediate.
+    let values = [0, 0, 0, 0, 0, 0, 1, 0];
+    let shape = [indices.len(), 2];
+    let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+    let expected = tree.evaluate(&indices, points).unwrap();
+    let actual = evaluator.evaluate_batched(points).unwrap();
+    assert_typed_results::<f64>(&actual, &expected);
+    assert_eq!(evaluator.stats_for_test().batched_center_contract_count, 2);
+}
+
 /// The tree of the #1184 report: a dim-1 centre with bonds 145, 165 and 151 and
 /// three branches of 20 binary sites. The automatic chunk had dropped to a single
 /// point here; it now holds as many as the grouped-message rows allow.

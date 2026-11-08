@@ -135,11 +135,12 @@ the result follows the input column order, including duplicate points.
 256 points and reducing that limit when a batch's per-point buffers would pass a
 32 MiB estimate: the largest local tensor where the generic centre contraction
 stacks a core slice per point, the message columns plus one grouped branch GEMM's
-rows where the raw centre kernels read the core in place **and** that GEMM's
-prepared slice stays within its 4,194,304-element admission (a larger one runs the
-flat kernel, which allocates only its output). The raw-centre sizes apply only
-where the core-based estimate holds a single point; a larger core-based estimate
-is kept as it is. This estimate is a sizing heuristic, not an
+rows where the raw centre kernels read the core in place. A node with three or
+more rooted children falls back to the flat kernel above that GEMM's
+4,194,304-element admission, so its rows are charged only below the admission; the
+two-child kernel has no such admission and is charged at every size. The
+raw-centre sizes apply only where the core-based estimate holds a single point; a
+larger core-based estimate is kept as it is. This estimate is a sizing heuristic, not an
 RSS limit.
 Set `Some(n)` for a fixed positive point limit. You can submit a larger batch directly: temporary contraction
 buffers are released between internal batches. The input and result vectors

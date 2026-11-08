@@ -7322,12 +7322,17 @@ where
 /// 1024/1/2048 a node's rows are `1024 x 2048`, twice its own larger bond, so the
 /// estimate has to come from the geometry rather than from the local tensors.
 ///
-/// A node whose prepared slice exceeds [`MULTI_BRANCH_MAX_PREPARED_ELEMENTS`]
-/// never reaches the grouped kernel at all, so its orientation contributes
-/// nothing: the flat kernel's only allocation is its output, and the
-/// message-column term already charges one column per directed message. Charging
-/// the grouped rows there cost a bonds-`[2, 2, 1024, 2048]` hub the whole budget
-/// and left the automatic batch at a single point (#1194).
+/// A **three-or-more-child** orientation whose prepared slice exceeds
+/// [`MULTI_BRANCH_MAX_PREPARED_ELEMENTS`] never reaches the grouped kernel at all,
+/// so it contributes nothing: the flat kernel's only allocation is its output, and
+/// the message-column term already charges one column per directed message.
+/// Charging the grouped rows there cost a bonds-`[2, 2, 1024, 2048]` hub the whole
+/// budget and left the automatic batch at a single point (#1194).
+///
+/// A **two-child** orientation has no such admission — the specialized three-bond
+/// kernel gates on the arithmetic threshold only — so its rows stay charged even
+/// above the cap. Exempting it too would have sized a batch from an allocation the
+/// kernel does make (#1194 review).
 fn grouped_message_intermediate_per_point<V>(
     tree: &TreeTN<IdxTensor, V>,
     plan: &CachedEvaluatorPlanInner<V>,
@@ -7358,20 +7363,31 @@ where
                 None => 0,
                 // One child: the message is that child's column.
                 Some((_, [])) => 0,
+                // Two children and three or more take different kernels, and only the
+                // arbitrary-degree one has a prepared-element admission.
                 Some((shared, rest)) => {
                     let rows = rest
                         .iter()
                         .try_fold(parent_dim, |rows, dim| rows.checked_mul(*dim))
                         .ok_or_else(|| anyhow::anyhow!("grouped message rows overflow usize"))?;
-                    // `multi_branch_message_contraction` takes the grouped kernel
-                    // only while its prepared slice fits `MULTI_BRANCH_MAX_PREPARED_ELEMENTS`
-                    // (`parent x product(children)`); above that cap the flat kernel
-                    // runs, allocates nothing beyond its output, and the message-column
-                    // term is the whole per-point charge.
-                    if rows.saturating_mul(*shared) > MULTI_BRANCH_MAX_PREPARED_ELEMENTS {
+                    let charged = rows.saturating_add(*shared);
+                    // The specialized three-bond kernel (`compute_branch_message_raw`
+                    // -> `grouped_branch_message_from_gemm`) gates on the arithmetic
+                    // threshold alone and always allocates its `parent x child_2` rows,
+                    // so the charge stays at every size.
+                    //
+                    // `multi_branch_message_contraction` (three or more children) does
+                    // reject the grouped route above `MULTI_BRANCH_MAX_PREPARED_ELEMENTS`
+                    // (`parent x product(children)`) and runs the flat kernel, which
+                    // allocates nothing beyond its output - already charged by the
+                    // message-column term. Above the cap that orientation therefore
+                    // contributes nothing.
+                    if rest.len() >= 2
+                        && rows.saturating_mul(*shared) > MULTI_BRANCH_MAX_PREPARED_ELEMENTS
+                    {
                         0
                     } else {
-                        rows.saturating_add(*shared)
+                        charged
                     }
                 }
             };
