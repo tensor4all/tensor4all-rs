@@ -10,7 +10,8 @@ use tensor4all_core::{
 use tensor4all_tensorbackend::ExecutionContext;
 
 use super::{
-    ContractionMethod, ContractionOptions, GlobalLeaves, LeafOps, SessionLeaves, ZipupTopologyMode,
+    ContractionMethod, ContractionOptions, GlobalLeaves, IdentityNodes, LeafOps, SessionLeaves,
+    ZipupTopologyMode,
 };
 use crate::{CanonicalForm, TreeTN, TreeTNOperationError};
 
@@ -111,6 +112,7 @@ where
                 options.svd_policy,
                 options.max_bond_dim,
                 ZipupTopologyMode::PruneScalarSubtrees,
+                &IdentityNodes::new(),
                 leaves.as_ref(),
             )
             .map_err(TreeTNOperationError::from),
