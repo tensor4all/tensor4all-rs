@@ -301,7 +301,7 @@ fn assert_routes_agree(
     right: &[Vec<usize>],
     batches: &[Vec<(usize, usize)>],
     limit: usize,
-) {
+) -> usize {
     let assemble = |(left_index, right_index): (usize, usize)| {
         let mut point = vec![0usize; local_dims.len()];
         for (&site, &value) in left_sites.iter().zip(&left[left_index]) {
@@ -359,7 +359,13 @@ fn assert_routes_agree(
             by_points.retained_bytes(),
             "step {step}: retained bytes"
         );
+        assert_eq!(
+            by_keys.evicted_entries(),
+            by_points.evicted_entries(),
+            "step {step}: evicted"
+        );
     }
+    by_keys.evicted_entries()
 }
 
 #[test]
@@ -394,8 +400,8 @@ fn keyed_lookup_is_bit_for_bit_the_point_lookup() {
 
     for limit in [crate::DEFAULT_RETAINED_BYTE_LIMIT, 4096] {
         // A 4096-byte budget cannot retain 40 x 40 entries, so both routes must
-        // drop insertions and re-evaluate on the warm pass identically.
-        assert_routes_agree(
+        // evict and re-evaluate on the warm pass identically.
+        let evicted = assert_routes_agree(
             &vec![2; 30],
             &sites[..15],
             &left,
@@ -403,6 +409,11 @@ fn keyed_lookup_is_bit_for_bit_the_point_lookup() {
             &right,
             &batches,
             limit,
+        );
+        assert_eq!(
+            evicted > 0,
+            limit == 4096,
+            "limit {limit}: {evicted} evicted entries"
         );
     }
 }
