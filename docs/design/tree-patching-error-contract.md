@@ -1264,9 +1264,11 @@ is not free and must not be claimed before it is measured:
   including `contract` at large sizes. `qr` and `svd` (and therefore
   `TreeTN::canonicalize`, `truncate`, and operator applications that truncate)
   do not have it above roughly `m*n ~ 16k` elements, where the blocked
-  Householder work is partitioned by the available parallelism; the spread
-  reported in #1162 was round-off for `qr` (`|dQ|, |dR| <= 8.9e-15` at
-  `224x112`, `c64`), while for `svd` it can be a phase (measured below).
+  Householder work is partitioned by the available parallelism. How far that
+  reaches is host- and shape-dependent: the spread reported in #1162 was
+  round-off for `qr` (`|dQ|, |dR| <= 8.9e-15` at `224x112`, `c64`), and that
+  host showed a phase-level `svd` difference at `448x224` (see the record
+  below).
 
   **Whether an operation should acquire Tier 2 is a performance decision, made
   per operation** (`#1162`): making the partition independent of the thread
@@ -1279,15 +1281,16 @@ is not free and must not be claimed before it is measured:
   of by drift. Tier 2 is therefore never a blanket promise, and no operation
   may claim it in rustdoc until such a measurement exists.
 
-  Measured 2026-11-08 on `evo2` (`c64`, seed 7; debug and `ci` agree) by
-  `crates/tensor4all-core/tests/thread_count_factorization_digest.rs`: `qr` is
-  identical at `8`--`64` squared and differs from `224x112` up (`max|diff|`
-  `3.0e-14` at 1T vs 4T, `6.9e-14` at 4T vs 8T). `svd` is identical up to
-  `224x112`; at `448x224` it differs by `0.43` at 1T vs 4T and that is not
-  round-off — singular values agree to `4.8e-14`, both factorizations rebuild the
-  input to `<= 1.5e-14` (measured `1.48e-14` at 1T, `1.45e-14` at 4T), and a
-  separate one-off overlap check gave min `|<u_c(1T), u_c(4T)>| = 1.000000` over
-  all `c`, so the columns differ by a phase.
+  Recorded 2026-11-08 at this head on `broccoli` (x86-64, 64 cores) by
+  `crates/tensor4all-core/tests/thread_count_factorization_digest.rs --
+  --nocapture` (`c64`, seed 7): `qr` is bitwise identical at `8`--`224x112` and
+  differs at `448x224` (`max|diff|` `7.1e-15` at 1T vs 4T, `6.6e-14` at 1T vs
+  8T, `6.0e-14` at 4T vs 8T). `svd` is identical at all six shapes on this host,
+  `448x224` included. Both outcomes are what the second test is for: it prints
+  this record instead of asserting a direction, because the divergence starts at
+  a different size on a different host. An AMD host (#1162) saw the split from
+  `m*n ~ 25k` with a phase-level `svd` difference at `448x224`; that observation
+  is not reproduced here and is not a cross-machine claim.
   `a_fixed_thread_count_repeats_the_factorization_bits` checks within-process
   repeatability at each of 1, 4 and 8 threads (not fresh caller threads, not a
   second process); `thread_count_may_change_the_last_bits_today` prints the state
