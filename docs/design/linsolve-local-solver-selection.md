@@ -93,11 +93,21 @@ another solver.
   Implicit differentiation of the solve, which would give the exact
   derivative, is not implemented.
 - GMRES solves `a1 = 0` in closed form whether or not `a1` is tracked. A
-  tracked `a1` adds `-(a1 / a0) A(b / a0)`, which is zero in value and makes
+  tracked `a1` adds `-a1 (A(b / a0) / a0)`, which is zero in value and makes
   the first derivatives those of `(a0 I + a1 A)^-1 b` at `a1 = 0` (`-8` in the
   example above), for one extra application of `A`. Iterating instead would
   hit the absolute thresholds of the GMRES recurrence on a well-conditioned but
   small system (`b = [1e-20]`, `a0 = 1e-20` stops as near-singular).
+  `A` is applied to `b / a0` scaled to unit norm, the quotient by `a0` is
+  formed between power-of-two scalings, and `a1` multiplies the finished
+  quotient. With `b = [2^1000]`, `a0 = 2^600` and `A = 2^1000 I`, `A(b / a0)`
+  itself would overflow; with `b = [2^-1074]`, `a0 = 2^-1074` and
+  `A = 2^-1074 I`, the gradient of `a1` would pass through the product of the
+  reciprocal factors of `a0`, which is `2^1074 = inf`. Both give the finite
+  values (`-2^800` and `-1`).
+- A zero initial residual is converged for every GMRES `rtol`, including `0`, so an
+  exact initial guess returns before the Arnoldi start vector `r / |r|` is
+  formed.
 - The GMRES Arnoldi normalizations divide by a norm without forming a
   reciprocal that overflows: when `1 / norm` is not a normal `f32`, the vector
   is first scaled by a power of two. `b = [2^-1073]` with `a0 = a1 = 1`

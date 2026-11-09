@@ -242,6 +242,7 @@ pub struct GmresOptions {
 
     /// Convergence tolerance for relative residual norm.
     /// The solver stops when `||r|| / ||b|| < rtol`.
+    /// A zero initial residual stops it for every `rtol`, including `0`.
     /// Default: 1e-10
     pub rtol: f64,
 
@@ -1056,10 +1057,12 @@ where
 /// `a1 = 0` gives `x = b / a0` in closed form, with the residual of that `x`
 /// reported; a subnormal quotient component can round to zero, so the closed
 /// form is not always converged. A gradient-tracked `a1 = 0` adds
-/// `-(a1 / a0) A(b / a0)`, which is zero in value and makes the first
-/// derivatives those of the exact solution, at the cost of one call to `apply_a`. For single-precision `b` the closed form
-/// requires every factor of [`AnyScalar::reciprocal_factors`] to be in the `f32`
-/// range.
+/// `-a1 (A(b / a0) / a0)`, which is zero in value and makes the first
+/// derivatives those of the exact solution, at the cost of one call to
+/// `apply_a`; `A` is applied to `b / a0` scaled to unit norm. For
+/// single-precision `b` the closed form requires every factor of
+/// [`AnyScalar::reciprocal_factors`] to be in the `f32` range.
+/// A zero initial residual is converged for every `rtol`, including `0`.
 /// The Arnoldi basis is built from the unshifted `A` callback, while affine
 /// coefficients are applied in the projected Hessenberg problem, matching
 /// KrylovKit's affine linear-solve convention.
@@ -1258,20 +1261,44 @@ where
             profile.scale_calls += scale_calls;
         }
         if a1.tracks_grad() {
-            // `x = b / a0 - (a1 / a0) A(b / a0)` equals `b / a0` at `a1 = 0`,
+            // `x = b / a0 - a1 (A(b / a0) / a0)` equals `b / a0` at `a1 = 0`,
             // and its first derivatives are those of `(a0 I + a1 A)^-1 b`
-            // there, which the Krylov iterates would only approximate.
+            // there, which the Krylov iterates would only approximate. `A` is
+            // applied to `b / a0` scaled to unit norm, and `a1` multiplies the
+            // finished quotient, so neither the forward values nor the
+            // gradient of `a1` overflow when `A(b / a0) / a0` is representable.
             let started = Instant::now();
-            let applied = apply_a(&solution)?;
+            let x_norm =
+                vector_ops::finite_norm(&solution, "gmres", 0, "closed-form solution norm")?;
+            if profile_enabled {
+                profile.norm += started.elapsed();
+                profile.norm_calls += 1;
+            }
+            let x_exponent = if x_norm > 0.0 {
+                vector_ops::normalization_exponent(x_norm)
+            } else {
+                0
+            };
+            let started = Instant::now();
+            let unit_x = vector_ops::scale_pow2(solution.clone(), -x_exponent)?;
+            if profile_enabled {
+                profile.scale += started.elapsed();
+                profile.scale_calls += vector_ops::scale_pow2_calls(x_exponent);
+            }
+            let started = Instant::now();
+            let applied = apply_a(&unit_x)?;
             if profile_enabled {
                 profile.apply += started.elapsed();
                 profile.apply_calls += 1;
             }
             let started = Instant::now();
-            let correction = divide(applied.scale(AnyScalar::new_real(0.0) - a1.clone())?)?;
+            let (quotient, quotient_scale_calls, quotient_norm_calls) =
+                vector_ops::scaled_quotient(applied, x_exponent, &a0, &factors, "gmres")?;
+            let correction = quotient.scale(AnyScalar::new_real(0.0) - a1.clone())?;
             if profile_enabled {
                 profile.scale += started.elapsed();
-                profile.scale_calls += scale_calls + 1;
+                profile.scale_calls += quotient_scale_calls + 1;
+                profile.norm_calls += quotient_norm_calls;
             }
             let started = Instant::now();
             solution = solution.axpby(
@@ -1357,7 +1384,9 @@ where
                 restart, residual_value
             );
         }
-        if tolerance.is_converged(r_norm, b_norm) {
+        // A zero initial residual is converged for every tolerance, including
+        // `0`: the Arnoldi start vector `r / |r|` needs `|r| > 0`.
+        if r_norm == 0.0 || tolerance.is_converged(r_norm, b_norm) {
             finish!(GmresResult {
                 solution: x,
                 iterations: total_iters,
@@ -1762,7 +1791,9 @@ where
             );
         }
 
-        if tolerance.is_converged(r_norm, b_norm) {
+        // A zero initial residual is converged for every tolerance, including
+        // `0`: the Arnoldi start vector `r / |r|` needs `|r| > 0`.
+        if r_norm == 0.0 || tolerance.is_converged(r_norm, b_norm) {
             return Ok(GmresResult {
                 solution: x,
                 iterations: total_iters,
@@ -2062,7 +2093,8 @@ where
             );
         }
 
-        if rel_res < options.rtol {
+        // A zero residual is converged for every `rtol`, including `0`.
+        if r_norm == 0.0 || rel_res < options.rtol {
             return Ok(GmresResult {
                 solution: x,
                 iterations: total_iters,

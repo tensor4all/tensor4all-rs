@@ -124,8 +124,12 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   case (`A = diag(2, 3)`, `b = (1, 2)`, tracked `a1 = 0`) pins the gradient of
   the one-step CG and BiCGSTAB iterate, `-8.4`, and the exact `-8` from the
   GMRES closed form. Core tests cover a tracked `a1 = 0` with `b = [1e-20]`,
-  `a0 = 1e-20` and with `b = [2^-1074]`, and the range-safe Arnoldi
-  normalization with `b = [2^-1073]`, `a0 = a1 = 1`.
+  `a0 = 1e-20` and with `b = [2^-1074]`, the finite values and gradients of
+  `b = [2^1000]`, `a0 = 2^600`, `A = 2^1000 I` and of
+  `b = a0 = [2^-1074]`, `A = 2^-1074 I`, a zero correction, and the range-safe
+  Arnoldi normalization with `b = [2^-1073]`, `a0 = a1 = 1`. `gmres`,
+  `gmres_affine` and `gmres_with_truncation` return an exact initial guess with
+  `rtol = 0` as converged.
 - A quotient next to `f64::MAX` that the rounded last factor sends to
   infinity is pinned by a core test.
 - Both identity-only closed forms reject single-precision entries when a

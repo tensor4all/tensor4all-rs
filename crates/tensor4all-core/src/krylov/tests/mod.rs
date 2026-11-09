@@ -696,6 +696,138 @@ fn gmres_affine_solves_a_tracked_zero_a1_in_closed_form() {
 }
 
 #[test]
+fn gmres_converges_on_an_exact_initial_guess_with_zero_tolerance() {
+    // With `rtol = 0` a zero residual still has to stop the solve: `r / |r|`
+    // is undefined for `|r| = 0`.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![1.0], &idx);
+    let identity = |x: &IdxTensor| Ok(x.clone());
+    let truncate = |_x: &mut IdxTensor| -> Result<()> { Ok(()) };
+    let options = GmresOptions {
+        rtol: 0.0,
+        ..Default::default()
+    };
+    let check =
+        |name: &str, solution: &IdxTensor, iterations: usize, residual: f64, converged: bool| {
+            assert!(converged, "{name}");
+            assert_eq!(iterations, 0, "{name}");
+            assert_eq!(residual, 0.0, "{name}");
+            assert_eq!(solution.to_vec::<f64>().unwrap(), vec![1.0], "{name}");
+        };
+    let r = gmres(identity, &b, &b, &options).unwrap();
+    check(
+        "gmres",
+        &r.solution,
+        r.iterations,
+        r.residual_norm,
+        r.converged,
+    );
+    let r = gmres_affine(
+        identity,
+        &b,
+        &b,
+        AnyScalar::new_real(0.0),
+        AnyScalar::new_real(1.0),
+        &options,
+    )
+    .unwrap();
+    check(
+        "gmres_affine",
+        &r.solution,
+        r.iterations,
+        r.residual_norm,
+        r.converged,
+    );
+    let r = gmres_with_truncation(identity, &b, &b, &options, truncate).unwrap();
+    check(
+        "gmres_with_truncation",
+        &r.solution,
+        r.iterations,
+        r.residual_norm,
+        r.converged,
+    );
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_keeps_extreme_closed_forms_and_gradients_finite() {
+    // `x(a1) = (a0 + a1 c)^-1 b` for `A = c I`, so `dx/da1 = -c b / a0^2` at
+    // `a1 = 0`. `A(b / a0)` overflows in the first case, and in the second
+    // the product of the reciprocal factors of `a0 = 2^-1074` does.
+    let tiny = f64::from_bits(1);
+    let idx = DynIndex::new_dyn(1);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    for (rhs, a0, c, solution, gradient) in [
+        (
+            2.0_f64.powi(1000),
+            2.0_f64.powi(600),
+            2.0_f64.powi(1000),
+            2.0_f64.powi(400),
+            -2.0_f64.powi(800),
+        ),
+        (tiny, tiny, tiny, 1.0, -1.0),
+    ] {
+        let b = make_vector_with_index(vec![rhs], &idx);
+        let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+        let result = gmres_affine(
+            move |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(c))?),
+            &b,
+            &x0,
+            AnyScalar::new_real(a0),
+            a1.clone(),
+            &GmresOptions::default(),
+        )
+        .unwrap();
+        assert!(result.converged, "{rhs:e}");
+        assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![solution]);
+        result.solution.sum().unwrap().backward().unwrap();
+        let grad = a1.grad().unwrap().expect("a1 has a gradient");
+        assert_eq!(grad.real(), gradient, "{rhs:e}");
+    }
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_with_a_zero_correction_keeps_a1_in_the_graph() {
+    // `A = 0` gives a zero `A(b / a0)`; `b = 2^-1074`, `a0 = 4` gives a
+    // closed form that rounds to zero and is reported as not converged.
+    let idx = DynIndex::new_dyn(1);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    for (rhs, a0, c, solution, converged) in [
+        (1.0, 2.0, 0.0, 0.5, true),
+        (f64::from_bits(1), 4.0, 1.0, 0.0, false),
+    ] {
+        let b = make_vector_with_index(vec![rhs], &idx);
+        let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+        let result = gmres_affine(
+            move |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(c))?),
+            &b,
+            &x0,
+            AnyScalar::new_real(a0),
+            a1.clone(),
+            &GmresOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(result.converged, converged, "{rhs:e}");
+        assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![solution]);
+        result.solution.sum().unwrap().backward().unwrap();
+        let grad = a1.grad().unwrap().expect("a1 has a gradient");
+        assert_eq!(grad.real(), 0.0, "{rhs:e}");
+    }
+}
+
+#[test]
+fn divide_by_norm_rejects_a_norm_that_is_not_positive_and_finite() {
+    let idx = DynIndex::new_dyn(1);
+    let v = make_vector_with_index(vec![1.0], &idx);
+    for norm in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let err = vector_ops::divide_by_norm(&v, norm).unwrap_err();
+        assert!(
+            err.to_string().contains("positive finite norm"),
+            "{norm}: {err}"
+        );
+    }
+}
+
+#[test]
 fn gmres_affine_normalizes_a_residual_whose_reciprocal_norm_overflows() {
     // (I + I) x = 2^-1073 has x = 2^-1074, but 1 / |r| = 2^1073 is infinite.
     let idx = DynIndex::new_dyn(1);
