@@ -162,6 +162,21 @@ Validation at `92fddf6e` (branch merged with main `af980a54`):
 - `cargo clippy -p tensor4all-treetn -p tensor4all-itensorlike --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc`: no findings
 - `python3 scripts/repository-rules-review.py --base origin/main --worktree --dry-run --file-growth`: pass
 
+Validation at `03962a6f`:
+
+- `cargo test -p tensor4all-core --lib krylov`: 121 passed, 560 filtered out
+- `cargo test -p tensor4all-core --lib any_scalar`: 19 passed, 662 filtered out
+- `cargo test -p tensor4all-treetn --lib linsolve`: 37 passed, 646 filtered out
+- `cargo test -p tensor4all-treetn --test integration linsolve`: 74 passed, 322 filtered out
+- `cargo test -p tensor4all-itensorlike --lib`: 139 passed
+- Doctests: `cargo test -p tensor4all-core --doc krylov` 21 passed (384 filtered out),
+  `cargo test -p tensor4all-core --doc reciprocal_factors` 1 passed,
+  `cargo test -p tensor4all-treetn --doc linsolve` 8 passed (197 filtered out),
+  `cargo test -p tensor4all-itensorlike --doc` 37 passed.
+- `cargo fmt --all -- --check`: clean
+- `cargo clippy -p tensor4all-core -p tensor4all-treetn -p tensor4all-itensorlike --all-targets -- -D warnings`, also with `-D clippy::missing_errors_doc -D clippy::missing_panics_doc`: no findings
+- `python3 scripts/repository-rules-review.py --base origin/main --worktree --dry-run --file-growth`: pass
+
 Full-workspace, release, alternate-backend, binding and benchmark checks were
 not run locally. Hosted PR CI runs the workspace `--lib --bins --tests` and
 doctests on Linux and macOS (Accelerate); the non-default feature matrix runs
