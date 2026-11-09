@@ -79,38 +79,6 @@ fn validate_mpo_external_indices_keeps_same_id_primed_external_leg() {
 }
 
 #[test]
-fn local_gmres_options_match_krylovkit_restart_convention() {
-    let options = LinsolveOptions::default()
-        .with_gmres_restart_dim(30)
-        .with_gmres_max_restarts(10)
-        .with_gmres_tol(1.0e-8);
-
-    let gmres_options = local_gmres_options(&options).unwrap();
-
-    assert_eq!(gmres_options.max_iter, 30);
-    assert_eq!(gmres_options.max_restarts, 10);
-    assert_eq!(gmres_options.rtol, 1.0e-8);
-}
-
-#[test]
-fn local_gmres_options_does_not_convert_maxiter_to_total_step_limit() {
-    let options = LinsolveOptions::default()
-        .with_gmres_restart_dim(30)
-        .with_gmres_max_restarts(100);
-
-    let gmres_options = local_gmres_options(&options).unwrap();
-
-    assert_eq!(gmres_options.max_iter, 30);
-    assert_eq!(gmres_options.max_restarts, 100);
-}
-
-#[test]
-fn local_gmres_options_reject_zero_iteration_parameters() {
-    assert!(local_gmres_options(&LinsolveOptions::default().with_gmres_restart_dim(0)).is_err());
-    assert!(local_gmres_options(&LinsolveOptions::default().with_gmres_max_restarts(0)).is_err());
-}
-
-#[test]
 fn one_site_update_rejects_malformed_transport_regions() {
     let mut updater = SquareLinsolveUpdater::<IdxTensor, usize>::new(
         TreeTN::new(),

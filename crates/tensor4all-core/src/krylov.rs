@@ -88,6 +88,16 @@ pub enum KrylovError {
         /// Quantity that was nonfinite or unusable as a divisor.
         quantity: &'static str,
     },
+    /// A value the solve needs is outside the `f64` range for every scaling
+    /// the solver may apply, so no finite answer exists to return; the input
+    /// is outside the supported range rather than numerically unlucky.
+    #[error("{solver}: {quantity} is outside the f64 range")]
+    OutOfRange {
+        /// Solver that rejected the input.
+        solver: &'static str,
+        /// Quantity that cannot be represented.
+        quantity: &'static str,
+    },
     /// The projected operator was not Hermitian.
     #[error("{solver}: projected operator is not Hermitian: {source}")]
     NonHermitian {
@@ -187,7 +197,7 @@ impl GmresOpProfile {
     fn print(&self, id: usize, iterations: usize, residual_norm: f64, converged: bool) {
         let total = self.started.elapsed();
         let other = total.saturating_sub(self.measured());
-        eprintln!(
+        let report = format!(
             "T4A gmres_op_profile #{id}: iterations={iterations} residual={residual_norm:.6e} converged={converged} total_ms={:.3} apply_ms={:.3} apply_calls={} inner_ms={:.3} inner_calls={} axpby_ms={:.3} axpby_calls={} norm_ms={:.3} norm_calls={} scale_ms={:.3} scale_calls={} update_ms={:.3} update_calls={} triangular_ms={:.3} triangular_calls={} b_norm_ms={:.3} other_ms={:.3}",
             total.as_secs_f64() * 1000.0,
             self.apply.as_secs_f64() * 1000.0,
@@ -207,7 +217,17 @@ impl GmresOpProfile {
             self.b_norm.as_secs_f64() * 1000.0,
             other.as_secs_f64() * 1000.0,
         );
+        eprintln!("{report}");
+        #[cfg(test)]
+        LAST_GMRES_PROFILE.with(|last| *last.borrow_mut() = Some(report));
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The last profile line printed on this thread, for tests of the counts.
+    static LAST_GMRES_PROFILE: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Options for GMRES solver.
@@ -232,6 +252,7 @@ pub struct GmresOptions {
 
     /// Convergence tolerance for relative residual norm.
     /// The solver stops when `||r|| / ||b|| < rtol`.
+    /// A zero initial residual stops it for every `rtol`, including `0`.
     /// Default: 1e-10
     pub rtol: f64,
 
@@ -517,7 +538,8 @@ struct HermitianRitzState {
 /// The lowest Ritz eigenpair and the true residual norm.
 /// # Errors
 /// Returns [`KrylovError::NonHermitian`] when the projected operator is not
-/// Hermitian, [`KrylovError::InvalidOptions`] when an option is invalid,
+/// Hermitian, [`KrylovError::InvalidOptions`] when an option is invalid
+/// (including a `max_iter` whose Krylov workspace cannot be allocated),
 /// [`KrylovError::ZeroInitialVector`] when `initial` is numerically zero, and
 /// [`KrylovError::Operation`] when an operator application or backend call
 /// fails. Non-convergence is reported through
@@ -568,9 +590,10 @@ where
         }));
     }
 
-    let mut basis = Vec::with_capacity(basis_capacity);
+    let mut basis = krylov_workspace(basis_capacity, "hermitian_lanczos_lowest_eigenpair")?;
     basis.push(initial.scale(AnyScalar::new_real(1.0 / initial_norm))?);
-    let mut h_cols: Vec<Vec<Complex64>> = Vec::with_capacity(options.max_iter);
+    let mut h_cols: Vec<Vec<Complex64>> =
+        krylov_workspace(options.max_iter, "hermitian_lanczos_lowest_eigenpair")?;
     let mut last_ritz: Option<HermitianRitzState> = None;
 
     for j in 0..options.max_iter {
@@ -579,7 +602,7 @@ where
             w.validate()?;
         }
 
-        let mut h_col = Vec::with_capacity(j + 2);
+        let mut h_col = krylov_workspace(j + 2, "hermitian_lanczos_lowest_eigenpair")?;
         let mut w_orth = w;
 
         for v_i in basis.iter().take(j + 1) {
@@ -601,7 +624,11 @@ where
         h_cols.push(h_col);
 
         let subspace_dim = j + 1;
-        let projected = projected_matrix_from_columns(&h_cols, subspace_dim)?;
+        let projected = projected_matrix_from_columns(
+            &h_cols,
+            subspace_dim,
+            "hermitian_lanczos_lowest_eigenpair",
+        )?;
         let ritz =
             lowest_hermitian_eigenpair(&projected, options.hermitian_tol).map_err(|err| {
                 anyhow::Error::new(KrylovError::NonHermitian {
@@ -668,7 +695,8 @@ where
 /// A [`HermitianKrylovExpmResult`] containing the evolved vector and diagnostics.
 /// # Errors
 /// Returns [`KrylovError::NonHermitian`] when the projected operator is not
-/// Hermitian, [`KrylovError::InvalidOptions`] when an option is invalid,
+/// Hermitian, [`KrylovError::InvalidOptions`] when an option is invalid
+/// (including a `max_iter` whose Krylov workspace cannot be allocated),
 /// [`KrylovError::ZeroInitialVector`] when `initial` is numerically zero, and
 /// [`KrylovError::Operation`] when an operator application or backend call
 /// fails. Non-convergence is reported through
@@ -832,9 +860,10 @@ where
 
     let basis_capacity =
         checked_krylov_capacity(options.max_iter, "hermitian_krylov_expm_multiply")?;
-    let mut basis = Vec::with_capacity(basis_capacity);
+    let mut basis = krylov_workspace(basis_capacity, "hermitian_krylov_expm_multiply")?;
     basis.push(initial.scale(AnyScalar::new_real(1.0 / initial_norm))?);
-    let mut h_cols: Vec<Vec<Complex64>> = Vec::with_capacity(options.max_iter);
+    let mut h_cols: Vec<Vec<Complex64>> =
+        krylov_workspace(options.max_iter, "hermitian_krylov_expm_multiply")?;
     let mut last_coefficients: Option<Vec<Complex64>> = None;
     let mut last_error_estimate = f64::INFINITY;
     let mut last_subspace_dim = 0usize;
@@ -846,7 +875,7 @@ where
             w.validate()?;
         }
         let mut w_orth = w;
-        let mut h_col = Vec::with_capacity(j + 2);
+        let mut h_col = krylov_workspace(j + 2, "hermitian_krylov_expm_multiply")?;
 
         for v_i in basis.iter().take(j + 1) {
             let h_ij = v_i.inner_product(&w_orth)?;
@@ -867,7 +896,8 @@ where
         h_cols.push(h_col);
 
         let subspace_dim = j + 1;
-        let projected = projected_matrix_from_columns(&h_cols, subspace_dim)?;
+        let projected =
+            projected_matrix_from_columns(&h_cols, subspace_dim, "hermitian_krylov_expm_multiply")?;
         let coefficients =
             hermitian_exponential_first_column(&projected, exponent, options.hermitian_tol)
                 .map_err(|err| anyhow::anyhow!("projected operator is not Hermitian: {err}"))?;
@@ -964,13 +994,15 @@ where
 /// # Returns
 /// A `GmresResult` containing the solution and convergence information.
 /// # Errors
-/// Returns an error when the options have an overflowing capacity (a
-/// [`KrylovError::InvalidOptions`]), when the operator and vectors have
+/// Returns an error when `max_iter` needs a Krylov workspace whose capacity
+/// overflows or cannot be allocated (a [`KrylovError::InvalidOptions`]), when the operator and vectors have
 /// incompatible shapes, when the affine coefficients are all zero (a
 /// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
 /// Non-convergence is reported through the result's `converged` flag and does
 /// not produce an error.
+/// A right-hand side whose norm is not finite, which would make every relative
+/// residual zero, is a [`KrylovError::NumericalBreakdown`].
 ///
 pub fn gmres<T, F>(
     apply_a: F,
@@ -998,13 +1030,15 @@ where
 /// This variant stops when `||b - A*x|| < atol`. The default [`gmres`] API uses
 /// relative residual tolerance and is preferred for scale-independent solves.
 /// # Errors
-/// Returns an error when the options have an overflowing capacity (a
-/// [`KrylovError::InvalidOptions`]), when the operator and vectors have
+/// Returns an error when `max_iter` needs a Krylov workspace whose capacity
+/// overflows or cannot be allocated (a [`KrylovError::InvalidOptions`]), when the operator and vectors have
 /// incompatible shapes, when the affine coefficients are all zero (a
 /// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
 /// Non-convergence is reported through the result's `converged` flag and does
 /// not produce an error.
+/// A right-hand side whose norm is not finite, which would make every relative
+/// residual zero, is a [`KrylovError::NumericalBreakdown`].
 ///
 pub fn gmres_with_absolute_tolerance<T, F>(
     apply_a: F,
@@ -1030,15 +1064,43 @@ where
 
 /// Solve `(a0 I + a1 A) x = b` using GMRES with relative residual tolerance.
 /// A zero-norm RHS returns the zero vector after validating the affine coefficients.
+/// `a1 = 0` gives `x = b / a0` in closed form, with the residual of that `x`
+/// reported; a subnormal quotient component can round to zero, so the closed
+/// form is not always converged. A gradient-tracked `a1 = 0` adds
+/// `-a1 (A(b / a0) / a0)`, which is zero in value and makes the first
+/// derivatives those of the exact solution, at the cost of one call to
+/// `apply_a`. When `A(b / a0)` has a NaN or infinite component, `A` is
+/// applied again to `b / a0 2^-s` for the smallest `s` that keeps it finite,
+/// found in about `2 log2(s)` further calls; components of `b / a0` that this
+/// scaling rounds away are applied as separate exact parts until none is
+/// left. The search covers every `s` for which `b / a0 2^-s` keeps its largest
+/// component nonzero. For
+/// single-precision `b` the closed form requires every factor of
+/// [`AnyScalar::reciprocal_factors`] to be in the `f32` range.
+/// A zero initial residual, also that of the closed form, is converged for
+/// every `rtol`, including `0`.
 /// The Arnoldi basis is built from the unshifted `A` callback, while affine
 /// coefficients are applied in the projected Hessenberg problem, matching
 /// KrylovKit's affine linear-solve convention.
 /// # Errors
-/// Returns [`KrylovError::InvalidOptions`] when an option is invalid,
+/// Returns [`KrylovError::InvalidOptions`] when an option is invalid
+/// (including a `max_iter` whose Krylov workspace cannot be allocated),
+/// [`KrylovError::InvalidOptions`] also when `a0` or `a1` has a NaN or
+/// infinite component, checked before the zero-RHS return, when `b` or `x0` is
+/// single precision and `a0` or `a1` is outside the `f32` range, or when an
+/// untracked `a1 = 0` and single-precision `b` need a factor of `1 / a0` outside
+/// the `f32` range,
 /// [`KrylovError::NoAffineCoefficient`] when both affine coefficients are zero,
 /// and [`KrylovError::Operation`] when the operator application, vector-space
 /// arithmetic, or a backend call fails. Non-convergence is reported through the
 /// result's `converged` flag and does not produce an error.
+/// A right-hand side whose norm is not finite, which would make every relative
+/// residual zero, is a [`KrylovError::NumericalBreakdown`].
+/// A gradient-tracked `a1 = 0` whose derivative `-A(b / a0) / a0` has a real
+/// or imaginary component outside the `f64` range, or whose `A` is not finite
+/// on `b / a0 2^-s` for any `s` that keeps `b / a0` nonzero, is a
+/// [`KrylovError::OutOfRange`] naming that quantity: the input is outside the
+/// supported range, and no NaN or partial gradient is returned.
 ///
 pub fn gmres_affine<T, F>(
     apply_a: F,
@@ -1070,11 +1132,19 @@ where
 /// KrylovKit's `linsolve(operator, b, a0, a1)` algorithm and avoids changing the
 /// Krylov basis when affine coefficients are present.
 /// # Errors
-/// Returns [`KrylovError::InvalidOptions`] when an option is invalid,
+/// Returns [`KrylovError::InvalidOptions`] when an option is invalid
+/// (including a `max_iter` whose Krylov workspace cannot be allocated),
+/// [`KrylovError::InvalidOptions`] also when `a0` or `a1` has a NaN or
+/// infinite component, checked before the zero-RHS return, when `b` or `x0` is
+/// single precision and `a0` or `a1` is outside the `f32` range, or when an
+/// untracked `a1 = 0` and single-precision `b` need a factor of `1 / a0` outside
+/// the `f32` range,
 /// [`KrylovError::NoAffineCoefficient`] when both affine coefficients are zero,
 /// and [`KrylovError::Operation`] when the operator application, vector-space
 /// arithmetic, or a backend call fails. Non-convergence is reported through the
 /// result's `converged` flag and does not produce an error.
+/// A right-hand side whose norm is not finite, which would make every relative
+/// residual zero, is a [`KrylovError::NumericalBreakdown`].
 ///
 pub fn gmres_affine_with_absolute_tolerance<T, F>(
     apply_a: F,
@@ -1144,9 +1214,35 @@ where
     if a0.is_zero() && a1.is_zero() {
         return Err(anyhow::Error::new(KrylovError::NoAffineCoefficient));
     }
+    // Checked before the zero-RHS and closed-form returns, which would
+    // otherwise accept them.
+    for (name, value) in [("a0", &a0), ("a1", &a1)] {
+        if !(value.real().is_finite() && value.imag().is_finite()) {
+            return Err(anyhow::Error::new(KrylovError::InvalidOptions {
+                solver: "gmres",
+                reason: format!("{name} must be finite, got {value:?}"),
+            }));
+        }
+    }
+    // `scale` and `axpby` convert a coefficient to the storage precision, so
+    // single-precision vectors need both coefficients in the `f32` range.
+    if b.is_single_precision() || x0.is_single_precision() {
+        for (name, value) in [("a0", &a0), ("a1", &a1)] {
+            if !value.is_in_single_precision_range() {
+                return Err(anyhow::Error::new(KrylovError::InvalidOptions {
+                    solver: "gmres",
+                    reason: format!(
+                        "{name} = {value:?} is outside the f32 range of the single-precision \
+                         vectors"
+                    ),
+                }));
+            }
+        }
+    }
 
     let started = Instant::now();
-    let b_norm = b.norm()?;
+    // A norm that overflows would make every relative residual zero.
+    let b_norm = vector_ops::finite_norm(b, "gmres", 0, "right-hand-side norm")?;
     if profile_enabled {
         profile.b_norm += started.elapsed();
     }
@@ -1160,16 +1256,186 @@ where
     }
     if a1.is_zero() {
         let started = Instant::now();
-        let solution = b.scale(AnyScalar::new_real(1.0) / a0)?;
+        // `a0 x = b` in closed form; the factors keep `b / a0` in range when
+        // `1 / a0` itself is not.
+        let factors = a0.reciprocal_factors()?;
+        if b.is_single_precision() {
+            if let Some(factor) = factors.iter().find(|f| !f.is_in_single_precision_range()) {
+                return Err(anyhow::Error::new(KrylovError::InvalidOptions {
+                    solver: "gmres",
+                    reason: format!(
+                        "dividing single-precision entries by a0 = {a0:?} needs the factor \
+                         {factor:?}, outside the f32 range"
+                    ),
+                }));
+            }
+        }
+        let scale_calls = factors.len();
+        let divide = |value: T| {
+            factors
+                .iter()
+                .try_fold(value, |value, factor| value.scale(factor.clone()))
+        };
+        let mut solution = divide(b.clone())?;
+        if profile_enabled {
+            profile.scale += started.elapsed();
+            profile.scale_calls += scale_calls;
+        }
+        if a1.tracks_grad() {
+            // `x = b / a0 - a1 (A(b / a0) / a0)` equals `b / a0` at `a1 = 0`,
+            // and its first derivatives are those of `(a0 I + a1 A)^-1 b`
+            // there, which the Krylov iterates would only approximate. `a1`
+            // multiplies the finished quotient, so its cotangent is
+            // `<A(x) / a0, g>` and never passes through `1 / a0`.
+            //
+            // `A` is applied to `x` itself, so no component of `x` is scaled
+            // away before `A` sees it. When the image has a NaN or infinite
+            // component, `A` is applied to `x 2^-s` for the smallest `s` that
+            // keeps it finite (`A` linear, exact powers of two), and `2^s`
+            // goes into the quotient. If `x 2^-s` rounds some components of
+            // `x` away (no single power of two keeps both a huge and a tiny
+            // component, as for `x = (2^500, 2^-1000)`, `A = 2^600 I`), the
+            // part it kept, `(x 2^-s) 2^s`, is exact, the rest
+            // `x - (x 2^-s) 2^s` is exact too, and `A` is applied to that rest
+            // in the same way: `A(x) / a0` is the sum of the parts' quotients.
+            //
+            // Nothing is given up early. The search for `s` covers every
+            // exponent for which `x 2^-s` keeps a nonzero component, found on
+            // the scaled vector itself, so it follows the storage precision
+            // (`2^-1074` for `f64`, `2^-149` for `f32`) and the mantissa of
+            // the largest component, and parts are taken
+            // until nothing of `x` is left: each part keeps its largest
+            // component, so the largest component of the rest drops by at least
+            // one binade per part and the parts end within about 2100 steps.
+            // When no exponent in that range makes the image finite, the input
+            // is outside the range this closed form supports, and the solve
+            // returns `KrylovError::OutOfRange` naming the operator image,
+            // never NaN and never a silently dropped component.
+            let out_of_range = |quantity: &'static str| {
+                anyhow::Error::new(KrylovError::OutOfRange {
+                    solver: "gmres",
+                    quantity,
+                })
+            };
+            const IMAGE: &str = "operator image A(x 2^-s) for every s that keeps x nonzero";
+            let started = Instant::now();
+            let mut apply_calls = 0;
+            let mut quotient_scale_calls = 0;
+            let mut quotient: Option<T> = None;
+            let mut remaining = Some(solution.clone());
+            while let Some(part) = remaining.take() {
+                apply_calls += 1;
+                let applied = apply_a(&part)?;
+                let (image, exponent) = if applied.is_all_finite()? {
+                    (applied, 0)
+                } else {
+                    let Some(limit) = vector_ops::largest_informative_exponent(&part)? else {
+                        // A(0) is not finite: no scaling helps.
+                        return Err(out_of_range(IMAGE));
+                    };
+                    let (found, calls) =
+                        vector_ops::smallest_finite_scaling(&apply_a, &part, limit)?;
+                    apply_calls += calls;
+                    let Some((exponent, image)) = found else {
+                        return Err(out_of_range(IMAGE));
+                    };
+                    let kept = vector_ops::scale_pow2(
+                        vector_ops::scale_pow2(part.clone(), -exponent)?,
+                        exponent,
+                    )?;
+                    let lost =
+                        part.axpby(AnyScalar::new_real(1.0), &kept, AnyScalar::new_real(-1.0))?;
+                    let lost_largest = lost.maxabs()?;
+                    if lost_largest > 0.0 {
+                        // Exact arithmetic halves the largest component at
+                        // least; a vector type whose `axpby` is not exact
+                        // (truncating) could fail to shrink and loop.
+                        // `maxabs` errors on NaN, so both values are ordered.
+                        if lost_largest >= part.maxabs()? {
+                            return Err(anyhow::Error::new(KrylovError::NumericalBreakdown {
+                                solver: "gmres",
+                                iteration: 0,
+                                quantity: "closed-form part split (rest did not shrink)",
+                            }));
+                        }
+                        remaining = Some(lost);
+                    }
+                    (image, exponent)
+                };
+                let (part_quotient, calls) =
+                    vector_ops::scaled_quotient(image, exponent, &a0, "gmres")?;
+                quotient_scale_calls += calls;
+                quotient = Some(match quotient {
+                    None => part_quotient,
+                    Some(sum) => sum.axpby(
+                        AnyScalar::new_real(1.0),
+                        &part_quotient,
+                        AnyScalar::new_real(1.0),
+                    )?,
+                });
+            }
+            let Some(quotient) = quotient else {
+                return Err(out_of_range(IMAGE));
+            };
+            if profile_enabled {
+                profile.apply += started.elapsed();
+                profile.apply_calls += apply_calls;
+            }
+            let started = Instant::now();
+            // `dx/da1 = -A(b / a0) / a0` can itself exceed the `f64` range
+            // (`A = f64::MAX I`, `b = 1`, `a0 = 1/2` gives `-4 f64::MAX`). No
+            // rescaling makes it representable, and `a1 = 0` times an
+            // infinite entry would be NaN, so that is reported here.
+            if !quotient.is_all_finite()? {
+                return Err(out_of_range("a1 derivative A(x) / a0"));
+            }
+            let correction = quotient.scale(AnyScalar::new_real(0.0) - a1.clone())?;
+            if profile_enabled {
+                profile.scale += started.elapsed();
+                profile.scale_calls += quotient_scale_calls + 1;
+            }
+            let started = Instant::now();
+            solution = solution.axpby(
+                AnyScalar::new_real(1.0),
+                &correction,
+                AnyScalar::new_real(1.0),
+            )?;
+            if profile_enabled {
+                profile.axpby += started.elapsed();
+                profile.axpby_calls += 1;
+            }
+        }
+        // The closed form can lose a subnormal quotient component, so the
+        // residual is measured rather than assumed to be zero.
+        let started = Instant::now();
+        let affine_x = solution.scale(a0.clone())?;
         if profile_enabled {
             profile.scale += started.elapsed();
             profile.scale_calls += 1;
         }
+        let started = Instant::now();
+        let residual = b.axpby(
+            AnyScalar::new_real(1.0),
+            &affine_x,
+            AnyScalar::new_real(-1.0),
+        )?;
+        if profile_enabled {
+            profile.axpby += started.elapsed();
+            profile.axpby_calls += 1;
+        }
+        let started = Instant::now();
+        let residual_norm = residual.norm()?;
+        if profile_enabled {
+            profile.norm += started.elapsed();
+            profile.norm_calls += 1;
+        }
         finish!(GmresResult {
             solution,
             iterations: 0,
-            residual_norm: 0.0,
-            converged: true,
+            residual_norm: tolerance.residual_value(residual_norm, b_norm),
+            // A zero residual is converged for every tolerance, including
+            // `rtol = 0`, as on the iterative path.
+            converged: residual_norm == 0.0 || tolerance.is_converged(residual_norm, b_norm),
         });
     }
 
@@ -1214,7 +1480,9 @@ where
                 restart, residual_value
             );
         }
-        if tolerance.is_converged(r_norm, b_norm) {
+        // A zero initial residual is converged for every tolerance, including
+        // `0`: the Arnoldi start vector `r / |r|` needs `|r| > 0`.
+        if r_norm == 0.0 || tolerance.is_converged(r_norm, b_norm) {
             finish!(GmresResult {
                 solution: x,
                 iterations: total_iters,
@@ -1225,18 +1493,21 @@ where
 
         let cycle_max_iter = options.max_iter;
         let mut v_basis: Vec<T> =
-            Vec::with_capacity(checked_krylov_capacity(cycle_max_iter, "gmres")?);
+            krylov_workspace(checked_krylov_capacity(cycle_max_iter, "gmres")?, "gmres")?;
         let started = Instant::now();
-        v_basis.push(r.scale(AnyScalar::new_real(1.0 / r_norm))?);
+        let (v0, scale_calls) = vector_ops::divide_by_norm(&r, r_norm)?;
+        v_basis.push(v0);
         if profile_enabled {
             profile.scale += started.elapsed();
-            profile.scale_calls += 1;
+            profile.scale_calls += scale_calls;
         }
 
-        let mut h_matrix: Vec<Vec<AnyScalar>> = Vec::with_capacity(cycle_max_iter);
-        let mut cs: Vec<AnyScalar> = Vec::with_capacity(cycle_max_iter);
-        let mut sn: Vec<AnyScalar> = Vec::with_capacity(cycle_max_iter);
-        let mut g: Vec<AnyScalar> = vec![AnyScalar::new_real(r_norm)];
+        let mut h_matrix: Vec<Vec<AnyScalar>> = krylov_workspace(cycle_max_iter, "gmres")?;
+        let mut cs: Vec<AnyScalar> = krylov_workspace(cycle_max_iter, "gmres")?;
+        let mut sn: Vec<AnyScalar> = krylov_workspace(cycle_max_iter, "gmres")?;
+        let mut g: Vec<AnyScalar> =
+            krylov_workspace(checked_krylov_capacity(cycle_max_iter, "gmres")?, "gmres")?;
+        g.push(AnyScalar::new_real(r_norm));
         let mut solution_already_updated = false;
 
         for j in 0..cycle_max_iter {
@@ -1248,7 +1519,7 @@ where
                 profile.apply += started.elapsed();
                 profile.apply_calls += 1;
             }
-            let mut h_a_col: Vec<AnyScalar> = Vec::with_capacity(j + 2);
+            let mut h_a_col: Vec<AnyScalar> = krylov_workspace(j + 2, "gmres")?;
             let mut w_orth = w;
 
             for v_i in v_basis.iter().take(j + 1) {
@@ -1292,7 +1563,7 @@ where
             }
             h_a_col.push(AnyScalar::new_real(h_jp1_j_real));
 
-            let mut h_col: Vec<AnyScalar> = Vec::with_capacity(j + 2);
+            let mut h_col: Vec<AnyScalar> = krylov_workspace(j + 2, "gmres")?;
             for h in h_a_col.iter().take(j) {
                 h_col.push(a1.clone() * h.clone());
             }
@@ -1331,7 +1602,7 @@ where
 
             if tolerance.is_converged(res_norm, b_norm) {
                 let started = Instant::now();
-                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                let y = solve_upper_triangular(&h_matrix, &g[..=j], "gmres")?;
                 if profile_enabled {
                     profile.triangular_solve += started.elapsed();
                     profile.triangular_solve_calls += 1;
@@ -1400,14 +1671,15 @@ where
 
             if h_jp1_j_real > 1e-14 {
                 let started = Instant::now();
-                v_basis.push(w_orth.scale(AnyScalar::new_real(1.0 / h_jp1_j_real))?);
+                let (v_next, scale_calls) = vector_ops::divide_by_norm(&w_orth, h_jp1_j_real)?;
+                v_basis.push(v_next);
                 if profile_enabled {
                     profile.scale += started.elapsed();
-                    profile.scale_calls += 1;
+                    profile.scale_calls += scale_calls;
                 }
             } else {
                 let started = Instant::now();
-                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                let y = solve_upper_triangular(&h_matrix, &g[..=j], "gmres")?;
                 if profile_enabled {
                     profile.triangular_solve += started.elapsed();
                     profile.triangular_solve_calls += 1;
@@ -1459,7 +1731,7 @@ where
         if !solution_already_updated {
             let actual_iters = h_matrix.len();
             let started = Instant::now();
-            let y = solve_upper_triangular(&h_matrix, &g[..actual_iters])?;
+            let y = solve_upper_triangular(&h_matrix, &g[..actual_iters], "gmres")?;
             if profile_enabled {
                 profile.triangular_solve += started.elapsed();
                 profile.triangular_solve_calls += 1;
@@ -1517,13 +1789,15 @@ where
 /// `max_total_iter` caps the total number of Arnoldi steps across all restart
 /// cycles; the final cycle is shortened when necessary.
 /// # Errors
-/// Returns an error when the options have an overflowing capacity (a
-/// [`KrylovError::InvalidOptions`]), when the operator and vectors have
+/// Returns an error when `max_iter` needs a Krylov workspace whose capacity
+/// overflows or cannot be allocated (a [`KrylovError::InvalidOptions`]), when the operator and vectors have
 /// incompatible shapes, when the affine coefficients are all zero (a
 /// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
 /// Non-convergence is reported through the result's `converged` flag and does
 /// not produce an error.
+/// A right-hand side whose norm is not finite, which would make every relative
+/// residual zero, is a [`KrylovError::NumericalBreakdown`].
 ///
 pub fn gmres_with_total_iteration_limit<T, F>(
     apply_a: F,
@@ -1565,7 +1839,8 @@ where
     b.validate()?;
     x0.validate()?;
 
-    let b_norm = b.norm()?;
+    // A norm that overflows would make every relative residual zero.
+    let b_norm = vector_ops::finite_norm(b, "gmres", 0, "right-hand-side norm")?;
     if b_norm == 0.0 {
         // The zero vector solves every homogeneous linear system.
         return Ok(GmresResult {
@@ -1612,7 +1887,9 @@ where
             );
         }
 
-        if tolerance.is_converged(r_norm, b_norm) {
+        // A zero initial residual is converged for every tolerance, including
+        // `0`: the Arnoldi start vector `r / |r|` needs `|r| > 0`.
+        if r_norm == 0.0 || tolerance.is_converged(r_norm, b_norm) {
             return Ok(GmresResult {
                 solution: x,
                 iterations: total_iters,
@@ -1623,17 +1900,19 @@ where
 
         // Arnoldi process with modified Gram-Schmidt
         let mut v_basis: Vec<T> =
-            Vec::with_capacity(checked_krylov_capacity(cycle_max_iter, "gmres")?);
-        let mut h_matrix: Vec<Vec<AnyScalar>> = Vec::with_capacity(cycle_max_iter);
+            krylov_workspace(checked_krylov_capacity(cycle_max_iter, "gmres")?, "gmres")?;
+        let mut h_matrix: Vec<Vec<AnyScalar>> = krylov_workspace(cycle_max_iter, "gmres")?;
 
         // v_0 = r / ||r||
-        let v0 = r.scale(AnyScalar::new_real(1.0 / r_norm))?;
+        let v0 = vector_ops::divide_by_norm(&r, r_norm)?.0;
         v_basis.push(v0);
 
         // Initialize Givens rotation storage
-        let mut cs: Vec<AnyScalar> = Vec::with_capacity(cycle_max_iter);
-        let mut sn: Vec<AnyScalar> = Vec::with_capacity(cycle_max_iter);
-        let mut g: Vec<AnyScalar> = vec![AnyScalar::new_real(r_norm)]; // residual in upper Hessenberg space
+        let mut cs: Vec<AnyScalar> = krylov_workspace(cycle_max_iter, "gmres")?;
+        let mut sn: Vec<AnyScalar> = krylov_workspace(cycle_max_iter, "gmres")?;
+        let mut g: Vec<AnyScalar> =
+            krylov_workspace(checked_krylov_capacity(cycle_max_iter, "gmres")?, "gmres")?;
+        g.push(AnyScalar::new_real(r_norm)); // residual in upper Hessenberg space
         let mut solution_already_updated = false;
 
         for j in 0..cycle_max_iter {
@@ -1643,7 +1922,7 @@ where
             let w = apply_a(&v_basis[j])?;
 
             // Modified Gram-Schmidt orthogonalization
-            let mut h_col: Vec<AnyScalar> = Vec::with_capacity(j + 2);
+            let mut h_col: Vec<AnyScalar> = krylov_workspace(j + 2, "gmres")?;
             let mut w_orth = w;
 
             for v_i in v_basis.iter().take(j + 1) {
@@ -1707,7 +1986,7 @@ where
 
             if tolerance.is_converged(res_norm, b_norm) {
                 // Solve upper triangular system and update x
-                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                let y = solve_upper_triangular(&h_matrix, &g[..=j], "gmres")?;
                 x = update_solution(&x, &v_basis[..=j], &y)?;
                 if options.check_true_residual {
                     let ax_check = apply_a(&x)?;
@@ -1748,11 +2027,11 @@ where
 
             // Add new basis vector (if not converged and h_jp1_j is not too small)
             if h_jp1_j_real > 1e-14 {
-                let v_jp1 = w_orth.scale(AnyScalar::new_real(1.0 / h_jp1_j_real))?;
+                let v_jp1 = vector_ops::divide_by_norm(&w_orth, h_jp1_j_real)?.0;
                 v_basis.push(v_jp1);
             } else {
                 // Lucky breakdown - we've found the exact solution in the Krylov subspace
-                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                let y = solve_upper_triangular(&h_matrix, &g[..=j], "gmres")?;
                 x = update_solution(&x, &v_basis[..=j], &y)?;
                 let ax_final = apply_a(&x)?;
                 let r_final = b.axpby(
@@ -1774,7 +2053,7 @@ where
         // End of restart cycle - update x with current solution
         if !solution_already_updated {
             let actual_iters = h_matrix.len();
-            let y = solve_upper_triangular(&h_matrix, &g[..actual_iters])?;
+            let y = solve_upper_triangular(&h_matrix, &g[..actual_iters], "gmres")?;
             x = update_solution(&x, &v_basis[..actual_iters], &y)?;
         }
     }
@@ -1815,13 +2094,15 @@ where
 /// and after the final solution update. This helps control the bond dimension
 /// growth that would otherwise occur in MPS/MPO representations.
 /// # Errors
-/// Returns an error when the options have an overflowing capacity (a
-/// [`KrylovError::InvalidOptions`]), when the operator and vectors have
+/// Returns an error when `max_iter` needs a Krylov workspace whose capacity
+/// overflows or cannot be allocated (a [`KrylovError::InvalidOptions`]), when the operator and vectors have
 /// incompatible shapes, when the affine coefficients are all zero (a
 /// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
 /// Non-convergence is reported through the result's `converged` flag and does
 /// not produce an error.
+/// A right-hand side whose norm is not finite, which would make every relative
+/// residual zero, is a [`KrylovError::NumericalBreakdown`].
 /// # Examples
 /// Solve `2x = b` with a no-op truncation function:
 /// ```
@@ -1876,7 +2157,8 @@ where
     b.validate()?;
     x0.validate()?;
 
-    let b_norm = b.norm()?;
+    // A norm that overflows would make every relative residual zero.
+    let b_norm = vector_ops::finite_norm(b, "gmres", 0, "right-hand-side norm")?;
     if b_norm == 0.0 {
         return Ok(GmresResult {
             solution: b.scale(AnyScalar::new_real(0.0))?,
@@ -1907,7 +2189,8 @@ where
             );
         }
 
-        if rel_res < options.rtol {
+        // A zero residual is converged for every `rtol`, including `0`.
+        if r_norm == 0.0 || rel_res < options.rtol {
             return Ok(GmresResult {
                 solution: x,
                 iterations: total_iters,
@@ -1916,13 +2199,14 @@ where
             });
         }
 
-        let mut v_basis: Vec<T> = Vec::with_capacity(checked_krylov_capacity(
-            options.max_iter,
+        let mut v_basis: Vec<T> = krylov_workspace(
+            checked_krylov_capacity(options.max_iter, "gmres_with_truncation")?,
             "gmres_with_truncation",
-        )?);
-        let mut h_matrix: Vec<Vec<AnyScalar>> = Vec::with_capacity(options.max_iter);
+        )?;
+        let mut h_matrix: Vec<Vec<AnyScalar>> =
+            krylov_workspace(options.max_iter, "gmres_with_truncation")?;
 
-        let mut v0 = r.scale(AnyScalar::new_real(1.0 / r_norm))?;
+        let mut v0 = vector_ops::divide_by_norm(&r, r_norm)?.0;
         truncate(&mut v0)?;
         // After truncation, v0 might not be unit norm and might point in a different direction.
         // We need to:
@@ -1930,7 +2214,7 @@ where
         // 2. Recompute g[0] = <r, v0> to maintain the correct relationship
         let v0_norm = v0.norm()?;
         let effective_g0 = if v0_norm > 1e-15 {
-            v0 = v0.scale(AnyScalar::new_real(1.0 / v0_norm))?;
+            v0 = vector_ops::divide_by_norm(&v0, v0_norm)?.0;
             // g[0] should be the component of r in the direction of v0
             // Since r was truncated and v0 = truncate(r/||r||)/||truncate(r/||r||)||,
             // g[0] = <r, v0> ≈ ||r|| * ||truncate(r/||r||)|| = r_norm * v0_norm
@@ -1940,9 +2224,13 @@ where
         };
         v_basis.push(v0);
 
-        let mut cs: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
-        let mut sn: Vec<AnyScalar> = Vec::with_capacity(options.max_iter);
-        let mut g: Vec<AnyScalar> = vec![AnyScalar::new_real(effective_g0)];
+        let mut cs: Vec<AnyScalar> = krylov_workspace(options.max_iter, "gmres_with_truncation")?;
+        let mut sn: Vec<AnyScalar> = krylov_workspace(options.max_iter, "gmres_with_truncation")?;
+        let mut g: Vec<AnyScalar> = krylov_workspace(
+            checked_krylov_capacity(options.max_iter, "gmres_with_truncation")?,
+            "gmres_with_truncation",
+        )?;
+        g.push(AnyScalar::new_real(effective_g0));
         let mut solution_already_updated = false;
 
         for j in 0..options.max_iter {
@@ -1950,7 +2238,7 @@ where
 
             let w = apply_a(&v_basis[j])?;
 
-            let mut h_col: Vec<AnyScalar> = Vec::with_capacity(j + 2);
+            let mut h_col: Vec<AnyScalar> = krylov_workspace(j + 2, "gmres_with_truncation")?;
             let mut w_orth = w;
 
             for v_i in v_basis.iter().take(j + 1) {
@@ -2043,7 +2331,7 @@ where
             }
 
             if rel_res < options.rtol {
-                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                let y = solve_upper_triangular(&h_matrix, &g[..=j], "gmres_with_truncation")?;
                 x = update_solution_truncated(&x, &v_basis[..=j], &y, &truncate)?;
 
                 if options.check_true_residual {
@@ -2090,12 +2378,12 @@ where
                 // Create v_{j+1} = w_orth / ||w_orth||
                 // w_orth has already been truncated twice (after orthogonalization and after reorthogonalization)
                 // so we don't need to truncate again. Scale doesn't increase bond dimensions.
-                let v_jp1 = w_orth.scale(AnyScalar::new_real(1.0 / h_jp1_j_real))?;
+                let v_jp1 = vector_ops::divide_by_norm(&w_orth, h_jp1_j_real)?.0;
                 // v_jp1 should have norm ~1.0 by construction
                 // The Arnoldi relation h_{j+1,j} * v_{j+1} = w_orth is maintained exactly
                 v_basis.push(v_jp1);
             } else {
-                let y = solve_upper_triangular(&h_matrix, &g[..=j])?;
+                let y = solve_upper_triangular(&h_matrix, &g[..=j], "gmres_with_truncation")?;
                 x = update_solution_truncated(&x, &v_basis[..=j], &y, &truncate)?;
                 let ax_final = apply_a(&x)?;
                 let r_final = b.axpby(
@@ -2115,7 +2403,7 @@ where
 
         if !solution_already_updated {
             let actual_iters = v_basis.len().min(options.max_iter);
-            let y = solve_upper_triangular(&h_matrix, &g[..actual_iters])?;
+            let y = solve_upper_triangular(&h_matrix, &g[..actual_iters], "gmres_with_truncation")?;
             x = update_solution_truncated(&x, &v_basis[..actual_iters], &y, &truncate)?;
         }
     }
@@ -2319,13 +2607,15 @@ pub struct RestartGmresResult<T> {
 /// # Returns
 /// A `RestartGmresResult` containing the solution and convergence information.
 /// # Errors
-/// Returns an error when the options have an overflowing capacity (a
-/// [`KrylovError::InvalidOptions`]), when the operator and vectors have
+/// Returns an error when `max_iter` needs a Krylov workspace whose capacity
+/// overflows or cannot be allocated (a [`KrylovError::InvalidOptions`]), when the operator and vectors have
 /// incompatible shapes, when the affine coefficients are all zero (a
 /// [`KrylovError::NoAffineCoefficient`] for affine solves), or when an
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
 /// Non-convergence is reported through the result's `converged` flag and does
 /// not produce an error.
+/// A right-hand side whose norm is not finite, which would make every relative
+/// residual zero, is a [`KrylovError::NumericalBreakdown`].
 /// # Examples
 /// Solve `5x = b` with no truncation:
 /// ```
@@ -2378,7 +2668,13 @@ where
         x.validate()?;
     }
 
-    let b_norm = b.norm()?;
+    // A norm that overflows would make every relative residual zero.
+    let b_norm = vector_ops::finite_norm(
+        b,
+        "restart_gmres_with_truncation",
+        0,
+        "right-hand-side norm",
+    )?;
     if b_norm == 0.0 {
         let solution = b.scale(AnyScalar::new_real(0.0))?;
         return Ok(RestartGmresResult {
@@ -2571,11 +2867,13 @@ fn validate_hermitian_krylov_expm_options(options: &HermitianKrylovExpmOptions) 
 fn projected_matrix_from_columns(
     h_cols: &[Vec<Complex64>],
     dim: usize,
+    solver: &'static str,
 ) -> Result<Matrix<Complex64>> {
     let matrix_len = dim.checked_mul(dim).ok_or_else(|| {
         anyhow::anyhow!("Krylov projected matrix shape ({dim}, {dim}) overflows usize")
     })?;
-    let mut data = vec![Complex64::new(0.0, 0.0); matrix_len];
+    let mut data = krylov_workspace(matrix_len, solver)?;
+    data.resize(matrix_len, Complex64::new(0.0, 0.0));
     for col in 0..dim {
         for row in 0..dim {
             if let Some(value) = h_cols.get(col).and_then(|h_col| h_col.get(row)) {
@@ -2584,6 +2882,27 @@ fn projected_matrix_from_columns(
         }
     }
     Ok(Matrix::from_col_major_vec(dim, dim, data))
+}
+
+/// Allocate an empty Krylov workspace with room for `capacity` entries.
+///
+/// Every iteration-sized buffer the solvers own (Krylov basis, Hessenberg
+/// columns, Givens rotations, projected residual and matrix, back-substitution
+/// result) is allocated here. Its size follows from a user-supplied iteration
+/// count, so an allocation that cannot be satisfied is reported as invalid
+/// options instead of aborting.
+fn krylov_workspace<T>(capacity: usize, solver: &'static str) -> Result<Vec<T>> {
+    let mut workspace = Vec::new();
+    workspace.try_reserve_exact(capacity).map_err(|source| {
+        anyhow::Error::new(KrylovError::InvalidOptions {
+            solver,
+            reason: format!(
+                "a Krylov workspace of {capacity} entries cannot be allocated ({source}); \
+                 reduce max_iter or the restart length"
+            ),
+        })
+    })?;
+    Ok(workspace)
 }
 
 fn checked_krylov_capacity(max_iter: usize, solver: &'static str) -> Result<usize> {
@@ -2759,13 +3078,18 @@ fn apply_givens_rotation(
 }
 
 /// Solve upper triangular system R y = g using back substitution.
-fn solve_upper_triangular(h: &[Vec<AnyScalar>], g: &[AnyScalar]) -> Result<Vec<AnyScalar>> {
+fn solve_upper_triangular(
+    h: &[Vec<AnyScalar>],
+    g: &[AnyScalar],
+    solver: &'static str,
+) -> Result<Vec<AnyScalar>> {
     let n = g.len();
     if n == 0 {
         return Ok(vec![]);
     }
 
-    let mut y = vec![AnyScalar::new_real(0.0); n];
+    let mut y = krylov_workspace(n, solver)?;
+    y.resize(n, AnyScalar::new_real(0.0));
 
     for i in (0..n).rev() {
         let mut sum = g[i].clone();

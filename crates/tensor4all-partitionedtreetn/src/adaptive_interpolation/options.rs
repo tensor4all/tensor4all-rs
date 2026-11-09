@@ -498,8 +498,7 @@ pub enum L2Estimator {
     /// [`InterpolationError::AllSamplesZero`](tensor4all_treetn::interpolation::InterpolationError::AllSamplesZero)
     /// before its global pivot search, and the residual estimate is taken as
     /// zero. The norm is read with `TreeTN::log_norm`, so a residual norm
-    /// above about `1.34e154` overflows the estimate and a norm below about
-    /// `1e-154` underflows it to zero.
+    /// above `f64::MAX` overflows the estimate.
     #[default]
     ResidualTt,
     /// Estimate the error from the mean square of the residual at fresh

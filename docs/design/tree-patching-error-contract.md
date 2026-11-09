@@ -153,7 +153,10 @@ checked against the `cargo run -p xtask --release -- api-dump` inventory
   `log_norm` is finite only below that norm, although its rustdoc
   (`ops.rs:91`) says it uses canonicalization "to avoid numerical overflow".
   That over-claim is a lower-layer discrepancy recorded here; M3 does not
-  change `treetn` or `core` for it. `PartitionedTreeTN` stores
+  change `treetn` or `core` for it. (Since PR #1199, `log_norm` and
+  `log_norm_on_session` take `TensorVectorSpace::norm` of the center, which
+  never forms the square, so `log_norm` is finite for every norm up to
+  `f64::MAX`; the limits below are stated for that range.) `PartitionedTreeTN` stores
   patches in a `HashMap` (`partitioned_tree_tn.rs:45`) and `norm_squared`
   sums in its iteration order (lines 333-337). The bitwise reproducibility of
   the canonicalization path has not been audited; the hash-order sum is not
@@ -279,7 +282,7 @@ The report encodes these cases in one enum (see
 
 | Quantity | How | Guarantee | Cost |
 |---|---|---|---|
-| `||f~_P||_P`, `||f~||_X` | `TreeTN::log_norm` of each accepted patch, combined by the driver in canonical path order | exact up to rounding while `||f~_P|| < ~1.34e154`, otherwise not computable; bitwise reproducibility unaudited | one canonicalization per patch, no evaluations of `f` |
+| `||f~_P||_P`, `||f~||_X` | `TreeTN::log_norm` of each accepted patch, combined by the driver in canonical path order | exact up to rounding while `||f~_P|| <= f64::MAX`, otherwise not computable; bitwise reproducibility unaudited | one canonicalization per patch, no evaluations of `f` |
 | `f~(x)` at chosen points | TreeTN batch evaluators | exact up to rounding | one network evaluation per point |
 | `||f - f~_P||_P` for a small patch | evaluate `f` and `f~_P` at every point of `P` | exact up to rounding (a certificate) | `|P|` evaluations of `f` (fewer with cache hits), `|P|` network evaluations |
 | `||f - f~_P||_P` for a large patch | Monte Carlo on `n` fresh uniform points of `P` | a statistical estimate, see below; no bound | `n` evaluations of `f` (fewer with cache hits), `n` network evaluations |
@@ -835,7 +838,7 @@ pub struct L2ErrorReport {
     pub certified_fraction: f64,
     /// ||f~|| / sqrt(|X|) from TreeTN::log_norm per accepted patch, combined
     /// in path order; None when some patch's log_norm is not finite
-    /// (||f~_P|| above about 1.34e154). Not covered by the bitwise
+    /// (||f~_P|| above f64::MAX). Not covered by the bitwise
     /// determinism claim: the canonicalization it relies on is not audited
     /// for reproducibility.
     pub approximation_rms: Option<f64>,
@@ -900,9 +903,9 @@ clone, since the method canonicalizes), forms
 `rms_P = exp(log_norm - ln(|P|) / 2)`, and combines
 `approximation_rms^2 = sum over P of (|P| / |X|) rms_P^2` in canonical path
 order. This avoids forming the global square in L2 units, but not the
-per-patch overflow inside `log_norm`, which squares the center tensor's norm
-(see [Findings](#findings-that-shape-the-design)): for a patch with
-`||f~_P||` above about `1.34e154`, `log_norm` returns `+inf` (or fails), and
+per-patch overflow inside `log_norm` (see
+[Findings](#findings-that-shape-the-design)): for a patch with
+`||f~_P||` above `f64::MAX`, `log_norm` returns `+inf` (or fails), and
 the driver then reports `approximation_rms = None` together with `None` for
 the rounding term, the flag, and the relative fields. This is an overflow
 outcome of the report, not an error of the run. A patch of norm zero
@@ -1569,7 +1572,7 @@ or more, checked in the test.
     and the global quantities combine as specified, within
     `GLOBAL_ROUNDING_MARGIN`. The overflow case is built on the exact
     small-patch path (a patch with one active site whose values are about
-    `1e155` on enough points that `||f~_P||` exceeds `1.34e154`), or with
+    `1e308` on enough points that `||f~_P||` exceeds `f64::MAX`), or with
     the dense test engine, with `L2Reference::Given` so that forming the
     reference does not overflow first, so it exercises only the report's overflow
     handling: the run completes and reports `approximation_rms`, the rounding
@@ -1636,7 +1639,7 @@ respect to the allowance used, that no relative statement exists for an
 acceptance-only run or when the relative denominator is not positive, that
 the audited relative value is a plug-in estimate of the bound, the absolute
 rounding term of a certificate and the `rounding_limited` flag, that
-`approximation_rms` is `None` above a patch norm of about `1.34e154`, which
+`approximation_rms` is `None` above a patch norm of `f64::MAX`, which
 report fields the bitwise determinism claim covers, and the units of each
 reference. After the corner-miss finding, the module documentation,
 `GlobalL2Error::Audited`, `MeasurementMethod::Sampled`, `L2Measurement`,
@@ -2214,9 +2217,8 @@ order. Its inputs:
   `InterpolationError::AllSamplesZero` before its global pivot search and the
   estimate is zero; the corners and the seed sample make this happen only
   when they are all zero too. `residual_rms` is read with
-  `TreeTN::log_norm_on_session`, so a residual norm above about `1.34e154`
-  overflows the estimate and one below about `1e-154` underflows it to zero;
-  the same range limits `approximation_rms`.
+  `TreeTN::log_norm_on_session`, so a residual norm above `f64::MAX`
+  overflows the estimate; the same range limits `approximation_rms`.
 
 #### `L2Estimator::UniformMonteCarlo`
 
