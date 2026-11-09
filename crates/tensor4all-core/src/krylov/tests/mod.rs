@@ -551,7 +551,9 @@ fn gmres_affine_closed_form_measures_its_residual() {
 #[test]
 fn gmres_affine_closed_form_rejects_factors_outside_the_single_precision_range() {
     // 2^100 / (2^200 + 2^200 i) = 2^-101 - 2^-101 i is a normal c32 value, but
-    // the factor 2^-199 converts to an f32 zero.
+    // a0 itself is outside the f32 range, so the coefficient check rejects it
+    // before the factors are formed. The factor check alone is covered by
+    // `gmres_affine_closed_form_rejects_a_subnormal_single_precision_factor`.
     let pow2 = |k: i32| 2.0_f64.powi(k / 2) * 2.0_f64.powi(k - k / 2);
     let idx = DynIndex::new_dyn(1);
     let b = IdxTensor::from_dense(vec![idx.clone()], vec![2.0_f32.powi(100)]).unwrap();
@@ -625,6 +627,43 @@ fn gmres_affine_closed_form_rejects_factors_outside_the_single_precision_range()
         "{error:?}"
     );
     assert!(error.to_string().contains("a1 = "), "{error}");
+}
+
+#[test]
+fn gmres_affine_closed_form_rejects_a_subnormal_single_precision_factor() {
+    // a0 = f32::MAX is a normal f32, so the coefficient check accepts it, and
+    // 2^100 / a0 (about 2^-28) is a normal f32. The single factor
+    // 1 / a0 (about 2.9e-39) is an f32 subnormal, though, so only the factor
+    // check rejects it.
+    let a0 = AnyScalar::new_real(f64::from(f32::MAX));
+    assert!(a0.is_in_single_precision_range());
+    let factors = a0.reciprocal_factors().unwrap();
+    assert_eq!(factors.len(), 1);
+    assert!(!factors[0].is_in_single_precision_range());
+
+    let idx = DynIndex::new_dyn(1);
+    let b = IdxTensor::from_dense(vec![idx.clone()], vec![2.0_f32.powi(100)]).unwrap();
+    let x0 = IdxTensor::from_dense(vec![idx], vec![0.0_f32]).unwrap();
+    let error = gmres_affine(
+        |x: &IdxTensor| Ok(x.clone()),
+        &b,
+        &x0,
+        a0,
+        AnyScalar::new_real(0.0),
+        &GmresOptions::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::InvalidOptions {
+                solver: "gmres",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("needs the factor"), "{error}");
 }
 
 #[test]

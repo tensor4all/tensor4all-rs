@@ -222,8 +222,10 @@ fn reciprocal_factors_divide_by_an_imaginary_divisor_exactly() {
 
 #[test]
 fn reciprocal_factors_bound_the_subnormal_error_of_a_complex_quotient() {
-    // Each component is within `bound` units of max(2^-1074, ulp(q)) of the
-    // quotient q. The reference q * 2^600 is computed with d scaled near one.
+    // On this sample each component is within `bound` units of
+    // max(2^-1074, ulp(q)) of the quotient q. The bounds are the observed
+    // maxima that the `reciprocal_factors` docs quote, not a derived worst
+    // case. The reference q * 2^600 is computed with d scaled near one.
     let unit_of = |q: f64| f64::from_bits(1).max(q.abs() * f64::EPSILON);
     let divisors = [
         (Complex64::new(0.0, 1.5), 0.5),

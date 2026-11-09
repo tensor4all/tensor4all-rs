@@ -98,9 +98,12 @@ impl AnyScalar {
     ///   error of each component is a few units in the last place of
     ///   `|quotient|`. For a real value with a subnormal quotient, the
     ///   intermediate before the last factor is rounded at subnormal
-    ///   granularity, so the absolute error is up to `9 * 2^-1074` when
-    ///   `|self| < 1/2` and up to `7 * 2^-1074` otherwise, and a component
-    ///   that small can round to zero.
+    ///   granularity and the last factor can amplify that rounding, so the
+    ///   absolute error is several units of `2^-1074`, and a component that
+    ///   small can round to zero. No worst-case constant is derived: on the
+    ///   tested sample of complex divisors and subnormal quotients the
+    ///   observed maximum is `9 * 2^-1074` when `|self| < 1/2` and
+    ///   `7 * 2^-1074` otherwise.
     ///
     /// The guarantees are for `f64` and `Complex64` arithmetic. Entries stored
     /// in single precision convert each factor to `f32`, which keeps the

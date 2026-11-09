@@ -683,19 +683,23 @@ where
     negative_rhs.scale_mut(AnyScalar::new_real(-1.0))?;
     let mut residual = lhs.add_reindexed_like_self(&negative_rhs)?;
 
-    let rhs_norm = rhs.clone().norm()?;
+    // Both norms stay in log space, so an rhs whose squared norm overflows
+    // or underflows f64 (|b| = 1e200 or 1e-200) still gives the true ratio.
+    let log_rhs_norm = rhs.clone().log_norm()?;
     // A norm that overflows would make the relative residual zero.
-    if !rhs_norm.is_finite() {
+    if log_rhs_norm.is_nan() || log_rhs_norm == f64::INFINITY {
         return Err(TreeTNOperationError::Operation {
             source: anyhow::anyhow!(
-                "relative_linear_system_residual: the rhs norm is not finite ({rhs_norm})"
+                "relative_linear_system_residual: the rhs norm is not finite (log norm {log_rhs_norm})"
             ),
         });
     }
-    if rhs_norm == 0.0 {
-        return residual.norm();
+    let log_residual_norm = residual.log_norm()?;
+    if log_rhs_norm == f64::NEG_INFINITY {
+        // An exactly zero rhs: report the absolute residual.
+        return Ok(log_residual_norm.exp());
     }
-    Ok(residual.norm()? / rhs_norm)
+    Ok((log_residual_norm - log_rhs_norm).exp())
 }
 
 #[cfg(test)]
