@@ -1220,7 +1220,8 @@ fn gmres_affine_tracked_zero_a1_retry_reaches_the_largest_exponent() {
     // the zero operator, but for x = 2^1000 it forms inf - inf = NaN until
     // x 2^-s has s >= 2054. Doubling stops at 2048, so the search has to
     // probe the last exponents up to the 2100 limit as well. x 2^-2054 =
-    // 2^-1054 is an exact power of two, so flush-to-zero does not apply.
+    // 2^-1054 is subnormal: the test relies on gradual underflow (the IEEE
+    // default, which Rust keeps on every CI target), not on flush-to-zero.
     let idx = DynIndex::new_dyn(1);
     let b = make_vector_with_index(vec![2.0_f64.powi(1000)], &idx);
     let x0 = make_vector_with_index(vec![0.0], &idx);
@@ -1264,8 +1265,9 @@ fn gmres_affine_tracked_zero_a1_retry_accepts_the_largest_in_range_exponent() {
     // x = b / a0 = 2^1000. The retry may scale x by 2^-s while its largest
     // component stays nonzero, s <= 1000 + 1074 = 2074. With k = 97,
     // t = 2^(2097 - s + 1000) is finite exactly from s = 2074, the last
-    // exponent in range: x 2^-2074 = 2^-1074 is the smallest subnormal, an
-    // exact power of two, and t = 2^1023. The solve must accept it.
+    // exponent in range: x 2^-2074 = 2^-1074 is the smallest subnormal (the
+    // test relies on gradual underflow, the IEEE default on every CI target),
+    // and t = 2^1023. The solve must accept it.
     let idx = DynIndex::new_dyn(1);
     let b = make_vector_with_index(vec![2.0_f64.powi(1000)], &idx);
     let x0 = make_vector_with_index(vec![0.0], &idx);
@@ -1363,6 +1365,29 @@ fn gmres_affine_tracked_zero_a1_retry_boundary_follows_the_mantissa_of_x() {
         ),
         "{error:?}"
     );
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retries_single_precision_within_its_own_range() {
+    // GPT r8 reproduction: f32 b = 4, a0 = 2 give x = 2, and
+    // A = f32::MAX I overflows f32 at x but not at x 2^-1. The informative
+    // range of an f32 vector ends near 2^-149, not 2^-1074, so a limit taken
+    // from the f64 boundary scaled x to zero and refused the solve.
+    // dx/da1 = -f32::MAX * 2 / 2 = -f32::MAX. All values are normal f32.
+    let idx = DynIndex::new_dyn(1);
+    let b = IdxTensor::from_dense(vec![idx.clone()], vec![4.0_f32]).unwrap();
+    let x0 = IdxTensor::from_dense(vec![idx.clone()], vec![0.0_f32]).unwrap();
+    let selector = IdxTensor::from_dense(vec![idx], vec![1.0_f32]).unwrap();
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(f64::from(f32::MAX)))?),
+        &b,
+        &x0,
+        2.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(result.solution.to_vec::<f32>().unwrap(), vec![2.0_f32]);
+    assert_eq!(grad.real(), -f64::from(f32::MAX));
 }
 
 #[test]

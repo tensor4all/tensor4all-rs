@@ -57,32 +57,31 @@ pub(super) fn divide_by_norm<T: TensorVectorSpace>(value: &T, norm: f64) -> Resu
 /// Largest `s` for which `scale_pow2(x, -s)` keeps a nonzero component, or
 /// `None` for `x = 0`.
 ///
-/// With `2^c <= |x_i| < 2^(c+1)` for the largest real or imaginary component,
-/// `x_i 2^-s` is nonzero for `s <= c + 1074`, and also for `s = c + 1075`
-/// when the mantissa of `x_i` exceeds 1 (it then rounds up to `2^-1074`;
-/// `2^c 2^-(c+1075) = 2^-1075` rounds to even, which is zero). `maxabs` gives
-/// the complex modulus, whose exponent `e` is `c` or `c + 1`, so the candidates
-/// `e + 1075`, `e + 1074` and `e + 1073` are checked on the scaled vector
-/// itself, with the same `scale_pow2` the retry applies.
+/// Where that ends depends on the storage precision (`2^-1074` for `f64`
+/// entries, `2^-149` for `f32`) and on the mantissa of the largest component
+/// (`1.5 * 2^-1075` still rounds up to `2^-1074`), so it is found on the scaled
+/// vector itself, with the same `scale_pow2` the retry applies: bisection
+/// between `0` (nonzero) and an exponent past the `f64` range, which zeroes
+/// every entry. Being nonzero is monotone in `s`, since a larger scaling
+/// never makes a rounded-to-zero entry nonzero again. About 11 `scale_pow2`
+/// calls and no `apply_a` call.
 pub(super) fn largest_informative_exponent<T: TensorVectorSpace>(x: &T) -> Result<Option<i32>> {
-    let largest = x.maxabs()?;
-    if largest == 0.0 {
+    if x.maxabs()? == 0.0 {
         return Ok(None);
     }
-    // Every component is at most f64::MAX < 2^1024, so the modulus exponent
-    // that matters is at most 1024 even when the modulus itself overflows.
-    let exponent = if largest.is_finite() {
-        normalization_exponent(largest).min(1024)
-    } else {
-        1024
-    };
-    for candidate in [exponent + 1075, exponent + 1074, exponent + 1073] {
-        if scale_pow2(x.clone(), -candidate)?.maxabs()? > 0.0 {
-            return Ok(Some(candidate));
+    // Every component is below 2^1024 and every nonzero entry is at least
+    // 2^-1074, so 2^-(1024 + 1076) takes all of them to zero.
+    let mut nonzero = 0;
+    let mut zero = 1024 + 1076;
+    while zero - nonzero > 1 {
+        let middle = nonzero + (zero - nonzero) / 2;
+        if scale_pow2(x.clone(), -middle)?.maxabs()? > 0.0 {
+            nonzero = middle;
+        } else {
+            zero = middle;
         }
     }
-    // Unreachable for a nonzero x by the bound above; the caller refuses.
-    Ok(None)
+    Ok(Some(nonzero))
 }
 
 /// The smallest `s` in `1..=limit` for which `A(x 2^-s)` has only finite

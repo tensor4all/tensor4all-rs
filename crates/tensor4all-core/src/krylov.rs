@@ -1300,9 +1300,10 @@ where
             // in the same way: `A(x) / a0` is the sum of the parts' quotients.
             //
             // Nothing is given up early. The search for `s` covers every
-            // exponent for which `x 2^-s` keeps a nonzero component, checked
-            // on the scaled vector (`s <= c + 1074`, or `c + 1075` when the
-            // largest component's mantissa exceeds 1), and parts are taken
+            // exponent for which `x 2^-s` keeps a nonzero component, found on
+            // the scaled vector itself, so it follows the storage precision
+            // (`2^-1074` for `f64`, `2^-149` for `f32`) and the mantissa of
+            // the largest component, and parts are taken
             // until nothing of `x` is left: each part keeps its largest
             // component, so the largest component of the rest drops by at least
             // one binade per part and the parts end within about 2100 steps.

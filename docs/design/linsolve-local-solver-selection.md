@@ -114,9 +114,9 @@ another solver.
   separate part and its quotient added (`dx2/da1 = -2^-900`). Finiteness is
   judged per real and imaginary component (`is_all_finite`), not by a complex
   modulus. Nothing is given up early: the search covers every `s` for which
-  `x 2^-s` keeps a nonzero component, checked on the scaled vector (with
-  `2^c <= max |x_i| < 2^(c+1)`: `s <= c + 1074`, and `s = c + 1075` when the
-  mantissa exceeds 1, since `1.5 * 2^-1075` rounds up to `2^-1074`), and
+  `x 2^-s` keeps a nonzero component, found by bisection on the scaled vector
+  itself, so it follows the storage precision (`2^-1074` for `f64`, `2^-149`
+  for `f32`) and the mantissa (`1.5 * 2^-1075` rounds up to `2^-1074`), and
   parts are taken until nothing of `x` is left (each
   part removes at least one binade, so this ends). Outside that range the
   solve refuses: a derivative component outside the `f64` range, or no finite
