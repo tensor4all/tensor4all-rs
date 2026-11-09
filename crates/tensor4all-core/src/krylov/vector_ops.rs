@@ -54,6 +54,21 @@ pub(super) fn divide_by_norm<T: TensorVectorSpace>(value: &T, norm: f64) -> Resu
     Ok((scaled.scale(AnyScalar::new_real(1.0 / mantissa))?, calls))
 }
 
+/// Whether every stored real and imaginary component of `value` is finite.
+///
+/// `maxabs` takes the modulus of a complex entry, which overflows for finite
+/// components above about `f64::MAX / sqrt(2)`. Halving first is exact for
+/// normal components and keeps the modulus of finite components at or below
+/// `f64::MAX / sqrt(2)`, while an infinite component stays infinite, so the
+/// check is per component. A NaN entry is an error from `maxabs`.
+pub(super) fn components_finite<T: TensorVectorSpace>(value: &T) -> Result<bool> {
+    Ok(value.scale(AnyScalar::new_real(0.5))?.maxabs()?.is_finite())
+}
+
+/// Largest down-scaling exponent tried when an operator image overflows:
+/// `2^-2100` takes every finite `f64` to zero.
+pub(super) const MAX_RETRY_EXPONENT: i32 = 2100;
+
 /// `divisor * 2^exponent`, applied in power-of-two steps that move
 /// monotonically from `divisor` toward the result, so a real divisor is
 /// scaled exactly when the result is a normal number.

@@ -1025,6 +1025,113 @@ fn gmres_affine_closed_form_with_zero_residual_converges_at_zero_rtol() {
     assert!(result.converged);
 }
 
+/// `d (selector . x) / d a1` for a tracked `a1 = 0` after `gmres_affine`.
+fn tracked_zero_a1_component_gradient(
+    apply_a: impl Fn(&IdxTensor) -> Result<IdxTensor>,
+    b: &IdxTensor,
+    x0: &IdxTensor,
+    a0: f64,
+    selector: &IdxTensor,
+) -> (GmresResult<IdxTensor>, AnyScalar) {
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let result = gmres_affine(
+        apply_a,
+        b,
+        x0,
+        AnyScalar::new_real(a0),
+        a1.clone(),
+        &GmresOptions::default(),
+    )
+    .unwrap();
+    selector
+        .inner_product(&result.solution)
+        .unwrap()
+        .real_part()
+        .backward()
+        .unwrap();
+    let grad = a1.grad().unwrap().unwrap();
+    (result, grad)
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retry_scales_x_no_further_than_needed() {
+    // GPT r4 reproduction: x = b / a0 = (2^500, 2^-600) and A = 2^600 I give
+    // A(x) = (2^1100, 1), which overflows. The smallest down-scaling that
+    // keeps A finite is 2^-77, under which x2 = 2^-677 stays normal; a
+    // norm-based 2^-501 flushed x2 to zero. dx2/da1 = -2^-500.
+    // Every value here is a normal f64.
+    let idx = DynIndex::new_dyn(2);
+    let b = make_vector_with_index(vec![2.0_f64.powi(1000), 2.0_f64.powi(-100)], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
+    let selector = make_vector_with_index(vec![0.0, 1.0], &idx);
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(2.0_f64.powi(600)))?),
+        &b,
+        &x0,
+        2.0_f64.powi(500),
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(result.residual_norm, 0.0);
+    assert_eq!(
+        result.solution.to_vec::<f64>().unwrap(),
+        vec![2.0_f64.powi(500), 2.0_f64.powi(-600)]
+    );
+    assert_eq!(grad.real(), -(2.0_f64.powi(-500)));
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_checks_complex_components_separately() {
+    // GPT r4 reproduction: A = (0.75 + 0.75 i) f64::MAX I, b = 1, a0 = 1.
+    // dx/da1 = -(0.75 + 0.75 i) f64::MAX has finite components, but its
+    // modulus (about 1.06 f64::MAX) overflows, so a hypot-based check
+    // rejected it.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![1.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let selector = make_vector_with_index(vec![1.0], &idx);
+    let c = 0.75 * f64::MAX;
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        move |x: &IdxTensor| Ok(x.scale(AnyScalar::new_complex(c, c))?),
+        &b,
+        &x0,
+        1.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(result.residual_norm, 0.0);
+    let solution = result.solution.to_vec::<Complex64>().unwrap();
+    assert_eq!(solution.len(), 1);
+    assert_eq!(solution[0].re, 1.0);
+    assert_eq!(solution[0].im, 0.0);
+    // d Re(x) / da1 = -Re(A(x) / a0).
+    assert_eq!(grad.real(), -c);
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retries_when_x_is_already_below_unit_norm() {
+    // GPT r4 reproduction: b = (1.5, 1.5, 1.5, 1.5), a0 = 4 give
+    // x = (0.375, ...), |x| = 0.75, and A with every entry f64::MAX gives
+    // A(x) = 1.5 f64::MAX each. A norm-based exponent was 0, so the retry
+    // repeated the overflowing call; halving x suffices.
+    // dx_i/da1 = -0.375 f64::MAX.
+    let idx = DynIndex::new_dyn(4);
+    let b = make_vector_with_index(vec![1.5; 4], &idx);
+    let x0 = make_vector_with_index(vec![0.0; 4], &idx);
+    let ones = make_vector_with_index(vec![1.0; 4], &idx);
+    let selector = make_vector_with_index(vec![1.0, 0.0, 0.0, 0.0], &idx);
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        |x: &IdxTensor| Ok(ones.scale(x.sum()?)?.scale(AnyScalar::new_real(f64::MAX))?),
+        &b,
+        &x0,
+        4.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![0.375; 4]);
+    assert_eq!(grad.real(), -0.375 * f64::MAX);
+}
+
 #[test]
 fn gmres_affine_normalizes_a_residual_whose_reciprocal_norm_overflows() {
     // (I + I) x = 2^-1073 has x = 2^-1074, but 1 / |r| = 2^1073 is infinite.

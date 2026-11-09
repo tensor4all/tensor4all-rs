@@ -1059,8 +1059,9 @@ where
 /// form is not always converged. A gradient-tracked `a1 = 0` adds
 /// `-a1 (A(b / a0) / a0)`, which is zero in value and makes the first
 /// derivatives those of the exact solution, at the cost of one call to
-/// `apply_a` (two when `A(b / a0)` overflows, the second on `b / a0` scaled
-/// to a norm in `[1/2, 1)`). For
+/// `apply_a`. When `A(b / a0)` overflows, `A` is applied again to
+/// `b / a0 2^-s` for the smallest `s` that keeps it finite, found in about
+/// `2 log2(s)` further calls. For
 /// single-precision `b` the closed form requires every factor of
 /// [`AnyScalar::reciprocal_factors`] to be in the `f32` range.
 /// A zero initial residual, also that of the closed form, is converged for
@@ -1083,8 +1084,9 @@ where
 /// A right-hand side whose norm is not finite, which would make every relative
 /// residual zero, is a [`KrylovError::NumericalBreakdown`]. So is a
 /// gradient-tracked `a1 = 0` whose derivative `-A(b / a0) / a0` is not
-/// representable in `f64`, or whose `A` is not finite on `b / a0` scaled to a
-/// norm below 1: no finite gradient exists to return there.
+/// representable in `f64` (a real or imaginary component overflows), or whose
+/// `A` is not finite on `b / a0` scaled by any power of two down to `2^-2100`:
+/// no finite gradient exists to return there.
 ///
 pub fn gmres_affine<T, F>(
     apply_a: F,
@@ -1273,24 +1275,54 @@ where
             // `<A(x) / a0, g>` and never passes through `1 / a0`.
             //
             // `A` is applied to `x` itself, so no component of `x` is scaled
-            // away before `A` sees it. Only when `A(x)` overflows is `A`
-            // evaluated again on `x 2^-e` with `|x 2^-e|` in `[1/2, 1)`
-            // (`A` linear, exact powers of two), and `2^e` goes into the
-            // quotient below; an entry of `x` more than `2^1022` below the
-            // largest can then lose bits.
+            // away before `A` sees it. Only when `A(x)` has a non-finite
+            // component is `A` evaluated on `x 2^-s` (`A` linear, exact powers
+            // of two), with `s` the smallest positive exponent for which that
+            // image is finite, and `2^s` goes into the quotient below. `s` is
+            // found by doubling (1, 2, 4, ...) and then bisecting between the
+            // last overflowing and the first finite exponent, which costs
+            // about `2 log2(s)` extra calls to `apply_a`. Scaling no further
+            // than needed keeps the small components of `x` that a larger
+            // scaling would flush. The search assumes that the image stays
+            // finite once it is finite for some `s`, which holds for a linear
+            // `A` evaluated in floating point.
             let started = Instant::now();
             let mut applied = apply_a(&solution)?;
             let mut apply_calls = 1;
             let mut x_exponent = 0;
-            if !applied.maxabs()?.is_finite() {
-                let x_norm =
-                    vector_ops::finite_norm(&solution, "gmres", 0, "closed-form solution norm")?;
-                if x_norm > 0.0 {
-                    x_exponent = vector_ops::normalization_exponent(x_norm) + 1;
-                    let unit_x = vector_ops::scale_pow2(solution.clone(), -x_exponent)?;
-                    applied = apply_a(&unit_x)?;
+            if !vector_ops::components_finite(&applied)? {
+                let mut probe = |exponent: i32| -> Result<Option<T>> {
                     apply_calls += 1;
+                    let image = apply_a(&vector_ops::scale_pow2(solution.clone(), -exponent)?)?;
+                    Ok(vector_ops::components_finite(&image)?.then_some(image))
+                };
+                let mut overflowing = 0;
+                let mut finite = None;
+                let mut exponent = 1;
+                while exponent <= vector_ops::MAX_RETRY_EXPONENT {
+                    if let Some(image) = probe(exponent)? {
+                        finite = Some((exponent, image));
+                        break;
+                    }
+                    overflowing = exponent;
+                    exponent *= 2;
                 }
+                if let Some((mut upper, mut image)) = finite {
+                    while upper - overflowing > 1 {
+                        let middle = overflowing + (upper - overflowing) / 2;
+                        match probe(middle)? {
+                            Some(found) => {
+                                upper = middle;
+                                image = found;
+                            }
+                            None => overflowing = middle,
+                        }
+                    }
+                    x_exponent = upper;
+                    applied = image;
+                }
+                // With no finite image, `applied` stays non-finite and the
+                // quotient check below reports the breakdown.
             }
             if profile_enabled {
                 profile.apply += started.elapsed();
@@ -1303,7 +1335,7 @@ where
             // (`A = f64::MAX I`, `b = 1`, `a0 = 1/2` gives `-4 f64::MAX`). No
             // rescaling makes it representable, and `a1 = 0` times an
             // infinite entry would be NaN, so that is reported here.
-            if !quotient.maxabs()?.is_finite() {
+            if !vector_ops::components_finite(&quotient)? {
                 return Err(anyhow::Error::new(KrylovError::NumericalBreakdown {
                     solver: "gmres",
                     iteration: 0,
