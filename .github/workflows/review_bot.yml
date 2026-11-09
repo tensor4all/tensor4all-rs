@@ -1,3 +1,8 @@
+# Touch: re-register this workflow with the Actions service.
+# Every run since 2026-11-09T16:18Z ends in startup_failure with zero jobs, while every
+# other workflow here runs: this file parses, the job ids match their `needs`, and both
+# local actions exist at this revision. Re-saving is how GitHub is made to re-read a
+# workflow whose registration went stale.
 name: review bot
 
 # Delta-scoped REPOSITORY_RULES review, ported from tenferro-rs by way of
