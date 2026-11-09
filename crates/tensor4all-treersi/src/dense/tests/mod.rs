@@ -196,28 +196,18 @@ mod cuda {
         ExecutionContext::Cuda(cuda_execution())
     }
 
-    fn cuda_execution() -> Arc<tensor4all_tensorbackend::CudaExecutionContext> {
-        cuda_execution_or_skip("a CUDA primitive")
-            .expect("this caller requires a visible CUDA ordinal 0")
-    }
-
-    /// A CUDA context, or `None` with a printed SKIP on a host without one.
+    /// A CUDA context, or a panic naming what failed.
     ///
-    /// The routing tests below are not `#[ignore]`d, so they run in CI: on a
-    /// GPU-less host they must say that their CUDA assertions did not run
-    /// instead of passing as if they had.
-    fn cuda_execution_or_skip(
-        name: &str,
-    ) -> Option<Arc<tensor4all_tensorbackend::CudaExecutionContext>> {
-        match tensor4all_tensorbackend::CudaExecutionContext::new() {
-            Ok(cuda) => Some(Arc::new(cuda)),
-            Err(error) => {
-                println!(
-                    "SKIP {name}: no usable CUDA ordinal 0 ({error}); CUDA assertions did not run"
-                );
-                None
-            }
-        }
+    /// A missing device and a broken CUDA initialization both surface here as
+    /// the same failure, deliberately: a routing test that returned early would
+    /// report success while having run nothing, and an early return is invisible
+    /// without `--nocapture`. `#[ignore]` is the only skip this file uses, and it
+    /// is printed by libtest itself.
+    fn cuda_execution() -> Arc<tensor4all_tensorbackend::CudaExecutionContext> {
+        Arc::new(
+            tensor4all_tensorbackend::CudaExecutionContext::new()
+                .expect("CUDA ordinal 0 must be visible and initializable"),
+        )
     }
 
     fn cuda_einsums() -> usize {
@@ -257,11 +247,9 @@ mod cuda {
     /// process-global CPU context is not entered here, so it would return a
     /// result and the assertion below would fail.
     #[test]
+    #[ignore = "requires visible CUDA ordinal 0"]
     fn cuda_primitives_enter_the_callers_context_engine() {
-        let Some(cuda) = cuda_execution_or_skip("cuda_primitives_enter_the_callers_context_engine")
-        else {
-            return;
-        };
+        let cuda = cuda_execution();
         let context = ExecutionContext::Cuda(Arc::clone(&cuda));
         let (probe, product) = cuda
             .with_session(|_engine| {
@@ -311,11 +299,9 @@ mod cuda {
     /// testable at all. The CPU arm must stay uncounted, or the counter would
     /// not separate the two routes.
     #[test]
+    #[ignore = "requires visible CUDA ordinal 0"]
     fn cuda_primitives_dispatch_to_the_device_arm() {
-        let Some(cuda) = cuda_execution_or_skip("cuda_primitives_dispatch_to_the_device_arm")
-        else {
-            return;
-        };
+        let cuda = cuda_execution();
         let context = ExecutionContext::Cuda(Arc::clone(&cuda));
         let probe_input = || Dense {
             dims: vec![2, 2, 3],
