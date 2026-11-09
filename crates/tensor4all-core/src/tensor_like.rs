@@ -837,6 +837,38 @@ pub trait TensorVectorSpace: TensorIndex {
     /// ```
     fn maxabs(&self) -> std::result::Result<f64, Self::Error>;
 
+    /// Smallest modulus among the nonzero elements, or `None` when every
+    /// element is zero. With [`maxabs`](Self::maxabs) it gives the dynamic
+    /// range of the elements, which decides whether one power-of-two
+    /// rescaling can keep every nonzero element a normal `f64`. The modulus
+    /// of a complex element is `hypot(re, im)`.
+    ///
+    /// The provided implementation reports an unsupported operation; dense
+    /// implementors such as [`IdxTensor`](crate::IdxTensor) override it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the type does not support element-wise
+    /// inspection, when the elements cannot be read, or when an element is
+    /// NaN.
+    ///
+    /// # Examples
+    /// ```
+    /// # fn main() -> anyhow::Result<()> {
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorVectorSpace};
+    ///
+    /// let index = DynIndex::new_dyn(3);
+    /// let tensor = IdxTensor::from_dense(vec![index.clone()], vec![-3.0_f64, 0.0, 0.5])?;
+    /// assert_eq!(TensorVectorSpace::min_nonzero_abs(&tensor)?, Some(0.5));
+    /// let zero = IdxTensor::from_dense(vec![index], vec![0.0_f64; 3])?;
+    /// assert_eq!(TensorVectorSpace::min_nonzero_abs(&zero)?, None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn min_nonzero_abs(&self) -> std::result::Result<Option<f64>, Self::Error> {
+        Err(anyhow::anyhow!("min_nonzero_abs is not supported by this tensor type").into())
+    }
+
     /// Element-wise subtraction: `self - other`.
     ///
     /// # Errors

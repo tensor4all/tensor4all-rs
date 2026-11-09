@@ -1,12 +1,12 @@
 //! Exact power-of-two rescaling for residual enrichment.
 //!
-//! A tensor `t` with exponent `e` stands for the value `t * 2^e`. Multiplying
-//! by a power of two is exact unless a result leaves the normal range, so
-//! these helpers move the largest entry where the next operation needs it
-//! while keeping every other entry that the target range can hold.
+//! Multiplying by a power of two is exact unless a result leaves the normal
+//! range, so the enrichment step rescales the residual by one `2^k` chosen
+//! from its largest entry, after checking that every nonzero entry stays a
+//! normal `f64` (see `ResidualEnrichment::MAX_RESIDUAL_SPREAD`).
 
 use anyhow::Result;
-use tensor4all_core::{AnyScalar, IndexLike, TensorLike};
+use tensor4all_core::{AnyScalar, TensorLike};
 
 /// Largest step of one multiplication, so that every factor `2^k` is a
 /// normal `f64`.
@@ -16,6 +16,21 @@ const MAX_STEP: i32 = 1000;
 fn pow2(k: i32) -> f64 {
     debug_assert!(k.abs() <= MAX_STEP);
     f64::from_bits(((k + 1023) as u64) << 52)
+}
+
+/// `floor(log2 |x|)` for a finite nonzero `x`, exact also for subnormal `x`
+/// (where `x.log2()` may round across an integer).
+pub(super) fn exponent(x: f64) -> i32 {
+    debug_assert!(x.is_finite() && x != 0.0);
+    let bits = x.to_bits() & !(1 << 63);
+    let biased = (bits >> 52) as i32;
+    if biased == 0 {
+        // Subnormal: x = mantissa * 2^-1074.
+        let mantissa = bits & ((1 << 52) - 1);
+        -1074 + (63 - mantissa.leading_zeros() as i32)
+    } else {
+        biased - 1023
+    }
 }
 
 /// `x * 2^k`, in steps so that no factor overflows or underflows on its own.
@@ -39,86 +54,38 @@ pub(super) fn scale_pow2<T: TensorLike>(t: &T, mut k: i32) -> Result<T> {
     Ok(t)
 }
 
-/// The largest entry modulus of `t` when every entry is finite, and `None`
-/// when an entry is infinite or NaN.
-pub(super) fn finite_maxabs<T: TensorLike>(t: &T) -> Option<f64> {
-    t.maxabs().ok().filter(|value| value.is_finite())
-}
-
-/// `(t', e)` with `t = t' * 2^e` and the largest modulus of `t'` finite: `t`
-/// itself unless its largest modulus overflows, which a complex entry whose
-/// finite parts give a modulus above `f64::MAX` can do; then `t / 2`.
+/// `floor(log2 maxabs(t))` for a nonzero `t` whose entries are finite. The
+/// largest modulus itself overflows for a complex entry whose finite parts
+/// give a modulus above `f64::MAX`; it is then read from `t / 2`, which is
+/// only inspected, not used further.
 ///
 /// # Errors
 ///
-/// Returns an error when `t` has a non-finite entry.
-pub(super) fn finite_modulus<T: TensorLike>(t: T) -> Result<(T, i32)> {
-    if finite_maxabs(&t).is_some() {
-        return Ok((t, 0));
+/// Returns an error when `t` has a non-finite entry or cannot be read.
+pub(super) fn largest_exponent<T: TensorLike>(t: &T) -> Result<i32> {
+    let largest = t.maxabs()?;
+    if largest.is_finite() {
+        anyhow::ensure!(largest > 0.0, "largest_exponent of a zero tensor");
+        return Ok(exponent(largest));
     }
-    let half = scale_pow2(&t, -1)?;
+    let half = scale_pow2(t, -1)?.maxabs()?;
     anyhow::ensure!(
-        finite_maxabs(&half).is_some(),
+        half.is_finite(),
         "residual enrichment: the local RHS or residual has a non-finite entry"
     );
-    Ok((half, 1))
+    Ok(exponent(half) + 1)
 }
 
-/// `(t', e)` with `t = t' * 2^e` and the largest modulus of `t'` in about
-/// `[1, 2)`, or `None` when `t` is zero. Scaling up is exact; scaling down
-/// only drops entries more than `2^1074` below the largest one.
-///
-/// # Errors
-///
-/// Returns an error when `t` has a non-finite entry.
-pub(super) fn normalize<T: TensorLike>(t: T) -> Result<Option<(T, i32)>> {
-    let (t, offset) = finite_modulus(t)?;
-    let max = t.maxabs()?;
-    if max == 0.0 {
-        return Ok(None);
-    }
-    let exponent = max.log2().floor() as i32;
-    Ok(Some((scale_pow2(&t, -exponent)?, exponent + offset)))
+/// `coefficient * norm * 2^k` without overflowing the product before the
+/// exponent is applied: `coefficient` is split into a mantissa in `[1, 2)`
+/// and an exponent first. Returns infinity only when the result itself
+/// exceeds `f64::MAX`.
+pub(super) fn scaled_product(coefficient: f64, norm: f64, k: i32) -> f64 {
+    debug_assert!(coefficient.is_finite() && coefficient > 0.0 && norm.is_finite());
+    let coefficient_exp = exponent(coefficient);
+    let mantissa = ldexp(coefficient, -coefficient_exp);
+    ldexp(mantissa * norm, coefficient_exp.saturating_add(k))
 }
 
-/// `r - b b^dagger r` for `b` with orthonormal columns along `bond`, with the
-/// exponent of the result: `r * 2^e` projected is `p * 2^e'`. The projection
-/// is computed in the units of `r` when that stays finite, so no entry is
-/// rescaled; only when the overlap or the product overflows is `r` shrunk, by
-/// the smallest power of two that bounds every intermediate.
-///
-/// # Errors
-///
-/// Returns an error when a contraction fails.
-pub(super) fn project_out<T>(b: &T, r: &T, e: i32) -> Result<(T, i32)>
-where
-    T: TensorLike,
-    T::Index: IndexLike,
-{
-    let project = |r: &T| -> Result<T> {
-        let overlap = T::contract(&[&b.conj(), r])?;
-        Ok(r.sub(&T::contract(&[b, &overlap])?)?)
-    };
-    let projected = project(r)?;
-    if finite_maxabs(&projected).is_some() {
-        return Ok((projected, e));
-    }
-    // Every intermediate is at most `len * max` with `len` the number of
-    // entries of `r` (which bounds the bond and src dimensions): the overlap
-    // by `sqrt(src) * max`, `b * overlap` by `sqrt(bond)` times that.
-    let len: usize = r
-        .external_indices()
-        .iter()
-        .map(|index| index.dim())
-        .product();
-    let max = r.maxabs()?;
-    let headroom = (len as f64).log2().ceil() as i32 + 2;
-    let shift = (1023 - headroom) - max.log2().ceil() as i32;
-    let shift = shift.min(-1);
-    let projected = project(&scale_pow2(r, shift)?)?;
-    anyhow::ensure!(
-        finite_maxabs(&projected).is_some(),
-        "residual enrichment: projecting the residual produced a non-finite entry"
-    );
-    Ok((projected, e - shift))
-}
+#[cfg(test)]
+mod tests;

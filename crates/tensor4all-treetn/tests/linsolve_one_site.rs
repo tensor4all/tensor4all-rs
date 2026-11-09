@@ -7,7 +7,7 @@ use tensor4all_core::{
 };
 use tensor4all_treetn::{
     factorize_tensor_to_treetn_with, square_linsolve, IndexMapping, LinsolveOptions,
-    ResidualEnrichment, SquareLinsolveResult, TreeTN, TreeTopology,
+    ResidualEnrichment, ResidualEnrichmentRangeError, SquareLinsolveResult, TreeTN, TreeTopology,
 };
 
 use crate::enrichment_step::{bond_dim, distance_from_00, enrich_once, EnrichmentStep};
@@ -730,57 +730,125 @@ fn enrichment_cutoff_zero_keeps_tiny_residual_directions() {
     assert!(distance_from_00(&state, &sites) < 1e-12);
 }
 
+/// One [`EnrichmentStep`] with RHS `|00> + big |11> + small |22>`, so the
+/// residual after the source solve is `big |11> + small |22>`, with a zero
+/// cutoff and room for both directions.
+fn zero_cutoff_step(big: f64, small: f64) -> anyhow::Result<(State, [DynIndex; 2])> {
+    EnrichmentStep {
+        rhs: [1.0, big, small].map(Complex64::from),
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    }
+    .run(
+        ResidualEnrichment::default()
+            .with_max_added(2)
+            .with_cutoff(0.0),
+    )
+}
+
+/// The [`ResidualEnrichmentRangeError`] in `error`'s source chain.
+fn range_error(error: &anyhow::Error) -> ResidualEnrichmentRangeError {
+    *error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ResidualEnrichmentRangeError>())
+        .unwrap_or_else(|| panic!("expected a ResidualEnrichmentRangeError, got {error:#}"))
+}
+
 #[test]
-fn enrichment_cutoff_zero_keeps_the_smallest_subnormal_direction() {
-    // The |22> residual direction has singular value f64::from_bits(1), the
-    // smallest positive subnormal. It is nonzero, so a zero cutoff keeps it;
-    // halving it on the way to the comparison would round it to zero.
-    let enrichment = ResidualEnrichment::default()
-        .with_max_added(2)
-        .with_cutoff(0.0);
-    let (state, sites) = enrich_once(f64::from_bits(1), enrichment);
-    assert_eq!(bond_dim(&state), 3);
+fn enrichment_cutoff_zero_keeps_small_directions_inside_the_supported_spread() {
+    // Normalizing by the largest entry would shrink the |22> direction below
+    // the smallest normal f64 (or to zero), and an SVD backend may flush a
+    // subnormal singular value to zero (faer does). Inside the supported
+    // spread a zero cutoff keeps it.
+    for [big, small] in [[1e-300, f64::from_bits(1)], [1.0, 1e-300], [1e150, 1e-150]] {
+        let (state, sites) = zero_cutoff_step(big, small).unwrap();
+        assert_eq!(bond_dim(&state), 3, "big = {big:e}, small = {small:e}");
+        assert!(distance_from_00(&state, &sites) < 1e-12);
+    }
+    // A subnormal residual direction alone, far below `b_local`, is added.
+    let (state, sites) = zero_cutoff_step(0.0, f64::from_bits(1)).unwrap();
+    assert_eq!(bond_dim(&state), 2);
     assert!(distance_from_00(&state, &sites) < 1e-12);
 }
 
 #[test]
-fn enrichment_cutoff_zero_keeps_a_subnormal_direction_beside_larger_entries() {
-    // Normalizing by the largest entry would shrink the |22> direction below
-    // the smallest subnormal and round it to zero, and an SVD backend may
-    // flush a subnormal singular value to zero (faer does); a zero cutoff
-    // keeps it anyway. The last two cases have no common power of two that
-    // holds both residual directions as normal numbers.
-    for rhs in [
-        [1.0, 4.0, f64::from_bits(1)],
-        [1.0, 1e200, 1e-200],
-        [1.0, 1e-300, f64::from_bits(1)],
-        [1.0, 1e300, 1e-200],
-        [1.0, f64::MAX, f64::from_bits(1)],
+fn enrichment_residual_spread_is_pinned_at_the_supported_boundary() {
+    let max_spread = ResidualEnrichment::MAX_RESIDUAL_SPREAD;
+    assert_eq!(max_spread, 1022);
+    // floor(log2 1) - floor(log2 2^-1022) = 1022: the shift is 0 and
+    // 2^-1022, the smallest normal f64, is kept.
+    let (state, sites) = zero_cutoff_step(1.0, f64::MIN_POSITIVE).unwrap();
+    assert_eq!(bond_dim(&state), 3);
+    assert!(distance_from_00(&state, &sites) < 1e-12);
+
+    // One binary order more on either side is refused.
+    let small = f64::MIN_POSITIVE / 2.0;
+    let error = range_error(&zero_cutoff_step(1.0, small).unwrap_err());
+    assert_eq!(
+        error,
+        ResidualEnrichmentRangeError {
+            largest: 1.0,
+            smallest: small,
+            spread: max_spread + 1,
+            max_spread,
+            shift: 0,
+        }
+    );
+    let error = range_error(&zero_cutoff_step(2.0, f64::MIN_POSITIVE).unwrap_err());
+    assert_eq!((error.spread, error.shift), (max_spread + 1, -1));
+}
+
+#[test]
+fn enrichment_refuses_a_zero_cutoff_beyond_the_supported_spread() {
+    // (big, small, spread, shift) with spread = floor(log2 big) -
+    // floor(log2 small) and shift = -floor(log2 big). One power-of-two shift
+    // cannot keep both residual directions normal, so the smallest one would
+    // be lost; with a zero cutoff that is refused, naming it.
+    for (big, small, spread, shift) in [
+        (4.0, f64::from_bits(1), 2 + 1074, -2),
+        (1e200, 1e-200, 664 + 665, -664),
+        (1e300, 1e-200, 996 + 665, -996),
+        (f64::MAX, f64::from_bits(1), 1023 + 1074, -1023),
     ] {
-        let step = EnrichmentStep {
-            rhs: rhs.map(Complex64::from),
-            coefficients: (0.0, 1.0),
-            operator_scale: 1.0,
+        let error = range_error(&zero_cutoff_step(big, small).unwrap_err());
+        let expected = ResidualEnrichmentRangeError {
+            largest: big,
+            smallest: small,
+            spread,
+            max_spread: ResidualEnrichment::MAX_RESIDUAL_SPREAD,
+            shift,
         };
-        let enrichment = ResidualEnrichment::default()
-            .with_max_added(2)
-            .with_cutoff(0.0);
-        let (state, sites) = step.run(enrichment).unwrap();
-        assert_eq!(bond_dim(&state), 3, "rhs = {rhs:?}");
-        assert!(distance_from_00(&state, &sites) < 1e-12);
+        assert_eq!(error, expected, "big = {big:e}, small = {small:e}");
     }
-    // A subnormal residual direction alone, far below `b_local`, is added.
+    let error = range_error(&zero_cutoff_step(f64::MAX, f64::from_bits(1)).unwrap_err());
+    let message = error.to_string();
+    assert!(
+        message.contains("2097") && message.contains("5e-324"),
+        "{message}"
+    );
+    // The smallest subnormal beside a unit direction (the residual of
+    // `enrich_once(f64::from_bits(1), ..)`) spans 1074 orders.
+    let error = range_error(&zero_cutoff_step(1.0, f64::from_bits(1)).unwrap_err());
+    assert_eq!((error.spread, error.shift), (1074, 0));
+}
+
+#[test]
+fn enrichment_beyond_the_supported_spread_proceeds_when_the_cutoff_dominates() {
+    // Spread 1023 is outside the range, but the lost |22> entry (modulus 1
+    // beside f64::MAX) is far below `1e-12 * ||b_local||`: no direction made
+    // of it could be kept, so the step proceeds and adds only |11>. A zero
+    // cutoff on the same residual is refused.
     let step = EnrichmentStep {
-        rhs: [1.0, 0.0, f64::from_bits(1)].map(Complex64::from),
+        rhs: [1.0, f64::MAX, 1.0].map(Complex64::from),
         coefficients: (0.0, 1.0),
         operator_scale: 1.0,
     };
-    let enrichment = ResidualEnrichment::default()
-        .with_max_added(2)
-        .with_cutoff(0.0);
-    let (state, sites) = step.run(enrichment).unwrap();
+    let (state, _) = step
+        .run(ResidualEnrichment::default().with_max_added(2))
+        .unwrap();
     assert_eq!(bond_dim(&state), 2);
-    assert!(distance_from_00(&state, &sites) < 1e-12);
+    let error = range_error(&zero_cutoff_step(f64::MAX, 1.0).unwrap_err());
+    assert_eq!((error.spread, error.shift), (1023, -1023));
 }
 
 #[test]

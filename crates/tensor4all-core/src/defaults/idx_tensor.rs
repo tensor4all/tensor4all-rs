@@ -5857,6 +5857,62 @@ impl IdxTensor {
         Ok(value)
     }
 
+    /// Smallest modulus among the nonzero elements, or `None` when every
+    /// element is zero. Elements outside the stored payload (structural
+    /// zeros) are zero and do not count.
+    ///
+    /// # Errors
+    /// Returns [`IdxTensorError`] when authoritative storage or eager
+    /// materialization cannot be read, or when the input contains NaN.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    ///
+    /// let i = DynIndex::new_dyn(4);
+    /// let t = IdxTensor::from_dense(vec![i], vec![-5.0, 0.0, 0.25, -2.0]).unwrap();
+    /// assert_eq!(t.min_nonzero_abs().unwrap(), Some(0.25));
+    /// ```
+    pub fn min_nonzero_abs(&self) -> std::result::Result<Option<f64>, IdxTensorError> {
+        if let Some(error) = self.storage.deferred_error() {
+            return Err(IdxTensorError::Storage {
+                source: error.clone(),
+            });
+        }
+        let dtype = self
+            .storage
+            .dtype()
+            .ok_or_else(|| IdxTensorError::ScalarTypeMismatch {
+                expected: "f32, f64, c32, or c64",
+                actual: "unknown".to_string(),
+            })?;
+        if !matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64) {
+            return Err(IdxTensorError::ScalarTypeMismatch {
+                expected: "f32, f64, c32, or c64",
+                actual: Self::dtype_name(dtype).to_string(),
+            });
+        }
+        let flags = self
+            .compact_nonfinite_flags()
+            .map_err(IdxTensorError::materialization)?;
+        if flags.has_nan {
+            return Err(IdxTensorError::NaNInput {
+                operation: "min_nonzero_abs",
+            });
+        }
+        let mut value: Option<f64> = None;
+        self.storage
+            .for_each_payload_value(|scalar| {
+                let magnitude = scalar.re.hypot(scalar.im);
+                if magnitude != 0.0 {
+                    value = Some(value.map_or(magnitude, |current| current.min(magnitude)));
+                }
+            })
+            .map_err(IdxTensorError::materialization)?;
+        Ok(value)
+    }
+
     fn native_complex_payload_value_at(
         native: &EagerTensor,
         payload_coords: &[usize],
@@ -6717,6 +6773,10 @@ impl TensorVectorSpace for IdxTensor {
 
     fn maxabs(&self) -> std::result::Result<f64, Self::Error> {
         IdxTensor::maxabs(self)
+    }
+
+    fn min_nonzero_abs(&self) -> std::result::Result<Option<f64>, Self::Error> {
+        IdxTensor::min_nonzero_abs(self)
     }
 
     fn isapprox(

@@ -478,6 +478,18 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
         })
     }
 
+    fn min_nonzero_abs(&self) -> std::result::Result<Option<f64>, Self::Error> {
+        self.blocks.iter().try_fold(None::<f64>, |acc, block| {
+            let value = block
+                .min_nonzero_abs()
+                .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))?;
+            Ok(match (acc, value) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            })
+        })
+    }
+
     fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error> {
         let scaled: std::result::Result<Vec<T>, Self::Error> = self
             .blocks

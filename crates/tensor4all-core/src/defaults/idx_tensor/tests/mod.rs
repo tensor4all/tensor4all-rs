@@ -1056,3 +1056,33 @@ mod dense_host_borrow {
         check_gather!(Complex32, |i: usize| Complex32::new(i as f32, 1.0));
     }
 }
+
+#[test]
+fn min_nonzero_abs_skips_zeros_and_keeps_subnormals() {
+    let i = DynIndex::new_dyn(4);
+    let real = IdxTensor::from_dense(
+        vec![i.clone()],
+        vec![0.0, -f64::MAX, f64::from_bits(1), 2.0],
+    )
+    .unwrap();
+    assert_eq!(real.min_nonzero_abs().unwrap(), Some(f64::from_bits(1)));
+
+    // The modulus of a complex element counts, not its smallest part.
+    let complex = IdxTensor::from_dense(
+        vec![i.clone()],
+        vec![
+            Complex64::new(0.0, 0.0),
+            Complex64::new(3.0, 4.0),
+            Complex64::new(1e-300, 1.0),
+            Complex64::new(0.0, -2.0),
+        ],
+    )
+    .unwrap();
+    assert_eq!(complex.min_nonzero_abs().unwrap(), Some(1.0));
+
+    let zero = IdxTensor::from_dense(vec![i.clone()], vec![0.0_f64; 4]).unwrap();
+    assert_eq!(zero.min_nonzero_abs().unwrap(), None);
+
+    let nan = IdxTensor::from_dense(vec![i], vec![1.0, f64::NAN, 0.0, 2.0]).unwrap();
+    assert!(nan.min_nonzero_abs().is_err());
+}

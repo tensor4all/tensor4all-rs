@@ -27,6 +27,29 @@ pub enum GmresToleranceMode {
 /// of the residual and one QR of the enlarged basis per step. The SVD applies
 /// [`cutoff`](Self::cutoff) as its own explicit policy, so the global default
 /// SVD truncation policy does not affect which directions are added.
+///
+/// # Supported residual range
+///
+/// The residual is rescaled by one exact power of two that takes its largest
+/// entry modulus into `[1, 2)` before it is projected and factorized, so that
+/// `||b_local||`, the overlaps and the singular values stay finite, and SVD
+/// backends (which rescale large or small matrices internally) see it
+/// unscaled. Every entry must be finite (a complex entry may have a modulus
+/// above `f64::MAX` if its parts are finite). With `e(x) = floor(log2 |x|)`,
+/// the rescaling keeps every nonzero entry a normal `f64`, which SVD backends
+/// need to resolve it (faer flushes subnormal singular values to zero),
+/// exactly when `e(largest) - e(smallest nonzero) <= `
+/// [`MAX_RESIDUAL_SPREAD`](Self::MAX_RESIDUAL_SPREAD) (1022 binary orders of
+/// magnitude). A wider residual is refused with a
+/// [`ResidualEnrichmentRangeError`] naming the spread, the shift and the
+/// entry that would be lost, instead of silently dropping that direction,
+/// unless the cutoff makes the loss irrelevant: when `cutoff * ||b_local||`
+/// exceeds `sqrt(len) * 2^(e(largest) - MAX_RESIDUAL_SPREAD)` (`len` the
+/// number of residual entries), no direction built from the lost entries
+/// could pass the cutoff anyway. A zero cutoff is therefore refused outside
+/// the range, and inside it keeps every direction whose computed singular
+/// value is positive.
+///
 /// Two-site MALS ([`LinsolveOptions::nsite`] `= 2`) adapts ranks by itself
 /// and does not accept enrichment.
 ///
@@ -72,6 +95,19 @@ impl Default for ResidualEnrichment {
 }
 
 impl ResidualEnrichment {
+    /// Largest supported spread `floor(log2 |largest|) - floor(log2
+    /// |smallest nonzero|)` of the two-site residual entries; see
+    /// [Supported residual range](Self#supported-residual-range). The largest
+    /// entry is rescaled into `[1, 2)` and `2^-1022` is the smallest normal
+    /// `f64`.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_treetn::ResidualEnrichment;
+    /// assert_eq!(ResidualEnrichment::MAX_RESIDUAL_SPREAD, 1022);
+    /// ```
+    pub const MAX_RESIDUAL_SPREAD: i32 = 1022;
+
     /// Set the maximum number of directions added to one bond per step.
     ///
     /// # Examples
@@ -364,3 +400,47 @@ impl LinsolveOptions {
 
 #[cfg(test)]
 mod tests;
+
+/// Residual enrichment refused a two-site residual whose entries span more
+/// binary orders of magnitude than one power-of-two rescaling can keep as
+/// normal `f64` values; see
+/// [Supported residual range](ResidualEnrichment#supported-residual-range).
+///
+/// A one-site ALS sweep with [`ResidualEnrichment`] returns it in the error's
+/// source chain (find it with `anyhow::Error::chain` and `downcast_ref`).
+/// Rescale the problem, or use a cutoff large enough that the entries which
+/// would be lost cannot matter.
+///
+/// # Examples
+/// ```
+/// use tensor4all_treetn::{ResidualEnrichment, ResidualEnrichmentRangeError};
+/// let error = ResidualEnrichmentRangeError {
+///     largest: f64::MAX,
+///     smallest: f64::from_bits(1),
+///     spread: 2097,
+///     max_spread: ResidualEnrichment::MAX_RESIDUAL_SPREAD,
+///     shift: -1023,
+/// };
+/// assert!(error.spread > error.max_spread);
+/// assert!(error.to_string().contains("2097"));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+#[error(
+    "residual enrichment: the residual entries span {spread} binary orders of magnitude \
+     (largest modulus {largest:e}, smallest nonzero {smallest:e}), more than the \
+     supported {max_spread}; rescaling by 2^{shift} would lose the entry of modulus {smallest:e}"
+)]
+pub struct ResidualEnrichmentRangeError {
+    /// Largest entry modulus of the residual (infinite when a complex entry's
+    /// finite parts give a modulus above `f64::MAX`).
+    pub largest: f64,
+    /// Smallest nonzero entry modulus of the residual: the entry that would
+    /// be lost.
+    pub smallest: f64,
+    /// `floor(log2 largest) - floor(log2 smallest)`.
+    pub spread: i32,
+    /// The supported spread, [`ResidualEnrichment::MAX_RESIDUAL_SPREAD`].
+    pub max_spread: i32,
+    /// Exponent `k` of the rescaling factor `2^k` that would have been used.
+    pub shift: i32,
+}
