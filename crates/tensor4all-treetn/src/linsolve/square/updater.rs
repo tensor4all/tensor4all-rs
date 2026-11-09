@@ -571,18 +571,25 @@ where
         if rhs_norm == 0.0 {
             return Ok(());
         }
-        let linop = LocalLinOp::with_expected_input_indices(
-            Arc::clone(&self.projected_operator),
-            region.to_vec(),
-            state,
-            &self.reference_state,
-            two_site_indices,
-        );
-        let applied = linop.apply_projected(&two_site)?;
+        // residual = b - a0 x - a1 A x. A zero coefficient drops its term
+        // instead of scaling it by zero, which would turn an overflowing
+        // `A x` (or `x`) into NaN.
         let one = AnyScalar::new_real(1.0);
-        let residual = rhs
-            .axpby(one.clone(), &two_site, -self.options.a0.clone())?
-            .axpby(one, &applied, -self.options.a1.clone())?;
+        let mut residual = rhs;
+        if !self.options.a0.is_zero() {
+            residual = residual.axpby(one.clone(), &two_site, -self.options.a0.clone())?;
+        }
+        if !self.options.a1.is_zero() {
+            let linop = LocalLinOp::with_expected_input_indices(
+                Arc::clone(&self.projected_operator),
+                region.to_vec(),
+                state,
+                &self.reference_state,
+                two_site_indices,
+            );
+            let applied = linop.apply_projected(&two_site)?;
+            residual = residual.axpby(one, &applied, -self.options.a1.clone())?;
+        }
         // Remove the component already representable in the current src basis.
         let overlap = T::contract(&[&basis.conj(), &residual])?;
         let residual = residual.sub(&T::contract(&[&basis, &overlap])?)?;
@@ -590,9 +597,15 @@ where
         // The enrichment cutoff is the only selection rule: pass it to the SVD
         // as an explicit absolute per-value policy, so neither the global
         // default policy nor a second factorization is involved.
-        let threshold = enrichment.cutoff * rhs_norm;
-        // A finite cutoff can still overflow here; no singular value exceeds
-        // an infinite threshold, so nothing is added.
+        // A zero cutoff keeps every nonzero direction whatever `||b_local||`
+        // is, so it must not depend on that norm, which can overflow.
+        let threshold = if enrichment.cutoff == 0.0 {
+            0.0
+        } else {
+            enrichment.cutoff * rhs_norm
+        };
+        // A positive cutoff can still overflow here; no singular value
+        // exceeds an infinite threshold, so nothing is added.
         if !threshold.is_finite() {
             return Ok(());
         }

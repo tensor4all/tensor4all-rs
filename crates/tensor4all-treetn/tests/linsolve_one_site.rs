@@ -10,7 +10,7 @@ use tensor4all_treetn::{
     ResidualEnrichment, SquareLinsolveResult, TreeTN, TreeTopology,
 };
 
-use crate::enrichment_step::{bond_dim, distance_from_00, enrich_once};
+use crate::enrichment_step::{bond_dim, distance_from_00, enrich_once, EnrichmentStep};
 
 type State = TreeTN<IdxTensor, usize>;
 
@@ -740,4 +740,35 @@ fn enrichment_with_an_overflowing_cutoff_adds_nothing() {
     let (state, sites) = enrich_once(0.5, enrichment);
     assert_eq!(bond_dim(&state), 1);
     assert!(distance_from_00(&state, &sites) < 1e-12);
+}
+
+#[test]
+fn enrichment_with_a1_zero_does_not_apply_an_overflowing_operator() {
+    // With a1 = 0 the residual is b - a0 x. Applying A = (1e200 I) (x) (1e200 I)
+    // overflows to infinity, and 0 * inf would poison the residual with NaN.
+    let step = EnrichmentStep {
+        rhs: [1.0, 1.0, 0.5],
+        coefficients: (1.0, 0.0),
+        operator_scale: 1e200,
+    };
+    let (state, _) = step
+        .run(ResidualEnrichment::default().with_max_added(2))
+        .unwrap();
+    assert_eq!(bond_dim(&state), 3);
+}
+
+#[test]
+fn enrichment_cutoff_zero_survives_an_overflowing_rhs_norm() {
+    // ||b_local|| overflows to infinity, but a zero cutoff keeps every nonzero
+    // residual direction regardless of the norm.
+    let step = EnrichmentStep {
+        rhs: [1.0, f64::MAX, f64::MAX],
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let enrichment = ResidualEnrichment::default()
+        .with_max_added(2)
+        .with_cutoff(0.0);
+    let (state, _) = step.run(enrichment).unwrap();
+    assert_eq!(bond_dim(&state), 3);
 }
