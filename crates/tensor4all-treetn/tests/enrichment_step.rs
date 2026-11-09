@@ -43,6 +43,18 @@ impl EnrichmentStep {
         &self,
         enrichment: ResidualEnrichment,
     ) -> anyhow::Result<(State, [DynIndex; 2])> {
+        let identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        self.run_with_first_site(identity, enrichment)
+    }
+
+    /// [`run`](Self::run) with RHS `sum_k columns[k] (x) rhs[k] |k>`, so the
+    /// first-site vectors need not be the coordinate basis. The source solve
+    /// keeps the direction of `columns[0]` as the src basis.
+    pub(crate) fn run_with_first_site(
+        &self,
+        columns: [[f64; 3]; 3],
+        enrichment: ResidualEnrichment,
+    ) -> anyhow::Result<(State, [DynIndex; 2])> {
         let sites = [DynIndex::new_dyn(3), DynIndex::new_dyn(3)];
         let unit = |index: &DynIndex, bond: &DynIndex| {
             let mut data = vec![0.0; 3];
@@ -70,11 +82,22 @@ impl EnrichmentStep {
             }
         };
         let link = DynIndex::new_dyn(3);
+        let first = {
+            // Column-major: index (s0, link) -> s0 + 3 * link.
+            let data: Vec<Complex64> = columns
+                .iter()
+                .flat_map(|column| column.map(Complex64::from))
+                .collect();
+            let indices = vec![sites[0].clone(), link.clone()];
+            if complex {
+                IdxTensor::from_dense(indices, data).unwrap()
+            } else {
+                IdxTensor::from_dense(indices, data.iter().map(|v| v.re).collect::<Vec<_>>())
+                    .unwrap()
+            }
+        };
         let rhs = TreeTN::<IdxTensor, usize>::from_tensors(
-            vec![
-                diag(&sites[0], &link, [Complex64::new(1.0, 0.0); 3]),
-                diag(&sites[1], &link, self.rhs),
-            ],
+            vec![first, diag(&sites[1], &link, self.rhs)],
             vec![0, 1],
         )
         .unwrap();

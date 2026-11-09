@@ -731,6 +731,38 @@ fn enrichment_cutoff_zero_keeps_tiny_residual_directions() {
 }
 
 #[test]
+fn enrichment_cutoff_zero_keeps_the_smallest_subnormal_direction() {
+    // The |22> residual direction has singular value f64::from_bits(1), the
+    // smallest positive subnormal. It is nonzero, so a zero cutoff keeps it;
+    // halving it on the way to the comparison would round it to zero.
+    let enrichment = ResidualEnrichment::default()
+        .with_max_added(2)
+        .with_cutoff(0.0);
+    let (state, sites) = enrich_once(f64::from_bits(1), enrichment);
+    assert_eq!(bond_dim(&state), 3);
+    assert!(distance_from_00(&state, &sites) < 1e-12);
+}
+
+#[test]
+fn enrichment_projection_survives_an_overflowing_overlap() {
+    // The src basis is q = (|0> + |1>) / sqrt(2). The |1>-column of the
+    // residual is f64::MAX (|0> + |1>), parallel to q; its overlap with q,
+    // sqrt(2) * f64::MAX, overflows in the original units although the
+    // projected residual is zero. The |2>-column f64::MAX |2> is orthogonal
+    // to q and is the only direction added.
+    let step = EnrichmentStep {
+        rhs: [1.0, f64::MAX, f64::MAX].map(Complex64::from),
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let columns = [[1.0, 1.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    let (state, _) = step
+        .run_with_first_site(columns, ResidualEnrichment::default().with_max_added(2))
+        .unwrap();
+    assert_eq!(bond_dim(&state), 2);
+}
+
+#[test]
 fn enrichment_with_an_overflowing_cutoff_adds_nothing() {
     // `cutoff * ||b_local||` overflows to infinity; a finite cutoff that large
     // keeps no direction rather than failing.

@@ -589,22 +589,25 @@ where
             let applied = linop.apply_projected(&two_site)?;
             residual = residual.axpby(one, &applied, -self.options.a1.clone())?;
         }
-        // Remove the component already representable in the current src basis.
-        let overlap = T::contract(&[&basis.conj(), &residual])?;
-        let residual = residual.sub(&T::contract(&[&basis, &overlap])?)?;
-
-        // Compare in units of `2 * unit`, where `unit` is the largest modulus
-        // of `b_local / 2` and `residual / 2`: `||b_local||`, the residual
-        // singular values and `cutoff * ||b_local||` can each overflow (or
-        // underflow) although every entry is finite, but in these units the
-        // entries have modulus at most 1. Halving first keeps `unit` finite
-        // for a complex entry whose finite parts give a modulus above
-        // `f64::MAX`; dividing by `sqrt(unit)` twice keeps the reciprocal
-        // finite for any normal or subnormal `unit`.
-        let half = AnyScalar::new_real(0.5);
-        let rhs_half = rhs.scale(half.clone())?;
-        let residual_half = residual.scale(half)?;
-        let unit = rhs_half.maxabs()?.max(residual_half.maxabs()?);
+        // Compare in units of `unit`, the largest modulus of `b_local` and the
+        // residual: `||b_local||`, the residual singular values, `cutoff *
+        // ||b_local||` and the overlap with the src basis can each overflow
+        // (or underflow) although every entry is finite, but in these units
+        // the entries have modulus at most 1. Scaling before the projection
+        // keeps the overlap finite. Both are halved only when the largest
+        // modulus overflows, which a complex entry whose finite parts give a
+        // modulus above `f64::MAX` can do; halving unconditionally would
+        // round the smallest subnormal entries to zero and drop a nonzero
+        // direction that a zero cutoff keeps. Dividing by `sqrt(unit)` twice
+        // keeps the reciprocal finite for any normal or subnormal `unit`.
+        let mut rhs = rhs;
+        let mut unit = rhs.maxabs()?.max(residual.maxabs()?);
+        if unit.is_infinite() {
+            let half = AnyScalar::new_real(0.5);
+            rhs = rhs.scale(half.clone())?;
+            residual = residual.scale(half)?;
+            unit = rhs.maxabs()?.max(residual.maxabs()?);
+        }
         anyhow::ensure!(
             unit.is_finite(),
             "residual enrichment: the local RHS or residual has a non-finite entry"
@@ -613,13 +616,16 @@ where
             return Ok(());
         }
         let inv_sqrt_unit = AnyScalar::new_real(unit.sqrt().recip());
-        let rhs_norm = rhs_half
+        let rhs_norm = rhs
             .scale(inv_sqrt_unit.clone())?
             .scale(inv_sqrt_unit.clone())?
             .norm()?;
-        let residual = residual_half
+        let residual = residual
             .scale(inv_sqrt_unit.clone())?
             .scale(inv_sqrt_unit)?;
+        // Remove the component already representable in the current src basis.
+        let overlap = T::contract(&[&basis.conj(), &residual])?;
+        let residual = residual.sub(&T::contract(&[&basis, &overlap])?)?;
 
         // The enrichment cutoff is the only selection rule: pass it to the SVD
         // as an explicit absolute per-value policy, so neither the global
@@ -631,8 +637,8 @@ where
         } else {
             enrichment.cutoff * rhs_norm
         };
-        // In these units every residual singular value is at most the
-        // Frobenius norm, which is at most `sqrt(len)` and finite, so an
+        // In these units every projected residual singular value is at most
+        // the Frobenius norm, which is at most `sqrt(len)` and finite, so an
         // overflowing threshold exceeds them all and nothing is added.
         if !threshold.is_finite() {
             return Ok(());
