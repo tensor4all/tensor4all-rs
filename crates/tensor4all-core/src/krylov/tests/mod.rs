@@ -1216,6 +1216,38 @@ fn gmres_affine_tracked_zero_a1_retries_an_image_with_an_inf_minus_inf_nan() {
 }
 
 #[test]
+fn gmres_affine_tracked_zero_a1_retry_reaches_the_largest_exponent() {
+    // GPT r6 reproduction: A(x) = t - t with t = ((x 2^1000) 2^1000) 2^77 is
+    // the zero operator, but for x = 2^1000 it forms inf - inf = NaN until
+    // x 2^-s has s >= 2054. Doubling stops at 2048, so the search has to
+    // probe the last exponents up to the 2100 limit as well. x 2^-2054 =
+    // 2^-1054 is an exact power of two, so flush-to-zero does not apply.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![2.0_f64.powi(1000)], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let selector = make_vector_with_index(vec![1.0], &idx);
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        |x: &IdxTensor| {
+            let t = x
+                .scale(AnyScalar::new_real(2.0_f64.powi(1000)))?
+                .scale(AnyScalar::new_real(2.0_f64.powi(1000)))?
+                .scale(AnyScalar::new_real(2.0_f64.powi(77)))?;
+            Ok(t.axpby(AnyScalar::new_real(1.0), &t, AnyScalar::new_real(-1.0))?)
+        },
+        &b,
+        &x0,
+        1.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(
+        result.solution.to_vec::<f64>().unwrap(),
+        vec![2.0_f64.powi(1000)]
+    );
+    assert_eq!(grad.real(), 0.0);
+}
+
+#[test]
 fn gmres_affine_normalizes_a_residual_whose_reciprocal_norm_overflows() {
     // (I + I) x = 2^-1073 has x = 2^-1074, but 1 / |r| = 2^1073 is infinite.
     let idx = DynIndex::new_dyn(1);

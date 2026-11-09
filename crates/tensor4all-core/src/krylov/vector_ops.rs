@@ -79,13 +79,18 @@ where
     let mut non_finite = 0;
     let mut exponent = 1;
     let mut found = None;
-    while exponent <= MAX_RETRY_EXPONENT {
+    // The last doubling step is clamped to the limit, so every exponent up
+    // to `MAX_RETRY_EXPONENT` is covered (2048 doubles past 2100).
+    loop {
         if let Some(image) = probe(exponent)? {
             found = Some((exponent, image));
             break;
         }
         non_finite = exponent;
-        exponent *= 2;
+        if exponent >= MAX_RETRY_EXPONENT {
+            break;
+        }
+        exponent = (exponent * 2).min(MAX_RETRY_EXPONENT);
     }
     if let Some((mut upper, mut image)) = found {
         while upper - non_finite > 1 {
