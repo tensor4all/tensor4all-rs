@@ -106,7 +106,11 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   imaginary parts `-2^-1020` and `-2^-1000`; `1 + NaN i` is rejected. A
   purely imaginary `a0` is divided exactly (`2^-1074 / i = -2^-1074 i`); for
   other complex `a0`, a sweep of subnormal quotients checks the absolute error
-  bound of `9 * 2^-1074` (`|a0| < 1/2`) or `4 * 2^-1074`.
+  bound of `9 * 2^-1074` (`|a0| < 1/2`) or `5 * 2^-1074`. A divisor
+  component that scaling down would flush is applied unscaled
+  (`2^1023 / (1 + 2^-1074 i)` keeps `-2^-51 i`), and a tracked complex
+  divisor, purely imaginary included, gives the gradient of the direct
+  reciprocal.
 - `TreeTN::scale_mut` applies each factor to one node, so the range guarantee
   is for that node's stored entries, not for the represented values.
 - `square_linsolve` validates `max_bond_dim` and the SVD policy before the
@@ -122,38 +126,18 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   and by vector operations, and the dense eigendecomposition of the projected
   matrix in the backend, are outside the solver and still abort on failure.
 
-The counts below are a historical record of local runs (not CI), on macOS, of
-the commands listed with each count. They are not a reproducible gate; hosted
-CI on the PR head is the independent check.
+Local validation runs the focused commands below; their results for each
+pushed head are listed in the PR's Verification section, and hosted CI on the
+head is the independent check.
 
-Validation at `92fddf6e` (branch merged with main `af980a54`):
-
-- `cargo test -p tensor4all-core --lib krylov`: 121 passed, 553 filtered out
-- `cargo test -p tensor4all-treetn --lib linsolve`: 38 passed, 646 filtered out
-- `cargo test -p tensor4all-treetn --test integration linsolve`: 73 passed, 322 filtered out
-- `cargo test -p tensor4all-itensorlike --lib`: 139 passed
-- Doctests: `cargo test -p tensor4all-core --doc krylov` 21 passed (383 filtered out),
-  `cargo test -p tensor4all-treetn --doc linsolve` 8 passed (197 filtered out),
-  `cargo test -p tensor4all-itensorlike --doc` 37 passed.
-- `cargo fmt --all -- --check`: clean
-- `cargo clippy -p tensor4all-core -p tensor4all-treetn -p tensor4all-itensorlike --all-targets -- -D warnings`: no findings
-- `cargo clippy -p tensor4all-treetn -p tensor4all-itensorlike --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc`: no findings
-- `python3 scripts/repository-rules-review.py --base origin/main --worktree --dry-run --file-growth`: pass
-
-Validation at `03962a6f`:
-
-- `cargo test -p tensor4all-core --lib krylov`: 121 passed, 560 filtered out
-- `cargo test -p tensor4all-core --lib any_scalar`: 19 passed, 662 filtered out
-- `cargo test -p tensor4all-treetn --lib linsolve`: 37 passed, 646 filtered out
-- `cargo test -p tensor4all-treetn --test integration linsolve`: 74 passed, 322 filtered out
-- `cargo test -p tensor4all-itensorlike --lib`: 139 passed
-- Doctests: `cargo test -p tensor4all-core --doc krylov` 21 passed (384 filtered out),
-  `cargo test -p tensor4all-core --doc reciprocal_factors` 1 passed,
-  `cargo test -p tensor4all-treetn --doc linsolve` 8 passed (197 filtered out),
-  `cargo test -p tensor4all-itensorlike --doc` 37 passed.
-- `cargo fmt --all -- --check`: clean
-- `cargo clippy -p tensor4all-core -p tensor4all-treetn -p tensor4all-itensorlike --all-targets -- -D warnings`, also with `-D clippy::missing_errors_doc -D clippy::missing_panics_doc`: no findings
-- `python3 scripts/repository-rules-review.py --base origin/main --worktree --dry-run --file-growth`: pass
+- `cargo fmt --all -- --check`
+- `cargo test -p tensor4all-core --lib krylov` and `--lib any_scalar`
+- `cargo test -p tensor4all-treetn --lib linsolve` and `--test integration linsolve`
+- `cargo test -p tensor4all-itensorlike --lib`
+- Doctests: `cargo test -p tensor4all-core --doc krylov` and `--doc reciprocal_factors`,
+  `cargo test -p tensor4all-treetn --doc linsolve`, `cargo test -p tensor4all-itensorlike --doc`
+- `cargo clippy -p tensor4all-core -p tensor4all-treetn -p tensor4all-itensorlike --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc`
+- `python3 scripts/repository-rules-review.py --base origin/main --worktree --dry-run --file-growth`
 
 Full-workspace, release, alternate-backend, binding and benchmark checks were
 not run locally. Hosted PR CI runs the workspace `--lib --bins --tests` and

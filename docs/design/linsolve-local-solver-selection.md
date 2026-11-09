@@ -124,16 +124,19 @@ is again solved in closed form. Both closed forms multiply by the factors of
   only for a quotient below `2^-1086`, where they cannot change the result).
   Every component then equals `fl(x * fl(1 / a0))` with the reciprocal rounded
   as if the exponent range were unbounded, also for a subnormal quotient;
-- a purely imaginary `a0 = b i`: the exact factor `-i`, then the factors of
-  the real `b`;
-- another complex `a0`: `2^j`, then `conj(a0 * 2^j)`, then the real
+- an untracked purely imaginary `a0 = b i`: the exact factor `-i`, then the
+  factors of the real `b` (a tracked one takes the general path, whose
+  recorded expression depends on both components);
+- another complex `a0`: `2^j` and `conj(a0 * 2^j)` when `j >= 0`, or `conj(a0)`
+  unscaled between two powers of two when `j < 0`, then the real
   `1 / |a0 * 2^j|^2`. A component of `1 / a0` can underflow while the matching
   component of the quotient is representable (`2^600 / (2^600 + 2^-420 i)`
-  has imaginary part `-2^-1020`), so no reciprocal component is formed on its
-  own. The intermediate is `q * |a0 * 2^j|^2`; keeping it from overflowing for
+  has imaginary part `-2^-1020`), and so can a component of a scaled-down
+  `a0` (`2^1023 / (1 + 2^-1074 i)` has imaginary part `-2^-51`), so neither
+  is formed on its own. The intermediate is `q * |a0 * 2^j|^2`; keeping it from overflowing for
   quotient components near `f64::MAX` needs `|a0 * 2^j| < 1`, so in the
   subnormal range it is rounded more coarsely than `q`. The absolute error is
-  then up to `9 * 2^-1074` (`|a0| < 1/2`) or `4 * 2^-1074` (otherwise), and a
+  then up to `9 * 2^-1074` (`|a0| < 1/2`) or `5 * 2^-1074` (otherwise), and a
   quotient component that small can round to zero.
 
 ## Tests

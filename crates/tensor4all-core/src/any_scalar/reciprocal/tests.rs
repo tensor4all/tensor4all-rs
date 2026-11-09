@@ -195,12 +195,12 @@ fn reciprocal_factors_bound_the_subnormal_error_of_a_complex_quotient() {
         (Complex64::new(0.2, 0.1), 9.0),
         (Complex64::new(0.03, -0.01), 9.0),
         (Complex64::new(3.0, 4.0) * pow2(-600), 9.0),
-        (Complex64::new(0.6, 0.8), 4.0),
-        (Complex64::new(1.0, 1e-3), 4.0),
-        (Complex64::new(1.9, -0.3), 4.0),
-        (Complex64::new(3.0, 4.0), 4.0),
-        (Complex64::new(3.0, 4.0) * pow2(150), 4.0),
-        (Complex64::new(3.0, 4.0) * pow2(300), 4.0),
+        (Complex64::new(0.6, 0.8), 5.0),
+        (Complex64::new(1.0, 1e-3), 5.0),
+        (Complex64::new(1.9, -0.3), 5.0),
+        (Complex64::new(3.0, 4.0), 5.0),
+        (Complex64::new(3.0, 4.0) * pow2(150), 5.0),
+        (Complex64::new(3.0, 4.0) * pow2(300), 5.0),
     ];
     for (d, bound) in divisors {
         let e = -(d.norm().log2().round() as i32);
@@ -218,5 +218,58 @@ fn reciprocal_factors_bound_the_subnormal_error_of_a_complex_quotient() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn reciprocal_factors_keep_a_component_that_scaling_the_divisor_would_flush() {
+    // Scaling 1 + 2^-1074 i down flushes its imaginary part, but that of
+    // 2^1023 / (1 + 2^-1074 i) is -2^-51. In the second case the large
+    // target scales 2^-900 to 2^-1136, and the quotient's part is -2^-477.
+    for (value, divisor, expected) in [
+        (
+            pow2(1023),
+            Complex64::new(1.0, f64::from_bits(1)),
+            Complex64::new(pow2(1023), -pow2(-51)),
+        ),
+        (
+            pow2(1023),
+            Complex64::new(pow2(300), pow2(-900)),
+            Complex64::new(pow2(723), -pow2(-477)),
+        ),
+    ] {
+        let actual = divide_complex(Complex64::new(value, 0.0), divisor);
+        assert_eq!(actual, expected, "{value:e} / {divisor}");
+    }
+}
+
+#[test]
+fn reciprocal_factors_track_both_components_of_a_complex_divisor() {
+    // The gradient of Re(1 / d) through the factors matches that of the
+    // direct reciprocal on every path, including a purely imaginary divisor.
+    for divisor in [
+        Complex64::new(0.0, 1.0),
+        Complex64::new(1.0, 2.0),
+        Complex64::new(0.1, 0.2),
+        Complex64::new(1.0, 2.0) * pow2(300),
+    ] {
+        let gradient = |via_factors: bool| {
+            let d = AnyScalar::new_complex(divisor.re, divisor.im)
+                .enable_grad()
+                .unwrap();
+            let quotient = if via_factors {
+                divide(AnyScalar::new_real(1.0), &d)
+            } else {
+                AnyScalar::new_real(1.0) / d.clone()
+            };
+            quotient.real_part().backward().unwrap();
+            let grad = d.grad().unwrap().unwrap();
+            Complex64::new(grad.real(), grad.imag())
+        };
+        let (actual, expected) = (gradient(true), gradient(false));
+        assert!(
+            (actual - expected).norm() <= 1e-12 * expected.norm(),
+            "{divisor}: {actual} vs {expected}"
+        );
     }
 }
