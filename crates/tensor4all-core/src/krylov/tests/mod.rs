@@ -394,6 +394,248 @@ fn hermitian_krylov_expm_multiply_errors_when_unconverged() {
 }
 
 #[test]
+fn hermitian_krylov_expm_multiply_retries_with_time_splits() {
+    // A three-dimensional Krylov space cannot resolve the largest angle of this
+    // four-level generator in one split; halving the step brings the residual
+    // estimate under the tolerance on the second attempt.
+    let idx = DynIndex::new_dyn(4);
+    let initial_data = vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.5, 0.0),
+        Complex64::new(0.25, 0.0),
+        Complex64::new(0.1, 0.0),
+    ];
+    let initial = make_vector_c64(initial_data.clone(), &idx);
+    let diagonal = [1.0, 2.0, 3.0, 4.0];
+    let exponent = Complex64::new(0.0, -0.1);
+
+    let result = hermitian_krylov_expm_multiply(
+        |x: &IdxTensor| scale_vector_c64(x, &diagonal),
+        exponent,
+        &initial,
+        &HermitianKrylovExpmOptions {
+            max_iter: 3,
+            max_time_splits: 8,
+            tol: 1.0e-3,
+            verbose: true,
+            ..HermitianKrylovExpmOptions::default()
+        },
+    )
+    .unwrap();
+
+    assert!(result.converged, "error={:.3e}", result.error_estimate);
+    assert_eq!(result.time_splits, 2);
+    assert!(
+        result.error_estimate <= 1.0e-3 * initial.norm().unwrap().max(1.0),
+        "error={:e}",
+        result.error_estimate
+    );
+    let actual = result.output.to_vec::<Complex64>().unwrap();
+    for (i, (value, scale)) in actual.iter().zip(diagonal.iter()).enumerate() {
+        let angle = -scale * 0.1;
+        let expected = initial_data[i] * Complex64::new(angle.cos(), angle.sin());
+        assert!(
+            (value - expected).norm() < 1.0e-4,
+            "{i}: {value} vs {expected}"
+        );
+    }
+}
+
+#[test]
+fn hermitian_krylov_expm_multiply_rejects_zero_max_iter_and_time_splits() {
+    let idx = DynIndex::new_dyn(1);
+    let initial = make_vector_c64(vec![Complex64::new(1.0, 0.0)], &idx);
+    let options = HermitianKrylovExpmOptions {
+        max_iter: 0,
+        ..HermitianKrylovExpmOptions::default()
+    };
+
+    let err = hermitian_krylov_expm_multiply(
+        |x: &IdxTensor| Ok(x.clone()),
+        Complex64::new(0.0, -0.5),
+        &initial,
+        &options,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("max_iter must be greater than zero"),
+        "{err}"
+    );
+
+    let err = hermitian_krylov_expm_multiply(
+        |x: &IdxTensor| Ok(x.clone()),
+        Complex64::new(0.0, -0.5),
+        &initial,
+        &HermitianKrylovExpmOptions {
+            max_time_splits: 0,
+            ..HermitianKrylovExpmOptions::default()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("max_time_splits must be greater than zero"),
+        "{err}"
+    );
+}
+
+/// A diagonal 3x3 operator with the lowest eigenvalue `-1` at index 1.
+fn diagonal3_lanczos_operator(x: &PlainVector) -> Result<PlainVector> {
+    Ok(PlainVector {
+        data: vec![2.0 * x.data[0], -x.data[1], 4.0 * x.data[2]],
+    })
+}
+
+#[test]
+fn hermitian_lanczos_reports_the_last_ritz_pair_when_max_iter_is_exhausted() {
+    let initial = PlainVector {
+        data: vec![1.0, 1.0, 1.0],
+    };
+
+    let result = hermitian_lanczos_lowest_eigenpair(
+        diagonal3_lanczos_operator,
+        &initial,
+        &HermitianLanczosOptions {
+            max_iter: 2,
+            rtol: 0.0,
+            ..HermitianLanczosOptions::default()
+        },
+    )
+    .unwrap();
+
+    // `rtol = 0` never accepts the residual estimate, so the solve ends on the
+    // exhausted subspace and reports what it found instead of looping or
+    // panicking.
+    assert!(!result.converged);
+    assert_eq!(result.iterations, 2);
+    // Two Lanczos steps from `(1, 1, 1)` build the tridiagonal
+    // `[[5/3, beta], [beta, 67/171]]` whose lowest Ritz value is this closed
+    // form; the unused fourth eigenvalue of `A` stays out of the subspace.
+    let expected = (27.0 - 1546.0_f64.sqrt()) / 19.0;
+    assert!(
+        (result.eigenvalue - expected).abs() < 1.0e-12,
+        "{} vs {expected}",
+        result.eigenvalue
+    );
+    // The reported residual is the true residual `||A v - lambda v||`.
+    let norm = result.eigenvector.norm().unwrap();
+    assert!((norm - 1.0).abs() < 1.0e-12, "norm={norm}");
+    let image = diagonal3_lanczos_operator(&result.eigenvector).unwrap();
+    let rayleigh = result.eigenvector.inner_product(&image).unwrap().real() / (norm * norm);
+    assert!(
+        (rayleigh - result.eigenvalue).abs() < 1.0e-12,
+        "{rayleigh} vs {}",
+        result.eigenvalue
+    );
+    let expected_residual = image
+        .axpby(
+            AnyScalar::new_real(1.0),
+            &result
+                .eigenvector
+                .scale(AnyScalar::new_real(result.eigenvalue))
+                .unwrap(),
+            AnyScalar::new_real(-1.0),
+        )
+        .unwrap()
+        .norm()
+        .unwrap();
+    assert!(
+        (result.residual_norm - expected_residual).abs() < 1.0e-12,
+        "{} vs {expected_residual}",
+        result.residual_norm
+    );
+}
+
+#[test]
+fn hermitian_lanczos_propagates_an_operator_failure_from_the_true_residual_check() {
+    use std::cell::Cell;
+
+    let initial = PlainVector {
+        data: vec![1.0, 1.0, 1.0],
+    };
+
+    // The first three applications build the basis; the fourth is the
+    // true-residual check inside `finalize_hermitian_lanczos_result`.
+    let calls = Cell::new(0usize);
+    let err = hermitian_lanczos_lowest_eigenpair(
+        |x: &PlainVector| -> Result<PlainVector> {
+            let call = calls.get();
+            calls.set(call + 1);
+            if call == 3 {
+                return Err(anyhow::anyhow!("lanczos operator failure sentinel"));
+            }
+            diagonal3_lanczos_operator(x)
+        },
+        &initial,
+        &HermitianLanczosOptions {
+            max_iter: 3,
+            rtol: 1.0e-12,
+            ..HermitianLanczosOptions::default()
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(calls.get(), 4);
+    assert!(matches!(err, KrylovError::Operation { .. }), "{err:?}");
+    assert!(
+        err.to_string()
+            .contains("lanczos operator failure sentinel"),
+        "{err}"
+    );
+}
+
+#[test]
+fn hermitian_lanczos_verbose_keeps_the_same_eigenpair() {
+    let initial = PlainVector {
+        data: vec![1.0, 1.0, 1.0],
+    };
+    let options = |verbose: bool| HermitianLanczosOptions {
+        max_iter: 3,
+        rtol: 1.0e-12,
+        verbose,
+        ..HermitianLanczosOptions::default()
+    };
+
+    let quiet =
+        hermitian_lanczos_lowest_eigenpair(diagonal3_lanczos_operator, &initial, &options(false))
+            .unwrap();
+    let verbose =
+        hermitian_lanczos_lowest_eigenpair(diagonal3_lanczos_operator, &initial, &options(true))
+            .unwrap();
+
+    assert!(quiet.converged && verbose.converged);
+    assert_eq!(quiet.iterations, verbose.iterations);
+    assert_eq!(quiet.eigenvalue, verbose.eigenvalue);
+    assert_eq!(quiet.residual_norm, verbose.residual_norm);
+    assert_eq!(quiet.eigenvector.data, verbose.eigenvector.data);
+    assert!((quiet.eigenvalue + 1.0).abs() < 1.0e-10);
+}
+
+#[test]
+fn hermitian_lanczos_rejects_zero_max_iter() {
+    let initial = PlainVector {
+        data: vec![1.0, 0.0],
+    };
+
+    let err = hermitian_lanczos_lowest_eigenpair(
+        |x: &PlainVector| Ok(x.clone()),
+        &initial,
+        &HermitianLanczosOptions {
+            max_iter: 0,
+            ..HermitianLanczosOptions::default()
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("max_iter must be greater than zero"),
+        "{err}"
+    );
+}
+
+#[test]
 fn gmres_accepts_vector_space_without_tensorlike() {
     let b = PlainVector {
         data: vec![1.0, -2.0],
@@ -693,6 +935,40 @@ fn gmres_affine_solves_a_tracked_zero_a1_in_closed_form() {
         assert_eq!(result.residual_norm, 0.0);
         assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![expected]);
     }
+}
+
+#[test]
+fn gmres_with_truncation_reports_a_vanished_search_direction() {
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![2.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let options = GmresOptions {
+        max_iter: 2,
+        rtol: 1.0e-12,
+        max_restarts: 1,
+        verbose: false,
+        check_true_residual: false,
+    };
+
+    // An absolute truncation threshold keeps the residual (norm 2) but
+    // annihilates the normalised search direction (norm 1).
+    let truncate = |v: &mut IdxTensor| -> Result<()> {
+        if v.norm().unwrap() < 1.5 {
+            *v = v.scale(AnyScalar::new_real(0.0)).unwrap();
+        }
+        Ok(())
+    };
+
+    let outcome = gmres_with_truncation(|x: &IdxTensor| Ok(x.clone()), &b, &x0, &options, truncate);
+
+    // The solver refuses instead of iterating on a vanished direction: the
+    // Arnoldi column is zero, so the upper-triangular solve is singular.
+    let err = outcome.unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("Near-singular upper triangular matrix in GMRES"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -1839,6 +2115,140 @@ fn gmres_private_helpers_cover_edge_paths() {
     let v = make_vector_with_index(vec![2.0, -1.0], &idx);
     let updated = update_solution(&x, &[v], &[AnyScalar::new_real(3.0)]).unwrap();
     assert_eq!(updated.to_vec::<f64>().unwrap(), vec![7.0, -2.0]);
+}
+
+#[test]
+fn krylov_basis_combinations_reject_an_empty_basis_or_mismatched_coefficients() {
+    let idx = DynIndex::new_dyn(2);
+    let basis = [make_vector_with_index(vec![1.0, 0.0], &idx)];
+    let too_many = [Complex64::new(1.0, 0.0), Complex64::new(0.5, 0.0)];
+
+    let lanczos =
+        combine_basis_with_coefficients(&basis, &too_many, &HermitianLanczosOptions::default())
+            .unwrap_err();
+    assert!(
+        lanczos
+            .to_string()
+            .contains("coefficient length 2 does not match basis length 1"),
+        "{lanczos}"
+    );
+
+    let expm = combine_basis_with_complex_coefficients(
+        &basis,
+        &too_many,
+        1.0e-10,
+        "hermitian_krylov_expm_multiply",
+    )
+    .unwrap_err();
+    assert!(
+        expm.to_string()
+            .contains("coefficient length 2 does not match basis length 1"),
+        "{expm}"
+    );
+
+    let empty: Result<IdxTensor> =
+        combine_basis_with_coefficients::<IdxTensor>(&[], &[], &HermitianLanczosOptions::default());
+    let empty = empty.unwrap_err();
+    assert!(empty.to_string().contains("empty Krylov basis"), "{empty}");
+}
+
+#[test]
+fn restart_gmres_rejects_an_inner_max_restarts_that_overflows() {
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![1.0], &idx);
+    let options = RestartGmresOptions::new().with_inner_max_restarts(usize::MAX);
+
+    let err = restart_gmres_with_truncation(
+        |x: &IdxTensor| Ok(x.clone()),
+        &b,
+        None,
+        &options,
+        |_: &mut IdxTensor| Ok(()),
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("inner_max_restarts + 1 overflows usize"),
+        "{err}"
+    );
+}
+
+#[test]
+fn gmres_affine_profile_covers_the_closed_form() {
+    // `a1 = 0` with `b = a0 x` takes the closed form, so the profile has to
+    // report the operator, scaling and update calls made there.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![1.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let options = GmresOptions::default();
+
+    let result = with_gmres_profile_env(|| {
+        gmres_affine(
+            |x: &IdxTensor| Ok(x.clone()),
+            &b,
+            &x0,
+            AnyScalar::new_real(1.0),
+            AnyScalar::new_real(0.0).enable_grad().unwrap(),
+            &options,
+        )
+        .unwrap()
+    });
+
+    assert!(result.converged);
+    assert_eq!(result.iterations, 0);
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![1.0]);
+    let report = super::LAST_GMRES_PROFILE
+        .with(|last| last.borrow().clone())
+        .unwrap();
+    for count in ["apply_calls=1 ", "scale_calls=4 ", "axpby_calls=2 "] {
+        assert!(report.contains(count), "{count}: {report}");
+    }
+}
+
+#[test]
+fn gmres_rejects_a_true_residual_that_contradicts_the_hessenberg_estimate() {
+    use std::cell::Cell;
+
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![1.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let options = GmresOptions {
+        max_iter: 1,
+        rtol: 1.0e-12,
+        max_restarts: 1,
+        verbose: false,
+        check_true_residual: true,
+    };
+
+    // The third operator call is the true-residual check; answering it with a
+    // different operator is how a truncated operator breaks the orthogonality
+    // the Hessenberg residual estimate relies on (issue #207).
+    let calls = Cell::new(0usize);
+    let result = gmres(
+        |x: &IdxTensor| {
+            let call = calls.get();
+            calls.set(call + 1);
+            if call == 2 {
+                x.scale(AnyScalar::new_real(2.0))
+                    .map_err(anyhow::Error::from)
+            } else {
+                Ok(x.clone())
+            }
+        },
+        &b,
+        &x0,
+        &options,
+    )
+    .unwrap();
+
+    // The rejected estimate does not end the solve: the solution is measured
+    // again and reported as converged only because the true residual is zero.
+    assert_eq!(result.iterations, 1);
+    assert!(result.converged);
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![1.0]);
+    assert_eq!(result.residual_norm, 0.0);
+    assert_eq!(calls.get(), 4);
 }
 
 /// Helper to create a 1D tensor (vector) with given data and shared index.
