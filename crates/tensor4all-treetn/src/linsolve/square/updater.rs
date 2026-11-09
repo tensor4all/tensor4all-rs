@@ -567,8 +567,21 @@ where
         let two_site = T::contract(&[&basis, &center])?;
         let two_site_indices = two_site.external_indices();
         let rhs = self.local_rhs(&region, &two_site_indices, state)?;
-        let rhs_norm = rhs.norm()?;
-        if rhs_norm == 0.0 {
+        // `||b_local||` as `norm_scaled * norm_unit`. The plain norm can
+        // overflow although every entry is finite; then it is recomputed in
+        // units of the largest entry, so `cutoff * ||b_local||` stays finite
+        // whenever it is representable.
+        let (norm_scaled, norm_unit) = match rhs.norm()? {
+            norm if norm.is_finite() => (norm, 1.0),
+            _ => {
+                let unit = rhs.maxabs()?;
+                if !unit.is_finite() {
+                    return Ok(());
+                }
+                (rhs.scale(AnyScalar::new_real(1.0 / unit))?.norm()?, unit)
+            }
+        };
+        if norm_scaled == 0.0 {
             return Ok(());
         }
         // residual = b - a0 x - a1 A x. A zero coefficient drops its term
@@ -598,14 +611,14 @@ where
         // as an explicit absolute per-value policy, so neither the global
         // default policy nor a second factorization is involved.
         // A zero cutoff keeps every nonzero direction whatever `||b_local||`
-        // is, so it must not depend on that norm, which can overflow.
+        // is, so it does not depend on that norm.
         let threshold = if enrichment.cutoff == 0.0 {
             0.0
         } else {
-            enrichment.cutoff * rhs_norm
+            enrichment.cutoff * norm_scaled * norm_unit
         };
-        // A positive cutoff can still overflow here; no singular value
-        // exceeds an infinite threshold, so nothing is added.
+        // The threshold overflows only when `cutoff * ||b_local||` exceeds
+        // `f64::MAX`; no finite singular value exceeds it, so nothing is added.
         if !threshold.is_finite() {
             return Ok(());
         }

@@ -55,7 +55,7 @@ pub struct ResidualEnrichment {
     /// projected right-hand side. Must be finite and nonnegative.
     /// Default: `1e-12`, which only discards numerically zero directions.
     pub cutoff: f64,
-    /// Bond dimension that enrichment never exceeds. `None` (the default)
+    /// Bond dimension beyond which enrichment never grows a bond. `None` (the default)
     /// limits a bond only by the dimension of the space on the `src` side.
     /// Bonds already larger than this value are left unchanged.
     pub max_bond_dim: Option<usize>,
@@ -96,7 +96,9 @@ impl ResidualEnrichment {
         self
     }
 
-    /// Set the bond dimension that enrichment never exceeds.
+    /// Set the bond dimension beyond which enrichment never grows a bond.
+    ///
+    /// Bonds already larger than `max_bond_dim` are left unchanged, not truncated.
     ///
     /// # Examples
     /// ```

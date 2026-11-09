@@ -758,17 +758,32 @@ fn enrichment_with_a1_zero_does_not_apply_an_overflowing_operator() {
 }
 
 #[test]
-fn enrichment_cutoff_zero_survives_an_overflowing_rhs_norm() {
-    // ||b_local|| overflows to infinity, but a zero cutoff keeps every nonzero
-    // residual direction regardless of the norm.
-    let step = EnrichmentStep {
+fn enrichment_cutoff_survives_an_overflowing_rhs_norm() {
+    // ||b_local|| overflows to infinity although `cutoff * ||b_local||` is
+    // finite. Both residual directions have singular value f64::MAX, above
+    // that threshold for every cutoff below, so both are kept.
+    let huge = EnrichmentStep {
         rhs: [1.0, f64::MAX, f64::MAX],
         coefficients: (0.0, 1.0),
         operator_scale: 1.0,
     };
-    let enrichment = ResidualEnrichment::default()
-        .with_max_added(2)
-        .with_cutoff(0.0);
-    let (state, _) = step.run(enrichment).unwrap();
-    assert_eq!(bond_dim(&state), 3);
+    for cutoff in [0.0, 1e-12, 0.5] {
+        let enrichment = ResidualEnrichment::default()
+            .with_max_added(2)
+            .with_cutoff(cutoff);
+        let (state, _) = huge.run(enrichment).unwrap();
+        assert_eq!(bond_dim(&state), 3, "cutoff = {cutoff}");
+    }
+    // The cutoff still selects: ||b_local|| overflows again, and |22> has
+    // singular value 1, far below 1e-12 * ||b_local|| ~ 1.8e296, so only
+    // |11> is added.
+    let tiny_tail = EnrichmentStep {
+        rhs: [1.0, f64::MAX, 1.0],
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let (state, _) = tiny_tail
+        .run(ResidualEnrichment::default().with_max_added(2))
+        .unwrap();
+    assert_eq!(bond_dim(&state), 2);
 }
