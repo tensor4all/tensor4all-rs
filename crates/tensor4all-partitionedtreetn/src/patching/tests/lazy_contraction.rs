@@ -49,7 +49,7 @@ fn partitions(group: &SaturatedGroup) -> (PartitionedTreeTN, PartitionedTreeTN) 
     (left, right)
 }
 
-fn options(
+pub(super) fn options(
     order: Vec<DynIndex>,
     strategy: PatchSplitStrategy,
     cap: Option<usize>,
@@ -64,7 +64,7 @@ fn options(
     }
 }
 
-fn measure<R>(run: impl FnOnce() -> R) -> (R, Vec<(usize, usize, usize)>) {
+pub(super) fn measure<R>(run: impl FnOnce() -> R) -> (R, Vec<(usize, usize, usize)>) {
     GROUP_PAIR_PROBES.with(|probes| probes.borrow_mut().clear());
     let result = run();
     (
@@ -73,7 +73,7 @@ fn measure<R>(run: impl FnOnce() -> R) -> (R, Vec<(usize, usize, usize)>) {
     )
 }
 
-fn assert_partition(partition: &PartitionedTreeTN, expected: &IdxTensor) {
+pub(super) fn assert_partition(partition: &PartitionedTreeTN, expected: &IdxTensor) {
     let actual = partition.to_treetn().unwrap().to_dense().unwrap();
     let error = actual.sub(expected).unwrap().maxabs().unwrap();
     assert!(error < 1e-10, "max-absolute residual {error:e}");

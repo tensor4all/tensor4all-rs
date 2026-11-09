@@ -1,4 +1,5 @@
 use super::*;
+mod layouts;
 mod lazy_contraction;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
