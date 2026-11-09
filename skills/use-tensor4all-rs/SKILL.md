@@ -30,6 +30,7 @@ This skill tracks `main`; a release tag may not contain every API described belo
 - **Import the crate's `prelude`** — the established user-facing crates (`tensor4all-core`, `tensor4all-simplett`, `tensor4all-treetn`, `tensor4all-itensorlike`, `tensor4all-tensorci`, `tensor4all-quanticstci`, `tensor4all-aci`, `tensor4all-interpolativeqtt`) ship a `prelude` re-exporting their public traits plus the types needed to call them. `tensor4all-partitionedtreetn` intentionally exposes its small concrete API at the crate root; import `Projector`, `SubDomainTreeTN`, `PartitionedTreeTN`, `ErrorNorm`, `ErrorTolerance`, `L2Reference`, and the adaptive patching functions directly, and `patched_interpolate` with its options and report types from its `adaptive_interpolation` module. Start with the owning crate's documented imports instead of guessing trait imports; a missing trait import is the top first-try failure (`error[E0599]`).
 
 - **Backend defaults by platform: pure-Rust `faer` on Linux/Windows, Apple Accelerate on macOS.** Compute crates enable `tenferro-cpu-platform` by default, so a plain dependency compiles and links standalone on every platform (no `RUSTFLAGS`). To choose a backend explicitly (faer on macOS, or a system BLAS such as OpenBLAS / MKL), set `default-features = false` and enable `tenferro-cpu-faer` or `tenferro-system-blas` on every directly imported compute crate. Every compute crate exposes the same CPU provider features (`tenferro-cpu-faer`, `tenferro-system-blas`, `tenferro-provider-inject`); enable exactly one of them.
+- **The dense kernels underneath are `t4a-faer`.** With the faer/native provider — the default on Linux and Windows; macOS defaults to Apple Accelerate instead — the SVD/QR/LU/eigendecomposition kernels that `tensor4all-tensorbackend` reaches run through tenferro's CPU linear algebra and `tlinalg` onto `t4a-faer` (package name; the library is `faer`), and the same is true on macOS once you select that provider explicitly. Truncated LU (`max_rank` / `abs_tol` / `rel_tol`, [tensor4all/faer#294](https://github.com/tensor4all/faer/issues/294)) is a **newer upstream capability than the `t4a-faer` this workspace resolves**: `Cargo.lock` pins 0.28.2, whose `FullPivLuParams` has none of those three fields. LUCI's dense square path therefore still factorizes fully and drops rank afterwards (`crates/tensor4all-core/src/matrixluci/dense.rs:146-165`), while the RSI row ID and the rectangular path use the internal rrLU with early stopping (`max_bond_dim` caps the elimination loop, and the tolerances stop it before further elimination); moving all three onto faer's truncated LU is tracked in [#1157](https://github.com/tensor4all/tensor4all-rs/issues/1157). For a matrix routine the wrappers do not expose, read faer's [usage skill](https://github.com/tensor4all/faer/blob/main/skills/faer-usage/SKILL.md) before hand-writing the kernel.
 - **Build with `--release`.** Tensor linalg in debug is orders of magnitude slower; TCI and DMRG are unusable without optimization. For benchmarks set `opt-level = 3` (and `lto`, `codegen-units = 1`).
 - **IdxTensor scalars** are `f32`, `f64`, `Complex32`, and `Complex64` (`num-complex` 0.4). Compact `Storage` snapshots keep the tensor's own scalar kind for all four dtypes - a narrow tensor is not promoted to `f64`/`Complex64`. Recipes that build random tensors assume you add `rand` + `rand_chacha` (matching the library's `0.9`) as dev-dependencies.
 - **CUDA is experimental and explicit.** Enable `tenferro-cuda` on `tensor4all-core` and `tensor4all-treetn`, then follow [`docs/book/src/tutorials/gpu/cuda-tree-contraction.md`](../../docs/book/src/tutorials/gpu/cuda-tree-contraction.md). The current surface is ordinal-0 upload, dense untracked same-dtype TreeTN full contraction, and download—never assume automatic transfer, CPU fallback, SVD/QR/truncation, TCI/ACI, or multi-GPU support.
@@ -119,8 +120,19 @@ This skill is for *using* the library. If the working tree is the tensor4all-rs 
 ## Linear solves
 
 `tensor4all_treetn::square_linsolve` and `tensor4all_itensorlike::linsolve`
-solve `(a0 I + a1 A)x = b` with projected GMRES. Their `LinsolveOptions`
-default to two-site MALS (`nsite=2`), which can adapt ranks by SVD. Use
+solve `(a0 I + a1 A)x = b`. Both `LinsolveOptions` types default to two-site
+MALS (`nsite=2`) with projected GMRES as the local solver.
+
+The local solver is chosen with
+`.with_local_solver(LocalSolver::Cg(CgOptions::default()))` or
+`LocalSolver::BiCgStab(BiCgStabOptions::default())`; `tensor4all-itensorlike`
+re-exports `LocalSolver`, `CgOptions` and `BiCgStabOptions`. CG requires the
+effective affine operator to be HPD. CG/BiCGSTAB use their native tolerances
+and budgets, and the `gmres_*` controls must keep their defaults with them
+(changed values are rejected). Core breakdown and operation errors propagate;
+no other solver is tried.
+
+Two-site MALS can adapt ranks by SVD. Use
 `.with_nsite(1)` for one-site ALS and single-node systems: exact QR transports
 the center, ranks cannot grow without enrichment, and redundant dimensions may
 shrink. Supply a sufficient initial bond space, or (TreeTN only) add

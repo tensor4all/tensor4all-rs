@@ -140,8 +140,7 @@
 //! residual run is exactly zero the engine returns
 //! `InterpolationError::AllSamplesZero` before its global pivot search and the
 //! estimate is taken as zero; and the norm is read from `TreeTN::log_norm`, so
-//! a residual norm above about `1.34e154` overflows the estimate and one
-//! below about `1e-154` underflows it to zero. Under `UniformMonteCarlo`, the
+//! a residual norm above `f64::MAX` overflows the estimate. Under `UniformMonteCarlo`, the
 //! acceptance sample and the audit are both uniform and can both miss a
 //! localized feature, and their standard error does not reveal the miss. Only
 //! a `Certified` result is a guarantee.
@@ -168,8 +167,8 @@
 //!   bound nor an estimate; no relative statement exists.
 //!
 //! `approximation_rms` (and with it the rounding term, the flag, and the
-//! relative fields) is `None` when the norm of some patch exceeds about
-//! `1.34e154`, where `TreeTN::log_norm` overflows.
+//! relative fields) is `None` when the norm of some patch exceeds
+//! `f64::MAX`, where `TreeTN::log_norm` overflows.
 //!
 //! # Algorithm
 //!

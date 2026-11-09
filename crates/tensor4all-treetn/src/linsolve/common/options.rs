@@ -1,5 +1,6 @@
 //! Common options for linsolve algorithms.
 
+use super::LocalSolver;
 use crate::TruncationOptions;
 use tensor4all_core::{AnyScalar, SvdTruncationPolicy};
 
@@ -177,6 +178,14 @@ impl ResidualEnrichment {
 /// Two-site updates can adapt bond dimensions. One-site updates keep the
 /// initial bond spaces unless [`ResidualEnrichment`] is enabled.
 ///
+/// Each local solver's settings have exactly one owner: GMRES is configured by
+/// the `gmres_*` fields, CG and BiCGSTAB by the options inside
+/// [`LocalSolver::Cg`] and [`LocalSolver::BiCgStab`]. Neither is a view of the
+/// other. Because the `gmres_*` fields would have no effect with another
+/// solver, [`Self::validate_local_solver`] rejects changed `gmres_*` values
+/// when CG or BiCGSTAB is selected. Invalid options are always errors; no value
+/// is clamped.
+///
 /// # Examples
 /// ```
 /// use tensor4all_treetn::LinsolveOptions;
@@ -204,7 +213,15 @@ pub struct LinsolveOptions {
     ///
     /// Explicit bond caps or SVD policies are invalid with `nsite = 1`.
     pub truncation: TruncationOptions,
-    /// Tolerance for GMRES convergence.
+    /// Local Krylov solver; GMRES by default. CG requires the effective
+    /// operator `a0 I + a1 A` to be Hermitian positive-definite.
+    pub local_solver: LocalSolver,
+    /// Tolerance for GMRES convergence; must be finite and positive, because a
+    /// GMRES solve stops when its residual is strictly below this value.
+    ///
+    /// The `gmres_*` fields configure [`LocalSolver::Gmres`] only. With any other
+    /// local solver they must keep their default values; a changed value is
+    /// rejected by [`crate::square_linsolve`] instead of being ignored.
     pub gmres_tol: f64,
     /// Residual tolerance convention for GMRES convergence.
     pub gmres_tolerance_mode: GmresToleranceMode,
@@ -229,6 +246,10 @@ pub struct LinsolveOptions {
     pub check_residual: bool,
 }
 
+pub(crate) const DEFAULT_GMRES_TOL: f64 = 1e-10;
+pub(crate) const DEFAULT_GMRES_MAX_RESTARTS: usize = 100;
+pub(crate) const DEFAULT_GMRES_RESTART_DIM: usize = 30;
+
 impl Default for LinsolveOptions {
     fn default() -> Self {
         Self {
@@ -236,10 +257,11 @@ impl Default for LinsolveOptions {
             nsite: 2,
             enrichment: None,
             truncation: TruncationOptions::default(),
-            gmres_tol: 1e-10,
+            local_solver: LocalSolver::default(),
+            gmres_tol: DEFAULT_GMRES_TOL,
             gmres_tolerance_mode: GmresToleranceMode::Relative,
-            gmres_max_restarts: 100,
-            gmres_restart_dim: 30,
+            gmres_max_restarts: DEFAULT_GMRES_MAX_RESTARTS,
+            gmres_restart_dim: DEFAULT_GMRES_RESTART_DIM,
             a0: AnyScalar::new_real(0.0),
             a1: AnyScalar::new_real(1.0),
             convergence_tol: None,
@@ -299,6 +321,16 @@ impl LinsolveOptions {
         self
     }
 
+    pub(crate) fn validate_convergence_tol(&self) -> anyhow::Result<()> {
+        if let Some(tol) = self.convergence_tol {
+            anyhow::ensure!(
+                tol.is_finite() && tol >= 0.0,
+                "LinsolveOptions::convergence_tol must be finite and nonnegative, got {tol}"
+            );
+        }
+        Ok(())
+    }
+
     pub(crate) fn validate_update_mode(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             matches!(self.nsite, 1 | 2),
@@ -337,6 +369,35 @@ impl LinsolveOptions {
     /// Set the SVD truncation policy used by TreeTN truncation steps.
     pub fn with_svd_policy(mut self, policy: SvdTruncationPolicy) -> Self {
         self.truncation = self.truncation.with_svd_policy(policy);
+        self
+    }
+
+    /// Select the local solver and its native options; GMRES is the default.
+    ///
+    /// CG requires a Hermitian positive-definite effective operator; BiCGSTAB
+    /// and GMRES accept general systems. Native CG/BiCGSTAB options determine
+    /// tolerances and budgets. The `gmres_*` settings apply only to GMRES. With
+    /// CG or BiCGSTAB a `gmres_*` setting would have no effect, so it must keep
+    /// its default: a changed value, set before or after this call, makes
+    /// [`Self::validate_local_solver`] and [`crate::square_linsolve`] fail.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::krylov::{BiCgStabOptions, CgOptions};
+    /// use tensor4all_treetn::{LinsolveOptions, LocalSolver};
+    /// let options = LinsolveOptions::new(3)
+    ///     .with_local_solver(LocalSolver::BiCgStab(BiCgStabOptions::default()));
+    /// assert!(matches!(options.local_solver, LocalSolver::BiCgStab(_)));
+    ///
+    /// // A GMRES tolerance cannot apply to CG, so it is rejected, not ignored.
+    /// let mixed = LinsolveOptions::new(2)
+    ///     .with_gmres_tol(1e-12)
+    ///     .with_local_solver(LocalSolver::Cg(CgOptions::default()));
+    /// let error = mixed.validate_local_solver().unwrap_err();
+    /// assert!(format!("{error:?}").contains("gmres_tol configures LocalSolver::Gmres only"));
+    /// ```
+    pub fn with_local_solver(mut self, local_solver: LocalSolver) -> Self {
+        self.local_solver = local_solver;
         self
     }
 
@@ -390,6 +451,10 @@ impl LinsolveOptions {
     }
 
     /// Set convergence tolerance for early termination.
+    ///
+    /// The sweep stops once the relative true residual is below `tol`, which
+    /// must be finite and nonnegative; [`crate::square_linsolve`] rejects other
+    /// values.
     pub fn with_convergence_tol(mut self, tol: f64) -> Self {
         self.convergence_tol = Some(tol);
         self

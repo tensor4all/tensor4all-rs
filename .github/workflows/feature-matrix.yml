@@ -86,7 +86,8 @@ jobs:
             apt: ""
             audit: false
             check: >
-              -p tensor4all-core -p tensor4all-treetn --features tenferro-cuda
+              -p tensor4all-core -p tensor4all-treetn -p tensor4all-treersi
+              --features tenferro-cuda
     steps:
       - uses: actions/checkout@v4
 

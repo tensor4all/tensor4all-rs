@@ -11,6 +11,14 @@ autotests = false
 [features]
 default = ["tenferro-cpu-platform", "global-defaults"]
 global-defaults = ["tensor4all-tensorbackend/global-defaults"]
+# CUDA execution of the sketch contractions. The rank decision stays on the
+# host CPU context, so this feature also requires the host default context.
+tenferro-cuda = [
+    "global-defaults",
+    "tensor4all-core/tenferro-cuda",
+    "tensor4all-treetn/tenferro-cuda",
+    "tensor4all-tensorbackend/tenferro-cuda",
+]
 # The platform default: Apple Accelerate on macOS, faer elsewhere
 # (see the `tensor4all-cpu-platform` crate).
 tenferro-cpu-platform = [

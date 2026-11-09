@@ -2,7 +2,7 @@
 
 ## Public behavior
 
-TreeTN and itensorlike `LinsolveOptions` expose `with_nsite(1)`; the default stays `nsite=2`. One-site ALS solves one local tensor with the existing projected GMRES and moves the orthogonality center by untruncated QR. Without enrichment it does not grow bonds or apply SVD truncation. Values other than 1 or 2 and explicit SVD policies or bond caps with nsite=1 are rejected. Oversized/redundant bonds may shrink during canonicalization/QR; insufficient initial ranks can prevent convergence unless residual enrichment is enabled.
+TreeTN and itensorlike `LinsolveOptions` expose `with_nsite(1)`; the default stays `nsite=2`. One-site ALS solves one local tensor with the selected projected Krylov solver (GMRES by default) and moves the orthogonality center by untruncated QR. Without enrichment it does not grow bonds or apply SVD truncation. Values other than 1 or 2 and explicit SVD policies or bond caps with nsite=1 are rejected. Oversized/redundant bonds may shrink during canonicalization/QR; insufficient initial ranks can prevent convergence unless residual enrichment is enabled.
 
 Single-node networks are supported when nsite=1; two-site mode retains its minimum of two nodes. Affine coefficients, index mappings (including primed indices and spectator nodes), residual reporting, early stopping, and zero-sweep behavior use the existing infrastructure. Mode options are validated before shortcuts, including identity-term-only solves.
 
@@ -22,7 +22,7 @@ Test real and complex local systems, affine coefficients, full-rank chains and b
 
 ## Deferred follow-ups
 
-Local CG/BiCGSTAB selection, preconditioning, new affine Krylov wrappers, compression-aware Krylov methods, enrichment in the itensorlike wrapper, benchmarks/performance promises, and unrelated GMRES improvements remain separate.
+Local CG/BiCGSTAB selection is described in [Local solver selection](linsolve-local-solver-selection.md). Preconditioning, new affine Krylov wrappers, compression-aware Krylov methods, enrichment in the itensorlike wrapper, benchmarks/performance promises, and unrelated GMRES improvements remain separate.
 
 ## Scope decisions
 

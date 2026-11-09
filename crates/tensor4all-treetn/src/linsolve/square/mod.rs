@@ -8,7 +8,7 @@
 //!
 //! The algorithm uses alternating updates (sweeping) similar to DMRG:
 //! 1. Position environments to expose a local region
-//! 2. Solve the local linear problem using GMRES (through `tensor4all_core::krylov::gmres`)
+//! 2. Solve the local linear problem with GMRES (default), CG, or BiCGSTAB
 //! 3. Move the center by exact QR (one-site ALS), or split by SVD (two-site MALS)
 //! 4. Update environment caches
 //!
@@ -34,9 +34,9 @@ pub use updater::{LinsolveVerifyReport, NodeVerifyDetail, SquareLinsolveUpdater}
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
-use tensor4all_core::{AnyScalar, IndexLike, TensorLike};
+use tensor4all_core::{AnyScalar, IndexLike, TensorLike, TensorVectorSpace};
 
 use crate::linsolve::common::LinsolveOptions;
 use crate::operator::{apply_linear_operator, ApplyOptions, IndexMapping, LinearOperator};
@@ -115,6 +115,12 @@ where
 /// rejected in this mode. The default two-site MALS mode
 /// can adapt ranks using SVD. A single-node network requires one-site mode.
 ///
+/// [`LinsolveOptions::with_local_solver`] selects GMRES (default), CG, or
+/// BiCGSTAB. CG requires the effective operator `a0 I + a1 H` to be Hermitian
+/// positive-definite. Core errors propagate; a breakdown never triggers fallback.
+/// Local nonconvergence returns the best local iterate and the outer true
+/// residual controls sweep convergence.
+///
 /// # Arguments
 ///
 /// * `operator` - The operator H as a TreeTN (must have compatible structure with `rhs`)
@@ -135,12 +141,42 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`TreeTNOperationError`] for an unsupported `nsite`, one-site truncation
-/// controls, an empty network, a single-node network in two-site mode, or when
-/// only one of `input_mapping` and `output_mapping` is
-/// provided, when the initial guess cannot be canonicalized, when the sweep plan
-/// cannot be built, or when an update or residual evaluation fails. Reaching the
-/// sweep limit without meeting `convergence_tol` returns `converged = false`,
+/// Invalid options are always errors; no value is clamped. Before any sweep or
+/// shortcut, [`TreeTNOperationError::InvalidConfiguration`] is returned when
+/// - `nsite` is not 1 or 2, or one-site mode has a bond cap or SVD policy;
+/// - `convergence_tol` is negative or not finite;
+/// - `max_bond_dim` is zero or the SVD policy threshold is negative or not
+///   finite;
+/// - [`LinsolveOptions::validate_local_solver`] rejects the coefficients or the
+///   local solver options (a non-finite `a0` or `a1`, `a0 = a1 = 0`, invalid
+///   active GMRES controls, changed `gmres_*` controls with CG or BiCGSTAB,
+///   invalid native CG/BiCGSTAB options);
+/// - only one of `input_mapping` and `output_mapping` is provided;
+/// - two-site mode is requested for a single-node network.
+///
+/// Also before any sweep, [`TreeTNOperationError`] is returned when
+/// - the network is empty, the operator cannot act on `init`, or its result is
+///   incompatible with `rhs`;
+/// - a node of `operator`, `rhs` or `init` is single precision and `a0` or `a1`
+///   is outside the `f32` range (an `InvalidConfiguration`), since `scale`
+///   converts them to the storage precision;
+/// - the identity-only closed form needs a factor of `1 / a0` outside the `f32`
+///   range for a network with a single-precision node;
+/// - `a0` is zero and the operator term is zero (`a1 = 0` or a zero operator),
+///   so the system is singular.
+///
+/// During the solve it is returned when the initial guess cannot be
+/// canonicalized, the sweep plan cannot be built, or an update or residual
+/// evaluation fails. Local solver failures carry the
+/// [`tensor4all_core::krylov::KrylovError`] in the source chain:
+/// `InvalidOptions` for a GMRES restart length whose Krylov workspace cannot be
+/// allocated or a CG/BiCGSTAB stopping threshold that overflows,
+/// `NonHermitian` and `NonPositiveCurvature` from CG, `NumericalBreakdown` from
+/// CG or BiCGSTAB, and `Operation` from any solver when the local operator or a
+/// tensor operation fails. No other solver is tried.
+///
+/// Reaching the sweep limit without meeting `convergence_tol`, including local
+/// solves that exhaust their iteration budgets, returns `converged = false`,
 /// not an error.
 ///
 /// # Example
@@ -259,14 +295,36 @@ where
         Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync + 'static,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug + 'static,
 {
-    options.validate_update_mode()?;
+    options
+        .validate_update_mode()
+        .map_err(TreeTNOperationError::invalid_configuration)?;
+    options
+        .validate_convergence_tol()
+        .map_err(TreeTNOperationError::invalid_configuration)?;
+    tensor4all_core::validate_svd_truncation_options(
+        options.truncation.max_bond_dim(),
+        options.truncation.svd_policy(),
+    )
+    .map_err(|error| TreeTNOperationError::invalid_configuration(anyhow::Error::new(error)))?;
+    options.validate_local_solver()?;
+    if input_mapping.is_some() != output_mapping.is_some() {
+        return Err(TreeTNOperationError::invalid_configuration(
+            anyhow::anyhow!("input_mapping and output_mapping must both be Some or both be None"),
+        ));
+    }
     validate_linsolve_inputs(operator, rhs, &init)?;
+    validate_single_precision_coefficients(&[operator, rhs, &init], &options.a0, &options.a1)?;
     if options.nsite == 2 && rhs.node_count() < 2 {
-        return Err(anyhow::anyhow!("square_linsolve requires at least two sites with nsite=2; use nsite=1 for a single-node solve").into());
+        return Err(TreeTNOperationError::invalid_configuration(anyhow::anyhow!(
+            "square_linsolve requires at least two sites with nsite=2; use nsite=1 for a single-node solve"
+        )));
     }
 
-    let identity_only = options.a1.is_zero() || operator_is_zero(operator)?;
-    // ALS must project even an identity solve into the initial bond spaces.
+    // A gradient-tracked `a1 = 0` must stay in the graph, so it sweeps.
+    let identity_only =
+        (options.a1.is_zero() && !options.a1.tracks_grad()) || operator_is_zero(operator)?;
+    // The closed form is exact for every local solver. ALS must still project
+    // an identity solve into the initial bond spaces, so it sweeps instead.
     if identity_only && (options.nsite == 2 || options.a0.is_zero()) {
         return solve_identity_term_only(
             operator,
@@ -389,6 +447,79 @@ where
     Ok(operator.norm()? == 0.0)
 }
 
+/// Multiply `tn` by `1 / divisor` through
+/// [`AnyScalar::reciprocal_factors`], whose doc gives the range and rounding
+/// guarantees.
+///
+/// [`TreeTN::scale_mut`] applies each factor to one node, so the range and
+/// rounding properties of the factors hold for that node's stored entries. In
+/// a gauge where that node's entries are far from the represented values (for
+/// example `2^-1000` on one node and `2^1000` on another), the node can
+/// underflow or overflow although the represented quotient is finite.
+///
+/// A network with a single-precision node rejects a factor outside the `f32`
+/// range, which that node's `scale` would turn into zero or infinity.
+fn has_single_precision_node<T, V>(tn: &TreeTN<T, V>) -> bool
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    tn.node_indices()
+        .into_iter()
+        .filter_map(|node| tn.tensor(node))
+        .any(TensorVectorSpace::is_single_precision)
+}
+
+/// `scale` converts a coefficient to the storage precision of the node it
+/// multiplies, so networks with a single-precision node need `a0` and `a1` in
+/// the `f32` range.
+fn validate_single_precision_coefficients<T, V>(
+    networks: &[&TreeTN<T, V>],
+    a0: &AnyScalar,
+    a1: &AnyScalar,
+) -> std::result::Result<(), TreeTNOperationError>
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    if !networks.iter().any(|tn| has_single_precision_node(tn)) {
+        return Ok(());
+    }
+    for (name, value) in [("a0", a0), ("a1", a1)] {
+        if !value.is_in_single_precision_range() {
+            return Err(TreeTNOperationError::invalid_configuration(
+                anyhow::anyhow!(
+                    "{name} = {value:?} is outside the f32 range of the single-precision networks"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn divide_by_scalar<T, V>(tn: &mut TreeTN<T, V>, divisor: &AnyScalar) -> Result<()>
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let factors = divisor
+        .reciprocal_factors()
+        .map_err(anyhow::Error::new)
+        .context("square_linsolve: identity-only closed form")?;
+    if has_single_precision_node(tn) {
+        if let Some(factor) = factors.iter().find(|f| !f.is_in_single_precision_range()) {
+            bail!(
+                "square_linsolve: identity-only closed form: dividing single-precision \
+                 tensors by a0 = {divisor:?} needs the factor {factor:?}, outside the f32 range"
+            );
+        }
+    }
+    for factor in factors {
+        tn.scale_mut(factor)?;
+    }
+    Ok(())
+}
+
 fn solve_identity_term_only<T, V>(
     operator: &TreeTN<T, V>,
     rhs: &TreeTN<T, V>,
@@ -408,7 +539,7 @@ where
     }
 
     let mut solution = rhs.clone();
-    solution.scale_mut(AnyScalar::new_real(1.0) / options.a0.clone())?;
+    divide_by_scalar(&mut solution, &options.a0)?;
     let residual = if options.check_residual || options.convergence_tol.is_some() {
         let residual_operator =
             linear_operator_for_residual(operator, init, input_mapping, output_mapping)?;
@@ -482,8 +613,13 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`TreeTNOperationError`] when scaling `solution` or `rhs`, applying `operator`,
-/// combining the two terms, or evaluating the residual and RHS norms fails.
+/// Returns [`TreeTNOperationError::InvalidConfiguration`] when a node of
+/// `operator`, `solution` or `rhs` is single precision and `a0` or `a1` is
+/// outside the `f32` range, [`TreeTNOperationError::Operation`] when the norm of
+/// `rhs` is not finite, which would make the relative residual zero, and
+/// [`TreeTNOperationError`] when scaling `solution` or `rhs`, applying
+/// `operator`, combining the two terms, or evaluating the residual and RHS norms
+/// fails.
 ///
 /// # Examples
 /// ```
@@ -537,6 +673,7 @@ where
 {
     let a0 = a0.into();
     let a1 = a1.into();
+    validate_single_precision_coefficients(&[&operator.mpo, solution, rhs], &a0, &a1)?;
     let mut lhs = solution.clone();
     lhs.scale_mut(a0)?;
 
@@ -550,11 +687,23 @@ where
     negative_rhs.scale_mut(AnyScalar::new_real(-1.0))?;
     let mut residual = lhs.add_reindexed_like_self(&negative_rhs)?;
 
-    let rhs_norm = rhs.clone().norm()?;
-    if rhs_norm == 0.0 {
-        return residual.norm();
+    // Both norms stay in log space, so an rhs whose squared norm overflows
+    // or underflows f64 (|b| = 1e200 or 1e-200) still gives the true ratio.
+    let log_rhs_norm = rhs.clone().log_norm()?;
+    // A norm that overflows would make the relative residual zero.
+    if log_rhs_norm.is_nan() || log_rhs_norm == f64::INFINITY {
+        return Err(TreeTNOperationError::Operation {
+            source: anyhow::anyhow!(
+                "relative_linear_system_residual: the rhs norm is not finite (log norm {log_rhs_norm})"
+            ),
+        });
     }
-    Ok(residual.norm()? / rhs_norm)
+    let log_residual_norm = residual.log_norm()?;
+    if log_rhs_norm == f64::NEG_INFINITY {
+        // An exactly zero rhs: report the absolute residual.
+        return Ok(log_residual_norm.exp());
+    }
+    Ok((log_residual_norm - log_rhs_norm).exp())
 }
 
 #[cfg(test)]

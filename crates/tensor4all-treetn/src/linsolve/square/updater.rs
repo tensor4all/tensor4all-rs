@@ -1,6 +1,6 @@
 //! SquareLinsolveUpdater: Local update implementation for square linsolve.
 //!
-//! Uses GMRES (via tensor4all_core::krylov) to solve the local linear problem at each sweep step.
+//! Dispatches local equations to the selected tensor4all-core Krylov solver.
 //! This is the V_in = V_out specialized version.
 
 use crate::error::TreeTNOperationError;
@@ -14,7 +14,6 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::krylov::{gmres_affine, gmres_affine_with_absolute_tolerance, GmresOptions};
 use tensor4all_core::{
     AnyScalar, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, SvdTruncationPolicy,
     TensorLike,
@@ -24,7 +23,7 @@ use super::local_linop::LocalLinOp;
 use super::pow2_scaling;
 use super::projected_state::ProjectedState;
 use crate::linsolve::common::{
-    GmresToleranceMode, LinsolveOptions, ProjectedOperator, ResidualEnrichment,
+    solve_local_system, LinsolveOptions, ProjectedOperator, ResidualEnrichment,
     ResidualEnrichmentRangeError,
 };
 use crate::local_update_support;
@@ -122,7 +121,7 @@ impl<V: std::fmt::Debug> std::fmt::Display for LinsolveVerifyReport<V> {
 /// At each sweep step:
 /// 1. Compute local operator (from ProjectedOperator environments)
 /// 2. Compute local RHS (from ProjectedState environments)
-/// 3. Solve local linear system using GMRES
+/// 3. Solve with the selected local Krylov method (GMRES by default)
 /// 4. Transport the center by QR (one-site ALS) or split by SVD (two-site MALS).
 ///
 /// Prefer [`super::square_linsolve`] to construct the sweep. For direct one-site
@@ -380,7 +379,7 @@ where
         local_update_support::copy_decomposed_to_subtree(subtree, decomposed, region, full_treetn)
     }
 
-    /// Solve the local linear problem using GMRES.
+    /// Solve the local linear problem using the selected Krylov method.
     ///
     /// Solves: (a₀ + a₁ * H_local) |x_local⟩ = |b_local⟩
     fn solve_local(&mut self, region: &[V], init: &T, state: &TreeTN<T, V>) -> Result<T> {
@@ -407,9 +406,8 @@ where
             init_indices,
         );
 
-        // KrylovKit builds Arnoldi from the unshifted local operator H.
-        // The affine coefficients `(a0 I + a1 H)` are applied in GMRES'
-        // projected Hessenberg problem, not inside LocalLinOp.
+        // Keep LocalLinOp unshifted: GMRES handles affine terms in its projected
+        // problem; CG/BiCGSTAB receive an affine callback from the dispatcher.
         let apply_calls = Cell::new(0usize);
         let apply_elapsed_micros = Cell::new(0u128);
         let apply_a = |x: &T| {
@@ -421,36 +419,19 @@ where
             result.map_err(anyhow::Error::from)
         };
 
-        let mut gmres_options = local_gmres_options(&self.options)?;
-        if trace && std::env::var_os("T4A_LINSOLVE_VERBOSE_GMRES").is_some() {
-            gmres_options.verbose = true;
-        }
-
-        // Solve using GMRES (works directly with IdxTensor)
-        let result = match self.options.gmres_tolerance_mode {
-            GmresToleranceMode::Relative => gmres_affine(
-                apply_a,
-                &rhs_local,
-                init,
-                self.options.a0.clone(),
-                self.options.a1.clone(),
-                &gmres_options,
-            )?,
-            GmresToleranceMode::Absolute => gmres_affine_with_absolute_tolerance(
-                apply_a,
-                &rhs_local,
-                init,
-                self.options.a0.clone(),
-                self.options.a1.clone(),
-                &gmres_options,
-                self.options.gmres_tol,
-            )?,
-        };
+        let result = solve_local_system(
+            &self.options,
+            apply_a,
+            &rhs_local,
+            init,
+            trace && std::env::var_os("T4A_LINSOLVE_VERBOSE_GMRES").is_some(),
+        )?;
 
         if trace {
             eprintln!(
-                "T4A local_solve #{solve_index}: region={region:?} mode={:?} rhs_norm={:.6e} init_norm={:.6e} iterations={} residual={:.6e} converged={} apply_calls={} apply_ms={:.3} total_ms={:.3}",
-                self.options.gmres_tolerance_mode,
+                "T4A local_solve #{solve_index}: region={region:?} solver={} residual_kind={} rhs_norm={:.6e} init_norm={:.6e} iterations={} residual={:.6e} converged={} apply_calls={} apply_ms={:.3} total_ms={:.3}",
+                self.options.local_solver.name(),
+                if result.residual_is_relative { "relative" } else { "absolute" },
                 rhs_local.norm()?,
                 init.norm()?,
                 result.iterations,
@@ -1101,23 +1082,6 @@ where
 
         Ok(())
     }
-}
-
-fn local_gmres_options(options: &LinsolveOptions) -> Result<GmresOptions> {
-    if options.gmres_restart_dim == 0 {
-        anyhow::bail!("LinsolveOptions::gmres_restart_dim must be greater than zero");
-    }
-    if options.gmres_max_restarts == 0 {
-        anyhow::bail!("LinsolveOptions::gmres_max_restarts must be greater than zero");
-    }
-
-    Ok(GmresOptions {
-        max_iter: options.gmres_restart_dim,
-        rtol: options.gmres_tol,
-        max_restarts: options.gmres_max_restarts,
-        verbose: false,
-        check_true_residual: true,
-    })
 }
 
 #[cfg(test)]

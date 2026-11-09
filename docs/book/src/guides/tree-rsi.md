@@ -4,6 +4,9 @@
 [tree tensor networks](tree-tn.md). All inputs must have the same labeled tree
 and matching physical indices at each node. Input bond dimensions may differ.
 The implementation supports four real/complex scalar types and CPU execution.
+With the `tenferro-cuda` feature a CUDA context is accepted as well: the sketch
+keeps its blocks in host memory, so each contraction transfers its operands to
+the device and the result back, and the local rank decision stays on the host.
 
 Use `hadamard_many_in` with the same execution context that owns the inputs.
 The convenience `hadamard_many` uses the default CPU context and requires the

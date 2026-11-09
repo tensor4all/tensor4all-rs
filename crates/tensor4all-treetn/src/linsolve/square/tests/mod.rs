@@ -1,5 +1,5 @@
 use super::*;
-use tensor4all_core::{DynIndex, IdxTensor};
+use tensor4all_core::{DynIndex, IdxTensor, TensorIndex};
 
 fn create_simple_2site_mps() -> TreeTN<IdxTensor, String> {
     let mut mps = TreeTN::<IdxTensor, String>::new();
@@ -161,3 +161,138 @@ fn test_square_linsolve_validation_error_bubbles_up() {
 // The MPO should have input indices matching the MPS site indices.
 // These tests are simplified to only test validation, as full linsolve requires
 // proper index mappings which are tested in integration tests.
+
+/// `2^k` for `k` down to `-1074`, built in two steps so that no intermediate
+/// underflows.
+fn pow2(k: i32) -> f64 {
+    2.0_f64.powi(k / 2) * 2.0_f64.powi(k - k / 2)
+}
+
+#[test]
+fn divide_by_scalar_stays_finite_when_the_quotient_is_finite() {
+    use num_complex::Complex64;
+    let s = DynIndex::new_dyn(4);
+    let values = [1.0, -2.5, 0.75, 3.0];
+    // (divisor, rhs scale, expected quotient for a unit rhs entry)
+    let cases = [
+        // Subnormal: 1 / divisor overflows.
+        (
+            Complex64::new(3.0 * pow2(-1070), 0.0),
+            pow2(-1000),
+            Complex64::new(pow2(70) / 3.0, 0.0),
+        ),
+        // Smallest subnormal; the rhs entries are exact subnormals.
+        (
+            Complex64::new(pow2(-1074), 0.0),
+            pow2(-1060),
+            Complex64::new(pow2(14), 0.0),
+        ),
+        // Complex, |divisor|^2 underflows.
+        (
+            Complex64::new(3.0, 4.0) * pow2(-1070),
+            pow2(-1000),
+            Complex64::new(3.0, -4.0) * (pow2(70) / 25.0),
+        ),
+        // Complex, |divisor|^2 overflows.
+        (
+            Complex64::new(3.0, 4.0) * pow2(1018),
+            pow2(1000),
+            Complex64::new(3.0, -4.0) * (pow2(-18) / 25.0),
+        ),
+        // Real divisor near f64::MAX with an rhs near it.
+        (
+            Complex64::new(f64::MAX, 0.0),
+            f64::MAX / 4.0,
+            Complex64::new(0.25, 0.0),
+        ),
+        // Ordinary divisors on both sides of one.
+        (Complex64::new(2.0, 0.0), 1.0, Complex64::new(0.5, 0.0)),
+        (
+            Complex64::new(0.75, 0.0),
+            1.0,
+            Complex64::new(4.0 / 3.0, 0.0),
+        ),
+    ];
+    for (divisor, rhs_scale, unit_quotient) in cases {
+        let rhs: Vec<Complex64> = values
+            .iter()
+            .map(|&v| Complex64::new(v * rhs_scale, 0.0))
+            .collect();
+        let tensor = IdxTensor::from_dense(vec![s.clone()], rhs).unwrap();
+        let mut tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
+        let divisor = AnyScalar::new_complex(divisor.re, divisor.im);
+        divide_by_scalar(&mut tn, &divisor).unwrap();
+
+        let expected: Vec<Complex64> = values.iter().map(|&v| unit_quotient * v).collect();
+        let dense = tn.to_dense().unwrap();
+        let expected = IdxTensor::from_dense(dense.external_indices(), expected).unwrap();
+        let scale = expected.maxabs().unwrap();
+        let error = dense.sub(&expected).unwrap().maxabs().unwrap();
+        assert!(
+            error.is_finite() && error <= 1e-15 * scale,
+            "{divisor:?}: {error} vs {scale}"
+        );
+    }
+}
+
+#[test]
+fn divide_by_scalar_rejects_zero_and_non_finite_divisors() {
+    let s = DynIndex::new_dyn(2);
+    let tensor = IdxTensor::from_dense(vec![s], vec![1.0, 2.0]).unwrap();
+    let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
+    for divisor in [0.0, f64::NAN, f64::INFINITY] {
+        let error = divide_by_scalar(&mut tn.clone(), &AnyScalar::new_real(divisor)).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("cannot divide by"),
+            "{error:#}"
+        );
+    }
+}
+
+#[test]
+fn divide_by_scalar_rejects_factors_outside_the_single_precision_range() {
+    // The factors of 1 / (2^200 + 2^200 i) include 2^-199, which converts to
+    // an f32 zero; 2^100 / (2^200 + 2^200 i) = 2^-101 - 2^-101 i is a normal
+    // c32 value, so returning zero would be wrong.
+    let s = DynIndex::new_dyn(2);
+    let tensor = IdxTensor::from_dense(vec![s.clone()], vec![2.0_f32.powi(100), 3.0]).unwrap();
+    let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
+    let huge = AnyScalar::new_complex(pow2(200), pow2(200));
+    let error = divide_by_scalar(&mut tn.clone(), &huge).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("outside the f32 range"),
+        "{error:#}"
+    );
+
+    let mut tn = tn;
+    divide_by_scalar(&mut tn, &AnyScalar::new_real(4.0)).unwrap();
+    let dense = tn.to_dense().unwrap();
+    let expected =
+        IdxTensor::from_dense(dense.external_indices(), vec![2.0_f32.powi(98), 0.75]).unwrap();
+    assert_eq!(dense.sub(&expected).unwrap().maxabs().unwrap(), 0.0);
+}
+
+#[test]
+fn single_precision_networks_reject_coefficients_outside_the_f32_range() {
+    let s = DynIndex::new_dyn(2);
+    let single = IdxTensor::from_dense(vec![s.clone()], vec![1.0_f32, 2.0]).unwrap();
+    let double = IdxTensor::from_dense(vec![s], vec![1.0_f64, 2.0]).unwrap();
+    let single = TreeTN::<IdxTensor, usize>::from_tensors(vec![single], vec![0]).unwrap();
+    let double = TreeTN::<IdxTensor, usize>::from_tensors(vec![double], vec![0]).unwrap();
+    let huge = AnyScalar::new_complex(pow2(128), pow2(128));
+    let one = AnyScalar::new_real(1.0);
+    for (a0, a1, name) in [(&huge, &one, "a0"), (&one, &huge, "a1")] {
+        let error =
+            validate_single_precision_coefficients(&[&double, &single], a0, a1).unwrap_err();
+        assert!(
+            matches!(error, TreeTNOperationError::InvalidConfiguration { .. }),
+            "{error:?}"
+        );
+        assert!(
+            format!("{error:#}").contains(&format!("{name} = ")),
+            "{error:#}"
+        );
+        validate_single_precision_coefficients(&[&double], a0, a1).unwrap();
+    }
+    validate_single_precision_coefficients(&[&single], &one, &AnyScalar::new_real(0.0)).unwrap();
+}

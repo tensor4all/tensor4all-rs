@@ -1495,5 +1495,7 @@ impl fmt::Debug for AnyScalar {
     }
 }
 
+mod reciprocal;
+
 #[cfg(test)]
 mod tests;

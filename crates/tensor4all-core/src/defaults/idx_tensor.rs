@@ -432,6 +432,15 @@ pub enum IdxTensorError {
         #[source]
         source: Arc<dyn std::error::Error + Send + Sync + 'static>,
     },
+    /// The payload stores a different scalar type than the one
+    /// [`IdxTensor::to_vec`] was asked to read.
+    ///
+    /// This is a caller error: the payload is intact and can be read as its own
+    /// scalar type. A readback that fails for any other reason keeps its typed
+    /// source in [`Self::Materialization`] or [`Self::EngineEntry`].
+    #[error("IdxTensor payload scalar type does not match the requested type")]
+    PayloadScalarTypeMismatch,
+
     /// The reduction result has a scalar dtype that this real-valued operation
     /// cannot interpret.
     #[error("IdxTensor scalar type mismatch: expected {expected}, got {actual}")]
@@ -572,6 +581,12 @@ impl IdxTensorError {
         Self::Materialization {
             source: Self::boxed(error),
         }
+    }
+
+    /// Whether this is a payload of another scalar type than the caller asked
+    /// [`IdxTensor::to_vec`] for, as opposed to a failed readback.
+    pub fn is_payload_scalar_type_mismatch(&self) -> bool {
+        matches!(self, Self::PayloadScalarTypeMismatch)
     }
 
     fn scalar_extraction(error: anyhow::Error) -> Self {
@@ -6796,6 +6811,10 @@ impl TensorVectorSpace for IdxTensor {
         IdxTensor::norm_squared(self)
     }
 
+    fn is_single_precision(&self) -> bool {
+        self.is_f32() || self.is_c32()
+    }
+
     fn norm(&self) -> std::result::Result<f64, Self::Error> {
         IdxTensor::norm(self)
     }
@@ -6806,6 +6825,18 @@ impl TensorVectorSpace for IdxTensor {
 
     fn min_nonzero_abs(&self) -> std::result::Result<Option<f64>, Self::Error> {
         IdxTensor::min_nonzero_abs(self)
+    }
+
+    fn is_all_finite(&self) -> std::result::Result<bool, Self::Error> {
+        if let Some(error) = self.storage.deferred_error() {
+            return Err(IdxTensorError::Storage {
+                source: error.clone(),
+            });
+        }
+        let flags = self
+            .compact_nonfinite_flags()
+            .map_err(IdxTensorError::materialization)?;
+        Ok(!(flags.has_nan || flags.has_infinity))
     }
 
     fn isapprox(
@@ -8580,7 +8611,21 @@ impl IdxTensor {
         values
             .as_slice::<T>()
             .map(|values| values.to_vec())
-            .map_err(|source| IdxTensorError::materialization(anyhow::Error::new(source)))
+            .map_err(|source| {
+                // Classified where the concrete error is still at hand: the
+                // requested type did not match the payload (a caller error),
+                // or the readback itself failed (keep its typed source).
+                if matches!(
+                    source.kind(),
+                    tenferro_tensor::ErrorKind::Validation(
+                        tenferro_tensor::ValidationKind::DTypeMismatch
+                    )
+                ) {
+                    IdxTensorError::PayloadScalarTypeMismatch
+                } else {
+                    IdxTensorError::materialization(anyhow::Error::new(source))
+                }
+            })
     }
 
     /// Reads dense column-major tensor values without copying them into a new vector.

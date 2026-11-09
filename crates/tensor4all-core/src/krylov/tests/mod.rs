@@ -68,6 +68,10 @@ impl TensorIndex for PlainVector {
 }
 
 impl TensorVectorSpace for PlainVector {
+    fn is_single_precision(&self) -> bool {
+        false
+    }
+
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         Ok(self.data.iter().map(|x| x * x).sum())
     }
@@ -501,6 +505,1005 @@ fn gmres_affine_matches_shifted_system_and_scalar_shortcuts() {
 }
 
 #[test]
+fn gmres_affine_closed_form_measures_its_residual() {
+    // a1 = 0 solves a0 x = b in closed form. The residual of the returned
+    // solution decides convergence: exact for 2^-1000 / (2^73 + 2^73 i),
+    // while 2^-1074 / (0.3 + 0.2 i) rounds to zero and leaves the whole rhs.
+    let pow2 = |k: i32| 2.0_f64.powi(k / 2) * 2.0_f64.powi(k - k / 2);
+    let idx = DynIndex::new_dyn(1);
+    let options = GmresOptions {
+        max_iter: 1,
+        rtol: 1e-10,
+        max_restarts: 1,
+        verbose: false,
+        check_true_residual: false,
+    };
+    for (rhs, a0, exact) in [
+        (pow2(-1000), Complex64::new(pow2(73), pow2(73)), true),
+        (f64::from_bits(1), Complex64::new(0.3, 0.2), false),
+    ] {
+        let b = make_vector_c64(vec![Complex64::new(rhs, 0.0)], &idx);
+        let x0 = make_vector_c64(vec![Complex64::new(0.0, 0.0)], &idx);
+        let result = gmres_affine(
+            |x: &IdxTensor| Ok(x.clone()),
+            &b,
+            &x0,
+            AnyScalar::new_complex(a0.re, a0.im),
+            AnyScalar::new_real(0.0),
+            &options,
+        )
+        .unwrap();
+        assert_eq!(result.iterations, 0);
+        let solution = result.solution.to_vec::<Complex64>().unwrap()[0];
+        if exact {
+            let expected = Complex64::new(f64::from_bits(1), -f64::from_bits(1));
+            assert_eq!(solution, expected);
+            assert!(result.converged);
+            assert_eq!(result.residual_norm, 0.0);
+        } else {
+            assert_eq!(solution, Complex64::new(0.0, 0.0));
+            assert!(!result.converged);
+            assert_eq!(result.residual_norm, 1.0);
+        }
+    }
+}
+
+#[test]
+fn gmres_affine_closed_form_rejects_factors_outside_the_single_precision_range() {
+    // 2^100 / (2^200 + 2^200 i) = 2^-101 - 2^-101 i is a normal c32 value, but
+    // a0 itself is outside the f32 range, so the coefficient check rejects it
+    // before the factors are formed. The factor check alone is covered by
+    // `gmres_affine_closed_form_rejects_a_subnormal_single_precision_factor`.
+    let pow2 = |k: i32| 2.0_f64.powi(k / 2) * 2.0_f64.powi(k - k / 2);
+    let idx = DynIndex::new_dyn(1);
+    let b = IdxTensor::from_dense(vec![idx.clone()], vec![2.0_f32.powi(100)]).unwrap();
+    let x0 = IdxTensor::from_dense(vec![idx], vec![0.0_f32]).unwrap();
+    let options = GmresOptions::default();
+    let solve = |a0: AnyScalar| {
+        gmres_affine(
+            |x: &IdxTensor| Ok(x.clone()),
+            &b,
+            &x0,
+            a0,
+            AnyScalar::new_real(0.0),
+            &options,
+        )
+    };
+    let error = solve(AnyScalar::new_complex(pow2(200), pow2(200))).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::InvalidOptions {
+                solver: "gmres",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(
+        error.to_string().contains("outside the f32 range"),
+        "{error}"
+    );
+
+    let result = solve(AnyScalar::new_real(4.0)).unwrap();
+    assert!(result.converged);
+    assert_eq!(
+        result.solution.to_vec::<f32>().unwrap(),
+        vec![2.0_f32.powi(98)]
+    );
+
+    // The factors of 1 / (2^128 + 2^128 i) are in the f32 range, but a0 itself
+    // is not, and the residual and the iteration convert it to f32. The same
+    // holds for a1 on the iterative path.
+    let error = solve(AnyScalar::new_complex(pow2(128), pow2(128))).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::InvalidOptions {
+                solver: "gmres",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("a0 = "), "{error}");
+    let error = gmres_affine(
+        |x: &IdxTensor| Ok(x.clone()),
+        &b,
+        &x0,
+        AnyScalar::new_real(1.0),
+        AnyScalar::new_real(1e300),
+        &options,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::InvalidOptions {
+                solver: "gmres",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("a1 = "), "{error}");
+}
+
+#[test]
+fn gmres_affine_closed_form_rejects_a_subnormal_single_precision_factor() {
+    // a0 = f32::MAX is a normal f32, so the coefficient check accepts it, and
+    // 2^100 / a0 (about 2^-28) is a normal f32. The single factor
+    // 1 / a0 (about 2.9e-39) is an f32 subnormal, though, so only the factor
+    // check rejects it.
+    let a0 = AnyScalar::new_real(f64::from(f32::MAX));
+    assert!(a0.is_in_single_precision_range());
+    let factors = a0.reciprocal_factors().unwrap();
+    assert_eq!(factors.len(), 1);
+    assert!(!factors[0].is_in_single_precision_range());
+
+    let idx = DynIndex::new_dyn(1);
+    let b = IdxTensor::from_dense(vec![idx.clone()], vec![2.0_f32.powi(100)]).unwrap();
+    let x0 = IdxTensor::from_dense(vec![idx], vec![0.0_f32]).unwrap();
+    let error = gmres_affine(
+        |x: &IdxTensor| Ok(x.clone()),
+        &b,
+        &x0,
+        a0,
+        AnyScalar::new_real(0.0),
+        &GmresOptions::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::InvalidOptions {
+                solver: "gmres",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("needs the factor"), "{error}");
+}
+
+#[test]
+fn gmres_affine_solves_a_tracked_zero_a1_in_closed_form() {
+    // Iterating would stop on the absolute near-singular threshold for
+    // b = 1e-20, a0 = 1e-20, and form 1 / |r| = inf for b = 2^-1074.
+    let idx = DynIndex::new_dyn(1);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let options = GmresOptions::default();
+    for (rhs, a0, expected) in [
+        (1e-20, 1e-20, 1.0),
+        (f64::from_bits(1), 1.0, f64::from_bits(1)),
+    ] {
+        let b = make_vector_with_index(vec![rhs], &idx);
+        let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+        let result = gmres_affine(
+            |x: &IdxTensor| Ok(x.clone()),
+            &b,
+            &x0,
+            AnyScalar::new_real(a0),
+            a1,
+            &options,
+        )
+        .unwrap();
+        assert_eq!(result.iterations, 0);
+        assert!(result.converged, "{rhs:e}");
+        assert_eq!(result.residual_norm, 0.0);
+        assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![expected]);
+    }
+}
+
+#[test]
+fn gmres_converges_on_an_exact_initial_guess_with_zero_tolerance() {
+    // With `rtol = 0` a zero residual still has to stop the solve: `r / |r|`
+    // is undefined for `|r| = 0`.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![1.0], &idx);
+    let identity = |x: &IdxTensor| Ok(x.clone());
+    let truncate = |_x: &mut IdxTensor| -> Result<()> { Ok(()) };
+    let options = GmresOptions {
+        rtol: 0.0,
+        ..Default::default()
+    };
+    let check =
+        |name: &str, solution: &IdxTensor, iterations: usize, residual: f64, converged: bool| {
+            assert!(converged, "{name}");
+            assert_eq!(iterations, 0, "{name}");
+            assert_eq!(residual, 0.0, "{name}");
+            assert_eq!(solution.to_vec::<f64>().unwrap(), vec![1.0], "{name}");
+        };
+    let r = gmres(identity, &b, &b, &options).unwrap();
+    check(
+        "gmres",
+        &r.solution,
+        r.iterations,
+        r.residual_norm,
+        r.converged,
+    );
+    let r = gmres_affine(
+        identity,
+        &b,
+        &b,
+        AnyScalar::new_real(0.0),
+        AnyScalar::new_real(1.0),
+        &options,
+    )
+    .unwrap();
+    check(
+        "gmres_affine",
+        &r.solution,
+        r.iterations,
+        r.residual_norm,
+        r.converged,
+    );
+    let r = gmres_with_truncation(identity, &b, &b, &options, truncate).unwrap();
+    check(
+        "gmres_with_truncation",
+        &r.solution,
+        r.iterations,
+        r.residual_norm,
+        r.converged,
+    );
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_keeps_extreme_closed_forms_and_gradients_finite() {
+    // `x(a1) = (a0 + a1 c)^-1 b` for `A = c I`, so `dx/da1 = -c b / a0^2` at
+    // `a1 = 0`. `A(b / a0)` overflows in the first case, and in the second
+    // the product of the reciprocal factors of `a0 = 2^-1074` does.
+    let tiny = f64::from_bits(1);
+    let idx = DynIndex::new_dyn(1);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    for (rhs, a0, c, solution, gradient) in [
+        (
+            2.0_f64.powi(1000),
+            2.0_f64.powi(600),
+            2.0_f64.powi(1000),
+            2.0_f64.powi(400),
+            -2.0_f64.powi(800),
+        ),
+        (tiny, tiny, tiny, 1.0, -1.0),
+    ] {
+        let b = make_vector_with_index(vec![rhs], &idx);
+        let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+        let result = gmres_affine(
+            move |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(c))?),
+            &b,
+            &x0,
+            AnyScalar::new_real(a0),
+            a1.clone(),
+            &GmresOptions::default(),
+        )
+        .unwrap();
+        assert!(result.converged, "{rhs:e}");
+        assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![solution]);
+        result.solution.sum().unwrap().backward().unwrap();
+        let grad = a1.grad().unwrap().expect("a1 has a gradient");
+        assert_eq!(grad.real(), gradient, "{rhs:e}");
+    }
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_with_a_zero_correction_keeps_a1_in_the_graph() {
+    // `A = 0` gives a zero `A(b / a0)`; `b = 2^-1074`, `a0 = 4` gives a
+    // closed form that rounds to zero and is reported as not converged.
+    let idx = DynIndex::new_dyn(1);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    for (rhs, a0, c, solution, converged) in [
+        (1.0, 2.0, 0.0, 0.5, true),
+        (f64::from_bits(1), 4.0, 1.0, 0.0, false),
+    ] {
+        let b = make_vector_with_index(vec![rhs], &idx);
+        let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+        let result = gmres_affine(
+            move |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(c))?),
+            &b,
+            &x0,
+            AnyScalar::new_real(a0),
+            a1.clone(),
+            &GmresOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(result.converged, converged, "{rhs:e}");
+        assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![solution]);
+        result.solution.sum().unwrap().backward().unwrap();
+        let grad = a1.grad().unwrap().expect("a1 has a gradient");
+        assert_eq!(grad.real(), 0.0, "{rhs:e}");
+    }
+}
+
+#[test]
+fn divide_by_norm_rejects_a_norm_that_is_not_positive_and_finite() {
+    let idx = DynIndex::new_dyn(1);
+    let v = make_vector_with_index(vec![1.0], &idx);
+    for norm in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        let err = vector_ops::divide_by_norm(&v, norm).unwrap_err();
+        assert!(
+            err.to_string().contains("positive finite norm"),
+            "{norm}: {err}"
+        );
+    }
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_differentiates_an_overflowing_operator_image() {
+    // b = 4, a0 = 2 gives x = 2, and A = f64::MAX * I makes A(x) = 2 f64::MAX
+    // overflow although dx/da1 = -A(x) / a0 = -f64::MAX is representable.
+    // Forming a1 * A(x) would give 0 * inf = NaN.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![4.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let result = gmres_affine(
+        |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(f64::MAX))?),
+        &b,
+        &x0,
+        AnyScalar::new_real(2.0),
+        a1.clone(),
+        &GmresOptions::default(),
+    )
+    .unwrap();
+    assert!(result.converged);
+    assert_eq!(result.residual_norm, 0.0);
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![2.0]);
+    result.solution.sum().unwrap().backward().unwrap();
+    let grad = a1.grad().unwrap().unwrap();
+    assert_eq!(grad.real(), -f64::MAX);
+    assert_eq!(grad.imag(), 0.0);
+
+    // With a0 = 1/2, dx/da1 = -A(x) / a0 = -4 f64::MAX is not representable:
+    // the solve rejects it as out of range instead of returning a NaN or
+    // infinite gradient.
+    let b = make_vector_with_index(vec![1.0], &idx);
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let error = gmres_affine(
+        |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(f64::MAX))?),
+        &b,
+        &x0,
+        AnyScalar::new_real(0.5),
+        a1,
+        &GmresOptions::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::OutOfRange {
+                solver: "gmres",
+                quantity: "a1 derivative A(x) / a0",
+            }
+        ),
+        "{error:?}"
+    );
+
+    // A = 4 f64::MAX I: A(x 2^-s) is finite from s = 2, but the derivative
+    // dx/da1 = -4 f64::MAX x / a0 = -8 f64::MAX is not representable.
+    let b = make_vector_with_index(vec![4.0], &idx);
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let error = gmres_affine(
+        |x: &IdxTensor| {
+            Ok(x.scale(AnyScalar::new_real(f64::MAX))?
+                .scale(AnyScalar::new_real(4.0))?)
+        },
+        &b,
+        &x0,
+        AnyScalar::new_real(2.0),
+        a1,
+        &GmresOptions::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::OutOfRange {
+                solver: "gmres",
+                quantity: "a1 derivative A(x) / a0",
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_backward_stays_finite_for_a_tiny_a0() {
+    // b = a0 = s = 2^-1074 and A = s I give x = 1 and dx/da1 = -A(x) / a0 = -1.
+    // Dividing the cotangent by a0 first would form 1 / s = inf in the
+    // backward pass and return an infinite gradient.
+    let s = f64::from_bits(1);
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![s], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let result = gmres_affine(
+        |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(s))?),
+        &b,
+        &x0,
+        AnyScalar::new_real(s),
+        a1.clone(),
+        &GmresOptions::default(),
+    )
+    .unwrap();
+    assert!(result.converged);
+    assert_eq!(result.residual_norm, 0.0);
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![1.0]);
+    result.solution.sum().unwrap().backward().unwrap();
+    let grad = a1.grad().unwrap().unwrap();
+    assert!(grad.real().is_finite(), "{grad:?}");
+    assert_eq!(grad.real(), -1.0);
+    assert_eq!(grad.imag(), 0.0);
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_keeps_a_tiny_derivative_component() {
+    // b = (2^-1000, 2^-1074), a0 = 2^-1000 and A = diag(1, 2^-1000) give
+    // x = (1, 2^-74), A(x) = (1, 2^-1074) and dx/da1 = -A(x) / a0 =
+    // -(2^1000, 2^-74). Scaling A(x) toward the size of a0 before dividing
+    // flushed the second component to zero.
+    let tiny = 2.0_f64.powi(-1000);
+    let idx = DynIndex::new_dyn(2);
+    let b = make_vector_with_index(vec![tiny, f64::from_bits(1)], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
+    let expected_grad = [-(2.0_f64.powi(1000)), -(2.0_f64.powi(-74))];
+    for (component, expected) in expected_grad.into_iter().enumerate() {
+        let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+        let result = gmres_affine(
+            |x: &IdxTensor| scale_vector_f64(x, &[1.0, tiny]),
+            &b,
+            &x0,
+            AnyScalar::new_real(tiny),
+            a1.clone(),
+            &GmresOptions::default(),
+        )
+        .unwrap();
+        assert!(result.converged);
+        assert_eq!(
+            result.solution.to_vec::<f64>().unwrap(),
+            vec![1.0, 2.0_f64.powi(-74)]
+        );
+        let mut weights = vec![0.0; 2];
+        weights[component] = 1.0;
+        let selector = make_vector_with_index(weights, &idx);
+        selector
+            .inner_product(&result.solution)
+            .unwrap()
+            .backward()
+            .unwrap();
+        let grad = a1.grad().unwrap().unwrap();
+        assert_eq!(grad.real(), expected, "component {component}");
+    }
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_applies_a_to_a_vector_below_unit_norm() {
+    // b = 3, a0 = 2 gives x = 1.5. A floor-based exponent leaves |x| = 1.5,
+    // and A = f64::MAX I overflows on it, although dx/da1 = -0.75 f64::MAX
+    // is representable.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![3.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let result = gmres_affine(
+        |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(f64::MAX))?),
+        &b,
+        &x0,
+        AnyScalar::new_real(2.0),
+        a1.clone(),
+        &GmresOptions::default(),
+    )
+    .unwrap();
+    assert!(result.converged);
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![1.5]);
+    result.solution.sum().unwrap().backward().unwrap();
+    let grad = a1.grad().unwrap().unwrap();
+    assert_eq!(grad.real(), -0.75 * f64::MAX);
+}
+
+#[test]
+fn gmres_affine_closed_form_with_zero_residual_converges_at_zero_rtol() {
+    // b = x0 = 1, a0 = 1, a1 = 0: the closed form returns x = 1 with residual
+    // 0, which is converged for every rtol, as on the iterative path.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![1.0], &idx);
+    let x0 = make_vector_with_index(vec![1.0], &idx);
+    let result = gmres_affine(
+        |x: &IdxTensor| Ok(x.clone()),
+        &b,
+        &x0,
+        AnyScalar::new_real(1.0),
+        AnyScalar::new_real(0.0),
+        &GmresOptions {
+            rtol: 0.0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![1.0]);
+    assert_eq!(result.residual_norm, 0.0);
+    assert!(result.converged);
+}
+
+/// `d (selector . x) / d a1` for a tracked `a1 = 0` after `gmres_affine`.
+fn tracked_zero_a1_component_gradient(
+    apply_a: impl Fn(&IdxTensor) -> Result<IdxTensor>,
+    b: &IdxTensor,
+    x0: &IdxTensor,
+    a0: f64,
+    selector: &IdxTensor,
+) -> (GmresResult<IdxTensor>, AnyScalar) {
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let result = gmres_affine(
+        apply_a,
+        b,
+        x0,
+        AnyScalar::new_real(a0),
+        a1.clone(),
+        &GmresOptions::default(),
+    )
+    .unwrap();
+    selector
+        .inner_product(&result.solution)
+        .unwrap()
+        .real_part()
+        .backward()
+        .unwrap();
+    let grad = a1.grad().unwrap().unwrap();
+    (result, grad)
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retry_scales_x_no_further_than_needed() {
+    // GPT r4 reproduction: x = b / a0 = (2^500, 2^-600) and A = 2^600 I give
+    // A(x) = (2^1100, 1), which overflows. The smallest down-scaling that
+    // keeps A finite is 2^-77, under which x2 = 2^-677 stays normal; a
+    // norm-based 2^-501 flushed x2 to zero. dx2/da1 = -2^-500.
+    // Every value here is a normal f64.
+    let idx = DynIndex::new_dyn(2);
+    let b = make_vector_with_index(vec![2.0_f64.powi(1000), 2.0_f64.powi(-100)], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
+    let selector = make_vector_with_index(vec![0.0, 1.0], &idx);
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(2.0_f64.powi(600)))?),
+        &b,
+        &x0,
+        2.0_f64.powi(500),
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(result.residual_norm, 0.0);
+    assert_eq!(
+        result.solution.to_vec::<f64>().unwrap(),
+        vec![2.0_f64.powi(500), 2.0_f64.powi(-600)]
+    );
+    assert_eq!(grad.real(), -(2.0_f64.powi(-500)));
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_checks_complex_components_separately() {
+    // GPT r4 reproduction: A = (0.75 + 0.75 i) f64::MAX I, b = 1, a0 = 1.
+    // dx/da1 = -(0.75 + 0.75 i) f64::MAX has finite components, but its
+    // modulus (about 1.06 f64::MAX) overflows, so a hypot-based check
+    // rejected it.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![1.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let selector = make_vector_with_index(vec![1.0], &idx);
+    let c = 0.75 * f64::MAX;
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        move |x: &IdxTensor| Ok(x.scale(AnyScalar::new_complex(c, c))?),
+        &b,
+        &x0,
+        1.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(result.residual_norm, 0.0);
+    let solution = result.solution.to_vec::<Complex64>().unwrap();
+    assert_eq!(solution.len(), 1);
+    assert_eq!(solution[0].re, 1.0);
+    assert_eq!(solution[0].im, 0.0);
+    // d Re(x) / da1 = -Re(A(x) / a0).
+    assert_eq!(grad.real(), -c);
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retries_when_x_is_already_below_unit_norm() {
+    // GPT r4 reproduction: b = (1.5, 1.5, 1.5, 1.5), a0 = 4 give
+    // x = (0.375, ...), |x| = 0.75, and A with every entry f64::MAX gives
+    // A(x) = 1.5 f64::MAX each. A norm-based exponent was 0, so the retry
+    // repeated the overflowing call; halving x suffices.
+    // dx_i/da1 = -0.375 f64::MAX.
+    let idx = DynIndex::new_dyn(4);
+    let b = make_vector_with_index(vec![1.5; 4], &idx);
+    let x0 = make_vector_with_index(vec![0.0; 4], &idx);
+    let ones = make_vector_with_index(vec![1.0; 4], &idx);
+    let selector = make_vector_with_index(vec![1.0, 0.0, 0.0, 0.0], &idx);
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        |x: &IdxTensor| Ok(ones.scale(x.sum()?)?.scale(AnyScalar::new_real(f64::MAX))?),
+        &b,
+        &x0,
+        4.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![0.375; 4]);
+    assert_eq!(grad.real(), -0.375 * f64::MAX);
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_keeps_components_that_no_single_scaling_keeps() {
+    // GPT r5 reproduction: x = b / a0 = (2^500, 2^-1000) and A = 2^600 I give
+    // A(x) = (2^1100, 2^-400). Keeping A finite needs x 2^-s with s >= 77,
+    // which takes x2 to 2^-1077 and rounds it to zero; no single power of two
+    // keeps both components. dx2/da1 = -2^-900 is a normal f64, as are x,
+    // b, a0 and the expected results; only the rounded-away intermediate is
+    // below the normal range, and it is lost with or without flush-to-zero.
+    let idx = DynIndex::new_dyn(2);
+    let b = make_vector_with_index(vec![2.0_f64.powi(1000), 2.0_f64.powi(-500)], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
+    for (selector, expected) in [
+        (vec![0.0, 1.0], -(2.0_f64.powi(-900))),
+        (vec![1.0, 0.0], -(2.0_f64.powi(600))),
+    ] {
+        let selector = make_vector_with_index(selector, &idx);
+        let (result, grad) = tracked_zero_a1_component_gradient(
+            |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(2.0_f64.powi(600)))?),
+            &b,
+            &x0,
+            2.0_f64.powi(500),
+            &selector,
+        );
+        assert!(result.converged);
+        assert_eq!(result.residual_norm, 0.0);
+        assert_eq!(
+            result.solution.to_vec::<f64>().unwrap(),
+            vec![2.0_f64.powi(500), 2.0_f64.powi(-1000)]
+        );
+        assert_eq!(grad.real(), expected);
+    }
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retries_a_complex_image_that_overflowed() {
+    // GPT r5 reproduction: complex b = 4, a0 = 2, A = f64::MAX I. A(x) = 2
+    // f64::MAX overflows; halving the infinite complex entry forms
+    // 0 * inf = NaN, and the finiteness check must report that as
+    // non-finite (and retry) rather than as an error.
+    let idx = DynIndex::new_dyn(1);
+    let b = IdxTensor::from_dense(vec![idx.clone()], vec![Complex64::new(4.0, 0.0)]).unwrap();
+    let x0 = IdxTensor::from_dense(vec![idx.clone()], vec![Complex64::new(0.0, 0.0)]).unwrap();
+    let selector = IdxTensor::from_dense(vec![idx], vec![Complex64::new(1.0, 0.0)]).unwrap();
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(f64::MAX))?),
+        &b,
+        &x0,
+        2.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(
+        result.solution.to_vec::<Complex64>().unwrap(),
+        vec![Complex64::new(2.0, 0.0)]
+    );
+    assert_eq!(grad.real(), -f64::MAX);
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retries_an_image_with_an_inf_minus_inf_nan() {
+    // GPT r5 reproduction: A(x) = t - t / 2 with t = f64::MAX x is
+    // (f64::MAX / 2) I, but for x = b / a0 = 2 it evaluates inf - inf = NaN.
+    // The NaN is an overflow to retry, not a backend failure.
+    // dx/da1 = -(f64::MAX / 2) * 2 / 2 = -f64::MAX / 2.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![4.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let selector = make_vector_with_index(vec![1.0], &idx);
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        |x: &IdxTensor| {
+            let t = x.scale(AnyScalar::new_real(f64::MAX))?;
+            Ok(t.axpby(AnyScalar::new_real(1.0), &t, AnyScalar::new_real(-0.5))?)
+        },
+        &b,
+        &x0,
+        2.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![2.0]);
+    assert_eq!(grad.real(), -f64::MAX / 2.0);
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retry_reaches_the_largest_exponent() {
+    // GPT r6 reproduction: A(x) = t - t with t = ((x 2^1000) 2^1000) 2^77 is
+    // the zero operator, but for x = 2^1000 it forms inf - inf = NaN until
+    // x 2^-s has s >= 2054. Doubling stops at 2048, so the search has to
+    // probe the last exponents up to the 2100 limit as well. x 2^-2054 =
+    // 2^-1054 is subnormal: the test relies on gradual underflow (the IEEE
+    // default, which Rust keeps on every CI target), not on flush-to-zero.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![2.0_f64.powi(1000)], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let selector = make_vector_with_index(vec![1.0], &idx);
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        |x: &IdxTensor| {
+            let t = x
+                .scale(AnyScalar::new_real(2.0_f64.powi(1000)))?
+                .scale(AnyScalar::new_real(2.0_f64.powi(1000)))?
+                .scale(AnyScalar::new_real(2.0_f64.powi(77)))?;
+            Ok(t.axpby(AnyScalar::new_real(1.0), &t, AnyScalar::new_real(-1.0))?)
+        },
+        &b,
+        &x0,
+        1.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(
+        result.solution.to_vec::<f64>().unwrap(),
+        vec![2.0_f64.powi(1000)]
+    );
+    assert_eq!(grad.real(), 0.0);
+}
+
+/// `A(x) = t - t` with `t = ((x 2^1000) 2^1000) 2^k`: the zero operator, whose
+/// evaluation overflows to `inf - inf = NaN` until `x` is scaled down far
+/// enough for `t` to be finite.
+fn zero_operator_overflowing_at(k: i32) -> impl Fn(&IdxTensor) -> Result<IdxTensor> {
+    move |x: &IdxTensor| {
+        let t = x
+            .scale(AnyScalar::new_real(2.0_f64.powi(1000)))?
+            .scale(AnyScalar::new_real(2.0_f64.powi(1000)))?
+            .scale(AnyScalar::new_real(2.0_f64.powi(k)))?;
+        Ok(t.axpby(AnyScalar::new_real(1.0), &t, AnyScalar::new_real(-1.0))?)
+    }
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retry_accepts_the_largest_in_range_exponent() {
+    // x = b / a0 = 2^1000. The retry may scale x by 2^-s while its largest
+    // component stays nonzero, s <= 1000 + 1074 = 2074. With k = 97,
+    // t = 2^(2097 - s + 1000) is finite exactly from s = 2074, the last
+    // exponent in range: x 2^-2074 = 2^-1074 is the smallest subnormal (the
+    // test relies on gradual underflow, the IEEE default on every CI target),
+    // and t = 2^1023. The solve must accept it.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![2.0_f64.powi(1000)], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let selector = make_vector_with_index(vec![1.0], &idx);
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        zero_operator_overflowing_at(97),
+        &b,
+        &x0,
+        1.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(
+        result.solution.to_vec::<f64>().unwrap(),
+        vec![2.0_f64.powi(1000)]
+    );
+    assert_eq!(grad.real(), 0.0);
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retry_rejects_the_first_out_of_range_exponent() {
+    // As above with k = 98: t is finite only from s = 2075, where
+    // x 2^-2075 = 2^-1075 rounds to zero, so no scaling in range keeps both
+    // x and A(x 2^-s) representable. The solve must return the typed
+    // out-of-range error naming the operator image, not NaN, not a
+    // NumericalBreakdown, and not a silently dropped component.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![2.0_f64.powi(1000)], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let error = gmres_affine(
+        zero_operator_overflowing_at(98),
+        &b,
+        &x0,
+        AnyScalar::new_real(1.0),
+        a1,
+        &GmresOptions::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::OutOfRange {
+                solver: "gmres",
+                quantity: "operator image A(x 2^-s) for every s that keeps x nonzero",
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retry_boundary_follows_the_mantissa_of_x() {
+    // GPT r7 reproduction: x = 1.5 * 2^1000. x 2^-2074 = 1.5 * 2^-1074 rounds
+    // (to even) to 2^-1073, and x 2^-2075 = 0.75 * 2^-1074 rounds up to the
+    // smallest subnormal 2^-1074, so s = 2075 still keeps x nonzero; only
+    // s = 2076 (0.375 * 2^-1074) rounds it to zero. Round-to-nearest-even is
+    // the IEEE default on every CI target (no flush-to-zero in Rust).
+    // In range: with k = 97, t = x 2^(2000 + k) 2^-s is finite only from
+    // s = 2075, so the solve must reach that endpoint and succeed.
+    let idx = DynIndex::new_dyn(1);
+    let x_value = 1.5 * 2.0_f64.powi(1000);
+    let b = make_vector_with_index(vec![x_value], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let selector = make_vector_with_index(vec![1.0], &idx);
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        zero_operator_overflowing_at(97),
+        &b,
+        &x0,
+        1.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![x_value]);
+    assert_eq!(grad.real(), 0.0);
+
+    // Out of range: with k = 98 the image needs s = 2076, where x 2^-s is zero.
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let error = gmres_affine(
+        zero_operator_overflowing_at(98),
+        &b,
+        &x0,
+        AnyScalar::new_real(1.0),
+        a1,
+        &GmresOptions::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::OutOfRange {
+                solver: "gmres",
+                quantity: "operator image A(x 2^-s) for every s that keeps x nonzero",
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retries_single_precision_within_its_own_range() {
+    // GPT r8 reproduction: f32 b = 4, a0 = 2 give x = 2, and
+    // A = f32::MAX I overflows f32 at x but not at x 2^-1. The informative
+    // range of an f32 vector ends near 2^-149, not 2^-1074, so a limit taken
+    // from the f64 boundary scaled x to zero and refused the solve.
+    // dx/da1 = -f32::MAX * 2 / 2 = -f32::MAX. All values are normal f32.
+    let idx = DynIndex::new_dyn(1);
+    let b = IdxTensor::from_dense(vec![idx.clone()], vec![4.0_f32]).unwrap();
+    let x0 = IdxTensor::from_dense(vec![idx.clone()], vec![0.0_f32]).unwrap();
+    let selector = IdxTensor::from_dense(vec![idx], vec![1.0_f32]).unwrap();
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(f64::from(f32::MAX)))?),
+        &b,
+        &x0,
+        2.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(result.solution.to_vec::<f32>().unwrap(), vec![2.0_f32]);
+    assert_eq!(grad.real(), -f64::from(f32::MAX));
+}
+
+#[test]
+fn gmres_affine_normalizes_a_residual_whose_reciprocal_norm_overflows() {
+    // (I + I) x = 2^-1073 has x = 2^-1074, but 1 / |r| = 2^1073 is infinite.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![f64::from_bits(2)], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let result = gmres_affine(
+        |x: &IdxTensor| Ok(x.clone()),
+        &b,
+        &x0,
+        AnyScalar::new_real(1.0),
+        AnyScalar::new_real(1.0),
+        &GmresOptions::default(),
+    )
+    .unwrap();
+    assert!(result.converged);
+    assert_eq!(
+        result.solution.to_vec::<f64>().unwrap(),
+        vec![f64::from_bits(1)]
+    );
+}
+
+#[test]
+fn gmres_rejects_a_right_hand_side_whose_norm_overflows() {
+    // |b| = sqrt(2) * f64::MAX is infinite, so every relative residual would
+    // be zero and a closed form or an iteration would report convergence.
+    let idx = DynIndex::new_dyn(2);
+    let b = make_vector_with_index(vec![f64::MAX, f64::MAX], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
+    let options = GmresOptions {
+        rtol: 1e-20,
+        ..Default::default()
+    };
+    let identity = |x: &IdxTensor| Ok(x.clone());
+    let errors = [
+        gmres_affine(
+            identity,
+            &b,
+            &x0,
+            AnyScalar::new_real(3.0),
+            AnyScalar::new_real(0.0),
+            &options,
+        )
+        .unwrap_err(),
+        gmres_affine(
+            identity,
+            &b,
+            &x0,
+            AnyScalar::new_real(3.0),
+            AnyScalar::new_real(1.0),
+            &options,
+        )
+        .unwrap_err(),
+        gmres(identity, &b, &x0, &options).unwrap_err(),
+    ];
+    for error in errors {
+        assert!(
+            matches!(
+                error,
+                KrylovError::NumericalBreakdown {
+                    solver: "gmres",
+                    iteration: 0,
+                    quantity: "right-hand-side norm",
+                }
+            ),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
+fn gmres_affine_rejects_non_finite_coefficients_before_any_shortcut() {
+    // A zero rhs and the a1 = 0 closed form both return before iterating.
+    let idx = DynIndex::new_dyn(1);
+    let options = GmresOptions::default();
+    for rhs in [0.0, 1.0] {
+        let b = make_vector_with_index(vec![rhs], &idx);
+        let x0 = make_vector_with_index(vec![0.0], &idx);
+        for (a0, a1, name) in [
+            (f64::NAN, 0.0, "a0"),
+            (f64::INFINITY, 0.0, "a0"),
+            (1.0, f64::NAN, "a1"),
+            (1.0, f64::NEG_INFINITY, "a1"),
+        ] {
+            let error = gmres_affine(
+                |x: &IdxTensor| Ok(x.clone()),
+                &b,
+                &x0,
+                AnyScalar::new_real(a0),
+                AnyScalar::new_real(a1),
+                &options,
+            )
+            .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    KrylovError::InvalidOptions {
+                        solver: "gmres",
+                        ..
+                    }
+                ),
+                "{error:?}"
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("{name} must be finite")),
+                "{error}"
+            );
+        }
+    }
+}
+
+#[test]
 fn gmres_affine_profile_and_zero_rhs_paths() {
     let idx = DynIndex::new_dyn(1);
     let b = make_vector_with_index(vec![0.0], &idx);
@@ -602,6 +1605,18 @@ fn gmres_affine_profile_covers_scalar_shortcut() {
     assert!(result.converged);
     assert_eq!(result.iterations, 0);
     assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![1.0, 2.0]);
+    // One factor of 1 / a0, then the residual: a0 x, b - a0 x and its norm.
+    let report = super::LAST_GMRES_PROFILE
+        .with(|last| last.borrow().clone())
+        .unwrap();
+    for count in [
+        "scale_calls=2 ",
+        "axpby_calls=1 ",
+        "norm_calls=1 ",
+        "apply_calls=0 ",
+    ] {
+        assert!(report.contains(count), "{count}: {report}");
+    }
 }
 
 #[test]
@@ -808,12 +1823,13 @@ fn gmres_private_helpers_cover_edge_paths() {
     assert_eq!(c.real(), 1.0);
     assert_eq!(s.real(), 0.0);
 
-    let empty = solve_upper_triangular(&[], &[]).unwrap();
+    let empty = solve_upper_triangular(&[], &[], "gmres").unwrap();
     assert!(empty.is_empty());
 
     let singular = solve_upper_triangular(
         &[vec![AnyScalar::new_real(0.0)]],
         &[AnyScalar::new_real(1.0)],
+        "gmres",
     )
     .unwrap_err();
     assert!(singular.to_string().contains("Near-singular"));
@@ -1932,8 +2948,15 @@ fn krylov_capacity_overflow_is_reported_before_allocation() {
         Some(KrylovError::InvalidOptions { solver: "test", .. })
     ));
 
-    let error = projected_matrix_from_columns(&[], usize::MAX).unwrap_err();
+    let error = projected_matrix_from_columns(&[], usize::MAX, "test").unwrap_err();
     assert!(error.to_string().contains("overflows usize"));
+
+    // 2^62 complex entries fit in usize but not in memory.
+    let error = projected_matrix_from_columns(&[], 1 << 31, "test").unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<KrylovError>(),
+        Some(KrylovError::InvalidOptions { solver: "test", .. })
+    ));
 }
 
 #[test]
@@ -1962,6 +2985,79 @@ fn gmres_rejects_maximum_iteration_capacity_without_invoking_operator() {
         })
     ));
     assert_eq!(called.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn krylov_workspace_too_large_to_allocate_is_an_invalid_options_error() {
+    // `max_iter + 1` fits in usize, but no allocator can provide that many
+    // entries; every iteration-sized workspace must fail with a typed error.
+    let max_iter = usize::MAX - 1;
+    let b = PlainVector {
+        data: vec![1.0, 2.0],
+    };
+    let x0 = PlainVector {
+        data: vec![0.0, 0.0],
+    };
+    let apply = |x: &PlainVector| -> Result<PlainVector> {
+        Ok(PlainVector {
+            data: x.data.iter().map(|v| 2.0 * v).collect(),
+        })
+    };
+    let gmres_options = GmresOptions {
+        max_iter,
+        max_restarts: 1,
+        ..GmresOptions::default()
+    };
+    let is_invalid_options = |error: &KrylovError, expected: &str| matches!(error, KrylovError::InvalidOptions { solver, .. } if *solver == expected);
+    let error = gmres(apply, &b, &x0, &gmres_options).err().unwrap();
+    assert!(is_invalid_options(&error, "gmres"), "{error:?}");
+    let error = gmres_affine(
+        apply,
+        &b,
+        &x0,
+        AnyScalar::new_real(0.5),
+        AnyScalar::new_real(1.0),
+        &gmres_options,
+    )
+    .err()
+    .unwrap();
+    assert!(is_invalid_options(&error, "gmres"), "{error:?}");
+    let error = gmres_with_truncation(apply, &b, &x0, &gmres_options, |_| Ok(()))
+        .err()
+        .unwrap();
+    assert!(
+        is_invalid_options(&error, "gmres_with_truncation"),
+        "{error:?}"
+    );
+    let error = hermitian_lanczos_lowest_eigenpair(
+        apply,
+        &b,
+        &HermitianLanczosOptions {
+            max_iter,
+            ..HermitianLanczosOptions::default()
+        },
+    )
+    .err()
+    .unwrap();
+    assert!(
+        is_invalid_options(&error, "hermitian_lanczos_lowest_eigenpair"),
+        "{error:?}"
+    );
+    let error = hermitian_krylov_expm_multiply(
+        apply,
+        Complex64::new(0.0, -0.1),
+        &b,
+        &HermitianKrylovExpmOptions {
+            max_iter,
+            ..HermitianKrylovExpmOptions::default()
+        },
+    )
+    .err()
+    .unwrap();
+    assert!(
+        is_invalid_options(&error, "hermitian_krylov_expm_multiply"),
+        "{error:?}"
+    );
 }
 
 mod gmres_zero_rhs;

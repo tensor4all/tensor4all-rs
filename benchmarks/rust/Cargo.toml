@@ -13,6 +13,8 @@ default = []
 diagnostics = ["tensor4all-treeaci/diagnostics"]
 # HDF5 is optional so a default build of this package does not need libhdf5.
 hdf5 = ["dep:tensor4all-hdf5"]
+# CUDA execution of the treersi sketch (benchmark_treersi_cuda_step1).
+cuda = ["tensor4all-treersi/tenferro-cuda"]
 
 [dependencies]
 anyhow.workspace = true
@@ -135,3 +137,8 @@ path = "../tree-rsi/examples/rank_diagnostic.rs"
 name = "agreement_worker"
 path = "../tree-rsi/agreement/worker.rs"
 test = true
+
+[[example]]
+name = "benchmark_treersi_cuda_step1"
+path = "benchmark_treersi_cuda_step1.rs"
+required-features = ["cuda"]

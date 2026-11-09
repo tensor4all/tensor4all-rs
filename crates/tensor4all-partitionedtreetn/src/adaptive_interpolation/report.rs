@@ -886,7 +886,7 @@ pub struct L2ErrorReport {
     pub certified_fraction: f64,
     /// `||f~|| / sqrt(|X|)` from `TreeTN::log_norm` per accepted patch,
     /// combined in canonical path order; `None` when some patch's
-    /// `log_norm` is not finite (`||f~_P||` above about `1.34e154`). Not
+    /// `log_norm` is not finite (`||f~_P||` above `f64::MAX`). Not
     /// covered by the bitwise determinism claim: the canonicalization it
     /// relies on is not audited for reproducibility. It feeds the report
     /// only, never a decision.
