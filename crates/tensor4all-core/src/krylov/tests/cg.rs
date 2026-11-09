@@ -741,6 +741,10 @@ impl TensorIndex for FaultyVector {
 }
 
 impl TensorVectorSpace for FaultyVector {
+    fn is_single_precision(&self) -> bool {
+        false
+    }
+
     fn validate(&self) -> std::result::Result<(), Self::Error> {
         self.check(FailingOp::Validate).map(|_| ())
     }

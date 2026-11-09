@@ -176,6 +176,19 @@ fn reciprocal_factors_keep_finite_components_of_a_complex_value() {
 }
 
 #[test]
+fn reciprocal_factors_can_round_a_quotient_next_to_f64_max_to_infinity() {
+    // x / d rounds to f64::MAX, but the last product is x * 2^j * fl(1 / (d * 2^j)),
+    // and that rounded reciprocal-first product is 2^1024 even with an
+    // unbounded exponent range (checked here after scaling by 2^-1200).
+    let x = f64::from_bits(0x5a5e_dcf8_9af5_f111);
+    let d = f64::from_bits(0x1a5e_dcf8_9af5_f112);
+    assert_eq!(x / d, f64::MAX);
+    let (x_scaled, d_scaled) = (x * pow2(-600), d * pow2(600));
+    assert_eq!(x_scaled * (1.0 / d_scaled), pow2(1024 - 1200));
+    assert_eq!(divide_real(x, d), f64::INFINITY);
+}
+
+#[test]
 fn reciprocal_factors_track_the_divisor_gradient() {
     // d(x / d)/dd = -x / d^2 = -2^-3 * 2^-s for x = 2 * 2^s, d = 4 * 2^s,
     // on both the direct and the scaled path.

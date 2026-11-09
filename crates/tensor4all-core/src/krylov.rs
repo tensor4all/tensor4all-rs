@@ -1041,7 +1041,9 @@ where
 /// A zero-norm RHS returns the zero vector after validating the affine coefficients.
 /// An untracked `a1 = 0` gives `x = b / a0` in closed form, with the residual of
 /// that `x` reported; a subnormal quotient component can round to zero, so the
-/// closed form is not always converged.
+/// closed form is not always converged. For single-precision `b` the closed form
+/// requires every factor of [`AnyScalar::reciprocal_factors`] to be in the `f32`
+/// range.
 /// The Arnoldi basis is built from the unshifted `A` callback, while affine
 /// coefficients are applied in the projected Hessenberg problem, matching
 /// KrylovKit's affine linear-solve convention.
@@ -1049,7 +1051,9 @@ where
 /// Returns [`KrylovError::InvalidOptions`] when an option is invalid
 /// (including a `max_iter` whose Krylov workspace cannot be allocated),
 /// [`KrylovError::InvalidOptions`] also when `a0` or `a1` has a NaN or
-/// infinite component, checked before the zero-RHS return,
+/// infinite component, checked before the zero-RHS return, or when an untracked
+/// `a1 = 0` and single-precision `b` need a factor of `1 / a0` outside the `f32`
+/// range,
 /// [`KrylovError::NoAffineCoefficient`] when both affine coefficients are zero,
 /// and [`KrylovError::Operation`] when the operator application, vector-space
 /// arithmetic, or a backend call fails. Non-convergence is reported through the
@@ -1088,7 +1092,9 @@ where
 /// Returns [`KrylovError::InvalidOptions`] when an option is invalid
 /// (including a `max_iter` whose Krylov workspace cannot be allocated),
 /// [`KrylovError::InvalidOptions`] also when `a0` or `a1` has a NaN or
-/// infinite component, checked before the zero-RHS return,
+/// infinite component, checked before the zero-RHS return, or when an untracked
+/// `a1 = 0` and single-precision `b` need a factor of `1 / a0` outside the `f32`
+/// range,
 /// [`KrylovError::NoAffineCoefficient`] when both affine coefficients are zero,
 /// and [`KrylovError::Operation`] when the operator application, vector-space
 /// arithmetic, or a backend call fails. Non-convergence is reported through the
@@ -1192,6 +1198,17 @@ where
         // `a0 x = b` in closed form; the factors keep `b / a0` in range when
         // `1 / a0` itself is not.
         let factors = a0.reciprocal_factors()?;
+        if b.is_single_precision() {
+            if let Some(factor) = factors.iter().find(|f| !f.is_in_single_precision_range()) {
+                return Err(anyhow::Error::new(KrylovError::InvalidOptions {
+                    solver: "gmres",
+                    reason: format!(
+                        "dividing single-precision entries by a0 = {a0:?} needs the factor \
+                         {factor:?}, outside the f32 range"
+                    ),
+                }));
+            }
+        }
         let scale_calls = factors.len();
         let solution = factors
             .into_iter()

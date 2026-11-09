@@ -451,6 +451,12 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
     // Vector space operations (required for GMRES)
     // ------------------------------------------------------------------------
 
+    fn is_single_precision(&self) -> bool {
+        self.blocks
+            .iter()
+            .any(TensorVectorSpace::is_single_precision)
+    }
+
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         self.blocks.iter().try_fold(0.0, |sum, block| {
             let value = block

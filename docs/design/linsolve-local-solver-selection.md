@@ -156,6 +156,24 @@ is again solved in closed form. Both closed forms multiply by the factors of
   `9 * 2^-1074` (`|a0| < 1/2`) or `7 * 2^-1074` (otherwise), and a quotient
   component that small can round to zero.
 
+The last product multiplies by a rounded factor, so a quotient within a few
+units in the last place of `f64::MAX` can round to infinity:
+`from_bits(0x5a5edcf89af5f111) / from_bits(0x1a5edcf89af5f112)` is
+`f64::MAX` when divided directly but infinite through the factors, as it is
+for `x * fl(1 / d)` with an unbounded exponent range.
+
+The factors are `f64` scalars, and `scale` converts a scalar to the storage
+precision of single-precision (`f32`, `Complex32`) entries. A factor outside
+the `f32` range would become zero or infinite there: dividing `2^100` by
+`2^200 + 2^200 i` needs `2^-199`, although the quotient `2^-101 - 2^-101 i`
+is a normal `Complex32`. Both identity-only closed forms therefore reject a
+single-precision right-hand side (core `gmres_affine`) or network (TreeTN,
+when any node is single precision) when a factor fails
+`AnyScalar::is_in_single_precision_range`, instead of returning a wrong
+result. `TensorVectorSpace::is_single_precision` reports the storage
+precision. Dividing in `f64` and converting once would avoid the error but
+needs a cast in the tensor layer, which these closed forms do not have.
+
 ## Tests
 
 The tests run the actual dispatch rather than option storage:

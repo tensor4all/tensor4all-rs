@@ -248,3 +248,26 @@ fn divide_by_scalar_rejects_zero_and_non_finite_divisors() {
         );
     }
 }
+
+#[test]
+fn divide_by_scalar_rejects_factors_outside_the_single_precision_range() {
+    // The factors of 1 / (2^200 + 2^200 i) include 2^-199, which converts to
+    // an f32 zero; 2^100 / (2^200 + 2^200 i) = 2^-101 - 2^-101 i is a normal
+    // c32 value, so returning zero would be wrong.
+    let s = DynIndex::new_dyn(2);
+    let tensor = IdxTensor::from_dense(vec![s.clone()], vec![2.0_f32.powi(100), 3.0]).unwrap();
+    let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
+    let huge = AnyScalar::new_complex(pow2(200), pow2(200));
+    let error = divide_by_scalar(&mut tn.clone(), &huge).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("outside the f32 range"),
+        "{error:#}"
+    );
+
+    let mut tn = tn;
+    divide_by_scalar(&mut tn, &AnyScalar::new_real(4.0)).unwrap();
+    let dense = tn.to_dense().unwrap();
+    let expected =
+        IdxTensor::from_dense(dense.external_indices(), vec![2.0_f32.powi(98), 0.75]).unwrap();
+    assert_eq!(dense.sub(&expected).unwrap().maxabs().unwrap(), 0.0);
+}

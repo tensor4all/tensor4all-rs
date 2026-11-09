@@ -68,6 +68,10 @@ impl TensorIndex for PlainVector {
 }
 
 impl TensorVectorSpace for PlainVector {
+    fn is_single_precision(&self) -> bool {
+        false
+    }
+
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         Ok(self.data.iter().map(|x| x * x).sum())
     }
@@ -542,6 +546,49 @@ fn gmres_affine_closed_form_measures_its_residual() {
             assert_eq!(result.residual_norm, 1.0);
         }
     }
+}
+
+#[test]
+fn gmres_affine_closed_form_rejects_factors_outside_the_single_precision_range() {
+    // 2^100 / (2^200 + 2^200 i) = 2^-101 - 2^-101 i is a normal c32 value, but
+    // the factor 2^-199 converts to an f32 zero.
+    let pow2 = |k: i32| 2.0_f64.powi(k / 2) * 2.0_f64.powi(k - k / 2);
+    let idx = DynIndex::new_dyn(1);
+    let b = IdxTensor::from_dense(vec![idx.clone()], vec![2.0_f32.powi(100)]).unwrap();
+    let x0 = IdxTensor::from_dense(vec![idx], vec![0.0_f32]).unwrap();
+    let options = GmresOptions::default();
+    let solve = |a0: AnyScalar| {
+        gmres_affine(
+            |x: &IdxTensor| Ok(x.clone()),
+            &b,
+            &x0,
+            a0,
+            AnyScalar::new_real(0.0),
+            &options,
+        )
+    };
+    let error = solve(AnyScalar::new_complex(pow2(200), pow2(200))).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::InvalidOptions {
+                solver: "gmres",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(
+        error.to_string().contains("outside the f32 range"),
+        "{error}"
+    );
+
+    let result = solve(AnyScalar::new_real(4.0)).unwrap();
+    assert!(result.converged);
+    assert_eq!(
+        result.solution.to_vec::<f32>().unwrap(),
+        vec![2.0_f32.powi(98)]
+    );
 }
 
 #[test]

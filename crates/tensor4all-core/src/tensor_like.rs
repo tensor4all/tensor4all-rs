@@ -772,6 +772,28 @@ pub trait TensorVectorSpace: TensorIndex {
     /// computation reports a failure.
     fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, Self::Error>;
 
+    /// Returns whether entries are stored in single precision (`f32` or
+    /// `Complex32`).
+    ///
+    /// [`scale`](Self::scale) converts its scalar to the storage precision,
+    /// so a scalar component outside the `f32` range becomes zero or infinite
+    /// before the multiplication. Callers that apply `f64` factors check them
+    /// with [`AnyScalar::is_in_single_precision_range`] when this is `true`.
+    /// A container reports `true` when any of its parts is single precision.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorVectorSpace};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let single = IdxTensor::from_dense(vec![i.clone()], vec![1.0_f32, 2.0]).unwrap();
+    /// let double = IdxTensor::from_dense(vec![i], vec![1.0_f64, 2.0]).unwrap();
+    /// assert!(single.is_single_precision());
+    /// assert!(!double.is_single_precision());
+    /// ```
+    fn is_single_precision(&self) -> bool;
+
     /// Compute the Frobenius norm of the tensor.
     ///
     /// The default takes the square root of [`Self::norm_squared`]. Override

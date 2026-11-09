@@ -164,6 +164,10 @@ impl TensorIndex for DefaultOnlyTensor {
 }
 
 impl TensorVectorSpace for DefaultOnlyTensor {
+    fn is_single_precision(&self) -> bool {
+        false
+    }
+
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         Ok(self.data.iter().map(|value| value * value).sum())
     }

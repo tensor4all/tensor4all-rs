@@ -34,10 +34,38 @@ fn times_pow2(value: &AnyScalar, k: i32) -> AnyScalar {
 }
 
 impl AnyScalar {
+    /// Returns whether every nonzero component converts to a normal `f32`, so
+    /// that converting the scalar to single precision only rounds it to 24
+    /// significant bits.
+    ///
+    /// Use it on the factors of [`reciprocal_factors`](Self::reciprocal_factors)
+    /// before applying them to single-precision entries: a factor outside
+    /// this range would become zero or infinite, or lose a component.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::AnyScalar;
+    ///
+    /// assert!(AnyScalar::new_real(0.25).is_in_single_precision_range());
+    /// assert!(AnyScalar::new_complex(3.0, 0.0).is_in_single_precision_range());
+    /// assert!(!AnyScalar::new_real(2.0_f64.powi(-199)).is_in_single_precision_range());
+    /// assert!(!AnyScalar::new_complex(1.0, 1e300).is_in_single_precision_range());
+    /// assert!(!AnyScalar::new_real(f64::NAN).is_in_single_precision_range());
+    /// ```
+    pub fn is_in_single_precision_range(&self) -> bool {
+        [self.real(), self.imag()]
+            .into_iter()
+            .all(|component| component == 0.0 || (component as f32).is_normal())
+    }
+
     /// Returns scalar factors whose product is `1 / self`, ordered so that
     /// multiplying a value by each in turn divides it by `self` with every
-    /// intermediate finite when the quotient components are, and without
-    /// forming a component of `1 / self` that could underflow.
+    /// intermediate before the last product finite when the quotient
+    /// components are, and without forming a component of `1 / self` that
+    /// could underflow. The last product multiplies by a rounded factor, so a
+    /// quotient component within a few units in the last place of `f64::MAX`
+    /// can round to infinity.
     ///
     /// Use this instead of multiplying by `1 / self` when `self` may be tiny or
     /// huge: for `self = 3 * 2^-1070`, `1 / self` overflows although
@@ -73,6 +101,11 @@ impl AnyScalar {
     ///   granularity, so the absolute error is up to `9 * 2^-1074` when
     ///   `|self| < 1/2` and up to `7 * 2^-1074` otherwise, and a component
     ///   that small can round to zero.
+    ///
+    /// The guarantees are for `f64` and `Complex64` arithmetic. Entries stored
+    /// in single precision convert each factor to `f32`, which keeps the
+    /// guarantees only when every factor passes
+    /// [`is_in_single_precision_range`](Self::is_in_single_precision_range).
     ///
     /// A gradient-tracked divisor yields tracked factors.
     ///

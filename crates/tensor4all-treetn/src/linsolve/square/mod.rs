@@ -35,7 +35,7 @@ use std::hash::Hash;
 
 use anyhow::{bail, Context, Result};
 
-use tensor4all_core::{AnyScalar, IndexLike, TensorLike};
+use tensor4all_core::{AnyScalar, IndexLike, TensorLike, TensorVectorSpace};
 
 use crate::linsolve::common::LinsolveOptions;
 use crate::operator::{apply_linear_operator, ApplyOptions, IndexMapping, LinearOperator};
@@ -446,6 +446,9 @@ where
 /// a gauge where that node's entries are far from the represented values (for
 /// example `2^-1000` on one node and `2^1000` on another), the node can
 /// underflow or overflow although the represented quotient is finite.
+///
+/// A network with a single-precision node rejects a factor outside the `f32`
+/// range, which that node's `scale` would turn into zero or infinity.
 fn divide_by_scalar<T, V>(tn: &mut TreeTN<T, V>, divisor: &AnyScalar) -> Result<()>
 where
     T: TensorLike,
@@ -455,6 +458,19 @@ where
         .reciprocal_factors()
         .map_err(anyhow::Error::new)
         .context("square_linsolve: identity-only closed form")?;
+    let single_precision = tn
+        .node_indices()
+        .into_iter()
+        .filter_map(|node| tn.tensor(node))
+        .any(TensorVectorSpace::is_single_precision);
+    if single_precision {
+        if let Some(factor) = factors.iter().find(|f| !f.is_in_single_precision_range()) {
+            bail!(
+                "square_linsolve: identity-only closed form: dividing single-precision \
+                 tensors by a0 = {divisor:?} needs the factor {factor:?}, outside the f32 range"
+            );
+        }
+    }
     for factor in factors {
         tn.scale_mut(factor)?;
     }

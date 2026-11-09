@@ -6709,6 +6709,10 @@ impl TensorVectorSpace for IdxTensor {
         IdxTensor::norm_squared(self)
     }
 
+    fn is_single_precision(&self) -> bool {
+        self.is_f32() || self.is_c32()
+    }
+
     fn norm(&self) -> std::result::Result<f64, Self::Error> {
         IdxTensor::norm(self)
     }

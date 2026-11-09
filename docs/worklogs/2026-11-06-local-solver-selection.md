@@ -122,6 +122,12 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   respect to tracked `a0` and `a1` for every local solver. A two-dimensional
   case (`A = diag(2, 3)`, `b = (1, 2)`, tracked `a1 = 0`) pins the gradient of
   the one-step iterate, `-8.4`, which differs from the exact `-8`.
+- A quotient next to `f64::MAX` that the rounded last factor sends to
+  infinity is pinned by a core test.
+- Both identity-only closed forms reject single-precision entries when a
+  factor of `1 / a0` is outside the `f32` range
+  (`2^100 / (2^200 + 2^200 i)`), and still divide when every factor is in
+  range.
 - Core `gmres_affine` rejects a non-finite `a0` or `a1` before the zero-RHS
   and closed-form returns, and its closed form reports the measured residual
   of the returned solution (`2^-1074 / (0.3 + 0.2 i)` rounds to zero and is
