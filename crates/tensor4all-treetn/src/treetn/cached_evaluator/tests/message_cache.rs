@@ -1116,12 +1116,29 @@ fn message_cache_warm_cut_refreshes_both_directions() {
     );
     assert_eq!(evaluator.message_cache_order.get(&left), Some(&(0, 1)));
     assert_eq!(evaluator.message_cache_order.get(&right), Some(&(1, 0)));
-    for (edge, before) in stamps_before {
-        let after = evaluator.message_caches[&edge].last_used();
+    // Against the *post-reset* stamp, so only the warm call can explain the
+    // difference: every direction the cut serves holds a strictly larger stamp
+    // than the reset gave it. Comparing with the pre-reset stamp would pass on
+    // the reset alone.
+    for edge in [(0, 1), (1, 0)] {
+        let reset = stamps_reset
+            .iter()
+            .find(|(candidate, _)| *candidate == edge)
+            .map(|(_, stamp)| *stamp)
+            .expect("the reset stamps every cache that holds payload");
+        let before = stamps_before
+            .iter()
+            .find(|(candidate, _)| *candidate == edge)
+            .and_then(|(_, stamp)| *stamp);
         assert_ne!(
-            Some(after),
+            Some(reset),
             before,
             "{edge:?} kept its pre-reset stamp, so the reset proved nothing"
+        );
+        let after = evaluator.message_caches[&edge].last_used();
+        assert!(
+            after > reset,
+            "{edge:?} was not re-stamped by the warm cut: {reset} -> {after}"
         );
     }
 }
