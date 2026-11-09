@@ -787,7 +787,9 @@ fn enrichment_cutoff_survives_an_overflowing_rhs_norm() {
         .unwrap();
     assert_eq!(bond_dim(&state), 2);
     // A complex entry with finite parts can have a modulus above f64::MAX,
-    // so even the largest entry overflows; |11> is still kept.
+    // so even the largest entry overflows. The |11> singular value
+    // sqrt(2) * f64::MAX exceeds `cutoff * ||b_local||` for both cutoffs,
+    // although for 0.9 neither of the two is representable; |11> is kept.
     let complex_tail = EnrichmentStep {
         rhs: [
             Complex64::new(1.0, 0.0),
@@ -797,10 +799,13 @@ fn enrichment_cutoff_survives_an_overflowing_rhs_norm() {
         coefficients: (0.0, 1.0),
         operator_scale: 1.0,
     };
-    let (state, _) = complex_tail
-        .run(ResidualEnrichment::default().with_max_added(2))
-        .unwrap();
-    assert_eq!(bond_dim(&state), 2);
+    for cutoff in [1e-12, 0.9] {
+        let enrichment = ResidualEnrichment::default()
+            .with_max_added(2)
+            .with_cutoff(cutoff);
+        let (state, _) = complex_tail.run(enrichment).unwrap();
+        assert_eq!(bond_dim(&state), 2, "cutoff = {cutoff}");
+    }
 }
 
 #[test]

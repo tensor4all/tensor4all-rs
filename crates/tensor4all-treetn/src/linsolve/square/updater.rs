@@ -567,32 +567,14 @@ where
         let two_site = T::contract(&[&basis, &center])?;
         let two_site_indices = two_site.external_indices();
         let rhs = self.local_rhs(&region, &two_site_indices, state)?;
-        // `||b_local||` as `norm_scaled * norm_unit`. The plain norm can
-        // overflow although every entry is finite; then it is recomputed in
-        // units of the largest entry of `b_local / 2`, so `cutoff * ||b_local||`
-        // stays finite whenever it is representable. Halving first keeps that
-        // largest modulus finite also for a complex entry whose parts are
-        // finite but whose modulus exceeds `f64::MAX`.
-        let (norm_scaled, norm_unit) = match rhs.norm()? {
-            norm if norm.is_finite() => (norm, 1.0),
-            _ => {
-                let half = rhs.scale(AnyScalar::new_real(0.5))?;
-                let unit = half.maxabs()?;
-                if !unit.is_finite() {
-                    return Ok(());
-                }
-                let norm = half.scale(AnyScalar::new_real(1.0 / unit))?.norm()?;
-                (2.0 * norm, unit)
-            }
-        };
-        if norm_scaled == 0.0 {
+        if rhs.maxabs()? == 0.0 {
             return Ok(());
         }
         // residual = b - a0 x - a1 A x. A zero coefficient drops its term
         // instead of scaling it by zero, which would turn an overflowing
         // `A x` (or `x`) into NaN.
         let one = AnyScalar::new_real(1.0);
-        let mut residual = rhs;
+        let mut residual = rhs.clone();
         if !self.options.a0.is_zero() {
             residual = residual.axpby(one.clone(), &two_site, -self.options.a0.clone())?;
         }
@@ -611,6 +593,34 @@ where
         let overlap = T::contract(&[&basis.conj(), &residual])?;
         let residual = residual.sub(&T::contract(&[&basis, &overlap])?)?;
 
+        // Compare in units of `2 * unit`, where `unit` is the largest modulus
+        // of `b_local / 2` and `residual / 2`: `||b_local||`, the residual
+        // singular values and `cutoff * ||b_local||` can each overflow (or
+        // underflow) although every entry is finite, but in these units the
+        // entries have modulus at most 1. Halving first keeps `unit` finite
+        // for a complex entry whose finite parts give a modulus above
+        // `f64::MAX`; dividing by `sqrt(unit)` twice keeps the reciprocal
+        // finite for any normal or subnormal `unit`.
+        let half = AnyScalar::new_real(0.5);
+        let rhs_half = rhs.scale(half.clone())?;
+        let residual_half = residual.scale(half)?;
+        let unit = rhs_half.maxabs()?.max(residual_half.maxabs()?);
+        anyhow::ensure!(
+            unit.is_finite(),
+            "residual enrichment: the local RHS or residual has a non-finite entry"
+        );
+        if unit == 0.0 {
+            return Ok(());
+        }
+        let inv_sqrt_unit = AnyScalar::new_real(unit.sqrt().recip());
+        let rhs_norm = rhs_half
+            .scale(inv_sqrt_unit.clone())?
+            .scale(inv_sqrt_unit.clone())?
+            .norm()?;
+        let residual = residual_half
+            .scale(inv_sqrt_unit.clone())?
+            .scale(inv_sqrt_unit)?;
+
         // The enrichment cutoff is the only selection rule: pass it to the SVD
         // as an explicit absolute per-value policy, so neither the global
         // default policy nor a second factorization is involved.
@@ -619,10 +629,11 @@ where
         let threshold = if enrichment.cutoff == 0.0 {
             0.0
         } else {
-            enrichment.cutoff * norm_scaled * norm_unit
+            enrichment.cutoff * rhs_norm
         };
-        // The threshold overflows only when `cutoff * ||b_local||` exceeds
-        // `f64::MAX`; no finite singular value exceeds it, so nothing is added.
+        // In these units every residual singular value is at most the
+        // Frobenius norm, which is at most `sqrt(len)` and finite, so an
+        // overflowing threshold exceeds them all and nothing is added.
         if !threshold.is_finite() {
             return Ok(());
         }
