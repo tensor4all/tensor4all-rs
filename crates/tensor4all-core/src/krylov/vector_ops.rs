@@ -54,23 +54,35 @@ pub(super) fn divide_by_norm<T: TensorVectorSpace>(value: &T, norm: f64) -> Resu
     Ok((scaled.scale(AnyScalar::new_real(1.0 / mantissa))?, calls))
 }
 
-/// Largest `s` for which `x 2^-s` keeps the largest component of `x` nonzero:
-/// with `2^e <= max |x_i| < 2^(e+1)`, `x 2^-s` keeps a component of at least
-/// `2^-1074` exactly when `s <= e + 1074`. This is the whole range in which a
-/// down-scaled `x` still carries information; `None` for `x = 0`.
+/// Largest `s` for which `scale_pow2(x, -s)` keeps a nonzero component, or
+/// `None` for `x = 0`.
+///
+/// With `2^c <= |x_i| < 2^(c+1)` for the largest real or imaginary component,
+/// `x_i 2^-s` is nonzero for `s <= c + 1074`, and also for `s = c + 1075`
+/// when the mantissa of `x_i` exceeds 1 (it then rounds up to `2^-1074`;
+/// `2^c 2^-(c+1075) = 2^-1075` rounds to even, which is zero). `maxabs` gives
+/// the complex modulus, whose exponent `e` is `c` or `c + 1`, so the candidates
+/// `e + 1075`, `e + 1074` and `e + 1073` are checked on the scaled vector
+/// itself, with the same `scale_pow2` the retry applies.
 pub(super) fn largest_informative_exponent<T: TensorVectorSpace>(x: &T) -> Result<Option<i32>> {
     let largest = x.maxabs()?;
     if largest == 0.0 {
         return Ok(None);
     }
-    // A complex modulus can exceed f64::MAX although no component does; every
-    // component is at most 2^1024, so its exponent is at most 1023.
+    // Every component is at most f64::MAX < 2^1024, so the modulus exponent
+    // that matters is at most 1024 even when the modulus itself overflows.
     let exponent = if largest.is_finite() {
-        normalization_exponent(largest).min(1023)
+        normalization_exponent(largest).min(1024)
     } else {
-        1023
+        1024
     };
-    Ok(Some(exponent + 1074))
+    for candidate in [exponent + 1075, exponent + 1074, exponent + 1073] {
+        if scale_pow2(x.clone(), -candidate)?.maxabs()? > 0.0 {
+            return Ok(Some(candidate));
+        }
+    }
+    // Unreachable for a nonzero x by the bound above; the caller refuses.
+    Ok(None)
 }
 
 /// The smallest `s` in `1..=limit` for which `A(x 2^-s)` has only finite

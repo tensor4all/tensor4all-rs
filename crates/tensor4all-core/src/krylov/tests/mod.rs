@@ -1318,6 +1318,54 @@ fn gmres_affine_tracked_zero_a1_retry_rejects_the_first_out_of_range_exponent() 
 }
 
 #[test]
+fn gmres_affine_tracked_zero_a1_retry_boundary_follows_the_mantissa_of_x() {
+    // GPT r7 reproduction: x = 1.5 * 2^1000. x 2^-2074 = 1.5 * 2^-1074 rounds
+    // (to even) to 2^-1073, and x 2^-2075 = 0.75 * 2^-1074 rounds up to the
+    // smallest subnormal 2^-1074, so s = 2075 still keeps x nonzero; only
+    // s = 2076 (0.375 * 2^-1074) rounds it to zero. Round-to-nearest-even is
+    // the IEEE default on every CI target (no flush-to-zero in Rust).
+    // In range: with k = 97, t = x 2^(2000 + k) 2^-s is finite only from
+    // s = 2075, so the solve must reach that endpoint and succeed.
+    let idx = DynIndex::new_dyn(1);
+    let x_value = 1.5 * 2.0_f64.powi(1000);
+    let b = make_vector_with_index(vec![x_value], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let selector = make_vector_with_index(vec![1.0], &idx);
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        zero_operator_overflowing_at(97),
+        &b,
+        &x0,
+        1.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![x_value]);
+    assert_eq!(grad.real(), 0.0);
+
+    // Out of range: with k = 98 the image needs s = 2076, where x 2^-s is zero.
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let error = gmres_affine(
+        zero_operator_overflowing_at(98),
+        &b,
+        &x0,
+        AnyScalar::new_real(1.0),
+        a1,
+        &GmresOptions::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::OutOfRange {
+                solver: "gmres",
+                quantity: "operator image A(x 2^-s) for every s that keeps x nonzero",
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn gmres_affine_normalizes_a_residual_whose_reciprocal_norm_overflows() {
     // (I + I) x = 2^-1073 has x = 2^-1074, but 1 / |r| = 2^1073 is infinite.
     let idx = DynIndex::new_dyn(1);
