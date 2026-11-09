@@ -5879,9 +5879,11 @@ impl IdxTensor {
     /// The modulus of a real element, or of a complex element with a zero
     /// part, is exact. For a complex element with two nonzero parts,
     /// `hypot(re, im)` may round up by up to one ulp, so the value used is
-    /// two ulps below it: a lower bound on the true modulus, within three
-    /// ulps of it. Hence `floor(log2 value)` never exceeds the exponent of
-    /// the true smallest modulus.
+    /// the larger of two ulps below it and `max(|re|, |im|)`: a positive
+    /// lower bound on the true modulus (within three ulps of it for normal
+    /// values). Hence `floor(log2 value)` never exceeds the exponent of the
+    /// true smallest modulus, and a nonzero element is never reported as
+    /// zero.
     ///
     /// # Errors
     /// Returns [`IdxTensorError`] when authoritative storage or eager
@@ -5926,10 +5928,14 @@ impl IdxTensor {
         let mut value: Option<f64> = None;
         self.storage
             .for_each_payload_value(|scalar| {
+                let largest_part = scalar.re.abs().max(scalar.im.abs());
                 let magnitude = if scalar.re == 0.0 || scalar.im == 0.0 {
-                    scalar.re.abs().max(scalar.im.abs())
+                    largest_part
                 } else {
-                    modulus_lower_bound(scalar.re.hypot(scalar.im))
+                    // `max(|re|, |im|)` never exceeds the modulus and is
+                    // positive for a nonzero entry, so the bound never
+                    // reports a nonzero subnormal entry as zero.
+                    modulus_lower_bound(scalar.re.hypot(scalar.im)).max(largest_part)
                 };
                 if magnitude != 0.0 {
                     value = Some(value.map_or(magnitude, |current| current.min(magnitude)));

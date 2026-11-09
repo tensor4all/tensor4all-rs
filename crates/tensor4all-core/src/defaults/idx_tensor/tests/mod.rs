@@ -1112,13 +1112,36 @@ fn min_nonzero_abs_skips_zeros_and_keeps_subnormals() {
         ],
     )
     .unwrap();
-    // hypot gives 8u; two ulps below is 6u, inside [4u, 8u) like the true
-    // modulus sqrt(58) u ~ 7.6u.
-    assert_eq!(subnormal.min_nonzero_abs().unwrap(), Some(6.0 * u));
+    // hypot gives 8u; two ulps below is 6u, but max(|re|, |im|) = 7u is
+    // larger and still below the true modulus sqrt(58) u ~ 7.6u, in [4u, 8u).
+    assert_eq!(subnormal.min_nonzero_abs().unwrap(), Some(7.0 * u));
 
     let zero = IdxTensor::from_dense(vec![i.clone()], vec![0.0_f64; 4]).unwrap();
     assert_eq!(zero.min_nonzero_abs().unwrap(), None);
 
     let nan = IdxTensor::from_dense(vec![i], vec![1.0, f64::NAN, 0.0, 2.0]).unwrap();
     assert!(nan.min_nonzero_abs().is_err());
+}
+
+#[test]
+fn min_nonzero_abs_keeps_the_smallest_complex_subnormals_nonzero() {
+    // (entry, expected bound, true modulus). For u + iu and u + 2iu, hypot
+    // returns u and 2u, and two ulps below those is 0; the bound must stay
+    // positive (max(|re|, |im|)) and below the true modulus, with the same
+    // floor(log2).
+    let u = f64::from_bits(1);
+    let i = DynIndex::new_dyn(1);
+    for (entry, expected, modulus) in [
+        (Complex64::new(u, u), u, 2f64.sqrt()),
+        (Complex64::new(u, 2.0 * u), 2.0 * u, 5f64.sqrt()),
+        (Complex64::new(7.0 * u, 3.0 * u), 7.0 * u, 58f64.sqrt()),
+    ] {
+        let tensor = IdxTensor::from_dense(vec![i.clone()], vec![entry]).unwrap();
+        let value = tensor.min_nonzero_abs().unwrap();
+        assert_eq!(value, Some(expected), "{entry:e}");
+        // The true modulus is `modulus * u`; compare in units of u.
+        let value = value.unwrap() / u;
+        assert!(value > 0.0 && value <= modulus, "{entry:e}: {value} u");
+        assert_eq!(value.log2().floor(), modulus.log2().floor(), "{entry:e}");
+    }
 }

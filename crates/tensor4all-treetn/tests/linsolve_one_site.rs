@@ -1208,6 +1208,35 @@ fn enrichment_spread_uses_the_exact_exponent_of_a_rounded_complex_modulus() {
 }
 
 #[test]
+fn enrichment_sees_the_smallest_complex_subnormal_residual_entries() {
+    // `u = f64::from_bits(1)`. A residual entry `u + iu` (hypot rounds its
+    // modulus sqrt(2) u down to u) must count as nonzero: alone it is the
+    // only residual direction (spread 0) and is added; beside a unit entry
+    // the spread is 1074 and a zero cutoff is refused.
+    let u = f64::from_bits(1);
+    let step = |big: f64| EnrichmentStep {
+        rhs: [
+            Complex64::new(1.0, 0.0),
+            Complex64::new(big, 0.0),
+            Complex64::new(u, u),
+        ],
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let enrichment = ResidualEnrichment::default()
+        .with_max_added(2)
+        .with_cutoff(0.0);
+
+    let (state, sites) = step(0.0).run(enrichment).unwrap();
+    assert_eq!(bond_dim(&state), 2);
+    assert!(distance_from_00(&state, &sites) < 1e-12);
+
+    let error = range_error(&step(1.0).run(enrichment).unwrap_err());
+    assert_eq!((error.spread, error.shift), (1074, 0));
+    assert_eq!(error.smallest, u);
+}
+
+#[test]
 fn enrichment_refuses_a_zero_cutoff_beyond_the_supported_spread() {
     // (big, small, spread, shift) with spread = floor(log2 big) -
     // floor(log2 small) and shift = -floor(log2 big). One power-of-two shift
