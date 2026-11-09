@@ -150,8 +150,14 @@ class EvidenceArchiveTests(unittest.TestCase):
         records[-1]["cells"].pop(missing)
         pending = list(records)
 
+        def replay(_binary, _arm, _round, _out, _cpu, _filter, sink=None):
+            """Stand in for `run_arm`, which appends its own record before it can fail."""
+            record = pending.pop(0)
+            sink.append(record)
+            return record
+
         with tempfile.TemporaryDirectory() as tmp:
-            out, err = run_main(tmp, run_arm=lambda *a: pending.pop(0))
+            out, err = run_main(tmp, run_arm=replay)
             self.assertTrue(err.code)
             self.assertIn("experiment.json.gz", str(err.code))
             self.assertFalse((out / "summary.json").exists(), "a rejected experiment must not summarize")
@@ -183,6 +189,26 @@ class EvidenceArchiveTests(unittest.TestCase):
         self.assertEqual(archived["runs"][-1]["after"]["loadavg"], [0.0, 0.0, 0.0])
         self.assertIn("CPU_Speed_Limit = 100", archived["runs"][-1]["before"]["thermal"])
         self.assertEqual(archived["protocol"]["host"], HOST)
+
+    def test_arm_whose_cells_cannot_be_read_is_archived_with_its_observations(self):
+        # The executable exits 0, so only the Criterion files can fail here: unreadable
+        # cells must still cost the arm neither its load nor its thermal observations.
+        def unreadable_cells(*_args):
+            raise json.JSONDecodeError("Expecting value", "<criterion estimates>", 0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out, err = run_main(tmp, read_cells=unreadable_cells)
+            self.assertFalse((out / "summary.json").exists(), "unreadable cells must not summarize")
+            archived = json.loads(gzip.open(out / "experiment.json.gz", "rt").read())
+
+        self.assertIn("could not be read", str(err.code))
+        self.assertEqual([(r["arm"], r["round"], r["exit_code"]) for r in archived["runs"]],
+                         [("original", 1, 0)])
+        failed = archived["runs"][0]
+        self.assertNotIn("cells", failed, "unreadable cells must not be archived as measurements")
+        self.assertIn("Expecting value", failed["cells_error"], "the archive says why the cells are missing")
+        self.assertEqual(failed["after"]["loadavg"], [0.0, 0.0, 0.0])
+        self.assertIn("CPU_Speed_Limit = 100", failed["before"]["thermal"])
 
 
 if __name__ == "__main__":

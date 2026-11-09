@@ -199,7 +199,7 @@ def read_cells(criterion_home, baseline):
 
 
 def run_arm(binary, arm, round_no, out, cpu, bench_filter, sink=None):
-    """Time one arm; on failure append the record to `sink` so its observations survive."""
+    """Time one arm, appending its observations to `sink` before anything that can fail."""
     label = f"{arm}-r{round_no}"
     criterion_home = out / "criterion" / label
     env = dict(os.environ, **THREAD_ENV, CRITERION_HOME=str(criterion_home))
@@ -220,11 +220,17 @@ def run_arm(binary, arm, round_no, out, cpu, bench_filter, sink=None):
         "round": round_no, "arm": arm, "exit_code": proc.returncode,
         "elapsed_seconds": elapsed, "before": before, "after": after,
     }
+    if sink is not None:
+        # Appended before the cells are read: unreadable Criterion output must not
+        # cost this arm its load and thermal observations.
+        sink.append(run_record)
     if proc.returncode != 0:
-        if sink is not None:
-            sink.append(run_record)
         raise SystemExit(f"{label} exited with {proc.returncode}; see logs/{label}.txt")
-    run_record["cells"] = read_cells(criterion_home, label)
+    try:
+        run_record["cells"] = read_cells(criterion_home, label)
+    except (OSError, ValueError, KeyError, TypeError) as err:
+        run_record["cells_error"] = f"{type(err).__name__}: {err}"
+        raise SystemExit(f"{label} wrote cells that could not be read ({err}); see logs/{label}.txt")
     return run_record
 
 
@@ -417,7 +423,6 @@ def main():
         for round_no, order in enumerate(ROUND_ORDERS, start=1):
             for arm in order:
                 record = run_arm(binaries[arm], arm, round_no, out, args.cpu, args.filter, runs)
-                runs.append(record)
                 print(f"round {round_no} {arm}: {len(record['cells'])} cells, "
                       f"load {record['before']['loadavg'][0]:.2f} -> {record['after']['loadavg'][0]:.2f}", flush=True)
     finally:

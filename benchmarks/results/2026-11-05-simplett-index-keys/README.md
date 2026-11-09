@@ -17,12 +17,11 @@ performance promotion gate.
   `790df1082fd016ecdaaeb42f540330103580af9538c15dacfe50342ec7168125`.
 - Apple M3 Pro, macOS 27.0.1, default Apple Accelerate provider, Cargo `bench`
   profile (optimization level 3, debug info disabled). Affinity is unavailable.
-- Thread environment (values exported to every timed run, not an observation):
-  `RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
-  OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1`.
-  The effective thread count inside the arms was never measured, so these
-  settings are the only basis for a single-thread claim, and a provider that
-  ignores them would not have been detected.
+- Thread environment: `RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+  OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1`, exported
+  to every timed run. These are requested values, not observations: the effective
+  thread count inside the arms was never measured, so this suite compares the
+  arms under those settings and does not establish a single-thread baseline.
 - Six cases `(sites, stored bond dimension, left/right samples)`:
   `(32,1,8)`, `(100,1,8)`, `(100,1,32)`, `(100,8,32)`, `(300,1,8)`, `(300,8,8)`.
   Batch size is the square of the last value. Physical dimensions are binary.
@@ -91,12 +90,10 @@ The shared-only arm is slower than original in five of the six fixed-split warm
 cases, and final is faster than shared-only in all six. The exception is
 `warm_fixed/n32_chi1_batch64`: its per-round shared/original ratios are
 0.927146, 0.968685 and 1.401761, a median of 0.968685, with median times
-8.523878 µs shared and 8.989069 µs original. The shared-key attribution of the
-fixed-split cost comes from a separate quiet-host run, whose n=300 pure-hit
-measurements are recorded in the PR discussion and are not part of this
-directory. This case's 0.97× median ratio lies outside the range that
-explanation covers, so it is left unexplained here rather than attributed to
-shared keys. No regression is omitted.
+8.523878 µs shared and 8.989069 µs original. This case's 0.97× median ratio is
+left unexplained here rather than attributed to shared keys: the attribution
+survives for the other five cases only, and the separate quiet-host run behind it
+is not recorded in this directory. No regression is omitted.
 
 ## Complete experiment 2 observations
 
