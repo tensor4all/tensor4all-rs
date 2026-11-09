@@ -191,7 +191,10 @@ pub enum FitInitializer {
     /// No term of dimension χ_A·χ_B is ever formed: each output tensor is an
     /// independent random tensor of bond dimension [`bond_dim`](Self::LowRankRandom::bond_dim).
     /// With `max_bond_dim = None` and an SVD truncation tolerance, the sweeps
-    /// grow the ranks adaptively as required.
+    /// grow the ranks adaptively as required. Honoured by the `contract` fit path;
+    /// `contract_in` builds the zip-up start and ignores this
+    /// initializer, so the memory guarantee above does not hold
+    /// there.
     LowRankRandom {
         /// Initial bond dimension of every edge (`1` = start as small as
         /// possible and let the sweeps grow it).
@@ -291,13 +294,14 @@ impl ContractOptions {
 
     /// Set the fit initializer strategy.
     ///
-    /// Ignored for `Zipup` and `Naive` methods. The default is
-    /// [`FitInitializer::LowRankRandom`] with `bond_dim = 1` and the
-    /// deterministic default seed: fit contraction therefore starts from a
-    /// small random state and (with a truncation tolerance and no
-    /// `max_bond_dim`) grows ranks adaptively without constructing the exact
-    /// product bond. Pass [`FitInitializer::ZipUp`] to restore the previous
-    /// zip-up-initialized behavior.
+    /// Ignored for `Zipup` and `Naive` methods. A fit contraction with no
+    /// explicit initializer starts from [`FitInitializer::default()`]: the
+    /// compatibility choice, documented on that `Default` implementation; what
+    /// it costs is documented on [`FitInitializer::ZipUp`]. Pass
+    /// [`FitInitializer::LowRankRandom`] with a small `bond_dim`, a truncation
+    /// tolerance and no `max_bond_dim` to start from a random state instead and
+    /// let the fit grow ranks adaptively — on the `contract` path;
+    /// `contract_in` builds the zip-up start whatever the initializer says.
     ///
     /// # Examples
     ///

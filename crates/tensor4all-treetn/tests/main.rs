@@ -35,5 +35,6 @@ mod src_context_seam;
 mod swap_test;
 mod tdvp;
 mod tensor_like;
+mod treetn_operation_error;
 mod truncate_validation;
 mod unfuse;

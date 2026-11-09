@@ -1,16 +1,25 @@
 //! Tag test-owned allocations so unrelated harness cleanup cannot affect the count.
+//! The same allocator also reports the bytes a measured operation requests, so
+//! per-call allocation traffic is pinned next to retention.
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
 use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
 use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_tensorbackend::CpuExecutionContext;
+use tensor4all_tensorbackend::Storage;
 
 struct CountingAllocator;
 static LIVE_BYTES: AtomicIsize = AtomicIsize::new(0);
+/// Bytes requested while measuring: every measured `alloc`, plus a measured
+/// `realloc` at its new size. A resize inside one allocation therefore counts
+/// the new size rather than the growth, which keeps the number an upper bound.
+/// Both counters are process-wide and one test drives every measurement in this
+/// binary, so no `Measurement` can start inside another one.
+static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
     static MEASURING: Cell<bool> = const { Cell::new(false) };
@@ -44,6 +53,7 @@ unsafe impl GlobalAlloc for CountingAllocator {
             };
             if counted {
                 LIVE_BYTES.fetch_add(layout.size() as isize, Ordering::Relaxed);
+                ALLOCATED_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
             }
         }
         ptr
@@ -86,6 +96,9 @@ unsafe impl GlobalAlloc for CountingAllocator {
             let old_bytes = if was_counted { layout.size() } else { 0 };
             let new_bytes = if counted { new_size } else { 0 };
             LIVE_BYTES.fetch_add(new_bytes as isize - old_bytes as isize, Ordering::Relaxed);
+            if measuring() {
+                ALLOCATED_BYTES.fetch_add(new_size, Ordering::Relaxed);
+            }
         }
         result
     }
@@ -95,8 +108,13 @@ struct Measurement;
 
 impl Measurement {
     fn start() -> Self {
+        ALLOCATED_BYTES.store(0, Ordering::Relaxed);
         MEASURING.with(|flag| flag.set(true));
         Self
+    }
+
+    fn allocated_bytes(&self) -> usize {
+        ALLOCATED_BYTES.load(Ordering::Relaxed)
     }
 }
 
@@ -187,6 +205,7 @@ fn check_allocator_accounting() {
 fn plain_tensor_construction_does_not_accumulate_runtime_records() {
     check_allocator_accounting();
     check_delayed_warmup_cleanup();
+    check_dense_select_allocation();
     let index = DynIndex::new_dyn(2);
     let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
         CpuBackend::new(),
@@ -232,4 +251,34 @@ fn plain_tensor_construction_does_not_accumulate_runtime_records() {
             IdxTensor::from_diag(vec![index.clone(), second.clone()], vec![1.0_f64, 2.0]).unwrap();
         assert_eq!(tensor.to_vec::<f64>().unwrap(), vec![1.0, 0.0, 0.0, 2.0]);
     });
+}
+
+/// #1211: a dense host selection reads a few coordinates out of its source
+/// payload, so it must borrow that payload instead of copying it first.
+fn check_dense_select_allocation() {
+    let dims = [1024usize, 1024, 4];
+    let indices: Vec<DynIndex> = dims.iter().map(|&dim| DynIndex::new_dyn(dim)).collect();
+    let data: Vec<f64> = (0..dims.iter().product())
+        .map(|linear| linear as f64)
+        .collect();
+    let payload_bytes = std::mem::size_of_val(data.as_slice());
+    let storage = Storage::from_dense_col_major(data, &dims).unwrap();
+    let tensor = IdxTensor::from_storage(indices.clone(), Arc::new(storage)).unwrap();
+
+    let measurement = Measurement::start();
+    // Fix `a = 3` and `b = 5`; the result keeps `c` only, so it is 4 values.
+    let selected = tensor
+        .select_indices(&indices[..2], &[3, 5])
+        .expect("dense host selection");
+    let allocated = measurement.allocated_bytes();
+    drop(measurement);
+    println!("dense select allocated {allocated} bytes for a {payload_bytes} byte payload");
+
+    assert_eq!(selected.dims(), vec![4]);
+    let expected: Vec<f64> = (0..4).map(|c| (3 + 1024 * (5 + 1024 * c)) as f64).collect();
+    assert_eq!(selected.dense_host_values::<f64>().unwrap(), expected);
+    assert!(
+        allocated * 1000 < payload_bytes,
+        "a 4-value selection allocated {allocated} bytes out of a {payload_bytes} byte payload"
+    );
 }

@@ -183,7 +183,7 @@ where
             }
 
             if current_nodes_for_target.is_empty() {
-                return Err(TreeTNOperationError::from(
+                return Err(TreeTNOperationError::invalid_graph(
                     anyhow::anyhow!(
                         "Target node {:?} has site indices not found in current TreeTN",
                         target_node_name
@@ -200,7 +200,7 @@ where
         for (target_name, current_nodes) in &target_to_current {
             for current_node in current_nodes {
                 if let Some(existing_target) = current_to_target.get(current_node) {
-                    return Err(TreeTNOperationError::from(
+                    return Err(TreeTNOperationError::invalid_graph(
                         anyhow::anyhow!(
                             "Current node {:?} maps to multiple target nodes: {:?} and {:?}",
                             current_node,
@@ -223,7 +223,7 @@ where
                     .site_space(&current_name)
                     .is_some_and(|s| !s.is_empty())
             {
-                return Err(TreeTNOperationError::from(
+                return Err(TreeTNOperationError::invalid_graph(
                     anyhow::anyhow!(
                         "Current node {:?} has site indices but no corresponding target node",
                         current_name
@@ -571,7 +571,7 @@ where
                     if let Some(target_name) = site_to_target.get(site_idx) {
                         targets_for_node.insert(target_name.clone());
                     } else {
-                        return Err(TreeTNOperationError::from(
+                        return Err(TreeTNOperationError::invalid_graph(
                             anyhow::anyhow!(
                                 "Site index {:?} in current node {:?} has no corresponding target node",
                                 site_idx,

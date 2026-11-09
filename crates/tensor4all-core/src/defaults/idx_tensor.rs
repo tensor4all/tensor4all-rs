@@ -2341,25 +2341,28 @@ impl IdxTensor {
         positions: &[usize],
     ) -> Result<Self> {
         let dims = self.dims();
-        let data = self.dense_host_values::<T>()?;
         let strides = Self::col_major_strides(&dims)?;
         let kept_len = checked_product(kept_dims)?;
-        let mut output = Vec::with_capacity(kept_len);
-        for linear in 0..kept_len {
-            let kept_coordinates = Self::col_major_coordinates(linear, kept_dims);
-            let mut source_coordinates = vec![0usize; dims.len()];
-            for (position, &axis) in kept_axes.iter().enumerate() {
-                source_coordinates[axis] = kept_coordinates[position];
+        // The source payload is only read here, so borrow it instead of copying
+        // the whole tensor into a temporary vector.
+        self.with_dense_host_slice::<T, _>(|data| {
+            let mut output = Vec::with_capacity(kept_len);
+            for linear in 0..kept_len {
+                let kept_coordinates = Self::col_major_coordinates(linear, kept_dims);
+                let mut source_coordinates = vec![0usize; dims.len()];
+                for (position, &axis) in kept_axes.iter().enumerate() {
+                    source_coordinates[axis] = kept_coordinates[position];
+                }
+                for (&axis, &position) in selected_axes.iter().zip(positions.iter()) {
+                    source_coordinates[axis] = position;
+                }
+                let offset = Self::col_major_offset(&source_coordinates, &strides)?;
+                output.push(*data.get(offset).ok_or_else(|| {
+                    anyhow::anyhow!("column-major selection read offset {offset} is out of bounds")
+                })?);
             }
-            for (&axis, &position) in selected_axes.iter().zip(positions.iter()) {
-                source_coordinates[axis] = position;
-            }
-            let offset = Self::col_major_offset(&source_coordinates, &strides)?;
-            output.push(*data.get(offset).ok_or_else(|| {
-                anyhow::anyhow!("column-major selection read offset {offset} is out of bounds")
-            })?);
-        }
-        Self::from_host_dense(kept_indices, output).map_err(anyhow::Error::from)
+            Self::from_host_dense(kept_indices, output).map_err(anyhow::Error::from)
+        })?
     }
 
     fn select_dense_host_dispatch(

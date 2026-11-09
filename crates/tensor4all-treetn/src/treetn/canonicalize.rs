@@ -117,7 +117,7 @@ where
             // Check if already canonicalized with a different form
             if let Some(current_form) = self.canonical_form {
                 if current_form != options.form {
-                    return Err(TreeTNOperationError::from(
+                    return Err(TreeTNOperationError::invalid_configuration(
                         anyhow::anyhow!(
                             "Cannot move ortho center: current form is {:?} but {:?} was requested. \
                              Use CanonicalizationOptions::forced() to re-canonicalize with a different form.",
@@ -326,7 +326,7 @@ where
         if !options.force {
             if let Some(current_form) = self.canonical_form {
                 if current_form != options.form {
-                    return Err(TreeTNOperationError::from(
+                    return Err(TreeTNOperationError::invalid_configuration(
                         anyhow::anyhow!(
                             "Cannot move ortho center: current form is {:?} but {:?} was requested. \
                              Use CanonicalizationOptions::forced() to re-canonicalize with a different form.",

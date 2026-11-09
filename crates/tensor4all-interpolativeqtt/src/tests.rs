@@ -2,7 +2,7 @@ use approx::assert_relative_eq;
 use quanticsgrids::{DiscretizedGrid, UnfoldingScheme};
 use tensor4all_simplett::{Tensor3, Tensor3Ops};
 
-use crate::interpolation::{checked_dim_add, dense_test_points, flatten_index};
+use crate::interpolation::{checked_dim_add, dense_test_points, finest_level_scale, flatten_index};
 use crate::interval::NInterval;
 
 use super::*;
@@ -18,6 +18,29 @@ fn grid_1d(r: usize, a: f64, b: f64) -> DiscretizedGrid {
         .with_unfolding_scheme(UnfoldingScheme::Fused)
         .build()
         .unwrap()
+}
+
+/// The degree-`degree` interpolant of `f` on the parent cell of the finest cell
+/// `i`, evaluated at that parent cell's local coordinate `t`: the value the exact
+/// finest level has to reproduce (tensor4all-rs#1175).
+fn parent_interpolant(
+    f: &impl Fn(f64) -> f64,
+    a: f64,
+    b: f64,
+    k_out: usize,
+    degree: usize,
+    i: usize,
+    t: f64,
+) -> f64 {
+    let basis = get_chebyshev_grid(degree).unwrap();
+    let parents = 1usize << (k_out - 1);
+    let parent = i / 2;
+    (0..=degree)
+        .map(|alpha| {
+            let x = a + (b - a) * (parent as f64 + basis.grid()[alpha]) / parents as f64;
+            basis.evaluate(alpha, t).unwrap() * f(x)
+        })
+        .sum()
 }
 
 fn grid_nd(r: usize, lower: &[f64], upper: &[f64]) -> DiscretizedGrid {
@@ -450,6 +473,250 @@ fn estimate_interpolation_error_n3() {
     assert!(err < 1.0e-8);
 }
 
+/// The exact route follows whether a bond was truncated, not whether the
+/// function has low rank: a low-rank function carried by a full-rank train still
+/// takes it, and the same function compressed onto a shorter bond does not
+/// (tensor4all-rs#1175).
+#[test]
+fn invert_qtt_exact_finest_level_follows_truncation_not_the_function_rank() {
+    let r = 8;
+    let degree = 10;
+    let a = 0.0;
+    let b = 1.0;
+    // A quadratic: rank three in exact arithmetic, reproduced by degree 10 on any
+    // cell, so the parent interpolant is the reference at every node.
+    let f = |x: f64| x * x + 1.0;
+    let basis = get_chebyshev_grid(degree).unwrap();
+    let k_out = r - 1;
+
+    for (tolerance, exact) in [(0.0, true), (1.0e-10, false)] {
+        let opts = InterpolativeQttOptions::default().with_tolerance(tolerance);
+        let tt = interpolate_single_scale(f, a, b, r, degree, &opts).unwrap();
+        assert_eq!(
+            finest_level_scale(&tt, &basis).unwrap().is_some(),
+            exact,
+            "tolerance {tolerance} with bonds {:?}",
+            tt.link_dims()
+        );
+        let s = &invert_qtt(&tt, &basis, 1).unwrap()[k_out - 1];
+        let mut max_rel = 0.0_f64;
+        for i in 0..(1usize << k_out) {
+            for beta in 0..=degree {
+                let t = ((i % 2) as f64 + basis.grid()[beta]) / 2.0;
+                let reference = parent_interpolant(&f, a, b, k_out, degree, i, t);
+                max_rel = max_rel.max((s[[i, beta]] - reference).abs() / reference.abs());
+            }
+        }
+        if exact {
+            assert!(max_rel <= 1.0e-14, "uncompressed: {max_rel:e}");
+        } else {
+            // The blend is what the compressed train keeps, and it is far off.
+            assert!(max_rel > 1.0e-9, "compressed blend: {max_rel:e}");
+        }
+    }
+}
+
+/// `SimpleTensorTrain::scale_mut` multiplies the last core only, which leaves every
+/// bond and the represented function's shape intact: a rescaled uncompressed train
+/// is still uncompressed and keeps the exact route, with the factor applied.
+#[test]
+fn invert_qtt_rescaled_train_keeps_the_exact_finest_level() {
+    let r = 8;
+    let degree = 10;
+    let a = 0.0;
+    let b = 1.0;
+    let f = |x: f64| x * x + 1.0;
+    let basis = get_chebyshev_grid(degree).unwrap();
+    let k_out = r - 1;
+    let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
+
+    let mut tt = interpolate_single_scale(f, a, b, r, degree, &opts).unwrap();
+    let before = tt.link_dims();
+    tt.scale_mut(2.0);
+    assert_eq!(tt.link_dims(), before, "scaling must not change a bond");
+    assert_eq!(finest_level_scale(&tt, &basis).unwrap(), Some(2.0));
+
+    let s = &invert_qtt(&tt, &basis, 1).unwrap()[k_out - 1];
+    let mut max_rel = 0.0_f64;
+    for i in 0..(1usize << k_out) {
+        for beta in 0..=degree {
+            let t = ((i % 2) as f64 + basis.grid()[beta]) / 2.0;
+            let reference = 2.0 * parent_interpolant(&f, a, b, k_out, degree, i, t);
+            max_rel = max_rel.max((s[[i, beta]] - reference).abs() / reference.abs());
+        }
+    }
+    assert!(max_rel <= 1.0e-14, "rescaled train: {max_rel:e}");
+}
+
+/// A finest core that deviates from `L_alpha(sigma / 2)` beyond the proportional
+/// bound is rejected: it is multiplied by the parent coefficients, which can be
+/// large, so the decode error can exceed the deviation by orders of magnitude. The
+/// blend is the safe answer, and the test pins the rejection rather than a tolerance.
+#[test]
+fn invert_qtt_perturbed_finest_core_falls_back_to_the_blend() {
+    let r = 8;
+    let degree = 10;
+    let a = 0.0;
+    let b = 1.0;
+    let f = |x: f64| x * x + 1.0;
+    let basis = get_chebyshev_grid(degree).unwrap();
+    let k_out = r - 1;
+    let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
+
+    let mut tt = interpolate_single_scale(f, a, b, r, degree, &opts).unwrap();
+    assert!(finest_level_scale(&tt, &basis).unwrap().is_some());
+    {
+        let cores = tt.site_tensors_mut();
+        let last = &mut cores[cores.len() - 1];
+        let perturbed = *last.get3(2, 0, 0) + 5.0e-13;
+        last.set3(2, 0, 0, perturbed);
+    }
+    assert_eq!(finest_level_scale(&tt, &basis).unwrap(), None);
+
+    // The route really changed: the blend is O(h^2) away from the parent interpolant.
+    let s = &invert_qtt(&tt, &basis, 1).unwrap()[k_out - 1];
+    let mut max_rel = 0.0_f64;
+    for i in 0..(1usize << k_out) {
+        for beta in 0..=degree {
+            let t = ((i % 2) as f64 + basis.grid()[beta]) / 2.0;
+            let reference = parent_interpolant(&f, a, b, k_out, degree, i, t);
+            max_rel = max_rel.max((s[[i, beta]] - reference).abs() / reference.abs());
+        }
+    }
+    assert!(
+        max_rel > 1.0e-9,
+        "perturbed core kept the exact route: {max_rel:e}"
+    );
+}
+
+/// A gauge that scales a coefficient column of an earlier core leaves every stored
+/// sample intact — the basis is cardinal at the sampled points, so a column whose
+/// basis function vanishes there is invisible to `evaluate` — while the polynomial
+/// the finest level reconstructs changes. The exact route therefore has to agree
+/// with the train's own samples at the cell boundaries, and falls back to the blend
+/// when it does not (tensor4all-rs#1175, #1198 review).
+#[test]
+fn invert_qtt_gauge_scaled_coefficient_column_does_not_reach_the_exact_route() {
+    let r = 2;
+    let degree = 2;
+    let basis = get_chebyshev_grid(degree).unwrap();
+    let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
+    let mut tt = interpolate_single_scale(|_| 1.0, 0.0, 1.0, r, degree, &opts).unwrap();
+    // Column `alpha = 2` of the first core: `L_2` vanishes at both sampled points
+    // (`t = 0` and `t = 1/2`), so this is a sample-preserving gauge.
+    {
+        let cores = tt.site_tensors_mut();
+        for site in 0..cores[0].site_dim() {
+            let scaled = 2.0 * *cores[0].get3(0, site, 2);
+            cores[0].set3(0, site, 2, scaled);
+        }
+    }
+    // Every stored sample is unchanged.
+    for cell in 0..(1usize << (r - 1)) {
+        for sigma in 0..2 {
+            let value = tt.evaluate(&[cell, sigma]).unwrap();
+            assert!(
+                (value - 1.0).abs() < 1.0e-15,
+                "cell {cell} sigma {sigma}: {value}"
+            );
+        }
+    }
+    // The reconstructed finest level must still be the constant 1.
+    let fine = &invert_qtt(&tt, &basis, 1).unwrap()[r - 2];
+    for cell in 0..fine.nrows() {
+        for beta in 0..=degree {
+            assert!(
+                (fine[[cell, beta]] - 1.0).abs() < 1.0e-12,
+                "cell {cell} node {beta}: {}",
+                fine[[cell, beta]]
+            );
+        }
+    }
+}
+
+/// The documented limit of the exact route, pinned so nobody mistakes it for a total
+/// check: a rewrite whose component vanishes at every point the train stores —
+/// `t = 0`, `t = 1/2` and the shared endpoints, for degree >= 3 a basis function such
+/// as `L_1` — leaves all samples, all bonds, the finest core and the boundary residual
+/// untouched, and the exact route then reports the rewritten coefficients. No
+/// comparison inside `invert_qtt` can reject it: the train does not carry the
+/// information. See the `# Accuracy of the finest level` contract
+/// (tensor4all-rs#1175, #1198 review).
+#[test]
+fn invert_qtt_sample_preserving_interior_rewrite_is_documented_as_undetectable() {
+    let r = 2;
+    let degree = 4;
+    let basis = get_chebyshev_grid(degree).unwrap();
+    let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
+    let mut tt = interpolate_single_scale(|_| 1.0, 0.0, 1.0, r, degree, &opts).unwrap();
+    // `L_1` vanishes at `0`, `1/2` and `1`, so doubling its coefficient is invisible
+    // to every stored sample and to the boundary the check compares.
+    let before = *tt.site_tensor(0).get3(0, 0, 1);
+    tt.site_tensors_mut()[0].set3(0, 0, 1, 2.0 * before);
+    assert_eq!(tt.link_dims(), vec![degree + 1]);
+    assert!(finest_level_scale(&tt, &basis).unwrap().is_some());
+    for cell in 0..(1usize << (r - 1)) {
+        for sigma in 0..2 {
+            let value = tt.evaluate(&[cell, sigma]).unwrap();
+            assert!(
+                (value - 1.0).abs() < 1.0e-15,
+                "cell {cell} sigma {sigma}: {value}"
+            );
+        }
+    }
+    let fine = &invert_qtt(&tt, &basis, 1).unwrap()[r - 2];
+    // The nodes the train does store are still right; the interior one follows the
+    // rewritten coefficient, which is the documented consequence.
+    for beta in [0, degree / 2, degree] {
+        assert!(
+            (fine[[0, beta]] - 1.0).abs() < 1.0e-12,
+            "node {beta}: {}",
+            fine[[0, beta]]
+        );
+    }
+    assert!(
+        (fine[[0, 1]] - 2.0).abs() < 1.0e-12,
+        "node 1: {} (the documented limitation has changed)",
+        fine[[0, 1]]
+    );
+}
+
+/// `scale_mut` twice perturbs the finest core by a couple of ulps (the products do
+/// not associate), so the canonical comparison has to be proportional rather than
+/// bit-exact — otherwise a legitimately rescaled uncompressed train silently falls
+/// back to the `O(h^2)` blend (tensor4all-rs#1175, #1198 review).
+#[test]
+fn invert_qtt_repeatedly_rescaled_train_keeps_the_exact_finest_level() {
+    let r = 2;
+    let degree = 3;
+    let basis = get_chebyshev_grid(degree).unwrap();
+    let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
+    let f = |x: f64| 1.0 + x * x;
+    let mut tt = interpolate_single_scale(f, 0.0, 1.0, r, degree, &opts).unwrap();
+    tt.scale_mut(0.1);
+    tt.scale_mut(0.1);
+    assert!(
+        finest_level_scale(&tt, &basis).unwrap().is_some(),
+        "a rescaled uncompressed train must keep the exact route"
+    );
+    let fine = &invert_qtt(&tt, &basis, 1).unwrap()[r - 2];
+    // The last cell spans [1/2, 1]; the train was scaled by 0.1 twice.
+    let last = fine.nrows() - 1;
+    for beta in 0..=degree {
+        let x = (last as f64 + basis.grid()[beta]) / fine.nrows() as f64;
+        let expected = 0.01 * f(x);
+        let actual = fine[[last, beta]];
+        assert!(
+            (actual - expected).abs() <= 1.0e-12 * expected.abs(),
+            "cell {last} node {beta}: {actual} vs {expected}"
+        );
+    }
+}
+
+/// An uncompressed train keeps the canonical finest core, so the finest level is
+/// evaluated in the parent basis instead of the two-point blend
+/// (tensor4all-rs#1175). The blend is what carried the `O(h^2)` error, so the
+/// interpolation error below is the construction's own.
 #[test]
 fn invert_qtt_uncompressed_stage1() {
     let r = 12;
@@ -461,6 +728,10 @@ fn invert_qtt_uncompressed_stage1() {
     let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
 
     let tt = interpolate_single_scale(f, a, b, r, degree, &opts).unwrap();
+    assert!(
+        finest_level_scale(&tt, &basis).unwrap().is_some(),
+        "an uncompressed train has to take the exact finest level"
+    );
     let result = invert_qtt(&tt, &basis, 1).unwrap();
 
     let k_out = r - 1;
@@ -476,6 +747,27 @@ fn invert_qtt_uncompressed_stage1() {
         }
     }
     assert!(max_err < 1.0e-6);
+
+    // A quadratic is reproduced by the degree-10 interpolant on every cell, so the
+    // directly evaluated parent interpolant is the reference the exact route has to
+    // match; the blend would sit `O(h^2) = 2.4e-7` away from it at the interior
+    // nodes.
+    let g = |x: f64| x * x + 1.0;
+    let exact_tt = interpolate_single_scale(g, a, b, r, degree, &opts).unwrap();
+    assert!(finest_level_scale(&exact_tt, &basis).unwrap().is_some());
+    let exact = &invert_qtt(&exact_tt, &basis, 1).unwrap()[k_out - 1];
+    let mut max_rel = 0.0_f64;
+    for i in 0..(1usize << k_out) {
+        for beta in 0..=degree {
+            let t = ((i % 2) as f64 + basis.grid()[beta]) / 2.0;
+            let reference = parent_interpolant(&g, a, b, k_out, degree, i, t);
+            max_rel = max_rel.max((exact[[i, beta]] - reference).abs() / reference.abs());
+        }
+    }
+    assert!(
+        max_rel <= 1.0e-14,
+        "exact finest level differs from the parent interpolant by {max_rel:e}"
+    );
 }
 
 #[test]
@@ -674,19 +966,21 @@ fn invert_qtt_degree1_exact_at_every_node() {
     }
 }
 
-/// Degree 2 at small `r`: nodes `c = 0, 1/2` are exact (exact comparison), and
-/// the `c = 1` node is the documented two-sample blend `2 p(1/2) - p(0)` of the
-/// samples the QTT stores, for compressed and uncompressed trains alike.
+/// Degree 2 at small `r`: the uncompressed train evaluates the `c = 1` node
+/// exactly, while the compressed one keeps the documented two-sample blend
+/// `2 p(1/2) - p(0)` of the samples the QTT stores. Nodes `c = 0, 1/2` are exact
+/// for both, because the blend reproduces the two stored samples.
 #[test]
-fn invert_qtt_degree2_finest_level_is_documented_two_sample_blend() {
+fn invert_qtt_degree2_exact_when_uncompressed_blend_when_compressed() {
     let r = 3;
     let degree = 2;
     let f = |x: f64| x * x;
     let basis = get_chebyshev_grid(degree).unwrap();
     let grid = grid_1d(r, 0.0, 1.0);
-    for tolerance in [0.0, 1.0e-12] {
+    for (tolerance, exact) in [(0.0, true), (1.0e-12, false)] {
         let opts = InterpolativeQttOptions::default().with_tolerance(tolerance);
         let tt = interpolate_single_scale(f, 0.0, 1.0, r, degree, &opts).unwrap();
+        assert_eq!(finest_level_scale(&tt, &basis).unwrap().is_some(), exact);
         let s = &invert_qtt(&tt, &basis, 1).unwrap()[r - 2];
         for i in 0..(1usize << (r - 1)) {
             let sample = |idx: usize| {
@@ -698,7 +992,12 @@ fn invert_qtt_degree2_finest_level_is_documented_two_sample_blend() {
             assert!((p0 - f(i as f64 * h)).abs() < 1.0e-12);
             assert!((s[[i, 0]] - p0).abs() < 1.0e-12);
             assert!((s[[i, 1]] - p_half).abs() < 1.0e-12);
-            assert!((s[[i, 2]] - (2.0 * p_half - p0)).abs() < 1.0e-12);
+            let c_one = if exact {
+                f((i + 1) as f64 * h)
+            } else {
+                2.0 * p_half - p0
+            };
+            assert!((s[[i, 2]] - c_one).abs() < 1.0e-12, "tolerance {tolerance}");
         }
     }
 }

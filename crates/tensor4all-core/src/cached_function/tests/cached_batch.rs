@@ -12,7 +12,7 @@ fn bitwise_batch<V: Clone + Send + Sync + 'static>(values: Vec<V>, bits: impl Fn
             calls += 1;
             assert_eq!(misses.shape(), &[2, 2]);
             assert_eq!(misses.data(), &[1, 0, 0, 1]);
-            Ok(vec![values[1].clone(), values[2].clone()])
+            Ok::<_, anyhow::Error>(vec![values[1].clone(), values[2].clone()])
         })
         .unwrap();
     let expected = [0, 1, 2, 1].map(|i| bits(&values[i]));
@@ -92,7 +92,7 @@ fn cached_batch_failure_and_wrong_lengths_do_not_insert_partial_results() {
         assert!(!cache.is_cached(&[1]).unwrap());
         assert!(!cache.is_cached(&[2]).unwrap());
         let retry = cache
-            .evaluate_batched(points, |_| Ok(vec![20.0, 30.0]))
+            .evaluate_batched(points, |_| Ok::<_, anyhow::Error>(vec![20.0, 30.0]))
             .unwrap();
         assert_eq!(retry, vec![10.0, 20.0, 30.0, 20.0]);
     }
@@ -107,9 +107,10 @@ fn cached_batch_rejects_shape_and_late_invalid_points_before_callback() {
         (vec![0, 2], vec![1, 2]),
     ] {
         let error = cache
-            .evaluate_batched(ColMajorArrayRef::new(&data, &shape).unwrap(), |_| {
-                panic!("invalid batch reached the callback")
-            })
+            .evaluate_batched(
+                ColMajorArrayRef::new(&data, &shape).unwrap(),
+                |_| -> anyhow::Result<Vec<f64>> { panic!("invalid batch reached the callback") },
+            )
             .unwrap_err();
         assert!(matches!(error, CachedBatchError::Index(_)));
         assert!(cache.is_empty());
@@ -118,14 +119,16 @@ fn cached_batch_rejects_shape_and_late_invalid_points_before_callback() {
 
 #[test]
 fn cached_batch_limits_skip_only_distinct_inserts_and_preserve_values() {
-    for (limit, retained, skipped) in [(0, 0, 2), (16, 1, 1), (32, 2, 0)] {
+    // The smallest table holds 3 entries; below it nothing can be retained.
+    let smallest = crate::cached_function::memo_table::table_bytes::<u64, f64>(4);
+    for (limit, retained, skipped) in [(0, 0, 2), (smallest - 1, 0, 2), (smallest, 2, 0)] {
         let mut cache = MultiIndexCache::<f64>::with_retained_byte_limit(&[2], limit).unwrap();
         let values = cache
             .evaluate_batched(
                 ColMajorArrayRef::new(&[1, 0, 1], &[1, 3]).unwrap(),
                 |misses| {
                     assert_eq!(misses.data(), &[1, 0]);
-                    Ok(vec![20.0, 10.0])
+                    Ok::<_, anyhow::Error>(vec![20.0, 10.0])
                 },
             )
             .unwrap();
@@ -140,9 +143,10 @@ fn cached_batch_empty_scalar_and_extended_integer_keys() {
     let mut cache = MultiIndexCache::<f64, u8>::new(&[2]).unwrap();
     assert_eq!(
         cache
-            .evaluate_batched(ColMajorArrayRef::new(&[], &[1, 0]).unwrap(), |_| panic!(
-                "empty callback"
-            ))
+            .evaluate_batched(
+                ColMajorArrayRef::new(&[], &[1, 0]).unwrap(),
+                |_| -> anyhow::Result<Vec<f64>> { panic!("empty callback") },
+            )
             .unwrap(),
         Vec::<f64>::new()
     );
@@ -151,7 +155,7 @@ fn cached_batch_empty_scalar_and_extended_integer_keys() {
         scalar
             .evaluate_batched(ColMajorArrayRef::new(&[], &[0, 3]).unwrap(), |misses| {
                 assert_eq!(misses.shape(), &[0, 1]);
-                Ok(vec![7.0])
+                Ok::<_, anyhow::Error>(vec![7.0])
             })
             .unwrap(),
         vec![7.0; 3]
@@ -166,7 +170,7 @@ fn cached_batch_empty_scalar_and_extended_integer_keys() {
                 ColMajorArrayRef::new(&data, &[n_sites, 3]).unwrap(),
                 |misses| {
                     assert_eq!(misses.shape(), &[n_sites, 2]);
-                    Ok(vec![2.0, 3.0])
+                    Ok::<_, anyhow::Error>(vec![2.0, 3.0])
                 },
             )
             .unwrap();
@@ -194,7 +198,7 @@ fn cached_batch_encodes_each_request_only_once() {
     let data = [0, 1, 1, 0, 0, 1].map(Counted);
     let values = cache
         .evaluate_batched(ColMajorArrayRef::new(&data, &[2, 3]).unwrap(), |_| {
-            Ok(vec![10.0, 20.0])
+            Ok::<_, anyhow::Error>(vec![10.0, 20.0])
         })
         .unwrap();
     assert_eq!(values, vec![10.0, 20.0, 10.0]);
@@ -204,11 +208,19 @@ fn cached_batch_encodes_each_request_only_once() {
 }
 
 #[test]
-fn cached_batch_wide_keys_preserve_budget_order_and_failure_accounting() {
-    for (n_sites, key_bytes) in [(1, 8), (65, 16), (129, 32), (257, 64), (513, 128)] {
+fn cached_batch_wide_keys_account_their_tables_and_failures() {
+    // The smallest table of each key width, written out independently of the
+    // accounting code: 4 buckets × (size of the (key, f64) pair, alignment
+    // included, + 1 control byte) + 16 control bytes. `(u128, f64)` is 32 B.
+    for (n_sites, smallest) in [
+        (1, 4 * (16 + 1) + 16),
+        (65, 4 * (32 + 1) + 16),
+        (129, 4 * (40 + 1) + 16),
+        (257, 4 * (72 + 1) + 16),
+        (513, 4 * (136 + 1) + 16),
+    ] {
         let dims = vec![2; n_sites];
-        let mut cache =
-            MultiIndexCache::<f64>::with_retained_byte_limit(&dims, key_bytes + 8).unwrap();
+        let mut cache = MultiIndexCache::<f64>::with_retained_byte_limit(&dims, smallest).unwrap();
         let mut data = vec![0; 3 * n_sites];
         data[n_sites - 1] = 1;
         data[3 * n_sites - 1] = 1;
@@ -218,24 +230,24 @@ fn cached_batch_wide_keys_preserve_budget_order_and_failure_accounting() {
             .evaluate_batched(batch, |misses| {
                 assert_eq!(misses.shape(), &[n_sites, 2]);
                 assert_eq!(misses.data(), &data[..2 * n_sites]);
-                Ok(vec![30.0, 20.0])
+                Ok::<_, anyhow::Error>(vec![30.0, 20.0])
             })
             .unwrap();
         assert_eq!(out, vec![30.0, 20.0, 30.0]);
         assert_eq!(
             (cache.hits(), cache.misses(), cache.dropped_inserts()),
-            (0, 3, 1)
+            (0, 3, 0)
         );
-        assert_eq!(cache.retained_bytes(), key_bytes + 8);
+        assert_eq!(cache.retained_bytes(), smallest);
         assert_eq!(cache.get(&data[..n_sites]).unwrap(), Some(30.0));
-        assert_eq!(cache.get(&data[n_sites..2 * n_sites]).unwrap(), None);
-        // A hit and a miss precede an invalid coordinate. Neither the missing
-        // value nor the invalid point may be retained or sent to the callback.
+        assert_eq!(cache.get(&data[n_sites..2 * n_sites]).unwrap(), Some(20.0));
+        // Both points are retained, so this batch is a hit, a hit and an
+        // invalid coordinate: nothing reaches the callback and nothing changes.
         data[3 * n_sites - 1] = 2;
         assert!(matches!(
             cache.evaluate_batched(
                 ColMajorArrayRef::new(&data, &[n_sites, 3]).unwrap(),
-                |_| panic!("invalid input reached callback")
+                |_| -> anyhow::Result<Vec<f64>> { panic!("invalid input reached callback") }
             ),
             Err(CachedBatchError::Index(
                 CacheKeyError::IndexOutOfBounds { .. }
@@ -243,8 +255,29 @@ fn cached_batch_wide_keys_preserve_budget_order_and_failure_accounting() {
         ));
         assert_eq!(
             (cache.hits(), cache.misses(), cache.dropped_inserts()),
-            (2, 5, 1)
+            (4, 3, 0)
         );
-        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.len(), 2);
+
+        // A cache holding only the first point: the same batch is a hit, a
+        // miss and an invalid coordinate. The pending miss must not be
+        // retained or sent to the callback when validation fails.
+        let mut partial =
+            MultiIndexCache::<f64>::with_retained_byte_limit(&dims, smallest).unwrap();
+        partial.insert(&data[..n_sites], 30.0).unwrap();
+        assert!(matches!(
+            partial.evaluate_batched(
+                ColMajorArrayRef::new(&data, &[n_sites, 3]).unwrap(),
+                |_| -> Result<Vec<f64>, std::convert::Infallible> {
+                    panic!("invalid input reached callback")
+                }
+            ),
+            Err(CachedBatchError::Index(
+                CacheKeyError::IndexOutOfBounds { .. }
+            ))
+        ));
+        assert_eq!((partial.hits(), partial.misses()), (1, 1));
+        assert_eq!(partial.len(), 1);
+        assert_eq!(partial.get(&data[n_sites..2 * n_sites]).unwrap(), None);
     }
 }

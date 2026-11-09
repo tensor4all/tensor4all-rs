@@ -204,7 +204,10 @@ fn to_treetn_options(options: &ContractOptions) -> TreeTNContractionOptions {
 /// Contract two tensor trains, running the SRC method in a caller-owned
 /// execution context.
 ///
-/// The same algorithm, options and validation as [`contract`]; what differs is
+/// The same algorithm, options and validation as [`contract`], with one
+/// exception: [`FitInitializer::LowRankRandom`] is not consulted here, so a Fit
+/// contraction started through this entry point always builds the zip-up `C₀`.
+/// What differs otherwise is
 /// the resource the method's numerical work runs in. With a context, SRC runs
 /// through treetn's `contract_src_with_rng_in` and Zip-up through treetn's
 /// `contract_zipup_with_in`, and Fit and Naive through treetn's `contract_in`

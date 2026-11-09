@@ -10,7 +10,10 @@
 //!    use `compose_exclusive_linear_operators` to fill gaps with identity operators.
 //! 2. **Index Transformation**: Replace state's site indices with operator's input indices.
 //! 3. **Application**: Apply the operator using ZipUp, Fit, SRC, or local exact naive
-//!    apply depending on options.
+//!    apply depending on options. Zip-up passes the filled-in identity nodes through
+//!    instead of contracting and factorizing them: it emits each such node's state
+//!    tensor with the operator's output site indices, so the nodes the operator does
+//!    not act on keep their tensors and bond dimensions unchanged (issue #1186).
 //! 4. **Output Transformation**: Replace operator's output indices with true output indices.
 //!
 //! # Example
@@ -85,7 +88,9 @@ use crate::error::{
 use crate::operator::compose::{
     compose_exclusive_linear_operators, compose_exclusive_linear_operators_unchecked,
 };
-use crate::treetn::contraction::{contract, ContractionMethod, ContractionOptions, SrcOptions};
+use crate::treetn::contraction::{
+    contract, ContractionMethod, ContractionOptions, IdentityNodes, SrcOptions,
+};
 use crate::treetn::TreeTN;
 
 /// Options for [`apply_linear_operator`].
@@ -288,6 +293,36 @@ impl<V> ApplyOptions<V> {
 /// contraction. No full state/operator tensor is materialized; bonds may grow
 /// as state/operator product links.
 ///
+/// # Partial operators
+///
+/// A node the operator does not cover is filled in with an identity, and the
+/// filled-in node contributes nothing to `A|x⟩`: it only maps the operator's
+/// input site index of that node to its output index. `Zipup` therefore passes
+/// such a node through (`TreeTN::contract_zipup_skipping_identity_nodes`): its
+/// state tensor is emitted with the operator's output site indices and its bond
+/// dimensions are the ones it came in with, with no contraction and no
+/// factorization. An identity factor adds no rank, so factorizing such a node
+/// emits the bond the state already has there; the skip keeps that bond instead
+/// of rebuilding it.
+///
+/// The pass-through is an opt-in for exactness and nothing else. It happens only
+/// when `options.svd_policy` is `Some(policy)` with `policy.threshold == 0.0`
+/// (so no factorization in the zip-up can drop a direction) and
+/// `options.max_bond_dim` is `None`; a zero threshold under either scaling
+/// qualifies. An absent policy does **not** qualify: it resolves to the
+/// process-wide default cutoff, which is a mutable global, so reading silence as
+/// "no truncation" would let the skip change a caller's numerics without them
+/// asking. A non-zero threshold does not qualify either, even on a node the state
+/// certifies as isometric toward the centre: the isometry argument holds for that
+/// node, but it is not a property the caller requested.
+///
+/// Consequently the untouched region is left at its input bond dimensions, which
+/// is what "exact" means here; compress the result afterwards if that region
+/// should be smaller. Only the general tree schedule passes nodes through; a
+/// chain-shaped state keeps the chain schedule, which conditions both operands up
+/// front and shrinks at the centre afterwards, and factorizes every node. The
+/// `Fit`, `Src` and `Naive` methods contract every filled-in node too.
+///
 /// # Arguments
 ///
 /// * `operator` - The LinearOperator to apply
@@ -384,14 +419,16 @@ where
     let center: V = match options.center.as_ref() {
         Some(center) => {
             if state.node_index(center).is_none() {
-                return Err(TreeTNOperationError::from(anyhow::anyhow!(
+                return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
                     "apply_linear_operator: contraction center {center:?} is not a node of the state"
                 )));
             }
             center.clone()
         }
         None => state.preferred_contraction_center().ok_or_else(|| {
-            TreeTNOperationError::from(anyhow::anyhow!("apply_linear_operator: empty state"))
+            TreeTNOperationError::invalid_configuration(anyhow::anyhow!(
+                "apply_linear_operator: empty state"
+            ))
         })?,
     };
 
@@ -399,13 +436,17 @@ where
     let state_nodes: HashSet<V> = state.node_names().into_iter().collect();
     let op_nodes: HashSet<V> = operator.node_names();
 
-    let full_operator = if op_nodes == state_nodes {
-        if options.method == ContractionMethod::Naive {
+    // Nodes the operator does not cover come back as `identity_nodes`, where the
+    // extension fills in an identity on the state's site space: a zip-up has
+    // nothing to do at such a node.
+    let (full_operator, identity_nodes) = if op_nodes == state_nodes {
+        let operator = if options.method == ContractionMethod::Naive {
             embed_full_operator_on_state_topology_for_naive(operator, state)?
         } else {
             // Operator covers all nodes - use directly
             operator.clone()
-        }
+        };
+        (operator, IdentityNodes::new())
     } else if op_nodes.is_subset(&state_nodes) {
         // Partial operator - need to compose with identity on gaps
         extend_operator_to_full_space(operator, state)?
@@ -437,6 +478,16 @@ where
     let contracted = if options.method == ContractionMethod::Naive {
         apply_linear_operator_naive_local(&full_operator, &transformed_state, &center)
             .context("Failed to locally apply state with operator")?
+    } else if options.method == ContractionMethod::Zipup {
+        transformed_state
+            .contract_zipup_skipping_identity_nodes(
+                full_operator.mpo(),
+                &center,
+                options.svd_policy,
+                options.max_bond_dim,
+                &identity_nodes,
+            )
+            .context("Failed to contract state with operator")?
     } else {
         contract(
             &transformed_state,
@@ -1094,10 +1145,14 @@ where
 /// For gap nodes, creates proper index mappings where:
 /// - True indices = state's actual site indices
 /// - Internal indices = new simulated indices for the MPO tensor
+///
+/// Returns the extended operator together with the gap nodes' site index pairs,
+/// so a zip-up can skip the nodes whose operator factor is that identity.
+#[allow(clippy::type_complexity)]
 fn extend_operator_to_full_space<T, V>(
     operator: &LinearOperator<T, V>,
     state: &TreeTN<T, V>,
-) -> Result<LinearOperator<T, V>>
+) -> Result<(LinearOperator<T, V>, IdentityNodes<T::Index, V>)>
 where
     T: TensorLike,
     T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
@@ -1199,7 +1254,10 @@ where
         composed.output_mapping.insert(gap_name, mapping);
     }
 
-    Ok(composed)
+    // `gap_site_indices` pairs are `Index::sim` copies of the state's site
+    // indices, so each pair has one dimension: that is what lets a zip-up emit a
+    // gap node as its state tensor with the output legs.
+    Ok((composed, gap_site_indices))
 }
 
 #[allow(clippy::type_complexity)]
