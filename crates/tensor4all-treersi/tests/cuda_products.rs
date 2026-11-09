@@ -259,11 +259,20 @@ fn cuda_product_inside_a_cpu_session_is_rejected() {
     let error = nested
         .expect("entering one CPU session succeeds")
         .expect_err("a CUDA run cannot nest inside a CPU session");
-    let message = error.to_string();
-    assert!(
-        message.contains("session"),
-        "the rejection must name the session entry: {message}"
-    );
+    match error {
+        TreeRsiError::Numerical { source } => {
+            let message = source.to_string();
+            assert!(
+                message.contains("session"),
+                "the rejection must name the session entry: {message}"
+            );
+            assert!(
+                std::error::Error::source(&*source).is_some(),
+                "the typed re-entry diagnostic must stay in the source chain: {message}"
+            );
+        }
+        other => panic!("a failed readback must be Numerical, got {other:?}"),
+    }
 }
 
 #[test]

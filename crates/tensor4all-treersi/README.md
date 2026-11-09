@@ -6,9 +6,11 @@ Hadamard products of compatible `TreeTN<IdxTensor, V>` inputs. Supports `f32`,
 RNGs, and supplied column-major probes. The sketch blocks stay in host buffers;
 with a CUDA context the contractions dispatch to the device and pay an explicit
 transfer per operand and per result (issue #1158 step 1), and the rank decision
-runs on the host. RSI has no ACI dependency, including
-build and development dependencies; the comparison executable lives separately
-in `benchmarks/tree-rsi`.
+runs on the host. The CUDA numerical tests cover `f64` and `Complex64`; `f32` and
+`Complex32` are supported and covered on CPU, but have no CUDA numerical
+case yet. RSI has no ACI dependency, including build and development
+dependencies; the comparison executable lives separately in
+`benchmarks/tree-rsi`.
 
 Start with the [guide](../../docs/book/src/guides/tree-rsi.md) and the runnable
 [validated product example](examples/validated_product.rs):

@@ -136,16 +136,32 @@ fn read_cores<T: TreeRsiScalar, V: TreeRsiNode>(
         )?;
         // INVARIANT: a CUDA run reaches the process-global CPU session here even
         // though its own context is CUDA; a caller already inside a CPU session
-        // therefore gets that session's re-entry rejection, reported as
-        // `ScalarKind` because the readback fails.
-        let data = ordered_host_core(context, tensor, &order)?
-            .to_vec::<T>()
-            .map_err(|e| TreeRsiError::ScalarKind {
-                message: e.to_string(),
-            })?;
+        // therefore gets that session's re-entry rejection.
+        let host = ordered_host_core(context, tensor, &order)?;
+        // Only a payload of another scalar type is a caller error (the stable
+        // `ScalarKind` variant). Every other readback failure keeps its typed
+        // cause: the CPU session re-entry diagnostic is a `Numerical` source and
+        // must stay inspectable instead of being flattened into a message.
+        let data = host.to_vec::<T>().map_err(readback_error)?;
         cores.push(Scaled::new(Dense { dims, data }, 0)?);
     }
     Ok(cores)
+}
+
+/// Map a host-readback failure to the public error.
+///
+/// A payload of another scalar type is a caller error and keeps the stable
+/// `ScalarKind` variant. Every other readback failure -- the process-global CPU
+/// session rejecting a re-entry, a storage failure -- keeps its typed cause in
+/// `Numerical`, whose `source` chain stays inspectable.
+fn readback_error(error: tensor4all_core::IdxTensorError) -> TreeRsiError {
+    if error.is_payload_scalar_type_mismatch() {
+        TreeRsiError::ScalarKind {
+            message: error.to_string(),
+        }
+    } else {
+        TreeRsiError::numerical(error)
+    }
 }
 
 fn probes<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
@@ -819,4 +835,47 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
                     .count(),
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::readback_error;
+    use crate::TreeRsiError;
+    use tensor4all_core::{DynIndex, IdxTensor, IdxTensorError};
+    use tensor4all_tensorbackend::{CpuExecutionContextError, ExecutionContextEntryError};
+
+    #[test]
+    fn a_session_reentry_readback_failure_keeps_its_typed_source() {
+        let error = IdxTensorError::EngineEntry {
+            source: ExecutionContextEntryError::Cpu(CpuExecutionContextError::Reentered),
+        };
+        match readback_error(error) {
+            TreeRsiError::Numerical { source } => {
+                assert!(
+                    source.to_string().contains("session"),
+                    "the re-entry diagnostic must survive: {source}"
+                );
+                assert!(
+                    std::error::Error::source(&*source).is_some(),
+                    "the typed re-entry diagnostic must stay in the chain"
+                );
+            }
+            other => panic!("a failed readback must be Numerical, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn another_scalar_type_is_reported_as_a_scalar_kind() {
+        let site = DynIndex::new_dyn(2);
+        let tensor = IdxTensor::from_dense(vec![site], vec![1.0_f64, 2.0]).unwrap();
+        let error = tensor.to_vec::<f32>().unwrap_err();
+        assert!(
+            error.is_payload_scalar_type_mismatch(),
+            "a dtype mismatch must be classified at to_vec: {error}"
+        );
+        assert!(matches!(
+            readback_error(error),
+            TreeRsiError::ScalarKind { .. }
+        ));
+    }
 }
