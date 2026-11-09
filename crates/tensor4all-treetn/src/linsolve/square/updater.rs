@@ -569,16 +569,20 @@ where
         let rhs = self.local_rhs(&region, &two_site_indices, state)?;
         // `||b_local||` as `norm_scaled * norm_unit`. The plain norm can
         // overflow although every entry is finite; then it is recomputed in
-        // units of the largest entry, so `cutoff * ||b_local||` stays finite
-        // whenever it is representable.
+        // units of the largest entry of `b_local / 2`, so `cutoff * ||b_local||`
+        // stays finite whenever it is representable. Halving first keeps that
+        // largest modulus finite also for a complex entry whose parts are
+        // finite but whose modulus exceeds `f64::MAX`.
         let (norm_scaled, norm_unit) = match rhs.norm()? {
             norm if norm.is_finite() => (norm, 1.0),
             _ => {
-                let unit = rhs.maxabs()?;
+                let half = rhs.scale(AnyScalar::new_real(0.5))?;
+                let unit = half.maxabs()?;
                 if !unit.is_finite() {
                     return Ok(());
                 }
-                (rhs.scale(AnyScalar::new_real(1.0 / unit))?.norm()?, unit)
+                let norm = half.scale(AnyScalar::new_real(1.0 / unit))?.norm()?;
+                (2.0 * norm, unit)
             }
         };
         if norm_scaled == 0.0 {
@@ -640,9 +644,19 @@ where
             return Ok(());
         }
 
-        let stacked = basis
-            .direct_sum(&svd.left, &[(bond, svd.bond_index)])?
-            .tensor;
+        // The residual directions are complex when `b` or `A` is complex
+        // although the basis may be real (a real initial guess); the direct
+        // sum needs one scalar type, so promote the real operand.
+        let complex_one = AnyScalar::new_complex(1.0, 0.0);
+        let (basis, left) = match (
+            basis.inner_product(&basis)?.is_complex(),
+            svd.left.inner_product(&svd.left)?.is_complex(),
+        ) {
+            (false, true) => (basis.scale(complex_one)?, svd.left),
+            (true, false) => (basis, svd.left.scale(complex_one)?),
+            _ => (basis, svd.left),
+        };
+        let stacked = basis.direct_sum(&left, &[(bond, svd.bond_index)])?.tensor;
         // Re-orthonormalize: the new directions are orthogonal to the old
         // basis only up to rounding.
         let enlarged = stacked.factorize_full_rank(&src_side, FactorizeAlg::QR, Canonical::Left)?;

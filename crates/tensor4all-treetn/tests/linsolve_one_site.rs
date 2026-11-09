@@ -747,7 +747,7 @@ fn enrichment_with_a1_zero_does_not_apply_an_overflowing_operator() {
     // With a1 = 0 the residual is b - a0 x. Applying A = (1e200 I) (x) (1e200 I)
     // overflows to infinity, and 0 * inf would poison the residual with NaN.
     let step = EnrichmentStep {
-        rhs: [1.0, 1.0, 0.5],
+        rhs: [1.0, 1.0, 0.5].map(Complex64::from),
         coefficients: (1.0, 0.0),
         operator_scale: 1e200,
     };
@@ -763,7 +763,7 @@ fn enrichment_cutoff_survives_an_overflowing_rhs_norm() {
     // finite. Both residual directions have singular value f64::MAX, above
     // that threshold for every cutoff below, so both are kept.
     let huge = EnrichmentStep {
-        rhs: [1.0, f64::MAX, f64::MAX],
+        rhs: [1.0, f64::MAX, f64::MAX].map(Complex64::from),
         coefficients: (0.0, 1.0),
         operator_scale: 1.0,
     };
@@ -778,7 +778,7 @@ fn enrichment_cutoff_survives_an_overflowing_rhs_norm() {
     // singular value 1, far below 1e-12 * ||b_local|| ~ 1.8e296, so only
     // |11> is added.
     let tiny_tail = EnrichmentStep {
-        rhs: [1.0, f64::MAX, 1.0],
+        rhs: [1.0, f64::MAX, 1.0].map(Complex64::from),
         coefficients: (0.0, 1.0),
         operator_scale: 1.0,
     };
@@ -786,4 +786,39 @@ fn enrichment_cutoff_survives_an_overflowing_rhs_norm() {
         .run(ResidualEnrichment::default().with_max_added(2))
         .unwrap();
     assert_eq!(bond_dim(&state), 2);
+    // A complex entry with finite parts can have a modulus above f64::MAX,
+    // so even the largest entry overflows; |11> is still kept.
+    let complex_tail = EnrichmentStep {
+        rhs: [
+            Complex64::new(1.0, 0.0),
+            Complex64::new(f64::MAX, f64::MAX),
+            Complex64::new(1.0, 0.0),
+        ],
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let (state, _) = complex_tail
+        .run(ResidualEnrichment::default().with_max_added(2))
+        .unwrap();
+    assert_eq!(bond_dim(&state), 2);
+}
+
+#[test]
+fn enrichment_with_a_complex_rhs_and_a_real_state() {
+    // The initial state is real and the RHS complex, so the residual
+    // directions are complex while the current src basis is real.
+    let step = EnrichmentStep {
+        rhs: [
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.5),
+        ],
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let (state, sites) = step
+        .run(ResidualEnrichment::default().with_max_added(2))
+        .unwrap();
+    assert_eq!(bond_dim(&state), 3);
+    assert!(distance_from_00(&state, &sites) < 1e-12);
 }

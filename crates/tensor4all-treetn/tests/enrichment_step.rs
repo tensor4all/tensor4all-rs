@@ -4,6 +4,8 @@
 //! test targets.
 use std::collections::HashMap;
 
+use num_complex::Complex64;
+
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::{
     apply_local_update_sweep, CanonicalizationOptions, IndexMapping, LinsolveOptions,
@@ -18,7 +20,7 @@ pub(crate) type State = TreeTN<IdxTensor, usize>;
 /// state is the state right after enrichment, before any solve at node 1.
 pub(crate) fn enrich_once(small: f64, enrichment: ResidualEnrichment) -> (State, [DynIndex; 2]) {
     EnrichmentStep {
-        rhs: [1.0, 1.0, small],
+        rhs: [1.0, 1.0, small].map(Complex64::from),
         coefficients: (0.0, 1.0),
         operator_scale: 1.0,
     }
@@ -28,9 +30,10 @@ pub(crate) fn enrich_once(small: f64, enrichment: ResidualEnrichment) -> (State,
 
 /// The step of [`enrich_once`] with RHS `|00> + rhs[1] |11> + rhs[2] |22>`
 /// (`rhs[0]` scales `|00>`), coefficients `(a0, a1)` and `A` the product of
-/// `operator_scale * I` on each site.
+/// `operator_scale * I` on each site. The RHS is complex if any `rhs[k]` has
+/// a nonzero imaginary part, and real otherwise.
 pub(crate) struct EnrichmentStep {
-    pub(crate) rhs: [f64; 3],
+    pub(crate) rhs: [Complex64; 3],
     pub(crate) coefficients: (f64, f64),
     pub(crate) operator_scale: f64,
 }
@@ -52,17 +55,24 @@ impl EnrichmentStep {
             vec![0, 1],
         )
         .unwrap();
-        let diag = |index: &DynIndex, bond: &DynIndex, values: [f64; 3]| {
-            let mut data = vec![0.0; 9];
+        let complex = self.rhs.iter().any(|value| value.im != 0.0);
+        let diag = |index: &DynIndex, bond: &DynIndex, values: [Complex64; 3]| {
+            let mut data = vec![Complex64::new(0.0, 0.0); 9];
             for (k, value) in values.into_iter().enumerate() {
                 data[4 * k] = value;
             }
-            IdxTensor::from_dense(vec![index.clone(), bond.clone()], data).unwrap()
+            let indices = vec![index.clone(), bond.clone()];
+            if complex {
+                IdxTensor::from_dense(indices, data).unwrap()
+            } else {
+                IdxTensor::from_dense(indices, data.iter().map(|v| v.re).collect::<Vec<_>>())
+                    .unwrap()
+            }
         };
         let link = DynIndex::new_dyn(3);
         let rhs = TreeTN::<IdxTensor, usize>::from_tensors(
             vec![
-                diag(&sites[0], &link, [1.0, 1.0, 1.0]),
+                diag(&sites[0], &link, [Complex64::new(1.0, 0.0); 3]),
                 diag(&sites[1], &link, self.rhs),
             ],
             vec![0, 1],
