@@ -2150,6 +2150,19 @@ fn krylov_basis_combinations_reject_an_empty_basis_or_mismatched_coefficients() 
         combine_basis_with_coefficients::<IdxTensor>(&[], &[], &HermitianLanczosOptions::default());
     let empty = empty.unwrap_err();
     assert!(empty.to_string().contains("empty Krylov basis"), "{empty}");
+
+    let empty: Result<IdxTensor> = combine_basis_with_complex_coefficients::<IdxTensor>(
+        &[],
+        &[],
+        1.0e-10,
+        "hermitian_krylov_expm_multiply",
+    );
+    let empty = empty.unwrap_err();
+    assert!(empty.to_string().contains("empty Krylov basis"), "{empty}");
+    assert!(
+        empty.to_string().contains("hermitian_krylov_expm_multiply"),
+        "{empty}"
+    );
 }
 
 #[test]
