@@ -601,11 +601,11 @@ where
         // a normal `f64` (faer flushes subnormal singular values to zero)
         // exactly when the entries span at most `MAX_RESIDUAL_SPREAD` binary
         // orders of magnitude; see `ResidualEnrichment`.
-        let Some(smallest) = residual.min_nonzero_abs()? else {
+        let Some((smallest_exp, smallest)) = pow2_scaling::smallest_exponent(&residual)? else {
             return Ok(());
         };
         let largest_exp = pow2_scaling::largest_exponent(&residual)?;
-        let spread = largest_exp - pow2_scaling::exponent(smallest);
+        let spread = largest_exp - smallest_exp;
         let shift = -largest_exp;
         let largest = residual.maxabs()?;
         let residual = pow2_scaling::scale_pow2(&residual, shift)?;

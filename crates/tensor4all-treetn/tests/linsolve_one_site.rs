@@ -1011,6 +1011,28 @@ fn enrichment_cutoff_survives_an_overflowing_rhs_norm() {
 }
 
 #[test]
+fn enrichment_with_every_residual_modulus_above_f64_max() {
+    // Both residual entries are `f64::MAX + i f64::MAX`: finite parts, but
+    // every nonzero modulus (`sqrt(2) f64::MAX`) overflows, so the smallest
+    // modulus is infinite too. The spread is 0 and both directions are kept.
+    let step = EnrichmentStep {
+        rhs: [
+            Complex64::new(1.0, 0.0),
+            Complex64::new(f64::MAX, f64::MAX),
+            Complex64::new(f64::MAX, f64::MAX),
+        ],
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let enrichment = ResidualEnrichment::default()
+        .with_max_added(2)
+        .with_cutoff(0.0);
+    let (state, sites) = step.run(enrichment).unwrap();
+    assert_eq!(bond_dim(&state), 3);
+    assert!(distance_from_00(&state, &sites) < 1e-12);
+}
+
+#[test]
 fn enrichment_with_a_complex_rhs_and_a_real_state() {
     // The initial state is real and the RHS complex, so the residual
     // directions are complex while the current src basis is real.

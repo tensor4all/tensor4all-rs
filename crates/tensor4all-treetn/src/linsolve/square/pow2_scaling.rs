@@ -76,6 +76,35 @@ pub(super) fn largest_exponent<T: TensorLike>(t: &T) -> Result<i32> {
     Ok(exponent(half) + 1)
 }
 
+/// `floor(log2)` of the smallest nonzero entry modulus of `t` together with
+/// that modulus, or `None` when `t` is zero. Like the largest modulus, the
+/// smallest one overflows when every nonzero entry is complex with finite
+/// parts and a modulus above `f64::MAX`; it is then read from `t / 2`, which
+/// is only inspected. Halving drops no nonzero entry there, since every
+/// nonzero modulus exceeds `f64::MAX`.
+///
+/// # Errors
+///
+/// Returns an error when `t` cannot be read or has a NaN entry, or when the
+/// smallest nonzero modulus is still infinite after halving (every nonzero
+/// entry has an infinite part). An infinite entry beside finite ones is
+/// reported by [`largest_exponent`] instead.
+pub(super) fn smallest_exponent<T: TensorLike>(t: &T) -> Result<Option<(i32, f64)>> {
+    let Some(smallest) = t.min_nonzero_abs()? else {
+        return Ok(None);
+    };
+    if smallest.is_finite() {
+        return Ok(Some((exponent(smallest), smallest)));
+    }
+    let half = scale_pow2(t, -1)?
+        .min_nonzero_abs()?
+        .filter(|value| value.is_finite());
+    let half = half.ok_or_else(|| {
+        anyhow::anyhow!("residual enrichment: the local RHS or residual has a non-finite entry")
+    })?;
+    Ok(Some((exponent(half) + 1, smallest)))
+}
+
 /// `coefficient * norm * 2^k` without overflowing the product before the
 /// exponent is applied: `coefficient` is split into a mantissa in `[1, 2)`
 /// and an exponent first. Returns infinity only when the result itself
