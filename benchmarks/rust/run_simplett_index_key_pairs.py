@@ -9,7 +9,9 @@ and timing gates, and writes the evidence files described in
 Run from a checkout that contains all three revisions (for example after
 `git fetch origin pull/1146/head`). The script refuses to time anything if the
 host fails the idle check, and the decision is INCONCLUSIVE whenever a noise
-gate fails; it never retries or drops cells.
+gate fails, except that a recorded CPU speed limit below 100 makes it
+THROTTLED so throttling is distinguishable from host load; it never retries or
+drops cells.
 
     python3 benchmarks/rust/run_simplett_index_key_pairs.py --output DIR
 
@@ -25,6 +27,7 @@ import math
 import os
 import pathlib
 import platform
+import re
 import shutil
 import statistics
 import subprocess
@@ -68,6 +71,8 @@ FULL_CELL_COUNT = 30  # six cases x five routes
 
 GATES = {
     "maximum_load_1m": 8.0,
+    # Smallest CPU speed limit a valid run may record, when the platform reports one.
+    "minimum_cpu_speed_limit": 100,
     # Two-sided: (ci95_high - ci95_low) / (2 * mean).
     "maximum_relative_ci_halfwidth": 0.25,
     # Sample standard deviation (divisor n - 1) of the per-round means.
@@ -217,6 +222,15 @@ def run_arm(binary, arm, round_no, out, cpu, bench_filter):
     return run_record
 
 
+def recorded_speed_limits(run):
+    """CPU speed limits in the run's thermal snapshots; empty when the host reports none."""
+    return [
+        int(limit)
+        for snapshot in (run["before"]["thermal"], run["after"]["thermal"])
+        for limit in re.findall(r"CPU_Speed_Limit\s*=\s*(\d+)", snapshot)
+    ]
+
+
 def summarize(runs):
     by_cell = {}
     for r in runs:
@@ -251,17 +265,22 @@ def summarize(runs):
     upward = [(v["ci95_high_ns"] - v["mean_ns"]) / v["mean_ns"] for r in runs for v in r["cells"].values()]
     loads = [x for r in runs for x in (r["before"]["loadavg"][0], r["after"]["loadavg"][0])]
     cvs = [c[f"{arm}_cv"] for c in cases for arm in ARMS]
+    speed_limits = [limit for r in runs for limit in recorded_speed_limits(r)]
 
     noise = {
         "maximum_load_1m": max(loads),
         "maximum_relative_ci_halfwidth": max(halfwidths),
         "maximum_upward_ci_halfwidth": max(upward),
         "maximum_rep_mean_cv": max(cvs),
+        "minimum_cpu_speed_limit": min(speed_limits) if speed_limits else None,
     }
     noise_pass = {
         "load": noise["maximum_load_1m"] <= GATES["maximum_load_1m"],
         "ci_halfwidth": noise["maximum_relative_ci_halfwidth"] <= GATES["maximum_relative_ci_halfwidth"],
         "cv": noise["maximum_rep_mean_cv"] <= GATES["maximum_rep_mean_cv"],
+        # No observation means the platform does not report a limit; that stays valid.
+        "thermal": noise["minimum_cpu_speed_limit"] is None
+        or noise["minimum_cpu_speed_limit"] >= GATES["minimum_cpu_speed_limit"],
     }
 
     batch = [c for c in cases if c["route"] in BATCH_ROUTES]
@@ -281,7 +300,9 @@ def summarize(runs):
         "hit_geomean_vs_shared": timing["final_hit_geomean_ratio_vs_shared"] is not None
         and timing["final_hit_geomean_ratio_vs_shared"] <= GATES["final_hit_geomean_max_ratio_vs_shared"],
     }
-    if not all(noise_pass.values()):
+    if not noise_pass["thermal"]:
+        decision = "THROTTLED"
+    elif not all(noise_pass.values()):
         decision = "INCONCLUSIVE"
     elif all(timing_pass.values()):
         decision = "PASS"
