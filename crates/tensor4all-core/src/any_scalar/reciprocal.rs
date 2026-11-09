@@ -10,8 +10,8 @@ const DIRECT_RECIPROCAL_EXPONENT: i32 = 500;
 /// divisor.
 const LARGE_DIVISOR_TARGET_EXPONENT: i32 = 64;
 
-/// Exponent above which a complex divisor is scaled to the large target. Below
-/// it, `|quotient| * 2^130` cannot overflow, so the small target is used.
+/// Exponent above which a complex divisor is scaled to the large target, where
+/// `|quotient| * 2^130` cannot overflow.
 const COMPLEX_LARGE_DIVISOR_EXPONENT: i32 = 200;
 
 /// Exact powers of two whose product is `2^k`, each a normal `f64`.
@@ -35,13 +35,13 @@ fn times_pow2(value: &AnyScalar, k: i32) -> AnyScalar {
 
 impl AnyScalar {
     /// Returns scalar factors whose product is `1 / self`, ordered so that
-    /// multiplying a value by each in turn divides it by `self` without
-    /// leaving the `f64` range when the quotient is representable.
+    /// multiplying a value by each in turn divides it by `self` with every
+    /// intermediate finite when the quotient components are, and without
+    /// forming a component of `1 / self` that could underflow.
     ///
     /// Use this instead of multiplying by `1 / self` when `self` may be tiny or
     /// huge: for `self = 3 * 2^-1070`, `1 / self` overflows although
-    /// `2^-1000 / self` is finite. Apply the factors in order; each
-    /// intermediate stays in range.
+    /// `2^-1000 / self` is finite. Apply the factors in order.
     ///
     /// - A real divisor whose magnitude is in `[2^-500, 2^500]` gives the single
     ///   factor `1 / self`.
@@ -51,14 +51,23 @@ impl AnyScalar {
     ///   of the result is then `fl(x * fl(1 / self))`, with the reciprocal
     ///   rounded as if the exponent range were unbounded, also when the
     ///   product is subnormal.
-    /// - A divisor with a nonzero imaginary part gives powers of two `2^j`,
-    ///   then `conj(self * 2^j)`, then the real `1 / |self * 2^j|^2`. No
-    ///   component of `1 / self` is formed on its own, so a quotient component
-    ///   is not lost when the matching component of the reciprocal would
-    ///   underflow. For a real value each component of the result has a
-    ///   relative error of a few units in the last place, unless it is
-    ///   subnormal; for a complex value the error of each component is a few
-    ///   units in the last place of `|quotient|`.
+    /// - A purely imaginary divisor `b i` gives `-i`, which is exact, followed
+    ///   by the factors of the real `b`, so the real-divisor guarantees apply
+    ///   to each component.
+    /// - Another complex divisor gives powers of two `2^j`, then
+    ///   `conj(self * 2^j)`, then the real `1 / |self * 2^j|^2`, with
+    ///   `|self * 2^j|` in `[1/4, 1/2)` when `|self| < 1/2`, in `[1/2, 1)` up
+    ///   to `2^201`, and in `[2^64, 2^65)` above. No component of `1 / self`
+    ///   is formed on its own, so a quotient component is not lost because the
+    ///   matching component of the reciprocal would underflow, and an
+    ///   intermediate overflows only when a quotient component does. For a
+    ///   real value each component has a relative error of a few units in the
+    ///   last place; in the subnormal range the intermediate `q * |self * 2^j|^2`
+    ///   is rounded at subnormal granularity, so the absolute error is up to
+    ///   `9 * 2^-1074` when `|self| < 1/2` and up to `4 * 2^-1074` otherwise,
+    ///   and a component that small can round to zero. For a complex value the
+    ///   error of each component is a few units in the last place of
+    ///   `|quotient|`.
     ///
     /// A gradient-tracked divisor yields tracked factors.
     ///
@@ -105,6 +114,12 @@ impl AnyScalar {
         if !(re.is_finite() && im.is_finite()) || self.is_zero() {
             return Err(anyhow!("cannot divide by {self:?}").into());
         }
+        if re == 0.0 && im != 0.0 {
+            // 1 / (b i) = -i / b, and multiplying by -i is exact.
+            let mut factors = vec![AnyScalar::new_complex(0.0, -1.0)];
+            factors.extend(self.imag_part().reciprocal_factors()?);
+            return Ok(factors);
+        }
         let largest = re.abs().max(im.abs());
         let complex = im != 0.0;
         let exponent = largest.log2().floor() as i32;
@@ -122,16 +137,22 @@ impl AnyScalar {
             magnitude *= 2.0;
             k += 1;
         }
-        // Small target `[1/4, 1/2)`: a scaled value stays below the quotient,
-        // so it overflows only when the quotient does. Large target
-        // `[2^64, 2^65)`: a scaled value loses bits only for a quotient below
+        // With `u = |self * 2^j|`, a value is first scaled to `q * u` and, for
+        // a complex divisor, then multiplied to `q * u^2`, where `q` is the
+        // quotient. `u <= 1/2` keeps both at or below `q` when `j > 0`, so they
+        // overflow only when the quotient does; `j <= 0` cannot overflow the
+        // first step, so `u` in `[1/2, 1)` suffices there. The large target
+        // `[2^64, 2^65)` loses bits of a scaled value only for a quotient below
         // `2^-1086`, and those bits stay below `2^-1139` after the reciprocal.
-        let small_target = if complex {
-            k >= -COMPLEX_LARGE_DIVISOR_EXPONENT
-        } else {
-            k > 0
-        };
-        let j = if small_target {
+        let j = if complex {
+            if k >= 2 {
+                k - 2
+            } else if k >= -COMPLEX_LARGE_DIVISOR_EXPONENT {
+                k - 1
+            } else {
+                k + LARGE_DIVISOR_TARGET_EXPONENT
+            }
+        } else if k > 0 {
             k - 2
         } else {
             k + LARGE_DIVISOR_TARGET_EXPONENT

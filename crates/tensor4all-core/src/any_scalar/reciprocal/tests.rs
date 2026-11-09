@@ -166,3 +166,57 @@ fn reciprocal_factors_track_the_divisor_gradient() {
         assert!((grad / expected - 1.0).abs() < 1e-14, "2^{s}: {grad:e}");
     }
 }
+
+#[test]
+fn reciprocal_factors_divide_by_an_imaginary_divisor_exactly() {
+    // Multiplying by -i is exact, so the real-divisor guarantees carry over.
+    assert_eq!(
+        divide_complex(
+            Complex64::new(f64::from_bits(1), 0.0),
+            Complex64::new(0.0, 1.0)
+        ),
+        Complex64::new(0.0, -f64::from_bits(1))
+    );
+    let x = f64::from_bits(0x224d_82c0_7cc5_3ee0);
+    let d = f64::from_bits(0x657d_82c0_7cc5_3edf);
+    let actual = divide_complex(Complex64::new(0.0, x), Complex64::new(0.0, d));
+    assert_eq!((actual.re.to_bits(), actual.im), (1, 0.0));
+}
+
+#[test]
+fn reciprocal_factors_bound_the_subnormal_error_of_a_complex_quotient() {
+    // Each component is within `bound` units of max(2^-1074, ulp(q)) of the
+    // quotient q. The reference q * 2^600 is computed with d scaled near one.
+    let unit_of = |q: f64| f64::from_bits(1).max(q.abs() * f64::EPSILON);
+    let divisors = [
+        (Complex64::new(0.0, 1.5), 0.5),
+        (Complex64::new(0.0, -0.3), 0.5),
+        (Complex64::new(0.35, 0.35), 9.0),
+        (Complex64::new(0.2, 0.1), 9.0),
+        (Complex64::new(0.03, -0.01), 9.0),
+        (Complex64::new(3.0, 4.0) * pow2(-600), 9.0),
+        (Complex64::new(0.6, 0.8), 4.0),
+        (Complex64::new(1.0, 1e-3), 4.0),
+        (Complex64::new(1.9, -0.3), 4.0),
+        (Complex64::new(3.0, 4.0), 4.0),
+        (Complex64::new(3.0, 4.0) * pow2(150), 4.0),
+        (Complex64::new(3.0, 4.0) * pow2(300), 4.0),
+    ];
+    for (d, bound) in divisors {
+        let e = -(d.norm().log2().round() as i32);
+        for bits in 1..1000_u64 {
+            for x in [f64::from_bits(bits) * d.norm(), f64::from_bits(bits)] {
+                let scaled = Complex64::new(x * pow2(300) * pow2(300 + e), 0.0) / (d * pow2(e));
+                let q = scaled / pow2(600);
+                let actual = divide_complex(Complex64::new(x, 0.0), d);
+                for (a, e) in [(actual.re, q.re), (actual.im, q.im)] {
+                    let error = (a - e).abs() / unit_of(e);
+                    assert!(
+                        error <= bound,
+                        "{x:e} / {d}: {actual} vs {q} ({error} units)"
+                    );
+                }
+            }
+        }
+    }
+}

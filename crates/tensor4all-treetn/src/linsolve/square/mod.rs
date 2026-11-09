@@ -438,8 +438,8 @@ where
 }
 
 /// Multiply `tn` by `1 / divisor` through
-/// [`AnyScalar::reciprocal_factors`], which keeps each step in the `f64` range
-/// when the quotient is representable.
+/// [`AnyScalar::reciprocal_factors`], whose doc gives the range and rounding
+/// guarantees.
 ///
 /// [`TreeTN::scale_mut`] applies each factor to one node, so the range and
 /// rounding properties of the factors hold for that node's stored entries. In

@@ -43,46 +43,21 @@ branch can be rebased onto main once the prerequisites land.
 - Existing GMRES option-conversion tests moved to their new common owner.
   No assertion tolerances, dependencies or lint configuration changed.
 
-## Validation of the pre-rebase branch
+## Test coverage
 
-These counts were recorded from local runs on `2e2f3294` and its prerequisite
-merge, before the rebase onto main. No logs were kept, and they cannot be
-reproduced from this branch; the counts in the last section are current.
+Tests exercise real/complex HPD and general affine systems, both sweep modes,
+chains and branching trees, explicit/inferred index mappings, zero/tiny RHS,
+exact/zero initial guesses, local versus sweep tolerances, exhausted/zero
+budgets, selected versus inactive invalid controls, CG curvature/Hermitian
+errors, BiCGSTAB breakdown and callback source-chain preservation.
 
-- Prerequisite baseline: 203 focused Krylov/linsolve tests passed.
-- Changed-crate Nextest (`--lib --tests`): 2,377 passed, 10 existing skips.
-  One unchanged GSE AD test was slow under concurrent validation.
-- Doctests: 644 passed (403 core, 204 treetn, 37 itensorlike).
-- Optimized regressions: 13 TreeTN integration groups and 8 local-dispatch unit
-  groups passed. Both native option-validation regressions passed in debug.
-- Tests exercise real/complex HPD and general affine systems, both sweep modes,
-  chains and branching trees, explicit/inferred index mappings, zero/tiny RHS,
-  exact/zero initial guesses, local versus sweep tolerances, exhausted/zero
-  budgets, selected versus inactive invalid controls, CG curvature/Hermitian
-  errors, BiCGSTAB breakdown and callback source-chain preservation.
-- Formatting, public-error docs, complete API inventory and deterministic
-  repository rules (including file growth) passed. Rustdoc completed with the
-  five previously observed core/TreeTN warnings.
-- Strict Clippy stops at 43 existing core `nonminimal_bool` findings. The whole
-  changed-crate check passes with only that known lint suppressed. The new
-  test's needless-borrow finding was fixed and its 8 unit tests rerun.
-- Connected-source self-review checked affine dispatch, scalar/vector-space
-  operations, iteration meanings, true residual ownership, typed error chains,
-  and preservation of exact QR, SVD and environment paths. Production paths
-  introduce no full dense materialization. Moved tests retain helper coverage.
-
-Local builds used Rustup stable 1.96 and the existing shared Cargo target. No
-full-workspace, alternate-backend, binding or performance-benchmark checks were
-run. Preconditioning, rank enrichment, core affine convenience APIs, compression
+Preconditioning, rank enrichment, core affine convenience APIs, compression
 inside CG/BiCGSTAB and automatic fallback remain out of scope.
 
 ## Review follow-up
 
 - a0 = a1 = 0 is rejected during option validation for every local solver.
 - The identity-only closed form no longer depends on the selected solver.
-- TreeTN and itensorlike Nextest on the pre-rebase branch (local, no logs
-  kept): 1,194 passed, 7 skipped; doctests: 241 passed; Clippy on both crates
-  reported no new findings.
 
 ## Integration with merged prerequisites
 
@@ -128,7 +103,10 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   to `from_bits(1)` rather than to zero; results with a real `a0` match the
   direct reciprocal bit for bit after scaling by `2^±600` and `2^±1000`;
   `2^600 / (2^600 + 2^-420 i)` and `2^400 / (2^400 + 2^-600 i)` keep the
-  imaginary parts `-2^-1020` and `-2^-1000`; `1 + NaN i` is rejected.
+  imaginary parts `-2^-1020` and `-2^-1000`; `1 + NaN i` is rejected. A
+  purely imaginary `a0` is divided exactly (`2^-1074 / i = -2^-1074 i`); for
+  other complex `a0`, a sweep of subnormal quotients checks the absolute error
+  bound of `9 * 2^-1074` (`|a0| < 1/2`) or `4 * 2^-1074`.
 - `TreeTN::scale_mut` applies each factor to one node, so the range guarantee
   is for that node's stored entries, not for the represented values.
 - `square_linsolve` validates `max_bond_dim` and the SVD policy before the
