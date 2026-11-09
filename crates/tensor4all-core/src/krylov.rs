@@ -1059,10 +1059,12 @@ where
 /// form is not always converged. A gradient-tracked `a1 = 0` adds
 /// `-a1 (A(b / a0) / a0)`, which is zero in value and makes the first
 /// derivatives those of the exact solution, at the cost of one call to
-/// `apply_a`; `A` is applied to `b / a0` scaled to unit norm. For
+/// `apply_a` (two when `A(b / a0)` overflows, the second on `b / a0` scaled
+/// to a norm in `[1/2, 1)`). For
 /// single-precision `b` the closed form requires every factor of
 /// [`AnyScalar::reciprocal_factors`] to be in the `f32` range.
-/// A zero initial residual is converged for every `rtol`, including `0`.
+/// A zero initial residual, also that of the closed form, is converged for
+/// every `rtol`, including `0`.
 /// The Arnoldi basis is built from the unshifted `A` callback, while affine
 /// coefficients are applied in the projected Hessenberg problem, matching
 /// KrylovKit's affine linear-solve convention.
@@ -1081,8 +1083,8 @@ where
 /// A right-hand side whose norm is not finite, which would make every relative
 /// residual zero, is a [`KrylovError::NumericalBreakdown`]. So is a
 /// gradient-tracked `a1 = 0` whose derivative `-A(b / a0) / a0` is not
-/// representable in `f64`, or whose `A` is not finite on `b / a0` scaled to
-/// unit norm: no finite gradient exists to return there.
+/// representable in `f64`, or whose `A` is not finite on `b / a0` scaled to a
+/// norm below 1: no finite gradient exists to return there.
 ///
 pub fn gmres_affine<T, F>(
     apply_a: F,
@@ -1266,37 +1268,37 @@ where
         if a1.tracks_grad() {
             // `x = b / a0 - a1 (A(b / a0) / a0)` equals `b / a0` at `a1 = 0`,
             // and its first derivatives are those of `(a0 I + a1 A)^-1 b`
-            // there, which the Krylov iterates would only approximate. `A` is
-            // applied to `b / a0` scaled to unit norm, and `a1` multiplies the
-            // finished quotient, so neither the forward values nor the
-            // gradient of `a1` overflow when `A(b / a0) / a0` is representable.
+            // there, which the Krylov iterates would only approximate. `a1`
+            // multiplies the finished quotient, so its cotangent is
+            // `<A(x) / a0, g>` and never passes through `1 / a0`.
+            //
+            // `A` is applied to `x` itself, so no component of `x` is scaled
+            // away before `A` sees it. Only when `A(x)` overflows is `A`
+            // evaluated again on `x 2^-e` with `|x 2^-e|` in `[1/2, 1)`
+            // (`A` linear, exact powers of two), and `2^e` goes into the
+            // quotient below; an entry of `x` more than `2^1022` below the
+            // largest can then lose bits.
             let started = Instant::now();
-            let x_norm =
-                vector_ops::finite_norm(&solution, "gmres", 0, "closed-form solution norm")?;
-            if profile_enabled {
-                profile.norm += started.elapsed();
-                profile.norm_calls += 1;
+            let mut applied = apply_a(&solution)?;
+            let mut apply_calls = 1;
+            let mut x_exponent = 0;
+            if !applied.maxabs()?.is_finite() {
+                let x_norm =
+                    vector_ops::finite_norm(&solution, "gmres", 0, "closed-form solution norm")?;
+                if x_norm > 0.0 {
+                    x_exponent = vector_ops::normalization_exponent(x_norm) + 1;
+                    let unit_x = vector_ops::scale_pow2(solution.clone(), -x_exponent)?;
+                    applied = apply_a(&unit_x)?;
+                    apply_calls += 1;
+                }
             }
-            let x_exponent = if x_norm > 0.0 {
-                vector_ops::normalization_exponent(x_norm)
-            } else {
-                0
-            };
-            let started = Instant::now();
-            let unit_x = vector_ops::scale_pow2(solution.clone(), -x_exponent)?;
-            if profile_enabled {
-                profile.scale += started.elapsed();
-                profile.scale_calls += vector_ops::scale_pow2_calls(x_exponent);
-            }
-            let started = Instant::now();
-            let applied = apply_a(&unit_x)?;
             if profile_enabled {
                 profile.apply += started.elapsed();
-                profile.apply_calls += 1;
+                profile.apply_calls += apply_calls;
             }
             let started = Instant::now();
-            let (quotient, quotient_scale_calls, quotient_norm_calls) =
-                vector_ops::scaled_quotient(applied, x_exponent, &a0, &factors, "gmres")?;
+            let (quotient, quotient_scale_calls) =
+                vector_ops::scaled_quotient(applied, x_exponent, &a0, "gmres")?;
             // `dx/da1 = -A(b / a0) / a0` can itself exceed the `f64` range
             // (`A = f64::MAX I`, `b = 1`, `a0 = 1/2` gives `-4 f64::MAX`). No
             // rescaling makes it representable, and `a1 = 0` times an
@@ -1312,7 +1314,6 @@ where
             if profile_enabled {
                 profile.scale += started.elapsed();
                 profile.scale_calls += quotient_scale_calls + 1;
-                profile.norm_calls += quotient_norm_calls;
             }
             let started = Instant::now();
             solution = solution.axpby(
@@ -1353,7 +1354,9 @@ where
             solution,
             iterations: 0,
             residual_norm: tolerance.residual_value(residual_norm, b_norm),
-            converged: tolerance.is_converged(residual_norm, b_norm),
+            // A zero residual is converged for every tolerance, including
+            // `rtol = 0`, as on the iterative path.
+            converged: residual_norm == 0.0 || tolerance.is_converged(residual_norm, b_norm),
         });
     }
 

@@ -54,36 +54,69 @@ pub(super) fn divide_by_norm<T: TensorVectorSpace>(value: &T, norm: f64) -> Resu
     Ok((scaled.scale(AnyScalar::new_real(1.0 / mantissa))?, calls))
 }
 
-/// `value * 2^exponent / divisor` through `factors`, the `reciprocal_factors`
-/// of a finite nonzero `divisor`. `value` is first scaled to a norm of about
-/// `2^(e / 2)`, where `2^e` is the size of the largest component of `divisor`,
-/// so that the scaled value and its quotient both lie within about `2^±540`;
-/// only the last power-of-two scaling moves to the size of the result. For
-/// `f64` entries no intermediate leaves the range when `value` and the result
-/// are representable. Returns the result and the numbers of `scale` and
-/// `norm` calls.
+/// `divisor * 2^exponent`, applied in power-of-two steps that move
+/// monotonically from `divisor` toward the result, so a real divisor is
+/// scaled exactly when the result is a normal number.
+fn scale_scalar_pow2(divisor: &AnyScalar, mut exponent: i32) -> AnyScalar {
+    let mut value = divisor.clone();
+    while exponent != 0 {
+        let chunk = exponent.clamp(-SCALE_CHUNK, SCALE_CHUNK);
+        value = value * AnyScalar::new_real(2.0_f64.powi(chunk));
+        exponent -= chunk;
+    }
+    value
+}
+
+/// `value * 2^exponent / divisor` for a finite nonzero `divisor`.
+///
+/// The part of `2^exponent` that points against the division (`exponent > 0`
+/// with `|divisor| > 2`, or `exponent < 0` with `|divisor| < 1`) is folded
+/// into the divisor first, as `divisor * 2^-c` with `c` the smaller of the two
+/// exponents in magnitude, so that `divisor * 2^-c` moves toward 1. What is
+/// left, the division by `divisor * 2^-c` through
+/// [`AnyScalar::reciprocal_factors`] and the remaining `2^(exponent - c)`,
+/// scales in one direction only. For a real divisor every intermediate
+/// component then lies between the input component and the result component,
+/// so a component that is normal in both is never flushed or overflowed on
+/// the way; the result is rounded at most twice. A complex divisor has the
+/// guarantees of `reciprocal_factors` for the scaled divisor, whose smaller
+/// component can lose bits when it is more than `2^1022` below the larger.
+///
+/// Errors when single-precision entries need a factor outside the `f32`
+/// range. Returns the result and the number of `scale` calls.
 pub(super) fn scaled_quotient<T: TensorVectorSpace>(
     value: T,
     exponent: i32,
     divisor: &AnyScalar,
-    factors: &[AnyScalar],
     solver: &'static str,
-) -> Result<(T, usize, usize)> {
-    let norm = finite_norm(&value, solver, 0, "closed-form correction norm")?;
-    if norm == 0.0 {
-        return Ok((value, 0, 1));
+) -> Result<(T, usize)> {
+    let divisor_exponent = normalization_exponent(divisor.real().abs().max(divisor.imag().abs()));
+    let cancel = if exponent > 0 && divisor_exponent > 0 {
+        exponent.min(divisor_exponent)
+    } else if exponent < 0 && divisor_exponent < 0 {
+        exponent.max(divisor_exponent)
+    } else {
+        0
+    };
+    let factors = scale_scalar_pow2(divisor, -cancel).reciprocal_factors()?;
+    if value.is_single_precision() {
+        if let Some(factor) = factors.iter().find(|f| !f.is_in_single_precision_range()) {
+            return Err(KrylovError::InvalidOptions {
+                solver,
+                reason: format!(
+                    "dividing single-precision entries by {divisor:?} needs the factor \
+                     {factor:?}, outside the f32 range"
+                ),
+            }
+            .into());
+        }
     }
-    let value_exponent = normalization_exponent(norm);
-    let shift = normalization_exponent(divisor.real().abs().max(divisor.imag().abs())) / 2;
-    let to_shift = shift - value_exponent;
     let quotient = factors
         .iter()
-        .try_fold(scale_pow2(value, to_shift)?, |value, factor| {
-            value.scale(factor.clone())
-        })?;
-    let to_result = exponent + value_exponent - shift;
-    let scale_calls = scale_pow2_calls(to_shift) + factors.len() + scale_pow2_calls(to_result);
-    Ok((scale_pow2(quotient, to_result)?, scale_calls, 1))
+        .try_fold(value, |value, factor| value.scale(factor.clone()))?;
+    let rest = exponent - cancel;
+    let scale_calls = factors.len() + scale_pow2_calls(rest);
+    Ok((scale_pow2(quotient, rest)?, scale_calls))
 }
 
 pub(super) fn true_residual<T, F>(apply_a: &F, b: &T, x: &T) -> Result<T>

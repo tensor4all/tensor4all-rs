@@ -937,6 +937,95 @@ fn gmres_affine_tracked_zero_a1_backward_stays_finite_for_a_tiny_a0() {
 }
 
 #[test]
+fn gmres_affine_tracked_zero_a1_keeps_a_tiny_derivative_component() {
+    // b = (2^-1000, 2^-1074), a0 = 2^-1000 and A = diag(1, 2^-1000) give
+    // x = (1, 2^-74), A(x) = (1, 2^-1074) and dx/da1 = -A(x) / a0 =
+    // -(2^1000, 2^-74). Scaling A(x) toward the size of a0 before dividing
+    // flushed the second component to zero.
+    let tiny = 2.0_f64.powi(-1000);
+    let idx = DynIndex::new_dyn(2);
+    let b = make_vector_with_index(vec![tiny, f64::from_bits(1)], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
+    let expected_grad = [-(2.0_f64.powi(1000)), -(2.0_f64.powi(-74))];
+    for (component, expected) in expected_grad.into_iter().enumerate() {
+        let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+        let result = gmres_affine(
+            |x: &IdxTensor| scale_vector_f64(x, &[1.0, tiny]),
+            &b,
+            &x0,
+            AnyScalar::new_real(tiny),
+            a1.clone(),
+            &GmresOptions::default(),
+        )
+        .unwrap();
+        assert!(result.converged);
+        assert_eq!(
+            result.solution.to_vec::<f64>().unwrap(),
+            vec![1.0, 2.0_f64.powi(-74)]
+        );
+        let mut weights = vec![0.0; 2];
+        weights[component] = 1.0;
+        let selector = make_vector_with_index(weights, &idx);
+        selector
+            .inner_product(&result.solution)
+            .unwrap()
+            .backward()
+            .unwrap();
+        let grad = a1.grad().unwrap().unwrap();
+        assert_eq!(grad.real(), expected, "component {component}");
+    }
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_applies_a_to_a_vector_below_unit_norm() {
+    // b = 3, a0 = 2 gives x = 1.5. A floor-based exponent leaves |x| = 1.5,
+    // and A = f64::MAX I overflows on it, although dx/da1 = -0.75 f64::MAX
+    // is representable.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![3.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let result = gmres_affine(
+        |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(f64::MAX))?),
+        &b,
+        &x0,
+        AnyScalar::new_real(2.0),
+        a1.clone(),
+        &GmresOptions::default(),
+    )
+    .unwrap();
+    assert!(result.converged);
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![1.5]);
+    result.solution.sum().unwrap().backward().unwrap();
+    let grad = a1.grad().unwrap().unwrap();
+    assert_eq!(grad.real(), -0.75 * f64::MAX);
+}
+
+#[test]
+fn gmres_affine_closed_form_with_zero_residual_converges_at_zero_rtol() {
+    // b = x0 = 1, a0 = 1, a1 = 0: the closed form returns x = 1 with residual
+    // 0, which is converged for every rtol, as on the iterative path.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![1.0], &idx);
+    let x0 = make_vector_with_index(vec![1.0], &idx);
+    let result = gmres_affine(
+        |x: &IdxTensor| Ok(x.clone()),
+        &b,
+        &x0,
+        AnyScalar::new_real(1.0),
+        AnyScalar::new_real(0.0),
+        &GmresOptions {
+            rtol: 0.0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![1.0]);
+    assert_eq!(result.residual_norm, 0.0);
+    assert!(result.converged);
+}
+
+#[test]
 fn gmres_affine_normalizes_a_residual_whose_reciprocal_norm_overflows() {
     // (I + I) x = 2^-1073 has x = 2^-1074, but 1 / |r| = 2^1073 is infinite.
     let idx = DynIndex::new_dyn(1);
