@@ -164,6 +164,34 @@ fn make_star_pair() -> (TreeTN<IdxTensor, String>, TreeTN<IdxTensor, String>) {
     )
 }
 
+/// Largest componentwise error between two comparable sequences.
+///
+/// `f64::max` drops a NaN operand, so folding the errors with it would read a
+/// wholly invalid result as a zero residual; the lengths are compared for the
+/// same reason, since `zip` truncates to the shorter side.
+fn max_finite_residual<E: Copy + std::fmt::Debug>(
+    name: &str,
+    got: &[E],
+    want: &[E],
+    error_of: impl Fn(E, E) -> f64,
+) -> f64 {
+    assert_eq!(
+        got.len(),
+        want.len(),
+        "{name}: compared vectors must have equal length"
+    );
+    let mut residual = 0.0_f64;
+    for (column, (got, want)) in got.iter().zip(want.iter()).enumerate() {
+        let error = error_of(*got, *want);
+        assert!(
+            error.is_finite(),
+            "{name}: non-finite error at column {column}: {got:?} vs {want:?}"
+        );
+        residual = residual.max(error);
+    }
+    residual
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_matrix_case(
     name: &str,
@@ -234,18 +262,9 @@ fn run_matrix_case(
     assert_eq!(got.indices(), want.indices());
     let got_values = got.to_vec::<f64>().unwrap();
     let want_values = want.to_vec::<f64>().unwrap();
-    // `f64::max` drops a NaN operand, so a non-finite entry would otherwise read
-    // as a zero residual; the lengths are compared for the same reason.
-    assert_eq!(got_values.len(), want_values.len());
-    let mut residual = 0.0_f64;
-    for (column, (got, want)) in got_values.iter().zip(want_values.iter()).enumerate() {
-        let error = (got - want).abs();
-        assert!(
-            error.is_finite(),
-            "{name}: non-finite error at column {column}: {got} vs {want}"
-        );
-        residual = residual.max(error);
-    }
+    let residual = max_finite_residual(name, &got_values, &want_values, |got, want| {
+        (got - want).abs()
+    });
     assert!(
         residual < tolerance,
         "{name}: CUDA/CPU parity residual {residual} exceeds {tolerance}"
@@ -491,12 +510,10 @@ fn cuda_src_c64_fixed_and_adaptive_chain_probe() {
         let got_dense = got_dense.permuteinds(want_dense.indices()).unwrap();
         let got: Vec<Complex64> = got_dense.to_vec().unwrap();
         let want: Vec<Complex64> = want_dense.to_vec().unwrap();
-        assert_eq!(got.len(), want.len());
-        let residual = got
-            .iter()
-            .zip(want.iter())
-            .map(|(a, b)| (a - b).norm())
-            .fold(0.0_f64, f64::max);
+        // Same guard as the f64 case above: a NaN or infinite component must
+        // fail here instead of folding away through `f64::max`.
+        let residual =
+            max_finite_residual(&format!("C64 {mode}"), &got, &want, |a, b| (a - b).norm());
         println!("C64 {mode} chain CUDA/CPU parity residual: {residual:e}");
         assert!(residual < 1e-8, "C64 {mode} parity residual {residual}");
     }
@@ -589,4 +606,22 @@ fn cuda_src_timing_breakdown() {
             "[{name}] setup={setup_ms:.1}ms upload={upload_ms:.1}ms warmup(first-run, incl. JIT)={warm_ms:.1}ms steady(CUDA,sync)={steady_ms:.2}ms download={download_ms:.1}ms cpu_steady={cpu_ms:.2}ms reps={REPS}"
         );
     }
+}
+
+/// A non-finite residual is rejected rather than folded away.
+///
+/// This is the guard both parity comparisons rely on: `f64::max` returns the
+/// non-NaN operand, so before the finite-error assertion a C64 result of NaN
+/// residuals read as exactly zero and passed every tolerance.
+#[test]
+#[should_panic(expected = "non-finite error at column 1")]
+fn a_nan_parity_residual_is_rejected() {
+    use num_complex::Complex64;
+
+    max_finite_residual(
+        "injected",
+        &[Complex64::new(1.0, 0.0), Complex64::new(f64::NAN, 0.0)],
+        &[Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+        |a, b| (a - b).norm(),
+    );
 }

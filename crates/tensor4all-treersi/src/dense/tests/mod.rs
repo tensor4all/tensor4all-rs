@@ -193,10 +193,35 @@ mod cuda {
     use super::*;
 
     fn cuda_context() -> ExecutionContext {
-        ExecutionContext::Cuda(Arc::new(
-            tensor4all_tensorbackend::CudaExecutionContext::new()
-                .expect("CUDA ordinal 0 must be available"),
-        ))
+        ExecutionContext::Cuda(cuda_execution())
+    }
+
+    fn cuda_execution() -> Arc<tensor4all_tensorbackend::CudaExecutionContext> {
+        cuda_execution_or_skip("a CUDA primitive")
+            .expect("this caller requires a visible CUDA ordinal 0")
+    }
+
+    /// A CUDA context, or `None` with a printed SKIP on a host without one.
+    ///
+    /// The routing tests below are not `#[ignore]`d, so they run in CI: on a
+    /// GPU-less host they must say that their CUDA assertions did not run
+    /// instead of passing as if they had.
+    fn cuda_execution_or_skip(
+        name: &str,
+    ) -> Option<Arc<tensor4all_tensorbackend::CudaExecutionContext>> {
+        match tensor4all_tensorbackend::CudaExecutionContext::new() {
+            Ok(cuda) => Some(Arc::new(cuda)),
+            Err(error) => {
+                println!(
+                    "SKIP {name}: no usable CUDA ordinal 0 ({error}); CUDA assertions did not run"
+                );
+                None
+            }
+        }
+    }
+
+    fn cuda_einsums() -> usize {
+        super::CUDA_EINSUMS.with(std::cell::Cell::get)
     }
 
     #[test]
@@ -222,6 +247,112 @@ mod cuda {
         let out = contract_axis_diag_probe(&cuda_context(), input, 1, &weights).unwrap();
         assert_eq!(out.dims, vec![2, 3]);
         assert_eq!(out.data, vec![7.0, 10.0, 43.0, 50.0, 111.0, 122.0]);
+    }
+
+    /// The primitives must dispatch to the caller's CUDA engine, not to a host
+    /// route that happens to return the same numbers.
+    ///
+    /// Holding this context's session makes the primitive's own entry fail with
+    /// the typed re-entry before any transfer. A CPU fallback would not: the
+    /// process-global CPU context is not entered here, so it would return a
+    /// result and the assertion below would fail.
+    #[test]
+    fn cuda_primitives_enter_the_callers_context_engine() {
+        let Some(cuda) = cuda_execution_or_skip("cuda_primitives_enter_the_callers_context_engine")
+        else {
+            return;
+        };
+        let context = ExecutionContext::Cuda(Arc::clone(&cuda));
+        let (probe, product) = cuda
+            .with_session(|_engine| {
+                let probe = contract_axis_diag_probe(
+                    &context,
+                    Dense {
+                        dims: vec![2, 2, 3],
+                        data: (1..=12).map(|value| value as f64).collect(),
+                    },
+                    1,
+                    &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                );
+                let product = mat_mul_cols(
+                    &context,
+                    vec![1.0, 3.0, 2.0, 4.0],
+                    2,
+                    2,
+                    vec![5.0, 7.0, 6.0, 8.0],
+                    2,
+                );
+                (probe, product)
+            })
+            .expect("holding one CUDA session succeeds");
+        for (name, error) in [
+            ("contract_axis_diag_probe", probe.expect_err("nested entry")),
+            ("mat_mul_cols", product.expect_err("nested entry")),
+        ] {
+            let TreeRsiError::Numerical { source } = error else {
+                panic!("{name} must fail on the CUDA session entry: {error}");
+            };
+            assert!(
+                matches!(
+                    source.downcast_ref::<tensor4all_tensorbackend::CudaExecutionContextError>(),
+                    Some(tensor4all_tensorbackend::CudaExecutionContextError::Reentered)
+                ),
+                "{name} must reach this context's engine and be rejected on the \
+                 nested entry, not run somewhere else: {source}"
+            );
+        }
+    }
+
+    /// Every CUDA dispatch is counted, so "the primitive ran on the device" is
+    /// observed instead of inferred from matching values.
+    ///
+    /// Swapping the CUDA arm in `einsum_host` for a host call leaves the numbers
+    /// correct and this counter unchanged, which is what makes the routing
+    /// testable at all. The CPU arm must stay uncounted, or the counter would
+    /// not separate the two routes.
+    #[test]
+    fn cuda_primitives_dispatch_to_the_device_arm() {
+        let Some(cuda) = cuda_execution_or_skip("cuda_primitives_dispatch_to_the_device_arm")
+        else {
+            return;
+        };
+        let context = ExecutionContext::Cuda(Arc::clone(&cuda));
+        let probe_input = || Dense {
+            dims: vec![2, 2, 3],
+            data: (1..=12).map(|value| value as f64).collect(),
+        };
+
+        let before = cuda_einsums();
+        contract_axis_diag_probe(&context, probe_input(), 1, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .unwrap();
+        mat_mul_cols(
+            &context,
+            vec![1.0, 3.0, 2.0, 4.0],
+            2,
+            2,
+            vec![5.0, 7.0, 6.0, 8.0],
+            2,
+        )
+        .unwrap();
+        let dispatched = cuda_einsums() - before;
+        assert_eq!(
+            dispatched, 2,
+            "each primitive must dispatch exactly one einsum through the CUDA engine, saw \
+             {dispatched}"
+        );
+
+        contract_axis_diag_probe(
+            &cpu_context(),
+            probe_input(),
+            1,
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        )
+        .unwrap();
+        assert_eq!(
+            cuda_einsums(),
+            before + dispatched,
+            "a CPU-context call must not be counted as a device dispatch"
+        );
     }
 
     #[test]

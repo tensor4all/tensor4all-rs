@@ -75,6 +75,17 @@ fn cpu_einsum_host<T: TreeRsiScalar>(
     Ok((data, dims))
 }
 
+// Number of einsums this thread dispatched to a CUDA engine.
+//
+// Test-only observability: a primitive test asserts this advances, so a CUDA
+// arm that quietly ran the same arithmetic on the host cannot pass. The count
+// is thread-local because these primitives run on the caller's thread and the
+// test binary runs other CUDA cases in parallel.
+#[cfg(all(test, feature = "tenferro-cuda"))]
+thread_local! {
+    pub(crate) static CUDA_EINSUMS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[cfg(feature = "tenferro-cuda")]
 fn cuda_einsum_host<T: TreeRsiScalar>(
     cuda: &tensor4all_tensorbackend::CudaExecutionContext,
@@ -82,6 +93,8 @@ fn cuda_einsum_host<T: TreeRsiScalar>(
     input_ids: &[&[usize]],
     output_ids: &[usize],
 ) -> Result<(Vec<T>, Vec<usize>)> {
+    #[cfg(test)]
+    CUDA_EINSUMS.with(|count| count.set(count.get() + 1));
     let host = operands
         .iter()
         .map(|(data, dims)| {
