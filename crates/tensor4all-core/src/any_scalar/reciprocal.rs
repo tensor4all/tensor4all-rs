@@ -54,19 +54,22 @@ impl AnyScalar {
     /// - An untracked purely imaginary divisor `b i` gives `-i`, which is
     ///   exact, followed by the factors of the real `b`, so the real-divisor
     ///   guarantees apply to each component.
-    /// - Another complex divisor gives the real `1 / |self * 2^j|^2` last, with
-    ///   `|self * 2^j|` in `[1/4, 1/2)` when `|self| < 1/2`, in `[1/2, 1)` up
-    ///   to `2^201`, and in `[2^64, 2^65)` above. Before it come `2^j` and
-    ///   `conj(self * 2^j)` when `j >= 0`; when `j < 0`, scaling `self` down
-    ///   could flush a component, so `conj(self)` is applied unscaled between
-    ///   two powers of two whose product is `2^(2j)`. No component of
+    /// - Another complex divisor gives a real factor last, built from
+    ///   `1 / |self * 2^j|^2` with `|self * 2^j|` in `[1/4, 1/2)` when
+    ///   `|self| < 1/2`, in `[1/2, 1)` up to `2^201`, and in `[2^64, 2^65)`
+    ///   above. When `j >= 0`, `2^j` and `conj(self * 2^j)` come first. When
+    ///   `j < 0`, scaling `self` down could flush a component, so `conj(self)`
+    ///   is applied unscaled: up to `2^201` the factors are `2^j`,
+    ///   `conj(self)` and `2^j / |self * 2^j|^2`, and above it `conj(self)`
+    ///   comes between two powers of two whose product is `2^(2j)`, followed
+    ///   by `1 / |self * 2^j|^2`. No component of
     ///   `1 / self` or of a scaled-down `self` is formed on its own. For a real
     ///   value, an intermediate overflows only when a quotient component
     ///   does, and each component has a relative error of a few units in the
     ///   last place; in the subnormal range the intermediate
     ///   `q * |self * 2^j|^2` is rounded at subnormal granularity, so the
     ///   absolute error is up to `9 * 2^-1074` when `|self| < 1/2` and up to
-    ///   `5 * 2^-1074` otherwise, and a component that small can round to
+    ///   `3 * 2^-1074` otherwise, and a component that small can round to
     ///   zero. For a complex value the error of each component is a few units
     ///   in the last place of `|quotient|`, and when `|self| >= 1/2` an
     ///   intermediate can also overflow if a component of the value exceeds
@@ -180,11 +183,21 @@ impl AnyScalar {
         } else {
             // Scaling the divisor down can flush a component whose product
             // with the value is representable, so `conj(self)` is applied
-            // unscaled between two powers of two: `2^(k-1)` keeps a real value
-            // times `conj(self)` below `|x|`, and `2^(2j-k+1)` completes `2^(2j)`.
+            // unscaled after `2^(k-1)`, which keeps a real value times
+            // `conj(self)` below `|x|`. The remaining `2^(2j-k+1)` is folded
+            // into the real reciprocal when that stays normal (`j = k - 1`), so
+            // the quotient is rounded once at the end.
             factors.extend(pow2(k - 1));
             factors.push(self.conj());
-            factors.extend(pow2(2 * j - k + 1));
+            let remaining = 2 * j - k + 1;
+            if k >= -COMPLEX_LARGE_DIVISOR_EXPONENT {
+                factors.push(times_pow2(
+                    &(AnyScalar::new_real(1.0) / norm_sqr),
+                    remaining,
+                ));
+                return Ok(factors);
+            }
+            factors.extend(pow2(remaining));
         }
         factors.push(AnyScalar::new_real(1.0) / norm_sqr);
         Ok(factors)

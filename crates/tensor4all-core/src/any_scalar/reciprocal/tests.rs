@@ -195,12 +195,12 @@ fn reciprocal_factors_bound_the_subnormal_error_of_a_complex_quotient() {
         (Complex64::new(0.2, 0.1), 9.0),
         (Complex64::new(0.03, -0.01), 9.0),
         (Complex64::new(3.0, 4.0) * pow2(-600), 9.0),
-        (Complex64::new(0.6, 0.8), 5.0),
-        (Complex64::new(1.0, 1e-3), 5.0),
-        (Complex64::new(1.9, -0.3), 5.0),
-        (Complex64::new(3.0, 4.0), 5.0),
-        (Complex64::new(3.0, 4.0) * pow2(150), 5.0),
-        (Complex64::new(3.0, 4.0) * pow2(300), 5.0),
+        (Complex64::new(0.6, 0.8), 3.0),
+        (Complex64::new(1.0, 1e-3), 3.0),
+        (Complex64::new(1.9, -0.3), 3.0),
+        (Complex64::new(3.0, 4.0), 3.0),
+        (Complex64::new(3.0, 4.0) * pow2(150), 3.0),
+        (Complex64::new(3.0, 4.0) * pow2(300), 3.0),
     ];
     for (d, bound) in divisors {
         let e = -(d.norm().log2().round() as i32);

@@ -18,6 +18,12 @@ use crate::error::TreeTNOperationError;
 /// and iteration budgets; with them the `gmres_*` controls must keep their
 /// defaults. No automatic selection or fallback is performed.
 ///
+/// Gradients through a local solve are those of the returned iterate, not of
+/// the exact solution, so they can miss directions outside the Krylov space the
+/// solver built. For `A = diag(2, 3)`, `b = (1, 2)`, `a0 = 1` and a
+/// gradient-tracked `a1 = 0`, every solver stops after one step with a zero
+/// residual and gives `d sum(x) / d a1 = -8.4`; the exact value is `-8`.
+///
 /// # Examples
 /// ```
 /// use tensor4all_core::krylov::CgOptions;

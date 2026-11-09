@@ -388,3 +388,43 @@ fn local_solver_keeps_tracked_unit_and_zero_coefficients_in_the_graph() {
         }
     }
 }
+
+#[test]
+fn local_solver_gradient_is_that_of_the_returned_iterate() {
+    use tensor4all_core::{DynIndex, IdxTensor};
+    // (a0 I + a1 A) x = b with A = diag(2, 3), b = (1, 2), a0 = 1 and a
+    // tracked a1 = 0. Every solver returns x = alpha b after one step, with
+    // a zero residual. The exact solution has d sum(x)/da1 = -sum(A b) = -8;
+    // the returned iterate has dalpha/da1 = -b'Ab / b'b = -14/5, so
+    // d sum(x)/da1 = -8.4. The gradient is that of the iterate.
+    let i = DynIndex::new_dyn(2);
+    let b = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
+    let init = IdxTensor::from_dense(vec![i.clone()], vec![0.0; 2]).unwrap();
+    let e2 = IdxTensor::from_dense(vec![i], vec![0.0, 1.0]).unwrap();
+    // A = diag(2, 3) = 2 I + e2 e2^T, built from graph-preserving operations.
+    let apply = |x: &IdxTensor| -> Result<IdxTensor> {
+        let projected = e2.scale(e2.inner_product(x)?)?;
+        Ok(x.axpby(
+            AnyScalar::new_real(2.0),
+            &projected,
+            AnyScalar::new_real(1.0),
+        )?)
+    };
+    for solver in choices() {
+        let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+        let mut options = LinsolveOptions::new(1).with_local_solver(solver.clone());
+        options.a0 = AnyScalar::new_real(1.0);
+        options.a1 = a1.clone();
+        let result = solve_local_system(&options, apply, &b, &init, false).unwrap();
+        let total = result.solution.sum().unwrap();
+        assert_eq!(result.iterations, 1, "{solver:?}");
+        assert!((total.real() - 3.0).abs() < 1e-12, "{solver:?}: {total:?}");
+        total.backward().unwrap();
+        let grad = a1.grad().unwrap();
+        let grad = grad.unwrap_or_else(|| panic!("{solver:?}: a1 has no gradient"));
+        assert!(
+            (grad.real() + 8.4).abs() < 1e-12,
+            "{solver:?}: d/da1 = {grad:?}"
+        );
+    }
+}

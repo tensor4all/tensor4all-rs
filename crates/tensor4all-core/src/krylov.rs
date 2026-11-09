@@ -1039,12 +1039,17 @@ where
 
 /// Solve `(a0 I + a1 A) x = b` using GMRES with relative residual tolerance.
 /// A zero-norm RHS returns the zero vector after validating the affine coefficients.
+/// An untracked `a1 = 0` gives `x = b / a0` in closed form, with the residual of
+/// that `x` reported; a subnormal quotient component can round to zero, so the
+/// closed form is not always converged.
 /// The Arnoldi basis is built from the unshifted `A` callback, while affine
 /// coefficients are applied in the projected Hessenberg problem, matching
 /// KrylovKit's affine linear-solve convention.
 /// # Errors
 /// Returns [`KrylovError::InvalidOptions`] when an option is invalid
 /// (including a `max_iter` whose Krylov workspace cannot be allocated),
+/// [`KrylovError::InvalidOptions`] also when `a0` or `a1` has a NaN or
+/// infinite component, checked before the zero-RHS return,
 /// [`KrylovError::NoAffineCoefficient`] when both affine coefficients are zero,
 /// and [`KrylovError::Operation`] when the operator application, vector-space
 /// arithmetic, or a backend call fails. Non-convergence is reported through the
@@ -1082,6 +1087,8 @@ where
 /// # Errors
 /// Returns [`KrylovError::InvalidOptions`] when an option is invalid
 /// (including a `max_iter` whose Krylov workspace cannot be allocated),
+/// [`KrylovError::InvalidOptions`] also when `a0` or `a1` has a NaN or
+/// infinite component, checked before the zero-RHS return,
 /// [`KrylovError::NoAffineCoefficient`] when both affine coefficients are zero,
 /// and [`KrylovError::Operation`] when the operator application, vector-space
 /// arithmetic, or a backend call fails. Non-convergence is reported through the
@@ -1155,6 +1162,16 @@ where
     if a0.is_zero() && a1.is_zero() {
         return Err(anyhow::Error::new(KrylovError::NoAffineCoefficient));
     }
+    // Checked before the zero-RHS and closed-form returns, which would
+    // otherwise accept them.
+    for (name, value) in [("a0", &a0), ("a1", &a1)] {
+        if !(value.real().is_finite() && value.imag().is_finite()) {
+            return Err(anyhow::Error::new(KrylovError::InvalidOptions {
+                solver: "gmres",
+                reason: format!("{name} must be finite, got {value:?}"),
+            }));
+        }
+    }
 
     let started = Instant::now();
     let b_norm = b.norm()?;
@@ -1174,12 +1191,7 @@ where
         let started = Instant::now();
         // `a0 x = b` in closed form; the factors keep `b / a0` in range when
         // `1 / a0` itself is not.
-        let factors = a0.reciprocal_factors().map_err(|error| {
-            anyhow::Error::new(KrylovError::InvalidOptions {
-                solver: "gmres",
-                reason: format!("a1 = 0 needs a finite nonzero a0: {error}"),
-            })
-        })?;
+        let factors = a0.reciprocal_factors()?;
         let scale_calls = factors.len();
         let solution = factors
             .into_iter()
@@ -1188,11 +1200,19 @@ where
             profile.scale += started.elapsed();
             profile.scale_calls += scale_calls;
         }
+        // The closed form can lose a subnormal quotient component, so the
+        // residual is measured rather than assumed to be zero.
+        let residual = b.axpby(
+            AnyScalar::new_real(1.0),
+            &solution.scale(a0.clone())?,
+            AnyScalar::new_real(-1.0),
+        )?;
+        let residual_norm = residual.norm()?;
         finish!(GmresResult {
             solution,
             iterations: 0,
-            residual_norm: 0.0,
-            converged: true,
+            residual_norm: tolerance.residual_value(residual_norm, b_norm),
+            converged: tolerance.is_converged(residual_norm, b_norm),
         });
     }
 

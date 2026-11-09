@@ -80,10 +80,18 @@ another solver.
   threshold is negative or not finite before the identity-only shortcut, as
   `InvalidConfiguration`; these were previously accepted when the shortcut
   skipped the truncation.
-- A gradient-tracked `a0 = 0`, `a1 = 0` or `a1 = 1` is no longer dropped by an
-  arithmetic shortcut: the shortcuts in the local solver, in core
-  `gmres_affine` and in the identity-only check apply only to untracked
-  coefficients.
+- The `a0 = 0`, `a1 = 0` and `a1 = 1` arithmetic shortcuts in the local
+  solver, in core `gmres_affine` and in the identity-only check apply only to
+  untracked coefficients, so a gradient-tracked coefficient with one of these
+  values stays in the graph.
+- Gradients through a solve are those of the returned Krylov iterate, not of
+  the exact solution. A solver that stops after `n` steps differentiates its
+  `n`-step iterate, which misses directions outside that Krylov space: for
+  `A = diag(2, 3)`, `b = (1, 2)`, `a0 = 1` and a tracked `a1 = 0`, every
+  solver stops after one step with a zero residual and gives
+  `d sum(x) / d a1 = -8.4`, while the exact value is `-sum(A b) = -8`.
+  Implicit differentiation of the solve, which would give the exact
+  derivative, is not implemented.
 
 ## Implementation
 
@@ -127,16 +135,18 @@ is again solved in closed form. Both closed forms multiply by the factors of
 - an untracked purely imaginary `a0 = b i`: the exact factor `-i`, then the
   factors of the real `b` (a tracked one takes the general path, whose
   recorded expression depends on both components);
-- another complex `a0`: `2^j` and `conj(a0 * 2^j)` when `j >= 0`, or `conj(a0)`
-  unscaled between two powers of two when `j < 0`, then the real
-  `1 / |a0 * 2^j|^2`. A component of `1 / a0` can underflow while the matching
+- another complex `a0`: `2^j` and `conj(a0 * 2^j)` when `j >= 0`, then the real
+  `1 / |a0 * 2^j|^2`. When `j < 0`, `conj(a0)` is applied unscaled: up to
+  `|a0| = 2^201` the factors are `2^j`, `conj(a0)` and the real
+  `2^j / |a0 * 2^j|^2`, and above it two powers of two with product `2^(2j)`
+  surround `conj(a0)`, followed by `1 / |a0 * 2^j|^2`. A component of `1 / a0` can underflow while the matching
   component of the quotient is representable (`2^600 / (2^600 + 2^-420 i)`
   has imaginary part `-2^-1020`), and so can a component of a scaled-down
   `a0` (`2^1023 / (1 + 2^-1074 i)` has imaginary part `-2^-51`), so neither
   is formed on its own. The intermediate is `q * |a0 * 2^j|^2`; keeping it from overflowing for
   quotient components near `f64::MAX` needs `|a0 * 2^j| < 1`, so in the
   subnormal range it is rounded more coarsely than `q`. The absolute error is
-  then up to `9 * 2^-1074` (`|a0| < 1/2`) or `5 * 2^-1074` (otherwise), and a
+  then up to `9 * 2^-1074` (`|a0| < 1/2`) or `3 * 2^-1074` (otherwise), and a
   quotient component that small can round to zero.
 
 ## Tests

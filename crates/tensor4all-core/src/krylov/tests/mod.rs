@@ -501,6 +501,93 @@ fn gmres_affine_matches_shifted_system_and_scalar_shortcuts() {
 }
 
 #[test]
+fn gmres_affine_closed_form_measures_its_residual() {
+    // a1 = 0 solves a0 x = b in closed form. The residual of the returned
+    // solution decides convergence: exact for 2^-1000 / (2^73 + 2^73 i),
+    // while 2^-1074 / (0.3 + 0.2 i) rounds to zero and leaves the whole rhs.
+    let pow2 = |k: i32| 2.0_f64.powi(k / 2) * 2.0_f64.powi(k - k / 2);
+    let idx = DynIndex::new_dyn(1);
+    let options = GmresOptions {
+        max_iter: 1,
+        rtol: 1e-10,
+        max_restarts: 1,
+        verbose: false,
+        check_true_residual: false,
+    };
+    for (rhs, a0, exact) in [
+        (pow2(-1000), Complex64::new(pow2(73), pow2(73)), true),
+        (f64::from_bits(1), Complex64::new(0.3, 0.2), false),
+    ] {
+        let b = make_vector_c64(vec![Complex64::new(rhs, 0.0)], &idx);
+        let x0 = make_vector_c64(vec![Complex64::new(0.0, 0.0)], &idx);
+        let result = gmres_affine(
+            |x: &IdxTensor| Ok(x.clone()),
+            &b,
+            &x0,
+            AnyScalar::new_complex(a0.re, a0.im),
+            AnyScalar::new_real(0.0),
+            &options,
+        )
+        .unwrap();
+        assert_eq!(result.iterations, 0);
+        let solution = result.solution.to_vec::<Complex64>().unwrap()[0];
+        if exact {
+            let expected = Complex64::new(f64::from_bits(1), -f64::from_bits(1));
+            assert_eq!(solution, expected);
+            assert!(result.converged);
+            assert_eq!(result.residual_norm, 0.0);
+        } else {
+            assert_eq!(solution, Complex64::new(0.0, 0.0));
+            assert!(!result.converged);
+            assert_eq!(result.residual_norm, 1.0);
+        }
+    }
+}
+
+#[test]
+fn gmres_affine_rejects_non_finite_coefficients_before_any_shortcut() {
+    // A zero rhs and the a1 = 0 closed form both return before iterating.
+    let idx = DynIndex::new_dyn(1);
+    let options = GmresOptions::default();
+    for rhs in [0.0, 1.0] {
+        let b = make_vector_with_index(vec![rhs], &idx);
+        let x0 = make_vector_with_index(vec![0.0], &idx);
+        for (a0, a1, name) in [
+            (f64::NAN, 0.0, "a0"),
+            (f64::INFINITY, 0.0, "a0"),
+            (1.0, f64::NAN, "a1"),
+            (1.0, f64::NEG_INFINITY, "a1"),
+        ] {
+            let error = gmres_affine(
+                |x: &IdxTensor| Ok(x.clone()),
+                &b,
+                &x0,
+                AnyScalar::new_real(a0),
+                AnyScalar::new_real(a1),
+                &options,
+            )
+            .unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    KrylovError::InvalidOptions {
+                        solver: "gmres",
+                        ..
+                    }
+                ),
+                "{error:?}"
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("{name} must be finite")),
+                "{error}"
+            );
+        }
+    }
+}
+
+#[test]
 fn gmres_affine_profile_and_zero_rhs_paths() {
     let idx = DynIndex::new_dyn(1);
     let b = make_vector_with_index(vec![0.0], &idx);

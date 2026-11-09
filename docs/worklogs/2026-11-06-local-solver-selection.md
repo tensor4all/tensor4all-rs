@@ -106,7 +106,7 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   imaginary parts `-2^-1020` and `-2^-1000`; `1 + NaN i` is rejected. A
   purely imaginary `a0` is divided exactly (`2^-1074 / i = -2^-1074 i`); for
   other complex `a0`, a sweep of subnormal quotients checks the absolute error
-  bound of `9 * 2^-1074` (`|a0| < 1/2`) or `5 * 2^-1074`. A divisor
+  bound of `9 * 2^-1074` (`|a0| < 1/2`) or `3 * 2^-1074`. A divisor
   component that scaling down would flush is applied unscaled
   (`2^1023 / (1 + 2^-1074 i)` keeps `-2^-51 i`), and a tracked complex
   divisor, purely imaginary included, gives the gradient of the direct
@@ -117,7 +117,13 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   identity-only shortcut.
 - The `a0 = 0`, `a1 = 0` and `a1 = 1` arithmetic shortcuts apply only to
   untracked coefficients; a test differentiates the local solution with
-  respect to tracked `a0` and `a1` for every local solver.
+  respect to tracked `a0` and `a1` for every local solver. A two-dimensional
+  case (`A = diag(2, 3)`, `b = (1, 2)`, tracked `a1 = 0`) pins the gradient of
+  the one-step iterate, `-8.4`, which differs from the exact `-8`.
+- Core `gmres_affine` rejects a non-finite `a0` or `a1` before the zero-RHS
+  and closed-form returns, and its closed form reports the measured residual
+  of the returned solution (`2^-1074 / (0.3 + 0.2 i)` rounds to zero and is
+  not converged).
 - `validate_local_solver` and the option, mapping and site-count checks at the
   start of `square_linsolve` return `TreeTNOperationError::InvalidConfiguration`.
 - Every solver-owned Krylov workspace (basis, Hessenberg columns, Givens
