@@ -85,6 +85,14 @@ def fake_idle_check(seconds, max_load):
             "before": OBSERVATION, "after": OBSERVATION, "passed": True}
 
 
+def fake_read_cells(_criterion_home, baseline):
+    """One cell per arm, whose values differ per arm; the fake executable writes no Criterion files."""
+    arm = baseline.rsplit("-r", 1)[0]
+    mean_ns = MEANS_NS[arm]
+    return {f"cache_keys/{arm}": {"mean_ns": mean_ns, "ci95_low_ns": mean_ns * 0.99,
+                                   "ci95_high_ns": mean_ns * 1.01, "samples": {"arm": arm}}}
+
+
 def run_main(tmp, build_arm=fake_build_arm, **overrides):
     """Drive `main` against a temporary output directory with the seams stubbed."""
     out = pathlib.Path(tmp) / "run"
@@ -158,7 +166,8 @@ class EvidenceArchiveTests(unittest.TestCase):
         # Two arms succeed, then the third one's own subprocess fails, so `run_arm`
         # never attaches cells for it; all three records must reach the archive.
         with tempfile.TemporaryDirectory() as tmp:
-            out, err = run_main(tmp, build_arm=lambda *a: fake_build_arm(*a, failing="final"))
+            out, err = run_main(tmp, build_arm=lambda *a: fake_build_arm(*a, failing="final"),
+                                read_cells=fake_read_cells)
             self.assertEqual(str(err.code), "final-r1 exited with 3; see logs/final-r1.txt")
             self.assertTrue((out / "experiment.json.gz").exists(),
                             "a failed arm must keep its observations")
@@ -167,7 +176,9 @@ class EvidenceArchiveTests(unittest.TestCase):
 
         self.assertEqual([(r["arm"], r["round"], r["exit_code"]) for r in archived["runs"]],
                          [("original", 1, 0), ("shared", 1, 0), ("final", 1, 3)])
-        self.assertIn("cells", archived["runs"][0], "a completed arm keeps its cell mapping")
+        for index, arm in ((0, "original"), (1, "shared")):
+            self.assertEqual(archived["runs"][index]["cells"], fake_read_cells(None, f"{arm}-r1"),
+                             "a completed arm keeps its measured cells")
         self.assertNotIn("cells", archived["runs"][-1], "a failed arm has no cells to summarize")
         self.assertEqual(archived["runs"][-1]["after"]["loadavg"], [0.0, 0.0, 0.0])
         self.assertIn("CPU_Speed_Limit = 100", archived["runs"][-1]["before"]["thermal"])

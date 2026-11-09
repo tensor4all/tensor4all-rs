@@ -52,6 +52,9 @@ ROUND_ORDERS = [
     ["shared", "final", "original"],
 ]
 
+# Requested thread limits, exported to every timed run. These are settings, not
+# observations: the driver never reads back the effective thread count, so the
+# archived protocol does not prove that a run used one thread.
 THREAD_ENV = {
     name: "1"
     for name in [

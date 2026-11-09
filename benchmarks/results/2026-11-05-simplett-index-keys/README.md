@@ -17,8 +17,12 @@ performance promotion gate.
   `790df1082fd016ecdaaeb42f540330103580af9538c15dacfe50342ec7168125`.
 - Apple M3 Pro, macOS 27.0.1, default Apple Accelerate provider, Cargo `bench`
   profile (optimization level 3, debug info disabled). Affinity is unavailable.
-- Thread environment: `RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+- Thread environment (values exported to every timed run, not an observation):
+  `RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
   OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1`.
+  The effective thread count inside the arms was never measured, so these
+  settings are the only basis for a single-thread claim, and a provider that
+  ignores them would not have been detected.
 - Six cases `(sites, stored bond dimension, left/right samples)`:
   `(32,1,8)`, `(100,1,8)`, `(100,1,32)`, `(100,8,32)`, `(300,1,8)`, `(300,8,8)`.
   Batch size is the square of the last value. Physical dimensions are binary.
@@ -147,9 +151,10 @@ revisions. It exports each revision with `git archive`, copies the harness onto
 the original revision, builds each `cache_overhead` executable once with
 `--locked` in its own target directory, stops if any two executables are
 identical, runs the fixed 120-second idle check, then times the
-`cache_keys` group in the three rotated arm orders under the thread
-environment above. It records the toolchain, host, binary hashes, load and
-thermal observations, raw Criterion samples, and applies the gates. The archive
+`cache_keys` group in the three rotated arm orders with the thread environment
+above exported to every run (its effective thread count is not observed). It
+records the toolchain, host, binary hashes, load and thermal observations, raw
+Criterion samples, and applies the gates. The archive
 is written before the cell-set check and in a `finally`, so a rejected suite keeps
 the run records that diagnosis needs, including the record of an arm whose own
 subprocess exited non-zero (that record carries its load and thermal observations
