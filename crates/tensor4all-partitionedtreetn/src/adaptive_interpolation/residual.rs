@@ -21,10 +21,10 @@
 //!
 //! `rms_P(r) = exp(log ||TT_r||) / sqrt(|P|)`, read with
 //! [`TreeTN::log_norm_on_session`](tensor4all_treetn::TreeTN::log_norm_on_session).
-//! Like every norm of the report, it shares the overflow and underflow limit
-//! of `log_norm`: the center norm is squared before the logarithm, so a
-//! residual norm above about `1.34e154` overflows and one below about
-//! `1e-154` underflows to zero.
+//! Like every norm of the report, it shares the range of `log_norm`, which
+//! takes the center norm with scaled accumulation and never squares it: a
+//! residual norm above `f64::MAX` overflows, and only an exactly zero
+//! residual gives zero.
 //!
 //! # Non-convergence
 //!
