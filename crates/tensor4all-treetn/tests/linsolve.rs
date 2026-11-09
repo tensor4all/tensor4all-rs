@@ -2389,6 +2389,36 @@ fn test_relative_linear_system_residual_with_mapped_coefficients() {
 }
 
 #[test]
+fn test_relative_linear_system_residual_rejects_an_rhs_whose_norm_overflows() {
+    // The rhs entries are at most 4 * f64::MAX / 4.5, but its norm is
+    // sqrt(30) * f64::MAX / 4.5 > f64::MAX, which would make the relative
+    // residual zero.
+    let phys_dim = 2;
+    let (state, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
+    let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[2.0, 2.0], phys_dim);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
+    let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+    let mut rhs = state.clone();
+    rhs.scale_mut(AnyScalar::new_real(f64::MAX / 4.5)).unwrap();
+
+    let error = relative_linear_system_residual(
+        &operator,
+        &state,
+        &rhs,
+        AnyScalar::new_real(3.0),
+        AnyScalar::new_real(1.0),
+        ApplyOptions::naive(),
+    )
+    .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("rhs norm is not finite"),
+        "{error:#}"
+    );
+}
+
+#[test]
 fn test_relative_linear_system_residual_stays_relative_for_tiny_rhs() {
     let phys_dim = 2;
     let (state, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);

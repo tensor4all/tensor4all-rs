@@ -174,6 +174,12 @@ result. `TensorVectorSpace::is_single_precision` reports the storage
 precision. Dividing in `f64` and converting once would avoid the error but
 needs a cast in the tensor layer, which these closed forms do not have.
 
+A right-hand side whose norm overflows (`b = (f64::MAX, f64::MAX)`) would make
+every relative residual zero and report convergence. Every GMRES entry point
+therefore returns `NumericalBreakdown` for a right-hand side whose norm is not
+finite, as CG and BiCGSTAB do, and `relative_linear_system_residual`, which the
+`square_linsolve` sweeps use, returns an error for such an rhs.
+
 The coefficients themselves are converted the same way wherever they are
 applied: in the closed-form residual `b - a0 x`, in every GMRES, CG and
 BiCGSTAB step, and in `relative_linear_system_residual`. So for

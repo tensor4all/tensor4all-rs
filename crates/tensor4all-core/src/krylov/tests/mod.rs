@@ -628,6 +628,54 @@ fn gmres_affine_closed_form_rejects_factors_outside_the_single_precision_range()
 }
 
 #[test]
+fn gmres_rejects_a_right_hand_side_whose_norm_overflows() {
+    // |b| = sqrt(2) * f64::MAX is infinite, so every relative residual would
+    // be zero and a closed form or an iteration would report convergence.
+    let idx = DynIndex::new_dyn(2);
+    let b = make_vector_with_index(vec![f64::MAX, f64::MAX], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
+    let options = GmresOptions {
+        rtol: 1e-20,
+        ..Default::default()
+    };
+    let identity = |x: &IdxTensor| Ok(x.clone());
+    let errors = [
+        gmres_affine(
+            identity,
+            &b,
+            &x0,
+            AnyScalar::new_real(3.0),
+            AnyScalar::new_real(0.0),
+            &options,
+        )
+        .unwrap_err(),
+        gmres_affine(
+            identity,
+            &b,
+            &x0,
+            AnyScalar::new_real(3.0),
+            AnyScalar::new_real(1.0),
+            &options,
+        )
+        .unwrap_err(),
+        gmres(identity, &b, &x0, &options).unwrap_err(),
+    ];
+    for error in errors {
+        assert!(
+            matches!(
+                error,
+                KrylovError::NumericalBreakdown {
+                    solver: "gmres",
+                    iteration: 0,
+                    quantity: "right-hand-side norm",
+                }
+            ),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
 fn gmres_affine_rejects_non_finite_coefficients_before_any_shortcut() {
     // A zero rhs and the a1 = 0 closed form both return before iterating.
     let idx = DynIndex::new_dyn(1);

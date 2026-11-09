@@ -611,9 +611,11 @@ where
 ///
 /// Returns [`TreeTNOperationError::InvalidConfiguration`] when a node of
 /// `operator`, `solution` or `rhs` is single precision and `a0` or `a1` is
-/// outside the `f32` range, and [`TreeTNOperationError`] when scaling `solution`
-/// or `rhs`, applying `operator`, combining the two terms, or evaluating the
-/// residual and RHS norms fails.
+/// outside the `f32` range, [`TreeTNOperationError::Operation`] when the norm of
+/// `rhs` is not finite, which would make the relative residual zero, and
+/// [`TreeTNOperationError`] when scaling `solution` or `rhs`, applying
+/// `operator`, combining the two terms, or evaluating the residual and RHS norms
+/// fails.
 ///
 /// # Examples
 /// ```
@@ -682,6 +684,14 @@ where
     let mut residual = lhs.add_reindexed_like_self(&negative_rhs)?;
 
     let rhs_norm = rhs.clone().norm()?;
+    // A norm that overflows would make the relative residual zero.
+    if !rhs_norm.is_finite() {
+        return Err(TreeTNOperationError::Operation {
+            source: anyhow::anyhow!(
+                "relative_linear_system_residual: the rhs norm is not finite ({rhs_norm})"
+            ),
+        });
+    }
     if rhs_norm == 0.0 {
         return residual.norm();
     }

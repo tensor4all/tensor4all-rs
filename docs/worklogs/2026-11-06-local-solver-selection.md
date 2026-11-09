@@ -130,6 +130,10 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   range. With single-precision vectors or networks, an `a0` or `a1` outside
   the `f32` range is rejected before any solve or residual evaluation
   (`a0 = 2^128 + 2^128 i`, `a1 = 1e300`).
+- Every GMRES entry point returns `NumericalBreakdown` for a right-hand side
+  whose norm is not finite (`b = (f64::MAX, f64::MAX)`), as CG and BiCGSTAB
+  already did, and `relative_linear_system_residual` returns an error for an
+  rhs whose norm is not finite. Otherwise every relative residual is zero.
 - The closed-form GMRES profile counts its residual work (one more `scale`,
   one `axpby`, one `norm`), and a test checks the counts.
 - Core `gmres_affine` rejects a non-finite `a0` or `a1` before the zero-RHS

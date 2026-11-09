@@ -990,6 +990,8 @@ where
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
 /// Non-convergence is reported through the result's `converged` flag and does
 /// not produce an error.
+/// A right-hand side whose norm is not finite, which would make every relative
+/// residual zero, is a [`KrylovError::NumericalBreakdown`].
 ///
 pub fn gmres<T, F>(
     apply_a: F,
@@ -1024,6 +1026,8 @@ where
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
 /// Non-convergence is reported through the result's `converged` flag and does
 /// not produce an error.
+/// A right-hand side whose norm is not finite, which would make every relative
+/// residual zero, is a [`KrylovError::NumericalBreakdown`].
 ///
 pub fn gmres_with_absolute_tolerance<T, F>(
     apply_a: F,
@@ -1069,6 +1073,8 @@ where
 /// and [`KrylovError::Operation`] when the operator application, vector-space
 /// arithmetic, or a backend call fails. Non-convergence is reported through the
 /// result's `converged` flag and does not produce an error.
+/// A right-hand side whose norm is not finite, which would make every relative
+/// residual zero, is a [`KrylovError::NumericalBreakdown`].
 ///
 pub fn gmres_affine<T, F>(
     apply_a: F,
@@ -1111,6 +1117,8 @@ where
 /// and [`KrylovError::Operation`] when the operator application, vector-space
 /// arithmetic, or a backend call fails. Non-convergence is reported through the
 /// result's `converged` flag and does not produce an error.
+/// A right-hand side whose norm is not finite, which would make every relative
+/// residual zero, is a [`KrylovError::NumericalBreakdown`].
 ///
 pub fn gmres_affine_with_absolute_tolerance<T, F>(
     apply_a: F,
@@ -1207,7 +1215,8 @@ where
     }
 
     let started = Instant::now();
-    let b_norm = b.norm()?;
+    // A norm that overflows would make every relative residual zero.
+    let b_norm = vector_ops::finite_norm(b, "gmres", 0, "right-hand-side norm")?;
     if profile_enabled {
         profile.b_norm += started.elapsed();
     }
@@ -1629,6 +1638,8 @@ where
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
 /// Non-convergence is reported through the result's `converged` flag and does
 /// not produce an error.
+/// A right-hand side whose norm is not finite, which would make every relative
+/// residual zero, is a [`KrylovError::NumericalBreakdown`].
 ///
 pub fn gmres_with_total_iteration_limit<T, F>(
     apply_a: F,
@@ -1670,7 +1681,8 @@ where
     b.validate()?;
     x0.validate()?;
 
-    let b_norm = b.norm()?;
+    // A norm that overflows would make every relative residual zero.
+    let b_norm = vector_ops::finite_norm(b, "gmres", 0, "right-hand-side norm")?;
     if b_norm == 0.0 {
         // The zero vector solves every homogeneous linear system.
         return Ok(GmresResult {
@@ -1929,6 +1941,8 @@ where
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
 /// Non-convergence is reported through the result's `converged` flag and does
 /// not produce an error.
+/// A right-hand side whose norm is not finite, which would make every relative
+/// residual zero, is a [`KrylovError::NumericalBreakdown`].
 /// # Examples
 /// Solve `2x = b` with a no-op truncation function:
 /// ```
@@ -1983,7 +1997,8 @@ where
     b.validate()?;
     x0.validate()?;
 
-    let b_norm = b.norm()?;
+    // A norm that overflows would make every relative residual zero.
+    let b_norm = vector_ops::finite_norm(b, "gmres", 0, "right-hand-side norm")?;
     if b_norm == 0.0 {
         return Ok(GmresResult {
             solution: b.scale(AnyScalar::new_real(0.0))?,
@@ -2438,6 +2453,8 @@ pub struct RestartGmresResult<T> {
 /// underlying tensor or backend operation fails (a [`KrylovError::Operation`]).
 /// Non-convergence is reported through the result's `converged` flag and does
 /// not produce an error.
+/// A right-hand side whose norm is not finite, which would make every relative
+/// residual zero, is a [`KrylovError::NumericalBreakdown`].
 /// # Examples
 /// Solve `5x = b` with no truncation:
 /// ```
@@ -2490,7 +2507,13 @@ where
         x.validate()?;
     }
 
-    let b_norm = b.norm()?;
+    // A norm that overflows would make every relative residual zero.
+    let b_norm = vector_ops::finite_norm(
+        b,
+        "restart_gmres_with_truncation",
+        0,
+        "right-hand-side norm",
+    )?;
     if b_norm == 0.0 {
         let solution = b.scale(AnyScalar::new_real(0.0))?;
         return Ok(RestartGmresResult {
