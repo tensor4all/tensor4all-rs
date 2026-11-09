@@ -18,7 +18,8 @@ tree tensor networks, with shared-memory and distributed parallel execution:
 
 - adaptive patched interpolation (the pQTCI algorithm) that produces a
   `PartitionedTreeTN` directly;
-- patched and adaptive patched contraction, including element-wise products;
+- patched and adaptive patched contraction, and patched element-wise
+  operations (of which the Hadamard product is one case);
 - patch-order selection and overpatching control;
 - a coherent error contract across interpolation, algebra, and reconstruction;
 - patch-level parallelism through Hataori (Rayon first, MPI later).
@@ -204,7 +205,7 @@ Scope (unchanged goal, corrected method):
   rank only slowly and it over-patches without M5;
 - preconditions for adoption: the site-free-node failures of `inner` and SRC
   contraction (issue #797), since compact patches create site-free nodes; the
-  M6 consumers (patched addition and contraction) measured as well as norm and
+  M6a consumers (patched addition and contraction) measured as well as norm and
   truncation; and an amendment of the full-site-index invariant of
   [partitioned-treetn.md](./partitioned-treetn.md).
 
@@ -228,7 +229,7 @@ redundant patches.
 Status: **minimum patch size and capped-patch bound implemented
 (2026-10-04, questions 2 and 4 without the engine's early exit,
 [`tree-pqtci-patch-size-bounds.md`](./tree-pqtci-patch-size-bounds.md));
-the engine's early exit is closed, sibling merging moved to M6, and the
+the engine's early exit is closed, sibling merging moved to M6 (now M6b), and the
 opt-in corner-miss mitigation (`cache_candidates`) is implemented
 (2026-10-04), which completes M5 by its completion rule below; the selector
 is an optional later study, and the overpatching measurements move after the
@@ -250,7 +251,7 @@ Scope:
 - `ExactParameterGain` remains the algebra-side reference strategy; its cost
   (about `L * d` truncations per split decision when `patch_order` is empty)
   motivates a cheaper default for large patch counts;
-- a minimum patch size option (done). Merging sibling patches moved to M6
+- a minimum patch size option (done). Merging sibling patches moved to M6 (now M6b)
   (user decision of 2026-10-04): in the reference implementation
   (`TCIAlgorithms.jl`, which the paper used) merging exists only after
   patched matrix multiplication (`_mergesmallpatches`), and its adaptive
@@ -286,7 +287,7 @@ M9 global review.
 Completion (user decision of 2026-10-04): M5 is complete when each of its
 implementation items is either implemented or explicitly deferred with a
 recorded reason: the minimum patch size and the capped-patch bound (done),
-sibling merging (question 3, moved to M6), the engine's early exit (closed),
+sibling merging (question 3, moved to M6, now M6b), the engine's early exit (closed),
 and the opt-in corner-miss mitigation (question 5, implemented as
 `cache_candidates`); the selector is already deferred as an optional later
 study. The overpatching measurements
@@ -337,36 +338,123 @@ records milestone ownership and current issue states.
 Exit: the review and its fixes are recorded in a work log, and the
 unresolved-issue list is in this roadmap or the findings record.
 
-### M6. Adaptive patched contraction (L)
+### M6. Patched algebra on trees: contraction, merging, element-wise operations
 
-Outcome: the contraction side of the method is complete on trees. This line
-works on existing `PartitionedTreeTN` values and does not depend on M1 or M2;
-it is ordered after them to keep the interpolation line first, and starts
-after the checkpoint review.
+Re-subdivided on 2026-11-09 (user decision). The original M6 carried patched
+element-wise products as an item of adaptive contraction, built on the
+existing `hadamard` (a diagonal-operator contraction, as in Grosso et al.
+§4.2 and `elemmul` of `PartitionedMPSs.jl`). The decision redefines that item:
+an element-wise operation is a pointwise map of `k` inputs, of which the
+Hadamard product is the binary-product case, and it is computed by dedicated
+element-wise algorithms rather than by operator–operator contraction, which
+is valid but not expected to be as efficient. Element-wise operations
+therefore differ from contraction in kernel, split signal, and error source,
+and get their own sub-milestone. Sibling merging serves every producer and
+is separated as well.
+
+The line works on existing `PartitionedTreeTN` values, does not depend on M1
+or M2, and starts after the checkpoint review. Each sub-milestone that
+changes public API or algorithm semantics needs its own design record and a
+review before implementation, as stated under [Status](#status).
+
+#### M6a. Adaptive patched contraction (L)
+
+Outcome: patched and adaptive patched operator–operator (MPO–MPO on a chain)
+contraction is complete on trees. The per-pair kernel is `treetn::contract`
+with `ContractionOptions`; an output patch is split when its contraction
+rank reaches the patch cap.
 
 Scope:
 
 - the contraction outcome API with early abort
   ([treetn-contraction-outcome.md](./treetn-contraction-outcome.md)) and its
   adoption in `contract_adaptive`;
-- patched element-wise products on top of the existing `hadamard`, including
-  the projector rule for paired distinct indices;
-- refine only the input patches that contributed to unconverged outputs,
-  recompute only those outputs, then merge converged neighbors;
-- sibling merging (moved from M5 question 3 on 2026-10-04) as a
-  post-processing function on a `PartitionedTreeTN`, usable on interpolation
-  and contraction outputs alike: bottom-up over the split tree as in
-  `_mergesmallpatches` of `TCIAlgorithms.jl` (merge when the summed,
-  truncated patch stays strictly below the cap), plus a check that the exact
-  truncation error of a merge stays within the merged region's allowance, so
-  the M3 error contract holds;
-- the contraction-side overhead items listed in the findings (prefix-tree
-  projector index, per-operation norm caching); the `Sequential` group-sum
-  shortcut was fixed under
+- refine only the input patches that contributed to unconverged outputs, and
+  recompute only those outputs;
+- the contraction-side overhead items listed in the findings: a prefix-tree
+  projector index, pairwise disjointness validation and the `N_A * N_B` pair
+  enumeration, and per-operation caching of `norm`/`norm_squared` (each call
+  currently clones and canonicalizes); the `Sequential` group-sum shortcut
+  was fixed under
   [#788](https://github.com/tensor4all/tensor4all-rs/issues/788) (closed).
 
-Exit: tests cover the worst, best, and general patch layouts on branched
-trees; a benchmark reproduces their qualitative ordering.
+Status: the outcome API (with its context-scoped counterpart), the
+general-tree SVD zip-up abort hook, lazy `Sequential` adoption, and
+selection-preserving bounded overlap refinement of adaptive contraction are
+implemented. The overhead items and the exit are open.
+
+Exit: library tests cover the worst, best, and general patch layouts on
+branched trees; a benchmark reproduces their qualitative ordering under the
+M9 rules.
+
+#### M6b. Sibling merging (M)
+
+Outcome: a post-processing function on any `PartitionedTreeTN` (interpolation,
+contraction, and element-wise outputs alike) that merges sibling patches
+without breaking the error contract of the operation that produced them.
+
+Scope:
+
+- sibling merging (moved from M5 question 3 on 2026-10-04): bottom-up over the
+  split tree as in `_mergesmallpatches` of `TCIAlgorithms.jl`; a merge is kept
+  only when the summed, truncated patch stays strictly below the cap;
+- a check that the exact truncation error of a merge stays within the merged
+  region's allowance under the producer's error contract: M3 for
+  interpolation outputs, M3b for algebra outputs;
+- integration into the producers ("then merge converged neighbors" after
+  M6a's recomputation, and likewise after M6c).
+
+Ordering: merging of interpolation outputs can proceed after the checkpoint;
+merging of algebra outputs waits for M3b, which defines their allowance.
+
+Status: not implemented. The allowance rule needs a design record: how a
+merged region's allowance is derived from the M3 (and later M3b) contract.
+
+Exit: tests on branched trees show that a merged interpolation output still
+meets its M3 tolerance, and that a merge exceeding the allowance is rejected.
+
+#### M6c. Patched element-wise operations (L)
+
+Outcome: adaptive patched element-wise operations
+`f(x_1, ..., x_k)` on `k` `PartitionedTreeTN` inputs; the Hadamard product is
+the case `k = 2`, `f = product`.
+
+Scope:
+
+- kernels: TreeACI `tree_elementwise_batched` for a general `f`; TreeACI or
+  tree RSI for products. Tree RSI is Hadamard-only by design (#907), so an
+  engine that supports only products must be rejected at compile time for
+  any other `f`;
+- the projector rule: output projectors are the nonempty intersections of the
+  `k` inputs' projectors, with paired indices of distinct identity mapped to
+  one identity; whether unpaired axes are broadcast is decided in the design
+  record;
+- split signal (decided 2026-11-09): an output patch is split when the
+  engine reports a rank reaching the patch cap (equality counts), the same
+  saturation rule as M6a, not on the engine's convergence flag;
+- engines receive an explicit execution context; no route through
+  `global-defaults`;
+- the exact, unpatched `treetn::hadamard` stays as a reference and test
+  oracle.
+
+Prerequisites: M6a's prefix-tree projector index (the intersection enumeration
+grows as `N_1 * ... * N_k`), and a design record for M6c.
+
+Open questions for that design record:
+
+1. Acceptance: whether a patch result is accepted through a mandatory
+   caller-supplied validation callback, an optional one, or a library
+   sampled check.
+2. Driver: whether M6c shares the project-first driver of M6a with only the
+   kernel swapped, or has its own. This decides whether M7 parallelizes one
+   driver or two.
+
+Status: not implemented; awaits the design record.
+
+Exit: tests on branched trees against a dense oracle, for a nonlinear `f`
+through TreeACI and for products through TreeACI and tree RSI; a benchmark
+against the unpatched element-wise operation at matched measured accuracy,
+on a workload chosen under the M9 rules.
 
 ### M7. Shared-memory parallel execution (L)
 
@@ -379,7 +467,8 @@ Scope:
   [adaptive-tci-parallel-execution.md](./adaptive-tci-parallel-execution.md);
   Hataori becomes an optional dependency of `tensor4all-partitionedtreetn`;
 - dynamic scheduling of patches with very different costs;
-- parallel contraction over independent output-projector groups;
+- parallel contraction over independent output-projector groups (M6a; also
+  M6c if it shares the M6a driver, an open M6c question);
 - the pinned reference scale of M3, so acceptance does not depend on
   execution order;
 - a documented outer/inner parallelism policy.
@@ -442,7 +531,9 @@ their own issues.
 M0 ──► M1 ──► M2 ──► M3 ──► M4 ──► M5 ──► Checkpoint review
                       │                          │
                       └──────────► M7 ──► M8     ▼
-M6 (independent of M1/M2; starts after the checkpoint) ──► M7
+M6a (independent of M1/M2; starts after the checkpoint) ──► M7
+M6a ──► M6c (prefix-tree index; own design record)
+Checkpoint ──► M6b for interpolation outputs; M3b ──► M6b for algebra outputs
 M9: continuous, each item gated on its producer
 M10: deferred
 ```
