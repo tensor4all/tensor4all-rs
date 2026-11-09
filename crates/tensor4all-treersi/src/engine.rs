@@ -16,10 +16,11 @@ use crate::{
 };
 use rand::Rng;
 use rand_distr::{Distribution, StandardNormal};
+use std::sync::Arc;
 use tensor4all_core::{
     matrix_luci_row_interpolation_owned_in, DynIndex, IdxTensor, IndexLike, RrLUOptions,
 };
-use tensor4all_tensorbackend::{CpuExecutionContext, ExecutionContext, Matrix};
+use tensor4all_tensorbackend::{ExecutionContext, Matrix};
 use tensor4all_treetn::TreeTN;
 
 type Blocks<T> = Vec<Option<Scaled<T>>>;
@@ -37,7 +38,7 @@ fn block<T>(blocks: &[Option<Scaled<T>>], node: usize) -> Result<&Scaled<T>> {
 /// Every contraction checks its output block before allocation, normalizes
 /// the result, and carries the input exponents into the result.
 fn replace<T: TreeRsiScalar>(
-    cpu: &CpuExecutionContext,
+    context: &ExecutionContext,
     input: Scaled<T>,
     axis: usize,
     weights: &Scaled<T>,
@@ -53,15 +54,40 @@ fn replace<T: TreeRsiScalar>(
     )?;
     let exponent = add_exponents(input.exponent, weights.exponent)?;
     Scaled::new(
-        dense::replace_axis(cpu, input.array, axis, &weights.array.data, rank)?,
+        dense::replace_axis(context, input.array, axis, &weights.array.data, rank)?,
         exponent,
     )
+}
+
+/// The core with its axes in `order`, on the host.
+///
+/// A device-resident core is downloaded explicitly first: the sketch keeps its
+/// blocks in host buffers, so step 1 of #1158 pays that transfer per core. The
+/// download rebuilds the host tensor in the process-global CPU eager context
+/// (`IdxTensor::download` -> `IdxTensor::from_native`), and the following
+/// `to_vec` enters that CPU context's session, so this is the second host
+/// dependency of a CUDA run beside the rank decision — it happens for every
+/// input core, including in a tree whose edges never need a rank decision.
+fn ordered_host_core(
+    _context: &ExecutionContext,
+    tensor: &IdxTensor,
+    order: &[DynIndex],
+) -> Result<IdxTensor> {
+    #[cfg(feature = "tenferro-cuda")]
+    if let ExecutionContext::Cuda(cuda) = _context {
+        let host = tensor.download(cuda).map_err(TreeRsiError::numerical)?;
+        return host.permute_indices(order).map_err(TreeRsiError::numerical);
+    }
+    tensor
+        .permute_indices(order)
+        .map_err(TreeRsiError::numerical)
 }
 
 fn read_cores<T: TreeRsiScalar, V: TreeRsiNode>(
     plan: &Plan<V>,
     tree: &TreeTN<IdxTensor, V>,
     limit: usize,
+    context: &ExecutionContext,
 ) -> Result<Vec<Scaled<T>>> {
     let mut cores = Vec::with_capacity(plan.nodes.len());
     for (node, name) in plan.nodes.iter().enumerate() {
@@ -108,16 +134,34 @@ fn read_cores<T: TreeRsiScalar, V: TreeRsiNode>(
             checked_product(dims.iter().copied(), "input core")?,
             limit,
         )?;
-        let data = tensor
-            .permute_indices(&order)
-            .map_err(TreeRsiError::numerical)?
-            .to_vec::<T>()
-            .map_err(|e| TreeRsiError::ScalarKind {
-                message: e.to_string(),
-            })?;
+        // INVARIANT: a CUDA run reaches the process-global CPU session here even
+        // though its own context is CUDA; a caller already inside a CPU session
+        // therefore gets that session's re-entry rejection.
+        let host = ordered_host_core(context, tensor, &order)?;
+        // Only a payload of another scalar type is a caller error (the stable
+        // `ScalarKind` variant). Every other readback failure keeps its typed
+        // cause: the CPU session re-entry diagnostic is a `Numerical` source and
+        // must stay inspectable instead of being flattened into a message.
+        let data = host.to_vec::<T>().map_err(readback_error)?;
         cores.push(Scaled::new(Dense { dims, data }, 0)?);
     }
     Ok(cores)
+}
+
+/// Map a host-readback failure to the public error.
+///
+/// A payload of another scalar type is a caller error and keeps the stable
+/// `ScalarKind` variant. Every other readback failure -- the process-global CPU
+/// session rejecting a re-entry, a storage failure -- keeps its typed cause in
+/// `Numerical`, whose `source` chain stays inspectable.
+fn readback_error(error: tensor4all_core::IdxTensorError) -> TreeRsiError {
+    if error.is_payload_scalar_type_mismatch() {
+        TreeRsiError::ScalarKind {
+            message: error.to_string(),
+        }
+    } else {
+        TreeRsiError::numerical(error)
+    }
 }
 
 fn probes<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
@@ -218,7 +262,7 @@ fn probes<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
 /// relative weight is only approximate. Independent per-column renormalization would
 /// define a different sketch and pivot selection policy.
 fn sketch<T: TreeRsiScalar>(
-    cpu: &CpuExecutionContext,
+    context: &ExecutionContext,
     core: &Scaled<T>,
     mut factors: Vec<(usize, &Scaled<T>)>,
     k: usize,
@@ -245,7 +289,7 @@ fn sketch<T: TreeRsiScalar>(
         limit,
     )?;
     let mut value = Scaled::new(
-        dense::contract_axis_to_probe(cpu, &core.array, axis, &weights.array.data, k)?,
+        dense::contract_axis_to_probe(context, &core.array, axis, &weights.array.data, k)?,
         add_exponents(core.exponent, weights.exponent)?,
     )?;
     let mut rest = factors
@@ -255,7 +299,7 @@ fn sketch<T: TreeRsiScalar>(
     rest.sort_by_key(|(a, _)| std::cmp::Reverse(*a));
     for (axis, weights) in rest {
         value = Scaled::new(
-            dense::contract_axis_diag_probe(cpu, value.array, axis, &weights.array.data)?,
+            dense::contract_axis_diag_probe(context, value.array, axis, &weights.array.data)?,
             add_exponents(value.exponent, weights.exponent)?,
         )?;
     }
@@ -263,7 +307,7 @@ fn sketch<T: TreeRsiScalar>(
 }
 
 fn sketch_environments<T: TreeRsiScalar, V>(
-    cpu: &CpuExecutionContext,
+    context: &ExecutionContext,
     plan: &Plan<V>,
     cores: &[Scaled<T>],
     probes: &Blocks<T>,
@@ -283,7 +327,7 @@ fn sketch_environments<T: TreeRsiScalar, V>(
             .map(|(axis, &c)| Ok((axis, block(&up, c)?)))
             .collect::<Result<Vec<_>>>()?;
         factors.push((plan.children[v].len(), block(probes, v)?));
-        up[v] = Some(sketch(cpu, &cores[v], factors, plan.k, limit)?);
+        up[v] = Some(sketch(context, &cores[v], factors, plan.k, limit)?);
     }
     for &p in &plan.preorder {
         let children = &plan.children[p];
@@ -357,7 +401,7 @@ fn sketch_environments<T: TreeRsiScalar, V>(
                         let probe = block(probes, p)?;
                         down[v] = Some(Scaled::new(
                             dense::contract_axis_diag_probe(
-                                cpu,
+                                context,
                                 env.array.clone(),
                                 1,
                                 &probe.array.data,
@@ -388,12 +432,12 @@ fn sketch_environments<T: TreeRsiScalar, V>(
                     factors.push((q + 1, block(&down, p)?));
                 }
                 if plan.needs_sketched_env[v] {
-                    let env = sketch(cpu, &cores[p], factors, plan.k, limit)?;
+                    let env = sketch(context, &cores[p], factors, plan.k, limit)?;
                     if plan.needs_down[v] {
                         let probe = block(probes, p)?;
                         down[v] = Some(Scaled::new(
                             dense::contract_axis_diag_probe(
-                                cpu,
+                                context,
                                 env.array.clone(),
                                 1,
                                 &probe.array.data,
@@ -404,7 +448,7 @@ fn sketch_environments<T: TreeRsiScalar, V>(
                     environments[v] = Some(env);
                 } else {
                     factors.push((q, block(probes, p)?));
-                    down[v] = Some(sketch(cpu, &cores[p], factors, plan.k, limit)?);
+                    down[v] = Some(sketch(context, &cores[p], factors, plan.k, limit)?);
                 }
             }
         }
@@ -420,7 +464,7 @@ struct Exact<T> {
 }
 impl<T: TreeRsiScalar> Exact<T> {
     fn build<V>(
-        cpu: &CpuExecutionContext,
+        context: &ExecutionContext,
         plan: &Plan<V>,
         cores: &[Scaled<T>],
         limit: usize,
@@ -434,7 +478,7 @@ impl<T: TreeRsiScalar> Exact<T> {
                 continue;
             }
             let target = plan.children[v].len() + 1;
-            let array = cache.partial(cpu, plan, cores, v, target, limit)?;
+            let array = cache.partial(context, plan, cores, v, target, limit)?;
             cache.up[v] = Some(Self::close(array, target)?);
         }
         for &p in &plan.preorder {
@@ -487,7 +531,7 @@ impl<T: TreeRsiScalar> Exact<T> {
                     if !plan.exact_down[v] {
                         continue;
                     }
-                    let array = cache.partial(cpu, plan, cores, p, target, limit)?;
+                    let array = cache.partial(context, plan, cores, p, target, limit)?;
                     cache.down[v] = Some(Self::close(array, target)?);
                 }
             }
@@ -497,7 +541,7 @@ impl<T: TreeRsiScalar> Exact<T> {
 
     fn partial<V>(
         &self,
-        cpu: &CpuExecutionContext,
+        context: &ExecutionContext,
         plan: &Plan<V>,
         cores: &[Scaled<T>],
         v: usize,
@@ -507,12 +551,12 @@ impl<T: TreeRsiScalar> Exact<T> {
         let mut value = cores[v].clone();
         for (axis, &c) in plan.children[v].iter().enumerate() {
             if axis != target {
-                value = replace(cpu, value, axis, block(&self.up, c)?, limit)?;
+                value = replace(context, value, axis, block(&self.up, c)?, limit)?;
             }
         }
         let axis = plan.children[v].len() + 1;
         if plan.parent[v].is_some() && axis != target {
-            value = replace(cpu, value, axis, block(&self.down, v)?, limit)?;
+            value = replace(context, value, axis, block(&self.down, v)?, limit)?;
         }
         Ok(value)
     }
@@ -530,7 +574,7 @@ impl<T: TreeRsiScalar> Exact<T> {
 
     fn environment<V>(
         &self,
-        cpu: &CpuExecutionContext,
+        context: &ExecutionContext,
         plan: &Plan<V>,
         cores: &[Scaled<T>],
         v: usize,
@@ -552,7 +596,7 @@ impl<T: TreeRsiScalar> Exact<T> {
             .iter()
             .position(|&c| c == v)
             .ok_or_else(|| missing("child not in parent"))?;
-        let value = self.partial(cpu, plan, cores, p, target, limit)?;
+        let value = self.partial(context, plan, cores, p, target, limit)?;
         let physical = plan.children[p].len();
         let mut order = vec![target, physical];
         order.extend((0..value.array.dims.len()).filter(|&a| a != target && a != physical));
@@ -564,7 +608,7 @@ impl<T: TreeRsiScalar> Exact<T> {
 }
 
 fn candidate<T: TreeRsiScalar, V>(
-    cpu: &CpuExecutionContext,
+    context: &ExecutionContext,
     plan: &Plan<V>,
     cores: &[Scaled<T>],
     frames: &Blocks<T>,
@@ -573,7 +617,7 @@ fn candidate<T: TreeRsiScalar, V>(
 ) -> Result<Scaled<T>> {
     let mut value = cores[v].clone();
     for (axis, &child) in plan.children[v].iter().enumerate() {
-        value = replace(cpu, value, axis, block(frames, child)?, limit)?;
+        value = replace(context, value, axis, block(frames, child)?, limit)?;
     }
     Ok(value)
 }
@@ -584,13 +628,22 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
     rng: &mut R,
     context: &ExecutionContext,
 ) -> Result<TreeRsiResult<V>> {
-    let cpu = match context {
-        ExecutionContext::Cpu(cpu) => cpu,
-        // INVARIANT: the other context variant exists only with GPU features.
+    // Host dependency 1 of 2: the rank decision is a host LU pivot search with a
+    // lower-triangular solve and no device twin, so it keeps running on the
+    // process-global CPU context even for a CUDA run. The other is the input-core
+    // readback in `ordered_host_core`. See #1158 step 2 for the device-resident
+    // sketch.
+    let rank_context = match context {
+        ExecutionContext::Cpu(cpu) => Arc::clone(cpu),
+        #[cfg(feature = "tenferro-cuda")]
+        ExecutionContext::Cuda(_) => tensor4all_tensorbackend::default_cpu_execution_context(),
+        // A build without the CUDA feature cannot execute the variant at all.
         #[allow(unreachable_patterns)]
         _ => {
             return Err(TreeRsiError::Context {
-                message: "RSI requires a CPU execution context".into(),
+                message: "this build cannot run tree RSI on this execution context; \
+                          enable the tenferro-cuda feature"
+                    .into(),
             })
         }
     };
@@ -603,17 +656,17 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
     let limit = options.max_local_elements;
     let cores = inputs
         .iter()
-        .map(|x| read_cores::<T, V>(&plan, x, limit))
+        .map(|x| read_cores::<T, V>(&plan, x, limit, context))
         .collect::<Result<Vec<_>>>()?;
     let probes = probes::<T, V, R>(&plan, inputs.len(), options, rng)?;
     let mut sketches = cores
         .iter()
         .zip(&probes)
-        .map(|(c, p)| sketch_environments(cpu, &plan, c, p, limit))
+        .map(|(c, p)| sketch_environments(context, &plan, c, p, limit))
         .collect::<Result<Vec<_>>>()?;
     let exact = cores
         .iter()
-        .map(|c| Exact::build(cpu, &plan, c, limit))
+        .map(|c| Exact::build(context, &plan, c, limit))
         .collect::<Result<Vec<_>>>()?;
     let n = plan.nodes.len();
     let mut frames = vec![vec![None; n]; inputs.len()];
@@ -624,7 +677,7 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
         let candidates = cores
             .iter()
             .zip(&frames)
-            .map(|(c, f)| candidate(cpu, &plan, c, f, v, limit))
+            .map(|(c, f)| candidate(context, &plan, c, f, v, limit))
             .collect::<Result<Vec<_>>>()?;
         let mut product: Option<Scaled<T>> = None;
         let is_root = v == plan.root;
@@ -642,7 +695,7 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
                     .ok_or_else(|| missing("empty candidate shape"))?;
                 rows = c.array.data.len() / chi;
                 let env = if plan.exact[v] {
-                    exact[a].environment(cpu, &plan, &cores[a], v, limit)?
+                    exact[a].environment(context, &plan, &cores[a], v, limit)?
                 } else {
                     sketches[a][v]
                         .take()
@@ -658,7 +711,7 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
                     Dense {
                         dims: vec![rows, columns],
                         data: dense::mat_mul_cols(
-                            cpu,
+                            context,
                             c.array.data.clone(),
                             rows,
                             chi,
@@ -711,7 +764,7 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
                 abs_tol: 0.0,
                 left_orthogonal: true,
             }),
-            cpu,
+            &rank_context,
         )
         .map_err(TreeRsiError::numerical)?;
         let (pivots, left) = if id.rows.is_empty() {
@@ -783,3 +836,6 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
         },
     })
 }
+
+#[cfg(test)]
+mod tests;

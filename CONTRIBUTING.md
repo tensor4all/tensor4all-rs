@@ -170,7 +170,7 @@ with their default features.
 | mpi | `-p tensor4all-partitionedtreetn --features hataori-mpi` (the system-MPI backend of the adaptive patch driver; the `hataori-mpi-rsmpi-rt` runtime backend is covered by `scripts/check-mpi-smoke.sh`) | Nightly feature matrix, including a panic audit |
 | diagnostics | `-p tensor4all-treetn -p tensor4all-treeaci --features diagnostics` | Nightly feature matrix, including a panic audit |
 | hdf5-runtime-loading | `-p tensor4all-hdf5 --no-default-features --features runtime-loading,tenferro-cpu-faer` | Nightly feature matrix, including a panic audit |
-| cuda | `-p tensor4all-core -p tensor4all-treetn --features tenferro-cuda` | Nightly feature matrix, compile only; CUDA execution is verified locally on a GPU only |
+| cuda | `-p tensor4all-core -p tensor4all-treetn -p tensor4all-treersi --features tenferro-cuda` | Nightly feature matrix, compile only; CUDA execution is verified locally on a GPU only |
 
 The PR CI panic audit compares the default configuration against
 `scripts/library-panics-baseline.json`. A non-default configuration reuses that
