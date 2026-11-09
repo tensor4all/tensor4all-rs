@@ -828,6 +828,115 @@ fn divide_by_norm_rejects_a_norm_that_is_not_positive_and_finite() {
 }
 
 #[test]
+fn gmres_affine_tracked_zero_a1_differentiates_an_overflowing_operator_image() {
+    // b = 4, a0 = 2 gives x = 2, and A = f64::MAX * I makes A(x) = 2 f64::MAX
+    // overflow although dx/da1 = -A(x) / a0 = -f64::MAX is representable.
+    // Forming a1 * A(x) would give 0 * inf = NaN.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![4.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let result = gmres_affine(
+        |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(f64::MAX))?),
+        &b,
+        &x0,
+        AnyScalar::new_real(2.0),
+        a1.clone(),
+        &GmresOptions::default(),
+    )
+    .unwrap();
+    assert!(result.converged);
+    assert_eq!(result.residual_norm, 0.0);
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![2.0]);
+    result.solution.sum().unwrap().backward().unwrap();
+    let grad = a1.grad().unwrap().unwrap();
+    assert_eq!(grad.real(), -f64::MAX);
+    assert_eq!(grad.imag(), 0.0);
+
+    // With a0 = 1/2, dx/da1 = -A(x) / a0 = -4 f64::MAX is not representable:
+    // the solve reports it instead of returning a NaN or infinite gradient.
+    let b = make_vector_with_index(vec![1.0], &idx);
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let error = gmres_affine(
+        |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(f64::MAX))?),
+        &b,
+        &x0,
+        AnyScalar::new_real(0.5),
+        a1,
+        &GmresOptions::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::NumericalBreakdown {
+                solver: "gmres",
+                iteration: 0,
+                quantity: "a1 derivative A(x) / a0",
+            }
+        ),
+        "{error:?}"
+    );
+
+    // A = 4 f64::MAX I overflows even on the unit-norm direction of x, so
+    // dx/da1 = -4 f64::MAX x / a0 has no finite value to scale from.
+    let b = make_vector_with_index(vec![4.0], &idx);
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let error = gmres_affine(
+        |x: &IdxTensor| {
+            Ok(x.scale(AnyScalar::new_real(f64::MAX))?
+                .scale(AnyScalar::new_real(4.0))?)
+        },
+        &b,
+        &x0,
+        AnyScalar::new_real(2.0),
+        a1,
+        &GmresOptions::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::NumericalBreakdown {
+                solver: "gmres",
+                iteration: 0,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_backward_stays_finite_for_a_tiny_a0() {
+    // b = a0 = s = 2^-1074 and A = s I give x = 1 and dx/da1 = -A(x) / a0 = -1.
+    // Dividing the cotangent by a0 first would form 1 / s = inf in the
+    // backward pass and return an infinite gradient.
+    let s = f64::from_bits(1);
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![s], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let result = gmres_affine(
+        |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(s))?),
+        &b,
+        &x0,
+        AnyScalar::new_real(s),
+        a1.clone(),
+        &GmresOptions::default(),
+    )
+    .unwrap();
+    assert!(result.converged);
+    assert_eq!(result.residual_norm, 0.0);
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![1.0]);
+    result.solution.sum().unwrap().backward().unwrap();
+    let grad = a1.grad().unwrap().unwrap();
+    assert!(grad.real().is_finite(), "{grad:?}");
+    assert_eq!(grad.real(), -1.0);
+    assert_eq!(grad.imag(), 0.0);
+}
+
+#[test]
 fn gmres_affine_normalizes_a_residual_whose_reciprocal_norm_overflows() {
     // (I + I) x = 2^-1073 has x = 2^-1074, but 1 / |r| = 2^1073 is infinite.
     let idx = DynIndex::new_dyn(1);

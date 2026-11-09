@@ -1079,7 +1079,10 @@ where
 /// arithmetic, or a backend call fails. Non-convergence is reported through the
 /// result's `converged` flag and does not produce an error.
 /// A right-hand side whose norm is not finite, which would make every relative
-/// residual zero, is a [`KrylovError::NumericalBreakdown`].
+/// residual zero, is a [`KrylovError::NumericalBreakdown`]. So is a
+/// gradient-tracked `a1 = 0` whose derivative `-A(b / a0) / a0` is not
+/// representable in `f64`, or whose `A` is not finite on `b / a0` scaled to
+/// unit norm: no finite gradient exists to return there.
 ///
 pub fn gmres_affine<T, F>(
     apply_a: F,
@@ -1294,6 +1297,17 @@ where
             let started = Instant::now();
             let (quotient, quotient_scale_calls, quotient_norm_calls) =
                 vector_ops::scaled_quotient(applied, x_exponent, &a0, &factors, "gmres")?;
+            // `dx/da1 = -A(b / a0) / a0` can itself exceed the `f64` range
+            // (`A = f64::MAX I`, `b = 1`, `a0 = 1/2` gives `-4 f64::MAX`). No
+            // rescaling makes it representable, and `a1 = 0` times an
+            // infinite entry would be NaN, so that is reported here.
+            if !quotient.maxabs()?.is_finite() {
+                return Err(anyhow::Error::new(KrylovError::NumericalBreakdown {
+                    solver: "gmres",
+                    iteration: 0,
+                    quantity: "a1 derivative A(x) / a0",
+                }));
+            }
             let correction = quotient.scale(AnyScalar::new_real(0.0) - a1.clone())?;
             if profile_enabled {
                 profile.scale += started.elapsed();
