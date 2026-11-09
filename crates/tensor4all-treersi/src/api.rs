@@ -89,7 +89,7 @@ pub fn hadamard_many_in<T: TreeRsiScalar, V: TreeRsiNode>(
 /// standard-normal probe entries. Explicit probes and dimension-one physical
 /// groups consume no draws. `options.seed` is ignored. Inputs and returned
 /// cores belong to `context`; consecutive calls consume successive draws. A
-/// CUDA context pays one transfer per contraction and keeps the two host
+/// CUDA context pays one transfer per operand and one per result and keeps the two host
 /// dependencies [`hadamard_many_in`] describes.
 ///
 /// # Errors
