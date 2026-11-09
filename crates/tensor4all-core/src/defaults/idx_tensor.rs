@@ -2428,31 +2428,33 @@ impl IdxTensor {
         let strides = Self::col_major_strides(&result_dims)?;
         let mut output = vec![T::default(); result_len];
         for (batch, tensor) in tensors.iter().enumerate() {
-            let data = tensor.dense_host_values::<T>()?;
-            if data.len() != base_len {
-                return Err(anyhow::anyhow!(
-                    "stack input payload length {} does not match {} base elements",
-                    data.len(),
-                    base_len
-                ));
-            }
-            for (linear, &value) in data.iter().enumerate().take(base_len) {
-                let base_coordinates = Self::col_major_coordinates(linear, base_dims);
-                let mut result_coordinates = Vec::with_capacity(result_dims.len());
-                for axis in 0..=base_rank {
-                    if axis == insert_axis {
-                        result_coordinates.push(batch);
-                    } else {
-                        let base_axis = if axis < insert_axis { axis } else { axis - 1 };
-                        result_coordinates.push(base_coordinates[base_axis]);
-                    }
+            tensor.with_dense_host_slice::<T, _>(|data| -> anyhow::Result<()> {
+                if data.len() != base_len {
+                    return Err(anyhow::anyhow!(
+                        "stack input payload length {} does not match {} base elements",
+                        data.len(),
+                        base_len
+                    ));
                 }
-                let offset = Self::col_major_offset(&result_coordinates, &strides)?;
-                let slot = output.get_mut(offset).ok_or_else(|| {
-                    anyhow::anyhow!("stack write offset {offset} is out of bounds")
-                })?;
-                *slot = value;
-            }
+                for (linear, &value) in data.iter().enumerate().take(base_len) {
+                    let base_coordinates = Self::col_major_coordinates(linear, base_dims);
+                    let mut result_coordinates = Vec::with_capacity(result_dims.len());
+                    for axis in 0..=base_rank {
+                        if axis == insert_axis {
+                            result_coordinates.push(batch);
+                        } else {
+                            let base_axis = if axis < insert_axis { axis } else { axis - 1 };
+                            result_coordinates.push(base_coordinates[base_axis]);
+                        }
+                    }
+                    let offset = Self::col_major_offset(&result_coordinates, &strides)?;
+                    let slot = output.get_mut(offset).ok_or_else(|| {
+                        anyhow::anyhow!("stack write offset {offset} is out of bounds")
+                    })?;
+                    *slot = value;
+                }
+                Ok(())
+            })??;
         }
         Self::from_host_dense(result_indices, output).map_err(anyhow::Error::from)
     }
@@ -9701,23 +9703,27 @@ impl IdxTensor {
         })?;
         match dtype {
             DType::F64 => {
-                let data = self.dense_host_values::<f64>()?;
-                let gathered = Self::gather_host(&data, &dims, axis, positions, target_dim)?;
+                let gathered = self.with_dense_host_slice::<f64, _>(|data| {
+                    Self::gather_host(data, &dims, axis, positions, target_dim)
+                })??;
                 Self::from_host_dense(result_indices, gathered)
             }
             DType::F32 => {
-                let data = self.dense_host_values::<f32>()?;
-                let gathered = Self::gather_host(&data, &dims, axis, positions, target_dim)?;
+                let gathered = self.with_dense_host_slice::<f32, _>(|data| {
+                    Self::gather_host(data, &dims, axis, positions, target_dim)
+                })??;
                 Self::from_host_dense(result_indices, gathered)
             }
             DType::C64 => {
-                let data = self.dense_host_values::<Complex64>()?;
-                let gathered = Self::gather_host(&data, &dims, axis, positions, target_dim)?;
+                let gathered = self.with_dense_host_slice::<Complex64, _>(|data| {
+                    Self::gather_host(data, &dims, axis, positions, target_dim)
+                })??;
                 Self::from_host_dense(result_indices, gathered)
             }
             DType::C32 => {
-                let data = self.dense_host_values::<Complex32>()?;
-                let gathered = Self::gather_host(&data, &dims, axis, positions, target_dim)?;
+                let gathered = self.with_dense_host_slice::<Complex32, _>(|data| {
+                    Self::gather_host(data, &dims, axis, positions, target_dim)
+                })??;
                 Self::from_host_dense(result_indices, gathered)
             }
             other => Err(IdxTensorError::operation(
