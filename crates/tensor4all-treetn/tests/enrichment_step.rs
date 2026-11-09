@@ -28,22 +28,25 @@ pub(crate) fn enrich_once(small: f64, enrichment: ResidualEnrichment) -> (State,
     .unwrap()
 }
 
-/// The step of [`enrich_once`] with RHS `|00> + rhs[1] |11> + rhs[2] |22>`
-/// (`rhs[0]` scales `|00>`), coefficients `(a0, a1)` and `A` the product of
-/// `operator_scale * I` on each site. The RHS is complex if any `rhs[k]` has
-/// a nonzero imaginary part, and real otherwise.
-pub(crate) struct EnrichmentStep {
-    pub(crate) rhs: [Complex64; 3],
+/// The step of [`enrich_once`] on two `N`-dimensional sites with RHS
+/// `sum_k rhs[k] |kk>` (`rhs[0]` scales `|00>`), coefficients `(a0, a1)` and
+/// `A` the product of `operator_scale * I` on each site. The RHS is complex
+/// if any `rhs[k]` has a nonzero imaginary part, and real otherwise.
+pub(crate) struct EnrichmentStep<const N: usize = 3> {
+    pub(crate) rhs: [Complex64; N],
     pub(crate) coefficients: (f64, f64),
     pub(crate) operator_scale: f64,
 }
 
-impl EnrichmentStep {
+impl<const N: usize> EnrichmentStep<N> {
     pub(crate) fn run(
         &self,
         enrichment: ResidualEnrichment,
     ) -> anyhow::Result<(State, [DynIndex; 2])> {
-        let identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let mut identity = [[0.0; N]; N];
+        for (k, column) in identity.iter_mut().enumerate() {
+            column[k] = 1.0;
+        }
         self.run_with_first_site(identity, enrichment)
     }
 
@@ -52,12 +55,12 @@ impl EnrichmentStep {
     /// keeps the direction of `columns[0]` as the src basis.
     pub(crate) fn run_with_first_site(
         &self,
-        columns: [[f64; 3]; 3],
+        columns: [[f64; N]; N],
         enrichment: ResidualEnrichment,
     ) -> anyhow::Result<(State, [DynIndex; 2])> {
-        let sites = [DynIndex::new_dyn(3), DynIndex::new_dyn(3)];
+        let sites = [DynIndex::new_dyn(N), DynIndex::new_dyn(N)];
         let unit = |index: &DynIndex, bond: &DynIndex| {
-            let mut data = vec![0.0; 3];
+            let mut data = vec![0.0; N];
             data[0] = 1.0;
             IdxTensor::from_dense(vec![index.clone(), bond.clone()], data).unwrap()
         };
@@ -68,10 +71,10 @@ impl EnrichmentStep {
         )
         .unwrap();
         let complex = self.rhs.iter().any(|value| value.im != 0.0);
-        let diag = |index: &DynIndex, bond: &DynIndex, values: [Complex64; 3]| {
-            let mut data = vec![Complex64::new(0.0, 0.0); 9];
+        let diag = |index: &DynIndex, bond: &DynIndex, values: [Complex64; N]| {
+            let mut data = vec![Complex64::new(0.0, 0.0); N * N];
             for (k, value) in values.into_iter().enumerate() {
-                data[4 * k] = value;
+                data[(N + 1) * k] = value;
             }
             let indices = vec![index.clone(), bond.clone()];
             if complex {
@@ -81,9 +84,9 @@ impl EnrichmentStep {
                     .unwrap()
             }
         };
-        let link = DynIndex::new_dyn(3);
+        let link = DynIndex::new_dyn(N);
         let first = {
-            // Column-major: index (s0, link) -> s0 + 3 * link.
+            // Column-major: index (s0, link) -> s0 + N * link.
             let data: Vec<Complex64> = columns
                 .iter()
                 .flat_map(|column| column.map(Complex64::from))
@@ -108,9 +111,9 @@ impl EnrichmentStep {
         for (node, site) in sites.iter().enumerate() {
             let s_in = site.sim();
             let s_out = s_in.prime();
-            let mut data = vec![0.0; 9];
-            for k in 0..3 {
-                data[4 * k] = self.operator_scale;
+            let mut data = vec![0.0; N * N];
+            for k in 0..N {
+                data[(N + 1) * k] = self.operator_scale;
             }
             identities.push(
                 IdxTensor::from_dense(vec![s_out.clone(), s_in.clone(), link.clone()], data)
@@ -163,7 +166,7 @@ pub(crate) fn bond_dim(state: &State) -> usize {
 
 /// Max-abs distance of the represented state from `|00>`.
 pub(crate) fn distance_from_00(state: &State, sites: &[DynIndex; 2]) -> f64 {
-    let mut data = vec![0.0; 9];
+    let mut data = vec![0.0; sites[0].dim() * sites[1].dim()];
     data[0] = 1.0;
     let expected = IdxTensor::from_dense(sites.to_vec(), data).unwrap();
     state

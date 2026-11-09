@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use num_complex::Complex64;
 use tensor4all_core::{
     AnyScalar, Canonical, DynIndex, FactorizeOptions, IdxTensor, IndexLike, SvdTruncationPolicy,
+    TensorContractionLike,
 };
 use tensor4all_treetn::{
     factorize_tensor_to_treetn_with, square_linsolve, IndexMapping, LinsolveOptions,
@@ -849,6 +850,67 @@ fn enrichment_beyond_the_supported_spread_proceeds_when_the_cutoff_dominates() {
     assert_eq!(bond_dim(&state), 2);
     let error = range_error(&zero_cutoff_step(f64::MAX, 1.0).unwrap_err());
     assert_eq!((error.spread, error.shift), (1023, -1023));
+}
+
+/// `||Q^dagger v|| / ||v||` for the src basis `Q` (the node-0 tensor right
+/// after enrichment, with orthonormal columns along the bond) and a site-0
+/// vector `v`: 1 when `v` lies in the enriched src space, 0 when it is
+/// orthogonal to it.
+fn src_span_overlap(state: &State, site: &DynIndex, v: &[f64]) -> f64 {
+    let basis = state.tensor(state.node_index(&0).unwrap()).unwrap();
+    let vector = IdxTensor::from_dense(vec![site.clone()], v.to_vec()).unwrap();
+    let overlap = IdxTensor::contract(&[&basis.conj(), &vector]).unwrap();
+    overlap.norm().unwrap() / vector.norm().unwrap()
+}
+
+#[test]
+fn enrichment_keeps_a_small_rotated_direction_in_the_src_space() {
+    // Two four-dimensional sites, RHS
+    // `|00> + 4 (|1> + |2>)|1> + small (|1> - |2>)|3>`: after the source
+    // solve the residual has a large direction `(|1> + |2>)/sqrt(2)` and an
+    // orthogonal small one `(|1> - |2>)/sqrt(2)`, neither a coordinate
+    // vector. With `max_added = 2` both must be in the enriched src space,
+    // and `|3>`, absent from the residual, must not. A backward-stable SVD
+    // resolves singular values only to about `eps * sigma_max`, so `small`
+    // stays well above that; far below it a rotated direction is not
+    // guaranteed even inside the supported spread (faer misses 1e-300).
+    let (plus, minus) = ([0.0, 1.0, 1.0, 0.0], [0.0, 1.0, -1.0, 0.0]);
+    let columns = [[1.0, 0.0, 0.0, 0.0], plus, [0.0; 4], minus];
+    let enrichment = ResidualEnrichment::default()
+        .with_max_added(2)
+        .with_cutoff(0.0);
+    for small in [1.0, 1e-8, 1e-14] {
+        let step = EnrichmentStep::<4> {
+            rhs: [1.0, 4.0, 0.0, small].map(Complex64::from),
+            coefficients: (0.0, 1.0),
+            operator_scale: 1.0,
+        };
+        let (state, sites) = step.run_with_first_site(columns, enrichment).unwrap();
+        assert_eq!(bond_dim(&state), 3, "small = {small:e}");
+        for (name, vector, expected) in [
+            ("|0>", [1.0, 0.0, 0.0, 0.0], 1.0),
+            ("|1> + |2>", plus, 1.0),
+            ("|1> - |2>", minus, 1.0),
+            ("|3>", [0.0, 0.0, 0.0, 1.0], 0.0),
+        ] {
+            let overlap = src_span_overlap(&state, &sites[0], &vector);
+            assert!(
+                (overlap - expected).abs() < 1e-12,
+                "small = {small:e}: ||Q^dagger ({name})|| = {overlap}, expected {expected}"
+            );
+        }
+        assert!(distance_from_00(&state, &sites) < 1e-12);
+    }
+    // The review's fixture with `small = 1e-310`: 4 beside 1e-310 spans
+    // 2 + 1030 = 1032 orders, beyond the supported range, so a zero cutoff
+    // is refused instead of returning a bond 3 that misses the direction.
+    let step = EnrichmentStep::<4> {
+        rhs: [1.0, 4.0, 0.0, 1e-310].map(Complex64::from),
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let error = step.run_with_first_site(columns, enrichment).unwrap_err();
+    assert_eq!(range_error(&error).spread, 1032);
 }
 
 #[test]

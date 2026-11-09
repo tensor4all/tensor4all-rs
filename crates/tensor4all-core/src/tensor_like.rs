@@ -848,9 +848,13 @@ pub trait TensorVectorSpace: TensorIndex {
     ///
     /// # Errors
     ///
-    /// Returns `Self::Error` when the type does not support element-wise
-    /// inspection, when the elements cannot be read, or when an element is
-    /// NaN.
+    /// - The provided implementation always returns an unsupported-operation
+    ///   error (message `min_nonzero_abs is not supported by this tensor
+    ///   type`), for types without element-wise access.
+    /// - [`IdxTensor`](crate::IdxTensor) returns `IdxTensorError::NaNInput`
+    ///   when an element is NaN, and `IdxTensorError::Storage` or a
+    ///   materialization error when its storage cannot be read.
+    /// - `BlockTensor` propagates the first error of its blocks.
     ///
     /// # Examples
     /// ```

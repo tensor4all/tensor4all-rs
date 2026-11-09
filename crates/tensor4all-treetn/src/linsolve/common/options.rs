@@ -48,7 +48,11 @@ pub enum GmresToleranceMode {
 /// number of residual entries), no direction built from the lost entries
 /// could pass the cutoff anyway. A zero cutoff is therefore refused outside
 /// the range, and inside it keeps every direction whose computed singular
-/// value is positive.
+/// value is positive. The range only bounds what the rescaling loses: the
+/// SVD itself resolves singular values to about `f64::EPSILON` times the
+/// largest one, so a smaller direction is found only when the residual's
+/// structure isolates it (for example a coordinate direction), and
+/// otherwise depends on the SVD backend.
 ///
 /// Two-site MALS ([`LinsolveOptions::nsite`] `= 2`) adapts ranks by itself
 /// and does not accept enrichment.
