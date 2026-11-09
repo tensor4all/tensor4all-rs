@@ -100,16 +100,16 @@ dyn-clone = "1.0"
 omeco = "0.2.1"
 hdf5-metno = { version = "0.12", default-features = false }
 ndarray = "0.17"
-# staging: faer 0.33.0 is the first release with the rank-truncated LU parameters
+# faer 0.33.0 is the first release with the rank-truncated LU parameters
 # (`max_rank`/`abs_tol`/`rel_tol`, `info.rank`) this workspace needs (tensor4all/faer#294,
-# tensor4all-rs#1157). It is a direct dependency until the provider stack's own faer identity moves
-# (tenferro -> tlinalg -> tcontract-exec, which still require ^0.28/^0.32): only then does this go
-# away. `std` only, so the kernel asks for `Par::Seq` and starts no second thread pool.
+# tensor4all-rs#1157). The provider stack (tenferro -> tlinalg -> tcontract-exec) resolves to the
+# same 0.33 identity, so this direct dependency adds no second faer. `std` only, so the kernel
+# asks for `Par::Seq` and starts no second thread pool.
 faer = { package = "t4a-faer", version = "0.33.0", default-features = false, features = ["std"] }
 quanticsgrids = { git = "https://github.com/tensor4all/quanticsgrids-rs", rev = "8214b72" }
 hdf5-rt = { git = "https://github.com/tensor4all/hdf5-rt", default-features = false }
-hataori = { git = "https://github.com/tensor4all/hataori-rs.git", rev = "b16886cfcb5bf8c103305d464f8a12527fffa74e", default-features = false }
-hataori-tenferro = { git = "https://github.com/tensor4all/hataori-rs.git", rev = "b16886cfcb5bf8c103305d464f8a12527fffa74e" }
+hataori = { git = "https://github.com/tensor4all/hataori-rs.git", rev = "9d65515706eb9c7b7414dd0d4d32644ec0c0674c", default-features = false }
+hataori-tenferro = { git = "https://github.com/tensor4all/hataori-rs.git", rev = "9d65515706eb9c7b7414dd0d4d32644ec0c0674c" }
 tenferro = { package = "tenferro-runtime", git = "https://github.com/tensor4all/tenferro-rs.git", rev = "32a4e98c12f9dc36ffa85b5273b9247b44936959", default-features = false }
 tenferro-ad = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "32a4e98c12f9dc36ffa85b5273b9247b44936959", default-features = false }
 tenferro-cpu = { git = "https://github.com/tensor4all/tenferro-rs.git", rev = "32a4e98c12f9dc36ffa85b5273b9247b44936959", default-features = false }
