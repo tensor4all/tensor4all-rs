@@ -149,7 +149,9 @@ the original revision, builds each `cache_overhead` executable once with
 identical, runs the fixed 120-second idle check, then times the
 `cache_keys` group in the three rotated arm orders under the thread
 environment above. It records the toolchain, host, binary hashes, load and
-thermal observations, raw Criterion samples, and applies the gates:
+thermal observations, raw Criterion samples, and applies the gates. The archive
+is written before the cell-set check, so a rejected suite keeps the run records
+that diagnosis needs:
 
 ```sh
 python3 benchmarks/rust/run_simplett_index_key_pairs.py --output <new-directory>

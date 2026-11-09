@@ -314,6 +314,30 @@ def summarize(runs):
     }
 
 
+def write_evidence(out, protocol, runs):
+    """Archive the runs first, so a rejected experiment still keeps its observations."""
+    with gzip.open(out / "experiment.json.gz", "wt") as fh:
+        json.dump({"protocol": protocol, "runs": runs}, fh)
+    with open(out / "experiment.csv", "w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["case", "arm", "round", "mean_ns", "ci95_low_ns", "ci95_high_ns"])
+        for r in runs:
+            for cell in sorted(r["cells"]):
+                v = r["cells"][cell]
+                writer.writerow([cell, r["arm"], r["round"], v["mean_ns"], v["ci95_low_ns"], v["ci95_high_ns"]])
+
+
+def require_same_cells(out, runs):
+    """Return the shared cell count, or refuse the experiment after its evidence is written."""
+    cell_sets = {frozenset(r["cells"]) for r in runs}
+    if len(cell_sets) != 1 or not next(iter(cell_sets)):
+        raise SystemExit(
+            f"runs measured different or empty cell sets; their load and thermal observations are in "
+            f"{out / 'experiment.json.gz'}"
+        )
+    return len(next(iter(cell_sets)))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--output", type=pathlib.Path, required=True, help="new directory for all results")
@@ -390,20 +414,9 @@ def main():
             print(f"round {round_no} {arm}: {len(record['cells'])} cells, "
                   f"load {record['before']['loadavg'][0]:.2f} -> {record['after']['loadavg'][0]:.2f}", flush=True)
 
-    cell_sets = {frozenset(r["cells"]) for r in runs}
-    if len(cell_sets) != 1 or not next(iter(cell_sets)):
-        raise SystemExit("runs measured different or empty cell sets; see experiment.json.gz")
-    complete = len(next(iter(cell_sets))) == FULL_CELL_COUNT and args.filter == "cache_keys"
-
-    with gzip.open(out / "experiment.json.gz", "wt") as fh:
-        json.dump({"protocol": protocol, "runs": runs}, fh)
-    with open(out / "experiment.csv", "w", newline="") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(["case", "arm", "round", "mean_ns", "ci95_low_ns", "ci95_high_ns"])
-        for r in runs:
-            for cell in sorted(r["cells"]):
-                v = r["cells"][cell]
-                writer.writerow([cell, r["arm"], r["round"], v["mean_ns"], v["ci95_low_ns"], v["ci95_high_ns"]])
+    write_evidence(out, protocol, runs)
+    cell_count = require_same_cells(out, runs)
+    complete = cell_count == FULL_CELL_COUNT and args.filter == "cache_keys"
 
     summary = summarize(runs)
     summary["complete_suite"] = complete
