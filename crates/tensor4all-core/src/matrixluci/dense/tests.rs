@@ -476,7 +476,11 @@ fn a_capped_complex_run_reports_the_next_pivot_faer_would_take() {
             ..uncapped
         };
         let (selection, pivots) = square_selection(&data, 3, &options);
-        assert_eq!(pivots, cap, "cap={cap}: the cap stops the elimination");
+        assert_eq!(
+            pivots,
+            cap + 1,
+            "cap={cap}: the cap stops the elimination one pivot past itself"
+        );
         assert_selection_bits_equal(
             &selection,
             &previous_square_selection(&data, 3, &options),
@@ -537,8 +541,13 @@ fn a_subnormal_stop_before_the_cap_keeps_the_previous_selection() {
     assert_eq!(selection.pivot_errors, vec![1e-308, 9e-309, 8e-309]);
 }
 
-/// A rank cap stops the factorization at the cap: the number of pivots actually taken is the cap,
-/// not `n`, and the selection is what the uncapped factorization returns after truncation.
+/// A rank cap stops the factorization at the cap: the pivots faer actually takes are the cap plus
+/// the one extra pivot the residual needs, not `n`, and the selection is what the uncapped
+/// factorization returns after truncation.
+///
+/// The expected count is `cap + 1` on purpose. A count clamped to the cap (`pivots.min(cap)`) reads
+/// the same for a capped run and for a full factorization whose result was truncated afterwards, so
+/// it cannot fail when the cap stops being passed to faer; with the raw `info.rank` it does.
 #[test]
 fn rank_cap_stops_the_square_factorization_at_the_cap() {
     let (n, data) = (64usize, lcg(64 * 64, 29));
@@ -552,7 +561,11 @@ fn rank_cap_stops_the_square_factorization_at_the_cap() {
             ..PivotKernelOptions::no_truncation()
         };
         let (selection, pivots) = square_selection(&data, n, &options);
-        assert_eq!(pivots, cap, "cap={cap}: the factorization stops at the cap");
+        assert_eq!(
+            pivots,
+            cap + 1,
+            "cap={cap}: the factorization stops at the cap, plus the extra pivot asked for"
+        );
         assert_eq!(
             selection.rank, cap,
             "cap={cap}: the selection is the capped rank"
@@ -597,8 +610,8 @@ fn absolute_tolerance_boundary_is_the_previous_one() {
     }
 }
 
-/// The relative tolerance is still measured against the largest accepted pivot, and a pivot exactly
-/// at `rel_tol * first_pivot` is accepted.
+/// The relative tolerance is measured against the largest accepted pivot - a running maximum, not
+/// the first pivot - and a pivot exactly at `rel_tol * max_accepted` is accepted.
 #[test]
 fn relative_tolerance_boundary_is_the_previous_one() {
     // diag(4, 2): the second pivot is exactly `0.5 * 4`.
@@ -618,6 +631,28 @@ fn relative_tolerance_boundary_is_the_previous_one() {
     let above = square_selection(&data, 2, &with_rel_tol(0.5f64.next_up())).0;
     assert_eq!(above.rank, 1, "rel_tol just over the ratio stops there");
     assert_eq!(above.pivot_errors, vec![4.0, 2.0]);
+
+    // The threshold is `rel_tol * max_accepted`, and complete pivoting can grow after its first
+    // pivot, so the two rules do not agree: on this matrix the pivots are 1, then 2 (the growth of
+    // the `[[1, 1], [1, -1]]` block), then 0.75. At `rel_tol = 0.5` the first-pivot threshold is
+    // 0.5, which would accept 0.75; the running maximum is 2, whose threshold is 1.0, so the kernel
+    // stops at two pivots and reports 0.75 as the residual.
+    let growth = [
+        1.0f64, 1.0, 0.0, // column 0
+        1.0, -1.0, 0.0, // column 1
+        0.0, 0.0, 0.75, // column 2
+    ];
+    let grown = square_selection(&growth, 3, &with_rel_tol(0.5)).0;
+    assert_eq!(
+        grown.rank, 2,
+        "the third pivot is below the running maximum"
+    );
+    assert_eq!(grown.pivot_errors, vec![1.0, 2.0, 0.75]);
+    assert_selection_bits_equal(
+        &grown,
+        &previous_square_selection(&growth, 3, &with_rel_tol(0.5)),
+        "growth",
+    );
 
     for rel_tol in [0.5, 0.5f64.next_down(), 0.5f64.next_up()] {
         assert_selection_bits_equal(

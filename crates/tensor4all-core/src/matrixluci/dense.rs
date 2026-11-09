@@ -118,9 +118,11 @@ impl DenseLuKernel {
 
     /// Complete-pivoting LU of a square input, stopped once the rank cap is met.
     ///
-    /// Returns the selection together with the number of pivots the rank cap accepted, which is the
-    /// evidence that a cap stops the elimination instead of factoring to full rank and truncating
-    /// afterwards.
+    /// Returns the selection together with the raw pivot count faer reported (`info.rank`), not a
+    /// count clamped to the cap. That number is the evidence a cap stops the elimination instead of
+    /// factoring to full rank and truncating afterwards: a bounded run reports the cap plus the one
+    /// extra pivot asked for below, not `n`. Clamping it here would make the two indistinguishable
+    /// from the outside.
     ///
     /// The rank cap is the only bound handed to faer, one pivot past the cap, so that the residual
     /// [`Self::compute_pivot_errors`] reads from `diag_abs[rank]` is the pivot faer itself would take
@@ -214,8 +216,9 @@ impl DenseLuKernel {
                 pivot_errors,
                 rank,
             },
-            // The pivots the rank cap accepted, not the extra one asked for above.
-            pivots.min(cap),
+            // Raw `info.rank`: the cap plus the extra pivot asked for above when the cap binds,
+            // and faer's own stop when it stopped first.
+            pivots,
         ))
     }
 }
