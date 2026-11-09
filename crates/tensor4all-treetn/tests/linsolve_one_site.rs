@@ -744,6 +744,29 @@ fn enrichment_cutoff_zero_keeps_the_smallest_subnormal_direction() {
 }
 
 #[test]
+fn enrichment_cutoff_zero_keeps_a_subnormal_direction_beside_larger_entries() {
+    // Normalizing by the largest entry would shrink the |22> direction below
+    // the smallest subnormal and round it to zero; a zero cutoff keeps it.
+    for rhs in [
+        [1.0, 4.0, f64::from_bits(1)],
+        [1.0, 1e200, 1e-200],
+        [1.0, 1e-300, f64::from_bits(1)],
+    ] {
+        let step = EnrichmentStep {
+            rhs: rhs.map(Complex64::from),
+            coefficients: (0.0, 1.0),
+            operator_scale: 1.0,
+        };
+        let enrichment = ResidualEnrichment::default()
+            .with_max_added(2)
+            .with_cutoff(0.0);
+        let (state, sites) = step.run(enrichment).unwrap();
+        assert_eq!(bond_dim(&state), 3, "rhs = {rhs:?}");
+        assert!(distance_from_00(&state, &sites) < 1e-12);
+    }
+}
+
+#[test]
 fn enrichment_projection_survives_an_overflowing_overlap() {
     // The src basis is q = (|0> + |1>) / sqrt(2). The |1>-column of the
     // residual is f64::MAX (|0> + |1>), parallel to q; its overlap with q,

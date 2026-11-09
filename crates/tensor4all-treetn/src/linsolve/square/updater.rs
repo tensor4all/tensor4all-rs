@@ -589,17 +589,21 @@ where
             let applied = linop.apply_projected(&two_site)?;
             residual = residual.axpby(one, &applied, -self.options.a1.clone())?;
         }
-        // Compare in units of `unit`, the largest modulus of `b_local` and the
-        // residual: `||b_local||`, the residual singular values, `cutoff *
-        // ||b_local||` and the overlap with the src basis can each overflow
-        // (or underflow) although every entry is finite, but in these units
-        // the entries have modulus at most 1. Scaling before the projection
-        // keeps the overlap finite. Both are halved only when the largest
-        // modulus overflows, which a complex entry whose finite parts give a
-        // modulus above `f64::MAX` can do; halving unconditionally would
-        // round the smallest subnormal entries to zero and drop a nonzero
-        // direction that a zero cutoff keeps. Dividing by `sqrt(unit)` twice
-        // keeps the reciprocal finite for any normal or subnormal `unit`.
+        // Rescale `b_local` and the residual by one exact power of two so that
+        // their largest modulus `unit` lies in `[2^-SCALE_EXP, 2^SCALE_EXP]`.
+        // `||b_local||`, the overlap with the src basis, the residual singular
+        // values and `cutoff * ||b_local||` can each overflow (or underflow)
+        // in the original units although every entry is finite; in these
+        // units they cannot. Scaling happens before the projection, so the
+        // overlap stays finite. A power of two is exact unless it pushes an
+        // entry below the smallest subnormal: scaling up never does, and
+        // scaling down only happens when `unit > 2^SCALE_EXP` and stops near
+        // `2^SCALE_EXP`, so only entries more than `2^(SCALE_EXP + 1074)`
+        // below `unit` are lost. A zero cutoff therefore keeps every
+        // representable nonzero direction, including subnormal ones.
+        // The largest modulus itself overflows for a complex entry whose
+        // finite parts give a modulus above `f64::MAX`; halve first then.
+        const SCALE_EXP: i32 = 256;
         let mut rhs = rhs;
         let mut unit = rhs.maxabs()?.max(residual.maxabs()?);
         if unit.is_infinite() {
@@ -615,14 +619,24 @@ where
         if unit == 0.0 {
             return Ok(());
         }
-        let inv_sqrt_unit = AnyScalar::new_real(unit.sqrt().recip());
-        let rhs_norm = rhs
-            .scale(inv_sqrt_unit.clone())?
-            .scale(inv_sqrt_unit.clone())?
-            .norm()?;
-        let residual = residual
-            .scale(inv_sqrt_unit.clone())?
-            .scale(inv_sqrt_unit)?;
+        let exponent = unit.log2().floor() as i32;
+        let shift = if exponent >= SCALE_EXP {
+            SCALE_EXP - 1 - exponent
+        } else if exponent < -SCALE_EXP {
+            -exponent
+        } else {
+            0
+        };
+        if shift != 0 {
+            // `shift` lies in [-1024 + SCALE_EXP, 1074]; split it so each
+            // factor `2^k` is a normal f64.
+            let pow2 = |k: i32| AnyScalar::new_real(f64::from_bits(((k + 1023) as u64) << 52));
+            for k in [shift / 2, shift - shift / 2] {
+                rhs = rhs.scale(pow2(k))?;
+                residual = residual.scale(pow2(k))?;
+            }
+        }
+        let rhs_norm = rhs.norm()?;
         // Remove the component already representable in the current src basis.
         let overlap = T::contract(&[&basis.conj(), &residual])?;
         let residual = residual.sub(&T::contract(&[&basis, &overlap])?)?;
@@ -638,7 +652,7 @@ where
             enrichment.cutoff * rhs_norm
         };
         // In these units every projected residual singular value is at most
-        // the Frobenius norm, which is at most `sqrt(len)` and finite, so an
+        // its Frobenius norm, about `sqrt(len) * 2^SCALE_EXP` and finite, so an
         // overflowing threshold exceeds them all and nothing is added.
         if !threshold.is_finite() {
             return Ok(());
