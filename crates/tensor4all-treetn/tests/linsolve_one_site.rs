@@ -800,6 +800,34 @@ fn enrichment_residual_spread_is_pinned_at_the_supported_boundary() {
 }
 
 #[test]
+fn enrichment_spread_uses_the_exact_exponent_of_a_rounded_complex_modulus() {
+    // `u = f64::from_bits(1)`. The small residual entry `7u + 3iu` has
+    // modulus `sqrt(58) u`, exponent -1072, but `hypot` rounds it up to
+    // `8u` (exponent -1071). The spread must use the exponent of the true
+    // modulus: beside `2^-49` it is 1023 and refused (the rounded value gave
+    // 1022 and faer then dropped the subnormal direction); beside `2^-50`
+    // it is 1022 and both directions are kept.
+    let u = f64::from_bits(1);
+    let small = Complex64::new(7.0 * u, 3.0 * u);
+    let step = |big: f64| EnrichmentStep {
+        rhs: [Complex64::new(1.0, 0.0), Complex64::new(big, 0.0), small],
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let enrichment = ResidualEnrichment::default()
+        .with_max_added(2)
+        .with_cutoff(0.0);
+
+    let error = range_error(&step(2f64.powi(-49)).run(enrichment).unwrap_err());
+    assert_eq!((error.spread, error.shift), (1023, 49));
+    assert_eq!(error.max_spread, ResidualEnrichment::MAX_RESIDUAL_SPREAD);
+
+    let (state, sites) = step(2f64.powi(-50)).run(enrichment).unwrap();
+    assert_eq!(bond_dim(&state), 3);
+    assert!(distance_from_00(&state, &sites) < 1e-12);
+}
+
+#[test]
 fn enrichment_refuses_a_zero_cutoff_beyond_the_supported_spread() {
     // (big, small, spread, shift) with spread = floor(log2 big) -
     // floor(log2 small) and shift = -floor(log2 big). One power-of-two shift

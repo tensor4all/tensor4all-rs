@@ -840,8 +840,11 @@ pub trait TensorVectorSpace: TensorIndex {
     /// Smallest modulus among the nonzero elements, or `None` when every
     /// element is zero. With [`maxabs`](Self::maxabs) it gives the dynamic
     /// range of the elements, which decides whether one power-of-two
-    /// rescaling can keep every nonzero element a normal `f64`. The modulus
-    /// of a complex element is `hypot(re, im)`.
+    /// rescaling can keep every nonzero element a normal `f64`. Implementors
+    /// return the exact modulus of a real element; for a complex element
+    /// they may return a lower bound within a few ulps (`hypot` rounds), but
+    /// never a value above the true modulus, so `floor(log2)` of the result
+    /// never exceeds that of the true smallest modulus.
     ///
     /// The provided implementation reports an unsupported operation; dense
     /// implementors such as [`IdxTensor`](crate::IdxTensor) override it.

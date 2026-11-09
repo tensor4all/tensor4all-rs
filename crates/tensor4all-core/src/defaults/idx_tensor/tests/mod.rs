@@ -1067,18 +1067,54 @@ fn min_nonzero_abs_skips_zeros_and_keeps_subnormals() {
     .unwrap();
     assert_eq!(real.min_nonzero_abs().unwrap(), Some(f64::from_bits(1)));
 
-    // The modulus of a complex element counts, not its smallest part.
+    // The modulus of a complex element counts, not its smallest part. With
+    // a zero part it is exact.
     let complex = IdxTensor::from_dense(
         vec![i.clone()],
         vec![
             Complex64::new(0.0, 0.0),
             Complex64::new(3.0, 4.0),
-            Complex64::new(1e-300, 1.0),
+            Complex64::new(0.0, -1.5),
             Complex64::new(0.0, -2.0),
         ],
     )
     .unwrap();
-    assert_eq!(complex.min_nonzero_abs().unwrap(), Some(1.0));
+    assert_eq!(complex.min_nonzero_abs().unwrap(), Some(1.5));
+
+    // With two nonzero parts it is a lower bound within a few ulps: 3 + 4i
+    // has modulus exactly 5, reported just below it.
+    let rounded = IdxTensor::from_dense(
+        vec![i.clone()],
+        vec![
+            Complex64::new(3.0, 4.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let value = rounded.min_nonzero_abs().unwrap().unwrap();
+    assert!(
+        (5.0 - 3.0 * 5.0 * f64::EPSILON..5.0).contains(&value),
+        "{value}"
+    );
+
+    // hypot(7u, 3u) rounds sqrt(58) u up to 8u (u the smallest subnormal);
+    // the bound stays below the true modulus, so floor(log2) is -1072.
+    let u = f64::from_bits(1);
+    let subnormal = IdxTensor::from_dense(
+        vec![i.clone()],
+        vec![
+            Complex64::new(7.0 * u, 3.0 * u),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+    )
+    .unwrap();
+    // hypot gives 8u; two ulps below is 6u, inside [4u, 8u) like the true
+    // modulus sqrt(58) u ~ 7.6u.
+    assert_eq!(subnormal.min_nonzero_abs().unwrap(), Some(6.0 * u));
 
     let zero = IdxTensor::from_dense(vec![i.clone()], vec![0.0_f64; 4]).unwrap();
     assert_eq!(zero.min_nonzero_abs().unwrap(), None);

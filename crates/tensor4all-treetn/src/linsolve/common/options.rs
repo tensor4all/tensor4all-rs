@@ -40,7 +40,11 @@ pub enum GmresToleranceMode {
 /// need to resolve it (faer flushes subnormal singular values to zero),
 /// exactly when `e(largest) - e(smallest nonzero) <= `
 /// [`MAX_RESIDUAL_SPREAD`](Self::MAX_RESIDUAL_SPREAD) (1022 binary orders of
-/// magnitude). A wider residual is refused with a
+/// magnitude). The smallest modulus is read exactly for a real entry and as
+/// a lower bound within a few ulps for a complex one (`hypot` rounds), so a
+/// complex entry just above a power of two may count one order more; the
+/// check never admits an entry that the shift would make subnormal. A wider
+/// residual is refused with a
 /// [`ResidualEnrichmentRangeError`] naming the spread, the shift and the
 /// entry that would be lost, instead of silently dropping that direction,
 /// unless the cutoff makes the loss irrelevant: when `cutoff * ||b_local||`
@@ -439,7 +443,7 @@ pub struct ResidualEnrichmentRangeError {
     /// finite parts give a modulus above `f64::MAX`).
     pub largest: f64,
     /// Smallest nonzero entry modulus of the residual: the entry that would
-    /// be lost.
+    /// be lost (for a complex entry, a lower bound within a few ulps).
     pub smallest: f64,
     /// `floor(log2 largest) - floor(log2 smallest)`.
     pub spread: i32,

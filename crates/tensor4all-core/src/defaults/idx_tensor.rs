@@ -5861,6 +5861,13 @@ impl IdxTensor {
     /// element is zero. Elements outside the stored payload (structural
     /// zeros) are zero and do not count.
     ///
+    /// The modulus of a real element, or of a complex element with a zero
+    /// part, is exact. For a complex element with two nonzero parts,
+    /// `hypot(re, im)` may round up by up to one ulp, so the value used is
+    /// two ulps below it: a lower bound on the true modulus, within three
+    /// ulps of it. Hence `floor(log2 value)` never exceeds the exponent of
+    /// the true smallest modulus.
+    ///
     /// # Errors
     /// Returns [`IdxTensorError`] when authoritative storage or eager
     /// materialization cannot be read, or when the input contains NaN.
@@ -5904,7 +5911,11 @@ impl IdxTensor {
         let mut value: Option<f64> = None;
         self.storage
             .for_each_payload_value(|scalar| {
-                let magnitude = scalar.re.hypot(scalar.im);
+                let magnitude = if scalar.re == 0.0 || scalar.im == 0.0 {
+                    scalar.re.abs().max(scalar.im.abs())
+                } else {
+                    modulus_lower_bound(scalar.re.hypot(scalar.im))
+                };
                 if magnitude != 0.0 {
                     value = Some(value.map_or(magnitude, |current| current.min(magnitude)));
                 }
@@ -6761,6 +6772,24 @@ use crate::tensor_like::{
     FactorizeError, FactorizeOptions, FactorizeResult, IncrementalQrState, TensorConstructionLike,
     TensorContractionLike, TensorFactorizationLike, TensorVectorSpace,
 };
+
+/// Two ulps below a positive `hypot` result (one ulp of rounding plus one of
+/// margin), so the result never exceeds the true modulus. An infinite
+/// `hypot` (finite parts with a modulus above `f64::MAX`) is kept, since any
+/// finite value would not be a bound the caller can rely on either way.
+fn modulus_lower_bound(hypot: f64) -> f64 {
+    if !hypot.is_finite() || hypot <= 0.0 {
+        return hypot;
+    }
+    let below = |x: f64| {
+        if x > 0.0 {
+            f64::from_bits(x.to_bits() - 1)
+        } else {
+            x
+        }
+    };
+    below(below(hypot))
+}
 
 impl TensorVectorSpace for IdxTensor {
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
