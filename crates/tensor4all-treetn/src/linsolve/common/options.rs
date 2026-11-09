@@ -23,9 +23,12 @@ pub enum GmresToleranceMode {
 /// unchanged by enrichment; the following local solve at `dst` uses them.
 ///
 /// This lets one-site ALS reach solutions whose ranks exceed those of the
-/// initial guess, at the cost of one two-site operator application and one
-/// SVD per step. Two-site MALS ([`LinsolveOptions::nsite`] `= 2`) adapts ranks
-/// by itself and does not accept enrichment.
+/// initial guess, at the cost of one two-site operator application, one SVD
+/// of the residual and one QR of the enlarged basis per step. The SVD applies
+/// [`cutoff`](Self::cutoff) as its own explicit policy, so the global default
+/// SVD truncation policy does not affect which directions are added.
+/// Two-site MALS ([`LinsolveOptions::nsite`] `= 2`) adapts ranks by itself
+/// and does not accept enrichment.
 ///
 /// Enriched bonds are never truncated, so the final state can carry
 /// directions with small or zero coefficients. Truncate the result afterwards

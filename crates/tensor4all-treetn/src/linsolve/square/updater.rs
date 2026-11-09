@@ -16,7 +16,8 @@ use anyhow::{Context, Result};
 
 use tensor4all_core::krylov::{gmres_affine, gmres_affine_with_absolute_tolerance, GmresOptions};
 use tensor4all_core::{
-    AnyScalar, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike,
+    AnyScalar, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, SvdTruncationPolicy,
+    TensorLike,
 };
 
 use super::local_linop::LocalLinOp;
@@ -586,28 +587,26 @@ where
         let overlap = T::contract(&[&basis.conj(), &residual])?;
         let residual = residual.sub(&T::contract(&[&basis, &overlap])?)?;
 
+        // The enrichment cutoff is the only selection rule: pass it to the SVD
+        // as an explicit absolute per-value policy, so neither the global
+        // default policy nor a second factorization is involved.
         let threshold = enrichment.cutoff * rhs_norm;
-        let leading = |rank: usize| {
-            residual.factorize(
-                &src_side,
-                &FactorizeOptions::svd()
-                    .with_canonical(Canonical::Left)
-                    .with_max_bond_dim(rank),
-            )
-        };
-        let mut svd = leading(budget)?;
-        let kept = svd
+        let svd = residual.factorize(
+            &src_side,
+            &FactorizeOptions::svd()
+                .with_canonical(Canonical::Left)
+                .with_svd_policy(SvdTruncationPolicy::new(threshold).with_absolute())
+                .with_max_bond_dim(budget),
+        )?;
+        // The SVD keeps at least one direction; drop it when even the leading
+        // singular value is at most the cutoff.
+        let leading = svd
             .singular_values
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("SVD did not report singular values"))?
-            .iter()
-            .take_while(|&&value| value > threshold)
-            .count();
-        if kept == 0 {
+            .and_then(|values| values.first().copied())
+            .ok_or_else(|| anyhow::anyhow!("SVD did not report singular values"))?;
+        if leading <= threshold {
             return Ok(());
-        }
-        if kept < svd.rank {
-            svd = leading(kept)?;
         }
 
         let stacked = basis
