@@ -122,8 +122,8 @@ This skill is for *using* the library. If the working tree is the tensor4all-rs 
 solve `(a0 I + a1 A)x = b` with projected GMRES. Their `LinsolveOptions`
 default to two-site MALS (`nsite=2`), which can adapt ranks by SVD. Use
 `.with_nsite(1)` for one-site ALS and single-node systems: exact QR transports
-the center, ranks cannot grow, and redundant dimensions may shrink. Supply a
-sufficient initial bond space, or (TreeTN only) add
+the center, ranks cannot grow without enrichment, and redundant dimensions may
+shrink. Supply a sufficient initial bond space, or (TreeTN only) add
 `.with_enrichment(ResidualEnrichment::default())` to grow bonds from the
 local residual. Explicit bond caps/SVD policies are invalid in
 one-site mode. TreeTN results expose the true residual and convergence status;

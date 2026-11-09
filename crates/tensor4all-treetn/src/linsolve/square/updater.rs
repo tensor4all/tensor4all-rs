@@ -591,6 +591,11 @@ where
         // as an explicit absolute per-value policy, so neither the global
         // default policy nor a second factorization is involved.
         let threshold = enrichment.cutoff * rhs_norm;
+        // A finite cutoff can still overflow here; no singular value exceeds
+        // an infinite threshold, so nothing is added.
+        if !threshold.is_finite() {
+            return Ok(());
+        }
         let svd = residual.factorize(
             &src_side,
             &FactorizeOptions::svd()

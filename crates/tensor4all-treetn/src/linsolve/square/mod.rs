@@ -106,9 +106,12 @@ where
 /// This solver is for the square case where V_in = V_out (input and output spaces are the same).
 /// Use [`LinsolveOptions::with_nsite(1)`](LinsolveOptions::with_nsite) for one-site
 /// ALS, which optimizes one tensor at a time and transports the center by exact
-/// QR. Its bond dimensions cannot grow; insufficient initial ranks can prevent
-/// convergence. Redundant dimensions may shrink during QR. Explicit bond caps
-/// and SVD policies are rejected in this mode. The default two-site MALS mode
+/// QR. Without enrichment its bond dimensions cannot grow, so insufficient
+/// initial ranks can prevent convergence; enable
+/// [`LinsolveOptions::with_enrichment`] to grow bonds from the local residual
+/// (see [`ResidualEnrichment`](crate::ResidualEnrichment)). Redundant
+/// dimensions may shrink during QR. Explicit bond caps and SVD policies are
+/// rejected in this mode. The default two-site MALS mode
 /// can adapt ranks using SVD. A single-node network requires one-site mode.
 ///
 /// # Arguments

@@ -14,6 +14,7 @@ mod cuda_src_contraction;
 mod cuda_tree_contraction;
 mod deterministic_order;
 mod dmrg;
+mod enrichment_step;
 mod f7_zipup_context;
 mod fit_sum;
 mod gse;
