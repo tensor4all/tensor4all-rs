@@ -1014,8 +1014,6 @@ mod dense_host_borrow {
     }
 
     #[test]
-
-    #[test]
     fn stack_host_borrows_each_dense_materialized_payload() {
         let data: Vec<f64> = (0..256 * 256).map(|i| i as f64).collect();
         let (tensor, _storage) = dense_materialized(data, [256, 256]);
