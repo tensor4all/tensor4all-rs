@@ -88,6 +88,16 @@ pub enum KrylovError {
         /// Quantity that was nonfinite or unusable as a divisor.
         quantity: &'static str,
     },
+    /// A value the solve needs is outside the `f64` range for every scaling
+    /// the solver may apply, so no finite answer exists to return; the input
+    /// is outside the supported range rather than numerically unlucky.
+    #[error("{solver}: {quantity} is outside the f64 range")]
+    OutOfRange {
+        /// Solver that rejected the input.
+        solver: &'static str,
+        /// Quantity that cannot be represented.
+        quantity: &'static str,
+    },
     /// The projected operator was not Hermitian.
     #[error("{solver}: projected operator is not Hermitian: {source}")]
     NonHermitian {
@@ -1062,8 +1072,9 @@ where
 /// `apply_a`. When `A(b / a0)` has a NaN or infinite component, `A` is
 /// applied again to `b / a0 2^-s` for the smallest `s` that keeps it finite,
 /// found in about `2 log2(s)` further calls; components of `b / a0` that this
-/// scaling rounds away are applied as a separate part (at most four parts).
-/// For
+/// scaling rounds away are applied as separate exact parts until none is
+/// left. The search covers every `s` for which `b / a0 2^-s` keeps its largest
+/// component nonzero. For
 /// single-precision `b` the closed form requires every factor of
 /// [`AnyScalar::reciprocal_factors`] to be in the `f32` range.
 /// A zero initial residual, also that of the closed form, is converged for
@@ -1084,12 +1095,12 @@ where
 /// arithmetic, or a backend call fails. Non-convergence is reported through the
 /// result's `converged` flag and does not produce an error.
 /// A right-hand side whose norm is not finite, which would make every relative
-/// residual zero, is a [`KrylovError::NumericalBreakdown`]. So is a
-/// gradient-tracked `a1 = 0` whose derivative `-A(b / a0) / a0` is not
-/// representable in `f64` (a real or imaginary component overflows), or whose
-/// `A` is not finite on `b / a0` scaled by any power of two down to `2^-2100`,
-/// or whose parts are not exhausted after four: no finite, complete gradient
-/// is returned there.
+/// residual zero, is a [`KrylovError::NumericalBreakdown`].
+/// A gradient-tracked `a1 = 0` whose derivative `-A(b / a0) / a0` has a real
+/// or imaginary component outside the `f64` range, or whose `A` is not finite
+/// on `b / a0 2^-s` for any `s` that keeps `b / a0` nonzero, is a
+/// [`KrylovError::OutOfRange`] naming that quantity: the input is outside the
+/// supported range, and no NaN or partial gradient is returned.
 ///
 pub fn gmres_affine<T, F>(
     apply_a: F,
@@ -1287,32 +1298,44 @@ where
             // part it kept, `(x 2^-s) 2^s`, is exact, the rest
             // `x - (x 2^-s) 2^s` is exact too, and `A` is applied to that rest
             // in the same way: `A(x) / a0` is the sum of the parts' quotients.
-            // At most `MAX_CLOSED_FORM_PARTS` parts are taken; a remainder
-            // after that is a `NumericalBreakdown` rather than a silently
-            // dropped component.
-            const MAX_CLOSED_FORM_PARTS: usize = 4;
+            //
+            // Nothing is given up early. The search for `s` covers every
+            // exponent for which `x 2^-s` keeps its largest component nonzero
+            // (`s <= e + 1074` with `2^e <= max |x_i|`), and parts are taken
+            // until nothing of `x` is left: each part keeps its largest
+            // component, so the largest component of the rest drops by at least
+            // one binade per part and the parts end within about 2100 steps.
+            // When no exponent in that range makes the image finite, the input
+            // is outside the range this closed form supports, and the solve
+            // returns `KrylovError::OutOfRange` naming the operator image,
+            // never NaN and never a silently dropped component.
+            let out_of_range = |quantity: &'static str| {
+                anyhow::Error::new(KrylovError::OutOfRange {
+                    solver: "gmres",
+                    quantity,
+                })
+            };
+            const IMAGE: &str = "operator image A(x 2^-s) for every s that keeps x nonzero";
             let started = Instant::now();
             let mut apply_calls = 0;
             let mut quotient_scale_calls = 0;
             let mut quotient: Option<T> = None;
             let mut remaining = Some(solution.clone());
-            for _ in 0..MAX_CLOSED_FORM_PARTS {
-                let Some(part) = remaining.take() else {
-                    break;
-                };
+            while let Some(part) = remaining.take() {
                 apply_calls += 1;
                 let applied = apply_a(&part)?;
                 let (image, exponent) = if applied.is_all_finite()? {
                     (applied, 0)
                 } else {
-                    let (found, calls) = vector_ops::smallest_finite_scaling(&apply_a, &part)?;
+                    let Some(limit) = vector_ops::largest_informative_exponent(&part)? else {
+                        // A(0) is not finite: no scaling helps.
+                        return Err(out_of_range(IMAGE));
+                    };
+                    let (found, calls) =
+                        vector_ops::smallest_finite_scaling(&apply_a, &part, limit)?;
                     apply_calls += calls;
                     let Some((exponent, image)) = found else {
-                        return Err(anyhow::Error::new(KrylovError::NumericalBreakdown {
-                            solver: "gmres",
-                            iteration: 0,
-                            quantity: "a1 derivative A(x) / a0",
-                        }));
+                        return Err(out_of_range(IMAGE));
                     };
                     let kept = vector_ops::scale_pow2(
                         vector_ops::scale_pow2(part.clone(), -exponent)?,
@@ -1320,7 +1343,19 @@ where
                     )?;
                     let lost =
                         part.axpby(AnyScalar::new_real(1.0), &kept, AnyScalar::new_real(-1.0))?;
-                    if lost.maxabs()? > 0.0 {
+                    let lost_largest = lost.maxabs()?;
+                    if lost_largest > 0.0 {
+                        // Exact arithmetic halves the largest component at
+                        // least; a vector type whose `axpby` is not exact
+                        // (truncating) could fail to shrink and loop.
+                        // `maxabs` errors on NaN, so both values are ordered.
+                        if lost_largest >= part.maxabs()? {
+                            return Err(anyhow::Error::new(KrylovError::NumericalBreakdown {
+                                solver: "gmres",
+                                iteration: 0,
+                                quantity: "closed-form part split (rest did not shrink)",
+                            }));
+                        }
                         remaining = Some(lost);
                     }
                     (image, exponent)
@@ -1337,12 +1372,8 @@ where
                     )?,
                 });
             }
-            let (Some(quotient), None) = (quotient, remaining) else {
-                return Err(anyhow::Error::new(KrylovError::NumericalBreakdown {
-                    solver: "gmres",
-                    iteration: 0,
-                    quantity: "a1 derivative A(x) / a0",
-                }));
+            let Some(quotient) = quotient else {
+                return Err(out_of_range(IMAGE));
             };
             if profile_enabled {
                 profile.apply += started.elapsed();
@@ -1354,11 +1385,7 @@ where
             // rescaling makes it representable, and `a1 = 0` times an
             // infinite entry would be NaN, so that is reported here.
             if !quotient.is_all_finite()? {
-                return Err(anyhow::Error::new(KrylovError::NumericalBreakdown {
-                    solver: "gmres",
-                    iteration: 0,
-                    quantity: "a1 derivative A(x) / a0",
-                }));
+                return Err(out_of_range("a1 derivative A(x) / a0"));
             }
             let correction = quotient.scale(AnyScalar::new_real(0.0) - a1.clone())?;
             if profile_enabled {

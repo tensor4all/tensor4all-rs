@@ -54,18 +54,38 @@ pub(super) fn divide_by_norm<T: TensorVectorSpace>(value: &T, norm: f64) -> Resu
     Ok((scaled.scale(AnyScalar::new_real(1.0 / mantissa))?, calls))
 }
 
-/// Largest down-scaling exponent tried when an operator image overflows:
-/// `2^-2100` takes every finite `f64` to zero.
-pub(super) const MAX_RETRY_EXPONENT: i32 = 2100;
+/// Largest `s` for which `x 2^-s` keeps the largest component of `x` nonzero:
+/// with `2^e <= max |x_i| < 2^(e+1)`, `x 2^-s` keeps a component of at least
+/// `2^-1074` exactly when `s <= e + 1074`. This is the whole range in which a
+/// down-scaled `x` still carries information; `None` for `x = 0`.
+pub(super) fn largest_informative_exponent<T: TensorVectorSpace>(x: &T) -> Result<Option<i32>> {
+    let largest = x.maxabs()?;
+    if largest == 0.0 {
+        return Ok(None);
+    }
+    // A complex modulus can exceed f64::MAX although no component does; every
+    // component is at most 2^1024, so its exponent is at most 1023.
+    let exponent = if largest.is_finite() {
+        normalization_exponent(largest).min(1023)
+    } else {
+        1023
+    };
+    Ok(Some(exponent + 1074))
+}
 
-/// The smallest `s >= 1` for which `A(x 2^-s)` has only finite components,
-/// with that image, or `None` when no `s` up to [`MAX_RETRY_EXPONENT`] gives
-/// one. `s` is found by doubling (1, 2, 4, ...) and then bisecting between the
-/// last non-finite and the first finite exponent, which assumes that the image
-/// stays finite once it is (true for a linear `A` in floating point). A NaN
-/// image, as `inf - inf` inside `A` forms, counts as non-finite. Also returns
-/// the number of `apply_a` calls.
-pub(super) fn smallest_finite_scaling<T, F>(apply_a: &F, x: &T) -> Result<(Option<(i32, T)>, usize)>
+/// The smallest `s` in `1..=limit` for which `A(x 2^-s)` has only finite
+/// components, with that image, or `None` when no `s` in that range gives one.
+/// `s` is found by doubling (1, 2, 4, ..., with the last step clamped to
+/// `limit`, so every exponent up to `limit` is covered) and then bisecting
+/// between the last non-finite and the first finite exponent, which assumes
+/// that the image stays finite once it is (true for a linear `A` in floating
+/// point). A NaN image, as `inf - inf` inside `A` forms, counts as non-finite.
+/// Also returns the number of `apply_a` calls.
+pub(super) fn smallest_finite_scaling<T, F>(
+    apply_a: &F,
+    x: &T,
+    limit: i32,
+) -> Result<(Option<(i32, T)>, usize)>
 where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
@@ -79,18 +99,21 @@ where
     let mut non_finite = 0;
     let mut exponent = 1;
     let mut found = None;
-    // The last doubling step is clamped to the limit, so every exponent up
-    // to `MAX_RETRY_EXPONENT` is covered (2048 doubles past 2100).
+    if limit < 1 {
+        return Ok((None, 0));
+    }
+    // The last doubling step is clamped to `limit`, so every exponent up to
+    // it is covered.
     loop {
         if let Some(image) = probe(exponent)? {
             found = Some((exponent, image));
             break;
         }
         non_finite = exponent;
-        if exponent >= MAX_RETRY_EXPONENT {
+        if exponent >= limit {
             break;
         }
-        exponent = (exponent * 2).min(MAX_RETRY_EXPONENT);
+        exponent = (exponent * 2).min(limit);
     }
     if let Some((mut upper, mut image)) = found {
         while upper - non_finite > 1 {

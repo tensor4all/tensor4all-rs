@@ -113,11 +113,19 @@ another solver.
   rounded-away rest `x - (x 2^-s) 2^s`, which is exact, is applied as a
   separate part and its quotient added (`dx2/da1 = -2^-900`). Finiteness is
   judged per real and imaginary component (`is_all_finite`), not by a complex
-  modulus. Limits: at most four parts are taken; a derivative component
-  outside the `f64` range, no finite image down to `x 2^-2100`, or a
-  remainder after four parts is a `KrylovError::NumericalBreakdown`, never a
-  NaN or a silently dropped component. The search assumes the image stays
-  finite once it is finite, as for a linear `A` in floating point.
+  modulus. Nothing is given up early: the search covers every `s` for which
+  `x 2^-s` keeps its largest component nonzero (`s <= e + 1074` with
+  `2^e <= max |x_i|`), and parts are taken until nothing of `x` is left (each
+  part removes at least one binade, so this ends). Outside that range the
+  solve refuses: a derivative component outside the `f64` range, or no finite
+  image for any such `s`, is `KrylovError::OutOfRange` naming the quantity,
+  never a NaN or a silently dropped component. The tests fix both sides of the
+  boundary: with `x = 2^1000` and an operator that becomes finite exactly at
+  `s = 2074` (the largest in range) the solve succeeds, and at `s = 2075`
+  (where `x 2^-s` rounds to zero) it returns `OutOfRange`. The search assumes
+  the image stays finite once it is finite, as for a linear `A` in floating
+  point; a vector type whose `axpby` is not exact and fails to shrink the rest
+  is a `NumericalBreakdown`.
 - A zero initial residual is converged for every GMRES `rtol`, including `0`, so an
   exact initial guess returns before the Arnoldi start vector `r / |r|` is
   formed.

@@ -854,7 +854,8 @@ fn gmres_affine_tracked_zero_a1_differentiates_an_overflowing_operator_image() {
     assert_eq!(grad.imag(), 0.0);
 
     // With a0 = 1/2, dx/da1 = -A(x) / a0 = -4 f64::MAX is not representable:
-    // the solve reports it instead of returning a NaN or infinite gradient.
+    // the solve rejects it as out of range instead of returning a NaN or
+    // infinite gradient.
     let b = make_vector_with_index(vec![1.0], &idx);
     let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
     let error = gmres_affine(
@@ -869,17 +870,16 @@ fn gmres_affine_tracked_zero_a1_differentiates_an_overflowing_operator_image() {
     assert!(
         matches!(
             error,
-            KrylovError::NumericalBreakdown {
+            KrylovError::OutOfRange {
                 solver: "gmres",
-                iteration: 0,
                 quantity: "a1 derivative A(x) / a0",
             }
         ),
         "{error:?}"
     );
 
-    // A = 4 f64::MAX I overflows even on the unit-norm direction of x, so
-    // dx/da1 = -4 f64::MAX x / a0 has no finite value to scale from.
+    // A = 4 f64::MAX I: A(x 2^-s) is finite from s = 2, but the derivative
+    // dx/da1 = -4 f64::MAX x / a0 = -8 f64::MAX is not representable.
     let b = make_vector_with_index(vec![4.0], &idx);
     let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
     let error = gmres_affine(
@@ -897,10 +897,9 @@ fn gmres_affine_tracked_zero_a1_differentiates_an_overflowing_operator_image() {
     assert!(
         matches!(
             error,
-            KrylovError::NumericalBreakdown {
+            KrylovError::OutOfRange {
                 solver: "gmres",
-                iteration: 0,
-                ..
+                quantity: "a1 derivative A(x) / a0",
             }
         ),
         "{error:?}"
@@ -1245,6 +1244,77 @@ fn gmres_affine_tracked_zero_a1_retry_reaches_the_largest_exponent() {
         vec![2.0_f64.powi(1000)]
     );
     assert_eq!(grad.real(), 0.0);
+}
+
+/// `A(x) = t - t` with `t = ((x 2^1000) 2^1000) 2^k`: the zero operator, whose
+/// evaluation overflows to `inf - inf = NaN` until `x` is scaled down far
+/// enough for `t` to be finite.
+fn zero_operator_overflowing_at(k: i32) -> impl Fn(&IdxTensor) -> Result<IdxTensor> {
+    move |x: &IdxTensor| {
+        let t = x
+            .scale(AnyScalar::new_real(2.0_f64.powi(1000)))?
+            .scale(AnyScalar::new_real(2.0_f64.powi(1000)))?
+            .scale(AnyScalar::new_real(2.0_f64.powi(k)))?;
+        Ok(t.axpby(AnyScalar::new_real(1.0), &t, AnyScalar::new_real(-1.0))?)
+    }
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retry_accepts_the_largest_in_range_exponent() {
+    // x = b / a0 = 2^1000. The retry may scale x by 2^-s while its largest
+    // component stays nonzero, s <= 1000 + 1074 = 2074. With k = 97,
+    // t = 2^(2097 - s + 1000) is finite exactly from s = 2074, the last
+    // exponent in range: x 2^-2074 = 2^-1074 is the smallest subnormal, an
+    // exact power of two, and t = 2^1023. The solve must accept it.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![2.0_f64.powi(1000)], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let selector = make_vector_with_index(vec![1.0], &idx);
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        zero_operator_overflowing_at(97),
+        &b,
+        &x0,
+        1.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(
+        result.solution.to_vec::<f64>().unwrap(),
+        vec![2.0_f64.powi(1000)]
+    );
+    assert_eq!(grad.real(), 0.0);
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retry_rejects_the_first_out_of_range_exponent() {
+    // As above with k = 98: t is finite only from s = 2075, where
+    // x 2^-2075 = 2^-1075 rounds to zero, so no scaling in range keeps both
+    // x and A(x 2^-s) representable. The solve must return the typed
+    // out-of-range error naming the operator image, not NaN, not a
+    // NumericalBreakdown, and not a silently dropped component.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![2.0_f64.powi(1000)], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+    let error = gmres_affine(
+        zero_operator_overflowing_at(98),
+        &b,
+        &x0,
+        AnyScalar::new_real(1.0),
+        a1,
+        &GmresOptions::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::OutOfRange {
+                solver: "gmres",
+                quantity: "operator image A(x 2^-s) for every s that keeps x nonzero",
+            }
+        ),
+        "{error:?}"
+    );
 }
 
 #[test]
