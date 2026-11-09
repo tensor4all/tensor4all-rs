@@ -1076,6 +1076,15 @@ fn message_cache_warm_cut_refreshes_both_directions() {
     evaluator.reset_message_cache_use_stamps();
     let stamps_reset = message_cache_stamps(&evaluator);
     assert_message_cache_index_is_exact(&evaluator);
+    // The reset itself hands every cache its own stamp; a shared one would put
+    // two caches under one index entry before the warm call even runs.
+    let mut reset_stamps = stamps_reset
+        .iter()
+        .map(|(_, stamp)| *stamp)
+        .collect::<Vec<_>>();
+    reset_stamps.sort_unstable();
+    reset_stamps.dedup();
+    assert_eq!(reset_stamps.len(), stamps_reset.len(), "{stamps_reset:?}");
 
     let warm = evaluator
         .evaluate_batched_with_hint(points, EvaluationHint::around(1))

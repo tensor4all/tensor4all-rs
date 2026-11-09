@@ -2767,13 +2767,12 @@ where
     #[cfg(test)]
     fn reset_message_cache_use_stamps(&mut self) {
         self.message_cache_order.clear();
-        let mut epoch = 1u64;
-        for (edge, cache) in self.message_caches.iter_mut() {
+        for (index, (edge, cache)) in self.message_caches.iter_mut().enumerate() {
+            let epoch = index as u64 + 1;
             cache.last_used = epoch;
             if cache.key_count() > 0 {
                 self.message_cache_order.insert(epoch, edge.clone());
             }
-            epoch += 1;
         }
     }
 
