@@ -1353,6 +1353,79 @@ fn message_cache_last_used_reads() -> usize {
     MESSAGE_CACHE_LAST_USED_READS.with(std::cell::Cell::get)
 }
 
+/// #1209: the LRU index holds exactly the caches that retain payload, each
+/// under its own use stamp, after a real run through the admission path.
+///
+/// The accounting fixture above inserts caches and re-syncs the index through a
+/// test-only rebuild, so it cannot see whether *admission* maintains the index.
+/// This one only calls `evaluate_batched`, with a one-column total so every
+/// admission has to evict: a cache created by this call is stamped while it is
+/// still empty and only starts retaining at the admission that follows.
+#[test]
+fn message_cache_index_holds_exactly_the_caches_that_retain_payload() {
+    let (tree, indices) = five_node_chain();
+    let column_bytes = std::mem::size_of::<CachedScalar>() * 2;
+    let values = alternating_points(&indices, 8);
+    let shape = [indices.len(), 8];
+    let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+    let expected = tree.evaluate(&indices, points).unwrap();
+    let mut evaluator = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            message_cache_max_bytes: column_bytes,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // Two rootings, so caches are created, evicted and reused under pressure.
+    for center in [0, 4, 2] {
+        let actual = evaluator
+            .evaluate_batched_with_hint(points, EvaluationHint::around(center))
+            .unwrap();
+        assert_scalars_close(&actual, &expected);
+    }
+
+    let residents = evaluator
+        .message_caches
+        .iter()
+        .filter(|(_, cache)| cache.key_count() > 0)
+        .collect::<Vec<_>>();
+    assert!(
+        !residents.is_empty(),
+        "a finite budget must retain at least one column to make this test meaningful"
+    );
+    assert_eq!(
+        evaluator.message_cache_order.len(),
+        residents.len(),
+        "the index must hold one entry per cache that retains payload"
+    );
+    for (epoch, edge) in &evaluator.message_cache_order {
+        let cache = evaluator
+            .message_caches
+            .get(edge)
+            .expect("every indexed edge is a cache of this evaluator");
+        assert!(
+            cache.key_count() > 0,
+            "{edge:?} is indexed but holds no payload"
+        );
+        assert_eq!(
+            cache.last_used(),
+            *epoch,
+            "{edge:?} is indexed under a stale use stamp"
+        );
+    }
+    for (edge, cache) in residents {
+        assert_eq!(
+            evaluator.message_cache_order.get(&cache.last_used()),
+            Some(edge),
+            "{edge:?} retains payload but is not in the index"
+        );
+    }
+    assert!(retained_message_cache_bytes(&evaluator) <= column_bytes);
+}
+
 /// #1209: admitting one column per edge under a one-column total must cost the
 /// caches that hold payload, not the edges the evaluator has seen.
 ///
@@ -1432,12 +1505,15 @@ fn message_cache_pressured_admission_visits_only_the_caches_that_hold_payload() 
     );
 
     // One resident at a time, so a victim search proportional to the caches
-    // that hold payload visits about one cache per admission. Measured on the
-    // tree before this change (with these two counters added to it): 1 048 576
-    // cache visits and 1 024 `last_used()` reads for the same fixture; after
-    // it, 1 024 and 0. The bound is stated generously -- two per admission --
-    // so one extra resident is allowed, while any scan over the 1 024 historical
-    // caches per admission is far outside it.
+    // that hold payload traverses about one cache per admission. Measured with
+    // the pre-#1209 walk restored (the same counters, same counter position):
+    // 1 049 600 traversals and 1 024 `last_used()` reads for this fixture,
+    // against 1 024 and 0 here. The bound is stated generously -- two per
+    // admission -- so one extra resident is allowed, while any walk over the
+    // historical caches per admission is far outside it. The traversal counter
+    // runs before every filter, so a walk over `message_caches` counts the empty
+    // caches too; counting inside `map()` did not, which is how an earlier
+    // version of this test could not see the regression.
     assert!(
         visits <= 2 * edges,
         "{visits} cache visits for {edges} pressured admissions; the search must follow the caches that hold payload"

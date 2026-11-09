@@ -2315,7 +2315,8 @@ where
     #[cfg(feature = "diagnostics")]
     fn diagnostic_cache(&self) -> diagnostics::CacheDiagnostics {
         let mut result = diagnostics::CacheDiagnostics {
-            message_owned_bytes: hash_map_owned_bytes_estimate(&self.message_caches),
+            message_owned_bytes: hash_map_owned_bytes_estimate(&self.message_caches)
+                .saturating_add(btree_map_owned_bytes_estimate(&self.message_cache_order)),
             prepared_entries: self.prepared_branch_slices_f64.slices.len()
                 + self.prepared_branch_slices_c64.slices.len(),
             prepared_payload_bytes: self.prepared_branch_slices_f64.retained_bytes()
@@ -2428,7 +2429,8 @@ where
             .values()
             .map(PackedMessageCache::owned_retained_bytes_estimate)
             .sum::<usize>()
-            .saturating_add(hash_map_owned_bytes_estimate(&self.message_caches));
+            .saturating_add(hash_map_owned_bytes_estimate(&self.message_caches))
+            .saturating_add(btree_map_owned_bytes_estimate(&self.message_cache_order));
     }
 
     /// A hinted, fully cached cut needs neither the other center components
@@ -2684,13 +2686,20 @@ where
             // no payload cannot release anything, so it is never a candidate and
             // never collected: the search is proportional to the resident caches
             // rather than to the edges the evaluator has seen (#1209).
+            //
+            // The traversal counter sits before every filter on purpose: it
+            // counts the caches the walk touches, so restoring a walk over
+            // `message_caches` -- where the historical empty caches live -- is
+            // counted too and the #1209 regression test fails again.
             let victims: Vec<(u64, (V, V))> = self
                 .message_cache_order
                 .iter()
-                .filter(|(_, other)| *other != edge)
-                .map(|(epoch, other)| {
+                .inspect(|_| {
                     #[cfg(test)]
                     MESSAGE_CACHE_VICTIM_VISITS.with(|visits| visits.set(visits.get() + 1));
+                })
+                .filter(|(_, other)| *other != edge)
+                .map(|(epoch, other)| {
                     #[cfg(test)]
                     MESSAGE_CACHE_VICTIM_CANDIDATES.with(|candidates| {
                         candidates.set(candidates.get() + 1);
@@ -8206,6 +8215,21 @@ fn hash_map_owned_bytes_estimate<K, V>(map: &HashMap<K, V>) -> usize {
         .saturating_add(std::mem::size_of::<V>())
         .saturating_add(HASH_MAP_BUCKET_OVERHEAD_ESTIMATE_BYTES);
     std::mem::size_of::<HashMap<K, V>>().saturating_add(map.capacity().saturating_mul(per_bucket))
+}
+
+// A deterministic estimate for one `BTreeMap` node's bookkeeping: the map
+// stores up to `B` entries plus child links per node and does not expose that
+// layout, so this is documented as an estimate, exactly like the hash-bucket
+// term. It is observability only; the logical payload budget never counts it.
+#[cfg(any(test, feature = "diagnostics"))]
+const BTREE_MAP_NODE_OVERHEAD_ESTIMATE_BYTES: usize = 3 * std::mem::size_of::<usize>();
+
+#[cfg(any(test, feature = "diagnostics"))]
+fn btree_map_owned_bytes_estimate<K, V>(map: &BTreeMap<K, V>) -> usize {
+    let per_entry = std::mem::size_of::<K>()
+        .saturating_add(std::mem::size_of::<V>())
+        .saturating_add(BTREE_MAP_NODE_OVERHEAD_ESTIMATE_BYTES);
+    std::mem::size_of::<BTreeMap<K, V>>().saturating_add(map.len().saturating_mul(per_entry))
 }
 
 /// Where one requested key's column ended up.
