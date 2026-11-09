@@ -820,6 +820,16 @@ fn dense_materialized(data: Vec<f64>, dims: [usize; 2]) -> (IdxTensor, Arc<Stora
     )
 }
 
+/// Same as `dense_materialized` for any storage scalar, for the dtype-dispatch tests.
+fn dense_materialized_typed<T: tensor4all_tensorbackend::StorageScalar>(
+    data: Vec<T>,
+    dims: [usize; 2],
+) -> IdxTensor {
+    let storage = Arc::new(Storage::from_dense_col_major(data, &dims).unwrap());
+    let indices = dims.iter().map(|&d| DynIndex::new_dyn(d)).collect();
+    IdxTensor::from_storage(indices, storage).unwrap()
+}
+
 /// A dense `Materialized` payload is borrowed in place and no eager tensor is
 /// built, the property `dense_host_values` has and `with_dense_slice` lacks.
 #[test]
@@ -1004,19 +1014,6 @@ mod dense_host_borrow {
     }
 
     #[test]
-    fn gather_dense_host_borrows_a_dense_materialized_payload() {
-        let data: Vec<f64> = (0..256 * 256).map(|i| i as f64).collect();
-        let (tensor, _storage) = dense_materialized(data, [256, 256]);
-        let target = DynIndex::new_dyn(1);
-        let source_bytes = 256 * 256 * size_of::<f64>();
-        let (out, _total, largest, _large) =
-            allocations_during(|| tensor.gather_dense_host(0, &[7], target.clone()).unwrap());
-        assert_eq!(out.dims(), vec![1, 256]);
-        assert!(
-            largest < source_bytes / 4,
-            "gather allocated {largest} bytes at once (source {source_bytes}): the payload was copied"
-        );
-    }
 
     #[test]
     fn stack_host_borrows_each_dense_materialized_payload() {
@@ -1035,5 +1032,29 @@ mod dense_host_borrow {
             large <= 1,
             "stack made {large} allocations of at least {LARGE} bytes for one 524288-byte output: an input was copied"
         );
+    }
+    macro_rules! check_gather {
+        ($ty:ty, $value:expr) => {{
+            let data: Vec<$ty> = (0..256 * 256).map($value).collect();
+            let tensor = dense_materialized_typed(data, [256, 256]);
+            let target = DynIndex::new_dyn(1);
+            let source_bytes = 256 * 256 * size_of::<$ty>();
+            let (out, _total, largest, _large) =
+                allocations_during(|| tensor.gather_dense_host(0, &[7], target).unwrap());
+            assert_eq!(out.dims(), vec![1, 256]);
+            assert!(
+                largest < source_bytes / 4,
+                "{} gather allocated {largest} bytes at once (source {source_bytes}): the payload was copied",
+                stringify!($ty)
+            );
+        }};
+    }
+
+    #[test]
+    fn gather_dense_host_borrows_a_dense_materialized_payload() {
+        check_gather!(f64, |i: usize| i as f64);
+        check_gather!(f32, |i: usize| i as f32);
+        check_gather!(Complex64, |i: usize| Complex64::new(i as f64, 1.0));
+        check_gather!(Complex32, |i: usize| Complex32::new(i as f32, 1.0));
     }
 }
