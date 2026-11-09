@@ -172,8 +172,21 @@ disjoint. Equal or disjoint layouts take the old path and are unchanged.
 `AUTOMATIC_REFINEMENT_LIMIT` atoms; a larger one returns
 `PartitionedTreeTNError::RefinementTooLarge` before anything is refined, and
 callers who need it call `common_refinement` and `refine_to` explicitly, which
-are not limited. `contract_selected`, `contract_adaptive`, and
-`add_with_patching` do not refine.
+are not limited. `contract_selected` and `add_with_patching` do not refine.
+
+`contract_adaptive` and `contract_adaptive_selected` group compatible pairs by
+their predicted output projector before contracting anything. When two
+predicted output projectors overlap without being equal, the pairs are refined
+onto a disjoint grid of the fixed output indices, under the same
+`AUTOMATIC_REFINEMENT_LIMIT`; here the limit applies to the whole candidate
+output grid, which is more conservative than `contract`'s per-operand count.
+`contract_adaptive_selected` selects by the original pair output keys first, so
+a returned key can be a refinement of a wanted key. With a bond-dimension cap
+and `PatchSplitStrategy::Sequential`, a group that has a split candidate stops
+at its first contribution whose bond dimension reaches the cap and is
+recomputed on projected children; the remaining pairs of that group are not
+contracted. The resulting partition layout and values are the same as before
+this shortcut.
 
 ## Adaptive patched interpolation
 

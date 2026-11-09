@@ -283,7 +283,10 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   local cutoffs and drops patches at/below theirs, `Norm` truncates every patch
   relative to itself.
 - `contract_adaptive(&left, &right, &center, &contract_options, &patching_options)` —
-  contract and retruncate against the corrected output norm.
+  contract and retruncate against the corrected output norm. Pairs are grouped
+  by predicted output projector first; unequal overlapping outputs are refined
+  onto a disjoint grid (limited by `AUTOMATIC_REFINEMENT_LIMIT`), and a
+  `Sequential` group with a cap stops at its first saturated contribution.
   `contract_adaptive_selected(..., &wanted)` forms only the wanted output
   projectors (split outputs refine a wanted key); its `Volume` budget uses the
   totals of the selected outputs, so a block can be truncated differently than
