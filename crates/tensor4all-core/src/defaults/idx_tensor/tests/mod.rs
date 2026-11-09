@@ -949,3 +949,91 @@ fn owned_session_publication_reports_the_validating_constructor_errors() {
     let native = NativeTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]).unwrap();
     assert!(IdxTensor::publish_dense_session_result_owned(vec![i, j.clone(), j], native).is_err());
 }
+
+/// Allocation-level guard for the two borrowed dense-host routes (#1214).
+mod dense_host_borrow {
+    use super::*;
+    use std::alloc::{GlobalAlloc, Layout, System};
+
+    /// Allocations at least this large can only be a source-sized payload copy or
+    /// the required output buffer; per-element coordinate vectors are far smaller.
+    const LARGE: usize = 1 << 18;
+
+    struct CountingAllocator;
+    thread_local! {
+        /// (total bytes, largest single allocation, large-allocation count).
+        static ALLOCATIONS: Cell<(usize, usize, usize)> = const { Cell::new((0, 0, 0)) };
+    }
+
+    // SAFETY: every method forwards the caller's allocation to `System` unchanged,
+    // so ownership and layout stay with the system allocator; `record` only bumps
+    // a thread-local counter and never touches the pointer.
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            record(layout.size());
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            record(new_size);
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+    fn record(bytes: usize) {
+        let _ = ALLOCATIONS.try_with(|cell| {
+            let (total, largest, large) = cell.get();
+            cell.set((
+                total + bytes,
+                largest.max(bytes),
+                large + usize::from(bytes >= LARGE),
+            ));
+        });
+    }
+
+    fn allocations_during<R>(f: impl FnOnce() -> R) -> (R, usize, usize, usize) {
+        ALLOCATIONS.with(|cell| cell.set((0, 0, 0)));
+        let out = f();
+        let (total, largest, large) = ALLOCATIONS.with(Cell::get);
+        (out, total, largest, large)
+    }
+
+    #[test]
+    fn gather_dense_host_borrows_a_dense_materialized_payload() {
+        let data: Vec<f64> = (0..256 * 256).map(|i| i as f64).collect();
+        let (tensor, _storage) = dense_materialized(data, [256, 256]);
+        let target = DynIndex::new_dyn(1);
+        let source_bytes = 256 * 256 * size_of::<f64>();
+        let (out, _total, largest, _large) =
+            allocations_during(|| tensor.gather_dense_host(0, &[7], target.clone()).unwrap());
+        assert_eq!(out.dims(), vec![1, 256]);
+        assert!(
+            largest < source_bytes / 4,
+            "gather allocated {largest} bytes at once (source {source_bytes}): the payload was copied"
+        );
+    }
+
+    #[test]
+    fn stack_host_borrows_each_dense_materialized_payload() {
+        let data: Vec<f64> = (0..256 * 256).map(|i| i as f64).collect();
+        let (tensor, _storage) = dense_materialized(data, [256, 256]);
+        let batch = DynIndex::new_dyn(1);
+        let mut result_indices = tensor.indices().to_vec();
+        result_indices.insert(0, batch);
+        let (out, _total, _largest, large) = allocations_during(|| {
+            IdxTensor::stack_host::<f64>(&[&tensor], &[256, 256], 0, result_indices).unwrap()
+        });
+        assert_eq!(out.dims(), vec![1, 256, 256]);
+        // One is the required output; a second may be the storage move. An input
+        // copy would add one more per input tensor.
+        assert!(
+            large <= 1,
+            "stack made {large} allocations of at least {LARGE} bytes for one 524288-byte output: an input was copied"
+        );
+    }
+}
