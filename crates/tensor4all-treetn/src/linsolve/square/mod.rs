@@ -153,6 +153,11 @@ where
 /// Also before any sweep, [`TreeTNOperationError`] is returned when
 /// - the network is empty, the operator cannot act on `init`, or its result is
 ///   incompatible with `rhs`;
+/// - a node of `operator`, `rhs` or `init` is single precision and `a0` or `a1`
+///   is outside the `f32` range (an `InvalidConfiguration`), since `scale`
+///   converts them to the storage precision;
+/// - the identity-only closed form needs a factor of `1 / a0` outside the `f32`
+///   range for a network with a single-precision node;
 /// - `a0` is zero and the operator term is zero (`a1 = 0` or a zero operator),
 ///   so the system is singular.
 ///
@@ -304,6 +309,7 @@ where
         ));
     }
     validate_linsolve_inputs(operator, rhs, &init)?;
+    validate_single_precision_coefficients(&[operator, rhs, &init], &options.a0, &options.a1)?;
     if options.nsite == 2 && rhs.node_count() < 2 {
         return Err(TreeTNOperationError::invalid_configuration(anyhow::anyhow!(
             "square_linsolve requires at least two sites with nsite=2; use nsite=1 for a single-node solve"
@@ -449,6 +455,44 @@ where
 ///
 /// A network with a single-precision node rejects a factor outside the `f32`
 /// range, which that node's `scale` would turn into zero or infinity.
+fn has_single_precision_node<T, V>(tn: &TreeTN<T, V>) -> bool
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    tn.node_indices()
+        .into_iter()
+        .filter_map(|node| tn.tensor(node))
+        .any(TensorVectorSpace::is_single_precision)
+}
+
+/// `scale` converts a coefficient to the storage precision of the node it
+/// multiplies, so networks with a single-precision node need `a0` and `a1` in
+/// the `f32` range.
+fn validate_single_precision_coefficients<T, V>(
+    networks: &[&TreeTN<T, V>],
+    a0: &AnyScalar,
+    a1: &AnyScalar,
+) -> std::result::Result<(), TreeTNOperationError>
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    if !networks.iter().any(|tn| has_single_precision_node(tn)) {
+        return Ok(());
+    }
+    for (name, value) in [("a0", a0), ("a1", a1)] {
+        if !value.is_in_single_precision_range() {
+            return Err(TreeTNOperationError::invalid_configuration(
+                anyhow::anyhow!(
+                    "{name} = {value:?} is outside the f32 range of the single-precision networks"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn divide_by_scalar<T, V>(tn: &mut TreeTN<T, V>, divisor: &AnyScalar) -> Result<()>
 where
     T: TensorLike,
@@ -458,12 +502,7 @@ where
         .reciprocal_factors()
         .map_err(anyhow::Error::new)
         .context("square_linsolve: identity-only closed form")?;
-    let single_precision = tn
-        .node_indices()
-        .into_iter()
-        .filter_map(|node| tn.tensor(node))
-        .any(TensorVectorSpace::is_single_precision);
-    if single_precision {
+    if has_single_precision_node(tn) {
         if let Some(factor) = factors.iter().find(|f| !f.is_in_single_precision_range()) {
             bail!(
                 "square_linsolve: identity-only closed form: dividing single-precision \
@@ -570,8 +609,11 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`TreeTNOperationError`] when scaling `solution` or `rhs`, applying `operator`,
-/// combining the two terms, or evaluating the residual and RHS norms fails.
+/// Returns [`TreeTNOperationError::InvalidConfiguration`] when a node of
+/// `operator`, `solution` or `rhs` is single precision and `a0` or `a1` is
+/// outside the `f32` range, and [`TreeTNOperationError`] when scaling `solution`
+/// or `rhs`, applying `operator`, combining the two terms, or evaluating the
+/// residual and RHS norms fails.
 ///
 /// # Examples
 /// ```
@@ -625,6 +667,7 @@ where
 {
     let a0 = a0.into();
     let a1 = a1.into();
+    validate_single_precision_coefficients(&[&operator.mpo, solution, rhs], &a0, &a1)?;
     let mut lhs = solution.clone();
     lhs.scale_mut(a0)?;
 

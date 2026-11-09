@@ -271,3 +271,28 @@ fn divide_by_scalar_rejects_factors_outside_the_single_precision_range() {
         IdxTensor::from_dense(dense.external_indices(), vec![2.0_f32.powi(98), 0.75]).unwrap();
     assert_eq!(dense.sub(&expected).unwrap().maxabs().unwrap(), 0.0);
 }
+
+#[test]
+fn single_precision_networks_reject_coefficients_outside_the_f32_range() {
+    let s = DynIndex::new_dyn(2);
+    let single = IdxTensor::from_dense(vec![s.clone()], vec![1.0_f32, 2.0]).unwrap();
+    let double = IdxTensor::from_dense(vec![s], vec![1.0_f64, 2.0]).unwrap();
+    let single = TreeTN::<IdxTensor, usize>::from_tensors(vec![single], vec![0]).unwrap();
+    let double = TreeTN::<IdxTensor, usize>::from_tensors(vec![double], vec![0]).unwrap();
+    let huge = AnyScalar::new_complex(pow2(128), pow2(128));
+    let one = AnyScalar::new_real(1.0);
+    for (a0, a1, name) in [(&huge, &one, "a0"), (&one, &huge, "a1")] {
+        let error =
+            validate_single_precision_coefficients(&[&double, &single], a0, a1).unwrap_err();
+        assert!(
+            matches!(error, TreeTNOperationError::InvalidConfiguration { .. }),
+            "{error:?}"
+        );
+        assert!(
+            format!("{error:#}").contains(&format!("{name} = ")),
+            "{error:#}"
+        );
+        validate_single_precision_coefficients(&[&double], a0, a1).unwrap();
+    }
+    validate_single_precision_coefficients(&[&single], &one, &AnyScalar::new_real(0.0)).unwrap();
+}

@@ -174,6 +174,15 @@ result. `TensorVectorSpace::is_single_precision` reports the storage
 precision. Dividing in `f64` and converting once would avoid the error but
 needs a cast in the tensor layer, which these closed forms do not have.
 
+The coefficients themselves are converted the same way wherever they are
+applied: in the closed-form residual `b - a0 x`, in every GMRES, CG and
+BiCGSTAB step, and in `relative_linear_system_residual`. So for
+single-precision vectors core `gmres_affine` rejects an `a0` or `a1` outside
+the `f32` range as `InvalidOptions`, and `square_linsolve` and
+`relative_linear_system_residual` reject it as `InvalidConfiguration` when a
+node of their networks is single precision. `2^100 / (2^128 + 2^128 i)` has
+factors in the `f32` range, but `a0` is not, so it is rejected.
+
 ## Tests
 
 The tests run the actual dispatch rather than option storage:

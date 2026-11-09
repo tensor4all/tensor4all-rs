@@ -187,7 +187,7 @@ impl GmresOpProfile {
     fn print(&self, id: usize, iterations: usize, residual_norm: f64, converged: bool) {
         let total = self.started.elapsed();
         let other = total.saturating_sub(self.measured());
-        eprintln!(
+        let report = format!(
             "T4A gmres_op_profile #{id}: iterations={iterations} residual={residual_norm:.6e} converged={converged} total_ms={:.3} apply_ms={:.3} apply_calls={} inner_ms={:.3} inner_calls={} axpby_ms={:.3} axpby_calls={} norm_ms={:.3} norm_calls={} scale_ms={:.3} scale_calls={} update_ms={:.3} update_calls={} triangular_ms={:.3} triangular_calls={} b_norm_ms={:.3} other_ms={:.3}",
             total.as_secs_f64() * 1000.0,
             self.apply.as_secs_f64() * 1000.0,
@@ -207,7 +207,17 @@ impl GmresOpProfile {
             self.b_norm.as_secs_f64() * 1000.0,
             other.as_secs_f64() * 1000.0,
         );
+        eprintln!("{report}");
+        #[cfg(test)]
+        LAST_GMRES_PROFILE.with(|last| *last.borrow_mut() = Some(report));
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The last profile line printed on this thread, for tests of the counts.
+    static LAST_GMRES_PROFILE: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Options for GMRES solver.
@@ -1051,9 +1061,10 @@ where
 /// Returns [`KrylovError::InvalidOptions`] when an option is invalid
 /// (including a `max_iter` whose Krylov workspace cannot be allocated),
 /// [`KrylovError::InvalidOptions`] also when `a0` or `a1` has a NaN or
-/// infinite component, checked before the zero-RHS return, or when an untracked
-/// `a1 = 0` and single-precision `b` need a factor of `1 / a0` outside the `f32`
-/// range,
+/// infinite component, checked before the zero-RHS return, when `b` or `x0` is
+/// single precision and `a0` or `a1` is outside the `f32` range, or when an
+/// untracked `a1 = 0` and single-precision `b` need a factor of `1 / a0` outside
+/// the `f32` range,
 /// [`KrylovError::NoAffineCoefficient`] when both affine coefficients are zero,
 /// and [`KrylovError::Operation`] when the operator application, vector-space
 /// arithmetic, or a backend call fails. Non-convergence is reported through the
@@ -1092,9 +1103,10 @@ where
 /// Returns [`KrylovError::InvalidOptions`] when an option is invalid
 /// (including a `max_iter` whose Krylov workspace cannot be allocated),
 /// [`KrylovError::InvalidOptions`] also when `a0` or `a1` has a NaN or
-/// infinite component, checked before the zero-RHS return, or when an untracked
-/// `a1 = 0` and single-precision `b` need a factor of `1 / a0` outside the `f32`
-/// range,
+/// infinite component, checked before the zero-RHS return, when `b` or `x0` is
+/// single precision and `a0` or `a1` is outside the `f32` range, or when an
+/// untracked `a1 = 0` and single-precision `b` need a factor of `1 / a0` outside
+/// the `f32` range,
 /// [`KrylovError::NoAffineCoefficient`] when both affine coefficients are zero,
 /// and [`KrylovError::Operation`] when the operator application, vector-space
 /// arithmetic, or a backend call fails. Non-convergence is reported through the
@@ -1178,6 +1190,21 @@ where
             }));
         }
     }
+    // `scale` and `axpby` convert a coefficient to the storage precision, so
+    // single-precision vectors need both coefficients in the `f32` range.
+    if b.is_single_precision() || x0.is_single_precision() {
+        for (name, value) in [("a0", &a0), ("a1", &a1)] {
+            if !value.is_in_single_precision_range() {
+                return Err(anyhow::Error::new(KrylovError::InvalidOptions {
+                    solver: "gmres",
+                    reason: format!(
+                        "{name} = {value:?} is outside the f32 range of the single-precision \
+                         vectors"
+                    ),
+                }));
+            }
+        }
+    }
 
     let started = Instant::now();
     let b_norm = b.norm()?;
@@ -1219,12 +1246,28 @@ where
         }
         // The closed form can lose a subnormal quotient component, so the
         // residual is measured rather than assumed to be zero.
+        let started = Instant::now();
+        let affine_x = solution.scale(a0.clone())?;
+        if profile_enabled {
+            profile.scale += started.elapsed();
+            profile.scale_calls += 1;
+        }
+        let started = Instant::now();
         let residual = b.axpby(
             AnyScalar::new_real(1.0),
-            &solution.scale(a0.clone())?,
+            &affine_x,
             AnyScalar::new_real(-1.0),
         )?;
+        if profile_enabled {
+            profile.axpby += started.elapsed();
+            profile.axpby_calls += 1;
+        }
+        let started = Instant::now();
         let residual_norm = residual.norm()?;
+        if profile_enabled {
+            profile.norm += started.elapsed();
+            profile.norm_calls += 1;
+        }
         finish!(GmresResult {
             solution,
             iterations: 0,

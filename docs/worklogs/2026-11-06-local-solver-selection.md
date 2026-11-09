@@ -127,7 +127,11 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
 - Both identity-only closed forms reject single-precision entries when a
   factor of `1 / a0` is outside the `f32` range
   (`2^100 / (2^200 + 2^200 i)`), and still divide when every factor is in
-  range.
+  range. With single-precision vectors or networks, an `a0` or `a1` outside
+  the `f32` range is rejected before any solve or residual evaluation
+  (`a0 = 2^128 + 2^128 i`, `a1 = 1e300`).
+- The closed-form GMRES profile counts its residual work (one more `scale`,
+  one `axpby`, one `norm`), and a test checks the counts.
 - Core `gmres_affine` rejects a non-finite `a0` or `a1` before the zero-RHS
   and closed-form returns, and its closed form reports the measured residual
   of the returned solution (`2^-1074 / (0.3 + 0.2 i)` rounds to zero and is

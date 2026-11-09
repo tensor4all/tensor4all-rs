@@ -589,6 +589,42 @@ fn gmres_affine_closed_form_rejects_factors_outside_the_single_precision_range()
         result.solution.to_vec::<f32>().unwrap(),
         vec![2.0_f32.powi(98)]
     );
+
+    // The factors of 1 / (2^128 + 2^128 i) are in the f32 range, but a0 itself
+    // is not, and the residual and the iteration convert it to f32. The same
+    // holds for a1 on the iterative path.
+    let error = solve(AnyScalar::new_complex(pow2(128), pow2(128))).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::InvalidOptions {
+                solver: "gmres",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("a0 = "), "{error}");
+    let error = gmres_affine(
+        |x: &IdxTensor| Ok(x.clone()),
+        &b,
+        &x0,
+        AnyScalar::new_real(1.0),
+        AnyScalar::new_real(1e300),
+        &options,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            KrylovError::InvalidOptions {
+                solver: "gmres",
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("a1 = "), "{error}");
 }
 
 #[test]
@@ -736,6 +772,18 @@ fn gmres_affine_profile_covers_scalar_shortcut() {
     assert!(result.converged);
     assert_eq!(result.iterations, 0);
     assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![1.0, 2.0]);
+    // One factor of 1 / a0, then the residual: a0 x, b - a0 x and its norm.
+    let report = super::LAST_GMRES_PROFILE
+        .with(|last| last.borrow().clone())
+        .unwrap();
+    for count in [
+        "scale_calls=2 ",
+        "axpby_calls=1 ",
+        "norm_calls=1 ",
+        "apply_calls=0 ",
+    ] {
+        assert!(report.contains(count), "{count}: {report}");
+    }
 }
 
 #[test]
