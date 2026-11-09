@@ -1665,7 +1665,12 @@ where
         .into())
     }
 
-    /// Replace multiple external indices.
+    /// Replace multiple external indices simultaneously, including swaps and
+    /// cycles.
+    ///
+    /// Every mapping is matched against the original true indices, so a target
+    /// that is also a source (for example `[a, b] -> [b, a]`) is not renamed
+    /// twice. Only the mappings change; the internal MPO tensors do not.
     fn replace_indices(
         &self,
         old_indices: &[Self::Index],
@@ -1679,9 +1684,17 @@ where
             )
             .into());
         }
-        let mut seen = HashSet::new();
-        for old in old_indices {
-            if !seen.insert(old.clone()) {
+        let mut replacements = HashMap::with_capacity(old_indices.len());
+        for (old, new) in old_indices.iter().zip(new_indices) {
+            if old.dim() != new.dim() {
+                return Err(anyhow::anyhow!(
+                    "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
+                    old.dim(),
+                    new.dim()
+                )
+                .into());
+            }
+            if replacements.insert(old.clone(), new.clone()).is_some() {
                 return Err(anyhow::anyhow!(
                     "Duplicate old index {:?} in LinearOperator::replace_indices",
                     old.id()
@@ -1691,8 +1704,24 @@ where
         }
 
         let mut result = self.clone();
-        for (old, new) in old_indices.iter().zip(new_indices.iter()) {
-            result = result.replaceind(old, new)?;
+        let mut found = HashSet::with_capacity(replacements.len());
+        for mapping in result
+            .input_mapping
+            .values_mut()
+            .chain(result.output_mapping.values_mut())
+            .flatten()
+        {
+            if let Some((old, new)) = replacements.get_key_value(&mapping.true_index) {
+                found.insert(old);
+                mapping.true_index = new.clone();
+            }
+        }
+        if let Some(missing) = old_indices.iter().find(|old| !found.contains(old)) {
+            return Err(anyhow::anyhow!(
+                "Index {:?} not found in LinearOperator mappings",
+                missing.id()
+            )
+            .into());
         }
         Ok(result)
     }

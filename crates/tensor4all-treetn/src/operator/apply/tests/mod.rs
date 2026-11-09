@@ -11,6 +11,8 @@ use tensor4all_core::index::{DynId, Index, TagSet};
 use tensor4all_core::{ColMajorArrayRef, IdxTensor, SvdTruncationPolicy, TensorContractionLike};
 use tensor4all_tensorbackend::StorageKind;
 
+mod simultaneous_replace;
+
 type DynIndex = Index<DynId, TagSet>;
 type ChainStateAndIdentity = (
     TreeTN<IdxTensor, String>,
