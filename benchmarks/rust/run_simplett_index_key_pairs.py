@@ -195,7 +195,8 @@ def read_cells(criterion_home, baseline):
     return cells
 
 
-def run_arm(binary, arm, round_no, out, cpu, bench_filter):
+def run_arm(binary, arm, round_no, out, cpu, bench_filter, sink=None):
+    """Time one arm; on failure append the record to `sink` so its observations survive."""
     label = f"{arm}-r{round_no}"
     criterion_home = out / "criterion" / label
     env = dict(os.environ, **THREAD_ENV, CRITERION_HOME=str(criterion_home))
@@ -217,6 +218,8 @@ def run_arm(binary, arm, round_no, out, cpu, bench_filter):
         "elapsed_seconds": elapsed, "before": before, "after": after,
     }
     if proc.returncode != 0:
+        if sink is not None:
+            sink.append(run_record)
         raise SystemExit(f"{label} exited with {proc.returncode}; see logs/{label}.txt")
     run_record["cells"] = read_cells(criterion_home, label)
     return run_record
@@ -322,7 +325,7 @@ def write_evidence(out, protocol, runs):
         writer = csv.writer(fh)
         writer.writerow(["case", "arm", "round", "mean_ns", "ci95_low_ns", "ci95_high_ns"])
         for r in runs:
-            for cell in sorted(r["cells"]):
+            for cell in sorted(r.get("cells", {})):
                 v = r["cells"][cell]
                 writer.writerow([cell, r["arm"], r["round"], v["mean_ns"], v["ci95_low_ns"], v["ci95_high_ns"]])
 
@@ -407,14 +410,18 @@ def main():
         raise SystemExit(f"idle check failed (load above {args.idle_max_load}); nothing was timed")
 
     runs = []
-    for round_no, order in enumerate(ROUND_ORDERS, start=1):
-        for arm in order:
-            record = run_arm(binaries[arm], arm, round_no, out, args.cpu, args.filter)
-            runs.append(record)
-            print(f"round {round_no} {arm}: {len(record['cells'])} cells, "
-                  f"load {record['before']['loadavg'][0]:.2f} -> {record['after']['loadavg'][0]:.2f}", flush=True)
+    try:
+        for round_no, order in enumerate(ROUND_ORDERS, start=1):
+            for arm in order:
+                record = run_arm(binaries[arm], arm, round_no, out, args.cpu, args.filter, runs)
+                runs.append(record)
+                print(f"round {round_no} {arm}: {len(record['cells'])} cells, "
+                      f"load {record['before']['loadavg'][0]:.2f} -> {record['after']['loadavg'][0]:.2f}", flush=True)
+    finally:
+        # A refused run keeps what it measured: a failed arm has no cells, so the
+        # summarizing checks below stay out of this path.
+        write_evidence(out, protocol, runs)
 
-    write_evidence(out, protocol, runs)
     cell_count = require_same_cells(out, runs)
     complete = cell_count == FULL_CELL_COUNT and args.filter == "cache_keys"
 

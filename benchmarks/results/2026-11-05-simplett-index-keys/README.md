@@ -150,8 +150,10 @@ identical, runs the fixed 120-second idle check, then times the
 `cache_keys` group in the three rotated arm orders under the thread
 environment above. It records the toolchain, host, binary hashes, load and
 thermal observations, raw Criterion samples, and applies the gates. The archive
-is written before the cell-set check, so a rejected suite keeps the run records
-that diagnosis needs:
+is written before the cell-set check and in a `finally`, so a rejected suite keeps
+the run records that diagnosis needs, including the record of an arm whose own
+subprocess exited non-zero (that record carries its load and thermal observations
+and no cells):
 
 ```sh
 python3 benchmarks/rust/run_simplett_index_key_pairs.py --output <new-directory>
@@ -170,7 +172,10 @@ INCONCLUSIVE, so throttling is distinguishable from host load; a narrower
 `noise_pass.thermal`. Platforms that record no speed limit cannot fail that
 gate, and on this platform `thermal_snapshot` reports `unavailable on this
 platform` for anything other than macOS.
-`benchmarks/rust/test_run_simplett_index_key_pairs.py` covers all three cases.
+`benchmarks/rust/test_run_simplett_index_key_pairs.py` covers all three cases,
+plus a failed arm that is archived with its observations and still refused. It
+stubs the git and host seams, so it needs neither the pinned revisions nor this
+host to run.
 
 Before timing, a quiet-host run must pass the recorded idle and noise checks.
 Preserve full suites, confidence intervals, host observations and invalid runs;

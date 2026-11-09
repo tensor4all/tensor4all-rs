@@ -1,8 +1,11 @@
 """Regression tests for the noise, thermal and evidence decisions in the paired driver."""
 
+import contextlib
 import gzip
+import hashlib
 import json
 import pathlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -22,6 +25,14 @@ CASES = [
     ]
 ]
 MEANS_NS = {"original": 100.0, "shared": 110.0, "final": 80.0}
+
+
+# The tests stub the git and host seams, so they need neither this checkout's history
+# nor this machine's load, and the harness blob can differ from the recorded one.
+HARNESS_BYTES = b"harness source"
+OBSERVATION = {"time": 0.0, "loadavg": [0.0, 0.0, 0.0], "thermal": "CPU_Speed_Limit = 100"}
+HOST = {"platform": "test", "machine": "test", "logical_cpus": 1, "python": "3"}
+REAL_RUN = subprocess.run
 
 
 def thermal(speed_limit):
@@ -46,6 +57,58 @@ def runs(speed_limit):
                     }
             records.append({"round": round_no, "arm": arm, "before": observation, "after": observation, "cells": cells})
     return records
+
+
+def fake_subprocess_run(cmd, **kwargs):
+    """Answer the driver's `git cat-file`/`git show` probes from constants."""
+    if cmd[0] == "git":
+        blob = HARNESS_BYTES if cmd[1] == "show" else b""
+        return subprocess.CompletedProcess(cmd, 0, stdout=blob, stderr=b"")
+    return REAL_RUN(cmd, **kwargs)
+
+
+def fake_build_arm(repo, arm, rev, harness_bytes, work, target_dir, failing=None):
+    for path in (work / "src", work / "target", work / "bin"):
+        path.mkdir(parents=True, exist_ok=True)
+    binary = work / "bin" / arm
+    exit_code = 3 if arm == failing else 0
+    binary.write_text(f"#!/bin/sh\nexit {exit_code}\n")
+    binary.chmod(0o755)
+    return {
+        "commit": rev, "harness_sha256": driver.HARNESS_SHA256, "harness_overlaid": False,
+        "binary_sha256": f"binary-{arm}", "rustc": "rustc", "cargo": "cargo",
+    }, binary
+
+
+def fake_idle_check(seconds, max_load):
+    return {"seconds": seconds, "maximum_load_1m": max_load,
+            "before": OBSERVATION, "after": OBSERVATION, "passed": True}
+
+
+def run_main(tmp, build_arm=fake_build_arm, **overrides):
+    """Drive `main` against a temporary output directory with the seams stubbed."""
+    out = pathlib.Path(tmp) / "run"
+    # `--repo` points at a directory without history: the git seam is stubbed, so
+    # neither a shallow checkout nor a different host can fail this test.
+    argv = ["driver", "--output", str(out), "--repo", str(pathlib.Path(tmp) / "no-checkout")]
+    patches = {
+        "HARNESS_SHA256": hashlib.sha256(HARNESS_BYTES).hexdigest(),
+        "build_arm": build_arm,
+        "idle_check": fake_idle_check,
+        "observe": lambda: OBSERVATION,
+        "host_description": lambda: HOST,
+    }
+    patches.update(overrides)
+    with mock.patch.object(subprocess, "run", fake_subprocess_run), \
+            mock.patch.object(sys, "argv", argv):
+        with contextlib.ExitStack() as stack:
+            for name, value in patches.items():
+                stack.enter_context(mock.patch.object(driver, name, value))
+            try:
+                driver.main()
+            except SystemExit as err:
+                return out, err
+    raise AssertionError("main returned without refusing")
 
 
 class ThermalGateTests(unittest.TestCase):
@@ -79,31 +142,10 @@ class EvidenceArchiveTests(unittest.TestCase):
         records[-1]["cells"].pop(missing)
         pending = list(records)
 
-        def fake_build_arm(repo, arm, rev, harness_bytes, work, target_dir):
-            for path in (work / "src", work / "target", work / "bin"):
-                path.mkdir(parents=True, exist_ok=True)
-            binary = work / "bin" / arm
-            binary.write_text(arm)
-            return {
-                "commit": rev, "harness_sha256": driver.HARNESS_SHA256, "harness_overlaid": False,
-                "binary_sha256": f"binary-{arm}", "rustc": "rustc", "cargo": "cargo",
-            }, binary
-
-        def fake_idle_check(seconds, max_load):
-            observation = driver.observe()
-            return {"seconds": seconds, "maximum_load_1m": max_load,
-                    "before": observation, "after": observation, "passed": True}
-
         with tempfile.TemporaryDirectory() as tmp:
-            out = pathlib.Path(tmp) / "run"
-            with mock.patch.object(driver, "build_arm", fake_build_arm), \
-                    mock.patch.object(driver, "run_arm", lambda *a: pending.pop(0)), \
-                    mock.patch.object(driver, "idle_check", fake_idle_check), \
-                    mock.patch.object(sys, "argv", ["driver", "--output", str(out)]):
-                with self.assertRaises(SystemExit) as caught:
-                    driver.main()
-            self.assertTrue(caught.exception.code)
-            self.assertIn("experiment.json.gz", str(caught.exception.code))
+            out, err = run_main(tmp, run_arm=lambda *a: pending.pop(0))
+            self.assertTrue(err.code)
+            self.assertIn("experiment.json.gz", str(err.code))
             self.assertFalse((out / "summary.json").exists(), "a rejected experiment must not summarize")
             archived = json.loads(gzip.open(out / "experiment.json.gz", "rt").read())
 
@@ -111,6 +153,25 @@ class EvidenceArchiveTests(unittest.TestCase):
         self.assertNotIn(missing, archived["runs"][-1]["cells"])
         self.assertEqual(archived["runs"][0]["before"]["loadavg"], [0.0, 0.0, 0.0])
         self.assertIn("CPU_Speed_Limit = 100", archived["runs"][0]["after"]["thermal"])
+
+    def test_failed_arm_is_archived_and_still_refused(self):
+        # Two arms succeed, then the third one's own subprocess fails, so `run_arm`
+        # never attaches cells for it; all three records must reach the archive.
+        with tempfile.TemporaryDirectory() as tmp:
+            out, err = run_main(tmp, build_arm=lambda *a: fake_build_arm(*a, failing="final"))
+            self.assertEqual(str(err.code), "final-r1 exited with 3; see logs/final-r1.txt")
+            self.assertTrue((out / "experiment.json.gz").exists(),
+                            "a failed arm must keep its observations")
+            self.assertFalse((out / "summary.json").exists(), "a failed arm must not summarize")
+            archived = json.loads(gzip.open(out / "experiment.json.gz", "rt").read())
+
+        self.assertEqual([(r["arm"], r["round"], r["exit_code"]) for r in archived["runs"]],
+                         [("original", 1, 0), ("shared", 1, 0), ("final", 1, 3)])
+        self.assertIn("cells", archived["runs"][0], "a completed arm keeps its cell mapping")
+        self.assertNotIn("cells", archived["runs"][-1], "a failed arm has no cells to summarize")
+        self.assertEqual(archived["runs"][-1]["after"]["loadavg"], [0.0, 0.0, 0.0])
+        self.assertIn("CPU_Speed_Limit = 100", archived["runs"][-1]["before"]["thermal"])
+        self.assertEqual(archived["protocol"]["host"], HOST)
 
 
 if __name__ == "__main__":
