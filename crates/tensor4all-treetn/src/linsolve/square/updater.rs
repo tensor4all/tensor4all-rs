@@ -21,6 +21,7 @@ use tensor4all_core::{
 };
 
 use super::local_linop::LocalLinOp;
+use super::pow2_scaling;
 use super::projected_state::ProjectedState;
 use crate::linsolve::common::{
     GmresToleranceMode, LinsolveOptions, ProjectedOperator, ResidualEnrichment,
@@ -589,107 +590,114 @@ where
             let applied = linop.apply_projected(&two_site)?;
             residual = residual.axpby(one, &applied, -self.options.a1.clone())?;
         }
-        // Rescale `b_local` and the residual by one exact power of two so that
-        // their largest modulus `unit` lies in `[2^-SCALE_EXP, 2^SCALE_EXP]`.
-        // `||b_local||`, the overlap with the src basis, the residual singular
-        // values and `cutoff * ||b_local||` can each overflow (or underflow)
-        // in the original units although every entry is finite; in these
-        // units they cannot. Scaling happens before the projection, so the
-        // overlap stays finite. A power of two is exact unless it pushes an
-        // entry below the smallest subnormal: scaling up never does, and
-        // scaling down only happens when `unit > 2^SCALE_EXP` and stops near
-        // `2^SCALE_EXP`, so only entries more than `2^(SCALE_EXP + 1074)`
-        // below `unit` are lost. A zero cutoff therefore keeps every
-        // representable nonzero direction, including subnormal ones.
-        // The largest modulus itself overflows for a complex entry whose
-        // finite parts give a modulus above `f64::MAX`; halve first then.
-        const SCALE_EXP: i32 = 256;
-        let mut rhs = rhs;
-        let mut unit = rhs.maxabs()?.max(residual.maxabs()?);
-        if unit.is_infinite() {
-            let half = AnyScalar::new_real(0.5);
-            rhs = rhs.scale(half.clone())?;
-            residual = residual.scale(half)?;
-            unit = rhs.maxabs()?.max(residual.maxabs()?);
-        }
-        anyhow::ensure!(
-            unit.is_finite(),
-            "residual enrichment: the local RHS or residual has a non-finite entry"
-        );
-        if unit == 0.0 {
+        // Residual directions are found by deflation: project the residual
+        // out of the current basis, take the leading left singular vectors of
+        // what is left, then repeat on the remainder with the new directions
+        // as the basis, until the budget is spent or nothing above the cutoff
+        // is left. Each tensor carries its own power-of-two exponent
+        // (`pow2_scaling`), so no common unit has to hold `b_local`, the
+        // residual and every residual direction at once:
+        // - the projection runs in the units of the residual and shrinks it,
+        //   minimally, only when the overlap overflows;
+        // - each SVD sees its remainder normalized to a largest modulus in
+        //   `[1, 2)`, so a direction far below the leading one in the
+        //   original units (even a subnormal one) is a normal number in a
+        //   later round, which an SVD backend that flushes subnormal singular
+        //   values to zero (faer) still resolves;
+        // - `cutoff * ||b_local||` is compared in each round's units.
+        // A zero cutoff thus keeps every nonzero direction up to the budget,
+        // except entries more than about `2^1074` below the largest one of
+        // the same remainder, which no single exponent can hold.
+        let Some((rhs_scaled, rhs_exp)) = pow2_scaling::normalize(rhs)? else {
             return Ok(());
-        }
-        let exponent = unit.log2().floor() as i32;
-        let shift = if exponent >= SCALE_EXP {
-            SCALE_EXP - 1 - exponent
-        } else if exponent < -SCALE_EXP {
-            -exponent
-        } else {
-            0
         };
-        if shift != 0 {
-            // `shift` lies in [-1024 + SCALE_EXP, 1074]; split it so each
-            // factor `2^k` is a normal f64.
-            let pow2 = |k: i32| AnyScalar::new_real(f64::from_bits(((k + 1023) as u64) << 52));
-            for k in [shift / 2, shift - shift / 2] {
-                rhs = rhs.scale(pow2(k))?;
-                residual = residual.scale(pow2(k))?;
+        let rhs_norm = rhs_scaled.norm()?;
+        let (mut remainder, mut remainder_exp) = pow2_scaling::finite_modulus(residual)?;
+        // A threshold below this, in units where the remainder's largest
+        // modulus is in [1, 2), may hide singular values the SVD flushes to
+        // zero; only then is another round needed.
+        let resolution = pow2_scaling::ldexp(1.0, -1000);
+        let mut projector = basis.clone();
+        let mut directions: Vec<T> = Vec::new();
+        let mut direction_bonds: Vec<T::Index> = Vec::new();
+        let mut added = 0;
+        while added < budget {
+            (remainder, remainder_exp) =
+                pow2_scaling::project_out(&projector, &remainder, remainder_exp)?;
+            let Some((normalized, normalized_exp)) = pow2_scaling::normalize(remainder.clone())?
+            else {
+                break;
+            };
+            // The enrichment cutoff is the only selection rule: pass it to the
+            // SVD as an explicit absolute per-value policy, so the global
+            // default policy is not involved. A zero cutoff keeps every
+            // nonzero direction whatever `||b_local||` is.
+            let threshold = if enrichment.cutoff == 0.0 {
+                0.0
+            } else {
+                pow2_scaling::ldexp(
+                    enrichment.cutoff * rhs_norm,
+                    rhs_exp - (remainder_exp + normalized_exp),
+                )
+            };
+            // Every singular value is at most the Frobenius norm, at most
+            // `2 * sqrt(len)` here, so an overflowing threshold exceeds them
+            // all.
+            if !threshold.is_finite() {
+                break;
+            }
+            let svd = normalized.factorize(
+                &src_side,
+                &FactorizeOptions::svd()
+                    .with_canonical(Canonical::Left)
+                    .with_svd_policy(SvdTruncationPolicy::new(threshold).with_absolute())
+                    .with_max_bond_dim(budget - added),
+            )?;
+            // The SVD keeps at least one direction; drop it when even the
+            // leading singular value is at most the cutoff.
+            let leading = svd
+                .singular_values
+                .as_ref()
+                .and_then(|values| values.first().copied())
+                .ok_or_else(|| anyhow::anyhow!("SVD did not report singular values"))?;
+            if leading <= threshold {
+                break;
+            }
+            added += svd.bond_index.dim();
+            projector = svd.left.clone();
+            directions.push(svd.left);
+            direction_bonds.push(svd.bond_index);
+            if threshold >= resolution {
+                break;
             }
         }
-        let rhs_norm = rhs.norm()?;
-        // Remove the component already representable in the current src basis.
-        let overlap = T::contract(&[&basis.conj(), &residual])?;
-        let residual = residual.sub(&T::contract(&[&basis, &overlap])?)?;
-
-        // The enrichment cutoff is the only selection rule: pass it to the SVD
-        // as an explicit absolute per-value policy, so neither the global
-        // default policy nor a second factorization is involved.
-        // A zero cutoff keeps every nonzero direction whatever `||b_local||`
-        // is, so it does not depend on that norm.
-        let threshold = if enrichment.cutoff == 0.0 {
-            0.0
-        } else {
-            enrichment.cutoff * rhs_norm
-        };
-        // In these units every projected residual singular value is at most
-        // its Frobenius norm, about `sqrt(len) * 2^SCALE_EXP` and finite, so an
-        // overflowing threshold exceeds them all and nothing is added.
-        if !threshold.is_finite() {
-            return Ok(());
-        }
-        let svd = residual.factorize(
-            &src_side,
-            &FactorizeOptions::svd()
-                .with_canonical(Canonical::Left)
-                .with_svd_policy(SvdTruncationPolicy::new(threshold).with_absolute())
-                .with_max_bond_dim(budget),
-        )?;
-        // The SVD keeps at least one direction; drop it when even the leading
-        // singular value is at most the cutoff.
-        let leading = svd
-            .singular_values
-            .as_ref()
-            .and_then(|values| values.first().copied())
-            .ok_or_else(|| anyhow::anyhow!("SVD did not report singular values"))?;
-        if leading <= threshold {
+        if directions.is_empty() {
             return Ok(());
         }
 
         // The residual directions are complex when `b` or `A` is complex
         // although the basis may be real (a real initial guess); the direct
-        // sum needs one scalar type, so promote the real operand.
+        // sum needs one scalar type, so promote the real operands.
         let complex_one = AnyScalar::new_complex(1.0, 0.0);
-        let (basis, left) = match (
+        let (basis, directions) = match (
             basis.inner_product(&basis)?.is_complex(),
-            svd.left.inner_product(&svd.left)?.is_complex(),
+            directions[0].inner_product(&directions[0])?.is_complex(),
         ) {
-            (false, true) => (basis.scale(complex_one)?, svd.left),
-            (true, false) => (basis, svd.left.scale(complex_one)?),
-            _ => (basis, svd.left),
+            (false, true) => (basis.scale(complex_one)?, directions),
+            (true, false) => (
+                basis,
+                directions
+                    .iter()
+                    .map(|direction| direction.scale(complex_one.clone()))
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            ),
+            _ => (basis, directions),
         };
-        let stacked = basis.direct_sum(&left, &[(bond, svd.bond_index)])?.tensor;
+        let operands: Vec<&T> = std::iter::once(&basis).chain(directions.iter()).collect();
+        let group: Vec<T::Index> = std::iter::once(bond).chain(direction_bonds).collect();
+        let stacked = T::direct_sum_many(&operands, &[group])?.tensor;
         // Re-orthonormalize: the new directions are orthogonal to the old
-        // basis only up to rounding.
+        // basis and to each other only up to rounding.
         let enlarged = stacked.factorize_full_rank(&src_side, FactorizeAlg::QR, Canonical::Left)?;
         let new_center = T::contract(&[&enlarged.left.conj(), &two_site])?;
 

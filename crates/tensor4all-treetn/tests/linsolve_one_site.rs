@@ -746,11 +746,16 @@ fn enrichment_cutoff_zero_keeps_the_smallest_subnormal_direction() {
 #[test]
 fn enrichment_cutoff_zero_keeps_a_subnormal_direction_beside_larger_entries() {
     // Normalizing by the largest entry would shrink the |22> direction below
-    // the smallest subnormal and round it to zero; a zero cutoff keeps it.
+    // the smallest subnormal and round it to zero, and an SVD backend may
+    // flush a subnormal singular value to zero (faer does); a zero cutoff
+    // keeps it anyway. The last two cases have no common power of two that
+    // holds both residual directions as normal numbers.
     for rhs in [
         [1.0, 4.0, f64::from_bits(1)],
         [1.0, 1e200, 1e-200],
         [1.0, 1e-300, f64::from_bits(1)],
+        [1.0, 1e300, 1e-200],
+        [1.0, f64::MAX, f64::from_bits(1)],
     ] {
         let step = EnrichmentStep {
             rhs: rhs.map(Complex64::from),
@@ -764,6 +769,18 @@ fn enrichment_cutoff_zero_keeps_a_subnormal_direction_beside_larger_entries() {
         assert_eq!(bond_dim(&state), 3, "rhs = {rhs:?}");
         assert!(distance_from_00(&state, &sites) < 1e-12);
     }
+    // A subnormal residual direction alone, far below `b_local`, is added.
+    let step = EnrichmentStep {
+        rhs: [1.0, 0.0, f64::from_bits(1)].map(Complex64::from),
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let enrichment = ResidualEnrichment::default()
+        .with_max_added(2)
+        .with_cutoff(0.0);
+    let (state, sites) = step.run(enrichment).unwrap();
+    assert_eq!(bond_dim(&state), 2);
+    assert!(distance_from_00(&state, &sites) < 1e-12);
 }
 
 #[test]
