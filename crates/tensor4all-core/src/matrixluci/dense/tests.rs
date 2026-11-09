@@ -411,8 +411,12 @@ fn assert_selection_bits_equal(
     }
 }
 
-/// With no truncation the faer call is the factorization the backend path performed, so the pivots,
-/// the rank and the error history are unchanged bit for bit.
+/// Within one lock, the direct faer call reproduces the `full_piv_lu_matrix_owned` + diagonal-scan
+/// path it replaced, bit for bit: the pivots, the rank and the error history.
+///
+/// What this cannot prove is the cross-version claim. Both sides of the comparison are built against
+/// the faer in this lock, so a change between 0.28.2 and 0.33.0 would move them together; that claim
+/// rests on the measurement taken while the lock still held 0.28.2 and is not re-derivable here.
 #[test]
 fn square_kernel_keeps_the_previous_selection_bit_for_bit() {
     for n in [1usize, 2, 8, 37, 64] {
@@ -443,6 +447,94 @@ fn square_kernel_keeps_the_previous_selection_bit_for_bit() {
             );
         }
     }
+}
+
+/// The residual a capped run reports is the pivot the untruncated factorization would take next,
+/// for a complex matrix whose trailing block disagrees with every hand-derived rule: of
+/// `3` and `2.5 + 2.5i` the largest modulus (`3.54`) and the largest `abs1` (`5`) both name the
+/// complex entry, and faer picks `3`.
+#[test]
+fn a_capped_complex_run_reports_the_next_pivot_faer_would_take() {
+    let data = [
+        Complex64::new(10.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(3.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(2.5, 2.5),
+    ];
+    let uncapped = PivotKernelOptions::no_truncation();
+    let (full, _) = square_selection(&data, 3, &uncapped);
+    assert_eq!(full.pivot_errors, vec![10.0, 3.0, 3.5355339059327378, 0.0]);
+
+    for cap in [1usize, 2] {
+        let options = PivotKernelOptions {
+            max_bond_dim: cap,
+            ..uncapped
+        };
+        let (selection, pivots) = square_selection(&data, 3, &options);
+        assert_eq!(pivots, cap, "cap={cap}: the cap stops the elimination");
+        assert_selection_bits_equal(
+            &selection,
+            &previous_square_selection(&data, 3, &options),
+            &format!("c64 cap={cap}"),
+        );
+    }
+
+    // The value the residual must carry, stated directly: the next diagonal of the untruncated
+    // run, which is `3` and not the trailing block's largest modulus.
+    let options = PivotKernelOptions {
+        max_bond_dim: 1,
+        ..uncapped
+    };
+    assert_eq!(
+        square_selection(&data, 3, &options).0.pivot_errors,
+        vec![10.0, 3.0]
+    );
+}
+
+/// A subnormal trailing block stops faer before the rank cap does, so the capped run must report
+/// what the untruncated run reports - the trailing diagonal - instead of consuming that stop's
+/// residual as one more pivot. `diag(1e-308, 9e-309, 8e-309)` capped at 2 keeps two pivots; the
+/// residual-as-pivot reading returned rank 1 with a `0.0` error.
+#[test]
+fn a_subnormal_stop_before_the_cap_keeps_the_previous_selection() {
+    let data = [
+        1e-308f64, 0.0, 0.0, // column 0
+        0.0, 9e-309, 0.0, // column 1
+        0.0, 0.0, 8e-309, // column 2
+    ];
+    let uncapped = PivotKernelOptions::no_truncation();
+    for cap in [1usize, 2, 3] {
+        let options = PivotKernelOptions {
+            max_bond_dim: cap,
+            ..uncapped
+        };
+        let (selection, pivots) = square_selection(&data, 3, &options);
+        assert_eq!(
+            pivots,
+            if cap < 3 { 0 } else { 3 },
+            "cap={cap}: faer stopped before the cap"
+        );
+        assert_selection_bits_equal(
+            &selection,
+            &previous_square_selection(&data, 3, &options),
+            &format!("subnormal cap={cap}"),
+        );
+    }
+
+    // Stated directly, so a regression cannot hide behind both sides moving together: the caps below
+    // the matrix's rank keep every subnormal pivot the untruncated run kept.
+    let cap2 = PivotKernelOptions {
+        max_bond_dim: 2,
+        ..uncapped
+    };
+    let (selection, _) = square_selection(&data, 3, &cap2);
+    assert_eq!(selection.rank, 2);
+    assert_eq!(selection.pivot_errors, vec![1e-308, 9e-309, 8e-309]);
 }
 
 /// A rank cap stops the factorization at the cap: the number of pivots actually taken is the cap,

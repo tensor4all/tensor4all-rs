@@ -118,17 +118,19 @@ impl DenseLuKernel {
 
     /// Complete-pivoting LU of a square input, stopped once the rank cap is met.
     ///
-    /// Returns the selection together with the number of pivots the factorization actually took,
-    /// which is the evidence that a rank cap stops the elimination instead of factoring to full
-    /// rank and truncating afterwards.
+    /// Returns the selection together with the number of pivots the rank cap accepted, which is the
+    /// evidence that a cap stops the elimination instead of factoring to full rank and truncating
+    /// afterwards.
     ///
-    /// The rank cap is the only bound handed to faer. The tolerance decision stays in
+    /// The rank cap is the only bound handed to faer, one pivot past the cap, so that the residual
+    /// [`Self::compute_pivot_errors`] reads from `diag_abs[rank]` is the pivot faer itself would take
+    /// next rather than a rule re-derived here. The tolerance decision stays in
     /// [`Self::compute_pivot_errors`] and runs on the pivot magnitudes this factorization produced,
-    /// for two reasons: faer rejects a pivot at *or below* its tolerance where this kernel rejects
-    /// only a strictly smaller one (`|pivot| < tol`), and a tolerance-driven stop would leave the
-    /// trailing residual below unmeasured. With every option at its no-truncation setting the call
-    /// is the same factorization the tenferro path performed (faer 0.28 and 0.33 agree bit for bit
-    /// with no option set), so the selection and `pivot_errors` are unchanged.
+    /// because faer rejects a pivot at *or below* its tolerance where this kernel rejects only a
+    /// strictly smaller one (`|pivot| < tol`). The call itself is the factorization the previous path
+    /// performed through `full_piv_lu_matrix_owned` in the same lock; the parity test compares those
+    /// two consumers of faer, which is what it can prove - the cross-version claim (0.28.2 against
+    /// 0.33.0) was measured when the lock still held 0.28.2 and cannot be re-derived from this one.
     fn factorize_square_with_faer<T: MatrixLuciScalar + faer::traits::ComplexField>(
         data: &[T],
         n: usize,
@@ -152,8 +154,17 @@ impl DenseLuKernel {
         }
 
         let cap = options.max_bond_dim.min(n);
+        // One pivot past the cap is what `compute_pivot_errors` reads as the residual
+        // (`diag_abs[rank]`), so the value comes from faer's own selection instead of a guess about
+        // its criterion: the search maximises `abs1` (`|re| + |im|` for complex), and for a tiny
+        // trailing block it does not answer the block's largest modulus either - `diag(10, 3,
+        // 2.5 + 2.5i)` capped at 1 picks 3, not the 3.53 complex entry nor its larger `abs1`. One
+        // extra elimination step costs `O((n - cap)^2)`.
+        let ask = if cap < n { cap + 1 } else { cap };
         let params = FullPivLuParams {
-            max_rank: (cap < n).then_some(cap),
+            // A `max_rank` at or above `n` still asks faer to reveal the rank it stopped at, which is
+            // how the subnormal stop below becomes visible instead of being reported as `n`.
+            max_rank: (cap < n).then_some(ask),
             ..<FullPivLuParams as Auto<T>>::auto()
         };
         let mut lu = faer::Mat::<T>::from_fn(n, n, |i, j| data[i + n * j]);
@@ -180,16 +191,13 @@ impl DenseLuKernel {
         let mut diag_abs = (0..pivots)
             .map(|i| lu[(i, i)].abs_val())
             .collect::<Vec<_>>();
-        if pivots < n {
-            // A truncated factorization leaves the trailing `(n - r) x (n - r)` block as the Schur
-            // complement of the pivots taken, so its largest magnitude is the residual an
-            // untruncated run meets next (its `U[r, r]` once complete pivoting has swapped that
-            // entry into place). `compute_pivot_errors` reads it from `diag_abs[rank]`.
-            let residual = (pivots..n)
-                .flat_map(|j| (pivots..n).map(move |i| (i, j)))
-                .map(|(i, j)| lu[(i, j)].abs_val())
-                .fold(0.0f64, f64::max);
-            diag_abs.push(residual);
+        if pivots < ask {
+            // faer stopped for its own reason - a zero or subnormal Schur complement - before it
+            // could reveal the extra pivot, and that stop predates the rank cap: the untruncated
+            // run reports `rank = n`, leaves the trailing block un-eliminated, and reading its
+            // diagonal is what the previous path did. Reproducing that diagonal keeps the
+            // subnormal contract, which the residual shortcut above would change.
+            diag_abs.extend((pivots..n).map(|i| lu[(i, i)].abs_val()));
         }
         if diag_abs.iter().any(|value| !value.is_finite()) {
             return Err(MatrixLuciError::NaNEncountered {
@@ -206,7 +214,8 @@ impl DenseLuKernel {
                 pivot_errors,
                 rank,
             },
-            pivots,
+            // The pivots the rank cap accepted, not the extra one asked for above.
+            pivots.min(cap),
         ))
     }
 }
