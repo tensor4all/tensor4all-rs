@@ -2755,6 +2755,28 @@ where
         }
     }
 
+    /// Re-stamps every cache with a fresh, small epoch, keeping the order index
+    /// exact.
+    ///
+    /// Tests use this to prove that a warm hit re-stamps the edges it serves:
+    /// without the reset the stamps of the cold call still look fresh, so the
+    /// assertion would hold either way. The stamps and the index have to move
+    /// together -- zeroing `last_used` alone leaves entries keyed by the old
+    /// epochs, which is neither the pre-call state nor a state production can
+    /// reach, and it silently inflates the index.
+    #[cfg(test)]
+    fn reset_message_cache_use_stamps(&mut self) {
+        self.message_cache_order.clear();
+        let mut epoch = 1u64;
+        for (edge, cache) in self.message_caches.iter_mut() {
+            cache.last_used = epoch;
+            if cache.key_count() > 0 {
+                self.message_cache_order.insert(epoch, edge.clone());
+            }
+            epoch += 1;
+        }
+    }
+
     fn build_message_assignment_batches(
         &self,
         plan: &RootedMessagePlan<V>,

@@ -993,9 +993,16 @@ fn message_cache_warm_hits_refresh_the_use_stamp() {
     )
     .unwrap();
     evaluator.evaluate_batched(points).unwrap();
-    for cache in evaluator.message_caches.values_mut() {
-        cache.last_used = 0;
-    }
+    let stamps_before = message_cache_stamps(&evaluator);
+    evaluator.reset_message_cache_use_stamps();
+    let stamps_reset = message_cache_stamps(&evaluator);
+    // The reset itself must leave a consistent state: one index entry per cache
+    // that holds payload, keyed by that cache's new stamp.
+    assert_message_cache_index_is_exact(&evaluator);
+    assert_ne!(
+        stamps_reset, stamps_before,
+        "the reset must change the stamps"
+    );
 
     let warm = evaluator.evaluate_batched(points).unwrap();
     assert_scalars_close(&warm, &tree.evaluate(&indices, points).unwrap());
@@ -1007,6 +1014,25 @@ fn message_cache_warm_hits_refresh_the_use_stamp() {
             .any(|cache| cache.last_used() > 0),
         "the edges that served the all-hit call must be re-stamped as used"
     );
+    // Every cache that holds payload is indexed exactly once, under its own
+    // current stamp: a re-stamp that forgot the index would leave the cache
+    // missing from it, and would leave a stale entry keyed by the old epoch.
+    assert_message_cache_index_is_exact(&evaluator);
+    // The all-hit call re-stamps the edges it serves and never moves a stamp
+    // backwards. Not every resident is served by every call, so this asserts the
+    // direction of the change, not that every edge was touched.
+    let restamped = stamps_reset
+        .iter()
+        .filter(|(edge, reset)| evaluator.message_caches[edge].last_used() > *reset)
+        .count();
+    assert!(restamped > 0, "the all-hit call re-stamped no cache at all");
+    for (edge, reset) in &stamps_reset {
+        assert!(
+            evaluator.message_caches[edge].last_used() >= *reset,
+            "{edge:?} moved backwards: {reset} -> {}",
+            evaluator.message_caches[edge].last_used()
+        );
+    }
 }
 
 /// [AI Supplied] #1183: the all-hit cut path re-stamps both directions it
@@ -1038,9 +1064,18 @@ fn message_cache_warm_cut_refreshes_both_directions() {
     evaluator
         .evaluate_batched_with_hint(points, EvaluationHint::around(1))
         .unwrap();
-    for cache in evaluator.message_caches.values_mut() {
-        cache.last_used = 0;
-    }
+    let stamps_before = [(0, 1), (1, 0)].map(|edge| {
+        (
+            edge,
+            evaluator
+                .message_caches
+                .get(&edge)
+                .map(|cache| cache.last_used()),
+        )
+    });
+    evaluator.reset_message_cache_use_stamps();
+    let stamps_reset = message_cache_stamps(&evaluator);
+    assert_message_cache_index_is_exact(&evaluator);
 
     let warm = evaluator
         .evaluate_batched_with_hint(points, EvaluationHint::around(1))
@@ -1056,6 +1091,74 @@ fn message_cache_warm_cut_refreshes_both_directions() {
             .is_none_or(|cache| cache.last_used() > 0)),
         "both directions of the warm cut must be re-stamped as used"
     );
+
+    // Both directions are indexed, each under its own current stamp. Sharing one
+    // epoch between them is what an earlier version did: the index then keeps a
+    // single entry for two caches, and every consumer silently sees one edge.
+    assert_message_cache_index_is_exact(&evaluator);
+    let left = evaluator.message_caches[&(0, 1)].last_used();
+    let right = evaluator.message_caches[&(1, 0)].last_used();
+    assert_ne!(left, right, "the two directions must not share a use stamp");
+    assert_eq!(
+        evaluator.message_cache_order.len(),
+        2,
+        "{:?}",
+        evaluator.message_cache_order
+    );
+    assert_eq!(evaluator.message_cache_order.get(&left), Some(&(0, 1)));
+    assert_eq!(evaluator.message_cache_order.get(&right), Some(&(1, 0)));
+    for (edge, before) in stamps_before {
+        let after = evaluator.message_caches[&edge].last_used();
+        assert_ne!(
+            Some(after),
+            before,
+            "{edge:?} kept its pre-reset stamp, so the reset proved nothing"
+        );
+    }
+}
+
+/// The use stamp of every cache that holds payload, keyed by edge.
+fn message_cache_stamps(
+    evaluator: &TreeTNCachedEvaluator<'_, usize>,
+) -> Vec<((usize, usize), u64)> {
+    evaluator
+        .message_caches
+        .iter()
+        .filter(|(_, cache)| cache.key_count() > 0)
+        .map(|(edge, cache)| (*edge, cache.last_used()))
+        .collect()
+}
+
+/// One index entry per cache that holds payload, keyed by that cache's stamp.
+fn assert_message_cache_index_is_exact(evaluator: &TreeTNCachedEvaluator<'_, usize>) {
+    let residents = message_cache_stamps(evaluator);
+    assert_eq!(
+        evaluator.message_cache_order.len(),
+        residents.len(),
+        "the index must hold one entry per cache that retains payload"
+    );
+    for (edge, stamp) in &residents {
+        assert_eq!(
+            evaluator.message_cache_order.get(stamp),
+            Some(edge),
+            "{edge:?} is not indexed under its current stamp {stamp}"
+        );
+    }
+    for (stamp, edge) in &evaluator.message_cache_order {
+        let cache = evaluator
+            .message_caches
+            .get(edge)
+            .expect("every indexed edge is a cache of this evaluator");
+        assert!(
+            cache.key_count() > 0,
+            "{edge:?} is indexed but holds no payload"
+        );
+        assert_eq!(
+            cache.last_used(),
+            *stamp,
+            "{edge:?} is indexed under a stale stamp"
+        );
+    }
 }
 
 /// Inserts a packed cache holding `keys` columns of `bond_dim` elements on
