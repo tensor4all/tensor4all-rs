@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{
@@ -287,6 +287,22 @@ fn cuda_hadamard_product_matches_cpu_f64() {
 
 #[test]
 #[ignore = "requires visible CUDA ordinal 0"]
+fn cuda_hadamard_product_matches_cpu_f32() {
+    // The f64 case's criterion, bounded by this scalar's own precision: f32
+    // epsilon is 1.19e-7 and the measured residual is 5.59e-9.
+    assert_cuda_matches_cpu(|x, _| x as f32, 1e-7);
+}
+
+#[test]
+#[ignore = "requires visible CUDA ordinal 0"]
 fn cuda_hadamard_product_matches_cpu_c64() {
     assert_cuda_matches_cpu(Complex64::new, 1e-8);
+}
+
+#[test]
+#[ignore = "requires visible CUDA ordinal 0"]
+fn cuda_hadamard_product_matches_cpu_c32() {
+    // A Complex32 component carries f32 precision and the measured residual is
+    // 5.99e-7, so the bound sits an order of magnitude above it.
+    assert_cuda_matches_cpu(|x, y| Complex32::new(x as f32, y as f32), 1e-5);
 }
