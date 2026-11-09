@@ -87,11 +87,21 @@ another solver.
 - Gradients through a solve are those of the returned Krylov iterate, not of
   the exact solution. A solver that stops after `n` steps differentiates its
   `n`-step iterate, which misses directions outside that Krylov space: for
-  `A = diag(2, 3)`, `b = (1, 2)`, `a0 = 1` and a tracked `a1 = 0`, every
-  solver stops after one step with a zero residual and gives
+  `A = diag(2, 3)`, `b = (1, 2)`, `a0 = 1` and a tracked `a1 = 0`, CG and
+  BiCGSTAB stop after one step with a zero residual and give
   `d sum(x) / d a1 = -8.4`, while the exact value is `-sum(A b) = -8`.
   Implicit differentiation of the solve, which would give the exact
   derivative, is not implemented.
+- GMRES solves `a1 = 0` in closed form whether or not `a1` is tracked. A
+  tracked `a1` adds `-(a1 / a0) A(b / a0)`, which is zero in value and makes
+  the first derivatives those of `(a0 I + a1 A)^-1 b` at `a1 = 0` (`-8` in the
+  example above), for one extra application of `A`. Iterating instead would
+  hit the absolute thresholds of the GMRES recurrence on a well-conditioned but
+  small system (`b = [1e-20]`, `a0 = 1e-20` stops as near-singular).
+- The GMRES Arnoldi normalizations divide by a norm without forming a
+  reciprocal that overflows: when `1 / norm` is not a normal `f32`, the vector
+  is first scaled by a power of two. `b = [2^-1073]` with `a0 = a1 = 1`
+  otherwise gives `1 / |r| = inf` and a NaN basis vector.
 
 ## Implementation
 
@@ -152,9 +162,10 @@ is again solved in closed form. Both closed forms multiply by the factors of
   `|w| <= 1/2`; no intermediate component then exceeds the largest component
   of the value or of the quotient. The cost is that the intermediate before
   the last factor is smaller than `q`, so in the subnormal range it is
-  rounded more coarsely than `q`. The absolute error is then up to
-  `9 * 2^-1074` (`|a0| < 1/2`) or `7 * 2^-1074` (otherwise), and a quotient
-  component that small can round to zero.
+  rounded more coarsely than `q`, and a quotient component that small can
+  round to zero. No worst-case constant for that absolute error is derived;
+  the sweep test checks `9 * 2^-1074` (`|a0| < 1/2`) and `7 * 2^-1074`
+  (otherwise) on its sample of divisors and subnormal quotients.
 
 The last product multiplies by a rounded factor, so a quotient within a few
 units in the last place of `f64::MAX` can round to infinity:

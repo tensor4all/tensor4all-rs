@@ -1053,9 +1053,11 @@ where
 
 /// Solve `(a0 I + a1 A) x = b` using GMRES with relative residual tolerance.
 /// A zero-norm RHS returns the zero vector after validating the affine coefficients.
-/// An untracked `a1 = 0` gives `x = b / a0` in closed form, with the residual of
-/// that `x` reported; a subnormal quotient component can round to zero, so the
-/// closed form is not always converged. For single-precision `b` the closed form
+/// `a1 = 0` gives `x = b / a0` in closed form, with the residual of that `x`
+/// reported; a subnormal quotient component can round to zero, so the closed
+/// form is not always converged. A gradient-tracked `a1 = 0` adds
+/// `-(a1 / a0) A(b / a0)`, which is zero in value and makes the first
+/// derivatives those of the exact solution, at the cost of one call to `apply_a`. For single-precision `b` the closed form
 /// requires every factor of [`AnyScalar::reciprocal_factors`] to be in the `f32`
 /// range.
 /// The Arnoldi basis is built from the unshifted `A` callback, while affine
@@ -1228,8 +1230,7 @@ where
             converged: true,
         });
     }
-    // A tracked `a1 = 0` stays in the graph through the iteration below.
-    if a1.is_zero() && !a1.tracks_grad() {
+    if a1.is_zero() {
         let started = Instant::now();
         // `a0 x = b` in closed form; the factors keep `b / a0` in range when
         // `1 / a0` itself is not.
@@ -1246,12 +1247,42 @@ where
             }
         }
         let scale_calls = factors.len();
-        let solution = factors
-            .into_iter()
-            .try_fold(b.clone(), |value, factor| value.scale(factor))?;
+        let divide = |value: T| {
+            factors
+                .iter()
+                .try_fold(value, |value, factor| value.scale(factor.clone()))
+        };
+        let mut solution = divide(b.clone())?;
         if profile_enabled {
             profile.scale += started.elapsed();
             profile.scale_calls += scale_calls;
+        }
+        if a1.tracks_grad() {
+            // `x = b / a0 - (a1 / a0) A(b / a0)` equals `b / a0` at `a1 = 0`,
+            // and its first derivatives are those of `(a0 I + a1 A)^-1 b`
+            // there, which the Krylov iterates would only approximate.
+            let started = Instant::now();
+            let applied = apply_a(&solution)?;
+            if profile_enabled {
+                profile.apply += started.elapsed();
+                profile.apply_calls += 1;
+            }
+            let started = Instant::now();
+            let correction = divide(applied.scale(AnyScalar::new_real(0.0) - a1.clone())?)?;
+            if profile_enabled {
+                profile.scale += started.elapsed();
+                profile.scale_calls += scale_calls + 1;
+            }
+            let started = Instant::now();
+            solution = solution.axpby(
+                AnyScalar::new_real(1.0),
+                &correction,
+                AnyScalar::new_real(1.0),
+            )?;
+            if profile_enabled {
+                profile.axpby += started.elapsed();
+                profile.axpby_calls += 1;
+            }
         }
         // The closed form can lose a subnormal quotient component, so the
         // residual is measured rather than assumed to be zero.
@@ -1339,10 +1370,11 @@ where
         let mut v_basis: Vec<T> =
             krylov_workspace(checked_krylov_capacity(cycle_max_iter, "gmres")?, "gmres")?;
         let started = Instant::now();
-        v_basis.push(r.scale(AnyScalar::new_real(1.0 / r_norm))?);
+        let (v0, scale_calls) = vector_ops::divide_by_norm(&r, r_norm)?;
+        v_basis.push(v0);
         if profile_enabled {
             profile.scale += started.elapsed();
-            profile.scale_calls += 1;
+            profile.scale_calls += scale_calls;
         }
 
         let mut h_matrix: Vec<Vec<AnyScalar>> = krylov_workspace(cycle_max_iter, "gmres")?;
@@ -1514,10 +1546,11 @@ where
 
             if h_jp1_j_real > 1e-14 {
                 let started = Instant::now();
-                v_basis.push(w_orth.scale(AnyScalar::new_real(1.0 / h_jp1_j_real))?);
+                let (v_next, scale_calls) = vector_ops::divide_by_norm(&w_orth, h_jp1_j_real)?;
+                v_basis.push(v_next);
                 if profile_enabled {
                     profile.scale += started.elapsed();
-                    profile.scale_calls += 1;
+                    profile.scale_calls += scale_calls;
                 }
             } else {
                 let started = Instant::now();
@@ -1744,7 +1777,7 @@ where
         let mut h_matrix: Vec<Vec<AnyScalar>> = krylov_workspace(cycle_max_iter, "gmres")?;
 
         // v_0 = r / ||r||
-        let v0 = r.scale(AnyScalar::new_real(1.0 / r_norm))?;
+        let v0 = vector_ops::divide_by_norm(&r, r_norm)?.0;
         v_basis.push(v0);
 
         // Initialize Givens rotation storage
@@ -1867,7 +1900,7 @@ where
 
             // Add new basis vector (if not converged and h_jp1_j is not too small)
             if h_jp1_j_real > 1e-14 {
-                let v_jp1 = w_orth.scale(AnyScalar::new_real(1.0 / h_jp1_j_real))?;
+                let v_jp1 = vector_ops::divide_by_norm(&w_orth, h_jp1_j_real)?.0;
                 v_basis.push(v_jp1);
             } else {
                 // Lucky breakdown - we've found the exact solution in the Krylov subspace
@@ -2045,7 +2078,7 @@ where
         let mut h_matrix: Vec<Vec<AnyScalar>> =
             krylov_workspace(options.max_iter, "gmres_with_truncation")?;
 
-        let mut v0 = r.scale(AnyScalar::new_real(1.0 / r_norm))?;
+        let mut v0 = vector_ops::divide_by_norm(&r, r_norm)?.0;
         truncate(&mut v0)?;
         // After truncation, v0 might not be unit norm and might point in a different direction.
         // We need to:
@@ -2053,7 +2086,7 @@ where
         // 2. Recompute g[0] = <r, v0> to maintain the correct relationship
         let v0_norm = v0.norm()?;
         let effective_g0 = if v0_norm > 1e-15 {
-            v0 = v0.scale(AnyScalar::new_real(1.0 / v0_norm))?;
+            v0 = vector_ops::divide_by_norm(&v0, v0_norm)?.0;
             // g[0] should be the component of r in the direction of v0
             // Since r was truncated and v0 = truncate(r/||r||)/||truncate(r/||r||)||,
             // g[0] = <r, v0> ≈ ||r|| * ||truncate(r/||r||)|| = r_norm * v0_norm
@@ -2217,7 +2250,7 @@ where
                 // Create v_{j+1} = w_orth / ||w_orth||
                 // w_orth has already been truncated twice (after orthogonalization and after reorthogonalization)
                 // so we don't need to truncate again. Scale doesn't increase bond dimensions.
-                let v_jp1 = w_orth.scale(AnyScalar::new_real(1.0 / h_jp1_j_real))?;
+                let v_jp1 = vector_ops::divide_by_norm(&w_orth, h_jp1_j_real)?.0;
                 // v_jp1 should have norm ~1.0 by construction
                 // The Arnoldi relation h_{j+1,j} * v_{j+1} = w_orth is maintained exactly
                 v_basis.push(v_jp1);

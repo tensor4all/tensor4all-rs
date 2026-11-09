@@ -29,6 +29,22 @@ pub(super) fn scale_real_pow2(mut value: f64, mut exponent: i32) -> f64 {
     value
 }
 
+/// `value / norm` for a positive finite `norm`, without forming a reciprocal
+/// that overflows: when `1 / norm` is not a normal `f32`, `value` is first
+/// scaled by `2^-e` with `norm * 2^-e` in `[1, 2)`. Every factor is normal in
+/// `f32` and `f64`. Returns the result and the number of `scale` calls.
+pub(super) fn divide_by_norm<T: TensorVectorSpace>(value: &T, norm: f64) -> Result<(T, usize)> {
+    let inverse = AnyScalar::new_real(1.0 / norm);
+    if inverse.is_in_single_precision_range() {
+        return Ok((value.scale(inverse)?, 1));
+    }
+    let exponent = normalization_exponent(norm);
+    let mantissa = scale_real_pow2(norm, -exponent);
+    let calls = (exponent.unsigned_abs() as usize).div_ceil(SCALE_CHUNK as usize) + 1;
+    let scaled = scale_pow2(value.clone(), -exponent)?;
+    Ok((scaled.scale(AnyScalar::new_real(1.0 / mantissa))?, calls))
+}
+
 pub(super) fn true_residual<T, F>(apply_a: &F, b: &T, x: &T) -> Result<T>
 where
     T: TensorVectorSpace,

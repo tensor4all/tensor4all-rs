@@ -390,13 +390,14 @@ fn local_solver_keeps_tracked_unit_and_zero_coefficients_in_the_graph() {
 }
 
 #[test]
-fn local_solver_gradient_is_that_of_the_returned_iterate() {
+fn local_solver_gradient_through_a_tracked_zero_a1() {
     use tensor4all_core::{DynIndex, IdxTensor};
     // (a0 I + a1 A) x = b with A = diag(2, 3), b = (1, 2), a0 = 1 and a
-    // tracked a1 = 0. Every solver returns x = alpha b after one step, with
-    // a zero residual. The exact solution has d sum(x)/da1 = -sum(A b) = -8;
-    // the returned iterate has dalpha/da1 = -b'Ab / b'b = -14/5, so
-    // d sum(x)/da1 = -8.4. The gradient is that of the iterate.
+    // tracked a1 = 0. The exact solution has d sum(x)/da1 = -sum(A b) = -8,
+    // which the GMRES closed form gives without iterating. CG and BiCGSTAB
+    // return x = alpha b after one step with a zero residual; that iterate
+    // has dalpha/da1 = -b'Ab / b'b = -14/5, so d sum(x)/da1 = -8.4: the
+    // gradient is that of the iterate.
     let i = DynIndex::new_dyn(2);
     let b = IdxTensor::from_dense(vec![i.clone()], vec![1.0, 2.0]).unwrap();
     let init = IdxTensor::from_dense(vec![i.clone()], vec![0.0; 2]).unwrap();
@@ -415,15 +416,19 @@ fn local_solver_gradient_is_that_of_the_returned_iterate() {
         let mut options = LinsolveOptions::new(1).with_local_solver(solver.clone());
         options.a0 = AnyScalar::new_real(1.0);
         options.a1 = a1.clone();
+        let (iterations, expected) = match solver {
+            LocalSolver::Gmres => (0, -8.0),
+            _ => (1, -8.4),
+        };
         let result = solve_local_system(&options, apply, &b, &init, false).unwrap();
         let total = result.solution.sum().unwrap();
-        assert_eq!(result.iterations, 1, "{solver:?}");
+        assert_eq!(result.iterations, iterations, "{solver:?}");
         assert!((total.real() - 3.0).abs() < 1e-12, "{solver:?}: {total:?}");
         total.backward().unwrap();
         let grad = a1.grad().unwrap();
         let grad = grad.unwrap_or_else(|| panic!("{solver:?}: a1 has no gradient"));
         assert!(
-            (grad.real() + 8.4).abs() < 1e-12,
+            (grad.real() - expected).abs() < 1e-12,
             "{solver:?}: d/da1 = {grad:?}"
         );
     }

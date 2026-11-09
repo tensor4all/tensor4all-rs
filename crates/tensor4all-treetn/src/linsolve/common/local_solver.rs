@@ -21,8 +21,9 @@ use crate::error::TreeTNOperationError;
 /// Gradients through a local solve are those of the returned iterate, not of
 /// the exact solution, so they can miss directions outside the Krylov space the
 /// solver built. For `A = diag(2, 3)`, `b = (1, 2)`, `a0 = 1` and a
-/// gradient-tracked `a1 = 0`, every solver stops after one step with a zero
-/// residual and gives `d sum(x) / d a1 = -8.4`; the exact value is `-8`.
+/// gradient-tracked `a1 = 0`, CG and BiCGSTAB stop after one step with a zero
+/// residual and give `d sum(x) / d a1 = -8.4`; the exact value is `-8`. GMRES
+/// solves `a1 = 0` in closed form, whose first derivatives are exact.
 ///
 /// # Examples
 /// ```

@@ -107,8 +107,9 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   `2^600 / (2^600 + 2^-420 i)` and `2^400 / (2^400 + 2^-600 i)` keep the
   imaginary parts `-2^-1020` and `-2^-1000`; `1 + NaN i` is rejected. A
   purely imaginary `a0` is divided exactly (`2^-1074 / i = -2^-1074 i`); for
-  other complex `a0`, a sweep of subnormal quotients checks the absolute error
-  bound of `9 * 2^-1074` (`|a0| < 1/2`) or `7 * 2^-1074`. A divisor
+  other complex `a0`, a sweep of subnormal quotients checks an absolute error
+  of at most `9 * 2^-1074` (`|a0| < 1/2`) or `7 * 2^-1074` on its sample; these
+  are not derived bounds. A divisor
   component that scaling down would flush is applied unscaled
   (`2^1023 / (1 + 2^-1074 i)` keeps `-2^-51 i`), and a tracked complex
   divisor, purely imaginary included, gives the gradient of the direct
@@ -121,7 +122,10 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   untracked coefficients; a test differentiates the local solution with
   respect to tracked `a0` and `a1` for every local solver. A two-dimensional
   case (`A = diag(2, 3)`, `b = (1, 2)`, tracked `a1 = 0`) pins the gradient of
-  the one-step iterate, `-8.4`, which differs from the exact `-8`.
+  the one-step CG and BiCGSTAB iterate, `-8.4`, and the exact `-8` from the
+  GMRES closed form. Core tests cover a tracked `a1 = 0` with `b = [1e-20]`,
+  `a0 = 1e-20` and with `b = [2^-1074]`, and the range-safe Arnoldi
+  normalization with `b = [2^-1073]`, `a0 = a1 = 1`.
 - A quotient next to `f64::MAX` that the rounded last factor sends to
   infinity is pinned by a core test.
 - Both identity-only closed forms reject single-precision entries when a

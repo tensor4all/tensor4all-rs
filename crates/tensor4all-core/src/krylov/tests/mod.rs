@@ -667,6 +667,57 @@ fn gmres_affine_closed_form_rejects_a_subnormal_single_precision_factor() {
 }
 
 #[test]
+fn gmres_affine_solves_a_tracked_zero_a1_in_closed_form() {
+    // Iterating would stop on the absolute near-singular threshold for
+    // b = 1e-20, a0 = 1e-20, and form 1 / |r| = inf for b = 2^-1074.
+    let idx = DynIndex::new_dyn(1);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let options = GmresOptions::default();
+    for (rhs, a0, expected) in [
+        (1e-20, 1e-20, 1.0),
+        (f64::from_bits(1), 1.0, f64::from_bits(1)),
+    ] {
+        let b = make_vector_with_index(vec![rhs], &idx);
+        let a1 = AnyScalar::new_real(0.0).enable_grad().unwrap();
+        let result = gmres_affine(
+            |x: &IdxTensor| Ok(x.clone()),
+            &b,
+            &x0,
+            AnyScalar::new_real(a0),
+            a1,
+            &options,
+        )
+        .unwrap();
+        assert_eq!(result.iterations, 0);
+        assert!(result.converged, "{rhs:e}");
+        assert_eq!(result.residual_norm, 0.0);
+        assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![expected]);
+    }
+}
+
+#[test]
+fn gmres_affine_normalizes_a_residual_whose_reciprocal_norm_overflows() {
+    // (I + I) x = 2^-1073 has x = 2^-1074, but 1 / |r| = 2^1073 is infinite.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![f64::from_bits(2)], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let result = gmres_affine(
+        |x: &IdxTensor| Ok(x.clone()),
+        &b,
+        &x0,
+        AnyScalar::new_real(1.0),
+        AnyScalar::new_real(1.0),
+        &GmresOptions::default(),
+    )
+    .unwrap();
+    assert!(result.converged);
+    assert_eq!(
+        result.solution.to_vec::<f64>().unwrap(),
+        vec![f64::from_bits(1)]
+    );
+}
+
+#[test]
 fn gmres_rejects_a_right_hand_side_whose_norm_overflows() {
     // |b| = sqrt(2) * f64::MAX is infinite, so every relative residual would
     // be zero and a closed form or an iteration would report convergence.
