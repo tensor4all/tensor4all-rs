@@ -54,7 +54,9 @@ performance promotion gate.
   (2 * mean)`. The CV uses the sample standard deviation (divisor n - 1) of
   the three round means.
   macOS reported no thermal/performance warning and no CPU power status; CPU
-  speed-limit verification is therefore unavailable.
+  speed-limit verification is therefore unavailable. The driver records the
+  smallest reported limit as `minimum_cpu_speed_limit`; the retained
+  `summary.json` files predate that key.
 
 ## Validity and decisions
 
@@ -79,9 +81,18 @@ In experiment 2, observed cold-batch ratios span 0.40–0.67, automatic-split
 ratios 0.66–0.89, fixed-split warm ratios 0.86–1.05, and environment-hit ratios
 0.53–0.89. These are diagnostics for choosing the implementation, not certified
 speedups. Three of six fixed-split warm cases are slower than original by
-median ratio (1.037, 1.044, 1.050), and single rounds reach 1.176. The
-shared-only arm is slower than original in every fixed-split warm case, and the
-final arm recovers part of that cost. No regression is omitted.
+median ratio (1.037, 1.044, 1.050), and single rounds reach 1.176.
+
+The shared-only arm is slower than original in five of the six fixed-split warm
+cases, and final is faster than shared-only in all six. The exception is
+`warm_fixed/n32_chi1_batch64`: its per-round shared/original ratios are
+0.927146, 0.968685 and 1.401761, a median of 0.968685, with median times
+8.523878 µs shared and 8.989069 µs original. The shared-key attribution of the
+fixed-split cost comes from a separate quiet-host run, whose n=300 pure-hit
+measurements are recorded in the PR discussion and are not part of this
+directory. This case's 0.97× median ratio lies outside the range that
+explanation covers, so it is left unexplained here rather than attributed to
+shared keys. No regression is omitted.
 
 ## Complete experiment 2 observations
 
@@ -150,7 +161,14 @@ upward half-width. "Batch" routes are `cold_fixed`, `warm_fixed` and
 `warm_auto`; "warm hit" routes are `left_hit` and `right_hit`. A failed idle
 check stops before timing, a failed noise gate makes the decision
 INCONCLUSIVE, and a narrower `--filter` produces a PARTIAL result that does not
-count toward signoff.
+count toward signoff. For a complete suite, a thermal snapshot that reports
+`CPU_Speed_Limit` below 100 makes the decision THROTTLED instead of
+INCONCLUSIVE, so throttling is distinguishable from host load; a narrower
+`--filter` still reports PARTIAL and keeps the failed flag in
+`noise_pass.thermal`. Platforms that record no speed limit cannot fail that
+gate, and on this platform `thermal_snapshot` reports `unavailable on this
+platform` for anything other than macOS.
+`benchmarks/rust/test_run_simplett_index_key_pairs.py` covers all three cases.
 
 Before timing, a quiet-host run must pass the recorded idle and noise checks.
 Preserve full suites, confidence intervals, host observations and invalid runs;
