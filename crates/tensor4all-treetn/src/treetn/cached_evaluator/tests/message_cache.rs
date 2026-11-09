@@ -1337,6 +1337,117 @@ fn message_cache_victim_candidates() -> usize {
     MESSAGE_CACHE_VICTIM_CANDIDATES.with(std::cell::Cell::get)
 }
 
+fn reset_message_cache_victim_visits() {
+    MESSAGE_CACHE_VICTIM_VISITS.with(|visits| visits.set(0));
+}
+
+fn message_cache_victim_visits() -> usize {
+    MESSAGE_CACHE_VICTIM_VISITS.with(std::cell::Cell::get)
+}
+
+fn reset_message_cache_last_used_reads() {
+    MESSAGE_CACHE_LAST_USED_READS.with(|reads| reads.set(0));
+}
+
+fn message_cache_last_used_reads() -> usize {
+    MESSAGE_CACHE_LAST_USED_READS.with(std::cell::Cell::get)
+}
+
+/// #1209: admitting one column per edge under a one-column total must cost the
+/// caches that hold payload, not the edges the evaluator has seen.
+///
+/// The fixture is the one the review used: the 1 024-cache accounting set, a
+/// one-column total, one column retained elsewhere, then one column reserved and
+/// admitted per edge while the running total is updated. Every admission makes
+/// the previous resident the only victim, so an eviction that walked the cache
+/// map would visit each of the 1 024 historical caches once per admission.
+#[test]
+fn message_cache_pressured_admission_visits_only_the_caches_that_hold_payload() {
+    let (tree, indices) = five_node_chain();
+    let edges = 1024usize;
+    let bond_dim = 2usize;
+    let column_bytes = std::mem::size_of::<CachedScalar>() * bond_dim;
+    let mut evaluator = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            center: Some(2),
+            // Exactly one column: every admission has to evict the resident.
+            message_cache_max_bytes: column_bytes,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // The accounting fixture's 1 024 historical edge caches. They hold no
+    // payload, so an eviction has nothing to reclaim from them, but they are
+    // the edges the evaluator has seen and they stay in the cache map.
+    for edge_index in 0..edges {
+        evaluator.message_caches.insert(
+            (edge_index, edges + edge_index),
+            PackedMessageCache::<IndexKey, CachedScalar>::new(bond_dim, 0),
+        );
+    }
+    // The one resident, on an edge that is not itself an admission target, so
+    // every admission below has a victim that is not the edge being used.
+    let resident = (2 * edges, 2 * edges + 1);
+    insert_packed_columns(&mut evaluator, resident, 1, bond_dim, 1);
+    assert_eq!(retained_message_cache_bytes(&evaluator), column_bytes);
+
+    reset_message_cache_last_used_reads();
+    reset_message_cache_victim_visits();
+    reset_message_cache_victim_candidates();
+    let mut admitted = 0usize;
+    let (mut reads, mut visits) = (0usize, 0usize);
+    for edge_index in 0..edges {
+        // The same edges the fixture populated, so the cache map keeps its size
+        // and the walk cost is what the issue reports, not growth of the map.
+        let edge = (edge_index, edges + edge_index);
+        // Count what choosing victims costs, not what the test's own insertion
+        // helper does afterwards.
+        reset_message_cache_last_used_reads();
+        reset_message_cache_victim_visits();
+        let cap = evaluator.reserve_message_cache_bytes(&edge, column_bytes, column_bytes);
+        reads += message_cache_last_used_reads();
+        visits += message_cache_victim_visits();
+        if cap < column_bytes {
+            continue;
+        }
+        // Admit the column this reservation made room for. The insertion also
+        // refreshes the running total from the map, so nothing here has to
+        // mirror the admission path's arithmetic.
+        insert_packed_columns(&mut evaluator, edge, 1, bond_dim, edge_index as u64 + 2);
+        admitted += 1;
+        assert!(
+            evaluator.message_cache_retained_bytes <= evaluator.options.message_cache_max_bytes,
+            "admission {edge_index} retained {} bytes over a {column_bytes}-byte total",
+            evaluator.message_cache_retained_bytes
+        );
+    }
+    assert_eq!(admitted, edges, "every edge must admit its one column");
+    assert_eq!(
+        retained_message_cache_bytes(&evaluator),
+        column_bytes,
+        "a one-column total leaves exactly one resident at the end"
+    );
+
+    // One resident at a time, so a victim search proportional to the caches
+    // that hold payload visits about one cache per admission. Measured on the
+    // tree before this change (with these two counters added to it): 1 048 576
+    // cache visits and 1 024 `last_used()` reads for the same fixture; after
+    // it, 1 024 and 0. The bound is stated generously -- two per admission --
+    // so one extra resident is allowed, while any scan over the 1 024 historical
+    // caches per admission is far outside it.
+    assert!(
+        visits <= 2 * edges,
+        "{visits} cache visits for {edges} pressured admissions; the search must follow the caches that hold payload"
+    );
+    assert!(
+        reads <= 2 * edges,
+        "{reads} last_used() reads for {edges} pressured admissions; the search must follow the caches that hold payload"
+    );
+}
+
 /// [AI Supplied] #1183 review: re-admitting a key released with the dead prefix
 /// replaces its stale entry, so its heap bytes are charged once, not twice.
 #[test]
