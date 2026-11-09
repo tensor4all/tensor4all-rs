@@ -1133,6 +1133,89 @@ fn gmres_affine_tracked_zero_a1_retries_when_x_is_already_below_unit_norm() {
 }
 
 #[test]
+fn gmres_affine_tracked_zero_a1_keeps_components_that_no_single_scaling_keeps() {
+    // GPT r5 reproduction: x = b / a0 = (2^500, 2^-1000) and A = 2^600 I give
+    // A(x) = (2^1100, 2^-400). Keeping A finite needs x 2^-s with s >= 77,
+    // which takes x2 to 2^-1077 and rounds it to zero; no single power of two
+    // keeps both components. dx2/da1 = -2^-900 is a normal f64, as are x,
+    // b, a0 and the expected results; only the rounded-away intermediate is
+    // below the normal range, and it is lost with or without flush-to-zero.
+    let idx = DynIndex::new_dyn(2);
+    let b = make_vector_with_index(vec![2.0_f64.powi(1000), 2.0_f64.powi(-500)], &idx);
+    let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
+    for (selector, expected) in [
+        (vec![0.0, 1.0], -(2.0_f64.powi(-900))),
+        (vec![1.0, 0.0], -(2.0_f64.powi(600))),
+    ] {
+        let selector = make_vector_with_index(selector, &idx);
+        let (result, grad) = tracked_zero_a1_component_gradient(
+            |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(2.0_f64.powi(600)))?),
+            &b,
+            &x0,
+            2.0_f64.powi(500),
+            &selector,
+        );
+        assert!(result.converged);
+        assert_eq!(result.residual_norm, 0.0);
+        assert_eq!(
+            result.solution.to_vec::<f64>().unwrap(),
+            vec![2.0_f64.powi(500), 2.0_f64.powi(-1000)]
+        );
+        assert_eq!(grad.real(), expected);
+    }
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retries_a_complex_image_that_overflowed() {
+    // GPT r5 reproduction: complex b = 4, a0 = 2, A = f64::MAX I. A(x) = 2
+    // f64::MAX overflows; halving the infinite complex entry forms
+    // 0 * inf = NaN, and the finiteness check must report that as
+    // non-finite (and retry) rather than as an error.
+    let idx = DynIndex::new_dyn(1);
+    let b = IdxTensor::from_dense(vec![idx.clone()], vec![Complex64::new(4.0, 0.0)]).unwrap();
+    let x0 = IdxTensor::from_dense(vec![idx.clone()], vec![Complex64::new(0.0, 0.0)]).unwrap();
+    let selector = IdxTensor::from_dense(vec![idx], vec![Complex64::new(1.0, 0.0)]).unwrap();
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        |x: &IdxTensor| Ok(x.scale(AnyScalar::new_real(f64::MAX))?),
+        &b,
+        &x0,
+        2.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(
+        result.solution.to_vec::<Complex64>().unwrap(),
+        vec![Complex64::new(2.0, 0.0)]
+    );
+    assert_eq!(grad.real(), -f64::MAX);
+}
+
+#[test]
+fn gmres_affine_tracked_zero_a1_retries_an_image_with_an_inf_minus_inf_nan() {
+    // GPT r5 reproduction: A(x) = t - t / 2 with t = f64::MAX x is
+    // (f64::MAX / 2) I, but for x = b / a0 = 2 it evaluates inf - inf = NaN.
+    // The NaN is an overflow to retry, not a backend failure.
+    // dx/da1 = -(f64::MAX / 2) * 2 / 2 = -f64::MAX / 2.
+    let idx = DynIndex::new_dyn(1);
+    let b = make_vector_with_index(vec![4.0], &idx);
+    let x0 = make_vector_with_index(vec![0.0], &idx);
+    let selector = make_vector_with_index(vec![1.0], &idx);
+    let (result, grad) = tracked_zero_a1_component_gradient(
+        |x: &IdxTensor| {
+            let t = x.scale(AnyScalar::new_real(f64::MAX))?;
+            Ok(t.axpby(AnyScalar::new_real(1.0), &t, AnyScalar::new_real(-0.5))?)
+        },
+        &b,
+        &x0,
+        2.0,
+        &selector,
+    );
+    assert!(result.converged);
+    assert_eq!(result.solution.to_vec::<f64>().unwrap(), vec![2.0]);
+    assert_eq!(grad.real(), -f64::MAX / 2.0);
+}
+
+#[test]
 fn gmres_affine_normalizes_a_residual_whose_reciprocal_norm_overflows() {
     // (I + I) x = 2^-1073 has x = 2^-1074, but 1 / |r| = 2^1073 is infinite.
     let idx = DynIndex::new_dyn(1);

@@ -100,9 +100,10 @@ impl AnyScalar {
     ///   intermediate before the last factor is rounded at subnormal
     ///   granularity and the last factor can amplify that rounding, so the
     ///   absolute error is several units of `2^-1074`, and a component that
-    ///   small can round to zero. No worst-case constant is derived; the tests
-    ///   check `9 * 2^-1074` when `|self| < 1/2` and `7 * 2^-1074` otherwise
-    ///   on a sample of complex divisors and subnormal quotients.
+    ///   small can round to zero. No worst-case constant is derived; on the
+    ///   tests' sample of complex divisors and subnormal quotients the largest
+    ///   errors are `8 * 2^-1074` when `|self| < 1/2` and `4 * 2^-1074`
+    ///   otherwise, and the tests check that both are attained.
     ///
     /// The guarantees are for `f64` and `Complex64` arithmetic. Entries stored
     /// in single precision convert each factor to `f32`, which keeps the

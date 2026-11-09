@@ -108,8 +108,9 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   imaginary parts `-2^-1020` and `-2^-1000`; `1 + NaN i` is rejected. A
   purely imaginary `a0` is divided exactly (`2^-1074 / i = -2^-1074 i`); for
   other complex `a0`, a sweep of subnormal quotients checks an absolute error
-  of at most `9 * 2^-1074` (`|a0| < 1/2`) or `7 * 2^-1074` on its sample; these
-  are not derived bounds. A divisor
+  of at most `8 * 2^-1074` (`|a0| < 1/2`) or `4 * 2^-1074` on its sample, both
+  attained (earlier drafts quoted `9` and `7`, which were looser test limits,
+  not observed maxima); these are not derived bounds. A divisor
   component that scaling down would flush is applied unscaled
   (`2^1023 / (1 + 2^-1074 i)` keeps `-2^-51 i`), and a tracked complex
   divisor, purely imaginary included, gives the gradient of the direct

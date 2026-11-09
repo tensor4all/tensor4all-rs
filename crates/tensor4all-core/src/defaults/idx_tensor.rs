@@ -6721,6 +6721,18 @@ impl TensorVectorSpace for IdxTensor {
         IdxTensor::maxabs(self)
     }
 
+    fn is_all_finite(&self) -> std::result::Result<bool, Self::Error> {
+        if let Some(error) = self.storage.deferred_error() {
+            return Err(IdxTensorError::Storage {
+                source: error.clone(),
+            });
+        }
+        let flags = self
+            .compact_nonfinite_flags()
+            .map_err(IdxTensorError::materialization)?;
+        Ok(!(flags.has_nan || flags.has_infinity))
+    }
+
     fn isapprox(
         &self,
         other: &Self,

@@ -223,25 +223,29 @@ fn reciprocal_factors_divide_by_an_imaginary_divisor_exactly() {
 #[test]
 fn reciprocal_factors_bound_the_subnormal_error_of_a_complex_quotient() {
     // On this sample each component is within `bound` units of
-    // max(2^-1074, ulp(q)) of the quotient q. The bounds are the observed
-    // maxima that the `reciprocal_factors` docs quote, not a derived worst
-    // case. The reference q * 2^600 is computed with d scaled near one.
+    // max(2^-1074, ulp(q)) of the quotient q. The bounds are the maxima
+    // observed on this sample (8 units for |d| < 1/2, 4 otherwise), which the
+    // `reciprocal_factors` docs quote; the test prints them and checks that
+    // each is attained. They are not a derived worst case. The reference
+    // q * 2^600 is computed with d scaled near one.
     let unit_of = |q: f64| f64::from_bits(1).max(q.abs() * f64::EPSILON);
     let divisors = [
         (Complex64::new(0.0, 1.5), 0.5),
         (Complex64::new(0.0, -0.3), 0.5),
-        (Complex64::new(0.35, 0.35), 9.0),
-        (Complex64::new(0.2, 0.1), 9.0),
-        (Complex64::new(0.03, -0.01), 9.0),
-        (Complex64::new(3.0, 4.0) * pow2(-600), 9.0),
-        (Complex64::new(0.45, 0.25), 7.0),
-        (Complex64::new(0.6, 0.8), 7.0),
-        (Complex64::new(1.0, 1e-3), 7.0),
-        (Complex64::new(1.9, -0.3), 7.0),
-        (Complex64::new(3.0, 4.0), 7.0),
-        (Complex64::new(3.0, 4.0) * pow2(150), 7.0),
-        (Complex64::new(3.0, 4.0) * pow2(300), 7.0),
+        (Complex64::new(0.35, 0.35), 8.0),
+        (Complex64::new(0.2, 0.1), 8.0),
+        (Complex64::new(0.03, -0.01), 8.0),
+        (Complex64::new(3.0, 4.0) * pow2(-600), 8.0),
+        (Complex64::new(0.45, 0.25), 4.0),
+        (Complex64::new(0.6, 0.8), 4.0),
+        (Complex64::new(1.0, 1e-3), 4.0),
+        (Complex64::new(1.9, -0.3), 4.0),
+        (Complex64::new(3.0, 4.0), 4.0),
+        (Complex64::new(3.0, 4.0) * pow2(150), 4.0),
+        (Complex64::new(3.0, 4.0) * pow2(300), 4.0),
     ];
+    // Largest error seen for each bound, with the input that produced it.
+    let mut observed: Vec<(f64, f64, String)> = Vec::new();
     for (d, bound) in divisors {
         let e = -(d.norm().log2().round() as i32);
         for bits in 1..1000_u64 {
@@ -255,9 +259,30 @@ fn reciprocal_factors_bound_the_subnormal_error_of_a_complex_quotient() {
                         error <= bound,
                         "{x:e} / {d}: {actual} vs {q} ({error} units)"
                     );
+                    let at = format!("{x:e} / {d}");
+                    match observed.iter_mut().find(|(b, _, _)| *b == bound) {
+                        Some(entry) if error > entry.1 => {
+                            entry.1 = error;
+                            entry.2 = at;
+                        }
+                        Some(_) => {}
+                        None => observed.push((bound, error, at)),
+                    }
                 }
             }
         }
+    }
+    // The bounds quoted in the docs are the observed maxima: print them and
+    // check that each is attained, not merely respected.
+    for (bound, error, at) in &observed {
+        eprintln!("bound {bound}: observed maximum {error} units at {at}");
+    }
+    for bound in [8.0, 4.0] {
+        let (_, error, at) = observed
+            .iter()
+            .find(|(b, _, _)| *b == bound)
+            .expect("each bound has a sample");
+        assert_eq!(*error, bound, "maximum for bound {bound} at {at}");
     }
 }
 

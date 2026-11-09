@@ -484,6 +484,18 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
         })
     }
 
+    fn is_all_finite(&self) -> std::result::Result<bool, Self::Error> {
+        for block in &self.blocks {
+            let finite = block
+                .is_all_finite()
+                .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))?;
+            if !finite {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error> {
         let scaled: std::result::Result<Vec<T>, Self::Error> = self
             .blocks

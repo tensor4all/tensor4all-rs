@@ -54,20 +54,54 @@ pub(super) fn divide_by_norm<T: TensorVectorSpace>(value: &T, norm: f64) -> Resu
     Ok((scaled.scale(AnyScalar::new_real(1.0 / mantissa))?, calls))
 }
 
-/// Whether every stored real and imaginary component of `value` is finite.
-///
-/// `maxabs` takes the modulus of a complex entry, which overflows for finite
-/// components above about `f64::MAX / sqrt(2)`. Halving first is exact for
-/// normal components and keeps the modulus of finite components at or below
-/// `f64::MAX / sqrt(2)`, while an infinite component stays infinite, so the
-/// check is per component. A NaN entry is an error from `maxabs`.
-pub(super) fn components_finite<T: TensorVectorSpace>(value: &T) -> Result<bool> {
-    Ok(value.scale(AnyScalar::new_real(0.5))?.maxabs()?.is_finite())
-}
-
 /// Largest down-scaling exponent tried when an operator image overflows:
 /// `2^-2100` takes every finite `f64` to zero.
 pub(super) const MAX_RETRY_EXPONENT: i32 = 2100;
+
+/// The smallest `s >= 1` for which `A(x 2^-s)` has only finite components,
+/// with that image, or `None` when no `s` up to [`MAX_RETRY_EXPONENT`] gives
+/// one. `s` is found by doubling (1, 2, 4, ...) and then bisecting between the
+/// last non-finite and the first finite exponent, which assumes that the image
+/// stays finite once it is (true for a linear `A` in floating point). A NaN
+/// image, as `inf - inf` inside `A` forms, counts as non-finite. Also returns
+/// the number of `apply_a` calls.
+pub(super) fn smallest_finite_scaling<T, F>(apply_a: &F, x: &T) -> Result<(Option<(i32, T)>, usize)>
+where
+    T: TensorVectorSpace,
+    F: Fn(&T) -> Result<T>,
+{
+    let mut calls = 0;
+    let mut probe = |exponent: i32| -> Result<Option<T>> {
+        calls += 1;
+        let image = apply_a(&scale_pow2(x.clone(), -exponent)?)?;
+        Ok(image.is_all_finite()?.then_some(image))
+    };
+    let mut non_finite = 0;
+    let mut exponent = 1;
+    let mut found = None;
+    while exponent <= MAX_RETRY_EXPONENT {
+        if let Some(image) = probe(exponent)? {
+            found = Some((exponent, image));
+            break;
+        }
+        non_finite = exponent;
+        exponent *= 2;
+    }
+    if let Some((mut upper, mut image)) = found {
+        while upper - non_finite > 1 {
+            let middle = non_finite + (upper - non_finite) / 2;
+            match probe(middle)? {
+                Some(finite) => {
+                    upper = middle;
+                    image = finite;
+                }
+                None => non_finite = middle,
+            }
+        }
+        found = Some((upper, image));
+    }
+    Ok((found, calls))
+}
 
 /// `divisor * 2^exponent`, applied in power-of-two steps that move
 /// monotonically from `divisor` toward the result, so a real divisor is

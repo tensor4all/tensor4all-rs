@@ -98,13 +98,26 @@ another solver.
   example above), for one extra application of `A`. Iterating instead would
   hit the absolute thresholds of the GMRES recurrence on a well-conditioned but
   small system (`b = [1e-20]`, `a0 = 1e-20` stops as near-singular).
-  `A` is applied to `b / a0` scaled to unit norm, the quotient by `a0` is
-  formed between power-of-two scalings, and `a1` multiplies the finished
-  quotient. With `b = [2^1000]`, `a0 = 2^600` and `A = 2^1000 I`, `A(b / a0)`
-  itself would overflow; with `b = [2^-1074]`, `a0 = 2^-1074` and
-  `A = 2^-1074 I`, the gradient of `a1` would pass through the product of the
-  reciprocal factors of `a0`, which is `2^1074 = inf`. Both give the finite
-  values (`-2^800` and `-1`).
+  `A` is applied to `x = b / a0` itself, unscaled, and `a1` multiplies the
+  finished quotient `A(x) / a0`, so the gradient of `a1` never passes through
+  the reciprocal factors of `a0` (with `b = [2^-1074]`, `a0 = 2^-1074` and
+  `A = 2^-1074 I` their product is `2^1074 = inf`; the gradient is `-1`).
+  Only when `A(x)` has a NaN or infinite component (an overflow, also as
+  `inf - inf` inside `A`) is `A` applied to `x 2^-s` for the smallest `s >= 1`
+  that keeps the image finite, found by doubling and bisection in about
+  `2 log2(s)` further calls; `2^s` is folded into the division by `a0` so that
+  every component moves monotonically from `A(x 2^-s)` to the quotient. With
+  `b = [2^1000]`, `a0 = 2^600` and `A = 2^1000 I` this gives `-2^800`. When
+  `x 2^-s` rounds small components of `x` away (`x = (2^500, 2^-1000)`,
+  `A = 2^600 I` needs `s = 77`, which takes `2^-1000` below `2^-1074`), the
+  rounded-away rest `x - (x 2^-s) 2^s`, which is exact, is applied as a
+  separate part and its quotient added (`dx2/da1 = -2^-900`). Finiteness is
+  judged per real and imaginary component (`is_all_finite`), not by a complex
+  modulus. Limits: at most four parts are taken; a derivative component
+  outside the `f64` range, no finite image down to `x 2^-2100`, or a
+  remainder after four parts is a `KrylovError::NumericalBreakdown`, never a
+  NaN or a silently dropped component. The search assumes the image stays
+  finite once it is finite, as for a linear `A` in floating point.
 - A zero initial residual is converged for every GMRES `rtol`, including `0`, so an
   exact initial guess returns before the Arnoldi start vector `r / |r|` is
   formed.
@@ -174,8 +187,9 @@ is again solved in closed form. Both closed forms multiply by the factors of
   the last factor is smaller than `q`, so in the subnormal range it is
   rounded more coarsely than `q`, and a quotient component that small can
   round to zero. No worst-case constant for that absolute error is derived;
-  the sweep test checks `9 * 2^-1074` (`|a0| < 1/2`) and `7 * 2^-1074`
-  (otherwise) on its sample of divisors and subnormal quotients.
+  on the sweep test's sample of divisors and subnormal quotients the largest
+  errors are `8 * 2^-1074` (`|a0| < 1/2`) and `4 * 2^-1074` (otherwise), and
+  the test prints them and checks that both are attained.
 
 The last product multiplies by a rounded factor, so a quotient within a few
 units in the last place of `f64::MAX` can round to infinity:

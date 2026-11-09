@@ -1059,9 +1059,11 @@ where
 /// form is not always converged. A gradient-tracked `a1 = 0` adds
 /// `-a1 (A(b / a0) / a0)`, which is zero in value and makes the first
 /// derivatives those of the exact solution, at the cost of one call to
-/// `apply_a`. When `A(b / a0)` overflows, `A` is applied again to
-/// `b / a0 2^-s` for the smallest `s` that keeps it finite, found in about
-/// `2 log2(s)` further calls. For
+/// `apply_a`. When `A(b / a0)` has a NaN or infinite component, `A` is
+/// applied again to `b / a0 2^-s` for the smallest `s` that keeps it finite,
+/// found in about `2 log2(s)` further calls; components of `b / a0` that this
+/// scaling rounds away are applied as a separate part (at most four parts).
+/// For
 /// single-precision `b` the closed form requires every factor of
 /// [`AnyScalar::reciprocal_factors`] to be in the `f32` range.
 /// A zero initial residual, also that of the closed form, is converged for
@@ -1085,8 +1087,9 @@ where
 /// residual zero, is a [`KrylovError::NumericalBreakdown`]. So is a
 /// gradient-tracked `a1 = 0` whose derivative `-A(b / a0) / a0` is not
 /// representable in `f64` (a real or imaginary component overflows), or whose
-/// `A` is not finite on `b / a0` scaled by any power of two down to `2^-2100`:
-/// no finite gradient exists to return there.
+/// `A` is not finite on `b / a0` scaled by any power of two down to `2^-2100`,
+/// or whose parts are not exhausted after four: no finite, complete gradient
+/// is returned there.
 ///
 pub fn gmres_affine<T, F>(
     apply_a: F,
@@ -1275,67 +1278,82 @@ where
             // `<A(x) / a0, g>` and never passes through `1 / a0`.
             //
             // `A` is applied to `x` itself, so no component of `x` is scaled
-            // away before `A` sees it. Only when `A(x)` has a non-finite
-            // component is `A` evaluated on `x 2^-s` (`A` linear, exact powers
-            // of two), with `s` the smallest positive exponent for which that
-            // image is finite, and `2^s` goes into the quotient below. `s` is
-            // found by doubling (1, 2, 4, ...) and then bisecting between the
-            // last overflowing and the first finite exponent, which costs
-            // about `2 log2(s)` extra calls to `apply_a`. Scaling no further
-            // than needed keeps the small components of `x` that a larger
-            // scaling would flush. The search assumes that the image stays
-            // finite once it is finite for some `s`, which holds for a linear
-            // `A` evaluated in floating point.
+            // away before `A` sees it. When the image has a NaN or infinite
+            // component, `A` is applied to `x 2^-s` for the smallest `s` that
+            // keeps it finite (`A` linear, exact powers of two), and `2^s`
+            // goes into the quotient. If `x 2^-s` rounds some components of
+            // `x` away (no single power of two keeps both a huge and a tiny
+            // component, as for `x = (2^500, 2^-1000)`, `A = 2^600 I`), the
+            // part it kept, `(x 2^-s) 2^s`, is exact, the rest
+            // `x - (x 2^-s) 2^s` is exact too, and `A` is applied to that rest
+            // in the same way: `A(x) / a0` is the sum of the parts' quotients.
+            // At most `MAX_CLOSED_FORM_PARTS` parts are taken; a remainder
+            // after that is a `NumericalBreakdown` rather than a silently
+            // dropped component.
+            const MAX_CLOSED_FORM_PARTS: usize = 4;
             let started = Instant::now();
-            let mut applied = apply_a(&solution)?;
-            let mut apply_calls = 1;
-            let mut x_exponent = 0;
-            if !vector_ops::components_finite(&applied)? {
-                let mut probe = |exponent: i32| -> Result<Option<T>> {
-                    apply_calls += 1;
-                    let image = apply_a(&vector_ops::scale_pow2(solution.clone(), -exponent)?)?;
-                    Ok(vector_ops::components_finite(&image)?.then_some(image))
+            let mut apply_calls = 0;
+            let mut quotient_scale_calls = 0;
+            let mut quotient: Option<T> = None;
+            let mut remaining = Some(solution.clone());
+            for _ in 0..MAX_CLOSED_FORM_PARTS {
+                let Some(part) = remaining.take() else {
+                    break;
                 };
-                let mut overflowing = 0;
-                let mut finite = None;
-                let mut exponent = 1;
-                while exponent <= vector_ops::MAX_RETRY_EXPONENT {
-                    if let Some(image) = probe(exponent)? {
-                        finite = Some((exponent, image));
-                        break;
+                apply_calls += 1;
+                let applied = apply_a(&part)?;
+                let (image, exponent) = if applied.is_all_finite()? {
+                    (applied, 0)
+                } else {
+                    let (found, calls) = vector_ops::smallest_finite_scaling(&apply_a, &part)?;
+                    apply_calls += calls;
+                    let Some((exponent, image)) = found else {
+                        return Err(anyhow::Error::new(KrylovError::NumericalBreakdown {
+                            solver: "gmres",
+                            iteration: 0,
+                            quantity: "a1 derivative A(x) / a0",
+                        }));
+                    };
+                    let kept = vector_ops::scale_pow2(
+                        vector_ops::scale_pow2(part.clone(), -exponent)?,
+                        exponent,
+                    )?;
+                    let lost =
+                        part.axpby(AnyScalar::new_real(1.0), &kept, AnyScalar::new_real(-1.0))?;
+                    if lost.maxabs()? > 0.0 {
+                        remaining = Some(lost);
                     }
-                    overflowing = exponent;
-                    exponent *= 2;
-                }
-                if let Some((mut upper, mut image)) = finite {
-                    while upper - overflowing > 1 {
-                        let middle = overflowing + (upper - overflowing) / 2;
-                        match probe(middle)? {
-                            Some(found) => {
-                                upper = middle;
-                                image = found;
-                            }
-                            None => overflowing = middle,
-                        }
-                    }
-                    x_exponent = upper;
-                    applied = image;
-                }
-                // With no finite image, `applied` stays non-finite and the
-                // quotient check below reports the breakdown.
+                    (image, exponent)
+                };
+                let (part_quotient, calls) =
+                    vector_ops::scaled_quotient(image, exponent, &a0, "gmres")?;
+                quotient_scale_calls += calls;
+                quotient = Some(match quotient {
+                    None => part_quotient,
+                    Some(sum) => sum.axpby(
+                        AnyScalar::new_real(1.0),
+                        &part_quotient,
+                        AnyScalar::new_real(1.0),
+                    )?,
+                });
             }
+            let (Some(quotient), None) = (quotient, remaining) else {
+                return Err(anyhow::Error::new(KrylovError::NumericalBreakdown {
+                    solver: "gmres",
+                    iteration: 0,
+                    quantity: "a1 derivative A(x) / a0",
+                }));
+            };
             if profile_enabled {
                 profile.apply += started.elapsed();
                 profile.apply_calls += apply_calls;
             }
             let started = Instant::now();
-            let (quotient, quotient_scale_calls) =
-                vector_ops::scaled_quotient(applied, x_exponent, &a0, "gmres")?;
             // `dx/da1 = -A(b / a0) / a0` can itself exceed the `f64` range
             // (`A = f64::MAX I`, `b = 1`, `a0 = 1/2` gives `-4 f64::MAX`). No
             // rescaling makes it representable, and `a1 = 0` times an
             // infinite entry would be NaN, so that is reported here.
-            if !vector_ops::components_finite(&quotient)? {
+            if !quotient.is_all_finite()? {
                 return Err(anyhow::Error::new(KrylovError::NumericalBreakdown {
                     solver: "gmres",
                     iteration: 0,
