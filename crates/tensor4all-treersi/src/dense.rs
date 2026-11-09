@@ -75,10 +75,12 @@ fn cpu_einsum_host<T: TreeRsiScalar>(
     Ok((data, dims))
 }
 
-// Number of einsums this thread dispatched to a CUDA engine.
+// Number of einsums a CUDA engine actually returned on this thread.
 //
-// Test-only observability: a primitive test asserts this advances, so a CUDA
-// arm that quietly ran the same arithmetic on the host cannot pass. The count
+// Test-only observability: a primitive test asserts this advances, so a route
+// that keeps the arm but does the arithmetic on the host cannot pass. It is
+// counted after the device contraction returns, not on entry to the arm, so the
+// count is evidence of device work rather than of reaching a branch. The count
 // is thread-local because these primitives run on the caller's thread and the
 // test binary runs other CUDA cases in parallel.
 #[cfg(all(test, feature = "tenferro-cuda"))]
@@ -93,8 +95,6 @@ fn cuda_einsum_host<T: TreeRsiScalar>(
     input_ids: &[&[usize]],
     output_ids: &[usize],
 ) -> Result<(Vec<T>, Vec<usize>)> {
-    #[cfg(test)]
-    CUDA_EINSUMS.with(|count| count.set(count.get() + 1));
     let host = operands
         .iter()
         .map(|(data, dims)| {
@@ -114,6 +114,10 @@ fn cuda_einsum_host<T: TreeRsiScalar>(
         })
         .map_err(TreeRsiError::numerical)?
         .map_err(TreeRsiError::numerical)?;
+    // Counted here, where a device contraction has already returned a result:
+    // entering the arm is not evidence that the device did the work.
+    #[cfg(test)]
+    CUDA_EINSUMS.with(|count| count.set(count.get() + 1));
     let host = cuda
         .download(&contracted)
         .map_err(TreeRsiError::numerical)?;
