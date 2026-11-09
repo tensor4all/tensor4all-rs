@@ -46,7 +46,7 @@ fn reciprocal_factors_match_the_direct_reciprocal_for_a_real_divisor() {
     // unchanged while it stays normal, so every path must give the bits of
     // the direct reciprocal multiplication.
     for (x, d) in [
-        (1.0, 3.0),
+        (1.0, 7.0),
         (5.5, 7.0),
         (1.0, 0.1),
         (-2.75, 1.7),
@@ -152,6 +152,30 @@ fn reciprocal_factors_keep_finite_components_of_a_rotated_quotient() {
 }
 
 #[test]
+fn reciprocal_factors_keep_finite_components_of_a_complex_value() {
+    // A component of `x * w` can reach `|x| |w|`, about `1.4 * f64::MAX` for
+    // `x = f64::MAX * (1 + i)` and `|w|` near one, although every component of
+    // `x / d` is finite. `1.9 + 2^-1074 i` takes the unscaled-conjugate path.
+    let value = Complex64::new(f64::MAX, f64::MAX);
+    for divisor in [
+        Complex64::new(1.9, 0.5),
+        Complex64::new(1.9, f64::from_bits(1)),
+        Complex64::new(1.9, 0.5) * pow2(150),
+        Complex64::new(1.9, 0.5) * pow2(300),
+    ] {
+        let expected = value * (Complex64::new(1.0, 0.0) / divisor);
+        assert!(expected.re.is_finite() && expected.im.is_finite());
+        let actual = divide_complex(value, divisor);
+        for (a, e) in [(actual.re, expected.re), (actual.im, expected.im)] {
+            assert!(
+                (a - e).abs() <= 4.0 * f64::EPSILON * e.abs(),
+                "{divisor}: {actual} vs {expected}"
+            );
+        }
+    }
+}
+
+#[test]
 fn reciprocal_factors_track_the_divisor_gradient() {
     // d(x / d)/dd = -x / d^2 = -2^-3 * 2^-s for x = 2 * 2^s, d = 4 * 2^s,
     // on both the direct and the scaled path.
@@ -195,12 +219,13 @@ fn reciprocal_factors_bound_the_subnormal_error_of_a_complex_quotient() {
         (Complex64::new(0.2, 0.1), 9.0),
         (Complex64::new(0.03, -0.01), 9.0),
         (Complex64::new(3.0, 4.0) * pow2(-600), 9.0),
-        (Complex64::new(0.6, 0.8), 3.0),
-        (Complex64::new(1.0, 1e-3), 3.0),
-        (Complex64::new(1.9, -0.3), 3.0),
-        (Complex64::new(3.0, 4.0), 3.0),
-        (Complex64::new(3.0, 4.0) * pow2(150), 3.0),
-        (Complex64::new(3.0, 4.0) * pow2(300), 3.0),
+        (Complex64::new(0.45, 0.25), 7.0),
+        (Complex64::new(0.6, 0.8), 7.0),
+        (Complex64::new(1.0, 1e-3), 7.0),
+        (Complex64::new(1.9, -0.3), 7.0),
+        (Complex64::new(3.0, 4.0), 7.0),
+        (Complex64::new(3.0, 4.0) * pow2(150), 7.0),
+        (Complex64::new(3.0, 4.0) * pow2(300), 7.0),
     ];
     for (d, bound) in divisors {
         let e = -(d.norm().log2().round() as i32);

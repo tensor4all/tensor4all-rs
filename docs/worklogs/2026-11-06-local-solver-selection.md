@@ -97,7 +97,9 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   forming `1 / a0`, so a subnormal `a0` such as `3 * 2^-1070`, or a complex
   `a0` whose `|a0|^2` overflows or underflows, gives the finite quotient.
   Core tests cover: a complex quotient whose magnitude exceeds `f64::MAX`
-  (`0.51 * f64::MAX / (0.35 + 0.35i)`) keeps finite components;
+  (`0.51 * f64::MAX / (0.35 + 0.35i)`) keeps finite components, and so does
+  `f64::MAX * (1 + i) / (1.9 + 0.5 i)`, also with the divisor scaled by
+  `2^150` and `2^300` and for `1.9 + 2^-1074 i`;
   `from_bits(2) / 3` gives `from_bits(1)`, and a quotient just above `2^-1075`
   (`from_bits(0x224d82c07cc53ee0) / from_bits(0x657d82c07cc53edf)`) rounds up
   to `from_bits(1)` rather than to zero; results with a real `a0` match the
@@ -106,7 +108,7 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   imaginary parts `-2^-1020` and `-2^-1000`; `1 + NaN i` is rejected. A
   purely imaginary `a0` is divided exactly (`2^-1074 / i = -2^-1074 i`); for
   other complex `a0`, a sweep of subnormal quotients checks the absolute error
-  bound of `9 * 2^-1074` (`|a0| < 1/2`) or `3 * 2^-1074`. A divisor
+  bound of `9 * 2^-1074` (`|a0| < 1/2`) or `7 * 2^-1074`. A divisor
   component that scaling down would flush is applied unscaled
   (`2^1023 / (1 + 2^-1074 i)` keeps `-2^-51 i`), and a tracked complex
   divisor, purely imaginary included, gives the gradient of the direct

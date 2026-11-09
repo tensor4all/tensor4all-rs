@@ -55,25 +55,24 @@ impl AnyScalar {
     ///   exact, followed by the factors of the real `b`, so the real-divisor
     ///   guarantees apply to each component.
     /// - Another complex divisor gives a real factor last, built from
-    ///   `1 / |self * 2^j|^2` with `|self * 2^j|` in `[1/4, 1/2)` when
-    ///   `|self| < 1/2`, in `[1/2, 1)` up to `2^201`, and in `[2^64, 2^65)`
-    ///   above. When `j >= 0`, `2^j` and `conj(self * 2^j)` come first. When
-    ///   `j < 0`, scaling `self` down could flush a component, so `conj(self)`
-    ///   is applied unscaled: up to `2^201` the factors are `2^j`,
-    ///   `conj(self)` and `2^j / |self * 2^j|^2`, and above it `conj(self)`
-    ///   comes between two powers of two whose product is `2^(2j)`, followed
-    ///   by `1 / |self * 2^j|^2`. No component of
-    ///   `1 / self` or of a scaled-down `self` is formed on its own. For a real
-    ///   value, an intermediate overflows only when a quotient component
-    ///   does, and each component has a relative error of a few units in the
-    ///   last place; in the subnormal range the intermediate
-    ///   `q * |self * 2^j|^2` is rounded at subnormal granularity, so the
-    ///   absolute error is up to `9 * 2^-1074` when `|self| < 1/2` and up to
-    ///   `3 * 2^-1074` otherwise, and a component that small can round to
-    ///   zero. For a complex value the error of each component is a few units
-    ///   in the last place of `|quotient|`, and when `|self| >= 1/2` an
-    ///   intermediate can also overflow if a component of the value exceeds
-    ///   `f64::MAX / 2`.
+    ///   `1 / |self * 2^j|^2` with `|self * 2^j|` in `[1/4, 1/2)` up to
+    ///   `|self| = 2^201` and in `[2^64, 2^65)` above. When `j >= 0`, `2^j`
+    ///   and `conj(self * 2^j)` come first. When `j < 0` and `|self|` is below
+    ///   `2^201`, the factors are `conj(self * 2^j)` and
+    ///   `2^j / |self * 2^j|^2` if scaling `self` down is exact; if it would
+    ///   flush a component, `conj(self)` is applied unscaled instead, as
+    ///   `2^j`, `conj(self)`, `2^j / |self * 2^j|^2`. Above `2^201`,
+    ///   `conj(self)` comes between two powers of two whose product is
+    ///   `2^(2j)`, followed by `1 / |self * 2^j|^2`. No component of `1 / self` or of a
+    ///   scaled-down `self` is formed on its own, and no intermediate
+    ///   component exceeds the largest component of the value or of the
+    ///   quotient, so none overflows unless a quotient component does. The
+    ///   error of each component is a few units in the last place of
+    ///   `|quotient|`. For a real value with a subnormal quotient, the
+    ///   intermediate before the last factor is rounded at subnormal
+    ///   granularity, so the absolute error is up to `9 * 2^-1074` when
+    ///   `|self| < 1/2` and up to `7 * 2^-1074` otherwise, and a component
+    ///   that small can round to zero.
     ///
     /// A gradient-tracked divisor yields tracked factors.
     ///
@@ -147,16 +146,18 @@ impl AnyScalar {
         }
         // With `u = |self * 2^j|` and quotient `q`, the last intermediate
         // before the real reciprocal is `q * u` (real divisor) or `q * u^2`
-        // (complex). For `j > 0` a value is scaled to `q * u` first, and
-        // `u <= 1/2` keeps every intermediate at or below `q`; for `j <= 0` no
-        // step exceeds the value itself, so `u` in `[1/2, 1)` suffices. The
-        // large target `[2^64, 2^65)` loses bits of a scaled value only for a
-        // quotient below `2^-1086`, and those bits stay below `2^-1139`.
+        // (complex). For a real divisor and `j > 0` a value is scaled to
+        // `q * u` first, and `u <= 1/2` keeps every intermediate at or below
+        // `q`; for `j <= 0` no step exceeds the value itself, so `u` in
+        // `[1/2, 1)` suffices. A complex factor `w` can grow a component of a
+        // complex value to `|x| |w|`, up to `sqrt(2)` times its largest
+        // component, so a complex divisor keeps `|w| <= 1/2` with `u` in
+        // `[1/4, 1/2)`. The large target `[2^64, 2^65)` loses bits of a scaled
+        // value only for a quotient below `2^-1086`, and those bits stay below
+        // `2^-1139`.
         let j = if complex {
-            if k >= 2 {
+            if k >= -COMPLEX_LARGE_DIVISOR_EXPONENT {
                 k - 2
-            } else if k >= -COMPLEX_LARGE_DIVISOR_EXPONENT {
-                k - 1
             } else {
                 k + LARGE_DIVISOR_TARGET_EXPONENT
             }
@@ -181,15 +182,25 @@ impl AnyScalar {
             factors.extend(pow2(j));
             factors.push(scaled.conj());
         } else {
+            let back = times_pow2(&scaled, -j);
+            if back.real() == re && back.imag() == im && k >= -COMPLEX_LARGE_DIVISOR_EXPONENT {
+                // Scaling the divisor down was exact. `|self * 2^j| < 1/2`
+                // bounds the first intermediate and `2^j / |self * 2^j|^2`
+                // stays normal, so the quotient is rounded once after a
+                // single complex product.
+                factors.push(scaled.conj());
+                factors.push(times_pow2(&(AnyScalar::new_real(1.0) / norm_sqr), j));
+                return Ok(factors);
+            }
             // Scaling the divisor down can flush a component whose product
             // with the value is representable, so `conj(self)` is applied
-            // unscaled after `2^(k-1)`, which keeps a real value times
-            // `conj(self)` below `|x|`. The remaining `2^(2j-k+1)` is folded
-            // into the real reciprocal when that stays normal (`j = k - 1`), so
-            // the quotient is rounded once at the end.
-            factors.extend(pow2(k - 1));
+            // unscaled after `2^(k-2)`, which keeps `|2^(k-2) self|` below
+            // 1/2. The remaining `2^(2j-k+2)` is folded into the real
+            // reciprocal when that stays normal (`j = k - 2`), so the quotient
+            // is rounded once at the end.
+            factors.extend(pow2(k - 2));
             factors.push(self.conj());
-            let remaining = 2 * j - k + 1;
+            let remaining = 2 * j - k + 2;
             if k >= -COMPLEX_LARGE_DIVISOR_EXPONENT {
                 factors.push(times_pow2(
                     &(AnyScalar::new_real(1.0) / norm_sqr),

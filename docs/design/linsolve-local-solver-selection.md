@@ -135,19 +135,26 @@ is again solved in closed form. Both closed forms multiply by the factors of
 - an untracked purely imaginary `a0 = b i`: the exact factor `-i`, then the
   factors of the real `b` (a tracked one takes the general path, whose
   recorded expression depends on both components);
-- another complex `a0`: `2^j` and `conj(a0 * 2^j)` when `j >= 0`, then the real
-  `1 / |a0 * 2^j|^2`. When `j < 0`, `conj(a0)` is applied unscaled: up to
-  `|a0| = 2^201` the factors are `2^j`, `conj(a0)` and the real
-  `2^j / |a0 * 2^j|^2`, and above it two powers of two with product `2^(2j)`
-  surround `conj(a0)`, followed by `1 / |a0 * 2^j|^2`. A component of `1 / a0` can underflow while the matching
+- another complex `a0`, with `|a0 * 2^j|` in `[1/4, 1/2)` up to
+  `|a0| = 2^201` and in `[2^64, 2^65)` above: `2^j` and `conj(a0 * 2^j)` when
+  `j >= 0`, then the real `1 / |a0 * 2^j|^2`. When `j < 0` below `2^201`, the
+  factors are `conj(a0 * 2^j)` and the real `2^j / |a0 * 2^j|^2` if scaling
+  `a0` down is exact, and `2^j`, the unscaled `conj(a0)` and
+  `2^j / |a0 * 2^j|^2` if it would flush a component. Above `2^201`, two
+  powers of two with product `2^(2j)` surround `conj(a0)`, followed by
+  `1 / |a0 * 2^j|^2`. A component of `1 / a0` can underflow while the matching
   component of the quotient is representable (`2^600 / (2^600 + 2^-420 i)`
   has imaginary part `-2^-1020`), and so can a component of a scaled-down
   `a0` (`2^1023 / (1 + 2^-1074 i)` has imaginary part `-2^-51`), so neither
-  is formed on its own. The intermediate is `q * |a0 * 2^j|^2`; keeping it from overflowing for
-  quotient components near `f64::MAX` needs `|a0 * 2^j| < 1`, so in the
-  subnormal range it is rounded more coarsely than `q`. The absolute error is
-  then up to `9 * 2^-1074` (`|a0| < 1/2`) or `3 * 2^-1074` (otherwise), and a
-  quotient component that small can round to zero.
+  is formed on its own. A complex factor `w` can grow a component of a complex
+  value to `|x| |w|`, about `1.4 * f64::MAX` for `x = f64::MAX * (1 + i)` and
+  `|w|` near one, so every complex factor applied before the last one has
+  `|w| <= 1/2`; no intermediate component then exceeds the largest component
+  of the value or of the quotient. The cost is that the intermediate before
+  the last factor is smaller than `q`, so in the subnormal range it is
+  rounded more coarsely than `q`. The absolute error is then up to
+  `9 * 2^-1074` (`|a0| < 1/2`) or `7 * 2^-1074` (otherwise), and a quotient
+  component that small can round to zero.
 
 ## Tests
 
