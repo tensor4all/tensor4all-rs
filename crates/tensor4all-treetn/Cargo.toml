@@ -91,6 +91,12 @@ required-features = ["tenferro-cuda", "tenferro-cpu-faer"]
 name = "integration"
 path = "tests/main.rs"
 
+# Changes the process-global default SVD truncation policy: must not share a
+# test binary with tests that read it.
+[[test]]
+name = "linsolve_enrichment_policy"
+path = "tests/linsolve_enrichment_policy.rs"
+
 # Installs a process-global counting allocator: must not share a test binary
 # with tests that measure anything else.
 [[test]]

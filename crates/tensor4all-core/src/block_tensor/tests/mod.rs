@@ -671,6 +671,20 @@ fn test_maxabs() {
     assert!((m - 5.0).abs() < 1e-10);
 }
 
+#[test]
+fn test_min_nonzero_abs() {
+    let idx = DynIndex::new_dyn(2);
+    let b1 = make_vector_with_index(vec![0.0, -5.0], &idx);
+    let b2 = make_vector_with_index(vec![3.0, 0.5], &idx);
+    let block = BlockTensor::new(vec![b1, b2], (2, 1)).unwrap();
+    assert_eq!(block.min_nonzero_abs().unwrap(), Some(0.5));
+
+    let z1 = make_vector_with_index(vec![0.0, 0.0], &idx);
+    let z2 = make_vector_with_index(vec![0.0, 0.0], &idx);
+    let zero = BlockTensor::new(vec![z1, z2], (2, 1)).unwrap();
+    assert_eq!(zero.min_nonzero_abs().unwrap(), None);
+}
+
 // ========================================================================
 // Unsupported operations
 // ========================================================================

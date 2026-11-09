@@ -12,5 +12,7 @@ pub(crate) use environment::CachedTopology;
 pub use environment::{EnvironmentCache, NetworkTopology};
 pub(crate) use local_solver::solve_local_system;
 pub use local_solver::LocalSolver;
-pub use options::{GmresToleranceMode, LinsolveOptions};
+pub use options::{
+    GmresToleranceMode, LinsolveOptions, ResidualEnrichment, ResidualEnrichmentRangeError,
+};
 pub use projected_operator::ProjectedOperator;

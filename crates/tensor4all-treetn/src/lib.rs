@@ -140,7 +140,8 @@ pub use treetn::{
 pub use linsolve::{
     relative_linear_system_residual, square_linsolve, EnvironmentCache, GmresToleranceMode,
     LinsolveOptions, LinsolveVerifyReport, LocalSolver, NetworkTopology, NodeVerifyDetail,
-    ProjectedOperator, ProjectedState, SquareLinsolveResult, SquareLinsolveUpdater,
+    ProjectedOperator, ProjectedState, ResidualEnrichment, ResidualEnrichmentRangeError,
+    SquareLinsolveResult, SquareLinsolveUpdater,
 };
 
 use petgraph::graph::NodeIndex;

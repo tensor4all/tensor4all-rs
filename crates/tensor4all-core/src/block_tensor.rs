@@ -484,6 +484,18 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
         })
     }
 
+    fn min_nonzero_abs(&self) -> std::result::Result<Option<f64>, Self::Error> {
+        self.blocks.iter().try_fold(None::<f64>, |acc, block| {
+            let value = block
+                .min_nonzero_abs()
+                .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))?;
+            Ok(match (acc, value) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            })
+        })
+    }
+
     fn is_all_finite(&self) -> std::result::Result<bool, Self::Error> {
         for block in &self.blocks {
             let finite = block
