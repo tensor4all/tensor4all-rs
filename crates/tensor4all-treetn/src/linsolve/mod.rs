@@ -27,6 +27,7 @@ pub mod square;
 // Re-export commonly used types
 pub use common::{
     EnvironmentCache, GmresToleranceMode, LinsolveOptions, NetworkTopology, ProjectedOperator,
+    ResidualEnrichment,
 };
 pub use square::{
     relative_linear_system_residual, square_linsolve, LinsolveVerifyReport, NodeVerifyDetail,

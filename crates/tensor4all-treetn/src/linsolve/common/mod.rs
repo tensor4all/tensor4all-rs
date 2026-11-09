@@ -9,5 +9,5 @@ mod projected_operator;
 
 pub(crate) use environment::CachedTopology;
 pub use environment::{EnvironmentCache, NetworkTopology};
-pub use options::{GmresToleranceMode, LinsolveOptions};
+pub use options::{GmresToleranceMode, LinsolveOptions, ResidualEnrichment};
 pub use projected_operator::ProjectedOperator;

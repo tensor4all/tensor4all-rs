@@ -7,7 +7,7 @@ use tensor4all_core::{
 };
 use tensor4all_treetn::{
     factorize_tensor_to_treetn_with, square_linsolve, IndexMapping, LinsolveOptions,
-    SquareLinsolveResult, TreeTN, TreeTopology,
+    ResidualEnrichment, SquareLinsolveResult, TreeTN, TreeTopology,
 };
 
 type State = TreeTN<IdxTensor, usize>;
@@ -178,12 +178,55 @@ impl Problem {
         .unwrap()
     }
 
-    fn assert_solution(&self, result: &SquareLinsolveResult<IdxTensor, usize>) {
+    /// The initial guess truncated by SVD to bonds of at most `max_bond_dim`.
+    fn rank_limited_init(&self, max_bond_dim: usize) -> State {
+        self.decompose(&self.init.contract_to_tensor().unwrap(), max_bond_dim)
+    }
+
+    /// `dense` decomposed on the problem's tree with bonds of at most `max_bond_dim`.
+    fn decompose(&self, dense: &IdxTensor, max_bond_dim: usize) -> State {
+        let sites = self
+            .init
+            .node_names()
+            .into_iter()
+            .map(|i| {
+                (
+                    i,
+                    self.init.site_space(&i).unwrap().iter().cloned().collect(),
+                )
+            })
+            .collect();
+        factorize_tensor_to_treetn_with(
+            dense,
+            &TreeTopology::new(sites, self.edges.clone()),
+            FactorizeOptions::svd().with_max_bond_dim(max_bond_dim),
+            &0,
+        )
+        .unwrap()
+    }
+
+    fn bond_dims(&self, state: &State) -> Vec<usize> {
+        self.edges
+            .iter()
+            .map(|(u, v)| {
+                state
+                    .bond_index(state.edge_between(u, v).unwrap())
+                    .unwrap()
+                    .dim()
+            })
+            .collect()
+    }
+
+    fn assert_dense_solution(&self, result: &SquareLinsolveResult<IdxTensor, usize>) {
         let actual = result.solution.contract_to_tensor().unwrap();
         let error = actual.sub(&self.expected).unwrap().maxabs().unwrap();
         assert!(error < 1e-8, "dense solution error {error}");
         assert!(result.converged, "residual {:?}", result.residual);
         assert!(result.residual.unwrap() < 1e-9);
+    }
+
+    fn assert_solution(&self, result: &SquareLinsolveResult<IdxTensor, usize>) {
+        self.assert_dense_solution(result);
         for &(u, v) in &self.edges {
             let before = self
                 .init
@@ -502,5 +545,160 @@ fn small_nonzero_operator_is_not_treated_as_zero() {
             .with_nsite(nsite)
             .with_coefficients(p.a0.re, p.a1.re / scale);
         p.assert_solution(&p.solve(p.init.clone(), 0, options));
+    }
+}
+
+#[test]
+fn enrichment_grows_an_insufficient_initial_rank() {
+    for complex in [false, true] {
+        for edges in [vec![(0, 1), (1, 2), (2, 3)], vec![(0, 1), (0, 2), (0, 3)]] {
+            let p = Problem::new(&edges, complex);
+            let init = p.rank_limited_init(1);
+            assert!(p.bond_dims(&init).iter().all(|&dim| dim == 1));
+            let without = p.solve(init.clone(), 0, p.options(4));
+            assert!(!without.converged);
+            let options = p.options(6).with_enrichment(ResidualEnrichment::default());
+            let result = p.solve(init, 0, options);
+            p.assert_dense_solution(&result);
+            // Every bond grows, and never beyond the dimension of its smaller side.
+            for (dim, &(u, v)) in p.bond_dims(&result.solution).into_iter().zip(&edges) {
+                let side = |node: usize, away: usize| {
+                    let mut seen = vec![node];
+                    let mut stack = vec![node];
+                    while let Some(n) = stack.pop() {
+                        for &(a, b) in &edges {
+                            for (from, to) in [(a, b), (b, a)] {
+                                if from == n && to != away && !seen.contains(&to) {
+                                    seen.push(to);
+                                    stack.push(to);
+                                }
+                            }
+                        }
+                    }
+                    1usize << seen.len()
+                };
+                let bound = side(u, v).min(side(v, u));
+                assert!(
+                    (2..=bound).contains(&dim),
+                    "edge ({u}, {v}): {dim} > {bound}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn enrichment_respects_per_step_and_total_bond_limits() {
+    // The complex solution needs rank 4 across the middle bond.
+    let p = Problem::new(&[(0, 1), (1, 2), (2, 3)], true);
+    let init = p.rank_limited_init(1);
+    let mut options = p
+        .options(1)
+        .with_enrichment(ResidualEnrichment::default().with_max_added(1));
+    options.convergence_tol = None;
+    // One full sweep visits every edge twice, adding at most one direction
+    // per visit.
+    let dims = p.bond_dims(&p.solve(init.clone(), 0, options.clone()).solution);
+    assert!(dims.iter().all(|&dim| (2..=3).contains(&dim)), "{dims:?}");
+
+    let capped = options.with_nfullsweeps(4).with_enrichment(
+        ResidualEnrichment::default()
+            .with_max_added(4)
+            .with_max_bond_dim(2),
+    );
+    let result = p.solve(init, 0, capped);
+    assert_eq!(p.bond_dims(&result.solution), vec![2, 2, 2]);
+    assert!(result.residual.unwrap() > 1e-4);
+}
+
+#[test]
+fn enrichment_skips_zero_rhs_and_single_node_problems() {
+    let mut p = Problem::new(&[(0, 1), (1, 2)], true);
+    p.rhs.scale_mut(AnyScalar::new_real(0.0)).unwrap();
+    let init = p.rank_limited_init(1);
+    let options = p.options(2).with_enrichment(ResidualEnrichment::default());
+    let result = p.solve(init, 0, options);
+    assert!(result.converged);
+    assert_eq!(p.bond_dims(&result.solution), vec![1, 1]);
+    assert!(
+        result
+            .solution
+            .contract_to_tensor()
+            .unwrap()
+            .maxabs()
+            .unwrap()
+            < 1e-10
+    );
+
+    let p = Problem::new(&[], false);
+    let options = p.options(2).with_enrichment(ResidualEnrichment::default());
+    p.assert_solution(&p.solve(p.init.clone(), 0, options));
+}
+
+#[test]
+fn enrichment_adds_nothing_once_the_residual_is_negligible() {
+    // The real solution has rank 2 across every bond, below the middle
+    // bond's bound of 4, so only the residual cutoff stops growth.
+    let p = Problem::new(&[(0, 1), (1, 2), (2, 3)], false);
+    let exact = p.decompose(&p.expected, 2);
+    assert_eq!(p.bond_dims(&exact), vec![2, 2, 2]);
+    let options = p
+        .options(2)
+        .with_enrichment(ResidualEnrichment::default().with_cutoff(1e-8));
+    let result = p.solve(exact, 0, options);
+    p.assert_dense_solution(&result);
+    assert_eq!(p.bond_dims(&result.solution), vec![2, 2, 2]);
+}
+
+#[test]
+fn enrichment_rejects_two_site_mode_and_invalid_settings() {
+    let p = Problem::new(&[(0, 1)], false);
+    for (options, expected) in [
+        (
+            p.options(1)
+                .with_nsite(2)
+                .with_enrichment(ResidualEnrichment::default()),
+            "residual enrichment applies only to one-site ALS",
+        ),
+        (
+            p.options(1)
+                .with_enrichment(ResidualEnrichment::default().with_max_added(0)),
+            "max_added must be at least 1",
+        ),
+        (
+            p.options(1)
+                .with_enrichment(ResidualEnrichment::default().with_cutoff(f64::NAN)),
+            "cutoff must be finite and nonnegative",
+        ),
+        (
+            p.options(1)
+                .with_enrichment(ResidualEnrichment::default().with_cutoff(-1.0)),
+            "cutoff must be finite and nonnegative",
+        ),
+        (
+            p.options(1)
+                .with_enrichment(ResidualEnrichment::default().with_max_bond_dim(0)),
+            "max_bond_dim must be at least 1",
+        ),
+    ] {
+        for identity_only in [false, true] {
+            let options = if identity_only {
+                options.clone().with_coefficients(1.0, 0.0)
+            } else {
+                options.clone()
+            };
+            let message = square_linsolve(
+                &p.operator,
+                &p.rhs,
+                p.init.clone(),
+                &0,
+                options,
+                Some(p.input.clone()),
+                Some(p.output.clone()),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(message.contains(expected), "{message}");
+        }
     }
 }
