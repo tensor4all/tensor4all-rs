@@ -1,6 +1,8 @@
 use super::*;
 use num_complex::Complex64;
-use tensor4all_tensorbackend::CpuBackend;
+use std::sync::Arc;
+
+use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
 
 /// Deterministic fixture values for the generic comparison below, so the test
 /// does not depend on a seeded RNG. Complex fixtures keep a non-zero imaginary
@@ -50,8 +52,13 @@ fn naive_contract_axis_diag_probe<T: TreeRsiScalar>(
     out
 }
 
-fn assert_contract_axis_diag_probe_matches_naive<T: Fixture>() {
-    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
+fn cpu_context() -> ExecutionContext {
+    ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
+        CpuBackend::with_threads(1).unwrap(),
+    )))
+}
+
+fn assert_contract_axis_diag_probe_matches_naive<T: Fixture>(context: &ExecutionContext) {
     // Every case is `rest.. x n x k`: the probe axis is last and `axis` is the
     // contracted one, so each case exercises a multi-probe (`k > 1`) call. The
     // rank-2 case has an empty rest prefix (`rows == 1`, one scalar per probe),
@@ -77,7 +84,7 @@ fn assert_contract_axis_diag_probe_matches_naive<T: Fixture>() {
             let rows: usize = expected_dims[..expected_dims.len() - 1].iter().product();
 
             let actual = contract_axis_diag_probe(
-                &context,
+                context,
                 Dense {
                     dims: dims.to_vec(),
                     data: data.clone(),
@@ -125,10 +132,75 @@ fn assert_contract_axis_diag_probe_matches_naive<T: Fixture>() {
 
 #[test]
 fn contract_axis_diag_probe_matches_the_naive_probe_loop_f64() {
-    assert_contract_axis_diag_probe_matches_naive::<f64>();
+    assert_contract_axis_diag_probe_matches_naive::<f64>(&cpu_context());
 }
 
 #[test]
 fn contract_axis_diag_probe_matches_the_naive_probe_loop_c64() {
-    assert_contract_axis_diag_probe_matches_naive::<Complex64>();
+    assert_contract_axis_diag_probe_matches_naive::<Complex64>(&cpu_context());
+}
+
+/// The probe label of each weight column must reach its own probe column of the
+/// output: a transposed or shifted probe axis is invisible to a whole-product
+/// comparison, and these values are small enough to check by hand.
+#[test]
+fn contract_axis_diag_probe_keeps_each_probe_column_separate() {
+    // Input `2 x 2 x 3` column-major (`rest x n x k`), contract `axis = 1`.
+    let input = Dense {
+        dims: vec![2, 2, 3],
+        data: (1..=12).map(|value| value as f64).collect(),
+    };
+    let weights = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let out = contract_axis_diag_probe(&cpu_context(), input, 1, &weights).unwrap();
+    assert_eq!(out.dims, vec![2, 3]);
+    assert_eq!(out.data, vec![7.0, 10.0, 43.0, 50.0, 111.0, 122.0]);
+}
+
+#[cfg(feature = "tenferro-cuda")]
+mod cuda {
+    use super::*;
+
+    fn cuda_context() -> ExecutionContext {
+        ExecutionContext::Cuda(Arc::new(
+            tensor4all_tensorbackend::CudaExecutionContext::new()
+                .expect("CUDA ordinal 0 must be available"),
+        ))
+    }
+
+    #[test]
+    #[ignore = "requires visible CUDA ordinal 0"]
+    fn contract_axis_diag_probe_matches_the_naive_probe_loop_f64_on_cuda() {
+        assert_contract_axis_diag_probe_matches_naive::<f64>(&cuda_context());
+    }
+
+    #[test]
+    #[ignore = "requires visible CUDA ordinal 0"]
+    fn contract_axis_diag_probe_matches_the_naive_probe_loop_c64_on_cuda() {
+        assert_contract_axis_diag_probe_matches_naive::<Complex64>(&cuda_context());
+    }
+
+    #[test]
+    #[ignore = "requires visible CUDA ordinal 0"]
+    fn contract_axis_diag_probe_keeps_each_probe_column_separate_on_cuda() {
+        let input = Dense {
+            dims: vec![2, 2, 3],
+            data: (1..=12).map(|value| value as f64).collect(),
+        };
+        let weights = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let out = contract_axis_diag_probe(&cuda_context(), input, 1, &weights).unwrap();
+        assert_eq!(out.dims, vec![2, 3]);
+        assert_eq!(out.data, vec![7.0, 10.0, 43.0, 50.0, 111.0, 122.0]);
+    }
+
+    #[test]
+    #[ignore = "requires visible CUDA ordinal 0"]
+    fn mat_mul_cols_matches_the_cpu_route_on_cuda() {
+        let a = vec![1.0_f64, 3.0, 2.0, 4.0];
+        let b = vec![5.0_f64, 7.0, 6.0, 8.0];
+        let cpu = mat_mul_cols(&cpu_context(), a.clone(), 2, 2, b.clone(), 2).unwrap();
+        let cuda = mat_mul_cols(&cuda_context(), a, 2, 2, b, 2).unwrap();
+        // 2x2 column-major `[1 2; 3 4] [5 6; 7 8] = [19 22; 43 50]`.
+        assert_eq!(cpu, vec![19.0, 43.0, 22.0, 50.0]);
+        assert_eq!(cuda, cpu);
+    }
 }

@@ -39,12 +39,17 @@ pub fn hadamard_many<T: TreeRsiScalar, V: TreeRsiNode>(
     hadamard_many_in::<T, V>(inputs, options, &context)
 }
 
-/// Approximates the Hadamard product in a caller-owned CPU execution context.
+/// Approximates the Hadamard product in a caller-owned execution context.
 ///
 /// All `inputs` must belong to `context`. `options.seed` initializes a named
 /// ChaCha8 RNG; [`hadamard_many_with_rng_in`] instead consumes a caller's stream.
 /// The returned tensor cores also belong to `context`. Tolerances control
 /// local pivot selection only; validate actual product accuracy separately.
+///
+/// With the `tenferro-cuda` feature a CUDA context is accepted: sketch blocks
+/// stay in host buffers, so every contraction uploads its operands and
+/// downloads its result, and the local rank decision runs on the host. Expect
+/// the transfer cost of that naive route; the numerics match the CPU route.
 ///
 /// # Errors
 /// Returns [`crate::TreeRsiError`] for incompatible inputs/context, invalid
@@ -74,12 +79,14 @@ pub fn hadamard_many_in<T: TreeRsiScalar, V: TreeRsiNode>(
     hadamard_many_with_rng_in::<T, V, _>(inputs, options, &mut rng, context)
 }
 
-/// Approximates the Hadamard product using a caller-owned RNG and CPU context.
+/// Approximates the Hadamard product using a caller-owned RNG and context.
 ///
 /// Consumes `rng` directly: input order, sorted node order, then column-major
 /// standard-normal probe entries. Explicit probes and dimension-one physical
 /// groups consume no draws. `options.seed` is ignored. Inputs and returned
-/// cores belong to `context`; consecutive calls consume successive draws.
+/// cores belong to `context`; consecutive calls consume successive draws. A
+/// CUDA context pays one transfer per contraction and keeps the rank decision
+/// on the host, as [`hadamard_many_in`] describes.
 ///
 /// # Errors
 /// Returns [`crate::TreeRsiError`] for incompatible inputs/context, invalid

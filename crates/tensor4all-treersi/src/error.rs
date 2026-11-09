@@ -146,8 +146,8 @@ pub enum TreeRsiError {
         message: String,
     },
 
-    /// The execution context cannot run tree RSI, or an input does not belong
-    /// to it.
+    /// The execution context cannot run tree RSI, an input does not belong to
+    /// it, or an explicit device transfer failed.
     #[error("tree RSI execution context error: {message}")]
     Context {
         /// Which input or context was rejected and why.

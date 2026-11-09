@@ -104,7 +104,7 @@ provider in a build, so `--all-features` is not a supported configuration.
 | `tenferro-cpu-faer` | pure-Rust faer CPU kernels |
 | `tenferro-system-blas` | system BLAS/LAPACK (OpenBLAS, MKL, Apple Accelerate) |
 | `tenferro-provider-inject` | caller-provided provider on the BLAS-linked tenferro surface |
-| `tenferro-cuda` | CUDA where exposed (currently `tensor4all-core` and `tensor4all-treetn`); implies `tenferro-cpu-faer` for host work |
+| `tenferro-cuda` | CUDA where exposed (`tensor4all-core`, `tensor4all-treetn` and `tensor4all-treersi`); implies `tenferro-cpu-faer` for host work |
 
 `tenferro-cpu-platform` is resolved by target in the wiring-only crate
 `tensor4all-cpu-platform`: Cargo features cannot depend on the target, but its

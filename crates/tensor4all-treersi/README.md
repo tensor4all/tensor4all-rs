@@ -1,9 +1,12 @@
 # tensor4all-treersi
 
-Experimental, CPU-only recursive sketched interpolation (RSI) for simultaneous
+Experimental recursive sketched interpolation (RSI) for simultaneous
 Hadamard products of compatible `TreeTN<IdxTensor, V>` inputs. Supports `f32`,
 `f64`, `Complex32`, and `Complex64`, explicit execution contexts, caller-owned
-RNGs, and supplied column-major probes. RSI has no ACI dependency, including
+RNGs, and supplied column-major probes. The sketch blocks stay in host buffers;
+with a CUDA context the contractions dispatch to the device and pay an explicit
+transfer per operand and per result (issue #1158 step 1), and the rank decision
+runs on the host. RSI has no ACI dependency, including
 build and development dependencies; the comparison executable lives separately
 in `benchmarks/tree-rsi`.
 
