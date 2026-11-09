@@ -993,9 +993,16 @@ fn message_cache_warm_hits_refresh_the_use_stamp() {
     )
     .unwrap();
     evaluator.evaluate_batched(points).unwrap();
-    for cache in evaluator.message_caches.values_mut() {
-        cache.last_used = 0;
-    }
+    let stamps_before = message_cache_stamps(&evaluator);
+    evaluator.reset_message_cache_use_stamps();
+    let stamps_reset = message_cache_stamps(&evaluator);
+    // The reset itself must leave a consistent state: one index entry per cache
+    // that holds payload, keyed by that cache's new stamp.
+    assert_message_cache_index_is_exact(&evaluator);
+    assert_ne!(
+        stamps_reset, stamps_before,
+        "the reset must change the stamps"
+    );
 
     let warm = evaluator.evaluate_batched(points).unwrap();
     assert_scalars_close(&warm, &tree.evaluate(&indices, points).unwrap());
@@ -1007,6 +1014,25 @@ fn message_cache_warm_hits_refresh_the_use_stamp() {
             .any(|cache| cache.last_used() > 0),
         "the edges that served the all-hit call must be re-stamped as used"
     );
+    // Every cache that holds payload is indexed exactly once, under its own
+    // current stamp: a re-stamp that forgot the index would leave the cache
+    // missing from it, and would leave a stale entry keyed by the old epoch.
+    assert_message_cache_index_is_exact(&evaluator);
+    // The all-hit call re-stamps the edges it serves and never moves a stamp
+    // backwards. Not every resident is served by every call, so this asserts the
+    // direction of the change, not that every edge was touched.
+    let restamped = stamps_reset
+        .iter()
+        .filter(|(edge, reset)| evaluator.message_caches[edge].last_used() > *reset)
+        .count();
+    assert!(restamped > 0, "the all-hit call re-stamped no cache at all");
+    for (edge, reset) in &stamps_reset {
+        assert!(
+            evaluator.message_caches[edge].last_used() >= *reset,
+            "{edge:?} moved backwards: {reset} -> {}",
+            evaluator.message_caches[edge].last_used()
+        );
+    }
 }
 
 /// [AI Supplied] #1183: the all-hit cut path re-stamps both directions it
@@ -1038,9 +1064,27 @@ fn message_cache_warm_cut_refreshes_both_directions() {
     evaluator
         .evaluate_batched_with_hint(points, EvaluationHint::around(1))
         .unwrap();
-    for cache in evaluator.message_caches.values_mut() {
-        cache.last_used = 0;
-    }
+    let stamps_before = [(0, 1), (1, 0)].map(|edge| {
+        (
+            edge,
+            evaluator
+                .message_caches
+                .get(&edge)
+                .map(|cache| cache.last_used()),
+        )
+    });
+    evaluator.reset_message_cache_use_stamps();
+    let stamps_reset = message_cache_stamps(&evaluator);
+    assert_message_cache_index_is_exact(&evaluator);
+    // The reset itself hands every cache its own stamp; a shared one would put
+    // two caches under one index entry before the warm call even runs.
+    let mut reset_stamps = stamps_reset
+        .iter()
+        .map(|(_, stamp)| *stamp)
+        .collect::<Vec<_>>();
+    reset_stamps.sort_unstable();
+    reset_stamps.dedup();
+    assert_eq!(reset_stamps.len(), stamps_reset.len(), "{stamps_reset:?}");
 
     let warm = evaluator
         .evaluate_batched_with_hint(points, EvaluationHint::around(1))
@@ -1056,6 +1100,91 @@ fn message_cache_warm_cut_refreshes_both_directions() {
             .is_none_or(|cache| cache.last_used() > 0)),
         "both directions of the warm cut must be re-stamped as used"
     );
+
+    // Both directions are indexed, each under its own current stamp. Sharing one
+    // epoch between them is what an earlier version did: the index then keeps a
+    // single entry for two caches, and every consumer silently sees one edge.
+    assert_message_cache_index_is_exact(&evaluator);
+    let left = evaluator.message_caches[&(0, 1)].last_used();
+    let right = evaluator.message_caches[&(1, 0)].last_used();
+    assert_ne!(left, right, "the two directions must not share a use stamp");
+    assert_eq!(
+        evaluator.message_cache_order.len(),
+        2,
+        "{:?}",
+        evaluator.message_cache_order
+    );
+    assert_eq!(evaluator.message_cache_order.get(&left), Some(&(0, 1)));
+    assert_eq!(evaluator.message_cache_order.get(&right), Some(&(1, 0)));
+    // Against the *post-reset* stamp, so only the warm call can explain the
+    // difference: every direction the cut serves holds a strictly larger stamp
+    // than the reset gave it. Comparing with the pre-reset stamp would pass on
+    // the reset alone.
+    for edge in [(0, 1), (1, 0)] {
+        let reset = stamps_reset
+            .iter()
+            .find(|(candidate, _)| *candidate == edge)
+            .map(|(_, stamp)| *stamp)
+            .expect("the reset stamps every cache that holds payload");
+        let before = stamps_before
+            .iter()
+            .find(|(candidate, _)| *candidate == edge)
+            .and_then(|(_, stamp)| *stamp);
+        assert_ne!(
+            Some(reset),
+            before,
+            "{edge:?} kept its pre-reset stamp, so the reset proved nothing"
+        );
+        let after = evaluator.message_caches[&edge].last_used();
+        assert!(
+            after > reset,
+            "{edge:?} was not re-stamped by the warm cut: {reset} -> {after}"
+        );
+    }
+}
+
+/// The use stamp of every cache that holds payload, keyed by edge.
+fn message_cache_stamps(
+    evaluator: &TreeTNCachedEvaluator<'_, usize>,
+) -> Vec<((usize, usize), u64)> {
+    evaluator
+        .message_caches
+        .iter()
+        .filter(|(_, cache)| cache.key_count() > 0)
+        .map(|(edge, cache)| (*edge, cache.last_used()))
+        .collect()
+}
+
+/// One index entry per cache that holds payload, keyed by that cache's stamp.
+fn assert_message_cache_index_is_exact(evaluator: &TreeTNCachedEvaluator<'_, usize>) {
+    let residents = message_cache_stamps(evaluator);
+    assert_eq!(
+        evaluator.message_cache_order.len(),
+        residents.len(),
+        "the index must hold one entry per cache that retains payload"
+    );
+    for (edge, stamp) in &residents {
+        assert_eq!(
+            evaluator.message_cache_order.get(stamp),
+            Some(edge),
+            "{edge:?} is not indexed under its current stamp {stamp}"
+        );
+    }
+    for (stamp, edge) in &evaluator.message_cache_order {
+        let cache = evaluator
+            .message_caches
+            .get(edge)
+            .expect("every indexed edge is a cache of this evaluator");
+        assert!(
+            cache.key_count() > 0,
+            "{edge:?} is indexed but holds no payload"
+        );
+        assert_eq!(
+            cache.last_used(),
+            *stamp,
+            "{edge:?} is indexed under a stale stamp"
+        );
+    }
 }
 
 /// Inserts a packed cache holding `keys` columns of `bond_dim` elements on
@@ -1335,6 +1464,193 @@ fn reset_message_cache_victim_candidates() {
 
 fn message_cache_victim_candidates() -> usize {
     MESSAGE_CACHE_VICTIM_CANDIDATES.with(std::cell::Cell::get)
+}
+
+fn reset_message_cache_victim_visits() {
+    MESSAGE_CACHE_VICTIM_VISITS.with(|visits| visits.set(0));
+}
+
+fn message_cache_victim_visits() -> usize {
+    MESSAGE_CACHE_VICTIM_VISITS.with(std::cell::Cell::get)
+}
+
+fn reset_message_cache_last_used_reads() {
+    MESSAGE_CACHE_LAST_USED_READS.with(|reads| reads.set(0));
+}
+
+fn message_cache_last_used_reads() -> usize {
+    MESSAGE_CACHE_LAST_USED_READS.with(std::cell::Cell::get)
+}
+
+/// #1209: the LRU index holds exactly the caches that retain payload, each
+/// under its own use stamp, after a real run through the admission path.
+///
+/// The accounting fixture above inserts caches and re-syncs the index through a
+/// test-only rebuild, so it cannot see whether *admission* maintains the index.
+/// This one only calls `evaluate_batched`, with a one-column total so every
+/// admission has to evict: a cache created by this call is stamped while it is
+/// still empty and only starts retaining at the admission that follows.
+#[test]
+fn message_cache_index_holds_exactly_the_caches_that_retain_payload() {
+    let (tree, indices) = five_node_chain();
+    let column_bytes = std::mem::size_of::<CachedScalar>() * 2;
+    let values = alternating_points(&indices, 8);
+    let shape = [indices.len(), 8];
+    let points = ColMajorArrayRef::new(&values, &shape).unwrap();
+    let expected = tree.evaluate(&indices, points).unwrap();
+    let mut evaluator = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            message_cache_max_bytes: column_bytes,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // Two rootings, so caches are created, evicted and reused under pressure.
+    for center in [0, 4, 2] {
+        let actual = evaluator
+            .evaluate_batched_with_hint(points, EvaluationHint::around(center))
+            .unwrap();
+        assert_scalars_close(&actual, &expected);
+    }
+
+    let residents = evaluator
+        .message_caches
+        .iter()
+        .filter(|(_, cache)| cache.key_count() > 0)
+        .collect::<Vec<_>>();
+    assert!(
+        !residents.is_empty(),
+        "a finite budget must retain at least one column to make this test meaningful"
+    );
+    assert_eq!(
+        evaluator.message_cache_order.len(),
+        residents.len(),
+        "the index must hold one entry per cache that retains payload"
+    );
+    for (epoch, edge) in &evaluator.message_cache_order {
+        let cache = evaluator
+            .message_caches
+            .get(edge)
+            .expect("every indexed edge is a cache of this evaluator");
+        assert!(
+            cache.key_count() > 0,
+            "{edge:?} is indexed but holds no payload"
+        );
+        assert_eq!(
+            cache.last_used(),
+            *epoch,
+            "{edge:?} is indexed under a stale use stamp"
+        );
+    }
+    for (edge, cache) in residents {
+        assert_eq!(
+            evaluator.message_cache_order.get(&cache.last_used()),
+            Some(edge),
+            "{edge:?} retains payload but is not in the index"
+        );
+    }
+    assert!(retained_message_cache_bytes(&evaluator) <= column_bytes);
+}
+
+/// #1209: admitting one column per edge under a one-column total must cost the
+/// caches that hold payload, not the edges the evaluator has seen.
+///
+/// The fixture is the one the review used: the 1 024-cache accounting set, a
+/// one-column total, one column retained elsewhere, then one column reserved and
+/// admitted per edge while the running total is updated. Every admission makes
+/// the previous resident the only victim, so an eviction that walked the cache
+/// map would visit each of the 1 024 historical caches once per admission.
+#[test]
+fn message_cache_pressured_admission_visits_only_the_caches_that_hold_payload() {
+    let (tree, indices) = five_node_chain();
+    let edges = 1024usize;
+    let bond_dim = 2usize;
+    let column_bytes = std::mem::size_of::<CachedScalar>() * bond_dim;
+    let mut evaluator = TreeTNCachedEvaluator::new(
+        &tree,
+        &indices,
+        CachedEvaluatorOptions {
+            center: Some(2),
+            // Exactly one column: every admission has to evict the resident.
+            message_cache_max_bytes: column_bytes,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // The accounting fixture's 1 024 historical edge caches. They hold no
+    // payload, so an eviction has nothing to reclaim from them, but they are
+    // the edges the evaluator has seen and they stay in the cache map.
+    for edge_index in 0..edges {
+        evaluator.message_caches.insert(
+            (edge_index, edges + edge_index),
+            PackedMessageCache::<IndexKey, CachedScalar>::new(bond_dim, 0),
+        );
+    }
+    // The one resident, on an edge that is not itself an admission target, so
+    // every admission below has a victim that is not the edge being used.
+    let resident = (2 * edges, 2 * edges + 1);
+    insert_packed_columns(&mut evaluator, resident, 1, bond_dim, 1);
+    assert_eq!(retained_message_cache_bytes(&evaluator), column_bytes);
+
+    reset_message_cache_last_used_reads();
+    reset_message_cache_victim_visits();
+    reset_message_cache_victim_candidates();
+    let mut admitted = 0usize;
+    let (mut reads, mut visits) = (0usize, 0usize);
+    for edge_index in 0..edges {
+        // The same edges the fixture populated, so the cache map keeps its size
+        // and the walk cost is what the issue reports, not growth of the map.
+        let edge = (edge_index, edges + edge_index);
+        // Count what choosing victims costs, not what the test's own insertion
+        // helper does afterwards.
+        reset_message_cache_last_used_reads();
+        reset_message_cache_victim_visits();
+        let cap = evaluator.reserve_message_cache_bytes(&edge, column_bytes, column_bytes);
+        reads += message_cache_last_used_reads();
+        visits += message_cache_victim_visits();
+        if cap < column_bytes {
+            continue;
+        }
+        // Admit the column this reservation made room for. The insertion also
+        // refreshes the running total from the map, so nothing here has to
+        // mirror the admission path's arithmetic.
+        insert_packed_columns(&mut evaluator, edge, 1, bond_dim, edge_index as u64 + 2);
+        admitted += 1;
+        assert!(
+            evaluator.message_cache_retained_bytes <= evaluator.options.message_cache_max_bytes,
+            "admission {edge_index} retained {} bytes over a {column_bytes}-byte total",
+            evaluator.message_cache_retained_bytes
+        );
+    }
+    assert_eq!(admitted, edges, "every edge must admit its one column");
+    assert_eq!(
+        retained_message_cache_bytes(&evaluator),
+        column_bytes,
+        "a one-column total leaves exactly one resident at the end"
+    );
+
+    // One resident at a time, so a victim search proportional to the caches
+    // that hold payload traverses about one cache per admission. Measured with
+    // the pre-#1209 walk restored (the same counters, same counter position):
+    // 1 049 600 traversals and 1 024 `last_used()` reads for this fixture,
+    // against 1 024 and 0 here. The bound is stated generously -- two per
+    // admission -- so one extra resident is allowed, while any walk over the
+    // historical caches per admission is far outside it. The traversal counter
+    // runs before every filter, so a walk over `message_caches` counts the empty
+    // caches too; counting inside `map()` did not, which is how an earlier
+    // version of this test could not see the regression.
+    assert!(
+        visits <= 2 * edges,
+        "{visits} cache visits for {edges} pressured admissions; the search must follow the caches that hold payload"
+    );
+    assert!(
+        reads <= 2 * edges,
+        "{reads} last_used() reads for {edges} pressured admissions; the search must follow the caches that hold payload"
+    );
 }
 
 /// [AI Supplied] #1183 review: re-admitting a key released with the dead prefix
