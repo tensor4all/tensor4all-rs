@@ -310,10 +310,12 @@ const SUM_OP: &str = "sum_on_session";
 /// can reduce a value inside a region it holds open. The result is a plain scalar, published from the
 /// concrete value rather than adopted into any eager runtime.
 ///
-/// **A zero-length axis is not parity with [`IdxTensor::sum`] on purpose** in this slice: the compatibility
-/// route accumulates from zero over the payload and answers `0`, while the session's reduction rejects a
-/// zero-length axis. The session keeps its backend's refusal rather than inventing a special case, and the
-/// difference is covered by a regression test. Everything else in the served domain matches.
+/// **A zero-length axis folds to the operation's identity**: the compatibility route accumulates from zero
+/// over the empty payload and answers `0`, and the session's reduction answers the same `0`, because the
+/// backend treats an empty reduction domain as the fold's unit rather than as invalid input (tenferro
+/// #2453). The two routes therefore agree over the whole served domain. The unit is the fold's own - `sum`
+/// answers `0`, `prod` would answer `1` - and a reduction with no finite unit (`max`/`min`) keeps the
+/// backend's typed refusal; this seam serves `sum` only, so it never exercises that boundary.
 ///
 /// # Errors
 ///

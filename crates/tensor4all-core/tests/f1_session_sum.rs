@@ -213,12 +213,13 @@ fn complex_values_keep_compatibility_parity_through_every_accepted_representatio
 }
 
 #[test]
-fn a_zero_length_axis_keeps_the_backends_refusal_and_leaves_the_session_usable() {
+fn a_zero_length_axis_returns_the_folds_identity_and_leaves_the_session_usable() {
     let context = session_context();
     let empty_index = Index::new_dyn(0);
     let k = Index::new_dyn(3);
 
-    // The compatibility route accumulates from zero over the empty payload and answers 0.
+    // An empty reduction domain folds to the operation's unit, so both routes answer 0 over the empty
+    // payload instead of one of them refusing it.
     let empty = IdxTensor::from_storage(
         vec![empty_index.clone(), k.clone()],
         Arc::new(Storage::from_dense_col_major(Vec::<f64>::new(), &[0, 3]).expect("storage")),
@@ -231,23 +232,19 @@ fn a_zero_length_axis_keeps_the_backends_refusal_and_leaves_the_session_usable()
         "compatibility accumulates from zero"
     );
 
-    // The session route keeps its backend's refusal for a zero-length axis rather than special-casing it:
-    // the documented non-parity. It is a session-side failure, not an operand refusal, so it also shows the
-    // held session surviving one.
+    // The session route answers the same identity, so the parity the rest of the served domain has holds
+    // here too. The held session stays usable after a reduction it only answers with a unit.
     let dense = IdxTensor::from_dense(vec![k.clone()], vec![1.0_f64, 2.0, 3.0]).unwrap();
     context
         .with_concrete_session(|session| {
-            let error = sum_on_session(session, &empty).expect_err("a zero-length axis is refused");
-            match error {
-                tensor4all_core::IdxTensorError::Operation { operation, .. } => {
-                    assert_eq!(operation, "sum_on_session");
-                }
-                other => panic!("expected a typed operation refusal, got {other:?}"),
-            }
-            let value = sum_on_session(session, &dense).expect("session sum after a refusal");
+            let empty_sum =
+                sum_on_session(session, &empty).expect("an empty axis folds to its identity");
+            // `0` is sum's unit, not `prod`'s `1`, and the narrow scalar keeps the operand's kind.
+            assert_eq!(empty_sum.as_f64(), Some(0.0), "the fold's unit for sum");
+            let value = sum_on_session(session, &dense).expect("session sum after the empty one");
             assert_eq!(value.real(), 6.0);
             Ok::<(), tensor4all_core::IdxTensorError>(())
         })
         .expect("session entry")
-        .expect("session work after a zero-length refusal");
+        .expect("session work after an empty-axis fold");
 }
