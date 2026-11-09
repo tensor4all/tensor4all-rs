@@ -209,14 +209,18 @@ where
     F: Fn(&T) -> Result<T>,
 {
     validate_local_options(options)?;
+    // A shortcut that drops a coefficient is taken only when the coefficient
+    // is untracked, so a gradient-tracked `a0` or `a1` stays in the graph.
+    let drops =
+        |value: &AnyScalar, test: fn(&AnyScalar) -> bool| test(value) && !value.tracks_grad();
     let apply_affine = |x: &T| -> Result<T> {
-        if options.a1.is_zero() {
+        if drops(&options.a1, AnyScalar::is_zero) {
             return Ok(x.scale(options.a0.clone())?);
         }
         let ax = apply_a(x)?;
-        if options.a0.is_zero() {
+        if drops(&options.a0, AnyScalar::is_zero) {
             // `a1 = 1`, real or complex, needs no scaling copy of `A x`.
-            if is_exactly_one(&options.a1) {
+            if drops(&options.a1, is_exactly_one) {
                 Ok(ax)
             } else {
                 Ok(ax.scale(options.a1.clone())?)

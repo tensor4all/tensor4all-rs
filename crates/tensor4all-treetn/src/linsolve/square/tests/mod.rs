@@ -162,8 +162,10 @@ fn test_square_linsolve_validation_error_bubbles_up() {
 // These tests are simplified to only test validation, as full linsolve requires
 // proper index mappings which are tested in integration tests.
 
+/// `2^k` for `k` down to `-1074`, built in two steps so that no intermediate
+/// underflows.
 fn pow2(k: i32) -> f64 {
-    pow2_factors(k).product()
+    2.0_f64.powi(k / 2) * 2.0_f64.powi(k - k / 2)
 }
 
 #[test]
@@ -240,97 +242,9 @@ fn divide_by_scalar_rejects_zero_and_non_finite_divisors() {
     let tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
     for divisor in [0.0, f64::NAN, f64::INFINITY] {
         let error = divide_by_scalar(&mut tn.clone(), &AnyScalar::new_real(divisor)).unwrap_err();
-        assert!(error.to_string().contains("cannot divide by"), "{error}");
-    }
-}
-
-fn divide_single_entry<E>(value: E, divisor: AnyScalar) -> E
-where
-    E: tensor4all_core::TensorElement + Copy,
-{
-    let s = DynIndex::new_dyn(1);
-    let tensor = IdxTensor::from_dense(vec![s], vec![value]).unwrap();
-    let mut tn = TreeTN::<IdxTensor, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
-    divide_by_scalar(&mut tn, &divisor).unwrap();
-    tn.to_dense().unwrap().to_vec::<E>().unwrap()[0]
-}
-
-#[test]
-fn divide_by_scalar_keeps_finite_components_of_a_rotated_quotient() {
-    use num_complex::Complex64;
-    // |quotient| exceeds f64::MAX but both components are finite, so no
-    // intermediate may grow the real entry past f64::MAX before the rotation.
-    let entry = Complex64::new(0.51 * f64::MAX, 0.0);
-    let divisor = Complex64::new(0.35, 0.35);
-    let expected = entry * (Complex64::new(1.0, 0.0) / divisor);
-    assert!(expected.re.is_finite() && expected.im.is_finite());
-    // Componentwise: |expected| itself overflows, but its components do not.
-    let scale = expected.re.abs().max(expected.im.abs());
-    assert!(
-        scale.is_finite() && scale > 0.0,
-        "reference must be finite: {scale:e}"
-    );
-    let error_of = |actual: Complex64| {
-        // `f64::max` drops a NaN operand, so check finiteness separately.
-        assert!(actual.re.is_finite() && actual.im.is_finite(), "{actual}");
-        (actual.re - expected.re)
-            .abs()
-            .max((actual.im - expected.im).abs())
-    };
-    // The comparison rejects a wrong answer.
-    assert!(error_of(Complex64::new(0.0, 0.0)) > 1e-15 * scale);
-    // k = 0 takes the direct reciprocal, k = 600 the small-divisor path.
-    for k in [0, 600] {
-        let actual = divide_single_entry(
-            entry * pow2(-k),
-            AnyScalar::new_complex(divisor.re * pow2(-k), divisor.im * pow2(-k)),
+        assert!(
+            format!("{error:#}").contains("cannot divide by"),
+            "{error:#}"
         );
-        let error = error_of(actual);
-        assert!(error <= 1e-15 * scale, "2^{k}: {actual} vs {expected}");
-    }
-}
-
-#[test]
-fn divide_by_scalar_rounds_a_subnormal_quotient_once() {
-    // from_bits(2) / 3 is 2/3 of the smallest subnormal, which rounds to it.
-    // k = 0 takes the direct reciprocal, k = 600 the large-divisor path.
-    for k in [0, 600] {
-        let actual = divide_single_entry(
-            f64::from_bits(2) * pow2(k),
-            AnyScalar::new_real(3.0 * pow2(k)),
-        );
-        assert_eq!(actual.to_bits(), 1, "2^{k}: {actual:e}");
-    }
-}
-
-#[test]
-fn divide_by_scalar_rounds_a_quotient_above_the_subnormal_midpoint_up() {
-    // x / d lies just above 2^-1075, half the smallest subnormal, and `d` is
-    // about 2^600, outside the direct-reciprocal range. Rounding the product
-    // before scaling it down would land exactly on 2^-1075 and round to zero.
-    let x = f64::from_bits(0x224d_82c0_7cc5_3ee0);
-    let d = f64::from_bits(0x657d_82c0_7cc5_3edf);
-    assert_eq!((x / d).to_bits(), 1);
-    assert_eq!(divide_single_entry(x, AnyScalar::new_real(d)).to_bits(), 1);
-}
-
-#[test]
-fn divide_by_scalar_matches_the_direct_reciprocal_outside_its_range() {
-    // Scaling entry and divisor by the same 2^s leaves fl(x * fl(1/d))
-    // unchanged while it stays normal, so every path must give the bits of
-    // the direct reciprocal multiplication.
-    for (x, d) in [
-        (1.0, 3.0),
-        (5.5, 7.0),
-        (1.0, 0.1),
-        (-2.75, 1.7),
-        (1.0, 1.0 / 3.0_f64),
-    ] {
-        let direct: f64 = divide_single_entry(x, AnyScalar::new_real(d));
-        assert_eq!(direct.to_bits(), (x * (1.0 / d)).to_bits());
-        for s in [-1000, -600, 600, 1000] {
-            let actual: f64 = divide_single_entry(x * pow2(s), AnyScalar::new_real(d * pow2(s)));
-            assert_eq!(actual.to_bits(), direct.to_bits(), "{x} / {d} at 2^{s}");
-        }
     }
 }

@@ -64,11 +64,25 @@ another solver.
 - A `gmres_restart_dim` (or core GMRES/Lanczos `max_iter`) whose Krylov
   workspace cannot be allocated returns `KrylovError::InvalidOptions` instead
   of aborting on a capacity overflow.
-- The identity-only closed form returns a finite `rhs / a0` for `a0` whose
-  largest component is below `2^-500` or above `2^500`, where it previously
-  formed an infinite `1 / a0` (or a complex reciprocal from an out-of-range
-  `|a0|^2`) and returned `inf` or `NaN` entries. Other `a0` are unchanged: one
-  multiplication by `1 / a0`.
+- An identity-only solve (`a1 = 0`) returns a finite `rhs / a0` for a real
+  `a0` below `2^-500` or above `2^500`, and keeps each representable
+  component of the quotient for a complex `a0`, in two-site MALS and in
+  one-site ALS with local GMRES. It previously formed `1 / a0` (or a complex
+  reciprocal from an out-of-range `|a0|^2`) and returned `inf`, `NaN` or a
+  flushed component. A real `a0` in
+  `[2^-500, 2^500]` is unchanged: one multiplication by `1 / a0`. The
+  guarantee holds for the stored entries of the scaled node, not for the
+  represented values: in an extreme gauge (entries `2^-1000` on one node and
+  `2^1000` on another) that node can underflow or overflow although the
+  represented quotient is finite.
+- `square_linsolve` rejects a zero `max_bond_dim` and an SVD policy whose
+  threshold is negative or not finite before the identity-only shortcut, as
+  `InvalidConfiguration`; these were previously accepted when the shortcut
+  skipped the truncation.
+- A gradient-tracked `a0 = 0`, `a1 = 0` or `a1 = 1` is no longer dropped by an
+  arithmetic shortcut: the shortcuts in the local solver, in core
+  `gmres_affine` and in the identity-only check apply only to untracked
+  coefficients.
 
 ## Implementation
 
@@ -98,17 +112,22 @@ and whether the reported local residual is relative or absolute.
 
 The identity-only closed form does not depend on the local solver: two-site
 MALS returns `rhs / a0` for every choice, and one-site ALS sweeps so the
-solution stays in the initial bond spaces. The closed form multiplies by
-`1 / a0` when the largest component of `a0` is in `[2^-500, 2^500]`. Outside
-that range it first multiplies the solution by an exact power of two `2^j` and
-then once by `1 / (a0 * 2^j)`. For a small `a0`, `|a0 * 2^j|` is in
-`[1/4, 1/2)`, so every component of the scaled entry stays below the largest
-component of the quotient. For a large `a0`, `|a0 * 2^j|` is in
-`[2^64, 2^65)`, so scaling an entry down loses bits only for a quotient below
-`2^-1086`, where they cannot change the rounded result. For a real `a0`, every
-component equals `fl(x * fl(1 / a0))` with the reciprocal rounded as if the
-exponent range were unbounded: one rounding for the reciprocal and one for the
-product, also for a subnormal quotient.
+solution stays in the initial bond spaces; with GMRES each local `a0 x = b`
+is again solved in closed form. Both closed forms multiply by the factors of
+`AnyScalar::reciprocal_factors`:
+
+- a real `a0` in `[2^-500, 2^500]`: the single factor `1 / a0`;
+- another real `a0`: an exact power of two `2^j`, then `1 / (a0 * 2^j)`, with
+  `|a0 * 2^j|` in `[1/4, 1/2)` for a small `a0` (every scaled entry stays below
+  the quotient) and in `[2^64, 2^65)` for a large one (scaling down loses bits
+  only for a quotient below `2^-1086`, where they cannot change the result).
+  Every component then equals `fl(x * fl(1 / a0))` with the reciprocal rounded
+  as if the exponent range were unbounded, also for a subnormal quotient;
+- a complex `a0`: `2^j`, then `conj(a0 * 2^j)`, then the real
+  `1 / |a0 * 2^j|^2`. A component of `1 / a0` can underflow while the matching
+  component of the quotient is representable (`2^600 / (2^600 + 2^-420 i)`
+  has imaginary part `-2^-1020`), so no reciprocal component is formed on its
+  own.
 
 ## Tests
 

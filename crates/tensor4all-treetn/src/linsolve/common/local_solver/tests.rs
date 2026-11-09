@@ -354,3 +354,37 @@ fn local_solver_rejects_non_finite_affine_coefficients_for_every_solver() {
         }
     }
 }
+
+#[test]
+fn local_solver_keeps_tracked_unit_and_zero_coefficients_in_the_graph() {
+    use tensor4all_core::{DynIndex, IdxTensor};
+    // (a0 + 2 a1) x = 1 gives x = 1 / (a0 + 2 a1), dx/da0 = -x^2 and
+    // dx/da1 = -2 x^2: (x, dx/da0, dx/da1) = (1/2, -1/4, -1/2) at
+    // (a0, a1) = (0, 1) and (1, -1, -2) at (1, 0).
+    let i = DynIndex::new_dyn(1);
+    let b = IdxTensor::from_dense(vec![i.clone()], vec![1.0]).unwrap();
+    let init = IdxTensor::from_dense(vec![i], vec![0.0]).unwrap();
+    let apply = |x: &IdxTensor| -> Result<IdxTensor> { Ok(x.scale(AnyScalar::new_real(2.0))?) };
+    for (solver, (a0, a1, x, da0, da1)) in choices().into_iter().flat_map(|solver| {
+        [(0.0, 1.0, 0.5, -0.25, -0.5), (1.0, 0.0, 1.0, -1.0, -2.0)]
+            .map(|case| (solver.clone(), case))
+    }) {
+        let a0 = AnyScalar::new_real(a0).enable_grad().unwrap();
+        let a1 = AnyScalar::new_real(a1).enable_grad().unwrap();
+        let mut options = LinsolveOptions::new(1).with_local_solver(solver.clone());
+        options.a0 = a0.clone();
+        options.a1 = a1.clone();
+        let result = solve_local_system(&options, apply, &b, &init, false).unwrap();
+        let total = result.solution.sum().unwrap();
+        assert!((total.real() - x).abs() < 1e-12, "{solver:?}: {total:?}");
+        total.backward().unwrap();
+        for (name, value, expected) in [("a0", a0, da0), ("a1", a1, da1)] {
+            let grad = value.grad().unwrap();
+            let grad = grad.unwrap_or_else(|| panic!("{solver:?}: {name} has no gradient"));
+            assert!(
+                (grad.real() - expected).abs() < 1e-12,
+                "{solver:?}: d/d{name} = {grad:?}"
+            );
+        }
+    }
+}

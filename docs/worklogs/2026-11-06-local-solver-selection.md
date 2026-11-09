@@ -117,19 +117,25 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   points to `square_linsolve` for `converged` and the residual.
 - `validate_local_solver` rejects a NaN or infinite `a0` or `a1`, which could
   otherwise reach the identity-only closed form unchecked.
-- The identity-only closed form divides by `a0` without forming `1 / a0`, so a
-  subnormal `a0` such as `3 * 2^-1070`, or a complex `a0` whose `|a0|^2`
-  overflows or underflows, gives the finite quotient. The power of two is
-  applied before the reciprocal for both a small and a large `a0`. For a small
-  `a0` a factor of four of headroom keeps the finite components of a complex
-  quotient whose magnitude exceeds `f64::MAX`
-  (`0.51 * f64::MAX / (0.35 + 0.35i)`). For a large `a0` the scaled divisor
-  is near `2^64`, so the product is rounded once even when it is subnormal:
-  `from_bits(2) / 3` gives `from_bits(1)`, and a quotient just above
-  `2^-1075` (`from_bits(0x224d82c07cc53ee0) / from_bits(0x657d82c07cc53edf)`)
-  rounds up to `from_bits(1)` rather than to zero. Results with a real `a0`
-  match the direct reciprocal multiplication bit for bit after scaling the
-  entry and `a0` by `2^±600` and `2^±1000`.
+- Both identity-only closed forms (two-site MALS and the local GMRES of
+  one-site ALS) divide through `AnyScalar::reciprocal_factors` instead of
+  forming `1 / a0`, so a subnormal `a0` such as `3 * 2^-1070`, or a complex
+  `a0` whose `|a0|^2` overflows or underflows, gives the finite quotient.
+  Core tests cover: a complex quotient whose magnitude exceeds `f64::MAX`
+  (`0.51 * f64::MAX / (0.35 + 0.35i)`) keeps finite components;
+  `from_bits(2) / 3` gives `from_bits(1)`, and a quotient just above `2^-1075`
+  (`from_bits(0x224d82c07cc53ee0) / from_bits(0x657d82c07cc53edf)`) rounds up
+  to `from_bits(1)` rather than to zero; results with a real `a0` match the
+  direct reciprocal bit for bit after scaling by `2^±600` and `2^±1000`;
+  `2^600 / (2^600 + 2^-420 i)` and `2^400 / (2^400 + 2^-600 i)` keep the
+  imaginary parts `-2^-1020` and `-2^-1000`; `1 + NaN i` is rejected.
+- `TreeTN::scale_mut` applies each factor to one node, so the range guarantee
+  is for that node's stored entries, not for the represented values.
+- `square_linsolve` validates `max_bond_dim` and the SVD policy before the
+  identity-only shortcut.
+- The `a0 = 0`, `a1 = 0` and `a1 = 1` arithmetic shortcuts apply only to
+  untracked coefficients; a test differentiates the local solution with
+  respect to tracked `a0` and `a1` for every local solver.
 - `validate_local_solver` and the option, mapping and site-count checks at the
   start of `square_linsolve` return `TreeTNOperationError::InvalidConfiguration`.
 - Every solver-owned Krylov workspace (basis, Hessenberg columns, Givens
@@ -138,8 +144,9 @@ and the option-validation test, and kept `GmresToleranceMode` alongside the
   and by vector operations, and the dense eigendecomposition of the projected
   matrix in the backend, are outside the solver and still abort on failure.
 
-The counts below are from local runs (not CI), on macOS, of the commands listed
-with each count; they are not reproducible from the diff alone.
+The counts below are a historical record of local runs (not CI), on macOS, of
+the commands listed with each count. They are not a reproducible gate; hosted
+CI on the PR head is the independent check.
 
 Validation at `92fddf6e` (branch merged with main `af980a54`):
 

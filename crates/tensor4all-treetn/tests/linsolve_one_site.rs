@@ -783,10 +783,47 @@ fn non_finite_coefficients_are_rejected_before_the_identity_shortcut() {
 }
 
 #[test]
-fn identity_shortcut_divides_by_a_tiny_or_huge_a0_without_overflow() {
-    // Two-site MALS with a1 = 0 and no residual returns rhs / a0 in closed
-    // form. For these coefficients 1 / a0, or |a0|^2 for complex a0, leaves
-    // the f64 range although rhs / a0 is of order 2^70 or 2^-18.
+fn two_site_truncation_options_are_rejected_before_the_identity_shortcut() {
+    let p = Problem::new(&[(0, 1)], false);
+    for (options, message) in [
+        (p.options(1).with_max_bond_dim(0), "max_bond_dim"),
+        (
+            p.options(1)
+                .with_svd_policy(SvdTruncationPolicy::new(f64::NAN)),
+            "threshold",
+        ),
+    ] {
+        let options = LinsolveOptions {
+            convergence_tol: None,
+            ..options
+                .with_nsite(2)
+                .with_coefficients(1.0, 0.0)
+                .with_residual_check(false)
+        };
+        let error = square_linsolve(
+            &p.operator,
+            &p.rhs,
+            p.init.clone(),
+            &0,
+            options,
+            Some(p.input.clone()),
+            Some(p.output.clone()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, TreeTNOperationError::InvalidConfiguration { .. }),
+            "{error:?}"
+        );
+        assert!(format!("{error:#}").contains(message), "{error:#}");
+    }
+}
+
+#[test]
+fn identity_only_solve_divides_by_a_tiny_or_huge_a0_without_overflow() {
+    // With a1 = 0, two-site MALS returns rhs / a0 in closed form and one-site
+    // ALS solves a0 x = b locally, which local GMRES also does in closed form.
+    // For these coefficients 1 / a0, or |a0|^2 for complex a0, leaves the f64
+    // range although rhs / a0 is of order 2^70 or 2^-18.
     // Split the exponent: 2^-1070 itself is subnormal but 1 / 2^1070 overflows.
     let pow2 = |k: i32| 2.0_f64.powi(k / 2) * 2.0_f64.powi(k - k / 2);
     // (complex problem, a0, rhs scale, rhs scale / a0)
@@ -819,28 +856,30 @@ fn identity_shortcut_divides_by_a_tiny_or_huge_a0_without_overflow() {
             .scale(AnyScalar::new_complex(quotient.re, quotient.im))
             .unwrap();
         p.rhs.scale_mut(AnyScalar::new_real(rhs_scale)).unwrap();
-        let options = LinsolveOptions {
-            convergence_tol: None,
-            ..p.options(1)
-                .with_nsite(2)
-                .with_coefficients(AnyScalar::new_complex(a0.re, a0.im), 0.0)
-                .with_residual_check(false)
-        };
-        let result = p.solve(p.init.clone(), 0, options);
-        assert_eq!(result.sweeps, 0);
-        assert!(result.residual.is_none());
-        let error = result
-            .solution
-            .contract_to_tensor()
-            .unwrap()
-            .sub(&expected)
-            .unwrap()
-            .maxabs()
-            .unwrap();
-        let scale = expected.maxabs().unwrap();
-        assert!(
-            error.is_finite() && error <= 1e-14 * scale,
-            "{a0:?}: {error} vs {scale}"
-        );
+        for nsite in [2, 1] {
+            let options = LinsolveOptions {
+                convergence_tol: None,
+                ..p.options(1)
+                    .with_nsite(nsite)
+                    .with_coefficients(AnyScalar::new_complex(a0.re, a0.im), 0.0)
+                    .with_residual_check(false)
+            };
+            let result = p.solve(p.init.clone(), 0, options);
+            assert_eq!(result.sweeps, if nsite == 2 { 0 } else { 1 });
+            assert!(result.residual.is_none());
+            let error = result
+                .solution
+                .contract_to_tensor()
+                .unwrap()
+                .sub(&expected)
+                .unwrap()
+                .maxabs()
+                .unwrap();
+            let scale = expected.maxabs().unwrap();
+            assert!(
+                error.is_finite() && error <= 1e-14 * scale,
+                "nsite = {nsite}, {a0:?}: {error} vs {scale}"
+            );
+        }
     }
 }

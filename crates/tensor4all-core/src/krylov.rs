@@ -1169,12 +1169,24 @@ where
             converged: true,
         });
     }
-    if a1.is_zero() {
+    // A tracked `a1 = 0` stays in the graph through the iteration below.
+    if a1.is_zero() && !a1.tracks_grad() {
         let started = Instant::now();
-        let solution = b.scale(AnyScalar::new_real(1.0) / a0)?;
+        // `a0 x = b` in closed form; the factors keep `b / a0` in range when
+        // `1 / a0` itself is not.
+        let factors = a0.reciprocal_factors().map_err(|error| {
+            anyhow::Error::new(KrylovError::InvalidOptions {
+                solver: "gmres",
+                reason: format!("a1 = 0 needs a finite nonzero a0: {error}"),
+            })
+        })?;
+        let scale_calls = factors.len();
+        let solution = factors
+            .into_iter()
+            .try_fold(b.clone(), |value, factor| value.scale(factor))?;
         if profile_enabled {
             profile.scale += started.elapsed();
-            profile.scale_calls += 1;
+            profile.scale_calls += scale_calls;
         }
         finish!(GmresResult {
             solution,

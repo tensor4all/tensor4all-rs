@@ -33,7 +33,7 @@ pub use updater::{LinsolveVerifyReport, NodeVerifyDetail, SquareLinsolveUpdater}
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
 use tensor4all_core::{AnyScalar, IndexLike, TensorLike};
 
@@ -141,6 +141,8 @@ where
 /// shortcut, [`TreeTNOperationError::InvalidConfiguration`] is returned when
 /// - `nsite` is not 1 or 2, or one-site mode has a bond cap or SVD policy;
 /// - `convergence_tol` is negative or not finite;
+/// - `max_bond_dim` is zero or the SVD policy threshold is negative or not
+///   finite;
 /// - [`LinsolveOptions::validate_local_solver`] rejects the coefficients or the
 ///   local solver options (a non-finite `a0` or `a1`, `a0 = a1 = 0`, invalid
 ///   active GMRES controls, changed `gmres_*` controls with CG or BiCGSTAB,
@@ -290,6 +292,11 @@ where
     options
         .validate_convergence_tol()
         .map_err(TreeTNOperationError::invalid_configuration)?;
+    tensor4all_core::validate_svd_truncation_options(
+        options.truncation.max_bond_dim(),
+        options.truncation.svd_policy(),
+    )
+    .map_err(|error| TreeTNOperationError::invalid_configuration(anyhow::Error::new(error)))?;
     options.validate_local_solver()?;
     if input_mapping.is_some() != output_mapping.is_some() {
         return Err(TreeTNOperationError::invalid_configuration(
@@ -303,7 +310,9 @@ where
         )));
     }
 
-    let identity_only = options.a1.is_zero() || operator_is_zero(operator)?;
+    // A gradient-tracked `a1 = 0` must stay in the graph, so it sweeps.
+    let identity_only =
+        (options.a1.is_zero() && !options.a1.tracks_grad()) || operator_is_zero(operator)?;
     // The closed form is exact for every local solver. ALS must still project
     // an identity solve into the initial bond spaces, so it sweeps instead.
     if identity_only && (options.nsite == 2 || options.a0.is_zero()) {
@@ -428,92 +437,27 @@ where
     Ok(operator.norm()? == 0.0)
 }
 
-/// Exact powers of two whose product is `2^k`, each a normal `f64`.
-fn pow2_factors(mut k: i32) -> impl Iterator<Item = f64> {
-    const STEP: i32 = 1000;
-    std::iter::from_fn(move || {
-        if k == 0 {
-            return None;
-        }
-        let j = k.clamp(-STEP, STEP);
-        k -= j;
-        Some(f64::from_bits(((1023 + j) as u64) << 52))
-    })
-}
-
-fn scalar_times_pow2(value: &AnyScalar, k: i32) -> AnyScalar {
-    pow2_factors(k).fold(value.clone(), |acc, factor| {
-        acc * AnyScalar::new_real(factor)
-    })
-}
-
-/// Largest exponent magnitude of `divisor` for which `1 / divisor` and the
-/// complex `|divisor|^2` stay comfortably inside the normal `f64` range.
-const DIRECT_RECIPROCAL_EXPONENT: i32 = 500;
-
-/// Magnitude exponent of the scaled divisor `divisor * 2^j` used for a large
-/// divisor; see [`divide_by_scalar`].
-const LARGE_DIVISOR_TARGET_EXPONENT: i32 = 64;
-
-/// Multiply `tn` by `1 / divisor`.
+/// Multiply `tn` by `1 / divisor` through
+/// [`AnyScalar::reciprocal_factors`], which keeps each step in the `f64` range
+/// when the quotient is representable.
 ///
-/// When the largest component of `divisor` lies in `[2^-500, 2^500]` this is
-/// one multiplication by the reciprocal. Outside that range the reciprocal (or
-/// the complex `|divisor|^2`) can leave the `f64` range, so `tn` is first
-/// multiplied by an exact power of two `2^j` and then once by
-/// `1 / (divisor * 2^j)`, a normal number:
-///
-/// - small divisors: `|divisor * 2^j|` is in `[1/4, 1/2)`. Every component of
-///   the scaled entry is then below the largest component of the quotient, so
-///   it overflows only when the quotient does.
-/// - large divisors: `|divisor * 2^j|` is in `[2^64, 2^65)`. A scaled entry
-///   component below `2^-1022`, where scaling down can lose bits, belongs to a
-///   quotient below `2^-1086`, and the lost bits stay below `2^-1139` after the
-///   multiplication, so they cannot change the rounded result.
-///
-/// For a real divisor and either kind of entry, every component of the result
-/// is `fl(x * fl(1 / divisor))`, the result of the direct reciprocal
-/// multiplication with the reciprocal rounded as if the exponent range were
-/// unbounded: one rounding for the reciprocal and one for the product, also
-/// when the product is subnormal. The same holds for a complex divisor and a
-/// real entry. A complex-by-complex product can lose low bits of an entry
-/// component in the scaling (absolute error below `2^-1139`) and can overflow
-/// inside the multiplication, as it can with a direct reciprocal.
+/// [`TreeTN::scale_mut`] applies each factor to one node, so the range and
+/// rounding properties of the factors hold for that node's stored entries. In
+/// a gauge where that node's entries are far from the represented values (for
+/// example `2^-1000` on one node and `2^1000` on another), the node can
+/// underflow or overflow although the represented quotient is finite.
 fn divide_by_scalar<T, V>(tn: &mut TreeTN<T, V>, divisor: &AnyScalar) -> Result<()>
 where
     T: TensorLike,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    let largest = divisor.real().abs().max(divisor.imag().abs());
-    anyhow::ensure!(
-        largest.is_finite() && largest > 0.0,
-        "square_linsolve: cannot divide by {divisor:?}"
-    );
-    let exponent = largest.log2().floor() as i32;
-    if exponent.abs() <= DIRECT_RECIPROCAL_EXPONENT {
-        tn.scale_mut(AnyScalar::new_real(1.0) / divisor.clone())?;
-        return Ok(());
+    let factors = divisor
+        .reciprocal_factors()
+        .map_err(anyhow::Error::new)
+        .context("square_linsolve: identity-only closed form")?;
+    for factor in factors {
+        tn.scale_mut(factor)?;
     }
-    // `|divisor| * 2^k` lies in [1, 2) after these loops; each step is exact.
-    let mut k = -exponent;
-    let mut magnitude = scalar_times_pow2(divisor, k).abs();
-    while magnitude >= 2.0 {
-        magnitude *= 0.5;
-        k -= 1;
-    }
-    while magnitude < 1.0 {
-        magnitude *= 2.0;
-        k += 1;
-    }
-    let j = if k > 0 {
-        k - 2
-    } else {
-        k + LARGE_DIVISOR_TARGET_EXPONENT
-    };
-    for factor in pow2_factors(j) {
-        tn.scale_mut(AnyScalar::new_real(factor))?;
-    }
-    tn.scale_mut(AnyScalar::new_real(1.0) / scalar_times_pow2(divisor, j))?;
     Ok(())
 }
 
