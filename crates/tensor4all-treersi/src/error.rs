@@ -139,15 +139,19 @@ pub enum TreeRsiError {
     #[error("tree RSI input context mismatch: {0}")]
     InputContext(#[source] TreeTNOperationError),
 
-    /// An input core could not be read with the requested scalar type.
+    /// An input core could not be read with the requested scalar type, or its
+    /// host readback failed.
     #[error("tree RSI scalar kind mismatch: {message}")]
     ScalarKind {
         /// Underlying conversion message.
         message: String,
     },
 
-    /// The execution context cannot run tree RSI, an input does not belong to
-    /// it, or an explicit device transfer failed.
+    /// The execution context cannot run tree RSI, or an input does not belong to
+    /// it.
+    ///
+    /// A failed explicit device transfer is **not** reported here: it keeps its
+    /// own source in [`Self::Numerical`].
     #[error("tree RSI execution context error: {message}")]
     Context {
         /// Which input or context was rejected and why.

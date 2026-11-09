@@ -16,9 +16,11 @@
 //! sketch values is not a justified general-purpose function approximation.
 //! The implementation uses host buffers and discrete pivot selection; with the
 //! `tenferro-cuda` feature a caller-supplied CUDA context runs the contractions
-//! on the device and transfers each operand and result explicitly, while the
-//! rank decision stays on the host. Automatic differentiation through this
-//! operation is not supported.
+//! on the device and transfers each operand and result explicitly. Two host
+//! dependencies remain for a CUDA run: the input-core readback enters the
+//! process-global CPU eager context, and the rank decision uses the
+//! process-global CPU context. Automatic differentiation through this operation
+//! is not supported.
 //!
 //! # Examples
 //! ```

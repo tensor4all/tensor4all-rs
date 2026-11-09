@@ -48,8 +48,12 @@ pub fn hadamard_many<T: TreeRsiScalar, V: TreeRsiNode>(
 ///
 /// With the `tenferro-cuda` feature a CUDA context is accepted: sketch blocks
 /// stay in host buffers, so every contraction uploads its operands and
-/// downloads its result, and the local rank decision runs on the host. Expect
-/// the transfer cost of that naive route; the numerics match the CPU route.
+/// downloads its result. Expect the transfer cost of that naive route. A CUDA
+/// run also keeps two host dependencies: each input core is downloaded and
+/// rebuilt in the process-global CPU eager context, whose session `to_vec`
+/// enters, and the local rank decision uses the process-global CPU context. A
+/// caller that already holds a session of that same process-global context
+/// therefore fails at the readback instead of nesting into it.
 ///
 /// # Errors
 /// Returns [`crate::TreeRsiError`] for incompatible inputs/context, invalid
@@ -85,8 +89,8 @@ pub fn hadamard_many_in<T: TreeRsiScalar, V: TreeRsiNode>(
 /// standard-normal probe entries. Explicit probes and dimension-one physical
 /// groups consume no draws. `options.seed` is ignored. Inputs and returned
 /// cores belong to `context`; consecutive calls consume successive draws. A
-/// CUDA context pays one transfer per contraction and keeps the rank decision
-/// on the host, as [`hadamard_many_in`] describes.
+/// CUDA context pays one transfer per contraction and keeps the two host
+/// dependencies [`hadamard_many_in`] describes.
 ///
 /// # Errors
 /// Returns [`crate::TreeRsiError`] for incompatible inputs/context, invalid

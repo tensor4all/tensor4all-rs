@@ -30,6 +30,46 @@ impl Fixture for Complex64 {
     }
 }
 
+/// Largest absolute value, refusing a non-finite entry (`f64::max` drops NaN).
+fn largest_absolute<T: TreeRsiScalar>(values: &[T]) -> f64 {
+    let mut worst = 0.0f64;
+    for (column, value) in values.iter().enumerate() {
+        let magnitude = tensor4all_core::Scalar::abs_val(*value);
+        assert!(
+            magnitude.is_finite(),
+            "non-finite value at column {column}: magnitude {magnitude}"
+        );
+        worst = worst.max(magnitude);
+    }
+    worst
+}
+
+/// Largest absolute componentwise difference.
+///
+/// `f64::max` drops a NaN operand and `zip` stops at the shorter side, so a
+/// non-finite or missing entry would otherwise read as a zero residual.
+fn largest_absolute_difference<T: TreeRsiScalar>(left: &[T], right: &[T]) -> f64 {
+    assert_eq!(
+        left.len(),
+        right.len(),
+        "compared vectors must have equal length: {} and {}",
+        left.len(),
+        right.len()
+    );
+    let mut worst = 0.0f64;
+    for (column, (a, b)) in left.iter().zip(right).enumerate() {
+        let error = tensor4all_core::Scalar::abs_val(*a - *b);
+        assert!(
+            error.is_finite(),
+            "non-finite error at column {column}: magnitudes {} and {}",
+            tensor4all_core::Scalar::abs_val(*a),
+            tensor4all_core::Scalar::abs_val(*b)
+        );
+        worst = worst.max(error);
+    }
+    worst
+}
+
 /// Naive reference: `out(r.., l) = sum_a input(r.., a, l) weights(a, l)` on the
 /// already permuted column-major `rest.. x n x k` buffer.
 fn naive_contract_axis_diag_probe<T: TreeRsiScalar>(
@@ -110,17 +150,9 @@ fn assert_contract_axis_diag_probe_matches_naive<T: Fixture>(context: &Execution
             let expected = naive_contract_axis_diag_probe(rows, n, k, &permuted.data, &weights);
 
             assert_eq!(actual.dims, expected_dims);
-            let scale = expected
-                .iter()
-                .map(|value| tensor4all_core::Scalar::abs_val(*value))
-                .fold(0.0f64, f64::max);
+            let scale = largest_absolute(&expected);
             assert!(scale > 1.0e-3, "fixture must not be degenerate");
-            let residual = actual
-                .data
-                .iter()
-                .zip(&expected)
-                .map(|(actual, expected)| (*actual - *expected).abs_val())
-                .fold(0.0f64, f64::max);
+            let residual = largest_absolute_difference(&actual.data, &expected);
             assert!(
                 residual <= 1.0e-13 * scale,
                 "diag-probe einsum disagrees with the naive loop: \

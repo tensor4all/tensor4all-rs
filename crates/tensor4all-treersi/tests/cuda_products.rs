@@ -68,15 +68,44 @@ fn site_ordered<T: TreeRsiScalar>(tree: &Tree, sites: &[DynIndex]) -> Vec<T> {
         .unwrap()
 }
 
+/// Largest absolute value, refusing a non-finite entry (`f64::max` drops NaN).
 fn max_abs<T: Scalar>(values: &[T]) -> f64 {
-    values.iter().fold(0.0_f64, |a, b| a.max(b.abs_val()))
+    let mut worst = 0.0_f64;
+    for (column, value) in values.iter().enumerate() {
+        let magnitude = value.abs_val();
+        assert!(
+            magnitude.is_finite(),
+            "non-finite value at column {column}: magnitude {magnitude}"
+        );
+        worst = worst.max(magnitude);
+    }
+    worst
 }
 
+/// Largest absolute componentwise difference.
+///
+/// `f64::max` drops a NaN operand and `zip` stops at the shorter side, so a
+/// non-finite or missing entry would otherwise read as a zero residual.
 fn max_diff<T: Scalar>(left: &[T], right: &[T]) -> f64 {
-    left.iter()
-        .zip(right)
-        .map(|(a, b)| (*a - *b).abs_val())
-        .fold(0.0_f64, f64::max)
+    assert_eq!(
+        left.len(),
+        right.len(),
+        "compared vectors must have equal length: {} and {}",
+        left.len(),
+        right.len()
+    );
+    let mut worst = 0.0_f64;
+    for (column, (a, b)) in left.iter().zip(right).enumerate() {
+        let error = (*a - *b).abs_val();
+        assert!(
+            error.is_finite(),
+            "non-finite error at column {column}: magnitudes {} and {}",
+            a.abs_val(),
+            b.abs_val()
+        );
+        worst = worst.max(error);
+    }
+    worst
 }
 
 fn options<T: TreeRsiScalar>() -> TreeRsiOptions<usize> {
@@ -189,6 +218,51 @@ fn assert_cuda_matches_cpu<T: TreeRsiScalar>(
     assert!(
         parity < tolerance,
         "CUDA/CPU parity residual {parity} exceeds {tolerance}"
+    );
+}
+
+/// A CUDA run reads its input cores back through the process-global CPU eager
+/// context, so it cannot nest a session of that exact context: the readback is
+/// rejected (`recursive CPU execution-context session entry on one thread`)
+/// instead of silently reusing the caller's session. A session of any other CPU
+/// context is unrelated and does nest — measured, that variant of this test
+/// succeeds. This needs a CUDA context, so it cannot run on a GPU-less host.
+#[test]
+#[ignore = "requires visible CUDA ordinal 0"]
+fn cuda_product_inside_a_cpu_session_is_rejected() {
+    let (_, cuda_context_value) = cuda_context();
+    // The readback rebuilds each core in the process-global CPU context, so the
+    // nesting under test is a session of that exact context.
+    let cpu = tensor4all_tensorbackend::default_cpu_execution_context();
+    let sites = (0..NUM_SITES)
+        .map(|_| DynIndex::new_dyn(2))
+        .collect::<Vec<_>>();
+    let edges = EDGES.to_vec();
+    let inputs = (0..2)
+        .map(|a| random_tree(&sites, &edges, BOND_DIM, SEED + a, |x, _| x))
+        .collect::<Vec<_>>();
+    let cuda_inputs = inputs
+        .iter()
+        .map(|input| scoped_copy::<f64>(input, &cuda_context_value))
+        .collect::<Vec<_>>();
+
+    let nested = cpu.with_concrete_session(|_session| {
+        let mut rng = ChaCha8Rng::seed_from_u64(SEED);
+        hadamard_many_with_rng_in::<f64, _, _>(
+            &cuda_inputs,
+            &options::<f64>(),
+            &mut rng,
+            &cuda_context_value,
+        )
+    });
+    // The outer entry itself succeeds; the product call is what fails.
+    let error = nested
+        .expect("entering one CPU session succeeds")
+        .expect_err("a CUDA run cannot nest inside a CPU session");
+    let message = error.to_string();
+    assert!(
+        message.contains("session"),
+        "the rejection must name the session entry: {message}"
     );
 }
 

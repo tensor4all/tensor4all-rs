@@ -62,7 +62,12 @@ fn replace<T: TreeRsiScalar>(
 /// The core with its axes in `order`, on the host.
 ///
 /// A device-resident core is downloaded explicitly first: the sketch keeps its
-/// blocks in host buffers, so step 1 of #1158 pays that transfer per core.
+/// blocks in host buffers, so step 1 of #1158 pays that transfer per core. The
+/// download rebuilds the host tensor in the process-global CPU eager context
+/// (`IdxTensor::download` -> `IdxTensor::from_native`), and the following
+/// `to_vec` enters that CPU context's session, so this is the second host
+/// dependency of a CUDA run beside the rank decision — it happens for every
+/// input core, including in a tree whose edges never need a rank decision.
 fn ordered_host_core(
     _context: &ExecutionContext,
     tensor: &IdxTensor,
@@ -129,6 +134,10 @@ fn read_cores<T: TreeRsiScalar, V: TreeRsiNode>(
             checked_product(dims.iter().copied(), "input core")?,
             limit,
         )?;
+        // INVARIANT: a CUDA run reaches the process-global CPU session here even
+        // though its own context is CUDA; a caller already inside a CPU session
+        // therefore gets that session's re-entry rejection, reported as
+        // `ScalarKind` because the readback fails.
         let data = ordered_host_core(context, tensor, &order)?
             .to_vec::<T>()
             .map_err(|e| TreeRsiError::ScalarKind {
@@ -603,9 +612,11 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
     rng: &mut R,
     context: &ExecutionContext,
 ) -> Result<TreeRsiResult<V>> {
-    // The rank decision is a host LU pivot search with a lower-triangular solve
-    // and no device twin, so it keeps running on the process-global CPU context
-    // even for a CUDA run; see #1158 step 2 for the device-resident sketch.
+    // Host dependency 1 of 2: the rank decision is a host LU pivot search with a
+    // lower-triangular solve and no device twin, so it keeps running on the
+    // process-global CPU context even for a CUDA run. The other is the input-core
+    // readback in `ordered_host_core`. See #1158 step 2 for the device-resident
+    // sketch.
     let rank_context = match context {
         ExecutionContext::Cpu(cpu) => Arc::clone(cpu),
         #[cfg(feature = "tenferro-cuda")]

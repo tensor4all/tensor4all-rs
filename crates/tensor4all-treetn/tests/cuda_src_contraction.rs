@@ -234,12 +234,18 @@ fn run_matrix_case(
     assert_eq!(got.indices(), want.indices());
     let got_values = got.to_vec::<f64>().unwrap();
     let want_values = want.to_vec::<f64>().unwrap();
+    // `f64::max` drops a NaN operand, so a non-finite entry would otherwise read
+    // as a zero residual; the lengths are compared for the same reason.
     assert_eq!(got_values.len(), want_values.len());
-    let residual = got_values
-        .iter()
-        .zip(want_values.iter())
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0_f64, f64::max);
+    let mut residual = 0.0_f64;
+    for (column, (got, want)) in got_values.iter().zip(want_values.iter()).enumerate() {
+        let error = (got - want).abs();
+        assert!(
+            error.is_finite(),
+            "{name}: non-finite error at column {column}: {got} vs {want}"
+        );
+        residual = residual.max(error);
+    }
     assert!(
         residual < tolerance,
         "{name}: CUDA/CPU parity residual {residual} exceeds {tolerance}"
