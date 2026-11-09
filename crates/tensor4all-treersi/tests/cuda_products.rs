@@ -12,9 +12,13 @@ use std::sync::Arc;
 use num_complex::Complex64;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tensor4all_core::{CudaExecutionContext, DynIndex, ExecutionContext, IdxTensor, Scalar};
-use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
-use tensor4all_treersi::{hadamard_many_with_rng_in, TreeRsiOptions, TreeRsiScalar};
+use tensor4all_core::{
+    CudaExecutionContext, DynIndex, ExecutionContext, IdxTensor, IdxTensorError, Scalar,
+};
+use tensor4all_tensorbackend::{
+    CpuBackend, CpuExecutionContext, CpuExecutionContextError, ExecutionContextEntryError,
+};
+use tensor4all_treersi::{hadamard_many_with_rng_in, TreeRsiError, TreeRsiOptions, TreeRsiScalar};
 use tensor4all_treetn::TreeTN;
 
 use crate::support;
@@ -259,20 +263,20 @@ fn cuda_product_inside_a_cpu_session_is_rejected() {
     let error = nested
         .expect("entering one CPU session succeeds")
         .expect_err("a CUDA run cannot nest inside a CPU session");
-    match error {
-        TreeRsiError::Numerical { source } => {
-            let message = source.to_string();
-            assert!(
-                message.contains("session"),
-                "the rejection must name the session entry: {message}"
-            );
-            assert!(
-                std::error::Error::source(&*source).is_some(),
-                "the typed re-entry diagnostic must stay in the source chain: {message}"
-            );
-        }
-        other => panic!("a failed readback must be Numerical, got {other:?}"),
-    }
+    // The dtype matches, so the rejection has to stay a host-core failure, and
+    // the chain itself has to identify the re-entry rather than its message.
+    let TreeRsiError::Numerical { source } = error else {
+        panic!("a rejected session entry must not be reported as a dtype mismatch: {error}");
+    };
+    assert!(
+        matches!(
+            source.downcast_ref::<IdxTensorError>(),
+            Some(IdxTensorError::EngineEntry {
+                source: ExecutionContextEntryError::Cpu(CpuExecutionContextError::Reentered)
+            })
+        ),
+        "the host core must be rejected by the CPU session re-entry: {source}"
+    );
 }
 
 #[test]

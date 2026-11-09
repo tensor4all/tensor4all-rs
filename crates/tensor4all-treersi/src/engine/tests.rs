@@ -8,19 +8,20 @@ fn a_session_reentry_readback_failure_keeps_its_typed_source() {
     let error = IdxTensorError::EngineEntry {
         source: ExecutionContextEntryError::Cpu(CpuExecutionContextError::Reentered),
     };
-    match readback_error(error) {
-        TreeRsiError::Numerical { source } => {
-            assert!(
-                source.to_string().contains("session"),
-                "the re-entry diagnostic must survive: {source}"
-            );
-            assert!(
-                std::error::Error::source(&*source).is_some(),
-                "the typed re-entry diagnostic must stay in the chain"
-            );
-        }
-        other => panic!("a failed readback must be Numerical, got {other:?}"),
-    }
+    let TreeRsiError::Numerical { source } = readback_error(error) else {
+        panic!("a failed readback must be Numerical");
+    };
+    // The chain itself has to identify the re-entry, not its message text: a
+    // dtype mismatch is the only class that does not keep a source.
+    assert!(
+        matches!(
+            source.downcast_ref::<IdxTensorError>(),
+            Some(IdxTensorError::EngineEntry {
+                source: ExecutionContextEntryError::Cpu(CpuExecutionContextError::Reentered)
+            })
+        ),
+        "the readback must keep the context re-entry as its source: {source}"
+    );
 }
 
 #[test]
