@@ -1153,5 +1153,11 @@ pub trait TreeInterpolator<T> {
         F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>;
 }
 
+mod elementwise;
+
+pub use elementwise::{
+    ElementwiseInterpolator, ElementwiseOperator, PointwiseElementwise, Product,
+};
+
 #[cfg(test)]
 mod tests;
