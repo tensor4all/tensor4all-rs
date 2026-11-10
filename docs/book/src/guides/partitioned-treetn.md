@@ -106,7 +106,15 @@ and `truncations`, with the absolute discarded norm for each two-node update.
 These local losses are relative to the untruncated local projection, not an
 accuracy certificate against the exact sum. Zero sweeps return the seed.
 `fit_sum_with_report(&terms, &seed, &center, options)` accepts a seed built
-elsewhere; the density-matrix seed is still tracked by #1126.
+elsewhere. `TreeTN::density_matrix_sum(&refs, &center, cutoff, max_bond_dim)`
+builds such a seed from all terms at once, with exact cross-term environments
+and a density eigenvalue-tail cutoff. It returns `network` and
+`discarded_weight`, an absolute squared error estimate in exact arithmetic.
+Without a binding cap its relative error is bounded by
+`sqrt((R - 1) * cutoff)`, apart from roundoff. Forming density matrices loses
+accuracy near machine precision; cancellation can weaken the estimate.
+Pair environments cost quadratic memory and work in the number of terms;
+this method can be slower than an exact N-ary sum at small input bonds.
 
 Fitting retains an environment for each target, so a smaller seed does not
 guarantee lower peak memory or time than exact-then-truncate. The pairwise-fit

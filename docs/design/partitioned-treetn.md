@@ -195,8 +195,9 @@ the same work.
 `TreeTN::pairwise_sum_fit` (#1129) composes that reduction with the existing
 variational `fit_sum` implementation, fitting every original summand from the
 truncated seed. Seed and fit truncation are independent. The reported fitting
-entry point, `fit_sum_with_report`, also accepts a caller-built seed; #1126
-can supply a density-matrix seed when implemented. Exact engines and the
+entry point, `fit_sum_with_report`, also accepts a caller-built seed;
+`TreeTN::density_matrix_sum` supplies a density-matrix seed without forming
+summed input bonds (see [its error and cost contract](density-matrix-sum.md)). Exact engines and the
 partitioned operations' exact-sum contracts remain unchanged.
 
 Fit reports identify each two-node region in sweep order and measure the

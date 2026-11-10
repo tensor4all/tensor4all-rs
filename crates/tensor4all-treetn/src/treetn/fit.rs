@@ -559,7 +559,7 @@ where
 
 /// Environment cache for one sum target and the current variational state.
 #[derive(Debug, Clone)]
-struct SumFitEnvironment<T, V>
+pub(super) struct SumFitEnvironment<T, V>
 where
     T: TensorLike,
     V: Clone + Hash + Eq,
@@ -574,7 +574,7 @@ where
     <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             envs: HashMap::new(),
             neighbor_order: HashMap::new(),
@@ -586,7 +586,7 @@ where
         cached_sorted_neighbors(&mut self.neighbor_order, tn, node, context)
     }
 
-    fn get_or_compute(
+    pub(super) fn get_or_compute(
         &mut self,
         from: &V,
         to: &V,

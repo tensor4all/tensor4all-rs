@@ -45,6 +45,10 @@ name = "benchmark_randomized_factorization"
 path = "benchmark_randomized_factorization.rs"
 
 [[example]]
+name = "density_sum_benchmark"
+path = "density_sum_benchmark.rs"
+
+[[example]]
 name = "benchmark_cached_batch_memory"
 path = "benchmark_cached_batch_memory.rs"
 

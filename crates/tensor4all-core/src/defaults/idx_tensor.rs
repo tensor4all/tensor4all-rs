@@ -3754,8 +3754,16 @@ impl IdxTensor {
 
     fn read_real_eigenvalues(values: &Self, hermitian_tol: f64) -> Result<Vec<f64>> {
         if values.is_complex() {
+            let values = if values.is_c32() {
+                values
+                    .to_vec::<Complex32>()?
+                    .into_iter()
+                    .map(|value| Complex64::new(f64::from(value.re), f64::from(value.im)))
+                    .collect()
+            } else {
+                values.to_vec::<Complex64>()?
+            };
             values
-                .to_vec::<Complex64>()?
                 .into_iter()
                 .enumerate()
                 .map(|(index, value)| {
@@ -3770,6 +3778,8 @@ impl IdxTensor {
                     Ok(value.re)
                 })
                 .collect()
+        } else if values.is_f32() {
+            Ok(values.to_vec::<f32>()?.into_iter().map(f64::from).collect())
         } else {
             values.to_vec::<f64>().map_err(anyhow::Error::from)
         }
