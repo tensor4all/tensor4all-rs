@@ -97,6 +97,22 @@ stays the accurate choice. The per-add truncation is therefore opt-in; the sum
 engine section of `docs/design/partitioned-treetn.md` carries the measurement
 conditions and the full table.
 
+For a cheap seed followed by variational refinement, use
+`TreeTN::pairwise_sum_fit(&terms, order, per_add, FitOptions::new(1))`.
+The pairwise cutoff and cap control only the seed; fit options independently
+control the sweeps over **all original summands**. Give the fit a larger bond
+cap or an SVD policy to grow beyond the seed. The result contains `network`
+and `truncations`, with the absolute discarded norm for each two-node update.
+These local losses are relative to the untruncated local projection, not an
+accuracy certificate against the exact sum. Zero sweeps return the seed.
+`fit_sum_with_report(&terms, &seed, &center, options)` accepts a seed built
+elsewhere; the density-matrix seed is still tracked by #1126.
+
+Fitting retains an environment for each target, so a smaller seed does not
+guarantee lower peak memory or time than exact-then-truncate. The pairwise-fit
+rustdoc states the chain storage costs and the tested R=12, N=64 accuracy
+comparison. Exact `SumEngine` options in partitioned operations are unchanged.
+
 ```rust
 # use tensor4all_core::{DynIndex, IdxTensor};
 # use tensor4all_partitionedtreetn::{

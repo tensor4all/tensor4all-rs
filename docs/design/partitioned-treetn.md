@@ -192,6 +192,22 @@ the same work.
 
 ### Pairwise sums with a per-add cutoff
 
+`TreeTN::pairwise_sum_fit` (#1129) composes that reduction with the existing
+variational `fit_sum` implementation, fitting every original summand from the
+truncated seed. Seed and fit truncation are independent. The reported fitting
+entry point, `fit_sum_with_report`, also accepts a caller-built seed; #1126
+can supply a density-matrix seed when implemented. Exact engines and the
+partitioned operations' exact-sum contracts remain unchanged.
+
+Fit reports identify each two-node region in sweep order and measure the
+absolute Frobenius norm between its untruncated local optimum and retained
+split. They do not bound displacement from the seed or certify distance to
+the exact sum. In exact arithmetic, canonical least-squares updates give a
+final residual no larger than the seed residual plus the sum of local losses;
+the unknown seed residual remains necessary. Reporting uses only local tensor
+reconstruction. All target environments remain live during fitting, so lower
+peak memory than the exact engines is not guaranteed.
+
 `TreeTN::pairwise_sum` (tensor4all/tensor4all-rs#1125) is the same pairwise
 reduction as one entry point with the truncation of the caller's choice after
 every add: `PairwiseSumOrder::{Sequential, Balanced}` for the order and an

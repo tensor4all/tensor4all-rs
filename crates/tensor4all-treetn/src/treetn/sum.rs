@@ -16,7 +16,7 @@ use tensor4all_core::{IndexLike, TensorLike};
 
 use super::TreeTN;
 use crate::error::TreeTNOperationError;
-use crate::TruncationOptions;
+use crate::{FitOptions, FitSumResult, TruncationOptions};
 
 /// How the exact sum of `N` tensor networks is built.
 ///
@@ -296,16 +296,99 @@ where
         order: PairwiseSumOrder,
         per_add_cutoff: Option<PerAddCutoff<'_, V>>,
     ) -> std::result::Result<Self, TreeTNOperationError> {
-        Self::ensure_summable(terms)?;
+        let first = Self::ensure_summable(terms)?;
         let Some(per_add) = per_add_cutoff else {
             return reduce_in_order(terms, order, |left, right| left.add(right));
         };
         per_add.validate()?;
+        if first.node_index(per_add.center).is_none() {
+            return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
+                "pairwise_sum: center is not a node of the terms"
+            )));
+        }
         let truncation = per_add.truncation_options();
         reduce_in_order(terms, order, |left, right| {
             let sum = left.add(right)?;
             sum.truncate([per_add.center.clone()], truncation)
         })
+    }
+
+    /// Build a truncated pairwise seed, then fit the sum of all original terms.
+    ///
+    /// This composes [`Self::pairwise_sum`] with [`crate::fit_sum_with_report`];
+    /// it does not fit the already-truncated seed as its target. It is opt-in
+    /// and leaves the exact [`SumEngine`] contract unchanged.
+    ///
+    /// # Arguments
+    /// * `terms` - Non-empty summands with the same named topology, full site
+    ///   indices and scalar kind, as required by [`Self::pairwise_sum`].
+    /// * `order` - Sequential or balanced pairwise reduction for the seed.
+    /// * `per_add` - Seed cutoff and optional seed bond cap, applied after
+    ///   every add. Its `center` is also the root of the fit sweeps.
+    /// * `options` - Independent fit truncation, bond cap and sweep settings.
+    ///   One sweep is a useful starting point. Supply `svd_policy` or a larger
+    ///   `max_bond_dim` to let the fit grow beyond the seed's bond dimensions;
+    ///   with neither it retains the seed's bond caps. Zero sweeps return the
+    ///   validated seed. `initial_max_bond_dim` is unused: `per_add` caps it.
+    ///
+    /// # Accuracy
+    /// Fitting can recover weight discarded while building the seed, but does
+    /// not guarantee convergence. Regional diagnostics and the bound relative
+    /// to the seed residual are documented in [`crate::fit_sum_with_report`].
+    /// On the #1107 random family (`R = 12`, `N = 64`, `D = 10`, per-add
+    /// cutoff `1e-8`, one SVD fit sweep with the same relative squared-tail
+    /// cutoff), a regression requires the max-absolute error to be at most
+    /// 10 times exact-then-truncate's error, using `epsilon * maxabs(sum)` as
+    /// its roundoff floor. This is a tested family, not a bound for all inputs.
+    ///
+    /// # Cost and peak memory
+    /// The seed costs `N - 1` truncated adds; then each full sweep performs
+    /// `2 * (R - 1)` local fits, each contracting all `N` targets. For uniform
+    /// chain bonds `D` and output bond `chi`, environments store
+    /// `O(N R D chi)` elements, in addition to the targets, output and local
+    /// workspaces. The exact engines instead build bonds `N D` and store
+    /// `O(R d (N D)^2)` chain-core elements before truncating once. The
+    /// pairwise seed may use smaller intermediate bonds, but the fit retains
+    /// all target environments; neither lower time nor lower peak memory is
+    /// guaranteed. Branching nodes depend on all incident bond dimensions.
+    /// These are structural cost estimates; peak RSS of this reported fit has
+    /// not been measured.
+    ///
+    /// # Returns
+    /// The fitted network and each fit region's discarded norm in sweep order.
+    /// Seed truncation losses are governed separately by [`Self::pairwise_sum`].
+    ///
+    /// # Errors
+    /// Returns [`TreeTNOperationError`] for invalid terms, seed or fit options,
+    /// an absent center, or a failure in seed construction, fitting or reporting.
+    /// Fit options are validated before constructing the seed.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_treetn::{FitOptions, PairwiseSumOrder, PerAddCutoff, TreeTN};
+    /// let term = TreeTN::<IdxTensor, usize>::from_tensors(
+    ///     vec![IdxTensor::from_dense(vec![DynIndex::new_dyn(2)], vec![1.0, 2.0]).unwrap()], vec![0],
+    /// ).unwrap();
+    /// let result = TreeTN::pairwise_sum_fit(
+    ///     &[term.clone(), term], PairwiseSumOrder::Sequential,
+    ///     PerAddCutoff { center: &0, cutoff: 1e-8, max_bond_dim: None },
+    ///     FitOptions::new(1),
+    /// ).unwrap();
+    /// assert_eq!(result.network.to_dense().unwrap().to_vec::<f64>().unwrap(), vec![2.0, 4.0]);
+    /// assert!(result.truncations.is_empty());
+    /// ```
+    pub fn pairwise_sum_fit(
+        terms: &[Self],
+        order: PairwiseSumOrder,
+        per_add: PerAddCutoff<'_, V>,
+        options: FitOptions,
+    ) -> std::result::Result<FitSumResult<T, V>, TreeTNOperationError> {
+        super::fit::validate_fit_sum_options(&options)?;
+        let refs: Vec<_> = terms.iter().collect();
+        let center = per_add.center;
+        let seed = Self::pairwise_sum(&refs, order, Some(per_add))?;
+        super::fit::fit_sum_with_report(terms, &seed, center, options)
     }
 }
 
