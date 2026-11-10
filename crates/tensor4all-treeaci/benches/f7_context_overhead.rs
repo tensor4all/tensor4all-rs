@@ -1,9 +1,9 @@
 //! Caller-owned-context overhead for tree-valued elementwise ACI (issue #859 F7).
 //!
-//! `tree_elementwise_batched_with_rng_in` sends the local update's session-bound
-//! numerics (the per-edge LUCI factorizations and the candidate-matrix products)
-//! through a caller-owned `CpuExecutionContext` instead of the process-global
-//! one. This benchmark compares the two routes on one explicit thread so the
+//! `tree_elementwise_batched_with_rng_in` runs every numerical step of the run
+//! (since #1235: frame contractions, candidate-matrix products, LUCI, guard
+//! evaluations and the final canonicalization) on one session of a caller-owned
+//! `CpuExecutionContext` instead of the process-global one. This benchmark compares the two routes on one explicit thread so the
 //! comparison is a route-for-route check, not a thread-count benchmark.
 //!
 //! # Thread environment

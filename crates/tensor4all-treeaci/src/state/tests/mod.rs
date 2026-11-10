@@ -285,7 +285,7 @@ fn profile_high_rank_chain_phases_and_candidate_cache() {
                 Ok(())
             },
             &mut rng,
-            None,
+            &mut crate::exec::Exec::Global,
         )
         .unwrap();
         let sweep_elapsed = sweep_started.elapsed();
@@ -572,7 +572,7 @@ fn profile_unequal_incident_bonds_at_coordination_four() {
                 Ok(())
             },
             &mut rng,
-            None,
+            &mut crate::exec::Exec::Global,
         )
         .unwrap();
         let sweep_elapsed = sweep_started.elapsed();
@@ -663,8 +663,14 @@ fn unseeded_initialization_defers_numeric_canonicalization() {
     let edge_ranks = initial_edge_ranks(&inputs, &problem, &options, &algebraic_bounds).unwrap();
     // Same stream as `TreeAciState::initialize` derives from the same options.
     let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(options.rng_seed);
-    let raw =
-        build_random_output::<f64, usize>(&inputs[0], &problem, &edge_ranks, &mut rng).unwrap();
+    let raw = build_random_output::<f64, usize>(
+        &inputs[0],
+        &problem,
+        &edge_ranks,
+        &mut rng,
+        &crate::exec::Exec::Global,
+    )
+    .unwrap();
     let state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
 
     assert_eq!(state.output.canonical_region().len(), 1);

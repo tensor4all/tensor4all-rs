@@ -13,6 +13,7 @@ mod canonicalize;
 mod context;
 pub mod contraction;
 mod decompose;
+mod density_sum;
 #[cfg(feature = "diagnostics")]
 pub mod diagnostics;
 mod evaluator;
@@ -57,6 +58,7 @@ pub use cached_evaluator::{
 };
 
 // Re-export evaluator types
+pub use density_sum::DensityMatrixSumResult;
 pub use evaluator::TreeTNEvaluator;
 
 // Re-export fit contraction entry points

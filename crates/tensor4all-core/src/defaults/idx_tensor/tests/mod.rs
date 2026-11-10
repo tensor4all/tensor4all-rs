@@ -3,6 +3,72 @@ use num_complex::{Complex32, Complex64};
 use std::cell::Cell;
 use tensor4all_tensorbackend::StorageError;
 
+// Reading f32 eigenvalues as f64 rejects otherwise successful native eigensolves.
+#[test]
+fn hermitian_eigendecomposition_preserves_narrow_scalars() {
+    let row = DynIndex::new_dyn(2);
+    let column = DynIndex::new_dyn(2);
+    let real = IdxTensor::from_dense(
+        vec![row.clone(), column.clone()],
+        vec![9.0_f32, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
+    let complex = IdxTensor::from_dense(
+        vec![row.clone(), column.clone()],
+        vec![
+            Complex32::new(5.0, 0.0),
+            Complex32::new(0.0, -4.0),
+            Complex32::new(0.0, 4.0),
+            Complex32::new(5.0, 0.0),
+        ],
+    )
+    .unwrap();
+    for matrix in [real, complex] {
+        let decomposition = matrix.hermitian_eigendecomposition(1e-6).unwrap();
+        let mut sorted = decomposition.eigenvalues.clone();
+        sorted.sort_by(f64::total_cmp);
+        assert!((sorted[0] - 1.0).abs() < 1e-5);
+        assert!((sorted[1] - 9.0).abs() < 1e-5);
+        assert_eq!(decomposition.eigenvectors.is_f32(), matrix.is_f32());
+        assert_eq!(decomposition.eigenvectors.is_c32(), matrix.is_c32());
+        let other = DynIndex::new_dyn(2);
+        let indices = vec![decomposition.eigenvector_index.clone(), other.clone()];
+        let values = decomposition
+            .eigenvalues
+            .iter()
+            .map(|&x| x as f32)
+            .collect();
+        let diagonal = IdxTensor::from_diag(indices, values).unwrap();
+        let left = matrix
+            .contract_pair(
+                &decomposition
+                    .eigenvectors
+                    .replaceind(&row, &column)
+                    .unwrap(),
+            )
+            .unwrap();
+        let right = decomposition
+            .eigenvectors
+            .contract_pair(&diagonal)
+            .unwrap()
+            .replaceind(&other, &decomposition.eigenvector_index)
+            .unwrap();
+        assert!(left.sub(&right).unwrap().maxabs().unwrap() < 1e-5);
+    }
+    let values = IdxTensor::from_dense(
+        vec![DynIndex::new_dyn(2)],
+        vec![Complex32::new(1.0, 0.0), Complex32::new(9.0, 0.0)],
+    )
+    .unwrap();
+    assert_eq!(
+        IdxTensor::read_real_eigenvalues(&values, 1e-6).unwrap(),
+        vec![1.0, 9.0]
+    );
+    let nonreal =
+        IdxTensor::from_dense(vec![DynIndex::new_dyn(1)], vec![Complex32::new(1.0, 0.1)]).unwrap();
+    assert!(IdxTensor::read_real_eigenvalues(&nonreal, 1e-6).is_err());
+}
+
 /// `norm_squared` of `x`, and the eager-payload reads it took.
 fn norm_squared_and_reads(x: &IdxTensor) -> (f64, usize) {
     EAGER_PAYLOAD_READS.with(|reads| reads.set(0));

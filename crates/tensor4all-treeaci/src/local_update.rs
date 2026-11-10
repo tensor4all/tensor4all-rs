@@ -3,13 +3,7 @@
 use std::mem::size_of;
 
 use tensor4all_core::IdxTensor;
-use tensor4all_core::{
-    matrix_luci_factors_from_matrix_owned, matrix_luci_factors_from_matrix_owned_in, RrLUOptions,
-};
-#[cfg(test)]
-use tensor4all_tensorbackend::mat_mul;
-#[cfg(not(test))]
-use tensor4all_tensorbackend::mat_mul_owned;
+use tensor4all_core::RrLUOptions;
 use tensor4all_tensorbackend::Matrix;
 use tensor4all_treetn::TreeTN;
 
@@ -85,7 +79,7 @@ pub(crate) fn materialize_and_factor_edge<T, V, F>(
     options: &TreeAciOptions<V>,
     left_orthogonal: bool,
     operator: &mut F,
-    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<LocalUpdateResult<T>>
 where
     T: TreeAciScalar,
@@ -261,6 +255,7 @@ where
                 forward,
                 &row_candidates,
                 reserved_bytes,
+                exec,
             )?;
             #[cfg(test)]
             crate::state::profile_debug_stats::record(|stats| {
@@ -275,6 +270,7 @@ where
                 reverse,
                 &col_candidates,
                 reserved_bytes,
+                exec,
             )?;
             #[cfg(test)]
             crate::state::profile_debug_stats::record(|stats| {
@@ -347,24 +343,12 @@ where
             #[cfg(test)]
             let product_result =
                 if std::env::var("T4A_TREEACI_USE_OWNED_LOCAL_MATMUL").as_deref() == Ok("1") {
-                    tensor4all_tensorbackend::mat_mul_owned(row_candidate_matrix, col_bond_matrix)
+                    exec.mat_mul_owned(row_candidate_matrix, col_bond_matrix)
                 } else {
-                    mat_mul(&row_candidate_matrix, &col_bond_matrix)
+                    exec.mat_mul(&row_candidate_matrix, &col_bond_matrix)
                 };
             #[cfg(not(test))]
-            let product_result: std::result::Result<Matrix<T>, String> = match context {
-                Some(context) => {
-                    match context.with_concrete_session(|session| {
-                        session.mat_mul(&row_candidate_matrix, &col_bond_matrix)
-                    }) {
-                        Ok(Ok(product)) => Ok(product),
-                        Ok(Err(error)) => Err(error.to_string()),
-                        Err(error) => Err(error.to_string()),
-                    }
-                }
-                None => mat_mul_owned(row_candidate_matrix, col_bond_matrix)
-                    .map_err(|error| error.to_string()),
-            };
+            let product_result = exec.mat_mul_owned(row_candidate_matrix, col_bond_matrix);
             let product = product_result.map_err(|error| TreeAciError::Numerical {
                 message: error.to_string(),
             })?;
@@ -418,16 +402,7 @@ where
         abs_tol: tolerance.local_threshold(),
         left_orthogonal,
     };
-    // The caller-owned route factorizes on the supplied context; the compatibility route keeps its own path.
-    let mut factors = match context {
-        Some(context) => {
-            matrix_luci_factors_from_matrix_owned_in(matrix, Some(lu_options), context)
-        }
-        None => matrix_luci_factors_from_matrix_owned(matrix, Some(lu_options)),
-    }
-    .map_err(|error| TreeAciError::Numerical {
-        message: error.to_string(),
-    })?;
+    let mut factors = exec.luci_factors(matrix, lu_options)?;
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {
         stats.luci += luci_started.elapsed();

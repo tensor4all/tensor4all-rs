@@ -1,0 +1,52 @@
+[
+  {
+    "mutation": "omit_cross_terms",
+    "failed_tests": [
+      "treetn::density_sum::tests::density_matrix_sum_retains_interference_and_cancellation",
+      "treetn::density_sum::tests::density_matrix_sum_matches_exact_then_truncate_ranks",
+      "treetn::density_sum::tests::density_matrix_sum_branches_complex_sites_and_error_bound"
+    ],
+    "exit_code": 101
+  },
+  {
+    "mutation": "ignore_cap",
+    "failed_tests": [
+      "treetn::density_sum::tests::density_matrix_sum_uses_discarded_weight_and_hard_cap",
+      "treetn::density_sum::tests::density_matrix_sum_branches_complex_sites_and_error_bound"
+    ],
+    "exit_code": 101
+  },
+  {
+    "mutation": "square_cutoff_again",
+    "failed_tests": [
+      "treetn::density_sum::tests::density_matrix_sum_validates_before_single_node_fast_path",
+      "treetn::density_sum::tests::density_matrix_sum_uses_discarded_weight_and_hard_cap",
+      "treetn::density_sum::tests::density_matrix_sum_matches_exact_then_truncate_ranks",
+      "treetn::density_sum::tests::density_matrix_sum_long_chain_stays_local"
+    ],
+    "exit_code": 101
+  },
+  {
+    "mutation": "omit_bra_conjugation",
+    "failed_tests": [
+      "treetn::density_sum::tests::density_matrix_sum_validates_before_single_node_fast_path",
+      "treetn::density_sum::tests::density_matrix_sum_retains_interference_and_cancellation",
+      "treetn::density_sum::tests::density_matrix_sum_branches_complex_sites_and_error_bound"
+    ],
+    "exit_code": 101
+  },
+  {
+    "mutation": "skip_cutoff_validation",
+    "failed_tests": [
+      "treetn::density_sum::tests::density_matrix_sum_validates_before_single_node_fast_path"
+    ],
+    "exit_code": 101
+  },
+  {
+    "mutation": "read_f32_as_f64",
+    "failed_tests": [
+      "defaults::idx_tensor::tests::hermitian_eigendecomposition_preserves_narrow_scalars"
+    ],
+    "exit_code": 101
+  }
+]

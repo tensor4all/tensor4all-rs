@@ -13,7 +13,7 @@ pub(crate) fn pivot_only_update<T, V, F>(
     forward: DirectedEdgeId,
     options: &TreeAciOptions<V>,
     operator: &mut F,
-    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<usize>
 where
     T: TreeAciScalar,
@@ -29,7 +29,7 @@ where
         options,
         true,
         operator,
-        context,
+        exec,
     )?;
     let directed =
         state
@@ -80,7 +80,7 @@ where
     };
     let mut pivots = state.pivots.clone();
     pivots.set(edge_number, pairs.collect());
-    let input_frames = InputFrameStore::from_samples(state.inputs, &state.problem, &arena)?;
+    let input_frames = InputFrameStore::from_samples(state.inputs, &state.problem, &arena, exec)?;
     let pivot_error = proposal.pivot_errors.last().copied().unwrap_or(0.0);
 
     state.sample_arena = arena;
@@ -117,7 +117,7 @@ pub(crate) fn run_arm<T, V, F>(
     order: EdgeOrder,
     sweeps: usize,
     operator: &mut F,
-    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<ArmOutcome>
 where
     T: TreeAciScalar,
@@ -142,7 +142,7 @@ where
             shuffle(&mut plan, &mut rng);
         }
         for forward in plan {
-            let evaluated = pivot_only_update(state, forward, options, operator, context)?;
+            let evaluated = pivot_only_update(state, forward, options, operator, exec)?;
             evaluated_points =
                 evaluated_points
                     .checked_add(evaluated)

@@ -1,3 +1,4 @@
+<!-- unified contribution policy: ../../docs/contributing/rust-repositories.md in tensor4all/tensor4all-meta -->
 # Contributing to tensor4all-rs
 
 Thank you for contributing. tensor4all-rs is in early development: public APIs may change, and fixes should remove obsolete paths rather than add compatibility shims.

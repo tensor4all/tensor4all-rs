@@ -35,7 +35,13 @@ fn verify<T: crate::TreeAciScalar>(phase: T, rounding: f64) {
         let (arena, active) =
             SampleArena::from_global_seeds(&problem, &[vec![0, 0], vec![1, 1], vec![2, 2]])
                 .unwrap();
-        let frames = InputFrameStore::from_samples(&inputs, &problem, &arena).unwrap();
+        let frames = InputFrameStore::from_samples(
+            &inputs,
+            &problem,
+            &arena,
+            &mut crate::exec::Exec::Global,
+        )
+        .unwrap();
         for forward in [0, 1] {
             for left_orthogonal in [false, true] {
                 let result = materialize_and_factor_edge(
@@ -50,7 +56,7 @@ fn verify<T: crate::TreeAciScalar>(phase: T, rounding: f64) {
                         output.copy_from_slice(&target);
                         Ok(())
                     },
-                    None,
+                    &mut crate::exec::Exec::Global,
                 )
                 .unwrap();
                 assert_eq!(result.row_samples[0].local_coordinate, 2);

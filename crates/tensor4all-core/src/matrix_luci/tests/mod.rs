@@ -460,6 +460,92 @@ fn row_interpolation_context_matches_full_factors_without_right_factor() {
     assert_eq!(zero.interpolation.ncols(), 0);
 }
 
+/// The session entry runs on the session it is handed: it is called while that
+/// same context's session is held, so a route that entered the context again
+/// would be refused, and it must return what the context entry returns.
+fn assert_row_interpolation_on_session_matches_context<T>()
+where
+    T: Scalar + crate::MatrixLuciScalar + PartialEq + std::fmt::Debug,
+{
+    let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+        tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+    );
+    let data = [
+        1.0, -2.0, 0.5, 3.0, 0.25, -1.5, 2.0, 4.0, -0.75, 1.0, 0.0, 2.5,
+    ]
+    .iter()
+    .map(|&x| T::from_f64(x))
+    .collect::<Vec<T>>();
+    for (matrix, options) in [
+        (Matrix::from_col_major_vec(4, 3, data), None),
+        (
+            Matrix::from_col_major_vec(4, 3, vec![T::zero(); 12]),
+            Some(RrLUOptions {
+                max_bond_dim: 2,
+                ..RrLUOptions::default()
+            }),
+        ),
+    ] {
+        let expected =
+            matrix_luci_row_interpolation_owned_in(matrix.clone(), options.clone(), &context)
+                .unwrap();
+        let actual = context
+            .with_concrete_session(|session| {
+                matrix_luci_row_interpolation_owned_on_session(matrix, options, session)
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(actual.rows, expected.rows);
+        assert_eq!(actual.pivot_magnitudes, expected.pivot_magnitudes);
+        assert_eq!(actual.interpolation.nrows(), expected.interpolation.nrows());
+        assert_eq!(actual.interpolation.ncols(), expected.interpolation.ncols());
+        assert_eq!(
+            actual.interpolation.as_col_major_slice(),
+            expected.interpolation.as_col_major_slice()
+        );
+    }
+}
+
+#[test]
+fn row_interpolation_on_session_matches_the_context_entry_f64() {
+    assert_row_interpolation_on_session_matches_context::<f64>();
+}
+
+#[test]
+fn row_interpolation_on_session_matches_the_context_entry_c64() {
+    assert_row_interpolation_on_session_matches_context::<Complex64>();
+}
+
+#[test]
+fn row_interpolation_on_session_rejects_what_the_context_entry_rejects() {
+    let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+        tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+    );
+    let nan = Matrix::from_col_major_vec(2, 1, vec![1.0_f64, f64::NAN]);
+    let negative = RrLUOptions {
+        rel_tol: -1.0,
+        ..RrLUOptions::default()
+    };
+    for (matrix, options) in [
+        (nan, None),
+        (
+            Matrix::from_col_major_vec(2, 1, vec![1.0, 2.0]),
+            Some(negative),
+        ),
+    ] {
+        let expected =
+            matrix_luci_row_interpolation_owned_in(matrix.clone(), options.clone(), &context)
+                .unwrap_err();
+        let actual = context
+            .with_concrete_session(|session| {
+                matrix_luci_row_interpolation_owned_on_session(matrix, options, session)
+            })
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(actual.to_string(), expected.to_string());
+    }
+}
+
 #[test]
 fn owned_context_facades_reject_invalid_controls_and_nonfinite_inputs() {
     fn check<T: Scalar + crate::MatrixLuciScalar>() {
