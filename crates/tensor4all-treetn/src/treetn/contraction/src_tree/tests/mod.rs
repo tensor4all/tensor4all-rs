@@ -7,7 +7,7 @@ use super::{
     EnvironmentCache,
 };
 use crate::treetn::TreeTN;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 
 /// `uncontracted_indices` used to order same-dimension survivors by
@@ -317,6 +317,352 @@ fn factorized_directed_messages_match_prepaired_reference() {
         assert!(
             residual < 1.0e-10,
             "factorized directed message {edge:?} residual is {residual}"
+        );
+    }
+}
+
+/// Sorted node list, rooted edges, local pairs and outputs of one pair of
+/// networks: the inputs every `EnvironmentCache` test builds.
+type TreeInputs<'a> = (
+    Vec<String>,
+    Vec<(String, String)>,
+    HashMap<String, (&'a IdxTensor, &'a IdxTensor)>,
+    HashMap<String, Vec<DynIndex>>,
+);
+
+fn tree_inputs<'a>(
+    tn_a: &'a TreeTN<IdxTensor, String>,
+    tn_b: &'a TreeTN<IdxTensor, String>,
+    center: &str,
+) -> TreeInputs<'a> {
+    let mut nodes = tn_a.node_names();
+    nodes.sort();
+    let edges = tn_a
+        .edges_to_canonicalize_by_names(&center.to_string())
+        .unwrap();
+    let local_values = local_site_pairs(tn_a, tn_b, &nodes).unwrap();
+    let local = nodes
+        .iter()
+        .cloned()
+        .zip(local_values)
+        .collect::<HashMap<_, _>>();
+    let outputs = nodes
+        .iter()
+        .map(|node| {
+            (
+                node.clone(),
+                local_output_indices(tn_a, tn_b, node).unwrap(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    (nodes, edges, local, outputs)
+}
+
+fn probe_indices(nodes: &[String], outputs: &HashMap<String, Vec<DynIndex>>) -> Vec<DynIndex> {
+    nodes
+        .iter()
+        .flat_map(|node| outputs[node].iter().cloned())
+        .collect::<Vec<_>>()
+}
+
+fn cpu_context() -> tensor4all_tensorbackend::ExecutionContext {
+    tensor4all_tensorbackend::ExecutionContext::Cpu(
+        tensor4all_tensorbackend::default_cpu_execution_context(),
+    )
+}
+
+/// Issue #696 Finding B: `batch(parent, child, width)` used to key its cache
+/// by the exact width and rebuild *every* probe column from 0 on each miss,
+/// so a run of edge-specific widths paid `sum(width)` columns of batched
+/// message work. Growing incrementally must pay only the missing columns.
+#[test]
+fn batch_materializes_only_the_missing_probe_columns() {
+    let tn_a = three_node_path(1.0);
+    let tn_b = three_node_path(2.0);
+    let (nodes, edges, local, outputs) = tree_inputs(&tn_a, &tn_b, "B");
+    let mut probes = ProbeBank::from_seed(probe_indices(&nodes, &outputs), 1, 17).unwrap();
+    let context = cpu_context();
+    // Every width below is on the segment grid this cache builds, so each
+    // miss is expected to add exactly `width - already` columns.
+    let mut cache = EnvironmentCache::new(
+        &tn_a,
+        &edges,
+        &nodes,
+        &local,
+        &outputs,
+        &mut probes,
+        2,
+        &context,
+    );
+
+    let parent = "B".to_string();
+    let child = "C".to_string();
+    let mut already = 0usize;
+    for width in [2usize, 4, 6] {
+        let before = cache.columns_computed;
+        let (_environment, batch) = cache.batch(&parent, &child, width).unwrap();
+        assert_eq!(batch.dim(), width);
+        let materialized = cache.columns_computed - before;
+        assert_eq!(
+            materialized,
+            width - already,
+            "batch({width}) must materialize width - already = {} columns, not {materialized}",
+            width - already
+        );
+        already = cache.columns_computed;
+    }
+    assert_eq!(
+        cache.columns_computed, 6,
+        "growing 2 -> 4 -> 6 must materialize 6 columns in total, not 12"
+    );
+}
+
+/// Largest per-column deviation between two batched environments, comparing
+/// `actual_columns` of `actual` against `expected` from `expected_offset` on.
+fn max_column_difference(
+    actual: &IdxTensor,
+    actual_batch: &DynIndex,
+    expected: &IdxTensor,
+    expected_batch: &DynIndex,
+    actual_columns: std::ops::Range<usize>,
+    expected_offset: usize,
+) -> f64 {
+    let mut max_difference = 0.0f64;
+    for (actual_column, expected_column) in actual_columns.zip(expected_offset..) {
+        let actual_column_tensor = actual
+            .select_indices(std::slice::from_ref(actual_batch), &[actual_column])
+            .unwrap();
+        let expected_column_tensor = expected
+            .select_indices(std::slice::from_ref(expected_batch), &[expected_column])
+            .unwrap();
+        max_difference = max_difference.max(
+            actual_column_tensor
+                .sub(&expected_column_tensor)
+                .unwrap()
+                .maxabs()
+                .unwrap(),
+        );
+    }
+    max_difference
+}
+
+/// The incremental cache must return what a from-zero rebuild returns: same
+/// probe columns, same per-column contraction values. The reference below is
+/// the pre-fix `batch` body (probe columns `[0, width)` rebuilt into one fresh
+/// batch) and stays local to this test.
+///
+/// Equality is claimed within 1e-12, not bit equality: a probe column computed
+/// inside a wider batch can round differently from the same column computed in
+/// a narrower one because the contraction kernel blocks over the batch axis.
+/// Measured on the development machine, max |difference| is 0 for width 2 and
+/// 1.07e-14 for every other width below, against tensor values of order 1 to
+/// 100.
+#[test]
+fn incremental_batch_matches_a_from_zero_rebuild_reference() {
+    let tn_a = three_node_path(1.0);
+    let tn_b = three_node_path(2.0);
+    let (nodes, edges, local, outputs) = tree_inputs(&tn_a, &tn_b, "B");
+    let context = cpu_context();
+    let mut reference_probes =
+        ProbeBank::from_seed(probe_indices(&nodes, &outputs), 1, 23).unwrap();
+    let mut incremental_probes =
+        ProbeBank::from_seed(probe_indices(&nodes, &outputs), 1, 23).unwrap();
+    let mut cache = EnvironmentCache::new(
+        &tn_a,
+        &edges,
+        &nodes,
+        &local,
+        &outputs,
+        &mut incremental_probes,
+        2,
+        &context,
+    );
+    let parent = "B".to_string();
+    let child = "C".to_string();
+
+    let mut rebuild_from_zero = |width: usize| -> (IdxTensor, DynIndex) {
+        reference_probes.extend_to(width).unwrap();
+        let reference_batch = DynIndex::new_link(width).unwrap();
+        let probe_batches = nodes
+            .iter()
+            .map(|node| {
+                (
+                    node.clone(),
+                    probe_batch_tensors(
+                        &outputs[node],
+                        &reference_probes,
+                        0,
+                        width,
+                        &reference_batch,
+                        &context,
+                    )
+                    .unwrap(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let directed = directed_messages_batched_from_factors(
+            &tn_a,
+            &edges,
+            &local,
+            &probe_batches,
+            &reference_batch,
+            &context,
+        )
+        .unwrap();
+        (
+            directed[&(parent.clone(), child.clone())].clone(),
+            reference_batch,
+        )
+    };
+
+    // Widths 2, 3 and 6 grow the segments; 4 is requested only afterwards and
+    // was never cached, so it must be assembled from the existing segments
+    // (wider cached width, narrower request) without growing a new one.
+    let mut width_four_batch = None;
+    for width in [2usize, 3, 6, 4] {
+        let (expected, expected_batch) = rebuild_from_zero(width);
+        let (actual, actual_batch) = cache.batch(&parent, &child, width).unwrap();
+        assert_eq!(actual_batch.dim(), width);
+        let max_difference = max_column_difference(
+            &actual,
+            &actual_batch,
+            &expected,
+            &expected_batch,
+            0..width,
+            0,
+        );
+        assert!(
+            max_difference <= 1.0e-12,
+            "batch({width}) must reproduce the from-zero rebuild, got max |diff| {max_difference:e}"
+        );
+        if width == 4 {
+            width_four_batch = Some(actual_batch);
+        }
+    }
+
+    // The exact-width entry now holds this edge at width 4, so the repeat must
+    // take the fast path: the same batch index comes back instead of a freshly
+    // assembled one.
+    let (_, cached_batch) = cache.batch(&parent, &child, 4).unwrap();
+    assert_eq!(
+        Some(cached_batch),
+        width_four_batch,
+        "a repeated width must be served from the exact-width entry"
+    );
+
+    // A range that cuts both ends of the cached segments: [1, 5) is assembled
+    // from the tail of one segment, whole segments, and the head of another,
+    // which is the split-and-concatenate path `batch` never takes.
+    let (expected, expected_batch) = rebuild_from_zero(6);
+    let (actual, actual_batch) = cache.request(&parent, &child, 1, 4).unwrap();
+    assert_eq!(actual_batch.dim(), 4);
+    let max_difference =
+        max_column_difference(&actual, &actual_batch, &expected, &expected_batch, 0..4, 1);
+    assert!(
+        max_difference <= 1.0e-12,
+        "request(1, 4) must reproduce the from-zero columns 1..5, got max |diff| {max_difference:e}"
+    );
+}
+
+#[test]
+#[ignore = "manual measurement harness for issue #696 Finding B"]
+fn bench_batch_cost_per_call_by_width() {
+    // Path A-B-C-D-E rooted at C: four edges, each with its own width, which
+    // is the heterogeneous-branch case the issue describes.
+    fn path_tree(dim: usize, len: usize, offset: f64) -> TreeTN<IdxTensor, String> {
+        let bonds = (0..len - 1)
+            .map(|_| DynIndex::new_dyn(dim))
+            .collect::<Vec<_>>();
+        let outs = (0..len).map(|_| DynIndex::new_dyn(dim)).collect::<Vec<_>>();
+        let mut names = Vec::new();
+        let mut tensors = Vec::new();
+        for site in 0..len {
+            let mut index_list = Vec::new();
+            if site > 0 {
+                index_list.push(bonds[site - 1].clone());
+            }
+            index_list.push(outs[site].clone());
+            if site + 1 < len {
+                index_list.push(bonds[site].clone());
+            }
+            let size = index_list
+                .iter()
+                .map(|index| index.dim())
+                .product::<usize>();
+            tensors.push(
+                IdxTensor::from_dense(
+                    index_list,
+                    (0..size)
+                        .map(|i| offset + f64::from(i as i32) / 13.0)
+                        .collect(),
+                )
+                .unwrap(),
+            );
+            names.push(format!("N{site}"));
+        }
+        TreeTN::from_tensors(tensors, names).unwrap()
+    }
+
+    // (label, dimension, path length, batch_size, four per-edge widths)
+    let configs = [
+        ("dim3-5nodes-batch8", 3usize, 5usize, 8usize, 8usize, 8usize),
+        ("dim4-7nodes-batch3", 4, 7, 3, 12, 6),
+        ("dim4-7nodes-batch3-wide", 4, 7, 3, 24, 12),
+    ];
+    println!(
+        "cpu execution context threads: {}",
+        tensor4all_tensorbackend::default_cpu_execution_context()
+            .with_backend(|backend| backend.num_threads())
+    );
+    let context = cpu_context();
+    let repetitions = 15;
+    for (label, dim, len, batch_size, first_width, step) in configs {
+        let tn_a = path_tree(dim, len, 1.0);
+        let tn_b = path_tree(dim, len, 2.0);
+        let center = format!("N{}", len / 2);
+        let (nodes, edges, local, outputs) = tree_inputs(&tn_a, &tn_b, &center);
+        println!("--- {label}: edges {edges:?}, batch_size {batch_size}");
+        let mut requests = Vec::new();
+        for (slot, (child, parent)) in edges.iter().enumerate() {
+            requests.push((parent.clone(), child.clone(), first_width + step * slot));
+        }
+        let mut per_call = vec![Vec::new(); requests.len()];
+        let mut pass = Vec::new();
+        for _ in 0..repetitions {
+            let mut probes = ProbeBank::from_seed(probe_indices(&nodes, &outputs), 1, 31).unwrap();
+            let mut cache = EnvironmentCache::new(
+                &tn_a,
+                &edges,
+                &nodes,
+                &local,
+                &outputs,
+                &mut probes,
+                batch_size,
+                &context,
+            );
+            let start_time = std::time::Instant::now();
+            for (slot, (parent, child, width)) in requests.iter().enumerate() {
+                let call = std::time::Instant::now();
+                let (_environment, batch_index) = cache.batch(parent, child, *width).unwrap();
+                assert_eq!(batch_index.dim(), *width);
+                per_call[slot].push(call.elapsed().as_secs_f64() * 1e6);
+            }
+            pass.push(start_time.elapsed().as_secs_f64() * 1e6);
+        }
+        let median = |values: &mut Vec<f64>| {
+            values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            values[values.len() / 2]
+        };
+        for (slot, (parent, child, width)) in requests.iter().enumerate() {
+            println!(
+                "batch({parent}->{child}, width {width}): median {:.1} us",
+                median(&mut per_call[slot])
+            );
+        }
+        println!(
+            "one pass over {} edges: median {:.1} us",
+            requests.len(),
+            median(&mut pass)
         );
     }
 }
