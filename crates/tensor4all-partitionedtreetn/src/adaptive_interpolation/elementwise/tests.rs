@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use tensor4all_core::{AnyScalar, ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
 use tensor4all_treeaci::TreeAciInterpolator;
+use tensor4all_treersi::TreeRsiInterpolator;
 use tensor4all_treetci::TreeTciInterpolator;
 use tensor4all_treetn::interpolation::{
     ElementwiseInterpolator, EvalContext, InterpolationTermination, Parallelism,
@@ -391,6 +392,40 @@ fn tree_aci_nonlinear_maps_meet_the_contract() {
     check(&star, &result, &expected, rtol);
     assert_resolvable(&result, &[&x, &y]);
     assert!(result.report.zero_patches.is_empty());
+}
+
+/// The same product with tree RSI as the per-patch kernel. Tree RSI checks
+/// no error, so every patch it computes is accepted on the driver's L2
+/// measurement.
+#[test]
+fn tree_rsi_products_meet_the_contract() {
+    let star = Star::new();
+    let (x, y) = inputs(&star);
+    let expected = pointwise(&star, &[&x, &y], |v| v[0] * v[1]);
+    let rtol = 1e-8;
+    let result = run_with(
+        &TreeRsiInterpolator::default(),
+        &[&x, &y],
+        &Product,
+        &options(l2(&expected), rtol),
+    )
+    .unwrap();
+    check(&star, &result, &expected, rtol);
+    assert_resolvable(&result, &[&x, &y]);
+    let gap = star.projector(&[(0, 0), (4, 1)]);
+    assert!(result
+        .report
+        .zero_patches
+        .iter()
+        .any(|record| record.projector.is_subset_of(&gap)));
+    assert!(!result.report.accepted.is_empty());
+    for record in &result.report.accepted {
+        assert_eq!(
+            record.termination,
+            InterpolationTermination::ErrorNotMeasured
+        );
+        assert!(record.acceptance.is_some());
+    }
 }
 
 #[test]

@@ -215,7 +215,10 @@
 //! 5. The engine runs on the active sites. A
 //!    [`InterpolationTermination::Converged`] outcome strictly below the bond
 //!    cap is re-embedded (every fixed site re-attached by a one-hot factor)
-//!    and, under L2, measured on the stored network: exhaustively when the
+//!    and, under L2, measured on the stored network; under L2 an
+//!    [`InterpolationTermination::ErrorNotMeasured`] outcome strictly below
+//!    the cap (an engine without an error estimate, such as tree RSI) is
+//!    treated the same way. The measurement is taken exhaustively when the
 //!    patch has at most `max(max_exhaustive_points, samples)` points,
 //!    otherwise by [`VerificationOptions::estimator`] - the residual TT, or
 //!    the uniform Monte Carlo sample. It is accepted when the estimate is at
@@ -224,7 +227,8 @@
 //!    most that many active sites (generalized bits) is checked against the
 //!    cap and judged the same way (by the engine estimate under
 //!    `SampledMax`).
-//! 6. A failed verification of a converged run reruns the engine (up to
+//! 6. A failed verification of a converged (or, under L2, unmeasured) run
+//!    reruns the engine (up to
 //!    [`VerificationOptions::retries`] times) with the worst measured points
 //!    (under the residual estimator also its pivots with a nonzero residual)
 //!    and the outcome's pivots added to the initial pivots; a failed capped
@@ -1843,7 +1847,13 @@ where
                 })
                 .map_err(interpolation_error)?;
             let converged = outcome.termination == InterpolationTermination::Converged;
+            // Under L2 the library's measurement is the acceptance, so an
+            // engine that does not measure its own error (tree RSI) is
+            // verified like a converged one.
+            let unmeasured =
+                self.is_l2() && outcome.termination == InterpolationTermination::ErrorNotMeasured;
             if !converged
+                && !unmeasured
                 && !self
                     .policy
                     .capped_eligible(outcome.termination, active.len())
@@ -1851,6 +1861,10 @@ where
                 break (outcome, None);
             }
             let subdomain = self.checked_subdomain(&outcome, &fixed, projector, ctx)?;
+            // A rank at the cap splits, as for every engine.
+            if unmeasured && subdomain.max_bond_dim() >= self.options.max_bond_dim {
+                break (outcome, None);
+            }
             let mut record = self.record(projector, &outcome, &subdomain, attempt);
             if !self.is_l2() {
                 // A capped-eligible run is judged by the engine estimate.
@@ -1906,9 +1920,10 @@ where
                 measurement: measured.measurement,
                 worst,
             });
-            // Only a converged run is rerun: a capped run has exhausted its
-            // rank, and more pivots only raise its starting rank.
-            if converged && attempt < retries {
+            // Only a converged or unmeasured run is rerun: a capped run has
+            // exhausted its rank, and more pivots only raise its starting
+            // rank.
+            if (converged || unmeasured) && attempt < retries {
                 let pivots = active_pivots(outcome.pivots.as_ref(), &active, &layout.dims)
                     .map_err(|message| engine_error(projector, message))?;
                 added = added_pivots(&base_set, &all_worst, &pivots, limit);

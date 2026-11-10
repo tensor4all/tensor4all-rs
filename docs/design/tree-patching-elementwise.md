@@ -5,10 +5,10 @@
 Design for milestone M6c of
 [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md),
 approved by the maintainer on 2026-11-10 (see
-[Decisions](#decisions-2026-11-10)). Steps 1 to 3 of the
-[implementation order](#implementation-order) and the TreeACI adapter of
-step 4 are implemented (see [Implementation notes](#implementation-notes));
-the tree RSI adapter and the benchmark are open. It answers the two open questions the roadmap left to this
+[Decisions](#decisions-2026-11-10)). Steps 1 to 4 of the
+[implementation order](#implementation-order) are implemented (see
+[Implementation notes](#implementation-notes)); the benchmark is open. It
+answers the two open questions the roadmap left to this
 record (acceptance and driver).
 
 The 2026-11-09 ruling stands: Hadamard is the case `k = 2, f = product` of a
@@ -275,6 +275,13 @@ The maintainer approved every proposal:
 5. **No broadcasting**: inputs share the full site space; the caller renames
    equivalent sites beforehand.
 
+Added during step 4 (2026-11-10):
+
+6. **Unmeasured runs**: under L2 the driver measures an `ErrorNotMeasured`
+   run below the cap like a converged one, so tree RSI, which estimates no
+   error, can be accepted on the measurement (see
+   [Implementation notes](#implementation-notes)).
+
 ## Implementation notes
 
 Steps 1 and 2, on 2026-11-10.
@@ -380,4 +387,48 @@ The TreeACI adapter, on 2026-11-10:
   class. In `tensor4all-partitionedtreetn`: the product and the nonlinear
   map of the star tests through `patched_elementwise` with tree ACI as the
   kernel, against the dense oracle within `delta`, with certified L2 error.
+
+The tree RSI adapter, on 2026-11-10:
+
+- **Unmeasured runs are measured (decided 2026-11-10).** The record's
+  mapping gives tree RSI `ErrorNotMeasured` below the cap, but M2's driver
+  measured only `Converged` runs (and capped-eligible ones) and split every
+  other outcome directly, so every RSI patch would have split to the minimum
+  size unmeasured. The maintainer chose to change the driver: under L2, an
+  `ErrorNotMeasured` run strictly below the cap is measured and retried like
+  a converged one, since [decision 1](#decisions-2026-11-10) already makes
+  that measurement the acceptance; at the cap it splits, and under
+  `SampledMax`, which has no library measurement, it still splits. This also
+  applies to TreeTCI's `DegenerateCandidateSet` outcomes, which are now
+  measured under L2 instead of split.
+- **Engine.** `tensor4all_treersi::TreeRsiInterpolator` implements
+  `ElementwiseInterpolator<T, Product>` only, so a non-product operator does
+  not compile (a `compile_fail` example, with a positive counterpart test).
+  It runs `hadamard_many_with_rng_on_session` on the context's session with
+  the problem's cap and a ChaCha8 stream seeded with the problem's seed. The
+  problem's tolerance and pivots are not used; `rel_tol` stays the engine's
+  option, as [Engine options](#engine-options) proposed. `root` and `probes`
+  name nodes of one network, so the constructor rejects them. A problem
+  without a cap needs the engine's `sketch_dim`.
+- **Outcome.** `termination` is `BondCapReached` when the largest output
+  bond reaches the cap and `ErrorNotMeasured` otherwise. The record named
+  `rank_limit_reached` as the cap test, but that flag also reports an edge
+  at its local dimension limit, which is exact and not a cap, so the adapter
+  compares the final ranks with the cap instead (a single node has no bond
+  and is never at the cap). `error_estimate` is `f64::INFINITY`, so no
+  comparison with a tolerance passes on it, and `max_sample_magnitude` is
+  zero, since tree RSI evaluates no samples.
+- **Errors.** Input, topology and option mismatches (including a missing
+  sketch width) are `InvalidProblem`; everything else is `Engine`.
+  `TreeRsiNode` dropped its unused `'static` bound, as `TreeAciNode` did.
+- **Tests.** In `tensor4all-treersi`: on a binary tree whose node 1 has
+  degree three the engine's network equals the session entry's bit for bit
+  with the problem's settings, while the process-global engine is borrowed,
+  and matches the dense product; plus the cap, a single node under a cap of
+  one, a problem without a cap, and each error class. In
+  `tensor4all-partitionedtreetn`: the star product through
+  `patched_elementwise` with tree RSI, against the dense oracle, every patch
+  accepted on its measurement; and the driver rule with a scripted engine
+  that reports `ErrorNotMeasured` (measured under L2, split at the cap and
+  under `SampledMax`).
 

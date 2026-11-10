@@ -371,11 +371,12 @@ pub struct PatchRecord {
     /// Projector of the patch (its fixed sites).
     pub projector: Projector,
     /// The engine's verdict of the run that was kept:
-    /// [`InterpolationTermination::Converged`], `BondCapReached` for a patch
-    /// accepted through
+    /// [`InterpolationTermination::Converged`], `ErrorNotMeasured` for a
+    /// patch accepted on its L2 measurement from an engine without an error
+    /// estimate (or retained), `BondCapReached` for a patch accepted through
     /// [`CappedPatches::AcceptUpTo`](super::CappedPatches::AcceptUpTo) or
-    /// retained by the minimum patch size, or `IterationLimit` or
-    /// `ErrorNotMeasured` for a retained patch.
+    /// retained by the minimum patch size, or `IterationLimit` for a retained
+    /// patch.
     pub termination: InterpolationTermination,
     /// The engine's raw error estimate in its own criterion's units (not an
     /// L2 error), `0` for an exactly evaluated patch.

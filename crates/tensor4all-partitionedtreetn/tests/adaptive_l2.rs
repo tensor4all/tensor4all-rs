@@ -15,7 +15,7 @@ use tensor4all_partitionedtreetn::adaptive_interpolation::{
     VerificationOptions, GLOBAL_ROUNDING_MARGIN, MEASUREMENT_ROUNDING_FACTOR,
 };
 use tensor4all_partitionedtreetn::{ErrorNorm, ErrorTolerance, L2Reference, Projector};
-use tensor4all_treetn::interpolation::{EvalContext, InterpolationError};
+use tensor4all_treetn::interpolation::{EvalContext, InterpolationError, InterpolationTermination};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -127,6 +127,55 @@ fn dense_engine_runs_meet_the_l2_budget() {
         "network norm {network:e}, direct {direct:e}"
     );
     assert_certified_bound(&result, &problem, &f);
+}
+
+/// An engine without an error estimate (tree RSI) reports
+/// `ErrorNotMeasured`. Under L2 the library's measurement is the acceptance,
+/// so such a run below the cap is measured like a converged one; at the cap
+/// it splits. The same switch as above therefore splits once and accepts
+/// both children on their measurement.
+#[test]
+fn unmeasured_runs_are_verified_under_l2_and_split_at_the_cap() {
+    let problem = branched();
+    let j0 = problem.site("j", 0);
+    let f = switch_on(problem.position(&j0));
+    let (_, norm) = dense_reference(&problem, &f);
+    let options = l2_given(2, norm, 1e-8).with_patch_order(vec![j0]);
+    let engine = DenseEngine::with_fault(Fault::Unmeasured);
+    let result = run(&engine, &problem, &f, &[], &options).unwrap();
+    let report = &result.report;
+    // The root runs at rank two, the cap, and splits without a measurement.
+    assert_eq!(report.splits, 1);
+    assert_eq!(engine.seen().len(), 3);
+    assert_eq!(report.accepted.len(), 2);
+    let tau = tau(report);
+    for record in &report.accepted {
+        assert_eq!(
+            record.termination,
+            InterpolationTermination::ErrorNotMeasured
+        );
+        assert!(record.acceptance.as_ref().unwrap().rms <= tau);
+    }
+    assert_certified_bound(&result, &problem, &f);
+}
+
+/// Under `SampledMax` there is no library measurement, so an unmeasured run
+/// is not accepted: it splits like an iteration limit.
+#[test]
+fn unmeasured_runs_split_under_sampled_max() {
+    let problem = chain3();
+    let f = |p: &[usize]| product(p, 0);
+    let engine = DenseEngine::with_fault(Fault::Unmeasured);
+    let options = sampled_max(4).with_error_norm(ErrorNorm::sampled_max_with_reference(2.0));
+    let result = run(&engine, &problem, &f, &[], &options).unwrap();
+    // Root and both children split; the grandchildren are exact.
+    assert_eq!(result.report.splits, 3);
+    assert_eq!(engine.seen().len(), 3);
+    assert!(result
+        .report
+        .accepted
+        .iter()
+        .all(|record| record.termination != InterpolationTermination::ErrorNotMeasured));
 }
 
 // ---------------------------------------------------------------------------
