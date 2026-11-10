@@ -1,7 +1,8 @@
 use num_complex::Complex64;
 use tensor4all_core::{DynIndex, IdxTensor, SvdTruncationPolicy};
 use tensor4all_partitionedtreetn::{
-    add_with_patching, contract_adaptive, truncate_adaptive, BudgetAllocation, PartitionedTreeTN,
+    add_with_patching, add_with_patching_with_report, contract_adaptive,
+    contract_adaptive_with_report, truncate_adaptive, BudgetAllocation, PartitionedTreeTN,
     PartitionedTreeTNError, PatchSplitStrategy, PatchingOptions, Projector, SubDomainTreeTN,
 };
 use tensor4all_treetn::{contraction::ContractionOptions, SumEngine, TreeTN, TruncationOptions};
@@ -917,4 +918,333 @@ fn adaptive_paths_reject_invalid_options_before_shortcut_and_ordinary_paths() {
         ),
         Err(PartitionedTreeTNError::InvalidOptions { .. })
     ));
+}
+
+/// The #1246 reproducer: a two-node chain over bits `a, b | c, d` with a
+/// generic inner bond of dimension 4, so a patch that fixes only `a` keeps an
+/// exact rank of 2 and a cap of 1 must truncate it with no index left to split.
+fn four_bit_chain() -> (TreeTN<IdxTensor, usize>, [DynIndex; 4]) {
+    fn values(count: usize, seed: u64) -> Vec<f64> {
+        let mut state = seed;
+        (0..count)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (state >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
+            })
+            .collect()
+    }
+    let a = DynIndex::new_dyn(2);
+    let b = DynIndex::new_dyn(2);
+    let c = DynIndex::new_dyn(2);
+    let d = DynIndex::new_dyn(2);
+    let bond = DynIndex::new_bond(4).unwrap();
+    let left =
+        IdxTensor::from_dense(vec![a.clone(), b.clone(), bond.clone()], values(16, 1)).unwrap();
+    let right = IdxTensor::from_dense(vec![bond, c.clone(), d.clone()], values(16, 2)).unwrap();
+    let chain = TreeTN::from_tensors(vec![left, right], vec![0usize, 1]).unwrap();
+    (chain, [a, b, c, d])
+}
+
+/// Identity operator on the [`four_bit_chain`] topology with fresh output sites
+/// over the same bits, so contracting it with the chain leaves the state's rank.
+fn four_bit_identity_operator(sites: &[DynIndex]) -> (PartitionedTreeTN, Vec<DynIndex>) {
+    let outputs: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
+    let op_bond = DynIndex::new_bond(1).unwrap();
+    // Column-major over `(out0, site0, out1, site1, op_bond)` and over
+    // `(op_bond, out2, site2, out3, site3)`: one where each output equals its site.
+    let mut left = vec![0.0_f64; 16];
+    let mut right = vec![0.0_f64; 16];
+    for first in 0..2 {
+        for second in 0..2 {
+            left[first + 2 * first + 4 * second + 8 * second] = 1.0;
+            right[first + 2 * first + 4 * second + 8 * second] = 1.0;
+        }
+    }
+    let node0 = IdxTensor::from_dense(
+        vec![
+            outputs[0].clone(),
+            sites[0].clone(),
+            outputs[1].clone(),
+            sites[1].clone(),
+            op_bond.clone(),
+        ],
+        left,
+    )
+    .unwrap();
+    let node1 = IdxTensor::from_dense(
+        vec![
+            op_bond,
+            outputs[2].clone(),
+            sites[2].clone(),
+            outputs[3].clone(),
+            sites[3].clone(),
+        ],
+        right,
+    )
+    .unwrap();
+    let tree = TreeTN::from_tensors(vec![node0, node1], vec![0usize, 1]).unwrap();
+    (
+        PartitionedTreeTN::from_subdomain(SubDomainTreeTN::from_treetn(tree).unwrap()).unwrap(),
+        outputs,
+    )
+}
+
+#[test]
+fn add_with_patching_reports_a_cap_with_no_split_index_left() {
+    // The issue's run: cap 1 with only `a` in `patch_order`, `Norm` allocation.
+    // Both patches are truncated by the cap and the relative error is ~4.8e-1,
+    // so the report is the only signal the caller gets.
+    let (chain, [a, ..]) = four_bit_chain();
+    let patch = SubDomainTreeTN::from_treetn(chain.clone()).unwrap();
+    let options = PatchingOptions {
+        cutoff: 1.0e-12,
+        allocation: BudgetAllocation::Norm,
+        max_bond_dim: Some(1),
+        patch_order: vec![a.clone()],
+        split_strategy: PatchSplitStrategy::Sequential,
+        ..PatchingOptions::default()
+    };
+    let (result, report) = add_with_patching_with_report(vec![patch], &0usize, &options).unwrap();
+
+    assert_eq!(result.len(), 2);
+    assert_eq!(report.patches.len(), 2);
+    assert_eq!(report.truncated_by_cap().count(), 2);
+    for record in &report.patches {
+        assert!(record.projector.get(&a).is_some());
+        assert_eq!(record.bond_dims, vec![1]);
+        assert!(record.cap_truncated);
+        assert_eq!(
+            result
+                .get(&record.projector)
+                .expect("record names a returned patch")
+                .data()
+                .link_dims(),
+            record.bond_dims
+        );
+    }
+
+    let exact = chain.to_dense().unwrap();
+    let approx = result.to_treetn().unwrap().to_dense().unwrap();
+    let relative = approx.sub(&exact).unwrap().norm().unwrap() / exact.norm().unwrap();
+    assert!(
+        relative > options.cutoff.sqrt(),
+        "the cap, not the cutoff, set the error {relative:e}"
+    );
+}
+
+#[test]
+fn add_with_patching_does_not_report_a_cap_equal_to_the_exact_rank() {
+    // Control 1 of the issue: cap 2 equals the exact rank of every patch, so
+    // nothing is discarded and the same two patches must not be flagged.
+    let (chain, [a, _, _, _]) = four_bit_chain();
+    let patch = SubDomainTreeTN::from_treetn(chain.clone()).unwrap();
+    let options = PatchingOptions {
+        cutoff: 1.0e-12,
+        allocation: BudgetAllocation::Norm,
+        max_bond_dim: Some(2),
+        patch_order: vec![a],
+        split_strategy: PatchSplitStrategy::Sequential,
+        ..PatchingOptions::default()
+    };
+    let (result, report) = add_with_patching_with_report(vec![patch], &0usize, &options).unwrap();
+
+    assert_eq!(result.len(), 2);
+    assert_eq!(report.truncated_by_cap().count(), 0);
+    for record in &report.patches {
+        assert_eq!(record.bond_dims, vec![2]);
+        assert!(!record.cap_truncated);
+    }
+
+    let exact = chain.to_dense().unwrap();
+    let approx = result.to_treetn().unwrap().to_dense().unwrap();
+    let relative = approx.sub(&exact).unwrap().norm().unwrap() / exact.norm().unwrap();
+    assert!(relative < 1.0e-12, "nothing was discarded: {relative:e}");
+}
+
+#[test]
+fn add_with_patching_does_not_report_a_cap_with_split_indices_left() {
+    // Control 2 of the issue: cap 1 with all four bits in `patch_order` splits
+    // every patch down to a single site, so no patch reaches the cap.
+    let (chain, [a, b, c, d]) = four_bit_chain();
+    let patch = SubDomainTreeTN::from_treetn(chain).unwrap();
+    let options = PatchingOptions {
+        cutoff: 1.0e-12,
+        allocation: BudgetAllocation::Norm,
+        max_bond_dim: Some(1),
+        patch_order: vec![a, b, c, d],
+        split_strategy: PatchSplitStrategy::Sequential,
+        ..PatchingOptions::default()
+    };
+    let (result, report) = add_with_patching_with_report(vec![patch], &0usize, &options).unwrap();
+
+    assert_eq!(result.len(), 4);
+    assert_eq!(report.patches.len(), 4);
+    assert_eq!(report.truncated_by_cap().count(), 0);
+    for record in &report.patches {
+        // Fixing two of the four bits leaves one bond, and it sits at the cap
+        // because the exact rank is already 1.
+        assert_eq!(record.bond_dims, vec![1]);
+        assert!(!record.cap_truncated);
+    }
+}
+
+#[test]
+fn add_with_patching_does_not_report_a_cap_on_a_numerically_zero_bond() {
+    // The stored bond dimension is 2 but its second singular value is exactly
+    // zero: the exact rank is 1, so a cap of 1 discards nothing. Reading the
+    // cap off the stored dimensions would call this a cap truncation, so the
+    // signal comes from the same cutoff applied without the cap.
+    let (a, b, c) = (
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+    );
+    let bond = DynIndex::new_dyn(2);
+    let left = IdxTensor::from_dense(
+        vec![a.clone(), b, bond.clone()],
+        vec![1.0_f64, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    )
+    .unwrap();
+    let right = IdxTensor::from_dense(vec![bond, c], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
+    let chain = TreeTN::from_tensors(vec![left, right], vec![0usize, 1]).unwrap();
+    let (result, report) = add_with_patching_with_report(
+        vec![SubDomainTreeTN::from_treetn(chain).unwrap()],
+        &0usize,
+        &PatchingOptions {
+            cutoff: 1.0e-12,
+            allocation: BudgetAllocation::Norm,
+            max_bond_dim: Some(1),
+            patch_order: vec![a],
+            split_strategy: PatchSplitStrategy::Sequential,
+            ..PatchingOptions::default()
+        },
+    )
+    .unwrap();
+
+    // The cutoff alone already meets the cap, so the patch is never split.
+    assert_eq!(result.len(), 1);
+    assert_eq!(report.patches.len(), 1);
+    assert_eq!(report.truncated_by_cap().count(), 0);
+    assert_eq!(report.patches[0].bond_dims, vec![1]);
+}
+
+#[test]
+fn contract_adaptive_reports_a_cap_with_no_split_index_left() {
+    let (chain, sites) = four_bit_chain();
+    let state =
+        PartitionedTreeTN::from_subdomain(SubDomainTreeTN::from_treetn(chain).unwrap()).unwrap();
+    let (operator, outputs) = four_bit_identity_operator(&sites);
+    let a = outputs[0].clone();
+    let options = PatchingOptions {
+        cutoff: 0.0,
+        max_bond_dim: Some(1),
+        patch_order: vec![a],
+        split_strategy: PatchSplitStrategy::Sequential,
+        ..PatchingOptions::default()
+    };
+    let (result, report) = contract_adaptive_with_report(
+        &operator,
+        &state,
+        &0,
+        &ContractionOptions::default(),
+        &options,
+    )
+    .unwrap();
+
+    assert_eq!(result.len(), 2);
+    assert_eq!(report.patches.len(), 2);
+    assert_eq!(report.truncated_by_cap().count(), 2);
+    for record in &report.patches {
+        assert_eq!(record.bond_dims, vec![1]);
+        assert!(record.cap_truncated);
+    }
+
+    // A cap of 4 does not bind on these patches: every returned bond stays
+    // strictly below it, so the closing truncation cannot have discarded
+    // anything. That is the whole claim, and it deliberately does not pin a
+    // bond dimension — an upstream truncation change moves the exact rank of
+    // this fixture (it went 4 -> 2 when zero singular values stopped being
+    // kept), and only "the cap changed nothing" is this test's subject.
+    let (capped, report) = contract_adaptive_with_report(
+        &operator,
+        &state,
+        &0,
+        &ContractionOptions::default(),
+        &PatchingOptions {
+            max_bond_dim: Some(4),
+            ..options.clone()
+        },
+    )
+    .unwrap();
+    assert_eq!(capped.len(), 2);
+    assert_eq!(report.truncated_by_cap().count(), 0);
+    assert!(report.patches.iter().all(|record| !record.cap_truncated));
+    let capped_dims: Vec<usize> = capped.values().map(|patch| patch.max_bond_dim()).collect();
+    assert!(
+        !capped_dims.is_empty(),
+        "the cap-4 call must return patches"
+    );
+    assert!(
+        capped_dims.iter().all(|&d| d < 4),
+        "a cap of 4 must not bind: {capped_dims:?}"
+    );
+
+    // Cap 1 with all four output bits in `patch_order` splits the output into
+    // one patch per bit assignment, so no patch needs the cap.
+    let (split, report) = contract_adaptive_with_report(
+        &operator,
+        &state,
+        &0,
+        &ContractionOptions::default(),
+        &PatchingOptions {
+            patch_order: outputs.to_vec(),
+            ..options
+        },
+    )
+    .unwrap();
+    assert_eq!(split.len(), 16);
+    assert_eq!(report.truncated_by_cap().count(), 0);
+    assert!(report
+        .patches
+        .iter()
+        .all(|record| record.bond_dims == vec![1] && !record.cap_truncated));
+}
+
+/// The plain entry point and the reporting one run the same computation: the
+/// report is an observation, not a second path. The plain call skips the extra
+/// uncapped truncation that decides the flag (it passes no sink), so this also
+/// pins that "skipping the record" cannot change the partition.
+#[test]
+fn the_plain_entry_point_returns_exactly_the_reporting_partition() {
+    let (chain, sites) = four_bit_chain();
+    let state =
+        PartitionedTreeTN::from_subdomain(SubDomainTreeTN::from_treetn(chain).unwrap()).unwrap();
+    let (operator, outputs) = four_bit_identity_operator(&sites);
+    let options = PatchingOptions {
+        cutoff: 0.0,
+        max_bond_dim: Some(1),
+        patch_order: vec![outputs[0].clone()],
+        split_strategy: PatchSplitStrategy::Sequential,
+        ..PatchingOptions::default()
+    };
+    let contract_options = ContractionOptions::default();
+
+    let plain = contract_adaptive(&operator, &state, &0, &contract_options, &options).unwrap();
+    let (reported, report) =
+        contract_adaptive_with_report(&operator, &state, &0, &contract_options, &options).unwrap();
+
+    // The cap does bind here, so this is the case where the reporting path does
+    // its extra uncapped truncation and the plain path does not.
+    assert_eq!(report.truncated_by_cap().count(), 2);
+    assert_eq!(plain.len(), reported.len());
+    for (projector, patch) in plain.iter() {
+        let other = reported.get(projector).expect("same projector");
+        assert_eq!(
+            patch.data().to_dense().unwrap().to_vec::<f64>().unwrap(),
+            other.data().to_dense().unwrap().to_vec::<f64>().unwrap(),
+            "the patch under {projector:?} must be identical"
+        );
+    }
 }
