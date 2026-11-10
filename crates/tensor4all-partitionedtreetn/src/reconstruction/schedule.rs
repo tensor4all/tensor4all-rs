@@ -32,8 +32,12 @@
 //! depth, and `Some(regions)` prunes a child prefix that intersects none of them
 //! before it is restricted, merged or kept, mirroring how
 //! [`MergeRefineOptions::coverage`] decides which input leaves are present. The
-//! result, every counter and the reported bound then cover the computed regions
-//! only.
+//! retained output is then limited to those regions, and the reported bound
+//! covers the computed regions only. The counters do not shrink the same way:
+//! they count the work that is executed, and the operator is still applied over
+//! the whole output domain once per input leaf (and, with a rank goal, probes are
+//! accumulated before a child is discarded), so `applied_operator_count` and the
+//! first `work_items_per_level` entries stay at the unselected schedule's values.
 //!
 //! With [`MergeRefineOptions::target_bond_dim`] unset the trajectory is uniform
 //! and exact: every region is refined down to the requested depth and
