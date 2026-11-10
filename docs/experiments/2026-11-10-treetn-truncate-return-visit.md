@@ -141,6 +141,12 @@ amplitudes:
 | B2 | 2.101e-14 | 2.782e-13 | 2.765e-13 |
 | IFT | 1.310e-8 | 1.310e-8 | 6.69e-14 |
 
+The accuracy columns are **not recomputable from this repository**: they come from
+an offline comparison of the amplitude files that `run` writes, and neither those
+files nor the comparison script were kept. They are reported as measured, not as
+evidence a reader can regenerate; what a reader can check is the agreement of the
+two binaries' `dims` and `diag` output, which is in the JSON.
+
 `dims <kind> 1e-9` prints every bond dimension before and after a truncation, and
 the two binaries agree on the whole vector in all four states, so it is not only
 the maximum and the sum that match. The number of removed units is identical too,

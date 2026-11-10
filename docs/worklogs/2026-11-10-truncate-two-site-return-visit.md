@@ -54,10 +54,12 @@
   It is an **equivalence test, not a route test**: both routes compute the same
   truncated block, so it also passes with the conditioning switched off. That the
   conditioned branch is entered was measured separately, by a counter inside the
-  branch run on the reproducer's four states: A 84 steps, B1 74, B2 160, IFT 0
-  (on IFT the bond is not smaller than both sides of the block, so every step
-  takes the fallback, as designed). A counter-based assertion would pin the route
-  better than this note; it is not in this PR.
+  branch run on the reproducer's four states: A 84 steps, B1 74, B2 160, IFT 0.
+  The counter capture was not kept, and the IFT zero is **unexplained**: the
+  dimension gate admits conditioning at IFT's first step (2500 x 156 against a
+  bond of 50), so the fallback there must come from the QR rank check, which I did
+  not observe step by step. A counter-based assertion would pin the route better
+  than this note; it is not in this PR.
 - The whole crate suite passes (702 unit tests, 419 + 212 integration tests);
   `cargo fmt --all --check` and `cargo clippy --all-targets` are clean.
 - Speedups on the four states, base `a1a02af6` against the branch, two runs per
