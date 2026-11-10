@@ -18,8 +18,8 @@ use tensor4all_tensorbackend::{
     StorageScalar,
 };
 use tensor4all_treersi::{
-    hadamard_many, hadamard_many_with_rng_in, hadamard_many_with_rng_on_session, TreeRsiError,
-    TreeRsiOptions, TreeRsiResult, TreeRsiScalar,
+    hadamard_many_with_rng_in, hadamard_many_with_rng_on_session, TreeRsiError, TreeRsiOptions,
+    TreeRsiResult, TreeRsiScalar,
 };
 use tensor4all_treetn::TreeTN;
 
@@ -247,8 +247,15 @@ fn session_entry_runs_while_the_process_global_backend_is_held() {
         "the fixture must take nontrivial rank decisions on sketched edges"
     );
     // Warm the process-global eager runtime first: cold initialization takes the global
-    // context's backend lock, which this test holds.
-    hadamard_many::<f64, _>(&compact_trees(&operands), &options).expect("warm-up");
+    // context's backend lock, which this test holds. The warm-up is a plain dense
+    // readback through the global route, not the code under test, so a broken session
+    // route cannot fail here instead of under the held lock.
+    let warm = compact_trees(&operands)[0]
+        .to_dense()
+        .expect("warm-up")
+        .to_vec::<f64>()
+        .expect("warm-up");
+    assert_eq!(warm.len(), 32);
 
     let inputs = compact_trees(&operands);
     let result = with_default_backend(|_global| {
