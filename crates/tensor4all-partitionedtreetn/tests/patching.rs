@@ -1182,7 +1182,10 @@ fn contract_adaptive_reports_a_cap_with_no_split_index_left() {
     assert_eq!(report.truncated_by_cap().count(), 0);
     assert!(report.patches.iter().all(|record| !record.cap_truncated));
     let capped_dims: Vec<usize> = capped.values().map(|patch| patch.max_bond_dim()).collect();
-    assert!(!capped_dims.is_empty(), "the cap-4 call must return patches");
+    assert!(
+        !capped_dims.is_empty(),
+        "the cap-4 call must return patches"
+    );
     assert!(
         capped_dims.iter().all(|&d| d < 4),
         "a cap of 4 must not bind: {capped_dims:?}"
@@ -1207,4 +1210,41 @@ fn contract_adaptive_reports_a_cap_with_no_split_index_left() {
         .patches
         .iter()
         .all(|record| record.bond_dims == vec![1] && !record.cap_truncated));
+}
+
+/// The plain entry point and the reporting one run the same computation: the
+/// report is an observation, not a second path. The plain call skips the extra
+/// uncapped truncation that decides the flag (it passes no sink), so this also
+/// pins that "skipping the record" cannot change the partition.
+#[test]
+fn the_plain_entry_point_returns_exactly_the_reporting_partition() {
+    let (chain, sites) = four_bit_chain();
+    let state =
+        PartitionedTreeTN::from_subdomain(SubDomainTreeTN::from_treetn(chain).unwrap()).unwrap();
+    let (operator, outputs) = four_bit_identity_operator(&sites);
+    let options = PatchingOptions {
+        cutoff: 0.0,
+        max_bond_dim: Some(1),
+        patch_order: vec![outputs[0].clone()],
+        split_strategy: PatchSplitStrategy::Sequential,
+        ..PatchingOptions::default()
+    };
+    let contract_options = ContractionOptions::default();
+
+    let plain = contract_adaptive(&operator, &state, &0, &contract_options, &options).unwrap();
+    let (reported, report) =
+        contract_adaptive_with_report(&operator, &state, &0, &contract_options, &options).unwrap();
+
+    // The cap does bind here, so this is the case where the reporting path does
+    // its extra uncapped truncation and the plain path does not.
+    assert_eq!(report.truncated_by_cap().count(), 2);
+    assert_eq!(plain.len(), reported.len());
+    for (projector, patch) in plain.iter() {
+        let other = reported.get(projector).expect("same projector");
+        assert_eq!(
+            patch.data().to_dense().unwrap().to_vec::<f64>().unwrap(),
+            other.data().to_dense().unwrap().to_vec::<f64>().unwrap(),
+            "the patch under {projector:?} must be identical"
+        );
+    }
 }

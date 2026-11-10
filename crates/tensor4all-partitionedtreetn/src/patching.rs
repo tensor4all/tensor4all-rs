@@ -332,7 +332,7 @@ pub fn add_with_patching<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    Ok(add_with_patching_with_report(subdomains, center, options)?.0)
+    add_with_patching_inner(subdomains, center, options, None)
 }
 
 /// Add subdomains with automatic TreeTN patch splitting, and report what the
@@ -400,11 +400,28 @@ pub fn add_with_patching_with_report<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
+    let mut records = Vec::new();
+    let truncated = add_with_patching_inner(subdomains, center, options, Some(&mut records))?;
+    Ok((truncated, PatchingReport::new(records)))
+}
+
+/// The body of [`add_with_patching_with_report`], with an optional sink for the
+/// cap records. `None` skips the extra truncation that decides the flag, so the
+/// plain entry point really does pay nothing for the report.
+fn add_with_patching_inner<V>(
+    subdomains: Vec<SubDomainTreeTN<V>>,
+    center: &V,
+    options: &PatchingOptions,
+    mut records: Option<&mut CapRecords<V>>,
+) -> Result<PartitionedTreeTN<V>>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
     validate_patching_options(options)?;
     let subdomains = combine_equal_key_subdomains(subdomains, options.sum_engine)?;
     let partitioned = PartitionedTreeTN::from_subdomains(subdomains)?;
     if partitioned.is_empty() {
-        return Ok((partitioned, PatchingReport::default()));
+        return Ok(partitioned);
     }
 
     let template = partitioned
@@ -479,16 +496,15 @@ where
 
         if !split_any {
             let partitioned = PartitionedTreeTN::from_subdomains(next)?;
-            let mut records = Vec::new();
             let truncated = truncate_adaptive_reporting(
                 &partitioned,
                 center,
                 options.cutoff,
                 options.allocation,
                 options.max_bond_dim,
-                Some(&mut records),
+                records.as_deref_mut(),
             )?;
-            return Ok((truncated, PatchingReport::new(records)));
+            return Ok(truncated);
         }
         working = next;
     }
@@ -582,7 +598,15 @@ pub fn contract_adaptive<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    Ok(contract_adaptive_with_report(left, right, center, contract_options, patching_options)?.0)
+    contract_adaptive_with_selection(
+        left,
+        right,
+        center,
+        contract_options,
+        patching_options,
+        None,
+        None,
+    )
 }
 
 /// Contract two partitions and adaptively truncate the output, reporting what
@@ -651,14 +675,17 @@ pub fn contract_adaptive_with_report<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    contract_adaptive_with_selection(
+    let mut records = Vec::new();
+    let truncated = contract_adaptive_with_selection(
         left,
         right,
         center,
         contract_options,
         patching_options,
         None,
-    )
+        Some(&mut records),
+    )?;
+    Ok((truncated, PatchingReport::new(records)))
 }
 
 /// Contract two partitions and adaptively truncate the output, forming only
@@ -771,15 +798,15 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     let wanted: HashSet<Projector> = wanted.iter().cloned().collect();
-    Ok(contract_adaptive_with_selection(
+    contract_adaptive_with_selection(
         left,
         right,
         center,
         contract_options,
         patching_options,
         Some(&wanted),
-    )?
-    .0)
+        None,
+    )
 }
 
 fn contract_adaptive_with_selection<V>(
@@ -789,7 +816,8 @@ fn contract_adaptive_with_selection<V>(
     contract_options: &ContractionOptions,
     patching_options: &PatchingOptions,
     wanted: Option<&HashSet<Projector>>,
-) -> Result<(PartitionedTreeTN<V>, PatchingReport)>
+    records: Option<&mut CapRecords<V>>,
+) -> Result<PartitionedTreeTN<V>>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
@@ -835,16 +863,15 @@ where
         )?);
     }
     let contracted = PartitionedTreeTN::from_subdomains(subdomains)?;
-    let mut records = Vec::new();
     let truncated = truncate_adaptive_reporting(
         &contracted,
         center,
         patching_options.cutoff,
         patching_options.allocation,
         patching_options.max_bond_dim,
-        Some(&mut records),
+        records,
     )?;
-    Ok((truncated, PatchingReport::new(records)))
+    Ok(truncated)
 }
 
 fn contract_group_project_first<V>(
