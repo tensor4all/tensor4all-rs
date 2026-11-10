@@ -709,6 +709,7 @@ fn fit_factorize_options(config: FitFactorizeConfig) -> Result<FactorizeOptions>
 struct FitExecution<'a, T: TensorLike> {
     leaves: &'a dyn LeafOps<T>,
     rng: &'a mut dyn rand::RngCore,
+    discarded_norm: Option<&'a mut f64>,
 }
 
 fn fit_two_site_update<T, V>(
@@ -800,6 +801,22 @@ where
         with_fit_profile(|profile| {
             profile.factorize_time += factorize_started.elapsed();
         });
+    }
+
+    if let Some(discarded_norm) = execution.discarded_norm {
+        let reconstructed = contract_fit_tensor_refs(
+            &[&factorize_result.left, &factorize_result.right],
+            execution.leaves,
+        )?;
+        *discarded_norm = local_optimum
+            .axpby(
+                AnyScalar::new_real(1.0),
+                &reconstructed,
+                AnyScalar::new_real(-1.0),
+            )
+            .map_err(|e| anyhow::anyhow!("fit truncation residual failed: {e}"))?
+            .norm()
+            .map_err(|e| anyhow::anyhow!("fit truncation norm failed: {e}"))?;
     }
 
     let edge_uv = subtree.edge_between(node_u, node_v).ok_or_else(|| {
@@ -1126,6 +1143,7 @@ where
             FitExecution {
                 leaves: self.leaves.as_ref(),
                 rng: &mut self.rng,
+                discarded_norm: None,
             },
         )
     }
@@ -1223,6 +1241,7 @@ where
     envs: Vec<SumFitEnvironment<T, V>>,
     factorize_config: FitFactorizeConfig,
     rng: rand_chacha::ChaCha8Rng,
+    truncations: Option<Vec<FitTruncation<V>>>,
 }
 
 impl<T, V> SumFitUpdater<T, V>
@@ -1243,6 +1262,7 @@ where
             rng: <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(0),
             targets,
             envs,
+            truncations: None,
             factorize_config: FitFactorizeConfig {
                 max_bond_dim,
                 svd_policy,
@@ -1389,7 +1409,8 @@ where
         }
         let local_sum =
             local_sum.ok_or_else(|| anyhow::anyhow!("fit_sum: no targets to accumulate"))?;
-        fit_two_site_update(
+        let mut discarded_norm = 0.0;
+        let updated = fit_two_site_update(
             subtree,
             step,
             full_treetn,
@@ -1399,10 +1420,18 @@ where
             FitExecution {
                 leaves: &GlobalLeaves,
                 rng: &mut self.rng,
+                discarded_norm: self.truncations.as_ref().map(|_| &mut discarded_norm),
             },
         )
         .map_err(|error| anyhow::anyhow!("fit_sum: two-site update failed: {error}"))
-        .map_err(TreeTNOperationError::from)
+        .map_err(TreeTNOperationError::from)?;
+        if let Some(truncations) = &mut self.truncations {
+            truncations.push(FitTruncation {
+                region: [node_u.clone(), node_v.clone()],
+                discarded_norm,
+            });
+        }
+        Ok(updated)
     }
 
     fn after_step(
@@ -1574,7 +1603,7 @@ impl FitContractionOptions {
     }
 }
 
-fn validate_fit_sum_options(options: &FitContractionOptions) -> Result<()> {
+pub(super) fn validate_fit_sum_options(options: &FitContractionOptions) -> Result<()> {
     if let Some(tol) = options.convergence_tol {
         if !tol.is_finite() || tol < 0.0 {
             return Err(anyhow::anyhow!(
@@ -1650,6 +1679,125 @@ pub fn fit_sum<T, V>(
     initial: &TreeTN<T, V>,
     center: &V,
     options: FitContractionOptions,
+) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    fit_sum_impl(targets, initial, center, options, None)
+}
+
+/// Truncation loss at one two-node update of [`fit_sum_with_report`].
+///
+/// Reports follow sweep order, so a region appears twice per full sweep.
+/// The norm includes floating-point reconstruction error and is not the
+/// residual against the exact sum or the displacement from the seed.
+///
+/// # Examples
+/// ```
+/// use tensor4all_treetn::FitTruncation;
+/// let report = FitTruncation { region: [0, 1], discarded_norm: 0.25 };
+/// assert_eq!(report.region, [0, 1]);
+/// assert_eq!(report.discarded_norm, 0.25);
+/// ```
+#[derive(Debug, Clone)]
+pub struct FitTruncation<V> {
+    /// Ordered node pair updated by this local step.
+    pub region: [V; 2],
+    /// Absolute Frobenius norm of the local optimum minus its retained split.
+    /// With canonical surroundings this is the whole-network loss introduced
+    /// by this split relative to that untruncated local update.
+    pub discarded_norm: f64,
+}
+
+/// A fitted sum and its regional truncation losses, unlike [`fit_sum`]'s network alone.
+///
+/// # Examples
+/// ```
+/// use tensor4all_core::{DynIndex, IdxTensor};
+/// use tensor4all_treetn::{fit_sum_with_report, FitOptions, TreeTN};
+/// let term = TreeTN::<IdxTensor, usize>::from_tensors(
+///     vec![IdxTensor::from_dense(vec![DynIndex::new_dyn(2)], vec![1.0, 2.0]).unwrap()], vec![0],
+/// ).unwrap();
+/// let result = fit_sum_with_report(&[term.clone(), term.clone()], &term, &0, FitOptions::new(1)).unwrap();
+/// assert_eq!(result.network.to_dense().unwrap().to_vec::<f64>().unwrap(), vec![2.0, 4.0]);
+/// assert!(result.truncations.is_empty()); // No bond to truncate.
+/// ```
+#[derive(Debug, Clone)]
+pub struct FitSumResult<T, V>
+where
+    T: TensorLike,
+    V: Clone + Hash + Eq + Send + Sync + std::fmt::Debug,
+{
+    /// Fitted network with the seed's named topology and site-index identities.
+    pub network: TreeTN<T, V>,
+    /// Local split losses in execution order; empty for zero sweeps or one node.
+    pub truncations: Vec<FitTruncation<V>>,
+}
+
+/// Fit all `targets` from `initial`, reporting the loss of every local split.
+///
+/// Arguments and validation are those of [`fit_sum`]. `initial` can come from
+/// any seed builder; [`TreeTN::pairwise_sum_fit`] constructs a cheap pairwise
+/// seed. The same seed, topology insertion order and options give deterministic
+/// results and ranks on the same backend; cross-backend bitwise equality is
+/// not promised.
+///
+/// If `e_j` are the reported norms, exact-arithmetic least-squares projection
+/// with canonical surroundings gives `||sum - output|| <= ||sum - initial|| +
+/// sum_j e_j`. The unknown seed residual is essential: the reports alone do
+/// not certify accuracy against the exact sum or bound the change from the
+/// seed. Roundoff also contributes to the measured local residuals.
+///
+/// Reporting reconstructs each local two-site tensor once, adding a local
+/// contraction, subtraction and norm, plus `O(local two-site tensor size)` workspace and
+/// `O(sweeps * edges)` small records. It never materializes the whole sum.
+///
+/// # Returns
+/// The fitted network and reports in sweep order. Zero sweeps return the
+/// validated seed unchanged with no reports.
+///
+/// # Errors
+/// Returns [`TreeTNOperationError`] for the validation and numerical failures
+/// of [`fit_sum`], or if a local residual contraction or norm fails.
+///
+/// # Examples
+/// ```
+/// use tensor4all_core::{DynIndex, IdxTensor};
+/// use tensor4all_treetn::{fit_sum_with_report, FitOptions, TreeTN};
+/// let term = TreeTN::<IdxTensor, usize>::from_tensors(
+///     vec![IdxTensor::from_dense(vec![DynIndex::new_dyn(2)], vec![1.0, 2.0]).unwrap()], vec![0],
+/// ).unwrap();
+/// let result = fit_sum_with_report(&[term.clone()], &term, &0, FitOptions::new(0)).unwrap();
+/// assert_eq!(result.network.to_dense().unwrap().to_vec::<f64>().unwrap(), vec![1.0, 2.0]);
+/// assert!(result.truncations.is_empty());
+/// ```
+pub fn fit_sum_with_report<T, V>(
+    targets: &[TreeTN<T, V>],
+    initial: &TreeTN<T, V>,
+    center: &V,
+    options: FitContractionOptions,
+) -> std::result::Result<FitSumResult<T, V>, TreeTNOperationError>
+where
+    T: TensorLike,
+    <T::Index as IndexLike>::Id: Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
+    let mut truncations = Vec::new();
+    let network = fit_sum_impl(targets, initial, center, options, Some(&mut truncations))?;
+    Ok(FitSumResult {
+        network,
+        truncations,
+    })
+}
+
+fn fit_sum_impl<T, V>(
+    targets: &[TreeTN<T, V>],
+    initial: &TreeTN<T, V>,
+    center: &V,
+    options: FitContractionOptions,
+    truncations: Option<&mut Vec<FitTruncation<V>>>,
 ) -> std::result::Result<TreeTN<T, V>, TreeTNOperationError>
 where
     T: TensorLike,
@@ -1756,6 +1904,7 @@ where
     );
     updater.factorize_config.randomized = options.randomized;
     updater.rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(options.rsvd_seed);
+    updater.truncations = truncations.as_ref().map(|_| Vec::new());
     updater
         .prepare(&psi)
         .context("fit_sum: failed to build initial target environments")?;
@@ -1769,6 +1918,9 @@ where
         options.convergence_tol,
     )?;
     finish_fit_profile("fit_sum");
+    if let (Some(output), Some(reports)) = (truncations, updater.truncations) {
+        *output = reports;
+    }
     Ok(psi)
 }
 

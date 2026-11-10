@@ -69,6 +69,7 @@ num-complex.workspace = true
 num-traits.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
+faer.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
 omeco.workspace = true

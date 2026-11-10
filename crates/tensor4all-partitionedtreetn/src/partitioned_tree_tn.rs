@@ -486,9 +486,12 @@ where
 
     /// Compute the squared Frobenius norm of all eager patches.
     ///
-    /// This sums each stored patch's squared norm without remasking or dense
-    /// materialization. The receiver is borrowed immutably; each patch's norm
-    /// implementation clones its TreeTN wrapper for canonicalization.
+    /// This sums each stored patch's squared norm in canonical patch order, so
+    /// the result does not depend on insertion or hash order, without
+    /// remasking or dense materialization. The receiver is borrowed immutably;
+    /// each patch's norm implementation clones its TreeTN wrapper for
+    /// canonicalization. The square of a norm above about `1.3e154` overflows;
+    /// use [`Self::norm`] for the norm itself.
     ///
     /// # Errors
     ///
@@ -501,15 +504,17 @@ where
     /// patch norm cannot be evaluated.
     pub fn norm_squared(&self) -> Result<f64> {
         self.validate_contents()?;
-        self.data
-            .values()
+        self.ordered_patches()
+            .into_iter()
             .try_fold(0.0, |sum, subdomain| Ok(sum + subdomain.norm_squared()?))
     }
 
     /// Compute the Frobenius norm of all eager patches.
     ///
-    /// This returns the square root of [`Self::norm_squared`]. The receiver is
-    /// borrowed immutably and no full dense tensor is materialized.
+    /// This combines patch norms with scaled `hypot` accumulation, preserving
+    /// representable norms even when their squares overflow or underflow.
+    /// Patches use canonical contribution order. The receiver is borrowed
+    /// immutably and no full dense tensor is materialized.
     ///
     /// # Errors
     ///
@@ -521,7 +526,22 @@ where
     /// [`PartitionedTreeTNError::DTypeMismatch`], and
     /// [`PartitionedTreeTNError::TreeTN`].
     pub fn norm(&self) -> Result<f64> {
-        Ok(self.norm_squared()?.sqrt())
+        self.validate_contents()?;
+        self.ordered_patches()
+            .into_iter()
+            .try_fold(0.0_f64, |norm, patch| Ok(norm.hypot(patch.norm()?)))
+    }
+
+    /// Stored patches in canonical patch order, independent of insertion and
+    /// hash order.
+    fn ordered_patches(&self) -> Vec<&SubDomainTreeTN<V>> {
+        let mut patches: Vec<_> = self.data.values().collect();
+        sort_by_patch_order(
+            &mut patches,
+            |a, b| a.patch_order_key().cmp(b.patch_order_key()),
+            |patch| patch.content_digest(),
+        );
+        patches
     }
 
     /// Refine every patch onto the layout projectors it is compatible with.
@@ -1286,18 +1306,8 @@ where
             return Ok(());
         };
 
-        let mut left_patches: Vec<_> = self.data.values().collect();
-        let mut right_patches: Vec<_> = other.data.values().collect();
-        sort_by_patch_order(
-            &mut left_patches,
-            |a, b| a.patch_order_key().cmp(b.patch_order_key()),
-            |patch| patch.content_digest(),
-        );
-        sort_by_patch_order(
-            &mut right_patches,
-            |a, b| a.patch_order_key().cmp(b.patch_order_key()),
-            |patch| patch.content_digest(),
-        );
+        let left_patches = self.ordered_patches();
+        let right_patches = other.ordered_patches();
         for left in left_patches {
             for &right in &right_patches {
                 let Some(merged) = left.projector().intersection(right.projector()) else {

@@ -2903,3 +2903,90 @@ fn apply_zipup_never_skips_without_an_explicit_exact_policy() {
          factorized path ({default_deviation:e})"
     );
 }
+
+/// Regression for issue #1227: a swap must be applied from one old-to-new map,
+/// not pair by pair, which used to collapse both mappings onto `a`.
+#[test]
+fn test_linear_operator_replace_indices_swap_is_simultaneous() {
+    let a = make_index(2);
+    let b = make_index(2);
+    let op = build_identity_operator(&[("A".to_string(), a.clone()), ("B".to_string(), b.clone())]);
+
+    let swapped = op
+        .replace_indices(&[a.clone(), b.clone()], &[b.clone(), a.clone()])
+        .unwrap();
+
+    let input_true = |node: &str| {
+        swapped
+            .get_input_mapping(&node.to_string())
+            .unwrap()
+            .true_index
+            .clone()
+    };
+    let output_true = |node: &str| {
+        swapped
+            .get_output_mapping(&node.to_string())
+            .unwrap()
+            .true_index
+            .clone()
+    };
+
+    // Both sides reported the same true index (`a`) when the pairs were applied
+    // one after another.
+    assert_eq!(
+        (input_true("A"), input_true("B")),
+        (b.clone(), a.clone()),
+        "input true indices must be swapped, not collapsed"
+    );
+    assert_eq!(
+        (output_true("A"), output_true("B")),
+        (b, a),
+        "output true indices must be swapped, not collapsed"
+    );
+    assert_eq!(swapped.external_indices().len(), 4);
+}
+
+/// `Index` equality ignores `dim`, so an index that only shares id, tags and
+/// plev with a stored true index must not match it: `replaceind` guarded this
+/// with a dimension comparison and the batch path keeps that guard.
+#[test]
+fn test_linear_operator_replace_indices_keeps_dimension_guard() {
+    let a = make_index(2);
+    let op = build_identity_operator(&[("A".to_string(), a.clone())]);
+
+    let mut aliased = a.clone();
+    aliased.dim = 3;
+    let target = make_index(3);
+
+    let err = op.replace_indices(&[aliased], &[target]).unwrap_err();
+    assert!(err.to_string().contains("not found"), "{err}");
+}
+
+/// Issue #1227's defect table lists both invalid batches as "(not checked)" for
+/// `LinearOperator`. They are rejected now, before any mapping changes.
+#[test]
+fn test_linear_operator_replace_indices_rejects_duplicate_and_occupied_targets() {
+    let a = make_index(2);
+    let b = make_index(2);
+    let op = build_identity_operator(&[("A".to_string(), a.clone()), ("B".to_string(), b.clone())]);
+
+    // Two sources onto one target would leave two mappings with the same true
+    // index, which is exactly the collapse the sequential path produced.
+    let shared = make_index(2);
+    let err = op
+        .replace_indices(&[a.clone(), b.clone()], &[shared.clone(), shared.clone()])
+        .unwrap_err();
+    assert!(err.to_string().contains("Duplicate target"), "{err}");
+
+    // `b` is a true index of this operator and is not replaced by the batch.
+    let err = op
+        .replace_indices(std::slice::from_ref(&a), std::slice::from_ref(&b))
+        .unwrap_err();
+    assert!(err.to_string().contains("already a true index"), "{err}");
+
+    // The rejected batches left the operator untouched.
+    assert_eq!(
+        op.get_input_mapping(&"B".to_string()).unwrap().true_index,
+        b
+    );
+}

@@ -417,6 +417,40 @@ fn sum_reduces_every_element() {
     assert_eq!(again.as_slice::<f64>().expect("f64 payload"), &[7.0]);
 }
 
+/// A zero-length axis is an empty reduction domain, and `sum` answers the fold's unit, `0`, for
+/// real and complex dtypes alike, leaving the session usable.
+///
+/// This is the layer the empty-reduction contract lives at: before the tenferro v0.10 pin
+/// (tenferro #2453) the reduction refused a zero-length axis, and `tensor4all-core`'s
+/// `sum_on_session` passed that refusal on. The value is asserted, not just success, so a
+/// product-like unit (`1`) fails.
+#[test]
+fn sum_of_an_empty_axis_is_the_additive_unit() {
+    use num_complex::Complex64;
+
+    let context = context(1);
+    let empty = Tensor::from_vec_col_major(vec![0, 3], Vec::<f64>::new()).expect("empty f64");
+    let empty_complex =
+        Tensor::from_vec_col_major(vec![3, 0], Vec::<Complex64>::new()).expect("empty c64");
+    let (real, complex, after) = context
+        .with_concrete_session(|session| {
+            Ok::<_, tenferro_tensor::Error>((
+                session.sum(&empty)?,
+                session.sum(&empty_complex)?,
+                session.sum(&matrix())?,
+            ))
+        })
+        .expect("session entry")
+        .expect("an empty axis is not refused");
+    assert!(real.shape().is_empty());
+    assert_eq!(real.as_slice::<f64>().expect("f64 payload"), &[0.0]);
+    assert_eq!(
+        complex.as_slice::<Complex64>().expect("c64 payload"),
+        &[Complex64::new(0.0, 0.0)]
+    );
+    assert_eq!(after.as_slice::<f64>().expect("f64 payload"), &[10.0]);
+}
+
 /// `conj` conjugates a complex value and leaves a real one unchanged.
 #[test]
 fn conj_conjugates_complex_values() {

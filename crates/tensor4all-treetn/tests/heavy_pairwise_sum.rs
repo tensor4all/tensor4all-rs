@@ -136,3 +136,63 @@ fn pairwise_sum_errors_stay_inside_the_documented_per_add_bound() {
         );
     }
 }
+
+#[test]
+#[ignore = "heavy: 64 chains of bond 10; run in release"]
+fn pairwise_fit_reaches_exact_then_truncate_accuracy() {
+    use tensor4all_core::SvdTruncationPolicy;
+    use tensor4all_treetn::{FitOptions, SumEngine, TruncationOptions};
+
+    let sites: Vec<_> = (0..SITES).map(|_| DynIndex::new_dyn(2)).collect();
+    let terms = random_terms(&sites);
+    let refs: Vec<_> = terms.iter().collect();
+    let mut exact = terms[0].to_dense().unwrap();
+    for term in &terms[1..] {
+        exact = exact.add(&term.to_dense().unwrap()).unwrap();
+    }
+    let policy = SvdTruncationPolicy::new(PER_ADD_CUTOFF)
+        .with_relative()
+        .with_squared_values()
+        .with_discarded_tail_sum();
+    let reference = TreeTN::exact_sum(&refs, SumEngine::Nary)
+        .unwrap()
+        .network
+        .truncate(
+            [CENTER],
+            TruncationOptions::default().with_svd_policy(policy),
+        )
+        .unwrap();
+    let result = TreeTN::pairwise_sum_fit(
+        &terms,
+        PairwiseSumOrder::Sequential,
+        PerAddCutoff {
+            center: &CENTER,
+            cutoff: PER_ADD_CUTOFF,
+            max_bond_dim: None,
+        },
+        FitOptions::new(1).with_svd_policy(policy),
+    )
+    .unwrap();
+    let reference_error = reference
+        .to_dense()
+        .unwrap()
+        .sub(&exact)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    let fitted_error = result
+        .network
+        .to_dense()
+        .unwrap()
+        .sub(&exact)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    let roundoff = f64::EPSILON * exact.maxabs().unwrap();
+    println!("exact-then-truncate max error {reference_error:e}; fitted {fitted_error:e}; roundoff scale {roundoff:e}");
+    assert!(
+        fitted_error <= 10.0 * reference_error.max(roundoff),
+        "fit error {fitted_error:e}, reference {reference_error:e}"
+    );
+    assert_eq!(result.truncations.len(), 2 * (SITES - 1));
+}

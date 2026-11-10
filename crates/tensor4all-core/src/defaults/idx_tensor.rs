@@ -999,8 +999,11 @@ impl IdxTensorStorage {
             return Ok(native);
         }
         let read = inner.tensor_read();
+        let view = read
+            .tensor_view()
+            .ok_or_else(|| anyhow::anyhow!("external scalar kind payload has no tensor view"))?;
         with_engine(inner.runtime(), None, |engine| {
-            engine.to_contiguous_read(TensorRead::from_view(read.tensor_view()))
+            engine.to_contiguous_read(TensorRead::from_view(view))
         })
         .map_err(anyhow::Error::new)
     }

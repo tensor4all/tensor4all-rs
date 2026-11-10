@@ -440,3 +440,106 @@ fn an_unfilled_builder_reports_the_width_it_holds() {
     assert_eq!(key.width_bits(), 0);
     assert!(matches!(key.repr(), Repr::U64(0)));
 }
+
+/// Reference key: one single-dimension key per component, appended through
+/// `KeyBuilder`, which places limbs independently of the fixed-arm packers.
+fn composed_reference(dims: &[usize], idx: &[usize]) -> IndexKey {
+    let whole = FlatIndexer::try_new(dims).unwrap();
+    let mut builder = KeyBuilder::with_capacity_bits(whole.width_bits()).unwrap();
+    for (&dim, &value) in dims.iter().zip(idx) {
+        let single = FlatIndexer::try_new(&[dim]).unwrap();
+        builder.push(&single.encode(&[value]).unwrap()).unwrap();
+    }
+    builder.finish()
+}
+
+/// The digit-layout packer (#1224) must agree with independent composition for
+/// every arm, including fields that straddle a digit boundary and singletons
+/// interleaved anywhere.
+#[test]
+fn digit_packing_matches_composition_for_mixed_dimensions() {
+    // Small deterministic generator; no extra dependency.
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    // A field wider than 32 bits, as far as the target's pointer width allows:
+    // 34 bits on a 64-bit target, `usize::MAX` (32 bits) on a 32-bit one.
+    let wide = usize::try_from((1u128 << 33) + 1).unwrap_or(usize::MAX);
+    let choices = [1usize, 2, 3, 5, 7, 256, 1000, 1 << 20, wide];
+    let mut arms_seen = [false; 5];
+    for _ in 0..400 {
+        let len = (next() % 90) as usize;
+        let dims: Vec<usize> = (0..len)
+            .map(|_| choices[(next() % choices.len() as u64) as usize])
+            .collect();
+        let idx: Vec<usize> = dims.iter().map(|&d| (next() % d as u64) as usize).collect();
+        let indexer = FlatIndexer::try_new(&dims).unwrap();
+        let key = indexer.encode(&idx).unwrap();
+        arms_seen[match key.repr() {
+            Repr::U64(_) => 0,
+            Repr::U128(_) => 1,
+            Repr::U256(_) => 2,
+            Repr::U512(_) => 3,
+            Repr::Limbs(_) => 4,
+        }] = true;
+        assert_eq!(
+            key,
+            composed_reference(&dims, &idx),
+            "dims {dims:?} idx {idx:?}"
+        );
+        // The all-maximal index sets every bit of every field.
+        let max: Vec<usize> = dims.iter().map(|&d| d - 1).collect();
+        assert_eq!(
+            indexer.encode(&max).unwrap(),
+            composed_reference(&dims, &max)
+        );
+    }
+    assert_eq!(arms_seen, [true; 5], "the generator must reach every arm");
+}
+
+#[test]
+fn a_field_straddling_each_fixed_digit_boundary_round_trips() {
+    for boundary in [64usize, 128, 192, 256, 320, 384, 448] {
+        // `boundary - 3` binary fields, then a 7-bit field crossing the
+        // boundary, then binary fields up to a width inside the same arm.
+        let mut dims = vec![2usize; boundary - 3];
+        dims.push(128);
+        dims.extend(std::iter::repeat_n(2, 2));
+        for value in [0usize, 1, 0b111, 0b1000, 127] {
+            let mut idx = vec![1usize; dims.len()];
+            idx[boundary - 3] = value;
+            let key = FlatIndexer::try_new(&dims).unwrap().encode(&idx).unwrap();
+            assert_eq!(
+                key,
+                composed_reference(&dims, &idx),
+                "boundary {boundary} value {value}"
+            );
+        }
+    }
+}
+
+#[test]
+fn singleton_fields_at_storage_boundaries_encode_without_panicking() {
+    for bits in [0, 64, 128, 256, 512, 576, 1024] {
+        let mut dims = vec![2; bits];
+        let mut indices = vec![1; bits];
+        let original = FlatIndexer::try_new(&dims)
+            .unwrap()
+            .encode(&indices)
+            .unwrap();
+        dims.extend([1, 1]);
+        indices.extend([0, 0]);
+        let extended = FlatIndexer::try_new(&dims)
+            .unwrap()
+            .encode(&indices)
+            .unwrap();
+        assert_eq!(
+            extended, original,
+            "{bits}-bit key with trailing singleton fields"
+        );
+    }
+}

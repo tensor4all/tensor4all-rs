@@ -344,3 +344,93 @@ fn test_replaceind_link_index_dimension_mismatch() {
         .to_string()
         .contains("Index space mismatch"));
 }
+
+// ============================================================================
+// Simultaneous batch rename (issue #1227)
+// ============================================================================
+
+#[test]
+fn test_replace_indices_swap_across_nodes_is_simultaneous() {
+    let (tn, s0, _bond, s1) = make_two_node_treetn();
+
+    let swapped = tn
+        .replace_indices(&[s0.clone(), s1.clone()], &[s1.clone(), s0.clone()])
+        .unwrap();
+
+    // The swap must actually move each site index to the other node.
+    assert_eq!(
+        swapped.node_site_indices(&"A".to_string()),
+        Some(vec![s1.clone()])
+    );
+    assert_eq!(
+        swapped.node_site_indices(&"B".to_string()),
+        Some(vec![s0.clone()])
+    );
+    assert_eq!(swapped.external_indices().len(), 2);
+}
+
+#[test]
+fn test_replace_indices_swap_within_one_node_is_simultaneous() {
+    let a = DynIndex::new_dyn(2);
+    let b = DynIndex::new_dyn(2);
+    let tensor =
+        IdxTensor::from_dense(vec![a.clone(), b.clone()], vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+    let tn =
+        TreeTN::<IdxTensor, String>::from_tensors(vec![tensor], vec!["N".to_string()]).unwrap();
+
+    let swapped = tn
+        .replace_indices(&[a.clone(), b.clone()], &[b.clone(), a.clone()])
+        .unwrap();
+
+    // The leg order carries the swap and the stored data must stay untouched.
+    let node = swapped.node_index(&"N".to_string()).unwrap();
+    let tensor = swapped.tensor(node).unwrap();
+    assert_eq!(tensor.external_indices(), vec![b, a]);
+    assert_eq!(tensor.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
+fn test_replace_indices_three_cycle_within_one_node_is_simultaneous() {
+    let a = DynIndex::new_dyn(2);
+    let b = DynIndex::new_dyn(2);
+    let c = DynIndex::new_dyn(2);
+    let data: Vec<f64> = (0..8).map(|i| i as f64).collect();
+    let tensor =
+        IdxTensor::from_dense(vec![a.clone(), b.clone(), c.clone()], data.clone()).unwrap();
+    let tn =
+        TreeTN::<IdxTensor, String>::from_tensors(vec![tensor], vec!["N".to_string()]).unwrap();
+
+    let cycled = tn
+        .replace_indices(
+            &[a.clone(), b.clone(), c.clone()],
+            &[b.clone(), c.clone(), a.clone()],
+        )
+        .unwrap();
+
+    let node = cycled.node_index(&"N".to_string()).unwrap();
+    let tensor = cycled.tensor(node).unwrap();
+    assert_eq!(tensor.external_indices(), vec![b, c, a]);
+    assert_eq!(tensor.to_vec::<f64>().unwrap(), data);
+}
+
+#[test]
+fn test_replace_indices_rejects_duplicate_targets() {
+    let (tn, s0, _bond, s1) = make_two_node_treetn();
+    let target = DynIndex::new_dyn(2);
+
+    let err = tn
+        .replace_indices(&[s0.clone(), s1.clone()], &[target.clone(), target.clone()])
+        .unwrap_err();
+    assert!(err.to_string().contains("Duplicate target"), "{err}");
+}
+
+#[test]
+fn test_replace_indices_rejects_occupied_target_outside_batch() {
+    let (tn, s0, _bond, s1) = make_two_node_treetn();
+
+    // `s1` already exists on node B and is not part of the batch.
+    let err = tn
+        .replace_indices(std::slice::from_ref(&s0), std::slice::from_ref(&s1))
+        .unwrap_err();
+    assert!(err.to_string().contains("already present"), "{err}");
+}

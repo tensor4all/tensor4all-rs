@@ -1,0 +1,83 @@
+{
+ "arms": {
+  "original": {
+   "commit": "097e2927d640ea68ff365ac56886be7676e79c8d",
+   "harness_sha256": "790df1082fd016ecdaaeb42f540330103580af9538c15dacfe50342ec7168125",
+   "harness_overlaid": true,
+   "binary_sha256": "b05c0ed76feb62fa148f215c35a852e0d77f5ad74153dad436b05787939eb881",
+   "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+   "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)"
+  },
+  "shared": {
+   "commit": "6527870794612c9ef0dfcf659082f89e2af787c5",
+   "harness_sha256": "790df1082fd016ecdaaeb42f540330103580af9538c15dacfe50342ec7168125",
+   "harness_overlaid": true,
+   "binary_sha256": "5487ff3259ab6bbd451f1e84d67959ef85b53ea1a75dbd373a31e9e3ac0de8d4",
+   "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+   "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)"
+  },
+  "final": {
+   "commit": "2985d117fd8180c731e5c8738e973b99eb2ab979",
+   "harness_sha256": "790df1082fd016ecdaaeb42f540330103580af9538c15dacfe50342ec7168125",
+   "harness_overlaid": false,
+   "binary_sha256": "fd0e808009303a164d8746a8006a345396b023dab95c6524870eac325b73b6d2",
+   "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+   "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)"
+  }
+ },
+ "host": {
+  "platform": "Linux-7.0.0-42-generic-x86_64-with-glibc2.39",
+  "machine": "x86_64",
+  "logical_cpus": 32,
+  "python": "3.12.3",
+  "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S"
+ },
+ "thread_environment": {
+  "RAYON_NUM_THREADS": "1",
+  "BLAS_NUM_THREADS": "1",
+  "OMP_NUM_THREADS": "1",
+  "OPENBLAS_NUM_THREADS": "1",
+  "MKL_NUM_THREADS": "1",
+  "VECLIB_MAXIMUM_THREADS": "1"
+ },
+ "cpu_pin": 4,
+ "filter": "cache_keys",
+ "round_orders": [
+  [
+   "original",
+   "shared",
+   "final"
+  ],
+  [
+   "final",
+   "original",
+   "shared"
+  ],
+  [
+   "shared",
+   "final",
+   "original"
+  ]
+ ],
+ "routes": [
+  "cold_fixed",
+  "warm_fixed",
+  "warm_auto",
+  "left_hit",
+  "right_hit"
+ ],
+ "gates": {
+  "maximum_load_1m": 8.0,
+  "minimum_cpu_speed_limit": 100,
+  "maximum_relative_ci_halfwidth": 0.25,
+  "maximum_rep_mean_cv": 0.2,
+  "final_batch_max_ratio_vs_original": 1.1,
+  "final_batch_max_ratio_vs_shared": 1.1,
+  "final_hit_geomean_max_ratio_vs_shared": 0.95
+ },
+ "idle_gate": {
+  "seconds": 60.0,
+  "maximum_load_1m": 2.0
+ },
+ "statistic": "median of per-round Criterion mean estimates; paired ratios per round and their median"
+}
