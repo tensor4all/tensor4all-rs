@@ -49,8 +49,9 @@ pub use partitioned_tree_tn::{
     PartitionedContractionOptions, PartitionedTreeTN, AUTOMATIC_REFINEMENT_LIMIT,
 };
 pub use patching::{
-    add_with_patching, contract_adaptive, contract_adaptive_selected, truncate_adaptive,
-    BudgetAllocation, PatchSplitStrategy, PatchingOptions,
+    add_with_patching, add_with_patching_with_report, contract_adaptive,
+    contract_adaptive_selected, contract_adaptive_with_report, truncate_adaptive, BudgetAllocation,
+    PatchCapRecord, PatchSplitStrategy, PatchingOptions, PatchingReport,
 };
 pub use projector::Projector;
 pub use subdomain_tree_tn::SubDomainTreeTN;
