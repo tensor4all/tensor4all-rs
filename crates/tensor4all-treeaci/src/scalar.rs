@@ -52,6 +52,7 @@ pub(crate) fn typed_evaluation_error(error: TreeTNOperationError) -> TreeAciErro
 /// ```
 pub trait TreeAciScalar:
     TensorElement
+    + tensor4all_tensorbackend::StorageScalar
     + tensor4all_core::Scalar
     + tensor4all_core::MatrixLuciScalar
     + tensor4all_tensorbackend::MatrixScalar

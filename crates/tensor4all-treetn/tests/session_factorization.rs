@@ -151,7 +151,7 @@ fn ci_canonicalization_on_a_session_matches_the_compatibility_route() {
 
     let mut global = tree.clone();
     global
-        .canonicalize_mut([0usize], options.clone())
+        .canonicalize_mut([0usize], options)
         .expect("compatibility CI canonicalization");
 
     let mut backend = CpuBackend::with_threads(1).expect("backend");
@@ -159,7 +159,7 @@ fn ci_canonicalization_on_a_session_matches_the_compatibility_route() {
         let mut session = Session::new(backend.engine_mut());
         let mut session_tree = tree.clone();
         session_tree
-            .canonicalize_mut_on_session([0usize], options.clone(), &mut session)
+            .canonicalize_mut_on_session([0usize], options, &mut session)
             .expect("the CI canonicalization must not reach the borrowed global backend");
         session_tree
     });

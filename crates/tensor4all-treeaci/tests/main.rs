@@ -16,3 +16,4 @@ mod public_api;
 mod rank_scaling;
 mod resource_limits;
 mod rng_stream_contract;
+mod session_entry;

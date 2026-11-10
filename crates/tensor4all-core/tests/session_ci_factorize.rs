@@ -13,7 +13,7 @@
 use num_complex::{Complex32, Complex64};
 use tensor4all_core::{
     factorize_full_rank, factorize_full_rank_on_session, Canonical, DynIndex, FactorizeAlg,
-    FactorizeError, IdxTensor, TensorContractionLike, TensorElement, TensorLike,
+    FactorizeError, IdxTensor, TensorContractionLike, TensorElement,
 };
 use tensor4all_tensorbackend::{
     explicit::Session, with_default_backend, CpuBackend, StorageScalar,

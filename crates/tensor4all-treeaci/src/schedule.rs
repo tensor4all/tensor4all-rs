@@ -76,7 +76,7 @@ pub(crate) fn run_local_sweeps<'a, T, V, F>(
     options: &TreeAciOptions<V>,
     operator: &mut F,
     rng: &mut dyn rand::RngCore,
-    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<SweepHistory>
 where
     T: TreeAciScalar,
@@ -108,7 +108,7 @@ where
         } else {
             PassDirection::Reverse
         };
-        let report = run_directional_pass(state, options, direction, operator, context)?;
+        let report = run_directional_pass(state, options, direction, operator, exec)?;
         stable_rank_passes =
             track_rank_stability(&mut previous_ranks, &state.edge_ranks, stable_rank_passes);
         evaluated_points = evaluated_points
@@ -153,6 +153,7 @@ where
                 rng,
                 operator,
                 &known_guard_pivots,
+                exec,
             )?;
             #[cfg(test)]
             crate::state::profile_debug_stats::record(|stats| {
@@ -174,7 +175,7 @@ where
             let injection_started = std::time::Instant::now();
             if can_inject {
                 needs_cleanup =
-                    inject_global_pivots(state, &search.pivots, &injection_capacities)? > 0;
+                    inject_global_pivots(state, &search.pivots, &injection_capacities, exec)? > 0;
             }
             known_guard_pivots = search.pivots;
             #[cfg(test)]
@@ -233,7 +234,7 @@ pub(crate) fn run_directional_pass<T, V, F>(
     options: &TreeAciOptions<V>,
     direction: PassDirection,
     operator: &mut F,
-    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<PassReport>
 where
     T: TreeAciScalar,
@@ -261,16 +262,16 @@ where
             operator,
             &mut update_trace,
             &mut evaluated_points,
-            context,
+            exec,
         ) {
             if update_trace.any {
-                finalize_deferred_canonicalization(state)?;
+                finalize_deferred_canonicalization(state, exec)?;
             }
             return Err(error);
         }
     }
 
-    finalize_deferred_canonicalization(state)?;
+    finalize_deferred_canonicalization(state, exec)?;
 
     let max_rank = state.edge_ranks.iter().copied().max().unwrap_or(1);
     let tolerance = options.tolerance_policy();
@@ -292,6 +293,7 @@ where
 
 fn finalize_deferred_canonicalization<T: TreeAciScalar, V: TreeAciNode>(
     state: &mut TreeAciState<'_, T, V>,
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<()> {
     #[cfg(test)]
     let canonicalization_started = std::time::Instant::now();
@@ -302,7 +304,8 @@ fn finalize_deferred_canonicalization<T: TreeAciScalar, V: TreeAciNode>(
             .iter()
             .cloned()
             .collect::<Vec<_>>();
-        state.output.canonicalize_mut(
+        exec.canonicalize_mut(
+            &mut state.output,
             center,
             CanonicalizationOptions::default().with_form(CanonicalForm::CI),
         )?;
@@ -321,7 +324,7 @@ fn run_phase_serial<T, V, F>(
     operator: &mut F,
     update_trace: &mut UpdateTrace,
     evaluated_points: &mut u64,
-    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<()>
 where
     T: TreeAciScalar,
@@ -349,8 +352,7 @@ where
 
         for step in &path.steps {
             let directed = directed_edge_for_step(state, step)?;
-            let report =
-                update_edge_transaction(state, directed, options, true, operator, context)?;
+            let report = update_edge_transaction(state, directed, options, true, operator, exec)?;
             *evaluated_points = evaluated_points
                 .checked_add(u64::try_from(report.evaluated_points).map_err(|_| {
                     TreeAciError::SizeOverflow {
