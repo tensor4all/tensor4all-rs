@@ -288,7 +288,9 @@ impl FlatIndexer {
         for (position, &dim) in local_dims.iter().enumerate() {
             let bits =
                 dimension_bits(dim).map_err(|_| IndexKeyError::ZeroDimension { position })?;
-            offsets.push(width_bits);
+            // A singleton always encodes zero. Use a valid offset even when
+            // it follows the final bit of a fixed-width arm or limb array.
+            offsets.push(if bits == 0 { 0 } else { width_bits });
             field_bits.push(bits);
             width_bits =
                 width_bits

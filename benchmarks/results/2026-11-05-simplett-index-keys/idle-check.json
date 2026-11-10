@@ -1,0 +1,20 @@
+{
+  "before": {
+    "time": 1793848256.973077,
+    "loadavg": [
+      5.2783203125,
+      11.14501953125,
+      11.9365234375
+    ],
+    "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded"
+  },
+  "after": {
+    "time": 1793848377.001575,
+    "loadavg": [
+      6.857421875,
+      9.4423828125,
+      11.12841796875
+    ],
+    "thermal": "Note: No thermal warning level has been recorded\nNote: No performance warning level has been recorded\nNote: No CPU power status has been recorded"
+  }
+}

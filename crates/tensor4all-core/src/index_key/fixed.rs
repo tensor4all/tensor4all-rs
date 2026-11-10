@@ -3,9 +3,8 @@
 //! Each helper packs an already-validated multi-index into the bit fields its
 //! indexer reserved. The caller has checked that every value is below its
 //! local dimension, so a value never carries out of its field, and the
-//! indexer guarantees that every non-singleton field lies below the arm's
-//! width. A singleton field always holds zero, so its offset (which may equal
-//! the arm width when it trails the last bit) never changes the key.
+//! indexer guarantees that every field lies below the arm's width (a
+//! singleton field encodes zero at offset zero).
 //!
 //! Arms wider than 64 bits pack into plain `u64` digits on the stack and
 //! convert to the `u128`/`bnum` type once, at the end. Shifting a `bnum` value

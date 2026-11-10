@@ -9,6 +9,7 @@ use tensor4all_treetn::{
     TreeTN, TruncationOptions,
 };
 
+mod evaluate;
 mod norm_range;
 
 fn subdomain(site: &DynIndex, values: [f64; 2], coordinate: usize) -> SubDomainTreeTN {

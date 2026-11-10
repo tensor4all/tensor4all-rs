@@ -208,6 +208,9 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   output projector are summed (`Binary` default, opt-in `Nary` /
   `NaryWithin { limit_bytes }`). `to_treetn_with(engine) -> ExactSum` reports
   `used_nary` and `estimated_nary_bytes`; `to_treetn()` is `Binary`.
+  `evaluate_batched(&indices, values)` evaluates points with the
+  `TreeTN::evaluate` layout; each point goes to the patch that covers it, and
+  uncovered points are zero.
 - `PatchingOptions { cutoff, allocation, max_bond_dim, patch_order,
   split_strategy, sum_engine }` — `sum_engine` (default `Binary`) builds the
   equal-key and contribution sums of `add_with_patching` / `contract_adaptive`;

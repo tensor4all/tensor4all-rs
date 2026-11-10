@@ -521,3 +521,25 @@ fn a_field_straddling_each_fixed_digit_boundary_round_trips() {
         }
     }
 }
+
+#[test]
+fn singleton_fields_at_storage_boundaries_encode_without_panicking() {
+    for bits in [0, 64, 128, 256, 512, 576, 1024] {
+        let mut dims = vec![2; bits];
+        let mut indices = vec![1; bits];
+        let original = FlatIndexer::try_new(&dims)
+            .unwrap()
+            .encode(&indices)
+            .unwrap();
+        dims.extend([1, 1]);
+        indices.extend([0, 0]);
+        let extended = FlatIndexer::try_new(&dims)
+            .unwrap()
+            .encode(&indices)
+            .unwrap();
+        assert_eq!(
+            extended, original,
+            "{bits}-bit key with trailing singleton fields"
+        );
+    }
+}
