@@ -170,7 +170,7 @@ fn evaluate_batched_matches_the_unpatched_network_and_zero_outside_the_patches()
 }
 
 #[test]
-fn evaluate_batched_of_an_empty_partition_is_zero_after_the_shape_check() {
+fn evaluate_batched_of_an_empty_partition_is_zero_after_the_input_checks() {
     let empty = PartitionedTreeTN::<usize>::new();
     let site = DynIndex::new_dyn(2);
     let values = evaluate(&empty, std::slice::from_ref(&site), &[vec![1], vec![0]]).unwrap();
@@ -186,6 +186,17 @@ fn evaluate_batched_of_an_empty_partition_is_zero_after_the_shape_check() {
     assert!(matches!(
         error,
         PartitionedTreeTNError::InvalidOptions { .. }
+    ));
+    // The values are still checked against the indices: bounds and repeats.
+    let out_of_bounds = evaluate(&empty, std::slice::from_ref(&site), &[vec![2]]);
+    assert!(matches!(
+        out_of_bounds,
+        Err(PartitionedTreeTNError::InvalidOptions { .. })
+    ));
+    let repeated = evaluate(&empty, &[site.clone(), site.clone()], &[vec![0, 0]]);
+    assert!(matches!(
+        repeated,
+        Err(PartitionedTreeTNError::InvalidOptions { .. })
     ));
 }
 
