@@ -205,9 +205,9 @@ Frame contraction reserves their metadata together with its scalar buffers;
 the LUCI phase uses Core's conservative logical working estimate plus retained
 input values and candidate/pivot records. Provider-private workspace and
 allocator overhead are outside this estimated logical budget; it is not RSS.
-Guard's aggregate message budget is divided across evaluators and then their
-directed-edge caches, with floor rounding keeping the aggregate within the
-configured bound. History capacity grows with completed passes rather than
+Guard's aggregate message budget is divided across evaluators, with floor
+rounding keeping the aggregate within the configured bound; each evaluator
+spends its portion as one total shared by its directed-edge caches. History capacity grows with completed passes rather than
 reserving the entire requested stopping ceiling.
 
 The two state-owned cache families report through `TreeAciDiagnostics`, in the
@@ -266,8 +266,13 @@ is reused across enumerated points, with each dependency overwritten before
 use. These temporary structures are preflighted together before allocation;
 rank-one bootstrap needs neither nontrivial suffixes nor projection scratch.
 
-Message caches follow the later approved append-only, evaluator-lifetime
-policy from PR #646. Their logical admission budget covers message payload;
+Message caches follow the later approved evaluator-lifetime policy from PR
+#646: entries are never evicted to admit a later column of the same edge. The
+budget is one total shared across the evaluator's directed edges, so a branch
+that is reused may retain more than an equal split; when the shared total is
+exhausted, whole columns are released from the least recently used other edge,
+oldest first. Their logical
+admission budget covers message payload;
 owned-storage diagnostics additionally count spare column capacity, map
 buckets, and heap payload owned by wide assignment keys. These estimates
 exclude allocator headers and are not hard resident-memory ceilings.

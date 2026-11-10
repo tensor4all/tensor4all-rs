@@ -8,7 +8,7 @@ use crate::{
 use rand::SeedableRng;
 use std::collections::{HashMap, HashSet};
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::{ColMajorArrayRef, IdxTensor, SvdTruncationPolicy};
+use tensor4all_core::{ColMajorArrayRef, IdxTensor, SvdTruncationPolicy, TensorContractionLike};
 use tensor4all_tensorbackend::StorageKind;
 
 type DynIndex = Index<DynId, TagSet>;
@@ -1401,7 +1401,7 @@ fn naive_apply_noncontiguous_bonded_identity_uses_compact_bridge_delta() {
     let operator =
         build_redundant_bonded_identity_operator(&[sites[0].clone(), sites[2].clone()], 2);
 
-    let extended = extend_operator_to_full_space(&operator, &state).unwrap();
+    let (extended, _) = extend_operator_to_full_space(&operator, &state).unwrap();
     let middle = extended.mpo.node_index(&sites[1].0).unwrap();
     let middle_tensor = extended.mpo.tensor(middle).unwrap();
 
@@ -1708,7 +1708,7 @@ fn test_apply_linear_operator_partial_shift_factorized_rooted_state_intermediate
 
     let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
 
-    let full_operator = extend_operator_to_full_space(&operator, &state).unwrap();
+    let (full_operator, _) = extend_operator_to_full_space(&operator, &state).unwrap();
     let mut output_keys: Vec<_> = full_operator.output_mappings().keys().cloned().collect();
     output_keys.sort();
     assert_eq!(output_keys, vec![0usize, 1usize, 2usize]);
@@ -1917,7 +1917,7 @@ fn test_extend_operator_to_full_space_uses_unchecked_branch_for_single_node_oper
     let (state, sites) = build_chain_state();
     let operator = build_identity_operator(&[sites[0].clone()]);
 
-    let extended = extend_operator_to_full_space(&operator, &state).unwrap();
+    let (extended, _) = extend_operator_to_full_space(&operator, &state).unwrap();
     assert_eq!(extended.mpo.node_count(), state.node_count());
     assert_eq!(extended.mpo.edge_count(), state.edge_count());
 }
@@ -2275,4 +2275,718 @@ fn apply_with_identity_gaps_keeps_the_state_site_leg_order() {
             Some(reference) => assert_eq!(&bits, reference),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Issue #1186: a partial apply must not factorize the nodes its operator does
+// not act on.
+// ---------------------------------------------------------------------------
+
+/// Deterministic, non-constant tensor values (an LCG).
+struct CombValues(u64);
+
+impl CombValues {
+    fn take(&mut self, count: usize) -> Vec<f64> {
+        (0..count)
+            .map(|_| {
+                self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1);
+                ((self.0 >> 33) as f64 / (1u64 << 31) as f64) - 0.5
+            })
+            .collect()
+    }
+}
+
+/// A comb: the degree-three scalar centre `hub`, the branch `a0-a1-a2` an
+/// operator can act on, and the branches `b0-b1` and `d0-d1` no operator
+/// touches. State bonds have dimension three and site legs dimension two, so a
+/// leg's role is visible in its dimension.
+fn build_comb_state() -> (TreeTN<IdxTensor, String>, Vec<(String, DynIndex)>) {
+    let mut values = CombValues(0x5eed_1186);
+    let s_hub = make_index(1);
+    let s_a: Vec<DynIndex> = (0..3).map(|_| make_index(2)).collect();
+    let s_b: Vec<DynIndex> = (0..2).map(|_| make_index(2)).collect();
+    let s_d: Vec<DynIndex> = (0..2).map(|_| make_index(2)).collect();
+    let c_a: Vec<DynIndex> = (0..3).map(|_| make_index(3)).collect();
+    let c_b: Vec<DynIndex> = (0..2).map(|_| make_index(3)).collect();
+    let c_d: Vec<DynIndex> = (0..2).map(|_| make_index(3)).collect();
+
+    let mut tensors = vec![IdxTensor::from_dense(
+        vec![
+            s_hub.clone(),
+            c_a[0].clone(),
+            c_b[0].clone(),
+            c_d[0].clone(),
+        ],
+        values.take(27),
+    )
+    .unwrap()];
+    let mut names = vec!["hub".to_string()];
+    let mut sites = vec![("hub".to_string(), s_hub)];
+
+    for (prefix, bonds, branch_sites) in [("a", &c_a, &s_a), ("b", &c_b, &s_b), ("d", &c_d, &s_d)] {
+        for (i, site) in branch_sites.iter().enumerate() {
+            let mut legs = vec![bonds[i].clone(), site.clone()];
+            let mut count = 3 * 2;
+            if i + 1 < bonds.len() {
+                legs.push(bonds[i + 1].clone());
+                count *= 3;
+            }
+            tensors.push(IdxTensor::from_dense(legs, values.take(count)).unwrap());
+            names.push(format!("{prefix}{i}"));
+            sites.push((format!("{prefix}{i}"), site.clone()));
+        }
+    }
+
+    let state = TreeTN::from_tensors(tensors, names).unwrap();
+    (state, sites)
+}
+
+/// An operator with bond dimension two on the branch `a0-a1-a2` only.
+fn build_branch_operator(sites: &[(String, DynIndex)]) -> LinearOperator<IdxTensor, String> {
+    let true_of = |name: &str| {
+        sites
+            .iter()
+            .find(|(node, _)| node == name)
+            .unwrap()
+            .1
+            .clone()
+    };
+    let inputs: Vec<DynIndex> = (0..3).map(|_| make_index(2)).collect();
+    let outputs: Vec<DynIndex> = (0..3).map(|_| make_index(2)).collect();
+    let bond_01 = make_index(2);
+    let bond_12 = make_index(2);
+
+    let t0 = IdxTensor::from_dense(
+        vec![inputs[0].clone(), outputs[0].clone(), bond_01.clone()],
+        vec![1.0, 0.0, 0.0, 0.3, 0.0, 1.0, 1.0, 0.4],
+    )
+    .unwrap();
+    let mut middle = vec![0.0; 16];
+    for bond in 0..2 {
+        for input in 0..2 {
+            for output in 0..2 {
+                middle[((bond * 2 + input) * 2 + output) * 2 + bond] =
+                    if input == output { 1.0 } else { 0.7 };
+            }
+        }
+    }
+    let t1 = IdxTensor::from_dense(
+        vec![
+            bond_01.clone(),
+            inputs[1].clone(),
+            outputs[1].clone(),
+            bond_12.clone(),
+        ],
+        middle,
+    )
+    .unwrap();
+    let t2 = IdxTensor::from_dense(
+        vec![bond_12.clone(), inputs[2].clone(), outputs[2].clone()],
+        vec![1.0, 0.0, 0.5, 0.0, 1.0, 2.0, 0.0, 1.0],
+    )
+    .unwrap();
+
+    let mpo = TreeTN::from_tensors(
+        vec![t0, t1, t2],
+        vec!["a0".to_string(), "a1".to_string(), "a2".to_string()],
+    )
+    .unwrap();
+
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+    for i in 0..3 {
+        let name = format!("a{i}");
+        let true_index = true_of(&name);
+        input_mapping.insert(
+            name.clone(),
+            IndexMapping {
+                true_index: true_index.clone(),
+                internal_index: inputs[i].clone(),
+            },
+        );
+        output_mapping.insert(
+            name,
+            IndexMapping {
+                true_index,
+                internal_index: outputs[i].clone(),
+            },
+        );
+    }
+
+    LinearOperator::new(mpo, input_mapping, output_mapping)
+}
+
+fn tensor_bits(tensor: &IdxTensor) -> Vec<u64> {
+    tensor
+        .to_vec::<f64>()
+        .unwrap()
+        .into_iter()
+        .map(f64::to_bits)
+        .collect()
+}
+
+/// Assert that `name` came out of a zip-up as the state's own tensor, bit for
+/// bit: the site indices keep their identity, the bond legs are the state's in
+/// the same order with fresh IDs, and every amplitude is unchanged.
+fn assert_node_passed_through(
+    result: &TreeTN<IdxTensor, String>,
+    state: &TreeTN<IdxTensor, String>,
+    name: &str,
+) {
+    let node = name.to_string();
+    let output = result.tensor(result.node_index(&node).unwrap()).unwrap();
+    let input = state.tensor(state.node_index(&node).unwrap()).unwrap();
+    let site_indices = state.node_site_indices(&node).unwrap();
+    assert_eq!(
+        result.node_site_indices(&node).unwrap(),
+        site_indices,
+        "{name} keeps the state's site indices"
+    );
+    let bonds_of = |tensor: &IdxTensor| -> Vec<DynIndex> {
+        tensor
+            .external_indices()
+            .into_iter()
+            .filter(|index| !site_indices.contains(index))
+            .collect()
+    };
+    let output_bonds = bonds_of(output);
+    let input_bonds = bonds_of(input);
+    assert_eq!(output_bonds.len(), input_bonds.len(), "{name} leg count");
+    // The pass-through keeps the bond legs in the state's order; only their IDs
+    // are fresh (the contraction simulates internal indices on both operands).
+    let mut realigned = output.clone();
+    for (fresh, original) in output_bonds.iter().zip(input_bonds.iter()) {
+        realigned = realigned.replaceind(fresh, original).unwrap();
+    }
+    // The identity factor's delta decides the leg order of what it emits (its
+    // output legs first), so compare the leg set and the amplitudes up to that
+    // permutation.
+    let ordered = realigned
+        .permuteinds(&input.external_indices())
+        .unwrap_or_else(|error| panic!("{name} does not carry the state's legs: {error}"));
+    assert_eq!(
+        tensor_bits(&ordered),
+        tensor_bits(input),
+        "{name} tensor data"
+    );
+}
+
+/// Largest absolute difference between two amplitude sequences.
+///
+/// `IdxTensor::sub` plus `maxabs` cannot express this comparison here: an apply
+/// result keeps the identity extension's dimension-one legs and the exact local
+/// (`naive`) reference does not, so the two dense tensors' leg counts differ and
+/// `sub` rejects them. Every node of these states carries exactly one site
+/// index, so `to_dense` orders both results' legs by node name and their
+/// amplitude sequences line up, and the dimension-one legs carry no data.
+///
+/// The finiteness guard keeps a NaN or an infinity out of `f64::max`, which
+/// would silently ignore it.
+fn max_finite_abs_difference(left: &[f64], right: &[f64]) -> f64 {
+    assert_eq!(left.len(), right.len(), "amplitude counts");
+    for (index, (new, reference)) in left.iter().zip(right.iter()).enumerate() {
+        assert!(
+            (new - reference).is_finite(),
+            "amplitude {index} is not comparable: {new:e} vs {reference:e}"
+        );
+    }
+    left.iter()
+        .zip(right.iter())
+        .map(|(new, reference)| (new - reference).abs())
+        .fold(0.0, f64::max)
+}
+
+fn dense_deviation(left: &TreeTN<IdxTensor, String>, right: &TreeTN<IdxTensor, String>) -> f64 {
+    let left = left.to_dense().unwrap().to_vec::<f64>().unwrap();
+    let right = right.to_dense().unwrap().to_vec::<f64>().unwrap();
+    max_finite_abs_difference(&left, &right)
+}
+
+#[test]
+#[should_panic(expected = "is not comparable")]
+fn max_finite_abs_difference_rejects_a_non_finite_difference() {
+    assert_eq!(
+        max_finite_abs_difference(&[0.0, 1.0], &[0.0, f64::NAN]),
+        0.0
+    );
+}
+
+#[test]
+fn apply_zipup_skips_the_nodes_its_operator_does_not_touch() {
+    use crate::operator::apply_linear_operator;
+    use crate::operator::ApplyOptions;
+    use crate::treetn::contraction::zipup_identity_node_skips;
+
+    let (state, sites) = build_comb_state();
+    let state = state
+        .canonicalize(["hub".to_string()], Default::default())
+        .unwrap();
+    let operator = build_branch_operator(&sites);
+
+    let skipped_before = zipup_identity_node_skips();
+    let result = apply_linear_operator(
+        &operator,
+        &state,
+        ApplyOptions {
+            center: Some("hub".to_string()),
+            // The skip is an opt-in for exactness: a zero threshold means the
+            // factorizations it replaces cannot cut anything. An absent policy
+            // does not qualify (it resolves to the default cutoff).
+            svd_policy: Some(SvdTruncationPolicy::new(0.0)),
+            ..ApplyOptions::zipup()
+        },
+    )
+    .unwrap();
+
+    // The comb has eight nodes; the four in the two untouched branches
+    // (`b0`, `b1`, `d0`, `d1`) are the four of the seven non-hub nodes that
+    // nothing touches. `hub` receives the operator branch's remainder, so it is
+    // still contracted and factorized.
+    let skipped = zipup_identity_node_skips() - skipped_before;
+    assert_eq!(skipped, 4, "untouched branch nodes skipped");
+
+    for name in ["b0", "b1", "d0", "d1"] {
+        assert_node_passed_through(&result, &state, name);
+    }
+
+    for (left, right) in [("hub", "b0"), ("b0", "b1"), ("hub", "d0"), ("d0", "d1")] {
+        let output_edge = result
+            .edge_between(&left.to_string(), &right.to_string())
+            .unwrap();
+        let input_edge = state
+            .edge_between(&left.to_string(), &right.to_string())
+            .unwrap();
+        assert_eq!(
+            result.bond_index(output_edge).unwrap().dim(),
+            state.bond_index(input_edge).unwrap().dim(),
+            "the untouched bond {left}-{right} keeps its dimension"
+        );
+    }
+
+    // The untouched region is carried over unchanged, not approximated: the
+    // only tolerance is the operator branch's own factorization.
+    let exact = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+    let deviation = dense_deviation(&result, &exact);
+    assert!(
+        deviation < 1.0e-12,
+        "the zip-up result deviates from the exact local apply by {deviation:e}"
+    );
+}
+
+/// A three-site chain whose two leading sites carry an operator, so the chain's
+/// head is the only node the operator does not touch.
+fn build_chain_state_and_operator() -> (TreeTN<IdxTensor, String>, LinearOperator<IdxTensor, String>)
+{
+    let mut values = CombValues(0xc4a1_1186);
+    let site_0 = make_index(2);
+    let site_1 = make_index(2);
+    let site_2 = make_index(2);
+    let bond_01 = make_index(3);
+    let bond_12 = make_index(3);
+
+    let state = TreeTN::from_tensors(
+        vec![
+            IdxTensor::from_dense(vec![site_0.clone(), bond_01.clone()], values.take(6)).unwrap(),
+            IdxTensor::from_dense(
+                vec![bond_01.clone(), site_1.clone(), bond_12.clone()],
+                values.take(18),
+            )
+            .unwrap(),
+            IdxTensor::from_dense(vec![bond_12.clone(), site_2.clone()], values.take(6)).unwrap(),
+        ],
+        vec![
+            "site0".to_string(),
+            "site1".to_string(),
+            "site2".to_string(),
+        ],
+    )
+    .unwrap();
+
+    let inputs: Vec<DynIndex> = (0..2).map(|_| make_index(2)).collect();
+    let outputs: Vec<DynIndex> = (0..2).map(|_| make_index(2)).collect();
+    let mpo_bond = make_index(2);
+    let mpo = TreeTN::from_tensors(
+        vec![
+            IdxTensor::from_dense(
+                vec![inputs[0].clone(), outputs[0].clone(), mpo_bond.clone()],
+                vec![0.5, 0.0, 0.0, 1.0, 0.0, 1.0, 1.5, 0.0],
+            )
+            .unwrap(),
+            IdxTensor::from_dense(
+                vec![mpo_bond.clone(), inputs[1].clone(), outputs[1].clone()],
+                vec![1.0, 0.0, 0.25, 0.0, 1.0, -0.5, 0.0, 1.0],
+            )
+            .unwrap(),
+        ],
+        vec!["site0".to_string(), "site1".to_string()],
+    )
+    .unwrap();
+
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+    for (i, true_index) in [(0, site_0), (1, site_1)] {
+        let name = format!("site{i}");
+        input_mapping.insert(
+            name.clone(),
+            IndexMapping {
+                true_index: true_index.clone(),
+                internal_index: inputs[i].clone(),
+            },
+        );
+        output_mapping.insert(
+            name,
+            IndexMapping {
+                true_index,
+                internal_index: outputs[i].clone(),
+            },
+        );
+    }
+
+    (
+        state,
+        LinearOperator::new(mpo, input_mapping, output_mapping),
+    )
+}
+
+#[test]
+fn apply_zipup_leaves_a_chain_partial_apply_on_the_chain_schedule() {
+    use crate::operator::apply_linear_operator;
+    use crate::operator::ApplyOptions;
+    use crate::treetn::contraction::zipup_identity_node_skips;
+
+    let (state, operator) = build_chain_state_and_operator();
+
+    let skipped_before = zipup_identity_node_skips();
+    let result = apply_linear_operator(&operator, &state, ApplyOptions::zipup()).unwrap();
+    // The chain schedule hands one remainder per edge to its successor, so it
+    // cannot emit a node without one; a chain-shaped state keeps that schedule,
+    // which conditions both operands and truncates at the centre.
+    assert_eq!(
+        zipup_identity_node_skips() - skipped_before,
+        0,
+        "a chain-shaped state keeps the chain schedule"
+    );
+
+    let exact = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+    let deviation = dense_deviation(&result, &exact);
+    assert!(
+        deviation < 1.0e-12,
+        "the zipup result deviates from the exact local apply by {deviation:e}"
+    );
+}
+
+/// The apply pipeline with the identity-node skip switched off: the reference
+/// for "the result must not change when the untouched nodes are skipped".
+fn apply_without_identity_skip(
+    operator: &LinearOperator<IdxTensor, String>,
+    state: &TreeTN<IdxTensor, String>,
+    center: &str,
+    options: &ApplyOptions<String>,
+) -> TreeTN<IdxTensor, String> {
+    let (full_operator, _) = extend_operator_to_full_space(operator, state).unwrap();
+    let transformed = transform_state_to_input(&full_operator, state).unwrap();
+    let contracted = transformed
+        .contract_zipup_skipping_identity_nodes(
+            full_operator.mpo(),
+            &center.to_string(),
+            options.svd_policy,
+            options.max_bond_dim,
+            &IdentityNodes::new(),
+        )
+        .unwrap();
+    transform_output_to_true(&full_operator, contracted).unwrap()
+}
+
+/// The reviewer's four-node counterexample (#1197), kept as a fence.
+///
+/// Nodes `a` (site dim 1), `x` (1), `b` (2), `r` (2); bonds `a-x = 1`,
+/// `b-x = 2`, `x-r = 2`. The untouched leaf carries `diag(1, 1e10)` and the hub
+/// `diag(1, 1e-14)`, so the state's exact amplitudes on `b`'s site are `(1, 1e-4)`.
+/// The network is deliberately **not** canonicalized: a canonical form is what
+/// hid this from the existing fixtures.
+///
+/// If the node is passed through, its weights never reach `x`, and `x`'s cutoff
+/// (`rtol = 1e-6`) drops the direction carrying `1e-4`: the result becomes
+/// `(1, 0)`, an error of `1e-4`. This test asserts `(1, 1e-4)`, so widening the
+/// skip back over a truncating policy fails here.
+fn build_four_node_star() -> (TreeTN<IdxTensor, String>, LinearOperator<IdxTensor, String>) {
+    let s_a = make_index(1);
+    let s_x = make_index(1);
+    let s_b = make_index(2);
+    let s_r = make_index(2);
+    let bond_ax = make_index(1);
+    let bond_bx = make_index(2);
+    let bond_xr = make_index(2);
+
+    // Amplitude = a * x * b * r with `x` and `b` diagonal over their bond pair,
+    // so the state reduces to a diagonal in `(s_b, s_r)`: 1 and 1e10 * 1e-14.
+    let t_a = IdxTensor::from_dense(vec![s_a.clone(), bond_ax.clone()], vec![1.0]).unwrap();
+    // Column-major over [site, bond_ax, bond_bx, bond_xr] with dims
+    // [1, 1, 2, 2]: the flat position of (0, 0, i, j) is `i + 2 * j`, so
+    // `diag(1, 1e-14)` is this.
+    let t_x = IdxTensor::from_dense(
+        vec![
+            s_x.clone(),
+            bond_ax.clone(),
+            bond_bx.clone(),
+            bond_xr.clone(),
+        ],
+        vec![1.0, 0.0, 0.0, 1.0e-14],
+    )
+    .unwrap();
+    // Column-major over [site, bond_bx] with dims [2, 2]: `diag(1, 1e10)`.
+    let t_b = IdxTensor::from_dense(
+        vec![s_b.clone(), bond_bx.clone()],
+        vec![1.0, 0.0, 0.0, 1.0e10],
+    )
+    .unwrap();
+    let t_r = IdxTensor::from_dense(vec![bond_xr.clone(), s_r.clone()], vec![1.0, 0.0, 0.0, 1.0])
+        .unwrap();
+
+    let state = TreeTN::from_tensors(
+        vec![t_a, t_x, t_b, t_r],
+        vec![
+            "a".to_string(),
+            "x".to_string(),
+            "b".to_string(),
+            "r".to_string(),
+        ],
+    )
+    .unwrap();
+
+    // Identity on `a` only: a single-node MPO with no bonds.
+    let input_a = make_index(1);
+    let output_a = make_index(1);
+    let mpo = TreeTN::from_tensors(
+        vec![IdxTensor::from_dense(vec![input_a.clone(), output_a.clone()], vec![1.0]).unwrap()],
+        vec!["a".to_string()],
+    )
+    .unwrap();
+    let mut input_mapping = HashMap::new();
+    input_mapping.insert(
+        "a".to_string(),
+        IndexMapping {
+            true_index: s_a.clone(),
+            internal_index: input_a,
+        },
+    );
+    let mut output_mapping = HashMap::new();
+    output_mapping.insert(
+        "a".to_string(),
+        IndexMapping {
+            true_index: s_a,
+            internal_index: output_a,
+        },
+    );
+
+    (
+        state,
+        LinearOperator::new(mpo, input_mapping, output_mapping),
+    )
+}
+
+#[test]
+fn apply_zipup_does_not_skip_a_node_that_is_not_isometric_toward_the_center() {
+    use crate::operator::apply_linear_operator;
+    use crate::operator::ApplyOptions;
+    use crate::treetn::contraction::zipup_identity_node_skips;
+
+    let (state, operator) = build_four_node_star();
+    let options = ApplyOptions {
+        center: Some("r".to_string()),
+        svd_policy: Some(SvdTruncationPolicy::new(1.0e-12)),
+        ..ApplyOptions::zipup()
+    };
+
+    let skipped_before = zipup_identity_node_skips();
+    let result = apply_linear_operator(&operator, &state, options.clone()).unwrap();
+    let skipped = zipup_identity_node_skips() - skipped_before;
+
+    // The fence, asserted first because it is the consequence that matters: the
+    // exact amplitudes are 1 and 1e-4. Pass `b` through and its weights never
+    // reach `x`, whose cutoff then drops the direction carrying 1e-4 and returns
+    // (1, 0) — a deviation of 1e-4, which this assertion catches before anyone
+    // looks at a skip counter. Sorted-abs so the check does not depend on the
+    // dense leg order; the two zeros are structural.
+    let mut dense = result.to_dense().unwrap().to_vec::<f64>().unwrap();
+    assert_eq!(dense.len(), 4, "the star's dense size");
+    dense.iter_mut().for_each(|value| *value = value.abs());
+    dense.sort_by(f64::total_cmp);
+    let expected = [0.0, 0.0, 1.0e-4, 1.0];
+    for (got, want) in dense.iter().zip(expected.iter()) {
+        assert!(
+            (got - want).abs() <= 1.0e-12 * want.max(1.0),
+            "amplitude {got:e} against the exact answer {want:e} — this input loses the \
+             dominant amplitude if the skip is enabled over a non-zero threshold"
+        );
+    }
+
+    // A non-zero threshold is not an exactness opt-in, so nothing is skipped even
+    // though `b` is a zip-up leaf the operator does not touch.
+    assert_eq!(
+        skipped, 0,
+        "a non-zero threshold must not enable the pass-through"
+    );
+
+    let exact = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+    let deviation = dense_deviation(&result, &exact);
+    assert!(
+        deviation <= 1.0e-12,
+        "the truncated result deviates from the exact local apply by {deviation:e}"
+    );
+    let reference = apply_without_identity_skip(&operator, &state, "r", &options);
+    let deviation_to_reference = dense_deviation(&result, &reference);
+    assert!(
+        deviation_to_reference <= 1.0e-12,
+        "the truncated result changed against the same apply with the skip off by \
+         {deviation_to_reference:e}"
+    );
+}
+
+/// The pass-through stands in for a factorization, so it is allowed only where
+/// the caller has asked for that factorization to be exact. An absent policy is
+/// not such a request: it resolves to the process-wide default cutoff.
+#[test]
+fn apply_zipup_never_skips_without_an_explicit_exact_policy() {
+    use crate::operator::apply_linear_operator;
+    use crate::operator::ApplyOptions;
+    use crate::treetn::contraction::zipup_identity_node_skips;
+
+    let (state, operator) = build_four_node_star();
+
+    // Default path: no policy, no cap. Nothing may be skipped, so a caller who
+    // never opted in keeps exactly the numerics it had before #1197.
+    let default_options = ApplyOptions {
+        center: Some("r".to_string()),
+        ..ApplyOptions::zipup()
+    };
+    let skipped_before = zipup_identity_node_skips();
+    let default_result = apply_linear_operator(&operator, &state, default_options.clone()).unwrap();
+    assert_eq!(
+        zipup_identity_node_skips() - skipped_before,
+        0,
+        "an absent policy is not an exactness opt-in"
+    );
+
+    // An explicit zero threshold is the same request for exactness, and buys the
+    // skip.
+    let exact_options = ApplyOptions {
+        center: Some("r".to_string()),
+        svd_policy: Some(SvdTruncationPolicy::new(0.0)),
+        ..ApplyOptions::zipup()
+    };
+    let skipped_before = zipup_identity_node_skips();
+    let exact_result = apply_linear_operator(&operator, &state, exact_options.clone()).unwrap();
+    assert_eq!(
+        zipup_identity_node_skips() - skipped_before,
+        1,
+        "a zero threshold opts the untouched leaf into the pass-through"
+    );
+
+    // Both are exact against the naive apply, and the opted-in path is not less
+    // accurate: skipping a node whose factorization cannot cut anything removes a
+    // round trip instead of adding error.
+    let naive = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+    let default_deviation = dense_deviation(&default_result, &naive);
+    let exact_deviation = dense_deviation(&exact_result, &naive);
+    assert!(
+        default_deviation <= 1.0e-15,
+        "the default path deviates from the exact local apply by {default_deviation:e}"
+    );
+    assert!(
+        exact_deviation <= 1.0e-15,
+        "the opted-in pass-through deviates from the exact local apply by {exact_deviation:e}"
+    );
+    assert!(
+        exact_deviation <= default_deviation,
+        "the pass-through ({exact_deviation:e}) must not be less accurate than the \
+         factorized path ({default_deviation:e})"
+    );
+}
+
+/// Regression for issue #1227: a swap must be applied from one old-to-new map,
+/// not pair by pair, which used to collapse both mappings onto `a`.
+#[test]
+fn test_linear_operator_replace_indices_swap_is_simultaneous() {
+    let a = make_index(2);
+    let b = make_index(2);
+    let op = build_identity_operator(&[("A".to_string(), a.clone()), ("B".to_string(), b.clone())]);
+
+    let swapped = op
+        .replace_indices(&[a.clone(), b.clone()], &[b.clone(), a.clone()])
+        .unwrap();
+
+    let input_true = |node: &str| {
+        swapped
+            .get_input_mapping(&node.to_string())
+            .unwrap()
+            .true_index
+            .clone()
+    };
+    let output_true = |node: &str| {
+        swapped
+            .get_output_mapping(&node.to_string())
+            .unwrap()
+            .true_index
+            .clone()
+    };
+
+    // Both sides reported the same true index (`a`) when the pairs were applied
+    // one after another.
+    assert_eq!(
+        (input_true("A"), input_true("B")),
+        (b.clone(), a.clone()),
+        "input true indices must be swapped, not collapsed"
+    );
+    assert_eq!(
+        (output_true("A"), output_true("B")),
+        (b, a),
+        "output true indices must be swapped, not collapsed"
+    );
+    assert_eq!(swapped.external_indices().len(), 4);
+}
+
+/// `Index` equality ignores `dim`, so an index that only shares id, tags and
+/// plev with a stored true index must not match it: `replaceind` guarded this
+/// with a dimension comparison and the batch path keeps that guard.
+#[test]
+fn test_linear_operator_replace_indices_keeps_dimension_guard() {
+    let a = make_index(2);
+    let op = build_identity_operator(&[("A".to_string(), a.clone())]);
+
+    let mut aliased = a.clone();
+    aliased.dim = 3;
+    let target = make_index(3);
+
+    let err = op.replace_indices(&[aliased], &[target]).unwrap_err();
+    assert!(err.to_string().contains("not found"), "{err}");
+}
+
+/// Issue #1227's defect table lists both invalid batches as "(not checked)" for
+/// `LinearOperator`. They are rejected now, before any mapping changes.
+#[test]
+fn test_linear_operator_replace_indices_rejects_duplicate_and_occupied_targets() {
+    let a = make_index(2);
+    let b = make_index(2);
+    let op = build_identity_operator(&[("A".to_string(), a.clone()), ("B".to_string(), b.clone())]);
+
+    // Two sources onto one target would leave two mappings with the same true
+    // index, which is exactly the collapse the sequential path produced.
+    let shared = make_index(2);
+    let err = op
+        .replace_indices(&[a.clone(), b.clone()], &[shared.clone(), shared.clone()])
+        .unwrap_err();
+    assert!(err.to_string().contains("Duplicate target"), "{err}");
+
+    // `b` is a true index of this operator and is not replaced by the batch.
+    let err = op
+        .replace_indices(std::slice::from_ref(&a), std::slice::from_ref(&b))
+        .unwrap_err();
+    assert!(err.to_string().contains("already a true index"), "{err}");
+
+    // The rejected batches left the operator untouched.
+    assert_eq!(
+        op.get_input_mapping(&"B".to_string()).unwrap().true_index,
+        b
+    );
 }

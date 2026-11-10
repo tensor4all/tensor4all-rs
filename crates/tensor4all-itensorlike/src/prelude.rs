@@ -21,7 +21,7 @@
 //! ```
 
 pub use crate::{
-    CanonicalForm, ContractMethod, ContractOptions, LinsolveOptions, SrcOptions, SvdOptions,
-    TensorTrain, TruncateOptions,
+    BiCgStabOptions, CanonicalForm, CgOptions, ContractMethod, ContractOptions, LinsolveOptions,
+    LocalSolver, SrcOptions, SvdOptions, TensorTrain, TruncateOptions,
 };
 pub use tensor4all_core::{DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy};

@@ -42,6 +42,7 @@ fn zero_walk_sweeps_evaluate_starting_targets_in_one_batch() {
         &mut seeded_rng(),
         &mut operator,
         &[],
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     let mut oracle_rng = seeded_rng();
@@ -84,6 +85,7 @@ fn coordinate_walk_point_count_excludes_duplicate_seed_targets() {
         &mut seeded_rng(),
         &mut operator,
         &[],
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     let mut expected_batches = vec![NSEARCH];

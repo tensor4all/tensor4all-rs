@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike, TensorLike};
+use tensor4all_core::{AnyScalar, ColMajorArrayRef, IndexLike, TensorLike, TensorVectorSpace};
 
 use super::{TreeTN, TreeTNEvaluator};
 
@@ -91,12 +91,12 @@ where
     /// Canonicalizes the network to a single center with Unitary form, where
     /// the Frobenius norm of the whole network equals the norm of the center
     /// tensor, and returns the logarithm of that center norm. Canonicalization
-    /// avoids contracting the full network, but the center norm is computed as
-    /// `center.norm_squared().sqrt()` before taking the logarithm, so this does
-    /// **not** protect against overflow: a center norm above roughly `1e154`
-    /// (where the squared norm exceeds `f64::MAX`) returns `inf`, and a norm
-    /// below roughly `1e-154` loses precision in the squared norm and returns
-    /// `-inf` once that underflows to zero.
+    /// avoids contracting the full network, and the center norm comes from
+    /// [`TensorVectorSpace::norm`], which for `IdxTensor` uses scaled
+    /// accumulation and never forms the squared norm. A center norm whose
+    /// square would overflow or underflow `f64`, such as `1e200` or `1e-200`,
+    /// therefore keeps a finite logarithm. Only a center norm above `f64::MAX`
+    /// returns `inf`, and an exactly zero network returns `-inf`.
     ///
     /// Canonicalization absorbs site-free nodes into their neighbors and
     /// replaces their bonds with fresh dimension-one links (see
@@ -114,7 +114,7 @@ where
     /// # Errors
     /// Returns [`TreeTNOperationError`] when the network is empty, when
     /// canonicalization to a single center fails, when the center node or tensor
-    /// is missing, or when the center's squared norm cannot be computed.
+    /// is missing, or when the center's norm cannot be computed.
     /// # Examples
     ///
     /// ```
@@ -132,7 +132,7 @@ where
     pub fn log_norm(&mut self) -> std::result::Result<f64, TreeTNOperationError> {
         let n = self.node_count();
         if n == 0 {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!("Cannot compute log_norm of empty TreeTN")
                     .context("log_norm: network must have at least one node"),
             ));
@@ -192,10 +192,8 @@ where
             .ok_or_else(|| anyhow::anyhow!("Center tensor not found"))
             .context("log_norm: center tensor must exist")?;
 
-        let norm_sq = center_tensor
-            .norm_squared()
+        let norm = TensorVectorSpace::norm(center_tensor)
             .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
-        let norm = norm_sq.sqrt();
 
         Ok(norm.ln())
     }
@@ -426,7 +424,7 @@ where
             return Ok(AnyScalar::new_real(0.0));
         }
         if !self.share_equivalent_site_index_network(other) {
-            return Err(TreeTNOperationError::from(anyhow::anyhow!(
+            return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
                 "inner: TreeTNs must have the same topology and site indices"
             )));
         }
@@ -716,7 +714,7 @@ where
         <T::Index as IndexLike>::Id: Ord,
     {
         if values.len() != indices.len() {
-            return Err(TreeTNOperationError::from(anyhow::anyhow!(
+            return Err(TreeTNOperationError::index_out_of_bounds(anyhow::anyhow!(
                 "TreeTN::evaluate_point: values.len() ({}) != indices.len() ({})",
                 values.len(),
                 indices.len()
@@ -861,14 +859,14 @@ where
     /// runtime, so a caller that already owns a `Session` can call it
     /// directly.
     ///
-    /// The overflow and underflow limits of [`TreeTN::log_norm`] apply
-    /// unchanged: the center norm is squared before the logarithm.
+    /// The range of [`TreeTN::log_norm`] applies unchanged: the center norm
+    /// uses scaled accumulation, so it is never squared before the logarithm.
     ///
     /// # Errors
     ///
     /// Returns [`TreeTNOperationError`] when the network is empty, when
     /// session canonicalization fails, when the center node or tensor is
-    /// missing, or when the center's squared norm cannot be computed.
+    /// missing, or when the center's norm cannot be computed.
     ///
     /// # Examples
     ///
@@ -893,7 +891,7 @@ where
     ) -> std::result::Result<f64, TreeTNOperationError> {
         let n = self.node_count();
         if n == 0 {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!("Cannot compute log_norm of empty TreeTN")
                     .context("log_norm_on_session: network must have at least one node"),
             ));
@@ -949,10 +947,10 @@ where
             .ok_or_else(|| anyhow::anyhow!("Center tensor not found"))
             .context("log_norm_on_session: center tensor must exist")?;
 
-        let norm_sq = center_tensor
-            .norm_squared()
+        let norm = center_tensor
+            .norm()
             .map_err(|e| TreeTNOperationError::from(anyhow::Error::new(e)))?;
-        Ok(norm_sq.sqrt().ln())
+        Ok(norm.ln())
     }
 
     /// Compute the Frobenius norm of the TreeTN on a caller-owned explicit `Session`.

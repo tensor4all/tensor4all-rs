@@ -4,7 +4,8 @@ use rand_chacha::ChaCha8Rng;
 use std::collections::HashMap;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_tensorbackend::{
-    default_cpu_execution_context, CpuExecutionContext, ExecutionContext, Matrix,
+    default_cpu_execution_context, CpuExecutionContext, CpuExecutionContextError, ExecutionContext,
+    Matrix,
 };
 use tensor4all_treersi::{
     hadamard_many, hadamard_many_with_rng_in, TreeRsiError, TreeRsiOptions, TreeRsiProbes,
@@ -23,6 +24,31 @@ fn options() -> TreeRsiOptions<usize> {
         max_bond_dim: Some(4),
         ..Default::default()
     }
+}
+
+/// A CPU context is entered once for the whole product, so a run nested inside
+/// a session of that exact context is refused at that entry, before any work,
+/// and the refusal keeps the context's typed re-entry error as its source. A
+/// caller that already holds a session uses the session entry instead.
+#[test]
+fn nested_cpu_session_rejects_the_entry_with_its_source() {
+    let cpu = default_cpu_execution_context();
+    let error = cpu
+        .with_concrete_session(|_session| {
+            hadamard_many::<f64, _>(&[single(vec![1.0, 2.0])], &options())
+        })
+        .expect("entering one CPU session succeeds")
+        .expect_err("a run cannot nest inside a session of the same context");
+    let TreeRsiError::Numerical { source } = error else {
+        panic!("a rejected session entry must not be reported as a dtype mismatch: {error}");
+    };
+    assert!(
+        matches!(
+            source.downcast_ref::<CpuExecutionContextError>(),
+            Some(CpuExecutionContextError::Reentered)
+        ),
+        "the run must fail on the CPU session re-entry: {source}"
+    );
 }
 
 #[test]

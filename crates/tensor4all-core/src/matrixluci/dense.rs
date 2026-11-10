@@ -8,15 +8,15 @@ use crate::matrixluci::{MatrixLuciError, PivotKernelOptions, PivotSelectionCore,
 use crate::scalar::Scalar as LegacyScalar;
 use crate::{rrlu, RrLUOptions};
 use num_complex::{Complex32, Complex64};
-use tenferro_tensor::TensorScalar;
-use tensor4all_tensorbackend::{full_piv_lu_matrix_owned, Matrix};
+use tensor4all_tensorbackend::{capped_full_piv_lu, CappedFullPivLuScalar, Matrix};
 
-/// Dense full-pivoting LU kernel backed by the configured tensor backend.
+/// Dense full-pivoting LU kernel.
 ///
 /// Materializes the source matrix and performs dense pivot selection. Square
-/// matrices use tenferro's complete-pivoting LU; rectangular matrices fall
-/// back to the internal rrLU implementation until tenferro exposes rectangular
-/// complete pivoting.
+/// matrices use the backend's complete-pivoting LU stopped at the caller's rank
+/// cap ([`tensor4all_tensorbackend::capped_full_piv_lu`]); rectangular matrices
+/// fall back to the internal rrLU implementation until the provider stack
+/// exposes rectangular complete pivoting.
 #[derive(Default)]
 pub struct DenseLuKernel;
 
@@ -114,67 +114,86 @@ impl DenseLuKernel {
         })
     }
 
-    fn permutation_indices_from_matrix<T: MatrixLuciScalar>(
-        data: &[T],
-        n: usize,
-        name: &str,
-    ) -> Result<Vec<usize>> {
-        let mut indices = Vec::with_capacity(n);
-        for row in 0..n {
-            let mut selected = None;
-            for col in 0..n {
-                if data[row + n * col].abs_val() > 0.5 && selected.replace(col).is_some() {
-                    return Err(MatrixLuciError::InvalidArgument {
-                        message: format!("{name} permutation row {row} has multiple entries"),
-                    });
-                }
-            }
-            indices.push(selected.ok_or_else(|| MatrixLuciError::InvalidArgument {
-                message: format!("{name} permutation row {row} has no entry"),
-            })?);
-        }
-        Ok(indices)
-    }
-
-    fn factorize_square_with_tenferro<T: MatrixLuciScalar + TensorScalar>(
+    /// Complete-pivoting LU of a square input, stopped once the rank cap is met.
+    ///
+    /// The factorization is the backend's ([`capped_full_piv_lu`]); this kernel keeps only the
+    /// LUCI decision of which pivots to accept. It hands the backend the rank cap and nothing else,
+    /// one pivot past the cap, so that the residual [`Self::compute_pivot_errors`] reads from
+    /// `diag_abs[rank]` is the pivot the factorization itself would take next rather than a rule
+    /// re-derived here. The tolerance decision stays in [`Self::compute_pivot_errors`], because
+    /// faer rejects a pivot at *or below* its tolerance where this kernel rejects only a strictly
+    /// smaller one (`|pivot| < tol`), and measures it against the first pivot where this kernel
+    /// keeps a running maximum.
+    ///
+    /// Returns the selection together with the raw pivot count the backend reported, not a count
+    /// clamped to the cap. That number is the evidence a cap stops the elimination instead of
+    /// factoring to full rank and truncating afterwards: a bounded run reports the cap plus the one
+    /// extra pivot asked for, not `n`. Clamping it here would make the two indistinguishable from
+    /// the outside.
+    fn factorize_square_with_backend<T: MatrixLuciScalar + CappedFullPivLuScalar>(
         data: &[T],
         n: usize,
         options: &PivotKernelOptions,
-    ) -> Result<PivotSelectionCore> {
+    ) -> Result<(PivotSelectionCore, usize)> {
         if data.iter().any(|&value| !value.abs_val().is_finite()) {
             return Err(MatrixLuciError::NaNEncountered {
                 matrix: "dense input",
             });
         }
-        let matrix = Matrix::from_col_major_vec(n, n, data.to_vec());
-        let decomp =
-            full_piv_lu_matrix_owned(matrix).map_err(|err| MatrixLuciError::InvalidArgument {
-                message: format!("tenferro full_piv_lu failed: {err}"),
-            })?;
+        if n == 0 {
+            return Ok((
+                PivotSelectionCore {
+                    row_indices: Vec::new(),
+                    col_indices: Vec::new(),
+                    pivot_errors: vec![0.0],
+                    rank: 0,
+                },
+                0,
+            ));
+        }
 
-        let u_values = decomp.u.as_col_major_slice();
-        let diag_abs = (0..n)
-            .map(|i| u_values[i + n * i].abs_val())
+        let cap = options.max_bond_dim.min(n);
+        // One pivot past the cap is the residual `compute_pivot_errors` reads (`diag_abs[rank]`). A
+        // cap at or above `n` asks for no bound at all. One extra elimination step costs
+        // `O((n - cap)^2)`.
+        let ask = if cap < n { cap + 1 } else { cap };
+        let lu = capped_full_piv_lu(
+            Matrix::from_col_major_vec(n, n, data.to_vec()),
+            (cap < n).then_some(ask),
+        )
+        .map_err(|err| MatrixLuciError::InvalidArgument {
+            message: format!("dense capped full-pivoting LU failed: {err}"),
+        })?;
+        let pivots = lu.rank();
+
+        // The pivots taken, and - when the elimination stopped for its own reason (a zero or
+        // subnormal Schur complement) before it could reveal the extra pivot - the trailing diagonal
+        // it left un-eliminated. That stop predates the rank cap, so the untruncated run reads the
+        // same entries; reading them keeps the subnormal contract the residual shortcut would change.
+        let read = if pivots < ask { n } else { pivots };
+        let diag_abs = lu.diagonal()[..read]
+            .iter()
+            .map(|value| value.abs_val())
             .collect::<Vec<_>>();
         if diag_abs.iter().any(|value| !value.is_finite()) {
             return Err(MatrixLuciError::NaNEncountered {
                 matrix: "dense diagonal",
             });
         }
+
         let pivot_errors = Self::compute_pivot_errors::<T>(&diag_abs, n, n, options);
         let rank = pivot_errors.len().saturating_sub(1);
-
-        let row_perm =
-            Self::permutation_indices_from_matrix(decomp.p.as_col_major_slice(), n, "P")?;
-        let col_perm =
-            Self::permutation_indices_from_matrix(decomp.q.as_col_major_slice(), n, "Q")?;
-
-        Ok(PivotSelectionCore {
-            row_indices: row_perm[..rank].to_vec(),
-            col_indices: col_perm[..rank].to_vec(),
-            pivot_errors,
-            rank,
-        })
+        Ok((
+            PivotSelectionCore {
+                row_indices: lu.row_perm()[..rank].to_vec(),
+                col_indices: lu.col_perm()[..rank].to_vec(),
+                pivot_errors,
+                rank,
+            },
+            // Raw count: the cap plus the extra pivot asked for above when the cap binds, and the
+            // backend's own stop when it stopped first.
+            pivots,
+        ))
     }
 }
 
@@ -190,7 +209,8 @@ macro_rules! impl_dense_kernel {
                     let nrows = source.nrows();
                     let ncols = source.ncols();
                     if nrows == ncols {
-                        DenseLuKernel::factorize_square_with_tenferro(data, nrows, options)
+                        DenseLuKernel::factorize_square_with_backend(data, nrows, options)
+                            .map(|(selection, _)| selection)
                     } else {
                         DenseLuKernel::factorize_with_rrlu(data, nrows, ncols, options)
                     }

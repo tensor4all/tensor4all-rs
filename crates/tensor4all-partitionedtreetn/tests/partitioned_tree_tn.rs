@@ -9,6 +9,9 @@ use tensor4all_treetn::{
     TreeTN, TruncationOptions,
 };
 
+mod evaluate;
+mod norm_range;
+
 fn subdomain(site: &DynIndex, values: [f64; 2], coordinate: usize) -> SubDomainTreeTN {
     let tensor = IdxTensor::from_dense(vec![site.clone()], values.to_vec()).unwrap();
     let tree = TreeTN::from_tensors(vec![tensor], vec![0usize]).unwrap();

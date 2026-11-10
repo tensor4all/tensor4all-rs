@@ -1,9 +1,258 @@
 //! `TreeTN::exact_sum`: the engines build the same network, `NaryWithin`
 //! switches at its limit, and the size estimate is the built sum's.
 
-use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
+use tensor4all_core::{AnyScalar, DynIndex, IdxTensor, IndexLike, TensorElement};
 
 use super::*;
+use crate::{fit_sum_with_report, FitOptions};
+
+fn diagonal_term<T: TensorElement + From<f64> + Copy>(
+    site: &[DynIndex],
+    values: [T; 2],
+) -> TreeTN<IdxTensor, usize> {
+    let bond = DynIndex::new_dyn(2);
+    TreeTN::from_tensors(
+        vec![
+            IdxTensor::from_dense(
+                vec![site[0].clone(), bond.clone()],
+                vec![T::from(1.0), T::from(0.0), T::from(0.0), T::from(1.0)],
+            )
+            .unwrap(),
+            IdxTensor::from_dense(
+                vec![bond, site[1].clone()],
+                vec![values[0], T::from(0.0), T::from(0.0), values[1]],
+            )
+            .unwrap(),
+        ],
+        vec![0, 1],
+    )
+    .unwrap()
+}
+
+#[test]
+fn pairwise_fit_recovers_all_summands_after_seed_truncation() {
+    let sites: Vec<_> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
+    for phase in [AnyScalar::new_real(1.0), AnyScalar::new_complex(0.0, 1.0)] {
+        let term = if phase.is_complex() {
+            diagonal_term(
+                &sites,
+                [
+                    num_complex::Complex64::new(0.0, 3.0),
+                    num_complex::Complex64::new(0.0, 1.0),
+                ],
+            )
+        } else {
+            diagonal_term(&sites, [3.0, 1.0])
+        };
+        let terms = vec![term; 3];
+        for order in [PairwiseSumOrder::Sequential, PairwiseSumOrder::Balanced] {
+            let result = TreeTN::pairwise_sum_fit(
+                &terms,
+                order,
+                PerAddCutoff {
+                    center: &0,
+                    cutoff: 0.0,
+                    max_bond_dim: Some(1),
+                },
+                FitOptions::new(1).with_max_bond_dim(2),
+            )
+            .unwrap();
+            let expected = IdxTensor::from_dense(sites.clone(), vec![9.0, 0.0, 0.0, 3.0])
+                .unwrap()
+                .scale(phase.clone())
+                .unwrap();
+            assert!(
+                result
+                    .network
+                    .to_dense()
+                    .unwrap()
+                    .sub(&expected)
+                    .unwrap()
+                    .maxabs()
+                    .unwrap()
+                    < 1e-12
+            );
+            assert_eq!(result.network.link_dims(), vec![2]);
+        }
+    }
+}
+
+#[test]
+fn sum_fit_reports_discarded_norm_for_each_region() {
+    let sites: Vec<_> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
+    for phase in [AnyScalar::new_real(1.0), AnyScalar::new_complex(0.0, 1.0)] {
+        let terms = vec![diagonal_term(&sites, [3.0, 1.0])
+            .scale(phase.clone())
+            .unwrap()];
+        let result = fit_sum_with_report(
+            &terms,
+            &terms[0],
+            &0,
+            FitOptions::new(1).with_max_bond_dim(1),
+        )
+        .unwrap();
+        assert_eq!(result.truncations.len(), 2);
+        for report in &result.truncations {
+            assert!(report.region == [0, 1] || report.region == [1, 0]);
+            assert!((report.discarded_norm - 1.0).abs() < 1e-12, "{report:?}");
+        }
+        let expected = IdxTensor::from_dense(sites.clone(), vec![3.0, 0.0, 0.0, 0.0])
+            .unwrap()
+            .scale(phase.clone())
+            .unwrap();
+        assert!(
+            result
+                .network
+                .to_dense()
+                .unwrap()
+                .sub(&expected)
+                .unwrap()
+                .maxabs()
+                .unwrap()
+                < 1e-12
+        );
+    }
+}
+
+#[test]
+fn pairwise_fit_zero_sweeps_returns_the_seed_and_one_site_has_no_regions() {
+    let sites: Vec<_> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
+    let terms = vec![diagonal_term(&sites, [3.0, 1.0]); 3];
+    let result = TreeTN::pairwise_sum_fit(
+        &terms,
+        PairwiseSumOrder::Sequential,
+        PerAddCutoff {
+            center: &0,
+            cutoff: 0.0,
+            max_bond_dim: Some(1),
+        },
+        FitOptions::new(0).with_max_bond_dim(2),
+    )
+    .unwrap();
+    let expected = IdxTensor::from_dense(sites, vec![9.0, 0.0, 0.0, 0.0]).unwrap();
+    assert!(
+        result
+            .network
+            .to_dense()
+            .unwrap()
+            .sub(&expected)
+            .unwrap()
+            .maxabs()
+            .unwrap()
+            < 1e-12
+    );
+    assert!(result.truncations.is_empty());
+
+    let site = DynIndex::new_dyn(2);
+    let term = TreeTN::<IdxTensor, usize>::from_tensors(
+        vec![IdxTensor::from_dense(vec![site], vec![1.0, 2.0]).unwrap()],
+        vec![0],
+    )
+    .unwrap();
+    let result = TreeTN::pairwise_sum_fit(
+        &[term.clone(), term],
+        PairwiseSumOrder::Balanced,
+        PerAddCutoff {
+            center: &0,
+            cutoff: 0.0,
+            max_bond_dim: None,
+        },
+        FitOptions::new(1),
+    )
+    .unwrap();
+    assert_eq!(
+        result.network.to_dense().unwrap().to_vec::<f64>().unwrap(),
+        vec![2.0, 4.0]
+    );
+    assert!(result.truncations.is_empty());
+}
+
+#[test]
+fn pairwise_fit_rejects_invalid_seed_and_fit_options_before_shortcuts() {
+    let sites: Vec<_> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
+    let terms = vec![diagonal_term(&sites, [3.0, 1.0])];
+    let seed = || PerAddCutoff {
+        center: &0,
+        cutoff: 0.0,
+        max_bond_dim: None,
+    };
+    for options in [
+        FitOptions::new(0).with_max_bond_dim(0),
+        FitOptions::new(0).with_convergence_tol(f64::NAN),
+    ] {
+        assert!(
+            TreeTN::pairwise_sum_fit(&terms, PairwiseSumOrder::Sequential, seed(), options)
+                .is_err()
+        );
+    }
+    for invalid in [
+        PerAddCutoff {
+            cutoff: f64::NAN,
+            ..seed()
+        },
+        PerAddCutoff {
+            max_bond_dim: Some(0),
+            ..seed()
+        },
+        PerAddCutoff {
+            center: &99,
+            ..seed()
+        },
+    ] {
+        assert!(TreeTN::pairwise_sum_fit(
+            &terms,
+            PairwiseSumOrder::Sequential,
+            invalid,
+            FitOptions::new(0)
+        )
+        .is_err());
+    }
+    assert!(TreeTN::<IdxTensor, usize>::pairwise_sum_fit(
+        &[],
+        PairwiseSumOrder::Sequential,
+        seed(),
+        FitOptions::new(0)
+    )
+    .is_err());
+}
+
+#[test]
+fn pairwise_fit_branching_result_and_ranks_repeat() {
+    let sites = star_sites();
+    let terms = star_terms(&sites);
+    let run = || {
+        TreeTN::pairwise_sum_fit(
+            &terms,
+            PairwiseSumOrder::Balanced,
+            PerAddCutoff {
+                center: &0,
+                cutoff: 1e-3,
+                max_bond_dim: Some(1),
+            },
+            FitOptions::new(2).with_max_bond_dim(2),
+        )
+        .unwrap()
+    };
+    let first = run();
+    let second = run();
+    assert_eq!(first.network.link_dims(), second.network.link_dims());
+    assert_eq!(first.truncations.len(), 12);
+    assert_eq!(first.truncations.len(), second.truncations.len());
+    let expected = TreeTN::add_many(&terms.iter().collect::<Vec<_>>())
+        .unwrap()
+        .to_dense()
+        .unwrap();
+    let dense = first.network.to_dense().unwrap();
+    assert!(dense.sub(&expected).unwrap().maxabs().unwrap() < 1e-10);
+    assert!(
+        dense
+            .sub(&second.network.to_dense().unwrap())
+            .unwrap()
+            .maxabs()
+            .unwrap()
+            < 1e-12
+    );
+}
 
 /// A four-node star `1 - 0 - 2, 0 - 3` over `sites`, with bond dimensions
 /// `bonds` to the leaves and values derived from `seed`.
@@ -283,15 +532,20 @@ fn pairwise_sum_rejects_invalid_per_add_cutoffs() {
         "{no_terms:#}"
     );
 
-    let bad_center = TreeTN::pairwise_sum(
-        &refs,
-        PairwiseSumOrder::Balanced,
-        Some(PerAddCutoff {
-            center: &99,
-            cutoff: 1.0e-12,
-            max_bond_dim: None,
-        }),
-    )
-    .unwrap_err();
-    assert!(!format!("{bad_center:#}").is_empty());
+    for inputs in [&refs[..1], refs.as_slice()] {
+        let bad_center = TreeTN::pairwise_sum(
+            inputs,
+            PairwiseSumOrder::Balanced,
+            Some(PerAddCutoff {
+                center: &99,
+                cutoff: 1.0e-12,
+                max_bond_dim: None,
+            }),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            bad_center,
+            TreeTNOperationError::InvalidGraph { .. }
+        ));
+    }
 }

@@ -1059,6 +1059,254 @@ fn small_positive_branch_slice_budget_still_retains_the_branching_slices() {
     );
 }
 
+/// The one-branching-tensor floor is a lower bound on the request, not a cap: `0` disables retention, a positive
+/// budget below the floor is raised to it, and a budget above the floor is kept as requested. Retention is then
+/// bounded by that budget - a readout crossing two branching nodes prepares twice the floor, so the raised and the
+/// requested budget hold different numbers of slices. Values are bitwise those of the zero-budget route in every
+/// regime.
+#[test]
+fn branch_slice_budget_zero_is_raised_below_the_floor_and_honoured_above_it() {
+    let (tree, indices) = two_branch_tree_of(|value| value);
+    let values = two_branch_values();
+    let points = ColMajorArrayRef::new(&values, &[6, 64]).unwrap();
+    let evaluator = |budget: usize| {
+        TreeTNCachedEvaluator::new(
+            &tree,
+            &indices,
+            CachedEvaluatorOptions {
+                center: Some(0),
+                max_batch_points: Some(usize::MAX),
+                branch_slice_cache_max_bytes: budget,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    // Each branching tensor has 3 × 6 × 6 × 6 = 648 entries: 5184 B as f64, 10368 B as Complex64. Its three physical
+    // slices are 216 entries each (1728 B / 3456 B), and one readout prepares the slices of both branching nodes: six
+    // of them, 10368 B as f64 and 20736 B as Complex64.
+    let (floor_f64, slice_f64, visited_f64) = (5184, 1728, 10368);
+    let (floor_c64, slice_c64, visited_c64) = (10368, 3456, 20736);
+
+    // Zero disables retention: nothing is kept.
+    let mut zero = evaluator(0);
+    let zero_values = zero
+        .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(zero.prepared_branch_slices_f64.max_bytes, 0);
+    assert_eq!(zero.prepared_branch_slices_f64.slices.len(), 0);
+    assert_eq!(zero.prepared_branch_slices_f64.retained_bytes(), 0);
+
+    // A positive budget below the floor is raised to it rather than taken literally, and the raised budget is what
+    // the cache enforces: it holds exactly one branching tensor's three slices and refuses the other three.
+    let mut below_floor = evaluator(1);
+    let below_floor_values = below_floor
+        .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(below_floor.prepared_branch_slices_f64.max_bytes, floor_f64);
+    assert_eq!(below_floor.prepared_branch_slices_f64.slices.len(), 3);
+    assert_eq!(
+        below_floor.prepared_branch_slices_f64.retained_bytes(),
+        3 * slice_f64
+    );
+
+    // A budget above the floor is kept as requested and is not capped back to the floor: it retains all six visited
+    // slices, twice the floor.
+    let mut above_floor = evaluator(4 * floor_f64);
+    let above_floor_values = above_floor
+        .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(
+        above_floor.prepared_branch_slices_f64.max_bytes,
+        4 * floor_f64
+    );
+    assert_eq!(above_floor.prepared_branch_slices_f64.slices.len(), 6);
+    assert_eq!(
+        above_floor.prepared_branch_slices_f64.retained_bytes(),
+        visited_f64
+    );
+
+    let bits = |values: &[f64]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    assert_eq!(bits(&below_floor_values), bits(&zero_values));
+    assert_eq!(bits(&above_floor_values), bits(&zero_values));
+    // A budget that is not a whole number of slices must stop at the last slice that fits: 6048 B is three and a
+    // half f64 slices, so three fit and the fourth (6912 B) does not. An admission test written as
+    // `retained_bytes < max_bytes` instead of `retained_bytes + payload <= max_bytes` takes the fourth here, and
+    // only a budget between multiples of the slice size can see that.
+    let mut partial = evaluator(floor_f64 + slice_f64 / 2);
+    let partial_values = partial
+        .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(
+        partial.prepared_branch_slices_f64.max_bytes,
+        floor_f64 + slice_f64 / 2
+    );
+    assert_eq!(partial.prepared_branch_slices_f64.slices.len(), 3);
+    assert_eq!(
+        partial.prepared_branch_slices_f64.retained_bytes(),
+        3 * slice_f64
+    );
+    assert_eq!(bits(&partial_values), bits(&zero_values));
+
+    // Complex64 tree: the same three regimes with twice the bytes per entry.
+    let (complex_tree, complex_indices) =
+        two_branch_tree_of(|value| Complex64::new(value, 0.5 * value - 0.1));
+    let complex_evaluator = |budget: usize| {
+        TreeTNCachedEvaluator::new(
+            &complex_tree,
+            &complex_indices,
+            CachedEvaluatorOptions {
+                center: Some(0),
+                max_batch_points: Some(usize::MAX),
+                branch_slice_cache_max_bytes: budget,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    let mut complex_zero = complex_evaluator(0);
+    let complex_zero_values = complex_zero
+        .evaluate_batched_typed::<Complex64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(complex_zero.prepared_branch_slices_c64.max_bytes, 0);
+    assert_eq!(complex_zero.prepared_branch_slices_c64.slices.len(), 0);
+    assert_eq!(complex_zero.prepared_branch_slices_c64.retained_bytes(), 0);
+
+    let mut complex_below_floor = complex_evaluator(1);
+    let complex_below_floor_values = complex_below_floor
+        .evaluate_batched_typed::<Complex64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(
+        complex_below_floor.prepared_branch_slices_c64.max_bytes,
+        floor_c64
+    );
+    assert_eq!(
+        complex_below_floor.prepared_branch_slices_c64.slices.len(),
+        3
+    );
+    assert_eq!(
+        complex_below_floor
+            .prepared_branch_slices_c64
+            .retained_bytes(),
+        3 * slice_c64
+    );
+
+    let mut complex_above_floor = complex_evaluator(4 * floor_c64);
+    let complex_above_floor_values = complex_above_floor
+        .evaluate_batched_typed::<Complex64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(
+        complex_above_floor.prepared_branch_slices_c64.max_bytes,
+        4 * floor_c64
+    );
+    assert_eq!(
+        complex_above_floor.prepared_branch_slices_c64.slices.len(),
+        6
+    );
+    assert_eq!(
+        complex_above_floor
+            .prepared_branch_slices_c64
+            .retained_bytes(),
+        visited_c64
+    );
+
+    let complex_bits = |values: &[Complex64]| {
+        values
+            .iter()
+            .map(|z| (z.re.to_bits(), z.im.to_bits()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        complex_bits(&complex_below_floor_values),
+        complex_bits(&complex_zero_values)
+    );
+    assert_eq!(
+        complex_bits(&complex_above_floor_values),
+        complex_bits(&complex_zero_values)
+    );
+
+    // The same half-slice budget for Complex64: 12096 B is three and a half 3456 B slices.
+    let mut complex_partial = complex_evaluator(floor_c64 + slice_c64 / 2);
+    let complex_partial_values = complex_partial
+        .evaluate_batched_typed::<Complex64>(points, EvaluationHint::default())
+        .unwrap();
+    assert_eq!(
+        complex_partial.prepared_branch_slices_c64.max_bytes,
+        floor_c64 + slice_c64 / 2
+    );
+    assert_eq!(complex_partial.prepared_branch_slices_c64.slices.len(), 3);
+    assert_eq!(
+        complex_partial.prepared_branch_slices_c64.retained_bytes(),
+        3 * slice_c64
+    );
+    assert_eq!(
+        complex_bits(&complex_partial_values),
+        complex_bits(&complex_zero_values)
+    );
+}
+
+/// Two degree-three nodes, so one readout prepares more physical-slice bytes than one branching tensor holds:
+/// 0 - 1 - {2 - {4, 5}, 3}. Every bond has dimension 6; the two branching nodes carry a physical site of dimension 3
+/// and each of the four leaves one of dimension 4.
+fn two_branch_tree_of<T: tensor4all_core::TensorElement>(
+    entry: impl Fn(f64) -> T,
+) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+    let physical_1 = DynIndex::new_dyn(3);
+    let physical_2 = DynIndex::new_dyn(3);
+    let sites: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(4)).collect();
+    let bond_01 = DynIndex::new_dyn(6);
+    let bond_12 = DynIndex::new_dyn(6);
+    let bond_13 = DynIndex::new_dyn(6);
+    let bond_24 = DynIndex::new_dyn(6);
+    let bond_25 = DynIndex::new_dyn(6);
+    let values = |len: usize| -> Vec<T> {
+        (0..len)
+            .map(|value| entry((value % 29) as f64 / 13.0 - 0.6))
+            .collect()
+    };
+    let tensors = vec![
+        IdxTensor::from_dense(vec![bond_01.clone(), sites[0].clone()], values(24)).unwrap(),
+        IdxTensor::from_dense(
+            vec![
+                bond_01,
+                bond_12.clone(),
+                bond_13.clone(),
+                physical_1.clone(),
+            ],
+            values(648),
+        )
+        .unwrap(),
+        IdxTensor::from_dense(
+            vec![
+                bond_12,
+                bond_24.clone(),
+                bond_25.clone(),
+                physical_2.clone(),
+            ],
+            values(648),
+        )
+        .unwrap(),
+        IdxTensor::from_dense(vec![bond_13, sites[1].clone()], values(24)).unwrap(),
+        IdxTensor::from_dense(vec![bond_24, sites[2].clone()], values(24)).unwrap(),
+        IdxTensor::from_dense(vec![bond_25, sites[3].clone()], values(24)).unwrap(),
+    ];
+    let tree = TreeTN::from_tensors(tensors, vec![0, 1, 2, 3, 4, 5]).unwrap();
+    let mut indices = vec![physical_1, physical_2];
+    indices.extend(sites);
+    (tree, indices)
+}
+
+fn two_branch_values() -> Vec<usize> {
+    let (point_count, dims) = (64, [3usize, 3, 4, 4, 4, 4]);
+    let mut values = vec![0usize; dims.len() * point_count];
+    for point in 0..point_count {
+        for (axis, &dim) in dims.iter().enumerate() {
+            values[dims.len() * point + axis] = (point / (axis + 1)) % dim;
+        }
+    }
+    values
+}
+
 #[test]
 fn stack_tensors_adds_trailing_assignment_axis_in_column_major_order() {
     let batch = DynIndex::new_dyn(2);

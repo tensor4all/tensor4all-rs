@@ -107,8 +107,10 @@ where
                 let actual =
                     scalar_chain_message_contraction(spec, &raw, &physical_values, &child_columns)
                         .unwrap();
+                // Debug formatting is the shortest exact representation, so it tells -0.0 from +0.0.
                 assert_eq!(
-                    actual, expected,
+                    format!("{actual:?}"),
+                    format!("{expected:?}"),
                     "axes ({physical_axis}, {parent_axis}, {child_axis}), dims ({physical_dim}, {parent_dim}, \
                      {child_dim}), {point_count} points"
                 );
@@ -138,26 +140,52 @@ fn scalar_chain_kernel_is_bitwise_the_original_loop_for_complex64() {
     );
 }
 
+/// Special values in both walks: child axis 2 (child stride 4 > parent stride 2, the child-major walk) and child axis
+/// 1 (child stride 2 < parent stride 4, the parent-major walk), against literals computed independently. Non-NaN
+/// results bit for bit (a zero result is +0.0: sums start from +0.0); a NaN result is NaN in both.
 #[test]
 fn scalar_chain_kernel_keeps_non_finite_values_and_signed_zero() {
-    let spec = ChainContractionSpec {
-        strides: [1, 2, 4],
-        physical_axis: 0,
-        parent_axis: 1,
-        child_axis: 2,
-        parent_dim: 2,
-        child_dim: 2,
-    };
-    let raw = [f64::INFINITY, -0.0, 0.0, f64::NAN, 1.0, -0.0, -0.0, 2.0];
-    let physical_values = [0usize, 1];
-    let child_columns = [0.0, 1.0, -0.0, -0.0];
-    let expected =
-        reference_scalar_chain_message_contraction(spec, &raw, &physical_values, &child_columns)
-            .unwrap();
-    let actual =
-        scalar_chain_message_contraction(spec, &raw, &physical_values, &child_columns).unwrap();
-    let bits = |values: &[f64]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
-    assert_eq!(bits(&actual), bits(&expected));
+    let inf = f64::INFINITY;
+    let raw = [inf, -0.0, 0.0, f64::NAN, 1.0, -0.0, -0.0, 2.0];
+    let nan = f64::NAN;
+    let cases: [(usize, usize, [f64; 4], [f64; 4]); 3] = [
+        (1, 2, [0.0, 1.0, -0.0, -0.0], [nan, 0.0, 0.0, nan]),
+        (2, 1, [0.0, 1.0, -0.0, -0.0], [nan, 0.0, nan, 0.0]),
+        (2, 1, [1.0, 2.0, -1.0, 0.5], [inf, 1.0, nan, 1.0]),
+    ];
+    for (parent_axis, child_axis, child_columns, literal) in cases {
+        let spec = ChainContractionSpec {
+            strides: [1, 2, 4],
+            physical_axis: 0,
+            parent_axis,
+            child_axis,
+            parent_dim: 2,
+            child_dim: 2,
+        };
+        let physical_values = [0usize, 1];
+        let reference = reference_scalar_chain_message_contraction(
+            spec,
+            &raw,
+            &physical_values,
+            &child_columns,
+        )
+        .unwrap();
+        let actual =
+            scalar_chain_message_contraction(spec, &raw, &physical_values, &child_columns).unwrap();
+        for (what, values) in [("kernel", &actual), ("reference", &reference)] {
+            for (value, literal) in values.iter().zip(literal) {
+                if literal.is_nan() {
+                    assert!(value.is_nan(), "child axis {child_axis}: {what} {values:?}");
+                } else {
+                    assert_eq!(
+                        value.to_bits(),
+                        literal.to_bits(),
+                        "child axis {child_axis}: {what} {values:?}, expected {literal:?}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]

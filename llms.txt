@@ -22,6 +22,7 @@ transforms (`tensor4all-quanticstransform`), and a C FFI layer
 - [C API design](docs/CAPI_DESIGN.md).
 - [Repository rules](AGENTS.md) and [contributing](CONTRIBUTING.md).
 - [Downstream usage skill](skills/use-tensor4all-rs/SKILL.md): crate selection, imports, layout, and first-try fixes.
+- [faer usage skill](https://github.com/tensor4all/faer/blob/main/skills/faer-usage/SKILL.md): the dense matrix library `t4a-faer` (crate name; the library is `faer`) behind `tensor4all-tensorbackend` whenever the faer/native CPU backend is selected — the default on Linux and Windows; macOS defaults to Apple Accelerate instead. Under that backend, tenferro's linear algebra and `tlinalg` call its gemm, LU, QR, SVD and eigendecomposition kernels. Read it when a matrix routine is needed directly instead of through the tensor wrappers, or before writing a kernel by hand. No version is pinned here; `Cargo.lock` is authoritative.
 - [Partitioned TreeTN crate README](crates/tensor4all-partitionedtreetn/README.md): TreeTN-native API quickstart.
 
 ## Repository

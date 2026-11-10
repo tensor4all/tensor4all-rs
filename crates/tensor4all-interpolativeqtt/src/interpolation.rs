@@ -472,16 +472,45 @@ where
 /// subinterval and each column to one local Chebyshev-Lobatto node.
 ///
 /// # Accuracy of the finest level
-/// The last QTT core only holds the interpolant of each finest subinterval at
-/// the two local points `t = 0` and `t = 1/2`; the inverse is also required to
-/// work on SVD-compressed trains, whose last bond is in an arbitrary gauge, so
-/// no more than these two samples per subinterval can be used. The finest
-/// matrix is therefore the linear blend of those two samples,
-/// `(1 - 2c) p(0) + 2c p(1/2)` for node `c`. It reproduces the exact node
-/// values for `c = 0` and `c = 1/2`, and for every node when
-/// `basis.len() == 2` (degree 1). For degree >= 2 the other nodes carry an
-/// `O(h^2)` error with `h = 2^-(k_out)` times the subinterval width; the
-/// coarser matrices inherit it through the restriction step.
+/// The last QTT core holds the interpolant of each finest subinterval at the two
+/// local points `t = 0` and `t = 1/2`, so two routes are possible and this
+/// function picks between them from the train itself:
+///
+/// * If the train is still the **uncompressed construction** — every bond at the
+///   construction's full dimension, the finest core proportional to
+///   `L_alpha(sigma / 2)`, and the reconstruction agreeing with the train's own
+///   samples where two subintervals meet — then the bond index names a local basis
+///   function and the coefficients the parent levels produced are evaluated in that
+///   basis at the node itself. The finest matrix is then exact at **every** node,
+///   without a blend. A train rescaled by [`SimpleTensorTrain::scale_mut`] keeps
+///   this route, since only the core's overall factor changes.
+/// * Otherwise, which includes every SVD-compressed train, the last bond is in an
+///   arbitrary gauge and no more than the two stored samples per subinterval can
+///   be used. The finest matrix is then the linear blend
+///   `(1 - 2c) p(0) + 2c p(1/2)` for node `c`. It reproduces the exact node values
+///   for `c = 0` and `c = 1/2`, and for every node when `basis.len() == 2`
+///   (degree 1). For degree >= 2 the other nodes carry an `O(h^2)` error with
+///   `h = 2^-(k_out)` times the subinterval width.
+///
+/// The uncompressed test is **sufficient, not necessary**: it measures how the
+/// train was built, not the rank of the represented function, so a full-rank train
+/// of a low-rank function takes the exact route. A compressed train that happens to
+/// agree with the exact values is not detected as exact and keeps the blend, as does
+/// a train whose finest core or earlier coefficient columns were rewritten in a way
+/// that moves the reconstruction off the train's own samples.
+///
+/// What the check can and cannot hold: it detects a truncated train, a rescaled
+/// train, and any rewrite that moves the reconstruction off the samples the train
+/// stores — at `t = 0`, at `t = 1/2`, and at the shared endpoints between
+/// subintervals. It cannot detect a rewrite whose component vanishes at all of those
+/// points (for degree >= 3 a basis function such as `L_1` does), because the train
+/// stores two samples per subinterval and carries no information there; the exact
+/// route then reports what the rewritten coefficients say. The route is therefore a
+/// statement about a train that is the direct output of this crate's constructors,
+/// which is what it is for; a hand-modified train is outside that contract.
+///
+/// The coarser matrices inherit the finest level's error through the restriction
+/// step.
 /// # Errors
 /// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when `q` is
 /// not in `1..tt.len()`, when the sites are not binary, when the decode matrix
@@ -1107,6 +1136,133 @@ fn matrix_from_fn(
     Ok(Matrix::from_col_major_vec(nrows, ncols, data))
 }
 
+/// The scale at which the train is still the construction's uncompressed form, or
+/// `None` when the two-point blend is the answer.
+///
+/// `Some(scale)` holds when **every** bond sits at the construction's full
+/// dimension (`basis.len()`) and the finest core is proportional to
+/// `L_alpha(sigma / 2)` with a factor `scale`. Both halves are needed:
+///
+/// * the bond dimensions are what a truncation lowers, so the all-bond test is the
+///   "no bond was truncated" criterion, and it catches an earlier bond that was
+///   truncated even if the finest core still looks canonical;
+/// * the exact core comparison is what makes the last bond index *name* a basis
+///   function, so the per-cell coefficients the parent levels produced can be
+///   evaluated at any local node `c`: `scale * sum_alpha coefficient[alpha] *
+///   L_alpha(c)` (tensor4all-rs #1175).
+///
+/// `scale` is not decoration: [`SimpleTensorTrain::scale_mut`] multiplies the
+/// **last** core only, which leaves every bond and the represented function's shape
+/// intact, so a rescaled train is still uncompressed and keeps the exact route.
+///
+/// The comparison is proportional, not bit-exact: [`SimpleTensorTrain::scale_mut`]
+/// applied twice multiplies the core twice and the products do not associate, so a
+/// legitimate rescale differs from `scale * L_alpha(sigma / 2)` by an ulp or two.
+/// The bound is `1e-14` relative per nonzero entry and an exact zero for a canonical
+/// zero, which is far below anything that matters, and the caller validates the
+/// decoded value separately ([`finest_level_is_continuous`]), because a deviation in
+/// the core meets the parent coefficients and can be amplified there.
+///
+/// The test is **sufficient, not necessary**: it measures how the train was built,
+/// not the rank of the represented function, so a full-rank train of a low-rank
+/// function takes the exact route and a compressed train that happens to agree with
+/// the exact values does not.
+pub(crate) fn finest_level_scale(
+    tt: &SimpleTensorTrain<f64>,
+    basis: &LagrangePolynomials,
+) -> Result<Option<f64>> {
+    let num_sites = tt.len();
+    if num_sites < 2 {
+        return Ok(None);
+    }
+    for link in 0..num_sites - 1 {
+        if tt.link_dim(link) != basis.len() {
+            return Ok(None);
+        }
+    }
+
+    let last = tt.site_tensor(num_sites - 1);
+    let mut expected = Vec::with_capacity(basis.len() * 2);
+    let mut anchor = (0_usize, 0.0_f64);
+    for alpha in 0..basis.len() {
+        for sigma in 0..2 {
+            let value = basis.evaluate(alpha, sigma as f64 / 2.0)?;
+            if value.abs() > anchor.1 {
+                anchor = (alpha * 2 + sigma, value.abs());
+            }
+            expected.push(value);
+        }
+    }
+    // The anchor is the entry of largest magnitude, so this division is the best
+    // conditioned one available.
+    let scale = *last.get3(anchor.0 / 2, anchor.0 % 2, 0) / expected[anchor.0];
+    if !scale.is_finite() {
+        return Ok(None);
+    }
+    for alpha in 0..basis.len() {
+        for sigma in 0..2 {
+            let stored = *last.get3(alpha, sigma, 0);
+            let canonical = scale * expected[alpha * 2 + sigma];
+            // Proportional, not bit-exact: `scale_mut` applied twice multiplies the
+            // core twice and the products do not associate, so a legitimate rescale
+            // differs from `scale * L_alpha(sigma / 2)` by an ulp or two. The bound
+            // stays far below any deviation that would matter, and a canonical zero
+            // has to be an exact zero.
+            let tolerance = if canonical == 0.0 {
+                0.0
+            } else {
+                1.0e-14 * canonical.abs()
+            };
+            if (stored - canonical).abs() > tolerance {
+                return Ok(None);
+            }
+        }
+    }
+    Ok(Some(scale))
+}
+
+/// Whether the polynomial the exact route reconstructs agrees with the train's own
+/// samples where two cells meet.
+///
+/// The local basis is cardinal at `t = 0` (`L_alpha(0) = delta_{alpha, 0}`), so the
+/// train's `t = 0` sample of cell `cell + 1` is `current[cell + 1, 0]`, and the
+/// reconstructed `t = 1` value of cell `cell` is the same physical point. A gauge
+/// that rescales a coefficient column of an *earlier* core leaves every bond and
+/// the finest core canonical — the basis functions that vanish at the sampled points
+/// carry no sample — but moves this boundary value, so the check is what rejects it
+/// (tensor4all-rs#1175 review).
+///
+/// The comparison is on the decoded value itself, so it bounds the output error, not
+/// the size of an input perturbation. The measured residual for an untouched
+/// construction is `0`, which leaves the `1e-12` bound twelve orders of magnitude
+/// above it.
+///
+/// The last cell has no successor to meet, so a perturbation confined to its
+/// interior is not detectable: the train stores two samples per cell and does not
+/// carry that information at all.
+fn finest_level_is_continuous(current: &Matrix<f64>, basis: &LagrangePolynomials) -> Result<bool> {
+    let cells = current.nrows();
+    if current.ncols() != basis.len() {
+        return Ok(false);
+    }
+    let mut end = Vec::with_capacity(basis.len());
+    for alpha in 0..basis.len() {
+        end.push(basis.evaluate(alpha, 1.0)?);
+    }
+    for cell in 0..cells.saturating_sub(1) {
+        let mut value = 0.0;
+        for alpha in 0..basis.len() {
+            value += current[[cell, alpha]] * end[alpha];
+        }
+        let next = current[[cell + 1, 0]];
+        let tolerance = 1.0e-12 * value.abs().max(next.abs()).max(1.0);
+        if (value - next).abs() > tolerance {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn invert_stage1(tt: &SimpleTensorTrain<f64>, basis: &LagrangePolynomials) -> Result<Matrix<f64>> {
     let cores = tt.site_tensors();
     let num_sites = cores.len();
@@ -1114,16 +1270,6 @@ fn invert_stage1(tt: &SimpleTensorTrain<f64>, basis: &LagrangePolynomials) -> Re
     let basis_len = basis.len();
     let last = &cores[num_sites - 1];
     let r_last = last.left_dim();
-
-    let mut decode = Matrix::zeros(r_last, basis_len);
-    for left in 0..r_last {
-        for beta in 0..basis_len {
-            let c = basis.grid()[beta];
-            let value =
-                *last.get3(left, 0, 0) * (1.0 - 2.0 * c) + *last.get3(left, 1, 0) * (2.0 * c);
-            decode[[left, beta]] = value;
-        }
-    }
 
     let first = &cores[0];
     let mut current = matrix_from_fn(first.site_dim(), first.right_dim(), |site, right| {
@@ -1148,6 +1294,29 @@ fn invert_stage1(tt: &SimpleTensorTrain<f64>, basis: &LagrangePolynomials) -> Re
             }
         }
         current = next;
+    }
+
+    // The exact route needs both halves: a construction that was never truncated
+    // and a reconstruction that still agrees with the train's own samples.
+    let exact_scale = match finest_level_scale(tt, basis)? {
+        Some(scale) if finest_level_is_continuous(&current, basis)? => Some(scale),
+        _ => None,
+    };
+
+    let mut decode = Matrix::zeros(r_last, basis_len);
+    for left in 0..r_last {
+        for beta in 0..basis_len {
+            let c = basis.grid()[beta];
+            let value = match exact_scale {
+                // Uncompressed: `left` is the local basis index, so evaluate the
+                // parent-basis interpolant at the node instead of blending.
+                Some(scale) => basis.evaluate(left, c)? * scale,
+                None => {
+                    *last.get3(left, 0, 0) * (1.0 - 2.0 * c) + *last.get3(left, 1, 0) * (2.0 * c)
+                }
+            };
+            decode[[left, beta]] = value;
+        }
     }
 
     if current.ncols() != decode.nrows() {

@@ -37,6 +37,7 @@ fn known_failures_keep_their_slot_and_are_removed_after_actual_repair() {
         &mut seeded_rng(),
         &mut operator,
         &known,
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     assert_eq!(report.pivots, known);
@@ -52,6 +53,7 @@ fn known_failures_keep_their_slot_and_are_removed_after_actual_repair() {
         &mut seeded_rng(),
         &mut identity,
         &known,
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     assert!(report.pivots.is_empty());
@@ -76,6 +78,7 @@ fn retained_points_are_preflighted_together_with_the_start_batch() {
         &mut seeded_rng(),
         &mut operator,
         &[],
+        &mut crate::exec::Exec::Global,
     )
     .unwrap_err();
     let crate::TreeAciError::ResourceLimit { requested, .. } = error else {
@@ -89,6 +92,7 @@ fn retained_points_are_preflighted_together_with_the_start_batch() {
         &mut seeded_rng(),
         &mut operator,
         &[],
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     assert_eq!(calls, 1);
@@ -104,6 +108,7 @@ fn retained_points_are_preflighted_together_with_the_start_batch() {
         &mut seeded_rng(),
         &mut reject_operator,
         &[vec![1, 1]],
+        &mut crate::exec::Exec::Global,
     )
     .unwrap_err();
     assert!(matches!(
@@ -137,7 +142,8 @@ fn retained_coordinates_and_count_are_checked_before_evaluation() {
             &options,
             &mut seeded_rng(),
             &mut operator,
-            &known
+            &known,
+            &mut crate::exec::Exec::Global
         )
         .is_err());
     }
@@ -150,7 +156,8 @@ fn retained_coordinates_and_count_are_checked_before_evaluation() {
             &overflow,
             &mut seeded_rng(),
             &mut operator,
-            &[vec![1, 1]]
+            &[vec![1, 1]],
+            &mut crate::exec::Exec::Global
         ),
         Err(crate::TreeAciError::SizeOverflow {
             context: "guard starting-point count"
@@ -177,7 +184,8 @@ fn nonfinite_target_at_a_retained_point_is_not_hidden_by_random_starts() {
             &options,
             &mut seeded_rng(),
             &mut operator,
-            &[vec![1, 1]]
+            &[vec![1, 1]],
+            &mut crate::exec::Exec::Global
         ),
         Err(crate::TreeAciError::NonFiniteValue {
             context: "guard target"
@@ -210,6 +218,7 @@ fn stronger_new_discoveries_fill_only_slots_not_held_by_known_failures() {
         &mut seeded_rng(),
         &mut identity,
         &known,
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     assert_eq!(
@@ -225,6 +234,7 @@ fn stronger_new_discoveries_fill_only_slots_not_held_by_known_failures() {
         &mut seeded_rng(),
         &mut identity,
         &known,
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     assert_eq!(report.pivots, vec![vec![1, 1], vec![0, 0]]);
@@ -235,6 +245,7 @@ fn stronger_new_discoveries_fill_only_slots_not_held_by_known_failures() {
         &mut seeded_rng(),
         &mut identity,
         &[vec![1, 1], vec![0, 0]],
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     assert_eq!(

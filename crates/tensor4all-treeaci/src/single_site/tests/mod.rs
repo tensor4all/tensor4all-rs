@@ -37,8 +37,13 @@ fn multiple_axes_and_different_input_axis_orders_are_evaluated_exactly_once() {
         Ok(())
     };
 
-    let result =
-        evaluate_single_site(&[first, second], &TreeAciOptions::default(), &mut multiply).unwrap();
+    let result = evaluate_single_site(
+        &[first, second],
+        &TreeAciOptions::default(),
+        &mut multiply,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
 
     assert_eq!(calls.get(), 1);
     assert_eq!(result.tree.node_names(), vec![7]);
@@ -64,7 +69,13 @@ fn scalar_node_without_physical_indices_is_one_point() {
         output[0] = batch.get(0, 0)?.powi(2);
         Ok(())
     };
-    let result = evaluate_single_site(&[input], &TreeAciOptions::default(), &mut square).unwrap();
+    let result = evaluate_single_site(
+        &[input],
+        &TreeAciOptions::default(),
+        &mut square,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
     assert_eq!(
         result.tree.to_dense().unwrap().to_vec::<f64>().unwrap(),
         vec![9.0]
@@ -168,14 +179,25 @@ fn the_exact_path_respects_the_working_budget() {
         max_frame_elements: Some(1 << 24),
         ..TreeAciOptions::default()
     };
-    assert!(evaluate_single_site(std::slice::from_ref(&tree), &generous, &mut square).is_ok());
+    assert!(evaluate_single_site(
+        std::slice::from_ref(&tree),
+        &generous,
+        &mut square,
+        &mut crate::exec::Exec::Global
+    )
+    .is_ok());
 
     let tight = TreeAciOptions::<usize> {
         max_working_bytes: 63,
         ..generous.clone()
     };
-    let error = evaluate_single_site(std::slice::from_ref(&tree), &tight, &mut square)
-        .expect_err("a 63-byte ceiling must reject two 32-byte buffers");
+    let error = evaluate_single_site(
+        std::slice::from_ref(&tree),
+        &tight,
+        &mut square,
+        &mut crate::exec::Exec::Global,
+    )
+    .expect_err("a 63-byte ceiling must reject two 32-byte buffers");
     assert!(
         matches!(
             error,

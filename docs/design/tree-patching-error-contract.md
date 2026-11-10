@@ -153,7 +153,10 @@ checked against the `cargo run -p xtask --release -- api-dump` inventory
   `log_norm` is finite only below that norm, although its rustdoc
   (`ops.rs:91`) says it uses canonicalization "to avoid numerical overflow".
   That over-claim is a lower-layer discrepancy recorded here; M3 does not
-  change `treetn` or `core` for it. `PartitionedTreeTN` stores
+  change `treetn` or `core` for it. (Since PR #1199, `log_norm` and
+  `log_norm_on_session` take `TensorVectorSpace::norm` of the center, which
+  never forms the square, so `log_norm` is finite for every norm up to
+  `f64::MAX`; the limits below are stated for that range.) `PartitionedTreeTN` stores
   patches in a `HashMap` (`partitioned_tree_tn.rs:45`) and `norm_squared`
   sums in its iteration order (lines 333-337). The bitwise reproducibility of
   the canonicalization path has not been audited; the hash-order sum is not
@@ -279,7 +282,7 @@ The report encodes these cases in one enum (see
 
 | Quantity | How | Guarantee | Cost |
 |---|---|---|---|
-| `||f~_P||_P`, `||f~||_X` | `TreeTN::log_norm` of each accepted patch, combined by the driver in canonical path order | exact up to rounding while `||f~_P|| < ~1.34e154`, otherwise not computable; bitwise reproducibility unaudited | one canonicalization per patch, no evaluations of `f` |
+| `||f~_P||_P`, `||f~||_X` | `TreeTN::log_norm` of each accepted patch, combined by the driver in canonical path order | exact up to rounding while `||f~_P|| <= f64::MAX`, otherwise not computable; bitwise reproducibility unaudited | one canonicalization per patch, no evaluations of `f` |
 | `f~(x)` at chosen points | TreeTN batch evaluators | exact up to rounding | one network evaluation per point |
 | `||f - f~_P||_P` for a small patch | evaluate `f` and `f~_P` at every point of `P` | exact up to rounding (a certificate) | `|P|` evaluations of `f` (fewer with cache hits), `|P|` network evaluations |
 | `||f - f~_P||_P` for a large patch | Monte Carlo on `n` fresh uniform points of `P` | a statistical estimate, see below; no bound | `n` evaluations of `f` (fewer with cache hits), `n` network evaluations |
@@ -835,7 +838,7 @@ pub struct L2ErrorReport {
     pub certified_fraction: f64,
     /// ||f~|| / sqrt(|X|) from TreeTN::log_norm per accepted patch, combined
     /// in path order; None when some patch's log_norm is not finite
-    /// (||f~_P|| above about 1.34e154). Not covered by the bitwise
+    /// (||f~_P|| above f64::MAX). Not covered by the bitwise
     /// determinism claim: the canonicalization it relies on is not audited
     /// for reproducibility.
     pub approximation_rms: Option<f64>,
@@ -900,9 +903,9 @@ clone, since the method canonicalizes), forms
 `rms_P = exp(log_norm - ln(|P|) / 2)`, and combines
 `approximation_rms^2 = sum over P of (|P| / |X|) rms_P^2` in canonical path
 order. This avoids forming the global square in L2 units, but not the
-per-patch overflow inside `log_norm`, which squares the center tensor's norm
-(see [Findings](#findings-that-shape-the-design)): for a patch with
-`||f~_P||` above about `1.34e154`, `log_norm` returns `+inf` (or fails), and
+per-patch overflow inside `log_norm` (see
+[Findings](#findings-that-shape-the-design)): for a patch with
+`||f~_P||` above `f64::MAX`, `log_norm` returns `+inf` (or fails), and
 the driver then reports `approximation_rms = None` together with `None` for
 the rounding term, the flag, and the relative fields. This is an overflow
 outcome of the report, not an error of the run. A patch of norm zero
@@ -1248,35 +1251,103 @@ unimplemented, and the upstream planner fix is tracked by
 
 The driver does not work around it.
 
-**Scope (decided, [open question 9](#open-questions-for-the-user); tiered
-2026-11-08 after #1162).** The promise has two tiers, because the second one
-is not free and must not be claimed before it is measured:
+**Scope (decided, [open question 9](#open-questions-for-the-user); narrowed to
+one tier 2026-11-09, owner decision after #1202).** There is one promise:
 
-- **Tier 1, enforced in CI**: for a fixed seed, a deterministic evaluator and a
-  deterministic engine, results are bitwise identical on the same machine and
-  build **at a fixed thread count**, across fresh threads, across processes,
-  and across repeated runs. The CI test pins the thread count and asserts a
-  digest, so a change that alters numerics cannot pass silently.
-- **Tier 2, an observed property, not a commitment**: bitwise identity
-  **across thread counts**. Some paths have it already, and the document
-  records that as a fact about them rather than as a promise: every path built
-  on `tenferro-einsum` contractions and on the elementwise/reduction kernels,
-  including `contract` at large sizes. `qr` and `svd` (and therefore
-  `TreeTN::canonicalize`, `truncate`, and operator applications that truncate)
-  do not have it above roughly `m*n ~ 16k` elements, where the blocked
-  Householder work is partitioned by the available parallelism; the observed
-  spread is round-off (`|dQ|, |dR| <= 8.9e-15` at `224x112`, `c64`).
+- **Tier 1**: for a fixed seed, a deterministic evaluator and a deterministic
+  engine, results are bitwise identical on the same machine and build **at a
+  fixed thread count**, across fresh threads, across processes, and across
+  repeated runs. What CI enforces today is the same-process half: the digest
+  tests pin the thread count and assert that two runs agree, so a result that
+  depends on anything but the pinned count fails there. They compare two runs of
+  the same build rather than a stored constant, so a numerically *different but
+  stable* implementation passes them and is the ordinary numerical tests' job.
+  The two-process half has no CI test yet (see the end of this section).
 
-  **Whether an operation should acquire Tier 2 is a performance decision, made
-  per operation** (`#1162`): making the partition independent of the thread
-  count constrains how the work is split, and the constraint is only accepted
-  if it is free. Frozen bar, set 2026-11-08 before any such measurement: adopt
-  it for an operation only if the cost is within 2% at 1, 4 and 8 threads on
-  the deciding host, measured with the existing protocol (5 repetitions,
-  median). Above that, the operation keeps Tier 1 and the 2% figure is recorded
-  with the measurement so the trade-off can be revisited deliberately instead
-  of by drift. Tier 2 is therefore never a blanket promise, and no operation
-  may claim it in rustdoc until such a measurement exists.
+Bitwise identity **across** thread counts is not promised, for any operation.
+The owner decided this after #1202: making a partition independent of the thread
+count removes parallel freedom, and no caller needs the same bits at one thread
+and at eight. The configurations recorded below are **observations under Tier 1**:
+they say what this host does today, and how far it reaches.
+
+**When results are compared, pin the thread count — also when a cache is shared
+across runs.** A digest, a stored baseline, or a cache key computed at one thread
+count is not comparable with one computed at another. The difference is round-off
+in a different kernel or partition, not a bug in either run, and it is wide enough
+to flip an equality check where two kernels meet: the `Complex64` dense products
+below differ between one worker and a team at every recorded shape while the `f64`
+products agree, and `qr` splits above `m*n ~ 16k` elements.
+
+  Recorded 2026-11-08 at this head on `broccoli` (x86-64, 64 cores) by
+  `crates/tensor4all-core/tests/thread_count_factorization_digest.rs --
+  --nocapture` (`c64`, seed 7): `qr` is bitwise identical at `8`--`224x112` and
+  differs at `448x224` (`max|diff|` `7.1e-15` at 1T vs 4T, `6.6e-14` at 1T vs
+  8T, `6.0e-14` at 4T vs 8T). `svd` is identical at all six shapes on this host,
+  `448x224` included. Both outcomes are what the second test is for: it prints
+  this record instead of asserting a direction, because the divergence starts at
+  a different size on a different host and no direction is promised. An AMD host (#1162) saw the split from
+  `m*n ~ 25k` with a phase-level `svd` difference at `448x224`; that observation
+  is not reproduced here and is not a cross-machine claim.
+  `a_fixed_thread_count_repeats_the_factorization_bits` checks within-process
+  repeatability at each of 1, 4 and 8 threads (not fresh caller threads, not a
+  second process); `thread_count_may_change_the_last_bits_today` prints the state
+  above and asserts only the shapes and the reconstruction.
+
+  **The dense products, per scalar type (#1192).** Recorded 2026-11-08 on the
+  same host by `crates/tensor4all-core/tests/thread_count_product_digest.rs --
+  --nocapture`, with the worker count set per cell by
+  `CpuBackend::with_threads(1|2|8)` rather than `RAYON_NUM_THREADS`, at `64^3`,
+  `58x58x128`, `145x145x128`, `165x151x128`, `256^3` and `500^3`. `f64`
+  `mat_mul` and `IdxTensor::contract_pair` are bitwise identical at every pair of
+  the counts recorded on that host, `1`, `2` and `8`, so the `f64` products are
+  cross-count identical there (an observation under Tier 1, not a promise).
+  `Complex64` products are identical between 2 and 8 workers and
+  differ between 1 worker and either of them at **every** one of those shapes:
+  the first differing element is index 0 (index 2 at `145x145x128`) and the
+  largest difference grows with the shape, `1.3e-15` at `64^3` and `3.2e-14` at
+  `500^3`. The split is serial against parallel, not one width against another:
+  two kernels, not a thread-count-dependent summation order.
+
+  The 4-worker column was added after the ruling in #1192; on `aarch64-apple`
+  all four columns agree for both types, so the split above belongs to the
+  x86-64 faer-backed configuration, not to a width as such.
+
+  Why, for `Complex64`: one worker and a team take different kernels. Sampling
+  the stacks of a repeated `Complex64` `mat_mul` on this host's faer
+  configuration shows the vendor gemm's fused complex microkernels
+  (`t4a_gemm_v0_gemm_microkernel_c64_simd256_*`) for a serial token, and the
+  packed `tcontract` driver (`tcontract::driver::static_grid::run_strip`, with
+  its real-`f64` `avx2` planar kernels over the interleaved complex storage) for
+  a team. Two kernels with different blocking and FMA grouping round
+  differently, and the packed route's result does not move between 2 and 8
+  workers. The choice is inside the pinned dependency stack (`tcontract`'s
+  fused-versus-packed strategy, which both `mat_mul` and
+  `IdxTensor::contract_pair` reach through the tenferro contraction); this
+  record did not trace which input flips it. The host is faer-backed: a
+  provider that schedules its own threads can make the same cells mean
+  something else, so the observation is about this configuration, not about
+  every build.
+
+  What inherits it, per type: `TreeTNCachedEvaluator`'s grouped paths call
+  `mat_mul`, so a `Complex64` readout may inherit the serial/parallel split
+  wherever those paths run, even where the factorization digests are
+  reproducible; no evaluator-level measurement of that was made here. `f64`
+  readouts meet the same call site, whose product is cross-count identical on
+  this host. Acquiring cross-count identity for the `Complex64` products is not a
+  goal (owner decision after #1202): the record leaves the kernel's accumulation
+  order alone, and a comparison that spans runs pins the thread count instead.
+  `IdxTensor::contract_pair` runs on the engine its operands' eager runtime
+  carries, and that runtime table holds weak handles, so the caller's context
+  must outlive the contraction; otherwise it falls back to the process-global
+  engine and the cell no longer means one worker count (the test keeps it
+  alive).
+
+  `a_fixed_thread_count_repeats_the_product_bits` checks within-process
+  repeatability of both products at each of 1, 2, 4 and 8 workers (not fresh
+  caller threads, not a second process);
+  `thread_count_may_change_the_complex_product_bits_today` prints the record
+  above and asserts only the shape, finiteness, and four sampled entries against
+  a sequential accumulation.
 
 There is no cross-machine promise; M8 (MPI) states its own contract. What is
 tested today is narrower still than Tier 1: fresh threads within one process,
@@ -1501,7 +1572,7 @@ or more, checked in the test.
     and the global quantities combine as specified, within
     `GLOBAL_ROUNDING_MARGIN`. The overflow case is built on the exact
     small-patch path (a patch with one active site whose values are about
-    `1e155` on enough points that `||f~_P||` exceeds `1.34e154`), or with
+    `1e308` on enough points that `||f~_P||` exceeds `f64::MAX`), or with
     the dense test engine, with `L2Reference::Given` so that forming the
     reference does not overflow first, so it exercises only the report's overflow
     handling: the run completes and reports `approximation_rms`, the rounding
@@ -1568,7 +1639,7 @@ respect to the allowance used, that no relative statement exists for an
 acceptance-only run or when the relative denominator is not positive, that
 the audited relative value is a plug-in estimate of the bound, the absolute
 rounding term of a certificate and the `rounding_limited` flag, that
-`approximation_rms` is `None` above a patch norm of about `1.34e154`, which
+`approximation_rms` is `None` above a patch norm of `f64::MAX`, which
 report fields the bitwise determinism claim covers, and the units of each
 reference. After the corner-miss finding, the module documentation,
 `GlobalL2Error::Audited`, `MeasurementMethod::Sampled`, `L2Measurement`,
@@ -1814,29 +1885,19 @@ defaults reproduce M3 exactly.
    (a) land, generic-path trees are not reproducible across threads, and the
    two-process CI test does not exist yet.
 
-   **Tiered 2026-11-08 (user, after #1162).** The target above is kept, but it
-   is split into what CI enforces and what is still a goal, because `qr`/`svd`
-   do not meet the cross-thread half and the document claimed they did:
-
-   - Tier 1 (enforced): bitwise identical at a **fixed thread count**, across
-     fresh threads, processes and repeated runs. The CI test pins the thread
-     count.
-   - Tier 2 (observed where it happens, not promised): identical **across
-     thread counts**. Present today in the einsum contraction paths and the
-     elementwise/reduction kernels, including `contract`; absent from
-     `qr`/`svd` above `m*n ~ 16k` elements, where the blocked Householder
-     partition follows the available parallelism.
-
-   **Tier 2 is decided per operation by measured cost, not adopted as a
-   target.** Making a parallel reduction or a blocked factorization
-   thread-count independent constrains the partition, and the constraint is
-   accepted only when it is free: within 2% at 1, 4 and 8 threads on the
-   deciding host, 5 repetitions, median. The bar is frozen as of 2026-11-08,
-   before any measurement, so that a later result cannot redefine it. Above
-   2%, the operation promises Tier 1 and the measurement is recorded in #1162.
-   Until such a measurement exists, no operation's rustdoc may claim Tier 2.
-   The narrowing here is a correction of this document, not a retreat from the
-   2026-10-03 decision about *which machine* the promise covers.
+   **Narrowed to Tier 1, 2026-11-08 (after #1162) and to Tier 1 only,
+   2026-11-09 (owner decision, after #1202).** What CI enforces, and the whole of
+   the promise, is bitwise identity at a **fixed thread count**, across fresh
+   threads, processes and repeated runs. Identity **across** thread counts is not
+   promised for any operation: making a partition independent of the thread count
+   removes parallel freedom and no caller needs the same bits at one thread and
+   at eight, so a comparison that spans runs pins the thread count instead.
+   [Determinism](#determinism) records what the observed cross-count behaviour is
+   — `qr`/`svd` above `m*n ~ 16k`, and the `Complex64` dense products at every
+   recorded shape, where the serial and the parallel path take different kernels —
+   as observations about the host and provider named with them. This narrowing is
+   a correction of this document, not a retreat from the 2026-10-03 decision about
+   *which machine* the promise covers.
 
 ## Implementation decisions
 
@@ -2156,9 +2217,8 @@ order. Its inputs:
   `InterpolationError::AllSamplesZero` before its global pivot search and the
   estimate is zero; the corners and the seed sample make this happen only
   when they are all zero too. `residual_rms` is read with
-  `TreeTN::log_norm_on_session`, so a residual norm above about `1.34e154`
-  overflows the estimate and one below about `1e-154` underflows it to zero;
-  the same range limits `approximation_rms`.
+  `TreeTN::log_norm_on_session`, so a residual norm above `f64::MAX`
+  overflows the estimate; the same range limits `approximation_rms`.
 
 #### `L2Estimator::UniformMonteCarlo`
 

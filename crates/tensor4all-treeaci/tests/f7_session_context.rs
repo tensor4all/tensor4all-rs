@@ -11,9 +11,10 @@
 //!   route on one thread; see `benches/f7_context_overhead.rs` for the
 //!   release-mode comparison.
 //!
-//! The frame contractions the crate performs itself still use their existing
-//! route; the inventory (docs/design/859-f7-consumer-inventory.md) records
-//! that exclusion.
+//! Since #1235 the context route enters one session and runs the
+//! session-scoped entry, so the frame contractions, the guard evaluations and
+//! the final canonicalization run in the context as well
+//! (docs/design/859-f7-consumer-inventory.md).
 
 use crate::g0;
 

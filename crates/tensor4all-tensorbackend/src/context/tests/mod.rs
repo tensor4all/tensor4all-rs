@@ -81,7 +81,7 @@ fn a_session_inside_a_backend_borrow_is_rejected_typed() {
 #[test]
 fn recursive_graph_entries_are_rejected_typed() {
     let context = context();
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let input = trace
         .input(ProgramInputSpec::new(DType::F64, [2_usize.into()]))
         .unwrap();
@@ -139,7 +139,7 @@ fn explicit_plain_graph_and_eager_paths_share_only_the_supplied_backend() {
     assert!(format!("{context:?}").contains("graph_initialized: false"));
     assert_eq!(context.with_backend(|backend| backend.num_threads()), 1);
 
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let input = trace
         .input(ProgramInputSpec::new(DType::F64, [2_usize.into()]))
         .unwrap();
@@ -327,7 +327,7 @@ fn graph_pool_stats_and_reset_track_the_context_engine_pool() {
     use tenferro_tensor::TensorBuffer;
 
     let context = context();
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let input = trace
         .input(ProgramInputSpec::new(DType::F64, [2_usize.into()]))
         .unwrap();
@@ -416,7 +416,7 @@ fn a_custom_runtime_engine_id_runs_graphs_and_eager_operations() {
     let engine = CpuEngine::serial().with_runtime_engine_id(custom.clone());
     let context = CpuExecutionContext::from_backend(CpuBackend::from(engine));
 
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let input = trace
         .input(ProgramInputSpec::new(DType::F64, [2_usize.into()]))
         .unwrap();

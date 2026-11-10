@@ -53,9 +53,9 @@ validated in CI. Longer runnable examples live in the
 | [tensor4all-simplett](crates/tensor4all-simplett/) | Simple TT/MPS with compression (being retired; new code targets TreeTN) |
 | [tensor4all-aci](crates/tensor4all-aci/) | Alternating Cross Interpolation for elementwise tensor train operations |
 | [tensor4all-treeaci](crates/tensor4all-treeaci/) | Experimental native TreeTN ACI and simultaneous n-way Hadamard products |
-| [tensor4all-treersi](crates/tensor4all-treersi/) | Experimental CPU RSI Hadamard products on TreeTN; validate actual output error |
+| [tensor4all-treersi](crates/tensor4all-treersi/) | Experimental RSI Hadamard products on TreeTN (CPU, CUDA by feature); validate actual output error |
 | [tensor4all-itensorlike](crates/tensor4all-itensorlike/) | ITensors.jl-like TensorTrain API |
-| [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology, one-site ALS and two-site MALS linear solves |
+| [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology; one-site ALS and two-site MALS linear solves with GMRES, CG or BiCGSTAB local solvers |
 | [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI2 primary, TCI1 legacy) |
 | [tensor4all-quanticstci](crates/tensor4all-quanticstci/) | High-level Quantics TCI interface |
 | [tensor4all-interpolativeqtt](crates/tensor4all-interpolativeqtt/) | Interpolative QTT construction |

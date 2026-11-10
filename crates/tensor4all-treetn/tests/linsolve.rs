@@ -2389,6 +2389,36 @@ fn test_relative_linear_system_residual_with_mapped_coefficients() {
 }
 
 #[test]
+fn test_relative_linear_system_residual_rejects_an_rhs_whose_norm_overflows() {
+    // The rhs entries are at most 4 * f64::MAX / 4.5, but its norm is
+    // sqrt(30) * f64::MAX / 4.5 > f64::MAX, which would make the relative
+    // residual zero.
+    let phys_dim = 2;
+    let (state, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
+    let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[2.0, 2.0], phys_dim);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
+    let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+    let mut rhs = state.clone();
+    rhs.scale_mut(AnyScalar::new_real(f64::MAX / 4.5)).unwrap();
+
+    let error = relative_linear_system_residual(
+        &operator,
+        &state,
+        &rhs,
+        AnyScalar::new_real(3.0),
+        AnyScalar::new_real(1.0),
+        ApplyOptions::naive(),
+    )
+    .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("rhs norm is not finite"),
+        "{error:#}"
+    );
+}
+
+#[test]
 fn test_relative_linear_system_residual_stays_relative_for_tiny_rhs() {
     let phys_dim = 2;
     let (state, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
@@ -2413,6 +2443,54 @@ fn test_relative_linear_system_residual_stays_relative_for_tiny_rhs() {
     .unwrap();
 
     assert!((residual - 1.0).abs() < 1.0e-12, "residual={residual}");
+}
+
+fn relative_residual_with_identity_operator(solution_scale: f64, rhs_scale: f64) -> f64 {
+    let phys_dim = 2;
+    let (state, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
+    let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[1.0, 1.0], phys_dim);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
+    let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+    let mut rhs = state.clone();
+    rhs.scale_mut(AnyScalar::new_real(rhs_scale)).unwrap();
+    let mut solution = state;
+    solution
+        .scale_mut(AnyScalar::new_real(solution_scale))
+        .unwrap();
+
+    relative_linear_system_residual(
+        &operator,
+        &solution,
+        &rhs,
+        AnyScalar::new_real(0.0),
+        AnyScalar::new_real(1.0),
+        ApplyOptions::naive(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_relative_linear_system_residual_accepts_an_rhs_whose_squared_norm_overflows() {
+    // |b| is about 5.5e200, finite, but |b|^2 overflows f64. With x = b and
+    // A = I the relative residual is exactly zero, not an error.
+    let residual = relative_residual_with_identity_operator(1.0e200, 1.0e200);
+    assert!(residual < 1.0e-12, "residual={residual}");
+}
+
+#[test]
+fn test_relative_linear_system_residual_stays_relative_when_squared_rhs_norm_underflows() {
+    // |b| is about 5.5e-200, nonzero, but |b|^2 underflows to zero. With x = 0
+    // the whole rhs is residual, so the relative residual is 1, not 0.
+    let residual = relative_residual_with_identity_operator(0.0, 1.0e-200);
+    assert!((residual - 1.0).abs() < 1.0e-12, "residual={residual}");
+}
+
+#[test]
+fn test_relative_linear_system_residual_is_zero_for_a_zero_rhs_and_solution() {
+    // A truly zero rhs takes the absolute-residual branch; x = 0 solves it.
+    let residual = relative_residual_with_identity_operator(0.0, 0.0);
+    assert_eq!(residual, 0.0);
 }
 
 /// Mapped local linsolve should allow operator nodes with no site indices.
@@ -2626,4 +2704,177 @@ fn test_square_linsolve_no_mappings_shared_indices() {
     let result = square_linsolve(&mpo, &mps, mps.clone(), &"site0", options, None, None).unwrap();
     assert_eq!(result.solution.node_count(), 2);
     assert_eq!(result.sweeps, 0);
+}
+
+// ============================================================================
+// Autodiff through the linsolve affine coefficients (issue #148, item 2)
+//
+// #148 asks whether a gradient reaches `LinsolveOptions::a0`/`a1` through the
+// local solve, or whether the coefficient path is detached. The answer is that
+// it reaches: the coefficients enter `gmres_affine` as `AnyScalar`s and stay in
+// the eager autodiff graph through the local solve, so `d(loss)/d(a1)` comes out
+// exact.
+//
+// The one AD-incompatible step in `square_linsolve` is the residual diagnostic:
+// it adds TreeTNs, and `direct_sum` (the TreeTN addition path) rejects tracked
+// tensors. These tests therefore turn that diagnostic off and check the solve
+// itself; an AD solve cannot use `check_residual` or `convergence_tol` until
+// TreeTN addition has an AD-preserving path.
+//
+// The system is `(a0 I + a1 A) x = b` with `A = 4 I` (a two-site diagonal MPO
+// with per-site diagonal 2), whose exact solution is `x = b / (a0 + 4 a1)`.
+// Because `A` is a multiple of the identity, the first GMRES restart sees a
+// residual parallel to `b`, so the Krylov space closes after one Arnoldi step
+// and both the solution and its coefficient derivative are exact.
+// ============================================================================
+
+/// Right-hand side of the coefficient-AD test system.
+const COEFF_AD_B: [f64; 4] = [1.0, 2.0, 3.0, 4.0];
+/// `a0` of the coefficient-AD test system.
+const COEFF_AD_A0: f64 = 1.0;
+/// `a1` of the coefficient-AD test system.
+const COEFF_AD_A1: f64 = 0.5;
+/// Eigenvalue by which the two-site `[2, 2]` diagonal MPO scales a state.
+const COEFF_AD_OPERATOR_SCALE: f64 = 4.0;
+
+/// Solve the coefficient-AD test system and return its dense solution.
+///
+/// `a1` is handed to `LinsolveOptions::with_coefficients` unchanged, so the
+/// caller decides whether it participates in autodiff.
+fn solve_coefficient_ad_system(a1: AnyScalar) -> IdxTensor {
+    use tensor4all_treetn::square_linsolve;
+
+    let phys_dim = 2;
+    let (rhs, site_indices, _bonds) = create_mps_from_values(&COEFF_AD_B, phys_dim);
+    let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[2.0, 2.0], phys_dim);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
+
+    let options = LinsolveOptions::default()
+        .with_nfullsweeps(3)
+        .with_gmres_tol(1e-12)
+        .with_gmres_restart_dim(10)
+        .with_gmres_max_restarts(30)
+        .with_max_bond_dim(4)
+        // See the section header: the residual diagnostic adds TreeTNs, which
+        // the tracked tensor path cannot do.
+        .with_residual_check(false)
+        .with_coefficients(COEFF_AD_A0, a1);
+
+    let init = rhs.clone();
+    let result = square_linsolve(
+        &mpo,
+        &rhs,
+        init,
+        &"site0",
+        options,
+        Some(input_mapping),
+        Some(output_mapping),
+    )
+    .expect("coefficient-AD linsolve failed");
+
+    result
+        .solution
+        .contract_to_tensor()
+        .expect("coefficient-AD solution failed to contract")
+}
+
+/// Exact solution values of the coefficient-AD test system.
+fn coefficient_ad_exact_values() -> Vec<f64> {
+    let denom = COEFF_AD_A0 + COEFF_AD_A1 * COEFF_AD_OPERATOR_SCALE;
+    COEFF_AD_B.iter().map(|b| b / denom).collect()
+}
+
+/// A gradient must reach a coefficient it depends on: `d(sum(x))/d(a1)`.
+#[test]
+fn test_linsolve_coefficient_gradient_reaches_solution() {
+    use tensor4all_core::contract;
+
+    let a1 = AnyScalar::new_real(COEFF_AD_A1).enable_grad().unwrap();
+    let solution = solve_coefficient_ad_system(a1.clone());
+
+    // Primal gate: a wrong solution would make the derivative comparison
+    // meaningless, whatever it reported.
+    let expected_values = coefficient_ad_exact_values();
+    let values = solution.to_vec::<f64>().unwrap();
+    for (got, expected) in values.iter().zip(expected_values.iter()) {
+        assert!(
+            (got - expected).abs() < 1e-10,
+            "solution value {got} != expected {expected}"
+        );
+    }
+
+    // sum(x) = sum(b) / (a0 + s*a1)  =>  d sum(x)/d a1 = -s*sum(b)/(a0 + s*a1)^2
+    let denom = COEFF_AD_A0 + COEFF_AD_A1 * COEFF_AD_OPERATOR_SCALE;
+    let sum_b: f64 = COEFF_AD_B.iter().sum();
+    let expected_grad = -COEFF_AD_OPERATOR_SCALE * sum_b / (denom * denom);
+
+    let ones = IdxTensor::from_dense(
+        solution.indices().to_vec(),
+        vec![
+            1.0;
+            solution
+                .indices()
+                .iter()
+                .map(|i| i.dim())
+                .product::<usize>()
+        ],
+    )
+    .unwrap();
+    let loss = contract(&[&solution, &ones]).unwrap();
+    assert!(
+        loss.tracks_grad(),
+        "the solve detached the coefficient path: the contracted solution carries no autodiff graph"
+    );
+    loss.backward().unwrap();
+
+    let grad = a1
+        .grad()
+        .unwrap()
+        .expect("a1 received no gradient through square_linsolve");
+    assert!(
+        (grad.real() - expected_grad).abs() < 1e-10,
+        "d sum(x) / d a1 = {} but the analytic value is {expected_grad}",
+        grad.real()
+    );
+}
+
+/// Control: a coefficient that must not be differentiated carries nothing.
+///
+/// Same system, but `a1` stays a plain constant. If the solve produced a tracked
+/// solution or a gradient here, the test above would be measuring something
+/// other than the coefficient path. The control also pins the primal, so a
+/// tracked coefficient cannot silently change the solved system.
+#[test]
+fn test_linsolve_constant_coefficient_carries_no_gradient() {
+    let a1 = AnyScalar::new_real(COEFF_AD_A1);
+    assert!(
+        !a1.tracks_grad(),
+        "the control coefficient must start untracked"
+    );
+
+    let solution = solve_coefficient_ad_system(a1.clone());
+
+    assert!(
+        !solution.tracks_grad(),
+        "an untracked coefficient produced a gradient-tracked solution"
+    );
+    assert!(
+        a1.grad().unwrap().is_none(),
+        "an untracked coefficient received a gradient"
+    );
+
+    // The tracked run must solve the same system. Tracking changes the tensor
+    // arithmetic route (`axpby` takes the eager path), so this is a tolerance
+    // comparison rather than an exact one.
+    let tracked_solution =
+        solve_coefficient_ad_system(AnyScalar::new_real(COEFF_AD_A1).enable_grad().unwrap());
+    let plain = solution.to_vec::<f64>().unwrap();
+    let tracked = tracked_solution.to_vec::<f64>().unwrap();
+    for (plain, tracked) in plain.iter().zip(tracked.iter()) {
+        assert!(
+            (plain - tracked).abs() < 1e-12,
+            "tracking the coefficient changed the primal solution: {plain} vs {tracked}"
+        );
+    }
 }

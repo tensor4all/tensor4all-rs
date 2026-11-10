@@ -2,6 +2,7 @@
 
 use crate::error::TreeTNOperationError;
 use std::any::{Any, TypeId};
+use std::collections::BTreeMap;
 // FxHash for every map of the evaluator: the keys are `IndexKey`s, node names and node pairs, none attacker-controlled.
 type HashMap<K, V> = std::collections::HashMap<K, V, rustc_hash::FxBuildHasher>;
 type HashSet<K> = std::collections::HashSet<K, rustc_hash::FxBuildHasher>;
@@ -408,6 +409,14 @@ struct RawCenterComponent<T> {
     values: Vec<T>,
 }
 
+impl<T> RawCenterComponent<T> {
+    /// The bond values this component contributes to `point`.
+    fn values_of(&self, point: usize) -> &[T] {
+        let assignment = self.point_to_assignment[point];
+        &self.values[assignment * self.dim..(assignment + 1) * self.dim]
+    }
+}
+
 #[derive(Clone, Debug)]
 struct SiteEntry {
     index: DynIndex,
@@ -629,17 +638,16 @@ fn cached_values_into_typed<T: TensorElement>(
 ///
 /// This is the one dtype rule
 /// [`TreeTNCachedEvaluator::evaluate_batched_typed`] enforces: a complex
-/// payload is never silently narrowed into a real request. It is wrapped in a
-/// [`TreeTNOperationError`], so a caller that needs to distinguish a dtype
-/// mismatch from a shape or backend failure can downcast the error source.
+/// payload is never silently narrowed into a real request. It is reported as
+/// [`TreeTNOperationError::ScalarKindMismatch`], so a caller distinguishes a
+/// dtype mismatch from a shape or backend failure by matching the variant.
 ///
 /// # Examples
 ///
 /// ```
 /// use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor};
 /// use tensor4all_treetn::{
-///     CachedEvaluatorOptions, EvaluatedScalarKindMismatch, EvaluationHint, TreeTN,
-///     TreeTNCachedEvaluator,
+///     CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator,
 /// };
 ///
 /// let s = DynIndex::new_dyn(2);
@@ -660,10 +668,11 @@ fn cached_values_into_typed<T: TensorElement>(
 /// let error = evaluator
 ///     .evaluate_batched_typed::<f64>(points, EvaluationHint::default())
 ///     .unwrap_err();
-/// let mismatch = error
-///     .source
-///     .downcast_ref::<EvaluatedScalarKindMismatch>()
-///     .expect("dtype mismatch");
+/// let tensor4all_treetn::TreeTNOperationError::ScalarKindMismatch { payload: mismatch, .. } =
+///     error
+/// else {
+///     panic!("expected the dtype variant, got {error:?}");
+/// };
 /// assert_eq!(mismatch.stored, "c64");
 /// assert_eq!(mismatch.requested, "f64");
 ///
@@ -1019,7 +1028,7 @@ where
 /// assert!(options.initial_centers.is_empty());
 /// assert!(options.max_greedy_steps_per_start.is_none());
 /// assert_eq!(options.max_batch_points, None);
-/// assert_eq!(options.message_cache_max_bytes, 8 * 1024 * 1024);
+/// assert_eq!(options.message_cache_max_bytes, 64 * 1024 * 1024);
 /// assert_eq!(options.branch_slice_cache_max_bytes, 32 * 1024 * 1024);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1045,19 +1054,31 @@ pub struct CachedEvaluatorOptions<V> {
     pub max_greedy_steps_per_start: Option<usize>,
     /// Explicit maximum points processed together in one internal batch.
     ///
-    /// `None` (recommended) chooses at most 256 points, reducing the limit
-    /// for large local tensors using a 32 MiB local-buffer estimate. This is
-    /// a sizing heuristic, not a bound on total RSS. `Some(n)` must be positive
+    /// `None` (recommended) chooses at most 256 points and reduces the limit
+    /// when a batch's per-point buffers would pass a 32 MiB estimate: the
+    /// largest local tensor where the generic centre contraction stacks a core
+    /// slice per point, and the message columns plus one grouped branch GEMM's
+    /// rows where the raw centre kernels read the core in place. The raw-centre
+    /// sizes apply **only where the core-based estimate holds a single point**;
+    /// every larger core-based estimate is kept as it is. This is a sizing
+    /// heuristic, not a bound on the total resident memory. `Some(n)` must be positive
     /// and fixes the limit to `n`; `Some(usize::MAX)` processes the whole input
     /// together and can require very large buffers. Input and returned scalars
     /// still occupy O(number of points) memory.
     pub max_batch_points: Option<usize>,
-    /// Maximum logical payload bytes retained by each directed message cache.
+    /// Maximum logical payload bytes the evaluator retains in its message
+    /// caches, **as one total shared by all of its directed edges**.
+    ///
+    /// The total does not scale with the number of edges: one edge whose
+    /// messages are actually reused -- the branch a plane read walks, say --
+    /// may retain most of it while the idle edges retain nothing. When the
+    /// total is exhausted, whole columns are released from the least recently
+    /// used other edge, oldest first.
     ///
     /// A value of `0` disables retention while preserving the same evaluation
-    /// results. The default is 8 MiB per directed edge. Use `usize::MAX` only
-    /// when unbounded retention is intentional; the budget excludes key/map
-    /// metadata and spare allocation capacity.
+    /// results. The default is 64 MiB for the evaluator as a whole. Use
+    /// `usize::MAX` only when unbounded retention is intentional; the budget
+    /// excludes key/map metadata and spare allocation capacity.
     pub message_cache_max_bytes: usize,
     /// Maximum logical payload bytes retained by the evaluator's prepared
     /// branch physical-slice cache.
@@ -1084,7 +1105,7 @@ impl<V> Default for CachedEvaluatorOptions<V> {
             initial_centers: Vec::new(),
             max_greedy_steps_per_start: None,
             max_batch_points: None,
-            message_cache_max_bytes: 8 * 1024 * 1024,
+            message_cache_max_bytes: 64 * 1024 * 1024,
             branch_slice_cache_max_bytes: 32 * 1024 * 1024,
         }
     }
@@ -1662,6 +1683,22 @@ where
     /// is the minimal assignment set on which a directed message depends;
     /// changing a site in another component must not invalidate this entry.
     message_caches: HashMap<(V, V), PackedMessageCache<IndexKey, CachedScalar>>,
+    /// The directed edges of `message_caches` that hold payload, ordered by the
+    /// epoch of their last use. Victim selection walks this index instead of
+    /// the cache map, so the cost of one pressured admission follows the caches
+    /// that can actually release something -- not the edges the evaluator has
+    /// seen, which it keeps for the whole run (#1209). A cache enters on a use
+    /// that leaves it non-empty and leaves when it is emptied.
+    message_cache_order: BTreeMap<u64, (V, V)>,
+    /// Monotonic use stamp for `message_caches`, so the shared budget is
+    /// reclaimed from the least recently used edge first.
+    message_cache_epoch: u64,
+    /// Logical payload retained by all of `message_caches`, kept in step with
+    /// the map so one admission costs O(1) instead of re-summing every edge's
+    /// payload. Retention changes in exactly two places -- the admission in the
+    /// stacked-message path and [`PackedMessageCache::evict_oldest_bytes`] --
+    /// and both update this.
+    message_cache_retained_bytes: usize,
     /// Each node's parent-bond `DynIndex`, memoized: it never changes for a
     /// fixed rooting, but `TreeTN::edge_between`/`bond_index` are graph
     /// lookups that cost real time if repeated on every call.
@@ -1795,9 +1832,9 @@ where
     ) -> std::result::Result<Self, TreeTNOperationError> {
         plan.ensure_matches(tree)?;
         if options.max_batch_points == Some(0) {
-            return Err(TreeTNOperationError::from(anyhow::anyhow!(
-                "TreeTNCachedEvaluator: max_batch_points must be positive"
-            )));
+            return Err(TreeTNOperationError::invalid_configuration(
+                anyhow::anyhow!("TreeTNCachedEvaluator: max_batch_points must be positive"),
+            ));
         }
         if let Some(center) = &options.center {
             ensure_node_exists(tree, center, "TreeTNCachedEvaluator::new: center")?;
@@ -1811,25 +1848,7 @@ where
         }
         let batch_point_limit = match options.max_batch_points {
             Some(limit) => limit,
-            None => {
-                // Bound the largest local tensor's per-point scalar buffer
-                // estimate; small/raw paths keep larger groups to amortize setup.
-                let largest_local = plan.inner.sorted_node_names.iter().try_fold(
-                    1_usize,
-                    |largest, node| -> Result<usize> {
-                        let tensor = tensor_for_node(tree, node)?;
-                        let elements = tensor
-                            .indices()
-                            .iter()
-                            .fold(1_usize, |n, index| n.saturating_mul(index.dim()));
-                        Ok(largest.max(elements))
-                    },
-                )?;
-                let per_point = largest_local
-                    .saturating_mul(std::mem::size_of::<CachedScalar>())
-                    .max(1);
-                (32 * 1024 * 1024 / per_point).clamp(1, 256)
-            }
+            None => automatic_batch_point_limit(tree, &plan.inner)?,
         };
         let center = options.center.clone();
         // A positive budget below one branching node's tensor could never retain that node's slices, so every
@@ -1849,6 +1868,9 @@ where
             batch_point_limit,
             last_stats: CachedEvaluationStats::default(),
             message_caches: HashMap::default(),
+            message_cache_order: BTreeMap::default(),
+            message_cache_epoch: 0,
+            message_cache_retained_bytes: 0,
             parent_bond_indices: HashMap::default(),
             prepared_branch_slices_f64: PreparedBranchSliceCache::new(slice_cache_bytes(
                 std::mem::size_of::<f64>(),
@@ -2067,7 +2089,8 @@ where
     /// Precision conversion within a kind (`f32` to `f64`) and widening a real
     /// payload into a complex request are permitted; narrowing a complex
     /// payload into a real request is not, and reports
-    /// [`EvaluatedScalarKindMismatch`] as the error source.
+    /// [`TreeTNOperationError::ScalarKindMismatch`] carrying the
+    /// [`EvaluatedScalarKindMismatch`].
     ///
     /// # Examples
     ///
@@ -2109,8 +2132,7 @@ where
         hint: EvaluationHint<V>,
     ) -> std::result::Result<Vec<T>, TreeTNOperationError> {
         let cached = self.evaluate_batched_cached(values, hint)?;
-        cached_values_into_typed(cached)
-            .map_err(|error| TreeTNOperationError::from(anyhow::Error::new(error)))
+        cached_values_into_typed(cached).map_err(TreeTNOperationError::from)
     }
 
     /// Evaluates a hinted batch and returns typed scalars on a caller-owned explicit `Session`.
@@ -2136,8 +2158,7 @@ where
     ) -> std::result::Result<Vec<T>, TreeTNOperationError> {
         let mut route = CachedEvaluationRoute::on_session(session);
         let cached = self.evaluate_batched_cached_with_route(values, hint, &mut route)?;
-        cached_values_into_typed(cached)
-            .map_err(|error| TreeTNOperationError::from(anyhow::Error::new(error)))
+        cached_values_into_typed(cached).map_err(TreeTNOperationError::from)
     }
 
     /// Shared batch evaluation returning the evaluator's internal lightweight
@@ -2178,7 +2199,7 @@ where
         let center = match hint.center {
             Some(node) => {
                 if self.tree.node_index(&node).is_none() {
-                    return Err(TreeTNOperationError::from(anyhow::anyhow!(
+                    return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
                         "TreeTNCachedEvaluator: hinted centre {:?} is not a node of this tree",
                         node
                     )));
@@ -2294,7 +2315,8 @@ where
     #[cfg(feature = "diagnostics")]
     fn diagnostic_cache(&self) -> diagnostics::CacheDiagnostics {
         let mut result = diagnostics::CacheDiagnostics {
-            message_owned_bytes: hash_map_owned_bytes_estimate(&self.message_caches),
+            message_owned_bytes: hash_map_owned_bytes_estimate(&self.message_caches)
+                .saturating_add(btree_map_owned_bytes_estimate(&self.message_cache_order)),
             prepared_entries: self.prepared_branch_slices_f64.slices.len()
                 + self.prepared_branch_slices_c64.slices.len(),
             prepared_payload_bytes: self.prepared_branch_slices_f64.retained_bytes()
@@ -2407,7 +2429,8 @@ where
             .values()
             .map(PackedMessageCache::owned_retained_bytes_estimate)
             .sum::<usize>()
-            .saturating_add(hash_map_owned_bytes_estimate(&self.message_caches));
+            .saturating_add(hash_map_owned_bytes_estimate(&self.message_caches))
+            .saturating_add(btree_map_owned_bytes_estimate(&self.message_cache_order));
     }
 
     /// A hinted, fully cached cut needs neither the other center components
@@ -2508,14 +2531,22 @@ where
         }
         // Tentative all-hit probes do not count. Commit hits only after both
         // directions and their checked assembly have succeeded.
-        self.message_caches
-            .get_mut(&left_edge)
-            .ok_or_else(|| anyhow::anyhow!("cached cut disappeared"))?
-            .record_hits(left_batch.keys.len());
-        self.message_caches
-            .get_mut(&right_edge)
-            .ok_or_else(|| anyhow::anyhow!("cached reverse cut disappeared"))?
-            .record_hits(right_batch.keys.len());
+        for (edge, hits) in [
+            (left_edge, left_batch.keys.len()),
+            (right_edge, right_batch.keys.len()),
+        ] {
+            let epoch = self.next_message_cache_epoch();
+            let cache = self
+                .message_caches
+                .get_mut(&edge)
+                .ok_or_else(|| anyhow::anyhow!("cached cut disappeared"))?;
+            cache.record_hits(hits);
+            // A warm cut is a use of both directions: without this, columns
+            // that are reused on every call would look stale to the shared
+            // budget's least-recently-used eviction. Each direction takes its
+            // own stamp so both stay ordered in the LRU index.
+            Self::note_message_cache_use(&mut self.message_cache_order, &edge, cache, epoch);
+        }
         self.last_stats = CachedEvaluationStats {
             subtree_environment_count: left_batch.keys.len(),
             directed_message_count: left_batch.keys.len() + right_batch.keys.len(),
@@ -2549,6 +2580,200 @@ where
 
     fn rooted_plan_for_center(&mut self, center: &V) -> Result<Arc<RootedMessagePlan<V>>> {
         self.plan.rooted_plan_for_center(center)
+    }
+
+    /// Advances the message-cache use stamp and returns it.
+    fn next_message_cache_epoch(&mut self) -> u64 {
+        self.message_cache_epoch = self.message_cache_epoch.wrapping_add(1);
+        self.message_cache_epoch
+    }
+
+    /// Stamps one cache as used at `epoch` and keeps the LRU order index in step.
+    ///
+    /// The index holds one entry per cache that retains payload, keyed by its
+    /// current use stamp, so victim selection reads the order from the index and
+    /// never has to compare the caches themselves. Passed as separate fields
+    /// because the cache borrow is live at every call site.
+    fn note_message_cache_use(
+        order: &mut BTreeMap<u64, (V, V)>,
+        edge: &(V, V),
+        cache: &mut PackedMessageCache<IndexKey, CachedScalar>,
+        epoch: u64,
+    ) {
+        let previous = cache.last_used();
+        cache.touch(epoch);
+        if previous != epoch {
+            order.remove(&previous);
+        }
+        Self::index_message_cache_state(order, edge, cache, epoch);
+    }
+
+    /// Records whether one cache retains payload under its current use stamp.
+    ///
+    /// Called after a use and again after an admission, which is the point at
+    /// which a newly created cache stops being empty.
+    fn index_message_cache_state(
+        order: &mut BTreeMap<u64, (V, V)>,
+        edge: &(V, V),
+        cache: &PackedMessageCache<IndexKey, CachedScalar>,
+        epoch: u64,
+    ) {
+        if cache.key_count() == 0 {
+            order.remove(&epoch);
+        } else {
+            order.insert(epoch, edge.clone());
+        }
+    }
+
+    /// Retained payload of one directed cache. This is the only payload
+    /// accounting one admission does, so its cost does not grow with the number
+    /// of edges the evaluator has seen.
+    fn message_cache_edge_bytes(&self, edge: &(V, V)) -> usize {
+        self.message_caches
+            .get(edge)
+            .map_or(0, PackedMessageCache::logical_payload_bytes)
+    }
+
+    /// Makes room in the evaluator-wide message-cache budget for `needed`
+    /// payload bytes of `bytes_per_column` each on `edge`, and returns the
+    /// absolute payload cap that edge's cache may retain afterwards.
+    ///
+    /// The budget is shared, so an edge whose batch is wider than the whole
+    /// total remains admissible up to that total. When the budget is exhausted,
+    /// whole columns are released from the least recently used *other* edges,
+    /// oldest column first -- the edge being used keeps the columns it already
+    /// has, matching the no-eviction-on-miss design (#646, #1167), and the
+    /// column it is about to store was just computed.
+    ///
+    /// Only whole columns of the part of `needed` that can fit are reclaimed,
+    /// and nothing at all when not even one column of this edge fits the total:
+    /// evicting a neighbour for a column, or a fraction of one, that admission
+    /// would refuse anyway loses reuse on both edges.
+    ///
+    /// The payload accounting is one read of this edge's cache plus the running
+    /// total. Choosing victims walks `message_cache_order`, which holds exactly
+    /// the caches that retain payload, and only when the total is exceeded -- so
+    /// the cost of one pressured admission follows the resident caches, not the
+    /// edges the evaluator has seen (#1209).
+    fn reserve_message_cache_bytes(
+        &mut self,
+        edge: &(V, V),
+        needed: usize,
+        bytes_per_column: usize,
+    ) -> usize {
+        let total = self.options.message_cache_max_bytes;
+        // Disabled and unbounded retention have nothing to give back, and
+        // accounting for them would read every edge's payload on every miss.
+        if total == 0 || total == usize::MAX {
+            return total;
+        }
+        let own = self.message_cache_edge_bytes(edge);
+        let mut others = self.message_cache_retained_bytes.saturating_sub(own);
+        let room = total.saturating_sub(own);
+        // Round the reservation down to whole columns, so a neighbour is never
+        // charged for capacity that admission cannot use.
+        let wanted = match bytes_per_column {
+            0 => 0,
+            per_column => needed.min(room) / per_column * per_column,
+        };
+        let mut over = own
+            .saturating_add(wanted)
+            .saturating_add(others)
+            .saturating_sub(total);
+        if over > 0 {
+            // Victims come from the order index, which holds exactly the caches
+            // that retain payload, least recently used first. A cache that holds
+            // no payload cannot release anything, so it is never a candidate and
+            // never collected: the search is proportional to the resident caches
+            // rather than to the edges the evaluator has seen (#1209).
+            //
+            // The traversal counter sits before every filter on purpose: it
+            // counts the caches the walk touches, so restoring a walk over
+            // `message_caches` -- where the historical empty caches live -- is
+            // counted too and the #1209 regression test fails again.
+            let victims: Vec<(u64, (V, V))> = self
+                .message_cache_order
+                .iter()
+                .inspect(|_| {
+                    #[cfg(test)]
+                    MESSAGE_CACHE_VICTIM_VISITS.with(|visits| visits.set(visits.get() + 1));
+                })
+                .filter(|(_, other)| *other != edge)
+                .map(|(epoch, other)| {
+                    #[cfg(test)]
+                    MESSAGE_CACHE_VICTIM_CANDIDATES.with(|candidates| {
+                        candidates.set(candidates.get() + 1);
+                    });
+                    (*epoch, other.clone())
+                })
+                .collect();
+            for (epoch, other) in victims {
+                if over == 0 {
+                    break;
+                }
+                let emptied = match self.message_caches.get_mut(&other) {
+                    Some(cache) => {
+                        // A whole column is the eviction grain, so this can
+                        // release more than the remaining shortfall.
+                        let released = cache.evict_oldest_bytes(over);
+                        others = others.saturating_sub(released);
+                        over = over.saturating_sub(released);
+                        self.message_cache_retained_bytes =
+                            self.message_cache_retained_bytes.saturating_sub(released);
+                        cache.key_count() == 0
+                    }
+                    None => true,
+                };
+                if emptied {
+                    // An empty cache can release nothing until it is used again,
+                    // so it leaves the index here and re-enters on its next use.
+                    self.message_cache_order.remove(&epoch);
+                }
+            }
+        }
+        total.saturating_sub(others)
+    }
+
+    /// Recomputes the retained total from the map. Only tests insert caches
+    /// outside the admission path, so only they need it.
+    #[cfg(test)]
+    fn resync_message_cache_retained_bytes(&mut self) {
+        self.message_cache_retained_bytes = self
+            .message_caches
+            .values()
+            .map(PackedMessageCache::logical_payload_bytes)
+            .sum();
+        // Tests insert caches outside the admission path, so the LRU index is
+        // rebuilt here from the map; production only ever reaches it through
+        // `note_message_cache_use` and eviction.
+        self.message_cache_order.clear();
+        for (edge, cache) in &self.message_caches {
+            if cache.key_count() > 0 {
+                self.message_cache_order
+                    .insert(cache.last_used(), edge.clone());
+            }
+        }
+    }
+
+    /// Re-stamps every cache with a fresh, small epoch, keeping the order index
+    /// exact.
+    ///
+    /// Tests use this to prove that a warm hit re-stamps the edges it serves:
+    /// without the reset the stamps of the cold call still look fresh, so the
+    /// assertion would hold either way. The stamps and the index have to move
+    /// together -- zeroing `last_used` alone leaves entries keyed by the old
+    /// epochs, which is neither the pre-call state nor a state production can
+    /// reach, and it silently inflates the index.
+    #[cfg(test)]
+    fn reset_message_cache_use_stamps(&mut self) {
+        self.message_cache_order.clear();
+        for (index, (edge, cache)) in self.message_caches.iter_mut().enumerate() {
+            let epoch = index as u64 + 1;
+            cache.last_used = epoch;
+            if cache.key_count() > 0 {
+                self.message_cache_order.insert(epoch, edge.clone());
+            }
+        }
     }
 
     fn build_message_assignment_batches(
@@ -2755,52 +2980,10 @@ where
     }
 
     fn can_use_raw_messages(&self, center: &V) -> Result<bool> {
-        #[cfg(test)]
-        if raw_message_kernels_disabled_for_test() {
+        if !self.plan.inner.neighbors.contains_key(center) {
             return Ok(false);
         }
-        let neighbors = &self.plan.inner.neighbors;
-        if !neighbors.contains_key(center) {
-            return Ok(false);
-        }
-        // Coordination is no longer a condition: a non-center node with three
-        // or more children is covered by
-        // `try_compute_multi_branch_message_raw` and the center of any degree
-        // by the raw center kernel. Refusing a single high-coordination node
-        // used to push *every* message of the whole tree onto the generic
-        // `IdxTensor` path, which measured ~20x per hinted evaluation on a
-        // 13-site spider against a chain of the same size, independently of
-        // bond dimension (tensor4all-rs #727).
-        if self
-            .layout()
-            .entries_by_node
-            .values()
-            .any(|entries| entries.len() != 1)
-        {
-            return Ok(false);
-        }
-        let mut scalar_kind = None;
-        for (node, node_neighbors) in neighbors {
-            let tensor = tensor_for_node(self.tree, node)?;
-            if tensor.indices().len() != node_neighbors.len() + 1 {
-                return Ok(false);
-            }
-            let kind = tensor_scalar_kind(tensor)?;
-            if let Some(previous) = scalar_kind {
-                if previous != kind {
-                    return Ok(false);
-                }
-            } else {
-                scalar_kind = Some(kind);
-            }
-        }
-        // The specialized raw kernels currently operate on the two 64-bit
-        // scalar kinds. The generic contraction path below preserves f32/c32;
-        // do not route those tensors through mismatched f64/c64 readers.
-        Ok(matches!(
-            scalar_kind,
-            Some(ScalarKind::F64 | ScalarKind::C64)
-        ))
+        raw_centre_route_available(self.tree, &self.plan.inner)
     }
 
     /// Computes a leaf node's message directly from the tree tensor's raw
@@ -4666,17 +4849,24 @@ where
         };
         let bond_dim = bond_index.dim();
         let assignment_index = DynIndex::new_dyn(keys.len());
-        let message_cache_max_bytes = self.options.message_cache_max_bytes;
+        let message_cache_budget_bytes = self.options.message_cache_max_bytes;
+        let epoch = self.next_message_cache_epoch();
 
-        // Split into hits and misses without computing anything yet. The
-        // cache borrow must not outlive this block: `compute_stacked_message`
-        // below needs `&self`, which conflicts with a live `&mut
-        // self.message_caches` entry.
-        let (hit_keys, missing_indices) = {
+        // A full hit returns before any child is consulted. The cache borrow
+        // must not outlive this block: `compute_stacked_message` below needs
+        // `&self`, which conflicts with a live `&mut self.message_caches`
+        // entry.
+        {
             let cache = self
                 .message_caches
                 .entry(directed_edge.clone())
-                .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_max_bytes));
+                .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_budget_bytes));
+            Self::note_message_cache_use(
+                &mut self.message_cache_order,
+                &directed_edge,
+                cache,
+                epoch,
+            );
             if let Some(positions) = cache.get_all_cached(&keys) {
                 let mut data = Vec::with_capacity(bond_dim * keys.len());
                 for position in positions {
@@ -4711,32 +4901,6 @@ where
                     raw_values,
                 });
             }
-            let mut hit_keys = Vec::new();
-            let mut missing_indices = Vec::new();
-            for (i, key) in keys.iter().enumerate() {
-                if cache.contains(key) {
-                    hit_keys.push(key.clone());
-                } else {
-                    missing_indices.push(i);
-                }
-            }
-            (hit_keys, missing_indices)
-        };
-        self.last_stats.message_cache_hits += hit_keys.len();
-        self.last_stats.message_cache_misses += missing_indices.len();
-        #[cfg(feature = "diagnostics")]
-        let (diag_hits, diag_misses) = (hit_keys.len() as u64, missing_indices.len() as u64);
-        if !hit_keys.is_empty() {
-            // `entry().or_insert_with()` rather than `get_mut().expect(...)`:
-            // the entry for `node` was inserted above and nothing removes
-            // entries from `message_caches`. `or_insert_with`'s closure is
-            // never invoked here, so this cannot fail rather than merely
-            // being checked not to.
-            let cache = self
-                .message_caches
-                .entry(directed_edge.clone())
-                .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_max_bytes));
-            cache.record_hits(hit_keys.len());
         }
 
         // A parent cache hit returned above before this point, so descendants
@@ -4764,6 +4928,35 @@ where
         let children_elapsed = children_started.elapsed();
         #[cfg(feature = "diagnostics")]
         let children_kernel = diagnostics::kernel_snapshot().since(children_kernel_start);
+
+        // Split into hits and misses only now: computing the children above can
+        // exhaust the shared message-cache budget and evict columns of this
+        // very edge, so a key that was cached before them may be gone. The use
+        // stamp is taken here too, so this edge stays newer than children that
+        // were computed for it.
+        let epoch = self.next_message_cache_epoch();
+        let (hit_count, missing_indices) = {
+            let cache = self
+                .message_caches
+                .entry(directed_edge.clone())
+                .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_budget_bytes));
+            Self::note_message_cache_use(
+                &mut self.message_cache_order,
+                &directed_edge,
+                cache,
+                epoch,
+            );
+            let missing_indices = (0..keys.len())
+                .filter(|index| !cache.contains(&keys[*index]))
+                .collect::<Vec<_>>();
+            let hit_count = keys.len() - missing_indices.len();
+            cache.record_hits(hit_count);
+            (hit_count, missing_indices)
+        };
+        self.last_stats.message_cache_hits += hit_count;
+        self.last_stats.message_cache_misses += missing_indices.len();
+        #[cfg(feature = "diagnostics")]
+        let (diag_hits, diag_misses) = (hit_count as u64, missing_indices.len() as u64);
 
         // Compute only the missing points, as a batch of just that size.
         let missing_points = missing_indices
@@ -4915,10 +5108,26 @@ where
         // `node` was inserted at the top of this function and nothing
         // between there and here removes it, so `entry().or_insert_with()`
         // cannot fail rather than merely being checked not to.
+        //
+        // The cap is the shared budget minus what the other edges retain, so
+        // this edge's batch fits whenever the pool has room for it; making
+        // that room possibly evicts the least recently used other edges.
+        let needed = missing_keys
+            .len()
+            .saturating_mul(bond_dim.saturating_mul(std::mem::size_of::<CachedScalar>()));
+        let cap = self.reserve_message_cache_bytes(
+            &directed_edge,
+            needed,
+            bond_dim.saturating_mul(std::mem::size_of::<CachedScalar>()),
+        );
+        let epoch = self.next_message_cache_epoch();
         let cache = self
             .message_caches
-            .entry(directed_edge)
-            .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_max_bytes));
+            .entry(directed_edge.clone())
+            .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_budget_bytes));
+        cache.max_bytes = cap;
+        Self::note_message_cache_use(&mut self.message_cache_order, &directed_edge, cache, epoch);
+        let retained_before = cache.logical_payload_bytes();
         let missing_slots = cache.get_or_compute_batch(&missing_keys, |request_keys| {
             request_keys
                 .iter()
@@ -4931,7 +5140,24 @@ where
                     Ok(missing_values[index * bond_dim..(index + 1) * bond_dim].to_vec())
                 })
                 .collect::<Result<Vec<_>>>()
-        })?;
+        });
+        // Admission is where retention grows, so the shared total is kept in
+        // step here rather than recomputed from the map on every miss. The LRU
+        // index learns about the admission at the same point: a cache created by
+        // this call was empty when it was stamped, and this is where it starts
+        // holding columns.
+        self.message_cache_retained_bytes = self.message_cache_retained_bytes.saturating_add(
+            cache
+                .logical_payload_bytes()
+                .saturating_sub(retained_before),
+        );
+        Self::index_message_cache_state(
+            &mut self.message_cache_order,
+            &directed_edge,
+            cache,
+            epoch,
+        );
+        let missing_slots = missing_slots?;
 
         // Merge cached and uncached columns in the original point order. A
         // finite budget may return `CacheSlot::Uncached`; those values are
@@ -6011,19 +6237,27 @@ fn tensor_from_cached_values_compact(
 #[cfg(test)]
 thread_local! {
     static RAW_CENTER_CORE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Entries read by the strided-dot helpers, counted where they read them.
+    static STRIDED_DOT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// `(grouped, flat)` calls of the arbitrary-degree branch kernel, so a
     /// test can pin which route a configuration actually takes. Thread-local
     /// rather than atomic because the test harness runs tests in parallel
     /// threads of one process.
     static MULTI_BRANCH_ROUTES: std::cell::Cell<(usize, usize)> =
         const { std::cell::Cell::new((0, 0)) };
+    /// Points (columns of the right operand) of the widest grouped call so far,
+    /// so a test can pin that the grouped kernel received one column per point
+    /// instead of a batch that assignment deduplication collapsed.
+    static MULTI_BRANCH_GROUPED_COLUMNS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
-fn record_multi_branch_route(grouped: bool) {
+fn record_multi_branch_route(grouped: bool, columns: usize) {
     let (grouped_calls, flat_calls) = MULTI_BRANCH_ROUTES.get();
     if grouped {
         MULTI_BRANCH_ROUTES.set((grouped_calls + 1, flat_calls));
+        MULTI_BRANCH_GROUPED_COLUMNS.set(MULTI_BRANCH_GROUPED_COLUMNS.get().max(columns));
     } else {
         MULTI_BRANCH_ROUTES.set((grouped_calls, flat_calls + 1));
     }
@@ -6032,6 +6266,12 @@ fn record_multi_branch_route(grouped: bool) {
 #[cfg(test)]
 fn reset_multi_branch_routes_for_test() {
     MULTI_BRANCH_ROUTES.set((0, 0));
+    MULTI_BRANCH_GROUPED_COLUMNS.set(0);
+}
+
+#[cfg(test)]
+fn multi_branch_grouped_columns_for_test() -> usize {
+    MULTI_BRANCH_GROUPED_COLUMNS.get()
 }
 
 #[cfg(test)]
@@ -6115,28 +6355,43 @@ where
     }
 
     #[cfg(test)]
-    let mut core_visits = 0usize;
+    let reads_before = STRIDED_DOT_READS.get();
+    ensure!(
+        physical_values
+            .iter()
+            .all(|&physical| physical < dims[physical_axis]),
+        "raw center physical value is out of bounds"
+    );
+    let physical_stride = strides[physical_axis];
     let mut output = Vec::with_capacity(physical_values.len());
-    for (point, &physical) in physical_values.iter().enumerate() {
-        ensure!(
-            physical < dims[physical_axis],
-            "raw center physical value is out of bounds"
-        );
-        let physical_offset = physical * strides[physical_axis];
-        let sum = fold_raw_center_components(
+    // Points STRIDED_DOT_LANES at a time share each pass over the core; the rest one at a time.
+    let (blocks, rest) = physical_values.as_chunks::<STRIDED_DOT_LANES>();
+    for (block, physicals) in blocks.iter().enumerate() {
+        let points = std::array::from_fn(|lane| block * STRIDED_DOT_LANES + lane);
+        output.extend(fold_raw_center_points(
+            core,
+            &strides,
+            components,
+            points,
+            0,
+            physicals.map(|physical| physical * physical_stride),
+        ));
+    }
+    let done = blocks.len() * STRIDED_DOT_LANES;
+    for (point, &physical) in (done..).zip(rest) {
+        output.push(fold_raw_center_components(
             core,
             &strides,
             components,
             point,
             0,
-            physical_offset,
-            #[cfg(test)]
-            &mut core_visits,
-        );
-        output.push(sum);
+            physical * physical_stride,
+        ));
     }
+    // The core entries the dot helpers actually read during this call (test builds only).
     #[cfg(test)]
-    RAW_CENTER_CORE_VISITS.set(core_visits);
+    RAW_CENTER_CORE_VISITS
+        .set(RAW_CENTER_CORE_VISITS.get() + STRIDED_DOT_READS.get() - reads_before);
     Ok(output)
 }
 
@@ -6149,6 +6404,13 @@ where
 /// nesting simply continues for a center of higher coordination. Components
 /// arrive sorted by descending axis, so the innermost loop is the
 /// smallest-stride one.
+///
+/// The level just outside the innermost one computes the inner sums of
+/// [`STRIDED_DOT_LANES`] consecutive bonds in one pass over the innermost
+/// component: each inner sum is its own accumulator, fed its terms in the same
+/// order as one at a time, and they are then added to the outer sum in bond
+/// order. Only independent additions are interleaved, so the bits are those of
+/// the plain nesting while the additions no longer wait on one another.
 fn fold_raw_center_components<T>(
     core: &[T],
     strides: &[usize],
@@ -6156,39 +6418,175 @@ fn fold_raw_center_components<T>(
     point: usize,
     level: usize,
     offset: usize,
-    #[cfg(test)] core_visits: &mut usize,
 ) -> T
 where
     T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
 {
     let component = &components[level];
-    let assignment = component.point_to_assignment[point];
-    let innermost = level + 1 == components.len();
+    let values = component.values_of(point);
+    let stride = strides[component.axis];
     let mut sum = T::default();
-    for bond in 0..component.dim {
-        let value = component.values[assignment * component.dim + bond];
-        let offset = offset + bond * strides[component.axis];
-        let inner = if innermost {
-            #[cfg(test)]
-            {
-                *core_visits += 1;
+    match &components[level + 1..] {
+        [] => {
+            sum = strided_dot(core, offset, stride, values);
+        }
+        [innermost] => {
+            let inner_values = innermost.values_of(point);
+            let inner_stride = strides[innermost.axis];
+            let (lanes, rest) = values.as_chunks::<STRIDED_DOT_LANES>();
+            for (chunk, lane_values) in lanes.iter().enumerate() {
+                let first = offset + chunk * STRIDED_DOT_LANES * stride;
+                let inner = strided_dots(core, first, stride, inner_stride, inner_values);
+                for (inner, &value) in inner.into_iter().zip(lane_values) {
+                    sum += inner * value;
+                }
             }
-            core[offset]
-        } else {
-            fold_raw_center_components(
-                core,
-                strides,
-                components,
-                point,
-                level + 1,
-                offset,
-                #[cfg(test)]
-                core_visits,
-            )
-        };
-        sum += inner * value;
+            let done = lanes.len() * STRIDED_DOT_LANES;
+            for (bond, &value) in rest.iter().enumerate() {
+                let inner = strided_dot(
+                    core,
+                    offset + (done + bond) * stride,
+                    inner_stride,
+                    inner_values,
+                );
+                sum += inner * value;
+            }
+        }
+        _ => {
+            for (bond, &value) in values.iter().enumerate() {
+                let inner = fold_raw_center_components(
+                    core,
+                    strides,
+                    components,
+                    point,
+                    level + 1,
+                    offset + bond * stride,
+                );
+                sum += inner * value;
+            }
+        }
     }
     sum
+}
+
+/// [`fold_raw_center_components`] for [`STRIDED_DOT_LANES`] points at once.
+///
+/// Each point keeps its own sums, nested and ordered exactly as in
+/// [`fold_raw_center_components`]; the points only share the walk over the core,
+/// so one pass serves four points and their additions overlap.
+fn fold_raw_center_points<T>(
+    core: &[T],
+    strides: &[usize],
+    components: &[RawCenterComponent<T>],
+    points: [usize; STRIDED_DOT_LANES],
+    level: usize,
+    offsets: [usize; STRIDED_DOT_LANES],
+) -> [T; STRIDED_DOT_LANES]
+where
+    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
+    let component = &components[level];
+    let values = points.map(|point| component.values_of(point));
+    let stride = strides[component.axis];
+    if level + 1 == components.len() {
+        return strided_dots_per_lane(core, offsets, stride, values);
+    }
+    let mut sums = [T::default(); STRIDED_DOT_LANES];
+    for bond in 0..component.dim {
+        let inner = fold_raw_center_points(
+            core,
+            strides,
+            components,
+            points,
+            level + 1,
+            offsets.map(|offset| offset + bond * stride),
+        );
+        for ((sum, inner), lane_values) in sums.iter_mut().zip(inner).zip(values) {
+            *sum += inner * lane_values[bond];
+        }
+    }
+    sums
+}
+
+/// Independent sums [`strided_dots`] computes per pass, for the raw center fold and the scalar chain kernel.
+const STRIDED_DOT_LANES: usize = 4;
+
+/// `Σ_j data[offset + j·stride] · values[j]`, added in ascending `j`.
+///
+/// The strided-dot helpers take strides of a dense tensor whose dimensions are
+/// all positive (the callers return early or never call them otherwise), so a
+/// stride is never 0 and `step_by` cannot panic.
+fn strided_dot<T>(data: &[T], offset: usize, stride: usize, values: &[T]) -> T
+where
+    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
+    let mut sum = T::default();
+    // INVARIANT: stride ≥ 1 (see above).
+    for (&entry, &value) in data[offset..].iter().step_by(stride).zip(values) {
+        #[cfg(test)]
+        STRIDED_DOT_READS.set(STRIDED_DOT_READS.get() + 1);
+        sum += entry * value;
+    }
+    sum
+}
+
+/// [`strided_dot`] at the [`STRIDED_DOT_LANES`] offsets `first + lane·lane_stride`
+/// with the same `values`, all lanes in one pass; each lane adds its terms in
+/// ascending `j`, so each lane has the bits of [`strided_dot`] while the lanes'
+/// additions overlap.
+fn strided_dots<T>(
+    data: &[T],
+    first: usize,
+    lane_stride: usize,
+    stride: usize,
+    values: &[T],
+) -> [T; STRIDED_DOT_LANES]
+where
+    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
+    let lane = |k: usize| data[first + k * lane_stride..].iter().step_by(stride);
+    let mut sums = [T::default(); STRIDED_DOT_LANES];
+    let [s0, s1, s2, s3] = &mut sums;
+    for ((((&value, &e0), &e1), &e2), &e3) in values
+        .iter()
+        .zip(lane(0))
+        .zip(lane(1))
+        .zip(lane(2))
+        .zip(lane(3))
+    {
+        #[cfg(test)]
+        STRIDED_DOT_READS.set(STRIDED_DOT_READS.get() + STRIDED_DOT_LANES);
+        *s0 += e0 * value;
+        *s1 += e1 * value;
+        *s2 += e2 * value;
+        *s3 += e3 * value;
+    }
+    sums
+}
+
+/// [`strided_dot`] of each lane (`offsets[k]`, `values[k]`), all lanes in one
+/// pass, with the same guarantee as [`strided_dots`].
+fn strided_dots_per_lane<T>(
+    data: &[T],
+    offsets: [usize; STRIDED_DOT_LANES],
+    stride: usize,
+    values: [&[T]; STRIDED_DOT_LANES],
+) -> [T; STRIDED_DOT_LANES]
+where
+    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
+    let lane = |k: usize| data[offsets[k]..].iter().step_by(stride).zip(values[k]);
+    let mut sums = [T::default(); STRIDED_DOT_LANES];
+    let [s0, s1, s2, s3] = &mut sums;
+    for (((l0, l1), l2), l3) in lane(0).zip(lane(1)).zip(lane(2)).zip(lane(3)) {
+        #[cfg(test)]
+        STRIDED_DOT_READS.set(STRIDED_DOT_READS.get() + STRIDED_DOT_LANES);
+        *s0 += *l0.0 * *l0.1;
+        *s1 += *l1.0 * *l1.1;
+        *s2 += *l2.0 * *l2.1;
+        *s3 += *l3.0 * *l3.1;
+    }
+    sums
 }
 
 /// One arbitrary-degree branch node's contraction geometry.
@@ -6647,11 +7045,11 @@ where
             ..Default::default()
         });
         #[cfg(test)]
-        record_multi_branch_route(false);
+        record_multi_branch_route(false, physical_values.len());
         return scalar_multi_branch_message_contraction(spec, raw, physical_values, child_columns);
     }
     #[cfg(test)]
-    record_multi_branch_route(true);
+    record_multi_branch_route(true, physical_values.len());
     grouped_multi_branch_message_contraction(route, spec, raw, physical_values, child_columns)
 }
 
@@ -6722,15 +7120,30 @@ where
         // `parent < parent_dim` and `child < child_dim`, so it is at most `last`, which is checked above.
         let columns = &child_columns[point * child_dim..(point + 1) * child_dim];
         let sums = &mut output[point * parent_dim..(point + 1) * parent_dim];
-        for (child, &child_value) in columns.iter().enumerate() {
-            let start = base + child * child_stride;
-            if parent_stride == 1 {
-                for (sum, &value) in sums.iter_mut().zip(&raw[start..start + parent_dim]) {
+        if child_stride < parent_stride {
+            // Parent-major walk along the shorter stride. Each sum still adds its child terms in ascending child
+            // order, as the child-major walk below does, so both walks give the same bits; this one reads the
+            // tensor in memory order instead of jumping a whole parent stride per term.
+            let (lanes, rest) = sums.as_chunks_mut::<STRIDED_DOT_LANES>();
+            for (chunk, lane_sums) in lanes.iter_mut().enumerate() {
+                let first = base + chunk * STRIDED_DOT_LANES * parent_stride;
+                *lane_sums = strided_dots(raw, first, parent_stride, child_stride, columns);
+            }
+            let done = lanes.len() * STRIDED_DOT_LANES;
+            for (parent, sum) in rest.iter_mut().enumerate() {
+                *sum = strided_dot(
+                    raw,
+                    base + (done + parent) * parent_stride,
+                    child_stride,
+                    columns,
+                );
+            }
+        } else {
+            for (child, &child_value) in columns.iter().enumerate() {
+                let start = base + child * child_stride;
+                let row = &raw[start..=start + (parent_dim - 1) * parent_stride];
+                for (sum, &value) in sums.iter_mut().zip(row.iter().step_by(parent_stride)) {
                     *sum += value * child_value;
-                }
-            } else {
-                for (parent, sum) in sums.iter_mut().enumerate() {
-                    *sum += raw[start + parent * parent_stride] * child_value;
                 }
             }
         }
@@ -7035,6 +7448,240 @@ where
         bail!("{context} {:?} is not present in TreeTN", node);
     }
     Ok(())
+}
+
+/// Whether the plan's messages and centre contract from raw host buffers, which
+/// is what [`automatic_batch_point_limit`] needs to know: a property of the
+/// plan's degrees, single-entry layouts and scalar kind, not of one centre.
+///
+/// Coordination is not a condition: a non-center node with three or more
+/// children is covered by `try_compute_multi_branch_message_raw` and the center
+/// of any degree by the raw center kernel. Refusing a single high-coordination
+/// node used to push *every* message of the whole tree onto the generic
+/// `IdxTensor` path, which measured ~20x per hinted evaluation on a 13-site
+/// spider against a chain of the same size, independently of bond dimension
+/// (tensor4all-rs #727).
+fn raw_centre_route_available<V>(
+    tree: &TreeTN<IdxTensor, V>,
+    plan: &CachedEvaluatorPlanInner<V>,
+) -> Result<bool>
+where
+    V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
+{
+    #[cfg(test)]
+    if raw_message_kernels_disabled_for_test() {
+        return Ok(false);
+    }
+    // A centre with no neighbour (a single-node tree) takes
+    // `contract_center_for_points`, which stacks the core per point: the raw
+    // centre kernels need at least one component.
+    if plan.neighbors.values().all(Vec::is_empty) {
+        return Ok(false);
+    }
+    if plan
+        .layout
+        .entries_by_node
+        .values()
+        .any(|entries| entries.len() != 1)
+    {
+        return Ok(false);
+    }
+    let mut scalar_kind = None;
+    for (node, node_neighbors) in &plan.neighbors {
+        let tensor = tensor_for_node(tree, node)?;
+        if tensor.indices().len() != node_neighbors.len() + 1 {
+            return Ok(false);
+        }
+        let kind = tensor_scalar_kind(tensor)?;
+        if let Some(previous) = scalar_kind {
+            if previous != kind {
+                return Ok(false);
+            }
+        } else {
+            scalar_kind = Some(kind);
+        }
+    }
+    // The specialized raw kernels currently operate on the two 64-bit scalar
+    // kinds. The generic contraction path below preserves f32/c32; do not route
+    // those tensors through mismatched f64/c64 readers.
+    Ok(matches!(
+        scalar_kind,
+        Some(ScalarKind::F64 | ScalarKind::C64)
+    ))
+}
+
+/// The most bytes one internal batch may allocate for the per-point buffers of
+/// the centre route it takes. The batch size is derived from it, so a wide or
+/// asymmetric tree gets fewer points rather than more memory.
+const BATCH_POINT_BUDGET_BYTES: usize = 32 * 1024 * 1024;
+
+/// The most points one automatic batch may hold.
+const BATCH_POINT_MAX: usize = 256;
+
+/// The points one internal batch may hold so that `points x per_point_bytes`
+/// stays within [`BATCH_POINT_BUDGET_BYTES`], in `1..=BATCH_POINT_MAX`.
+///
+/// Two routes reach the centre and allocate differently:
+///
+/// * the generic `contract_center_for_points` slices the centre core once per
+///   point and stacks the slices, so one point holds the largest local tensor;
+/// * the raw centre kernels (`try_contract_leaf_center_raw`,
+///   `contract_raw_center`) read the core in place, so one point holds a column of
+///   each directed message, the centre's own scalar, and the rows of a grouped
+///   message GEMM for the node whose message is being computed
+///   ([`grouped_message_intermediate_per_point`]; the allocation is the
+///   `intermediate` of `grouped_branch_message_from_gemm` and of
+///   `contract_multi_branch_typed`). That last term is bounded by no local tensor:
+///   an outer bond times a wide sibling is larger than both, and for bonds
+///   1024/1/2048 it is `1024 x 2048` rows per point.
+///
+/// Two conditions keep every other shape where it was:
+///
+/// * the core-based estimate is returned unchanged whenever it already allows
+///   more than one point (`core_bound > 1`), so **the raw-route formula applies
+///   only where the core-based estimate holds a single point** — that is where
+///   charging the core to a route that does not copy it collapsed a batch that
+///   the raw kernels exist to serve (tensor4all-rs #1184);
+/// * a plan that does not route its centre through the raw kernels
+///   ([`raw_centre_route_available`]) keeps the core-based estimate at every
+///   size.
+fn automatic_batch_point_limit<V>(
+    tree: &TreeTN<IdxTensor, V>,
+    plan: &CachedEvaluatorPlanInner<V>,
+) -> Result<usize>
+where
+    V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
+{
+    let scalar_bytes = std::mem::size_of::<CachedScalar>().max(1);
+    let mut largest_local = 1_usize;
+    // One column per directed message, and the centre's own result: summing one
+    // node's axes counts each of its bonds once, so the sum over all nodes counts
+    // every bond twice, once per direction.
+    let mut message_columns = 1_usize;
+    for node in &plan.sorted_node_names {
+        let tensor = tensor_for_node(tree, node)?;
+        let dims = tensor.indices().iter().map(DynIndex::dim);
+        message_columns =
+            message_columns.saturating_add(dims.fold(0_usize, |sum, dim| sum.saturating_add(dim)));
+        let elements = tensor
+            .indices()
+            .iter()
+            .fold(1_usize, |n, index| n.saturating_mul(index.dim()));
+        largest_local = largest_local.max(elements);
+    }
+    let core_per_point = largest_local.saturating_mul(scalar_bytes).max(1);
+    let core_bound = (BATCH_POINT_BUDGET_BYTES / core_per_point).clamp(1, BATCH_POINT_MAX);
+    if core_bound > 1 || !raw_centre_route_available(tree, plan)? {
+        return Ok(core_bound);
+    }
+    let per_point_scalars =
+        message_columns.saturating_add(grouped_message_intermediate_per_point(tree, plan)?);
+    let per_point_bytes = per_point_scalars.saturating_mul(scalar_bytes).max(1);
+    Ok((BATCH_POINT_BUDGET_BYTES / per_point_bytes).clamp(1, BATCH_POINT_MAX))
+}
+
+/// The most scalars one point adds to a grouped branch message GEMM: the rows of
+/// its intermediate plus the shared child column it multiplies them by.
+///
+/// The geometry depends on which neighbour a node's message is directed away
+/// from, and the centre that decides that is only known at evaluation time, so
+/// this takes the worst neighbour as the parent. The rooted plan lists a node's
+/// children in label order, folds the *first* of them with the shared GEMM, and
+/// keeps `parent x product(other children)` rows per point: for `child_1` in the
+/// degree-three kernel and for the multi-branch kernel alike. A node with one
+/// child needs no GEMM at all, because its message is that child's column.
+///
+/// This is the term that a per-node element count does not see: with bonds
+/// 1024/1/2048 a node's rows are `1024 x 2048`, twice its own larger bond, so the
+/// estimate has to come from the geometry rather than from the local tensors.
+///
+/// A **three-or-more-child** orientation whose prepared slice exceeds
+/// [`MULTI_BRANCH_MAX_PREPARED_ELEMENTS`] never reaches the grouped kernel at all,
+/// so it contributes nothing: the flat kernel's only allocation is its output, and
+/// the message-column term already charges one column per directed message.
+/// Charging the grouped rows there cost a bonds-`[2, 2, 1024, 2048]` hub the whole
+/// budget and left the automatic batch at a single point (#1194).
+///
+/// A **two-child** orientation has no such admission — the specialized three-bond
+/// kernel gates on the arithmetic threshold only — so its rows stay charged even
+/// above the cap. Exempting it too would have sized a batch from an allocation the
+/// kernel does make (#1194 review).
+fn grouped_message_intermediate_per_point<V>(
+    tree: &TreeTN<IdxTensor, V>,
+    plan: &CachedEvaluatorPlanInner<V>,
+) -> Result<usize>
+where
+    V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
+{
+    let mut worst = 0_usize;
+    for node in &plan.sorted_node_names {
+        let Some(neighbours) = plan.neighbors.get(node) else {
+            continue;
+        };
+        let dims = neighbours
+            .iter()
+            .map(|neighbour| bond_dim_between(tree, node, neighbour))
+            .collect::<Result<Vec<usize>>>()?;
+        for (parent, _) in neighbours.iter().enumerate() {
+            let mut children: Vec<(usize, &V)> = neighbours
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != parent)
+                .map(|(other, neighbour)| (dims[other], neighbour))
+                .collect();
+            children.sort_by(|left, right| left.1.cmp(right.1));
+            let parent_dim = dims[parent];
+            let child_dims: Vec<usize> = children.iter().map(|(dim, _)| *dim).collect();
+            let per_point = match child_dims.split_first() {
+                None => 0,
+                // One child: the message is that child's column.
+                Some((_, [])) => 0,
+                // Two children and three or more take different kernels, and only the
+                // arbitrary-degree one has a prepared-element admission.
+                Some((shared, rest)) => {
+                    let rows = rest
+                        .iter()
+                        .try_fold(parent_dim, |rows, dim| rows.checked_mul(*dim))
+                        .ok_or_else(|| anyhow::anyhow!("grouped message rows overflow usize"))?;
+                    let charged = rows.saturating_add(*shared);
+                    // The specialized three-bond kernel (`compute_branch_message_raw`
+                    // -> `grouped_branch_message_from_gemm`) gates on the arithmetic
+                    // threshold alone and always allocates its `parent x child_2` rows,
+                    // so the charge stays at every size.
+                    //
+                    // `multi_branch_message_contraction` (three or more children) does
+                    // reject the grouped route above `MULTI_BRANCH_MAX_PREPARED_ELEMENTS`
+                    // (`parent x product(children)`) and runs the flat kernel, which
+                    // allocates nothing beyond its output - already charged by the
+                    // message-column term. Above the cap that orientation therefore
+                    // contributes nothing.
+                    if rest.len() >= 2
+                        && rows.saturating_mul(*shared) > MULTI_BRANCH_MAX_PREPARED_ELEMENTS
+                    {
+                        0
+                    } else {
+                        charged
+                    }
+                }
+            };
+            worst = worst.max(per_point);
+        }
+    }
+    Ok(worst)
+}
+
+/// The dimension of the bond between two adjacent nodes.
+fn bond_dim_between<V>(tree: &TreeTN<IdxTensor, V>, node: &V, neighbour: &V) -> Result<usize>
+where
+    V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
+{
+    let edge = tree.edge_between(node, neighbour).ok_or_else(|| {
+        anyhow::anyhow!("TreeTNCachedEvaluator: no edge between {node:?} and {neighbour:?}")
+    })?;
+    let bond = tree.bond_index(edge).ok_or_else(|| {
+        anyhow::anyhow!("TreeTNCachedEvaluator: no bond index between {node:?} and {neighbour:?}")
+    })?;
+    Ok(bond.dim())
 }
 
 /// The element count of the largest tensor of a node with exactly three bonds: the nodes whose physical slices
@@ -7512,23 +8159,48 @@ impl MessageCacheKey for u32 {
 /// A run-scoped, append-only cache of packed message columns for one
 /// directed edge.
 ///
-/// Per Hiroshi's #646 review design: entries are never evicted individually
-/// and there is no public `clear` -- the cache lives no longer than the
-/// evaluator that owns it, so nothing outside can hold a handle that would
-/// need clearing. Columns are stored contiguously in a single flat buffer
-/// (column-major: column `i` occupies `columns[i * bond_dim .. (i+1) *
-/// bond_dim]`) instead of one heap allocation per message. The configured
-/// budget applies to logical column payload; observability separately reports
-/// an owned-storage estimate that includes retained vector capacity, the
-/// key map, and key-owned heap payloads.
+/// Per Hiroshi's #646 review design: entries are never evicted to admit a
+/// *later* column of the same edge, and there is no public `clear` -- the
+/// cache lives no longer than the evaluator that owns it, so nothing outside
+/// can hold a handle that would need clearing. Columns are stored
+/// contiguously in a single flat buffer (column-major: column `i` occupies
+/// `columns[i * bond_dim .. (i+1) * bond_dim]`) instead of one heap
+/// allocation per message. The configured budget applies to logical column
+/// payload; observability separately reports an owned-storage estimate that
+/// includes retained vector capacity, the key map, and key-owned heap
+/// payloads.
+///
+/// Released columns leave a dead prefix at the front of `columns`: a release
+/// advances `head` instead of shifting the surviving columns and renumbering
+/// their positions, so releasing a few columns from a large cache does not
+/// cost a copy of the whole buffer.
 struct PackedMessageCache<K, T> {
     bond_dim: usize,
     max_bytes: usize,
+    /// Column position per key, counted from the start of `columns`, so a live
+    /// position is `>= head`. Entries released with the dead prefix stay here
+    /// until [`PackedMessageCache::reclaim_evicted_prefix`] drops them.
     positions: HashMap<K, usize>,
+    /// Whole columns of `bond_dim` elements, the live ones after the first
+    /// `head`.
     columns: Vec<T>,
+    /// Columns already released from the front of `columns`. Their keys are
+    /// still in `positions` and are dropped with the dead prefix, so
+    /// `released_keys` of the entries are stale.
+    head: usize,
+    released_keys: usize,
+    /// Key-owned heap payload of the keys in `positions`. Exact after a prefix
+    /// reclaim; between reclaims it still counts the keys released with the
+    /// dead prefix, so the owned-storage estimate can exceed the live total
+    /// until then.
     key_heap_bytes: usize,
     hits: usize,
     misses: usize,
+    /// Monotonic stamp of the last use of this edge's cache, owned by the
+    /// evaluator that shares one byte budget across its edges. Only that
+    /// cross-edge eviction reads it; within one edge, columns are already in
+    /// insertion order.
+    last_used: u64,
 }
 
 // A deterministic estimate for the control bytes and bucket bookkeeping of
@@ -7537,12 +8209,48 @@ struct PackedMessageCache<K, T> {
 // allocator-specific byte measurement.
 const HASH_MAP_BUCKET_OVERHEAD_ESTIMATE_BYTES: usize = 16;
 
+// Payload reads on this thread, counted only for the regression test that
+// pins "one read per admission, however many edges there are". Every payload
+// read goes through `PackedMessageCache::logical_payload_bytes`, so a re-added
+// full-map scan cannot pass unnoticed. Thread-local, because tests run in
+// parallel threads.
+#[cfg(test)]
+thread_local! {
+    static MESSAGE_CACHE_PAYLOAD_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Caches offered as eviction candidates on this thread. Counted only for
+    /// the regression test that pins "a victim search considers the edges that
+    /// hold payload, not every edge the evaluator has ever seen".
+    static MESSAGE_CACHE_VICTIM_CANDIDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// `last_used()` reads on this thread, counted for the regression test that
+    /// pins the admission cost under budget pressure (#1209).
+    static MESSAGE_CACHE_LAST_USED_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Directed-edge caches visited while choosing victims on this thread. The
+    /// number the #1209 fixture bounds: it must follow the caches that hold
+    /// payload, not the edges the evaluator has seen.
+    static MESSAGE_CACHE_VICTIM_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[cfg(any(test, feature = "diagnostics"))]
 fn hash_map_owned_bytes_estimate<K, V>(map: &HashMap<K, V>) -> usize {
     let per_bucket = std::mem::size_of::<K>()
         .saturating_add(std::mem::size_of::<V>())
         .saturating_add(HASH_MAP_BUCKET_OVERHEAD_ESTIMATE_BYTES);
     std::mem::size_of::<HashMap<K, V>>().saturating_add(map.capacity().saturating_mul(per_bucket))
+}
+
+// A deterministic estimate for one `BTreeMap` node's bookkeeping: the map
+// stores up to `B` entries plus child links per node and does not expose that
+// layout, so this is documented as an estimate, exactly like the hash-bucket
+// term. It is observability only; the logical payload budget never counts it.
+#[cfg(any(test, feature = "diagnostics"))]
+const BTREE_MAP_NODE_OVERHEAD_ESTIMATE_BYTES: usize = 3 * std::mem::size_of::<usize>();
+
+#[cfg(any(test, feature = "diagnostics"))]
+fn btree_map_owned_bytes_estimate<K, V>(map: &BTreeMap<K, V>) -> usize {
+    let per_entry = std::mem::size_of::<K>()
+        .saturating_add(std::mem::size_of::<V>())
+        .saturating_add(BTREE_MAP_NODE_OVERHEAD_ESTIMATE_BYTES);
+    std::mem::size_of::<BTreeMap<K, V>>().saturating_add(map.len().saturating_mul(per_entry))
 }
 
 /// Where one requested key's column ended up.
@@ -7681,12 +8389,106 @@ where
             max_bytes,
             positions: HashMap::default(),
             columns: Vec::new(),
+            head: 0,
+            released_keys: 0,
             key_heap_bytes: 0,
             hits: 0,
             misses: 0,
+            last_used: 0,
         }
     }
 
+    /// Marks this edge as used by the evaluator at `epoch`.
+    fn touch(&mut self, epoch: u64) {
+        self.last_used = epoch;
+    }
+
+    fn last_used(&self) -> u64 {
+        #[cfg(test)]
+        MESSAGE_CACHE_LAST_USED_READS.with(|reads| reads.set(reads.get() + 1));
+        self.last_used
+    }
+
+    fn bytes_per_column(&self) -> usize {
+        self.bond_dim.saturating_mul(std::mem::size_of::<T>())
+    }
+
+    /// Releases whole columns from the front of the packed buffer, oldest
+    /// first, until at least `bytes` of payload are freed or the cache is
+    /// empty. Returns the payload bytes actually released.
+    ///
+    /// Called only by the owner evaluator, when the budget shared by all
+    /// directed edges is exhausted and this edge is the least recently used
+    /// one. Columns keep their insertion order in `columns`, so a release only
+    /// advances `head` over the dead prefix: neither the surviving columns nor
+    /// their positions move, so releasing a few columns from a large cache
+    /// costs the release, not a copy of the cache. The dead prefix and the
+    /// keys released with it are reclaimed once they are at least as large as
+    /// the survivors, which keeps the amortized cost of a release O(1).
+    ///
+    /// A cache emptied by this releases its packed buffer too: the budget
+    /// bounds logical payload rather than allocation capacity, so an edge that
+    /// gave every column back must not keep the high-water buffer of the
+    /// columns it no longer has. A partially drained cache keeps its buffer
+    /// (its high-water mark), which the documented budget does not cover.
+    fn evict_oldest_bytes(&mut self, bytes: usize) -> usize {
+        let per_column = self.bytes_per_column();
+        if per_column == 0 || bytes == 0 {
+            return 0;
+        }
+        let live = self.key_count();
+        let dropped = bytes.div_ceil(per_column).min(live);
+        if dropped == 0 {
+            return 0;
+        }
+        self.head += dropped;
+        self.released_keys += dropped;
+        if dropped == live {
+            self.columns = Vec::new();
+            self.positions = HashMap::default();
+            self.key_heap_bytes = 0;
+            self.head = 0;
+            self.released_keys = 0;
+        } else if self.head.saturating_mul(2) >= self.positions.len() {
+            self.reclaim_evicted_prefix();
+        }
+        dropped * per_column
+    }
+
+    /// Drops the released prefix of `columns` and the map entries that point
+    /// into it, and renumbers the survivors back to a zero `head`.
+    fn reclaim_evicted_prefix(&mut self) {
+        self.columns.drain(..self.head * self.bond_dim);
+        let head = std::mem::take(&mut self.head);
+        self.positions
+            .retain(|_, position| match position.checked_sub(head) {
+                Some(live) => {
+                    *position = live;
+                    true
+                }
+                None => false,
+            });
+        self.key_heap_bytes = self
+            .positions
+            .keys()
+            .map(|key| key.owned_heap_bytes())
+            .sum();
+        self.released_keys = 0;
+    }
+
+    /// Position of `key` while its column is live, i.e. not part of the dead
+    /// prefix. A released key's entry waits for the next prefix reclaim and
+    /// must not be served.
+    fn live_position(&self, key: &K) -> Option<usize> {
+        self.positions
+            .get(key)
+            .copied()
+            .filter(|position| *position >= self.head)
+    }
+
+    /// Column at a position as [`Self::position`] reports it. Positions count
+    /// from the start of `columns`, so a released column's slot stays where it
+    /// was until [`Self::reclaim_evicted_prefix`] shifts the survivors down.
     fn column(&self, position: usize) -> &[T] {
         &self.columns[position * self.bond_dim..(position + 1) * self.bond_dim]
     }
@@ -7712,7 +8514,7 @@ where
     fn get_all_cached(&mut self, keys: &[K]) -> Option<Vec<usize>> {
         let positions = keys
             .iter()
-            .map(|key| self.positions.get(key).copied())
+            .map(|key| self.live_position(key))
             .collect::<Option<Vec<_>>>()?;
         self.hits += keys.len();
         Some(positions)
@@ -7724,32 +8526,39 @@ where
     }
 
     fn contains(&self, key: &K) -> bool {
-        self.positions.contains_key(key)
+        self.live_position(key).is_some()
     }
 
     /// Looks up one key's column position without touching the hit/miss
     /// counters -- for reassembling a merged result after the counted
     /// lookup/insert calls that drove the merge have already run.
     fn position(&self, key: &K) -> Option<usize> {
-        self.positions.get(key).copied()
+        self.live_position(key)
     }
 
     /// Logical payload bytes admitted by the cache budget.
     ///
-    /// This intentionally uses the vector length, not capacity: it describes
-    /// the message columns that are logically retained. Use
-    /// [`Self::owned_retained_bytes_estimate`] for the storage estimate that
+    /// This intentionally counts the live columns, not the buffer length or
+    /// capacity: it describes the message columns that are logically retained.
+    /// [`Self::owned_retained_bytes_estimate`] is the storage estimate, which
     /// also includes spare vector capacity and the key map.
     fn retained_bytes(&self) -> usize {
         self.logical_payload_bytes()
     }
 
     fn logical_payload_bytes(&self) -> usize {
-        self.columns.len().saturating_mul(std::mem::size_of::<T>())
+        #[cfg(test)]
+        MESSAGE_CACHE_PAYLOAD_READS.with(|reads| reads.set(reads.get() + 1));
+        // Released columns still occupy the dead prefix of the buffer but are
+        // no longer retained, so the budget does not count them.
+        self.columns
+            .len()
+            .saturating_sub(self.head.saturating_mul(self.bond_dim))
+            .saturating_mul(std::mem::size_of::<T>())
     }
 
     fn key_count(&self) -> usize {
-        self.positions.len()
+        self.positions.len().saturating_sub(self.released_keys)
     }
 
     /// Estimates bytes owned by this cache, including vector capacity, key
@@ -7806,7 +8615,7 @@ where
         let mut missing_keys = Vec::new();
         let mut missing_seen = HashSet::default();
         for key in keys {
-            if self.positions.contains_key(key) {
+            if self.contains(key) {
                 self.hits += 1;
             } else {
                 self.misses += 1;
@@ -7850,9 +8659,21 @@ where
                 if would_retain_bytes.is_some_and(|bytes| bytes <= self.max_bytes) {
                     let position = self.columns.len() / self.bond_dim;
                     self.columns.extend(column);
-                    self.key_heap_bytes =
-                        self.key_heap_bytes.saturating_add(key.owned_heap_bytes());
-                    self.positions.insert(key, position);
+                    let owned_heap_bytes = key.owned_heap_bytes();
+                    // Re-admitting a key released with the dead prefix replaces
+                    // its stale entry rather than adding a live one, and its heap
+                    // bytes are already in `key_heap_bytes` from the first
+                    // admission, so only a key new to the map is charged.
+                    match self.positions.insert(key, position) {
+                        None => {
+                            self.key_heap_bytes =
+                                self.key_heap_bytes.saturating_add(owned_heap_bytes);
+                        }
+                        Some(released) if released < self.head => {
+                            self.released_keys = self.released_keys.saturating_sub(1);
+                        }
+                        Some(_) => {}
+                    }
                 } else {
                     computed_values.insert(key, column);
                 }
@@ -7865,8 +8686,8 @@ where
         // which is a caller contract violation this type cannot prevent, so
         // it is reported as an error rather than assumed impossible.
         keys.iter()
-            .map(|key| match self.positions.get(key) {
-                Some(&position) => Ok(CacheSlot::Cached(position)),
+            .map(|key| match self.live_position(key) {
+                Some(position) => Ok(CacheSlot::Cached(position)),
                 None => computed_values
                     .get(key)
                     .cloned()

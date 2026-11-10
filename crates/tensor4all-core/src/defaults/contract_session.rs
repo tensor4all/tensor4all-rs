@@ -310,10 +310,12 @@ const SUM_OP: &str = "sum_on_session";
 /// can reduce a value inside a region it holds open. The result is a plain scalar, published from the
 /// concrete value rather than adopted into any eager runtime.
 ///
-/// **A zero-length axis is not parity with [`IdxTensor::sum`] on purpose** in this slice: the compatibility
-/// route accumulates from zero over the payload and answers `0`, while the session's reduction rejects a
-/// zero-length axis. The session keeps its backend's refusal rather than inventing a special case, and the
-/// difference is covered by a regression test. Everything else in the served domain matches.
+/// **A zero-length axis folds to the operation's identity**: the compatibility route accumulates from zero
+/// over the empty payload and answers `0`, and the session's reduction answers the same `0`, because the
+/// backend treats an empty reduction domain as the fold's unit rather than as invalid input (tenferro
+/// #2453). The two routes therefore agree over the whole served domain. The unit is the fold's own - `sum`
+/// answers `0`, `prod` would answer `1` - and a reduction with no finite unit (`max`/`min`) keeps the
+/// backend's typed refusal; this seam serves `sum` only, so it never exercises that boundary.
 ///
 /// # Errors
 ///
@@ -693,6 +695,65 @@ pub fn norm_on_session(
     tensor: &IdxTensor,
 ) -> Result<f64, IdxTensorError> {
     norm_on_session_impl::<false>(session, tensor)
+}
+
+/// Read the dense column-major values of a host tensor under `new_indices` on a caller-held session.
+///
+/// The session counterpart of `permute_indices(new_indices)` followed by
+/// [`IdxTensor::to_vec`]: the reorder and the readback run on `session`, so a
+/// caller already inside a session reads an operand without entering the
+/// process-global context or the eager runtime that owns the operand. Compact
+/// host storage and untracked eager host values are both served; `new_indices`
+/// must be a reordering of the tensor's indices with the same dimensions.
+///
+/// # Errors
+///
+/// Returns [`IdxTensorError::PayloadScalarTypeMismatch`] when the payload is not `T`
+/// (classified exactly as [`IdxTensor::to_vec`] classifies it, so
+/// [`IdxTensorError::is_payload_scalar_type_mismatch`] holds), and the refusals of
+/// [`permute_indices_on_session`] for an invalid index list, a tracked, device-resident or
+/// structured operand, a deferred storage error or a session failure.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{dense_values_on_session, DynIndex, IdxTensor};
+/// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(3);
+/// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+/// let values = context.with_concrete_session(|session| {
+///     dense_values_on_session::<f64>(session, &tensor, &[j.clone(), i.clone()])
+/// })??;
+/// // Column-major over `[j, i]`: the transpose of the `[i, j]` buffer.
+/// assert_eq!(values, vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+/// let mismatch = context.with_concrete_session(|session| {
+///     dense_values_on_session::<f32>(session, &tensor, &[i.clone(), j.clone()])
+/// })?;
+/// assert!(mismatch.unwrap_err().is_payload_scalar_type_mismatch());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn dense_values_on_session<T: TensorScalar + Copy>(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    tensor: &IdxTensor,
+    new_indices: &[crate::defaults::DynIndex],
+) -> Result<Vec<T>, IdxTensorError> {
+    const OP: &str = "dense_values_on_session";
+    let aligned = permute_indices_on_session(session, tensor, new_indices)?;
+    let operand = aligned.session_dense_operand(OP)?;
+    let value = materialize_on_session(OP, session, operand)?;
+    value.as_slice::<T>().map(<[T]>::to_vec).map_err(|source| {
+        if matches!(
+            source.kind(),
+            tenferro_tensor::ErrorKind::Validation(tenferro_tensor::ValidationKind::DTypeMismatch)
+        ) {
+            IdxTensorError::PayloadScalarTypeMismatch
+        } else {
+            IdxTensorError::operation(OP, anyhow::Error::new(source))
+        }
+    })
 }
 
 /// Publish a compact host copy of one operand on the caller's session.

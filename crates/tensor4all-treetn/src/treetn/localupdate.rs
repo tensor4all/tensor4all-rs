@@ -390,13 +390,13 @@ where
         // Validate: canonical_region must be a single node within the step's nodes
         let canonical_region = staged.canonical_region();
         if canonical_region.is_empty() {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!("TreeTN is not canonicalized: canonical_region is empty")
                     .context("apply_local_update_sweep: TreeTN must be canonicalized before sweep"),
             ));
         }
         if canonical_region.len() != 1 {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_configuration(
                 anyhow::anyhow!(
                     "canonical_region must be a single node, got {} nodes",
                     canonical_region.len()
@@ -409,7 +409,7 @@ where
         })?;
         let step_nodes_set: HashSet<V> = step.nodes.iter().cloned().collect();
         if !step_nodes_set.contains(center_node) {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!(
                     "canonical_region {:?} is not within the extracted subtree {:?}",
                     center_node,
@@ -459,7 +459,9 @@ use tensor4all_core::{Canonical, FactorizeOptions, SvdTruncationPolicy};
 ///
 /// # Algorithm
 /// For each step with nodes [A, B] where B is the new center:
-/// 1. Contract tensors A and B into a single tensor AB
+/// 1. Contract tensors A and B into a single tensor AB (when the bond is
+///    smaller than both sides of the block, A is first split by an exact QR
+///    and the SVD runs on `R B`, which carries the same singular values)
 /// 2. Factorize AB using SVD with truncation (left indices = A's external + bond to A's other neighbors)
 /// 3. The left tensor becomes the new A, the right tensor becomes the new B
 /// 4. B is the orthogonality center (isometry pointing towards B)
@@ -589,7 +591,6 @@ where
         let tensor_b = subtree
             .tensor(idx_b)
             .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?} in subtree", node_b))?;
-        let tensor_ab = T::contract(&[tensor_a, tensor_b]).context("Failed to contract A and B")?;
 
         // Determine left indices (indices that will remain on A after factorization)
         // These are: all indices of A except the bond to B
@@ -617,18 +618,68 @@ where
             .validate()
             .map_err(|error| anyhow::anyhow!("Invalid factorization options: {error}"))?;
 
+        // Condition A by an exact QR before contracting. `A = Q R` with `Q`
+        // isometric gives `AB = Q (R B)`, so `R B` carries AB's singular
+        // values, its retained rank and its truncated value; only the work
+        // shrinks. The conditioning pays only when the bond is smaller than
+        // both matricization dimensions of the block: then a QR of `A`
+        // followed by an SVD of the `bond x columns` remainder is cheaper than
+        // an SVD of the full block. On a comb, the step that leaves the hub
+        // carries the other branches on the left, which is exactly that case.
+        // A QR that cannot read the storage (a diagonal tensor, for one) or that
+        // had to drop a row (A is rank-deficient on the bond) keeps the
+        // unconditioned route: the conditioning is an optimization, and the
+        // direct factorization is exact on its own.
+        let columns: usize = tensor_b
+            .external_indices()
+            .iter()
+            .filter(|index| *index != &bond_ab)
+            .map(|index| index.dim())
+            .product();
+        let rows: usize = left_inds.iter().map(|index| index.dim()).product();
+        let qr_options = FactorizeOptions::qr().with_qr_rtol(0.0);
+        let conditioned = if rows.min(columns) <= bond_ab.dim() {
+            None
+        } else {
+            match self.context.as_ref() {
+                Some(context) => tensor_a.factorize_in(&left_inds, &qr_options, context),
+                None => tensor_a.factorize(&left_inds, &qr_options),
+            }
+            .ok()
+            .filter(|qr| qr.rank == bond_ab.dim())
+        };
+
         // A site-free endpoint leaves one side of the split empty; the shared
         // helper handles that case with a dimension-one bond.
         let context = self.context.as_ref();
-        let factorize_result =
-            super::factorize_allowing_empty_side(&tensor_ab, &left_inds, |tensor, left| {
+        let (left_prefix, factor_input, factor_left_inds) = match conditioned {
+            Some(qr) => {
+                let reduced = T::contract(&[&qr.right, tensor_b])
+                    .context("Failed to contract the conditioned A with B")?;
+                (Some(qr.left), reduced, vec![qr.bond_index])
+            }
+            None => (
+                None,
+                T::contract(&[tensor_a, tensor_b]).context("Failed to contract A and B")?,
+                left_inds,
+            ),
+        };
+        let factorize_result = super::factorize_allowing_empty_side(
+            &factor_input,
+            &factor_left_inds,
+            |tensor, left| {
                 match context {
                     Some(context) => tensor.factorize_in(left, &options, context),
                     None => tensor.factorize(left, &options),
                 }
                 .map_err(|e| anyhow::anyhow!("Factorization failed: {}", e))
-            })?;
-        let new_tensor_a = factorize_result.left;
+            },
+        )?;
+        let new_tensor_a = match left_prefix {
+            Some(q) => T::contract(&[&q, &factorize_result.left])
+                .context("Failed to apply the conditioning QR to A")?,
+            None => factorize_result.left,
+        };
         let new_tensor_b = factorize_result.right;
         let new_bond = factorize_result.bond_index;
 
@@ -691,13 +742,15 @@ where
         V: Ord,
     {
         if node_names.is_empty() {
-            return Err(anyhow::anyhow!("Cannot extract empty subtree").into());
+            return Err(TreeTNOperationError::invalid_configuration(
+                anyhow::anyhow!("Cannot extract empty subtree"),
+            ));
         }
 
         // Validate all nodes exist
         for name in node_names {
             if self.graph.node_index(name).is_none() {
-                return Err(TreeTNOperationError::from(
+                return Err(TreeTNOperationError::invalid_graph(
                     anyhow::anyhow!("Node {:?} does not exist", name)
                         .context("extract_subtree: invalid node name"),
                 ));
@@ -711,7 +764,7 @@ where
             .collect();
 
         if !self.site_index_network.is_connected_subset(&node_indices) {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!("Specified nodes do not form a connected subtree")
                     .context("extract_subtree: nodes must be connected"),
             ));
@@ -873,7 +926,7 @@ where
         // Verify that replacement has the same topology (nodes and edges)
         // Note: site index network may differ due to bond dimension changes in truncation
         if !current_subtree.same_topology(replacement) {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!(
                     "Replacement TreeTN does not have the same topology as the current subtree"
                 )

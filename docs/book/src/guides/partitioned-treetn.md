@@ -42,6 +42,12 @@ Norms, inner products, contraction, truncation, and summation use this stored
 masked value directly. No projector is re-applied and no full network is
 densified.
 
+`PartitionedTreeTN::evaluate_batched(&indices, values)` evaluates a partition
+at many points, with the same `indices` and column-major `values` layout as
+`TreeTN::evaluate`. Each point is evaluated by the one patch whose projector
+it satisfies, found by a hash lookup, and a point that no patch covers is
+zero.
+
 ## Adaptive patching
 
 Every truncating or contracting operation takes an explicit existing node name
@@ -96,6 +102,30 @@ cutoff discards weight that the one-shot truncation keeps, so the exact sum
 stays the accurate choice. The per-add truncation is therefore opt-in; the sum
 engine section of `docs/design/partitioned-treetn.md` carries the measurement
 conditions and the full table.
+
+For a cheap seed followed by variational refinement, use
+`TreeTN::pairwise_sum_fit(&terms, order, per_add, FitOptions::new(1))`.
+The pairwise cutoff and cap control only the seed; fit options independently
+control the sweeps over **all original summands**. Give the fit a larger bond
+cap or an SVD policy to grow beyond the seed. The result contains `network`
+and `truncations`, with the absolute discarded norm for each two-node update.
+These local losses are relative to the untruncated local projection, not an
+accuracy certificate against the exact sum. Zero sweeps return the seed.
+`fit_sum_with_report(&terms, &seed, &center, options)` accepts a seed built
+elsewhere. `TreeTN::density_matrix_sum(&refs, &center, cutoff, max_bond_dim)`
+builds such a seed from all terms at once, with exact cross-term environments
+and a density eigenvalue-tail cutoff. It returns `network` and
+`discarded_weight`, an absolute squared error estimate in exact arithmetic.
+Without a binding cap its relative error is bounded by
+`sqrt((R - 1) * cutoff)`, apart from roundoff. Forming density matrices loses
+accuracy near machine precision; cancellation can weaken the estimate.
+Pair environments cost quadratic memory and work in the number of terms;
+this method can be slower than an exact N-ary sum at small input bonds.
+
+Fitting retains an environment for each target, so a smaller seed does not
+guarantee lower peak memory or time than exact-then-truncate. The pairwise-fit
+rustdoc states the chain storage costs and the tested R=12, N=64 accuracy
+comparison. Exact `SumEngine` options in partitioned operations are unchanged.
 
 ```rust
 # use tensor4all_core::{DynIndex, IdxTensor};

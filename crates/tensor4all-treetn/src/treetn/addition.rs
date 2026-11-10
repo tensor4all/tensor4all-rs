@@ -597,20 +597,24 @@ where
         V: Ord,
         T::Index: Eq + Hash,
     {
-        let (first, rest) = terms
-            .split_first()
-            .ok_or_else(|| anyhow::anyhow!("add_many requires at least one term"))?;
+        let (first, rest) = terms.split_first().ok_or_else(|| {
+            TreeTNOperationError::invalid_configuration(anyhow::anyhow!(
+                "add_many requires at least one term"
+            ))
+        })?;
         for term in rest {
             // Verify same topology
             if !first.same_topology(term) {
-                return Err(anyhow::anyhow!("Cannot add TreeTNs with different topologies").into());
+                return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
+                    "Cannot add TreeTNs with different topologies"
+                )));
             }
             first.ensure_same_site_spaces(term)?;
         }
         Ok(first)
     }
 
-    fn ensure_same_site_spaces(&self, other: &Self) -> Result<()>
+    fn ensure_same_site_spaces(&self, other: &Self) -> std::result::Result<(), TreeTNOperationError>
     where
         V: Ord,
         T::Index: Eq + Hash,
@@ -622,11 +626,17 @@ where
             let other_site_space = other
                 .site_space(&node_name)
                 .ok_or_else(|| anyhow::anyhow!("site space not found for node {:?}", node_name))?;
-            if self_site_space != other_site_space {
-                return Err(anyhow::anyhow!(
-                    "Cannot add TreeTNs with different site indices at node {:?}",
+            if self_site_space != other_site_space
+                || self_site_space.iter().any(|index| {
+                    other_site_space
+                        .get(index)
+                        .is_some_and(|other| index.dim() != other.dim())
+                })
+            {
+                return Err(TreeTNOperationError::invalid_graph(anyhow::anyhow!(
+                    "Cannot add TreeTNs with different site indices or dimensions at node {:?}",
                     node_name
-                ));
+                )));
             }
         }
         Ok(())

@@ -37,7 +37,11 @@ where
         ),
     ] {
         let mut reference = None;
-        for limit in [None, Some(0), Some(16), Some(1024)] {
+        // One table of 4 buckets of (u64 key, T value) pairs, padding included:
+        // it holds three entries,
+        // so a run that evaluates more points evicts.
+        let evicting = 4 * (std::mem::size_of::<(u64, T)>() + 1) + 16;
+        for limit in [None, Some(0), Some(16), Some(evicting), Some(1024)] {
             let mut evaluated = 0;
             let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<T>> {
                 evaluated += batch.n_points(); // FnMut, no RefCell wrapper required.
@@ -49,7 +53,7 @@ where
                     })
                     .collect())
             };
-            let result = crossinterpolate2::<T, _, _, _>(
+            let result = crossinterpolate2::<T, _, _, _, _>(
                 evaluate,
                 dims.clone(),
                 TreeTciGraph::new(dims.len(), &edges).unwrap(),
@@ -70,6 +74,16 @@ where
             assert!(result.evaluation.requested_points >= evaluated);
             if let Some(limit) = limit {
                 assert!(result.evaluation.retained_bytes <= limit);
+                // Every evaluated value is retained, evicted later, or refused.
+                let e = &result.evaluation;
+                assert_eq!(
+                    e.evaluated_points,
+                    e.cached_entries + e.evicted_entries + e.dropped_inserts,
+                    "limit {limit}"
+                );
+                if limit == evicting {
+                    assert!(e.evicted_entries > 0, "limit {limit}: no eviction");
+                }
                 if limit == 1024 {
                     assert!(result.evaluation.cache_hits > 0);
                     assert!(evaluated < result.evaluation.requested_points);
@@ -242,15 +256,17 @@ fn memo_accepts_a_borrowed_mutable_tree_evaluator() {
     use tensor4all_core::ColMajorArrayRef;
     use tensor4all_treetn::TreeTNCachedEvaluator;
     let graph = TreeTciGraph::linear_chain(2).unwrap();
-    let source = crossinterpolate2::<f64, _, _, _>(
+    let source = crossinterpolate2::<f64, _, _, _, _>(
         |batch| {
-            Ok(batch
-                .data()
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|p| 2.0 * (p[0] + 1) as f64 * (p[1] + 1) as f64)
-                .collect())
+            Ok::<_, anyhow::Error>(
+                batch
+                    .data()
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|p| 2.0 * (p[0] + 1) as f64 * (p[1] + 1) as f64)
+                    .collect(),
+            )
         },
         vec![2, 2],
         graph.clone(),
@@ -276,8 +292,8 @@ fn memo_accepts_a_borrowed_mutable_tree_evaluator() {
         .collect::<Vec<_>>();
     let mut oracle =
         TreeTNCachedEvaluator::<usize>::new(&source, &indices, Default::default()).unwrap();
-    let result = crossinterpolate2::<f64, _, _, _>(
-        |batch: GlobalIndexBatch<'_>| {
+    let result = crossinterpolate2::<f64, _, _, _, _>(
+        |batch: GlobalIndexBatch<'_>| -> anyhow::Result<Vec<f64>> {
             let shape = [batch.n_sites(), batch.n_points()];
             Ok(oracle
                 .evaluate_batched(ColMajorArrayRef::new(batch.data(), &shape)?)?
@@ -310,8 +326,8 @@ fn memo_rejects_index_spaces_wider_than_its_side_keys() {
     // 129 binary sites need 129 bits, so the memo cache selects a 256-bit key,
     // which has no side-key support. The run fails at setup instead of silently
     // falling back to whole-point lookups.
-    let error = crossinterpolate2::<f64, _, _, _>(
-        |batch: GlobalIndexBatch<'_>| Ok(vec![1.0; batch.n_points()]),
+    let error = crossinterpolate2::<f64, _, _, _, _>(
+        |batch: GlobalIndexBatch<'_>| Ok::<_, anyhow::Error>(vec![1.0; batch.n_points()]),
         vec![2; 129],
         TreeTciGraph::linear_chain(129).unwrap(),
         vec![vec![0; 129]],
@@ -331,8 +347,8 @@ fn memo_rejects_index_spaces_wider_than_its_side_keys() {
     );
 
     // Without memoization the same run is untouched by the keyed path.
-    let result = crossinterpolate2::<f64, _, _, _>(
-        |batch: GlobalIndexBatch<'_>| Ok(vec![1.0; batch.n_points()]),
+    let result = crossinterpolate2::<f64, _, _, _, _>(
+        |batch: GlobalIndexBatch<'_>| Ok::<_, anyhow::Error>(vec![1.0; batch.n_points()]),
         vec![2; 129],
         TreeTciGraph::linear_chain(129).unwrap(),
         vec![vec![0; 129]],

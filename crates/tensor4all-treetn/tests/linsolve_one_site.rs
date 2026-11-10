@@ -4,11 +4,15 @@ use std::collections::HashMap;
 use num_complex::Complex64;
 use tensor4all_core::{
     AnyScalar, Canonical, DynIndex, FactorizeOptions, IdxTensor, IndexLike, SvdTruncationPolicy,
+    TensorContractionLike,
 };
 use tensor4all_treetn::{
     factorize_tensor_to_treetn_with, square_linsolve, IndexMapping, LinsolveOptions,
-    SquareLinsolveResult, TreeTN, TreeTopology,
+    ResidualEnrichment, ResidualEnrichmentRangeError, SquareLinsolveResult, TreeTN,
+    TreeTNOperationError, TreeTopology,
 };
+
+use crate::enrichment_step::{bond_dim, distance_from_00, enrich_once, EnrichmentStep};
 
 type State = TreeTN<IdxTensor, usize>;
 
@@ -34,6 +38,23 @@ struct Problem {
 
 impl Problem {
     fn new(edges: &[(usize, usize)], complex: bool) -> Self {
+        let z = |re, im| Complex64::new(re, if complex { im } else { 0.0 });
+        Self::with_local_operator(
+            edges,
+            complex,
+            [z(3.0, 0.1), z(0.25, -0.2), z(-0.15, 0.3), z(2.0, -0.2)],
+            z(0.3, 0.2),
+            z(0.7, -0.1),
+        )
+    }
+
+    fn with_local_operator(
+        edges: &[(usize, usize)],
+        complex: bool,
+        local: [Complex64; 4],
+        a0: Complex64,
+        a1: Complex64,
+    ) -> Self {
         let n = edges
             .iter()
             .flat_map(|&(u, v)| [u, v])
@@ -49,9 +70,6 @@ impl Problem {
             edges.to_vec(),
         );
         let z = |re, im| Complex64::new(re, if complex { im } else { 0.0 });
-        let local = [z(3.0, 0.1), z(0.25, -0.2), z(-0.15, 0.3), z(2.0, -0.2)];
-        let a0 = z(0.3, 0.2);
-        let a1 = z(0.7, -0.1);
         let values: Vec<_> = (0..1 << n)
             .map(|i| z((i + 1) as f64 / 3.0, (i as f64).cos()))
             .collect();
@@ -160,6 +178,26 @@ impl Problem {
             .with_convergence_tol(1e-9)
     }
 
+    /// `options(sweeps)` with `solver`; GMRES keeps the tighter `gmres_*`
+    /// settings, other solvers get the defaults because they reject changed
+    /// GMRES controls.
+    fn options_with_solver(
+        &self,
+        sweeps: usize,
+        solver: tensor4all_treetn::LocalSolver,
+    ) -> LinsolveOptions {
+        let options = self.options(sweeps);
+        let options = if matches!(solver, tensor4all_treetn::LocalSolver::Gmres) {
+            options
+        } else {
+            let defaults = LinsolveOptions::default();
+            options
+                .with_gmres_tol(defaults.gmres_tol)
+                .with_gmres_restart_dim(defaults.gmres_restart_dim)
+        };
+        options.with_local_solver(solver)
+    }
+
     fn solve(
         &self,
         init: State,
@@ -178,12 +216,55 @@ impl Problem {
         .unwrap()
     }
 
-    fn assert_solution(&self, result: &SquareLinsolveResult<IdxTensor, usize>) {
+    /// The initial guess truncated by SVD to bonds of at most `max_bond_dim`.
+    fn rank_limited_init(&self, max_bond_dim: usize) -> State {
+        self.decompose(&self.init.contract_to_tensor().unwrap(), max_bond_dim)
+    }
+
+    /// `dense` decomposed on the problem's tree with bonds of at most `max_bond_dim`.
+    fn decompose(&self, dense: &IdxTensor, max_bond_dim: usize) -> State {
+        let sites = self
+            .init
+            .node_names()
+            .into_iter()
+            .map(|i| {
+                (
+                    i,
+                    self.init.site_space(&i).unwrap().iter().cloned().collect(),
+                )
+            })
+            .collect();
+        factorize_tensor_to_treetn_with(
+            dense,
+            &TreeTopology::new(sites, self.edges.clone()),
+            FactorizeOptions::svd().with_max_bond_dim(max_bond_dim),
+            &0,
+        )
+        .unwrap()
+    }
+
+    fn bond_dims(&self, state: &State) -> Vec<usize> {
+        self.edges
+            .iter()
+            .map(|(u, v)| {
+                state
+                    .bond_index(state.edge_between(u, v).unwrap())
+                    .unwrap()
+                    .dim()
+            })
+            .collect()
+    }
+
+    fn assert_dense_solution(&self, result: &SquareLinsolveResult<IdxTensor, usize>) {
         let actual = result.solution.contract_to_tensor().unwrap();
         let error = actual.sub(&self.expected).unwrap().maxabs().unwrap();
         assert!(error < 1e-8, "dense solution error {error}");
         assert!(result.converged, "residual {:?}", result.residual);
         assert!(result.residual.unwrap() < 1e-9);
+    }
+
+    fn assert_solution(&self, result: &SquareLinsolveResult<IdxTensor, usize>) {
+        self.assert_dense_solution(result);
         for &(u, v) in &self.edges {
             let before = self
                 .init
@@ -503,4 +584,907 @@ fn small_nonzero_operator_is_not_treated_as_zero() {
             .with_coefficients(p.a0.re, p.a1.re / scale);
         p.assert_solution(&p.solve(p.init.clone(), 0, options));
     }
+}
+
+fn local_solver_choices() -> Vec<tensor4all_treetn::LocalSolver> {
+    use tensor4all_core::krylov::{BiCgStabOptions, CgOptions};
+    use tensor4all_treetn::LocalSolver;
+    vec![
+        LocalSolver::Gmres,
+        LocalSolver::Cg(CgOptions {
+            rtol: 1e-12,
+            ..Default::default()
+        }),
+        LocalSolver::BiCgStab(BiCgStabOptions {
+            rtol: 1e-12,
+            ..Default::default()
+        }),
+    ]
+}
+
+#[test]
+fn local_solver_selection_supports_one_and_two_site_tree_sweeps() {
+    for complex in [false, true] {
+        for edges in [vec![(0, 1), (1, 2)], vec![(0, 1), (0, 2), (0, 3)]] {
+            let z = |re, im| Complex64::new(re, if complex { im } else { 0.0 });
+            let p = Problem::with_local_operator(
+                &edges,
+                complex,
+                [z(3.0, 0.0), z(0.25, 0.4), z(0.25, -0.4), z(2.0, 0.0)],
+                z(0.3, 0.0),
+                z(0.7, 0.0),
+            );
+            for nsite in [1, 2] {
+                for solver in local_solver_choices() {
+                    let options = p.options_with_solver(4, solver).with_nsite(nsite);
+                    p.assert_solution(&p.solve(p.init.clone(), edges.last().unwrap().1, options));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn local_solver_selection_bicgstab_handles_general_tree_operators() {
+    use tensor4all_core::krylov::BiCgStabOptions;
+    use tensor4all_treetn::LocalSolver;
+    for complex in [false, true] {
+        let p = Problem::new(&[(0, 1), (0, 2), (0, 3)], complex);
+        for nsite in [1, 2] {
+            let options = p
+                .options_with_solver(
+                    4,
+                    LocalSolver::BiCgStab(BiCgStabOptions {
+                        rtol: 1e-12,
+                        ..Default::default()
+                    }),
+                )
+                .with_nsite(nsite);
+            p.assert_solution(&p.solve(p.init.clone(), 0, options));
+        }
+    }
+}
+
+#[test]
+fn local_solver_selection_respects_zero_budget_for_identity_only_sweeps() {
+    use tensor4all_core::krylov::{BiCgStabOptions, CgOptions};
+    use tensor4all_treetn::LocalSolver;
+    let p = Problem::new(&[(0, 1)], false);
+    let before = p.init.contract_to_tensor().unwrap();
+    let closed_form = p
+        .rhs
+        .contract_to_tensor()
+        .unwrap()
+        .scale(AnyScalar::new_real(0.5))
+        .unwrap();
+    let zero_budget_solvers = || {
+        [
+            LocalSolver::Gmres,
+            LocalSolver::Cg(CgOptions {
+                max_iter: 0,
+                ..Default::default()
+            }),
+            LocalSolver::BiCgStab(BiCgStabOptions {
+                max_iter: 0,
+                ..Default::default()
+            }),
+        ]
+    };
+    // One-site ALS sweeps an identity-only system, so native budgets apply.
+    for solver in zero_budget_solvers().into_iter().skip(1) {
+        let options = p
+            .options_with_solver(1, solver)
+            .with_nsite(1)
+            .with_coefficients(2.0, 0.0);
+        let result = p.solve(p.init.clone(), 0, options);
+        assert!(!result.converged);
+        assert_eq!(result.sweeps, 1);
+        assert!(result.residual.unwrap() > 1e-3);
+        assert!(
+            result
+                .solution
+                .contract_to_tensor()
+                .unwrap()
+                .sub(&before)
+                .unwrap()
+                .maxabs()
+                .unwrap()
+                < 1e-12
+        );
+    }
+    // Two-site MALS returns the same closed form whichever solver is selected.
+    for solver in zero_budget_solvers() {
+        let options = p
+            .options_with_solver(1, solver)
+            .with_nsite(2)
+            .with_coefficients(2.0, 0.0);
+        let result = p.solve(p.init.clone(), 0, options);
+        assert!(
+            result
+                .solution
+                .contract_to_tensor()
+                .unwrap()
+                .sub(&closed_form)
+                .unwrap()
+                .maxabs()
+                .unwrap()
+                < 1e-12
+        );
+    }
+}
+
+#[test]
+fn local_solver_selection_zero_and_tiny_rhs_across_sweep_modes() {
+    for complex in [false, true] {
+        for scale in [0.0, 1e-20] {
+            let z = |re, im| Complex64::new(re, if complex { im } else { 0.0 });
+            let mut p = Problem::with_local_operator(
+                &[(0, 1)],
+                complex,
+                [z(3.0, 0.0), z(0.25, 0.2), z(0.25, -0.2), z(2.0, 0.0)],
+                z(0.3, 0.0),
+                z(0.7, 0.0),
+            );
+            p.rhs.scale_mut(AnyScalar::new_real(scale)).unwrap();
+            let expected = p.expected.scale(AnyScalar::new_real(scale)).unwrap();
+            if scale != 0.0 {
+                p.init.scale_mut(AnyScalar::new_real(0.0)).unwrap();
+            }
+            for nsite in [1, 2] {
+                for solver in local_solver_choices() {
+                    let options = p.options_with_solver(2, solver).with_nsite(nsite);
+                    let result = p.solve(p.init.clone(), 0, options);
+                    assert!(
+                        result.converged,
+                        "{complex} {scale} {nsite}: {:?}",
+                        result.residual
+                    );
+                    let error = result
+                        .solution
+                        .contract_to_tensor()
+                        .unwrap()
+                        .sub(&expected)
+                        .unwrap()
+                        .maxabs()
+                        .unwrap();
+                    assert!(error <= 1e-8 * scale, "{complex} {scale} {nsite}: {error}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_single_index_mapping_is_rejected_before_the_identity_shortcut() {
+    // Two-site MALS with a1 = 0 takes the identity-only closed form, which does
+    // not use the mappings when no residual is requested; the mismatch must
+    // still be reported.
+    let p = Problem::new(&[(0, 1)], false);
+    let options = p
+        .options(1)
+        .with_nsite(2)
+        .with_coefficients(2.0, 0.0)
+        .with_residual_check(false);
+    assert!(options.convergence_tol.is_some());
+    let options = LinsolveOptions {
+        convergence_tol: None,
+        ..options
+    };
+    for (input, output) in [
+        (Some(p.input.clone()), None),
+        (None, Some(p.output.clone())),
+    ] {
+        let error = square_linsolve(
+            &p.operator,
+            &p.rhs,
+            p.init.clone(),
+            &0,
+            options.clone(),
+            input,
+            output,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, TreeTNOperationError::InvalidConfiguration { .. }),
+            "{error:?}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("must both be Some or both be None"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn non_finite_coefficients_are_rejected_before_the_identity_shortcut() {
+    // Two-site MALS with a1 = 0 and no residual takes the closed form
+    // rhs / a0 without calling a local solver, so the coefficients must be
+    // checked by option validation.
+    let p = Problem::new(&[(0, 1)], false);
+    for a0 in [f64::NAN, f64::INFINITY] {
+        let options = LinsolveOptions {
+            convergence_tol: None,
+            ..p.options(1)
+                .with_nsite(2)
+                .with_coefficients(a0, 0.0)
+                .with_residual_check(false)
+        };
+        let error = square_linsolve(
+            &p.operator,
+            &p.rhs,
+            p.init.clone(),
+            &0,
+            options,
+            Some(p.input.clone()),
+            Some(p.output.clone()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, TreeTNOperationError::InvalidConfiguration { .. }),
+            "{error:?}"
+        );
+        assert!(error.to_string().contains("a0 must be finite"), "{error}");
+    }
+}
+
+#[test]
+fn two_site_truncation_options_are_rejected_before_the_identity_shortcut() {
+    let p = Problem::new(&[(0, 1)], false);
+    for (options, message) in [
+        (p.options(1).with_max_bond_dim(0), "max_bond_dim"),
+        (
+            p.options(1)
+                .with_svd_policy(SvdTruncationPolicy::new(f64::NAN)),
+            "threshold",
+        ),
+    ] {
+        let options = LinsolveOptions {
+            convergence_tol: None,
+            ..options
+                .with_nsite(2)
+                .with_coefficients(1.0, 0.0)
+                .with_residual_check(false)
+        };
+        let error = square_linsolve(
+            &p.operator,
+            &p.rhs,
+            p.init.clone(),
+            &0,
+            options,
+            Some(p.input.clone()),
+            Some(p.output.clone()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, TreeTNOperationError::InvalidConfiguration { .. }),
+            "{error:?}"
+        );
+        assert!(format!("{error:#}").contains(message), "{error:#}");
+    }
+}
+
+#[test]
+fn identity_only_solve_divides_by_a_tiny_or_huge_a0_without_overflow() {
+    // With a1 = 0, two-site MALS returns rhs / a0 in closed form and one-site
+    // ALS solves a0 x = b locally, which local GMRES also does in closed form.
+    // For these coefficients 1 / a0, or |a0|^2 for complex a0, leaves the f64
+    // range although rhs / a0 is of order 2^70 or 2^-18.
+    // Split the exponent: 2^-1070 itself is subnormal but 1 / 2^1070 overflows.
+    let pow2 = |k: i32| 2.0_f64.powi(k / 2) * 2.0_f64.powi(k - k / 2);
+    // (complex problem, a0, rhs scale, rhs scale / a0)
+    let cases = [
+        (
+            false,
+            Complex64::new(3.0 * pow2(-1070), 0.0),
+            pow2(-1000),
+            Complex64::new(pow2(70) / 3.0, 0.0),
+        ),
+        (
+            true,
+            Complex64::new(3.0, 4.0) * pow2(-1070),
+            pow2(-1000),
+            Complex64::new(3.0, -4.0) * (pow2(70) / 25.0),
+        ),
+        (
+            true,
+            Complex64::new(3.0, 4.0) * pow2(1018),
+            pow2(1000),
+            Complex64::new(3.0, -4.0) * (pow2(-18) / 25.0),
+        ),
+    ];
+    for (complex, a0, rhs_scale, quotient) in cases {
+        let mut p = Problem::new(&[(0, 1)], complex);
+        let expected = p
+            .rhs
+            .contract_to_tensor()
+            .unwrap()
+            .scale(AnyScalar::new_complex(quotient.re, quotient.im))
+            .unwrap();
+        p.rhs.scale_mut(AnyScalar::new_real(rhs_scale)).unwrap();
+        for nsite in [2, 1] {
+            let options = LinsolveOptions {
+                convergence_tol: None,
+                ..p.options(1)
+                    .with_nsite(nsite)
+                    .with_coefficients(AnyScalar::new_complex(a0.re, a0.im), 0.0)
+                    .with_residual_check(false)
+            };
+            let result = p.solve(p.init.clone(), 0, options);
+            assert_eq!(result.sweeps, if nsite == 2 { 0 } else { 1 });
+            assert!(result.residual.is_none());
+            let error = result
+                .solution
+                .contract_to_tensor()
+                .unwrap()
+                .sub(&expected)
+                .unwrap()
+                .maxabs()
+                .unwrap();
+            let scale = expected.maxabs().unwrap();
+            assert!(
+                error.is_finite() && error <= 1e-14 * scale,
+                "nsite = {nsite}, {a0:?}: {error} vs {scale}"
+            );
+        }
+    }
+}
+
+#[test]
+fn enrichment_grows_an_insufficient_initial_rank() {
+    for complex in [false, true] {
+        for edges in [vec![(0, 1), (1, 2), (2, 3)], vec![(0, 1), (0, 2), (0, 3)]] {
+            let p = Problem::new(&edges, complex);
+            let init = p.rank_limited_init(1);
+            assert!(p.bond_dims(&init).iter().all(|&dim| dim == 1));
+            let without = p.solve(init.clone(), 0, p.options(4));
+            assert!(!without.converged);
+            let options = p.options(6).with_enrichment(ResidualEnrichment::default());
+            let result = p.solve(init, 0, options);
+            p.assert_dense_solution(&result);
+            // Every bond grows, and never beyond the dimension of its smaller side.
+            for (dim, &(u, v)) in p.bond_dims(&result.solution).into_iter().zip(&edges) {
+                let side = |node: usize, away: usize| {
+                    let mut seen = vec![node];
+                    let mut stack = vec![node];
+                    while let Some(n) = stack.pop() {
+                        for &(a, b) in &edges {
+                            for (from, to) in [(a, b), (b, a)] {
+                                if from == n && to != away && !seen.contains(&to) {
+                                    seen.push(to);
+                                    stack.push(to);
+                                }
+                            }
+                        }
+                    }
+                    1usize << seen.len()
+                };
+                let bound = side(u, v).min(side(v, u));
+                assert!(
+                    (2..=bound).contains(&dim),
+                    "edge ({u}, {v}): {dim} > {bound}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn enrichment_respects_per_step_and_total_bond_limits() {
+    // The complex solution needs rank 4 across the middle bond.
+    let p = Problem::new(&[(0, 1), (1, 2), (2, 3)], true);
+    let init = p.rank_limited_init(1);
+    let mut options = p
+        .options(1)
+        .with_enrichment(ResidualEnrichment::default().with_max_added(1));
+    options.convergence_tol = None;
+    // One full sweep visits every edge twice, adding at most one direction
+    // per visit.
+    let dims = p.bond_dims(&p.solve(init.clone(), 0, options.clone()).solution);
+    assert!(dims.iter().all(|&dim| (2..=3).contains(&dim)), "{dims:?}");
+
+    let capped = options.with_nfullsweeps(4).with_enrichment(
+        ResidualEnrichment::default()
+            .with_max_added(4)
+            .with_max_bond_dim(2),
+    );
+    let result = p.solve(init, 0, capped);
+    assert_eq!(p.bond_dims(&result.solution), vec![2, 2, 2]);
+    assert!(result.residual.unwrap() > 1e-4);
+}
+
+#[test]
+fn enrichment_skips_zero_rhs_and_single_node_problems() {
+    let mut p = Problem::new(&[(0, 1), (1, 2)], true);
+    p.rhs.scale_mut(AnyScalar::new_real(0.0)).unwrap();
+    let init = p.rank_limited_init(1);
+    let options = p.options(2).with_enrichment(ResidualEnrichment::default());
+    let result = p.solve(init, 0, options);
+    assert!(result.converged);
+    assert_eq!(p.bond_dims(&result.solution), vec![1, 1]);
+    assert!(
+        result
+            .solution
+            .contract_to_tensor()
+            .unwrap()
+            .maxabs()
+            .unwrap()
+            < 1e-10
+    );
+
+    let p = Problem::new(&[], false);
+    let options = p.options(2).with_enrichment(ResidualEnrichment::default());
+    p.assert_solution(&p.solve(p.init.clone(), 0, options));
+}
+
+#[test]
+fn enrichment_adds_nothing_once_the_residual_is_negligible() {
+    // The real solution has rank 2 across every bond, below the middle
+    // bond's bound of 4, so only the residual cutoff stops growth.
+    let p = Problem::new(&[(0, 1), (1, 2), (2, 3)], false);
+    let exact = p.decompose(&p.expected, 2);
+    assert_eq!(p.bond_dims(&exact), vec![2, 2, 2]);
+    let options = p
+        .options(2)
+        .with_enrichment(ResidualEnrichment::default().with_cutoff(1e-8));
+    let result = p.solve(exact, 0, options);
+    p.assert_dense_solution(&result);
+    assert_eq!(p.bond_dims(&result.solution), vec![2, 2, 2]);
+}
+
+#[test]
+fn enrichment_rejects_two_site_mode_and_invalid_settings() {
+    let p = Problem::new(&[(0, 1)], false);
+    for (options, expected) in [
+        (
+            p.options(1)
+                .with_nsite(2)
+                .with_enrichment(ResidualEnrichment::default()),
+            "residual enrichment applies only to one-site ALS",
+        ),
+        (
+            p.options(1)
+                .with_enrichment(ResidualEnrichment::default().with_max_added(0)),
+            "max_added must be at least 1",
+        ),
+        (
+            p.options(1)
+                .with_enrichment(ResidualEnrichment::default().with_cutoff(f64::NAN)),
+            "cutoff must be finite and nonnegative",
+        ),
+        (
+            p.options(1)
+                .with_enrichment(ResidualEnrichment::default().with_cutoff(-1.0)),
+            "cutoff must be finite and nonnegative",
+        ),
+        (
+            p.options(1)
+                .with_enrichment(ResidualEnrichment::default().with_max_bond_dim(0)),
+            "max_bond_dim must be at least 1",
+        ),
+    ] {
+        for identity_only in [false, true] {
+            let options = if identity_only {
+                options.clone().with_coefficients(1.0, 0.0)
+            } else {
+                options.clone()
+            };
+            let message = square_linsolve(
+                &p.operator,
+                &p.rhs,
+                p.init.clone(),
+                &0,
+                options,
+                Some(p.input.clone()),
+                Some(p.output.clone()),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(message.contains(expected), "{message}");
+        }
+    }
+}
+
+#[test]
+fn enrichment_leaves_the_state_unchanged_before_the_next_solve() {
+    for small in [0.5, 1e-3] {
+        let (state, sites) = enrich_once(small, ResidualEnrichment::default().with_max_added(2));
+        assert_eq!(bond_dim(&state), 3);
+        let distance = distance_from_00(&state, &sites);
+        assert!(
+            distance < 1e-12,
+            "enrichment changed the state by {distance}"
+        );
+    }
+}
+
+#[test]
+fn enrichment_cutoff_zero_keeps_tiny_residual_directions() {
+    // A singular value of 1e-13 exceeds a zero cutoff, although the default
+    // SVD policy (relative 1e-12) alone would drop it.
+    let enrichment = ResidualEnrichment::default()
+        .with_max_added(2)
+        .with_cutoff(0.0);
+    let (state, sites) = enrich_once(1e-13, enrichment);
+    assert_eq!(bond_dim(&state), 3);
+    assert!(distance_from_00(&state, &sites) < 1e-12);
+}
+
+/// One [`EnrichmentStep`] with RHS `|00> + big |11> + small |22>`, so the
+/// residual after the source solve is `big |11> + small |22>`, with a zero
+/// cutoff and room for both directions.
+fn zero_cutoff_step(big: f64, small: f64) -> anyhow::Result<(State, [DynIndex; 2])> {
+    EnrichmentStep {
+        rhs: [1.0, big, small].map(Complex64::from),
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    }
+    .run(
+        ResidualEnrichment::default()
+            .with_max_added(2)
+            .with_cutoff(0.0),
+    )
+}
+
+/// The [`ResidualEnrichmentRangeError`] in `error`'s source chain.
+fn range_error(error: &anyhow::Error) -> ResidualEnrichmentRangeError {
+    *error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ResidualEnrichmentRangeError>())
+        .unwrap_or_else(|| panic!("expected a ResidualEnrichmentRangeError, got {error:#}"))
+}
+
+#[test]
+fn enrichment_cutoff_zero_keeps_small_directions_inside_the_supported_spread() {
+    // Normalizing by the largest entry would shrink the |22> direction below
+    // the smallest normal f64 (or to zero), and an SVD backend may flush a
+    // subnormal singular value to zero (faer does). Inside the supported
+    // spread a zero cutoff keeps it.
+    for [big, small] in [[1e-300, f64::from_bits(1)], [1.0, 1e-300], [1e150, 1e-150]] {
+        let (state, sites) = zero_cutoff_step(big, small).unwrap();
+        assert_eq!(bond_dim(&state), 3, "big = {big:e}, small = {small:e}");
+        assert!(distance_from_00(&state, &sites) < 1e-12);
+    }
+    // A subnormal residual direction alone, far below `b_local`, is added.
+    let (state, sites) = zero_cutoff_step(0.0, f64::from_bits(1)).unwrap();
+    assert_eq!(bond_dim(&state), 2);
+    assert!(distance_from_00(&state, &sites) < 1e-12);
+}
+
+#[test]
+fn enrichment_residual_spread_is_pinned_at_the_supported_boundary() {
+    let max_spread = ResidualEnrichment::MAX_RESIDUAL_SPREAD;
+    assert_eq!(max_spread, 1022);
+    // floor(log2 1) - floor(log2 2^-1022) = 1022: the shift is 0 and
+    // 2^-1022, the smallest normal f64, is kept.
+    let (state, sites) = zero_cutoff_step(1.0, f64::MIN_POSITIVE).unwrap();
+    assert_eq!(bond_dim(&state), 3);
+    assert!(distance_from_00(&state, &sites) < 1e-12);
+
+    // One binary order more on either side is refused.
+    let small = f64::MIN_POSITIVE / 2.0;
+    let error = range_error(&zero_cutoff_step(1.0, small).unwrap_err());
+    assert_eq!(
+        error,
+        ResidualEnrichmentRangeError {
+            largest: 1.0,
+            smallest: small,
+            spread: max_spread + 1,
+            max_spread,
+            shift: 0,
+        }
+    );
+    let error = range_error(&zero_cutoff_step(2.0, f64::MIN_POSITIVE).unwrap_err());
+    assert_eq!((error.spread, error.shift), (max_spread + 1, -1));
+}
+
+#[test]
+fn enrichment_spread_uses_the_exact_exponent_of_a_rounded_complex_modulus() {
+    // `u = f64::from_bits(1)`. The small residual entry `7u + 3iu` has
+    // modulus `sqrt(58) u`, exponent -1072, but `hypot` rounds it up to
+    // `8u` (exponent -1071). The spread must use the exponent of the true
+    // modulus: beside `2^-49` it is 1023 and refused (the rounded value gave
+    // 1022 and faer then dropped the subnormal direction); beside `2^-50`
+    // it is 1022 and both directions are kept.
+    let u = f64::from_bits(1);
+    let small = Complex64::new(7.0 * u, 3.0 * u);
+    let step = |big: f64| EnrichmentStep {
+        rhs: [Complex64::new(1.0, 0.0), Complex64::new(big, 0.0), small],
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let enrichment = ResidualEnrichment::default()
+        .with_max_added(2)
+        .with_cutoff(0.0);
+
+    let error = range_error(&step(2f64.powi(-49)).run(enrichment).unwrap_err());
+    assert_eq!((error.spread, error.shift), (1023, 49));
+    assert_eq!(error.max_spread, ResidualEnrichment::MAX_RESIDUAL_SPREAD);
+
+    let (state, sites) = step(2f64.powi(-50)).run(enrichment).unwrap();
+    assert_eq!(bond_dim(&state), 3);
+    assert!(distance_from_00(&state, &sites) < 1e-12);
+}
+
+#[test]
+fn enrichment_sees_the_smallest_complex_subnormal_residual_entries() {
+    // `u = f64::from_bits(1)`. A residual entry `u + iu` (hypot rounds its
+    // modulus sqrt(2) u down to u) must count as nonzero: alone it is the
+    // only residual direction (spread 0) and is added; beside a unit entry
+    // the spread is 1074 and a zero cutoff is refused.
+    let u = f64::from_bits(1);
+    let step = |big: f64| EnrichmentStep {
+        rhs: [
+            Complex64::new(1.0, 0.0),
+            Complex64::new(big, 0.0),
+            Complex64::new(u, u),
+        ],
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let enrichment = ResidualEnrichment::default()
+        .with_max_added(2)
+        .with_cutoff(0.0);
+
+    let (state, sites) = step(0.0).run(enrichment).unwrap();
+    assert_eq!(bond_dim(&state), 2);
+    assert!(distance_from_00(&state, &sites) < 1e-12);
+
+    let error = range_error(&step(1.0).run(enrichment).unwrap_err());
+    assert_eq!((error.spread, error.shift), (1074, 0));
+    assert_eq!(error.smallest, u);
+}
+
+#[test]
+fn enrichment_refuses_a_zero_cutoff_beyond_the_supported_spread() {
+    // (big, small, spread, shift) with spread = floor(log2 big) -
+    // floor(log2 small) and shift = -floor(log2 big). One power-of-two shift
+    // cannot keep both residual directions normal, so the smallest one would
+    // be lost; with a zero cutoff that is refused, naming it.
+    for (big, small, spread, shift) in [
+        (4.0, f64::from_bits(1), 2 + 1074, -2),
+        (1e200, 1e-200, 664 + 665, -664),
+        (1e300, 1e-200, 996 + 665, -996),
+        (f64::MAX, f64::from_bits(1), 1023 + 1074, -1023),
+    ] {
+        let error = range_error(&zero_cutoff_step(big, small).unwrap_err());
+        let expected = ResidualEnrichmentRangeError {
+            largest: big,
+            smallest: small,
+            spread,
+            max_spread: ResidualEnrichment::MAX_RESIDUAL_SPREAD,
+            shift,
+        };
+        assert_eq!(error, expected, "big = {big:e}, small = {small:e}");
+    }
+    let error = range_error(&zero_cutoff_step(f64::MAX, f64::from_bits(1)).unwrap_err());
+    let message = error.to_string();
+    assert!(
+        message.contains("2097") && message.contains("5e-324"),
+        "{message}"
+    );
+    // The smallest subnormal beside a unit direction (the residual of
+    // `enrich_once(f64::from_bits(1), ..)`) spans 1074 orders.
+    let error = range_error(&zero_cutoff_step(1.0, f64::from_bits(1)).unwrap_err());
+    assert_eq!((error.spread, error.shift), (1074, 0));
+}
+
+#[test]
+fn enrichment_beyond_the_supported_spread_proceeds_when_the_cutoff_dominates() {
+    // Spread 1023 is outside the range, but the lost |22> entry (modulus 1
+    // beside f64::MAX) is far below `1e-12 * ||b_local||`: no direction made
+    // of it could be kept, so the step proceeds and adds only |11>. A zero
+    // cutoff on the same residual is refused.
+    let step = EnrichmentStep {
+        rhs: [1.0, f64::MAX, 1.0].map(Complex64::from),
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let (state, _) = step
+        .run(ResidualEnrichment::default().with_max_added(2))
+        .unwrap();
+    assert_eq!(bond_dim(&state), 2);
+    let error = range_error(&zero_cutoff_step(f64::MAX, 1.0).unwrap_err());
+    assert_eq!((error.spread, error.shift), (1023, -1023));
+}
+
+/// `||Q^dagger v|| / ||v||` for the src basis `Q` (the node-0 tensor right
+/// after enrichment, with orthonormal columns along the bond) and a site-0
+/// vector `v`: 1 when `v` lies in the enriched src space, 0 when it is
+/// orthogonal to it.
+fn src_span_overlap(state: &State, site: &DynIndex, v: &[f64]) -> f64 {
+    let basis = state.tensor(state.node_index(&0).unwrap()).unwrap();
+    let vector = IdxTensor::from_dense(vec![site.clone()], v.to_vec()).unwrap();
+    let overlap = IdxTensor::contract(&[&basis.conj(), &vector]).unwrap();
+    overlap.norm().unwrap() / vector.norm().unwrap()
+}
+
+#[test]
+fn enrichment_keeps_a_small_rotated_direction_in_the_src_space() {
+    // Two four-dimensional sites, RHS
+    // `|00> + 4 (|1> + |2>)|1> + small (|1> - |2>)|3>`: after the source
+    // solve the residual has a large direction `(|1> + |2>)/sqrt(2)` and an
+    // orthogonal small one `(|1> - |2>)/sqrt(2)`, neither a coordinate
+    // vector. With `max_added = 2` both must be in the enriched src space,
+    // and `|3>`, absent from the residual, must not. A backward-stable SVD
+    // resolves singular values only to about `eps * sigma_max`, so `small`
+    // stays well above that; far below it a rotated direction is not
+    // guaranteed even inside the supported spread (faer misses 1e-300).
+    let (plus, minus) = ([0.0, 1.0, 1.0, 0.0], [0.0, 1.0, -1.0, 0.0]);
+    let columns = [[1.0, 0.0, 0.0, 0.0], plus, [0.0; 4], minus];
+    let enrichment = ResidualEnrichment::default()
+        .with_max_added(2)
+        .with_cutoff(0.0);
+    for small in [1.0, 1e-8, 1e-14] {
+        let step = EnrichmentStep::<4> {
+            rhs: [1.0, 4.0, 0.0, small].map(Complex64::from),
+            coefficients: (0.0, 1.0),
+            operator_scale: 1.0,
+        };
+        let (state, sites) = step.run_with_first_site(columns, enrichment).unwrap();
+        assert_eq!(bond_dim(&state), 3, "small = {small:e}");
+        for (name, vector, expected) in [
+            ("|0>", [1.0, 0.0, 0.0, 0.0], 1.0),
+            ("|1> + |2>", plus, 1.0),
+            ("|1> - |2>", minus, 1.0),
+            ("|3>", [0.0, 0.0, 0.0, 1.0], 0.0),
+        ] {
+            let overlap = src_span_overlap(&state, &sites[0], &vector);
+            assert!(
+                (overlap - expected).abs() < 1e-12,
+                "small = {small:e}: ||Q^dagger ({name})|| = {overlap}, expected {expected}"
+            );
+        }
+        assert!(distance_from_00(&state, &sites) < 1e-12);
+    }
+    // The review's fixture with `small = 1e-310`: 4 beside 1e-310 spans
+    // 2 + 1030 = 1032 orders, beyond the supported range, so a zero cutoff
+    // is refused instead of returning a bond 3 that misses the direction.
+    let step = EnrichmentStep::<4> {
+        rhs: [1.0, 4.0, 0.0, 1e-310].map(Complex64::from),
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let error = step.run_with_first_site(columns, enrichment).unwrap_err();
+    assert_eq!(range_error(&error).spread, 1032);
+}
+
+#[test]
+fn enrichment_projection_survives_an_overflowing_overlap() {
+    // The src basis is q = (|0> + |1>) / sqrt(2). The |1>-column of the
+    // residual is f64::MAX (|0> + |1>), parallel to q; its overlap with q,
+    // sqrt(2) * f64::MAX, overflows in the original units although the
+    // projected residual is zero. The |2>-column f64::MAX |2> is orthogonal
+    // to q and is the only direction added.
+    let step = EnrichmentStep {
+        rhs: [1.0, f64::MAX, f64::MAX].map(Complex64::from),
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let columns = [[1.0, 1.0, 0.0], [1.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+    let (state, _) = step
+        .run_with_first_site(columns, ResidualEnrichment::default().with_max_added(2))
+        .unwrap();
+    assert_eq!(bond_dim(&state), 2);
+}
+
+#[test]
+fn enrichment_with_an_overflowing_cutoff_adds_nothing() {
+    // `cutoff * ||b_local||` overflows to infinity; a finite cutoff that large
+    // keeps no direction rather than failing.
+    let enrichment = ResidualEnrichment::default()
+        .with_max_added(2)
+        .with_cutoff(f64::MAX);
+    let (state, sites) = enrich_once(0.5, enrichment);
+    assert_eq!(bond_dim(&state), 1);
+    assert!(distance_from_00(&state, &sites) < 1e-12);
+}
+
+#[test]
+fn enrichment_with_a1_zero_does_not_apply_an_overflowing_operator() {
+    // With a1 = 0 the residual is b - a0 x. Applying A = (1e200 I) (x) (1e200 I)
+    // overflows to infinity, and 0 * inf would poison the residual with NaN.
+    let step = EnrichmentStep {
+        rhs: [1.0, 1.0, 0.5].map(Complex64::from),
+        coefficients: (1.0, 0.0),
+        operator_scale: 1e200,
+    };
+    let (state, _) = step
+        .run(ResidualEnrichment::default().with_max_added(2))
+        .unwrap();
+    assert_eq!(bond_dim(&state), 3);
+}
+
+#[test]
+fn enrichment_cutoff_survives_an_overflowing_rhs_norm() {
+    // ||b_local|| overflows to infinity although `cutoff * ||b_local||` is
+    // finite. Both residual directions have singular value f64::MAX, above
+    // that threshold for every cutoff below, so both are kept.
+    let huge = EnrichmentStep {
+        rhs: [1.0, f64::MAX, f64::MAX].map(Complex64::from),
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    for cutoff in [0.0, 1e-12, 0.5] {
+        let enrichment = ResidualEnrichment::default()
+            .with_max_added(2)
+            .with_cutoff(cutoff);
+        let (state, _) = huge.run(enrichment).unwrap();
+        assert_eq!(bond_dim(&state), 3, "cutoff = {cutoff}");
+    }
+    // The cutoff still selects: ||b_local|| overflows again, and |22> has
+    // singular value 1, far below 1e-12 * ||b_local|| ~ 1.8e296, so only
+    // |11> is added.
+    let tiny_tail = EnrichmentStep {
+        rhs: [1.0, f64::MAX, 1.0].map(Complex64::from),
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let (state, _) = tiny_tail
+        .run(ResidualEnrichment::default().with_max_added(2))
+        .unwrap();
+    assert_eq!(bond_dim(&state), 2);
+    // A complex entry with finite parts can have a modulus above f64::MAX,
+    // so even the largest entry overflows. The |11> singular value
+    // sqrt(2) * f64::MAX exceeds `cutoff * ||b_local||` for both cutoffs,
+    // although for 0.9 neither of the two is representable; |11> is kept.
+    let complex_tail = EnrichmentStep {
+        rhs: [
+            Complex64::new(1.0, 0.0),
+            Complex64::new(f64::MAX, f64::MAX),
+            Complex64::new(1.0, 0.0),
+        ],
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    for cutoff in [1e-12, 0.9] {
+        let enrichment = ResidualEnrichment::default()
+            .with_max_added(2)
+            .with_cutoff(cutoff);
+        let (state, _) = complex_tail.run(enrichment).unwrap();
+        assert_eq!(bond_dim(&state), 2, "cutoff = {cutoff}");
+    }
+}
+
+#[test]
+fn enrichment_with_every_residual_modulus_above_f64_max() {
+    // Both residual entries are `f64::MAX + i f64::MAX`: finite parts, but
+    // every nonzero modulus (`sqrt(2) f64::MAX`) overflows, so the smallest
+    // modulus is infinite too. The spread is 0 and both directions are kept.
+    let step = EnrichmentStep {
+        rhs: [
+            Complex64::new(1.0, 0.0),
+            Complex64::new(f64::MAX, f64::MAX),
+            Complex64::new(f64::MAX, f64::MAX),
+        ],
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let enrichment = ResidualEnrichment::default()
+        .with_max_added(2)
+        .with_cutoff(0.0);
+    let (state, sites) = step.run(enrichment).unwrap();
+    assert_eq!(bond_dim(&state), 3);
+    assert!(distance_from_00(&state, &sites) < 1e-12);
+}
+
+#[test]
+fn enrichment_with_a_complex_rhs_and_a_real_state() {
+    // The initial state is real and the RHS complex, so the residual
+    // directions are complex while the current src basis is real.
+    let step = EnrichmentStep {
+        rhs: [
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.5),
+        ],
+        coefficients: (0.0, 1.0),
+        operator_scale: 1.0,
+    };
+    let (state, sites) = step
+        .run(ResidualEnrichment::default().with_max_added(2))
+        .unwrap();
+    assert_eq!(bond_dim(&state), 3);
+    assert!(distance_from_00(&state, &sites) < 1e-12);
 }

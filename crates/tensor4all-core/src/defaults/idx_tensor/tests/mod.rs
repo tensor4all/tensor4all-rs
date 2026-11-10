@@ -3,6 +3,72 @@ use num_complex::{Complex32, Complex64};
 use std::cell::Cell;
 use tensor4all_tensorbackend::StorageError;
 
+// Reading f32 eigenvalues as f64 rejects otherwise successful native eigensolves.
+#[test]
+fn hermitian_eigendecomposition_preserves_narrow_scalars() {
+    let row = DynIndex::new_dyn(2);
+    let column = DynIndex::new_dyn(2);
+    let real = IdxTensor::from_dense(
+        vec![row.clone(), column.clone()],
+        vec![9.0_f32, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
+    let complex = IdxTensor::from_dense(
+        vec![row.clone(), column.clone()],
+        vec![
+            Complex32::new(5.0, 0.0),
+            Complex32::new(0.0, -4.0),
+            Complex32::new(0.0, 4.0),
+            Complex32::new(5.0, 0.0),
+        ],
+    )
+    .unwrap();
+    for matrix in [real, complex] {
+        let decomposition = matrix.hermitian_eigendecomposition(1e-6).unwrap();
+        let mut sorted = decomposition.eigenvalues.clone();
+        sorted.sort_by(f64::total_cmp);
+        assert!((sorted[0] - 1.0).abs() < 1e-5);
+        assert!((sorted[1] - 9.0).abs() < 1e-5);
+        assert_eq!(decomposition.eigenvectors.is_f32(), matrix.is_f32());
+        assert_eq!(decomposition.eigenvectors.is_c32(), matrix.is_c32());
+        let other = DynIndex::new_dyn(2);
+        let indices = vec![decomposition.eigenvector_index.clone(), other.clone()];
+        let values = decomposition
+            .eigenvalues
+            .iter()
+            .map(|&x| x as f32)
+            .collect();
+        let diagonal = IdxTensor::from_diag(indices, values).unwrap();
+        let left = matrix
+            .contract_pair(
+                &decomposition
+                    .eigenvectors
+                    .replaceind(&row, &column)
+                    .unwrap(),
+            )
+            .unwrap();
+        let right = decomposition
+            .eigenvectors
+            .contract_pair(&diagonal)
+            .unwrap()
+            .replaceind(&other, &decomposition.eigenvector_index)
+            .unwrap();
+        assert!(left.sub(&right).unwrap().maxabs().unwrap() < 1e-5);
+    }
+    let values = IdxTensor::from_dense(
+        vec![DynIndex::new_dyn(2)],
+        vec![Complex32::new(1.0, 0.0), Complex32::new(9.0, 0.0)],
+    )
+    .unwrap();
+    assert_eq!(
+        IdxTensor::read_real_eigenvalues(&values, 1e-6).unwrap(),
+        vec![1.0, 9.0]
+    );
+    let nonreal =
+        IdxTensor::from_dense(vec![DynIndex::new_dyn(1)], vec![Complex32::new(1.0, 0.1)]).unwrap();
+    assert!(IdxTensor::read_real_eigenvalues(&nonreal, 1e-6).is_err());
+}
+
 /// `norm_squared` of `x`, and the eager-payload reads it took.
 fn norm_squared_and_reads(x: &IdxTensor) -> (f64, usize) {
     EAGER_PAYLOAD_READS.with(|reads| reads.set(0));
@@ -820,6 +886,16 @@ fn dense_materialized(data: Vec<f64>, dims: [usize; 2]) -> (IdxTensor, Arc<Stora
     )
 }
 
+/// Same as `dense_materialized` for any storage scalar, for the dtype-dispatch tests.
+fn dense_materialized_typed<T: tensor4all_tensorbackend::StorageScalar>(
+    data: Vec<T>,
+    dims: [usize; 2],
+) -> IdxTensor {
+    let storage = Arc::new(Storage::from_dense_col_major(data, &dims).unwrap());
+    let indices = dims.iter().map(|&d| DynIndex::new_dyn(d)).collect();
+    IdxTensor::from_storage(indices, storage).unwrap()
+}
+
 /// A dense `Materialized` payload is borrowed in place and no eager tensor is
 /// built, the property `dense_host_values` has and `with_dense_slice` lacks.
 #[test]
@@ -948,4 +1024,190 @@ fn owned_session_publication_reports_the_validating_constructor_errors() {
     // Rank mismatch.
     let native = NativeTensor::from_vec_col_major(vec![2, 3], vec![0.0_f64; 6]).unwrap();
     assert!(IdxTensor::publish_dense_session_result_owned(vec![i, j.clone(), j], native).is_err());
+}
+
+/// Allocation-level guard for the two borrowed dense-host routes (#1214).
+mod dense_host_borrow {
+    use super::*;
+    use std::alloc::{GlobalAlloc, Layout, System};
+
+    /// Allocations at least this large can only be a source-sized payload copy or
+    /// the required output buffer; per-element coordinate vectors are far smaller.
+    const LARGE: usize = 1 << 18;
+
+    struct CountingAllocator;
+    thread_local! {
+        /// (total bytes, largest single allocation, large-allocation count).
+        static ALLOCATIONS: Cell<(usize, usize, usize)> = const { Cell::new((0, 0, 0)) };
+    }
+
+    // SAFETY: every method forwards the caller's allocation to `System` unchanged,
+    // so ownership and layout stay with the system allocator; `record` only bumps
+    // a thread-local counter and never touches the pointer.
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            record(layout.size());
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            record(new_size);
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+    fn record(bytes: usize) {
+        let _ = ALLOCATIONS.try_with(|cell| {
+            let (total, largest, large) = cell.get();
+            cell.set((
+                total + bytes,
+                largest.max(bytes),
+                large + usize::from(bytes >= LARGE),
+            ));
+        });
+    }
+
+    fn allocations_during<R>(f: impl FnOnce() -> R) -> (R, usize, usize, usize) {
+        ALLOCATIONS.with(|cell| cell.set((0, 0, 0)));
+        let out = f();
+        let (total, largest, large) = ALLOCATIONS.with(Cell::get);
+        (out, total, largest, large)
+    }
+
+    #[test]
+    fn stack_host_borrows_each_dense_materialized_payload() {
+        let data: Vec<f64> = (0..256 * 256).map(|i| i as f64).collect();
+        let (tensor, _storage) = dense_materialized(data, [256, 256]);
+        let batch = DynIndex::new_dyn(1);
+        let mut result_indices = tensor.indices().to_vec();
+        result_indices.insert(0, batch);
+        let (out, _total, _largest, large) = allocations_during(|| {
+            IdxTensor::stack_host::<f64>(&[&tensor], &[256, 256], 0, result_indices).unwrap()
+        });
+        assert_eq!(out.dims(), vec![1, 256, 256]);
+        // One is the required output; a second may be the storage move. An input
+        // copy would add one more per input tensor.
+        assert!(
+            large <= 1,
+            "stack made {large} allocations of at least {LARGE} bytes for one 524288-byte output: an input was copied"
+        );
+    }
+    macro_rules! check_gather {
+        ($ty:ty, $value:expr) => {{
+            let data: Vec<$ty> = (0..256 * 256).map($value).collect();
+            let tensor = dense_materialized_typed(data, [256, 256]);
+            let target = DynIndex::new_dyn(1);
+            let source_bytes = 256 * 256 * size_of::<$ty>();
+            let (out, _total, largest, _large) =
+                allocations_during(|| tensor.gather_dense_host(0, &[7], target).unwrap());
+            assert_eq!(out.dims(), vec![1, 256]);
+            assert!(
+                largest < source_bytes / 4,
+                "{} gather allocated {largest} bytes at once (source {source_bytes}): the payload was copied",
+                stringify!($ty)
+            );
+        }};
+    }
+
+    #[test]
+    fn gather_dense_host_borrows_a_dense_materialized_payload() {
+        check_gather!(f64, |i: usize| i as f64);
+        check_gather!(f32, |i: usize| i as f32);
+        check_gather!(Complex64, |i: usize| Complex64::new(i as f64, 1.0));
+        check_gather!(Complex32, |i: usize| Complex32::new(i as f32, 1.0));
+    }
+}
+
+#[test]
+fn min_nonzero_abs_skips_zeros_and_keeps_subnormals() {
+    let i = DynIndex::new_dyn(4);
+    let real = IdxTensor::from_dense(
+        vec![i.clone()],
+        vec![0.0, -f64::MAX, f64::from_bits(1), 2.0],
+    )
+    .unwrap();
+    assert_eq!(real.min_nonzero_abs().unwrap(), Some(f64::from_bits(1)));
+
+    // The modulus of a complex element counts, not its smallest part. With
+    // a zero part it is exact.
+    let complex = IdxTensor::from_dense(
+        vec![i.clone()],
+        vec![
+            Complex64::new(0.0, 0.0),
+            Complex64::new(3.0, 4.0),
+            Complex64::new(0.0, -1.5),
+            Complex64::new(0.0, -2.0),
+        ],
+    )
+    .unwrap();
+    assert_eq!(complex.min_nonzero_abs().unwrap(), Some(1.5));
+
+    // With two nonzero parts it is a lower bound within a few ulps: 3 + 4i
+    // has modulus exactly 5, reported just below it.
+    let rounded = IdxTensor::from_dense(
+        vec![i.clone()],
+        vec![
+            Complex64::new(3.0, 4.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let value = rounded.min_nonzero_abs().unwrap().unwrap();
+    assert!(
+        (5.0 - 3.0 * 5.0 * f64::EPSILON..5.0).contains(&value),
+        "{value}"
+    );
+
+    // hypot(7u, 3u) rounds sqrt(58) u up to 8u (u the smallest subnormal);
+    // the bound stays below the true modulus, so floor(log2) is -1072.
+    let u = f64::from_bits(1);
+    let subnormal = IdxTensor::from_dense(
+        vec![i.clone()],
+        vec![
+            Complex64::new(7.0 * u, 3.0 * u),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+        ],
+    )
+    .unwrap();
+    // hypot gives 8u; two ulps below is 6u, but max(|re|, |im|) = 7u is
+    // larger and still below the true modulus sqrt(58) u ~ 7.6u, in [4u, 8u).
+    assert_eq!(subnormal.min_nonzero_abs().unwrap(), Some(7.0 * u));
+
+    let zero = IdxTensor::from_dense(vec![i.clone()], vec![0.0_f64; 4]).unwrap();
+    assert_eq!(zero.min_nonzero_abs().unwrap(), None);
+
+    let nan = IdxTensor::from_dense(vec![i], vec![1.0, f64::NAN, 0.0, 2.0]).unwrap();
+    assert!(nan.min_nonzero_abs().is_err());
+}
+
+#[test]
+fn min_nonzero_abs_keeps_the_smallest_complex_subnormals_nonzero() {
+    // (entry, expected bound, true modulus). For u + iu and u + 2iu, hypot
+    // returns u and 2u, and two ulps below those is 0; the bound must stay
+    // positive (max(|re|, |im|)) and below the true modulus, with the same
+    // floor(log2).
+    let u = f64::from_bits(1);
+    let i = DynIndex::new_dyn(1);
+    for (entry, expected, modulus) in [
+        (Complex64::new(u, u), u, 2f64.sqrt()),
+        (Complex64::new(u, 2.0 * u), 2.0 * u, 5f64.sqrt()),
+        (Complex64::new(7.0 * u, 3.0 * u), 7.0 * u, 58f64.sqrt()),
+    ] {
+        let tensor = IdxTensor::from_dense(vec![i.clone()], vec![entry]).unwrap();
+        let value = tensor.min_nonzero_abs().unwrap();
+        assert_eq!(value, Some(expected), "{entry:e}");
+        // The true modulus is `modulus * u`; compare in units of u.
+        let value = value.unwrap() / u;
+        assert!(value > 0.0 && value <= modulus, "{entry:e}: {value} u");
+        assert_eq!(value.log2().floor(), modulus.log2().floor(), "{entry:e}");
+    }
 }

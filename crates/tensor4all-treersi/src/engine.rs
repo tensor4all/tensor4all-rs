@@ -7,7 +7,7 @@
 //! Interpolated frames remain exact slices, up to floating-point arithmetic.
 
 use crate::{
-    dense::{self, Dense},
+    dense::{self, Dense, Exec},
     plan::{build_plan, checked_product, enforce_limit, node_tensor, Plan},
     scalar::{magnitude, product_underflows},
     scaled::{add_exponents, Scaled},
@@ -17,9 +17,10 @@ use crate::{
 use rand::Rng;
 use rand_distr::{Distribution, StandardNormal};
 use tensor4all_core::{
-    matrix_luci_row_interpolation_owned_in, DynIndex, IdxTensor, IndexLike, RrLUOptions,
+    dense_values_on_session, matrix_luci_row_interpolation_owned_on_session, DynIndex, IdxTensor,
+    IdxTensorError, IndexLike, MatrixLuciRowInterpolation, RrLUOptions,
 };
-use tensor4all_tensorbackend::{CpuExecutionContext, ExecutionContext, Matrix};
+use tensor4all_tensorbackend::{ExecutionContext, Matrix};
 use tensor4all_treetn::TreeTN;
 
 type Blocks<T> = Vec<Option<Scaled<T>>>;
@@ -37,7 +38,7 @@ fn block<T>(blocks: &[Option<Scaled<T>>], node: usize) -> Result<&Scaled<T>> {
 /// Every contraction checks its output block before allocation, normalizes
 /// the result, and carries the input exponents into the result.
 fn replace<T: TreeRsiScalar>(
-    cpu: &CpuExecutionContext,
+    exec: &mut Exec<'_, '_>,
     input: Scaled<T>,
     axis: usize,
     weights: &Scaled<T>,
@@ -53,15 +54,78 @@ fn replace<T: TreeRsiScalar>(
     )?;
     let exponent = add_exponents(input.exponent, weights.exponent)?;
     Scaled::new(
-        dense::replace_axis(cpu, input.array, axis, &weights.array.data, rank)?,
+        dense::replace_axis(exec, input.array, axis, &weights.array.data, rank)?,
         exponent,
     )
+}
+
+/// The values of `tensor` with its axes in `order`, as a host column-major buffer.
+///
+/// On a session the reorder and readback run on that session, so neither the
+/// process-global context nor the eager runtime that owns the input is entered.
+///
+/// A CUDA run downloads each core explicitly first: the sketch keeps its blocks
+/// in host buffers, so step 1 of #1158 pays that transfer per core. The download
+/// rebuilds the host tensor in the process-global CPU eager context
+/// (`IdxTensor::download` -> `IdxTensor::from_native`), and the following
+/// `to_vec` enters that CPU context's session, so this is the second host
+/// dependency of a CUDA run beside the rank decision — it happens for every
+/// input core, including in a tree whose edges never need a rank decision.
+fn host_core_values<T: TreeRsiScalar>(
+    exec: &mut Exec<'_, '_>,
+    tensor: &IdxTensor,
+    order: &[DynIndex],
+) -> Result<Vec<T>> {
+    match exec {
+        Exec::Session(session) => {
+            dense_values_on_session::<T>(session, tensor, order).map_err(readback_error)
+        }
+        #[cfg(feature = "tenferro-cuda")]
+        Exec::Cuda(cuda) => {
+            let host = tensor.download(cuda).map_err(TreeRsiError::numerical)?;
+            // INVARIANT: a CUDA run reaches the process-global CPU session here
+            // even though its own context is CUDA; a caller already inside a
+            // CPU session therefore gets that session's re-entry rejection.
+            host.permute_indices(order)
+                .map_err(TreeRsiError::numerical)?
+                .to_vec::<T>()
+                .map_err(readback_error)
+        }
+    }
+}
+
+/// The local rank decision: a host LU pivot search with a lower-triangular solve.
+///
+/// On a session the solve runs on that session. A CUDA run has no device twin
+/// for it, so it keeps running on the process-global CPU context: host
+/// dependency 1 of 2 of a CUDA run (the other is the input-core readback in
+/// [`host_core_values`]). See #1158 step 2 for the device-resident sketch. The
+/// session arm never takes that fallback, which is what lets the session entry
+/// run while another thread holds the process-global backend.
+fn row_interpolation<T: TreeRsiScalar>(
+    exec: &mut Exec<'_, '_>,
+    matrix: Matrix<T>,
+    options: RrLUOptions,
+) -> Result<MatrixLuciRowInterpolation<T>> {
+    match exec {
+        Exec::Session(session) => {
+            matrix_luci_row_interpolation_owned_on_session(matrix, Some(options), session)
+        }
+        #[cfg(feature = "tenferro-cuda")]
+        Exec::Cuda(_) => tensor4all_core::matrix_luci_row_interpolation_owned_in(
+            matrix,
+            Some(options),
+            &tensor4all_tensorbackend::default_cpu_execution_context(),
+        ),
+    }
+    .map_err(TreeRsiError::numerical)
 }
 
 fn read_cores<T: TreeRsiScalar, V: TreeRsiNode>(
     plan: &Plan<V>,
     tree: &TreeTN<IdxTensor, V>,
     limit: usize,
+    exec: &mut Exec<'_, '_>,
 ) -> Result<Vec<Scaled<T>>> {
     let mut cores = Vec::with_capacity(plan.nodes.len());
     for (node, name) in plan.nodes.iter().enumerate() {
@@ -108,16 +172,30 @@ fn read_cores<T: TreeRsiScalar, V: TreeRsiNode>(
             checked_product(dims.iter().copied(), "input core")?,
             limit,
         )?;
-        let data = tensor
-            .permute_indices(&order)
-            .map_err(TreeRsiError::numerical)?
-            .to_vec::<T>()
-            .map_err(|e| TreeRsiError::ScalarKind {
-                message: e.to_string(),
-            })?;
+        // Only a payload of another scalar type is a caller error (the stable
+        // `ScalarKind` variant). Every other readback failure keeps its typed
+        // cause: a session re-entry diagnostic is a `Numerical` source and must
+        // stay inspectable instead of being flattened into a message.
+        let data = host_core_values::<T>(exec, tensor, &order)?;
         cores.push(Scaled::new(Dense { dims, data }, 0)?);
     }
     Ok(cores)
+}
+
+/// Map a host-readback failure to the public error.
+///
+/// A payload of another scalar type is a caller error and keeps the stable
+/// `ScalarKind` variant. Every other readback failure -- the process-global CPU
+/// session rejecting a re-entry, a storage failure -- keeps its typed cause in
+/// `Numerical`, whose `source` chain stays inspectable.
+fn readback_error(error: IdxTensorError) -> TreeRsiError {
+    if error.is_payload_scalar_type_mismatch() {
+        TreeRsiError::ScalarKind {
+            message: error.to_string(),
+        }
+    } else {
+        TreeRsiError::numerical(error)
+    }
 }
 
 fn probes<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
@@ -218,7 +296,7 @@ fn probes<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
 /// relative weight is only approximate. Independent per-column renormalization would
 /// define a different sketch and pivot selection policy.
 fn sketch<T: TreeRsiScalar>(
-    cpu: &CpuExecutionContext,
+    exec: &mut Exec<'_, '_>,
     core: &Scaled<T>,
     mut factors: Vec<(usize, &Scaled<T>)>,
     k: usize,
@@ -245,7 +323,7 @@ fn sketch<T: TreeRsiScalar>(
         limit,
     )?;
     let mut value = Scaled::new(
-        dense::contract_axis_to_probe(cpu, &core.array, axis, &weights.array.data, k)?,
+        dense::contract_axis_to_probe(exec, &core.array, axis, &weights.array.data, k)?,
         add_exponents(core.exponent, weights.exponent)?,
     )?;
     let mut rest = factors
@@ -255,7 +333,7 @@ fn sketch<T: TreeRsiScalar>(
     rest.sort_by_key(|(a, _)| std::cmp::Reverse(*a));
     for (axis, weights) in rest {
         value = Scaled::new(
-            dense::contract_axis_diag_probe(cpu, value.array, axis, &weights.array.data)?,
+            dense::contract_axis_diag_probe(exec, value.array, axis, &weights.array.data)?,
             add_exponents(value.exponent, weights.exponent)?,
         )?;
     }
@@ -263,7 +341,7 @@ fn sketch<T: TreeRsiScalar>(
 }
 
 fn sketch_environments<T: TreeRsiScalar, V>(
-    cpu: &CpuExecutionContext,
+    exec: &mut Exec<'_, '_>,
     plan: &Plan<V>,
     cores: &[Scaled<T>],
     probes: &Blocks<T>,
@@ -283,7 +361,7 @@ fn sketch_environments<T: TreeRsiScalar, V>(
             .map(|(axis, &c)| Ok((axis, block(&up, c)?)))
             .collect::<Result<Vec<_>>>()?;
         factors.push((plan.children[v].len(), block(probes, v)?));
-        up[v] = Some(sketch(cpu, &cores[v], factors, plan.k, limit)?);
+        up[v] = Some(sketch(exec, &cores[v], factors, plan.k, limit)?);
     }
     for &p in &plan.preorder {
         let children = &plan.children[p];
@@ -357,7 +435,7 @@ fn sketch_environments<T: TreeRsiScalar, V>(
                         let probe = block(probes, p)?;
                         down[v] = Some(Scaled::new(
                             dense::contract_axis_diag_probe(
-                                cpu,
+                                exec,
                                 env.array.clone(),
                                 1,
                                 &probe.array.data,
@@ -388,12 +466,12 @@ fn sketch_environments<T: TreeRsiScalar, V>(
                     factors.push((q + 1, block(&down, p)?));
                 }
                 if plan.needs_sketched_env[v] {
-                    let env = sketch(cpu, &cores[p], factors, plan.k, limit)?;
+                    let env = sketch(exec, &cores[p], factors, plan.k, limit)?;
                     if plan.needs_down[v] {
                         let probe = block(probes, p)?;
                         down[v] = Some(Scaled::new(
                             dense::contract_axis_diag_probe(
-                                cpu,
+                                exec,
                                 env.array.clone(),
                                 1,
                                 &probe.array.data,
@@ -404,7 +482,7 @@ fn sketch_environments<T: TreeRsiScalar, V>(
                     environments[v] = Some(env);
                 } else {
                     factors.push((q, block(probes, p)?));
-                    down[v] = Some(sketch(cpu, &cores[p], factors, plan.k, limit)?);
+                    down[v] = Some(sketch(exec, &cores[p], factors, plan.k, limit)?);
                 }
             }
         }
@@ -420,7 +498,7 @@ struct Exact<T> {
 }
 impl<T: TreeRsiScalar> Exact<T> {
     fn build<V>(
-        cpu: &CpuExecutionContext,
+        exec: &mut Exec<'_, '_>,
         plan: &Plan<V>,
         cores: &[Scaled<T>],
         limit: usize,
@@ -434,7 +512,7 @@ impl<T: TreeRsiScalar> Exact<T> {
                 continue;
             }
             let target = plan.children[v].len() + 1;
-            let array = cache.partial(cpu, plan, cores, v, target, limit)?;
+            let array = cache.partial(exec, plan, cores, v, target, limit)?;
             cache.up[v] = Some(Self::close(array, target)?);
         }
         for &p in &plan.preorder {
@@ -487,7 +565,7 @@ impl<T: TreeRsiScalar> Exact<T> {
                     if !plan.exact_down[v] {
                         continue;
                     }
-                    let array = cache.partial(cpu, plan, cores, p, target, limit)?;
+                    let array = cache.partial(exec, plan, cores, p, target, limit)?;
                     cache.down[v] = Some(Self::close(array, target)?);
                 }
             }
@@ -497,7 +575,7 @@ impl<T: TreeRsiScalar> Exact<T> {
 
     fn partial<V>(
         &self,
-        cpu: &CpuExecutionContext,
+        exec: &mut Exec<'_, '_>,
         plan: &Plan<V>,
         cores: &[Scaled<T>],
         v: usize,
@@ -507,12 +585,12 @@ impl<T: TreeRsiScalar> Exact<T> {
         let mut value = cores[v].clone();
         for (axis, &c) in plan.children[v].iter().enumerate() {
             if axis != target {
-                value = replace(cpu, value, axis, block(&self.up, c)?, limit)?;
+                value = replace(exec, value, axis, block(&self.up, c)?, limit)?;
             }
         }
         let axis = plan.children[v].len() + 1;
         if plan.parent[v].is_some() && axis != target {
-            value = replace(cpu, value, axis, block(&self.down, v)?, limit)?;
+            value = replace(exec, value, axis, block(&self.down, v)?, limit)?;
         }
         Ok(value)
     }
@@ -530,7 +608,7 @@ impl<T: TreeRsiScalar> Exact<T> {
 
     fn environment<V>(
         &self,
-        cpu: &CpuExecutionContext,
+        exec: &mut Exec<'_, '_>,
         plan: &Plan<V>,
         cores: &[Scaled<T>],
         v: usize,
@@ -552,7 +630,7 @@ impl<T: TreeRsiScalar> Exact<T> {
             .iter()
             .position(|&c| c == v)
             .ok_or_else(|| missing("child not in parent"))?;
-        let value = self.partial(cpu, plan, cores, p, target, limit)?;
+        let value = self.partial(exec, plan, cores, p, target, limit)?;
         let physical = plan.children[p].len();
         let mut order = vec![target, physical];
         order.extend((0..value.array.dims.len()).filter(|&a| a != target && a != physical));
@@ -564,7 +642,7 @@ impl<T: TreeRsiScalar> Exact<T> {
 }
 
 fn candidate<T: TreeRsiScalar, V>(
-    cpu: &CpuExecutionContext,
+    exec: &mut Exec<'_, '_>,
     plan: &Plan<V>,
     cores: &[Scaled<T>],
     frames: &Blocks<T>,
@@ -573,58 +651,127 @@ fn candidate<T: TreeRsiScalar, V>(
 ) -> Result<Scaled<T>> {
     let mut value = cores[v].clone();
     for (axis, &child) in plan.children[v].iter().enumerate() {
-        value = replace(cpu, value, axis, block(frames, child)?, limit)?;
+        value = replace(exec, value, axis, block(frames, child)?, limit)?;
     }
     Ok(value)
 }
 
-pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
+/// Output cores as host column-major buffers, before they are published as
+/// tensors of the caller's chosen representation.
+pub(crate) struct Output<T, V> {
+    cores: Vec<(Vec<DynIndex>, Vec<T>)>,
+    nodes: Vec<V>,
+    diagnostics: TreeRsiDiagnostics<V>,
+}
+
+impl<T: TreeRsiScalar, V: TreeRsiNode> Output<T, V> {
+    /// Builds the result tree, turning every core into a tensor with `publish`.
+    fn publish(
+        self,
+        mut publish: impl FnMut(Vec<DynIndex>, Vec<T>) -> std::result::Result<IdxTensor, IdxTensorError>,
+    ) -> Result<TreeRsiResult<V>> {
+        let tensors = self
+            .cores
+            .into_iter()
+            .map(|(indices, data)| publish(indices, data).map_err(TreeRsiError::numerical))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(TreeRsiResult {
+            tree: TreeTN::from_tensors(tensors, self.nodes)?,
+            diagnostics: self.diagnostics,
+        })
+    }
+}
+
+/// The context entry: inputs and output cores belong to `context`.
+///
+/// A CPU context is entered once and the whole product runs on that one
+/// session through [`run`], the same implementation the session entry uses;
+/// the output cores are adopted into `context` after the session is released.
+/// A CUDA context keeps its per-contraction route.
+pub(crate) fn run_in<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
     inputs: &[TreeTN<IdxTensor, V>],
     options: &TreeRsiOptions<V>,
     rng: &mut R,
     context: &ExecutionContext,
 ) -> Result<TreeRsiResult<V>> {
-    let cpu = match context {
-        ExecutionContext::Cpu(cpu) => cpu,
-        // INVARIANT: the other context variant exists only with GPU features.
+    let validate = || {
+        inputs.iter().try_for_each(|input| {
+            input
+                .validate_context(context)
+                .map_err(TreeRsiError::InputContext)
+        })
+    };
+    let output = match context {
+        ExecutionContext::Cpu(cpu) => {
+            validate()?;
+            cpu.with_concrete_session(|session| {
+                run::<T, V, R>(inputs, options, rng, &mut Exec::Session(session))
+            })
+            .map_err(TreeRsiError::numerical)??
+        }
+        #[cfg(feature = "tenferro-cuda")]
+        ExecutionContext::Cuda(cuda) => {
+            validate()?;
+            run::<T, V, R>(inputs, options, rng, &mut Exec::Cuda(cuda))?
+        }
+        // A build without the CUDA feature cannot execute the variant at all.
         #[allow(unreachable_patterns)]
         _ => {
             return Err(TreeRsiError::Context {
-                message: "RSI requires a CPU execution context".into(),
+                message: "this build cannot run tree RSI on this execution context; \
+                          enable the tenferro-cuda feature"
+                    .into(),
             })
         }
     };
-    for input in inputs {
-        input
-            .validate_context(context)
-            .map_err(TreeRsiError::InputContext)?;
-    }
+    output.publish(|indices, data| IdxTensor::from_dense_in(context, indices, data))
+}
+
+/// The session entry: every numerical step runs on `session`, and the output
+/// cores are published as compact host storage that outlives it.
+pub(crate) fn run_on_session<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
+    inputs: &[TreeTN<IdxTensor, V>],
+    options: &TreeRsiOptions<V>,
+    rng: &mut R,
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+) -> Result<TreeRsiResult<V>> {
+    run::<T, V, R>(inputs, options, rng, &mut Exec::Session(session))?
+        .publish(IdxTensor::from_dense_compact)
+}
+
+/// The one tree RSI implementation; `exec` decides where it runs.
+fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
+    inputs: &[TreeTN<IdxTensor, V>],
+    options: &TreeRsiOptions<V>,
+    rng: &mut R,
+    exec: &mut Exec<'_, '_>,
+) -> Result<Output<T, V>> {
     let plan = build_plan(inputs, options)?;
     let limit = options.max_local_elements;
     let cores = inputs
         .iter()
-        .map(|x| read_cores::<T, V>(&plan, x, limit))
+        .map(|x| read_cores::<T, V>(&plan, x, limit, exec))
         .collect::<Result<Vec<_>>>()?;
     let probes = probes::<T, V, R>(&plan, inputs.len(), options, rng)?;
     let mut sketches = cores
         .iter()
         .zip(&probes)
-        .map(|(c, p)| sketch_environments(cpu, &plan, c, p, limit))
+        .map(|(c, p)| sketch_environments(exec, &plan, c, p, limit))
         .collect::<Result<Vec<_>>>()?;
     let exact = cores
         .iter()
-        .map(|c| Exact::build(cpu, &plan, c, limit))
+        .map(|c| Exact::build(exec, &plan, c, limit))
         .collect::<Result<Vec<_>>>()?;
     let n = plan.nodes.len();
     let mut frames = vec![vec![None; n]; inputs.len()];
     let mut bonds: Vec<Option<DynIndex>> = vec![None; n];
-    let mut output: Vec<Option<IdxTensor>> = vec![None; n];
+    let mut output: Vec<Option<(Vec<DynIndex>, Vec<T>)>> = vec![None; n];
     let mut edges = Vec::with_capacity(n - 1);
     for &v in plan.postorder.iter().chain(std::iter::once(&plan.root)) {
         let candidates = cores
             .iter()
             .zip(&frames)
-            .map(|(c, f)| candidate(cpu, &plan, c, f, v, limit))
+            .map(|(c, f)| candidate(exec, &plan, c, f, v, limit))
             .collect::<Result<Vec<_>>>()?;
         let mut product: Option<Scaled<T>> = None;
         let is_root = v == plan.root;
@@ -642,7 +789,7 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
                     .ok_or_else(|| missing("empty candidate shape"))?;
                 rows = c.array.data.len() / chi;
                 let env = if plan.exact[v] {
-                    exact[a].environment(cpu, &plan, &cores[a], v, limit)?
+                    exact[a].environment(exec, &plan, &cores[a], v, limit)?
                 } else {
                     sketches[a][v]
                         .take()
@@ -658,7 +805,7 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
                     Dense {
                         dims: vec![rows, columns],
                         data: dense::mat_mul_cols(
-                            cpu,
+                            exec,
                             c.array.data.clone(),
                             rows,
                             chi,
@@ -685,10 +832,7 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
             .collect::<Result<Vec<_>>>()?;
         indices.extend(plan.phys[v].indices.iter().cloned());
         if is_root {
-            output[v] = Some(
-                IdxTensor::from_dense_in(context, indices, product.into_values()?)
-                    .map_err(TreeRsiError::numerical)?,
-            );
+            output[v] = Some((indices, product.into_values()?));
             continue;
         }
         let scale = product
@@ -702,18 +846,17 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
             .unwrap_or(usize::MAX)
             .min(rows)
             .min(columns);
-        let id = matrix_luci_row_interpolation_owned_in(
+        let id = row_interpolation(
+            exec,
             Matrix::try_from_col_major_vec(rows, columns, product.array.data)
                 .map_err(TreeRsiError::numerical)?,
-            Some(RrLUOptions {
+            RrLUOptions {
                 max_bond_dim: cap,
                 rel_tol: options.rel_tol,
                 abs_tol: 0.0,
                 left_orthogonal: true,
-            }),
-            cpu,
-        )
-        .map_err(TreeRsiError::numerical)?;
+            },
+        )?;
         let (pivots, left) = if id.rows.is_empty() {
             let mut unit = vec![T::zero(); rows];
             unit[0] = T::one();
@@ -744,9 +887,7 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
         let bond = DynIndex::new_dyn(rank);
         indices.push(bond.clone());
         bonds[v] = Some(bond);
-        output[v] = Some(
-            IdxTensor::from_dense_in(context, indices, left).map_err(TreeRsiError::numerical)?,
-        );
+        output[v] = Some((indices, left));
         let p = plan.parent[v].ok_or_else(|| missing("non-root node has no parent"))?;
         edges.push(TreeRsiEdgeReport {
             child: plan.nodes[v].clone(),
@@ -763,12 +904,13 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
             },
         });
     }
-    let tensors = output
+    let cores = output
         .into_iter()
         .map(|x| x.ok_or_else(|| missing("output core missing")))
         .collect::<Result<Vec<_>>>()?;
-    Ok(TreeRsiResult {
-        tree: TreeTN::from_tensors(tensors, plan.nodes.clone())?,
+    Ok(Output {
+        cores,
+        nodes: plan.nodes.clone(),
         diagnostics: TreeRsiDiagnostics {
             root: plan.nodes[plan.root].clone(),
             sketch_dim: plan.k,
@@ -783,3 +925,6 @@ pub(crate) fn run<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
         },
     })
 }
+
+#[cfg(test)]
+mod tests;

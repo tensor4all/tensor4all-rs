@@ -7,4 +7,6 @@
 mod support;
 
 mod boundaries;
+mod cuda_products;
 mod products;
+mod session_entry;

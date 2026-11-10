@@ -7,7 +7,6 @@ use crate::{
     MultiIndex, PivotCandidateProposer, TreeTCI2, TreeTciGraph, TreeTciObserver, TreeTciOptions,
     TreeTciTermination,
 };
-use anyhow::Result;
 use tensor4all_core::CommonScalar;
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::interpolation::EvalContext;
@@ -26,8 +25,8 @@ use tensor4all_treetn::TreeTN;
 ///     crossinterpolate2, DefaultProposer, TreeTciGraph, TreeTciOptions, TreeTciTermination,
 /// };
 ///
-/// let result = crossinterpolate2::<f64, _, _, _>(
-///     |batch| Ok(vec![2.0; batch.n_points()]), vec![2, 2],
+/// let result = crossinterpolate2::<f64, _, _, _, _>(
+///     |batch| Ok::<_, anyhow::Error>(vec![2.0; batch.n_points()]), vec![2, 2],
 ///     TreeTciGraph::linear_chain(2)?, vec![vec![0, 0]],
 ///     TreeTciOptions { seed: Some(0), ..Default::default() }, None, &DefaultProposer, &mut (),
 /// )?;
@@ -101,7 +100,7 @@ pub struct TreeTciRunResult {
 /// };
 ///
 /// let proposer = DefaultProposer;
-/// let result = crossinterpolate2::<f64, _, _, _>(
+/// let result = crossinterpolate2::<f64, _, _, _, _>(
 ///     evaluate,
 ///     local_dims,
 ///     graph,
@@ -125,7 +124,7 @@ pub struct TreeTciRunResult {
 /// callback failures, and materialization/backend failures return
 /// [`crate::TreeTciError::Operation`] with the underlying diagnostic.
 ///
-pub fn crossinterpolate2<T, F, P, O>(
+pub fn crossinterpolate2<T, F, P, O, E>(
     evaluate: F,
     local_dims: Vec<usize>,
     graph: TreeTciGraph,
@@ -141,13 +140,17 @@ where
         + tensor4all_core::MatrixLuciScalar
         + tensor4all_core::TensorElement
         + crate::globalpivot::ScalarParts,
-    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    F: FnMut(GlobalIndexBatch<'_>) -> std::result::Result<Vec<T>, E>,
+    E: Into<anyhow::Error>,
     P: PivotCandidateProposer,
     O: TreeTciObserver,
 {
     options.validate()?;
     let mut evaluate = evaluate;
-    let mut execution = Compatibility::new(&mut evaluate);
+    let mut adapted = |batch: GlobalIndexBatch<'_>| -> anyhow::Result<Vec<T>> {
+        evaluate(batch).map_err(Into::into)
+    };
+    let mut execution = Compatibility::new(&mut adapted);
     with_seeded_streams(&options, proposer, |streams| {
         crossinterpolate2_with_streams(
             &mut execution,
@@ -197,8 +200,8 @@ where
 /// use tensor4all_tensorbackend::CpuBackend;
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
-/// let result = crossinterpolate2_in::<f64, _, _, _>(
-///     |batch| Ok(vec![2.0; batch.n_points()]), vec![2, 2],
+/// let result = crossinterpolate2_in::<f64, _, _, _, _>(
+///     |batch| Ok::<_, anyhow::Error>(vec![2.0; batch.n_points()]), vec![2, 2],
 ///     TreeTciGraph::linear_chain(2)?, vec![vec![0, 0]],
 ///     TreeTciOptions::default(), None, &DefaultProposer, &mut (), &context,
 /// )?;
@@ -206,7 +209,7 @@ where
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[allow(clippy::too_many_arguments)]
-pub fn crossinterpolate2_in<T, F, P, O>(
+pub fn crossinterpolate2_in<T, F, P, O, E>(
     evaluate: F,
     local_dims: Vec<usize>,
     graph: TreeTciGraph,
@@ -223,7 +226,8 @@ where
         + tensor4all_core::MatrixLuciScalar
         + tensor4all_core::TensorElement
         + crate::globalpivot::ScalarParts,
-    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    F: FnMut(GlobalIndexBatch<'_>) -> std::result::Result<Vec<T>, E>,
+    E: Into<anyhow::Error>,
     P: PivotCandidateProposer,
     O: TreeTciObserver,
 {
@@ -232,7 +236,9 @@ where
     context
         .with_concrete_session(|session| {
             let mut contextual =
-                |batch: GlobalIndexBatch<'_>, _ctx: &mut EvalContext<'_>| evaluate(batch);
+                |batch: GlobalIndexBatch<'_>,
+                 _ctx: &mut EvalContext<'_>|
+                 -> anyhow::Result<Vec<T>> { evaluate(batch).map_err(Into::into) };
             let mut context = crate::evaluation::serial_context(session);
             let mut execution = Explicit::new(&mut context, &mut contextual);
             with_seeded_streams(&options, proposer, |streams| {
@@ -277,8 +283,8 @@ where
 ///
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let mut rng = ChaCha8Rng::seed_from_u64(0);
-/// let result = crossinterpolate2_with_rng_in::<f64, _, _, _, _>(
-///     |batch| Ok(vec![2.0; batch.n_points()]), vec![2, 2],
+/// let result = crossinterpolate2_with_rng_in::<f64, _, _, _, _, _>(
+///     |batch| Ok::<_, anyhow::Error>(vec![2.0; batch.n_points()]), vec![2, 2],
 ///     TreeTciGraph::linear_chain(2)?, vec![vec![0, 0]],
 ///     TreeTciOptions::default(), None, &DefaultProposer, &mut (), &mut rng, &context,
 /// )?;
@@ -286,7 +292,7 @@ where
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[allow(clippy::too_many_arguments)]
-pub fn crossinterpolate2_with_rng_in<T, F, P, R, O>(
+pub fn crossinterpolate2_with_rng_in<T, F, P, R, O, E>(
     evaluate: F,
     local_dims: Vec<usize>,
     graph: TreeTciGraph,
@@ -304,7 +310,8 @@ where
         + tensor4all_core::MatrixLuciScalar
         + tensor4all_core::TensorElement
         + crate::globalpivot::ScalarParts,
-    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    F: FnMut(GlobalIndexBatch<'_>) -> std::result::Result<Vec<T>, E>,
+    E: Into<anyhow::Error>,
     P: PivotCandidateProposer,
     O: TreeTciObserver,
     R: rand::Rng + ?Sized,
@@ -315,7 +322,9 @@ where
     context
         .with_concrete_session(|session| {
             let mut contextual =
-                |batch: GlobalIndexBatch<'_>, _ctx: &mut EvalContext<'_>| evaluate(batch);
+                |batch: GlobalIndexBatch<'_>,
+                 _ctx: &mut EvalContext<'_>|
+                 -> anyhow::Result<Vec<T>> { evaluate(batch).map_err(Into::into) };
             let mut context = crate::evaluation::serial_context(session);
             let mut execution = Explicit::new(&mut context, &mut contextual);
             crossinterpolate2_with_streams(
@@ -361,8 +370,8 @@ where
 /// };
 ///
 /// let mut rng = ChaCha8Rng::seed_from_u64(0);
-/// let result = crossinterpolate2_with_rng::<f64, _, _, _, _>(
-///     |batch| Ok(vec![2.0; batch.n_points()]), vec![2, 2],
+/// let result = crossinterpolate2_with_rng::<f64, _, _, _, _, _>(
+///     |batch| Ok::<_, anyhow::Error>(vec![2.0; batch.n_points()]), vec![2, 2],
 ///     TreeTciGraph::linear_chain(2)?, vec![vec![0, 0]],
 ///     TreeTciOptions::default(), None, &DefaultProposer, &mut (), &mut rng,
 /// )?;
@@ -372,7 +381,7 @@ where
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[allow(clippy::too_many_arguments)]
-pub fn crossinterpolate2_with_rng<T, F, P, R, O>(
+pub fn crossinterpolate2_with_rng<T, F, P, R, O, E>(
     evaluate: F,
     local_dims: Vec<usize>,
     graph: TreeTciGraph,
@@ -389,7 +398,8 @@ where
         + tensor4all_core::MatrixLuciScalar
         + tensor4all_core::TensorElement
         + crate::globalpivot::ScalarParts,
-    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<T>>,
+    F: FnMut(GlobalIndexBatch<'_>) -> std::result::Result<Vec<T>, E>,
+    E: Into<anyhow::Error>,
     P: PivotCandidateProposer,
     O: TreeTciObserver,
     R: rand::Rng + ?Sized,
@@ -397,7 +407,10 @@ where
     let mut stream: &mut R = rng;
     let mut streams = RandomStreams::Shared(&mut stream);
     let mut evaluate = evaluate;
-    let mut execution = Compatibility::new(&mut evaluate);
+    let mut adapted = |batch: GlobalIndexBatch<'_>| -> anyhow::Result<Vec<T>> {
+        evaluate(batch).map_err(Into::into)
+    };
+    let mut execution = Compatibility::new(&mut adapted);
     crossinterpolate2_with_streams(
         &mut execution,
         local_dims,

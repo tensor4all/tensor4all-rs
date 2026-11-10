@@ -1161,9 +1161,13 @@ fn contract_adaptive_reports_a_cap_with_no_split_index_left() {
         assert!(record.cap_truncated);
     }
 
-    // The output patches have exact rank 4, so a cap of 4 discards nothing and
-    // reports nothing.
-    let (uncapped, report) = contract_adaptive_with_report(
+    // A cap of 4 does not bind on these patches: every returned bond stays
+    // strictly below it, so the closing truncation cannot have discarded
+    // anything. That is the whole claim, and it deliberately does not pin a
+    // bond dimension — an upstream truncation change moves the exact rank of
+    // this fixture (it went 4 -> 2 when zero singular values stopped being
+    // kept), and only "the cap changed nothing" is this test's subject.
+    let (capped, report) = contract_adaptive_with_report(
         &operator,
         &state,
         &0,
@@ -1174,13 +1178,15 @@ fn contract_adaptive_reports_a_cap_with_no_split_index_left() {
         },
     )
     .unwrap();
-    assert_eq!(uncapped.len(), 2);
-    assert!(uncapped.values().all(|patch| patch.max_bond_dim() == 4));
+    assert_eq!(capped.len(), 2);
     assert_eq!(report.truncated_by_cap().count(), 0);
-    assert!(report
-        .patches
-        .iter()
-        .all(|record| record.bond_dims == vec![4] && !record.cap_truncated));
+    assert!(report.patches.iter().all(|record| !record.cap_truncated));
+    let capped_dims: Vec<usize> = capped.values().map(|patch| patch.max_bond_dim()).collect();
+    assert!(!capped_dims.is_empty(), "the cap-4 call must return patches");
+    assert!(
+        capped_dims.iter().all(|&d| d < 4),
+        "a cap of 4 must not bind: {capped_dims:?}"
+    );
 
     // Cap 1 with all four output bits in `patch_order` splits the output into
     // one patch per bit assignment, so no patch needs the cap.

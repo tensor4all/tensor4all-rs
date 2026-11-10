@@ -38,6 +38,26 @@ macOS also set `VECLIB_MAXIMUM_THREADS=1`.
 
 ### Rust
 
+#### Density-matrix sums (#1126)
+
+`density_sum_benchmark` compares two summation methods in the same library:
+the density-matrix sweep and an exact N-ary sum truncated once. It uses the
+complex smooth, random and mixed chain families of #1107, with dense residual
+checks outside the measured operation. Run one method per process to measure
+peak RSS, which includes setup and verification:
+
+```bash
+cargo build --release -p tensor4all-benchmarks --example density_sum_benchmark
+RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
+  /usr/bin/time -l ./target/release/examples/density_sum_benchmark smooth density 12 64
+```
+
+Arguments are family (`smooth`, `random`, `mixed`), method (`density`, `nary`),
+site count and term count. The dense reference restricts this harness to
+2–16 binary sites; production summation has no such restriction.
+The [local comparison and raw samples](results/2026-11-10-density-sum.md)
+include the required `R=12, N=64` families and the host-isolation limits.
+
 #### Fixed-rank RSVD and Lanczos (#1108)
 
 `benchmark_randomized_factorization` diagnoses Fit/Zipup costs; its

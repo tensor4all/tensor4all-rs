@@ -432,6 +432,15 @@ pub enum IdxTensorError {
         #[source]
         source: Arc<dyn std::error::Error + Send + Sync + 'static>,
     },
+    /// The payload stores a different scalar type than the one
+    /// [`IdxTensor::to_vec`] was asked to read.
+    ///
+    /// This is a caller error: the payload is intact and can be read as its own
+    /// scalar type. A readback that fails for any other reason keeps its typed
+    /// source in [`Self::Materialization`] or [`Self::EngineEntry`].
+    #[error("IdxTensor payload scalar type does not match the requested type")]
+    PayloadScalarTypeMismatch,
+
     /// The reduction result has a scalar dtype that this real-valued operation
     /// cannot interpret.
     #[error("IdxTensor scalar type mismatch: expected {expected}, got {actual}")]
@@ -572,6 +581,12 @@ impl IdxTensorError {
         Self::Materialization {
             source: Self::boxed(error),
         }
+    }
+
+    /// Whether this is a payload of another scalar type than the caller asked
+    /// [`IdxTensor::to_vec`] for, as opposed to a failed readback.
+    pub fn is_payload_scalar_type_mismatch(&self) -> bool {
+        matches!(self, Self::PayloadScalarTypeMismatch)
     }
 
     fn scalar_extraction(error: anyhow::Error) -> Self {
@@ -984,8 +999,11 @@ impl IdxTensorStorage {
             return Ok(native);
         }
         let read = inner.tensor_read();
+        let view = read
+            .tensor_view()
+            .ok_or_else(|| anyhow::anyhow!("external scalar kind payload has no tensor view"))?;
         with_engine(inner.runtime(), None, |engine| {
-            engine.to_contiguous_read(TensorRead::from_view(read.tensor_view()))
+            engine.to_contiguous_read(TensorRead::from_view(view))
         })
         .map_err(anyhow::Error::new)
     }
@@ -2341,25 +2359,28 @@ impl IdxTensor {
         positions: &[usize],
     ) -> Result<Self> {
         let dims = self.dims();
-        let data = self.dense_host_values::<T>()?;
         let strides = Self::col_major_strides(&dims)?;
         let kept_len = checked_product(kept_dims)?;
-        let mut output = Vec::with_capacity(kept_len);
-        for linear in 0..kept_len {
-            let kept_coordinates = Self::col_major_coordinates(linear, kept_dims);
-            let mut source_coordinates = vec![0usize; dims.len()];
-            for (position, &axis) in kept_axes.iter().enumerate() {
-                source_coordinates[axis] = kept_coordinates[position];
+        // The source payload is only read here, so borrow it instead of copying
+        // the whole tensor into a temporary vector.
+        self.with_dense_host_slice::<T, _>(|data| {
+            let mut output = Vec::with_capacity(kept_len);
+            for linear in 0..kept_len {
+                let kept_coordinates = Self::col_major_coordinates(linear, kept_dims);
+                let mut source_coordinates = vec![0usize; dims.len()];
+                for (position, &axis) in kept_axes.iter().enumerate() {
+                    source_coordinates[axis] = kept_coordinates[position];
+                }
+                for (&axis, &position) in selected_axes.iter().zip(positions.iter()) {
+                    source_coordinates[axis] = position;
+                }
+                let offset = Self::col_major_offset(&source_coordinates, &strides)?;
+                output.push(*data.get(offset).ok_or_else(|| {
+                    anyhow::anyhow!("column-major selection read offset {offset} is out of bounds")
+                })?);
             }
-            for (&axis, &position) in selected_axes.iter().zip(positions.iter()) {
-                source_coordinates[axis] = position;
-            }
-            let offset = Self::col_major_offset(&source_coordinates, &strides)?;
-            output.push(*data.get(offset).ok_or_else(|| {
-                anyhow::anyhow!("column-major selection read offset {offset} is out of bounds")
-            })?);
-        }
-        Self::from_host_dense(kept_indices, output).map_err(anyhow::Error::from)
+            Self::from_host_dense(kept_indices, output).map_err(anyhow::Error::from)
+        })?
     }
 
     fn select_dense_host_dispatch(
@@ -2425,31 +2446,33 @@ impl IdxTensor {
         let strides = Self::col_major_strides(&result_dims)?;
         let mut output = vec![T::default(); result_len];
         for (batch, tensor) in tensors.iter().enumerate() {
-            let data = tensor.dense_host_values::<T>()?;
-            if data.len() != base_len {
-                return Err(anyhow::anyhow!(
-                    "stack input payload length {} does not match {} base elements",
-                    data.len(),
-                    base_len
-                ));
-            }
-            for (linear, &value) in data.iter().enumerate().take(base_len) {
-                let base_coordinates = Self::col_major_coordinates(linear, base_dims);
-                let mut result_coordinates = Vec::with_capacity(result_dims.len());
-                for axis in 0..=base_rank {
-                    if axis == insert_axis {
-                        result_coordinates.push(batch);
-                    } else {
-                        let base_axis = if axis < insert_axis { axis } else { axis - 1 };
-                        result_coordinates.push(base_coordinates[base_axis]);
-                    }
+            tensor.with_dense_host_slice::<T, _>(|data| -> anyhow::Result<()> {
+                if data.len() != base_len {
+                    return Err(anyhow::anyhow!(
+                        "stack input payload length {} does not match {} base elements",
+                        data.len(),
+                        base_len
+                    ));
                 }
-                let offset = Self::col_major_offset(&result_coordinates, &strides)?;
-                let slot = output.get_mut(offset).ok_or_else(|| {
-                    anyhow::anyhow!("stack write offset {offset} is out of bounds")
-                })?;
-                *slot = value;
-            }
+                for (linear, &value) in data.iter().enumerate().take(base_len) {
+                    let base_coordinates = Self::col_major_coordinates(linear, base_dims);
+                    let mut result_coordinates = Vec::with_capacity(result_dims.len());
+                    for axis in 0..=base_rank {
+                        if axis == insert_axis {
+                            result_coordinates.push(batch);
+                        } else {
+                            let base_axis = if axis < insert_axis { axis } else { axis - 1 };
+                            result_coordinates.push(base_coordinates[base_axis]);
+                        }
+                    }
+                    let offset = Self::col_major_offset(&result_coordinates, &strides)?;
+                    let slot = output.get_mut(offset).ok_or_else(|| {
+                        anyhow::anyhow!("stack write offset {offset} is out of bounds")
+                    })?;
+                    *slot = value;
+                }
+                Ok(())
+            })??;
         }
         Self::from_host_dense(result_indices, output).map_err(anyhow::Error::from)
     }
@@ -3731,8 +3754,16 @@ impl IdxTensor {
 
     fn read_real_eigenvalues(values: &Self, hermitian_tol: f64) -> Result<Vec<f64>> {
         if values.is_complex() {
+            let values = if values.is_c32() {
+                values
+                    .to_vec::<Complex32>()?
+                    .into_iter()
+                    .map(|value| Complex64::new(f64::from(value.re), f64::from(value.im)))
+                    .collect()
+            } else {
+                values.to_vec::<Complex64>()?
+            };
             values
-                .to_vec::<Complex64>()?
                 .into_iter()
                 .enumerate()
                 .map(|(index, value)| {
@@ -3747,6 +3778,8 @@ impl IdxTensor {
                     Ok(value.re)
                 })
                 .collect()
+        } else if values.is_f32() {
+            Ok(values.to_vec::<f32>()?.into_iter().map(f64::from).collect())
         } else {
             values.to_vec::<f64>().map_err(anyhow::Error::from)
         }
@@ -5852,6 +5885,79 @@ impl IdxTensor {
         Ok(value)
     }
 
+    /// Smallest modulus among the nonzero elements, or `None` when every
+    /// element is zero. Elements outside the stored payload (structural
+    /// zeros) are zero and do not count.
+    ///
+    /// The modulus of a real element, or of a complex element with a zero
+    /// part, is exact. For a complex element with two nonzero parts,
+    /// `hypot(re, im)` may round up by up to one ulp, so the value used is
+    /// the larger of two ulps below it and `max(|re|, |im|)`: a positive
+    /// lower bound on the true modulus (within three ulps of it for normal
+    /// values). Hence `floor(log2 value)` never exceeds the exponent of the
+    /// true smallest modulus, and a nonzero element is never reported as
+    /// zero.
+    ///
+    /// # Errors
+    /// Returns [`IdxTensorError`] when authoritative storage or eager
+    /// materialization cannot be read, or when the input contains NaN.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    ///
+    /// let i = DynIndex::new_dyn(4);
+    /// let t = IdxTensor::from_dense(vec![i], vec![-5.0, 0.0, 0.25, -2.0]).unwrap();
+    /// assert_eq!(t.min_nonzero_abs().unwrap(), Some(0.25));
+    /// ```
+    pub fn min_nonzero_abs(&self) -> std::result::Result<Option<f64>, IdxTensorError> {
+        if let Some(error) = self.storage.deferred_error() {
+            return Err(IdxTensorError::Storage {
+                source: error.clone(),
+            });
+        }
+        let dtype = self
+            .storage
+            .dtype()
+            .ok_or_else(|| IdxTensorError::ScalarTypeMismatch {
+                expected: "f32, f64, c32, or c64",
+                actual: "unknown".to_string(),
+            })?;
+        if !matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64) {
+            return Err(IdxTensorError::ScalarTypeMismatch {
+                expected: "f32, f64, c32, or c64",
+                actual: Self::dtype_name(dtype).to_string(),
+            });
+        }
+        let flags = self
+            .compact_nonfinite_flags()
+            .map_err(IdxTensorError::materialization)?;
+        if flags.has_nan {
+            return Err(IdxTensorError::NaNInput {
+                operation: "min_nonzero_abs",
+            });
+        }
+        let mut value: Option<f64> = None;
+        self.storage
+            .for_each_payload_value(|scalar| {
+                let largest_part = scalar.re.abs().max(scalar.im.abs());
+                let magnitude = if scalar.re == 0.0 || scalar.im == 0.0 {
+                    largest_part
+                } else {
+                    // `max(|re|, |im|)` never exceeds the modulus and is
+                    // positive for a nonzero entry, so the bound never
+                    // reports a nonzero subnormal entry as zero.
+                    modulus_lower_bound(scalar.re.hypot(scalar.im)).max(largest_part)
+                };
+                if magnitude != 0.0 {
+                    value = Some(value.map_or(magnitude, |current| current.min(magnitude)));
+                }
+            })
+            .map_err(IdxTensorError::materialization)?;
+        Ok(value)
+    }
+
     fn native_complex_payload_value_at(
         native: &EagerTensor,
         payload_coords: &[usize],
@@ -6701,9 +6807,31 @@ use crate::tensor_like::{
     TensorContractionLike, TensorFactorizationLike, TensorVectorSpace,
 };
 
+/// Two ulps below a positive `hypot` result (one ulp of rounding plus one of
+/// margin), so the result never exceeds the true modulus. An infinite
+/// `hypot` (finite parts with a modulus above `f64::MAX`) is kept, since any
+/// finite value would not be a bound the caller can rely on either way.
+fn modulus_lower_bound(hypot: f64) -> f64 {
+    if !hypot.is_finite() || hypot <= 0.0 {
+        return hypot;
+    }
+    let below = |x: f64| {
+        if x > 0.0 {
+            f64::from_bits(x.to_bits() - 1)
+        } else {
+            x
+        }
+    };
+    below(below(hypot))
+}
+
 impl TensorVectorSpace for IdxTensor {
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         IdxTensor::norm_squared(self)
+    }
+
+    fn is_single_precision(&self) -> bool {
+        self.is_f32() || self.is_c32()
     }
 
     fn norm(&self) -> std::result::Result<f64, Self::Error> {
@@ -6712,6 +6840,22 @@ impl TensorVectorSpace for IdxTensor {
 
     fn maxabs(&self) -> std::result::Result<f64, Self::Error> {
         IdxTensor::maxabs(self)
+    }
+
+    fn min_nonzero_abs(&self) -> std::result::Result<Option<f64>, Self::Error> {
+        IdxTensor::min_nonzero_abs(self)
+    }
+
+    fn is_all_finite(&self) -> std::result::Result<bool, Self::Error> {
+        if let Some(error) = self.storage.deferred_error() {
+            return Err(IdxTensorError::Storage {
+                source: error.clone(),
+            });
+        }
+        let flags = self
+            .compact_nonfinite_flags()
+            .map_err(IdxTensorError::materialization)?;
+        Ok(!(flags.has_nan || flags.has_infinity))
     }
 
     fn isapprox(
@@ -8486,7 +8630,21 @@ impl IdxTensor {
         values
             .as_slice::<T>()
             .map(|values| values.to_vec())
-            .map_err(|source| IdxTensorError::materialization(anyhow::Error::new(source)))
+            .map_err(|source| {
+                // Classified where the concrete error is still at hand: the
+                // requested type did not match the payload (a caller error),
+                // or the readback itself failed (keep its typed source).
+                if matches!(
+                    source.kind(),
+                    tenferro_tensor::ErrorKind::Validation(
+                        tenferro_tensor::ValidationKind::DTypeMismatch
+                    )
+                ) {
+                    IdxTensorError::PayloadScalarTypeMismatch
+                } else {
+                    IdxTensorError::materialization(anyhow::Error::new(source))
+                }
+            })
     }
 
     /// Reads dense column-major tensor values without copying them into a new vector.
@@ -9698,23 +9856,27 @@ impl IdxTensor {
         })?;
         match dtype {
             DType::F64 => {
-                let data = self.dense_host_values::<f64>()?;
-                let gathered = Self::gather_host(&data, &dims, axis, positions, target_dim)?;
+                let gathered = self.with_dense_host_slice::<f64, _>(|data| {
+                    Self::gather_host(data, &dims, axis, positions, target_dim)
+                })??;
                 Self::from_host_dense(result_indices, gathered)
             }
             DType::F32 => {
-                let data = self.dense_host_values::<f32>()?;
-                let gathered = Self::gather_host(&data, &dims, axis, positions, target_dim)?;
+                let gathered = self.with_dense_host_slice::<f32, _>(|data| {
+                    Self::gather_host(data, &dims, axis, positions, target_dim)
+                })??;
                 Self::from_host_dense(result_indices, gathered)
             }
             DType::C64 => {
-                let data = self.dense_host_values::<Complex64>()?;
-                let gathered = Self::gather_host(&data, &dims, axis, positions, target_dim)?;
+                let gathered = self.with_dense_host_slice::<Complex64, _>(|data| {
+                    Self::gather_host(data, &dims, axis, positions, target_dim)
+                })??;
                 Self::from_host_dense(result_indices, gathered)
             }
             DType::C32 => {
-                let data = self.dense_host_values::<Complex32>()?;
-                let gathered = Self::gather_host(&data, &dims, axis, positions, target_dim)?;
+                let gathered = self.with_dense_host_slice::<Complex32, _>(|data| {
+                    Self::gather_host(data, &dims, axis, positions, target_dim)
+                })??;
                 Self::from_host_dense(result_indices, gathered)
             }
             other => Err(IdxTensorError::operation(

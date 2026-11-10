@@ -173,7 +173,20 @@ where
         Err(anyhow::anyhow!("Index {:?} not found in TreeTN", old_index.id()).into())
     }
 
-    /// Replace multiple indices in this TreeTN.
+    /// Replace multiple indices in this TreeTN as one simultaneous batch.
+    ///
+    /// Every pair reads the *original* indices, like [`IdxTensor::replace_indices`]:
+    /// `[a, b] -> [b, a]` swaps `a` and `b` instead of renaming them one after
+    /// another. When a target is also a source in the same batch, the rename
+    /// hops through fresh intermediate identities.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeTNOperationError`] when the slices differ in length, when a
+    /// source is repeated or absent, when a pair changes the dimension, when a
+    /// target is repeated, or when a target already exists in the network and is
+    /// not itself replaced by this batch. The whole batch is validated before
+    /// anything is renamed, so a rejected batch leaves this network unchanged.
     fn replace_indices(
         &self,
         old_indices: &[Self::Index],
@@ -188,7 +201,72 @@ where
             .into());
         }
 
+        let mut old_set = std::collections::HashSet::with_capacity(old_indices.len());
+        for old in old_indices {
+            if !old_set.insert(old.clone()) {
+                return Err(anyhow::anyhow!(
+                    "Duplicate source index {:?} in TreeTN::replace_indices",
+                    old.id()
+                )
+                .into());
+            }
+        }
+        let present: std::collections::HashSet<Self::Index> = self
+            .node_indices()
+            .into_iter()
+            .filter_map(|node| self.tensor(node))
+            .flat_map(|tensor| tensor.external_indices())
+            .collect();
+        let mut new_set = std::collections::HashSet::with_capacity(new_indices.len());
+        for (old, new) in old_indices.iter().zip(new_indices.iter()) {
+            if old.dim() != new.dim() {
+                return Err(anyhow::anyhow!(
+                    "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
+                    old.dim(),
+                    new.dim()
+                )
+                .into());
+            }
+            if !present.contains(old) {
+                return Err(anyhow::anyhow!("Index {:?} not found in TreeTN", old.id()).into());
+            }
+            if !new_set.insert(new) {
+                return Err(anyhow::anyhow!(
+                    "Duplicate target index {:?} in TreeTN::replace_indices",
+                    new.id()
+                )
+                .into());
+            }
+            if present.contains(new) && !old_set.contains(new) {
+                return Err(anyhow::anyhow!(
+                    "Target index {:?} is already present in the TreeTN and is not replaced by this batch",
+                    new.id()
+                )
+                .into());
+            }
+        }
+
         let mut result = self.clone();
+        // Pair-by-pair renaming is already simultaneous unless a target is also a
+        // source; that case needs fresh identities so each pair reads the original.
+        let needs_temporaries = old_indices
+            .iter()
+            .zip(new_indices.iter())
+            .filter(|(old, new)| old != new)
+            .any(|(_, new)| old_set.contains(new));
+        if needs_temporaries {
+            let mut temporaries = Vec::with_capacity(old_indices.len());
+            for old in old_indices {
+                let temporary = old.sim();
+                result = result.replaceind(old, &temporary)?;
+                temporaries.push(temporary);
+            }
+            for (temporary, new) in temporaries.iter().zip(new_indices.iter()) {
+                result = result.replaceind(temporary, new)?;
+            }
+            return Ok(result);
+        }
+
         for (old, new) in old_indices.iter().zip(new_indices.iter()) {
             result = result.replaceind(old, new)?;
         }

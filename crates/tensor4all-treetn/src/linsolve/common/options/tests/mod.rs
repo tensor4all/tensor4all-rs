@@ -48,3 +48,26 @@ fn test_complex_coefficients() {
     assert_eq!(opts.a0, AnyScalar::new_complex(0.5, -0.25));
     assert_eq!(opts.a1, AnyScalar::new_complex(-1.0, 2.0));
 }
+
+#[test]
+fn convergence_tol_must_be_finite_and_nonnegative() {
+    LinsolveOptions::default()
+        .validate_convergence_tol()
+        .unwrap();
+    LinsolveOptions::default()
+        .with_convergence_tol(0.0)
+        .validate_convergence_tol()
+        .unwrap();
+    for tol in [f64::NAN, f64::INFINITY, -1e-12] {
+        let error = LinsolveOptions::default()
+            .with_convergence_tol(tol)
+            .validate_convergence_tol()
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("convergence_tol must be finite and nonnegative"),
+            "{error}"
+        );
+    }
+}

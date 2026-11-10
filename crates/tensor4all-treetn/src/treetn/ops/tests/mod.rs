@@ -163,3 +163,30 @@ fn evaluator_rejects_incomplete_site_index_list() {
 
     assert!(err.to_string().contains("indices.len()"));
 }
+
+#[test]
+fn test_log_norm_survives_squared_norm_overflow_and_underflow() {
+    // |t| = 5 * 10^k: for k = +-200 the squared norm leaves the f64 range,
+    // but the norm and its logarithm do not.
+    for exponent in [200_i32, -200] {
+        let scale = 10f64.powi(exponent);
+        let expected = 5.0_f64.ln() + f64::from(exponent) * 10f64.ln();
+        let site = DynIndex::new_dyn(2);
+        let tensor = IdxTensor::from_dense(vec![site], vec![3.0 * scale, 4.0 * scale]).unwrap();
+        let tree = TreeTN::<_, usize>::from_tensors(vec![tensor], vec![0]).unwrap();
+
+        let log_norm = tree.clone().log_norm().unwrap();
+        assert!(
+            (log_norm - expected).abs() < 1.0e-12 * expected.abs(),
+            "exponent={exponent} log_norm={log_norm} expected={expected}"
+        );
+
+        let mut backend = tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap();
+        let mut session = tensor4all_tensorbackend::explicit::Session::new(backend.engine_mut());
+        let session_log_norm = tree.clone().log_norm_on_session(&mut session).unwrap();
+        assert!(
+            (session_log_norm - expected).abs() < 1.0e-12 * expected.abs(),
+            "exponent={exponent} session_log_norm={session_log_norm} expected={expected}"
+        );
+    }
+}

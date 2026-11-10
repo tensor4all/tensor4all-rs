@@ -75,8 +75,8 @@ pub use matrix_luci::{
     matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix,
     matrix_luci_factors_from_matrix_owned, matrix_luci_factors_from_matrix_owned_in,
     matrix_luci_factors_from_matrix_owned_on_session, matrix_luci_factors_working_bytes,
-    matrix_luci_row_interpolation_owned_in, MatrixLUCI, MatrixLuciFactors,
-    MatrixLuciRowInterpolation,
+    matrix_luci_row_interpolation_owned_in, matrix_luci_row_interpolation_owned_on_session,
+    MatrixLUCI, MatrixLuciFactors, MatrixLuciRowInterpolation,
 };
 pub use matrixaca::MatrixACA;
 pub use matrixlu::{rrlu, rrlu_mut, rrlu_pivots, RrLU, RrLUOptions, RrLUPivots};
@@ -155,10 +155,10 @@ pub use defaults::idx_tensor::{
     print_and_reset_pairwise_contract_profile, reset_pairwise_contract_profile,
 };
 pub use defaults::{
-    contract_pair_on_session, contract_with_options_on_session, index_select_on_session,
-    inner_product_on_session, norm_on_session, norm_squared_on_session, permute_indices_on_session,
-    permute_on_session, select_indices_on_session, stack_along_new_index_on_session,
-    sum_on_session,
+    contract_pair_on_session, contract_with_options_on_session, dense_values_on_session,
+    index_select_on_session, inner_product_on_session, norm_on_session, norm_squared_on_session,
+    permute_indices_on_session, permute_on_session, select_indices_on_session,
+    stack_along_new_index_on_session, sum_on_session,
 };
 
 // Re-export linear algebra modules from defaults for backwards compatibility

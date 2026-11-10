@@ -181,7 +181,7 @@ fn an_observer_changes_nothing() {
 #[test]
 fn crossinterpolate2_with_an_observer_matches_one_without() {
     let interpolate = |observer: &mut Recorder| {
-        crossinterpolate2::<f64, _, _, _>(
+        crossinterpolate2::<f64, _, _, _, _>(
             target,
             vec![2; N_SITES],
             graph(),
@@ -196,7 +196,7 @@ fn crossinterpolate2_with_an_observer_matches_one_without() {
     let dense = |r: &tensor4all_treetci::TreeTciRunResult| {
         r.treetn.to_dense().unwrap().to_vec::<f64>().unwrap()
     };
-    let plain = crossinterpolate2::<f64, _, _, _>(
+    let plain = crossinterpolate2::<f64, _, _, _, _>(
         target,
         vec![2; N_SITES],
         graph(),
@@ -225,7 +225,7 @@ fn every_entry_point_reports_its_iterations() {
     let dims = || vec![2; N_SITES];
 
     let mut recorder = Recorder::default();
-    let run = crossinterpolate2_in::<f64, _, _, _>(
+    let run = crossinterpolate2_in::<f64, _, _, _, _>(
         target,
         dims(),
         graph(),
@@ -240,7 +240,7 @@ fn every_entry_point_reports_its_iterations() {
     recorder.assert_matches(&run.ranks, &run.errors);
 
     let mut recorder = Recorder::default();
-    let run = crossinterpolate2_with_rng::<f64, _, _, _, _>(
+    let run = crossinterpolate2_with_rng::<f64, _, _, _, _, _>(
         target,
         dims(),
         graph(),
@@ -255,7 +255,7 @@ fn every_entry_point_reports_its_iterations() {
     recorder.assert_matches(&run.ranks, &run.errors);
 
     let mut recorder = Recorder::default();
-    let run = crossinterpolate2_with_rng_in::<f64, _, _, _, _>(
+    let run = crossinterpolate2_with_rng_in::<f64, _, _, _, _, _>(
         target,
         dims(),
         graph(),

@@ -3,150 +3,45 @@
 //! This module provides `TTCache`, a wrapper around tensor trains that caches
 //! partial evaluations for efficient repeated evaluation.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::hash_map::Entry;
 
-use bnum::types::{U1024, U256, U512};
+use rustc_hash::{FxHashMap, FxHashSet};
+use tensor4all_core::index_key::{FlatIndexer, IndexKey, IndexKeyError};
 
 use crate::einsum_helper::{matrix_times_col_vector, row_vector_times_matrix};
 use crate::error::{Result, SimpleTensorTrainError};
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{LocalIndex, MultiIndex, Tensor3, Tensor3Ops};
 
-/// Compute total bits needed for the index space.
-///
-/// Each site contributes `ceil(log2(dim))` bits, the width of the largest
-/// mixed-radix key, so a binary site contributes one bit. Keys are bounded by
-/// `product(local_dims) - 1`, matching `tensor4all_core::CachedFunction`.
-fn compute_total_bits(local_dims: &[usize]) -> u32 {
-    local_dims.iter().fold(0u32, |bits, &dim| {
-        let dim_bits = if dim <= 1 {
-            0
-        } else {
-            ((dim - 1) as u64).ilog2().saturating_add(1)
-        };
-        bits.saturating_add(dim_bits)
-    })
-}
-
-/// Index key types for different bit widths
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum IndexKey {
-    U64(u64),
-    U128(u128),
-    U256(U256),
-    U512(U512),
-    U1024(U1024),
-}
-
-/// Flat indexer with automatic key type selection based on index space size
-enum FlatIndexer {
-    U64 { coeffs: Vec<u64> },
-    U128 { coeffs: Vec<u128> },
-    U256 { coeffs: Vec<U256> },
-    U512 { coeffs: Vec<U512> },
-    U1024 { coeffs: Vec<U1024> },
-}
-
-/// Macro for computing coefficients for primitive integer types (u64, u128)
-macro_rules! compute_coeffs_primitive {
-    ($local_dims:expr, $T:ty) => {{
-        let mut coeffs = Vec::with_capacity($local_dims.len());
-        let mut prod: $T = 1;
-        for &d in $local_dims {
-            coeffs.push(prod);
-            prod = prod.saturating_mul(d as $T);
-        }
-        coeffs
-    }};
-}
-
-/// Macro for computing coefficients for bnum types (U256, U512, U1024)
-macro_rules! compute_coeffs_bnum {
-    ($local_dims:expr, $T:ty) => {{
-        let mut coeffs = Vec::with_capacity($local_dims.len());
-        let mut prod = <$T>::ONE;
-        for &d in $local_dims {
-            coeffs.push(prod);
-            prod = prod.saturating_mul(<$T>::from(d as u64));
-        }
-        coeffs
-    }};
-}
-
-/// Macro for computing flat index for primitive types
-macro_rules! flat_index_primitive {
-    ($idx:expr, $coeffs:expr, $T:ty, $Key:ident) => {{
-        let key: $T = $idx.iter().zip($coeffs).map(|(&i, &c)| c * i as $T).sum();
-        IndexKey::$Key(key)
-    }};
-}
-
-/// Macro for computing flat index for bnum types
-macro_rules! flat_index_bnum {
-    ($idx:expr, $coeffs:expr, $T:ty, $Key:ident) => {{
-        let key = $idx
-            .iter()
-            .zip($coeffs)
-            .map(|(&i, &c)| c * <$T>::from(i as u64))
-            .fold(<$T>::ZERO, |a, b| a + b);
-        IndexKey::$Key(key)
-    }};
-}
-
-impl FlatIndexer {
-    /// Create a new indexer, automatically selecting a lossless key type.
-    fn new(local_dims: &[usize]) -> Result<Self> {
-        let total_bits = compute_total_bits(local_dims);
-        if total_bits > 1024 {
-            return Err(SimpleTensorTrainError::InvalidOperation {
-                message: format!(
-                    "cache index space requires {total_bits} bits, exceeding the 1024-bit key limit"
-                ),
-            });
-        }
-
-        let indexer = if total_bits <= 64 {
-            Self::U64 {
-                coeffs: compute_coeffs_primitive!(local_dims, u64),
-            }
-        } else if total_bits <= 128 {
-            Self::U128 {
-                coeffs: compute_coeffs_primitive!(local_dims, u128),
-            }
-        } else if total_bits <= 256 {
-            Self::U256 {
-                coeffs: compute_coeffs_bnum!(local_dims, U256),
-            }
-        } else if total_bits <= 512 {
-            Self::U512 {
-                coeffs: compute_coeffs_bnum!(local_dims, U512),
-            }
-        } else {
-            Self::U1024 {
-                coeffs: compute_coeffs_bnum!(local_dims, U1024),
-            }
-        };
-        Ok(indexer)
+fn cache_key_error(error: IndexKeyError) -> SimpleTensorTrainError {
+    SimpleTensorTrainError::InvalidOperation {
+        message: format!("cache index encoding failed: {error}"),
     }
+}
 
-    /// Compute flat index key from multi-index
-    fn flat_index(&self, idx: &[usize]) -> IndexKey {
-        match self {
-            Self::U64 { coeffs } => flat_index_primitive!(idx, coeffs, u64, U64),
-            Self::U128 { coeffs } => flat_index_primitive!(idx, coeffs, u128, U128),
-            Self::U256 { coeffs } => flat_index_bnum!(idx, coeffs, U256, U256),
-            Self::U512 { coeffs } => flat_index_bnum!(idx, coeffs, U512, U512),
-            Self::U1024 { coeffs } => flat_index_bnum!(idx, coeffs, U1024, U1024),
+// Build metadata only for visited lengths, after public index validation. In
+// particular, a zero-dimensional site must not reject unrelated partial reads.
+fn partial_key<T: TTScalar>(
+    indexer: &mut Option<FlatIndexer>,
+    tensors: &[Tensor3<T>],
+    indices: &[LocalIndex],
+) -> Result<IndexKey> {
+    let indexer = match indexer {
+        Some(indexer) => indexer,
+        slot @ None => {
+            let dims: Vec<_> = tensors.iter().map(Tensor3Ops::site_dim).collect();
+            slot.insert(FlatIndexer::try_new(&dims).map_err(cache_key_error)?)
         }
-    }
+    };
+    indexer.encode(indices).map_err(cache_key_error)
 }
 
 /// Helper struct for building unique index mappings
 struct IndexMapper {
     left_indexer: FlatIndexer,
     right_indexer: FlatIndexer,
-    left_key_to_id: HashMap<IndexKey, usize>,
-    right_key_to_id: HashMap<IndexKey, usize>,
+    left_key_to_id: FxHashMap<IndexKey, usize>,
+    right_key_to_id: FxHashMap<IndexKey, usize>,
     idx_to_left: Vec<usize>,
     idx_to_right: Vec<usize>,
     left_first_idx: Vec<usize>,
@@ -156,10 +51,10 @@ struct IndexMapper {
 impl IndexMapper {
     fn new(left_dims: &[usize], right_dims: &[usize], capacity: usize) -> Result<Self> {
         Ok(Self {
-            left_indexer: FlatIndexer::new(left_dims)?,
-            right_indexer: FlatIndexer::new(right_dims)?,
-            left_key_to_id: HashMap::new(),
-            right_key_to_id: HashMap::new(),
+            left_indexer: FlatIndexer::try_new(left_dims).map_err(cache_key_error)?,
+            right_indexer: FlatIndexer::try_new(right_dims).map_err(cache_key_error)?,
+            left_key_to_id: FxHashMap::default(),
+            right_key_to_id: FxHashMap::default(),
             idx_to_left: Vec::with_capacity(capacity),
             idx_to_right: Vec::with_capacity(capacity),
             left_first_idx: Vec::new(),
@@ -167,56 +62,36 @@ impl IndexMapper {
         })
     }
 
-    fn add_index(&mut self, i: usize, left_part: &[usize], right_part: &[usize]) {
-        let left_key = self.left_indexer.flat_index(left_part);
-        let right_key = self.right_indexer.flat_index(right_part);
+    fn add_index(&mut self, i: usize, left_part: &[usize], right_part: &[usize]) -> Result<()> {
+        let left_key = self
+            .left_indexer
+            .encode(left_part)
+            .map_err(cache_key_error)?;
+        let right_key = self
+            .right_indexer
+            .encode(right_part)
+            .map_err(cache_key_error)?;
 
-        let left_id = match self.left_key_to_id.get(&left_key) {
-            Some(&id) => id,
-            None => {
-                let id = self.left_key_to_id.len();
-                self.left_key_to_id.insert(left_key, id);
+        let next_left = self.left_key_to_id.len();
+        let left_id = *match self.left_key_to_id.entry(left_key) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
                 self.left_first_idx.push(i);
-                id
+                entry.insert(next_left)
             }
         };
-
-        let right_id = match self.right_key_to_id.get(&right_key) {
-            Some(&id) => id,
-            None => {
-                let id = self.right_key_to_id.len();
-                self.right_key_to_id.insert(right_key, id);
+        let next_right = self.right_key_to_id.len();
+        let right_id = *match self.right_key_to_id.entry(right_key) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
                 self.right_first_idx.push(i);
-                id
+                entry.insert(next_right)
             }
         };
 
         self.idx_to_left.push(left_id);
         self.idx_to_right.push(right_id);
-    }
-}
-
-/// Helper for counting unique keys in split heuristic
-struct UniqueCounter {
-    indexer: FlatIndexer,
-    keys: HashSet<IndexKey>,
-}
-
-impl UniqueCounter {
-    fn new(local_dims: &[usize], capacity: usize) -> Result<Self> {
-        Ok(Self {
-            indexer: FlatIndexer::new(local_dims)?,
-            keys: HashSet::with_capacity(capacity),
-        })
-    }
-
-    fn insert(&mut self, idx: &[usize]) {
-        let key = self.indexer.flat_index(idx);
-        self.keys.insert(key);
-    }
-
-    fn len(&self) -> usize {
-        self.keys.len()
+        Ok(())
     }
 }
 
@@ -249,9 +124,12 @@ pub struct TTCache<T: TTScalar> {
     /// The site tensors (reshaped to 3D: left_bond x flat_site x right_bond)
     tensors: Vec<Tensor3<T>>,
     /// Cache for left partial evaluations: site -> (indices -> vector)
-    cache_left: Vec<HashMap<MultiIndex, Vec<T>>>,
+    cache_left: Vec<FxHashMap<IndexKey, Vec<T>>>,
     /// Cache for right partial evaluations: site -> (indices -> vector)
-    cache_right: Vec<HashMap<MultiIndex, Vec<T>>>,
+    cache_right: Vec<FxHashMap<IndexKey, Vec<T>>>,
+    /// Key metadata for each visited left prefix / right suffix length.
+    left_indexers: Vec<Option<FlatIndexer>>,
+    right_indexers: Vec<Option<FlatIndexer>>,
     /// Site dimensions for each tensor (can be multi-dimensional per site)
     site_dims: Vec<Vec<usize>>,
 }
@@ -265,8 +143,10 @@ impl<T: TTScalar> TTCache<T> {
 
         Self {
             tensors,
-            cache_left: (0..n).map(|_| HashMap::new()).collect(),
-            cache_right: (0..n).map(|_| HashMap::new()).collect(),
+            cache_left: (0..n).map(|_| FxHashMap::default()).collect(),
+            cache_right: (0..n).map(|_| FxHashMap::default()).collect(),
+            left_indexers: vec![None; n],
+            right_indexers: vec![None; n],
             site_dims,
         }
     }
@@ -323,14 +203,9 @@ impl<T: TTScalar> TTCache<T> {
             }
         }
 
-        let tensors: Vec<Tensor3<T>> = tt.site_tensors().to_vec();
-
-        Ok(Self {
-            tensors,
-            cache_left: (0..n).map(|_| HashMap::new()).collect(),
-            cache_right: (0..n).map(|_| HashMap::new()).collect(),
-            site_dims,
-        })
+        let mut cache = Self::new(tt);
+        cache.site_dims = site_dims;
+        Ok(cache)
     }
 
     /// Number of sites
@@ -441,15 +316,22 @@ impl<T: TTScalar> TTCache<T> {
     /// any index is out of bounds for its site, or if the tenferro-backed
     /// matrix-vector contraction fails.
     pub fn evaluate_left(&mut self, indices: &[LocalIndex]) -> Result<Vec<T>> {
-        let ell = indices.len();
         self.validate_partial_indices(0, indices)?;
+        self.evaluate_left_validated(indices)
+    }
 
+    fn evaluate_left_validated(&mut self, indices: &[LocalIndex]) -> Result<Vec<T>> {
+        let ell = indices.len();
         if ell == 0 {
             return Ok(vec![T::one()]);
         }
 
         // Check cache
-        let key: MultiIndex = indices.to_vec();
+        let key = partial_key(
+            &mut self.left_indexers[ell - 1],
+            &self.tensors[..ell],
+            indices,
+        )?;
         if let Some(cached) = self.cache_left[ell - 1].get(&key) {
             return Ok(cached.clone());
         }
@@ -462,7 +344,7 @@ impl<T: TTScalar> TTCache<T> {
             tensor.slice_site(flat_idx)
         } else {
             // Recursive case: left[0..ell-1] * tensor[ell-1][:, idx, :]
-            let left = self.evaluate_left(&indices[0..ell - 1])?;
+            let left = self.evaluate_left_validated(&indices[0..ell - 1])?;
             let flat_idx = self.multi_to_flat(ell - 1, &indices[ell - 1..ell])?;
             let tensor = &self.tensors[ell - 1];
             let slice = tensor.slice_site(flat_idx);
@@ -498,15 +380,24 @@ impl<T: TTScalar> TTCache<T> {
             });
         }
 
+        self.validate_partial_indices(n - ell, indices)?;
+        self.evaluate_right_validated(indices)
+    }
+
+    fn evaluate_right_validated(&mut self, indices: &[LocalIndex]) -> Result<Vec<T>> {
+        let n = self.len();
+        let ell = indices.len();
         if ell == 0 {
             return Ok(vec![T::one()]);
         }
-
         let start = n - ell;
-        self.validate_partial_indices(start, indices)?;
 
         // Check cache
-        let key: MultiIndex = indices.to_vec();
+        let key = partial_key(
+            &mut self.right_indexers[start],
+            &self.tensors[start..],
+            indices,
+        )?;
         if let Some(cached) = self.cache_right[start].get(&key) {
             return Ok(cached.clone());
         }
@@ -519,7 +410,7 @@ impl<T: TTScalar> TTCache<T> {
             tensor.slice_site(flat_idx)
         } else {
             // Recursive case: tensor[start][:, idx, :] * right[1..]
-            let right = self.evaluate_right(&indices[1..])?;
+            let right = self.evaluate_right_validated(&indices[1..])?;
             let flat_idx = self.multi_to_flat(start, &indices[0..1])?;
             let tensor = &self.tensors[start];
             let slice = tensor.slice_site(flat_idx);
@@ -629,7 +520,7 @@ impl<T: TTScalar> TTCache<T> {
         // Determine split position
         let split = match split {
             Some(s) => s,
-            None => self.find_split_heuristic(indices)?,
+            None => self.find_split_heuristic(indices),
         };
 
         if split == 0 || split > n {
@@ -648,7 +539,7 @@ impl<T: TTScalar> TTCache<T> {
             IndexMapper::new(&local_dims[..split], &local_dims[split..], indices.len())?;
 
         for (i, idx) in indices.iter().enumerate() {
-            mapper.add_index(i, &idx[..split], &idx[split..]);
+            mapper.add_index(i, &idx[..split], &idx[split..])?;
         }
 
         // Extract unique parts using first occurrence indices
@@ -715,56 +606,35 @@ impl<T: TTScalar> TTCache<T> {
     ///
     /// Samples at 1/4, 1/2, 3/4 positions and returns the one with
     /// minimum total unique left + right parts.
-    fn find_split_heuristic(&self, indices: &[MultiIndex]) -> Result<usize> {
+    fn find_split_heuristic(&self, indices: &[MultiIndex]) -> usize {
         let n = self.len();
         if n <= 1 {
-            return Ok(n.max(1));
+            return n.max(1);
         }
 
-        let local_dims: Vec<usize> = self
-            .site_dims
-            .iter()
-            .map(|dims| {
-                dims.iter()
-                    .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
-            })
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
-                message: "cache heuristic site-dimension product overflowed usize".to_string(),
-            })?;
-
-        // Helper to compute cost at a split position
-        let compute_cost = |split: usize| -> Result<usize> {
+        // These sets only count within this call and borrow the validated batch;
+        // encoding keys for three discarded split candidates adds avoidable work.
+        let mut left = FxHashSet::with_capacity_and_hasher(indices.len(), Default::default());
+        let mut right = FxHashSet::with_capacity_and_hasher(indices.len(), Default::default());
+        let mut best_split = n / 2;
+        let mut best_cost = usize::MAX;
+        for split in [n / 4, n / 2, n.saturating_mul(3) / 4] {
             if split == 0 || split >= n {
-                return Ok(usize::MAX);
+                continue;
             }
-
-            let mut left_counter = UniqueCounter::new(&local_dims[..split], indices.len())?;
-            let mut right_counter = UniqueCounter::new(&local_dims[split..], indices.len())?;
-
+            left.clear();
+            right.clear();
             for idx in indices {
-                left_counter.insert(&idx[..split]);
-                right_counter.insert(&idx[split..]);
+                left.insert(&idx[..split]);
+                right.insert(&idx[split..]);
             }
-
-            Ok(left_counter.len().saturating_add(right_counter.len()))
-        };
-
-        // 3-point sampling: 1/4, 1/2, 3/4 positions
-        let candidates = [n / 4, n / 2, n.saturating_mul(3) / 4];
-        let costs: Result<Vec<(usize, usize)>> = candidates
-            .iter()
-            .filter(|&&p| p >= 1 && p < n)
-            .map(|&p| Ok((p, compute_cost(p)?)))
-            .collect();
-
-        costs?
-            .into_iter()
-            .min_by_key(|&(_, c)| c)
-            .map(|(p, _)| p)
-            .ok_or_else(|| SimpleTensorTrainError::InvalidOperation {
-                message: "cache heuristic could not choose a valid split".to_string(),
-            })
+            let cost = left.len().saturating_add(right.len());
+            if cost < best_cost {
+                best_cost = cost;
+                best_split = split;
+            }
+        }
+        best_split
     }
 }
 

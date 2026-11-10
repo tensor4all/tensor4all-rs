@@ -255,10 +255,15 @@ fn contract_is_bitwise_identical_across_processes() {
         output.status.success(),
         "the child process failed:\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
+    // The harness writes its own `test <name> ... ` announcement to the same stdout the
+    // child's `--nocapture` output goes to, and the two can share a line, so the tag is
+    // located rather than required at the start of one.
     let child: Vec<String> = stdout
         .lines()
-        .filter_map(|line| line.strip_prefix(DIGEST_TAG))
-        .map(|digest| digest.trim().to_owned())
+        .filter_map(|line| {
+            line.find(DIGEST_TAG)
+                .map(|at| line[at + DIGEST_TAG.len()..].trim().to_owned())
+        })
         .collect();
     assert_eq!(
         child.len(),

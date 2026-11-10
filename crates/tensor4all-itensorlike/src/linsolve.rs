@@ -21,6 +21,9 @@ use crate::tensortrain::TensorTrain;
 /// [`LinsolveOptions::with_nsite(1)`](LinsolveOptions::with_nsite) for one-site
 /// ALS without bond growth or SVD truncation. One-site mode also supports
 /// single-tensor trains. Choose sufficient initial ranks for the solution.
+/// Select GMRES (default), CG, or BiCGSTAB with
+/// [`LinsolveOptions::with_local_solver`]. CG requires a Hermitian
+/// positive-definite effective operator `a0 I + a1 A`.
 ///
 /// # Examples
 /// ```
@@ -49,15 +52,24 @@ use crate::tensortrain::TensorTrain;
 /// * `options` - Solver options
 ///
 /// # Returns
-/// The solution `x` as a TensorTrain.
+/// The state after the requested sweeps as a TensorTrain. Non-convergence is
+/// not an error and is not reported: neither a local CG/BiCGSTAB/GMRES solve
+/// that exhausts its budget nor a sweep that stops above `convergence_tol` is
+/// visible in the result. Use [`tensor4all_treetn::square_linsolve`], whose
+/// result carries `converged` and the true residual, when that is needed.
 ///
 /// # Errors
 ///
 /// Returns [`TensorTrainError::InvalidStructure`] when any input train is
 /// empty or when their lengths differ, [`TensorTrainError::OperationError`]
-/// when a sweep, GMRES, or SVD option is invalid or when the operator and initial
-/// guess cannot be index-mapped, and [`TensorTrainError::TreeTn`] when the update
-/// mode is invalid or the underlying TreeTN solve fails.
+/// when a sweep or SVD option is invalid or when the operator and initial guess
+/// cannot be index-mapped, and [`TensorTrainError::TreeTn`] when the update mode
+/// or the local solver options are invalid (see
+/// [`tensor4all_treetn::LinsolveOptions::validate_local_solver`]) or the
+/// underlying TreeTN solve fails. Invalid native CG/BiCGSTAB options, CG
+/// non-Hermitian or non-positive-curvature errors, CG or BiCGSTAB breakdown and
+/// local operator failures carry a
+/// [`KrylovError`](tensor4all_core::krylov::KrylovError) in the source chain.
 ///
 pub fn linsolve(
     operator: &TensorTrain,
@@ -92,27 +104,6 @@ pub fn linsolve(
 
     validate_svd_truncation_options(options.max_bond_dim(), options.svd_policy())?;
 
-    if !options.gmres_tol().is_finite() || options.gmres_tol() <= 0.0 {
-        return Err(TensorTrainError::OperationError {
-            message: format!(
-                "gmres_tol must be finite and > 0, got {}",
-                options.gmres_tol()
-            ),
-        });
-    }
-
-    if options.gmres_max_restarts() == 0 {
-        return Err(TensorTrainError::OperationError {
-            message: "gmres_max_restarts must be >= 1".to_string(),
-        });
-    }
-
-    if options.gmres_restart_dim() == 0 {
-        return Err(TensorTrainError::OperationError {
-            message: "gmres_restart_dim must be >= 1".to_string(),
-        });
-    }
-
     if let Some(tol) = options.convergence_tol() {
         if !tol.is_finite() || tol < 0.0 {
             return Err(TensorTrainError::OperationError {
@@ -127,6 +118,7 @@ pub fn linsolve(
     let (a0, a1) = options.coefficients();
     let treetn_options = tensor4all_treetn::LinsolveOptions::new(nfullsweeps)
         .with_nsite(options.nsite())
+        .with_local_solver(options.local_solver().clone())
         .with_truncation(TruncationOptions::new())
         .with_gmres_tol(options.gmres_tol())
         .with_gmres_max_restarts(options.gmres_max_restarts())
@@ -151,6 +143,9 @@ pub fn linsolve(
         treetn_options
     };
     let treetn_options = treetn_options.with_residual_check(options.check_residual());
+    treetn_options
+        .validate_local_solver()
+        .map_err(|source| TensorTrainError::tree_tn("Invalid local solver options", source))?;
 
     // Use the last site as the sweep center
     let center = init.len() - 1;
@@ -301,13 +296,16 @@ impl TensorTrain {
     /// `self` is the operator `A`, `rhs` is `b`, `init` is the initial guess.
     ///
     /// See [`linsolve`] for details.
+    ///
     /// # Errors
     ///
-    /// Returns [`TensorTrainError::InvalidStructure`] when any input train is
-    /// empty or when their lengths differ, [`TensorTrainError::OperationError`]
-    /// when an option is invalid or when the operator and initial guess cannot
-    /// be index-mapped, and [`TensorTrainError::TreeTn`] when the underlying
-    /// TreeTN solve fails.
+    /// The same as [`linsolve`]: [`TensorTrainError::InvalidStructure`] when any
+    /// input train is empty or when their lengths differ,
+    /// [`TensorTrainError::OperationError`] when a sweep or SVD option is
+    /// invalid or when the operator and initial guess cannot be index-mapped, and
+    /// [`TensorTrainError::TreeTn`] when the update mode or the local solver
+    /// options are invalid or the underlying TreeTN solve fails. As for
+    /// [`linsolve`], non-convergence is not an error and is not reported.
     ///
     pub fn linsolve(&self, rhs: &Self, init: Self, options: &LinsolveOptions) -> Result<Self> {
         linsolve(self, rhs, init, options)

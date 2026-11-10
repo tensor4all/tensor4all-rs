@@ -491,11 +491,13 @@ impl From<anyhow::Error> for BackendLinalgError {
     }
 }
 
-/// Scalar types supported by [`triangular_solve_matrix`].
+/// Scalar types supported by [`triangular_solve_matrix`] and
+/// [`triangular_solve_matrix_in`].
 /// `f64` and `Complex64` are solved directly. `f32` and `Complex32` are
 /// promoted to the corresponding 64-bit dtype for the backend solve and then
 /// converted back, because the current tenferro CPU triangular solve is double
-/// precision only.
+/// precision only. The process-global and the session route apply the same
+/// promotion, so they return bitwise identical results for every scalar type.
 /// # Examples
 /// ```
 /// use tensor4all_tensorbackend::{from_vec2d, triangular_solve_matrix};
@@ -527,6 +529,27 @@ pub trait MatrixTriangularSolveScalar: BackendLinalgScalar + crate::matrix::Matr
     ) -> Result<Matrix<Self>> {
         Self::triangular_solve_matrix_impl(&a, &b, left_side, lower, transpose_a, unit_diagonal)
     }
+
+    /// Solve a triangular system on an engine the caller already holds.
+    ///
+    /// The engine-taking counterpart of [`Self::triangular_solve_matrix_impl`],
+    /// with the same scalar promotion, so both routes agree bit for bit.
+    ///
+    /// # Errors
+    ///
+    /// Returns the backend's triangular-solve failure: incompatible shapes,
+    /// inconsistent triangular flags, or an engine-level execution failure.
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    fn triangular_solve_matrix_in_impl(
+        session: &mut dyn tenferro_tensor::Engine,
+        a: &Matrix<Self>,
+        b: &Matrix<Self>,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> Result<Matrix<Self>>;
 }
 
 /// Small-matrix diagnostics produced by the successive randomized compression
@@ -837,8 +860,13 @@ where
 
 /// Solve `A X = B` on a caller-held engine.
 ///
-/// Same kernel, conversion and validation as [`solve_matrix`], entered through the
-/// given session instead of the process-global one.
+/// Same kernel and validation as [`solve_matrix`], entered through the given session
+/// instead of the process-global one. The scalar conversion differs for the narrow
+/// types: `f64` and `Complex64` are solved directly on both routes, so the results
+/// agree bit for bit, but this entry solves `f32` and `Complex32` in their own
+/// precision, while [`solve_matrix`] promotes them to `f64` / `Complex64` and narrows
+/// the result. For the narrow types the two routes can therefore differ in the last
+/// bits; [`MatrixSolveScalar`]'s session hook applies the global route's promotion.
 ///
 /// # Errors
 ///
@@ -967,7 +995,10 @@ where
 /// Solve a triangular system on a caller-held engine.
 ///
 /// Same kernel, conversion and validation as [`triangular_solve_matrix`], entered
-/// through the given engine instead of the process-global context.
+/// through the given engine instead of the process-global context. Per scalar type:
+/// `f64` and `Complex64` are solved directly; `f32` and `Complex32` are promoted to
+/// `f64` / `Complex64`, solved, and narrowed back, exactly as on the global route.
+/// The two routes therefore return bitwise identical results for all four types.
 ///
 /// # Errors
 ///
@@ -984,11 +1015,113 @@ pub fn triangular_solve_matrix_in<T>(
     unit_diagonal: bool,
 ) -> std::result::Result<Matrix<T>, BackendLinalgError>
 where
-    T: BackendLinalgScalar + Copy,
-    Tensor: From<TypedTensor<T>>,
+    T: MatrixTriangularSolveScalar,
 {
-    triangular_solve_matrix_direct_in(session, a, b, left_side, lower, transpose_a, unit_diagonal)
+    T::triangular_solve_matrix_in_impl(session, a, b, left_side, lower, transpose_a, unit_diagonal)
         .map_err(BackendLinalgError::from)
+}
+
+/// Narrow scalar whose triangular solve runs in its 64-bit counterpart.
+trait WidenedTriangularSolveScalar: Copy + Send + Sync {
+    type Wide: BackendLinalgScalar + Copy;
+
+    fn widen(self) -> Self::Wide;
+
+    fn narrow(wide: Self::Wide) -> Self;
+}
+
+impl WidenedTriangularSolveScalar for f32 {
+    type Wide = f64;
+
+    fn widen(self) -> f64 {
+        f64::from(self)
+    }
+
+    fn narrow(wide: f64) -> Self {
+        wide as f32
+    }
+}
+
+impl WidenedTriangularSolveScalar for Complex32 {
+    type Wide = Complex64;
+
+    fn widen(self) -> Complex64 {
+        Complex64::new(f64::from(self.re), f64::from(self.im))
+    }
+
+    fn narrow(wide: Complex64) -> Self {
+        Complex32::new(wide.re as f32, wide.im as f32)
+    }
+}
+
+/// The one triangular solve for `f32` / `Complex32`: promote both operands, solve
+/// on `session`, narrow the result. The process-global route enters it through
+/// [`triangular_solve_matrix_widened`], the session route directly.
+#[allow(clippy::too_many_arguments)]
+fn triangular_solve_matrix_widened_in<T>(
+    session: &mut dyn tenferro_tensor::Engine,
+    a: &Matrix<T>,
+    b: &Matrix<T>,
+    left_side: bool,
+    lower: bool,
+    transpose_a: bool,
+    unit_diagonal: bool,
+) -> Result<Matrix<T>>
+where
+    T: WidenedTriangularSolveScalar,
+    Tensor: From<TypedTensor<T::Wide>>,
+{
+    let widen = |m: &Matrix<T>| {
+        Matrix::from_col_major_vec(
+            m.nrows(),
+            m.ncols(),
+            m.as_col_major_slice().iter().map(|&v| v.widen()).collect(),
+        )
+    };
+    let x = triangular_solve_matrix_direct_in(
+        session,
+        &widen(a),
+        &widen(b),
+        left_side,
+        lower,
+        transpose_a,
+        unit_diagonal,
+    )?;
+    Ok(Matrix::from_col_major_vec(
+        x.nrows(),
+        x.ncols(),
+        x.as_col_major_slice()
+            .iter()
+            .map(|&v| T::narrow(v))
+            .collect(),
+    ))
+}
+
+/// [`triangular_solve_matrix_widened_in`] on the process-global session.
+fn triangular_solve_matrix_widened<T>(
+    a: &Matrix<T>,
+    b: &Matrix<T>,
+    left_side: bool,
+    lower: bool,
+    transpose_a: bool,
+    unit_diagonal: bool,
+) -> Result<Matrix<T>>
+where
+    T: WidenedTriangularSolveScalar,
+    Tensor: From<TypedTensor<T::Wide>>,
+{
+    with_default_session(|session| {
+        Ok(triangular_solve_matrix_widened_in(
+            session,
+            a,
+            b,
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+        ))
+    })
+    .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?
 }
 
 impl MatrixSolveScalar for f64 {
@@ -1031,6 +1164,26 @@ impl MatrixTriangularSolveScalar for f64 {
     ) -> Result<Matrix<Self>> {
         triangular_solve_matrix_direct_owned(a, b, left_side, lower, transpose_a, unit_diagonal)
     }
+
+    fn triangular_solve_matrix_in_impl(
+        session: &mut dyn tenferro_tensor::Engine,
+        a: &Matrix<Self>,
+        b: &Matrix<Self>,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> Result<Matrix<Self>> {
+        triangular_solve_matrix_direct_in(
+            session,
+            a,
+            b,
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+        )
+    }
 }
 
 impl MatrixSolveScalar for Complex64 {
@@ -1072,6 +1225,26 @@ impl MatrixTriangularSolveScalar for Complex64 {
         unit_diagonal: bool,
     ) -> Result<Matrix<Self>> {
         triangular_solve_matrix_direct_owned(a, b, left_side, lower, transpose_a, unit_diagonal)
+    }
+
+    fn triangular_solve_matrix_in_impl(
+        session: &mut dyn tenferro_tensor::Engine,
+        a: &Matrix<Self>,
+        b: &Matrix<Self>,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> Result<Matrix<Self>> {
+        triangular_solve_matrix_direct_in(
+            session,
+            a,
+            b,
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+        )
     }
 }
 
@@ -1148,38 +1321,27 @@ impl MatrixTriangularSolveScalar for f32 {
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> Result<Matrix<Self>> {
-        let a64 = Matrix::from_col_major_vec(
-            a.nrows(),
-            a.ncols(),
-            a.as_col_major_slice()
-                .iter()
-                .map(|&value| value as f64)
-                .collect(),
-        );
-        let b64 = Matrix::from_col_major_vec(
-            b.nrows(),
-            b.ncols(),
-            b.as_col_major_slice()
-                .iter()
-                .map(|&value| value as f64)
-                .collect(),
-        );
-        let x64 = triangular_solve_matrix_direct(
-            &a64,
-            &b64,
+        triangular_solve_matrix_widened(a, b, left_side, lower, transpose_a, unit_diagonal)
+    }
+
+    fn triangular_solve_matrix_in_impl(
+        session: &mut dyn tenferro_tensor::Engine,
+        a: &Matrix<Self>,
+        b: &Matrix<Self>,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> Result<Matrix<Self>> {
+        triangular_solve_matrix_widened_in(
+            session,
+            a,
+            b,
             left_side,
             lower,
             transpose_a,
             unit_diagonal,
-        )?;
-        Ok(Matrix::from_col_major_vec(
-            x64.nrows(),
-            x64.ncols(),
-            x64.as_col_major_slice()
-                .iter()
-                .map(|&value| value as f32)
-                .collect(),
-        ))
+        )
     }
 }
 
@@ -1256,38 +1418,27 @@ impl MatrixTriangularSolveScalar for Complex32 {
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> Result<Matrix<Self>> {
-        let a64 = Matrix::from_col_major_vec(
-            a.nrows(),
-            a.ncols(),
-            a.as_col_major_slice()
-                .iter()
-                .map(|&value| Complex64::new(value.re as f64, value.im as f64))
-                .collect(),
-        );
-        let b64 = Matrix::from_col_major_vec(
-            b.nrows(),
-            b.ncols(),
-            b.as_col_major_slice()
-                .iter()
-                .map(|&value| Complex64::new(value.re as f64, value.im as f64))
-                .collect(),
-        );
-        let x64 = triangular_solve_matrix_direct(
-            &a64,
-            &b64,
+        triangular_solve_matrix_widened(a, b, left_side, lower, transpose_a, unit_diagonal)
+    }
+
+    fn triangular_solve_matrix_in_impl(
+        session: &mut dyn tenferro_tensor::Engine,
+        a: &Matrix<Self>,
+        b: &Matrix<Self>,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> Result<Matrix<Self>> {
+        triangular_solve_matrix_widened_in(
+            session,
+            a,
+            b,
             left_side,
             lower,
             transpose_a,
             unit_diagonal,
-        )?;
-        Ok(Matrix::from_col_major_vec(
-            x64.nrows(),
-            x64.ncols(),
-            x64.as_col_major_slice()
-                .iter()
-                .map(|&value| Complex32::new(value.re as f32, value.im as f32))
-                .collect(),
-        ))
+        )
     }
 }
 

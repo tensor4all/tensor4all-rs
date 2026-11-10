@@ -14,8 +14,18 @@
 //!
 //! Only Hadamard products are supported. Applying arbitrary nonlinear maps to
 //! sketch values is not a justified general-purpose function approximation.
-//! The implementation uses CPU host buffers and discrete pivot selection;
-//! automatic differentiation through this operation is not supported.
+//! The implementation uses host buffers and discrete pivot selection; with the
+//! `tenferro-cuda` feature a caller-supplied CUDA context runs the contractions
+//! on the device and transfers each operand and result explicitly. Two host
+//! dependencies remain for a CUDA run: the input-core readback enters the
+//! process-global CPU eager context, and the rank decision uses the
+//! process-global CPU context. Automatic differentiation through this operation
+//! is not supported.
+//!
+//! [`hadamard_many_with_rng_on_session`] runs the same implementation on a
+//! caller-held explicit session (CPU only): every step stays on that session,
+//! and the result is compact host storage that outlives it. A CPU context entry
+//! is that implementation run on the context's own session.
 //!
 //! # Examples
 //! ```
@@ -42,7 +52,7 @@ mod scaled;
 
 #[cfg(feature = "global-defaults")]
 pub use api::hadamard_many;
-pub use api::{hadamard_many_in, hadamard_many_with_rng_in};
+pub use api::{hadamard_many_in, hadamard_many_with_rng_in, hadamard_many_with_rng_on_session};
 pub use error::{Result, TreeRsiError};
 pub use options::{TreeRsiOptions, TreeRsiProbes};
 pub use result::{TreeRsiDiagnostics, TreeRsiEdgeReport, TreeRsiResult};

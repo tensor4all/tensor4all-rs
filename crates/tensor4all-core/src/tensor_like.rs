@@ -772,6 +772,28 @@ pub trait TensorVectorSpace: TensorIndex {
     /// computation reports a failure.
     fn inner_product(&self, other: &Self) -> std::result::Result<AnyScalar, Self::Error>;
 
+    /// Returns whether entries are stored in single precision (`f32` or
+    /// `Complex32`).
+    ///
+    /// [`scale`](Self::scale) converts its scalar to the storage precision,
+    /// so a scalar component outside the `f32` range becomes zero or infinite
+    /// before the multiplication. Callers that apply `f64` factors check them
+    /// with [`AnyScalar::is_in_single_precision_range`] when this is `true`.
+    /// A container reports `true` when any of its parts is single precision.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorVectorSpace};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let single = IdxTensor::from_dense(vec![i.clone()], vec![1.0_f32, 2.0]).unwrap();
+    /// let double = IdxTensor::from_dense(vec![i], vec![1.0_f64, 2.0]).unwrap();
+    /// assert!(single.is_single_precision());
+    /// assert!(!double.is_single_precision());
+    /// ```
+    fn is_single_precision(&self) -> bool;
+
     /// Compute the Frobenius norm of the tensor.
     ///
     /// The default takes the square root of [`Self::norm_squared`]. Override
@@ -836,6 +858,87 @@ pub trait TensorVectorSpace: TensorIndex {
     /// # }
     /// ```
     fn maxabs(&self) -> std::result::Result<f64, Self::Error>;
+
+    /// Smallest modulus among the nonzero elements, or `None` when every
+    /// element is zero. With [`maxabs`](Self::maxabs) it gives the dynamic
+    /// range of the elements, which decides whether one power-of-two
+    /// rescaling can keep every nonzero element a normal `f64`. Implementors
+    /// return the exact modulus of a real element; for a complex element
+    /// they may return a lower bound within a few ulps (`hypot` rounds), but
+    /// never a value above the true modulus, so `floor(log2)` of the result
+    /// never exceeds that of the true smallest modulus.
+    ///
+    /// The provided implementation reports an unsupported operation; dense
+    /// implementors such as [`IdxTensor`](crate::IdxTensor) override it.
+    ///
+    /// # Errors
+    ///
+    /// - The provided implementation always returns an unsupported-operation
+    ///   error (message `min_nonzero_abs is not supported by this tensor
+    ///   type`), for types without element-wise access.
+    /// - [`IdxTensor`](crate::IdxTensor) returns `IdxTensorError::NaNInput`
+    ///   when an element is NaN, and `IdxTensorError::Storage` or a
+    ///   materialization error when its storage cannot be read.
+    /// - `BlockTensor` propagates the first error of its blocks.
+    ///
+    /// # Examples
+    /// ```
+    /// # fn main() -> anyhow::Result<()> {
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorVectorSpace};
+    ///
+    /// let index = DynIndex::new_dyn(3);
+    /// let tensor = IdxTensor::from_dense(vec![index.clone()], vec![-3.0_f64, 0.0, 0.5])?;
+    /// assert_eq!(TensorVectorSpace::min_nonzero_abs(&tensor)?, Some(0.5));
+    /// let zero = IdxTensor::from_dense(vec![index], vec![0.0_f64; 3])?;
+    /// assert_eq!(TensorVectorSpace::min_nonzero_abs(&zero)?, None);
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn min_nonzero_abs(&self) -> std::result::Result<Option<f64>, Self::Error> {
+        Err(anyhow::anyhow!("min_nonzero_abs is not supported by this tensor type").into())
+    }
+
+    /// Returns whether every stored real and imaginary component is finite,
+    /// with neither NaN nor infinity.
+    ///
+    /// Use it to tell a non-finite value, such as an operator image that
+    /// overflowed (including an `inf - inf = NaN` formed by the overflow),
+    /// from a backend failure: a NaN entry gives `Ok(false)`, not an error.
+    /// The default derives the answer from [`Self::maxabs`], which takes the
+    /// modulus of a complex entry (so finite components whose modulus
+    /// overflows count as non-finite) and may report a NaN entry as an error;
+    /// `IdxTensor` and `BlockTensor` check each component instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` when the entries cannot be inspected (a
+    /// materialization or backend failure), or, for the default
+    /// implementation, whatever [`Self::maxabs`] reports.
+    ///
+    /// # Examples
+    /// ```
+    /// # fn main() -> anyhow::Result<()> {
+    /// use num_complex::Complex64;
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorVectorSpace};
+    ///
+    /// let index = DynIndex::new_dyn(2);
+    /// let finite = IdxTensor::from_dense(vec![index.clone()], vec![f64::MAX, -1.0])?;
+    /// assert!(finite.is_all_finite()?);
+    /// let nan = IdxTensor::from_dense(vec![index.clone()], vec![f64::NAN, 1.0])?;
+    /// assert!(!nan.is_all_finite()?);
+    /// // Both components are finite although the modulus overflows.
+    /// let big = 0.75 * f64::MAX;
+    /// let complex = IdxTensor::from_dense(
+    ///     vec![index],
+    ///     vec![Complex64::new(big, big), Complex64::new(0.0, 0.0)],
+    /// )?;
+    /// assert!(complex.is_all_finite()?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn is_all_finite(&self) -> std::result::Result<bool, Self::Error> {
+        Ok(self.maxabs()?.is_finite())
+    }
 
     /// Element-wise subtraction: `self - other`.
     ///

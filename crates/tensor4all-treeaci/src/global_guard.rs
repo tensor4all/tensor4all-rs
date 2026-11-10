@@ -39,6 +39,7 @@ pub(crate) fn find_global_pivots<'a, T, V, F>(
     rng: &mut dyn rand::RngCore,
     operator: &mut F,
     known_pivots: &[Vec<usize>],
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<GlobalSearchReport>
 where
     T: TreeAciScalar,
@@ -116,8 +117,12 @@ where
     let mut evaluated_points = 0usize;
     let start_coordinates = input_evaluators.expand_points(&starts)?;
     let start_hint = input_evaluators.hint_for_scan_site(None);
-    let start_inputs =
-        input_evaluators.evaluate_expanded::<T>(&starts, &start_coordinates, start_hint.clone())?;
+    let start_inputs = input_evaluators.evaluate_expanded::<T>(
+        &starts,
+        &start_coordinates,
+        start_hint.clone(),
+        exec,
+    )?;
     let start_batch = TreeElementwiseBatch::new(&start_inputs, state.inputs.len(), nstarts)?;
     let mut start_outputs = vec![T::default(); nstarts];
     operator(start_batch, &mut start_outputs)?;
@@ -154,6 +159,7 @@ where
         &starts,
         &start_coordinates,
         start_hint,
+        exec,
     )?;
     let start_errors = start_outputs
         .into_iter()
@@ -218,8 +224,12 @@ where
                 // longer has to be inferred from the batch -- which a batch of
                 // one point cannot support at all.
                 let hint = input_evaluators.hint_for_scan_site(scan_site);
-                let input_values =
-                    input_evaluators.evaluate_expanded::<T>(points, &coordinates, hint.clone())?;
+                let input_values = input_evaluators.evaluate_expanded::<T>(
+                    points,
+                    &coordinates,
+                    hint.clone(),
+                    exec,
+                )?;
                 let batch =
                     TreeElementwiseBatch::new(&input_values, state.inputs.len(), points.len())?;
                 let mut target = vec![T::default(); points.len()];
@@ -230,6 +240,7 @@ where
                     points,
                     &coordinates,
                     hint,
+                    exec,
                 )?;
                 target
                     .into_iter()
@@ -306,6 +317,7 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
     state: &mut TreeAciState<'a, T, V>,
     points: &[Vec<usize>],
     growth_capacity: &[usize],
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<usize> {
     if growth_capacity.len() != state.edge_ranks.len() {
         return Err(TreeAciError::InternalInvariant {
@@ -383,7 +395,7 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
         }
         #[cfg(test)]
         let padding_started = std::time::Instant::now();
-        let proposed_output = pad_output_bonds(state, &growth)?;
+        let proposed_output = pad_output_bonds(state, &growth, exec)?;
         #[cfg(test)]
         crate::state::profile_debug_stats::record(|stats| {
             stats.guard_output_padding += padding_started.elapsed();
@@ -393,7 +405,7 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
         let proposed_frames =
             state
                 .input_frames
-                .extend(state.inputs, &state.problem, &state.sample_arena)?;
+                .extend(state.inputs, &state.problem, &state.sample_arena, exec)?;
         #[cfg(test)]
         crate::state::profile_debug_stats::record(|stats| {
             stats.guard_frame_extension += frames_started.elapsed();
@@ -444,6 +456,7 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
 fn pad_output_bonds<T: TreeAciScalar, V: TreeAciNode>(
     state: &TreeAciState<'_, T, V>,
     growth: &[usize],
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<tensor4all_treetn::TreeTN<IdxTensor, V>> {
     if growth.iter().all(|&amount| amount == 0) {
         return Ok(state.output.clone());
@@ -629,8 +642,8 @@ fn pad_output_bonds<T: TreeAciScalar, V: TreeAciNode>(
                 message: "global-pivot padding references a missing output tensor",
             })?;
         let mut padded = vec![T::default(); new_len];
-        let values = tensor
-            .to_vec::<T>()
+        let values = exec
+            .values::<T>(tensor)
             .map_err(|error| TreeAciError::Numerical {
                 message: error.to_string(),
             })?;
@@ -661,11 +674,10 @@ fn pad_output_bonds<T: TreeAciScalar, V: TreeAciNode>(
         }
         tensors.push((
             node_index,
-            IdxTensor::from_dense(new_indices, padded).map_err(|error| {
-                TreeAciError::Numerical {
+            exec.tensor(new_indices, padded)
+                .map_err(|error| TreeAciError::Numerical {
                     message: error.to_string(),
-                }
-            })?,
+                })?,
         ));
     }
     let mut output = state.output.clone();
@@ -745,7 +757,7 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
             .flat_map(|physical| physical.indices.iter().cloned())
             .collect::<Vec<_>>();
         let options = CachedEvaluatorOptions {
-            message_cache_max_bytes: message_cache_max_bytes / problem.directed_edges.len().max(1),
+            message_cache_max_bytes,
             ..CachedEvaluatorOptions::<V>::default()
         };
         let first_input = inputs.first().ok_or(TreeAciError::InternalInvariant {
@@ -797,11 +809,15 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
 
     /// Evaluates an unstructured batch, with no scan site to hint.
     #[cfg(test)]
-    pub(crate) fn evaluate<T: TreeAciScalar>(&mut self, points: &[Vec<usize>]) -> Result<Vec<T>> {
+    pub(crate) fn evaluate<T: TreeAciScalar>(
+        &mut self,
+        points: &[Vec<usize>],
+        exec: &mut crate::exec::Exec<'_, '_>,
+    ) -> Result<Vec<T>> {
         self.enforce_guard_batch_budget::<T>(points.len())?;
         let coordinates = self.expand_points(points)?;
         let hint = self.hint_for_scan_site(None);
-        self.evaluate_expanded(points, &coordinates, hint)
+        self.evaluate_expanded(points, &coordinates, hint, exec)
     }
 
     #[cfg(test)]
@@ -852,6 +868,7 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
         points: &[Vec<usize>],
         coordinates: &[usize],
         hint: EvaluationHint<V>,
+        exec: &mut crate::exec::Exec<'_, '_>,
     ) -> Result<Vec<T>> {
         #[cfg(test)]
         let evaluation_started = std::time::Instant::now();
@@ -873,8 +890,8 @@ impl<'a, V: TreeAciNode> InputEvaluators<'a, V> {
                 })?;
         let mut result = vec![T::default(); result_elements];
         for (input_number, evaluator) in self.inputs.iter_mut().enumerate() {
-            let evaluated = evaluator
-                .evaluate_batched_typed::<T>(values, hint.clone())
+            let evaluated = exec
+                .evaluate::<T, V>(evaluator, values, hint.clone())
                 .map_err(crate::scalar::typed_evaluation_error)?;
             for (point, value) in evaluated.into_iter().enumerate() {
                 result[input_number + input_count * point] = value;
@@ -977,20 +994,13 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
         plan: &CachedEvaluatorPlan<V>,
         message_cache_max_bytes: usize,
     ) -> Result<Self> {
-        let directed_caches =
-            output
-                .edge_count()
-                .checked_mul(2)
-                .ok_or(TreeAciError::SizeOverflow {
-                    context: "guard directed message cache count",
-                })?;
         let evaluator = TreeTNCachedEvaluator::with_plan(
             output,
             plan,
             CachedEvaluatorOptions {
                 #[cfg(feature = "diagnostics")]
                 diagnostic_namespace: "output".to_owned(),
-                message_cache_max_bytes: message_cache_max_bytes / directed_caches.max(1),
+                message_cache_max_bytes,
                 ..CachedEvaluatorOptions::<V>::default()
             },
         )?;
@@ -1002,11 +1012,12 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
         &mut self,
         input_evaluators: &InputEvaluators<'_, V>,
         points: &[Vec<usize>],
+        exec: &mut crate::exec::Exec<'_, '_>,
     ) -> Result<Vec<T>> {
         input_evaluators.enforce_guard_batch_budget::<T>(points.len())?;
         let coordinates = input_evaluators.expand_points(points)?;
         let hint = input_evaluators.hint_for_scan_site(None);
-        self.evaluate_expanded(input_evaluators, points, &coordinates, hint)
+        self.evaluate_expanded(input_evaluators, points, &coordinates, hint, exec)
     }
 
     fn evaluate_expanded<T: TreeAciScalar>(
@@ -1015,6 +1026,7 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
         points: &[Vec<usize>],
         coordinates: &[usize],
         hint: EvaluationHint<V>,
+        exec: &mut crate::exec::Exec<'_, '_>,
     ) -> Result<Vec<T>> {
         #[cfg(test)]
         let evaluation_started = std::time::Instant::now();
@@ -1024,9 +1036,8 @@ impl<'a, V: TreeAciNode> GuardOutputEvaluator<'a, V> {
                 message: error.to_string(),
             }
         })?;
-        let result = self
-            .evaluator
-            .evaluate_batched_typed::<T>(values, hint)
+        let result = exec
+            .evaluate::<T, V>(&mut self.evaluator, values, hint)
             .map_err(crate::scalar::typed_evaluation_error);
         #[cfg(test)]
         crate::state::profile_debug_stats::record(|stats| {

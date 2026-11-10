@@ -72,6 +72,77 @@ fn indices_except_exact<I: IndexLike>(indices: &[I], excluded: &[I]) -> Vec<I> {
     tensor4all_core::index_ops::unique_inds(indices, excluded)
 }
 
+thread_local! {
+    /// How many zip-up nodes this thread has emitted without a contraction or
+    /// factorization because the second operand is the identity there (see
+    /// [`TreeTN::contract_zipup_skipping_identity_nodes`]).
+    ///
+    /// A per-thread diagnostic for tests: they assert that a partial apply skips
+    /// the nodes its operator does not touch and that the skipped nodes come out
+    /// unchanged. It counts work avoided and never affects a result.
+    static ZIPUP_IDENTITY_NODE_SKIPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Value of this thread's [`ZIPUP_IDENTITY_NODE_SKIPS`] counter.
+pub(crate) fn zipup_identity_node_skips() -> usize {
+    ZIPUP_IDENTITY_NODE_SKIPS.with(std::cell::Cell::get)
+}
+
+/// Whether emitting `source` instead of contracting and factorizing it is exact.
+///
+/// The pass-through is an **opt-in for exactness**, never an inference from the
+/// caller's silence. It is allowed only when the caller asks for an SVD policy
+/// whose threshold is exactly zero (no truncation is possible anywhere in the
+/// zip-up) and sets no [`max_bond_dim`]. Anything else — an absent policy, which
+/// resolves to the process-wide default cutoff at the factorizer, or a cap, which
+/// truncates the block itself — keeps the ordinary contraction and factorization,
+/// so no caller's numerics change without them asking for it.
+///
+/// The earlier form of this guard derived exactness from `svd_policy.is_none()`,
+/// which is vacuous: `None` means "resolve the default", and the default is a
+/// relative `1e-12` cutoff (`core::defaults::svd`), itself a mutable global that
+/// another part of the program can change.
+///
+/// `form` must be [`CanonicalForm::Unitary`]: the zip-up's own QR/LU forms do not
+/// emit a node as a plain relabeling.
+fn zipup_skip_is_exact(
+    form: CanonicalForm,
+    svd_policy: Option<SvdTruncationPolicy>,
+    max_bond_dim: Option<usize>,
+) -> bool {
+    if form != CanonicalForm::Unitary || max_bond_dim.is_some() {
+        return false;
+    }
+    svd_policy.is_some_and(|policy| policy.threshold == 0.0)
+}
+
+/// Sum out the identity bonds of skipped nodes that the given block still
+/// carries. Every such bond is an edge the operator extension created outside
+/// the operator's own support, so it is one of its dimension-one dummy links and
+/// summing it out drops the leg exactly; a wider leg would mean the caller
+/// handed in a bond of the operator itself, and a silent sum would be wrong.
+fn sum_out_identity_legs<T: TensorLike>(tensor: &T, legs: &[T::Index]) -> Result<T> {
+    if legs.is_empty() {
+        return Ok(tensor.clone());
+    }
+    if let Some(wide) = legs.iter().find(|leg| leg.dim() != 1) {
+        return Err(anyhow::anyhow!(
+            "contract_zipup_with: identity bond {:?} has dimension {} instead of one",
+            wide.id(),
+            wide.dim()
+        ));
+    }
+    let ones = T::ones(legs).context("Failed to build the identity legs' ones tensor")?;
+    T::contract_pair(&ones, tensor).context("Failed to sum out an identity leg")
+}
+
+/// The node-local identities an [`apply`](crate::operator::apply_linear_operator)
+/// adds to a partial operator, as `(input internal, output internal)` site index
+/// pairs per node.
+///
+/// Empty for every other contract caller.
+pub(crate) type IdentityNodes<I, V> = HashMap<V, Vec<(I, I)>>;
+
 fn zipup_factorize_options(
     alg: FactorizeAlg,
     canonical: Canonical,
@@ -852,15 +923,17 @@ where
     ///
     /// # Examples
     /// ```
-    /// use tensor4all_core::{DynIndex, FactorizeError, IdxTensor, SvdTruncationPolicy};
+    /// use tensor4all_core::{DynIndex, IdxTensor, SvdTruncationPolicy};
     /// use tensor4all_treetn::{CanonicalForm, TreeTN};
     /// let site = DynIndex::new_dyn(2);
     /// let tree = TreeTN::from_tensors(vec![
     ///     IdxTensor::from_dense(vec![site], vec![1.0, 2.0]).unwrap()], vec![0]).unwrap();
     /// let error = tree.contract_zipup_with(
     ///     &tree, &0, CanonicalForm::LU, Some(SvdTruncationPolicy::new(1e-8)), None).unwrap_err();
-    /// assert!(matches!(error.source.downcast_ref::<FactorizeError>(),
-    ///     Some(FactorizeError::InvalidOptions(_))));
+    /// // The factorization validates its options in the tensor layer, so it keeps
+    /// // the catch-all variant; the message carries the typed cause.
+    /// assert!(matches!(error, tensor4all_treetn::TreeTNOperationError::Operation { .. }));
+    /// assert!(error.to_string().contains("factorization options"), "{error}");
     /// ```
     pub fn contract_zipup_with(
         &self,
@@ -882,6 +955,55 @@ where
             svd_policy,
             max_bond_dim,
             ZipupTopologyMode::PruneScalarSubtrees,
+            &IdentityNodes::new(),
+            &GlobalLeaves,
+        )
+        .map_err(TreeTNOperationError::from)
+    }
+
+    /// The same zip-up as [`Self::contract_zipup`] for a second operand that is
+    /// the identity on the nodes in `identity_nodes` (the gap nodes
+    /// [`apply_linear_operator`](crate::operator::apply_linear_operator) extends
+    /// a partial operator with).
+    ///
+    /// Each such node is emitted as its first operand's tensor with the
+    /// identity's input site indices renamed to its output ones, without
+    /// contraction or factorization, and it passes no remainder to its parent.
+    /// An identity factor adds no rank, so factorizing such a node cannot create
+    /// a wider bond than the first operand already has on that edge; it rebuilds
+    /// that bond (or a truncation of it, when the block is rank-deficient or a
+    /// cap is set) as an isometry times a remainder. Skipping it keeps the bond
+    /// and the node's amplitudes bit for bit (issue #1186). Its own bond indices
+    /// stay on the edges they came from, so the untouched region of the result
+    /// carries the first operand's tensors and bonds unchanged. A node that
+    /// receives a remainder from an operator-carrying child is contracted and
+    /// factorized as usual.
+    ///
+    /// Only the general tree schedule takes this path. The chain schedule hands
+    /// one remainder per edge to its successor and cannot emit a node without
+    /// one, so a chain-shaped first operand keeps its own schedule and
+    /// factorizes every node.
+    pub(crate) fn contract_zipup_skipping_identity_nodes(
+        &self,
+        other: &Self,
+        center: &V,
+        svd_policy: Option<SvdTruncationPolicy>,
+        max_bond_dim: Option<usize>,
+        identity_nodes: &IdentityNodes<T::Index, V>,
+    ) -> std::result::Result<Self, TreeTNOperationError>
+    where
+        V: Ord,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
+        self.contract_zipup_impl(
+            other,
+            center,
+            CanonicalForm::Unitary,
+            svd_policy,
+            max_bond_dim,
+            ZipupTopologyMode::PruneScalarSubtrees,
+            identity_nodes,
             &GlobalLeaves,
         )
         .map_err(TreeTNOperationError::from)
@@ -934,6 +1056,7 @@ where
             svd_policy,
             max_bond_dim,
             ZipupTopologyMode::PreserveInputTopology,
+            &IdentityNodes::new(),
             leaves,
         )
     }
@@ -1352,6 +1475,7 @@ where
         svd_policy: Option<SvdTruncationPolicy>,
         max_bond_dim: Option<usize>,
         topology_mode: ZipupTopologyMode,
+        identity_nodes: &IdentityNodes<T::Index, V>,
         leaves: &dyn LeafOps<T>,
     ) -> Result<Self>
     where
@@ -1386,6 +1510,11 @@ where
             });
             if has_output_sites {
                 if let Some(chain) = self.chain_order(center) {
+                    // The chain schedule hands exactly one remainder per edge to
+                    // its successor, so it cannot emit a node without one and
+                    // does not take `identity_nodes` into account; a chain-shaped
+                    // first operand therefore keeps this schedule and factorizes
+                    // every node.
                     return self.contract_zipup_chain(
                         other,
                         center,
@@ -1440,6 +1569,11 @@ where
         // 5. Initialize intermediate tensors storage: HashMap<node_name, Vec<intermediate_tensor>>
         let mut intermediate_tensors: HashMap<V, Vec<T>> = HashMap::new();
 
+        // Identity bonds of skipped nodes, per parent: nothing will contract the
+        // parent's copy of such a bond, so it is summed out when the parent is
+        // processed instead of surviving as a stray leg of the result.
+        let mut orphan_identity_legs: HashMap<V, Vec<T::Index>> = HashMap::new();
+
         // 6. Initialize result tensors: HashMap<node_name, tensor>
         let mut result_tensors: HashMap<V, T> = HashMap::new();
 
@@ -1486,7 +1620,57 @@ where
                     .map(|v| v.is_empty())
                     .unwrap_or(true);
 
-            let c_temp = if is_leaf {
+            // Factorize child tensor and pass the right factor to destination (even if destination is root)
+            let bond_to_dest_a = get_bond_index(&tn_a, source_name, destination_name)
+                .context("Failed to get bond index to destination in tn_a")?;
+            let bond_to_dest_b = get_bond_index(&tn_b, source_name, destination_name)
+                .context("Failed to get bond index to destination in tn_b")?;
+
+            // A node whose second operand is the identity on its site space
+            // (an `apply` gap node, `identity_nodes`) carries no bond and no
+            // remainder of its own: it only relabels its site legs from the
+            // identity's input to its output indices. Contracting it would copy
+            // the tensor, and factorizing the block would emit an isometry plus a
+            // remainder over a bond that is the state's own, because an identity
+            // factor adds no rank.
+            //
+            // That is only a relabeling of the parent's view where the
+            // factorization it replaces was exact (issue #1197). Skipping a node
+            // whose remainder is not unitary hands the parent's cutoff a
+            // differently scaled matrix and can drop a direction the untouched
+            // subtree makes dominant — a leaf with `diag(1e-8, 1e8)` under a hub
+            // with `diag(1, 1e-8)` then loses an amplitude of 1 at `rtol = 1e-6`.
+            // `zipup_skip_is_exact` decides; a node it rejects keeps the ordinary
+            // contraction and factorization, as does a node that receives a
+            // remainder from an operator-bearing child.
+            //
+            // The parent's copy of the emitted node's identity bond is left
+            // without a partner, so it is recorded and summed out when the parent
+            // is processed.
+            if is_leaf && zipup_skip_is_exact(form, svd_policy, max_bond_dim) {
+                if let Some(pairs) = identity_nodes
+                    .get(source_name)
+                    .filter(|pairs| !pairs.is_empty())
+                {
+                    let mut emitted = tensor_a.clone();
+                    for (input, output) in pairs {
+                        emitted = emitted.replaceind(input, output).with_context(|| {
+                            format!(
+                                "Failed to relabel the identity site indices of {source_name:?}"
+                            )
+                        })?;
+                    }
+                    result_tensors.insert(source_name.clone(), emitted);
+                    orphan_identity_legs
+                        .entry(destination_name.clone())
+                        .or_default()
+                        .push(bond_to_dest_b);
+                    ZIPUP_IDENTITY_NODE_SKIPS.set(ZIPUP_IDENTITY_NODE_SKIPS.get() + 1);
+                    continue;
+                }
+            }
+
+            let mut c_temp = if is_leaf {
                 // Leaf node: contract A[source] * B[source]
                 leaves
                     .contract_pair(&tensor_a, &tensor_b)
@@ -1503,12 +1687,9 @@ where
                     .contract_list(&tensor_list)
                     .context("Failed to contract internal node tensors")?
             };
-
-            // Factorize child tensor and pass the right factor to destination (even if destination is root)
-            let bond_to_dest_a = get_bond_index(&tn_a, source_name, destination_name)
-                .context("Failed to get bond index to destination in tn_a")?;
-            let bond_to_dest_b = get_bond_index(&tn_b, source_name, destination_name)
-                .context("Failed to get bond index to destination in tn_b")?;
+            if let Some(legs) = orphan_identity_legs.remove(source_name) {
+                c_temp = sum_out_identity_legs(&c_temp, &legs)?;
+            }
 
             // left_inds = all indices except the two parent bonds (keep site + child bonds)
             let c_temp_indices = c_temp.external_indices();
@@ -1569,9 +1750,12 @@ where
             let mut tensor_list = r_list;
             tensor_list.push(root_tensor_a);
             tensor_list.push(root_tensor_b);
-            let root_result = leaves
+            let mut root_result = leaves
                 .contract_list(&tensor_list)
                 .context("Failed to contract root node tensors")?;
+            if let Some(legs) = orphan_identity_legs.remove(&root_name) {
+                root_result = sum_out_identity_legs(&root_result, &legs)?;
+            }
 
             // Store root result (no factorization needed)
             result_tensors.insert(root_name.clone(), root_result);
@@ -1593,8 +1777,11 @@ where
                     .tensor(root_b_idx)
                     .ok_or_else(|| anyhow::anyhow!("Root tensor not found in tn_b"))?;
 
-                let root_result = T::contract(&[root_tensor_a, root_tensor_b])
+                let mut root_result = T::contract(&[root_tensor_a, root_tensor_b])
                     .context("Failed to contract root node tensors")?;
+                if let Some(legs) = orphan_identity_legs.remove(&root_name) {
+                    root_result = sum_out_identity_legs(&root_result, &legs)?;
+                }
 
                 result_tensors.insert(root_name.clone(), root_result);
             }
@@ -1754,7 +1941,7 @@ where
         // If not canonicalized, require no ortho_towards at all
         if self.canonical_region.is_empty() {
             if !self.ortho_towards.is_empty() {
-                return Err(TreeTNOperationError::from(
+                return Err(TreeTNOperationError::invalid_graph(
                     anyhow::anyhow!(
                         "Found {} ortho_towards entries but canonical_region is empty",
                         self.ortho_towards.len()
@@ -1779,7 +1966,7 @@ where
 
         // Check canonical_region connectivity
         if !self.site_index_network.is_connected_subset(&center_indices) {
-            return Err(TreeTNOperationError::from(
+            return Err(TreeTNOperationError::invalid_graph(
                 anyhow::anyhow!("canonical_region is not connected").context(
                     "validate_ortho_consistency: canonical_region must form a connected subtree",
                 ),
@@ -1822,7 +2009,7 @@ where
             match self.ortho_towards.get(bond) {
                 Some(actual_dir) => {
                     if actual_dir != expected_dir {
-                        return Err(TreeTNOperationError::from(
+                        return Err(TreeTNOperationError::invalid_graph(
                             anyhow::anyhow!(
                                 "ortho_towards for bond {:?} points to {:?} but expected {:?}",
                                 bond,
@@ -1834,7 +2021,7 @@ where
                     }
                 }
                 None => {
-                    return Err(TreeTNOperationError::from(
+                    return Err(TreeTNOperationError::invalid_graph(
                         anyhow::anyhow!(
                             "ortho_towards for bond {:?} is missing, expected to point to {:?}",
                             bond,
@@ -1859,7 +2046,7 @@ where
         for idx in self.ortho_towards.keys() {
             if bond_indices.contains(idx) && !expected_directions.contains_key(idx) {
                 // This is a bond inside the canonical_region - should not have ortho_towards
-                return Err(TreeTNOperationError::from(
+                return Err(TreeTNOperationError::invalid_graph(
                     anyhow::anyhow!(
                         "Unexpected ortho_towards for bond {:?} (inside canonical_region)",
                         idx
@@ -1948,7 +2135,7 @@ where
         V: Ord,
     {
         if form != CanonicalForm::Unitary {
-            return Err(TreeTNOperationError::from(anyhow::anyhow!(
+            return Err(TreeTNOperationError::invalid_configuration(anyhow::anyhow!(
                 "contract_zipup_with_in: the {form:?} form has no context-scoped                  factorization path; use contract_zipup_with() or the Unitary form"
             )));
         }
@@ -1959,6 +2146,7 @@ where
             svd_policy,
             max_bond_dim,
             ZipupTopologyMode::PruneScalarSubtrees,
+            &IdentityNodes::new(),
             &SessionLeaves(context.clone()),
         )
         .map_err(TreeTNOperationError::from)
@@ -2863,9 +3051,9 @@ where
     R: Rng + ?Sized,
 {
     if options.method != ContractionMethod::Src {
-        return Err(TreeTNOperationError::from(anyhow::anyhow!(
-            "contract_src_with_rng requires ContractionMethod::Src"
-        )));
+        return Err(TreeTNOperationError::invalid_configuration(
+            anyhow::anyhow!("contract_src_with_rng requires ContractionMethod::Src"),
+        ));
     }
     validate_svd_truncation_options(options.max_bond_dim, options.svd_policy)
         .context("contract_src_with_rng: invalid contraction options")?;
@@ -2957,9 +3145,9 @@ where
     R: Rng + ?Sized,
 {
     if options.method != ContractionMethod::Src {
-        return Err(TreeTNOperationError::from(anyhow::anyhow!(
-            "contract_src_with_rng_in requires ContractionMethod::Src"
-        )));
+        return Err(TreeTNOperationError::invalid_configuration(
+            anyhow::anyhow!("contract_src_with_rng_in requires ContractionMethod::Src"),
+        ));
     }
     validate_svd_truncation_options(options.max_bond_dim, options.svd_policy)
         .context("contract_src_with_rng_in: invalid contraction options")?;
@@ -2990,14 +3178,18 @@ where
     // before RNG advancement or contraction: mixed host/CUDA inputs and
     // foreign CUDA contexts fail here with the offending node identified.
     tn_a.validate_context(context).map_err(|error| {
-        TreeTNOperationError::from(anyhow::anyhow!(
-            "contract_src: input A validation failed: {error}"
-        ))
+        // A rejected context can be an unsupported runtime rather than a graph
+        // problem, so this stays in the catch-all with its cause.
+        TreeTNOperationError::from(
+            anyhow::Error::new(error).context("contract_src: input A validation failed"),
+        )
     })?;
     tn_b.validate_context(context).map_err(|error| {
-        TreeTNOperationError::from(anyhow::anyhow!(
-            "contract_src: input B validation failed: {error}"
-        ))
+        // A rejected context can be an unsupported runtime rather than a graph
+        // problem, so this stays in the catch-all with its cause.
+        TreeTNOperationError::from(
+            anyhow::Error::new(error).context("contract_src: input B validation failed"),
+        )
     })?;
     let output_rank = options
         .max_bond_dim

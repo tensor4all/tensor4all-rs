@@ -100,6 +100,7 @@ pub use treetn::{
     factorize_tensor_to_treetn_with,
     factorize_tensor_to_treetn_with_on_session,
     fit_sum,
+    fit_sum_with_report,
     fix_and_remove_site,
     get_boundary_edges,
     hadamard,
@@ -112,10 +113,13 @@ pub use treetn::{
     CachedEvaluatorOptions,
     CachedEvaluatorPlan,
     CenterSearchResult,
+    DensityMatrixSumResult,
     EvaluatedScalarKindMismatch,
     EvaluationHint,
     ExactSum,
     FitOptions,
+    FitSumResult,
+    FitTruncation,
     // Core type
     GreedyCenterSearch,
     LocalUpdateStep,
@@ -139,8 +143,9 @@ pub use treetn::{
 // Re-export linsolve types from new location
 pub use linsolve::{
     relative_linear_system_residual, square_linsolve, EnvironmentCache, GmresToleranceMode,
-    LinsolveOptions, LinsolveVerifyReport, NetworkTopology, NodeVerifyDetail, ProjectedOperator,
-    ProjectedState, SquareLinsolveResult, SquareLinsolveUpdater,
+    LinsolveOptions, LinsolveVerifyReport, LocalSolver, NetworkTopology, NodeVerifyDetail,
+    ProjectedOperator, ProjectedState, ResidualEnrichment, ResidualEnrichmentRangeError,
+    SquareLinsolveResult, SquareLinsolveUpdater,
 };
 
 use petgraph::graph::NodeIndex;

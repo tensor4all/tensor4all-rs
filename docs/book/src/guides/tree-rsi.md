@@ -4,10 +4,17 @@
 [tree tensor networks](tree-tn.md). All inputs must have the same labeled tree
 and matching physical indices at each node. Input bond dimensions may differ.
 The implementation supports four real/complex scalar types and CPU execution.
+With the `tenferro-cuda` feature a CUDA context is accepted as well: the sketch
+keeps its blocks in host memory, so each contraction transfers its operands to
+the device and the result back, and the local rank decision stays on the host.
 
 Use `hadamard_many_in` with the same execution context that owns the inputs.
 The convenience `hadamard_many` uses the default CPU context and requires the
-`global-defaults` feature. Set `max_bond_dim` or `sketch_dim`; start with a rank
+`global-defaults` feature. Code that already runs inside an explicit session
+(a worker lane or a patch driver stage) uses `hadamard_many_with_rng_on_session`
+instead: it runs every step on that session, accepts host inputs such as
+compact storage published by another session, and returns compact host cores
+that outlive the session. It is CPU-only. Set `max_bond_dim` or `sketch_dim`; start with a rank
 budget appropriate to the application and validate actual product error.
 `rel_tol` controls local sketch pivots and is not a global error tolerance.
 

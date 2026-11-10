@@ -117,7 +117,7 @@ where
             // Check if already canonicalized with a different form
             if let Some(current_form) = self.canonical_form {
                 if current_form != options.form {
-                    return Err(TreeTNOperationError::from(
+                    return Err(TreeTNOperationError::invalid_configuration(
                         anyhow::anyhow!(
                             "Cannot move ortho center: current form is {:?} but {:?} was requested. \
                              Use CanonicalizationOptions::forced() to re-canonicalize with a different form.",
@@ -276,16 +276,17 @@ where
     /// session or the process-global eager runtime, so a caller that already owns
     /// a caller with a live `Session` can call it directly.
     ///
-    /// Only [`CanonicalForm::Unitary`] (QR) has an explicit-session path; the
-    /// LU and CI forms return a typed error instead of running on another
-    /// runtime. The smart no-op and form-mismatch behavior of
-    /// [`TreeTN::canonicalize`] is preserved when `options.force` is false.
+    /// [`CanonicalForm::Unitary`] (QR) and [`CanonicalForm::CI`] have an
+    /// explicit-session path; the LU form returns a typed error instead of
+    /// running on another runtime. The smart no-op and form-mismatch behavior
+    /// of [`TreeTN::canonicalize`] is preserved when `options.force` is false.
     ///
     /// # Errors
     ///
     /// Returns [`TreeTNOperationError`] under the same conditions as
-    /// [`TreeTN::canonicalize`] for the supported form, when a non-unitary form
-    /// is requested, and when the supplied session rejects a leaf.
+    /// [`TreeTN::canonicalize`] for the supported forms (under CI, a zero
+    /// tensor that has to be factorized), when the LU form is requested, and
+    /// when the supplied session rejects a leaf.
     ///
     /// # Examples
     ///
@@ -326,7 +327,7 @@ where
         if !options.force {
             if let Some(current_form) = self.canonical_form {
                 if current_form != options.form {
-                    return Err(TreeTNOperationError::from(
+                    return Err(TreeTNOperationError::invalid_configuration(
                         anyhow::anyhow!(
                             "Cannot move ortho center: current form is {:?} but {:?} was requested. \
                              Use CanonicalizationOptions::forced() to re-canonicalize with a different form.",
@@ -383,8 +384,9 @@ where
 
     /// Session-scoped canonicalization body for the concrete frontend.
     ///
-    /// Only the unitary (QR) form has an explicit-session path, so the LU/CI
-    /// zero-tensor failure cannot occur here.
+    /// The unitary (QR) and CI forms have an explicit-session path; LU does
+    /// not. Under CI, a zero tensor that has to be factorized fails as on the
+    /// compatibility route.
     pub(crate) fn canonicalize_impl_on_session(
         &mut self,
         canonical_region: impl IntoIterator<Item = V>,
@@ -392,13 +394,16 @@ where
         context_name: &str,
         session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
     ) -> Result<()> {
-        if form != CanonicalForm::Unitary {
-            return Err(anyhow::anyhow!(
-                "{}: unsupported canonical form (only unitary has an explicit-session path)",
-                context_name
-            ));
-        }
-        let alg = FactorizeAlg::QR;
+        let alg = match form {
+            CanonicalForm::Unitary => FactorizeAlg::QR,
+            CanonicalForm::CI => FactorizeAlg::CI,
+            CanonicalForm::LU => {
+                return Err(anyhow::anyhow!(
+                    "{}: unsupported canonical form (LU has no explicit-session path)",
+                    context_name
+                ))
+            }
+        };
 
         let sweep_ctx = self.prepare_sweep_to_center(canonical_region, context_name)?;
         let sweep_ctx = match sweep_ctx {

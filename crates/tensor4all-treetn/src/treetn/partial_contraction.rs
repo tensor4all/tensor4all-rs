@@ -1020,7 +1020,7 @@ where
     <DynIndex as IndexLike>::Id: Clone + Hash + Eq + Ord + Debug + Send + Sync,
 {
     if spec.output_order.is_some() {
-        return Err(TreeTNOperationError::from(anyhow::anyhow!(
+        return Err(TreeTNOperationError::invalid_configuration(anyhow::anyhow!(
             "partial_contract_to_site_network: spec.output_order must be None because the target site network defines the output layout"
         )));
     }
