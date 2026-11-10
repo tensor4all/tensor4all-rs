@@ -25,10 +25,8 @@ use super::src_probe::{
 use super::{SrcOptions, TreeTN};
 
 type DirectedEnvironment<T, V> = HashMap<(V, V), T>;
-type BatchedEnvironment<T, V> = (
-    <T as tensor4all_core::TensorIndex>::Index,
-    DirectedEnvironment<T, V>,
-);
+/// The edge last served at one exact width: `(batch index, edge, environment)`.
+type BatchedEnvironment<T, V> = (<T as tensor4all_core::TensorIndex>::Index, (V, V), T);
 /// One growth call's stored result: `(start, width, batch index, per-edge
 /// environment)`, covering probe columns `[start, start + width)`.
 type EnvironmentSegment<T, V> = (
@@ -333,6 +331,10 @@ where
     batch_size: usize,
     segments: Vec<EnvironmentSegment<T, V>>,
     segment_total_width: usize,
+    /// Probe columns this cache materialized, read only by the incremental
+    /// growth test; production builds carry no counter.
+    #[cfg(test)]
+    columns_computed: usize,
     context: &'a ExecutionContext,
 }
 
@@ -366,69 +368,36 @@ where
             batch_size: batch_size.max(1),
             segments: Vec::new(),
             segment_total_width: 0,
+            #[cfg(test)]
+            columns_computed: 0,
         }
     }
 
+    /// Return the batched complement environment for one edge at `width`.
+    ///
+    /// The exact-width entry is the edge last served at that width; any other
+    /// edge falls through to [`Self::request`], which reads the cached
+    /// segments instead of recomputing anything.
     fn batch(&mut self, parent: &V, child: &V, width: usize) -> Result<(T, T::Index)> {
         if width == 0 {
             anyhow::bail!("contract_src: tree environment batch must be non-empty");
         }
-        if let Some((batch, environments)) = self.batched_environments.get(&width) {
-            let environment = environments
-                .get(&(parent.clone(), child.clone()))
-                .cloned()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "contract_src: cached batched complement environment is missing for {:?}->{:?}",
-                        parent,
-                        child
-                    )
-                })?;
-            return Ok((environment, batch.clone()));
+        let edge = (parent.clone(), child.clone());
+        if let Some((batch, served_edge, environment)) = self.batched_environments.get(&width) {
+            if served_edge == &edge {
+                return Ok((environment.clone(), batch.clone()));
+            }
         }
-        self.probes.extend_to(width)?;
-        let batch = T::Index::new_link(width)?;
-        let probe_batches = self
-            .nodes
-            .iter()
-            .map(|node| {
-                let site_outputs = self
-                    .outputs
-                    .get(node)
-                    .ok_or_else(|| anyhow::anyhow!("contract_src: output list is missing"))?;
-                Ok((
-                    node.clone(),
-                    probe_batch_tensors::<T, R>(
-                        site_outputs,
-                        self.probes,
-                        0,
-                        width,
-                        &batch,
-                        self.context,
-                    )?,
-                ))
-            })
-            .collect::<Result<HashMap<_, _>>>()?;
-        let directed = directed_messages_batched_from_factors(
-            self.tn,
-            self.edges,
-            self.local,
-            &probe_batches,
-            &batch,
-            self.context,
-        )?;
-        let environment = directed
-            .get(&(parent.clone(), child.clone()))
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "contract_src: batched complement environment is missing for {:?}->{:?}",
-                    parent,
-                    child
-                )
-            })?;
+        // Grow the missing columns as one segment: this path asks for one wide
+        // prefix per edge, so stepping by `batch_size` would pay a fresh batch
+        // tensor (and the graph behind it) per step for no column saving.
+        if self.segment_total_width < width {
+            let next_start = self.segment_total_width;
+            self.grow_segment(next_start, width - next_start)?;
+        }
+        let (environment, batch) = self.request(parent, child, 0, width)?;
         self.batched_environments
-            .insert(width, (batch.clone(), directed));
+            .insert(width, (batch.clone(), edge, environment.clone()));
         Ok((environment, batch))
     }
 
@@ -439,6 +408,10 @@ where
         let end = start
             .checked_add(width)
             .ok_or_else(|| anyhow::anyhow!("contract_src: tree segment range overflows"))?;
+        #[cfg(test)]
+        {
+            self.columns_computed += width;
+        }
         self.probes.extend_to(end)?;
         let next_total_width = self
             .segment_total_width
@@ -489,12 +462,13 @@ where
     ///
     /// `EnvironmentCache` is shared across every edge in the tree -- unlike
     /// `PrefixCache` (one instance per site), one `EnvironmentCache` serves
-    /// every edge's own `site_max_width`. Only the initial segment may be
-    /// narrower than `batch_size`; later growth computes a full segment so
-    /// requests remain aligned even when one edge caps an earlier request.
-    /// The common case returns one segment directly. A genuinely partial
-    /// overlap falls back to splitting and re-stacking the covering segments'
-    /// environments.
+    /// every edge's own `site_max_width`. Growth through this method keeps the
+    /// `batch_size` grid (only the initial segment may be narrower) so requests
+    /// stay aligned even when one edge caps an earlier one; [`Self::batch`]
+    /// grows one segment per exact width instead, so the grid can be ragged
+    /// when both entry points share a cache. The common case returns one
+    /// segment directly. A genuinely partial overlap falls back to assembling
+    /// the covering segments' environments.
     fn request(
         &mut self,
         parent: &V,
@@ -534,13 +508,16 @@ where
             }
         }
 
-        // Misaligned fallback: split each overlapping segment's
-        // `(parent, child)` environment tensor into individual probe-columns
-        // via `select_indices`, then re-stack the requested range with
-        // `stack_along_new_index`. Reachable only when `[start, start+width)`
-        // doesn't align with a single stored segment's boundaries -- see
-        // this method's doc comment.
-        let mut collected = Vec::with_capacity(width);
+        // Misaligned fallback: assemble the requested range from the covering
+        // segments' `(parent, child)` environment tensors, one piece per
+        // segment. A whole segment is reused as it is; a segment the range
+        // cuts is split into its requested columns via `select_indices` and
+        // re-stacked. `concatenate_along_new_index` then joins the pieces'
+        // batch axes in one backend call, so assembling a prefix costs one
+        // copy rather than one select per column. Reachable only when
+        // `[start, start+width)` doesn't align with a single stored segment's
+        // boundaries -- see this method's doc comment.
+        let mut pieces = Vec::with_capacity(self.segments.len());
         for (segment_start, segment_width, batch_index, environments) in &self.segments {
             let segment_start = *segment_start;
             let segment_end = segment_start
@@ -560,8 +537,13 @@ where
                         child
                     )
                 })?;
+            if overlap_start == segment_start && overlap_end == segment_end {
+                pieces.push((environment.clone(), batch_index.clone()));
+                continue;
+            }
+            let mut columns = Vec::with_capacity(overlap_end - overlap_start);
             for position in (overlap_start - segment_start)..(overlap_end - segment_start) {
-                collected.push(
+                columns.push(
                     environment
                         .select_indices(std::slice::from_ref(batch_index), &[position])
                         .map_err(|error| {
@@ -573,26 +555,45 @@ where
                         })?,
                 );
             }
+            let column_refs = columns.iter().collect::<Vec<_>>();
+            let piece_batch = T::Index::new_link(columns.len())?;
+            let stacked = T::stack_along_new_index(&column_refs, piece_batch.clone(), -1).map_err(
+                |error| {
+                    anyhow::anyhow!(
+                        "contract_src: {:?}->{:?} misaligned segment split failed: {error}",
+                        parent,
+                        child
+                    )
+                },
+            )?;
+            pieces.push((stacked, piece_batch));
         }
+        let found = pieces
+            .iter()
+            .map(|(_, piece_batch)| piece_batch.dim())
+            .sum::<usize>();
         anyhow::ensure!(
-            collected.len() == width,
-            "contract_src: {:?}->{:?} misaligned segment request [{start}, {requested_end}) only found {} of {} columns",
+            found == width,
+            "contract_src: {:?}->{:?} misaligned segment request [{start}, {requested_end}) only found {found} of {width} columns",
             parent,
-            child,
-            collected.len(),
-            width
+            child
         );
-        let collected_refs = collected.iter().collect::<Vec<_>>();
+        let piece_tensors = pieces.iter().map(|(tensor, _)| tensor).collect::<Vec<_>>();
+        let piece_batches = pieces
+            .iter()
+            .map(|(_, piece_batch)| piece_batch.clone())
+            .collect::<Vec<_>>();
         let batch_index = T::Index::new_link(width)?;
-        let stacked = T::stack_along_new_index(&collected_refs, batch_index.clone(), -1)
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "contract_src: {:?}->{:?} misaligned segment request [{start}, {requested_end}) failed: {error}",
-                    parent,
-                    child
-                )
-            })?;
-        Ok((stacked, batch_index))
+        let assembled =
+            T::concatenate_along_new_index(&piece_tensors, &piece_batches, batch_index.clone())
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "contract_src: {:?}->{:?} misaligned segment request [{start}, {requested_end}) failed: {error}",
+                        parent,
+                        child
+                    )
+                })?;
+        Ok((assembled, batch_index))
     }
 }
 
