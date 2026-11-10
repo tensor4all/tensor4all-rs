@@ -2657,6 +2657,7 @@ dependencies = [
  "tensor4all-core",
  "tensor4all-quanticstransform",
  "tensor4all-tensorbackend",
+ "tensor4all-treeaci",
  "tensor4all-treetci",
  "tensor4all-treetn",
  "thiserror 2.0.20",
@@ -2770,6 +2771,7 @@ dependencies = [
 name = "tensor4all-treeaci"
 version = "0.3.0"
 dependencies = [
+ "anyhow",
  "criterion",
  "num-complex 0.4.6",
  "rand",

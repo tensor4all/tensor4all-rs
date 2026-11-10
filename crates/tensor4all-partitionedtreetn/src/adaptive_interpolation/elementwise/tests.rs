@@ -8,8 +8,12 @@ use std::collections::BTreeMap;
 
 use tensor4all_core::{AnyScalar, ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+use tensor4all_treeaci::TreeAciInterpolator;
 use tensor4all_treetci::TreeTciInterpolator;
-use tensor4all_treetn::interpolation::{EvalContext, Parallelism, PointwiseElementwise, Product};
+use tensor4all_treetn::interpolation::{
+    ElementwiseInterpolator, EvalContext, InterpolationTermination, Parallelism,
+    PointwiseElementwise, Product,
+};
 use tensor4all_treetn::TreeTN;
 
 use super::*;
@@ -143,10 +147,29 @@ fn run<Op: ElementwiseOperator<f64>>(
     operator: &Op,
     options: &PatchedInterpolationOptions,
 ) -> Result<PatchedInterpolationResult<usize>, PatchedInterpolationError> {
+    run_with(
+        &PointwiseElementwise(TreeTciInterpolator::default()),
+        inputs,
+        operator,
+        options,
+    )
+}
+
+/// [`run`] with another element-wise engine.
+fn run_with<E, Op>(
+    engine: &E,
+    inputs: &[&PartitionedTreeTN<usize>],
+    operator: &Op,
+    options: &PatchedInterpolationOptions,
+) -> Result<PatchedInterpolationResult<usize>, PatchedInterpolationError>
+where
+    E: ElementwiseInterpolator<f64, Op> + Sync,
+    Op: ElementwiseOperator<f64>,
+{
     let mut backend = CpuBackend::with_threads(1).unwrap();
     let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
     patched_elementwise(
-        &PointwiseElementwise(TreeTciInterpolator::default()),
+        engine,
         &TreeTciInterpolator::default(),
         inputs,
         operator,
@@ -308,6 +331,63 @@ fn a_nonlinear_map_covers_the_regions_where_an_input_is_absent() {
     let expected = pointwise(&star, &[&x, &y], |v| 1.0 / (4.0 - v[0] * v[1]));
     let rtol = 1e-8;
     let result = run(&[&x, &y], &rational, &options(l2(&expected), rtol)).unwrap();
+    check(&star, &result, &expected, rtol);
+    assert_resolvable(&result, &[&x, &y]);
+    assert!(result.report.zero_patches.is_empty());
+}
+
+/// The same product with tree ACI as the per-patch kernel, against the
+/// dense oracle: the kernel receives the restricted input networks.
+#[test]
+fn tree_aci_products_meet_the_contract() {
+    let star = Star::new();
+    let (x, y) = inputs(&star);
+    let expected = pointwise(&star, &[&x, &y], |v| v[0] * v[1]);
+    let rtol = 1e-8;
+    let result = run_with(
+        &TreeAciInterpolator::default(),
+        &[&x, &y],
+        &Product,
+        &options(l2(&expected), rtol),
+    )
+    .unwrap();
+    check(&star, &result, &expected, rtol);
+    assert_resolvable(&result, &[&x, &y]);
+    let gap = star.projector(&[(0, 0), (4, 1)]);
+    assert!(result
+        .report
+        .zero_patches
+        .iter()
+        .any(|record| record.projector.is_subset_of(&gap)));
+    // Every engine run was tree ACI's, on a patch below the cap.
+    assert!(!result.report.accepted.is_empty());
+    assert!(result
+        .report
+        .accepted
+        .iter()
+        .all(|record| record.termination == InterpolationTermination::Converged));
+}
+
+/// A nonlinear map through tree ACI, including where an input is absent.
+#[test]
+fn tree_aci_nonlinear_maps_meet_the_contract() {
+    let star = Star::new();
+    let (x, y) = inputs(&star);
+    let rational = |inputs: ColMajorArrayRef<'_, f64>, output: &mut [f64]| -> anyhow::Result<()> {
+        for (column, value) in inputs.data().chunks(2).zip(output.iter_mut()) {
+            *value = 1.0 / (4.0 - column[0] * column[1]);
+        }
+        Ok(())
+    };
+    let expected = pointwise(&star, &[&x, &y], |v| 1.0 / (4.0 - v[0] * v[1]));
+    let rtol = 1e-8;
+    let result = run_with(
+        &TreeAciInterpolator::default(),
+        &[&x, &y],
+        &rational,
+        &options(l2(&expected), rtol),
+    )
+    .unwrap();
     check(&star, &result, &expected, rtol);
     assert_resolvable(&result, &[&x, &y]);
     assert!(result.report.zero_patches.is_empty());

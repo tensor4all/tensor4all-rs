@@ -55,6 +55,7 @@ mod frames;
 mod global_guard;
 mod hadamard;
 mod initialize;
+mod interpolator;
 mod local_update;
 mod options;
 mod path_cover;
@@ -86,6 +87,7 @@ pub use elementwise::{
 };
 pub use error::{Result, TreeAciError};
 pub use hadamard::hadamard_many;
+pub use interpolator::TreeAciInterpolator;
 pub use options::TreeAciOptions;
 pub use result::{TreeAciDiagnostics, TreeAciResult, TreeAciTermination};
 pub use scalar::{TreeAciNode, TreeAciScalar};

@@ -86,6 +86,7 @@ pub struct TreeAciDiagnostics<V> {
 ///     tree: TreeTN::new(),
 ///     max_ranks: vec![],
 ///     max_errors: vec![],
+///     max_sample_magnitude: 0.0,
 ///     global_pivots_found: vec![],
 ///     termination: TreeAciTermination::MaxSweeps,
 ///     diagnostics: TreeAciDiagnostics::default(),
@@ -100,6 +101,13 @@ pub struct TreeAciResult<V: TreeAciNode> {
     pub max_ranks: Vec<usize>,
     /// Maximum normalized local error after each sweep.
     pub max_errors: Vec<f64>,
+    /// Largest `|f|` among the operator values of the local matrices the run
+    /// committed, or among all values on the exact single-node path.
+    ///
+    /// Values sampled only by the global guard's searches are excluded, so
+    /// this is the scale of the samples the interpolation itself was built
+    /// from.
+    pub max_sample_magnitude: f64,
     /// Number of distinct significant pivots returned by each global guard run,
     /// including previously found points that still fail revalidation.
     pub global_pivots_found: Vec<usize>,

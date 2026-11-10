@@ -85,6 +85,9 @@ where
     let mut output_values = vec![T::default(); point_count];
     operator(batch, &mut output_values)?;
     crate::scalar::ensure_finite_values(&output_values, "single-node output")?;
+    let max_sample_magnitude = output_values
+        .iter()
+        .fold(0.0_f64, |scale, &value| scale.max(value.abs_val()));
     let output_tensor =
         exec.tensor(indices, output_values)
             .map_err(|error| TreeAciError::Numerical {
@@ -98,6 +101,7 @@ where
         tree,
         max_ranks: Vec::new(),
         max_errors: Vec::new(),
+        max_sample_magnitude,
         global_pivots_found: Vec::new(),
         termination: TreeAciTermination::Converged,
         diagnostics: TreeAciDiagnostics {

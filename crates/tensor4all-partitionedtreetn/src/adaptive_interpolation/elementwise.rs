@@ -296,7 +296,8 @@ where
 ///
 /// * `engine` - The element-wise kernel, for example
 ///   [`PointwiseElementwise`](tensor4all_treetn::interpolation::PointwiseElementwise)
-///   around a black-box engine, or a dedicated kernel adapter.
+///   around a black-box engine, or a dedicated kernel such as
+///   `tensor4all_treeaci::TreeAciInterpolator` (tree ACI, any `f`).
 /// * `residual_engine` - The black-box engine of the
 ///   [`L2Estimator::ResidualTt`](super::L2Estimator::ResidualTt) estimator,
 ///   which interpolates a measured residual; for example

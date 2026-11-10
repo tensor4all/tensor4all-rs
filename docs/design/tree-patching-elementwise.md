@@ -5,10 +5,10 @@
 Design for milestone M6c of
 [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md),
 approved by the maintainer on 2026-11-10 (see
-[Decisions](#decisions-2026-11-10)). Steps 1 and 2 of the
-[implementation order](#implementation-order) are implemented (see
-[Implementation notes](#implementation-notes)); the kernel adapters wait for
-#1235 and #1236. It answers the two open questions the roadmap left to this
+[Decisions](#decisions-2026-11-10)). Steps 1 to 3 of the
+[implementation order](#implementation-order) and the TreeACI adapter of
+step 4 are implemented (see [Implementation notes](#implementation-notes));
+the tree RSI adapter and the benchmark are open. It answers the two open questions the roadmap left to this
 record (acceptance and driver).
 
 The 2026-11-09 ruling stands: Hadamard is the case `k = 2, f = product` of a
@@ -316,8 +316,8 @@ Steps 1 and 2, on 2026-11-10.
   `ElementwiseOperator` (closures implement it), the `Product` marker,
   `ElementwiseInterpolator<T, Op>`, and `PointwiseElementwise<E>`, which
   turns any black-box engine into an element-wise one by evaluating the
-  restricted inputs pointwise. Until the TreeACI and tree RSI adapters exist,
-  `PointwiseElementwise(TreeTciInterpolator)` is the engine of the tests.
+  restricted inputs pointwise. `PointwiseElementwise(TreeTciInterpolator)`
+  remains the reference engine of the driver's tests.
 - **Entries.** `patched_elementwise`, `patched_elementwise_on_lanes`, and
   `patched_elementwise_mpi` (2026-11-10) share one preparation (`prepare`)
   and the bodies of the interpolation entries, now factored as
@@ -334,4 +334,50 @@ Steps 1 and 2, on 2026-11-10.
 - **B0.** The black-box route is documented in `patched_elementwise` and
   tested against the same oracle
   (`the_black_box_route_meets_the_same_contract`).
+
+Step 3 landed on main as #1245 (TreeACI, #1235) and #1240 (tree RSI, #1236).
+The TreeACI adapter, on 2026-11-10:
+
+- **Engine.** `tensor4all_treeaci::TreeAciInterpolator` implements
+  `ElementwiseInterpolator<T, Op>` for every `Op: ElementwiseOperator<T>`
+  and runs `tree_elementwise_batched_with_rng_on_session` on the session of
+  the caller's `EvalContext`. The problem supplies the tolerance (absolute,
+  `scale_tolerance = false`), the cap, and the random stream (ChaCha8 seeded
+  with the problem's seed); the engine's own options supply the rest, as
+  [Engine options](#engine-options) proposed. `initial_guess` and `root` name
+  nodes of one network, so the constructor rejects them; the options are
+  stored node-free.
+- **Pivots.** Tree ACI takes none, so the problem's initial pivots and
+  global search starts are unused and the outcome carries no pivots, as
+  [Accept and split](#accept-and-split) proposed. A retry therefore differs
+  from the first run only by its seed.
+- **Outcome.** `termination` follows the mapping of
+  [The engine seam](#the-engine-seam), with one addition taken from the
+  TreeTCI adapter: `Converged` at a final rank equal to the cap is
+  `BondCapReached`, as the contract requires. `error_estimate` is the last
+  sweep's largest local error, which with an absolute tolerance is in the
+  units of `f` (zero on the exact single-node path).
+- **Sample scale.** The contract's `max_sample_magnitude` excludes samples
+  taken only for global pivot search, so it cannot be recorded by wrapping
+  the operator (the global guard calls the same operator). Tree ACI now
+  reports `TreeAciResult::max_sample_magnitude`, the running maximum of
+  `|f|` over the local matrices it committed (all values on the single-node
+  path), and the adapter passes it on.
+- **Errors.** An operator error reaches the caller as `Evaluator` with the
+  operator's own error as the source (the adapter keeps it beside tree ACI's
+  string-only `Callback`); a non-finite operator value is also `Evaluator`,
+  as for TreeTCI. Input and topology mismatches, and a zero tolerance (tree
+  ACI's criterion needs a positive one), are `InvalidProblem`; everything
+  else is `Engine`.
+- **`TreeAciNode` without `'static`.** The contract's node type carries no
+  `'static` bound, and nothing in tree ACI needed one, so the bound was
+  dropped from `TreeAciNode`; this only widens the accepted node types.
+- **Tests.** In `tensor4all-treeaci`: on the G0 fixture (a CTTN with a
+  degree-3 junction) the engine's network equals the session entry's bit for
+  bit with the problem's settings, while the process-global engine is
+  borrowed, and meets the exact function; plus the termination mapping (cap
+  reached, rank limited, sweep limit), the single-node scale, and each error
+  class. In `tensor4all-partitionedtreetn`: the product and the nonlinear
+  map of the star tests through `patched_elementwise` with tree ACI as the
+  kernel, against the dense oracle within `delta`, with certified L2 error.
 

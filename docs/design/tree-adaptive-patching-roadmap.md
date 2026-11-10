@@ -477,8 +477,9 @@ not vanish. Implemented on 2026-11-10: the driver seam, structural splits,
 input restriction, the `ElementwiseInterpolator` contract with a pointwise
 adapter, and `patched_elementwise` with serial, lanes, and MPI entries,
 tested on a degree-3 star against a pointwise oracle (the MPI entry is
-compiled, and runs only in the MPI smoke test). Open: the TreeACI and tree
-RSI adapters (after #1235 and #1236), and the benchmark.
+compiled, and runs only in the MPI smoke test); and the TreeACI adapter,
+tested through `patched_elementwise` against the dense oracle for a product
+and a nonlinear `f`. Open: the tree RSI adapter and the benchmark.
 
 Exit: tests on branched trees against a dense oracle, for a nonlinear `f`
 through TreeACI and for products through TreeACI and tree RSI; a benchmark
