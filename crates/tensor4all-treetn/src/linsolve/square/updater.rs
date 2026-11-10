@@ -1,6 +1,6 @@
 //! SquareLinsolveUpdater: Local update implementation for square linsolve.
 //!
-//! Uses GMRES (via tensor4all_core::krylov) to solve the local linear problem at each sweep step.
+//! Dispatches local equations to the selected tensor4all-core Krylov solver.
 //! This is the V_in = V_out specialized version.
 
 use crate::error::TreeTNOperationError;
@@ -14,12 +14,18 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 
-use tensor4all_core::krylov::{gmres_affine, gmres_affine_with_absolute_tolerance, GmresOptions};
-use tensor4all_core::{Canonical, FactorizeAlg, FactorizeOptions, IndexLike, TensorLike};
+use tensor4all_core::{
+    AnyScalar, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, SvdTruncationPolicy,
+    TensorLike,
+};
 
 use super::local_linop::LocalLinOp;
+use super::pow2_scaling;
 use super::projected_state::ProjectedState;
-use crate::linsolve::common::{GmresToleranceMode, LinsolveOptions, ProjectedOperator};
+use crate::linsolve::common::{
+    solve_local_system, LinsolveOptions, ProjectedOperator, ResidualEnrichment,
+    ResidualEnrichmentRangeError,
+};
 use crate::local_update_support;
 use crate::operator::IndexMapping;
 use crate::{factorize_tensor_to_treetn_with, LocalUpdateStep, LocalUpdater, TreeTN, TreeTopology};
@@ -115,7 +121,7 @@ impl<V: std::fmt::Debug> std::fmt::Display for LinsolveVerifyReport<V> {
 /// At each sweep step:
 /// 1. Compute local operator (from ProjectedOperator environments)
 /// 2. Compute local RHS (from ProjectedState environments)
-/// 3. Solve local linear system using GMRES
+/// 3. Solve with the selected local Krylov method (GMRES by default)
 /// 4. Transport the center by QR (one-site ALS) or split by SVD (two-site MALS).
 ///
 /// Prefer [`super::square_linsolve`] to construct the sweep. For direct one-site
@@ -373,7 +379,7 @@ where
         local_update_support::copy_decomposed_to_subtree(subtree, decomposed, region, full_treetn)
     }
 
-    /// Solve the local linear problem using GMRES.
+    /// Solve the local linear problem using the selected Krylov method.
     ///
     /// Solves: (a₀ + a₁ * H_local) |x_local⟩ = |b_local⟩
     fn solve_local(&mut self, region: &[V], init: &T, state: &TreeTN<T, V>) -> Result<T> {
@@ -387,49 +393,8 @@ where
             .and_then(|value| value.parse::<usize>().ok());
         let solve_started = Instant::now();
 
-        // Use state's SiteIndexNetwork directly (implements NetworkTopology)
-        let topology = state.site_index_network();
-
-        // Get local RHS: <b|_local
-        let rhs_local_raw =
-            self.projected_state
-                .local_constant_term(region, &self.reference_state, topology)?;
-        let rhs_local_raw =
-            self.replace_reference_boundary_bonds_with_state(rhs_local_raw, region, state)?;
-
-        // Align RHS indices with init indices.
-        // The RHS may have indices from the `rhs` TreeTN, while init has indices from
-        // the current `state`. For GMRES operations (like b - A*x), they must match.
-        //
-        // For MPO cases, external indices should match (validated earlier), but the order
-        // may differ. Use full index matching to align them.
         let init_indices = init.external_indices();
-        let rhs_indices = rhs_local_raw.external_indices();
-
-        let rhs_local = if self.index_sets_match(&init_indices, &rhs_indices) {
-            // Same set of indices and same count - check if order matches
-            let indices_match = init_indices
-                .iter()
-                .zip(rhs_indices.iter())
-                .all(|(ii, ri)| ii == ri && ii.dim() == ri.dim());
-            if indices_match {
-                rhs_local_raw
-            } else {
-                // Permute RHS indices to init index order.
-                // Note: permuteinds requires same length, which we've already checked
-                rhs_local_raw.permuteinds(&init_indices)?
-            }
-        } else {
-            return Err(anyhow::anyhow!(
-                "{}",
-                self.index_structure_mismatch_message(
-                    &init_indices,
-                    &rhs_indices,
-                    "Index structure mismatch between init and RHS (local tensors)",
-                    "This suggests:\n  - ProjectedState environment construction may have contracted/left open unexpected indices\n  - External indices may not be properly aligned between x and b\n  - full contraction may have over-contracted external indices in the environment\n\nSee the rustdoc on [`ProjectedState`](crate::linsolve::square::ProjectedState) and `docs/design/treetn-linsolve-mpo.md` for analysis of external index handling.",
-                )
-            ));
-        };
+        let rhs_local = self.local_rhs(region, &init_indices, state)?;
 
         // Create local linear operator with separate reference_state
         // This prevents unintended bra↔ket link contractions in environment computation
@@ -441,9 +406,8 @@ where
             init_indices,
         );
 
-        // KrylovKit builds Arnoldi from the unshifted local operator H.
-        // The affine coefficients `(a0 I + a1 H)` are applied in GMRES'
-        // projected Hessenberg problem, not inside LocalLinOp.
+        // Keep LocalLinOp unshifted: GMRES handles affine terms in its projected
+        // problem; CG/BiCGSTAB receive an affine callback from the dispatcher.
         let apply_calls = Cell::new(0usize);
         let apply_elapsed_micros = Cell::new(0u128);
         let apply_a = |x: &T| {
@@ -455,36 +419,19 @@ where
             result.map_err(anyhow::Error::from)
         };
 
-        let mut gmres_options = local_gmres_options(&self.options)?;
-        if trace && std::env::var_os("T4A_LINSOLVE_VERBOSE_GMRES").is_some() {
-            gmres_options.verbose = true;
-        }
-
-        // Solve using GMRES (works directly with IdxTensor)
-        let result = match self.options.gmres_tolerance_mode {
-            GmresToleranceMode::Relative => gmres_affine(
-                apply_a,
-                &rhs_local,
-                init,
-                self.options.a0.clone(),
-                self.options.a1.clone(),
-                &gmres_options,
-            )?,
-            GmresToleranceMode::Absolute => gmres_affine_with_absolute_tolerance(
-                apply_a,
-                &rhs_local,
-                init,
-                self.options.a0.clone(),
-                self.options.a1.clone(),
-                &gmres_options,
-                self.options.gmres_tol,
-            )?,
-        };
+        let result = solve_local_system(
+            &self.options,
+            apply_a,
+            &rhs_local,
+            init,
+            trace && std::env::var_os("T4A_LINSOLVE_VERBOSE_GMRES").is_some(),
+        )?;
 
         if trace {
             eprintln!(
-                "T4A local_solve #{solve_index}: region={region:?} mode={:?} rhs_norm={:.6e} init_norm={:.6e} iterations={} residual={:.6e} converged={} apply_calls={} apply_ms={:.3} total_ms={:.3}",
-                self.options.gmres_tolerance_mode,
+                "T4A local_solve #{solve_index}: region={region:?} solver={} residual_kind={} rhs_norm={:.6e} init_norm={:.6e} iterations={} residual={:.6e} converged={} apply_calls={} apply_ms={:.3} total_ms={:.3}",
+                self.options.local_solver.name(),
+                if result.residual_is_relative { "relative" } else { "absolute" },
                 rhs_local.norm()?,
                 init.norm()?,
                 result.iterations,
@@ -500,6 +447,237 @@ where
         }
 
         Ok(result.solution)
+    }
+
+    /// Projected right-hand side `<ref|b>` on `region`, in the index order of
+    /// the local state tensor `init_indices`.
+    fn local_rhs(
+        &mut self,
+        region: &[V],
+        init_indices: &[T::Index],
+        state: &TreeTN<T, V>,
+    ) -> Result<T> {
+        let topology = state.site_index_network();
+        let rhs_local_raw =
+            self.projected_state
+                .local_constant_term(region, &self.reference_state, topology)?;
+        let rhs_local_raw =
+            self.replace_reference_boundary_bonds_with_state(rhs_local_raw, region, state)?;
+
+        // The RHS carries indices from the `rhs` TreeTN, while the local state
+        // carries indices from `state`. Krylov operations such as b - A*x need
+        // the same index order, so permute when only the order differs.
+        let rhs_indices = rhs_local_raw.external_indices();
+        if !self.index_sets_match(init_indices, &rhs_indices) {
+            return Err(anyhow::anyhow!(
+                "{}",
+                self.index_structure_mismatch_message(
+                    init_indices,
+                    &rhs_indices,
+                    "Index structure mismatch between init and RHS (local tensors)",
+                    "This suggests:\n  - ProjectedState environment construction may have contracted/left open unexpected indices\n  - External indices may not be properly aligned between x and b\n  - full contraction may have over-contracted external indices in the environment\n\nSee the rustdoc on [`ProjectedState`](crate::linsolve::square::ProjectedState) and `docs/design/treetn-linsolve-mpo.md` for analysis of external index handling.",
+                )
+            ));
+        }
+        let in_order = init_indices
+            .iter()
+            .zip(rhs_indices.iter())
+            .all(|(ii, ri)| ii == ri && ii.dim() == ri.dim());
+        if in_order {
+            Ok(rhs_local_raw)
+        } else {
+            Ok(rhs_local_raw.permuteinds(init_indices)?)
+        }
+    }
+
+    /// Append residual directions to the `src`–`dst` bond of a two-node subtree.
+    ///
+    /// Requires `src` to be left-orthonormal towards `dst` (the state after
+    /// QR center transport) and the subtree's region outside `{src, dst}` to
+    /// match `state`, whose environments define the two-site projection.
+    /// The represented two-site tensor is unchanged; on return `src` is again
+    /// left-orthonormal with a bond of dimension at most
+    /// `old + enrichment.max_added`, and `dst` is the new center.
+    fn enrich_bond(
+        &mut self,
+        subtree: &mut TreeTN<T, V>,
+        src_name: &V,
+        dst_name: &V,
+        enrichment: &ResidualEnrichment,
+        state: &TreeTN<T, V>,
+    ) -> Result<()> {
+        let src = subtree
+            .node_index(src_name)
+            .ok_or_else(|| anyhow::anyhow!("enrichment source node missing"))?;
+        let dst = subtree
+            .node_index(dst_name)
+            .ok_or_else(|| anyhow::anyhow!("enrichment destination node missing"))?;
+        let edge = subtree
+            .edge_between(src_name, dst_name)
+            .ok_or_else(|| anyhow::anyhow!("enrichment edge missing"))?;
+        let bond = subtree
+            .bond_index(edge)
+            .ok_or_else(|| anyhow::anyhow!("enrichment bond missing"))?
+            .clone();
+        let basis = subtree
+            .tensor(src)
+            .ok_or_else(|| anyhow::anyhow!("enrichment source tensor missing"))?
+            .clone();
+        let center = subtree
+            .tensor(dst)
+            .ok_or_else(|| anyhow::anyhow!("enrichment destination tensor missing"))?
+            .clone();
+
+        let src_side: Vec<T::Index> = basis
+            .external_indices()
+            .into_iter()
+            .filter(|index| index != &bond)
+            .collect();
+        // New directions must be orthogonal to the current basis, so the
+        // src-side space dimension bounds the bond.
+        let src_side_dim: usize = src_side.iter().map(|index| index.dim()).product();
+        let mut budget = enrichment
+            .max_added
+            .min(src_side_dim.saturating_sub(bond.dim()));
+        if let Some(cap) = enrichment.max_bond_dim {
+            budget = budget.min(cap.saturating_sub(bond.dim()));
+        }
+        if budget == 0 {
+            return Ok(());
+        }
+
+        let region = [src_name.clone(), dst_name.clone()];
+        let two_site = T::contract(&[&basis, &center])?;
+        let two_site_indices = two_site.external_indices();
+        let rhs = self.local_rhs(&region, &two_site_indices, state)?;
+        if rhs.maxabs()? == 0.0 {
+            return Ok(());
+        }
+        // residual = b - a0 x - a1 A x. A zero coefficient drops its term
+        // instead of scaling it by zero, which would turn an overflowing
+        // `A x` (or `x`) into NaN.
+        let one = AnyScalar::new_real(1.0);
+        let mut residual = rhs.clone();
+        if !self.options.a0.is_zero() {
+            residual = residual.axpby(one.clone(), &two_site, -self.options.a0.clone())?;
+        }
+        if !self.options.a1.is_zero() {
+            let linop = LocalLinOp::with_expected_input_indices(
+                Arc::clone(&self.projected_operator),
+                region.to_vec(),
+                state,
+                &self.reference_state,
+                two_site_indices,
+            );
+            let applied = linop.apply_projected(&two_site)?;
+            residual = residual.axpby(one, &applied, -self.options.a1.clone())?;
+        }
+        // Rescale the residual by one exact power of two `2^shift` that takes
+        // its largest entry modulus into [1, 2), before the projection:
+        // `||b_local||`, the overlap with the src basis, the residual
+        // singular values and `cutoff * ||b_local||` can each overflow (or
+        // underflow) in the original units although every entry is finite,
+        // but in these units they cannot, and the SVD backend sees a matrix
+        // it does not rescale internally. The shift keeps every nonzero entry
+        // a normal `f64` (faer flushes subnormal singular values to zero)
+        // exactly when the entries span at most `MAX_RESIDUAL_SPREAD` binary
+        // orders of magnitude; see `ResidualEnrichment`.
+        let Some((smallest_exp, smallest)) = pow2_scaling::smallest_exponent(&residual)? else {
+            return Ok(());
+        };
+        let largest_exp = pow2_scaling::largest_exponent(&residual)?;
+        let spread = largest_exp - smallest_exp;
+        let shift = -largest_exp;
+        let largest = residual.maxabs()?;
+        let residual = pow2_scaling::scale_pow2(&residual, shift)?;
+
+        // The enrichment cutoff is the only selection rule: pass it to the SVD
+        // as an explicit absolute per-value policy, so neither the global
+        // default policy nor a second factorization is involved.
+        // A zero cutoff keeps every nonzero direction whatever `||b_local||`
+        // is, so it does not depend on that norm. Otherwise `||b_local||` is
+        // read from `b_local / 2^rhs_exp` (largest entry in [1, 2)) and the
+        // threshold `cutoff * ||b_local|| * 2^shift` is formed without
+        // overflowing `cutoff * norm` before the exponents apply.
+        let threshold = if enrichment.cutoff == 0.0 {
+            0.0
+        } else {
+            let rhs_exp = pow2_scaling::largest_exponent(&rhs)?;
+            let rhs_norm = pow2_scaling::scale_pow2(&rhs, -rhs_exp)?.norm()?;
+            pow2_scaling::scaled_product(enrichment.cutoff, rhs_norm, shift + rhs_exp)
+        };
+        // In these units every residual singular value is at most its
+        // Frobenius norm, at most `2 * sqrt(len)`, so an overflowing threshold
+        // exceeds them all.
+        if !threshold.is_finite() {
+            return Ok(());
+        }
+        // Outside the supported spread the shift loses entries of modulus
+        // below 2^-1022 here; together they perturb the singular values by
+        // at most `sqrt(len) * 2^-1022`. Refuse when the cutoff could keep a
+        // direction made of them, rather than silently dropping it.
+        if spread > ResidualEnrichment::MAX_RESIDUAL_SPREAD {
+            let len: usize = residual
+                .external_indices()
+                .iter()
+                .map(|index| index.dim())
+                .product();
+            let lost_bound = (len as f64).sqrt() * f64::MIN_POSITIVE;
+            if threshold <= lost_bound {
+                return Err(ResidualEnrichmentRangeError {
+                    largest,
+                    smallest,
+                    spread,
+                    max_spread: ResidualEnrichment::MAX_RESIDUAL_SPREAD,
+                    shift,
+                }
+                .into());
+            }
+        }
+        // Remove the component already representable in the current src basis.
+        let overlap = T::contract(&[&basis.conj(), &residual])?;
+        let residual = residual.sub(&T::contract(&[&basis, &overlap])?)?;
+        let svd = residual.factorize(
+            &src_side,
+            &FactorizeOptions::svd()
+                .with_canonical(Canonical::Left)
+                .with_svd_policy(SvdTruncationPolicy::new(threshold).with_absolute())
+                .with_max_bond_dim(budget),
+        )?;
+        // The SVD keeps at least one direction; drop it when even the leading
+        // singular value is at most the cutoff.
+        let leading = svd
+            .singular_values
+            .as_ref()
+            .and_then(|values| values.first().copied())
+            .ok_or_else(|| anyhow::anyhow!("SVD did not report singular values"))?;
+        if leading <= threshold {
+            return Ok(());
+        }
+
+        // The residual directions are complex when `b` or `A` is complex
+        // although the basis may be real (a real initial guess); the direct
+        // sum needs one scalar type, so promote the real operand.
+        let complex_one = AnyScalar::new_complex(1.0, 0.0);
+        let (basis, left) = match (
+            basis.inner_product(&basis)?.is_complex(),
+            svd.left.inner_product(&svd.left)?.is_complex(),
+        ) {
+            (false, true) => (basis.scale(complex_one)?, svd.left),
+            (true, false) => (basis, svd.left.scale(complex_one)?),
+            _ => (basis, svd.left),
+        };
+        let stacked = basis.direct_sum(&left, &[(bond, svd.bond_index)])?.tensor;
+        // Re-orthonormalize: the new directions are orthogonal to the old
+        // basis only up to rounding.
+        let enlarged = stacked.factorize_full_rank(&src_side, FactorizeAlg::QR, Canonical::Left)?;
+        let new_center = T::contract(&[&enlarged.left.conj(), &two_site])?;
+
+        subtree.replace_edge_bond(edge, enlarged.bond_index)?;
+        subtree.replace_tensor(src, enlarged.left)?;
+        subtree.replace_tensor(dst, new_center)?;
+        subtree.set_edge_ortho_towards(edge, Some(dst_name.clone()))?;
+        Ok(())
     }
 
     /// Synchronize reference_state region with ket_state, preserving boundary bond IDs.
@@ -600,6 +778,15 @@ where
                     Canonical::Left,
                     "ALS center transport",
                 )?;
+                if let Some(enrichment) = self.options.enrichment {
+                    self.enrich_bond(
+                        &mut subtree,
+                        node,
+                        &step.new_center,
+                        &enrichment,
+                        full_treetn,
+                    )?;
+                }
             }
             subtree.set_canonical_region([step.new_center.clone()])?;
             return Ok(subtree);
@@ -895,23 +1082,6 @@ where
 
         Ok(())
     }
-}
-
-fn local_gmres_options(options: &LinsolveOptions) -> Result<GmresOptions> {
-    if options.gmres_restart_dim == 0 {
-        anyhow::bail!("LinsolveOptions::gmres_restart_dim must be greater than zero");
-    }
-    if options.gmres_max_restarts == 0 {
-        anyhow::bail!("LinsolveOptions::gmres_max_restarts must be greater than zero");
-    }
-
-    Ok(GmresOptions {
-        max_iter: options.gmres_restart_dim,
-        rtol: options.gmres_tol,
-        max_restarts: options.gmres_max_restarts,
-        verbose: false,
-        check_true_residual: true,
-    })
 }
 
 #[cfg(test)]

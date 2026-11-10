@@ -741,6 +741,10 @@ impl TensorIndex for FaultyVector {
 }
 
 impl TensorVectorSpace for FaultyVector {
+    fn is_single_precision(&self) -> bool {
+        false
+    }
+
     fn validate(&self) -> std::result::Result<(), Self::Error> {
         self.check(FailingOp::Validate).map(|_| ())
     }
@@ -1045,4 +1049,37 @@ fn cg_reports_the_true_residual_when_the_iteration_budget_runs_out() {
         "reported {:e} but b - A x has norm {true_residual:e} (relative drift {drift:e})",
         result.residual_norm
     );
+}
+
+#[test]
+fn cg_static_options_validation() {
+    CgOptions {
+        max_iter: 0,
+        rtol: 0.0,
+        atol: 0.0,
+        hermitian_tol: 0.0,
+    }
+    .validate()
+    .unwrap();
+    for invalid in [f64::NAN, f64::INFINITY, -1.0] {
+        for options in [
+            CgOptions {
+                rtol: invalid,
+                ..CgOptions::default()
+            },
+            CgOptions {
+                atol: invalid,
+                ..CgOptions::default()
+            },
+            CgOptions {
+                hermitian_tol: invalid,
+                ..CgOptions::default()
+            },
+        ] {
+            assert!(matches!(
+                options.validate(),
+                Err(KrylovError::InvalidOptions { solver: "cg", .. })
+            ));
+        }
+    }
 }

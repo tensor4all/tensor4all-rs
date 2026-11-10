@@ -742,11 +742,12 @@ fn exact_small_patches_carry_exact_measurements_and_add_no_evaluations() {
 
 #[test]
 fn an_overflowing_approximation_norm_is_reported_as_none() {
-    // ||f~|| = 2e155 exceeds sqrt(f64::MAX); the exact path builds the patch.
+    // ||f~|| = 2e308 exceeds f64::MAX although every value is finite, so the
+    // patch log-norm overflows; the exact path builds the patch.
     let problem = single_node(&[4]);
-    let f = |_: &[usize]| 1e155;
+    let f = |_: &[usize]| 1e308;
     let options = PatchedInterpolationOptions::new(2)
-        .with_error_norm(ErrorNorm::l2(L2Reference::Given(2e155)))
+        .with_error_norm(ErrorNorm::l2(L2Reference::Given(f64::MAX)))
         .with_tolerance(tol(1e-6));
     let result = run(&DenseEngine::new(), &problem, &f, &[], &options).unwrap();
     let error = result.report.norm.l2_error().unwrap();

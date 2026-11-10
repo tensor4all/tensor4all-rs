@@ -164,6 +164,10 @@ impl TensorIndex for DefaultOnlyTensor {
 }
 
 impl TensorVectorSpace for DefaultOnlyTensor {
+    fn is_single_precision(&self) -> bool {
+        false
+    }
+
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         Ok(self.data.iter().map(|value| value * value).sum())
     }
@@ -1010,4 +1014,17 @@ fn tensor_contraction_default_direct_sum_many_rejects_bad_arguments() {
     assert!(message(&[vec![]], &[]).contains("at least one operand"));
     assert!(message(&[], &[&a]).contains("at least one index group"));
     assert!(message(&[vec![bond.clone()]], &[&a, &a]).contains("expected one per operand (2)"));
+}
+
+#[test]
+fn tensor_vector_space_default_min_nonzero_abs_is_unsupported() {
+    let tensor = DefaultOnlyTensor {
+        indices: vec![DynIndex::new_dyn(2)],
+        data: vec![1.0, 2.0],
+    };
+    let error = tensor.min_nonzero_abs().unwrap_err().to_string();
+    assert!(
+        error.contains("min_nonzero_abs is not supported"),
+        "{error}"
+    );
 }

@@ -55,6 +55,36 @@ impl Default for BiCgStabOptions {
     }
 }
 
+impl BiCgStabOptions {
+    /// Validate finite, nonnegative static tolerances without applying an operator.
+    ///
+    /// A zero iteration budget and zero tolerances are valid. The RHS-dependent
+    /// stopping threshold is checked when solving.
+    ///
+    /// # Errors
+    /// Returns [`KrylovError::InvalidOptions`] when a tolerance is negative or
+    /// non-finite.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_core::krylov::{BiCgStabOptions, KrylovError};
+    /// let options = BiCgStabOptions { rtol: f64::NAN, ..Default::default() };
+    /// assert!(matches!(options.validate(), Err(KrylovError::InvalidOptions { .. })));
+    /// assert!(BiCgStabOptions::default().validate().is_ok());
+    /// ```
+    pub fn validate(&self) -> std::result::Result<(), KrylovError> {
+        for (name, tolerance) in [("rtol", self.rtol), ("atol", self.atol)] {
+            if !tolerance.is_finite() || tolerance < 0.0 {
+                return Err(KrylovError::InvalidOptions {
+                    solver: "bicgstab",
+                    reason: format!("{name} must be finite and nonnegative"),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Solution and true-residual diagnostics returned by [`bicgstab`].
 /// Like [`super::CgResult`], the residual is absolute; [`super::GmresResult`]
 /// reports a relative residual by default.
@@ -174,15 +204,7 @@ where
     T: TensorVectorSpace,
     F: Fn(&T) -> Result<T>,
 {
-    for (name, tolerance) in [("rtol", options.rtol), ("atol", options.atol)] {
-        if !tolerance.is_finite() || tolerance < 0.0 {
-            return Err(KrylovError::InvalidOptions {
-                solver: "bicgstab",
-                reason: format!("{name} must be finite and nonnegative"),
-            }
-            .into());
-        }
-    }
+    options.validate()?;
     b.validate()?;
     x0.validate()?;
     let b_norm = finite_norm(b, "bicgstab", 0, "right-hand-side norm")?;

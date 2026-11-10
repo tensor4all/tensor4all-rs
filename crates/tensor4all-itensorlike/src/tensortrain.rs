@@ -2233,6 +2233,12 @@ impl TensorVectorSpace for TensorTrain {
     // GMRES-required methods (fully supported)
     // ========================================================================
 
+    fn is_single_precision(&self) -> bool {
+        self.tensors()
+            .into_iter()
+            .any(TensorVectorSpace::is_single_precision)
+    }
+
     fn axpby(
         &self,
         a: AnyScalar,

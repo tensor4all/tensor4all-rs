@@ -2,6 +2,7 @@
 
 use tensor4all_core::{AnyScalar, SvdTruncationPolicy};
 pub use tensor4all_treetn::contraction::SrcOptions;
+pub use tensor4all_treetn::LocalSolver;
 
 use crate::error::{Result, TensorTrainError};
 
@@ -468,7 +469,8 @@ impl ContractOptions {
 /// Options for the linear solver.
 ///
 /// Solves `(a₀ + a₁ * A) * x = b` using two-site MALS sweeps with local GMRES
-/// by default. Use [`Self::with_nsite`] for one-site ALS without bond growth.
+/// by default. Use [`Self::with_nsite`] for one-site ALS without bond growth and
+/// [`Self::with_local_solver`] for native CG or BiCGSTAB controls.
 ///
 /// # Examples
 ///
@@ -492,6 +494,7 @@ pub struct LinsolveOptions {
     nsite: usize,
     max_bond_dim: Option<usize>,
     svd_policy: Option<SvdTruncationPolicy>,
+    local_solver: LocalSolver,
     gmres_tol: f64,
     gmres_max_restarts: usize,
     gmres_restart_dim: usize,
@@ -503,14 +506,18 @@ pub struct LinsolveOptions {
 
 impl Default for LinsolveOptions {
     fn default() -> Self {
+        // GMRES defaults come from TreeTN, which rejects changed GMRES controls
+        // when another local solver is selected.
+        let treetn = tensor4all_treetn::LinsolveOptions::default();
         Self {
             nhalfsweeps: 10,
             nsite: 2,
             max_bond_dim: None,
             svd_policy: None,
-            gmres_tol: 1e-10,
-            gmres_max_restarts: 100,
-            gmres_restart_dim: 30,
+            local_solver: LocalSolver::default(),
+            gmres_tol: treetn.gmres_tol,
+            gmres_max_restarts: treetn.gmres_max_restarts,
+            gmres_restart_dim: treetn.gmres_restart_dim,
             a0: AnyScalar::new_real(0.0),
             a1: AnyScalar::new_real(1.0),
             convergence_tol: None,
@@ -583,7 +590,43 @@ impl LinsolveOptions {
         self
     }
 
+    /// Select the local solver; GMRES is the default.
+    ///
+    /// CG requires a Hermitian positive-definite effective operator `a0 I + a1 A`.
+    /// CG/BiCGSTAB use their native tolerances and budgets. The `gmres_*`
+    /// controls apply only when GMRES is selected. With CG or BiCGSTAB a
+    /// `gmres_*` setting would have no effect, so it must keep its default: a
+    /// changed value, set before or after this call, makes [`crate::linsolve`]
+    /// fail with [`crate::TensorTrainError::TreeTn`]. No automatic fallback is
+    /// performed.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_itensorlike::{CgOptions, LinsolveOptions, LocalSolver};
+    /// let options = LinsolveOptions::new(2)
+    ///     .with_local_solver(LocalSolver::Cg(CgOptions::default()));
+    /// assert!(matches!(options.local_solver(), LocalSolver::Cg(_)));
+    /// ```
+    pub fn with_local_solver(mut self, local_solver: LocalSolver) -> Self {
+        self.local_solver = local_solver;
+        self
+    }
+
+    /// Borrow the selected local solver and its native controls.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_itensorlike::{LinsolveOptions, LocalSolver};
+    /// assert!(matches!(LinsolveOptions::default().local_solver(), LocalSolver::Gmres));
+    /// ```
+    pub fn local_solver(&self) -> &LocalSolver {
+        &self.local_solver
+    }
+
     /// Set GMRES tolerance.
+    ///
+    /// The `gmres_*` setters configure [`LocalSolver::Gmres`] only; changing one
+    /// while CG or BiCGSTAB is selected makes [`crate::linsolve`] fail.
     pub fn with_gmres_tol(mut self, tol: f64) -> Self {
         self.gmres_tol = tol;
         self

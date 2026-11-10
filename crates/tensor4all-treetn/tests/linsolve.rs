@@ -2389,6 +2389,36 @@ fn test_relative_linear_system_residual_with_mapped_coefficients() {
 }
 
 #[test]
+fn test_relative_linear_system_residual_rejects_an_rhs_whose_norm_overflows() {
+    // The rhs entries are at most 4 * f64::MAX / 4.5, but its norm is
+    // sqrt(30) * f64::MAX / 4.5 > f64::MAX, which would make the relative
+    // residual zero.
+    let phys_dim = 2;
+    let (state, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
+    let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[2.0, 2.0], phys_dim);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
+    let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+    let mut rhs = state.clone();
+    rhs.scale_mut(AnyScalar::new_real(f64::MAX / 4.5)).unwrap();
+
+    let error = relative_linear_system_residual(
+        &operator,
+        &state,
+        &rhs,
+        AnyScalar::new_real(3.0),
+        AnyScalar::new_real(1.0),
+        ApplyOptions::naive(),
+    )
+    .unwrap_err();
+
+    assert!(
+        format!("{error:#}").contains("rhs norm is not finite"),
+        "{error:#}"
+    );
+}
+
+#[test]
 fn test_relative_linear_system_residual_stays_relative_for_tiny_rhs() {
     let phys_dim = 2;
     let (state, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
@@ -2413,6 +2443,54 @@ fn test_relative_linear_system_residual_stays_relative_for_tiny_rhs() {
     .unwrap();
 
     assert!((residual - 1.0).abs() < 1.0e-12, "residual={residual}");
+}
+
+fn relative_residual_with_identity_operator(solution_scale: f64, rhs_scale: f64) -> f64 {
+    let phys_dim = 2;
+    let (state, site_indices, _bonds) = create_mps_from_values(&[1.0, 2.0, 3.0, 4.0], phys_dim);
+    let (mpo, s_in_tmp, s_out_tmp) = create_mpo_with_internal_indices(&[1.0, 1.0], phys_dim);
+    let (input_mapping, output_mapping) =
+        create_fixed_site_index_mappings(["site0", "site1"], &site_indices, &s_in_tmp, &s_out_tmp);
+    let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
+    let mut rhs = state.clone();
+    rhs.scale_mut(AnyScalar::new_real(rhs_scale)).unwrap();
+    let mut solution = state;
+    solution
+        .scale_mut(AnyScalar::new_real(solution_scale))
+        .unwrap();
+
+    relative_linear_system_residual(
+        &operator,
+        &solution,
+        &rhs,
+        AnyScalar::new_real(0.0),
+        AnyScalar::new_real(1.0),
+        ApplyOptions::naive(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_relative_linear_system_residual_accepts_an_rhs_whose_squared_norm_overflows() {
+    // |b| is about 5.5e200, finite, but |b|^2 overflows f64. With x = b and
+    // A = I the relative residual is exactly zero, not an error.
+    let residual = relative_residual_with_identity_operator(1.0e200, 1.0e200);
+    assert!(residual < 1.0e-12, "residual={residual}");
+}
+
+#[test]
+fn test_relative_linear_system_residual_stays_relative_when_squared_rhs_norm_underflows() {
+    // |b| is about 5.5e-200, nonzero, but |b|^2 underflows to zero. With x = 0
+    // the whole rhs is residual, so the relative residual is 1, not 0.
+    let residual = relative_residual_with_identity_operator(0.0, 1.0e-200);
+    assert!((residual - 1.0).abs() < 1.0e-12, "residual={residual}");
+}
+
+#[test]
+fn test_relative_linear_system_residual_is_zero_for_a_zero_rhs_and_solution() {
+    // A truly zero rhs takes the absolute-residual branch; x = 0 solves it.
+    let residual = relative_residual_with_identity_operator(0.0, 0.0);
+    assert_eq!(residual, 0.0);
 }
 
 /// Mapped local linsolve should allow operator nodes with no site indices.

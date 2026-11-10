@@ -2,6 +2,7 @@
 
 use crate::error::TreeTNOperationError;
 use std::any::{Any, TypeId};
+use std::collections::BTreeMap;
 // FxHash for every map of the evaluator: the keys are `IndexKey`s, node names and node pairs, none attacker-controlled.
 type HashMap<K, V> = std::collections::HashMap<K, V, rustc_hash::FxBuildHasher>;
 type HashSet<K> = std::collections::HashSet<K, rustc_hash::FxBuildHasher>;
@@ -1682,6 +1683,13 @@ where
     /// is the minimal assignment set on which a directed message depends;
     /// changing a site in another component must not invalidate this entry.
     message_caches: HashMap<(V, V), PackedMessageCache<IndexKey, CachedScalar>>,
+    /// The directed edges of `message_caches` that hold payload, ordered by the
+    /// epoch of their last use. Victim selection walks this index instead of
+    /// the cache map, so the cost of one pressured admission follows the caches
+    /// that can actually release something -- not the edges the evaluator has
+    /// seen, which it keeps for the whole run (#1209). A cache enters on a use
+    /// that leaves it non-empty and leaves when it is emptied.
+    message_cache_order: BTreeMap<u64, (V, V)>,
     /// Monotonic use stamp for `message_caches`, so the shared budget is
     /// reclaimed from the least recently used edge first.
     message_cache_epoch: u64,
@@ -1860,6 +1868,7 @@ where
             batch_point_limit,
             last_stats: CachedEvaluationStats::default(),
             message_caches: HashMap::default(),
+            message_cache_order: BTreeMap::default(),
             message_cache_epoch: 0,
             message_cache_retained_bytes: 0,
             parent_bond_indices: HashMap::default(),
@@ -2306,7 +2315,8 @@ where
     #[cfg(feature = "diagnostics")]
     fn diagnostic_cache(&self) -> diagnostics::CacheDiagnostics {
         let mut result = diagnostics::CacheDiagnostics {
-            message_owned_bytes: hash_map_owned_bytes_estimate(&self.message_caches),
+            message_owned_bytes: hash_map_owned_bytes_estimate(&self.message_caches)
+                .saturating_add(btree_map_owned_bytes_estimate(&self.message_cache_order)),
             prepared_entries: self.prepared_branch_slices_f64.slices.len()
                 + self.prepared_branch_slices_c64.slices.len(),
             prepared_payload_bytes: self.prepared_branch_slices_f64.retained_bytes()
@@ -2419,7 +2429,8 @@ where
             .values()
             .map(PackedMessageCache::owned_retained_bytes_estimate)
             .sum::<usize>()
-            .saturating_add(hash_map_owned_bytes_estimate(&self.message_caches));
+            .saturating_add(hash_map_owned_bytes_estimate(&self.message_caches))
+            .saturating_add(btree_map_owned_bytes_estimate(&self.message_cache_order));
     }
 
     /// A hinted, fully cached cut needs neither the other center components
@@ -2520,11 +2531,11 @@ where
         }
         // Tentative all-hit probes do not count. Commit hits only after both
         // directions and their checked assembly have succeeded.
-        let epoch = self.next_message_cache_epoch();
         for (edge, hits) in [
             (left_edge, left_batch.keys.len()),
             (right_edge, right_batch.keys.len()),
         ] {
+            let epoch = self.next_message_cache_epoch();
             let cache = self
                 .message_caches
                 .get_mut(&edge)
@@ -2532,8 +2543,9 @@ where
             cache.record_hits(hits);
             // A warm cut is a use of both directions: without this, columns
             // that are reused on every call would look stale to the shared
-            // budget's least-recently-used eviction.
-            cache.touch(epoch);
+            // budget's least-recently-used eviction. Each direction takes its
+            // own stamp so both stay ordered in the LRU index.
+            Self::note_message_cache_use(&mut self.message_cache_order, &edge, cache, epoch);
         }
         self.last_stats = CachedEvaluationStats {
             subtree_environment_count: left_batch.keys.len(),
@@ -2576,6 +2588,43 @@ where
         self.message_cache_epoch
     }
 
+    /// Stamps one cache as used at `epoch` and keeps the LRU order index in step.
+    ///
+    /// The index holds one entry per cache that retains payload, keyed by its
+    /// current use stamp, so victim selection reads the order from the index and
+    /// never has to compare the caches themselves. Passed as separate fields
+    /// because the cache borrow is live at every call site.
+    fn note_message_cache_use(
+        order: &mut BTreeMap<u64, (V, V)>,
+        edge: &(V, V),
+        cache: &mut PackedMessageCache<IndexKey, CachedScalar>,
+        epoch: u64,
+    ) {
+        let previous = cache.last_used();
+        cache.touch(epoch);
+        if previous != epoch {
+            order.remove(&previous);
+        }
+        Self::index_message_cache_state(order, edge, cache, epoch);
+    }
+
+    /// Records whether one cache retains payload under its current use stamp.
+    ///
+    /// Called after a use and again after an admission, which is the point at
+    /// which a newly created cache stops being empty.
+    fn index_message_cache_state(
+        order: &mut BTreeMap<u64, (V, V)>,
+        edge: &(V, V),
+        cache: &PackedMessageCache<IndexKey, CachedScalar>,
+        epoch: u64,
+    ) {
+        if cache.key_count() == 0 {
+            order.remove(&epoch);
+        } else {
+            order.insert(epoch, edge.clone());
+        }
+    }
+
     /// Retained payload of one directed cache. This is the only payload
     /// accounting one admission does, so its cost does not grow with the number
     /// of edges the evaluator has seen.
@@ -2602,8 +2651,10 @@ where
     /// would refuse anyway loses reuse on both edges.
     ///
     /// The payload accounting is one read of this edge's cache plus the running
-    /// total. Choosing victims walks the evaluator's directed-edge caches (as
-    /// many as the tree has edges), and only when the total is exceeded.
+    /// total. Choosing victims walks `message_cache_order`, which holds exactly
+    /// the caches that retain payload, and only when the total is exceeded -- so
+    /// the cost of one pressured admission follows the resident caches, not the
+    /// edges the evaluator has seen (#1209).
     fn reserve_message_cache_bytes(
         &mut self,
         edge: &(V, V),
@@ -2630,35 +2681,53 @@ where
             .saturating_add(others)
             .saturating_sub(total);
         if over > 0 {
-            // A cache that holds no payload cannot release anything, so it is not
-            // a candidate: skipping it here keeps the collection and the sort
-            // proportional to the caches that retain columns. The map walk itself
-            // remains O(E) in the edges the evaluator has seen.
-            let mut order: Vec<((V, V), u64)> = self
-                .message_caches
+            // Victims come from the order index, which holds exactly the caches
+            // that retain payload, least recently used first. A cache that holds
+            // no payload cannot release anything, so it is never a candidate and
+            // never collected: the search is proportional to the resident caches
+            // rather than to the edges the evaluator has seen (#1209).
+            //
+            // The traversal counter sits before every filter on purpose: it
+            // counts the caches the walk touches, so restoring a walk over
+            // `message_caches` -- where the historical empty caches live -- is
+            // counted too and the #1209 regression test fails again.
+            let victims: Vec<(u64, (V, V))> = self
+                .message_cache_order
                 .iter()
-                .filter(|(other, cache)| *other != edge && cache.key_count() > 0)
-                .map(|(other, cache)| {
+                .inspect(|_| {
+                    #[cfg(test)]
+                    MESSAGE_CACHE_VICTIM_VISITS.with(|visits| visits.set(visits.get() + 1));
+                })
+                .filter(|(_, other)| *other != edge)
+                .map(|(epoch, other)| {
                     #[cfg(test)]
                     MESSAGE_CACHE_VICTIM_CANDIDATES.with(|candidates| {
                         candidates.set(candidates.get() + 1);
                     });
-                    (other.clone(), cache.last_used())
+                    (*epoch, other.clone())
                 })
                 .collect();
-            order.sort_by_key(|(_, last_used)| *last_used);
-            for (other, _) in order {
+            for (epoch, other) in victims {
                 if over == 0 {
                     break;
                 }
-                if let Some(cache) = self.message_caches.get_mut(&other) {
-                    // A whole column is the eviction grain, so this can release
-                    // more than the remaining shortfall.
-                    let released = cache.evict_oldest_bytes(over);
-                    others = others.saturating_sub(released);
-                    over = over.saturating_sub(released);
-                    self.message_cache_retained_bytes =
-                        self.message_cache_retained_bytes.saturating_sub(released);
+                let emptied = match self.message_caches.get_mut(&other) {
+                    Some(cache) => {
+                        // A whole column is the eviction grain, so this can
+                        // release more than the remaining shortfall.
+                        let released = cache.evict_oldest_bytes(over);
+                        others = others.saturating_sub(released);
+                        over = over.saturating_sub(released);
+                        self.message_cache_retained_bytes =
+                            self.message_cache_retained_bytes.saturating_sub(released);
+                        cache.key_count() == 0
+                    }
+                    None => true,
+                };
+                if emptied {
+                    // An empty cache can release nothing until it is used again,
+                    // so it leaves the index here and re-enters on its next use.
+                    self.message_cache_order.remove(&epoch);
                 }
             }
         }
@@ -2674,6 +2743,37 @@ where
             .values()
             .map(PackedMessageCache::logical_payload_bytes)
             .sum();
+        // Tests insert caches outside the admission path, so the LRU index is
+        // rebuilt here from the map; production only ever reaches it through
+        // `note_message_cache_use` and eviction.
+        self.message_cache_order.clear();
+        for (edge, cache) in &self.message_caches {
+            if cache.key_count() > 0 {
+                self.message_cache_order
+                    .insert(cache.last_used(), edge.clone());
+            }
+        }
+    }
+
+    /// Re-stamps every cache with a fresh, small epoch, keeping the order index
+    /// exact.
+    ///
+    /// Tests use this to prove that a warm hit re-stamps the edges it serves:
+    /// without the reset the stamps of the cold call still look fresh, so the
+    /// assertion would hold either way. The stamps and the index have to move
+    /// together -- zeroing `last_used` alone leaves entries keyed by the old
+    /// epochs, which is neither the pre-call state nor a state production can
+    /// reach, and it silently inflates the index.
+    #[cfg(test)]
+    fn reset_message_cache_use_stamps(&mut self) {
+        self.message_cache_order.clear();
+        for (index, (edge, cache)) in self.message_caches.iter_mut().enumerate() {
+            let epoch = index as u64 + 1;
+            cache.last_used = epoch;
+            if cache.key_count() > 0 {
+                self.message_cache_order.insert(epoch, edge.clone());
+            }
+        }
     }
 
     fn build_message_assignment_batches(
@@ -4761,7 +4861,12 @@ where
                 .message_caches
                 .entry(directed_edge.clone())
                 .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_budget_bytes));
-            cache.touch(epoch);
+            Self::note_message_cache_use(
+                &mut self.message_cache_order,
+                &directed_edge,
+                cache,
+                epoch,
+            );
             if let Some(positions) = cache.get_all_cached(&keys) {
                 let mut data = Vec::with_capacity(bond_dim * keys.len());
                 for position in positions {
@@ -4835,7 +4940,12 @@ where
                 .message_caches
                 .entry(directed_edge.clone())
                 .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_budget_bytes));
-            cache.touch(epoch);
+            Self::note_message_cache_use(
+                &mut self.message_cache_order,
+                &directed_edge,
+                cache,
+                epoch,
+            );
             let missing_indices = (0..keys.len())
                 .filter(|index| !cache.contains(&keys[*index]))
                 .collect::<Vec<_>>();
@@ -5013,10 +5123,10 @@ where
         let epoch = self.next_message_cache_epoch();
         let cache = self
             .message_caches
-            .entry(directed_edge)
+            .entry(directed_edge.clone())
             .or_insert_with(|| PackedMessageCache::new(bond_dim, message_cache_budget_bytes));
         cache.max_bytes = cap;
-        cache.touch(epoch);
+        Self::note_message_cache_use(&mut self.message_cache_order, &directed_edge, cache, epoch);
         let retained_before = cache.logical_payload_bytes();
         let missing_slots = cache.get_or_compute_batch(&missing_keys, |request_keys| {
             request_keys
@@ -5032,11 +5142,20 @@ where
                 .collect::<Result<Vec<_>>>()
         });
         // Admission is where retention grows, so the shared total is kept in
-        // step here rather than recomputed from the map on every miss.
+        // step here rather than recomputed from the map on every miss. The LRU
+        // index learns about the admission at the same point: a cache created by
+        // this call was empty when it was stamped, and this is where it starts
+        // holding columns.
         self.message_cache_retained_bytes = self.message_cache_retained_bytes.saturating_add(
             cache
                 .logical_payload_bytes()
                 .saturating_sub(retained_before),
+        );
+        Self::index_message_cache_state(
+            &mut self.message_cache_order,
+            &directed_edge,
+            cache,
+            epoch,
         );
         let missing_slots = missing_slots?;
 
@@ -8102,6 +8221,13 @@ thread_local! {
     /// the regression test that pins "a victim search considers the edges that
     /// hold payload, not every edge the evaluator has ever seen".
     static MESSAGE_CACHE_VICTIM_CANDIDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// `last_used()` reads on this thread, counted for the regression test that
+    /// pins the admission cost under budget pressure (#1209).
+    static MESSAGE_CACHE_LAST_USED_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Directed-edge caches visited while choosing victims on this thread. The
+    /// number the #1209 fixture bounds: it must follow the caches that hold
+    /// payload, not the edges the evaluator has seen.
+    static MESSAGE_CACHE_VICTIM_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(any(test, feature = "diagnostics"))]
@@ -8110,6 +8236,21 @@ fn hash_map_owned_bytes_estimate<K, V>(map: &HashMap<K, V>) -> usize {
         .saturating_add(std::mem::size_of::<V>())
         .saturating_add(HASH_MAP_BUCKET_OVERHEAD_ESTIMATE_BYTES);
     std::mem::size_of::<HashMap<K, V>>().saturating_add(map.capacity().saturating_mul(per_bucket))
+}
+
+// A deterministic estimate for one `BTreeMap` node's bookkeeping: the map
+// stores up to `B` entries plus child links per node and does not expose that
+// layout, so this is documented as an estimate, exactly like the hash-bucket
+// term. It is observability only; the logical payload budget never counts it.
+#[cfg(any(test, feature = "diagnostics"))]
+const BTREE_MAP_NODE_OVERHEAD_ESTIMATE_BYTES: usize = 3 * std::mem::size_of::<usize>();
+
+#[cfg(any(test, feature = "diagnostics"))]
+fn btree_map_owned_bytes_estimate<K, V>(map: &BTreeMap<K, V>) -> usize {
+    let per_entry = std::mem::size_of::<K>()
+        .saturating_add(std::mem::size_of::<V>())
+        .saturating_add(BTREE_MAP_NODE_OVERHEAD_ESTIMATE_BYTES);
+    std::mem::size_of::<BTreeMap<K, V>>().saturating_add(map.len().saturating_mul(per_entry))
 }
 
 /// Where one requested key's column ended up.
@@ -8263,6 +8404,8 @@ where
     }
 
     fn last_used(&self) -> u64 {
+        #[cfg(test)]
+        MESSAGE_CACHE_LAST_USED_READS.with(|reads| reads.set(reads.get() + 1));
         self.last_used
     }
 

@@ -451,6 +451,12 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
     // Vector space operations (required for GMRES)
     // ------------------------------------------------------------------------
 
+    fn is_single_precision(&self) -> bool {
+        self.blocks
+            .iter()
+            .any(TensorVectorSpace::is_single_precision)
+    }
+
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         self.blocks.iter().try_fold(0.0, |sum, block| {
             let value = block
@@ -476,6 +482,30 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
                 .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))?;
             Ok(acc.max(value))
         })
+    }
+
+    fn min_nonzero_abs(&self) -> std::result::Result<Option<f64>, Self::Error> {
+        self.blocks.iter().try_fold(None::<f64>, |acc, block| {
+            let value = block
+                .min_nonzero_abs()
+                .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))?;
+            Ok(match (acc, value) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            })
+        })
+    }
+
+    fn is_all_finite(&self) -> std::result::Result<bool, Self::Error> {
+        for block in &self.blocks {
+            let finite = block
+                .is_all_finite()
+                .map_err(|error| TensorVectorSpaceError::from(anyhow::Error::new(error)))?;
+            if !finite {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     fn scale(&self, scalar: AnyScalar) -> std::result::Result<Self, Self::Error> {
