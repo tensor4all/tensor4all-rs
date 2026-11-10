@@ -349,6 +349,11 @@ where
         Ok(Self { data })
     }
 
+    /// Consume the partition into its patches, keyed by projector.
+    pub(crate) fn into_patches(self) -> HashMap<Projector, SubDomainTreeTN<V>> {
+        self.data
+    }
+
     /// Construct a partition containing one patch.
     ///
     /// # Errors

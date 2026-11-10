@@ -2,11 +2,15 @@
 
 ## Status
 
-Proposal for milestone M6b of
-[tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md).
-Not implemented. The maintainer decided on 2026-11-10 that M6b is
-implemented now, without waiting for an M9 measurement, because
-overpatching has already been observed to be frequent.
+Implemented for milestone M6b of
+[tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md) as
+`adaptive_interpolation::merge_siblings`. The maintainer decided on
+2026-11-10 that M6b is implemented now, without waiting for an M9
+measurement, because overpatching has already been observed to be frequent,
+and approved both questions of
+[Decisions](#decisions-2026-11-10) the same day. The text below is the
+proposal; [Implementation notes](#implementation-notes) records where the
+code differs from it.
 
 This record covers interpolation outputs only. Merging the outputs of the
 patched algebra (`contract_adaptive`, `add_with_patching`,
@@ -283,12 +287,52 @@ runs `patched_interpolate` and checks the dense error against `f`.
 Exit (roadmap): a merged interpolation output still meets its M3 tolerance,
 and a merge exceeding the allowance is rejected.
 
-## Open questions for the user
+## Decisions (2026-11-10)
 
-1. **Input.** Narrow the M6b outcome from "any `PartitionedTreeTN`" to
+Both proposals were approved by the maintainer.
+
+1. **Input.** The M6b outcome is narrowed from "any `PartitionedTreeTN`" to
    interpolation results now, with algebra outputs after M3b
-   ([Algebra outputs](#algebra-outputs)). Proposed: yes.
-2. **Producer integration.** The roadmap lists "integration into the
-   producers". Proposed: ship the post-processing function first and add a
-   `PatchedInterpolationOptions` switch only when a measurement shows a
-   benefit of merging inside the driver (earlier memory release).
+   ([Algebra outputs](#algebra-outputs)).
+2. **Producer integration.** The post-processing function ships first; a
+   `PatchedInterpolationOptions` switch is added only when a measurement
+   shows a benefit of merging inside the driver (earlier memory release).
+
+## Implementation notes
+
+- **Execution.** The proposal ran every step on a caller-given
+  `ExecutionContext`. `tensor4all-treetn` has no context-scoped sum or norm
+  (only `truncate_in` and `norm_on_session`), and the crate's other algebra
+  (`reconstruct`, `contract_adaptive`) runs on the global defaults, so
+  `merge_siblings` does too and takes no context. A context-scoped variant
+  belongs to the change that gives the crate's algebra explicit contexts.
+- **Shared truncation.** `truncate_toward_allowance` stays in
+  `reconstruction/engine.rs` and is re-exported `pub(crate)` from
+  `reconstruction`, instead of moving to a new module.
+- **Report additions.** `PatchedInterpolationReport` gained `patch_order`
+  (the resolved split order) and `max_bond_dim`; `PatchRecord` gained
+  `log_norm`, filled when the result is assembled (the MPI wire format
+  already carried it beside the record), so the merged approximation norm is
+  assembled exactly as the run's.
+- **Report shape.** `SiblingMergeReport::error` is a full `L2ErrorReport`
+  (domain size, global error, certified fraction, approximation RMS), not
+  only `GlobalL2Error`; the merged-result type is `SiblingMergeResult` with
+  fields `partition`, `producer`, and `merge`.
+- **Global error.** `verify.rs` now combines regions as `Term`s:
+  `Term::of` turns a patch's measurements into one, `Term::merged` combines
+  members with a truncation. The run's `global_error` maps its
+  contributions to terms, so the run and the merge share the arithmetic. A
+  test reassembles a run's own leaves and gets its error bit for bit, and
+  another shows that a merge without truncation leaves an audited estimate
+  and its standard error unchanged.
+- **SampledMax.** A `SampledMax` result is rejected with `InvalidInput`
+  rather than `UnsupportedNorm`, whose documented meaning is a placeholder
+  norm of the driver.
+- **Observed merges.** On the test star (two binary sites per node,
+  `sin(40 x^2)`, exhaustive verification), a cap of 4 gives one accepted
+  merge at `rtol = 1e-3`; at a cap of 3, and for the rank-limited spike
+  functions tried, every complete group reaches the cap, as expected when a
+  split was caused by the rank itself. The accepted merge spends slack: its
+  members' errors are below their allowances, and the sum truncated within
+  the remainder fits below the cap. These small runs are smoke tests, not a
+  measurement of how often merges succeed on real workloads.

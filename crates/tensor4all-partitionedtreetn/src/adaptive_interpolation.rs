@@ -58,6 +58,14 @@
 //! canonical order, and the run then reports the same
 //! [`PatchedInterpolationError::ResourceLimit`] as before.
 //!
+//! # Sibling merging
+//!
+//! The driver never undoes a split. [`merge_siblings`] post-processes an
+//! [`ErrorNorm::L2`] result: it merges complete groups of sibling patches,
+//! bottom-up, when their truncated sum stays below the bond cap and within
+//! the slack that the members' measured errors leave in the merged region,
+//! so the run's L2 contract still holds.
+//!
 //! # Derivation notice
 //!
 //! The patch queue, the accept-or-split flow, and pivot recycling are derived
@@ -342,6 +350,7 @@ mod corners;
 mod embed;
 mod fan_out;
 mod layout;
+mod merge;
 #[cfg(any(feature = "hataori-mpi", feature = "hataori-mpi-rsmpi-rt"))]
 mod mpi;
 mod options;
@@ -381,6 +390,9 @@ use sampling::{patch_candidates, patch_seeds, PatchDomain, PatchSeeds};
 use verify::{Contribution, MeasureError, MeasureTarget, Measured, PointPlan};
 
 pub use fan_out::patched_interpolate_on_lanes;
+pub use merge::{
+    merge_siblings, SiblingMergeOptions, SiblingMergeRecord, SiblingMergeReport, SiblingMergeResult,
+};
 #[cfg(any(feature = "hataori-mpi", feature = "hataori-mpi-rsmpi-rt"))]
 pub use mpi::patched_interpolate_mpi;
 pub use options::{CappedPatches, L2Estimator, PatchedInterpolationOptions, VerificationOptions};
@@ -1944,6 +1956,7 @@ where
             acceptance: None,
             audit: None,
             status: PatchStatus::WithinTolerance,
+            log_norm: None,
         }
     }
 
@@ -2099,6 +2112,7 @@ where
             acceptance,
             audit: None,
             status: PatchStatus::WithinTolerance,
+            log_norm: None,
         };
         Ok(accepted(record, subdomain, patch_points))
     }
@@ -2410,7 +2424,10 @@ where
     let mut records = Vec::with_capacity(accepted.len());
     let mut subdomains = Vec::with_capacity(accepted.len());
     for (_, entry) in accepted {
-        records.push(entry.record);
+        records.push(PatchRecord {
+            log_norm: entry.log_norm,
+            ..entry.record
+        });
         subdomains.push(entry.subdomain);
     }
     let partition = PartitionedTreeTN::from_disjoint_subdomains(subdomains)?;
@@ -2418,6 +2435,13 @@ where
         partition,
         report: PatchedInterpolationReport {
             tolerance: plan.options.tolerance,
+            patch_order: plan
+                .layout
+                .split_order
+                .iter()
+                .map(|&position| plan.layout.sites[position].clone())
+                .collect(),
+            max_bond_dim: plan.options.max_bond_dim,
             norm,
             accepted: records,
             zero_patches: zeros.into_iter().map(|(_, record, _)| record).collect(),

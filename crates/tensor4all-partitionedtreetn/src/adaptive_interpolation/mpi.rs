@@ -454,6 +454,9 @@ fn decode_patch_record(record: WirePatchRecord, projector: Projector) -> PatchRe
         acceptance: record.acceptance.map(decode_measurement),
         audit: record.audit.map(decode_measurement),
         status: decode_status(record.status),
+        // The log-norm travels beside the record and is attached when the
+        // root assembles the result.
+        log_norm: None,
     }
 }
 

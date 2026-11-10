@@ -5,7 +5,7 @@ use std::hash::Hash;
 
 use tensor4all_treetn::interpolation::InterpolationTermination;
 
-use crate::{ErrorTolerance, PartitionedTreeTN, Projector};
+use crate::{DynIndex, ErrorTolerance, PartitionedTreeTN, Projector};
 
 /// Relative margin covering the floating-point rounding of the budget
 /// arithmetic: patch and domain sizes as `f64` (inexact above `2^53`), sums
@@ -398,6 +398,10 @@ pub struct PatchRecord {
     pub audit: Option<L2Measurement>,
     /// Whether the patch meets its allowance.
     pub status: PatchStatus,
+    /// `ln ||f~_P||`, the natural log of the patch network's L2 norm,
+    /// measured on the session that built the patch. `None` under
+    /// `SampledMax`, which measures no norm, or when the norm overflowed.
+    pub log_norm: Option<f64>,
 }
 
 /// The record of one zero patch: a region approximated by zero and left out
@@ -1295,6 +1299,15 @@ impl NormReport {
 pub struct PatchedInterpolationReport {
     /// The requested tolerance.
     pub tolerance: ErrorTolerance,
+    /// The order in which splits fix sites: the run's
+    /// [`PatchedInterpolationOptions::patch_order`](super::PatchedInterpolationOptions::patch_order),
+    /// or every site in the derived site order when that option is empty.
+    /// The patches form a prefix tree over this order: a patch fixes a
+    /// prefix of it.
+    pub patch_order: Vec<DynIndex>,
+    /// The run's bond cap,
+    /// [`PatchedInterpolationOptions::max_bond_dim`](super::PatchedInterpolationOptions::max_bond_dim).
+    pub max_bond_dim: usize,
     /// The norm, its reference and allowance, and under L2 the measured
     /// global error.
     pub norm: NormReport,
