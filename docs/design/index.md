@@ -44,6 +44,7 @@
 | [gse-chain-mps-algorithm.md](./gse-chain-mps-algorithm.md) | Chain MPS global subspace expansion analysis for TreeTN GSE-TDVP planning |
 | [itensormps-compatible-zipup.md](./itensormps-compatible-zipup.md) | ITensorMPS-compatible chain zip-up contraction schedule and policy-aware decomposition follow-up |
 | [fit-sum.md](./fit-sum.md) | Variational fitting of compatible TreeTN sums without exact direct-sum materialization |
+| [density-matrix-sum.md](./density-matrix-sum.md) | Density-matrix summation, cross-term environments, and discarded-weight error estimates |
 | [linsolve-one-site-als.md](./linsolve-one-site-als.md) | One-site ALS linear solves: fixed ranks, exact QR transport, and validation scope |
 | [linsolve-local-solver-selection.md](./linsolve-local-solver-selection.md) | GMRES, CG and BiCGSTAB selection for ALS/MALS local equations |
 

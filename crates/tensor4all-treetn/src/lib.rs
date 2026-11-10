@@ -113,6 +113,7 @@ pub use treetn::{
     CachedEvaluatorOptions,
     CachedEvaluatorPlan,
     CenterSearchResult,
+    DensityMatrixSumResult,
     EvaluatedScalarKindMismatch,
     EvaluationHint,
     ExactSum,
