@@ -212,6 +212,24 @@ fn complex_values_keep_compatibility_parity_through_every_accepted_representatio
     }
 }
 
+/// Contract change, stated so the rewrite of this test is not silent.
+///
+/// - **Before** (`a_zero_length_axis_keeps_the_backends_refusal_and_leaves_the_session_usable`): the
+///   session route refused a zero-length axis with `IdxTensorError::Operation { operation:
+///   "sum_on_session", .. }`, a documented non-parity with the compatibility route's `0`.
+/// - **Now**: the session route answers `Some(0.0)`, the same `0` as the compatibility route.
+/// - **Why the expectation changed**: the refusal was never this crate's rule. `sum_on_session` passes
+///   the session's answer through, and the backend it reaches through the tenferro v0.10 pin
+///   (tenferro #2453) defines an empty reduction domain as the fold's unit instead of invalid input.
+///   Keeping the old expectation would need a special case in this crate that refuses what the backend
+///   answers - the kind of local patch the layering rules forbid - and would keep a non-parity whose
+///   only reason has gone. The unit is asserted as a value (`0`, not "not an error"), so a backend
+///   that answered a product-like `1` would fail here.
+/// - **What the old test also covered**: that the held session survives a *session-side* failure. A
+///   dense floating operand no longer reaches one through `sum`, so that property is pinned at the
+///   session layer instead (`tensor4all-tensorbackend`
+///   `explicit::tests::einsum_rejects_a_mismatched_label_count_typed`); the backend's own answer for
+///   an empty axis is pinned there too (`sum_of_an_empty_axis_is_the_additive_unit`).
 #[test]
 fn a_zero_length_axis_returns_the_folds_identity_and_leaves_the_session_usable() {
     let context = session_context();

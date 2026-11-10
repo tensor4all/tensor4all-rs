@@ -375,12 +375,14 @@ where
     }
 }
 
-fn square_selection<T: crate::MatrixLuciScalar + faer::traits::ComplexField>(
+fn square_selection<
+    T: crate::MatrixLuciScalar + tensor4all_tensorbackend::CappedFullPivLuScalar,
+>(
     data: &[T],
     n: usize,
     options: &PivotKernelOptions,
 ) -> (PivotSelectionCore, usize) {
-    DenseLuKernel::factorize_square_with_faer(data, n, options).unwrap()
+    DenseLuKernel::factorize_square_with_backend(data, n, options).unwrap()
 }
 
 fn assert_selection_bits_equal(
@@ -411,7 +413,7 @@ fn assert_selection_bits_equal(
     }
 }
 
-/// Within one lock, the direct faer call reproduces the `full_piv_lu_matrix_owned` + diagonal-scan
+/// Within one lock, the backend's capped LU reproduces the `full_piv_lu_matrix_owned` + diagonal-scan
 /// path it replaced, bit for bit: the pivots, the rank and the error history.
 ///
 /// What this cannot prove is the cross-version claim. Both sides of the comparison are built against

@@ -103,7 +103,8 @@ ndarray = "0.17"
 # faer 0.33.0 is the first release with the rank-truncated LU parameters
 # (`max_rank`/`abs_tol`/`rel_tol`, `info.rank`) this workspace needs (tensor4all/faer#294,
 # tensor4all-rs#1157). The provider stack (tenferro -> tlinalg -> tcontract-exec) resolves to the
-# same 0.33 identity, so this direct dependency adds no second faer. `std` only, so the kernel
+# same 0.33 identity, so this direct dependency adds no second faer. Only
+# `tensor4all-tensorbackend` depends on it directly (`capped_full_piv_lu`); `std` only, so that kernel
 # asks for `Par::Seq` and starts no second thread pool.
 faer = { package = "t4a-faer", version = "0.33.0", default-features = false, features = ["std"] }
 quanticsgrids = { git = "https://github.com/tensor4all/quanticsgrids-rs", rev = "8214b72" }

@@ -16,6 +16,9 @@ mod any_scalar;
 #[cfg(feature = "global-defaults")]
 /// Backend dispatch for dense linear algebra operations.
 mod backend;
+#[cfg(feature = "global-defaults")]
+/// Complete-pivoting LU of a square matrix stopped at a rank cap.
+mod capped_full_piv_lu;
 #[cfg(feature = "explicit-context")]
 /// Explicit and optional process-global tenferro execution helpers.
 mod context;
@@ -61,6 +64,8 @@ pub use backend::{
     FullPivLuResult, FullPivLuScalar, MatrixSolveScalar, MatrixTriangularSolveScalar,
     SrcErrorEstimate, SvdResult,
 };
+#[cfg(feature = "global-defaults")]
+pub use capped_full_piv_lu::{capped_full_piv_lu, CappedFullPivLu, CappedFullPivLuScalar};
 #[cfg(feature = "global-defaults")]
 pub use context::{
     default_cpu_execution_context, default_eager_ctx, with_default_backend, with_runtime_engine,

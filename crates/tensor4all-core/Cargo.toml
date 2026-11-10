@@ -78,7 +78,6 @@ tenferro-ad.workspace = true
 tenferro-einsum.workspace = true
 tenferro-linalg.workspace = true
 tenferro-tensor.workspace = true
-faer.workspace = true
 
 [dev-dependencies]
 tenferro-tensor.workspace = true

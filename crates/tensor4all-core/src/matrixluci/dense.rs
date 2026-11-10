@@ -7,18 +7,16 @@ use crate::matrixluci::source::{materialize_source, CandidateMatrixSource};
 use crate::matrixluci::{MatrixLuciError, PivotKernelOptions, PivotSelectionCore, Result};
 use crate::scalar::Scalar as LegacyScalar;
 use crate::{rrlu, RrLUOptions};
-use faer::dyn_stack::{MemBuffer, MemStack};
-use faer::linalg::lu::full_pivoting::factor::{self as faer_flu, FullPivLuParams};
-use faer::{Auto, Par};
 use num_complex::{Complex32, Complex64};
-use tensor4all_tensorbackend::Matrix;
+use tensor4all_tensorbackend::{capped_full_piv_lu, CappedFullPivLuScalar, Matrix};
 
 /// Dense full-pivoting LU kernel.
 ///
 /// Materializes the source matrix and performs dense pivot selection. Square
-/// matrices use a complete-pivoting LU from faer, stopped at the caller's rank
-/// cap; rectangular matrices fall back to the internal rrLU implementation
-/// until the provider stack exposes rectangular complete pivoting.
+/// matrices use the backend's complete-pivoting LU stopped at the caller's rank
+/// cap ([`tensor4all_tensorbackend::capped_full_piv_lu`]); rectangular matrices
+/// fall back to the internal rrLU implementation until the provider stack
+/// exposes rectangular complete pivoting.
 #[derive(Default)]
 pub struct DenseLuKernel;
 
@@ -118,22 +116,21 @@ impl DenseLuKernel {
 
     /// Complete-pivoting LU of a square input, stopped once the rank cap is met.
     ///
-    /// Returns the selection together with the raw pivot count faer reported (`info.rank`), not a
-    /// count clamped to the cap. That number is the evidence a cap stops the elimination instead of
-    /// factoring to full rank and truncating afterwards: a bounded run reports the cap plus the one
-    /// extra pivot asked for below, not `n`. Clamping it here would make the two indistinguishable
-    /// from the outside.
+    /// The factorization is the backend's ([`capped_full_piv_lu`]); this kernel keeps only the
+    /// LUCI decision of which pivots to accept. It hands the backend the rank cap and nothing else,
+    /// one pivot past the cap, so that the residual [`Self::compute_pivot_errors`] reads from
+    /// `diag_abs[rank]` is the pivot the factorization itself would take next rather than a rule
+    /// re-derived here. The tolerance decision stays in [`Self::compute_pivot_errors`], because
+    /// faer rejects a pivot at *or below* its tolerance where this kernel rejects only a strictly
+    /// smaller one (`|pivot| < tol`), and measures it against the first pivot where this kernel
+    /// keeps a running maximum.
     ///
-    /// The rank cap is the only bound handed to faer, one pivot past the cap, so that the residual
-    /// [`Self::compute_pivot_errors`] reads from `diag_abs[rank]` is the pivot faer itself would take
-    /// next rather than a rule re-derived here. The tolerance decision stays in
-    /// [`Self::compute_pivot_errors`] and runs on the pivot magnitudes this factorization produced,
-    /// because faer rejects a pivot at *or below* its tolerance where this kernel rejects only a
-    /// strictly smaller one (`|pivot| < tol`). The call itself is the factorization the previous path
-    /// performed through `full_piv_lu_matrix_owned` in the same lock; the parity test compares those
-    /// two consumers of faer, which is what it can prove - the cross-version claim (0.28.2 against
-    /// 0.33.0) was measured when the lock still held 0.28.2 and cannot be re-derived from this one.
-    fn factorize_square_with_faer<T: MatrixLuciScalar + faer::traits::ComplexField>(
+    /// Returns the selection together with the raw pivot count the backend reported, not a count
+    /// clamped to the cap. That number is the evidence a cap stops the elimination instead of
+    /// factoring to full rank and truncating afterwards: a bounded run reports the cap plus the one
+    /// extra pivot asked for, not `n`. Clamping it here would make the two indistinguishable from
+    /// the outside.
+    fn factorize_square_with_backend<T: MatrixLuciScalar + CappedFullPivLuScalar>(
         data: &[T],
         n: usize,
         options: &PivotKernelOptions,
@@ -156,51 +153,28 @@ impl DenseLuKernel {
         }
 
         let cap = options.max_bond_dim.min(n);
-        // One pivot past the cap is what `compute_pivot_errors` reads as the residual
-        // (`diag_abs[rank]`), so the value comes from faer's own selection instead of a guess about
-        // its criterion: the search maximises `abs1` (`|re| + |im|` for complex), and for a tiny
-        // trailing block it does not answer the block's largest modulus either - `diag(10, 3,
-        // 2.5 + 2.5i)` capped at 1 picks 3, not the 3.53 complex entry nor its larger `abs1`. One
-        // extra elimination step costs `O((n - cap)^2)`.
+        // One pivot past the cap is the residual `compute_pivot_errors` reads (`diag_abs[rank]`). A
+        // cap at or above `n` asks for no bound at all. One extra elimination step costs
+        // `O((n - cap)^2)`.
         let ask = if cap < n { cap + 1 } else { cap };
-        let params = FullPivLuParams {
-            // A `max_rank` at or above `n` still asks faer to reveal the rank it stopped at, which is
-            // how the subnormal stop below becomes visible instead of being reported as `n`.
-            max_rank: (cap < n).then_some(ask),
-            ..<FullPivLuParams as Auto<T>>::auto()
-        };
-        let mut lu = faer::Mat::<T>::from_fn(n, n, |i, j| data[i + n * j]);
-        let (mut row_perm, mut row_perm_inv) = (vec![0usize; n], vec![0usize; n]);
-        let (mut col_perm, mut col_perm_inv) = (vec![0usize; n], vec![0usize; n]);
-        let mut scratch = MemBuffer::new(faer_flu::lu_in_place_scratch::<usize, T>(
-            n,
-            n,
-            Par::Seq.shape(),
-            params.into(),
-        ));
-        let (info, _, _) = faer_flu::lu_in_place(
-            lu.as_mut(),
-            &mut row_perm,
-            &mut row_perm_inv,
-            &mut col_perm,
-            &mut col_perm_inv,
-            Par::Seq,
-            MemStack::new(&mut scratch),
-            params.into(),
-        );
-        let pivots = info.rank.min(n);
+        let lu = capped_full_piv_lu(
+            Matrix::from_col_major_vec(n, n, data.to_vec()),
+            (cap < n).then_some(ask),
+        )
+        .map_err(|err| MatrixLuciError::InvalidArgument {
+            message: format!("dense capped full-pivoting LU failed: {err}"),
+        })?;
+        let pivots = lu.rank();
 
-        let mut diag_abs = (0..pivots)
-            .map(|i| lu[(i, i)].abs_val())
+        // The pivots taken, and - when the elimination stopped for its own reason (a zero or
+        // subnormal Schur complement) before it could reveal the extra pivot - the trailing diagonal
+        // it left un-eliminated. That stop predates the rank cap, so the untruncated run reads the
+        // same entries; reading them keeps the subnormal contract the residual shortcut would change.
+        let read = if pivots < ask { n } else { pivots };
+        let diag_abs = lu.diagonal()[..read]
+            .iter()
+            .map(|value| value.abs_val())
             .collect::<Vec<_>>();
-        if pivots < ask {
-            // faer stopped for its own reason - a zero or subnormal Schur complement - before it
-            // could reveal the extra pivot, and that stop predates the rank cap: the untruncated
-            // run reports `rank = n`, leaves the trailing block un-eliminated, and reading its
-            // diagonal is what the previous path did. Reproducing that diagonal keeps the
-            // subnormal contract, which the residual shortcut above would change.
-            diag_abs.extend((pivots..n).map(|i| lu[(i, i)].abs_val()));
-        }
         if diag_abs.iter().any(|value| !value.is_finite()) {
             return Err(MatrixLuciError::NaNEncountered {
                 matrix: "dense diagonal",
@@ -211,13 +185,13 @@ impl DenseLuKernel {
         let rank = pivot_errors.len().saturating_sub(1);
         Ok((
             PivotSelectionCore {
-                row_indices: row_perm[..rank].to_vec(),
-                col_indices: col_perm[..rank].to_vec(),
+                row_indices: lu.row_perm()[..rank].to_vec(),
+                col_indices: lu.col_perm()[..rank].to_vec(),
                 pivot_errors,
                 rank,
             },
-            // Raw `info.rank`: the cap plus the extra pivot asked for above when the cap binds,
-            // and faer's own stop when it stopped first.
+            // Raw count: the cap plus the extra pivot asked for above when the cap binds, and the
+            // backend's own stop when it stopped first.
             pivots,
         ))
     }
@@ -235,7 +209,7 @@ macro_rules! impl_dense_kernel {
                     let nrows = source.nrows();
                     let ncols = source.ncols();
                     if nrows == ncols {
-                        DenseLuKernel::factorize_square_with_faer(data, nrows, options)
+                        DenseLuKernel::factorize_square_with_backend(data, nrows, options)
                             .map(|(selection, _)| selection)
                     } else {
                         DenseLuKernel::factorize_with_rrlu(data, nrows, ncols, options)
