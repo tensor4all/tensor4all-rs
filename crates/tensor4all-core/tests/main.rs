@@ -33,6 +33,7 @@ mod randomized_factorization;
 mod resident_rrqr;
 mod runtime_free_indexed_ops;
 mod send_sync;
+mod session_ci_factorize;
 mod session_tracked_refusals;
 mod small_pivots;
 mod tensor_any_scalar;
