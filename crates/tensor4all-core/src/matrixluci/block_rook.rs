@@ -19,9 +19,17 @@ use tensor4all_tensorbackend::{mat_mul, solve_matrix, Matrix};
 /// An exactly zero starting residual column is skipped. Certifying an all-zero
 /// residual may inspect every remaining entry, one column at a time.
 ///
+/// A rook pivot is the largest entry of its own residual row and column only,
+/// so its magnitude can be far below the maximum of the remaining residual.
+/// Before the factorization stops (tolerance or undividable pivot), the
+/// remaining residual block is therefore scanned exactly. If its maximum still
+/// passes the stopping test the factorization stops; otherwise that maximum
+/// becomes the next pivot and the rook search continues.
+///
 /// The trailing `pivot_errors` entry is the exact maximum magnitude of the
-/// remaining residual block, which is the dense kernel's meaning. Measuring it
-/// costs one evaluation of every unselected entry, again one column at a time.
+/// remaining residual block, which is the dense kernel's meaning, for every
+/// way the factorization ends. Each scan costs one evaluation of every
+/// unselected entry, again one column at a time.
 #[derive(Default)]
 pub struct LazyBlockRookKernel;
 
@@ -272,6 +280,30 @@ fn residual_max_abs<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     selected_rows: &[usize],
     selected_cols: &[usize],
 ) -> Result<f64> {
+    residual_argmax_abs(
+        source,
+        remaining_rows,
+        remaining_cols,
+        selected_rows,
+        selected_cols,
+    )
+    .map(|(_, _, value)| value)
+}
+
+/// Location (as source row and column indices) and exact magnitude of the
+/// largest entry of the residual block over the unselected rows and columns.
+///
+/// Returns [`MatrixLuciError::NaNEncountered`] if any residual entry is not
+/// finite, so a NaN can never be mistaken for a small residual. For an
+/// all-zero block the location is the first remaining entry and the
+/// magnitude is `0.0`.
+fn residual_argmax_abs<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
+    source: &S,
+    remaining_rows: &[usize],
+    remaining_cols: &[usize],
+    selected_rows: &[usize],
+    selected_cols: &[usize],
+) -> Result<(usize, usize, f64)> {
     let (pivot, a_rj) = if selected_rows.is_empty() {
         (Matrix::zeros(0, 0), Matrix::zeros(remaining_rows.len(), 0))
     } else {
@@ -281,18 +313,20 @@ fn residual_max_abs<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
         )
     };
     let chunk_width = selected_rows.len().max(1);
-    let mut max_abs = 0.0f64;
-    for chunk in remaining_cols.chunks(chunk_width) {
+    let mut best = (0usize, 0usize, 0.0f64);
+    for (chunk_idx, chunk) in remaining_cols.chunks(chunk_width).enumerate() {
         let residual = residual_from(source, remaining_rows, chunk, selected_rows, &pivot, &a_rj)?;
-        let (_, _, value) = argmax_abs(&residual);
+        let (row_pos, col_pos, value) = argmax_abs(&residual);
         if !value.is_finite() {
             return Err(MatrixLuciError::NaNEncountered {
                 matrix: "rook residual",
             });
         }
-        max_abs = max_abs.max(value);
+        if value > best.2 {
+            best = (row_pos, chunk_idx * chunk_width + col_pos, value);
+        }
     }
-    Ok(max_abs)
+    Ok((remaining_rows[best.0], remaining_cols[best.1], best.2))
 }
 
 fn factorize_lazy<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
@@ -325,31 +359,48 @@ fn factorize_lazy<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
             break;
         }
 
-        let (pivot_row, pivot_col, pivot_abs) = rook_pivot(
+        let (mut pivot_row, mut pivot_col, mut pivot_abs) = rook_pivot(
             source,
             &remaining_rows,
             &remaining_cols,
             &selected_rows,
             &selected_cols,
         )?;
-        last_error = pivot_abs;
-
-        if !selected_rows.is_empty()
-            && (pivot_abs < options.rel_tol * max_error || pivot_abs < options.abs_tol)
-        {
-            break;
-        }
-
+        // Checked before the stopping test: NaN compares false against every
+        // threshold and must not be read as a converged residual.
         if !pivot_abs.is_finite() {
             return Err(MatrixLuciError::NaNEncountered {
                 matrix: "rook residual",
             });
         }
-        if pivot_is_undividable::<T>(pivot_abs) {
-            if selected_rows.is_empty() {
-                last_error = pivot_abs;
-            }
+
+        let stops = |value: f64, n_selected: usize| {
+            (n_selected > 0 && (value < options.rel_tol * max_error || value < options.abs_tol))
+                || pivot_is_undividable::<T>(value)
+        };
+        if pivot_abs == 0.0 {
+            // `rook_pivot` returns an exact zero only after it has found
+            // every remaining column to be zero, which already certifies it.
+            last_error = 0.0;
             break;
+        }
+        if stops(pivot_abs, selected_rows.len()) {
+            // INVARIANT: the factorization only ends on the exact maximum of
+            // the remaining residual. A rook pivot is a local maximum of its
+            // own row and column and is not a bound for the rest of the block
+            // (tensor4all-rs#1256).
+            let (row, col, value) = residual_argmax_abs(
+                source,
+                &remaining_rows,
+                &remaining_cols,
+                &selected_rows,
+                &selected_cols,
+            )?;
+            if stops(value, selected_rows.len()) {
+                last_error = value;
+                break;
+            }
+            (pivot_row, pivot_col, pivot_abs) = (row, col, value);
         }
 
         max_error = max_error.max(pivot_abs);
