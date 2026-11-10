@@ -451,26 +451,128 @@ fn square_kernel_keeps_the_previous_selection_bit_for_bit() {
     }
 }
 
+/// The score the backend's complete-pivoting search maximises over a complex block. It depends on
+/// the SIMD path faer dispatches to at run time and both are the contract (see
+/// `tensor4all_tensorbackend::capped_full_piv_lu`; its tests pin the path against CPU detection).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ComplexPivotScore {
+    /// Vector dispatch: `max(|re|, |im|)`.
+    LargerPart,
+    /// Scalar dispatch: `|re| + |im|`.
+    PartSum,
+}
+
+impl ComplexPivotScore {
+    const BOTH: [Self; 2] = [Self::LargerPart, Self::PartSum];
+
+    fn of(self, value: Complex64) -> f64 {
+        match self {
+            Self::LargerPart => value.re.abs().max(value.im.abs()),
+            Self::PartSum => value.re.abs() + value.im.abs(),
+        }
+    }
+
+    /// The score this host's backend runs, probed on `diag(3, 2.5 + 2.5i)`: the larger part takes
+    /// `3` (3 > 2.5) first, the part sum `2.5 + 2.5i` (5 > 3).
+    fn of_this_host() -> Self {
+        let probe = tensor4all_tensorbackend::capped_full_piv_lu(
+            Matrix::from_col_major_vec(
+                2,
+                2,
+                vec![
+                    Complex64::new(3.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(0.0, 0.0),
+                    Complex64::new(2.5, 2.5),
+                ],
+            ),
+            Some(1),
+        )
+        .unwrap();
+        if probe.diagonal()[0] == Complex64::new(3.0, 0.0) {
+            Self::LargerPart
+        } else {
+            assert_eq!(probe.diagonal()[0], Complex64::new(2.5, 2.5));
+            Self::PartSum
+        }
+    }
+}
+
+/// Reference model of complete pivoting on a diagonal matrix under `score`: the pivots are the
+/// diagonal in descending score, so the kernel's `pivot_errors` are their moduli in that order,
+/// then `0.0` for the exhausted block (uncapped) or the next pivot's modulus as the residual
+/// (capped at `cap`).
+fn diagonal_pivot_errors(diag: &[Complex64], score: ComplexPivotScore, cap: usize) -> Vec<f64> {
+    let mut order = diag.to_vec();
+    order.sort_by(|a, b| score.of(*b).total_cmp(&score.of(*a)));
+    let mut errors = order.iter().map(|value| value.norm()).collect::<Vec<_>>();
+    errors.push(0.0);
+    errors.truncate(cap + 1);
+    errors
+}
+
+/// Both arms of the reference model, stated as literals on `diag(10, 3, 2.5 + 2.5i)`, so neither
+/// score is the reference the other is checked against. This runs on every host; only the arm the
+/// host dispatches to is also compared with the kernel below.
+#[test]
+fn the_diagonal_reference_model_orders_pivots_by_each_score() {
+    let diag = [
+        Complex64::new(10.0, 0.0),
+        Complex64::new(3.0, 0.0),
+        Complex64::new(2.5, 2.5),
+    ];
+    let modulus = Complex64::new(2.5, 2.5).norm();
+    assert_eq!(modulus, 3.5355339059327378);
+    assert_eq!(
+        diagonal_pivot_errors(&diag, ComplexPivotScore::LargerPart, 3),
+        vec![10.0, 3.0, modulus, 0.0]
+    );
+    assert_eq!(
+        diagonal_pivot_errors(&diag, ComplexPivotScore::PartSum, 3),
+        vec![10.0, modulus, 3.0, 0.0]
+    );
+    assert_eq!(
+        diagonal_pivot_errors(&diag, ComplexPivotScore::LargerPart, 1),
+        vec![10.0, 3.0]
+    );
+    assert_eq!(
+        diagonal_pivot_errors(&diag, ComplexPivotScore::PartSum, 1),
+        vec![10.0, modulus]
+    );
+    for score in ComplexPivotScore::BOTH {
+        assert_eq!(
+            diagonal_pivot_errors(&diag, score, 2).len(),
+            3,
+            "{score:?}: two pivots and a residual"
+        );
+    }
+}
+
 /// The residual a capped run reports is the pivot the untruncated factorization would take next,
-/// for a complex matrix whose trailing block disagrees with every hand-derived rule: of
-/// `3` and `2.5 + 2.5i` the largest modulus (`3.54`) and the largest `abs1` (`5`) both name the
-/// complex entry, and faer picks `3`.
+/// for a complex matrix whose second pivot depends on the dispatched score: of `3` and
+/// `2.5 + 2.5i` the larger part names `3` and the part sum (like the modulus, `3.54`) names the
+/// complex entry. The expectation is the reference model under the score this host runs.
 #[test]
 fn a_capped_complex_run_reports_the_next_pivot_faer_would_take() {
-    let data = [
+    let score = ComplexPivotScore::of_this_host();
+    let diag = [
         Complex64::new(10.0, 0.0),
-        Complex64::new(0.0, 0.0),
-        Complex64::new(0.0, 0.0),
-        Complex64::new(0.0, 0.0),
         Complex64::new(3.0, 0.0),
-        Complex64::new(0.0, 0.0),
-        Complex64::new(0.0, 0.0),
-        Complex64::new(0.0, 0.0),
         Complex64::new(2.5, 2.5),
+    ];
+    let zero = Complex64::new(0.0, 0.0);
+    let data = [
+        diag[0], zero, zero, //
+        zero, diag[1], zero, //
+        zero, zero, diag[2],
     ];
     let uncapped = PivotKernelOptions::no_truncation();
     let (full, _) = square_selection(&data, 3, &uncapped);
-    assert_eq!(full.pivot_errors, vec![10.0, 3.0, 3.5355339059327378, 0.0]);
+    assert_eq!(
+        full.pivot_errors,
+        diagonal_pivot_errors(&diag, score, 3),
+        "{score:?}"
+    );
 
     for cap in [1usize, 2] {
         let options = PivotKernelOptions {
@@ -488,18 +590,15 @@ fn a_capped_complex_run_reports_the_next_pivot_faer_would_take() {
             &previous_square_selection(&data, 3, &options),
             &format!("c64 cap={cap}"),
         );
+        // The residual is the next diagonal of the untruncated run under the same score, not the
+        // trailing block's largest modulus.
+        assert_eq!(
+            selection.pivot_errors,
+            diagonal_pivot_errors(&diag, score, cap),
+            "{score:?} cap={cap}"
+        );
+        assert_eq!(selection.pivot_errors[cap], full.pivot_errors[cap]);
     }
-
-    // The value the residual must carry, stated directly: the next diagonal of the untruncated
-    // run, which is `3` and not the trailing block's largest modulus.
-    let options = PivotKernelOptions {
-        max_bond_dim: 1,
-        ..uncapped
-    };
-    assert_eq!(
-        square_selection(&data, 3, &options).0.pivot_errors,
-        vec![10.0, 3.0]
-    );
 }
 
 /// A subnormal trailing block stops faer before the rank cap does, so the capped run must report
