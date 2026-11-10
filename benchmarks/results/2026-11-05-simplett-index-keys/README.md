@@ -151,17 +151,20 @@ identical, runs the fixed 120-second idle check, then times the
 `cache_keys` group in the three rotated arm orders with the thread environment
 above exported to every run (its effective thread count is not observed). It
 records the toolchain, host, binary hashes, load and thermal observations, raw
-Criterion samples, and applies the gates. The archive
-is written before the cell-set check and in a `finally`, so a rejected suite keeps
+Criterion samples, and applies the gates. Each record is appended before its arm
+is launched, so the archive
+is written before the cell-set check and in a `finally`, and a rejected suite keeps
 the run records that diagnosis needs, including the record of an arm whose own
-subprocess exited non-zero (that record carries its load and thermal observations
-and no cells):
+subprocess exited non-zero or could not be started at all (that record carries
+its load and thermal observations, a `status`, and no cells):
 
 ```sh
 python3 benchmarks/rust/run_simplett_index_key_pairs.py --output <new-directory>
 ```
 
-On Linux, `--cpu N` pins each timed run to one CPU. The driver evaluates the
+On Linux, `--cpu N` pins each timed run to one CPU; an arm whose `preexec_fn`
+cannot apply it is recorded as `launch-failed` and the remaining arms still run.
+The driver evaluates the
 CI-width gate on the two-sided half-width; the experiments above used the
 upward half-width. "Batch" routes are `cold_fixed`, `warm_fixed` and
 `warm_auto`; "warm hit" routes are `left_hit` and `right_hit`. A failed idle
@@ -175,7 +178,8 @@ INCONCLUSIVE, so throttling is distinguishable from host load; a narrower
 gate, and on this platform `thermal_snapshot` reports `unavailable on this
 platform` for anything other than macOS.
 `benchmarks/rust/test_run_simplett_index_key_pairs.py` covers all three cases,
-plus a failed arm that is archived with its observations and still refused. It
+plus a failed arm and an unstartable arm that are archived with their
+observations and still refused. It
 stubs the git and host seams, so it needs neither the pinned revisions nor this
 host to run.
 

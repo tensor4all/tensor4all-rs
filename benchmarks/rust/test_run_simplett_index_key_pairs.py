@@ -33,6 +33,13 @@ HARNESS_BYTES = b"harness source"
 OBSERVATION = {"time": 0.0, "loadavg": [0.0, 0.0, 0.0], "thermal": "CPU_Speed_Limit = 100"}
 HOST = {"platform": "test", "machine": "test", "logical_cpus": 1, "python": "3"}
 REAL_RUN = subprocess.run
+# What CPython raises when `preexec_fn` raises; the original error is not chained.
+LAUNCH_ERROR = subprocess.SubprocessError("Exception occurred in preexec_fn.")
+
+
+def launch_failure(*_args, **_kwargs):
+    """Fail the way a `preexec_fn` that cannot apply the requested CPU fails."""
+    raise LAUNCH_ERROR
 
 
 def thermal(speed_limit):
@@ -93,12 +100,12 @@ def fake_read_cells(_criterion_home, baseline):
                                    "ci95_high_ns": mean_ns * 1.01, "samples": {"arm": arm}}}
 
 
-def run_main(tmp, build_arm=fake_build_arm, **overrides):
+def run_main(tmp, build_arm=fake_build_arm, extra_argv=(), subprocess_run=fake_subprocess_run, **overrides):
     """Drive `main` against a temporary output directory with the seams stubbed."""
     out = pathlib.Path(tmp) / "run"
     # `--repo` points at a directory without history: the git seam is stubbed, so
     # neither a shallow checkout nor a different host can fail this test.
-    argv = ["driver", "--output", str(out), "--repo", str(pathlib.Path(tmp) / "no-checkout")]
+    argv = ["driver", "--output", str(out), "--repo", str(pathlib.Path(tmp) / "no-checkout"), *extra_argv]
     patches = {
         "HARNESS_SHA256": hashlib.sha256(HARNESS_BYTES).hexdigest(),
         "build_arm": build_arm,
@@ -107,7 +114,7 @@ def run_main(tmp, build_arm=fake_build_arm, **overrides):
         "host_description": lambda: HOST,
     }
     patches.update(overrides)
-    with mock.patch.object(subprocess, "run", fake_subprocess_run), \
+    with mock.patch.object(subprocess, "run", subprocess_run), \
             mock.patch.object(sys, "argv", argv):
         with contextlib.ExitStack() as stack:
             for name, value in patches.items():
@@ -152,7 +159,7 @@ class EvidenceArchiveTests(unittest.TestCase):
 
         def replay(_binary, _arm, _round, _out, _cpu, _filter, sink=None):
             """Stand in for `run_arm`, which appends its own record before it can fail."""
-            record = pending.pop(0)
+            record = dict(pending.pop(0), status="ok")
             sink.append(record)
             return record
 
@@ -208,6 +215,63 @@ class EvidenceArchiveTests(unittest.TestCase):
         self.assertNotIn("cells", failed, "unreadable cells must not be archived as measurements")
         self.assertIn("Expecting value", failed["cells_error"], "the archive says why the cells are missing")
         self.assertEqual(failed["after"]["loadavg"], [0.0, 0.0, 0.0])
+        self.assertIn("CPU_Speed_Limit = 100", failed["before"]["thermal"])
+
+
+class LaunchFailureTests(unittest.TestCase):
+    """An arm whose `preexec_fn` cannot apply `--cpu` never execs its binary."""
+
+    def test_launch_failure_is_archived_as_a_missing_measurement(self):
+        # A `--cpu` the host cannot apply raises inside `preexec_fn`, before the arm
+        # execs: the attempt must still be readable from the archive, without cells.
+        records = []
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(subprocess, "run", launch_failure), \
+                mock.patch.object(driver, "observe", lambda: OBSERVATION):
+            try:
+                driver.run_arm(pathlib.Path("/bin/true"), "final", 1, pathlib.Path(tmp), 100,
+                               "cache_keys", records)
+            finally:
+                archived = [dict(record) for record in records]
+
+        self.assertEqual(len(archived), 1, f"a launch failure must be archived; got {archived}")
+        record = archived[0]
+        self.assertEqual((record["arm"], record["round"], record["cpu"]), ("final", 1, 100))
+        self.assertEqual(record["status"], "launch-failed")
+        self.assertIn("preexec_fn", record["exception"])
+        self.assertNotIn("cells", record, "a launch failure has no measurement")
+        self.assertIn("CPU_Speed_Limit = 100", record["before"]["thermal"],
+                      "the snapshot taken before the launch survives")
+
+    def test_a_launch_failure_does_not_stop_the_other_arms(self):
+        def launch_failure_for(arm):
+            def run(cmd, **kwargs):
+                if kwargs.get("preexec_fn") is None:
+                    return fake_subprocess_run(cmd, **kwargs)
+                if pathlib.Path(cmd[0]).name == arm:
+                    raise LAUNCH_ERROR
+                # The other arms would hit the same unappliable `--cpu` for real.
+                return REAL_RUN(cmd, **{k: v for k, v in kwargs.items() if k != "preexec_fn"})
+            return run
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out, err = run_main(tmp, extra_argv=["--cpu", "100"],
+                                subprocess_run=launch_failure_for("final"), read_cells=fake_read_cells)
+            archived = json.loads(gzip.open(out / "experiment.json.gz", "rt").read())
+
+        self.assertFalse((out / "summary.json").exists(), "a missing measurement must not summarize")
+        self.assertIn("different or empty cell sets", str(err.code))
+        statuses = [(r["arm"], r["round"], r["status"]) for r in archived["runs"]]
+        self.assertEqual(len(statuses), len(driver.ROUND_ORDERS) * len(driver.ARMS), "every round is still attempted")
+        self.assertEqual([s for s in statuses if s[2] == "launch-failed"],
+                         [("final", 1, "launch-failed"), ("final", 2, "launch-failed"),
+                          ("final", 3, "launch-failed")])
+        measured = [r for r in archived["runs"] if r["status"] == "ok"]
+        self.assertEqual(len(measured), 6, "the arms that did launch keep their measurements")
+        self.assertTrue(all(r["cells"] for r in measured))
+        failed = next(r for r in archived["runs"] if r["status"] == "launch-failed")
+        self.assertNotIn("cells", failed)
+        self.assertIn("preexec_fn", failed["exception"])
         self.assertIn("CPU_Speed_Limit = 100", failed["before"]["thermal"])
 
 

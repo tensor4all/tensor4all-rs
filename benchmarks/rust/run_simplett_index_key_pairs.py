@@ -199,36 +199,44 @@ def read_cells(criterion_home, baseline):
 
 
 def run_arm(binary, arm, round_no, out, cpu, bench_filter, sink=None):
-    """Time one arm, appending its observations to `sink` before anything that can fail."""
+    """Time one arm, recording the attempt before anything that can fail."""
     label = f"{arm}-r{round_no}"
     criterion_home = out / "criterion" / label
     env = dict(os.environ, **THREAD_ENV, CRITERION_HOME=str(criterion_home))
     preexec = None
     if cpu is not None:
         preexec = lambda: os.sched_setaffinity(0, {cpu})  # noqa: E731
-    before = observe()
+    # The record exists before the launch, so an arm that never starts is readable
+    # from the archive together with the host observation taken before it.
+    run_record = {"round": round_no, "arm": arm, "cpu": cpu, "status": "running", "before": observe()}
+    if sink is not None:
+        sink.append(run_record)
     start = time.monotonic()
-    proc = subprocess.run(
-        [str(binary), bench_filter, "--bench", "--noplot", "--save-baseline", label],
-        env=env, text=True, capture_output=True, preexec_fn=preexec,
-    )
+    try:
+        proc = subprocess.run(
+            [str(binary), bench_filter, "--bench", "--noplot", "--save-baseline", label],
+            env=env, text=True, capture_output=True, preexec_fn=preexec,
+        )
+    except (OSError, subprocess.SubprocessError) as err:
+        # A `preexec_fn` that cannot apply `--cpu` fails here. The arm becomes a
+        # missing measurement instead of costing the other arms their runs.
+        run_record.update(status="launch-failed", exception=repr(err), after=observe(),
+                          elapsed_seconds=time.monotonic() - start)
+        return run_record
     elapsed = time.monotonic() - start
     after = observe()
     (out / "logs").mkdir(exist_ok=True)
     (out / "logs" / f"{label}.txt").write_text(proc.stdout + "\n" + proc.stderr)
-    run_record = {
-        "round": round_no, "arm": arm, "exit_code": proc.returncode,
-        "elapsed_seconds": elapsed, "before": before, "after": after,
-    }
-    if sink is not None:
-        # Appended before the cells are read: unreadable Criterion output must not
-        # cost this arm its load and thermal observations.
-        sink.append(run_record)
+    # Appended before the cells are read: unreadable Criterion output must not
+    # cost this arm its load and thermal observations.
+    run_record.update(status="ok" if proc.returncode == 0 else "exit-nonzero", exit_code=proc.returncode,
+                      elapsed_seconds=elapsed, after=after)
     if proc.returncode != 0:
         raise SystemExit(f"{label} exited with {proc.returncode}; see logs/{label}.txt")
     try:
         run_record["cells"] = read_cells(criterion_home, label)
     except (OSError, ValueError, KeyError, TypeError) as err:
+        run_record["status"] = "cells-unreadable"
         run_record["cells_error"] = f"{type(err).__name__}: {err}"
         raise SystemExit(f"{label} wrote cells that could not be read ({err}); see logs/{label}.txt")
     return run_record
@@ -341,7 +349,7 @@ def write_evidence(out, protocol, runs):
 
 def require_same_cells(out, runs):
     """Return the shared cell count, or refuse the experiment after its evidence is written."""
-    cell_sets = {frozenset(r["cells"]) for r in runs}
+    cell_sets = {frozenset(r.get("cells", {})) for r in runs}
     if len(cell_sets) != 1 or not next(iter(cell_sets)):
         raise SystemExit(
             f"runs measured different or empty cell sets; their load and thermal observations are in "
@@ -423,11 +431,11 @@ def main():
         for round_no, order in enumerate(ROUND_ORDERS, start=1):
             for arm in order:
                 record = run_arm(binaries[arm], arm, round_no, out, args.cpu, args.filter, runs)
-                print(f"round {round_no} {arm}: {len(record['cells'])} cells, "
+                print(f"round {round_no} {arm}: {record['status']} with {len(record.get('cells', {}))} cells, "
                       f"load {record['before']['loadavg'][0]:.2f} -> {record['after']['loadavg'][0]:.2f}", flush=True)
     finally:
-        # A refused run keeps what it measured: a failed arm has no cells, so the
-        # summarizing checks below stay out of this path.
+        # A refused run keeps what it measured: a failed or unstartable arm has no
+        # cells, so the summarizing checks below stay out of this path.
         write_evidence(out, protocol, runs)
 
     cell_count = require_same_cells(out, runs)
