@@ -1,6 +1,9 @@
 //! Regression for tensor4all-rs#1256: with `PivotSearchStrategy::Rook`, the
-//! bond error reported by `crossinterpolate2` must be the true maximum error of
-//! the returned interpolant, not the magnitude of the last rook pivot.
+//! error reported by `crossinterpolate2` is the 2-site bond error before the
+//! final 1-site cleanup sweep, no longer the magnitude of the last rook pivot.
+//! The returned interpolant's true maximum error is checked against that bond
+//! error plus a `tolerance` allowance for the cleanup sweep, which `errors`
+//! does not record, and against `tolerance` itself.
 use tensor4all_simplett::AbstractTensorTrain;
 use tensor4all_tensorci::{crossinterpolate2, PivotSearchStrategy, TCI2Options, TCI2Termination};
 
@@ -12,7 +15,7 @@ fn entry(i: usize, j: usize) -> f64 {
 }
 
 #[test]
-fn rook_reported_error_bounds_the_true_error_on_a_smooth_ridge() {
+fn rook_true_error_within_reported_bond_error_plus_cleanup_allowance_on_a_smooth_ridge() {
     let tol = 1e-8;
     let amax = (0..N)
         .flat_map(|i| (0..N).map(move |j| entry(i, j).abs()))
