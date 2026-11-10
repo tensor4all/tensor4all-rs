@@ -49,6 +49,11 @@ name = "density_sum_benchmark"
 path = "density_sum_benchmark.rs"
 
 [[example]]
+name = "sum_benchmark"
+path = "sum_benchmark.rs"
+test = true
+
+[[example]]
 name = "benchmark_cached_batch_memory"
 path = "benchmark_cached_batch_memory.rs"
 
