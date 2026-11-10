@@ -112,3 +112,68 @@ fn factorization_canonicalization_and_norm_complete_while_the_global_backend_is_
         "session norm {norm} does not match the dense reference {expected_norm}"
     );
 }
+
+/// CI canonicalization runs on the session too: on a branched tree it gives
+/// the compatibility route's tensors bit for bit, and it completes while the
+/// process-global backend is borrowed on this thread (any global entry would
+/// be refused as a re-entry).
+#[test]
+fn ci_canonicalization_on_a_session_matches_the_compatibility_route() {
+    use tensor4all_treetn::{CanonicalForm, TreeTN};
+
+    // A star 0 - {1, 2, 3} with bond dimension 2 and one site per node.
+    let sites: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(3)).collect();
+    let bonds: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    let fill = |legs: Vec<DynIndex>, salt: usize| {
+        let count: usize = legs.iter().map(IndexLike::dim).product();
+        let values: Vec<f64> = (0..count)
+            .map(|flat| (((flat + salt) * 7 + 3) % 13) as f64 / 6.0 - 1.0)
+            .collect();
+        IdxTensor::from_dense(legs, values).expect("tensor")
+    };
+    let mut tensors = vec![fill(
+        vec![
+            sites[0].clone(),
+            bonds[0].clone(),
+            bonds[1].clone(),
+            bonds[2].clone(),
+        ],
+        0,
+    )];
+    for leaf in 1..4 {
+        tensors.push(fill(
+            vec![bonds[leaf - 1].clone(), sites[leaf].clone()],
+            leaf,
+        ));
+    }
+    let tree = TreeTN::<IdxTensor, usize>::from_tensors(tensors, vec![0, 1, 2, 3]).expect("tree");
+    let options = CanonicalizationOptions::default().with_form(CanonicalForm::CI);
+
+    let mut global = tree.clone();
+    global
+        .canonicalize_mut([0usize], options.clone())
+        .expect("compatibility CI canonicalization");
+
+    let mut backend = CpuBackend::with_threads(1).expect("backend");
+    let session_tree = with_default_backend(|_global| {
+        let mut session = Session::new(backend.engine_mut());
+        let mut session_tree = tree.clone();
+        session_tree
+            .canonicalize_mut_on_session([0usize], options.clone(), &mut session)
+            .expect("the CI canonicalization must not reach the borrowed global backend");
+        session_tree
+    });
+
+    assert_eq!(session_tree.canonical_form(), Some(CanonicalForm::CI));
+    for node in 0..4usize {
+        let tensor = |tree: &TreeTN<IdxTensor, usize>| {
+            let index = tree.node_index(&node).expect("node");
+            let tensor = tree.tensor(index).expect("tensor");
+            (
+                tensor.dims(),
+                tensor.dense_host_values::<f64>().expect("host values"),
+            )
+        };
+        assert_eq!(tensor(&session_tree), tensor(&global), "node {node}");
+    }
+}
