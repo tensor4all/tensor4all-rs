@@ -143,10 +143,13 @@ representations, same typed refusals, same deferred-error precedence, same uniqu
 rank-zero and the general case. The scalar is published from the concrete value through the same
 `AnyScalar::from_published_*` route as slice 2, never through `AnyScalar::from_tensor`.
 
-**A zero-length axis is a documented non-parity**: the compatibility route accumulates from zero over the
-empty payload and answers `0`, while the session's reduction rejects a zero-length axis. The session keeps
-its backend's refusal rather than special-casing it, and a regression test covers it (including that the
-held session survives that session-side failure).
+**A zero-length axis folds to the operation's identity**, in both routes: the compatibility route
+accumulates from zero over the empty payload and answers `0`, and the session's reduction answers the same
+`0`, because the backend treats an empty reduction domain as the fold's unit rather than as invalid input
+(tenferro #2453, reached here by the tenferro v0.10 pin). The unit is the fold's own (`sum` `0`, `prod`
+`1`); a reduction with no finite unit (`max`/`min`) keeps the backend's typed refusal, which this seam never
+reaches because it serves `sum` only. The regression test covers the identity, the parity, and that the
+held session survives it.
 
 **The dtype domain is the shared one: `f64` and `c64`.** `f32`/`c32` are refused by the same adaptation the
 contraction and inner-product slices use. The compatibility `sum` serves them (it routes through

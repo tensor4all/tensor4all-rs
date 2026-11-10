@@ -318,7 +318,11 @@ pub(crate) fn normalize_payload_read_for_roots<'a>(
         return Ok((payload, roots.to_vec()));
     }
 
-    let mut current_payload = payload.as_read().tensor_view().duplicate()?;
+    let mut current_payload = payload
+        .as_read()
+        .tensor_view()
+        .ok_or_else(|| anyhow!("external scalar kind payload has no tensor view"))?
+        .duplicate()?;
     let mut current_roots = roots.to_vec();
     while let Some((axis_a, axis_b)) = first_duplicate_pair(&current_roots) {
         let mut input_ids: Vec<usize> = (0..current_roots.len()).collect();

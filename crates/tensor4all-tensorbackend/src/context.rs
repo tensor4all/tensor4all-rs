@@ -1685,7 +1685,7 @@ impl CpuExecutionContext {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     ///
-    /// let mut trace = TraceContext::new();
+    /// let trace = TraceContext::new();
     /// let input = trace.input(ProgramInputSpec::new(DType::F64, [2_usize.into()]))?;
     /// let output = trace.add_op(CoreSemanticOp::Neg, &[input])?[0];
     /// let graph = trace.finish(&[output])?;

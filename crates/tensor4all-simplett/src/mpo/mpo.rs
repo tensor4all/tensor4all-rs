@@ -11,7 +11,7 @@ use crate::einsum_helper::{
 use crate::traits::TTScalar;
 use tenferro_tensor::TensorValue;
 use tensor4all_tensorbackend::{
-    einsum_native_tensor_reads, NativeEinsumPlan, NativeTensorReadInput,
+    einsum_native_tensor_reads, invariant_violated, NativeEinsumPlan, NativeTensorReadInput,
 };
 
 /// Matrix Product Operator representation
@@ -502,8 +502,14 @@ impl<T: TTScalar> MPO<T> {
             let prefix = environment
                 .reshape_view([bond_dim, stride])
                 .map_err(|error| backend_error(error.to_string()))?;
+            let prefix_read = prefix.tensor_read().unwrap_or_else(|| {
+                invariant_violated(
+                    "preset-typed tensor view",
+                    "a core tensor has no readable view",
+                )
+            });
             environment = plan
-                .execute_reads(&[prefix.tensor_read(), T::tensor_read(tensor.as_inner())])
+                .execute_reads(&[prefix_read, T::tensor_read(tensor.as_inner())])
                 .map(TensorValue::from_tensor)
                 .map_err(|error| backend_error(error.to_string()))?;
             stride = next_stride;
@@ -515,8 +521,13 @@ impl<T: TTScalar> MPO<T> {
             });
         }
 
-        let result = environment
-            .tensor_read()
+        let read = environment.tensor_read().unwrap_or_else(|| {
+            invariant_violated(
+                "preset-typed tensor view",
+                "a core tensor has no readable view",
+            )
+        });
+        let result = read
             .as_slice::<T>()
             .map_err(|error| backend_error(error.to_string()))?
             .to_vec();
