@@ -1,0 +1,272 @@
+[
+  {
+    "case": "cache_keys/cold_fixed/n100_chi1_batch1024",
+    "original_us": 1249.5649714003116,
+    "shared_only_us": 1282.5361526338017,
+    "final_us": 550.8476023884648,
+    "paired_ratio": 0.44641248759895213,
+    "ratio_min": 0.42226202873829166,
+    "ratio_max": 0.44926792241261126
+  },
+  {
+    "case": "cache_keys/cold_fixed/n100_chi1_batch64",
+    "original_us": 275.59554287347817,
+    "shared_only_us": 259.5953600376345,
+    "final_us": 111.10839437180707,
+    "paired_ratio": 0.40005339601659623,
+    "ratio_min": 0.39628956321877645,
+    "ratio_max": 0.456565841186921
+  },
+  {
+    "case": "cache_keys/cold_fixed/n100_chi8_batch1024",
+    "original_us": 2333.7186630330975,
+    "shared_only_us": 2401.0403558308744,
+    "final_us": 1605.4112013314757,
+    "paired_ratio": 0.6710300235487919,
+    "ratio_min": 0.6632720502192121,
+    "ratio_max": 0.6983150203370055
+  },
+  {
+    "case": "cache_keys/cold_fixed/n300_chi1_batch64",
+    "original_us": 1724.81893628572,
+    "shared_only_us": 1740.7157792689495,
+    "final_us": 675.7584717275187,
+    "paired_ratio": 0.3966359605912488,
+    "ratio_min": 0.32920546499739956,
+    "ratio_max": 0.39987366165501537
+  },
+  {
+    "case": "cache_keys/cold_fixed/n300_chi8_batch64",
+    "original_us": 2568.9811196170717,
+    "shared_only_us": 2723.3496371392266,
+    "final_us": 1393.482929100241,
+    "paired_ratio": 0.538208608826578,
+    "ratio_min": 0.5251036952030491,
+    "ratio_max": 0.5459763055898861
+  },
+  {
+    "case": "cache_keys/cold_fixed/n32_chi1_batch64",
+    "original_us": 50.50089399602322,
+    "shared_only_us": 51.193945843428764,
+    "final_us": 32.848486526508665,
+    "paired_ratio": 0.6640005911671131,
+    "ratio_min": 0.6448809490511728,
+    "ratio_max": 0.6942973685779263
+  },
+  {
+    "case": "cache_keys/left_hit/n100_chi1_batch1024",
+    "original_us": 0.2205449825931109,
+    "shared_only_us": 0.2306277949577937,
+    "final_us": 0.11944569174219569,
+    "paired_ratio": 0.535557248871314,
+    "ratio_min": 0.5113166495896412,
+    "ratio_max": 0.5443238471523881
+  },
+  {
+    "case": "cache_keys/left_hit/n100_chi1_batch64",
+    "original_us": 0.22588662002810747,
+    "shared_only_us": 0.22487570915499897,
+    "final_us": 0.12311021937101634,
+    "paired_ratio": 0.5346922440782252,
+    "ratio_min": 0.5122560276584485,
+    "ratio_max": 0.5450089047137786
+  },
+  {
+    "case": "cache_keys/left_hit/n100_chi8_batch1024",
+    "original_us": 0.23085437955295537,
+    "shared_only_us": 0.2297058743123433,
+    "final_us": 0.12320782711839062,
+    "paired_ratio": 0.5330408820893545,
+    "ratio_min": 0.5268560901683916,
+    "ratio_max": 0.5337036592373945
+  },
+  {
+    "case": "cache_keys/left_hit/n300_chi1_batch64",
+    "original_us": 0.5625730511506234,
+    "shared_only_us": 0.5896998643423169,
+    "final_us": 0.46621496004802976,
+    "paired_ratio": 0.8316999164611949,
+    "ratio_min": 0.8042835027262151,
+    "ratio_max": 0.8723847661352117
+  },
+  {
+    "case": "cache_keys/left_hit/n300_chi8_batch64",
+    "original_us": 0.5662157626232837,
+    "shared_only_us": 0.587014475229984,
+    "final_us": 0.47563353258286195,
+    "paired_ratio": 0.8598572702422996,
+    "ratio_min": 0.8041390453541155,
+    "ratio_max": 0.8989525918882197
+  },
+  {
+    "case": "cache_keys/left_hit/n32_chi1_batch64",
+    "original_us": 0.10680806266234133,
+    "shared_only_us": 0.10361892907723518,
+    "final_us": 0.05902739675821032,
+    "paired_ratio": 0.5446799162508035,
+    "ratio_min": 0.5446092277133722,
+    "ratio_max": 0.5690683532785596
+  },
+  {
+    "case": "cache_keys/right_hit/n100_chi1_batch1024",
+    "original_us": 0.2249084603867944,
+    "shared_only_us": 0.22939972071603115,
+    "final_us": 0.12041927705837671,
+    "paired_ratio": 0.5380416722661331,
+    "ratio_min": 0.5062101342821532,
+    "ratio_max": 0.5380684626153376
+  },
+  {
+    "case": "cache_keys/right_hit/n100_chi1_batch64",
+    "original_us": 0.22643016075407035,
+    "shared_only_us": 0.23555473290856785,
+    "final_us": 0.11920706812263293,
+    "paired_ratio": 0.5314881565175943,
+    "ratio_min": 0.4564899242419414,
+    "ratio_max": 0.532026956840578
+  },
+  {
+    "case": "cache_keys/right_hit/n100_chi8_batch1024",
+    "original_us": 0.22947579732805246,
+    "shared_only_us": 0.23038508133606006,
+    "final_us": 0.12223177890766566,
+    "paired_ratio": 0.5337722977484275,
+    "ratio_min": 0.5326565168566617,
+    "ratio_max": 0.5571487442720917
+  },
+  {
+    "case": "cache_keys/right_hit/n300_chi1_batch64",
+    "original_us": 0.5606121217803296,
+    "shared_only_us": 0.5651866737071277,
+    "final_us": 0.46139014604085926,
+    "paired_ratio": 0.8236875773877342,
+    "ratio_min": 0.8185569979675994,
+    "ratio_max": 0.8293827975694917
+  },
+  {
+    "case": "cache_keys/right_hit/n300_chi8_batch64",
+    "original_us": 0.5558209463963016,
+    "shared_only_us": 0.5724175710843145,
+    "final_us": 0.5055027477688705,
+    "paired_ratio": 0.8915419023460318,
+    "ratio_min": 0.8431539564320703,
+    "ratio_max": 0.9554536645043994
+  },
+  {
+    "case": "cache_keys/right_hit/n32_chi1_batch64",
+    "original_us": 0.11033135809252209,
+    "shared_only_us": 0.10551266321010558,
+    "final_us": 0.05922449194892281,
+    "paired_ratio": 0.5367874824785362,
+    "ratio_min": 0.5336293121073452,
+    "ratio_max": 0.5554365149549131
+  },
+  {
+    "case": "cache_keys/warm_auto/n100_chi1_batch1024",
+    "original_us": 451.6653971182164,
+    "shared_only_us": 546.4849706159677,
+    "final_us": 388.88877288163746,
+    "paired_ratio": 0.8493036164009302,
+    "ratio_min": 0.8114704050319642,
+    "ratio_max": 0.9086164573492778
+  },
+  {
+    "case": "cache_keys/warm_auto/n100_chi1_batch64",
+    "original_us": 33.78157971070062,
+    "shared_only_us": 39.86682892262189,
+    "final_us": 26.298882859315366,
+    "paired_ratio": 0.7784977222656333,
+    "ratio_min": 0.6083116992792541,
+    "ratio_max": 0.787893675209744
+  },
+  {
+    "case": "cache_keys/warm_auto/n100_chi8_batch1024",
+    "original_us": 442.5646632237582,
+    "shared_only_us": 563.4520488907722,
+    "final_us": 393.60586004477545,
+    "paired_ratio": 0.8851105228159365,
+    "ratio_min": 0.8810671023200899,
+    "ratio_max": 0.9114905459092691
+  },
+  {
+    "case": "cache_keys/warm_auto/n300_chi1_batch64",
+    "original_us": 145.77261145554735,
+    "shared_only_us": 170.21405745973175,
+    "final_us": 96.98012498527285,
+    "paired_ratio": 0.6593154588120114,
+    "ratio_min": 0.655064014912148,
+    "ratio_max": 0.6707618859612262
+  },
+  {
+    "case": "cache_keys/warm_auto/n300_chi8_batch64",
+    "original_us": 143.97752816840037,
+    "shared_only_us": 170.90234920231458,
+    "final_us": 95.91928822928985,
+    "paired_ratio": 0.6649808587011201,
+    "ratio_min": 0.6390759987648028,
+    "ratio_max": 0.6826414275015256
+  },
+  {
+    "case": "cache_keys/warm_auto/n32_chi1_batch64",
+    "original_us": 17.8264977950534,
+    "shared_only_us": 16.6465006323294,
+    "final_us": 11.847423430306582,
+    "paired_ratio": 0.6659844613591713,
+    "ratio_min": 0.6623321264292432,
+    "ratio_max": 0.6688475327323375
+  },
+  {
+    "case": "cache_keys/warm_fixed/n100_chi1_batch1024",
+    "original_us": 208.07775088237975,
+    "shared_only_us": 226.9675444940948,
+    "final_us": 214.2968145485321,
+    "paired_ratio": 1.037122344675647,
+    "ratio_min": 1.027166937387326,
+    "ratio_max": 1.1761831493110793
+  },
+  {
+    "case": "cache_keys/warm_fixed/n100_chi1_batch64",
+    "original_us": 18.341059221444063,
+    "shared_only_us": 18.9714755414125,
+    "final_us": 17.386782977861873,
+    "paired_ratio": 0.9354526209677506,
+    "ratio_min": 0.9300096882690697,
+    "ratio_max": 0.9501914463629226
+  },
+  {
+    "case": "cache_keys/warm_fixed/n100_chi8_batch1024",
+    "original_us": 214.46402383121065,
+    "shared_only_us": 229.28674412189488,
+    "final_us": 217.4915570980724,
+    "paired_ratio": 0.9934377981403361,
+    "ratio_min": 0.9923593058629107,
+    "ratio_max": 1.025679085389829
+  },
+  {
+    "case": "cache_keys/warm_fixed/n300_chi1_batch64",
+    "original_us": 63.47608250343999,
+    "shared_only_us": 69.90186229958287,
+    "final_us": 66.26044817921633,
+    "paired_ratio": 1.0438648001887239,
+    "ratio_min": 1.0355087155808105,
+    "ratio_max": 1.0503577222125364
+  },
+  {
+    "case": "cache_keys/warm_fixed/n300_chi8_batch64",
+    "original_us": 62.97157430628061,
+    "shared_only_us": 73.37516840705972,
+    "final_us": 67.90855658162648,
+    "paired_ratio": 1.0498671971587392,
+    "ratio_min": 1.0493622812066878,
+    "ratio_max": 1.1413699926089707
+  },
+  {
+    "case": "cache_keys/warm_fixed/n32_chi1_batch64",
+    "original_us": 8.989069395070622,
+    "shared_only_us": 8.523878052325163,
+    "final_us": 7.755448005478278,
+    "paired_ratio": 0.8610089997788453,
+    "ratio_min": 0.8435631842503353,
+    "ratio_max": 0.8983980873763812
+  }
+]
