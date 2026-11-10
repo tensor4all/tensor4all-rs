@@ -50,6 +50,7 @@ mod batch;
 pub mod branch_diagnostics;
 mod elementwise;
 mod error;
+mod exec;
 mod frames;
 mod global_guard;
 mod hadamard;
@@ -80,7 +81,8 @@ mod validate;
 pub use batch::TreeElementwiseBatch;
 pub use elementwise::{
     tree_elementwise, tree_elementwise_batched, tree_elementwise_batched_with_rng,
-    tree_elementwise_batched_with_rng_in, tree_elementwise_with_rng,
+    tree_elementwise_batched_with_rng_in, tree_elementwise_batched_with_rng_on_session,
+    tree_elementwise_with_rng,
 };
 pub use error::{Result, TreeAciError};
 pub use hadamard::hadamard_many;

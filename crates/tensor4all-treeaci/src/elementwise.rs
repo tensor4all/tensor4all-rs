@@ -4,6 +4,7 @@ use rand::SeedableRng;
 use tensor4all_core::IdxTensor;
 use tensor4all_treetn::TreeTN;
 
+use crate::exec::Exec;
 use crate::{
     schedule::{run_directional_pass, run_local_sweeps, PassDirection},
     single_site::evaluate_single_site,
@@ -93,15 +94,16 @@ where
 /// Tree elementwise ACI whose run-time execution runs in a caller-owned CPU context.
 ///
 /// The same algorithm, options, stopping rule and diagnostics as
-/// [`tree_elementwise_batched_with_rng`]; what differs is the resource the stage's session-bound work runs in. With
-/// a context, the per-edge factorizations and the candidate-matrix products run through `context` instead of the
-/// process-global CPU context. The frame contractions this crate performs itself still use their existing route,
-/// as the inventory records, and the caller's own operator is untouched.
+/// [`tree_elementwise_batched_with_rng`]. It enters one session of `context`
+/// and runs [`tree_elementwise_batched_with_rng_on_session`] on it, so every
+/// numerical step of the run executes in `context`. The operator is called
+/// while that session is held: an operator must not enter `context` itself.
 ///
 /// # Errors
 ///
 /// Returns the same errors as [`tree_elementwise_batched_with_rng`], plus
-/// [`crate::TreeAciError::Numerical`] when the caller's context refuses a factorization or a product.
+/// [`crate::TreeAciError::Numerical`] when `context` cannot open a session or
+/// refuses a numerical step.
 pub fn tree_elementwise_batched_with_rng_in<T, V, F, R>(
     operator: F,
     inputs: &[TreeTN<IdxTensor, V>],
@@ -115,8 +117,100 @@ where
     F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
     R: rand::Rng + ?Sized,
 {
+    context
+        .with_concrete_session(|session| {
+            tree_elementwise_batched_with_rng_on_session(operator, inputs, options, rng, session)
+        })
+        .map_err(|error| crate::TreeAciError::Numerical {
+            message: error.to_string(),
+        })?
+}
+
+/// Tree elementwise ACI on a caller's explicit session.
+///
+/// The same algorithm, options, stopping rule, diagnostics, and random stream
+/// as [`tree_elementwise_batched_with_rng`], with every numerical step - the
+/// frame contractions, the candidate-matrix products, the pivoted LU, the
+/// guard evaluations, and the final canonicalization - running on `session`.
+/// The result's tensors are published as compact host storage, so the result
+/// outlives the session, and the run enters no process-global or thread-local
+/// runtime. This is the entry for a caller that already holds a session, such
+/// as a worker lane of a patch driver.
+///
+/// The inputs are read through their host payloads without entering a
+/// runtime: they must be compact host storage (as session routes publish) or
+/// host-contiguous dense values.
+///
+/// # Errors
+///
+/// Returns the same errors as [`tree_elementwise_batched_with_rng`], plus
+/// [`crate::TreeAciError::Numerical`] or [`crate::TreeAciError::TreeTN`] when
+/// `session` refuses a numerical step or an input cannot be read without a
+/// runtime.
+///
+/// # Examples
+///
+/// ```
+/// use rand::SeedableRng;
+/// use tensor4all_core::{DynIndex, IdxTensor};
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// use tensor4all_treeaci::{tree_elementwise_batched_with_rng_on_session, TreeAciOptions};
+/// use tensor4all_treetn::TreeTN;
+///
+/// let (a, b) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3));
+/// let bond = DynIndex::new_dyn(1);
+/// let tree = TreeTN::from_tensors(
+///     vec![
+///         IdxTensor::from_dense(vec![a.clone(), bond.clone()], vec![1.0_f64, 2.0])?,
+///         IdxTensor::from_dense(vec![bond, b.clone()], vec![1.0, 2.0, 3.0])?,
+///     ],
+///     vec![0usize, 1],
+/// )?;
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let mut session = Session::new(backend.engine_mut());
+/// let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
+/// // Square the product network (a + 1)(b + 1) pointwise.
+/// let result = tree_elementwise_batched_with_rng_on_session::<f64, _, _, _>(
+///     |batch, output| {
+///         for (point, value) in output.iter_mut().enumerate() {
+///             *value = batch.get(0, point)?.powi(2);
+///         }
+///         Ok(())
+///     },
+///     &[tree],
+///     &TreeAciOptions::default(),
+///     &mut rng,
+///     &mut session,
+/// )?;
+/// let dense = result.tree.to_dense()?;
+/// let expected = IdxTensor::from_dense(
+///     vec![a, b],
+///     vec![1.0, 4.0, 4.0, 16.0, 9.0, 36.0],
+/// )?;
+/// assert!(dense.sub(&expected)?.maxabs()? < 1e-12);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn tree_elementwise_batched_with_rng_on_session<T, V, F, R>(
+    operator: F,
+    inputs: &[TreeTN<IdxTensor, V>],
+    options: &TreeAciOptions<V>,
+    rng: &mut R,
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+) -> Result<TreeAciResult<V>>
+where
+    T: TreeAciScalar,
+    V: TreeAciNode,
+    F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
+    R: rand::Rng + ?Sized,
+{
     let mut stream: &mut R = rng;
-    tree_elementwise_batched_erased(operator, inputs, options, &mut stream, Some(context))
+    tree_elementwise_batched_erased(
+        operator,
+        inputs,
+        options,
+        &mut stream,
+        Exec::Session(session),
+    )
 }
 
 /// Tree elementwise ACI on a caller-owned random stream.
@@ -152,7 +246,7 @@ where
     // Erase the caller's RNG type once so the run below is instantiated once
     // per scalar type instead of once per (scalar, RNG) pair.
     let mut stream: &mut R = rng;
-    tree_elementwise_batched_erased(operator, inputs, options, &mut stream, None)
+    tree_elementwise_batched_erased(operator, inputs, options, &mut stream, Exec::Global)
 }
 
 fn tree_elementwise_batched_erased<T, V, F>(
@@ -160,7 +254,7 @@ fn tree_elementwise_batched_erased<T, V, F>(
     inputs: &[TreeTN<IdxTensor, V>],
     options: &TreeAciOptions<V>,
     rng: &mut dyn rand::RngCore,
-    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    mut exec: Exec<'_, '_>,
 ) -> Result<TreeAciResult<V>>
 where
     T: TreeAciScalar,
@@ -171,10 +265,10 @@ where
     // caches. Branch before `TreeAciState::initialize`; `evaluate_single_site`
     // performs the complete public-input and initial-guess validation itself.
     if inputs.first().is_some_and(|input| input.node_count() == 1) {
-        return evaluate_single_site(inputs, options, &mut operator);
+        return evaluate_single_site(inputs, options, &mut operator, &mut exec);
     }
-    let mut state = TreeAciState::<T, V>::initialize_with_rng(inputs, options, rng)?;
-    let history = run_local_sweeps(&mut state, options, &mut operator, rng, context)?;
+    let mut state = TreeAciState::<T, V>::initialize_with_rng(inputs, options, rng, &mut exec)?;
+    let history = run_local_sweeps(&mut state, options, &mut operator, rng, &mut exec)?;
     let mut evaluated_points = history.evaluated_points;
     if history.needs_cleanup {
         let direction = if history.max_ranks.len() % 2 == 0 {
@@ -182,7 +276,8 @@ where
         } else {
             PassDirection::Reverse
         };
-        let cleanup = run_directional_pass(&mut state, options, direction, &mut operator, context)?;
+        let cleanup =
+            run_directional_pass(&mut state, options, direction, &mut operator, &mut exec)?;
         evaluated_points = evaluated_points
             .checked_add(cleanup.evaluated_points)
             .ok_or(crate::TreeAciError::SizeOverflow {
@@ -333,7 +428,7 @@ where
         inputs,
         options,
         &mut stream,
-        None,
+        Exec::Global,
     )
 }
 

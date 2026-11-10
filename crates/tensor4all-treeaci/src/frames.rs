@@ -8,6 +8,8 @@ use std::rc::Rc;
 
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_tensorbackend::Matrix;
+
+use crate::exec::Exec;
 use tensor4all_treetn::TreeTN;
 
 use crate::{
@@ -713,8 +715,9 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         inputs: &[TreeTN<IdxTensor, V>],
         problem: &PreparedTreeProblem<V>,
         arena: &SampleArena,
+        exec: &mut crate::exec::Exec<'_, '_>,
     ) -> Result<Self> {
-        Self::build_or_extend(inputs, problem, arena, None, None)
+        Self::build_or_extend(inputs, problem, arena, None, None, exec)
     }
 
     /// Extends this store to cover every sample now retained by `arena`,
@@ -735,13 +738,14 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         inputs: &[TreeTN<IdxTensor, V>],
         problem: &PreparedTreeProblem<V>,
         arena: &SampleArena,
+        exec: &mut crate::exec::Exec<'_, '_>,
     ) -> Result<Self> {
         let previous_counts = self
             .frames
             .iter()
             .map(|edges| edges.iter().map(|frame| frame.sample_count).collect())
             .collect::<Vec<Vec<_>>>();
-        self.extend_new_samples(inputs, problem, arena, &previous_counts)
+        self.extend_new_samples(inputs, problem, arena, &previous_counts, exec)
     }
 
     /// Extends the store using the explicitly supplied append-only prefix
@@ -761,6 +765,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         problem: &PreparedTreeProblem<V>,
         arena: &SampleArena,
         previous_counts: &[Vec<usize>],
+        exec: &mut crate::exec::Exec<'_, '_>,
     ) -> Result<Self> {
         if previous_counts.len() != self.frames.len()
             || inputs.len() != self.frames.len()
@@ -798,7 +803,14 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                     message: "frame extension is missing an input tensor",
                 })?;
         }
-        Self::build_or_extend(inputs, problem, arena, Some(self), Some(previous_counts))
+        Self::build_or_extend(
+            inputs,
+            problem,
+            arena,
+            Some(self),
+            Some(previous_counts),
+            exec,
+        )
     }
 
     fn build_or_extend<V: TreeAciNode>(
@@ -807,6 +819,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         arena: &SampleArena,
         existing: Option<&Self>,
         previous_counts: Option<&[Vec<usize>]>,
+        exec: &mut crate::exec::Exec<'_, '_>,
     ) -> Result<Self> {
         #[cfg(test)]
         let extension_profile = existing.is_some();
@@ -840,7 +853,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             let existing_input = existing.and_then(|store| store.frames.get(input_index));
             let cores = match existing.and_then(|store| store.cores.get(input_index)) {
                 Some(cores) => Rc::clone(cores),
-                None => Rc::new(prepare_cores::<T, V>(input, problem)?),
+                None => Rc::new(prepare_cores::<T, V>(input, problem, exec)?),
             };
             let oriented_core_cache =
                 match existing.and_then(|store| store.oriented_core_cache.get(input_index)) {
@@ -1010,7 +1023,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 if input_frames[edge].is_some() {
                     continue;
                 }
-                builder.compute_batch(edge, known_samples[edge]..sample_counts[edge])?;
+                builder.compute_batch(edge, known_samples[edge]..sample_counts[edge], exec)?;
             }
             #[cfg(test)]
             if extension_profile {
@@ -1451,6 +1464,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     /// Propagates every failure of the selected kernel, including
     /// [`TreeAciError::InternalInvariant`] for an unknown edge or input and
     /// [`TreeAciError::SizeOverflow`] on checked dimension arithmetic.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn candidate_frames_for_edge<V: TreeAciNode>(
         &self,
         inputs: &[TreeTN<IdxTensor, V>],
@@ -1459,6 +1473,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         directed_edge: DirectedEdgeId,
         candidates: &[ComponentSample],
         reserved_bytes: usize,
+        exec: &mut crate::exec::Exec<'_, '_>,
     ) -> Result<PackedCandidateFrames<T>> {
         self.candidate_frames_for_edge_with_layout(
             inputs,
@@ -1468,6 +1483,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             candidates,
             PackedCandidateFrameLayout::BondByCandidate,
             reserved_bytes,
+            exec,
         )
     }
 
@@ -1478,6 +1494,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     /// # Errors
     ///
     /// Same errors as [`Self::candidate_frames_for_edge`].
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn candidate_frames_for_edge_rows<V: TreeAciNode>(
         &self,
         inputs: &[TreeTN<IdxTensor, V>],
@@ -1486,6 +1503,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         directed_edge: DirectedEdgeId,
         candidates: &[ComponentSample],
         reserved_bytes: usize,
+        exec: &mut crate::exec::Exec<'_, '_>,
     ) -> Result<PackedCandidateFrames<T>> {
         self.candidate_frames_for_edge_with_layout(
             inputs,
@@ -1495,6 +1513,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             candidates,
             PackedCandidateFrameLayout::CandidateByBond,
             reserved_bytes,
+            exec,
         )
     }
 
@@ -1508,6 +1527,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         candidates: &[ComponentSample],
         layout: PackedCandidateFrameLayout,
         reserved_bytes: usize,
+        exec: &mut crate::exec::Exec<'_, '_>,
     ) -> Result<PackedCandidateFrames<T>> {
         let directed =
             problem
@@ -1524,6 +1544,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 directed_edge,
                 candidates,
                 layout,
+                exec,
             );
         }
         if directed.incoming_to_from.len() >= 3 {
@@ -1535,6 +1556,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 candidates,
                 layout,
                 reserved_bytes,
+                exec,
             );
         }
         if directed.incoming_to_from.is_empty() {
@@ -1742,15 +1764,16 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
             // [AI Supplied] Test-only A/B for consuming the two ephemeral
             // matrices instead of copying them through borrowed `mat_mul`.
             #[cfg(test)]
-            let batched =
-                if std::env::var("T4A_TREEACI_USE_OWNED_LOCAL_MATMUL").as_deref() == Ok("1") {
-                    contract_prepared_core_batched_owned((*core_matrix).clone(), frame_matrix)?
-                } else {
-                    contract_prepared_core_batched(&core_matrix, &frame_matrix)?
-                };
+            let batched = if std::env::var("T4A_TREEACI_USE_OWNED_LOCAL_MATMUL").as_deref()
+                == Ok("1")
+            {
+                contract_prepared_core_batched_owned((*core_matrix).clone(), frame_matrix, exec)?
+            } else {
+                contract_prepared_core_batched(&core_matrix, &frame_matrix, exec)?
+            };
             #[cfg(not(test))]
             let batched =
-                contract_prepared_core_batched_owned((*core_matrix).clone(), frame_matrix)?;
+                contract_prepared_core_batched_owned((*core_matrix).clone(), frame_matrix, exec)?;
             #[cfg(test)]
             crate::state::profile_debug_stats::record(|stats| {
                 stats.candidate_backend += backend_started.elapsed();
@@ -1842,6 +1865,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         candidates: &[ComponentSample],
         layout: PackedCandidateFrameLayout,
         reserved_bytes: usize,
+        exec: &mut crate::exec::Exec<'_, '_>,
     ) -> Result<PackedCandidateFrames<T>> {
         let directed =
             problem
@@ -1992,6 +2016,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 &incoming_axes,
                 base_offset,
                 &frame_matrices,
+                exec,
             )?;
             let mut coordinates = vec![0usize; incoming_edges.len()];
             for &candidate_index in &indices {
@@ -2042,6 +2067,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
     /// superset of the group's actual candidates whenever the group is not
     /// already the full product) and reading back only the entries the
     /// group's candidates actually need.
+    #[allow(clippy::too_many_arguments)]
     fn candidate_frames_for_edge_two_incoming<V: TreeAciNode>(
         &self,
         inputs: &[TreeTN<IdxTensor, V>],
@@ -2050,6 +2076,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
         directed_edge: DirectedEdgeId,
         candidates: &[ComponentSample],
         layout: PackedCandidateFrameLayout,
+        exec: &mut crate::exec::Exec<'_, '_>,
     ) -> Result<PackedCandidateFrames<T>> {
         let directed =
             problem
@@ -2209,6 +2236,7 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                 incoming_dim_2,
                 &v1,
                 &v2,
+                exec,
             )?;
 
             for &(candidate_index, key) in &indices {
@@ -2508,10 +2536,11 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
         &mut self,
         edge: DirectedEdgeId,
         samples: std::ops::Range<SampleId>,
+        exec: &mut crate::exec::Exec<'_, '_>,
     ) -> Result<()> {
         let directed = &self.problem.directed_edges[edge];
         if directed.incoming_to_from.len() == 2 {
-            return self.compute_batch_two_incoming(edge, samples);
+            return self.compute_batch_two_incoming(edge, samples, exec);
         }
         if directed.incoming_to_from.len() != 1 {
             let mut layout = None;
@@ -2680,12 +2709,13 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
         // owned dense boundary.
         #[cfg(test)]
         let batched = if std::env::var("T4A_TREEACI_USE_OWNED_LOCAL_MATMUL").as_deref() == Ok("1") {
-            contract_prepared_core_batched_owned((*core_matrix).clone(), frame_matrix)?
+            contract_prepared_core_batched_owned((*core_matrix).clone(), frame_matrix, exec)?
         } else {
-            contract_prepared_core_batched(&core_matrix, &frame_matrix)?
+            contract_prepared_core_batched(&core_matrix, &frame_matrix, exec)?
         };
         #[cfg(not(test))]
-        let batched = contract_prepared_core_batched_owned((*core_matrix).clone(), frame_matrix)?;
+        let batched =
+            contract_prepared_core_batched_owned((*core_matrix).clone(), frame_matrix, exec)?;
         for (sample, record) in pending {
             let incoming_sample = record.incoming[0].1;
             let column = incoming_positions[&incoming_sample];
@@ -2719,6 +2749,7 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
         &mut self,
         edge: DirectedEdgeId,
         samples: std::ops::Range<SampleId>,
+        exec: &mut crate::exec::Exec<'_, '_>,
     ) -> Result<()> {
         let directed = &self.problem.directed_edges[edge];
         let incoming_edge_1 = directed.incoming_to_from[0];
@@ -2862,6 +2893,7 @@ impl<T: TreeAciScalar, V: TreeAciNode> FrameBuilder<'_, T, V> {
                 incoming_dim_2,
                 &v1,
                 &v2,
+                exec,
             )?;
 
             for (sample, sample_1, sample_2) in group_samples {
@@ -3189,14 +3221,14 @@ fn single_incoming_all_physical_core_matrix<T: TreeAciScalar>(
 fn contract_prepared_core_batched<T: TreeAciScalar>(
     core_matrix: &Matrix<T>,
     incoming_frame_matrix: &Matrix<T>,
+    exec: &mut Exec<'_, '_>,
 ) -> Result<Matrix<T>> {
     #[cfg(feature = "diagnostics")]
     let kernel_started = std::time::Instant::now();
-    let result =
-        tensor4all_tensorbackend::mat_mul(core_matrix, incoming_frame_matrix).map_err(|error| {
-            TreeAciError::Numerical {
-                message: error.to_string(),
-            }
+    let result = exec
+        .mat_mul(core_matrix, incoming_frame_matrix)
+        .map_err(|error| TreeAciError::Numerical {
+            message: error.to_string(),
         });
     #[cfg(feature = "diagnostics")]
     diagnostics_record_matmul(kernel_started.elapsed(), 1);
@@ -3206,10 +3238,12 @@ fn contract_prepared_core_batched<T: TreeAciScalar>(
 fn contract_prepared_core_batched_owned<T: TreeAciScalar>(
     core_matrix: Matrix<T>,
     incoming_frame_matrix: Matrix<T>,
+    exec: &mut Exec<'_, '_>,
 ) -> Result<Matrix<T>> {
     #[cfg(feature = "diagnostics")]
     let kernel_started = std::time::Instant::now();
-    let result = tensor4all_tensorbackend::mat_mul_owned(core_matrix, incoming_frame_matrix)
+    let result = exec
+        .mat_mul_owned(core_matrix, incoming_frame_matrix)
         .map_err(|error| TreeAciError::Numerical {
             message: error.to_string(),
         });
@@ -3251,6 +3285,7 @@ fn two_incoming_core_matrix_batched<T: TreeAciScalar>(
     incoming_dim_2: usize,
     v1: &Matrix<T>,
     v2: &Matrix<T>,
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<Matrix<T>> {
     let n1 = v1.ncols();
     let stride_2 = core.strides[incoming_axis_2];
@@ -3264,11 +3299,11 @@ fn two_incoming_core_matrix_batched<T: TreeAciScalar>(
             outgoing_dim,
             incoming_dim_1,
         );
-        let stage1 = contract_prepared_core_batched(&core_matrix, v1)?;
+        let stage1 = contract_prepared_core_batched(&core_matrix, v1, exec)?;
         stage1_data.extend(stage1.into_col_major_vec());
     }
     let stage1_matrix = Matrix::from_col_major_vec(outgoing_dim * n1, incoming_dim_2, stage1_data);
-    contract_prepared_core_batched(&stage1_matrix, v2)
+    contract_prepared_core_batched(&stage1_matrix, v2, exec)
 }
 
 /// The complete Cartesian product of candidate frame vectors produced by
@@ -3386,6 +3421,7 @@ fn incoming_batch_matrix<T: TreeAciScalar>(
     incoming_axes: &[usize],
     physical_offset: usize,
     frame_matrices: &[Matrix<T>],
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<PackedCandidateBatch<T>> {
     if frame_matrices.len() != incoming_axes.len() {
         return Err(TreeAciError::InternalInvariant {
@@ -3449,7 +3485,8 @@ fn incoming_batch_matrix<T: TreeAciScalar>(
                 outgoing_dim,
                 incoming_dims[0],
             );
-            contract_prepared_core_batched(&core_matrix, &frame_matrices[0])?.into_col_major_vec()
+            contract_prepared_core_batched(&core_matrix, &frame_matrices[0], exec)?
+                .into_col_major_vec()
         }
         2 => two_incoming_core_matrix_batched(
             core,
@@ -3462,6 +3499,7 @@ fn incoming_batch_matrix<T: TreeAciScalar>(
             incoming_dims[1],
             &frame_matrices[0],
             &frame_matrices[1],
+            exec,
         )?
         .into_col_major_vec(),
         _ => generalized_incoming_batch(
@@ -3474,6 +3512,7 @@ fn incoming_batch_matrix<T: TreeAciScalar>(
             outgoing_dim,
             physical_offset,
             frame_matrices,
+            exec,
         )?,
     };
 
@@ -3515,6 +3554,7 @@ fn generalized_incoming_batch<T: TreeAciScalar>(
     outgoing_dim: usize,
     physical_offset: usize,
     frame_matrices: &[Matrix<T>],
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<Vec<T>> {
     let degree = incoming_axes.len();
     let mut remaining = checked_product(
@@ -3541,7 +3581,7 @@ fn generalized_incoming_batch<T: TreeAciScalar>(
             outgoing_dim,
             incoming_dims[0],
         );
-        let product = contract_prepared_core_batched(&core_matrix, &frame_matrices[0])?;
+        let product = contract_prepared_core_batched(&core_matrix, &frame_matrices[0], exec)?;
         stage.extend(product.into_col_major_vec());
     }
 
@@ -3590,18 +3630,12 @@ fn generalized_incoming_batch<T: TreeAciScalar>(
             ];
             #[cfg(feature = "diagnostics")]
             let kernel_started = std::time::Instant::now();
-            let contracted =
-                tensor4all_tensorbackend::einsum_native_tensor_reads(&operands, &[0, 3, 2])
-                    .map_err(|error| TreeAciError::Numerical {
-                        message: error.to_string(),
-                    })?;
+            let values = exec
+                .einsum_reads::<T>(&operands, &[0, 3, 2])
+                .map_err(|message| TreeAciError::Numerical { message })?;
             #[cfg(feature = "diagnostics")]
             diagnostics_record_matmul(kernel_started.elapsed(), 1);
-            T::into_dense_values_from_native_col_major(contracted).map_err(|error| {
-                TreeAciError::Numerical {
-                    message: error.to_string(),
-                }
-            })?
+            values
         } else {
             vec![T::default(); next_elements]
         };
@@ -3699,6 +3733,7 @@ fn outgoing_bond<'a, V: TreeAciNode>(
 fn prepare_cores<T: TreeAciScalar, V: TreeAciNode>(
     input: &TreeTN<IdxTensor, V>,
     problem: &PreparedTreeProblem<V>,
+    exec: &Exec<'_, '_>,
 ) -> Result<Vec<PreparedCore<T>>> {
     problem
         .node_order
@@ -3724,8 +3759,8 @@ fn prepare_cores<T: TreeAciScalar, V: TreeAciNode>(
                     context: "prepared core strides",
                 })?;
             }
-            let values = tensor
-                .to_vec::<T>()
+            let values = exec
+                .values::<T>(tensor)
                 .map_err(|error| TreeAciError::ScalarKind {
                     message: error.to_string(),
                 })?;

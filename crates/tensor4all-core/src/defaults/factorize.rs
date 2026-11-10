@@ -35,7 +35,7 @@
 use super::eager_session::with_eager_session;
 use crate::defaults::idx_tensor::unfold_split_inner;
 use crate::defaults::DynIndex;
-use crate::{contract_pair, unfold_split, AnyScalar, IdxTensor};
+use crate::{contract_pair, unfold_split, AnyScalar, IdxTensor, IdxTensorError};
 use crate::{
     matrix_luci_factors_from_matrix_owned, rrlu_mut, MatrixLuciFactors, RrLUOptions,
     Scalar as MatrixScalar,
@@ -975,12 +975,15 @@ pub fn factorize_on_session(
 /// eager runtime, so a caller that already owns a held session (TreeTN
 /// canonicalization, for example) can call it directly.
 ///
-/// QR and SVD are served. LU and CI have no session route.
+/// QR, SVD, and CI are served; CI uses the pivoted LU of
+/// [`matrix_luci_factors_from_matrix_owned_on_session`](crate::matrix_luci_factors_from_matrix_owned_on_session)
+/// and gives the same factors as [`factorize_full_rank`]. LU has no session
+/// route.
 ///
 /// # Errors
 ///
 /// Returns [`FactorizeError`] for a diagonal, structured or tracked operand, a
-/// `Right` canonical QR request, an LU/CI request, or a rejection by the
+/// `Right` canonical QR request, an LU request, or a rejection by the
 /// supplied session.
 ///
 /// # Examples
@@ -1066,10 +1069,84 @@ pub fn factorize_full_rank_on_session(
         FactorizeAlg::RSVD => Err(FactorizeError::InvalidOptions(
             "RSVD needs a fixed rank and caller RNG; use factorize_with_rng",
         )),
-        FactorizeAlg::LU | FactorizeAlg::CI => Err(FactorizeError::UnsupportedStorage(
-            "LU and CI factorization have no explicit-session path",
+        FactorizeAlg::CI => {
+            if t.is_f32() {
+                factorize_ci_full_rank_on_session::<f32>(session, t, left_inds, canonical)
+            } else if t.is_f64() {
+                factorize_ci_full_rank_on_session::<f64>(session, t, left_inds, canonical)
+            } else if t.is_c32() {
+                factorize_ci_full_rank_on_session::<Complex32>(session, t, left_inds, canonical)
+            } else if t.is_c64() {
+                factorize_ci_full_rank_on_session::<Complex64>(session, t, left_inds, canonical)
+            } else {
+                Err(FactorizeError::UnsupportedStorage(
+                    "the explicit-session CI route serves floating-point tensors",
+                ))
+            }
+        }
+        FactorizeAlg::LU => Err(FactorizeError::UnsupportedStorage(
+            "LU factorization has no explicit-session path",
         )),
     }
+}
+
+/// Full-rank CI factors on the caller's session.
+///
+/// The explicit-session counterpart of `factorize_ci_full_rank`: the operand's
+/// host payload is unfolded without entering a runtime, the pivoted LU runs on
+/// `session`, and both factors are published as compact host storage.
+fn factorize_ci_full_rank_on_session<T>(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    t: &IdxTensor,
+    left_inds: &[DynIndex],
+    canonical: Canonical,
+) -> Result<FactorizeResult<IdxTensor>, FactorizeError>
+where
+    T: TensorElement
+        + tensor4all_tensorbackend::StorageScalar
+        + MatrixScalar
+        + crate::MatrixLuciScalar
+        + 'static,
+{
+    let (left_indices, right_indices, order) =
+        crate::defaults::idx_tensor::unfold_index_sets(t, left_inds)
+            .map_err(|error| anyhow::anyhow!("Failed to unfold tensor: {error}"))?;
+    // Read and reorder the operand's own host payload: entering the eager
+    // runtime for a transpose would be a second session entry on this thread.
+    let (dims, data) = t
+        .host_dense_permuted::<T>(&order)
+        .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
+    let left_len = left_indices.len();
+    let m = crate::defaults::idx_tensor::checked_product(&dims[..left_len])
+        .map_err(FactorizeError::ComputationError)?;
+    let n = crate::defaults::idx_tensor::checked_product(&dims[left_len..])
+        .map_err(FactorizeError::ComputationError)?;
+    let lu_options = RrLUOptions {
+        max_bond_dim: usize::MAX,
+        rel_tol: 0.0,
+        abs_tol: 0.0,
+        left_orthogonal: canonical == Canonical::Left,
+    };
+    let factors = crate::matrix_luci_factors_from_matrix_owned_on_session(
+        matrix_from_col_major_values(data, m, n, "host")?,
+        Some(lu_options),
+        session,
+    )?;
+    let rank = factors.rank;
+    let (left, right, bond_index) = matrix_luci_factors_to_idx_tensors(
+        factors,
+        &left_indices,
+        &right_indices,
+        canonical,
+        IdxTensor::from_dense_compact,
+    )?;
+    Ok(FactorizeResult::new(
+        left,
+        right,
+        bond_index,
+        None,
+        rank.max(1),
+    ))
 }
 
 fn factorize_qr_full_rank_on_session(
@@ -1569,8 +1646,13 @@ where
     // backend factorization.
     let factors = matrix_luci_factors_from_matrix_owned(a_matrix, Some(lu_options))?;
     let rank = factors.rank;
-    let (left, right, bond_index) =
-        matrix_luci_factors_to_idx_tensors(factors, &left_indices, &right_indices, canonical)?;
+    let (left, right, bond_index) = matrix_luci_factors_to_idx_tensors(
+        factors,
+        &left_indices,
+        &right_indices,
+        canonical,
+        IdxTensor::from_dense,
+    )?;
 
     Ok(FactorizeResult::new(
         left,
@@ -1597,11 +1679,15 @@ fn rank_one_zero_factors<T: MatrixScalar>(
     (left, right)
 }
 
+/// Build the two CI factor tensors with `build`: `IdxTensor::from_dense` on
+/// the compatibility route, `IdxTensor::from_dense_compact` on an explicit
+/// session, which must not adopt the factors into the process-global runtime.
 fn matrix_luci_factors_to_idx_tensors<T>(
     factors: MatrixLuciFactors<T>,
     left_indices: &[DynIndex],
     right_indices: &[DynIndex],
     canonical: Canonical,
+    build: fn(Vec<DynIndex>, Vec<T>) -> std::result::Result<IdxTensor, IdxTensorError>,
 ) -> Result<(IdxTensor, IdxTensor, DynIndex), FactorizeError>
 where
     T: TensorElement + MatrixScalar,
@@ -1617,12 +1703,12 @@ where
 
     let mut l_indices = left_indices.to_vec();
     l_indices.push(bond_index.clone());
-    let left = IdxTensor::from_dense(l_indices, left_matrix.into_col_major_vec())
+    let left = build(l_indices, left_matrix.into_col_major_vec())
         .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
     let mut r_indices = vec![bond_index.clone()];
     r_indices.extend_from_slice(right_indices);
-    let right = IdxTensor::from_dense(r_indices, right_matrix.into_col_major_vec())
+    let right = build(r_indices, right_matrix.into_col_major_vec())
         .map_err(|e| FactorizeError::ComputationError(anyhow::Error::new(e)))?;
 
     Ok((left, right, bond_index))

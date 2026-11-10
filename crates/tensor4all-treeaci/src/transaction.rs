@@ -25,7 +25,7 @@ pub(crate) fn update_edge_transaction<T, V, F>(
     options: &TreeAciOptions<V>,
     left_orthogonal: bool,
     operator: &mut F,
-    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<EdgeCommitReport>
 where
     T: TreeAciScalar,
@@ -43,19 +43,20 @@ where
         options,
         left_orthogonal,
         operator,
-        context,
+        exec,
     )?;
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {
         stats.proposals += proposal_started.elapsed();
     });
-    commit_edge_proposal(state, forward, proposal)
+    commit_edge_proposal(state, forward, proposal, exec)
 }
 
 fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     state: &mut TreeAciState<'_, T, V>,
     forward: DirectedEdgeId,
     proposal: LocalUpdateResult<T>,
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<EdgeCommitReport> {
     let LocalUpdateResult {
         row_samples,
@@ -119,7 +120,14 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     });
     #[cfg(test)]
     let replace_started = std::time::Instant::now();
-    replace_edge_cores(&mut proposed_output, &state.problem, forward, left, right)?;
+    replace_edge_cores(
+        &mut proposed_output,
+        &state.problem,
+        forward,
+        left,
+        right,
+        exec,
+    )?;
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {
         stats.output_replace += replace_started.elapsed();
@@ -154,7 +162,7 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
         let frames =
             state
                 .input_frames
-                .extend(state.inputs, &state.problem, &state.sample_arena)?;
+                .extend(state.inputs, &state.problem, &state.sample_arena, exec)?;
         #[cfg(test)]
         crate::state::profile_debug_stats::record(|stats| {
             stats.frame_extension += frames_started.elapsed();
@@ -217,6 +225,7 @@ fn replace_edge_cores<T: TreeAciScalar, V: TreeAciNode>(
     forward: DirectedEdgeId,
     left: tensor4all_tensorbackend::Matrix<T>,
     right: tensor4all_tensorbackend::Matrix<T>,
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<()> {
     #[cfg(test)]
     let phase_started = std::time::Instant::now();
@@ -232,17 +241,15 @@ fn replace_edge_cores<T: TreeAciScalar, V: TreeAciNode>(
     });
     #[cfg(test)]
     let phase_started = std::time::Instant::now();
-    let left_tensor =
-        IdxTensor::from_dense(left_indices, left.into_col_major_vec()).map_err(|error| {
-            TreeAciError::Numerical {
-                message: error.to_string(),
-            }
+    let left_tensor = exec
+        .tensor(left_indices, left.into_col_major_vec())
+        .map_err(|error| TreeAciError::Numerical {
+            message: error.to_string(),
         })?;
-    let right_tensor =
-        IdxTensor::from_dense(right_indices, right.into_col_major_vec()).map_err(|error| {
-            TreeAciError::Numerical {
-                message: error.to_string(),
-            }
+    let right_tensor = exec
+        .tensor(right_indices, right.into_col_major_vec())
+        .map_err(|error| TreeAciError::Numerical {
+            message: error.to_string(),
         })?;
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {
