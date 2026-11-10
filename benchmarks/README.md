@@ -55,6 +55,8 @@ RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 V
 Arguments are family (`smooth`, `random`, `mixed`), method (`density`, `nary`),
 site count and term count. The dense reference restricts this harness to
 2–16 binary sites; production summation has no such restriction.
+The [local comparison and raw samples](results/2026-11-10-density-sum.md)
+include the required `R=12, N=64` families and the host-isolation limits.
 
 #### Fixed-rank RSVD and Lanczos (#1108)
 

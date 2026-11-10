@@ -30,7 +30,10 @@
   warnings in changed code. Strict warning denial is blocked by existing
   boolean-simplification warnings elsewhere in the two crates. Full workspace
   validation and alternate-provider/hardware checks remain hosted-CI work.
-- The performance comparison will use all smooth, random and mixed families
+- Rustdoc builds with existing unrelated link warnings; the new API's links
+  and asserted examples validate. The guide change is prose only and does not
+  change any existing guide snippet or its API.
+- The performance comparison used all smooth, random and mixed families
   of #1107 at `(R, N) = (8, 8), (12, 16), (12, 64)`, three fresh processes per
   method and case, alternating method order. Compare median operation time
   and median process peak RSS; preserve every result. Both methods must
@@ -43,5 +46,14 @@
 - Host: Apple M3 Pro, default macOS Accelerate provider. macOS CPU affinity
   and exclusive host access are unavailable, so these are diagnostic timing
   and RSS observations, not an isolated-host performance guarantee. Load
-  averages and every process sample will be retained. This chat runs no
-  concurrent build or test while measuring.
+  averages and all 54 process samples are retained in the
+  [experiment record](../../benchmarks/results/2026-11-10-density-sum.md).
+  This chat ran no concurrent build or test while measuring.
+- At `R=12, N=64`, density summation reached the same ranks and cutoff-scale
+  errors with 53–55% lower process peak RSS, but took 6.5–8.9 times longer in
+  this diagnostic run. At `N=16` random input, density used slightly more
+  memory. No universal performance or thousand-term scalability claim follows.
+- The review also identified a pre-existing dimension-validation concern in
+  `IdxTensor::replace_indices`: the supplied old index's dimension is not
+  checked against the matched axis. The shared sum validation prevents this
+  route here; a separate review of replacement APIs is recommended.
