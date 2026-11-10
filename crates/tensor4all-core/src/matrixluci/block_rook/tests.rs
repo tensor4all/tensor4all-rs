@@ -1,7 +1,7 @@
 use crate::matrixluci::block_rook::LazyBlockRookKernel;
 use crate::matrixluci::dense::DenseLuKernel;
 use crate::matrixluci::kernel::PivotKernel;
-use crate::matrixluci::source::{DenseMatrixSource, LazyMatrixSource};
+use crate::matrixluci::source::{CandidateMatrixSource, DenseMatrixSource, LazyMatrixSource};
 use crate::matrixluci::types::PivotKernelOptions;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -409,4 +409,184 @@ fn lazy_residual_scan_rejects_non_finite_residuals() {
             crate::matrixluci::MatrixLuciError::NaNEncountered { .. }
         ));
     }
+}
+
+/// Source wrapper that counts the entries a kernel asks for.
+///
+/// `requested` counts every entry copied out, reloads included; `unique`
+/// counts first touches, which is what a memoizing evaluator pays for.
+struct CountingSource<S> {
+    inner: S,
+    requested: std::cell::Cell<usize>,
+    touched: std::cell::RefCell<std::collections::HashSet<(usize, usize)>>,
+}
+
+impl<S> CountingSource<S> {
+    fn new(inner: S) -> Self {
+        Self {
+            inner,
+            requested: std::cell::Cell::new(0),
+            touched: std::cell::RefCell::new(std::collections::HashSet::new()),
+        }
+    }
+
+    fn requested(&self) -> usize {
+        self.requested.get()
+    }
+
+    fn unique(&self) -> usize {
+        self.touched.borrow().len()
+    }
+}
+
+impl<T: crate::MatrixLuciScalar, S: CandidateMatrixSource<T>> CandidateMatrixSource<T>
+    for CountingSource<S>
+{
+    fn nrows(&self) -> usize {
+        self.inner.nrows()
+    }
+
+    fn ncols(&self) -> usize {
+        self.inner.ncols()
+    }
+
+    fn get_block(&self, rows: &[usize], cols: &[usize], out: &mut [T]) {
+        self.requested
+            .set(self.requested.get() + rows.len() * cols.len());
+        let mut touched = self.touched.borrow_mut();
+        for &col in cols {
+            for &row in rows {
+                touched.insert((row, col));
+            }
+        }
+        self.inner.get_block(rows, cols, out);
+    }
+}
+
+/// `A = U Vᵀ` with `U`, `V` of shape `n × rank`, column-major.
+fn exact_rank_matrix(n: usize, rank: usize, seed: u64) -> Vec<f64> {
+    use rand::{Rng, SeedableRng};
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed);
+    let u: Vec<f64> = (0..n * rank).map(|_| rng.random::<f64>() - 0.5).collect();
+    let v: Vec<f64> = (0..n * rank).map(|_| rng.random::<f64>() - 0.5).collect();
+    let mut data = vec![0.0; n * n];
+    for col in 0..n {
+        for row in 0..n {
+            data[row + n * col] = (0..rank).map(|k| u[row + n * k] * v[col + n * k]).sum();
+        }
+    }
+    data
+}
+
+/// The rook walk as it was before #1247: every column and row block reloads
+/// `A[I, J]` and `A[rows, J]`, and every block reloads `A[I, cols]`. It is the
+/// oracle for the hoisted walk, which must perform the same arithmetic on the
+/// same values.
+fn reloading_rook_pivot<S: CandidateMatrixSource<f64>>(
+    source: &S,
+    remaining_rows: &[usize],
+    remaining_cols: &[usize],
+    selected_rows: &[usize],
+    selected_cols: &[usize],
+) -> (usize, usize, f64) {
+    use super::{argmax_abs, load_block, residual_from};
+    let block = |rows: &[usize], cols: &[usize]| {
+        if selected_rows.is_empty() {
+            return load_block(source, rows, cols);
+        }
+        let pivot = load_block(source, selected_rows, selected_cols);
+        let a_rj = load_block(source, rows, selected_cols);
+        residual_from(source, rows, cols, selected_rows, &pivot, &a_rj).unwrap()
+    };
+
+    let mut columns = remaining_cols.iter().copied();
+    let (mut current_row, mut current_col);
+    loop {
+        let Some(col) = columns.next() else {
+            return (remaining_rows[0], remaining_cols[0], 0.0);
+        };
+        current_col = col;
+        let (row_pos, _, best_abs) = argmax_abs(&block(remaining_rows, &[col]));
+        if best_abs != 0.0 {
+            current_row = remaining_rows[row_pos];
+            break;
+        }
+    }
+    for _ in 0..remaining_rows.len() + remaining_cols.len() + 1 {
+        let (_, col_pos, best_abs) = argmax_abs(&block(&[current_row], remaining_cols));
+        let next_col = remaining_cols[col_pos];
+        if next_col == current_col {
+            return (current_row, current_col, best_abs);
+        }
+        current_col = next_col;
+        let (row_pos, _, _) = argmax_abs(&block(remaining_rows, &[current_col]));
+        current_row = remaining_rows[row_pos];
+    }
+    let (_, col_pos, best_abs) = argmax_abs(&block(&[current_row], remaining_cols));
+    (current_row, remaining_cols[col_pos], best_abs)
+}
+
+#[test]
+fn lazy_rook_walk_loads_the_pivot_operands_once_and_selects_the_same_pivots() {
+    use super::{remaining_indices, residual_max_abs, rook_pivot};
+    // The shape measured on #1247: a binding cap below the exact rank.
+    let (n, exact_rank, cap) = (400usize, 30usize, 15usize);
+    let data = exact_rank_matrix(n, exact_rank, 1247);
+    let source = CountingSource::new(dense_to_lazy(data.clone(), n, n));
+
+    let out = LazyBlockRookKernel
+        .factorize(&source, &rank_cap_options(cap))
+        .unwrap();
+    assert_eq!(out.rank, cap);
+
+    // At a binding cap the exact remaining-residual scan touches every entry.
+    assert_eq!(source.unique(), n * n);
+    // Of the requested entries, n * n are that scan. Reloading the walk
+    // invariants per column or row block requested 369,600 entries (2.31x);
+    // loading them once per walk requests 268,927 (1.68x). The bound sits
+    // between the two with ~7% headroom over the hoisted count.
+    let ratio = source.requested() as f64 / source.unique() as f64;
+    assert!(
+        ratio < 1.8,
+        "requested {} / unique {} = {ratio:.3}",
+        source.requested(),
+        source.unique()
+    );
+
+    // Same pivots, same pivot magnitudes, bit for bit, as the reloading walk.
+    let oracle_source = dense_to_lazy(data, n, n);
+    for step in 0..out.rank {
+        let selected_rows = &out.row_indices[..step];
+        let selected_cols = &out.col_indices[..step];
+        let remaining_rows = remaining_indices(n, selected_rows);
+        let remaining_cols = remaining_indices(n, selected_cols);
+        let (row, col, abs) = rook_pivot(
+            &oracle_source,
+            &remaining_rows,
+            &remaining_cols,
+            selected_rows,
+            selected_cols,
+        )
+        .unwrap();
+        let (oracle_row, oracle_col, oracle_abs) = reloading_rook_pivot(
+            &oracle_source,
+            &remaining_rows,
+            &remaining_cols,
+            selected_rows,
+            selected_cols,
+        );
+        assert_eq!((row, col), (oracle_row, oracle_col), "step {step}");
+        assert_eq!(abs.to_bits(), oracle_abs.to_bits(), "step {step}");
+        assert_eq!((row, col), (out.row_indices[step], out.col_indices[step]));
+        assert_eq!(abs.to_bits(), out.pivot_errors[step].to_bits());
+    }
+    let trailing = residual_max_abs(
+        &oracle_source,
+        &remaining_indices(n, &out.row_indices),
+        &remaining_indices(n, &out.col_indices),
+        &out.row_indices,
+        &out.col_indices,
+    )
+    .unwrap();
+    assert_eq!(out.pivot_errors[cap].to_bits(), trailing.to_bits());
 }
