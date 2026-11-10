@@ -102,6 +102,10 @@ name = "index_key"
 harness = false
 
 [[bench]]
+name = "index_key_encode"
+harness = false
+
+[[bench]]
 name = "lazy_block_rook"
 harness = false
 

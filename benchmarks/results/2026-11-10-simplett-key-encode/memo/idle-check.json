@@ -1,0 +1,23 @@
+{
+ "seconds": 60.0,
+ "maximum_load_1m": 2.0,
+ "before": {
+  "time": 1794269219.5919456,
+  "loadavg": [
+   1.990234375,
+   1.02099609375,
+   0.81982421875
+  ],
+  "thermal": "unavailable on this platform"
+ },
+ "after": {
+  "time": 1794269279.5924923,
+  "loadavg": [
+   0.91796875,
+   0.8798828125,
+   0.78271484375
+  ],
+  "thermal": "unavailable on this platform"
+ },
+ "passed": true
+}
