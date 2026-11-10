@@ -466,7 +466,10 @@ fn digit_packing_matches_composition_for_mixed_dimensions() {
         state ^= state << 17;
         state
     };
-    let choices = [1usize, 2, 3, 5, 7, 256, 1000, 1 << 20, (1 << 33) + 1];
+    // A field wider than 32 bits, as far as the target's pointer width allows:
+    // 34 bits on a 64-bit target, `usize::MAX` (32 bits) on a 32-bit one.
+    let wide = usize::try_from((1u128 << 33) + 1).unwrap_or(usize::MAX);
+    let choices = [1usize, 2, 3, 5, 7, 256, 1000, 1 << 20, wide];
     let mut arms_seen = [false; 5];
     for _ in 0..400 {
         let len = (next() % 90) as usize;
