@@ -409,3 +409,39 @@ fn test_add_preserves_same_id_prime_pair_site_indices() {
         dense_result.distance(&dense_expected).unwrap()
     );
 }
+
+/// Regression for issue #1227: `reindex_site_space_like` pairs site indices node
+/// by node, and the batch overlaps whenever the template carries the caller's
+/// indices on other nodes. A sequential batch rename left such a network
+/// unchanged; the batch rename must be simultaneous.
+#[test]
+fn test_reindex_site_space_like_handles_cross_node_site_overlap() {
+    fn chain(a: DynIndex, b: DynIndex) -> TreeTN<IdxTensor, String> {
+        let bond = DynIndex::new_dyn(1);
+        let t_a = IdxTensor::from_dense(vec![a, bond.clone()], vec![1.0, 2.0]).unwrap();
+        let t_b = IdxTensor::from_dense(vec![bond, b], vec![3.0, 4.0]).unwrap();
+        TreeTN::<IdxTensor, String>::from_tensors(
+            vec![t_a, t_b],
+            vec!["A".to_string(), "B".to_string()],
+        )
+        .unwrap()
+    }
+
+    let s0 = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(2);
+    let state = chain(s0.clone(), s1.clone());
+    // Template carries the caller's indices on the opposite nodes.
+    let template = chain(s1.clone(), s0.clone());
+
+    let aligned = state.reindex_site_space_like(&template).unwrap();
+
+    assert_eq!(
+        aligned.node_site_indices(&"A".to_string()),
+        Some(vec![s1.clone()])
+    );
+    assert_eq!(
+        aligned.node_site_indices(&"B".to_string()),
+        Some(vec![s0.clone()])
+    );
+    assert!(aligned.share_equivalent_site_index_network(&template));
+}

@@ -1665,7 +1665,20 @@ where
         .into())
     }
 
-    /// Replace multiple external indices.
+    /// Replace multiple external indices as one simultaneous batch.
+    ///
+    /// Every mapping is matched against a single old-to-new map built from the
+    /// whole batch, so `[a, b] -> [b, a]` swaps the two true indices instead of
+    /// collapsing both onto `a`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeTNOperationError`] when the slices differ in length, when a
+    /// source is repeated, when a pair changes the dimension, when a source is
+    /// absent from both the input and the output mappings, when a target is
+    /// repeated, or when a target is already a true index of this operator and is
+    /// not itself replaced by this batch. The whole batch is validated before
+    /// anything is renamed.
     fn replace_indices(
         &self,
         old_indices: &[Self::Index],
@@ -1679,21 +1692,82 @@ where
             )
             .into());
         }
-        let mut seen = HashSet::new();
-        for old in old_indices {
-            if !seen.insert(old.clone()) {
+        let present: Vec<Self::Index> = self
+            .input_mapping
+            .values()
+            .chain(self.output_mapping.values())
+            .flatten()
+            .map(|mapping| mapping.true_index.clone())
+            .collect();
+        // Index equality ignores `dim`, so every membership test below also
+        // compares dimensions, as `replaceind` does.
+        let holds = |index: &Self::Index| {
+            present
+                .iter()
+                .any(|other| other == index && other.dim() == index.dim())
+        };
+        let mut replacement_map = HashMap::with_capacity(old_indices.len());
+        for (old, new) in old_indices.iter().zip(new_indices.iter()) {
+            if old.dim() != new.dim() {
+                return Err(anyhow::anyhow!(
+                    "Index space mismatch: cannot replace index with dimension {} with index of dimension {}",
+                    old.dim(),
+                    new.dim()
+                )
+                .into());
+            }
+            if replacement_map.insert(old.clone(), new.clone()).is_some() {
                 return Err(anyhow::anyhow!(
                     "Duplicate old index {:?} in LinearOperator::replace_indices",
                     old.id()
                 )
                 .into());
             }
+            if !holds(old) {
+                return Err(anyhow::anyhow!(
+                    "Index {:?} not found in LinearOperator mappings",
+                    old.id()
+                )
+                .into());
+            }
+        }
+        let mut target_set = HashSet::with_capacity(new_indices.len());
+        for new in new_indices {
+            if !target_set.insert(new) {
+                return Err(anyhow::anyhow!(
+                    "Duplicate target index {:?} in LinearOperator::replace_indices",
+                    new.id()
+                )
+                .into());
+            }
+            if holds(new) && !replacement_map.contains_key(new) {
+                return Err(anyhow::anyhow!(
+                    "Target index {:?} is already a true index of this LinearOperator and is not replaced by this batch",
+                    new.id()
+                )
+                .into());
+            }
         }
 
         let mut result = self.clone();
-        for (old, new) in old_indices.iter().zip(new_indices.iter()) {
-            result = result.replaceind(old, new)?;
+        for mappings in result
+            .input_mapping
+            .values_mut()
+            .chain(result.output_mapping.values_mut())
+        {
+            for mapping in mappings {
+                if let Some((source, new_index)) =
+                    replacement_map.get_key_value(&mapping.true_index)
+                {
+                    // Index equality ignores `dim`, so keep `replaceind`'s guard.
+                    if source.dim() != mapping.true_index.dim() {
+                        continue;
+                    }
+                    mapping.true_index = new_index.clone();
+                }
+            }
         }
+
         Ok(result)
     }
 }
