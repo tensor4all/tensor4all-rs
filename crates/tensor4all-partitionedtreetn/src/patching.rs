@@ -407,7 +407,8 @@ where
 /// `patching_options.max_bond_dim`, the group is split: `patch_order` supplies
 /// the candidate split indices (every unprojected output index when it is
 /// empty) and `split_strategy` picks one of them. A capped output therefore
-/// becomes several patches whose projectors refine the original one.
+/// becomes several patches whose projectors refine the original one; when no
+/// unprojected split index is left, the truncated group is returned unsplit.
 ///
 /// # Arguments
 ///
