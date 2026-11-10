@@ -8,15 +8,14 @@
 //! Widths up to 512 bits use fixed-width fast paths; wider index spaces fall
 //! back to a limb-backed representation with the same semantics.
 //!
-//! The ladder stops at 512 bits because that is where a fixed-width bignum
-//! stops paying. Measured per-dimension encode cost is 2.12 ns at `U256` and
-//! 2.86 ns at `U512` against 2.52–2.71 ns for limbs, while a `U1024` arm cost
-//! 6.02 ns — 2.3x the limb path at the same width. A generic shift over
-//! sixteen digits touches every digit for each component, whereas a limb write
-//! touches the one or two the component actually spans.
+//! The ladder stops at 512 bits. Since #1224 the 65..=512-bit arms are packed
+//! digit by digit on the stack (see `fixed`) and converted to the arm's type
+//! once, so their encode cost no longer grows with the bignum's digit count;
+//! above 512 bits the key itself would need more inline space than a boxed
+//! arm is worth, so wider index spaces use heap limbs.
 //!
-//! These figures only hold with the placement helpers inlined; see `fixed` for
-//! why that attribute is load-bearing.
+//! The packers must stay inlined; see `fixed` for why that attribute is
+//! load-bearing.
 
 use thiserror::Error;
 
@@ -262,6 +261,8 @@ pub struct FlatIndexer {
     dims: Vec<usize>,
     offsets: Vec<u64>,
     width_bits: u64,
+    /// Digit layout for the 65..=512-bit arms; empty for every other width.
+    layout: fixed::DigitLayout,
 }
 
 impl FlatIndexer {
@@ -282,11 +283,13 @@ impl FlatIndexer {
     /// ```
     pub fn try_new(local_dims: &[usize]) -> Result<Self, IndexKeyError> {
         let mut offsets = Vec::with_capacity(local_dims.len());
+        let mut field_bits = Vec::with_capacity(local_dims.len());
         let mut width_bits = 0u64;
         for (position, &dim) in local_dims.iter().enumerate() {
             let bits =
                 dimension_bits(dim).map_err(|_| IndexKeyError::ZeroDimension { position })?;
             offsets.push(width_bits);
+            field_bits.push(bits);
             width_bits =
                 width_bits
                     .checked_add(u64::from(bits))
@@ -294,10 +297,16 @@ impl FlatIndexer {
                         requested_bits: u64::MAX,
                     })?;
         }
+        let layout = if (65..=512).contains(&width_bits) {
+            fixed::DigitLayout::new(&offsets, &field_bits, width_bits)
+        } else {
+            fixed::DigitLayout::default()
+        };
         Ok(Self {
             dims: local_dims.to_vec(),
             offsets,
             width_bits,
+            layout,
         })
     }
 
@@ -335,45 +344,30 @@ impl FlatIndexer {
     /// ```
     pub fn encode(&self, idx: &[usize]) -> Result<IndexKey, IndexKeyError> {
         self.check(idx)?;
-        macro_rules! pack {
-            ($zero:expr, $place:path, $arm:expr) => {{
-                let mut key = $zero;
-                for (&value, &offset) in idx.iter().zip(&self.offsets) {
-                    // Offsets are below the arm's width here, so this cannot
-                    // truncate; the conversion is checked rather than cast so
-                    // that a future width change cannot silently wrap.
-                    let offset =
-                        u32::try_from(offset).map_err(|_| IndexKeyError::WidthOverflow {
-                            requested_bits: self.width_bits,
-                        })?;
-                    key = $place(key, value, offset);
-                }
-                Ok(IndexKey {
-                    width_bits: self.width_bits,
-                    repr: $arm(key),
-                })
-            }};
-        }
-        match self.width_bits {
-            0..=64 => pack!(0u64, fixed::place_u64, Repr::U64),
-            65..=128 => pack!(0u128, fixed::place_u128, Repr::U128),
-            129..=256 => pack!(bnum::types::U256::ZERO, fixed::place_u256, |k| {
-                Repr::U256(Box::new(k))
-            }),
-            257..=512 => pack!(bnum::types::U512::ZERO, fixed::place_u512, |k| {
-                Repr::U512(Box::new(k))
-            }),
+        let repr = match self.width_bits {
+            0..=64 => Repr::U64(fixed::pack_u64(idx, &self.offsets)),
+            65..=128 => {
+                let [low, high] = fixed::pack_digits::<2>(idx, &self.offsets, &self.layout);
+                Repr::U128(u128::from(low) | (u128::from(high) << 64))
+            }
+            129..=256 => Repr::U256(Box::new(bnum::types::U256::from_digits(
+                fixed::pack_digits::<4>(idx, &self.offsets, &self.layout),
+            ))),
+            257..=512 => Repr::U512(Box::new(bnum::types::U512::from_digits(
+                fixed::pack_digits::<8>(idx, &self.offsets, &self.layout),
+            ))),
             _ => {
                 let mut limbs = dynamic::zeroed(self.width_bits)?;
                 for (&value, &offset) in idx.iter().zip(&self.offsets) {
                     dynamic::place(&mut limbs, value, offset);
                 }
-                Ok(IndexKey {
-                    width_bits: self.width_bits,
-                    repr: Repr::Limbs(limbs),
-                })
+                Repr::Limbs(limbs)
             }
-        }
+        };
+        Ok(IndexKey {
+            width_bits: self.width_bits,
+            repr,
+        })
     }
 
     /// Validates length and per-dimension bounds before any packing happens.
@@ -383,6 +377,15 @@ impl FlatIndexer {
                 expected: self.dims.len(),
                 actual: idx.len(),
             });
+        }
+        // Branch-free scan first: it vectorizes, and valid input is the hot
+        // path. Only a failed scan pays for locating the offending position.
+        let any_out_of_range = idx
+            .iter()
+            .zip(&self.dims)
+            .fold(false, |bad, (&value, &dim)| bad | (value >= dim));
+        if !any_out_of_range {
+            return Ok(());
         }
         for (position, (&value, &dim)) in idx.iter().zip(&self.dims).enumerate() {
             if value >= dim {
