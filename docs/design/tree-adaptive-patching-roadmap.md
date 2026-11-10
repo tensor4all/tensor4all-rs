@@ -464,7 +464,14 @@ Open questions for that design record:
    kernel swapped, or has its own. This decides whether M7 parallelizes one
    driver or two.
 
-Status: not implemented; awaits the design record.
+Status: not implemented. The design record
+[tree-patching-elementwise.md](./tree-patching-elementwise.md) proposes
+answers to both questions above (a library M3 measurement on
+`f(x_1, ..., x_k)`, and M2's driver with a per-patch engine seam) and raises
+three more for the maintainer. It also revises the projector rule above:
+intersections are the layout of products only; for a general `f` the output
+must also cover regions where an input has no patch, since `f(0, ...)` need
+not vanish.
 
 Exit: tests on branched trees against a dense oracle, for a nonlinear `f`
 through TreeACI and for products through TreeACI and tree RSI; a benchmark
