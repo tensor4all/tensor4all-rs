@@ -34,8 +34,10 @@ where
     ///
     /// The owning patch of a point is found by hashing: patches are grouped by
     /// the set of sites their projectors fix, and a point is looked up once per
-    /// group, so the cost per point does not grow with the number of patches.
-    /// Points of one patch are evaluated together with one evaluator.
+    /// group until one matches. The cost per point is at most the total size
+    /// of the distinct fixed-site sets, independent of how many patches share
+    /// a set; an irregular layout can have as many sets as patches. Points of
+    /// one patch are evaluated together with one evaluator.
     ///
     /// # Arguments
     ///
@@ -50,8 +52,9 @@ where
     ///
     /// One value per point, in point order: real ([`AnyScalar::new_real`]
     /// representation) for a real partition, complex for a complex one. An
-    /// empty partition has no dtype and no site space; it checks only the
-    /// shape and returns real zeros.
+    /// empty partition has no dtype and no site space: it checks `values`
+    /// against `indices` (shape, repeated indices, bounds), not against a site
+    /// space, and returns real zeros.
     ///
     /// # Errors
     ///
