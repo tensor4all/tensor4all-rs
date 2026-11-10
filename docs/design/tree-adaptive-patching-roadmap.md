@@ -412,8 +412,14 @@ Scope:
 Ordering: merging of interpolation outputs can proceed after the checkpoint;
 merging of algebra outputs waits for M3b, which defines their allowance.
 
-Status: not implemented. The allowance rule needs a design record: how a
-merged region's allowance is derived from the M3 (and later M3b) contract.
+Status: not implemented. On 2026-11-10 the maintainer decided to implement
+M6b now, without waiting for an M9 measurement, because overpatching has
+already been observed to be frequent. The allowance rule is proposed in
+[tree-patching-sibling-merge.md](./tree-patching-sibling-merge.md): a merge
+spends only the slack that the members' measured errors leave inside the
+merged region, so the producer's M3 tolerance is kept without a second
+budget. That record also proposes narrowing the outcome above to
+interpolation results until M3b gives algebra outputs per-patch errors.
 
 Exit: tests on branched trees show that a merged interpolation output still
 meets its M3 tolerance, and that a merge exceeding the allowance is rejected.
