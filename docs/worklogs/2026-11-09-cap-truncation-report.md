@@ -38,9 +38,11 @@
   and it does not become an error.
 - Controls that report nothing, for both entry points: cap 2 with
   `patch_order = [a]` for addition (the exact rank of each patch is 2, error at
-  round-off), cap 4 for contraction (the output patches have exact rank 4), and
-  cap 1 with every bit in `patch_order` (the split loop keeps splitting, so no
-  patch reaches the cap).
+  round-off), cap 4 for contraction (the output patches had exact rank 4 when this
+  was measured; `main`'s #1186 part 2 stopped keeping zero singular values, so the
+  control now asserts only that every bond stays below the cap), and cap 1 with
+  every bit in `patch_order` (the split loop keeps splitting, so no patch
+  reaches the cap).
 - A stored bond dimension above the cap with a zero singular value is not
   reported; that case is pinned by its own test, because the stored dimensions
   are what made an earlier version of the flag wrong.
