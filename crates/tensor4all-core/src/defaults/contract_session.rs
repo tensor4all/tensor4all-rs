@@ -697,6 +697,65 @@ pub fn norm_on_session(
     norm_on_session_impl::<false>(session, tensor)
 }
 
+/// Read the dense column-major values of a host tensor under `new_indices` on a caller-held session.
+///
+/// The session counterpart of `permute_indices(new_indices)` followed by
+/// [`IdxTensor::to_vec`]: the reorder and the readback run on `session`, so a
+/// caller already inside a session reads an operand without entering the
+/// process-global context or the eager runtime that owns the operand. Compact
+/// host storage and untracked eager host values are both served; `new_indices`
+/// must be a reordering of the tensor's indices with the same dimensions.
+///
+/// # Errors
+///
+/// Returns [`IdxTensorError::PayloadScalarTypeMismatch`] when the payload is not `T`
+/// (classified exactly as [`IdxTensor::to_vec`] classifies it, so
+/// [`IdxTensorError::is_payload_scalar_type_mismatch`] holds), and the refusals of
+/// [`permute_indices_on_session`] for an invalid index list, a tracked, device-resident or
+/// structured operand, a deferred storage error or a session failure.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{dense_values_on_session, DynIndex, IdxTensor};
+/// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let i = DynIndex::new_dyn(2);
+/// let j = DynIndex::new_dyn(3);
+/// let tensor = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
+/// let values = context.with_concrete_session(|session| {
+///     dense_values_on_session::<f64>(session, &tensor, &[j.clone(), i.clone()])
+/// })??;
+/// // Column-major over `[j, i]`: the transpose of the `[i, j]` buffer.
+/// assert_eq!(values, vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+/// let mismatch = context.with_concrete_session(|session| {
+///     dense_values_on_session::<f32>(session, &tensor, &[i.clone(), j.clone()])
+/// })?;
+/// assert!(mismatch.unwrap_err().is_payload_scalar_type_mismatch());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn dense_values_on_session<T: TensorScalar + Copy>(
+    session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+    tensor: &IdxTensor,
+    new_indices: &[crate::defaults::DynIndex],
+) -> Result<Vec<T>, IdxTensorError> {
+    const OP: &str = "dense_values_on_session";
+    let aligned = permute_indices_on_session(session, tensor, new_indices)?;
+    let operand = aligned.session_dense_operand(OP)?;
+    let value = materialize_on_session(OP, session, operand)?;
+    value.as_slice::<T>().map(<[T]>::to_vec).map_err(|source| {
+        if matches!(
+            source.kind(),
+            tenferro_tensor::ErrorKind::Validation(tenferro_tensor::ValidationKind::DTypeMismatch)
+        ) {
+            IdxTensorError::PayloadScalarTypeMismatch
+        } else {
+            IdxTensorError::operation(OP, anyhow::Error::new(source))
+        }
+    })
+}
+
 /// Publish a compact host copy of one operand on the caller's session.
 ///
 /// The copy is the representation boundary the runtime-free indexed operations

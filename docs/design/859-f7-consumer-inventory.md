@@ -78,7 +78,7 @@ context) and who has never been touched.
 | `tensor4all-aci` | `elementwise_batched_with_rng_in` (LUCI and frame products in the caller's context) |
 | `tensor4all-treeaci` | `tree_elementwise_batched_with_rng_in` (LUCI and candidate-matrix products in the caller's context) |
 | `tensor4all-itensorlike` | `contract_in` (SRC / Zip-up / Fit / Naive through treetn's twins) |
-| `tensor4all-treersi` | `hadamard_many_in`, `hadamard_many_with_rng_in` |
+| `tensor4all-treersi` | `hadamard_many_in`, `hadamard_many_with_rng_in`, `hadamard_many_with_rng_on_session` (every step on the caller's session, #1236) |
 | everything else | none yet (see §5) |
 
 Reproduce: `grep -rhoE "pub fn [a-z_0-9]*(_in|_on_session|_on_phase|_with_context|_in_context)\b" crates/*/src`.

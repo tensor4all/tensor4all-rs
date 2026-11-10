@@ -3,7 +3,7 @@ use crate::{engine, Result, TreeRsiNode, TreeRsiOptions, TreeRsiResult, TreeRsiS
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::IdxTensor;
-use tensor4all_tensorbackend::ExecutionContext;
+use tensor4all_tensorbackend::{explicit::Session, ExecutionContext};
 use tensor4all_treetn::TreeTN;
 
 /// Approximates the simultaneous Hadamard product using the default CPU context.
@@ -45,6 +45,10 @@ pub fn hadamard_many<T: TreeRsiScalar, V: TreeRsiNode>(
 /// ChaCha8 RNG; [`hadamard_many_with_rng_in`] instead consumes a caller's stream.
 /// The returned tensor cores also belong to `context`. Tolerances control
 /// local pivot selection only; validate actual product accuracy separately.
+///
+/// A CPU context is entered once for the whole product, so a caller that
+/// already holds a session of `context` gets the context's re-entry error;
+/// such a caller should use [`hadamard_many_with_rng_on_session`] instead.
 ///
 /// With the `tenferro-cuda` feature a CUDA context is accepted: sketch blocks
 /// stay in host buffers, so every contraction uploads its operands and
@@ -121,5 +125,58 @@ pub fn hadamard_many_with_rng_in<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Siz
     rng: &mut R,
     context: &ExecutionContext,
 ) -> Result<TreeRsiResult<V>> {
-    engine::run::<T, V, R>(inputs, options, rng, context)
+    engine::run_in::<T, V, R>(inputs, options, rng, context)
+}
+
+/// Approximates the Hadamard product on a caller-held explicit session.
+///
+/// Every numerical step -- input readback, sketch contractions and the local
+/// rank decision -- runs on `session`; neither the process-global context nor
+/// any other context is entered, so this is the entry for code that already
+/// runs inside a session (a worker lane, a patch driver stage, an MPI rank).
+/// It is CPU-only by construction: there is no CUDA route and no fallback to
+/// the default CPU context.
+///
+/// `inputs` are host tensors: compact host storage (for example published by
+/// another session) or untracked eager host values. A tracked, device-resident
+/// or structured core is refused. The returned cores are published as compact
+/// host storage, so the result stays usable after `session` is released.
+/// `rng` is consumed exactly as [`hadamard_many_with_rng_in`] consumes it, and
+/// for the same inputs, options, RNG stream and backend configuration both
+/// entries return the same tree; [`hadamard_many_with_rng_in`] on a CPU context
+/// is this implementation run on that context's session.
+///
+/// # Errors
+/// Returns [`crate::TreeRsiError`] for invalid topology, indices, options or
+/// probes, scalar mismatch, allocation bounds, lost floating-point range, a
+/// refused input representation or a session failure. Invalid input cores and
+/// required probe matrices are rejected before the random stream advances.
+///
+/// # Examples
+/// ```
+/// use rand::SeedableRng;
+/// use rand_chacha::ChaCha8Rng;
+/// use tensor4all_core::{DynIndex, IdxTensor};
+/// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
+/// use tensor4all_treetn::TreeTN;
+/// use tensor4all_treersi::{hadamard_many_with_rng_on_session, TreeRsiOptions};
+/// let context = CpuExecutionContext::from_backend(CpuBackend::new());
+/// let t = TreeTN::from_tensors(vec![IdxTensor::from_dense_compact(
+///     vec![DynIndex::new_dyn(2)], vec![2.0_f64, 3.0])?], vec![0usize])?;
+/// let mut rng = ChaCha8Rng::seed_from_u64(7);
+/// let options = TreeRsiOptions { max_bond_dim: Some(2), ..Default::default() };
+/// let out = context.with_concrete_session(|session| {
+///     hadamard_many_with_rng_on_session::<f64, _, _>(&[t.clone(), t], &options, &mut rng, session)
+/// })??;
+/// // The session is released; the compact result is still readable.
+/// assert_eq!(out.tree.to_dense()?.dense_host_values::<f64>()?, vec![4.0, 9.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn hadamard_many_with_rng_on_session<T: TreeRsiScalar, V: TreeRsiNode, R: Rng + ?Sized>(
+    inputs: &[TreeTN<IdxTensor, V>],
+    options: &TreeRsiOptions<V>,
+    rng: &mut R,
+    session: &mut Session<'_>,
+) -> Result<TreeRsiResult<V>> {
+    engine::run_on_session::<T, V, R>(inputs, options, rng, session)
 }

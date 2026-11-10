@@ -1,6 +1,5 @@
 use super::*;
 use num_complex::Complex64;
-use std::sync::Arc;
 
 use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
 
@@ -92,13 +91,14 @@ fn naive_contract_axis_diag_probe<T: TreeRsiScalar>(
     out
 }
 
-fn cpu_context() -> ExecutionContext {
-    ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
-        CpuBackend::with_threads(1).unwrap(),
-    )))
+/// Runs `f` on one session of a private single-threaded CPU context.
+fn on_cpu<R>(f: impl FnOnce(&mut Exec<'_, '_>) -> R) -> R {
+    CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap())
+        .with_concrete_session(|session| f(&mut Exec::Session(session)))
+        .unwrap()
 }
 
-fn assert_contract_axis_diag_probe_matches_naive<T: Fixture>(context: &ExecutionContext) {
+fn assert_contract_axis_diag_probe_matches_naive<T: Fixture>(exec: &mut Exec<'_, '_>) {
     // Every case is `rest.. x n x k`: the probe axis is last and `axis` is the
     // contracted one, so each case exercises a multi-probe (`k > 1`) call. The
     // rank-2 case has an empty rest prefix (`rows == 1`, one scalar per probe),
@@ -124,7 +124,7 @@ fn assert_contract_axis_diag_probe_matches_naive<T: Fixture>(context: &Execution
             let rows: usize = expected_dims[..expected_dims.len() - 1].iter().product();
 
             let actual = contract_axis_diag_probe(
-                context,
+                exec,
                 Dense {
                     dims: dims.to_vec(),
                     data: data.clone(),
@@ -164,12 +164,12 @@ fn assert_contract_axis_diag_probe_matches_naive<T: Fixture>(context: &Execution
 
 #[test]
 fn contract_axis_diag_probe_matches_the_naive_probe_loop_f64() {
-    assert_contract_axis_diag_probe_matches_naive::<f64>(&cpu_context());
+    on_cpu(assert_contract_axis_diag_probe_matches_naive::<f64>);
 }
 
 #[test]
 fn contract_axis_diag_probe_matches_the_naive_probe_loop_c64() {
-    assert_contract_axis_diag_probe_matches_naive::<Complex64>(&cpu_context());
+    on_cpu(assert_contract_axis_diag_probe_matches_naive::<Complex64>);
 }
 
 /// The probe label of each weight column must reach its own probe column of the
@@ -183,7 +183,7 @@ fn contract_axis_diag_probe_keeps_each_probe_column_separate() {
         data: (1..=12).map(|value| value as f64).collect(),
     };
     let weights = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let out = contract_axis_diag_probe(&cpu_context(), input, 1, &weights).unwrap();
+    let out = on_cpu(|exec| contract_axis_diag_probe(exec, input, 1, &weights)).unwrap();
     assert_eq!(out.dims, vec![2, 3]);
     assert_eq!(out.data, vec![7.0, 10.0, 43.0, 50.0, 111.0, 122.0]);
 }
@@ -191,10 +191,7 @@ fn contract_axis_diag_probe_keeps_each_probe_column_separate() {
 #[cfg(feature = "tenferro-cuda")]
 mod cuda {
     use super::*;
-
-    fn cuda_context() -> ExecutionContext {
-        ExecutionContext::Cuda(cuda_execution())
-    }
+    use std::sync::Arc;
 
     /// A CUDA context, or a panic naming what failed.
     ///
@@ -217,13 +214,15 @@ mod cuda {
     #[test]
     #[ignore = "requires visible CUDA ordinal 0"]
     fn contract_axis_diag_probe_matches_the_naive_probe_loop_f64_on_cuda() {
-        assert_contract_axis_diag_probe_matches_naive::<f64>(&cuda_context());
+        assert_contract_axis_diag_probe_matches_naive::<f64>(&mut Exec::Cuda(&cuda_execution()));
     }
 
     #[test]
     #[ignore = "requires visible CUDA ordinal 0"]
     fn contract_axis_diag_probe_matches_the_naive_probe_loop_c64_on_cuda() {
-        assert_contract_axis_diag_probe_matches_naive::<Complex64>(&cuda_context());
+        assert_contract_axis_diag_probe_matches_naive::<Complex64>(&mut Exec::Cuda(
+            &cuda_execution(),
+        ));
     }
 
     #[test]
@@ -234,7 +233,8 @@ mod cuda {
             data: (1..=12).map(|value| value as f64).collect(),
         };
         let weights = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
-        let out = contract_axis_diag_probe(&cuda_context(), input, 1, &weights).unwrap();
+        let out = contract_axis_diag_probe(&mut Exec::Cuda(&cuda_execution()), input, 1, &weights)
+            .unwrap();
         assert_eq!(out.dims, vec![2, 3]);
         assert_eq!(out.data, vec![7.0, 10.0, 43.0, 50.0, 111.0, 122.0]);
     }
@@ -250,11 +250,11 @@ mod cuda {
     #[ignore = "requires visible CUDA ordinal 0"]
     fn cuda_primitives_enter_the_callers_context_engine() {
         let cuda = cuda_execution();
-        let context = ExecutionContext::Cuda(Arc::clone(&cuda));
         let (probe, product) = cuda
             .with_session(|_engine| {
+                let mut exec = Exec::Cuda(&cuda);
                 let probe = contract_axis_diag_probe(
-                    &context,
+                    &mut exec,
                     Dense {
                         dims: vec![2, 2, 3],
                         data: (1..=12).map(|value| value as f64).collect(),
@@ -263,7 +263,7 @@ mod cuda {
                     &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
                 );
                 let product = mat_mul_cols(
-                    &context,
+                    &mut exec,
                     vec![1.0, 3.0, 2.0, 4.0],
                     2,
                     2,
@@ -302,17 +302,17 @@ mod cuda {
     #[ignore = "requires visible CUDA ordinal 0"]
     fn cuda_primitives_dispatch_to_the_device_arm() {
         let cuda = cuda_execution();
-        let context = ExecutionContext::Cuda(Arc::clone(&cuda));
+        let mut exec = Exec::Cuda(&cuda);
         let probe_input = || Dense {
             dims: vec![2, 2, 3],
             data: (1..=12).map(|value| value as f64).collect(),
         };
 
         let before = cuda_einsums();
-        contract_axis_diag_probe(&context, probe_input(), 1, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        contract_axis_diag_probe(&mut exec, probe_input(), 1, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
             .unwrap();
         mat_mul_cols(
-            &context,
+            &mut exec,
             vec![1.0, 3.0, 2.0, 4.0],
             2,
             2,
@@ -327,17 +327,14 @@ mod cuda {
              {dispatched}"
         );
 
-        contract_axis_diag_probe(
-            &cpu_context(),
-            probe_input(),
-            1,
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-        )
+        on_cpu(|cpu| {
+            contract_axis_diag_probe(cpu, probe_input(), 1, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        })
         .unwrap();
         assert_eq!(
             cuda_einsums(),
             before + dispatched,
-            "a CPU-context call must not be counted as a device dispatch"
+            "a CPU-session call must not be counted as a device dispatch"
         );
     }
 
@@ -346,8 +343,8 @@ mod cuda {
     fn mat_mul_cols_matches_the_cpu_route_on_cuda() {
         let a = vec![1.0_f64, 3.0, 2.0, 4.0];
         let b = vec![5.0_f64, 7.0, 6.0, 8.0];
-        let cpu = mat_mul_cols(&cpu_context(), a.clone(), 2, 2, b.clone(), 2).unwrap();
-        let cuda = mat_mul_cols(&cuda_context(), a, 2, 2, b, 2).unwrap();
+        let cpu = on_cpu(|exec| mat_mul_cols(exec, a.clone(), 2, 2, b.clone(), 2)).unwrap();
+        let cuda = mat_mul_cols(&mut Exec::Cuda(&cuda_execution()), a, 2, 2, b, 2).unwrap();
         // 2x2 column-major `[1 2; 3 4] [5 6; 7 8] = [19 22; 43 50]`.
         assert_eq!(cpu, vec![19.0, 43.0, 22.0, 50.0]);
         assert_eq!(cuda, cpu);

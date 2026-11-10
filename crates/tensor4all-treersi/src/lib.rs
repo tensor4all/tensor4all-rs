@@ -22,6 +22,11 @@
 //! process-global CPU context. Automatic differentiation through this operation
 //! is not supported.
 //!
+//! [`hadamard_many_with_rng_on_session`] runs the same implementation on a
+//! caller-held explicit session (CPU only): every step stays on that session,
+//! and the result is compact host storage that outlives it. A CPU context entry
+//! is that implementation run on the context's own session.
+//!
 //! # Examples
 //! ```
 //! use tensor4all_core::{DynIndex, IdxTensor};
@@ -47,7 +52,7 @@ mod scaled;
 
 #[cfg(feature = "global-defaults")]
 pub use api::hadamard_many;
-pub use api::{hadamard_many_in, hadamard_many_with_rng_in};
+pub use api::{hadamard_many_in, hadamard_many_with_rng_in, hadamard_many_with_rng_on_session};
 pub use error::{Result, TreeRsiError};
 pub use options::{TreeRsiOptions, TreeRsiProbes};
 pub use result::{TreeRsiDiagnostics, TreeRsiEdgeReport, TreeRsiResult};
