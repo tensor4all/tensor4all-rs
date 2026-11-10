@@ -42,6 +42,12 @@ Norms, inner products, contraction, truncation, and summation use this stored
 masked value directly. No projector is re-applied and no full network is
 densified.
 
+`PartitionedTreeTN::evaluate_batched(&indices, values)` evaluates a partition
+at many points, with the same `indices` and column-major `values` layout as
+`TreeTN::evaluate`. Each point is evaluated by the one patch whose projector
+it satisfies, found by a hash lookup, and a point that no patch covers is
+zero.
+
 ## Adaptive patching
 
 Every truncating or contracting operation takes an explicit existing node name
