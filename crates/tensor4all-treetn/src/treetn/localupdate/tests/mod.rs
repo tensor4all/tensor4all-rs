@@ -649,8 +649,11 @@ fn test_sweep_plan_from_treetn() {
 
 /// A two-site block whose bond is smaller than both of its matricization
 /// dimensions, so `TruncateUpdater` conditions the left operand with a QR
-/// before the truncating SVD. Its bond amplitude decays geometrically, so a
-/// cutoff discards singular values that are genuinely nonzero.
+/// before the truncating SVD. The right operand is built as `sum_p 0.2^p u_p
+/// v_p^T` over an orthonormal pair of DCT-II bases, so its bond directions have
+/// singular values exactly a factor 5 apart and the block truncates in several
+/// directions at once (a single decaying direction would be rank one and would
+/// make a bond cap untestable).
 fn conditioned_fixture() -> (TreeTN<IdxTensor, String>, DynIndex) {
     let site_a = DynIndex::new_dyn(2);
     let left_a = DynIndex::new_dyn(16);
@@ -658,18 +661,30 @@ fn conditioned_fixture() -> (TreeTN<IdxTensor, String>, DynIndex) {
     let right_b = DynIndex::new_dyn(8);
     let bond = DynIndex::new_dyn(8);
 
+    const BOND: usize = 8;
+    const COLS_B: usize = 2 * 8;
+
     let rows_a = 2 * 16;
-    let data_a: Vec<f64> = (0..rows_a * 8)
+    let data_a: Vec<f64> = (0..rows_a * BOND)
         .map(|k| ((k * 37) % 101) as f64 / 101.0 - 0.5)
         .collect();
-    // The bond index is the fastest one, so `k % 8` selects it: its amplitude
-    // decays by a factor 5 per step, so a 1e-2 relative cutoff keeps two or
-    // three of the eight directions.
-    let data_b: Vec<f64> = (0..8 * 2 * 8)
+    // Orthonormal columns of the DCT-II matrix on 8 (bond) and 16 (site x right)
+    // points; `sqrt(2/n)` normalises the non-constant mode and `sqrt(1/n)` the
+    // constant one.
+    let basis = |n: usize, i: usize, p: usize| {
+        let norm = if p == 0 {
+            (1.0 / n as f64).sqrt()
+        } else {
+            (2.0 / n as f64).sqrt()
+        };
+        norm * (std::f64::consts::PI * (i as f64 + 0.5) * p as f64 / n as f64).cos()
+    };
+    let data_b: Vec<f64> = (0..BOND * COLS_B)
         .map(|k| {
-            let direction = k % 8;
-            let decay = 0.2_f64.powi(direction);
-            decay * ((((k / 8) * 53) % 97) as f64 / 97.0 - 0.5)
+            let (d, c) = (k / COLS_B, k % COLS_B);
+            (0..BOND)
+                .map(|p| 0.2_f64.powi(p as i32) * basis(BOND, d, p) * basis(COLS_B, c, p))
+                .sum()
         })
         .collect();
 

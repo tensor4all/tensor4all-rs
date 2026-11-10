@@ -44,17 +44,28 @@
 
 - `test_truncate_updater_conditioned_route_matches_the_direct_one` builds a
   two-site block whose bond (8) is smaller than both its sides (32 rows, 16
-  columns), runs the updater, and compares the block it produces against the one
-  produced by a single SVD of the contracted pair: same bond dimension, same
-  rank, same values to 1e-12, and the left factor must differ from the direct
-  route's, which pins that the conditioning really ran.
+  columns) and whose eight bond directions have singular values a factor 5 apart
+  (`sum_p 0.2^p u_p v_p^T` over DCT-II bases; the block's own spectrum, `A B`, is
+  0.667 / 0.267 / 0.0424 / 0.0102 / ... so a 1e-2 relative cutoff keeps four
+  directions and the cap of 3 binds), runs the updater, and compares the block it
+  produces against the one produced by a single SVD of the contracted pair: same
+  bond dimension, same rank, same values to 1e-12 — for a relative cutoff, an
+  absolute cutoff, squared values and a bond cap.
+  It is an **equivalence test, not a route test**: both routes compute the same
+  truncated block, so it also passes with the conditioning switched off. That the
+  conditioned branch is entered was measured separately, by a counter inside the
+  branch run on the reproducer's four states: A 84 steps, B1 74, B2 160, IFT 0
+  (on IFT the bond is not smaller than both sides of the block, so every step
+  takes the fallback, as designed). A counter-based assertion would pin the route
+  better than this note; it is not in this PR.
 - The whole crate suite passes (702 unit tests, 419 + 212 integration tests);
   `cargo fmt --all --check` and `cargo clippy --all-targets` are clean.
 - Speedups on the four states, base `a1a02af6` against the branch, two runs per
-  side alternating: 2.23x (comb A), 1.49x (B1), 1.72x (B2, an already compressed
-  state), 1.29x (the reporter's three-branch state). Truncation accuracy is
+  side alternating: 2.24x (comb A), 1.50x (B1), 1.72x (B2, an already compressed
+  state), 1.26x (the reporter's three-branch state). Truncation accuracy is
   unchanged to the printed precision, and the deviation from the unconditioned
-  route is 7e-14 to 2.8e-13. Numbers, harness and raw output:
+  route is 7e-14 to 2.8e-13. Numbers, harness and the command output that was
+  captured:
   [the return visit evidence](../experiments/2026-11-10-treetn-truncate-return-visit.md).
 - The wall times were taken on a host at load average 12-26, so the ratios are
   what the numbers support; the bond dimensions and removed units are exact.

@@ -126,10 +126,10 @@ Truncate wall time, two runs per side, base and head alternating:
 
 | state | base | head | speedup | bonds (both) | units (both) |
 |---|---|---|---|---|---|
-| A | 5.105 s / 5.099 s | 2.284 s / 2.293 s | 2.23x | 128/5754 -> 112/4105 | 1649 |
-| B1 | 8.675 s / 8.714 s | 5.844 s / 5.852 s | 1.49x | 595/9723 -> 270/5959 | 3764 |
-| B2 | 5.741 s / 5.801 s | 3.378 s / 3.368 s | 1.72x | 270/5959 -> 270/5959 | 0 |
-| IFT | 4.856 s / 5.038 s | 3.836 s / 3.849 s | 1.29x | 307/9888 -> 135/5254 | 4634 |
+| A | 5.153 s / 5.145 s | 2.304 s / 2.293 s | 2.24x | 128/5754 -> 112/4105 | 1649 |
+| B1 | 8.743 s / 8.761 s | 5.846 s / 5.873 s | 1.50x | 595/9723 -> 270/5959 | 3764 |
+| B2 | 5.844 s / 5.822 s | 3.389 s / 3.387 s | 1.72x | 270/5959 -> 270/5959 | 0 |
+| IFT | 4.863 s / 4.860 s | 3.862 s / 3.871 s | 1.26x | 307/9888 -> 135/5254 | 4634 |
 
 Accuracy against a base run at rtol 1e-15, relative L2 over 8192 sampled
 amplitudes:
@@ -145,8 +145,13 @@ amplitudes:
 the two binaries agree on the whole vector in all four states, so it is not only
 the maximum and the sum that match. The number of removed units is identical too,
 and the state agrees to 1e-13, which is the different rounding of an equivalent
-factorization, not a different truncation. The raw output of every run above is in
-[the evidence JSON](2026-11-10-treetn-truncate-return-visit.json).
+factorization, not a different truncation. The raw output of the timing runs and
+of the `diag` classification is in
+[the evidence JSON](2026-11-10-treetn-truncate-return-visit.json)
+(`campaign-*.txt`, `r2-diag-*.txt`), and every number in the table above is read
+off those captures. The reference runs (`run <kind> 1e-15`) and the offline
+comparison that produces the accuracy table are **not** in the JSON: they are
+reproducible from the commands recorded there, but their output was not kept.
 
 ## Not measured
 
