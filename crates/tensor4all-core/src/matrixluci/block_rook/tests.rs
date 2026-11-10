@@ -590,3 +590,93 @@ fn lazy_rook_walk_loads_the_pivot_operands_once_and_selects_the_same_pivots() {
     .unwrap();
     assert_eq!(out.pivot_errors[cap].to_bits(), trailing.to_bits());
 }
+
+/// Smooth ridge from tensor4all-rs#1256: a residual with several separated
+/// bumps, on which a rook walk ends at a local maximum far below the rest.
+fn smooth_ridge_matrix(n: usize) -> Vec<f64> {
+    let entry = |i: usize, j: usize| {
+        let x = i as f64 / n as f64;
+        let y = (j as f64 + 0.5) / n as f64;
+        (-(x - y) * (x - y) / 0.002).exp() + 0.3 * (3.0 * x * y).cos()
+    };
+    let mut data = vec![0.0; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            data[i + n * j] = entry(i, j);
+        }
+    }
+    data
+}
+
+/// `max |A - A[:, J] A[I, J]^{-1} A[I, :]|` over every entry of `A`, built
+/// densely and independently of the kernel's residual helpers.
+fn interpolation_max_error(data: &[f64], n: usize, rows: &[usize], cols: &[usize]) -> f64 {
+    use tensor4all_tensorbackend::{mat_mul, solve_matrix, Matrix};
+    let block = |rs: &[usize], cs: &[usize]| {
+        let mut out = Vec::with_capacity(rs.len() * cs.len());
+        for &c in cs {
+            for &r in rs {
+                out.push(data[r + n * c]);
+            }
+        }
+        Matrix::from_col_major_vec(rs.len(), cs.len(), out)
+    };
+    let all: Vec<usize> = (0..n).collect();
+    let solved = solve_matrix(&block(rows, cols), &block(rows, &all)).unwrap();
+    let approx = mat_mul(&block(&all, cols), &solved).unwrap();
+    let mut max_err = 0.0f64;
+    for j in 0..n {
+        for i in 0..n {
+            let err = (data[i + n * j] - approx[[i, j]]).abs();
+            assert!(
+                err.is_finite(),
+                "non-finite interpolation error at ({i}, {j})"
+            );
+            max_err = max_err.max(err);
+        }
+    }
+    max_err
+}
+
+#[test]
+fn lazy_block_rook_tolerance_stop_reports_the_true_interpolation_error() {
+    // tensor4all-rs#1256: the kernel stopped on the last rook pivot, 2.5e-9 of
+    // the matrix maximum, while the returned interpolant was off by 1.3e-6.
+    let n = 200;
+    let rel_tol = 1e-8;
+    let data = smooth_ridge_matrix(n);
+    let options = PivotKernelOptions {
+        rel_tol,
+        abs_tol: 0.0,
+        ..PivotKernelOptions::default()
+    };
+    let dense = DenseLuKernel
+        .factorize(&DenseMatrixSource::from_column_major(&data, n, n), &options)
+        .unwrap();
+    let rook = LazyBlockRookKernel
+        .factorize(&dense_to_lazy(data.clone(), n, n), &options)
+        .unwrap();
+
+    for (name, out) in [("dense", &dense), ("rook", &rook)] {
+        let reported = *out.pivot_errors.last().unwrap();
+        let first_pivot = out.pivot_errors[0];
+        let true_err = interpolation_max_error(&data, n, &out.row_indices, &out.col_indices);
+        println!(
+            "{name:5} rank={:3} reported/first_pivot={:.2e} true/first_pivot={:.2e}",
+            out.rank,
+            reported / first_pivot,
+            true_err / first_pivot
+        );
+        // The selected rows and columns carry only rounding error, so the
+        // reported remaining maximum and the true maximum agree closely.
+        assert!(
+            (reported - true_err).abs() <= 1e-3 * true_err + 1e-13 * first_pivot,
+            "{name}: reported error {reported:.3e} is not the true error {true_err:.3e}"
+        );
+        assert!(
+            true_err < rel_tol * first_pivot,
+            "{name}: stopped with true error {true_err:.3e} >= tolerance {:.3e}",
+            rel_tol * first_pivot
+        );
+    }
+}
