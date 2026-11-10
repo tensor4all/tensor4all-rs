@@ -89,6 +89,11 @@ literals, or named public types:
 - Dense fixed-rank RSVD, Gaussian range finding, caller-owned RNG entries,
   and RSVD selection in TreeTN Fit and Zipup. Supported scalar types are
   `f64` and `Complex64`; `f32` and `Complex32` are unsupported.
+- `MergeRefineOptions::output_regions` names the output regions a
+  `schedule_merge_refine` run must compute. `None`, the default, keeps the
+  previous behaviour of refining every region at `output_depth`; `Some(regions)`
+  prunes every output prefix that intersects none of them, so the result, the
+  report counters and `error_bound` cover the selected part of the output.
 
 ### Public-API renames and removals since v0.2.0
 
