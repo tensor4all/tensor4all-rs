@@ -69,7 +69,10 @@ pub use localupdate::{
 };
 
 // Re-export the variational sum-fit entry point and its contraction options alias.
-pub use fit::{contract_fit_in, fit_sum, FitContractionOptions as FitOptions};
+pub use fit::{
+    contract_fit_in, fit_sum, fit_sum_with_report, FitContractionOptions as FitOptions,
+    FitSumResult, FitTruncation,
+};
 
 // Re-export partial contraction types
 pub use partial_contraction::{

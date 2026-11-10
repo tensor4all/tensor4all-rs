@@ -100,6 +100,7 @@ pub use treetn::{
     factorize_tensor_to_treetn_with,
     factorize_tensor_to_treetn_with_on_session,
     fit_sum,
+    fit_sum_with_report,
     fix_and_remove_site,
     get_boundary_edges,
     hadamard,
@@ -116,6 +117,8 @@ pub use treetn::{
     EvaluationHint,
     ExactSum,
     FitOptions,
+    FitSumResult,
+    FitTruncation,
     // Core type
     GreedyCenterSearch,
     LocalUpdateStep,
