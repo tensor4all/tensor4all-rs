@@ -646,3 +646,152 @@ fn test_sweep_plan_from_treetn() {
     assert_eq!(plan1.len(), plan2.len());
     assert_eq!(plan1.nsite, plan2.nsite);
 }
+
+/// A two-site block whose bond is smaller than both of its matricization
+/// dimensions, so `TruncateUpdater` conditions the left operand with a QR
+/// before the truncating SVD. The right operand is built as `sum_p 0.2^p u_p
+/// v_p^T` over an orthonormal pair of DCT-II bases, so its bond directions have
+/// singular values exactly a factor 5 apart and the block truncates in several
+/// directions at once (a single decaying direction would be rank one and would
+/// make a bond cap untestable).
+fn conditioned_fixture() -> (TreeTN<IdxTensor, String>, DynIndex) {
+    let site_a = DynIndex::new_dyn(2);
+    let left_a = DynIndex::new_dyn(16);
+    let site_b = DynIndex::new_dyn(2);
+    let right_b = DynIndex::new_dyn(8);
+    let bond = DynIndex::new_dyn(8);
+
+    const BOND: usize = 8;
+    const COLS_B: usize = 2 * 8;
+
+    let rows_a = 2 * 16;
+    let data_a: Vec<f64> = (0..rows_a * BOND)
+        .map(|k| ((k * 37) % 101) as f64 / 101.0 - 0.5)
+        .collect();
+    // Orthonormal columns of the DCT-II matrix on 8 (bond) and 16 (site x right)
+    // points; `sqrt(2/n)` normalises the non-constant mode and `sqrt(1/n)` the
+    // constant one.
+    let basis = |n: usize, i: usize, p: usize| {
+        let norm = if p == 0 {
+            (1.0 / n as f64).sqrt()
+        } else {
+            (2.0 / n as f64).sqrt()
+        };
+        norm * (std::f64::consts::PI * (i as f64 + 0.5) * p as f64 / n as f64).cos()
+    };
+    let data_b: Vec<f64> = (0..BOND * COLS_B)
+        .map(|k| {
+            let (d, c) = (k / COLS_B, k % COLS_B);
+            (0..BOND)
+                .map(|p| 0.2_f64.powi(p as i32) * basis(BOND, d, p) * basis(COLS_B, c, p))
+                .sum()
+        })
+        .collect();
+
+    let tensor_a =
+        IdxTensor::from_dense(vec![site_a.clone(), left_a.clone(), bond.clone()], data_a).unwrap();
+    let tensor_b = IdxTensor::from_dense(vec![bond.clone(), site_b, right_b], data_b).unwrap();
+
+    let mut subtree = TreeTN::<IdxTensor, String>::new();
+    subtree.add_tensor("A".to_string(), tensor_a).unwrap();
+    subtree.add_tensor("B".to_string(), tensor_b).unwrap();
+    let node_a = subtree.node_index(&"A".to_string()).unwrap();
+    let node_b = subtree.node_index(&"B".to_string()).unwrap();
+    subtree.connect(node_a, &bond, node_b, &bond).unwrap();
+    subtree.set_canonical_region(["A".to_string()]).unwrap();
+    (subtree, bond)
+}
+
+/// The conditioned route must truncate exactly as a single SVD of the
+/// contracted pair does, for every truncation policy the updater accepts.
+#[test]
+fn test_truncate_updater_conditioned_route_matches_the_direct_one() {
+    use tensor4all_core::{
+        Canonical, FactorizeOptions, SvdTruncationPolicy, TensorContractionLike,
+    };
+
+    let policies = [
+        ("relative cutoff", SvdTruncationPolicy::new(1e-2), None),
+        (
+            "absolute cutoff",
+            SvdTruncationPolicy::new(1e-4).with_absolute(),
+            None,
+        ),
+        (
+            "squared values",
+            SvdTruncationPolicy::new(1e-4).with_squared_values(),
+            None,
+        ),
+        ("bond cap", SvdTruncationPolicy::new(0.0), Some(3)),
+    ];
+    for (label, policy, max_bond_dim) in policies {
+        let (subtree, bond) = conditioned_fixture();
+        let options = FactorizeOptions::svd()
+            .with_canonical(Canonical::Left)
+            .with_svd_policy(policy);
+        let options = match max_bond_dim {
+            Some(cap) => options.with_max_bond_dim(cap),
+            None => options,
+        };
+        let tensor_a = subtree
+            .tensor(subtree.node_index(&"A".to_string()).unwrap())
+            .unwrap();
+        let tensor_b = subtree
+            .tensor(subtree.node_index(&"B".to_string()).unwrap())
+            .unwrap();
+        let left_inds: Vec<DynIndex> = tensor_a
+            .external_indices()
+            .iter()
+            .filter(|index| **index != bond)
+            .cloned()
+            .collect();
+        let pair = IdxTensor::contract(&[tensor_a, tensor_b]).unwrap();
+        let expected = tensor4all_core::factorize(&pair, &left_inds, &options).unwrap();
+        assert!(
+            expected.rank < bond.dim(),
+            "{label}: the fixture must truncate, rank {} of {}",
+            expected.rank,
+            bond.dim()
+        );
+
+        let step = LocalUpdateStep {
+            nodes: vec!["A".to_string(), "B".to_string()],
+            new_center: "B".to_string(),
+        };
+        let mut updater = TruncateUpdater::new(max_bond_dim, Some(policy));
+        let updated = updater.update(subtree, &step, &TreeTN::new()).unwrap();
+
+        let updated_bond = updated
+            .bond_index(
+                updated
+                    .edge_between(&"A".to_string(), &"B".to_string())
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(updated_bond.dim(), expected.rank, "{label}: retained rank");
+        // Gauges differ between the two routes, so compare the block they both
+        // produce by contracting the factors back together.
+        let actual_block = IdxTensor::contract(&[
+            updated
+                .tensor(updated.node_index(&"A".to_string()).unwrap())
+                .unwrap(),
+            updated
+                .tensor(updated.node_index(&"B".to_string()).unwrap())
+                .unwrap(),
+        ])
+        .unwrap();
+        let expected_block = IdxTensor::contract(&[&expected.left, &expected.right]).unwrap();
+        let actual = actual_block.to_vec::<f64>().unwrap();
+        let reference = expected_block.to_vec::<f64>().unwrap();
+        assert_eq!(actual.len(), reference.len(), "{label}: block size");
+        let scale = reference.iter().fold(0.0_f64, |acc, x| acc.max(x.abs()));
+        let deviation = actual
+            .iter()
+            .zip(&reference)
+            .fold(0.0_f64, |acc, (a, b)| acc.max((a - b).abs()));
+        assert!(
+            deviation <= 1e-12 * scale,
+            "{label}: conditioned route deviates by {deviation} from the direct one"
+        );
+    }
+}
