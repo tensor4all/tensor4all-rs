@@ -2,12 +2,11 @@
 
 ## Status
 
-Proposal for milestone M6c of
-[tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md).
-Not implemented. It answers the two open questions the roadmap leaves to
-this record (acceptance and driver) and raises the ones listed under
-[Open questions for the user](#open-questions-for-the-user). Nothing here is
-decided until the maintainer answers them.
+Design for milestone M6c of
+[tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md),
+approved by the maintainer on 2026-11-10 (see
+[Decisions](#decisions-2026-11-10)). Not implemented. It answers the two open
+questions the roadmap left to this record (acceptance and driver).
 
 The 2026-11-09 ruling stands: Hadamard is the case `k = 2, f = product` of a
 general element-wise operation; the dedicated kernels (TreeACI for any `f`,
@@ -185,7 +184,7 @@ pub trait ElementwiseInterpolator<T, Op> {
   reaches the cap, equality included, as in M6a.
 - **Measurement failure**: under B the M2 rule also splits a patch whose
   measured error exceeds `tau` after its retries. That is a second split
-  trigger beside the decided one ([open question 3](#open-questions-for-the-user)).
+  trigger beside the decided one ([decision 3](#decisions-2026-11-10)).
   Without it, a patch below the cap that fails its measurement could only be
   retained as `ToleranceNotMet` or fail the run.
 - **Retries.** M2 reruns a failed engine with the worst measured points as
@@ -204,7 +203,7 @@ publication rule depends on it. The kernels take other handles:
 a caller RNG, `hadamard_many_in` an `&ExecutionContext`, and RSI requires its
 inputs to belong to that context. A `Session` cannot be turned into either.
 This is a prerequisite outside the patching crate
-([open question 4](#open-questions-for-the-user)):
+([decision 4](#decisions-2026-11-10)):
 
 - (a) session-scoped entry points in `tensor4all-treeaci` and
   `tensor4all-treersi`, like `TreeTN::norm_on_session`; or
@@ -237,8 +236,7 @@ and the inputs of a black-box run never travel.
 - Structural splits: a region spanning two input patches is split before
   any engine run; an input projector fixing a site absent from
   `patch_order` fails before evaluation.
-- Rank at the cap splits; a measurement failure splits (if question 3 is
-  answered yes); `merge_siblings` applies to the result.
+- Rank at the cap splits; a measurement failure splits; `merge_siblings` applies to the result.
 - The compile-time restriction: a `compile_fail` doctest shows that tree
   RSI with a non-product operator does not compile; the product case is
   tested positively.
@@ -254,25 +252,22 @@ at matched measured accuracy, on a workload chosen under the M9 rules.
 2. The M2 seam: resolvability and structural splits, zero-preserving
    operators, input restriction, and the `ElementwiseInterpolator` trait,
    tested with a dense reference engine inside the crate's tests.
-3. The execution-context prerequisite (question 4), in the kernel crates.
+3. The execution-context prerequisite (decision 4), in the kernel crates.
 4. The TreeACI adapter, then the tree RSI adapter.
 5. The benchmark (M9 rules).
 
-Steps 1 and 2 do not depend on question 4.
+Steps 1 and 2 do not depend on step 3.
 
-## Open questions for the user
+## Decisions (2026-11-10)
 
-1. **Acceptance**: (c), the M3 library measurement on
-   `f(x_1, ..., x_k)`? Proposed: yes.
-2. **Driver**: B, M2's driver with a per-patch engine seam (with B0 as
-   oracle and fallback)? Proposed: yes. This changes M2's internals; the
-   per-patch body of `adaptive_interpolation.rs` (over 2500 lines) is
-   generalized, not copied.
-3. **Second split trigger**: under B, does a patch below the cap that fails
-   its measurement also split (M2's rule)? Proposed: yes, since otherwise it
-   can only be retained as `ToleranceNotMet` or fail the run.
-4. **Execution context**: route (a) session-scoped kernel entries, or (b) an
-   `EvalContext` that carries the `ExecutionContext`? Proposed: (a), filed
-   as issues in `tensor4all-treeaci` and `tensor4all-treersi`.
-5. **No broadcasting**: inputs must share the full site space, renamed by the
-   caller if needed? Proposed: yes.
+The maintainer approved every proposal:
+
+1. **Acceptance**: (c), the M3 library measurement on `f(x_1, ..., x_k)`.
+2. **Driver**: B, M2's driver with a per-patch engine seam, with B0 as oracle
+   and fallback. M2's per-patch body is generalized, not copied.
+3. **Second split trigger**: a patch below the cap that fails its measurement
+   splits, as in M2.
+4. **Execution context**: route (a), session-scoped entry points in
+   `tensor4all-treeaci` (#1235) and `tensor4all-treersi` (#1236).
+5. **No broadcasting**: inputs share the full site space; the caller renames
+   equivalent sites beforehand.

@@ -465,10 +465,12 @@ Open questions for that design record:
    driver or two.
 
 Status: not implemented. The design record
-[tree-patching-elementwise.md](./tree-patching-elementwise.md) proposes
-answers to both questions above (a library M3 measurement on
-`f(x_1, ..., x_k)`, and M2's driver with a per-patch engine seam) and raises
-three more for the maintainer. It also revises the projector rule above:
+[tree-patching-elementwise.md](./tree-patching-elementwise.md) answers
+both questions above, approved on 2026-11-10: a library M3 measurement on
+`f(x_1, ..., x_k)`, and M2's driver with a per-patch engine seam. A patch
+that fails its measurement also splits, inputs share one site space (no
+broadcasting), and the kernels get session-scoped entry points in their own
+crates. It also revises the projector rule above:
 intersections are the layout of products only; for a general `f` the output
 must also cover regions where an input has no patch, since `f(0, ...)` need
 not vanish.
