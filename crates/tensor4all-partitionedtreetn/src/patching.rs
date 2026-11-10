@@ -403,8 +403,12 @@ where
 ///
 /// Contraction uses the already eager-masked patches and the supplied TreeTN
 /// contraction options. Its output is then retruncated with cutoffs computed
-/// from the corrected output norm. The split fields of `patching_options` are
-/// retained for API parity but are not used by this post-contraction pass.
+/// from the corrected output norm. When a contribution or a group sum reaches
+/// `patching_options.max_bond_dim`, the group is split: `patch_order` supplies
+/// the candidate split indices (every unprojected output index when it is
+/// empty) and `split_strategy` picks one of them. A capped output therefore
+/// becomes several patches whose projectors refine the original one; when no
+/// unprojected split index is left, the truncated group is returned unsplit.
 ///
 /// # Arguments
 ///
@@ -413,7 +417,7 @@ where
 /// * `center` - Existing node used by contraction and adaptive truncation.
 /// * `contract_options` - Non-dense TreeTN contraction method and rank policy.
 /// * `patching_options` - Output discarded-weight budget and its allocation,
-///   and bond cap.
+///   bond cap, and split options (`patch_order` candidates, `split_strategy`).
 ///
 /// # Returns
 ///
