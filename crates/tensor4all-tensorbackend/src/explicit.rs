@@ -847,9 +847,12 @@ impl<'session> Session<'session> {
 
     /// Solve `A X = B` for column-major matrices on this session.
     ///
-    /// Same kernel, conversion and validation as
-    /// [`solve_matrix`](crate::solve_matrix), entered through this session instead of
-    /// the process-global one.
+    /// Same kernel and validation as [`solve_matrix`](crate::solve_matrix), entered
+    /// through this session instead of the process-global one. `f64` and `Complex64`
+    /// agree with that entry bit for bit; `f32` and `Complex32` are solved in their own
+    /// precision here, while [`solve_matrix`](crate::solve_matrix) promotes them to
+    /// `f64` / `Complex64` and narrows the result, so the narrow types can differ in
+    /// the last bits (see [`solve_matrix_in`](crate::solve_matrix_in)).
     ///
     /// # Errors
     ///
@@ -886,8 +889,10 @@ impl<'session> Session<'session> {
     ///
     /// Same kernel, conversion and validation as
     /// [`triangular_solve_matrix`](crate::triangular_solve_matrix), entered through this
-    /// session instead of the process-global one. `left_side`, `lower`, `transpose_a`
-    /// and `unit_diagonal` have the same meaning as on that entry.
+    /// session instead of the process-global one: `f64` and `Complex64` are solved
+    /// directly, `f32` and `Complex32` are promoted to `f64` / `Complex64` and the
+    /// result narrowed, so both routes return bitwise identical results. `left_side`,
+    /// `lower`, `transpose_a` and `unit_diagonal` have the same meaning as on that entry.
     ///
     /// # Errors
     ///
@@ -921,8 +926,7 @@ impl<'session> Session<'session> {
         unit_diagonal: bool,
     ) -> Result<crate::matrix::Matrix<T>, crate::backend::BackendLinalgError>
     where
-        T: crate::backend::BackendLinalgScalar + Copy,
-        NativeTensor: From<tenferro::TypedTensor<T>>,
+        T: crate::backend::MatrixTriangularSolveScalar,
     {
         crate::triangular_solve_matrix_in(
             self.engine,

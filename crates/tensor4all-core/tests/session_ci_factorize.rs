@@ -3,12 +3,10 @@
 //! `factorize_full_rank_on_session` serves `FactorizeAlg::CI` with the
 //! session's pivoted LU, and the run enters no process-global runtime (it
 //! completes while the default engine is borrowed). The factors equal those of
-//! `factorize_full_rank` bit for bit for `f64`, `f32` and `Complex64`, on both
-//! canonical sides. `Complex32` reconstructs the tensor but is not bitwise
-//! equal: the compatibility route's triangular solve widens `Complex32` to
-//! `Complex64` and narrows the result, while the session's solves in
-//! `Complex32`, so the two routes of `matrix_luci_factors_from_matrix_owned`
-//! already differ in the last bit there. LU keeps its typed refusal.
+//! `factorize_full_rank` bit for bit for `f64`, `f32`, `Complex64` and
+//! `Complex32`, on both canonical sides, and reconstruct the tensor to working
+//! precision. Both routes' triangular solves promote the narrow scalar types to
+//! 64 bits the same way (tensor4all-rs#1244). LU keeps its typed refusal.
 
 use num_complex::{Complex32, Complex64};
 use tensor4all_core::{
@@ -23,7 +21,7 @@ fn values<T: TensorElement + StorageScalar>(tensor: &IdxTensor) -> Vec<T> {
     tensor.dense_host_values::<T>().expect("host values")
 }
 
-fn check<T>(scalar: fn(f64, f64) -> T, bitwise: bool)
+fn check<T>(scalar: fn(f64, f64) -> T)
 where
     T: TensorElement + StorageScalar + PartialEq + std::fmt::Debug,
 {
@@ -58,18 +56,16 @@ where
         assert_eq!(session.rank, global.rank, "{canonical:?}");
         assert_eq!(session.left.dims(), global.left.dims());
         assert_eq!(session.right.dims(), global.right.dims());
-        if bitwise {
-            assert_eq!(
-                values::<T>(&session.left),
-                values::<T>(&global.left),
-                "{canonical:?}"
-            );
-            assert_eq!(
-                values::<T>(&session.right),
-                values::<T>(&global.right),
-                "{canonical:?}"
-            );
-        }
+        assert_eq!(
+            values::<T>(&session.left),
+            values::<T>(&global.left),
+            "{canonical:?}"
+        );
+        assert_eq!(
+            values::<T>(&session.right),
+            values::<T>(&global.right),
+            "{canonical:?}"
+        );
         // Full rank: the factors reconstruct the tensor to working precision.
         let product = session.left.contract_pair(&session.right).unwrap();
         let residual = product.sub(&tensor).unwrap().maxabs().unwrap();
@@ -88,10 +84,10 @@ where
 
 #[test]
 fn session_ci_factors_equal_the_compatibility_route_without_entering_it() {
-    check::<f64>(|re, _| re, true);
-    check::<f32>(|re, _| re as f32, true);
-    check::<Complex64>(Complex64::new, true);
-    check::<Complex32>(|re, im| Complex32::new(re as f32, im as f32), false);
+    check::<f64>(|re, _| re);
+    check::<f32>(|re, _| re as f32);
+    check::<Complex64>(Complex64::new);
+    check::<Complex32>(|re, im| Complex32::new(re as f32, im as f32));
 }
 
 #[test]
