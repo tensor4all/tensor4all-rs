@@ -366,8 +366,8 @@ def main():
     parser.add_argument("--idle-max-load", type=float, default=6.0)
     parser.add_argument(
         "--target-dir", type=pathlib.Path, default=None,
-        help="parent of per-arm Cargo target directories to reuse; by default a temporary one inside --output, "
-        "removed after building",
+        help="parent of the per-arm, per-revision Cargo target directories (<dir>/<arm>/<full SHA>) to reuse "
+        "across runs; by default a temporary one inside --output, removed after building",
     )
     parser.add_argument("--cpu", type=int, default=None, help="pin each run to this CPU (Linux only)")
     parser.add_argument(
@@ -396,10 +396,12 @@ def main():
     target_dir = args.target_dir.resolve() if args.target_dir else work / "target"
     arms, binaries = {}, {}
     for arm, rev in ARMS.items():
-        # One target directory per arm: Cargo hashes workspace crates without
-        # their location and `git archive` stamps files with the commit time,
-        # so a shared directory can reuse another arm's build as up to date.
-        arms[arm], binaries[arm] = build_arm(repo, arm, rev, harness_bytes, work, target_dir / arm)
+        # One target directory per arm and revision: Cargo hashes workspace
+        # crates without their location and `git archive` stamps files with the
+        # commit time, so a directory that already holds another revision's
+        # build (another arm, or the same arm in an earlier run with a reused
+        # --target-dir) would be taken as up to date and its executable reused.
+        arms[arm], binaries[arm] = build_arm(repo, arm, rev, harness_bytes, work, target_dir / arm / rev)
     shutil.rmtree(work / "src")
     hashes = [info["binary_sha256"] for info in arms.values()]
     if len(set(hashes)) != len(hashes):

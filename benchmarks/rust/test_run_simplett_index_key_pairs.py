@@ -33,6 +33,7 @@ HARNESS_BYTES = b"harness source"
 OBSERVATION = {"time": 0.0, "loadavg": [0.0, 0.0, 0.0], "thermal": "CPU_Speed_Limit = 100"}
 HOST = {"platform": "test", "machine": "test", "logical_cpus": 1, "python": "3"}
 REAL_RUN = subprocess.run
+REAL_BUILD_ARM = driver.build_arm
 # What CPython raises when `preexec_fn` raises; the original error is not chained.
 LAUNCH_ERROR = subprocess.SubprocessError("Exception occurred in preexec_fn.")
 
@@ -273,6 +274,69 @@ class LaunchFailureTests(unittest.TestCase):
         self.assertNotIn("cells", failed)
         self.assertIn("preexec_fn", failed["exception"])
         self.assertIn("CPU_Speed_Limit = 100", failed["before"]["thermal"])
+
+
+class TargetDirReuseTests(unittest.TestCase):
+    """A reused `--target-dir` must never pair one revision's record with another's binary."""
+
+    REVISION_MARKER = "REVISION"
+
+    def fake_export(self, _repo, rev, dest):
+        dest.mkdir(parents=True)
+        (dest / self.REVISION_MARKER).write_text(rev)
+        harness = dest / driver.HARNESS
+        harness.parent.mkdir(parents=True, exist_ok=True)
+        harness.write_bytes(HARNESS_BYTES)
+
+    @staticmethod
+    def stale_cargo(cmd, **kwargs):
+        """Model Cargo on `git archive` output: an existing executable counts as up to date.
+
+        Exported files carry the commit time, older than artifacts already in the
+        target directory, so Cargo keeps whatever executable is there. A fresh
+        directory gets an executable that names the revision it was built from.
+        """
+        if cmd[0] == "git":
+            return fake_subprocess_run(cmd, **kwargs)
+        if cmd[:2] == ["cargo", "bench"]:
+            target = pathlib.Path(cmd[cmd.index("--target-dir") + 1])
+            executable = target / "release" / "cache_overhead"
+            if not executable.exists():
+                executable.parent.mkdir(parents=True, exist_ok=True)
+                rev = (pathlib.Path(kwargs["cwd"]) / TargetDirReuseTests.REVISION_MARKER).read_text()
+                executable.write_text(f"built from {rev}\n")
+            message = {"reason": "compiler-artifact", "target": {"name": "cache_overhead"},
+                       "executable": str(executable)}
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(message) + "\n")
+        if cmd[0] in ("rustc", "cargo"):
+            return subprocess.CompletedProcess(cmd, 0, stdout=f"{cmd[0]} test\n", stderr="")
+        raise AssertionError(f"unexpected command {cmd}")
+
+    def build_only(self, tmp, name, final_rev, target_dir):
+        """Run `main` through its builds; the idle gate then refuses, so nothing is timed."""
+        arms = dict(driver.ARMS, final=final_rev)
+        refuse_idle = lambda seconds, max_load: dict(fake_idle_check(seconds, max_load), passed=False)
+        out, err = run_main(pathlib.Path(tmp) / name, extra_argv=["--target-dir", str(target_dir)],
+                            build_arm=REAL_BUILD_ARM, subprocess_run=self.stale_cargo, export_revision=self.fake_export,
+                            idle_check=refuse_idle, ARMS=arms)
+        self.assertIn("idle check failed", str(err.code))
+        protocol = json.loads((out / "protocol.json").read_text())
+        return protocol, out
+
+    def test_reused_target_dir_builds_each_recorded_revision(self):
+        after, before = "a" * 40, "b" * 40
+        with tempfile.TemporaryDirectory() as tmp:
+            target_dir = pathlib.Path(tmp) / "shared-target"
+            self.build_only(tmp, "after", after, target_dir)
+            protocol, out = self.build_only(tmp, "before", before, target_dir)
+            final_binary = (out / "build" / "bin" / "final").read_text()
+
+        recorded = protocol["arms"]["final"]
+        self.assertEqual(recorded["commit"], before)
+        self.assertEqual(final_binary, f"built from {before}\n",
+                         "the final binary must come from the revision the protocol records")
+        self.assertEqual(recorded["binary_sha256"],
+                         hashlib.sha256(final_binary.encode()).hexdigest())
 
 
 if __name__ == "__main__":
