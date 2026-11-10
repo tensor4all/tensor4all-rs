@@ -10,7 +10,11 @@ the device and the result back, and the local rank decision stays on the host.
 
 Use `hadamard_many_in` with the same execution context that owns the inputs.
 The convenience `hadamard_many` uses the default CPU context and requires the
-`global-defaults` feature. Set `max_bond_dim` or `sketch_dim`; start with a rank
+`global-defaults` feature. Code that already runs inside an explicit session
+(a worker lane or a patch driver stage) uses `hadamard_many_with_rng_on_session`
+instead: it runs every step on that session, accepts host inputs such as
+compact storage published by another session, and returns compact host cores
+that outlive the session. It is CPU-only. Set `max_bond_dim` or `sketch_dim`; start with a rank
 budget appropriate to the application and validate actual product error.
 `rel_tol` controls local sketch pivots and is not a global error tolerance.
 

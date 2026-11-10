@@ -217,9 +217,64 @@ pub struct MatrixLuciRowInterpolation<T> {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn matrix_luci_row_interpolation_owned_in<T>(
-    mut a: Matrix<T>,
+    a: Matrix<T>,
     options: Option<RrLUOptions>,
     context: &CpuExecutionContext,
+) -> Result<MatrixLuciRowInterpolation<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+{
+    row_interpolation_owned(a, options, Linalg::Context(context))
+}
+
+/// Selects a row interpolant on a caller-held explicit session.
+///
+/// The session counterpart of [`matrix_luci_row_interpolation_owned_in`] for
+/// code that already runs inside a session, such as a worker lane whose session
+/// was entered by the phase that owns it. The pivot search is identical; the
+/// triangular solve of the interpolation runs on `session`, and neither a
+/// process-global context nor a fresh session entry is consulted.
+///
+/// Consumes column-major `a` and uses `options` for pivot rank and tolerances
+/// (`None` uses the defaults). `left_orthogonal` is always set to true. A zero
+/// matrix yields zero rows; the caller chooses its zero-rank convention.
+///
+/// # Errors
+/// Returns [`MatrixCIError::InvalidArgument`] for negative or nonfinite
+/// tolerances, infinite input magnitudes, or session solve failures; returns
+/// [`MatrixCIError::NaNEncountered`] for NaN input or nonfinite factors or
+/// residual magnitudes.
+///
+/// # Examples
+/// ```
+/// use tensor4all_core::{matrix_luci_row_interpolation_owned_on_session, RrLUOptions};
+/// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext, Matrix};
+/// let context = CpuExecutionContext::from_backend(CpuBackend::new());
+/// let a = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 2.0, 3.0, 6.0]);
+/// let id = context.with_concrete_session(|session| {
+///     matrix_luci_row_interpolation_owned_on_session(a, Some(RrLUOptions::default()), session)
+/// })??;
+/// assert_eq!(id.rows, vec![1]);
+/// assert_eq!(id.interpolation.as_col_major_slice(), &[0.5, 1.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn matrix_luci_row_interpolation_owned_on_session<T>(
+    a: Matrix<T>,
+    options: Option<RrLUOptions>,
+    session: &mut Session<'_>,
+) -> Result<MatrixLuciRowInterpolation<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+{
+    row_interpolation_owned(a, options, Linalg::Session(session))
+}
+
+/// The row interpolation shared by the context and session entry points; only
+/// the place the triangular solve runs differs.
+fn row_interpolation_owned<T>(
+    mut a: Matrix<T>,
+    options: Option<RrLUOptions>,
+    mut linalg: Linalg<'_, '_>,
 ) -> Result<MatrixLuciRowInterpolation<T>>
 where
     T: Scalar + crate::MatrixLuciScalar,
@@ -231,12 +286,7 @@ where
     let rank = lu.n_pivot;
     Ok(MatrixLuciRowInterpolation {
         rows: lu.row_permutation[..rank].to_vec(),
-        interpolation: cols_times_pivot_solve(
-            &lu.l,
-            &lu.row_permutation,
-            rank,
-            &mut Linalg::Context(context),
-        )?,
+        interpolation: cols_times_pivot_solve(&lu.l, &lu.row_permutation, rank, &mut linalg)?,
         pivot_magnitudes: lu.pivot_magnitudes,
     })
 }

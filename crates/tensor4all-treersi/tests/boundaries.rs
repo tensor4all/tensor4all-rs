@@ -2,10 +2,10 @@ use num_complex::Complex32;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use std::collections::HashMap;
-use tensor4all_core::{DynIndex, IdxTensor, IdxTensorError};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_tensorbackend::{
     default_cpu_execution_context, CpuExecutionContext, CpuExecutionContextError, ExecutionContext,
-    ExecutionContextEntryError, Matrix,
+    Matrix,
 };
 use tensor4all_treersi::{
     hadamard_many, hadamard_many_with_rng_in, TreeRsiError, TreeRsiOptions, TreeRsiProbes,
@@ -26,12 +26,12 @@ fn options() -> TreeRsiOptions<usize> {
     }
 }
 
-/// The typed readback enters the process-global CPU eager session, so a run
-/// nested inside a session of that exact context fails there. A rank-1 core
-/// needs no transpose, which leaves the readback as the first engine entry, so
-/// this reaches `read_cores` itself instead of the transpose before it.
+/// A CPU context is entered once for the whole product, so a run nested inside
+/// a session of that exact context is refused at that entry, before any work,
+/// and the refusal keeps the context's typed re-entry error as its source. A
+/// caller that already holds a session uses the session entry instead.
 #[test]
-fn nested_cpu_session_rejects_the_readback_with_its_source() {
+fn nested_cpu_session_rejects_the_entry_with_its_source() {
     let cpu = default_cpu_execution_context();
     let error = cpu
         .with_concrete_session(|_session| {
@@ -44,12 +44,10 @@ fn nested_cpu_session_rejects_the_readback_with_its_source() {
     };
     assert!(
         matches!(
-            source.downcast_ref::<IdxTensorError>(),
-            Some(IdxTensorError::EngineEntry {
-                source: ExecutionContextEntryError::Cpu(CpuExecutionContextError::Reentered)
-            })
+            source.downcast_ref::<CpuExecutionContextError>(),
+            Some(CpuExecutionContextError::Reentered)
         ),
-        "the readback must fail on the CPU session re-entry: {source}"
+        "the run must fail on the CPU session re-entry: {source}"
     );
 }
 
