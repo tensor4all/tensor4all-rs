@@ -10,10 +10,10 @@
 //! patch instead of sampling a black box. The design is recorded in
 //! `docs/design/tree-patching-elementwise.md`.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::sync::Mutex;
 
 use tensor4all_core::{
     ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor, TensorElement,
@@ -28,14 +28,16 @@ use tensor4all_treetn::{
 
 use super::embed::{restrict_fixed_sites, zeros_like};
 use super::engine::PatchEngine;
+use super::fan_out::run_on_lanes;
 use super::layout::SiteLayout;
 use super::{
-    assemble, invalid, run_waves, PatchedInterpolationError, PatchedInterpolationOptions,
-    PatchedInterpolationResult, Plan, SerialWaves,
+    invalid, run_serial, PatchedInterpolationError, PatchedInterpolationOptions,
+    PatchedInterpolationResult, Plan,
 };
 use crate::partitioned_tree_tn::PatchLocator;
 use crate::subdomain_tree_tn::{ensure_same_dtype, ensure_same_tree_structure};
 use crate::{PartitionedTreeTN, Projector, SubDomainTreeTN};
+use hataori_tenferro::TenferroLanes;
 
 /// Where a region lies against one input's patches.
 enum Region<'a, V>
@@ -77,7 +79,7 @@ where
 
 /// The element-wise engine of one run: the kernel, the operator, the inputs,
 /// and the black-box engine of the residual estimator.
-struct Elementwise<'a, E, Op, R, V>
+pub(super) struct Elementwise<'a, E, Op, R, V>
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
@@ -166,27 +168,38 @@ where
     }
 }
 
+/// Idle cached evaluators per (input, patch).
+type EvaluatorPool<'a, V> = HashMap<(usize, usize), Vec<TreeTNCachedEvaluator<'a, V>>>;
+
 /// The target `f(x_1, ..., x_k)` at full-domain points, evaluated from the
 /// input patches on the run's session.
-struct Target<'a, T, V, Op>
+pub(super) struct Target<'a, T, V, Op>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     inputs: Vec<PatchLocator<'a, V>>,
     sites: Vec<DynIndex>,
     operator: &'a Op,
-    /// One evaluator per (input, patch), built on first use.
-    evaluators: RefCell<HashMap<(usize, usize), TreeTNCachedEvaluator<'a, V>>>,
+    /// Idle evaluators per (input, patch), built on first use. An evaluator
+    /// is taken out while it runs and put back afterwards, so lanes never
+    /// share one and the lock is held only to take or return it.
+    evaluators: Mutex<EvaluatorPool<'a, V>>,
     scalar: std::marker::PhantomData<T>,
 }
 
-impl<T, V, Op> Target<'_, T, V, Op>
+impl<'a, T, V, Op> Target<'a, T, V, Op>
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
     Op: ElementwiseOperator<T>,
 {
-    fn evaluate(
+    fn pool(&self) -> anyhow::Result<std::sync::MutexGuard<'_, EvaluatorPool<'a, V>>> {
+        self.evaluators
+            .lock()
+            .map_err(|_| anyhow::anyhow!("an evaluator pool lock was poisoned by a panic"))
+    }
+
+    pub(super) fn evaluate(
         &self,
         batch: ColMajorArrayRef<'_, usize>,
         ctx: &mut EvalContext<'_>,
@@ -198,7 +211,6 @@ where
         let data = batch.data();
         let zero = T::from_f64(0.0);
         let mut columns = vec![zero; k * n_points];
-        let mut evaluators = self.evaluators.borrow_mut();
         let mut owned: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         let mut points = Vec::new();
         for (input_id, locator) in self.inputs.iter().enumerate() {
@@ -213,15 +225,17 @@ where
                 for &point in members {
                     points.extend_from_slice(&data[point * rows..(point + 1) * rows]);
                 }
-                let evaluator = match evaluators.entry((input_id, patch_id)) {
-                    std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                    std::collections::hash_map::Entry::Vacant(entry) => {
+                let key = (input_id, patch_id);
+                let idle = self.pool()?.get_mut(&key).and_then(Vec::pop);
+                let mut evaluator = match idle {
+                    Some(evaluator) => evaluator,
+                    None => {
                         let network = locator.patch(patch_id).data();
                         let options = CachedEvaluatorOptions {
                             center: network.node_names().into_iter().min(),
                             ..CachedEvaluatorOptions::default()
                         };
-                        entry.insert(TreeTNCachedEvaluator::new(network, &self.sites, options)?)
+                        TreeTNCachedEvaluator::new(network, &self.sites, options)?
                     }
                 };
                 let shape = [rows, members.len()];
@@ -230,6 +244,7 @@ where
                     ColMajorArrayRef::new(&points, &shape)?,
                     EvaluationHint::default(),
                 )?;
+                self.pool()?.entry(key).or_default().push(evaluator);
                 for (&point, value) in members.iter().zip(values) {
                     columns[input_id + k * point] = value;
                 }
@@ -392,6 +407,146 @@ where
     Op: ElementwiseOperator<T>,
     R: TreeInterpolator<T> + Sync,
 {
+    let Prepared {
+        engine,
+        target,
+        topology,
+        node_sites,
+        pivots,
+    } = prepare(engine, residual_engine, inputs, operator, options)?;
+    let plan = Plan::validated(&engine, topology, node_sites, pivots, options)?;
+    run_serial(ctx, &plan, |batch, ctx| target.evaluate(batch, ctx))
+}
+
+/// The lanes counterpart of [`patched_elementwise`]: the same validation,
+/// patches, and report, with each wave of patches spread over the lanes of a
+/// caller-owned [`TenferroLanes`], as in
+/// [`patched_interpolate_on_lanes`](super::patched_interpolate_on_lanes).
+///
+/// Every patch runs on the engine of the lane that pulled it, including the
+/// restriction of the inputs, the kernel, and the pointwise evaluation of the
+/// target. Cached input evaluators are pooled across lanes: a lane takes one
+/// out while it evaluates, so no evaluator is shared between threads at
+/// once. The result does not depend on the number of lanes, as for the
+/// interpolation entries.
+///
+/// # Arguments
+///
+/// As for [`patched_elementwise`], with `lanes` in place of the context; the
+/// engines and the operator are shared by the lanes, so they must be `Sync`.
+///
+/// # Errors
+///
+/// As for [`patched_elementwise`], plus
+/// [`PatchedInterpolationError::FanOut`] when the lane executor fails.
+///
+/// # Examples
+///
+/// ```
+/// use hataori_tenferro::TenferroLanes;
+/// use tenferro_cpu::CpuEngine;
+/// use tensor4all_core::{DynIndex, IdxTensor};
+/// use tensor4all_partitionedtreetn::adaptive_interpolation::{
+///     patched_elementwise_on_lanes, PatchedInterpolationOptions,
+/// };
+/// use tensor4all_partitionedtreetn::{
+///     ErrorNorm, ErrorTolerance, L2Reference, PartitionedTreeTN, Projector, SubDomainTreeTN,
+/// };
+/// use tensor4all_treetci::TreeTciInterpolator;
+/// use tensor4all_treetn::interpolation::{PointwiseElementwise, Product};
+/// use tensor4all_treetn::TreeTN;
+///
+/// // x(a, b) = 1 + b, stored as two patches split on a, squared on two lanes.
+/// let (a, b) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3));
+/// let bond = DynIndex::new_dyn(1);
+/// let tree = TreeTN::from_tensors(
+///     vec![
+///         IdxTensor::from_dense(vec![a.clone(), bond.clone()], vec![1.0, 1.0])?,
+///         IdxTensor::from_dense(vec![bond, b.clone()], vec![1.0, 2.0, 3.0])?,
+///     ],
+///     vec![0usize, 1],
+/// )?;
+/// let x = PartitionedTreeTN::from_subdomains(vec![
+///     SubDomainTreeTN::new(tree.clone(), Projector::from_pairs([(a.clone(), 0)])?)?,
+///     SubDomainTreeTN::new(tree, Projector::from_pairs([(a.clone(), 1)])?)?,
+/// ])?;
+/// let options = PatchedInterpolationOptions::new(4)
+///     .with_error_norm(ErrorNorm::l2(L2Reference::Given(10.0)))
+///     .with_tolerance(ErrorTolerance { rtol: 1e-10, atol: 0.0 })
+///     .with_patch_order(vec![a.clone(), b.clone()]);
+/// let mut lanes = TenferroLanes::new(vec![CpuEngine::serial(), CpuEngine::serial()])?;
+/// let result = patched_elementwise_on_lanes::<f64, _, _, _, _>(
+///     &mut lanes,
+///     &PointwiseElementwise(TreeTciInterpolator::default()),
+///     &TreeTciInterpolator::default(),
+///     &[&x, &x],
+///     &Product,
+///     &options,
+/// )?;
+/// assert_eq!(result.partition.len(), 2);
+/// let dense = result.partition.to_treetn()?.to_dense()?;
+/// let expected = IdxTensor::from_dense(
+///     vec![a.clone(), b.clone()],
+///     vec![1.0, 1.0, 4.0, 4.0, 9.0, 9.0],
+/// )?;
+/// assert!(dense.sub(&expected)?.maxabs()? < 1e-10);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn patched_elementwise_on_lanes<T, V, E, Op, R>(
+    lanes: &mut TenferroLanes,
+    engine: &E,
+    residual_engine: &R,
+    inputs: &[&PartitionedTreeTN<V>],
+    operator: &Op,
+    options: &PatchedInterpolationOptions,
+) -> Result<PatchedInterpolationResult<V>, PatchedInterpolationError>
+where
+    T: CommonScalar + TensorElement + Send,
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    E: ElementwiseInterpolator<T, Op> + Sync,
+    Op: ElementwiseOperator<T> + Sync,
+    R: TreeInterpolator<T> + Sync,
+{
+    let Prepared {
+        engine,
+        target,
+        topology,
+        node_sites,
+        pivots,
+    } = prepare(engine, residual_engine, inputs, operator, options)?;
+    let plan = Plan::validated(&engine, topology, node_sites, pivots, options)?;
+    run_on_lanes(lanes, &plan, |batch, ctx| target.evaluate(batch, ctx))
+}
+
+/// What every entry of `patched_elementwise` builds from its inputs before
+/// the plan: the engine, the pointwise target, and the problem's layout.
+pub(super) struct Prepared<'a, T, V, E, Op, R>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    pub(super) engine: Elementwise<'a, E, Op, R, V>,
+    pub(super) target: Target<'a, T, V, Op>,
+    pub(super) topology: NodeNameNetwork<V>,
+    pub(super) node_sites: BTreeMap<V, Vec<DynIndex>>,
+    pub(super) pivots: ColMajorArray<usize>,
+}
+
+/// Validate the inputs of `patched_elementwise` and build its parts.
+///
+/// # Errors
+///
+/// As documented on [`patched_elementwise`] for the inputs.
+pub(super) fn prepare<'a, T, V, E, Op, R>(
+    engine: &'a E,
+    residual_engine: &'a R,
+    inputs: &[&'a PartitionedTreeTN<V>],
+    operator: &'a Op,
+    options: &PatchedInterpolationOptions,
+) -> Result<Prepared<'a, T, V, E, Op, R>, PatchedInterpolationError>
+where
+    T: CommonScalar + TensorElement,
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+{
     if inputs.is_empty() {
         return Err(invalid(
             "patched_elementwise needs at least one input partition",
@@ -447,7 +602,7 @@ where
         inputs: locators,
         sites: sites.clone(),
         operator,
-        evaluators: RefCell::new(HashMap::new()),
+        evaluators: Mutex::new(HashMap::new()),
         scalar: std::marker::PhantomData::<T>,
     };
     let engine = Elementwise {
@@ -460,17 +615,13 @@ where
             .collect(),
     };
     let pivots = ColMajorArray::new(Vec::new(), vec![sites.len(), 0]).map_err(super::internal)?;
-    let plan = Plan::validated(&engine, topology, node_sites, pivots, options)?;
-    let mut waves = SerialWaves {
-        ctx,
-        evaluate: RefCell::new(
-            |batch: ColMajorArrayRef<'_, usize>, ctx: &mut EvalContext<'_>| {
-                target.evaluate(batch, ctx)
-            },
-        ),
-    };
-    let merged = run_waves(&plan, &mut waves)?;
-    assemble(&plan, merged)
+    Ok(Prepared {
+        engine,
+        target,
+        topology,
+        node_sites,
+        pivots,
+    })
 }
 
 #[cfg(test)]

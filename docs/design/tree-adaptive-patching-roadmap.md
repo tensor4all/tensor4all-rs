@@ -475,9 +475,10 @@ intersections are the layout of products only; for a general `f` the output
 must also cover regions where an input has no patch, since `f(0, ...)` need
 not vanish. Implemented on 2026-11-10: the driver seam, structural splits,
 input restriction, the `ElementwiseInterpolator` contract with a pointwise
-adapter, and a serial `patched_elementwise`, tested on a degree-3 star
-against a pointwise oracle. Open: the TreeACI and tree RSI adapters (after
-#1235 and #1236), the lanes and MPI entries, and the benchmark.
+adapter, and `patched_elementwise` with serial, lanes, and MPI entries,
+tested on a degree-3 star against a pointwise oracle (the MPI entry is
+compiled, and runs only in the MPI smoke test). Open: the TreeACI and tree
+RSI adapters (after #1235 and #1236), and the benchmark.
 
 Exit: tests on branched trees against a dense oracle, for a nonlinear `f`
 through TreeACI and for products through TreeACI and tree RSI; a benchmark

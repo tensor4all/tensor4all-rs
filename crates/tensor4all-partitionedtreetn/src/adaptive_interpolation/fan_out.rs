@@ -219,9 +219,25 @@ where
 {
     let engine = BlackBox(engine);
     let plan = Plan::validated(&engine, topology, node_sites, initial_pivots, options)?;
+    run_on_lanes(lanes, &plan, evaluate)
+}
+
+/// Run the waves of a validated plan on `lanes` and assemble the result: the
+/// body of every lanes entry.
+pub(super) fn run_on_lanes<T, V, E, F>(
+    lanes: &mut TenferroLanes,
+    plan: &Plan<'_, T, V, E>,
+    evaluate: F,
+) -> Result<PatchedInterpolationResult<V>, PatchedInterpolationError>
+where
+    T: CommonScalar + TensorElement + Send,
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    E: PatchEngine<T, V> + Sync,
+    F: Fn(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>> + Sync,
+{
     let mut waves = LanesWaves { lanes, evaluate };
-    let merged = run_waves(&plan, &mut waves)?;
-    assemble(&plan, merged)
+    let merged = run_waves(plan, &mut waves)?;
+    assemble(plan, merged)
 }
 
 /// Run one patch per lane and keep each patch's typed error.

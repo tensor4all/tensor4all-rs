@@ -399,13 +399,13 @@ use layout::SiteLayout;
 use sampling::{patch_candidates, patch_seeds, PatchDomain, PatchSeeds};
 use verify::{Contribution, MeasureError, MeasureTarget, Measured, PointPlan};
 
-pub use elementwise::patched_elementwise;
+pub use elementwise::{patched_elementwise, patched_elementwise_on_lanes};
 pub use fan_out::patched_interpolate_on_lanes;
 pub use merge::{
     merge_siblings, SiblingMergeOptions, SiblingMergeRecord, SiblingMergeReport, SiblingMergeResult,
 };
 #[cfg(any(feature = "hataori-mpi", feature = "hataori-mpi-rsmpi-rt"))]
-pub use mpi::patched_interpolate_mpi;
+pub use mpi::{patched_elementwise_mpi, patched_interpolate_mpi};
 pub use options::{CappedPatches, L2Estimator, PatchedInterpolationOptions, VerificationOptions};
 pub use report::{
     GlobalL2Error, L2ErrorReport, L2Measurement, L2ReferenceSource, MaxReferenceSource,
@@ -739,12 +739,28 @@ where
 {
     let engine = BlackBox(engine);
     let plan = Plan::validated(&engine, topology, node_sites, initial_pivots, options)?;
+    run_serial(ctx, &plan, evaluate)
+}
+
+/// Run the waves of a validated plan on the caller's session and assemble the
+/// result: the body of every serial entry.
+fn run_serial<T, V, E, F>(
+    ctx: &mut EvalContext<'_>,
+    plan: &Plan<'_, T, V, E>,
+    evaluate: F,
+) -> Result<PatchedInterpolationResult<V>, PatchedInterpolationError>
+where
+    T: CommonScalar + TensorElement,
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    E: PatchEngine<T, V>,
+    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
+{
     let mut waves = SerialWaves {
         ctx,
         evaluate: RefCell::new(evaluate),
     };
-    let merged = run_waves(&plan, &mut waves)?;
-    assemble(&plan, merged)
+    let merged = run_waves(plan, &mut waves)?;
+    assemble(plan, merged)
 }
 
 fn invalid(message: impl Into<String>) -> PatchedInterpolationError {

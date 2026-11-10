@@ -318,8 +318,19 @@ Steps 1 and 2, on 2026-11-10.
   turns any black-box engine into an element-wise one by evaluating the
   restricted inputs pointwise. Until the TreeACI and tree RSI adapters exist,
   `PointwiseElementwise(TreeTciInterpolator)` is the engine of the tests.
-- **Serial only.** `patched_elementwise` has a serial entry; the lanes and MPI
-  entries follow with the kernels.
+- **Entries.** `patched_elementwise`, `patched_elementwise_on_lanes`, and
+  `patched_elementwise_mpi` (2026-11-10) share one preparation (`prepare`)
+  and the bodies of the interpolation entries, now factored as
+  `run_serial`, `run_on_lanes`, and `run_mpi`. The cached input evaluators
+  of the target live in a pool behind a mutex: a lane takes one out while it
+  evaluates and returns it afterwards, so the lanes never share an evaluator
+  and the lock is held only to take or return one. Every MPI rank passes the
+  same inputs, held in its own memory; a rank's preparation error goes
+  through the same validation collective as a plan error. The lanes entry is
+  tested against the serial one (same layout, splits, and evaluations,
+  values within `1e-12`); the MPI entry is added to the MPI smoke test, which
+  runs only under `scripts/check-mpi-smoke.sh` with an MPI wrapper library
+  and was compiled but not run here.
 - **B0.** The black-box route is documented in `patched_elementwise` and
   tested against the same oracle
   (`the_black_box_route_meets_the_same_contract`).

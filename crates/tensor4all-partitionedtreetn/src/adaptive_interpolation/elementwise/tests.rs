@@ -384,3 +384,80 @@ fn invalid_inputs_fail_before_any_evaluation() {
         result.err()
     );
 }
+
+/// The canonical form of a result's layout: accepted and zero projectors.
+fn layout_of(result: &PatchedInterpolationResult<usize>) -> (Vec<String>, Vec<String>) {
+    let key = |projector: &Projector| {
+        let mut entries: Vec<String> = projector
+            .iter()
+            .map(|(index, value)| format!("{index:?}={value}"))
+            .collect();
+        entries.sort();
+        entries.join(",")
+    };
+    let mut accepted: Vec<String> = result
+        .report
+        .accepted
+        .iter()
+        .map(|record| key(&record.projector))
+        .collect();
+    let mut zeros: Vec<String> = result
+        .report
+        .zero_patches
+        .iter()
+        .map(|record| key(&record.projector))
+        .collect();
+    accepted.sort();
+    zeros.sort();
+    (accepted, zeros)
+}
+
+#[test]
+fn the_lanes_entry_matches_the_serial_entry() {
+    let star = Star::new();
+    let (x, y) = inputs(&star);
+    let rational = |inputs: ColMajorArrayRef<'_, f64>, output: &mut [f64]| -> anyhow::Result<()> {
+        for (column, value) in inputs.data().chunks(2).zip(output.iter_mut()) {
+            *value = 1.0 / (4.0 - column[0] * column[1]);
+        }
+        Ok(())
+    };
+    let expected = pointwise(&star, &[&x, &y], |v| 1.0 / (4.0 - v[0] * v[1]));
+    // Splitting on the inputs' sites first keeps the three runs small while
+    // every patch still runs the engine on five active sites.
+    let options = options(l2(&expected), 1e-8).with_patch_order(split_first(&star));
+    let serial = run(&[&x, &y], &rational, &options).unwrap();
+    assert!(serial
+        .report
+        .accepted
+        .iter()
+        .any(|record| record.projector.len() <= 3 && record.max_bond_dim > 1));
+    let serial_values = star.values(&serial.partition);
+    let threads = 3;
+    let engines = (0..threads)
+        .map(|_| tenferro_cpu::CpuEngine::serial())
+        .collect();
+    let mut lanes = hataori_tenferro::TenferroLanes::new(engines).unwrap();
+    let fanned = patched_elementwise_on_lanes(
+        &mut lanes,
+        &PointwiseElementwise(TreeTciInterpolator::default()),
+        &TreeTciInterpolator::default(),
+        &[&x, &y],
+        &rational,
+        &options,
+    )
+    .unwrap();
+    assert_eq!(layout_of(&fanned), layout_of(&serial), "{threads} lanes");
+    assert_eq!(fanned.report.splits, serial.report.splits);
+    assert_eq!(
+        fanned.report.function_evaluations,
+        serial.report.function_evaluations
+    );
+    let values = star.values(&fanned.partition);
+    let difference: Vec<f64> = values
+        .iter()
+        .zip(&serial_values)
+        .map(|(a, b)| a - b)
+        .collect();
+    assert!(l2(&difference) <= 1e-12 * l2(&expected), "{threads} lanes");
+}
