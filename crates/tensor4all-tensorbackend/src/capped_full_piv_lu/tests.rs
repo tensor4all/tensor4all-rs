@@ -45,8 +45,8 @@ fn an_uncapped_run_is_the_backend_full_piv_lu() {
     }
 }
 
-/// A rank cap stops the elimination there: the raw count the factorization reports is the cap, not
-/// `n`, and the pivots it did take are the uncapped run's leading pivots.
+/// A rank cap stops the elimination there: on a full-rank input the count is the cap, not `n`, and
+/// the pivots it did take are the uncapped run's leading pivots.
 #[test]
 fn a_rank_cap_stops_the_elimination_at_the_cap() {
     let n = 64usize;
@@ -92,11 +92,69 @@ fn a_subnormal_block_stops_before_the_cap() {
     assert_eq!(lu.diagonal(), &[1e-308, 9e-309, 8e-309]);
 }
 
-/// faer's pivot search maximises `abs1` over the trailing block's entries, which is neither the
-/// largest modulus nor the largest `abs1` of the diagonal one would derive by hand: capped one past
-/// the leading pivot of `diag(10, 3, 2.5 + 2.5i)` it takes `3`.
+/// The score faer's pivot search maximises over a complex trailing block. Which one runs is decided
+/// by the runtime SIMD dispatch (`pulp::Arch::new`), so both are part of the contract and every
+/// complex pivot-order test states its expectation under each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ComplexPivotScore {
+    /// Vector dispatch: `max(|re|, |im|)`, the real and imaginary parts compared lane by lane.
+    LargerPart,
+    /// Scalar dispatch: `|re| + |im|`.
+    PartSum,
+}
+
+/// The score this host runs, read from the CPU independently of faer. It mirrors pulp 0.22's
+/// `Arch::new`: x86-64-v3 (or v4) on x86, NEON on aarch64, simd128 on wasm32 dispatch to vectors;
+/// anything else to the scalar path.
+fn host_complex_pivot_score() -> ComplexPivotScore {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        let v3 = std::arch::is_x86_feature_detected!("sse")
+            && std::arch::is_x86_feature_detected!("sse2")
+            && std::arch::is_x86_feature_detected!("fxsr")
+            && std::arch::is_x86_feature_detected!("sse3")
+            && std::arch::is_x86_feature_detected!("ssse3")
+            && std::arch::is_x86_feature_detected!("sse4.1")
+            && std::arch::is_x86_feature_detected!("sse4.2")
+            && std::arch::is_x86_feature_detected!("popcnt")
+            && std::arch::is_x86_feature_detected!("avx")
+            && std::arch::is_x86_feature_detected!("avx2")
+            && std::arch::is_x86_feature_detected!("bmi1")
+            && std::arch::is_x86_feature_detected!("bmi2")
+            && std::arch::is_x86_feature_detected!("fma")
+            && std::arch::is_x86_feature_detected!("lzcnt");
+        if v3 {
+            return ComplexPivotScore::LargerPart;
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            return ComplexPivotScore::LargerPart;
+        }
+    }
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        return ComplexPivotScore::LargerPart;
+    }
+    #[allow(unreachable_code)]
+    ComplexPivotScore::PartSum
+}
+
+/// The expectation under the score this host runs; both arms are written out by the caller.
+fn under<T>(score: ComplexPivotScore, larger_part: T, part_sum: T) -> T {
+    match score {
+        ComplexPivotScore::LargerPart => larger_part,
+        ComplexPivotScore::PartSum => part_sum,
+    }
+}
+
+/// `diag(10, 3, 2.5 + 2.5i)` capped one past the leading pivot: the larger part ranks `3` (3 > 2.5)
+/// second, the part sum ranks `2.5 + 2.5i` (5 > 3) second. The modulus (`3.54 > 3`) agrees with the
+/// part sum only, so a caller cannot re-derive the order from the diagonal by hand.
 #[test]
-fn a_complex_capped_run_takes_the_pivot_faer_selects() {
+fn a_complex_pivot_follows_the_dispatched_score() {
+    let score = host_complex_pivot_score();
     let zero = Complex64::new(0.0, 0.0);
     let data = vec![
         Complex64::new(10.0, 0.0),
@@ -113,8 +171,79 @@ fn a_complex_capped_run_takes_the_pivot_faer_selects() {
     assert_eq!(lu.rank(), 2);
     assert_eq!(
         lu.diagonal()[..2],
-        [Complex64::new(10.0, 0.0), Complex64::new(3.0, 0.0)]
+        under(
+            score,
+            [Complex64::new(10.0, 0.0), Complex64::new(3.0, 0.0)],
+            [Complex64::new(10.0, 0.0), Complex64::new(2.5, 2.5)],
+        ),
+        "{score:?}"
     );
+    assert_eq!(
+        lu.row_perm()[..2],
+        under(score, [0, 1], [0, 2]),
+        "{score:?}"
+    );
+}
+
+/// The 16x16 case measured in tensor4all/faer#342: a zero matrix with `A[(0,1)] = 3 + 4i` and
+/// `A[(2,1)] = 5` pivots on `(2,1)` under the larger part (5 > 4) and on `(0,1)` under the part sum
+/// (7 > 5), for both complex widths.
+#[test]
+fn the_faer_342_case_follows_the_dispatched_score_in_both_widths() {
+    let score = host_complex_pivot_score();
+    let n = 16usize;
+
+    let mut c64 = vec![Complex64::new(0.0, 0.0); n * n];
+    c64[n] = Complex64::new(3.0, 4.0);
+    c64[2 + n] = Complex64::new(5.0, 0.0);
+    let lu = capped_full_piv_lu(Matrix::from_col_major_vec(n, n, c64), Some(1)).unwrap();
+    assert_eq!(lu.rank(), 1);
+    assert_eq!(lu.col_perm()[0], 1, "{score:?}");
+    assert_eq!(lu.row_perm()[0], under(score, 2, 0), "{score:?}");
+    assert_eq!(
+        lu.diagonal()[0],
+        under(score, Complex64::new(5.0, 0.0), Complex64::new(3.0, 4.0)),
+        "{score:?}"
+    );
+
+    let mut c32 = vec![Complex32::new(0.0, 0.0); n * n];
+    c32[n] = Complex32::new(3.0, 4.0);
+    c32[2 + n] = Complex32::new(5.0, 0.0);
+    let lu = capped_full_piv_lu(Matrix::from_col_major_vec(n, n, c32), Some(1)).unwrap();
+    assert_eq!(lu.col_perm()[0], 1, "{score:?}");
+    assert_eq!(lu.row_perm()[0], under(score, 2, 0), "{score:?}");
+}
+
+/// What `rank()` reports for a zero matrix is the intended contract, not an elimination count:
+/// uncapped, no rank revelation is requested and it is the bound `n`; capped, the elimination's
+/// zero stop is revealed and it is `0`. Both runs stop before the first pivot.
+#[test]
+fn rank_reports_the_bound_when_no_revelation_is_requested() {
+    let zeros = || Matrix::from_col_major_vec(2, 2, vec![0.0f64; 4]);
+
+    let uncapped = capped_full_piv_lu(zeros(), None).unwrap();
+    assert_eq!(uncapped.rank(), 2, "None: the bound n, not a revealed rank");
+
+    let capped = capped_full_piv_lu(zeros(), Some(2)).unwrap();
+    assert_eq!(capped.rank(), 0, "Some(cap): the revealed zero stop");
+
+    for lu in [&uncapped, &capped] {
+        assert_eq!(lu.row_perm(), &[0, 1]);
+        assert_eq!(lu.col_perm(), &[0, 1]);
+        assert_eq!(lu.diagonal(), &[0.0, 0.0]);
+    }
+}
+
+/// A non-finite entry switches the revelation off even under a cap: the count is `min(cap, n)`
+/// although the elimination took no pivot.
+#[test]
+fn rank_reports_the_cap_for_non_finite_input() {
+    let lu = capped_full_piv_lu(
+        Matrix::from_col_major_vec(2, 2, vec![f64::NAN, 0.0, 0.0, 0.0]),
+        Some(2),
+    )
+    .unwrap();
+    assert_eq!(lu.rank(), 2);
 }
 
 /// The narrow scalars factor too, so every dense LUCI scalar has a backend kernel.

@@ -13,13 +13,25 @@
 //!
 //! Two properties of the elimination callers can rely on:
 //!
-//! - The pivot search maximises `abs1` (`|re| + |im|` for complex scalars) over
-//!   the trailing block, so the next pivot is whatever faer selects, not a rule
-//!   a caller re-derives from the diagonal (`diag(10, 3, 2.5 + 2.5i)` takes `3`
-//!   second).
+//! - Each pivot is the trailing block's entry of largest *score*. For real
+//!   scalars the score is `|x|`. For complex scalars it depends on the SIMD path
+//!   faer dispatches to at run time from CPU detection, and both are part of
+//!   this contract:
+//!   - vector path (x86-64 with the x86-64-v3 set - AVX2, FMA, ... - or
+//!     AVX-512; aarch64 NEON; wasm32 simd128): the *larger part*,
+//!     `max(|re|, |im|)`;
+//!   - scalar path (any other CPU): the *part sum*, `|re| + |im|`.
+//!
+//!   Both are within `sqrt(2)` of the modulus, so a pivot is never smaller than
+//!   `1/sqrt(2)` of the block's largest modulus, but they rank entries
+//!   differently: capped at two, `diag(10, 3, 2.5 + 2.5i)` takes `3` second
+//!   under the larger part and `2.5 + 2.5i` under the part sum. The pivot order
+//!   is therefore whatever this call returns, not a rule a caller re-derives
+//!   from the diagonal.
 //! - A zero or subnormal Schur complement stops the elimination before the cap
-//!   does. [`CappedFullPivLu::rank`] then reports that earlier stop, and the
-//!   trailing diagonal is left un-eliminated.
+//!   does, and the trailing diagonal is left un-eliminated. Whether
+//!   [`CappedFullPivLu::rank`] reports that earlier stop depends on the cap: see
+//!   there.
 
 use anyhow::anyhow;
 use faer::dyn_stack::{MemBuffer, MemStack};
@@ -60,7 +72,8 @@ pub trait CappedFullPivLuScalar: sealed::Factor {}
 /// The pivots a [`capped_full_piv_lu`] call took, and the diagonal it left.
 ///
 /// Holds no factor matrices: the row and column permutations, the in-place
-/// diagonal, and the number of pivots the elimination actually took.
+/// diagonal, and the rank count [`Self::rank`] (whose meaning depends on the
+/// cap).
 ///
 /// # Examples
 ///
@@ -86,7 +99,10 @@ pub struct CappedFullPivLu<T> {
 impl<T> CappedFullPivLu<T> {
     /// Row permutation: `row_perm()[k]` is the input row moved to position `k`.
     ///
-    /// Has `n` entries; the first [`Self::rank`] are the rows of the pivots taken.
+    /// Has `n` entries: the rows of the pivots taken, in order, then the rows the
+    /// elimination did not pivot on. Under a cap with finite input the pivots
+    /// taken are the first [`Self::rank`] entries; without a cap `rank()` is `n`
+    /// even when the elimination stopped earlier (see [`Self::rank`]).
     ///
     /// # Examples
     ///
@@ -104,7 +120,9 @@ impl<T> CappedFullPivLu<T> {
 
     /// Column permutation: `col_perm()[k]` is the input column moved to position `k`.
     ///
-    /// Has `n` entries; the first [`Self::rank`] are the columns of the pivots taken.
+    /// Has `n` entries: the columns of the pivots taken, in order, then the
+    /// columns the elimination did not pivot on. Which leading entries are pivots
+    /// is read as for [`Self::row_perm`].
     ///
     /// # Examples
     ///
@@ -122,10 +140,13 @@ impl<T> CappedFullPivLu<T> {
 
     /// The diagonal of the in-place factorization, `n` entries.
     ///
-    /// The first [`Self::rank`] entries are the pivots taken, in order. The rest
-    /// are the trailing block's diagonal as the elimination left it: the Schur
-    /// complement's diagonal after a cap, the untouched input diagonal (under
-    /// the permutations) after a zero or subnormal stop.
+    /// The leading entries, up to where the elimination stopped, are the pivots
+    /// taken, in order. The rest are the trailing block's diagonal as the
+    /// elimination left it: the Schur complement's diagonal after a cap, the
+    /// un-eliminated block's diagonal (under the permutations) after a zero or
+    /// subnormal stop - which is zero or subnormal. Under a cap with finite input
+    /// the stop is at [`Self::rank`]; without a cap `rank()` does not report it,
+    /// and the first zero or subnormal entry here marks it.
     ///
     /// # Examples
     ///
@@ -141,11 +162,24 @@ impl<T> CappedFullPivLu<T> {
         &self.diagonal
     }
 
-    /// Number of pivots the elimination took.
+    /// The rank count the factorization reports; what it means depends on the
+    /// `max_rank` the call was given.
     ///
-    /// This is the raw count, not one clamped to the cap: `n` when uncapped,
-    /// the cap when the cap stops the elimination, and fewer when a zero or
-    /// subnormal Schur complement stops it first.
+    /// - `Some(cap)`, finite input: the number of pivots the elimination took.
+    ///   That is `min(cap, n)` when the cap stops it, and fewer when a zero or
+    ///   subnormal Schur complement stops it first (`0` for a zero matrix).
+    /// - `Some(cap)`, a NaN or infinite entry: `min(cap, n)`, whether or not the
+    ///   elimination stopped earlier.
+    /// - `None`: always `n`, also for a singular matrix whose elimination
+    ///   stopped early (a zero matrix reports `n`). No rank is revealed.
+    ///
+    /// What a caller can decide from it: under a cap with finite input, a
+    /// value `r < min(cap, n)` means the elimination found the remaining
+    /// `(n - r) x (n - r)` Schur complement zero or subnormal, so the `r` pivots
+    /// taken already reproduce the input up to rounding; `r == min(cap, n)` says
+    /// nothing about what lies past the cap. Without a
+    /// cap, the count carries no information about the matrix: read
+    /// [`Self::diagonal`], or pass `Some(n)` to have the early stop reported.
     ///
     /// # Examples
     ///
@@ -159,6 +193,11 @@ impl<T> CappedFullPivLu<T> {
     /// ]);
     /// assert_eq!(capped_full_piv_lu(a.clone(), None)?.rank(), 3);
     /// assert_eq!(capped_full_piv_lu(a, Some(2))?.rank(), 2);
+    ///
+    /// // A rank-1 matrix: only a cap reports the early stop.
+    /// let singular = Matrix::from_col_major_vec(2, 2, vec![3.0_f64, 0.0, 0.0, 0.0]);
+    /// assert_eq!(capped_full_piv_lu(singular.clone(), None)?.rank(), 2);
+    /// assert_eq!(capped_full_piv_lu(singular, Some(2))?.rank(), 1);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn rank(&self) -> usize {
@@ -170,8 +209,11 @@ impl<T> CappedFullPivLu<T> {
 ///
 /// The elimination runs in place on `a`'s column-major buffer, sequentially.
 /// `None` factors to full rank; `Some(r)` stops once `r` pivots are taken, so
-/// the work is `O(n^2 r)`. Pivot acceptance (tolerances, degenerate pivots) is
-/// left to the caller, who reads it from [`CappedFullPivLu::diagonal`].
+/// the work is `O(n^2 r)`. Either stops earlier at a zero or subnormal Schur
+/// complement, but only `Some` reports that stop in [`CappedFullPivLu::rank`].
+/// Pivot acceptance (tolerances, degenerate pivots) is left to the caller, who
+/// reads it from [`CappedFullPivLu::diagonal`]. The complex pivot score depends
+/// on the dispatched SIMD path (see the module docs).
 ///
 /// Non-finite entries are not checked here: validate the input first if a
 /// non-finite value must be refused.
