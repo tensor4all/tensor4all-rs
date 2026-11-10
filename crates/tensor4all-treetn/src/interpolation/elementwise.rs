@@ -58,8 +58,10 @@ pub trait ElementwiseOperator<T> {
     ///
     /// # Errors
     ///
-    /// Returns the operator's own error; the engine reports it as an
-    /// evaluator failure.
+    /// Returns an error when `inputs` is not a `[k, n_points]` array the
+    /// operator accepts (for [`Product`]: `k = 0`, or `output.len() !=
+    /// n_points`), or when the operator fails on a value; an engine reports
+    /// it as [`InterpolationError::Evaluator`].
     fn apply(&self, inputs: ColMajorArrayRef<'_, T>, output: &mut [T]) -> anyhow::Result<()>;
 }
 

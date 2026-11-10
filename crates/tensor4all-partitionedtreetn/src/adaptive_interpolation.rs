@@ -58,6 +58,13 @@
 //! canonical order, and the run then reports the same
 //! [`PatchedInterpolationError::ResourceLimit`] as before.
 //!
+//! # Element-wise operations
+//!
+//! [`patched_elementwise`] runs the same driver on `f(x_1, ..., x_k)` of
+//! partitions, with an element-wise engine that receives the input networks
+//! restricted to each patch; patches that cross the inputs' patches are split
+//! before any evaluation.
+//!
 //! # Sibling merging
 //!
 //! The driver never undoes a split. [`merge_siblings`] post-processes an
@@ -347,7 +354,9 @@
 mod acceptance;
 mod cache;
 mod corners;
+mod elementwise;
 mod embed;
+mod engine;
 mod fan_out;
 mod layout;
 mod merge;
@@ -385,10 +394,12 @@ use crate::{ErrorNorm, L2Reference, PartitionedTreeTN, Projector, SubDomainTreeT
 
 use acceptance::SizePolicy;
 use cache::{Counters, PatchCache, PatchSampler};
+use engine::{BlackBox, PatchEngine};
 use layout::SiteLayout;
 use sampling::{patch_candidates, patch_seeds, PatchDomain, PatchSeeds};
 use verify::{Contribution, MeasureError, MeasureTarget, Measured, PointPlan};
 
+pub use elementwise::patched_elementwise;
 pub use fan_out::patched_interpolate_on_lanes;
 pub use merge::{
     merge_siblings, SiblingMergeOptions, SiblingMergeRecord, SiblingMergeReport, SiblingMergeResult,
@@ -726,7 +737,8 @@ where
     E: TreeInterpolator<T> + Sync,
     F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
-    let plan = Plan::validated(engine, topology, node_sites, initial_pivots, options)?;
+    let engine = BlackBox(engine);
+    let plan = Plan::validated(&engine, topology, node_sites, initial_pivots, options)?;
     let mut waves = SerialWaves {
         ctx,
         evaluate: RefCell::new(evaluate),
@@ -1292,7 +1304,7 @@ impl<'a, T, V, E> Plan<'a, T, V, E>
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
 {
     /// Validate the inputs and options in their documented order.
     fn validated(
@@ -1387,7 +1399,7 @@ impl<T, V, E> Plan<'_, T, V, E>
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
 {
     fn sampler<'s>(
         &'s self,
@@ -1456,7 +1468,7 @@ where
         let sample = self.measure(tally, sampler, target, plan, projector, ctx)?;
         let before = tally.counters.evaluations.get();
         let estimate = residual::estimate(
-            self.engine,
+            self.engine.residual_engine(),
             &self.residual_problem(target, active, &sample, tolerance, residual_seed, projector)?,
             sampler,
             target,
@@ -1636,6 +1648,16 @@ where
         tally: &Tally,
         ctx: &mut EvalContext<'_>,
     ) -> Result<Verdict<T, V>, PatchedInterpolationError> {
+        let layout = &self.layout;
+        let active: Vec<usize> = (0..layout.sites.len())
+            .filter(|&position| patch.fixed[position].is_none())
+            .collect();
+        // A patch with at most one active site is evaluated exactly below,
+        // which needs no engine; any other patch must be one the engine can
+        // run on.
+        if active.len() > 1 && !self.engine.runs_on(projector)? {
+            return self.structural_split(patch, &active, projector);
+        }
         let Patch {
             path,
             fixed,
@@ -1643,10 +1665,6 @@ where
             recycled,
             worst,
         } = patch;
-        let layout = &self.layout;
-        let active: Vec<usize> = (0..layout.sites.len())
-            .filter(|&position| fixed[position].is_none())
-            .collect();
         if active.len() <= 1 {
             return self.exact_patch(
                 pins, evaluate, tally, &fixed, &active, cache, projector, ctx,
@@ -1804,7 +1822,9 @@ where
             .map_err(interpolation_error)?;
             let outcome = self
                 .engine
-                .interpolate(&problem, ctx, |batch, ctx| sampler.sample(batch, ctx))
+                .run(&problem, layout, &fixed, projector, ctx, |batch, ctx| {
+                    sampler.sample(batch, ctx)
+                })
                 .map_err(interpolation_error)?;
             let converged = outcome.termination == InterpolationTermination::Converged;
             if !converged
@@ -2010,6 +2030,32 @@ where
         let worst = failure
             .map(|failure| complete_points(&failure.worst, fixed))
             .unwrap_or_default();
+        let parent = Patch {
+            path,
+            fixed: fixed.to_vec(),
+            cache: sampler.cache.into_inner(),
+            recycled,
+            worst,
+        };
+        self.split_at(parent, active, split_position)
+    }
+
+    /// Split `parent` at `split_position` into one child per coordinate. Each
+    /// child receives its part of the parent's cache and of its recycled and
+    /// worst points.
+    fn split_at(
+        &self,
+        parent: Patch<T>,
+        active: &[usize],
+        split_position: usize,
+    ) -> Result<Verdict<T, V>, PatchedInterpolationError> {
+        let Patch {
+            path,
+            fixed,
+            cache,
+            recycled,
+            worst,
+        } = parent;
         let slot = active
             .iter()
             .position(|&position| position == split_position)
@@ -2021,13 +2067,13 @@ where
                 .cloned()
                 .collect()
         };
-        let mut children = sampling::reserve_vec(layout.dims[split_position], "patch children")
-            .map_err(invalid)?;
-        let caches = sampler.cache.into_inner().split(slot).map_err(invalid)?;
+        let dim = self.layout.dims[split_position];
+        let mut children = sampling::reserve_vec(dim, "patch children").map_err(invalid)?;
+        let caches = cache.split(slot).map_err(invalid)?;
         for (value, cache) in caches.into_iter().enumerate() {
             let mut child_path = path.clone();
             child_path.push((split_position, value));
-            let mut child_fixed = fixed.to_vec();
+            let mut child_fixed = fixed.clone();
             child_fixed[split_position] = Some(value);
             children.push(Patch {
                 path: child_path,
@@ -2038,6 +2084,31 @@ where
             });
         }
         Ok(Verdict::Split(children))
+    }
+
+    /// Split a patch the engine cannot run on at the next site of the split
+    /// order, before any evaluation. The size minimum does not block it: the
+    /// engine has no way to compute such a patch.
+    fn structural_split(
+        &self,
+        patch: Patch<T>,
+        active: &[usize],
+        projector: &Projector,
+    ) -> Result<Verdict<T, V>, PatchedInterpolationError> {
+        let split_position = self
+            .layout
+            .split_order
+            .iter()
+            .copied()
+            .find(|&position| patch.fixed[position].is_none())
+            .ok_or_else(|| {
+                invalid(format!(
+                    "the patch {projector:?} spans several patches of an input, and every site \
+                     of patch_order is fixed in it; list every site an input projector fixes in \
+                     patch_order"
+                ))
+            })?;
+        self.split_at(patch, active, split_position)
     }
 
     /// Evaluate a patch with at most one active site on all its points and
@@ -2274,7 +2345,7 @@ fn patch_outcome<T, V, E>(
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
 {
     let tally = Tally::default();
     let path = patch.path.clone();
@@ -2407,7 +2478,7 @@ fn assemble<T, V, E>(
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
 {
     let RunMerged {
         references,
@@ -2473,7 +2544,7 @@ fn run_waves<T, V, E, W>(
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
     W: Waves<T, V, E>,
 {
     let mut references = plan.initial_references();
@@ -2569,7 +2640,7 @@ impl<T, V, E, F> Waves<T, V, E> for SerialWaves<'_, '_, F>
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
     F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
     fn run_wave(

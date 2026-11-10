@@ -60,6 +60,7 @@ use tensor4all_treetn::interpolation::{
 use tensor4all_treetn::NodeNameNetwork;
 
 use super::cache::CacheLayout;
+use super::engine::{BlackBox, PatchEngine};
 use super::layout::SiteLayout;
 use super::options::PatchedInterpolationOptions;
 use super::report::{
@@ -787,7 +788,7 @@ fn encode_outcome<T, V, E>(
 where
     T: CommonScalar + TensorElement + Serialize + Copy,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
 {
     let PatchRun {
         path,
@@ -837,7 +838,7 @@ fn decode_outcome<T, V, E>(
 where
     T: CommonScalar + TensorElement + Copy,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
 {
     let WireOutcome {
         path,
@@ -904,7 +905,7 @@ impl<T, V, E, C, F> Waves<T, V, E> for MpiWaves<'_, '_, C, F>
 where
     T: CommonScalar + TensorElement + Send + Serialize + for<'de> Deserialize<'de> + Copy,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T> + Sync,
+    E: PatchEngine<T, V> + Sync,
     C: Communicator,
     F: Fn(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>> + Sync,
 {
@@ -1165,7 +1166,8 @@ where
             message: format!("the MPI root {root} is outside the world of {size} ranks"),
         });
     }
-    let validation = Plan::validated(engine, topology, node_sites, initial_pivots, options);
+    let engine = BlackBox(engine);
+    let validation = Plan::validated(&engine, topology, node_sites, initial_pivots, options);
     let local_error = validation.as_ref().err().map(ToString::to_string);
     agree_on_validation(world, root, rank, local_error)?;
     let plan = validation?;

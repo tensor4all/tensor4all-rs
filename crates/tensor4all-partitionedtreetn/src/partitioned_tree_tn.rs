@@ -2,6 +2,8 @@
 
 mod evaluate;
 
+pub(crate) use evaluate::PatchLocator;
+
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -351,11 +353,6 @@ where
         Ok(Self { data })
     }
 
-    /// Consume the partition into its patches, keyed by projector.
-    pub(crate) fn into_patches(self) -> HashMap<Projector, SubDomainTreeTN<V>> {
-        self.data
-    }
-
     /// Construct a partition containing one patch.
     ///
     /// # Errors
@@ -536,7 +533,7 @@ where
 
     /// Stored patches in canonical patch order, independent of insertion and
     /// hash order.
-    fn ordered_patches(&self) -> Vec<&SubDomainTreeTN<V>> {
+    pub(crate) fn ordered_patches(&self) -> Vec<&SubDomainTreeTN<V>> {
         let mut patches: Vec<_> = self.data.values().collect();
         sort_by_patch_order(
             &mut patches,

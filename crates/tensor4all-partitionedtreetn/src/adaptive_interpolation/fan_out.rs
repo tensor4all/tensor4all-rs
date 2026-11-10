@@ -45,6 +45,7 @@ use tensor4all_tensorbackend::explicit::Session;
 use tensor4all_treetn::interpolation::{EvalContext, Parallelism, TreeInterpolator};
 use tensor4all_treetn::NodeNameNetwork;
 
+use super::engine::{BlackBox, PatchEngine};
 use super::options::PatchedInterpolationOptions;
 use super::report::PatchedInterpolationResult;
 use super::{
@@ -64,7 +65,7 @@ impl<T, V, E, F> Waves<T, V, E> for LanesWaves<'_, F>
 where
     T: CommonScalar + TensorElement + Send,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T> + Sync,
+    E: PatchEngine<T, V> + Sync,
     F: Fn(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>> + Sync,
 {
     fn run_wave(
@@ -216,7 +217,8 @@ where
     E: TreeInterpolator<T> + Sync,
     F: Fn(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>> + Sync,
 {
-    let plan = Plan::validated(engine, topology, node_sites, initial_pivots, options)?;
+    let engine = BlackBox(engine);
+    let plan = Plan::validated(&engine, topology, node_sites, initial_pivots, options)?;
     let mut waves = LanesWaves { lanes, evaluate };
     let merged = run_waves(&plan, &mut waves)?;
     assemble(&plan, merged)
@@ -237,7 +239,7 @@ fn map_wave<T, V, E, F>(
 where
     T: CommonScalar + TensorElement + Send,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T> + Sync,
+    E: PatchEngine<T, V> + Sync,
     F: Fn(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>> + Sync,
 {
     let errors: Mutex<Vec<Option<PatchedInterpolationError>>> =

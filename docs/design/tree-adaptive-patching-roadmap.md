@@ -473,7 +473,11 @@ broadcasting), and the kernels get session-scoped entry points in their own
 crates. It also revises the projector rule above:
 intersections are the layout of products only; for a general `f` the output
 must also cover regions where an input has no patch, since `f(0, ...)` need
-not vanish.
+not vanish. Implemented on 2026-11-10: the driver seam, structural splits,
+input restriction, the `ElementwiseInterpolator` contract with a pointwise
+adapter, and a serial `patched_elementwise`, tested on a degree-3 star
+against a pointwise oracle. Open: the TreeACI and tree RSI adapters (after
+#1235 and #1236), the lanes and MPI entries, and the benchmark.
 
 Exit: tests on branched trees against a dense oracle, for a nonlinear `f`
 through TreeACI and for products through TreeACI and tree RSI; a benchmark

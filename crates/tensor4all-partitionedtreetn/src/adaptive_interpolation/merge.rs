@@ -424,7 +424,7 @@ fn initial_leaves<V>(
 where
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
 {
-    let mut patches: HashMap<Projector, SubDomainTreeTN<V>> = partition.into_patches();
+    let mut patches: HashMap<Projector, SubDomainTreeTN<V>> = partition.into_iter().collect();
     let mut leaves = BTreeMap::new();
     let missing = || internal(anyhow::anyhow!("an L2 patch has no acceptance measurement"));
     for record in &report.accepted {

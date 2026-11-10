@@ -5,8 +5,11 @@
 Design for milestone M6c of
 [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md),
 approved by the maintainer on 2026-11-10 (see
-[Decisions](#decisions-2026-11-10)). Not implemented. It answers the two open
-questions the roadmap left to this record (acceptance and driver).
+[Decisions](#decisions-2026-11-10)). Steps 1 and 2 of the
+[implementation order](#implementation-order) are implemented (see
+[Implementation notes](#implementation-notes)); the kernel adapters wait for
+#1235 and #1236. It answers the two open questions the roadmap left to this
+record (acceptance and driver).
 
 The 2026-11-09 ruling stands: Hadamard is the case `k = 2, f = product` of a
 general element-wise operation; the dedicated kernels (TreeACI for any `f`,
@@ -271,3 +274,53 @@ The maintainer approved every proposal:
    `tensor4all-treeaci` (#1235) and `tensor4all-treersi` (#1236).
 5. **No broadcasting**: inputs share the full site space; the caller renames
    equivalent sites beforehand.
+
+## Implementation notes
+
+Steps 1 and 2, on 2026-11-10.
+
+- **Seam.** The driver's engine is the private trait `PatchEngine<T, V>`
+  (`adaptive_interpolation/engine.rs`): `runs_on(projector)`, `run(..)`, and
+  the black-box `residual_engine()`. `BlackBox` wraps a `TreeInterpolator`
+  for `patched_interpolate` and its lanes and MPI entries; `Elementwise`
+  wraps an `ElementwiseInterpolator` for `patched_elementwise`. The per-patch
+  body of M2 is unchanged apart from the engine call and the structural
+  split; M2's existing tests, its golden outputs included, pass unchanged.
+- **Residual engine.** The `ResidualTt` estimator interpolates the residual
+  `f - f~` as a black box, which an element-wise kernel cannot do (tree RSI
+  computes products only). `patched_elementwise` therefore takes a second,
+  black-box engine for the estimator (for example TreeTCI); it is unused
+  under `UniformMonteCarlo`. The record did not foresee this argument.
+- **Zero-preserving operators.** No declaration was needed. Where an input
+  is zero for a product, every candidate sample is zero, so M2's existing
+  zero screen measures the zero approximation and records a zero patch
+  without an engine run. A map with `f(0, ...) != 0` samples nonzero values
+  there and runs the engine with a zero input network.
+- **Restriction.** `embed::restrict_fixed_sites` is the inverse of
+  `embed_fixed_sites`. An input with no patch on the region is restricted
+  through any of its patches, which gives an exact zero network (the mask
+  zeroes the selected coordinates); an empty input partition takes
+  `zeros_like` of another restricted input.
+- **Target evaluation.** The black-box values of `f(x_1, ..., x_k)` used for
+  sampling and measurement come from `PatchLocator` (shared with
+  `PartitionedTreeTN::evaluate_batched`, #1234) and one
+  `TreeTNCachedEvaluator` per input patch, evaluated on the run's session.
+- **`patch_order`.** Structural splits descend through `patch_order` in
+  order, so an order that lists other sites before the sites the inputs fix
+  splits deeper than the inputs need: with the default order (every site),
+  the test inputs split to depth five instead of three. The documentation
+  asks callers to list the inputs' fixed sites first; the order is not
+  reordered automatically, because M6b's `merge_siblings` relies on the
+  patches forming a prefix tree over `patch_order`.
+- **Engines provided.** `tensor4all-treetn::interpolation` has
+  `ElementwiseOperator` (closures implement it), the `Product` marker,
+  `ElementwiseInterpolator<T, Op>`, and `PointwiseElementwise<E>`, which
+  turns any black-box engine into an element-wise one by evaluating the
+  restricted inputs pointwise. Until the TreeACI and tree RSI adapters exist,
+  `PointwiseElementwise(TreeTciInterpolator)` is the engine of the tests.
+- **Serial only.** `patched_elementwise` has a serial entry; the lanes and MPI
+  entries follow with the kernels.
+- **B0.** The black-box route is documented in `patched_elementwise` and
+  tested against the same oracle
+  (`the_black_box_route_meets_the_same_contract`).
+
