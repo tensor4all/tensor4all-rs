@@ -81,6 +81,10 @@ name = "benchmark_merge_refine"
 path = "benchmark_merge_refine.rs"
 
 [[example]]
+name = "benchmark_merge_refine_intended_regime"
+path = "benchmark_merge_refine_intended_regime.rs"
+
+[[example]]
 name = "benchmark_tree_patch_representation"
 path = "benchmark_tree_patch_representation.rs"
 
