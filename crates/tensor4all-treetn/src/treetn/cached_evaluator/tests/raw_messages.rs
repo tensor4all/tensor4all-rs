@@ -39,7 +39,15 @@ fn measured_raw_center_core_visits(physical_dim: usize, bond_dims: &[usize]) -> 
         .collect::<Vec<_>>();
 
     reset_raw_center_core_visits_for_test();
-    let values = contract_raw_center(&core, &dims, 0, &physical_values, &components).unwrap();
+    let values = contract_raw_center(
+        &core,
+        &dims,
+        0,
+        &physical_values,
+        &components,
+        Parallelism::Serial,
+    )
+    .unwrap();
     assert_eq!(values.len(), physical_dim);
     raw_center_core_visits_for_test()
 }
@@ -61,7 +69,15 @@ fn assert_representative_raw_center_values(physical_dim: usize, bond_dims: &[usi
         })
         .collect::<Vec<_>>();
 
-    let values = contract_raw_center(&core, &dims, 0, &physical_values, &components).unwrap();
+    let values = contract_raw_center(
+        &core,
+        &dims,
+        0,
+        &physical_values,
+        &components,
+        Parallelism::Serial,
+    )
+    .unwrap();
     let expected_value = bond_dims.iter().product::<usize>() as f64;
     assert_eq!(values, vec![expected_value; physical_dim]);
 }

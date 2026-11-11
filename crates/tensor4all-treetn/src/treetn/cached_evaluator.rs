@@ -197,6 +197,8 @@ use tensor4all_tensorbackend::{
 use super::diagnostics;
 use super::evaluator::value_at;
 use super::TreeTN;
+use crate::interpolation::Parallelism;
+use rayon::prelude::*;
 
 type KeyId = usize;
 type EnvironmentCache<V> = HashMap<V, StackedMessage>;
@@ -2131,7 +2133,36 @@ where
         values: ColMajorArrayRef<'_, usize>,
         hint: EvaluationHint<V>,
     ) -> std::result::Result<Vec<T>, TreeTNOperationError> {
-        let cached = self.evaluate_batched_cached(values, hint)?;
+        self.evaluate_batched_typed_with_parallelism(values, hint, Parallelism::Serial)
+    }
+
+    /// Evaluates a batch like [`Self::evaluate_batched_typed`], running the
+    /// per-point centre kernel on the parallelism the caller hands in.
+    ///
+    /// `parallelism` is a value the caller already owns. With
+    /// [`Parallelism::Pool`], the points of each chunk are split into at most
+    /// `budget` shards (on whole four-point lane blocks) and the shards run on
+    /// that pool; each point is still folded in exactly the order it is folded
+    /// serially, so the result is bit-identical to [`Parallelism::Serial`]. No
+    /// global, thread-local or ambient pool is consulted.
+    /// [`Self::evaluate_batched_typed`] is this call with
+    /// [`Parallelism::Serial`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::evaluate_batched_typed`].
+    pub fn evaluate_batched_typed_with_parallelism<T: TensorElement>(
+        &mut self,
+        values: ColMajorArrayRef<'_, usize>,
+        hint: EvaluationHint<V>,
+        parallelism: Parallelism<'_>,
+    ) -> std::result::Result<Vec<T>, TreeTNOperationError> {
+        let cached = self.evaluate_batched_cached_with_route(
+            values,
+            hint,
+            &mut CachedEvaluationRoute::global(),
+            parallelism,
+        )?;
         cached_values_into_typed(cached).map_err(TreeTNOperationError::from)
     }
 
@@ -2156,8 +2187,32 @@ where
         values: ColMajorArrayRef<'_, usize>,
         hint: EvaluationHint<V>,
     ) -> std::result::Result<Vec<T>, TreeTNOperationError> {
+        self.evaluate_batched_typed_on_session_with_parallelism(
+            session,
+            values,
+            hint,
+            Parallelism::Serial,
+        )
+    }
+
+    /// [`Self::evaluate_batched_typed_on_session`] with the parallelism of the
+    /// caller's own host code; see
+    /// [`Self::evaluate_batched_typed_with_parallelism`]. The session stays on
+    /// the calling thread; only the host per-point kernel fans out.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::evaluate_batched_typed_on_session`].
+    pub fn evaluate_batched_typed_on_session_with_parallelism<T: TensorElement>(
+        &mut self,
+        session: &mut Session<'_>,
+        values: ColMajorArrayRef<'_, usize>,
+        hint: EvaluationHint<V>,
+        parallelism: Parallelism<'_>,
+    ) -> std::result::Result<Vec<T>, TreeTNOperationError> {
         let mut route = CachedEvaluationRoute::on_session(session);
-        let cached = self.evaluate_batched_cached_with_route(values, hint, &mut route)?;
+        let cached =
+            self.evaluate_batched_cached_with_route(values, hint, &mut route, parallelism)?;
         cached_values_into_typed(cached).map_err(TreeTNOperationError::from)
     }
 
@@ -2170,7 +2225,12 @@ where
         values: ColMajorArrayRef<'_, usize>,
         hint: EvaluationHint<V>,
     ) -> std::result::Result<Vec<CachedScalar>, TreeTNOperationError> {
-        self.evaluate_batched_cached_with_route(values, hint, &mut CachedEvaluationRoute::global())
+        self.evaluate_batched_cached_with_route(
+            values,
+            hint,
+            &mut CachedEvaluationRoute::global(),
+            Parallelism::Serial,
+        )
     }
 
     fn evaluate_batched_cached_with_route(
@@ -2178,6 +2238,7 @@ where
         values: ColMajorArrayRef<'_, usize>,
         hint: EvaluationHint<V>,
         route: &mut CachedEvaluationRoute<'_, '_>,
+        parallelism: Parallelism<'_>,
     ) -> std::result::Result<Vec<CachedScalar>, TreeTNOperationError> {
         #[cfg(feature = "diagnostics")]
         let query_started = std::time::Instant::now();
@@ -2216,7 +2277,13 @@ where
             let chunk =
                 ColMajorArrayRef::new(&values.data()[n_indices * start..n_indices * end], &shape)
                     .map_err(anyhow::Error::from)?;
-            results.extend(self.evaluate_chunk(&center, chunk, hinted_center, route)?);
+            results.extend(self.evaluate_chunk(
+                &center,
+                chunk,
+                hinted_center,
+                route,
+                parallelism,
+            )?);
             stats.subtree_environment_count += self.last_stats.subtree_environment_count;
             stats.directed_message_count += self.last_stats.directed_message_count;
             stats.batched_message_contract_count += self.last_stats.batched_message_contract_count;
@@ -2250,6 +2317,7 @@ where
         values: ColMajorArrayRef<'_, usize>,
         hinted_center: bool,
         route: &mut CachedEvaluationRoute<'_, '_>,
+        parallelism: Parallelism<'_>,
     ) -> std::result::Result<Vec<CachedScalar>, TreeTNOperationError> {
         if hinted_center {
             if let Some(result) = self.try_contract_cached_edge_cut(center, values)? {
@@ -2265,6 +2333,7 @@ where
                 &component_batches,
                 &environment_cache,
                 route,
+                parallelism,
             )
         } else {
             self.contract_center_for_points(
@@ -2273,6 +2342,7 @@ where
                 &component_batches,
                 &environment_cache,
                 route,
+                parallelism,
             )
         }?;
         self.last_stats.batched_center_contract_count = 1;
@@ -5615,6 +5685,7 @@ where
         values: ColMajorArrayRef<'_, usize>,
         component_batches: &[ComponentBatch<V>],
         environment_cache: &EnvironmentCache<V>,
+        parallelism: Parallelism<'_>,
     ) -> Result<Option<Vec<CachedScalar>>> {
         if component_batches.len() < 2 {
             return Ok(None);
@@ -5673,6 +5744,7 @@ where
                         physical_axis,
                         &physical_values,
                         &components,
+                        parallelism,
                     )
                 })?;
                 return Ok(Some(result.into_iter().map(CachedScalar::C64).collect()));
@@ -5698,6 +5770,7 @@ where
                 physical_axis,
                 &physical_values,
                 &components,
+                parallelism,
             )
         })?;
         Ok(Some(result.into_iter().map(CachedScalar::F64).collect()))
@@ -5785,6 +5858,7 @@ where
         component_batches: &[ComponentBatch<V>],
         environment_cache: &EnvironmentCache<V>,
         route: &mut CachedEvaluationRoute<'_, '_>,
+        parallelism: Parallelism<'_>,
     ) -> Result<Vec<CachedScalar>> {
         let Some(cut_batch) = component_batches.first() else {
             return self.contract_center_for_points(
@@ -5793,6 +5867,7 @@ where
                 component_batches,
                 environment_cache,
                 route,
+                parallelism,
             );
         };
         let cut_neighbor = cut_batch.neighbor.clone();
@@ -5865,6 +5940,7 @@ where
                 component_batches,
                 environment_cache,
                 route,
+                parallelism,
             );
         }
 
@@ -5878,6 +5954,7 @@ where
                 component_batches,
                 environment_cache,
                 route,
+                parallelism,
             );
         }
         let assembly = EdgeCutAssembly {
@@ -5891,28 +5968,44 @@ where
 
         match scalar_kind {
             ScalarKind::F32 => self
-                .contract_edge_cut_typed(&assembly, |value| match value {
-                    CachedScalar::F32(value) => Some(*value),
-                    _ => None,
-                })
+                .contract_edge_cut_typed(
+                    &assembly,
+                    |value| match value {
+                        CachedScalar::F32(value) => Some(*value),
+                        _ => None,
+                    },
+                    parallelism,
+                )
                 .map(|values| values.into_iter().map(CachedScalar::F32).collect()),
             ScalarKind::F64 => self
-                .contract_edge_cut_typed(&assembly, |value| match value {
-                    CachedScalar::F64(value) => Some(*value),
-                    _ => None,
-                })
+                .contract_edge_cut_typed(
+                    &assembly,
+                    |value| match value {
+                        CachedScalar::F64(value) => Some(*value),
+                        _ => None,
+                    },
+                    parallelism,
+                )
                 .map(|values| values.into_iter().map(CachedScalar::F64).collect()),
             ScalarKind::C32 => self
-                .contract_edge_cut_typed(&assembly, |value| match value {
-                    CachedScalar::C32(value) => Some(*value),
-                    _ => None,
-                })
+                .contract_edge_cut_typed(
+                    &assembly,
+                    |value| match value {
+                        CachedScalar::C32(value) => Some(*value),
+                        _ => None,
+                    },
+                    parallelism,
+                )
                 .map(|values| values.into_iter().map(CachedScalar::C32).collect()),
             ScalarKind::C64 => self
-                .contract_edge_cut_typed(&assembly, |value| match value {
-                    CachedScalar::C64(value) => Some(*value),
-                    _ => None,
-                })
+                .contract_edge_cut_typed(
+                    &assembly,
+                    |value| match value {
+                        CachedScalar::C64(value) => Some(*value),
+                        _ => None,
+                    },
+                    parallelism,
+                )
                 .map(|values| values.into_iter().map(CachedScalar::C64).collect()),
         }
     }
@@ -5921,6 +6014,7 @@ where
         &mut self,
         assembly: &EdgeCutAssembly<'_, V>,
         decode: impl Fn(&CachedScalar) -> Option<T>,
+        parallelism: Parallelism<'_>,
     ) -> Result<Vec<T>>
     where
         T: TensorElement
@@ -5928,7 +6022,9 @@ where
             + Copy
             + Default
             + std::ops::AddAssign
-            + std::ops::Mul<Output = T>,
+            + std::ops::Mul<Output = T>
+            + Send
+            + Sync,
     {
         let left_values = stacked_message_values_typed(assembly.cut_environment, &decode)?;
         let right_values = stacked_message_values_typed(assembly.center_message, &decode)?;
@@ -5946,45 +6042,58 @@ where
         )?;
 
         let n_points = assembly.values.shape()[1];
-        let mut result = Vec::with_capacity(n_points);
-        for point in 0..n_points {
-            let left_assignment = assembly
-                .cut_batch
-                .point_to_assignment
-                .get(point)
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("missing cut assignment for point {point}"))?;
-            let right_assignment = assembly
-                .center_assignment_batch
-                .point_to_assignment
-                .get(point)
-                .copied()
-                .ok_or_else(|| anyhow::anyhow!("missing reverse assignment for point {point}"))?;
-            let left_start = left_assignment
-                .checked_mul(assembly.bond_dim)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("cut assignment offset overflows usize for point {point}")
-                })?;
-            let right_start = right_assignment
-                .checked_mul(assembly.bond_dim)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("reverse assignment offset overflows usize for point {point}")
-                })?;
-            let left_end = left_start
-                .checked_add(assembly.bond_dim)
-                .ok_or_else(|| anyhow::anyhow!("cut column end overflows usize"))?;
-            let right_end = right_start
-                .checked_add(assembly.bond_dim)
-                .ok_or_else(|| anyhow::anyhow!("reverse column end overflows usize"))?;
-            let left = left_values.get(left_start..left_end).ok_or_else(|| {
-                anyhow::anyhow!("cut message column is out of bounds for point {point}")
-            })?;
-            let right = right_values.get(right_start..right_end).ok_or_else(|| {
-                anyhow::anyhow!("reverse message column is out of bounds for point {point}")
-            })?;
-            result.push(column_dot(left, right, |value| Some(*value))?);
-            self.last_stats.warm_edge_cut_assembly_visits += assembly.bond_dim;
-        }
+        let result = run_point_shards(n_points, 1, parallelism, |first, end| {
+            (first..end)
+                .map(|point| {
+                    let left_assignment = assembly
+                        .cut_batch
+                        .point_to_assignment
+                        .get(point)
+                        .copied()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("missing cut assignment for point {point}")
+                        })?;
+                    let right_assignment = assembly
+                        .center_assignment_batch
+                        .point_to_assignment
+                        .get(point)
+                        .copied()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("missing reverse assignment for point {point}")
+                        })?;
+                    let left_start =
+                        left_assignment
+                            .checked_mul(assembly.bond_dim)
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "cut assignment offset overflows usize for point {point}"
+                                )
+                            })?;
+                    let right_start =
+                        right_assignment
+                            .checked_mul(assembly.bond_dim)
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "reverse assignment offset overflows usize for point {point}"
+                                )
+                            })?;
+                    let left_end = left_start
+                        .checked_add(assembly.bond_dim)
+                        .ok_or_else(|| anyhow::anyhow!("cut column end overflows usize"))?;
+                    let right_end = right_start
+                        .checked_add(assembly.bond_dim)
+                        .ok_or_else(|| anyhow::anyhow!("reverse column end overflows usize"))?;
+                    let left = left_values.get(left_start..left_end).ok_or_else(|| {
+                        anyhow::anyhow!("cut message column is out of bounds for point {point}")
+                    })?;
+                    let right = right_values.get(right_start..right_end).ok_or_else(|| {
+                        anyhow::anyhow!("reverse message column is out of bounds for point {point}")
+                    })?;
+                    column_dot(left, right, |value| Some(*value))
+                })
+                .collect()
+        })?;
+        self.last_stats.warm_edge_cut_assembly_visits += n_points * assembly.bond_dim;
         Ok(result)
     }
 
@@ -5995,6 +6104,7 @@ where
         component_batches: &[ComponentBatch<V>],
         environment_cache: &EnvironmentCache<V>,
         route: &mut CachedEvaluationRoute<'_, '_>,
+        parallelism: Parallelism<'_>,
     ) -> Result<Vec<CachedScalar>> {
         let n_points = values.shape()[1];
         if n_points == 0 {
@@ -6010,6 +6120,7 @@ where
             values,
             component_batches,
             environment_cache,
+            parallelism,
         );
         if let Some(result) = raw_internal_result? {
             return Ok(result);
@@ -6237,6 +6348,10 @@ fn tensor_from_cached_values_compact(
 #[cfg(test)]
 thread_local! {
     static RAW_CENTER_CORE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Shards the last per-point kernel on this thread was split into; 1 means
+    /// it ran serially. Set by the calling thread, so a test reads what the
+    /// `Parallelism` it passed produced.
+    static POINT_SHARDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Entries read by the strided-dot helpers, counted where they read them.
     static STRIDED_DOT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// `(grouped, flat)` calls of the arbitrary-degree branch kernel, so a
@@ -6280,6 +6395,11 @@ fn multi_branch_routes_for_test() -> (usize, usize) {
 }
 
 #[cfg(test)]
+fn point_shards_for_test() -> usize {
+    POINT_SHARDS.get()
+}
+
+#[cfg(test)]
 fn reset_raw_center_core_visits_for_test() {
     RAW_CENTER_CORE_VISITS.set(0);
 }
@@ -6295,9 +6415,10 @@ fn contract_raw_center<T>(
     physical_axis: usize,
     physical_values: &[usize],
     components: &[RawCenterComponent<T>],
+    parallelism: Parallelism<'_>,
 ) -> Result<Vec<T>>
 where
-    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T> + Send + Sync,
 {
     ensure!(
         components.len() >= 2,
@@ -6363,14 +6484,98 @@ where
         "raw center physical value is out of bounds"
     );
     let physical_stride = strides[physical_axis];
+    // Shards are ranges of whole STRIDED_DOT_LANES blocks, so every point is
+    // folded in the same lane block, in the same order, as in the serial walk.
+    let output = run_point_shards(
+        physical_values.len(),
+        STRIDED_DOT_LANES,
+        parallelism,
+        |first, end| {
+            Ok(fold_raw_center_range(
+                core,
+                &strides,
+                components,
+                first,
+                &physical_values[first..end],
+                physical_stride,
+            ))
+        },
+    )?;
+    // The core entries the dot helpers actually read during this call (test builds only).
+    #[cfg(test)]
+    RAW_CENTER_CORE_VISITS
+        .set(RAW_CENTER_CORE_VISITS.get() + STRIDED_DOT_READS.get() - reads_before);
+    Ok(output)
+}
+
+/// Runs `fold(first, end)` over disjoint point ranges that together cover
+/// `0..n_points`, on the team the caller handed in, and concatenates the
+/// results in point order.
+///
+/// [`Parallelism::Serial`] and a budget of at most one run `fold(0, n_points)`
+/// on the calling thread. A pool of budget `b` splits the points into at most
+/// `b` ranges whose starts are multiples of `granule`, so a kernel that
+/// processes `granule` points per pass sees the same passes as in the serial
+/// walk. Points are independent, so no point's arithmetic changes. Nothing
+/// outside `parallelism` is consulted: no global, thread-local or ambient pool.
+fn run_point_shards<T: Send>(
+    n_points: usize,
+    granule: usize,
+    parallelism: Parallelism<'_>,
+    fold: impl Fn(usize, usize) -> Result<Vec<T>> + Sync,
+) -> Result<Vec<T>> {
+    let granule = granule.max(1);
+    let blocks = n_points.div_ceil(granule);
+    let (pool, shards) = match parallelism {
+        Parallelism::Pool { pool, budget } if budget > 1 => (Some(pool), budget.min(blocks)),
+        _ => (None, 1),
+    };
+    let points_per_shard = blocks.div_ceil(shards.max(1)) * granule;
+    let shards = match pool {
+        Some(_) if points_per_shard > 0 => n_points.div_ceil(points_per_shard),
+        _ => 1,
+    };
+    #[cfg(test)]
+    POINT_SHARDS.set(shards);
+    let Some(pool) = pool.filter(|_| shards > 1) else {
+        return fold(0, n_points);
+    };
+    let parts = pool.install(|| {
+        (0..shards)
+            .into_par_iter()
+            .map(|shard| {
+                fold(
+                    shard * points_per_shard,
+                    ((shard + 1) * points_per_shard).min(n_points),
+                )
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
+    Ok(parts.into_iter().flatten().collect())
+}
+
+/// Folds the points `first_point..first_point + physicals.len()` of a raw
+/// center. `first_point` is a multiple of [`STRIDED_DOT_LANES`] unless this is
+/// the whole batch, so lane blocks are identical to those of a serial walk.
+fn fold_raw_center_range<T>(
+    core: &[T],
+    strides: &[usize],
+    components: &[RawCenterComponent<T>],
+    first_point: usize,
+    physical_values: &[usize],
+    physical_stride: usize,
+) -> Vec<T>
+where
+    T: Copy + Default + std::ops::AddAssign + std::ops::Mul<Output = T>,
+{
     let mut output = Vec::with_capacity(physical_values.len());
     // Points STRIDED_DOT_LANES at a time share each pass over the core; the rest one at a time.
     let (blocks, rest) = physical_values.as_chunks::<STRIDED_DOT_LANES>();
     for (block, physicals) in blocks.iter().enumerate() {
-        let points = std::array::from_fn(|lane| block * STRIDED_DOT_LANES + lane);
+        let points = std::array::from_fn(|lane| first_point + block * STRIDED_DOT_LANES + lane);
         output.extend(fold_raw_center_points(
             core,
-            &strides,
+            strides,
             components,
             points,
             0,
@@ -6378,21 +6583,17 @@ where
         ));
     }
     let done = blocks.len() * STRIDED_DOT_LANES;
-    for (point, &physical) in (done..).zip(rest) {
+    for (point, &physical) in (first_point + done..).zip(rest) {
         output.push(fold_raw_center_components(
             core,
-            &strides,
+            strides,
             components,
             point,
             0,
             physical * physical_stride,
         ));
     }
-    // The core entries the dot helpers actually read during this call (test builds only).
-    #[cfg(test)]
-    RAW_CENTER_CORE_VISITS
-        .set(RAW_CENTER_CORE_VISITS.get() + STRIDED_DOT_READS.get() - reads_before);
-    Ok(output)
+    output
 }
 
 /// Sums one point's center contraction over the components from `level` on.
