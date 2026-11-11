@@ -166,3 +166,57 @@ the complete original maximum-rank/local-error histories. JSON consistency,
 relative links, source-restoration hashes, Rust formatting and deterministic
 repository-rules dry run pass. The existing library suites are not repeated
 for this documentation and standalone diagnostic update.
+
+## Root-cause intervention and exactness limits
+
+The [controlled root-cause study](../experiments/treeaci-784-root-cause/README.md)
+and [complete results](../experiments/treeaci-784-root-cause.json) retain nine
+runs, including adverse outcomes. Read-only Core diagnostics reproduce every
+original R10/seed 2026 relative rank and error. All 45 growing local updates
+in passes 39–50 have lost old pivot rows after neighboring replacements,
+although every old column remains available in directed update coordinates.
+At the old rank, their Schur maxima are 1.0025–2.5375 times tolerance.
+The update therefore regrows legitimately against its changed local matrix;
+the stopping counter is not the defect. This does not exclude conditioning
+or finite-precision influence on selection.
+
+A diagnostic-only intervention fills missing center-directed child candidates
+using duplicate auxiliary slots, retaining pivot prefixes, dimensions, RNG,
+Guard settings and tolerance. Replacing one slot after Guard in pass 3 changes
+R10/seed 2026 from MaxSweeps/50 to Converged/17 and removes candidate closure
+failures. Thus the early gap is an effective trajectory trigger; its repair
+changes later behavior even though the original gap disappears in pass 4.
+It is not proved to be the sole cause of all reset-mode cycling.
+
+Do not promote that intervention as the completed fix. On the original 5,000
+importance samples, the relative L2 estimate increases from 0.00354242 to
+0.00471554, about 33.1%; the original norm, sampling seed and estimate are
+reproduced. R9/seed 2026 worsens from 30 to 50 passes, R9/seed 42 improves
+12→9, and R10/seed 42 remains 15 without requiring a slot replacement.
+The intervention is best-effort and cannot address a missing child with no
+duplicate auxiliary capacity. General closure-safe injection belongs with
+the mixed-capacity design in #854/#794, together with a global accuracy
+contract; a shorter local-stopping history alone is insufficient evidence.
+
+There is no universal mathematical-exactness guarantee. Two public-API tests
+demonstrate the current boundary: a fully sampled matrix can retain nonzero
+error below a positive tolerance; default finite Guard can miss a spike in
+an exactly rank-at-most-two target and return `Converged` with full-grid
+maximum error 1024. The latter visits 166 distinct assignments of a 4096-point
+grid and replays the same complete query transcript after placing the spike
+at unqueried assignment 11. Tightening tolerance recovers the small matrix
+entry, whereas a binding rank cap reports `RankLimited`. These new tests do
+not loosen existing assertions or alter the approximate algorithm.
+
+The public termination documentation now explicitly disclaims exact
+reconstruction. The design's obsolete `f64::EPSILON` pivot-floor statement is
+corrected against `matrixlu.rs::pivot_is_undividable`, which checks exact zero
+and reciprocal representability instead. The theoretical distinction is
+between exact-arithmetic, rank-sufficient full-domain reconstruction and this
+bounded adaptive implementation; no global monotone-error theorem is supplied.
+
+Verification passes both new ordinary-profile tests, all 22 TreeACI doctests,
+strict all-targets TreeACI Clippy and formatting. The retained release probe
+rebuilds and reproduces every snapshot and rank/error in the 17-pass
+intervention. No production selection or Guard changes are made, and no
+diagnostic timing is used for a performance claim. Hosted CI remains unrun.

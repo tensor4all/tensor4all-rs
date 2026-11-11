@@ -10,6 +10,7 @@ mod audit_regressions;
 mod branch_degree;
 mod branch_diagnostics;
 mod convergence;
+mod exactness;
 mod f7_session_context;
 mod g0_convergence;
 mod heavy_g0_convergence;

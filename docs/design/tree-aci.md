@@ -124,8 +124,9 @@ CI canonicalization preserves all four supported scalar dtypes end to end.
 When a rank ceiling ends rrLU, the reported local error is the remaining Schur
 complement maximum, rather than the last accepted pivot. Thus a saturated cut
 whose local matrix is already exact does not by itself imply `RankLimited`.
-Normalization also makes the LUCI kernels' absolute `f64::EPSILON` pivot floor
-a fixed relative round-off floor for this mode. With absolute tolerance selected, the
+The LUCI division guard stops at exact zero or an unrepresentable reciprocal
+in the scalar type; it does not impose an absolute `f64::EPSILON` pivot floor.
+With absolute tolerance selected, the
 local matrix remains in raw output units and the configured threshold is
 absolute in those same units. The global guard follows the same policy: in
 relative mode it scales its threshold by the largest `|f|` among its random
@@ -139,6 +140,21 @@ full-grid maximum error: the tolerance controls edge-local residuals, and the
 guard performs bounded randomized coordinate searches with its configured
 acceptance margin. Independent validation remains necessary. Exhaustive
 checks belong only in small tests or explicit diagnostic programs.
+
+Neither the stopping rule nor reset pivot selection guarantees eventual
+mathematically exact reconstruction. A positive tolerance deliberately permits
+discarding nonzero contributions; a configured rank cap can also exclude the
+exact target. Even without a binding cap, finitely many local and randomized
+Guard queries cannot distinguish a constant from a constant plus a spike at
+an unqueried assignment. The public-API exactness tests exhibit this with a
+rank-at-most-two target on a 12-bit grid: default Guard returns `Converged`
+although the independent full-grid maximum error is 1024. The same tests
+show a fully sampled two-site matrix retaining a nonzero error below its
+configured tolerance and recovering that contribution under a tighter target.
+These are counterexamples to an unconditional exactness claim, not changes to
+the documented approximate contract. In exact arithmetic, rank-sufficient
+factorizations with zero residual on the full domain reconstruct that domain;
+the current bounded adaptive search does not establish those premises.
 
 ### Strong pivot hints at the tolerance boundary
 
@@ -176,6 +192,13 @@ do not establish the per-edge stability or Guard conditions. The
 preserves center-directed selected-pivot nesting in the exact relative-mode
 chain replay. It separately exposes a transient Guard candidate closure gap,
 without establishing that gap as the cause of later small-cut regrowth.
+The [controlled follow-up](../experiments/treeaci-784-root-cause/README.md)
+changes one duplicate auxiliary slot after Guard: R10/seed 2026 then converges
+at 17, but its importance-sampled L2 error increases 33.1%, and R9/seed 2026
+takes 50 rather than 30 passes. This intervention is not promoted into the
+production algorithm. Late regrowth coincides with lost old pivot rows and
+above-threshold residuals at the old rank; strong hints do not prevent that
+loss when neighboring candidate spaces change.
 
 Relative local stopping does not bound pointwise relative error or the global
 Frobenius error. In particular, held-out random points can underestimate a

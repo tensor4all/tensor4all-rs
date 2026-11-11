@@ -18,7 +18,8 @@ use crate::TreeAciNode;
 pub enum TreeAciTermination {
     /// The local error target, per-edge rank stability, and enabled global
     /// guard criteria were satisfied. Local residuals and randomized guard
-    /// searches are not a certificate of the full-grid maximum error.
+    /// searches certify neither exact reconstruction nor the full-grid maximum
+    /// error; even a representable low-rank target can contain an unseen peak.
     Converged,
     /// An inaccurate edge reached its algebraic/configured rank cap, or the
     /// guard found an unresolved residual while all cuts were saturated.
