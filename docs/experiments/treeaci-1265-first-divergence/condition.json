@@ -1,0 +1,86 @@
+{
+  "baseline": {
+    "shape": [
+      16,
+      8
+    ],
+    "singular_values": [
+      247.26966374321617,
+      92.38510943784853,
+      33.911723354266606,
+      9.746455697381986,
+      2.3728383283538036e-14,
+      1.5936893475423695e-14,
+      4.377340124468696e-15,
+      4.966684078965474e-16
+    ],
+    "selected_cross_singular_values": [
+      94.73133942122125,
+      47.038771683542066,
+      11.805436999674503,
+      3.7932932051363526
+    ],
+    "selected_cross_condition": 24.973376509084293,
+    "local_cross_reconstruction_max_residual": 7.105427357601002e-15,
+    "rank": 4,
+    "normalized_pivot_errors": [
+      1.0,
+      1.1751263945819794,
+      0.5716536686578249,
+      0.28935988503761545,
+      3.08604809455153e-16
+    ]
+  },
+  "candidate": {
+    "shape": [
+      16,
+      6
+    ],
+    "singular_values": [
+      212.85944184717005,
+      78.09796696503598,
+      34.78905629548561,
+      21.02687817157346,
+      11.77281864062081,
+      5.755919654056344
+    ],
+    "selected_cross_singular_values": [
+      140.1495996355696,
+      53.7742869287455,
+      21.95471934488868,
+      14.887114665534995,
+      6.96492699154994,
+      2.7718360495407257
+    ],
+    "selected_cross_condition": 50.56200912705187,
+    "local_cross_reconstruction_max_residual": 8.881784197001252e-15,
+    "rank": 6,
+    "normalized_pivot_errors": [
+      1.0,
+      1.1866481249886294,
+      0.9086419639694937,
+      0.46921902721526654,
+      0.3842414625264279,
+      0.23518310228454964,
+      0.0
+    ]
+  },
+  "common_column_keys": [
+    50331648,
+    54525952,
+    16777216,
+    20971520
+  ],
+  "added_column_keys": [
+    33554432,
+    37748736
+  ],
+  "common_columns_max_abs_difference": 0.0,
+  "candidate_restricted_to_baseline_columns_singular_values": [
+    174.84605601454558,
+    65.32613736416394,
+    23.979209545524117,
+    6.891784916153067
+  ],
+  "scope": "Diagnostic SVD of actual raw local matrices, not a change to production linalg or truncation. First divergent candidate grid: pass2 step24 cut44 (21->22)."
+}
