@@ -9,9 +9,10 @@ approved by the maintainer on 2026-11-10 (see
 [implementation order](#implementation-order) are implemented (see
 [Implementation notes](#implementation-notes)). Step 5, the benchmark, has
 an exploratory report for the TreeACI kernel
-([2026-11-11](../../benchmarks/results/2026-11-11-m6c-elementwise.md)); the
-comparison on `tt_nblock` at low temperature waits for #784, and tree RSI is
-parked. This record answers the two open questions the roadmap left to it
+([2026-11-11](../../benchmarks/results/2026-11-11-m6c-elementwise.md)); on
+`tt_nblock` at T = 0.01 it measures about half the parameters of unpatched
+TreeACI at matched accuracy, the timing comparison there waits for #784, and
+tree RSI is parked. This record answers the two open questions the roadmap left to it
 (acceptance and driver).
 
 The 2026-11-09 ruling stands: Hadamard is the case `k = 2, f = product` of a

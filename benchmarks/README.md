@@ -254,8 +254,8 @@ cargo run --release -p tensor4all-benchmarks \
   --variants "rtol=1e-3;rtol=1e-3,engine-tol-factor=3"
 ```
 
-The exploratory runs, the TreeACI kernel tolerance factor and the open
-`tt_nblock` comparison are in
+The exploratory runs, the TreeACI kernel tolerance factor and the
+`tt_nblock` comparison (parameters measured, timing open until #784) are in
 [`2026-11-11-m6c-elementwise.md`](results/2026-11-11-m6c-elementwise.md); its
 tables are generated from the raw output by
 `results/m6c-elementwise/report.py`.

@@ -213,9 +213,9 @@ def probe_784():
                   "parameters", "sampled rel. L2 error"], rows)
 
 
-def comb_runs():
+def group_runs(group):
     out = {}
-    for path in sorted((RAW / "comb-T0.1-R12").glob("s*-*.jsonl")):
+    for path in sorted((RAW / group).glob("s*-*.jsonl")):
         seed, method = path.stem.split("-", 1)
         c = config(path)
         for r in lines(path, "result"):
@@ -223,32 +223,39 @@ def comb_runs():
     return out
 
 
-def comb_table():
-    runs = comb_runs()
+def run_setting(method, c, r):
+    if method == "unpatched":
+        return f"tol {variant_value(r['variant'], 'tol', c['tol'])}"
+    rtol = variant_value(r["variant"], "rtol", c["rtol"])
+    k = variant_value(r["variant"], "engine-tol-factor", "1")
+    return f"rtol {rtol}, k {k}" if method == "patched" else f"rtol {c['rtol']}"
+
+
+def runs_table(group):
+    runs = group_runs(group)
     rows = []
     for (seed, method), items in sorted(runs.items()):
         for c, r in items:
             e, acc = r["engine"], r["accuracy"]
             if method == "unpatched":
-                setting = f"tol {variant_value(r['variant'], 'tol', c['tol'])}"
-                detail = f"{e['termination']}, {e['sweeps']} sweeps"
+                ranks = e["max_ranks"]
+                detail = (f"{e['termination']}, {e['sweeps']} sweeps; max rank within 3% from "
+                          f"sweep {stable_from(ranks)}, last change at sweep {last_change(ranks)}")
             else:
-                rtol = variant_value(r["variant"], "rtol", c["rtol"])
-                k = variant_value(r["variant"], "engine-tol-factor", "1")
-                setting = f"rtol {rtol}, k {k}" if method == "patched" else f"rtol {c['rtol']}"
                 detail = (f"{e['splits']} splits, {e['verification_failures']} failed "
                           f"measurements; kernel {e['kernel']['seconds']:.1f} s, "
                           f"measurement {e['residual_engine']['seconds']:.1f} s")
-            rows.append([seed, method, setting, f"{r['seconds']:.1f}", r["patches"], r["max_rank"],
-                         r["params"], f"{g(acc['rel_l2'], 3)} ± {g(acc['rel_l2_se'], 1)}", detail])
+            rows.append([seed, method, run_setting(method, c, r), f"{r['seconds']:.1f}",
+                         r["patches"], r["max_rank"], r["params"],
+                         f"{g(acc['rel_l2'], 3)} ± {g(acc['rel_l2_se'], 1)}", detail])
     return table(["seed", "method", "setting", "time [s]", "patches", "max rank", "parameters",
                   "sampled rel. L2 error ± s.e.", "engine"], rows)
 
 
-def comb_matched():
+def matched_table(group):
     """Each patched run against the fastest unpatched run of the same seed
     whose sampled error is not larger."""
-    runs = comb_runs()
+    runs = group_runs(group)
     rows = []
     for (seed, method), items in sorted(runs.items()):
         if method != "patched":
@@ -257,20 +264,35 @@ def comb_matched():
         for c, r in items:
             err = r["accuracy"]["rel_l2"]
             match = [u for _, u in unpatched if u["accuracy"]["rel_l2"] <= err]
-            rtol = variant_value(r["variant"], "rtol", c["rtol"])
-            k = variant_value(r["variant"], "engine-tol-factor", "1")
+            setting = run_setting(method, c, r)
             if not match:
-                rows.append([seed, f"rtol {rtol}, k {k}", g(err, 3), "no unpatched run this accurate",
-                             "", "", ""])
+                rows.append([seed, setting, g(err, 3), "no unpatched run this accurate",
+                             "", "", "", ""])
                 continue
             u = min(match, key=lambda u: u["seconds"])
-            rows.append([seed, f"rtol {rtol}, k {k}", g(err, 3),
-                         f"tol {variant_value(u['variant'], 'tol', '')} ({g(u['accuracy']['rel_l2'], 3)})",
-                         g(r["seconds"] / u["seconds"], 3), g(r["params"] / u["params"], 3),
-                         r["patches"]])
+            uerr = u["accuracy"]["rel_l2"]
+            rows.append([seed, setting, g(err, 3),
+                         f"tol {variant_value(u['variant'], 'tol', '')} ({g(uerr, 3)})",
+                         g(err / uerr, 2), g(r["seconds"] / u["seconds"], 3),
+                         g(r["params"] / u["params"], 3), r["patches"]])
     return table(["seed", "patched run", "its error", "unpatched match (error)",
-                  "time patched / unpatched", "parameters patched / unpatched",
-                  "patches"], rows)
+                  "its error / match error", "time patched / unpatched",
+                  "parameters patched / unpatched", "patches"], rows)
+
+
+def processes(group):
+    """Wall clock, peak memory and exit status of each process, from its
+    `/usr/bin/time -v` record (whole process: inputs, runs and accuracy checks)."""
+    rows = []
+    for path in sorted((RAW / group).glob("s*-*.time")):
+        text = path.read_text()
+        wall = re.search(r"Elapsed \(wall clock\) time \(h:mm:ss or m:ss\): (\S+)", text)
+        rss = re.search(r"Maximum resident set size \(kbytes\): (\d+)", text)
+        status = re.search(r"Exit status: (\d+)", text)
+        rows.append([path.stem, wall.group(1) if wall else "-",
+                     f"{int(rss.group(1)) / 1024 ** 2:.2f}" if rss else "-",
+                     status.group(1) if status else "no exit record"])
+    return table(["process", "wall clock", "peak RSS [GiB]", "exit status"], rows)
 
 
 def b0_status():
@@ -298,9 +320,12 @@ GENERATORS = {
     "audit": audit,
     "topology-scan": topology_scan,
     "probe-784": probe_784,
-    "comb-runs": comb_table,
-    "comb-matched": comb_matched,
+    "comb-runs": lambda: runs_table("comb-T0.1-R12"),
+    "comb-matched": lambda: matched_table("comb-T0.1-R12"),
     "comb-b0": b0_status,
+    "nblock-runs": lambda: runs_table("nblock-T0.01-R12"),
+    "nblock-matched": lambda: matched_table("nblock-T0.01-R12"),
+    "nblock-processes": lambda: processes("nblock-T0.01-R12"),
 }
 
 

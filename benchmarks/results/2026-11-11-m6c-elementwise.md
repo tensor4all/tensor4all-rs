@@ -18,9 +18,11 @@ RSI half is parked by the maintainer (2026-11-11): tree RSI has no in-run
 error control, and its `rel_tol` is an LU pivot threshold, not an accuracy
 setting.
 
-Open: the comparison on gw-rs's low-temperature topology (`tt_nblock`,
-T = 0.01, R = 12) waits for #784 (section 5); B0 was tried on one seed and
-did not finish within its 2 h limit (section 6).
+Open: on gw-rs's low-temperature topology (`tt_nblock`, T = 0.01,
+R = 12) the parameter counts are measured (section 7), but the timing
+comparison waits for #784, because every unpatched run there cycles until
+its sweep limit (sections 5 and 7). B0 was tried on one seed and did not
+finish within its 2 h limit (section 6).
 
 Not reported: a first round of runs on 2026-11-10/11 used the comb CTTN at
 T = 0.01 and R = 12. That is the comb's worst regime for G0 (section 4), its
@@ -32,9 +34,12 @@ withdrawn.
 
 Each run group has a `PROVENANCE` file written by command: the SHA-256 of
 the measured binary, the commit it was built from (`git rev-parse`), the
-host and the thread environment. Every group except `784probe/bin-fix` uses
-the same binary (SHA-256 `e232e17f…`), built in release from a clean
-`feat/tree-patching-m6a-contraction` at `9dde54ca`. Harness:
+host and the thread environment. Every group except `784probe/bin-fix` and
+`nblock-T0.01-R12` uses the same binary (SHA-256 `e232e17f…`), built in
+release from a clean `feat/tree-patching-m6a-contraction` at `9dde54ca`.
+`nblock-T0.01-R12` uses `8805647a…`, built from a clean `06ebafaa`, which
+only changes the library's default tolerance factor; the harness still
+passes `k` explicitly. Harness:
 [`benchmark_m6c_elementwise`](../rust/benchmark_m6c_elementwise.rs).
 
 Host: AMD Ryzen 9 6900HX (8 cores, 16 logical CPUs), WSL2 kernel 6.18,
@@ -270,58 +275,58 @@ runs of sections 1 to 3 were running.
 | 7 | patched | rtol 1e-2, k 3 | 9.6 | 1 | 61 | 118284 | 0.000743 ± 8e-06 | 0 splits, 0 failed measurements; kernel 1.8 s, measurement 7.7 s |
 | 7 | patched | rtol 1e-3, k 3 | 50.5 | 8 | 33 | 230672 | 0.000119 ± 2e-06 | 7 splits, 0 failed measurements; kernel 28.5 s, measurement 21.9 s |
 | 7 | patched | rtol 1e-4, k 3 | 70.8 | 8 | 40 | 372520 | 1.33e-05 ± 2e-07 | 7 splits, 0 failed measurements; kernel 42.8 s, measurement 27.8 s |
-| 7 | unpatched | tol 1e-3 | 0.5 | 1 | 50 | 76100 | 0.0166 ± 8e-05 | Converged, 8 sweeps |
-| 7 | unpatched | tol 3e-4 | 1.1 | 1 | 56 | 90402 | 0.00209 ± 2e-05 | Converged, 12 sweeps |
-| 7 | unpatched | tol 1e-4 | 2.4 | 1 | 61 | 124332 | 0.000419 ± 5e-06 | Converged, 18 sweeps |
-| 7 | unpatched | tol 3e-5 | 4.3 | 1 | 67 | 150724 | 0.000152 ± 1e-06 | Converged, 18 sweeps |
-| 7 | unpatched | tol 1e-5 | 2.5 | 1 | 73 | 195632 | 8.52e-05 ± 5e-07 | Converged, 14 sweeps |
+| 7 | unpatched | tol 1e-3 | 0.5 | 1 | 50 | 76100 | 0.0166 ± 8e-05 | Converged, 8 sweeps; max rank within 3% from sweep 6, last change at sweep 6 |
+| 7 | unpatched | tol 3e-4 | 1.1 | 1 | 56 | 90402 | 0.00209 ± 2e-05 | Converged, 12 sweeps; max rank within 3% from sweep 7, last change at sweep 11 |
+| 7 | unpatched | tol 1e-4 | 2.4 | 1 | 61 | 124332 | 0.000419 ± 5e-06 | Converged, 18 sweeps; max rank within 3% from sweep 14, last change at sweep 18 |
+| 7 | unpatched | tol 3e-5 | 4.3 | 1 | 67 | 150724 | 0.000152 ± 1e-06 | Converged, 18 sweeps; max rank within 3% from sweep 7, last change at sweep 15 |
+| 7 | unpatched | tol 1e-5 | 2.5 | 1 | 73 | 195632 | 8.52e-05 ± 5e-07 | Converged, 14 sweeps; max rank within 3% from sweep 8, last change at sweep 13 |
 | 42 | patched | rtol 1e-2, k 1 | 7.2 | 1 | 55 | 88688 | 0.00244 ± 3e-05 | 0 splits, 0 failed measurements; kernel 0.9 s, measurement 6.3 s |
 | 42 | patched | rtol 1e-3, k 1 | 44.3 | 4 | 61 | 458752 | 0.000173 ± 1e-06 | 3 splits, 0 failed measurements; kernel 22.8 s, measurement 21.3 s |
 | 42 | patched | rtol 1e-4, k 1 | 55.5 | 8 | 38 | 306860 | 3.83e-05 ± 3e-07 | 7 splits, 0 failed measurements; kernel 30.5 s, measurement 24.8 s |
 | 42 | patched | rtol 1e-2, k 3 | 9.5 | 1 | 59 | 119504 | 0.000559 ± 7e-06 | 0 splits, 0 failed measurements; kernel 1.7 s, measurement 7.8 s |
 | 42 | patched | rtol 1e-3, k 3 | 41.6 | 8 | 34 | 229152 | 0.000127 ± 2e-06 | 7 splits, 0 failed measurements; kernel 24.2 s, measurement 17.3 s |
 | 42 | patched | rtol 1e-4, k 3 | 42.1 | 8 | 40 | 363496 | 1.51e-05 ± 3e-07 | 7 splits, 0 failed measurements; kernel 24.3 s, measurement 17.6 s |
-| 42 | unpatched | tol 1e-3 | 1.1 | 1 | 50 | 70866 | 0.0166 ± 8e-05 | Converged, 15 sweeps |
-| 42 | unpatched | tol 3e-4 | 1.4 | 1 | 57 | 101244 | 0.0013 ± 1e-05 | Converged, 16 sweeps |
-| 42 | unpatched | tol 1e-4 | 2.3 | 1 | 61 | 119590 | 0.000532 ± 7e-06 | Converged, 14 sweeps |
-| 42 | unpatched | tol 3e-5 | 1.1 | 1 | 68 | 152554 | 0.000135 ± 1e-06 | Converged, 10 sweeps |
+| 42 | unpatched | tol 1e-3 | 1.1 | 1 | 50 | 70866 | 0.0166 ± 8e-05 | Converged, 15 sweeps; max rank within 3% from sweep 10, last change at sweep 13 |
+| 42 | unpatched | tol 3e-4 | 1.4 | 1 | 57 | 101244 | 0.0013 ± 1e-05 | Converged, 16 sweeps; max rank within 3% from sweep 9, last change at sweep 13 |
+| 42 | unpatched | tol 1e-4 | 2.3 | 1 | 61 | 119590 | 0.000532 ± 7e-06 | Converged, 14 sweeps; max rank within 3% from sweep 11, last change at sweep 14 |
+| 42 | unpatched | tol 3e-5 | 1.1 | 1 | 68 | 152554 | 0.000135 ± 1e-06 | Converged, 10 sweeps; max rank within 3% from sweep 9, last change at sweep 9 |
 | 2026 | patched | rtol 1e-2, k 1 | 13.7 | 1 | 55 | 94860 | 0.00192 ± 2e-05 | 0 splits, 0 failed measurements; kernel 4.5 s, measurement 9.1 s |
 | 2026 | patched | rtol 1e-3, k 1 | 76.9 | 4 | 62 | 445026 | 0.000218 ± 2e-06 | 3 splits, 0 failed measurements; kernel 42.9 s, measurement 33.8 s |
 | 2026 | patched | rtol 1e-4, k 1 | 66.5 | 8 | 37 | 300806 | 4.45e-05 ± 6e-07 | 7 splits, 0 failed measurements; kernel 36.9 s, measurement 29.4 s |
 | 2026 | patched | rtol 1e-2, k 3 | 7.6 | 1 | 60 | 114868 | 0.000735 ± 8e-06 | 0 splits, 0 failed measurements; kernel 1.5 s, measurement 6.1 s |
 | 2026 | patched | rtol 1e-3, k 3 | 67.7 | 8 | 34 | 241454 | 0.000116 ± 2e-06 | 7 splits, 0 failed measurements; kernel 42.9 s, measurement 24.6 s |
 | 2026 | patched | rtol 1e-4, k 3 | 62.7 | 8 | 40 | 356546 | 1.6e-05 ± 3e-07 | 7 splits, 0 failed measurements; kernel 34.5 s, measurement 28.0 s |
-| 2026 | unpatched | tol 1e-3 | 1.0 | 1 | 51 | 70258 | 0.0157 ± 8e-05 | Converged, 11 sweeps |
-| 2026 | unpatched | tol 3e-4 | 2.2 | 1 | 56 | 99924 | 0.00129 ± 1e-05 | Converged, 20 sweeps |
-| 2026 | unpatched | tol 1e-4 | 1.7 | 1 | 61 | 124492 | 0.000429 ± 6e-06 | Converged, 13 sweeps |
-| 2026 | unpatched | tol 3e-5 | 3.2 | 1 | 68 | 151364 | 0.000152 ± 1e-06 | Converged, 20 sweeps |
-| 2026 | unpatched | tol 1e-5 | 3.5 | 1 | 72 | 195494 | 8.56e-05 ± 5e-07 | Converged, 14 sweeps |
+| 2026 | unpatched | tol 1e-3 | 1.0 | 1 | 51 | 70258 | 0.0157 ± 8e-05 | Converged, 11 sweeps; max rank within 3% from sweep 7, last change at sweep 7 |
+| 2026 | unpatched | tol 3e-4 | 2.2 | 1 | 56 | 99924 | 0.00129 ± 1e-05 | Converged, 20 sweeps; max rank within 3% from sweep 17, last change at sweep 19 |
+| 2026 | unpatched | tol 1e-4 | 1.7 | 1 | 61 | 124492 | 0.000429 ± 6e-06 | Converged, 13 sweeps; max rank within 3% from sweep 6, last change at sweep 13 |
+| 2026 | unpatched | tol 3e-5 | 3.2 | 1 | 68 | 151364 | 0.000152 ± 1e-06 | Converged, 20 sweeps; max rank within 3% from sweep 8, last change at sweep 19 |
+| 2026 | unpatched | tol 1e-5 | 3.5 | 1 | 72 | 195494 | 8.56e-05 ± 5e-07 | Converged, 14 sweeps; max rank within 3% from sweep 6, last change at sweep 13 |
 <!-- END GENERATED: comb-runs -->
 
 Each patched run against the fastest unpatched run of the same seed whose
 sampled error is not larger:
 
 <!-- BEGIN GENERATED: comb-matched -->
-| seed | patched run | its error | unpatched match (error) | time patched / unpatched | parameters patched / unpatched | patches |
-|---|---|---|---|---|---|---|
-| 7 | rtol 1e-2, k 1 | 0.00193 | tol 1e-4 (0.000419) | 3.07 | 0.77 | 1 |
-| 7 | rtol 1e-3, k 1 | 0.00018 | tol 1e-5 (8.52e-05) | 27.3 | 2.34 | 4 |
-| 7 | rtol 1e-4, k 1 | 4.24e-05 | no unpatched run this accurate |  |  |  |
-| 7 | rtol 1e-2, k 3 | 0.000743 | tol 1e-4 (0.000419) | 4.07 | 0.951 | 1 |
-| 7 | rtol 1e-3, k 3 | 0.000119 | tol 1e-5 (8.52e-05) | 20.1 | 1.18 | 8 |
-| 7 | rtol 1e-4, k 3 | 1.33e-05 | no unpatched run this accurate |  |  |  |
-| 42 | rtol 1e-2, k 1 | 0.00244 | tol 3e-5 (0.000135) | 6.85 | 0.581 | 1 |
-| 42 | rtol 1e-3, k 1 | 0.000173 | tol 3e-5 (0.000135) | 42.1 | 3.01 | 4 |
-| 42 | rtol 1e-4, k 1 | 3.83e-05 | no unpatched run this accurate |  |  |  |
-| 42 | rtol 1e-2, k 3 | 0.000559 | tol 3e-5 (0.000135) | 9.04 | 0.783 | 1 |
-| 42 | rtol 1e-3, k 3 | 0.000127 | no unpatched run this accurate |  |  |  |
-| 42 | rtol 1e-4, k 3 | 1.51e-05 | no unpatched run this accurate |  |  |  |
-| 2026 | rtol 1e-2, k 1 | 0.00192 | tol 1e-4 (0.000429) | 7.86 | 0.762 | 1 |
-| 2026 | rtol 1e-3, k 1 | 0.000218 | tol 3e-5 (0.000152) | 24.1 | 2.94 | 4 |
-| 2026 | rtol 1e-4, k 1 | 4.45e-05 | no unpatched run this accurate |  |  |  |
-| 2026 | rtol 1e-2, k 3 | 0.000735 | tol 1e-4 (0.000429) | 4.39 | 0.923 | 1 |
-| 2026 | rtol 1e-3, k 3 | 0.000116 | tol 1e-5 (8.56e-05) | 19.4 | 1.24 | 8 |
-| 2026 | rtol 1e-4, k 3 | 1.6e-05 | no unpatched run this accurate |  |  |  |
+| seed | patched run | its error | unpatched match (error) | its error / match error | time patched / unpatched | parameters patched / unpatched | patches |
+|---|---|---|---|---|---|---|---|
+| 7 | rtol 1e-2, k 1 | 0.00193 | tol 1e-4 (0.000419) | 4.6 | 3.07 | 0.77 | 1 |
+| 7 | rtol 1e-3, k 1 | 0.00018 | tol 1e-5 (8.52e-05) | 2.1 | 27.3 | 2.34 | 4 |
+| 7 | rtol 1e-4, k 1 | 4.24e-05 | no unpatched run this accurate |  |  |  |  |
+| 7 | rtol 1e-2, k 3 | 0.000743 | tol 1e-4 (0.000419) | 1.8 | 4.07 | 0.951 | 1 |
+| 7 | rtol 1e-3, k 3 | 0.000119 | tol 1e-5 (8.52e-05) | 1.4 | 20.1 | 1.18 | 8 |
+| 7 | rtol 1e-4, k 3 | 1.33e-05 | no unpatched run this accurate |  |  |  |  |
+| 42 | rtol 1e-2, k 1 | 0.00244 | tol 3e-5 (0.000135) | 18 | 6.85 | 0.581 | 1 |
+| 42 | rtol 1e-3, k 1 | 0.000173 | tol 3e-5 (0.000135) | 1.3 | 42.1 | 3.01 | 4 |
+| 42 | rtol 1e-4, k 1 | 3.83e-05 | no unpatched run this accurate |  |  |  |  |
+| 42 | rtol 1e-2, k 3 | 0.000559 | tol 3e-5 (0.000135) | 4.1 | 9.04 | 0.783 | 1 |
+| 42 | rtol 1e-3, k 3 | 0.000127 | no unpatched run this accurate |  |  |  |  |
+| 42 | rtol 1e-4, k 3 | 1.51e-05 | no unpatched run this accurate |  |  |  |  |
+| 2026 | rtol 1e-2, k 1 | 0.00192 | tol 1e-4 (0.000429) | 4.5 | 7.86 | 0.762 | 1 |
+| 2026 | rtol 1e-3, k 1 | 0.000218 | tol 3e-5 (0.000152) | 1.4 | 24.1 | 2.94 | 4 |
+| 2026 | rtol 1e-4, k 1 | 4.45e-05 | no unpatched run this accurate |  |  |  |  |
+| 2026 | rtol 1e-2, k 3 | 0.000735 | tol 1e-4 (0.000429) | 1.7 | 4.39 | 0.923 | 1 |
+| 2026 | rtol 1e-3, k 3 | 0.000116 | tol 1e-5 (8.56e-05) | 1.4 | 19.4 | 1.24 | 8 |
+| 2026 | rtol 1e-4, k 3 | 1.6e-05 | no unpatched run this accurate |  |  |  |  |
 <!-- END GENERATED: comb-matched -->
 
 B0 (`patched_interpolate` with TreeTCI over pointwise input evaluation, cap
@@ -356,6 +361,90 @@ converges in 8 to 20 sweeps, in 0.5 to 4.3 s. Patching gains nothing here:
 
 This workload is where the comb is efficient, not where patching pays.
 
+## 7. `tt_nblock` at T = 0.01, R = 12: patched against unpatched
+
+G0 on gw-rs's production topology at its low temperature, three seeds, one
+process per seed and method on cores 4, 6 and 8 (`nblock-T0.01-R12/`).
+Patched: cap 64, `k = 3`, `rtol` 1e-2 to 1e-4. Unpatched TreeACI: absolute
+`tol` 1e-3, 1e-4 and 1e-5, with its default limit of 50 sweeps. The three
+patched processes ran together, beside another session's single-thread job
+on core 14; the three unpatched processes ran together afterwards on an
+otherwise idle host. Times compare across these two batches only as far as
+that difference in load allows.
+
+<!-- BEGIN GENERATED: nblock-runs -->
+| seed | method | setting | time [s] | patches | max rank | parameters | sampled rel. L2 error ± s.e. | engine |
+|---|---|---|---|---|---|---|---|---|
+| 7 | patched | rtol 1e-2, k 3 | 254.1 | 55 | 62 | 1108356 | 0.00201 ± 2e-05 | 54 splits, 0 failed measurements; kernel 132.5 s, measurement 120.5 s |
+| 7 | patched | rtol 1e-3, k 3 | 464.4 | 96 | 58 | 1653924 | 0.000257 ± 3e-06 | 95 splits, 1 failed measurements; kernel 235.1 s, measurement 227.1 s |
+| 7 | patched | rtol 1e-4, k 3 | 449.1 | 97 | 56 | 2368598 | 2.38e-05 ± 2e-07 | 96 splits, 1 failed measurements; kernel 209.7 s, measurement 237.1 s |
+| 7 | unpatched | tol 1e-3 | 111.2 | 1 | 414 | 2786054 | 0.00357 ± 2e-05 | MaxSweeps, 50 sweeps; max rank within 3% from sweep 8, last change at sweep 49 |
+| 7 | unpatched | tol 1e-4 | 187.7 | 1 | 498 | 3866342 | 0.000244 ± 1e-06 | MaxSweeps, 50 sweeps; max rank within 3% from sweep 8, last change at sweep 50 |
+| 7 | unpatched | tol 1e-5 | 296.6 | 1 | 579 | 5064770 | 1.57e-05 ± 1e-07 | MaxSweeps, 50 sweeps; max rank within 3% from sweep 8, last change at sweep 49 |
+| 42 | patched | rtol 1e-2, k 3 | 276.1 | 54 | 62 | 1107036 | 0.00255 ± 3e-05 | 53 splits, 0 failed measurements; kernel 150.9 s, measurement 124.0 s |
+| 42 | patched | rtol 1e-3, k 3 | 429.0 | 90 | 58 | 1650302 | 0.000273 ± 3e-06 | 89 splits, 0 failed measurements; kernel 201.4 s, measurement 225.5 s |
+| 42 | patched | rtol 1e-4, k 3 | 445.5 | 98 | 55 | 2364356 | 2.2e-05 ± 2e-07 | 97 splits, 0 failed measurements; kernel 199.7 s, measurement 243.5 s |
+| 42 | unpatched | tol 1e-3 | 112.3 | 1 | 412 | 2789402 | 0.00376 ± 2e-05 | MaxSweeps, 50 sweeps; max rank within 3% from sweep 7, last change at sweep 50 |
+| 42 | unpatched | tol 1e-4 | 189.7 | 1 | 498 | 3830752 | 0.000274 ± 1e-06 | MaxSweeps, 50 sweeps; max rank within 3% from sweep 28, last change at sweep 50 |
+| 42 | unpatched | tol 1e-5 | 300.5 | 1 | 579 | 5082308 | 1.81e-05 ± 8e-08 | MaxSweeps, 50 sweeps; max rank within 3% from sweep 8, last change at sweep 49 |
+| 2026 | patched | rtol 1e-2, k 3 | 233.3 | 49 | 62 | 1115356 | 0.00203 ± 2e-05 | 48 splits, 0 failed measurements; kernel 116.5 s, measurement 115.7 s |
+| 2026 | patched | rtol 1e-3, k 3 | 377.9 | 82 | 59 | 1650740 | 0.000286 ± 3e-06 | 81 splits, 0 failed measurements; kernel 171.7 s, measurement 204.2 s |
+| 2026 | patched | rtol 1e-4, k 3 | 475.4 | 98 | 55 | 2369936 | 2.24e-05 ± 2e-07 | 97 splits, 0 failed measurements; kernel 222.8 s, measurement 250.2 s |
+| 2026 | unpatched | tol 1e-3 | 102.6 | 1 | 416 | 2768540 | 0.00201 ± 1e-05 | MaxSweeps, 50 sweeps; max rank within 3% from sweep 8, last change at sweep 49 |
+| 2026 | unpatched | tol 1e-4 | 180.3 | 1 | 501 | 3854996 | 0.000291 ± 1e-06 | MaxSweeps, 50 sweeps; max rank within 3% from sweep 9, last change at sweep 49 |
+| 2026 | unpatched | tol 1e-5 | 300.3 | 1 | 572 | 5075724 | 1.65e-05 ± 1e-07 | MaxSweeps, 50 sweeps; max rank within 3% from sweep 8, last change at sweep 49 |
+<!-- END GENERATED: nblock-runs -->
+
+Each patched run against the fastest unpatched run of the same seed whose
+sampled error is not larger:
+
+<!-- BEGIN GENERATED: nblock-matched -->
+| seed | patched run | its error | unpatched match (error) | its error / match error | time patched / unpatched | parameters patched / unpatched | patches |
+|---|---|---|---|---|---|---|---|
+| 7 | rtol 1e-2, k 3 | 0.00201 | tol 1e-4 (0.000244) | 8.2 | 1.35 | 0.287 | 55 |
+| 7 | rtol 1e-3, k 3 | 0.000257 | tol 1e-4 (0.000244) | 1.1 | 2.47 | 0.428 | 96 |
+| 7 | rtol 1e-4, k 3 | 2.38e-05 | tol 1e-5 (1.57e-05) | 1.5 | 1.51 | 0.468 | 97 |
+| 42 | rtol 1e-2, k 3 | 0.00255 | tol 1e-4 (0.000274) | 9.3 | 1.46 | 0.289 | 54 |
+| 42 | rtol 1e-3, k 3 | 0.000273 | tol 1e-5 (1.81e-05) | 15 | 1.43 | 0.325 | 90 |
+| 42 | rtol 1e-4, k 3 | 2.2e-05 | tol 1e-5 (1.81e-05) | 1.2 | 1.48 | 0.465 | 98 |
+| 2026 | rtol 1e-2, k 3 | 0.00203 | tol 1e-3 (0.00201) | 1 | 2.27 | 0.403 | 49 |
+| 2026 | rtol 1e-3, k 3 | 0.000286 | tol 1e-5 (1.65e-05) | 17 | 1.26 | 0.325 | 82 |
+| 2026 | rtol 1e-4, k 3 | 2.24e-05 | tol 1e-5 (1.65e-05) | 1.4 | 1.58 | 0.467 | 98 |
+<!-- END GENERATED: nblock-matched -->
+
+Whole processes, including building the inputs and the accuracy checks:
+
+<!-- BEGIN GENERATED: nblock-processes -->
+| process | wall clock | peak RSS [GiB] | exit status |
+|---|---|---|---|
+| s2026-patched | 19:45.29 | 1.52 | 0 |
+| s2026-unpatched | 32:55.71 | 0.66 | 0 |
+| s42-patched | 20:23.04 | 1.52 | 0 |
+| s42-unpatched | 33:37.85 | 0.66 | 0 |
+| s7-patched | 20:37.26 | 1.59 | 0 |
+| s7-unpatched | 33:57.56 | 0.69 | 0 |
+<!-- END GENERATED: nblock-processes -->
+
+The unpatched G0 has maximum rank 412 to 579. With cap 64, the patched runs
+end with 49 to 98 patches of maximum rank 55 to 62. Of their 48 to 97
+splits, at most one per run follows a failed measurement; the others are
+forced by the cap. The cap of 64 was not tuned for this workload.
+
+**Parameters.** The `tol` grid is coarse, so some matches are 8 to 17 times
+more accurate than their patched run and favour it. Where the two errors are
+within a factor 1.6 of each other (seed 2026 at `rtol = 1e-2`, seed 7 at
+`rtol = 1e-3`, and every seed at `rtol = 1e-4`), the patched result has 0.40
+to 0.47 times the parameters of the unpatched one.
+
+**Time.** In those same pairs the patched run took 1.5 to 2.5 times as long.
+About half of each patched run is the driver's L2 measurement. Every
+unpatched run ends at `MaxSweeps` after 50 sweeps. Its maximum rank is within
+3 % of its final value from sweep 7 to 9 in eight of nine runs, and from
+sweep 28 in the ninth (seed 42, `tol = 1e-4`); it last changes at sweep 49
+or 50. Most unpatched sweeps therefore run after the rank has settled, as in
+section 5, and the unpatched times measure #784 as well as the operation.
+How much faster a converging unpatched run would be is not measured here.
+
 ## Conclusions
 
 - `patched_elementwise` with TreeACI meets its L2 contract on every exact
@@ -367,5 +456,12 @@ This workload is where the comb is efficient, not where patching pays.
   does not pay at errors down to about 1e-4: the patched runs are 3 to 42
   times slower than unpatched TreeACI at matched accuracy. Below 8.5e-5 there
   is no unpatched comparison yet (section 6).
-- The workload where patching might pay, gw-rs's `tt_nblock` at T = 0.01
-  with rank around 375, cannot be timed until #784 is fixed (section 5).
+- On gw-rs's `tt_nblock` at T = 0.01, R = 12, where the whole G0 has
+  maximum rank 412 to 579, patching with cap 64 and `k = 3` needs 0.40 to
+  0.47 times the parameters of unpatched TreeACI at close to equal accuracy,
+  on all three seeds. This is the first workload of this report where
+  patching pays in parameters (section 7).
+- Its timing is open. The patched runs took 1.3 to 2.5 times as long as
+  their unpatched matches, but every unpatched run cycled until its sweep
+  limit (#784), so its times include sweeps after the rank had settled. A
+  timing conclusion on this workload waits for #784 (sections 5 and 7).
