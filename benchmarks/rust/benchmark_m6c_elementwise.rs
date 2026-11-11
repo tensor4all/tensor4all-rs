@@ -2,8 +2,11 @@
 // gw-rs (docs/design/tree-patching-elementwise.md, implementation step 5).
 //
 // Workloads (2D Hubbard dispersion, mu = 0.5, interleaved quantics grid with
-// `R` bits per variable, comb CTTN whose spine `kx1 - ky1 - n1` has a
-// degree-three node at `ky1`):
+// `R` bits per variable) on one of two gw-rs topologies (`--topology`):
+// `cttn`, the comb CTTN whose spine `kx1 - ky1 - n1` has a degree-three node
+// at `ky1`, or `tt_nblock`, the chain of every `n` bit followed by `kx` and
+// `ky` interleaved (gw-rs's topology at low temperature; the comb is G0's
+// worst case at T = 0.01 for R >= 9):
 //
 // - `g0`: the nonlinear map `G0 = 1 / (mu + 2 cos kx + 2 cos ky + i omega_n)`
 //   of three exact rank-2 inputs (`cos kx`, `cos ky`, `omega_n`), the TreeACI
@@ -50,7 +53,9 @@
 // max-norm tolerance of unpatched TreeACI), `--rsi-rtol` (tree RSI's
 // LU pivot tolerance, patched and unpatched; not an accuracy control, since
 // tree RSI estimates no error), `--rsi-cap` (unpatched RSI), `--in-cap`,
-// `--in-rtol`, `--in-tol` (the G0 input of `g0sq`), `--in2-cap`, `--in2-rtol`
+// `--in-rtol`, `--in-tol` (the G0 input of `g0sq`), `--scale-tolerance`
+// (unpatched TreeACI: `--tol` relative to the sampled scale, as gw-rs runs it,
+// instead of absolute), `--topology`, `--in2-cap`, `--in2-rtol`
 // (the second factor of `g0sq-mixed`), `--samples`, `--seed`,
 // and `--variants "cap=32;cap=128,rtol=1e-4"`, which runs the method once per
 // `;`-separated set of overrides on the same inputs and samples (peak RSS
@@ -130,6 +135,11 @@ struct Args {
     audit_kernel: bool,
     /// TreeACI's `global_tolerance_margin` (its default is 10).
     aci_margin: f64,
+    /// `cttn` (comb, degree three at ky1) or `tt_nblock` (chain).
+    topology: String,
+    /// Unpatched TreeACI: `--tol` relative to the sampled magnitude (`true`,
+    /// TreeACI's default and gw-rs g0_aci's) or absolute (`false`).
+    scale_tolerance: bool,
     /// `TreeAciInterpolator::with_tolerance_factor` of the patched TreeACI
     /// kernel: it runs at `tau / factor`, the acceptance stays at `tau`.
     engine_tol_factor: f64,
@@ -155,6 +165,8 @@ fn set(args: &mut Args, key: &str, value: &str) -> Result<()> {
         "--dump-patches" => args.dump_patches = value.parse()?,
         "--audit-kernel" => args.audit_kernel = value.parse()?,
         "--aci-margin" => args.aci_margin = value.parse()?,
+        "--topology" => args.topology = value.to_string(),
+        "--scale-tolerance" => args.scale_tolerance = value.parse()?,
         "--engine-tol-factor" => args.engine_tol_factor = value.parse()?,
         "--variants" => {
             args.variants = value.split(';').map(str::to_string).collect();
@@ -218,6 +230,8 @@ fn parse_args() -> Result<Args> {
         audit_kernel: false,
         aci_margin: 10.0,
         engine_tol_factor: 1.0,
+        topology: "cttn".to_string(),
+        scale_tolerance: false,
     };
     let mut rest = raw[2..].iter();
     while let Some(key) = rest.next() {
@@ -254,20 +268,36 @@ struct Grid {
 }
 
 impl Grid {
-    fn new(r: usize, temperature: f64) -> Self {
+    /// `topology` is `cttn` (gw-rs `cttn_seq_comb`) or `tt_nblock` (gw-rs
+    /// `tt_chain_nblock`).
+    fn new(r: usize, temperature: f64, topology: &str) -> Result<Self> {
         let sites = (0..3 * r).map(|_| DynIndex::new_dyn(2)).collect();
-        // Comb CTTN (gw-rs `cttn_seq_comb`): spine kx1 - ky1 - n1, each
-        // variable's remaining bits on its own arm.
-        let mut edges = vec![(0, 1), (1, 2)];
-        for var in 0..3 {
-            edges.extend((1..r).map(|bit| (var + 3 * (bit - 1), var + 3 * bit)));
-        }
-        Self {
+        let edges = match topology {
+            // Comb CTTN: spine kx1 - ky1 - n1, each variable's remaining
+            // bits on its own arm; ky1 has degree three.
+            "cttn" => {
+                let mut edges = vec![(0, 1), (1, 2)];
+                for var in 0..3 {
+                    edges.extend((1..r).map(|bit| (var + 3 * (bit - 1), var + 3 * bit)));
+                }
+                edges
+            }
+            // Chain: every n bit (MSB first), then kx and ky interleaved.
+            "tt_nblock" => {
+                let order: Vec<usize> = (0..r)
+                    .map(|bit| 2 + 3 * bit)
+                    .chain((0..r).flat_map(|bit| [3 * bit, 3 * bit + 1]))
+                    .collect();
+                order.windows(2).map(|pair| (pair[0], pair[1])).collect()
+            }
+            other => bail!("topology must be cttn or tt_nblock, not {other}"),
+        };
+        Ok(Self {
             r,
             temperature,
             sites,
             edges,
-        }
+        })
     }
 
     fn size(&self) -> usize {
@@ -1076,7 +1106,7 @@ fn run_method(
                 .collect::<Result<_>>()?;
             let options = TreeAciOptions {
                 tolerance: args.tol,
-                scale_tolerance: false,
+                scale_tolerance: args.scale_tolerance,
                 max_bond_dim: Some(4000),
                 rng_seed: args.seed,
                 ..aci_options(args.aci_margin)
@@ -1104,6 +1134,8 @@ fn run_method(
                 "termination": format!("{:?}", result.termination),
                 "sweeps": result.max_errors.len(),
                 "last_error": result.max_errors.last(),
+                "max_ranks": result.max_ranks,
+                "max_errors": result.max_errors,
             });
             (single_patch(result.tree)?, stats)
         }
@@ -1180,13 +1212,14 @@ fn g0_input(
 
 fn main() -> Result<()> {
     let args = parse_args()?;
-    let grid = Grid::new(args.r, args.temperature);
+    let grid = Grid::new(args.r, args.temperature, &args.topology)?;
     let product = args.workload.starts_with("g0sq");
     let power = if product { 2 } else { 1 };
     emit(json!({
         "kind": "config",
         "workload": args.workload, "method": args.method, "r": args.r,
-        "temperature": args.temperature, "mu": MU, "topology": "cttn_seq_comb",
+        "temperature": args.temperature, "mu": MU, "topology": args.topology,
+        "scale_tolerance": args.scale_tolerance,
         "cap": args.cap, "rtol": args.rtol, "tol": args.tol,
         "rsi_rtol": args.rsi_rtol, "rsi_cap": args.rsi_cap,
         "in_cap": args.in_cap, "in_rtol": args.in_rtol, "in_tol": args.in_tol,
