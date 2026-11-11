@@ -2150,7 +2150,7 @@ where
     ///
     /// # Errors
     ///
-    /// Same conditions as [`Self::evaluate_batched_typed`].
+    /// Returns the same errors as [`Self::evaluate_batched_typed`].
     pub fn evaluate_batched_typed_with_parallelism<T: TensorElement>(
         &mut self,
         values: ColMajorArrayRef<'_, usize>,
@@ -2202,7 +2202,7 @@ where
     ///
     /// # Errors
     ///
-    /// Same conditions as [`Self::evaluate_batched_typed_on_session`].
+    /// Returns the same errors as [`Self::evaluate_batched_typed_on_session`].
     pub fn evaluate_batched_typed_on_session_with_parallelism<T: TensorElement>(
         &mut self,
         session: &mut Session<'_>,
