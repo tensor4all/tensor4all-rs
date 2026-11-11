@@ -447,28 +447,25 @@ def frequencies(cpus):
     return result
 
 
-def frequency_ratios(before, after, protected):
+def frequency_values(snapshot, protected):
     expected = {str(cpu) for cpu in protected}
-    values = []
-    for snapshot in (before, after):
-        if not isinstance(snapshot, dict) or set(snapshot) != expected:
-            raise ValueError("complete protected-CPU frequency observations required")
-        current = {}
-        for cpu in expected:
-            try:
-                raw = snapshot[cpu]["scaling_cur_freq"]
-                if isinstance(raw, bool):
-                    raise ValueError("boolean frequency")
-                value = float(raw)
-                finite(value, f"CPU {cpu} current frequency", positive=True)
-                current[cpu] = value
-            except (KeyError, TypeError, ValueError, OverflowError) as error:
-                raise ValueError(f"positive numeric current frequency required for protected CPU {cpu}") from error
-        values.append(current)
-    return {cpu: max(values[0][cpu], values[1][cpu]) / min(values[0][cpu], values[1][cpu]) for cpu in expected}
+    if not isinstance(snapshot, dict) or set(snapshot) != expected:
+        raise ValueError("complete protected-CPU frequency observations required")
+    current = {}
+    for cpu in sorted(expected):
+        try:
+            raw = snapshot[cpu]["scaling_cur_freq"]
+            if isinstance(raw, bool):
+                raise ValueError("boolean frequency")
+            value = float(raw)
+            finite(value, f"CPU {cpu} current frequency", positive=True)
+            current[cpu] = value
+        except (KeyError, TypeError, ValueError, OverflowError) as error:
+            raise ValueError(f"positive numeric current frequency required for protected CPU {cpu}") from error
+    return current
 
 
-def host_noise_failures(record, protocol):
+def host_noise_failures(record, protocol, frequency_bounds):
     protected = set(protocol["host"]["protected_cpus"])
     cpu = protocol["host"]["measured_cpu"]
     tick = protocol["host"]["clock_ticks_per_second"]
@@ -495,9 +492,15 @@ def host_noise_failures(record, protocol):
     for sibling in protected - {cpu}:
         if busy[sibling] > allowance + budget:
             failures.append(f"SMT sibling {sibling} busy during sample")
-    for core, ratio in frequency_ratios(record["frequency_before"], record["frequency_after"], protected).items():
-        if ratio > protocol["max_frequency_ratio"]:
-            failures.append(f"frequency drift on protected CPU {core}")
+    limit = protocol["max_frequency_ratio"]
+    finite(limit, "max_frequency_ratio", minimum=1.0)
+    for endpoint in ("frequency_before", "frequency_after"):
+        for core, value in frequency_values(record[endpoint], protected).items():
+            low, high = frequency_bounds.get(core, (value, value))
+            frequency_bounds[core] = (min(low, value), max(high, value))
+    for core, (low, high) in frequency_bounds.items():
+        if high / low > limit:
+            failures.append(f"frequency drift on protected CPU {core}: run range {low:g}–{high:g} kHz exceeds {limit:g}x")
     return failures
 
 
@@ -535,7 +538,7 @@ def preflight(cpu, observers):
         topology[str(sibling)] = {key: (root / key).read_text().strip()
                                  for key in ("thread_siblings_list", "core_id", "physical_package_id")}
     frequency = frequencies(protected)
-    frequency_ratios(frequency, frequency, protected)
+    frequency_values(frequency, protected)
     return dict(measured_cpu=cpu, observer_cpus=sorted(observers), protected_cpus=sorted(protected),
                 clock_ticks_per_second=os.sysconf("SC_CLK_TCK"),
                 initial_affinity=sorted(initial_affinity), runner_affinity=sorted(os.sched_getaffinity(0)),
@@ -659,7 +662,7 @@ def run_process(command, stem, env, timeout, before_exec=None, monitor=None, cwd
                 validity_failures=failures)
 
 
-def observe(binary, config, repetition, index, output, protocol, repo, manifest):
+def observe(binary, config, repetition, index, output, protocol, repo, manifest, frequency_bounds):
     cpu = protocol["host"]["measured_cpu"]
     protected = set(protocol["host"]["protected_cpus"])
     observers = set(protocol["host"]["observer_cpus"])
@@ -674,7 +677,7 @@ def observe(binary, config, repetition, index, output, protocol, repo, manifest)
     record["idle_busy_fraction"] = idle_busy
     record["affinity_audit_before"] = audit_before
     record["frequency_before"] = frequencies(protected)
-    frequency_ratios(record["frequency_before"], record["frequency_before"], protected)
+    frequency_values(record["frequency_before"], protected)
     if any(value > protocol["max_idle_busy_fraction"] for value in idle_busy.values()):
         record["error"] = "protected CPU idle gate failed before launch"
         return record
@@ -700,7 +703,7 @@ def observe(binary, config, repetition, index, output, protocol, repo, manifest)
     external = max(0.0, busy_seconds[cpu] - child_cpu - 2 / tick)
     record["protected_busy_seconds"] = busy_seconds
     record["external_busy_seconds"] = external
-    record["validity_failures"].extend(host_noise_failures(record, protocol))
+    record["validity_failures"].extend(host_noise_failures(record, protocol, frequency_bounds))
     record["stdout_sha256"] = digest(Path(str(stem) + ".stdout"))
     record["stderr_sha256"] = digest(Path(str(stem) + ".stderr"))
     if record["exit_code"]:
@@ -738,7 +741,8 @@ def verify_saved_host(protocol, records, completion):
 
     audit(host["affinity_audit"])
     audit(completion["final_affinity_audit"])
-    frequency_ratios(host["frequencies"], host["frequencies"], protected)
+    frequency_values(host["frequencies"], protected)
+    frequency_bounds = {}
     for record in records:
         if record.get("error"):
             continue
@@ -748,7 +752,7 @@ def verify_saved_host(protocol, records, completion):
             finite(record[key], key)
         if record["timed_out"] or record["process_seconds"] < protocol["prime_seconds"]:
             raise ValueError("missing full per-child priming or terminated child")
-        noise = host_noise_failures(record, protocol)
+        noise = host_noise_failures(record, protocol, frequency_bounds)
         if noise:
             raise ValueError(f"saved host noise gate failed: {noise}")
         audit(record["affinity_audit_before"])
@@ -820,7 +824,7 @@ def analyze_saved(output):
                 path = output / "raw" / f"{record['index']:04d}.{stream}"
                 if record.get(stream + "_sha256") != digest(path):
                     failures.append(f"changed raw evidence: {path.name}")
-    except (OSError, KeyError, TypeError, ValueError) as error:
+    except (OSError, KeyError, TypeError, ValueError, OverflowError) as error:
         failures.append(f"completion/evidence verification failed: {error}")
     protocol["validity_failures"] = protocol.get("validity_failures", []) + failures
     return analyze(protocol, records)
@@ -888,13 +892,15 @@ def main(argv=None):
                             provenance=provenance(repo, binary, manifest))
             write_json(output / "protocol.json", protocol)
             frozen_protocol_hash = digest(output / "protocol.json")
+            frequency_bounds = {}
             with (output / "samples.jsonl").open("x") as samples:
                 if not args.prepare_only:
                     for index, (repetition, config) in enumerate(schedule(protocol)):
                         if digest(output / "protocol.json") != frozen_protocol_hash:
                             raise ValueError("frozen protocol changed during measurement")
                         try:
-                            record = observe(binary, config, repetition, index, output, protocol, repo, manifest)
+                            record = observe(binary, config, repetition, index, output, protocol, repo, manifest,
+                                             frequency_bounds)
                         except (OSError, ValueError, subprocess.SubprocessError) as error:
                             record = dict(index=index, repetition=repetition, config=config, error=str(error), validity_failures=[str(error)])
                         records.append(record)

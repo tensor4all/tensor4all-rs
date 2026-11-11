@@ -80,9 +80,11 @@ retries a cell. Use host-visible `/proc` without `hidepid` in the initial PID
 namespace; container-only process visibility cannot prove host isolation. The
 default guards require readable, positive `scaling_cur_freq` observations on
 every protected CPU, stable frequency, low protected-core idle activity and
-low timing dispersion. Missing frequency observations invalidate the run. Configure a stable performance governor/frequency
-on the isolated host if its idle-to-active clock changes violate the declared
-frequency bound; the runner does not change governor settings.
+low timing dispersion. For each protected CPU, the ratio of the highest to
+the lowest frequency across all sample endpoints must stay within the
+declared limit. Missing frequency observations invalidate the run. Configure
+a stable performance governor or frequency on the isolated host if observed
+clock changes violate the declared bound.
 
 The full suite covers the seeded Fourier cancellation case with 4, 5 and 6
 Fourier qubits plus three spectators, including three input seeds at the

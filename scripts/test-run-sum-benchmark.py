@@ -170,6 +170,26 @@ class AnalysisTests(unittest.TestCase):
                 protocol_sha256=MODULE.digest(root / "protocol.json"), samples_sha256=MODULE.digest(root / "samples.jsonl"))
             MODULE.write_json(root / "completion.json", completion)
             self.assertEqual(MODULE.analyze_saved(root)["status"], "PASS")
+
+            def at_frequency(record, khz):
+                snapshot = record["frequency_before"] | {"2": {"scaling_cur_freq": khz}}
+                return record | {"frequency_before": snapshot, "frequency_after": snapshot}
+
+            baseline = next(record for record in records if record["config"]["method"] == "balanced")
+            aci = next(record for record in records if record["config"]["method"] == "aci")
+            low = at_frequency(baseline, "1600000")
+            MODULE.verify_saved_host(protocol, [low, at_frequency(aci, "2000000")], completion)
+            with self.assertRaisesRegex(ValueError, "frequency drift"):
+                MODULE.verify_saved_host(protocol, [low, at_frequency(aci, "2500000")], completion)
+            for limit in (float("nan"), 10**310):
+                with self.subTest(limit=limit):
+                    (root / "protocol.json").write_text(json.dumps(protocol | {"max_frequency_ratio": limit}))
+                    completion["protocol_sha256"] = MODULE.digest(root / "protocol.json")
+                    MODULE.write_json(root / "completion.json", completion, mode="w")
+                    self.assertEqual(MODULE.analyze_saved(root)["status"], "INCONCLUSIVE")
+            MODULE.write_json(root / "protocol.json", protocol, mode="w")
+            completion["protocol_sha256"] = MODULE.digest(root / "protocol.json")
+
             for key, value in (
                 ("frequency_before", {}),
                 ("frequency_after", {"2": {"scaling_cur_freq": "2000000"}, "3": {"scaling_cur_freq": None}}),
@@ -314,11 +334,11 @@ class ProcessTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             MODULE.cpu_busy_fraction(before[2], before[2])
         frequency = {"2": {"scaling_cur_freq": "2000000"}, "3": {"scaling_cur_freq": "2000000"}}
-        self.assertEqual(MODULE.frequency_ratios(frequency, frequency, {2, 3}), {"2": 1.0, "3": 1.0})
+        self.assertEqual(MODULE.frequency_values(frequency, {2, 3}), {"2": 2000000.0, "3": 2000000.0})
         for missing in ({}, {"2": {"scaling_cur_freq": None}},
                         {"2": {"scaling_cur_freq": "0"}, "3": {"scaling_cur_freq": "2000000"}}):
             with self.subTest(missing=missing), self.assertRaises(ValueError):
-                MODULE.frequency_ratios(missing, frequency, {2, 3})
+                MODULE.frequency_values(missing, {2, 3})
 
 
 class ProvenanceTests(unittest.TestCase):
