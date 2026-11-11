@@ -55,7 +55,8 @@
 // tree RSI estimates no error), `--rsi-cap` (unpatched RSI), `--in-cap`,
 // `--in-rtol`, `--in-tol` (the G0 input of `g0sq`), `--scale-tolerance`
 // (unpatched TreeACI: `--tol` relative to the sampled scale, as gw-rs runs it,
-// instead of absolute), `--topology`, `--in2-cap`, `--in2-rtol`
+// instead of absolute), `--max-sweeps` (unpatched TreeACI's sweep limit,
+// 50 unless given), `--topology`, `--in2-cap`, `--in2-rtol`
 // (the second factor of `g0sq-mixed`), `--samples`, `--seed`,
 // and `--variants "cap=32;cap=128,rtol=1e-4"`, which runs the method once per
 // `;`-separated set of overrides on the same inputs and samples (peak RSS
@@ -140,6 +141,10 @@ struct Args {
     /// Unpatched TreeACI: `--tol` relative to the sampled magnitude (`true`,
     /// TreeACI's default and gw-rs g0_aci's) or absolute (`false`).
     scale_tolerance: bool,
+    /// Unpatched TreeACI's sweep limit (`TreeAciOptions::max_sweeps`); 50
+    /// unless given. A lower limit stops a run that cycles at the tolerance
+    /// boundary (#784) after its rank has settled.
+    max_sweeps: usize,
     /// `TreeAciInterpolator::with_tolerance_factor` of the patched TreeACI
     /// kernel: it runs at `tau / factor`, the acceptance stays at `tau`.
     /// Pinned to 1 unless given, as in the 2026-11-11 report, although the
@@ -170,6 +175,7 @@ fn set(args: &mut Args, key: &str, value: &str) -> Result<()> {
         "--topology" => args.topology = value.to_string(),
         "--scale-tolerance" => args.scale_tolerance = value.parse()?,
         "--engine-tol-factor" => args.engine_tol_factor = value.parse()?,
+        "--max-sweeps" => args.max_sweeps = value.parse()?,
         "--variants" => {
             args.variants = value.split(';').map(str::to_string).collect();
         }
@@ -196,6 +202,7 @@ fn variant(args: &Args, overrides: &str) -> Result<Args> {
                 | "seed"
                 | "engine-tol-factor"
                 | "aci-margin"
+                | "max-sweeps"
         ) {
             bail!("variant key {key} would change the inputs or the samples");
         }
@@ -232,6 +239,7 @@ fn parse_args() -> Result<Args> {
         audit_kernel: false,
         aci_margin: 10.0,
         engine_tol_factor: 1.0,
+        max_sweeps: 50,
         topology: "cttn".to_string(),
         scale_tolerance: false,
     };
@@ -1111,6 +1119,7 @@ fn run_method(
                 scale_tolerance: args.scale_tolerance,
                 max_bond_dim: Some(4000),
                 rng_seed: args.seed,
+                max_sweeps: args.max_sweeps,
                 ..aci_options(args.aci_margin)
             };
             let mut rng = ChaCha8Rng::seed_from_u64(args.seed);
@@ -1221,7 +1230,7 @@ fn main() -> Result<()> {
         "kind": "config",
         "workload": args.workload, "method": args.method, "r": args.r,
         "temperature": args.temperature, "mu": MU, "topology": args.topology,
-        "scale_tolerance": args.scale_tolerance,
+        "scale_tolerance": args.scale_tolerance, "max_sweeps": args.max_sweeps,
         "cap": args.cap, "rtol": args.rtol, "tol": args.tol,
         "rsi_rtol": args.rsi_rtol, "rsi_cap": args.rsi_cap,
         "in_cap": args.in_cap, "in_rtol": args.in_rtol, "in_tol": args.in_tol,
