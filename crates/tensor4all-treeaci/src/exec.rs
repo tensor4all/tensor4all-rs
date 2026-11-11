@@ -12,7 +12,6 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use tensor4all_core::{
-    matrix_luci_factors_from_matrix_owned, matrix_luci_factors_from_matrix_owned_on_session,
     permute_indices_on_session, ColMajorArrayRef, DynIndex, IdxTensor, IdxTensorError,
     MatrixLuciFactors, RrLUOptions,
 };
@@ -87,11 +86,16 @@ impl<'s> Exec<'_, 's> {
         &mut self,
         matrix: Matrix<T>,
         options: RrLUOptions,
+        hints: &[(usize, usize)],
     ) -> crate::Result<MatrixLuciFactors<T>> {
         match self {
-            Self::Global => matrix_luci_factors_from_matrix_owned(matrix, Some(options)),
+            Self::Global => tensor4all_core::matrix_luci_factors_from_matrix_owned_with_hints(
+                matrix, options, hints,
+            ),
             Self::Session(session) => {
-                matrix_luci_factors_from_matrix_owned_on_session(matrix, Some(options), session)
+                tensor4all_core::matrix_luci_factors_from_matrix_owned_with_hints_on_session(
+                    matrix, options, hints, session,
+                )
             }
         }
         .map_err(|error| crate::TreeAciError::Numerical {

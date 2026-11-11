@@ -87,6 +87,7 @@ fn local_entries_equal_direct_values_and_callback_layout_is_column_major() {
         &active,
         &frames,
         0,
+        &[],
         &options,
         true,
         &mut operator,
@@ -133,6 +134,7 @@ fn local_truncation_uses_relative_or_absolute_sampled_scale() {
                 &active,
                 &frames,
                 0,
+                &[],
                 &options,
                 left_orthogonal,
                 &mut diagonal,
@@ -192,6 +194,7 @@ fn luci_factors_reconstruct_rank_one_and_zero_targets() {
             &active,
             &frames,
             0,
+            &[],
             &options,
             true,
             &mut operator,
@@ -242,6 +245,7 @@ fn zero_local_matrix_keeps_the_pivot_identity_in_the_interpolating_factor() {
             &active,
             &frames,
             0,
+            &[],
             &options,
             left_orthogonal,
             &mut zero,
@@ -295,7 +299,8 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
     };
     assert!(matches!(
         materialize_and_factor_edge(
-            &inputs, &problem, &active, &frames, 0, &options, true, &mut failing, &mut crate::exec::Exec::Global ),
+            &inputs, &problem, &active, &frames, 0,
+        &[], &options, true, &mut failing, &mut crate::exec::Exec::Global ),
         Err(TreeAciError::Callback { message }) if message == "sentinel"
     ));
 
@@ -320,6 +325,7 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
             &active,
             &frames,
             0,
+            &[],
             &limited,
             true,
             &mut unused,
@@ -351,6 +357,7 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
             &active,
             &frames,
             0,
+        &[],
             &working_limited,
             true,
             &mut working_unused, &mut crate::exec::Exec::Global ),
@@ -512,6 +519,7 @@ fn run_local_update_measurement(
             &active,
             &frames,
             forward,
+            &[],
             &options,
             true,
             &mut operator,

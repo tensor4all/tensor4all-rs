@@ -1,3 +1,5 @@
+mod hints;
+
 use super::*;
 use crate::rrlu;
 use num_complex::{Complex32, Complex64};

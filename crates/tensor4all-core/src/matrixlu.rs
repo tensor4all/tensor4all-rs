@@ -981,6 +981,18 @@ fn factorize_validated_in_place<T: Scalar>(
     a: &mut Matrix<T>,
     opts: RrLUOptions,
 ) -> Result<RrLUFactorization> {
+    factorize_with_hints::<T, false>(a, opts, &[])
+}
+
+// Threshold complete pivoting bounds an accepted hint's multipliers by two.
+// A hint never replaces the full residual check or forces another pivot.
+const MIN_HINT_PIVOT_RATIO: f64 = 0.5;
+
+fn factorize_with_hints<T: Scalar, const HINTED: bool>(
+    a: &mut Matrix<T>,
+    opts: RrLUOptions,
+    hints: &[(usize, usize)],
+) -> Result<RrLUFactorization> {
     let nr = a.nrows();
     let nc = a.ncols();
     let data = a.as_col_major_mut_slice();
@@ -989,6 +1001,16 @@ fn factorize_validated_in_place<T: Scalar>(
     let max_bond_dim = opts.max_bond_dim.min(nr).min(nc);
     let mut row_permutation = (0..nr).collect::<Vec<_>>();
     let mut col_permutation = (0..nc).collect::<Vec<_>>();
+    let mut row_positions = if HINTED {
+        (0..nr).collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let mut col_positions = if HINTED {
+        (0..nc).collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let mut n_pivot = 0;
     let mut error = f64::NAN;
     let mut max_error = 0.0f64;
@@ -1001,7 +1023,7 @@ fn factorize_validated_in_place<T: Scalar>(
             break;
         }
 
-        let (pivot_row, pivot_col, pivot_val) = match next_argmax.take() {
+        let (mut pivot_row, mut pivot_col, pivot_val) = match next_argmax.take() {
             Some(found) => found,
             None => submatrix_argmax_col_major(data, nr, nc, k, nr, k, nc),
         };
@@ -1024,14 +1046,44 @@ fn factorize_validated_in_place<T: Scalar>(
 
         max_error = max_error.max(pivot_abs);
 
+        // Keep a surviving hint only while it is a strong pivot of the current
+        // Schur complement. Stopping still uses the full residual maximum.
+        if HINTED {
+            for &(row, col) in hints {
+                let i = row_positions[row];
+                let j = col_positions[col];
+                if i < k || j < k {
+                    continue;
+                }
+                let magnitude = col_major_get(data, nr, i, j).abs_val();
+                if magnitude >= MIN_HINT_PIVOT_RATIO * pivot_abs
+                    && magnitude >= opts.abs_tol
+                    && magnitude >= opts.rel_tol * max_error
+                    && !pivot_is_undividable::<T>(magnitude)
+                {
+                    pivot_row = i;
+                    pivot_col = j;
+                    break;
+                }
+            }
+        }
+
         // Swap rows and columns
         if pivot_row != k {
             swap_rows_col_major(data, nr, nc, k, pivot_row);
             row_permutation.swap(k, pivot_row);
+            if HINTED {
+                row_positions[row_permutation[k]] = k;
+                row_positions[row_permutation[pivot_row]] = pivot_row;
+            }
         }
         if pivot_col != k {
             swap_cols_col_major(data, nr, nc, k, pivot_col);
             col_permutation.swap(k, pivot_col);
+            if HINTED {
+                col_positions[col_permutation[k]] = k;
+                col_positions[col_permutation[pivot_col]] = pivot_col;
+            }
         }
 
         let pivot = col_major_get(data, nr, k, k);
@@ -1183,6 +1235,15 @@ pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> R
     let left_orthogonal = opts.left_orthogonal;
     let rank_cap = opts.max_bond_dim;
     let state = factorize_mut_in_place(a, opts)?;
+    finish_rrlu(a, state, left_orthogonal, rank_cap)
+}
+
+fn finish_rrlu<T: Scalar>(
+    a: &Matrix<T>,
+    state: RrLUFactorization,
+    left_orthogonal: bool,
+    rank_cap: usize,
+) -> Result<RrLU<T>> {
     let nrows = a.nrows();
     let ncols = a.ncols();
     let (l, u) = extract_lu_from_factorized(
@@ -1208,6 +1269,32 @@ pub fn rrlu_mut<T: Scalar>(a: &mut Matrix<T>, options: Option<RrLUOptions>) -> R
         n_pivot: state.n_pivot,
         error,
     })
+}
+
+pub(crate) fn rrlu_mut_with_hints<T: Scalar>(
+    a: &mut Matrix<T>,
+    opts: RrLUOptions,
+    hints: &[(usize, usize)],
+) -> Result<RrLU<T>> {
+    validate_owned_luci_input(a, &opts)?;
+    if hints.iter().any(|&(r, c)| r >= a.nrows() || c >= a.ncols()) {
+        return Err(MatrixCIError::InvalidArgument {
+            message: "pivot hint is outside the matrix".into(),
+        });
+    }
+    let left_orthogonal = opts.left_orthogonal;
+    let rank_cap = opts.max_bond_dim;
+    if hints.len() > a.nrows().min(a.ncols()) {
+        return Err(MatrixCIError::InvalidArgument {
+            message: "too many pivot hints".into(),
+        });
+    }
+    let state = if hints.is_empty() {
+        factorize_with_hints::<T, false>(a, opts, hints)?
+    } else {
+        factorize_with_hints::<T, true>(a, opts, hints)?
+    };
+    finish_rrlu(a, state, left_orthogonal, rank_cap)
 }
 
 /// Pivot indices and error diagnostics from a rank-revealing LU selection.

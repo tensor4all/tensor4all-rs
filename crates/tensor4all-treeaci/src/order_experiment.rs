@@ -26,6 +26,7 @@ where
         &state.candidates,
         &state.input_frames,
         forward,
+        &[],
         options,
         true,
         operator,

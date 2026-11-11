@@ -9,7 +9,16 @@ use tensor4all_treetn::TreeTN;
 pub(crate) type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
 type Fixture = (Vec<DynIndex>, Vec<TreeTN<IdxTensor, usize>>);
 
+#[allow(dead_code)] // INVARIANT: the benchmark uses fixture_with_temperature instead.
 pub(crate) fn fixture(r: usize, mode: &str) -> TestResult<Fixture> {
+    fixture_with_temperature(r, mode, 0.01)
+}
+
+pub(crate) fn fixture_with_temperature(
+    r: usize,
+    mode: &str,
+    temperature: f64,
+) -> TestResult<Fixture> {
     assert!((2..=10).contains(&r));
     let sites: Vec<_> = (0..3 * r).map(|_| DynIndex::new_dyn(2)).collect();
     let edges = match mode {
@@ -128,7 +137,11 @@ pub(crate) fn fixture(r: usize, mode: &str) -> TestResult<Fixture> {
                     } else {
                         [
                             1.0,
-                            coords[0] as f64 * 2.0 * PI * 0.01 * (1usize << (r - 1 - bit)) as f64,
+                            coords[0] as f64
+                                * 2.0
+                                * PI
+                                * temperature
+                                * (1usize << (r - 1 - bit)) as f64,
                             0.0,
                             1.0,
                         ]
@@ -150,7 +163,8 @@ pub(crate) fn fixture(r: usize, mode: &str) -> TestResult<Fixture> {
                             let beta = if var < 2 {
                                 0.0
                             } else {
-                                -2.0 * PI * 0.01 * (1usize << (r - 1)) as f64 + PI * 0.01
+                                -2.0 * PI * temperature * (1usize << (r - 1)) as f64
+                                    + PI * temperature
                             };
                             after[0] + beta * after[1]
                         },
@@ -184,10 +198,20 @@ pub(crate) fn operator(
 
 #[allow(dead_code)] // used by the g0_convergence integration test
 pub(crate) fn exact(r: usize, x: usize, y: usize, n: usize) -> Complex64 {
+    exact_with_temperature(r, x, y, n, 0.01)
+}
+
+pub(crate) fn exact_with_temperature(
+    r: usize,
+    x: usize,
+    y: usize,
+    n: usize,
+    temperature: f64,
+) -> Complex64 {
     let size = (1usize << r) as f64;
     1.0 / Complex64::new(
         0.5 + 2.0 * (2.0 * PI * x as f64 / size).cos() + 2.0 * (2.0 * PI * y as f64 / size).cos(),
-        2.0 * PI * 0.01 * (n as f64 - size / 2.0 + 0.5),
+        2.0 * PI * temperature * (n as f64 - size / 2.0 + 0.5),
     )
 }
 

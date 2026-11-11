@@ -140,25 +140,39 @@ guard performs bounded randomized coordinate searches with its configured
 acceptance margin. Independent validation remains necessary. Exhaustive
 checks belong only in small tests or explicit diagnostic programs.
 
-### Fresh local crosses and tolerance-boundary cycling
+### Strong pivot hints at the tolerance boundary
 
-Every local update uses the fresh dense LUCI cross at the original tolerance
-and rank ceiling. TreeACI does not retain a previous cross or run preferred-
-pivot replacement searches. The retention mechanism introduced for #784 was
-withdrawn because its full-matrix screening and repeated reconstruction caused
-the severe G0 performance regression in #885.
+Each update factors the current Cartesian candidate matrix once. TreeACI maps
+surviving previous pivot pairs into that matrix's coordinates; pairs whose
+nested components are unavailable are omitted. Core's hinted LUCI accepts the
+first unused hint whose current Schur-complement magnitude is at least half
+its complete-pivot maximum and meets the original tolerances. Otherwise it
+uses the complete pivot. The complete residual maximum still controls stopping,
+including at rank ceilings; hints never impose a minimum rank.
 
-Guard-injected candidate components are therefore available to fresh LUCI on
-every following update, including neighboring saturated cuts. There is no
-old-pivot preference or pending preference-refresh flag that can exclude a
-Guard discovery; the unchanged #874 public regressions still validate this
-behavior. Guard detection, revalidation, rank limits and cleanup remain in
-force.
+This stabilizes competing near-threshold crosses without reconstructing an old
+cross, screening full-matrix replacements, or repeatedly solving trial crosses.
+It is a replacement for the withdrawn #870 mechanism, whose full-matrix
+screening and repeated reconstruction caused #885. The hint path adds inverse
+row/column permutations and at most O(previous rank * selected rank) scalar
+reads to the existing elimination. Empty hints use the original specialization
+without those inverse maps. The Core working estimate covers the inverse maps;
+TreeACI separately charges its borrowed hint buffer in every local phase.
 
-Tolerance-boundary rank oscillation and non-improving sweeps remain unresolved
-under #784. The per-edge stability window, original tolerance and Guard
-conditions still determine termination; reaching the pass limit reports
-`MaxSweeps`. Withdrawal does not certify global accuracy or solve cycling.
+Guard-injected candidates enter the current matrix on every following update.
+An old hint cannot terminate selection while an above-threshold residual
+remains, and there is no fresh-rank ceiling or preference-refresh flag. The
+unchanged #874 regressions continue to exercise Guard discovery and cleanup.
+The per-edge stability window, tolerance and Guard still determine termination;
+a pass limit still reports `MaxSweeps`. The #784 DMRG replays and a smaller
+seeded witness cover cycling, without claiming convergence for every input.
+
+Relative local stopping does not bound pointwise relative error or the global
+Frobenius error. In particular, held-out random points can underestimate a
+high-dynamic-range target's largest magnitude. Independent error reports must
+name their normalization and sampled or exhaustive domain. The seeded cycling
+regression includes the unchanged held-out stream plus a fixed reference peak;
+its sampled maximum-error check is not a full-grid certificate.
 
 ## Caches
 

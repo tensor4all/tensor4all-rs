@@ -76,6 +76,7 @@ pub(crate) fn materialize_and_factor_edge<T, V, F>(
     candidates: &CandidateSets,
     frames: &InputFrameStore<T>,
     forward: DirectedEdgeId,
+    pivot_hints: &[(usize, usize)],
     options: &TreeAciOptions<V>,
     left_orthogonal: bool,
     operator: &mut F,
@@ -114,6 +115,7 @@ where
         "candidate columns",
         options.max_candidate_cols,
     )?;
+    let hint_bytes = std::mem::size_of_val(pivot_hints);
     let metadata_bytes =
         row_layout
             .bytes
@@ -154,6 +156,7 @@ where
         max_cut_rank,
     )?
     .checked_add(metadata_bytes)
+    .and_then(|bytes| bytes.checked_add(hint_bytes))
     .ok_or(TreeAciError::SizeOverflow {
         context: "local frame reservation bytes",
     })?;
@@ -216,6 +219,7 @@ where
     let factor_bytes = input_value_elements
         .checked_mul(size_of::<T>())
         .and_then(|bytes| bytes.checked_add(luci_bytes))
+        .and_then(|bytes| bytes.checked_add(hint_bytes))
         // Selected pivot samples coexist with both full candidate lists.
         .and_then(|bytes| {
             metadata_bytes
@@ -402,7 +406,7 @@ where
         abs_tol: tolerance.local_threshold(),
         left_orthogonal,
     };
-    let mut factors = exec.luci_factors(matrix, lu_options)?;
+    let mut factors = exec.luci_factors(matrix, lu_options, pivot_hints)?;
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {
         stats.luci += luci_started.elapsed();

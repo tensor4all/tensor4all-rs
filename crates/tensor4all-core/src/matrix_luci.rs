@@ -740,6 +740,96 @@ where
     dense_matrix_luci_factors_from_matrix_owned(a, options, Linalg::Session(session))
 }
 
+/// Factorizes a column-major matrix with strong pivot hints in one LU elimination.
+///
+/// `options` sets the rank ceiling, tolerances and factor orientation. `hints`
+/// lists preferred `(row, column)` pairs in original matrix coordinates and
+/// priority order; at most `min(nrows, ncols)` pairs may be supplied. Repeated
+/// pairs are allowed. Empty hints give the ordinary dense LUCI selection.
+///
+/// At each elimination step the first available hint whose current magnitude
+/// is at least half the complete-pivot maximum and meets both tolerances is
+/// selected; otherwise the complete pivot is used. Already used rows/columns
+/// are skipped. The full remaining Schur-complement maximum determines
+/// stopping and the final residual diagnostic, including at a rank cap.
+/// Hints do not impose a minimum rank or an obligation to keep any old pivot.
+///
+/// Returns the selected cross and factors `a ~= left * right`. Unlike
+/// reconstructing or exchanging a previous cross, this performs one elimination
+/// and one factor assembly, with O(nrows + ncols) inverse-permutation storage
+/// and O(hints.len() * rank) additional scalar reads. Rank and factors can differ
+/// from complete pivoting; hints are intended to stabilize related matrices.
+///
+/// # Errors
+/// Returns [`MatrixCIError::InvalidArgument`] for out-of-bounds or too many
+/// hints, invalid tolerances, infinite inputs, or backend failures. Returns
+/// [`MatrixCIError::NaNEncountered`] for NaN inputs or nonfinite intermediates.
+///
+/// # Examples
+/// ```
+/// use tensor4all_core::{matrix_luci_factors_from_matrix_owned_with_hints, RrLUOptions};
+/// use tensor4all_tensorbackend::{Matrix, mat_mul};
+/// let a = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 0.0, 0.0, 1.5]);
+/// let factors = matrix_luci_factors_from_matrix_owned_with_hints(
+///     a.clone(), RrLUOptions::default(), &[(0, 0)])?;
+/// assert_eq!(factors.row_indices, vec![0, 1]);
+/// assert_eq!(factors.col_indices, vec![0, 1]);
+/// assert_eq!(mat_mul(&factors.left, &factors.right)?.as_col_major_slice(), a.as_col_major_slice());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn matrix_luci_factors_from_matrix_owned_with_hints<T>(
+    mut a: Matrix<T>,
+    options: RrLUOptions,
+    hints: &[(usize, usize)],
+) -> Result<MatrixLuciFactors<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+{
+    let lu = crate::matrixlu::rrlu_mut_with_hints(&mut a, options, hints)?;
+    factors_from_rrlu(&lu, &mut Linalg::Global)
+}
+
+/// Factorizes a column-major matrix with strong hints on a caller-owned session.
+///
+/// Uses the selection, constraints and return contract of
+/// [`matrix_luci_factors_from_matrix_owned_with_hints`]. `session` is already
+/// entered by the caller; every factor product and solve runs on that session.
+/// `options` controls rank/tolerances/orientation and `hints` contains at most
+/// `min(nrows, ncols)` preferred original `(row, column)` coordinates.
+///
+/// # Errors
+/// Returns [`MatrixCIError::InvalidArgument`] for out-of-bounds or too many
+/// hints, invalid tolerances, infinite inputs, or backend failures. Returns
+/// [`MatrixCIError::NaNEncountered`] for NaN inputs or nonfinite intermediates.
+///
+/// # Examples
+/// ```
+/// use tensor4all_core::{matrix_luci_factors_from_matrix_owned_with_hints_on_session, RrLUOptions};
+/// use tensor4all_tensorbackend::{default_cpu_execution_context, Matrix};
+/// let context = default_cpu_execution_context();
+/// let factors = context.with_concrete_session(|session| {
+///     matrix_luci_factors_from_matrix_owned_with_hints_on_session(
+///         Matrix::from_col_major_vec(2, 1, vec![1.0_f64, 1.5]),
+///         RrLUOptions::default(), &[(0, 0)], session)
+/// })??;
+/// assert_eq!(factors.row_indices, vec![0]);
+/// assert_eq!(factors.left.as_col_major_slice(), &[1.0, 1.5]);
+/// assert_eq!(factors.right.as_col_major_slice(), &[1.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn matrix_luci_factors_from_matrix_owned_with_hints_on_session<T>(
+    mut a: Matrix<T>,
+    options: RrLUOptions,
+    hints: &[(usize, usize)],
+    session: &mut Session<'_>,
+) -> Result<MatrixLuciFactors<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+{
+    let lu = crate::matrixlu::rrlu_mut_with_hints(&mut a, options, hints)?;
+    factors_from_rrlu(&lu, &mut Linalg::Session(session))
+}
+
 /// Conservative logical working-byte estimate for owned dense LUCI factors.
 ///
 /// Includes the consumed matrix, rrLU L/U, factor construction, permutation

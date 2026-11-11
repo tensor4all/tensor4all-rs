@@ -97,6 +97,10 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// Optional rank cap on every output edge. Default: no explicit cap.
     pub max_bond_dim: Option<usize>,
     /// Relative or absolute local error target. Default: `1e-12`.
+    ///
+    /// This controls edge-local residuals. `Converged` also requires the rank
+    /// stability window and enabled Guard checks; it does not certify a global
+    /// Frobenius bound or pointwise relative accuracy on small-magnitude values.
     pub tolerance: f64,
     /// Scale `tolerance` by sampled output magnitude. Default: `true`.
     ///

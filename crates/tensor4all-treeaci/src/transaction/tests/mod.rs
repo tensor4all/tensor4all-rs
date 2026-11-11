@@ -1,3 +1,5 @@
+mod hints;
+
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_tensorbackend::Matrix;
 use tensor4all_treetn::TreeTN;
@@ -303,6 +305,7 @@ fn incomplete_commit_metadata_is_rejected_before_staging() {
         &state.candidates,
         &state.input_frames,
         0,
+        &[],
         &options,
         true,
         &mut identity,

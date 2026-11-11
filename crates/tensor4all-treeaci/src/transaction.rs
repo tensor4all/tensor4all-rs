@@ -34,12 +34,14 @@ where
 {
     #[cfg(test)]
     let proposal_started = std::time::Instant::now();
+    let hints = local_pivot_hints(state, forward, options.max_working_bytes)?;
     let proposal = materialize_and_factor_edge(
         state.inputs,
         &state.problem,
         &state.candidates,
         &state.input_frames,
         forward,
+        &hints,
         options,
         left_orthogonal,
         operator,
@@ -337,6 +339,66 @@ fn factor_indices<V: TreeAciNode>(
         indices.push(outgoing);
     }
     Ok(indices)
+}
+
+fn local_pivot_hints<T: TreeAciScalar, V: TreeAciNode>(
+    state: &TreeAciState<'_, T, V>,
+    forward: DirectedEdgeId,
+    max_working_bytes: usize,
+) -> Result<Vec<(usize, usize)>> {
+    let reverse = state.problem.directed_edges[forward].reverse;
+    let position = |edge, id| -> Result<Option<usize>> {
+        let sample = state.sample_arena.record(edge, id)?;
+        let directed = &state.problem.directed_edges[edge];
+        let node = state.problem.node_positions[&directed.from];
+        let mut stride = state.problem.physical[node].local_dim;
+        let mut encoded = sample.local_coordinate;
+        for &(incoming, id) in &sample.incoming {
+            let ids = &state.candidates.ids[incoming];
+            let Some(p) = ids.iter().position(|&candidate| candidate == id) else {
+                return Ok(None);
+            };
+            encoded = p
+                .checked_mul(stride)
+                .and_then(|v| encoded.checked_add(v))
+                .ok_or(TreeAciError::SizeOverflow {
+                    context: "local pivot hint",
+                })?;
+            stride = stride
+                .checked_mul(ids.len())
+                .ok_or(TreeAciError::SizeOverflow {
+                    context: "local pivot hint",
+                })?;
+        }
+        Ok(Some(encoded))
+    };
+    let remap = |&(a, b): &(usize, usize)| -> Result<Option<(usize, usize)>> {
+        let (a, b) = if forward.is_multiple_of(2) {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        Ok(position(forward, a)?.zip(position(reverse, b)?))
+    };
+    let pairs = &state.pivots.per_edge[forward / 2];
+    // INVARIANT: remapping only scans rank-bounded incoming candidate lists;
+    // two metadata-only walks avoid reserving discarded, unavailable hints.
+    let count = pairs.iter().try_fold(0usize, |count, pair| {
+        Ok::<_, TreeAciError>(count + usize::from(remap(pair)?.is_some()))
+    })?;
+    let bytes = count
+        .checked_mul(std::mem::size_of::<(usize, usize)>())
+        .ok_or(TreeAciError::SizeOverflow {
+            context: "local pivot hint bytes",
+        })?;
+    crate::problem::enforce_limit("working bytes", bytes, max_working_bytes)?;
+    let mut hints = Vec::with_capacity(count);
+    for pair in pairs {
+        if let Some(hint) = remap(pair)? {
+            hints.push(hint);
+        }
+    }
+    Ok(hints)
 }
 
 #[cfg(test)]

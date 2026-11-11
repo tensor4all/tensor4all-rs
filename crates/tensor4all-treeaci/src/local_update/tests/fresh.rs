@@ -50,6 +50,7 @@ fn verify<T: crate::TreeAciScalar>(phase: T, rounding: f64) {
                     &active,
                     &frames,
                     forward,
+                    &[],
                     &options,
                     left_orthogonal,
                     &mut |_: crate::TreeElementwiseBatch<'_, T>, output: &mut [T]| {

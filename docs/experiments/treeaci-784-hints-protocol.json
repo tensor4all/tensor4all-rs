@@ -1,0 +1,71 @@
+{
+  "issue": 784,
+  "umbrella": 854,
+  "baseline_commit": "d41c7cd41fa91491b01132ab2d732e4cece9bde4",
+  "candidate_commit": "resolved from git before the complete experiment; see results manifest",
+  "harness": "crates/tensor4all-treeaci/examples/convergence_g0.rs; identical harness and g0 test fixture on both revisions",
+  "profile": "release, locked default CPU platform features (faer on Linux)",
+  "hardware": "AMD Ryzen 9 6900HX with Radeon Graphics",
+  "measurement_cpu": 14,
+  "unused_measurement_sibling": 15,
+  "observer_cpus": "0-11",
+  "thread_environment": {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "RAYON_NUM_THREADS": "1"
+  },
+  "cases": [
+    [
+      5,
+      "nblock",
+      0.01
+    ],
+    [
+      6,
+      "nblock",
+      0.01
+    ],
+    [
+      8,
+      "nblock",
+      0.01
+    ],
+    [
+      9,
+      "nblock",
+      0.01
+    ],
+    [
+      9,
+      "nblock",
+      0.1
+    ],
+    [
+      8,
+      "cttn",
+      0.01
+    ]
+  ],
+  "repetitions": 3,
+  "order": "case-major; baseline/candidate alternating first arm by case+repetition; no selective reruns",
+  "priming": "both arms run R5 nblock T0.1 once, discarded equally; fixed one-second busy loop on measurement CPU before each arm",
+  "timeout_seconds_per_arm": 600,
+  "metric": "construction seconds, excludes fixture construction and sampled output evaluation",
+  "statistic": "sum of per-case medians; per-case median ratios; all raw repetitions retained",
+  "acceptance": {
+    "aggregate_candidate_over_baseline_max": 1.1,
+    "every_candidate_median_max": "1.20 * baseline median + 0.05 seconds",
+    "every_candidate_termination": "Converged",
+    "quality": "all returned arms satisfy unchanged normalized sampled max <= 5e-4 and relative sampled L2 <= 0.007 on 1093 shared points; sampling is not a full-grid certificate"
+  },
+  "noise_gates": {
+    "swapout_pages_delta_max": 0,
+    "global_steal_fraction_max": 0.01,
+    "mean_other_busy_cores_max": 2.0,
+    "mean_cpu15_busy_fraction_max": 0.1,
+    "available_memory_min_bytes": 2147483648
+  },
+  "invalidity": "any noise or validity failure makes the whole experiment INCONCLUSIVE; retain every case; a new attempt requires a complete paired rerun",
+  "scope": "correctness repair, not a speedup claim or attribution of #896; no comparison with historical dependencies and no RSI execution"
+}
