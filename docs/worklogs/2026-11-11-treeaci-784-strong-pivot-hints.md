@@ -40,3 +40,12 @@ same current dependencies on both arms. Results and final local validation
 are recorded after the complete comparison. #854 remains open for its other
 items; this change does not establish #794's mixed-capacity disposition or
 attribute #896's historical timing gap. No RSI algorithm is executed.
+
+The [initial complete comparison](../experiments/treeaci-784-hints-initial.json)
+is INCONCLUSIVE: both arms fail the original sample-normalized maximum-error
+gate for R8. Its six cases and all three repetitions remain recorded. The
+reference sample set missed the large analytic peak. The revised complete
+protocol adds that independently computed peak to all 1,093 original points,
+keeps both numerical thresholds and every case, and repeats both arms in full.
+The analytic peak comes from the bounded 2D momentum grid at the smallest
+Matsubara magnitude; this does not certify errors over the full 3D grid.

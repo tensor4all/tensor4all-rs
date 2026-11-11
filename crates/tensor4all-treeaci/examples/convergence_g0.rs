@@ -3,7 +3,7 @@
 //! Arguments: `R topology temperature`, where topology is `nblock`, `cttn`,
 //! or `swap`. Uses the #885 settings: relative tolerance 1e-4, seed 42,
 //! cap 2000, 50 passes and default Guard. Only construction is timed.
-//! Checks 1,093 deterministic and held-out points against the analytic G0;
+//! Checks 1,094 deterministic and held-out points against the analytic G0;
 //! this is sampling evidence, not a full-grid error certificate.
 //!
 //! Example: `cargo run --release -p tensor4all-treeaci --example convergence_g0 -- 6 nblock 0.01`
@@ -58,6 +58,23 @@ fn main() -> g0::TestResult<()> {
             rng.random_range(0..size),
         )
     }));
+    // Independent global reference peak: the smallest Matsubara magnitude
+    // occurs at n=size/2 or size/2-1. Enumerate the bounded 2D momentum grid
+    // (at most 1024^2 pairs, O(1) storage), not the 3D tensor. Keep every
+    // original sample and add this point so random misses cannot underestimate
+    // the normalization scale of this high-dynamic-range reference (#854).
+    let mut peak = (0, 0, size / 2);
+    let mut peak_scale = 0.0_f64;
+    for x in 0..size {
+        for y in 0..size {
+            let magnitude = g0::exact_with_temperature(r, x, y, size / 2, temperature).norm();
+            if magnitude > peak_scale {
+                peak_scale = magnitude;
+                peak = (x, y, size / 2);
+            }
+        }
+    }
+    points.push(peak);
     let mut coordinates = Vec::with_capacity(points.len() * 3 * r);
     for &(x, y, n) in &points {
         for bit in 0..r {
@@ -85,6 +102,10 @@ fn main() -> g0::TestResult<()> {
         residual_sq += error * error;
         reference_sq += expected.norm_sqr();
     }
+    assert_eq!(
+        scale, peak_scale,
+        "reference peak must normalize all samples"
+    );
     let normalized_max_error = max_error / scale;
     let relative_sampled_l2 = (residual_sq / reference_sq).sqrt();
     println!(
@@ -93,7 +114,7 @@ fn main() -> g0::TestResult<()> {
         "seconds":seconds,"termination":format!("{:?}",result.termination),
         "ranks":result.max_ranks,"errors":result.max_errors,"guard":result.global_pivots_found,
         "evaluated_points":result.diagnostics.evaluated_points,
-        "sample_count":points.len(),"normalized_max_error":normalized_max_error,"relative_sampled_l2":relative_sampled_l2})
+        "sample_count":points.len(),"reference_peak":peak,"reference_scale":scale,"normalized_max_error":normalized_max_error,"relative_sampled_l2":relative_sampled_l2})
     );
     assert!(
         normalized_max_error <= 5e-4,

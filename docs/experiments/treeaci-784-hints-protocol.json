@@ -57,7 +57,7 @@
     "aggregate_candidate_over_baseline_max": 1.1,
     "every_candidate_median_max": "1.20 * baseline median + 0.05 seconds",
     "every_candidate_termination": "Converged",
-    "quality": "all returned arms satisfy unchanged normalized sampled max <= 5e-4 and relative sampled L2 <= 0.007 on 1093 shared points; sampling is not a full-grid certificate"
+    "quality": "all returned arms satisfy unchanged normalized sampled max <= 5e-4 and relative sampled L2 <= 0.007 on all 1093 original points plus the independently computed global analytic peak (1094 points). The peak normalizes the sampled maximum; sampled error checks are not a full-grid error certificate."
   },
   "noise_gates": {
     "swapout_pages_delta_max": 0,
@@ -67,5 +67,6 @@
     "available_memory_min_bytes": 2147483648
   },
   "invalidity": "any noise or validity failure makes the whole experiment INCONCLUSIVE; retain every case; a new attempt requires a complete paired rerun",
-  "scope": "correctness repair, not a speedup claim or attribution of #896; no comparison with historical dependencies and no RSI execution"
+  "scope": "correctness repair, not a speedup claim or attribution of #896; no comparison with historical dependencies and no RSI execution",
+  "registration": "Complete rerun after retaining the original INCONCLUSIVE study; source revision adds the independent analytic reference peak to all 1093 original samples. No samples, cases or numerical thresholds are removed or loosened."
 }
