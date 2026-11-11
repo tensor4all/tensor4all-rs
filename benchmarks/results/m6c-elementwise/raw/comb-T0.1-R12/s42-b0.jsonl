@@ -1,0 +1,2 @@
+{"cap":64,"git_commit":null,"in2_cap":32,"in2_rtol":0.001,"in_cap":64,"in_rtol":0.001,"in_tol":0.003,"kind":"config","method":"b0","mu":0.5,"r":12,"rsi_cap":256,"rsi_rtol":1e-14,"rtol":0.001,"samples":30000,"scale_tolerance":false,"seed":42,"temperature":0.1,"tol":0.003,"topology":"cttn","variants":[""],"workload":"g0"}
+{"g0_norm":10091.331202188923,"kind":"reference","norm":10091.331202188923,"seconds":7.479601832}

@@ -238,6 +238,28 @@ cargo run --release -p tensor4all-benchmarks \
 The recorded runs, their matched-accuracy comparison, and their caveats are in
 [`2026-10-03-m5-fixed-depth-exploration.md`](results/2026-10-03-m5-fixed-depth-exploration.md).
 
+#### Patched element-wise operations (M6c)
+
+`benchmark_m6c_elementwise` runs `patched_elementwise` with the TreeACI kernel
+on the gw-rs Matsubara G0 (the Dyson map of three exact rank-2 inputs, its
+square, and the square of two differently partitioned G0) on the comb CTTN or
+`tt_nblock`, and compares it with unpatched TreeACI and B0. Errors are exact
+over the grid for `R <= 7` and importance-sampled otherwise. The source lives
+in `rust/benchmark_m6c_elementwise.rs`.
+
+```bash
+cargo run --release -p tensor4all-benchmarks \
+  --example benchmark_m6c_elementwise -- \
+  g0 patched-aci --r 6 --temperature 0.1 --cap 16 --exhaustive true \
+  --variants "rtol=1e-3;rtol=1e-3,engine-tol-factor=3"
+```
+
+The exploratory runs, the TreeACI kernel tolerance factor and the open
+`tt_nblock` comparison are in
+[`2026-11-11-m6c-elementwise.md`](results/2026-11-11-m6c-elementwise.md); its
+tables are generated from the raw output by
+`results/m6c-elementwise/report.py`.
+
 #### TreeTCI global pivot search (#792)
 
 `benchmark_global_search` runs the default TreeTCI loop (`DefaultProposer`,

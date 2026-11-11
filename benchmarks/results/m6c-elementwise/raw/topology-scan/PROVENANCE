@@ -1,0 +1,7 @@
+binary_sha256=e232e17f0914295997c67f11365a09ff3ba9e795c03fae13ae3f11b5507d8c29
+source_commit=9dde54ca34032c1b7cbdeeae3d3f49ba3e50c557
+source_note=binary identical (sha256) to topology-scan/bin, built from clean m6a at the commit above
+harness=benchmarks/rust/benchmark_m6c_elementwise.rs
+profile=release
+host=AMD Ryzen 9 6900HX with Radeon Graphics, 16 logical CPUs, 6.18.58.1-microsoft-standard-WSL2
+threads=RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1, one taskset core per process

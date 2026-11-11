@@ -1,0 +1,6 @@
+bin-base_sha256=e232e17f0914295997c67f11365a09ff3ba9e795c03fae13ae3f11b5507d8c29
+bin-base_source_commit=9dde54ca34032c1b7cbdeeae3d3f49ba3e50c557 (identical sha256 to topology-scan/bin)
+bin-fix_sha256=014412ba8cca1ab378db723d8e61af9044d1a24a60eb66227f7638605382ba9f
+bin-fix_source_commit=f50c5c751bc06a3afb7db82c4b94db0c74b40ad9 (scratch: m6a 9dde54ca34032c1b7cbdeeae3d3f49ba3e50c557 + cherry-picked fix/784-rank-oscillation a3a826d3 f66cb657 2d829428), dirty_files=0
+host=AMD Ryzen 9 6900HX with Radeon Graphics, 6.18.58.1-microsoft-standard-WSL2
+threads=RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1, taskset -c 4, arms run sequentially
