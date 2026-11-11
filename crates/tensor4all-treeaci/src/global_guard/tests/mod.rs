@@ -1,3 +1,4 @@
+mod candidate_closure;
 mod finite_values;
 mod known_pivots;
 mod start_residuals;
