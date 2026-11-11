@@ -36,10 +36,14 @@ Existing #874 Guard and other TreeACI regressions retain their assertions.
 
 Representative G0 performance uses the preregistered
 [paired protocol](../experiments/treeaci-784-hints-protocol.json), with the
-same current dependencies on both arms. Results and final local validation
-are recorded after the complete comparison. #854 remains open for its other
-items; this change does not establish #794's mixed-capacity disposition or
-attribute #896's historical timing gap. No RSI algorithm is executed.
+same current dependencies on both arms. The complete corrected study
+[passes](../experiments/treeaci-784-hints-results.json): the sum of six
+per-case construction medians changes from 37.783s to 13.636s (ratio 0.3609).
+Every candidate converges and all sampled-accuracy and host-noise gates pass.
+R8 nblock is 4.9% slower; the other five cases improve. Low-T R9 nblock changes
+from MaxSweeps/50 to Converged/12, and warm R9 from MaxSweeps/50 to Converged/10.
+Three repetitions give descriptive medians without confidence intervals.
+These are current-revision comparisons, not historical attribution for #896.
 
 The [initial complete comparison](../experiments/treeaci-784-hints-initial.json)
 is INCONCLUSIVE: both arms fail the original sample-normalized maximum-error
@@ -49,3 +53,27 @@ protocol adds that independently computed peak to all 1,093 original points,
 keeps both numerical thresholds and every case, and repeats both arms in full.
 The analytic peak comes from the bounded 2D momentum grid at the smallest
 Matsubara magnitude; this does not certify errors over the full 3D grid.
+
+The [DMRG evidence](../experiments/treeaci-784-hints-dmrg.json) retains every
+family/cap setting, histories, independent errors and final output hashes.
+Chi40's relative Frobenius error changes from 3.00e-6 to 2.91e-6. Chi100/cap800
+increases from 7.71e-6 to 9.28e-6, about 20.4%; local admissibility and stable
+ranks do not imply better global accuracy. The other cases remain near their
+baseline error scales. Final clean-source replays are byte-identical to the
+independently checked output cores, including the three-pass controls.
+
+Local validation passes the existing Core library suite (751 passed, one
+existing ignored), eight focused Core hint controls, the existing TreeACI
+unit/integration suites (248 passed, eleven existing ignored), the added
+remapping and seeded-convergence controls, and the affected cold-G0 fixture
+controls. All 436 Core/TreeACI doctests, strict changed-crate Clippy, formatting,
+API inventory, crate boundaries and deterministic repository-rules review pass.
+The changed production files pass the public-error-doc audit; the unscoped
+audit also traverses unrelated nested worktrees and reports existing boilerplate
+there. Nextest is unavailable, so Cargo's test harness runs the local suites.
+Hosted CI and the scheduled heavy R9 CTTN regression remain unrun locally.
+
+#854 remains open for its other items. This change does not establish #794's
+mixed-capacity disposition, attribute #896's historical timing gap, validate
+the separate NBlock W witness, or guarantee convergence for every input.
+No RSI algorithm is executed.
