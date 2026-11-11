@@ -166,6 +166,11 @@ unchanged #874 regressions continue to exercise Guard discovery and cleanup.
 The per-edge stability window, tolerance and Guard still determine termination;
 a pass limit still reports `MaxSweeps`. The #784 DMRG replays and a smaller
 seeded witness cover cycling, without claiming convergence for every input.
+The R10/seed 2026 tt_nblock witness at relative tolerance 1e-4 still reaches
+MaxSweeps/50; the hints are a partial repair of #784/#854. The
+[R10 evidence](../experiments/treeaci-784-r10-counterexample.json) also records
+R9/seed 2026 taking 30 passes, compared with 12 at seed 42. Maximum-rank plateaus
+do not establish the per-edge stability or Guard conditions.
 
 Relative local stopping does not bound pointwise relative error or the global
 Frobenius error. In particular, held-out random points can underestimate a

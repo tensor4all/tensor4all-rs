@@ -1,0 +1,507 @@
+{
+  "status": "PARTIAL_REPAIR_R10_COUNTEREXAMPLE",
+  "issue": 784,
+  "umbrella": 854,
+  "source": "User-supplied M6a 784probe artifacts; all four original JSONL records preserved below. No original timed command file or host-noise samples were present in that directory; original timing observations are not a controlled paired performance study.",
+  "harness_revision": "9dde54ca34032c1b7cbdeeae3d3f49ba3e50c557",
+  "harness_path": "benchmarks/rust/benchmark_m6c_elementwise.rs",
+  "baseline_revision": "9dde54ca34032c1b7cbdeeae3d3f49ba3e50c557",
+  "fix_revision": "f50c5c751bc06a3afb7db82c4b94db0c74b40ad9",
+  "fix_cherry_pick": "30e75885, 42ad1abd, f50c5c75 onto the M6a harness revision",
+  "verified_binary_hashes": {
+    "base": {
+      "sha256": "e232e17f0914295997c67f11365a09ff3ba9e795c03fae13ae3f11b5507d8c29"
+    },
+    "fix": {
+      "sha256": "014412ba8cca1ab378db723d8e61af9044d1a24a60eb66227f7638605382ba9f"
+    }
+  },
+  "critical_sources_identical_to_published_784_branch": {
+    "crates/tensor4all-core/src/matrixlu.rs": true,
+    "crates/tensor4all-core/src/matrix_luci.rs": true,
+    "crates/tensor4all-treeaci/src/local_update.rs": true,
+    "crates/tensor4all-treeaci/src/schedule.rs": true
+  },
+  "effective_unpatched_options": {
+    "max_sweeps": 50,
+    "min_sweeps": 2,
+    "max_bond_dim": 4000,
+    "rng_seed": 2026,
+    "global_guard": "enabled, default searches and margin10",
+    "resource_budgets_bytes": 8589934592,
+    "note": "The printed cap64 applies to patched methods; unpatched ACI hardcodes cap4000. It is nonbinding for the observed maximum ranks below380."
+  },
+  "original_cases": [
+    {
+      "mode": "rel",
+      "base": {
+        "source_sha256": "3f85fa9e2aaaa83b626fc66cea158a9294613c52c80b3fe46b297572b7a45756",
+        "records": [
+          {
+            "cap": 64,
+            "git_commit": null,
+            "in2_cap": 32,
+            "in2_rtol": 0.001,
+            "in_cap": 64,
+            "in_rtol": 0.001,
+            "in_tol": 0.003,
+            "kind": "config",
+            "method": "unpatched-aci",
+            "mu": 0.5,
+            "r": 10,
+            "rsi_cap": 256,
+            "rsi_rtol": 1e-14,
+            "rtol": 0.001,
+            "samples": 5000,
+            "scale_tolerance": true,
+            "seed": 2026,
+            "temperature": 0.01,
+            "tol": 0.0001,
+            "topology": "tt_nblock",
+            "variants": [""],
+            "workload": "g0"
+          },
+          {
+            "g0_norm": 10264.14566326555,
+            "kind": "reference",
+            "norm": 10264.14566326555,
+            "seconds": 0.110805127
+          },
+          {
+            "accuracy": {
+              "rel_l2": 0.0027517175888651406,
+              "rel_l2_se": 3.668656901946014e-05,
+              "seconds": 26.914343623
+            },
+            "engine": {
+              "last_error": 9.80217152879288e-05,
+              "max_errors": [4.5554084465436176e-05,9.197194902567512e-05,9.600519198333479e-05,9.592045663060425e-05,9.95452843081802e-05,9.895340665614567e-05,9.675201044405758e-05,9.946930525626016e-05,9.866577637299659e-05,9.848929155823681e-05,9.811428024167714e-05,9.8077077797512e-05,9.973483545341957e-05,9.903169422291457e-05,9.709542023207892e-05,9.96337097312787e-05,9.963370973060549e-05,9.96407559507473e-05,9.973021101613688e-05,9.931930995332173e-05,9.990472460097907e-05,9.840401920523091e-05,9.864843439968569e-05,9.770888241807795e-05,9.85162625677169e-05,9.892032539654709e-05,9.895815223686656e-05,9.640841728484602e-05,9.972937974542692e-05,9.764440044290005e-05,9.851366959970564e-05,9.939449761998126e-05,9.790077775978067e-05,9.474914672724836e-05,9.444285739380701e-05,9.961487305375543e-05,9.65557501961671e-05,9.98535680298166e-05,9.872195858586977e-05,9.980656228663553e-05,9.793205408337069e-05,9.95859440746269e-05,9.597548084148383e-05,9.959747859700249e-05,9.922720020577739e-05,9.899441772253227e-05,9.981375355323987e-05,9.613866357547971e-05,9.929008191561304e-05,9.80217152879288e-05],
+              "max_ranks": [2,14,34,76,144,233,347,373,372,376,374,374,371,378,375,374,373,374,376,375,373,376,372,375,372,374,371,370,375,373,371,373,374,372,373,370,376,375,372,378,370,370,372,374,377,371,374,375,370,375],
+              "sweeps": 50,
+              "termination": "MaxSweeps"
+            },
+            "kind": "result",
+            "max_rank": 375,
+            "params": 1734854,
+            "patches": 1,
+            "seconds": 38.635735661,
+            "variant": ""
+          }
+        ],
+        "summary": {
+          "termination": "MaxSweeps",
+          "sweeps": 50,
+          "construction_seconds": 38.635735661,
+          "relative_l2_estimate": 0.0027517175888651406,
+          "relative_l2_standard_error": 3.668656901946014e-05,
+          "parameters": 1734854
+        }
+      },
+      "fix": {
+        "source_sha256": "bb61489c2d828cb9f6684e9880f1404fd9538e48dd3dfde66930a19e2b82c619",
+        "records": [
+          {
+            "cap": 64,
+            "git_commit": null,
+            "in2_cap": 32,
+            "in2_rtol": 0.001,
+            "in_cap": 64,
+            "in_rtol": 0.001,
+            "in_tol": 0.003,
+            "kind": "config",
+            "method": "unpatched-aci",
+            "mu": 0.5,
+            "r": 10,
+            "rsi_cap": 256,
+            "rsi_rtol": 1e-14,
+            "rtol": 0.001,
+            "samples": 5000,
+            "scale_tolerance": true,
+            "seed": 2026,
+            "temperature": 0.01,
+            "tol": 0.0001,
+            "topology": "tt_nblock",
+            "variants": [""],
+            "workload": "g0"
+          },
+          {
+            "g0_norm": 10264.14566326555,
+            "kind": "reference",
+            "norm": 10264.14566326555,
+            "seconds": 0.111216597
+          },
+          {
+            "accuracy": {
+              "rel_l2": 0.0035424206684131487,
+              "rel_l2_se": 4.996006331985852e-05,
+              "seconds": 27.065310707
+            },
+            "engine": {
+              "last_error": 9.71432773983136e-05,
+              "max_errors": [8.493452350786915e-05,9.134017525093734e-05,9.998795306933107e-05,9.677655300044619e-05,9.832056469252826e-05,9.826565585964176e-05,9.936827891525133e-05,9.710740935935569e-05,9.877925742115812e-05,9.991745671888337e-05,9.984053080504311e-05,9.848586980387015e-05,9.959016717777858e-05,9.992726469394518e-05,9.964620694036403e-05,9.946038675390455e-05,9.957601438314842e-05,9.886598455364976e-05,9.868881958365137e-05,9.899433859932852e-05,9.817435187049289e-05,9.781329519066695e-05,9.969065597984094e-05,9.939745122367299e-05,9.9990260874145e-05,9.868748847379729e-05,9.914373020811321e-05,9.898767776282024e-05,9.802792574553537e-05,9.993368865422141e-05,9.993368865320279e-05,9.918722224181737e-05,9.988087321136885e-05,9.921731019390848e-05,9.892145083688511e-05,9.913229736404677e-05,9.985099405464657e-05,9.451009720741076e-05,9.921330606162305e-05,9.638815751925467e-05,9.750376125310538e-05,9.850060969589243e-05,9.697680969972806e-05,9.832305411462111e-05,9.980913182091201e-05,9.913568850371092e-05,9.974935106194341e-05,9.901701363803367e-05,9.904973473604848e-05,9.71432773983136e-05],
+              "max_ranks": [2,14,34,76,145,253,358,377,376,377,375,376,374,375,372,375,372,373,372,370,372,372,377,374,377,377,373,373,373,374,370,373,372,373,372,372,373,372,372,372,374,375,372,372,372,372,372,372,372,372],
+              "sweeps": 50,
+              "termination": "MaxSweeps"
+            },
+            "kind": "result",
+            "max_rank": 372,
+            "params": 1754338,
+            "patches": 1,
+            "seconds": 38.432493487,
+            "variant": ""
+          }
+        ],
+        "summary": {
+          "termination": "MaxSweeps",
+          "sweeps": 50,
+          "construction_seconds": 38.432493487,
+          "relative_l2_estimate": 0.0035424206684131487,
+          "relative_l2_standard_error": 4.996006331985852e-05,
+          "parameters": 1754338
+        }
+      },
+      "observed_construction_ratio": 0.9947395288190369,
+      "relative_l2_estimate_ratio": 1.287348920814984
+    },
+    {
+      "mode": "abs",
+      "base": {
+        "source_sha256": "e27a3ba77ac09954032da01d6a3058cbe3686b37acba6af78c63932917bb25c1",
+        "records": [
+          {
+            "cap": 64,
+            "git_commit": null,
+            "in2_cap": 32,
+            "in2_rtol": 0.001,
+            "in_cap": 64,
+            "in_rtol": 0.001,
+            "in_tol": 0.003,
+            "kind": "config",
+            "method": "unpatched-aci",
+            "mu": 0.5,
+            "r": 10,
+            "rsi_cap": 256,
+            "rsi_rtol": 1e-14,
+            "rtol": 0.001,
+            "samples": 5000,
+            "scale_tolerance": false,
+            "seed": 2026,
+            "temperature": 0.01,
+            "tol": 0.003183,
+            "topology": "tt_nblock",
+            "variants": [""],
+            "workload": "g0"
+          },
+          {
+            "g0_norm": 10264.14566326555,
+            "kind": "reference",
+            "norm": 10264.14566326555,
+            "seconds": 0.115011355
+          },
+          {
+            "accuracy": {
+              "rel_l2": 0.003104143657897152,
+              "rel_l2_se": 4.7501997633241634e-05,
+              "seconds": 27.191410245
+            },
+            "engine": {
+              "last_error": 0.003167591330396426,
+              "max_errors": [0.002358936390487904,0.0030322362034974856,0.003174624353916772,0.003136919279807012,0.003127164660917372,0.00305596625907774,0.0031467153064899766,0.0031382391362115183,0.003181811625576361,0.003181811625576371,0.00312002265812844,0.003145289050912619,0.0031707426166737523,0.003150811584480093,0.0031808968716002034,0.0031727411321055324,0.0031420150646915236,0.003177807877735564,0.0031798468493125097,0.0031825936728919904,0.003133936982834661,0.0031280473305909575,0.003140045404964035,0.003171033458698196,0.003172408102468445,0.0031829145250985556,0.003112214388888776,0.003143757103444746,0.0031712637919883453,0.003164079758134376,0.003152529231048221,0.0031811787608168204,0.003166340468830752,0.0031749377463668855,0.0031768995280844333,0.0031112694437135185,0.003082372035249536,0.003167469525888098,0.003167469525988454,0.003163165856270123,0.0031585070104531558,0.003178118288300761,0.0030696665393189467,0.0031561900255876484,0.0031136918661189223,0.0031776108293038456,0.003169057787845824,0.0031631280402124183,0.0031742946032168695,0.003167591330396426],
+              "max_ranks": [2,12,31,72,133,243,352,372,375,376,370,370,372,376,374,375,374,374,371,371,374,376,369,370,374,373,369,368,374,376,376,375,373,373,370,373,371,370,373,373,375,374,370,368,372,376,374,374,376,373],
+              "sweeps": 50,
+              "termination": "MaxSweeps"
+            },
+            "kind": "result",
+            "max_rank": 373,
+            "params": 1742040,
+            "patches": 1,
+            "seconds": 38.254072838,
+            "variant": ""
+          }
+        ],
+        "summary": {
+          "termination": "MaxSweeps",
+          "sweeps": 50,
+          "construction_seconds": 38.254072838,
+          "relative_l2_estimate": 0.003104143657897152,
+          "relative_l2_standard_error": 4.7501997633241634e-05,
+          "parameters": 1742040
+        }
+      },
+      "fix": {
+        "source_sha256": "ac7a3b84e0537dc5f60c63154582d0d2b36c56cd254f0e10cd751064cd19e4c1",
+        "records": [
+          {
+            "cap": 64,
+            "git_commit": null,
+            "in2_cap": 32,
+            "in2_rtol": 0.001,
+            "in_cap": 64,
+            "in_rtol": 0.001,
+            "in_tol": 0.003,
+            "kind": "config",
+            "method": "unpatched-aci",
+            "mu": 0.5,
+            "r": 10,
+            "rsi_cap": 256,
+            "rsi_rtol": 1e-14,
+            "rtol": 0.001,
+            "samples": 5000,
+            "scale_tolerance": false,
+            "seed": 2026,
+            "temperature": 0.01,
+            "tol": 0.003183,
+            "topology": "tt_nblock",
+            "variants": [""],
+            "workload": "g0"
+          },
+          {
+            "g0_norm": 10264.14566326555,
+            "kind": "reference",
+            "norm": 10264.14566326555,
+            "seconds": 0.112268869
+          },
+          {
+            "accuracy": {
+              "rel_l2": 0.0033474476669497514,
+              "rel_l2_se": 4.344810439675185e-05,
+              "seconds": 27.512534083
+            },
+            "engine": {
+              "last_error": 0.0031762301518380854,
+              "max_errors": [0.002252156031079074,0.002749501125408431,0.003020764957949156,0.003020764957949131,0.0031442550377509967,0.0029690635611412065,0.003148283817691747,0.0031792881584068312,0.003177590498917072,0.003147584706860986,0.0031564967295866185,0.003169346680894019,0.003169346680855875,0.003169346680894019,0.003180706618055381,0.003169346680894019,0.0031696710060883726,0.003169346680894019,0.003169346680855875,0.003169346680894019,0.003169346680855875,0.003169346680894019,0.003169346680855875,0.003169346680894019,0.003172332963839804,0.003169346680894019,0.003169346680855875,0.0031322800906461315,0.0031473551574964093,0.0031674940023842255,0.003161923657720456,0.00311094692796921,0.003110946928028535,0.003166263724533126,0.003110946928028535,0.0031814474699542227,0.003121145828726274,0.00313040907265976,0.003110946928028535,0.00311094692796921,0.003110946928028535,0.003158352601167957,0.003171154999645868,0.0031567705266950245,0.003133685727831241,0.0031762301518380854],
+              "max_ranks": [2,10,28,66,121,236,356,375,374,374,374,375,372,374,374,373,373,375,375,375,375,375,375,375,375,375,378,379,376,373,374,374,374,374,374,374,374,374,374,374,374,374,374,374,374,374],
+              "sweeps": 46,
+              "termination": "Converged"
+            },
+            "kind": "result",
+            "max_rank": 374,
+            "params": 1755952,
+            "patches": 1,
+            "seconds": 34.645770029,
+            "variant": ""
+          }
+        ],
+        "summary": {
+          "termination": "Converged",
+          "sweeps": 46,
+          "construction_seconds": 34.645770029,
+          "relative_l2_estimate": 0.0033474476669497514,
+          "relative_l2_standard_error": 4.344810439675185e-05,
+          "parameters": 1755952
+        }
+      },
+      "observed_construction_ratio": 0.9056753296758596,
+      "relative_l2_estimate_ratio": 1.0783803959696316
+    }
+  ],
+  "controlled_followups": {
+    "binary": "fix binary with the verified hash above",
+    "thread_environment": {
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "RAYON_NUM_THREADS": "1"
+    },
+    "cpu_affinity": "14",
+    "cases": [
+      {
+        "r": 9,
+        "seed": 42,
+        "command": ["../tensor4all-rs-tree-patching-m6a/target/m6c-bench/784probe/bin-fix","g0","unpatched-aci","--r","9","--topology","tt_nblock","--temperature","0.01","--tol","1e-4","--scale-tolerance","true","--seed","42","--samples","64"],
+        "source_sha256": "42e1aafddf06ef62306571cad4e6f45aad1da4e41ff490d78125d149e80626ce",
+        "records": [
+          {
+            "cap": 64,
+            "git_commit": null,
+            "in2_cap": 32,
+            "in2_rtol": 0.001,
+            "in_cap": 64,
+            "in_rtol": 0.001,
+            "in_tol": 0.003,
+            "kind": "config",
+            "method": "unpatched-aci",
+            "mu": 0.5,
+            "r": 9,
+            "rsi_cap": 256,
+            "rsi_rtol": 1e-14,
+            "rtol": 0.001,
+            "samples": 64,
+            "scale_tolerance": true,
+            "seed": 42,
+            "temperature": 0.01,
+            "tol": 0.0001,
+            "topology": "tt_nblock",
+            "variants": [""],
+            "workload": "g0"
+          },
+          {
+            "g0_norm": 5106.9438769218705,
+            "kind": "reference",
+            "norm": 5106.9438769218705,
+            "seconds": 0.014851756
+          },
+          {
+            "accuracy": {
+              "rel_l2": 0.002144077119240661,
+              "rel_l2_se": 0.00023325747354288197,
+              "seconds": 0.234588302
+            },
+            "engine": {
+              "last_error": 9.952729352410789e-05,
+              "max_errors": [8.37877853795748e-05,8.99728341001501e-05,8.970869334120182e-05,9.445873101389834e-05,9.444795788323727e-05,9.992882903068188e-05,9.934068406416802e-05,9.983063808835572e-05,9.932422422657553e-05,9.946810575359356e-05,9.946810575376655e-05,9.952729352410789e-05],
+              "max_ranks": [2,14,38,84,158,272,343,347,347,344,344,344],
+              "sweeps": 12,
+              "termination": "Converged"
+            },
+            "kind": "result",
+            "max_rank": 344,
+            "params": 1168790,
+            "patches": 1,
+            "seconds": 3.425316718,
+            "variant": ""
+          }
+        ],
+        "purpose": "Stopping-rule diagnostic. Only 64 accuracy samples; no accuracy or comparative performance claim."
+      },
+      {
+        "r": 9,
+        "seed": 2026,
+        "command": ["../tensor4all-rs-tree-patching-m6a/target/m6c-bench/784probe/bin-fix","g0","unpatched-aci","--r","9","--topology","tt_nblock","--temperature","0.01","--tol","1e-4","--scale-tolerance","true","--seed","2026","--samples","64"],
+        "source_sha256": "d6a20aaee59ecfa7058c399f38927eaeb93452cb8a6a3cda720fca1ce62eadf6",
+        "records": [
+          {
+            "cap": 64,
+            "git_commit": null,
+            "in2_cap": 32,
+            "in2_rtol": 0.001,
+            "in_cap": 64,
+            "in_rtol": 0.001,
+            "in_tol": 0.003,
+            "kind": "config",
+            "method": "unpatched-aci",
+            "mu": 0.5,
+            "r": 9,
+            "rsi_cap": 256,
+            "rsi_rtol": 1e-14,
+            "rtol": 0.001,
+            "samples": 64,
+            "scale_tolerance": true,
+            "seed": 2026,
+            "temperature": 0.01,
+            "tol": 0.0001,
+            "topology": "tt_nblock",
+            "variants": [""],
+            "workload": "g0"
+          },
+          {
+            "g0_norm": 5106.9438769218705,
+            "kind": "reference",
+            "norm": 5106.9438769218705,
+            "seconds": 0.013746876
+          },
+          {
+            "accuracy": {
+              "rel_l2": 0.002496949980506273,
+              "rel_l2_se": 0.00028995252391101066,
+              "seconds": 0.237574199
+            },
+            "engine": {
+              "last_error": 9.97844088609992e-05,
+              "max_errors": [8.37877853795748e-05,8.230071062841728e-05,9.794757385861112e-05,9.752625315713431e-05,9.845730082763633e-05,9.347685745311299e-05,9.915589874127427e-05,9.999390063091e-05,9.86922199710187e-05,9.928207093653135e-05,9.86922199710187e-05,9.997802300314888e-05,9.997802300389592e-05,9.977640824784791e-05,9.977640824891464e-05,9.977640824784791e-05,9.977640824891464e-05,9.977640824784791e-05,9.977640824891464e-05,9.977640824784791e-05,9.977640824891464e-05,9.977640824784791e-05,9.977640824891464e-05,9.977640824784791e-05,9.977640824891464e-05,9.977640824784791e-05,9.977640824891464e-05,9.977640824784791e-05,9.977640824891464e-05,9.97844088609992e-05],
+              "max_ranks": [2,14,34,78,147,230,323,343,343,349,349,348,348,348,348,348,348,348,348,348,348,348,348,348,348,348,348,348,348,348],
+              "sweeps": 30,
+              "termination": "Converged"
+            },
+            "kind": "result",
+            "max_rank": 348,
+            "params": 1195510,
+            "patches": 1,
+            "seconds": 12.567725333,
+            "variant": ""
+          }
+        ],
+        "purpose": "Stopping-rule diagnostic. Only 64 accuracy samples; no accuracy or comparative performance claim."
+      },
+      {
+        "r": 10,
+        "seed": 42,
+        "command": ["../tensor4all-rs-tree-patching-m6a/target/m6c-bench/784probe/bin-fix","g0","unpatched-aci","--r","10","--topology","tt_nblock","--temperature","0.01","--tol","1e-4","--scale-tolerance","true","--seed","42","--samples","64"],
+        "source_sha256": "eb07cdd7ddaac51e15ebd7625cf9bf6bb110cce82b497a03b81fd17658c0d72f",
+        "records": [
+          {
+            "cap": 64,
+            "git_commit": null,
+            "in2_cap": 32,
+            "in2_rtol": 0.001,
+            "in_cap": 64,
+            "in_rtol": 0.001,
+            "in_tol": 0.003,
+            "kind": "config",
+            "method": "unpatched-aci",
+            "mu": 0.5,
+            "r": 10,
+            "rsi_cap": 256,
+            "rsi_rtol": 1e-14,
+            "rtol": 0.001,
+            "samples": 64,
+            "scale_tolerance": true,
+            "seed": 42,
+            "temperature": 0.01,
+            "tol": 0.0001,
+            "topology": "tt_nblock",
+            "variants": [""],
+            "workload": "g0"
+          },
+          {
+            "g0_norm": 10264.14566326555,
+            "kind": "reference",
+            "norm": 10264.14566326555,
+            "seconds": 0.107685963
+          },
+          {
+            "accuracy": {
+              "rel_l2": 0.0032630977262093006,
+              "rel_l2_se": 0.00030674615085009126,
+              "seconds": 0.330808746
+            },
+            "engine": {
+              "last_error": 9.624755703304831e-05,
+              "max_errors": [8.493452350786915e-05,8.500105017280193e-05,9.84456916246431e-05,8.585878900043716e-05,9.958953203876038e-05,9.934623714315785e-05,9.880283883707258e-05,9.789833020144117e-05,9.989107762360788e-05,9.983021737050262e-05,9.968748250697964e-05,9.851170358475547e-05,9.851170358377436e-05,9.97397160163434e-05,9.624755703304831e-05],
+              "max_ranks": [2,10,30,68,128,212,297,368,372,370,372,372,374,374,372],
+              "sweeps": 15,
+              "termination": "Converged"
+            },
+            "kind": "result",
+            "max_rank": 372,
+            "params": 1753494,
+            "patches": 1,
+            "seconds": 7.271878576,
+            "variant": ""
+          }
+        ],
+        "purpose": "Stopping-rule diagnostic. Only 64 accuracy samples; no accuracy or comparative performance claim."
+      }
+    ],
+    "own_harness_r10_seed42": {
+      "errors": [8.493452350786915e-05,8.500105017280193e-05,9.84456916246431e-05,8.585878900043716e-05,9.958953203876038e-05,9.934623714315785e-05,9.880283883707258e-05,9.789833020144117e-05,9.989107762360788e-05,9.983021737050262e-05,9.968748250697964e-05,9.851170358475547e-05,9.851170358377436e-05,9.97397160163434e-05,9.624755703304831e-05],
+      "evaluated_points": 28444995,
+      "guard": [4,5,5,5,5,5,1,0,0,0,0,0,0,0,0],
+      "normalized_max_error": 0.0001468332693572117,
+      "r": 10,
+      "ranks": [2,10,30,68,128,212,297,368,372,370,372,372,374,374,372],
+      "reference_peak": [125,472,512],
+      "reference_scale": 31.83093532037346,
+      "relative_sampled_l2": 0.0010729908773955484,
+      "sample_count": 1094,
+      "seconds": 7.8191984340000005,
+      "temperature": 0.01,
+      "termination": "Converged",
+      "topology": "nblock"
+    },
+    "r9_seed42_max_rank_history_matches_original_12_pass_record": true,
+    "r10_seed42_max_rank_history_matches_own_harness": true
+  },
+  "interpretation": ["Relative tolerance1e-4 matches the previous R9 protocol; it is not a tolerance mismatch.","Within the same M6a harness, changing only seed42 to2026 increases R9 passes12 to30; R10 seed42 converges at15 while the supplied seed2026 run reaches MaxSweeps/50. R and seed jointly expose an unresolved workload; no unique root cause is established.","Maximum rank stability does not establish the per-edge no-growth window or the Guard condition. The unchanged min_sweeps2 checks all cut ranks; Guard pivot histories and per-edge rank histories were not in the supplied records.","The reported relative L2 errors are importance-sampling estimates with5000 samples and reported standard errors, not the previous1094-point sampled residual checks.","The original DMRG and six-case G0 results remain valid for their exact cases. They do not establish complete resolution of784/854 or performance restoration for this R10 workload."],
+  "next_diagnostics": "Capture all per-edge ranks, the no-growth counter, Guard pivots, and surviving/accepted hint counts on the R10 seed2026 witness before changing the selection policy. Do not loosen tolerances, add a rank floor, bypass Guard, increase the pass limit to relabel success, or restore expensive cross-reconstruction screening."
+}

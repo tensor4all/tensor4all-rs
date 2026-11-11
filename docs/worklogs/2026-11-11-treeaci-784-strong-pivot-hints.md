@@ -1,8 +1,13 @@
 # Strong pivot hints for TreeACI tolerance-boundary cycling
 
+**Status: partial repair.** The original DMRG family and the registered G0
+cases improve, but the newly supplied R10/seed 2026 relative-tolerance workload
+still reaches MaxSweeps/50. This branch does not establish complete closure
+of the convergence work in #784/#854.
+
 ## Decisions
 
-- Fix #784 within #854's remaining convergence work. Keep the original
+- Address #784 within #854's remaining convergence work. Keep the original
   tolerance, per-cut rank-stability window, Guard, RNG and pass limits.
 - Reuse surviving cross coordinates as hints inside one threshold-complete LU
   elimination. Accept a hint only if it meets the original tolerances and is
@@ -77,3 +82,35 @@ Hosted CI and the scheduled heavy R9 CTTN regression remain unrun locally.
 mixed-capacity disposition, attribute #896's historical timing gap, validate
 the separate NBlock W witness, or guarantee convergence for every input.
 No RSI algorithm is executed.
+
+## R10 counterexample and scope correction
+
+The [M6a probe records and controlled follow-ups](../experiments/treeaci-784-r10-counterexample.json)
+retain all four user-supplied runs and verified binary hashes. At R10,
+T=0.01, tt_nblock, seed 2026, cap 4000 and 50 passes, relative tolerance 1e-4
+still returns MaxSweeps/50. Absolute tolerance 0.003183 converges only at 46.
+The single-run construction observations are 38.636→38.432s for relative
+mode and 38.254→34.646s for absolute mode, not the earlier six-case aggregate
+improvement. Their original host-noise measurements were not available, so
+these observations are not a new qualified performance study.
+
+The importance-sampled relative L2 estimates increase from 2.752e-3 to
+3.542e-3 in relative mode (28.7%), and from 3.104e-3 to 3.347e-3 in absolute
+mode (7.8%). These use 5,000 importance samples with reported standard errors;
+they are a different validation measure from the earlier 1,094-point checks.
+
+The relative tolerance matches the previous R9 protocol. Matched controls on
+the same M6a fix binary give R9/seed 42: 12 passes; R9/seed 2026: 30 passes;
+R10/seed 42: 15 passes. The seed 42 rank histories match this branch's own
+harness at both R values. Thus increasing R is not a sufficient explanation:
+seed sensitivity also remains. The M6a path uses three exact inputs and an
+explicit session, while the original harness uses four inputs (one is zero)
+and the global route; the nonbinding rank caps are 4000 and 2000 respectively.
+The controls do not identify a unique root cause.
+
+`min_sweeps` remains 2 and checks growth on every edge. A constant maximum
+rank does not establish that all edge ranks are stable, nor that Guard's
+window is clear. The supplied logs lack per-edge rank and Guard histories;
+the R10/seed 2026 case needs those traces and surviving/accepted hint counts
+before another selection-policy change. No tolerance, stopping rule, pass
+limit, rank floor or Guard setting is changed in response to this report.
