@@ -38,13 +38,24 @@ use crate::{
 /// session of the caller's [`EvalContext`], with the engine's
 /// [`TreeAciOptions`] except that the problem supplies
 ///
-/// - `tolerance` (the problem's absolute tolerance, which must be positive),
+/// - `tolerance` (the problem's absolute tolerance, which must be positive,
+///   divided by the engine's [tolerance factor](Self::with_tolerance_factor)),
 /// - `scale_tolerance` (always `false`: the tolerance is absolute),
 /// - `max_bond_dim` (the problem's cap), and
 /// - the random stream (a ChaCha8 stream seeded with the problem's seed).
 ///
 /// Tree ACI takes no pivots, so the problem's initial pivots and global
 /// search starts are not used, and the outcome carries no pivots.
+///
+/// A converged tree ACI run does not bound its error by `tolerance`: the
+/// global guard accepts residuals up to
+/// [`TreeAciOptions::global_tolerance_margin`] times the tolerance, and the
+/// error estimate covers the sampled local matrices only. A caller that
+/// accepts each run on a separate measurement at the problem's tolerance (as
+/// the patched element-wise driver of `tensor4all-partitionedtreetn` does)
+/// can give the kernel a tighter target with
+/// [`with_tolerance_factor`](Self::with_tolerance_factor), which leaves the
+/// problem's tolerance, and therefore that acceptance, unchanged.
 ///
 /// The outcome maps tree ACI's result as follows:
 ///
@@ -53,7 +64,8 @@ use crate::{
 ///   `IterationLimit`.
 /// - `error_estimate`: the last sweep's largest local error, which with an
 ///   absolute tolerance is in the units of `f`; zero on the exact single-node
-///   path.
+///   path. It is compared with the tightened tolerance inside the run, not
+///   with the problem's.
 /// - `max_sample_magnitude`: [`TreeAciResult::max_sample_magnitude`], which
 ///   excludes the global guard's samples.
 ///
@@ -114,6 +126,8 @@ use crate::{
 pub struct TreeAciInterpolator {
     // Node-free: the fields that name nodes come from each run's problem.
     options: TreeAciOptions<()>,
+    // Each run's tolerance is the problem's divided by this factor (>= 1).
+    tolerance_factor: f64,
 }
 
 impl TreeAciInterpolator {
@@ -159,7 +173,64 @@ impl TreeAciInterpolator {
         crate::problem::validate_options(&options)?;
         Ok(Self {
             options: options.for_nodes(),
+            tolerance_factor: 1.0,
         })
+    }
+
+    /// Run tree ACI with the problem's tolerance divided by `factor`.
+    ///
+    /// The problem's tolerance is what the caller accepts a result at; with a
+    /// factor above one the kernel aims below it, which leaves room for tree
+    /// ACI's convergence criterion (see the type documentation). The outcome's
+    /// termination and error estimate refer to the tightened run. A larger
+    /// factor gives larger ranks and more accurate results than requested;
+    /// one (the default) runs at the problem's tolerance.
+    ///
+    /// # Arguments
+    ///
+    /// * `factor` - Finite and at least one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeAciError::InvalidOption`] for a factor below one or not
+    /// finite.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treeaci::{TreeAciError, TreeAciInterpolator};
+    ///
+    /// let engine = TreeAciInterpolator::default().with_tolerance_factor(3.0)?;
+    /// assert_eq!(engine.tolerance_factor(), 3.0);
+    /// assert_eq!(TreeAciInterpolator::default().tolerance_factor(), 1.0);
+    ///
+    /// let error = TreeAciInterpolator::default().with_tolerance_factor(0.5).unwrap_err();
+    /// assert!(matches!(error, TreeAciError::InvalidOption { option: "tolerance_factor", .. }));
+    /// # Ok::<(), TreeAciError>(())
+    /// ```
+    pub fn with_tolerance_factor(mut self, factor: f64) -> Result<Self> {
+        if !(factor.is_finite() && factor >= 1.0) {
+            return Err(TreeAciError::InvalidOption {
+                option: "tolerance_factor",
+                message: "the tolerance factor must be finite and at least one",
+            });
+        }
+        self.tolerance_factor = factor;
+        Ok(self)
+    }
+
+    /// The factor each run's tolerance is divided by; see
+    /// [`with_tolerance_factor`](Self::with_tolerance_factor).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_treeaci::TreeAciInterpolator;
+    ///
+    /// assert_eq!(TreeAciInterpolator::default().tolerance_factor(), 1.0);
+    /// ```
+    pub fn tolerance_factor(&self) -> f64 {
+        self.tolerance_factor
     }
 
     /// The options of one run on `problem`.
@@ -168,7 +239,7 @@ impl TreeAciInterpolator {
         problem: &InterpolationProblem<V>,
     ) -> TreeAciOptions<V> {
         TreeAciOptions {
-            tolerance: problem.absolute_tolerance(),
+            tolerance: problem.absolute_tolerance() / self.tolerance_factor,
             scale_tolerance: false,
             max_bond_dim: problem.max_bond_dim().map(|cap| cap.get()),
             rng_seed: problem.seed(),
@@ -182,6 +253,7 @@ impl Default for TreeAciInterpolator {
     fn default() -> Self {
         Self {
             options: TreeAciOptions::default(),
+            tolerance_factor: 1.0,
         }
     }
 }

@@ -173,6 +173,54 @@ fn the_engine_runs_the_session_entry_with_the_problems_settings() {
     assert!(outcome.max_sample_magnitude <= exact.maxabs().unwrap() * (1.0 + 1e-12));
 }
 
+/// With a tolerance factor the engine runs the session entry at the
+/// problem's tolerance divided by the factor, bit for bit.
+#[test]
+fn a_tolerance_factor_runs_the_session_entry_at_the_tightened_tolerance() {
+    let r = 3;
+    let (sites, inputs) = g0::fixture(r, "cttn").unwrap();
+    let options = g0::options();
+    let tolerance = options.tolerance;
+    let problem = problem_of(&inputs[0], tolerance, Some(64), 5);
+    let engine = TreeAciInterpolator::new(options.clone())
+        .unwrap()
+        .with_tolerance_factor(3.0)
+        .unwrap();
+    let outcome = run(&engine, &problem, &inputs, &g0_map).unwrap();
+
+    let direct = {
+        let mut backend = CpuBackend::with_threads(1).unwrap();
+        let mut session = Session::new(backend.engine_mut());
+        let mut rng = ChaCha8Rng::seed_from_u64(5);
+        tree_elementwise_batched_with_rng_on_session(
+            g0::operator,
+            &inputs,
+            &TreeAciOptions {
+                tolerance: tolerance / 3.0,
+                scale_tolerance: false,
+                max_bond_dim: Some(64),
+                rng_seed: 5,
+                ..options.clone()
+            },
+            &mut rng,
+            &mut session,
+        )
+        .unwrap()
+    };
+    let dense = |tree: &TreeTN<IdxTensor, usize>| {
+        tree.to_dense()
+            .unwrap()
+            .permute_indices(&sites)
+            .unwrap()
+            .to_vec::<Complex64>()
+            .unwrap()
+    };
+    assert_eq!(dense(&outcome.network), dense(&direct.tree));
+    assert_eq!(outcome.termination, InterpolationTermination::Converged);
+    assert_eq!(outcome.error_estimate, *direct.max_errors.last().unwrap());
+    assert!(outcome.error_estimate <= tolerance / 3.0);
+}
+
 /// A single node is evaluated exactly: its sample scale is the largest |f|
 /// on the grid and its error estimate is zero.
 #[test]

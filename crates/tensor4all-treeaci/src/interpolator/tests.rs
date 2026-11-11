@@ -121,3 +121,39 @@ fn errors_are_classified_by_their_cause() {
         Some(TreeAciError::Numerical { .. })
     ));
 }
+
+#[test]
+fn the_tolerance_factor_divides_the_problems_tolerance() {
+    let problem = problem(Some(4));
+    let plain = TreeAciInterpolator::default();
+    assert_eq!(plain.run_options(&problem).tolerance, 1e-8);
+    let tightened = TreeAciInterpolator::default()
+        .with_tolerance_factor(4.0)
+        .unwrap();
+    let options = tightened.run_options(&problem);
+    assert_eq!(options.tolerance, 1e-8 / 4.0);
+    assert!(!options.scale_tolerance);
+    assert_eq!(options.max_bond_dim, Some(4));
+}
+
+#[test]
+fn a_tolerance_factor_below_one_or_not_finite_is_rejected() {
+    for factor in [0.0, 0.5, -1.0, f64::NAN, f64::INFINITY] {
+        let error = TreeAciInterpolator::default()
+            .with_tolerance_factor(factor)
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                TreeAciError::InvalidOption {
+                    option: "tolerance_factor",
+                    ..
+                }
+            ),
+            "{factor}"
+        );
+    }
+    assert!(TreeAciInterpolator::default()
+        .with_tolerance_factor(1.0)
+        .is_ok());
+}
