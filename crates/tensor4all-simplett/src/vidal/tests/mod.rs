@@ -333,3 +333,42 @@ fn test_inverse_accessors() {
     inv.site_tensors_mut()[0].set3(0, 0, 0, 42.0);
     assert_eq!(*inv.site_tensor(0).get3(0, 0, 0), 42.0);
 }
+
+#[test]
+fn test_vidal_round_trip_at_a_small_global_scale() {
+    let scale = 1e-20;
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], scale);
+    let vidal = VidalTensorTrain::from_tensor_train(&tt).unwrap();
+    let back = vidal.to_tensor_train();
+    let expected = tt.sum().unwrap();
+    let actual = back.sum().unwrap();
+    assert!(
+        (actual - expected).abs() <= expected.abs() * 1e-12,
+        "Vidal round trip lost the global scale: {actual} vs {expected}"
+    );
+}
+
+#[test]
+fn test_inverse_round_trip_at_a_small_global_scale() {
+    let scale = 1e-20;
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], scale);
+    let inv = InverseTensorTrain::from_tensor_train(&tt).unwrap();
+    let back = inv.to_tensor_train();
+    let expected = tt.sum().unwrap();
+    let actual = back.sum().unwrap();
+    assert!(
+        (actual - expected).abs() <= expected.abs() * 1e-12,
+        "Inverse round trip lost the global scale: {actual} vs {expected}"
+    );
+}
+
+#[test]
+fn test_vidal_round_trip_of_the_zero_tensor() {
+    let tt = SimpleTensorTrain::<f64>::constant(&[2, 3, 2], 0.0);
+
+    let vidal = VidalTensorTrain::from_tensor_train(&tt).unwrap();
+    assert_eq!(vidal.to_tensor_train().sum().unwrap(), 0.0);
+
+    let inverse = InverseTensorTrain::from_tensor_train(&tt).unwrap();
+    assert_eq!(inverse.to_tensor_train().sum().unwrap(), 0.0);
+}

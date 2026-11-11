@@ -382,12 +382,20 @@ impl<T: TTScalar + Scalar + Default> VidalTensorTrain<T> {
             let right_dim = tensors[i].right_dim();
             let left_dim = tensors[i].left_dim();
 
+            // The zero test is relative to the bond spectrum. A global
+            // rescaling leaves the relative spectrum unchanged, so an
+            // absolute floor would not be scale invariant.
+            let sv_max = singular_values[i]
+                .iter()
+                .fold(0.0_f64, |acc, &sv| acc.max(sv.abs()));
             let mut new_tensor = tensor3_zeros(left_dim, site_dim, right_dim)?;
             for l in 0..left_dim {
                 for s in 0..site_dim {
                     for r in 0..right_dim {
                         let val = *tensors[i].get3(l, s, r);
-                        let sv = if r < singular_values[i].len() && singular_values[i][r] > 1e-15 {
+                        let sv = if r < singular_values[i].len()
+                            && singular_values[i][r].abs() > 1e-15 * sv_max
+                        {
                             singular_values[i][r]
                         } else {
                             1.0
@@ -662,8 +670,17 @@ impl<T: TTScalar + Scalar + Default> InverseTensorTrain<T> {
             .singular_values
             .iter()
             .map(|sv| {
+                // Relative to the bond spectrum, for the same reason as the
+                // divide in `from_tensor_train_with_partition`.
+                let sv_max = sv.iter().fold(0.0_f64, |acc, &v| acc.max(v.abs()));
                 sv.iter()
-                    .map(|&v| if v.abs() > 1e-15 { 1.0 / v } else { 0.0 })
+                    .map(|&v| {
+                        if v.abs() > 1e-15 * sv_max {
+                            1.0 / v
+                        } else {
+                            0.0
+                        }
+                    })
                     .collect()
             })
             .collect();
