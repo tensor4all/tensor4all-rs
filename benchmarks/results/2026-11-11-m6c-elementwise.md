@@ -194,7 +194,8 @@ patches but G0 needs more patches than with `k = 3` (24 to 35 against 19 to
 33), with errors of 0.05 to 0.09 times `rtol` and 11 to 40 % more parameters
 than `k = 1`. As a check, G0 at `k = 10`, `rtol = 1e-3` and at `k = 3`,
 `rtol = 3e-4` give the same kernel tolerance and the same network (95442
-parameters, error 8.3e-5). The default of `k` is still 1, pending the decision.
+parameters, error 8.3e-5). These runs used the default of the time, `k = 1`; the
+maintainer then set the default to 3 (2026-11-11).
 
 ## 4. Topology against temperature (unpatched TreeACI, R = 10)
 

@@ -357,6 +357,14 @@ The TreeACI adapter, on 2026-11-10:
   [Engine options](#engine-options) proposed. `initial_guess` and `root` name
   nodes of one network, so the constructor rejects them; the options are
   stored node-free.
+- **Tolerance factor.** The kernel runs at the problem's tolerance divided
+  by `TreeAciInterpolator::with_tolerance_factor` (default 3, chosen by the
+  maintainer on 2026-11-11), and the driver still accepts at the problem's
+  tolerance. A converged tree ACI run does not bound its error by its
+  tolerance (the global guard's margin and local-only estimate), so with a
+  factor of one the measurements fail and split at intermediate `rtol`; see
+  the [benchmark report](../../benchmarks/results/2026-11-11-m6c-elementwise.md),
+  section 3.
 - **Pivots.** Tree ACI takes none, so the problem's initial pivots and
   global search starts are unused and the outcome carries no pivots, as
   [Accept and split](#accept-and-split) proposed. A retry therefore differs

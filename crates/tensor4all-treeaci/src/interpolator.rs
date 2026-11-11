@@ -50,12 +50,15 @@ use crate::{
 /// A converged tree ACI run does not bound its error by `tolerance`: the
 /// global guard accepts residuals up to
 /// [`TreeAciOptions::global_tolerance_margin`] times the tolerance, and the
-/// error estimate covers the sampled local matrices only. A caller that
-/// accepts each run on a separate measurement at the problem's tolerance (as
-/// the patched element-wise driver of `tensor4all-partitionedtreetn` does)
-/// can give the kernel a tighter target with
-/// [`with_tolerance_factor`](Self::with_tolerance_factor), which leaves the
-/// problem's tolerance, and therefore that acceptance, unchanged.
+/// error estimate covers the sampled local matrices only. The engine
+/// therefore runs tree ACI at the problem's tolerance divided by a
+/// [tolerance factor](Self::with_tolerance_factor), 3 by default, and leaves
+/// the problem's tolerance, and so the acceptance of a caller that measures
+/// each run at it (as the patched element-wise driver of
+/// `tensor4all-partitionedtreetn` does), unchanged. With a factor of one, that
+/// driver's measurements fail on patches whose second singular value sits at
+/// the threshold, and each failure retries and splits; a factor of 3 removes
+/// most of those failures at up to about 20 % more parameters.
 ///
 /// The outcome maps tree ACI's result as follows:
 ///
@@ -130,6 +133,10 @@ pub struct TreeAciInterpolator {
     tolerance_factor: f64,
 }
 
+/// The tolerance factor of a new engine; see
+/// [`TreeAciInterpolator::with_tolerance_factor`].
+const DEFAULT_TOLERANCE_FACTOR: f64 = 3.0;
+
 impl TreeAciInterpolator {
     /// Build an engine from tree ACI options.
     ///
@@ -173,7 +180,7 @@ impl TreeAciInterpolator {
         crate::problem::validate_options(&options)?;
         Ok(Self {
             options: options.for_nodes(),
-            tolerance_factor: 1.0,
+            tolerance_factor: DEFAULT_TOLERANCE_FACTOR,
         })
     }
 
@@ -184,11 +191,15 @@ impl TreeAciInterpolator {
     /// ACI's convergence criterion (see the type documentation). The outcome's
     /// termination and error estimate refer to the tightened run. A larger
     /// factor gives larger ranks and more accurate results than requested;
-    /// one (the default) runs at the problem's tolerance.
+    /// one runs at the problem's tolerance.
     ///
     /// # Arguments
     ///
-    /// * `factor` - Finite and at least one.
+    /// * `factor` - Finite and at least one. The default is 3, which removes
+    ///   most measurement failures of the patched element-wise driver at up
+    ///   to about 20 % more parameters; 10 removes the rest at 11 to 40 %
+    ///   more parameters than one. Use one when the caller accepts the run on
+    ///   tree ACI's own convergence.
     ///
     /// # Errors
     ///
@@ -200,9 +211,9 @@ impl TreeAciInterpolator {
     /// ```
     /// use tensor4all_treeaci::{TreeAciError, TreeAciInterpolator};
     ///
-    /// let engine = TreeAciInterpolator::default().with_tolerance_factor(3.0)?;
-    /// assert_eq!(engine.tolerance_factor(), 3.0);
-    /// assert_eq!(TreeAciInterpolator::default().tolerance_factor(), 1.0);
+    /// let engine = TreeAciInterpolator::default().with_tolerance_factor(1.0)?;
+    /// assert_eq!(engine.tolerance_factor(), 1.0);
+    /// assert_eq!(TreeAciInterpolator::default().tolerance_factor(), 3.0);
     ///
     /// let error = TreeAciInterpolator::default().with_tolerance_factor(0.5).unwrap_err();
     /// assert!(matches!(error, TreeAciError::InvalidOption { option: "tolerance_factor", .. }));
@@ -227,7 +238,7 @@ impl TreeAciInterpolator {
     /// ```
     /// use tensor4all_treeaci::TreeAciInterpolator;
     ///
-    /// assert_eq!(TreeAciInterpolator::default().tolerance_factor(), 1.0);
+    /// assert_eq!(TreeAciInterpolator::default().tolerance_factor(), 3.0);
     /// ```
     pub fn tolerance_factor(&self) -> f64 {
         self.tolerance_factor
@@ -249,11 +260,12 @@ impl TreeAciInterpolator {
 }
 
 impl Default for TreeAciInterpolator {
-    /// An engine with [`TreeAciOptions::default`].
+    /// An engine with [`TreeAciOptions::default`] and the default tolerance
+    /// factor of 3.
     fn default() -> Self {
         Self {
             options: TreeAciOptions::default(),
-            tolerance_factor: 1.0,
+            tolerance_factor: DEFAULT_TOLERANCE_FACTOR,
         }
     }
 }

@@ -1,8 +1,8 @@
 //! `TreeAciInterpolator`, tree ACI behind the element-wise engine contract
 //! of `tensor4all_treetn::interpolation`.
 //!
-//! The engine runs the session entry with the problem's tolerance, cap and
-//! seed: on the low-temperature G0 fixture (a CTTN whose junction has degree
+//! The engine runs the session entry with the problem's tolerance divided by
+//! its tolerance factor, cap and seed: on the low-temperature G0 fixture (a CTTN whose junction has degree
 //! three) its network equals that entry's bit for bit and meets the exact
 //! function, while the process-global engine is borrowed. The remaining
 //! tests cover the mapping of termination, error estimate and sample scale,
@@ -126,7 +126,9 @@ fn the_engine_runs_the_session_entry_with_the_problems_settings() {
             .expect("the engine must not reach the borrowed global engine")
     });
 
-    // The session entry with the problem's settings, called directly.
+    // The session entry with the problem's settings, called directly at the
+    // default tolerance factor of 3.
+    assert_eq!(engine.tolerance_factor(), 3.0);
     let direct = {
         let mut backend = CpuBackend::with_threads(1).unwrap();
         let mut session = Session::new(backend.engine_mut());
@@ -135,7 +137,7 @@ fn the_engine_runs_the_session_entry_with_the_problems_settings() {
             g0::operator,
             &inputs,
             &TreeAciOptions {
-                tolerance,
+                tolerance: tolerance / 3.0,
                 scale_tolerance: false,
                 max_bond_dim: Some(64),
                 rng_seed: 11,
@@ -173,10 +175,10 @@ fn the_engine_runs_the_session_entry_with_the_problems_settings() {
     assert!(outcome.max_sample_magnitude <= exact.maxabs().unwrap() * (1.0 + 1e-12));
 }
 
-/// With a tolerance factor the engine runs the session entry at the
-/// problem's tolerance divided by the factor, bit for bit.
+/// With a tolerance factor of one the engine runs the session entry at the
+/// problem's tolerance itself, bit for bit.
 #[test]
-fn a_tolerance_factor_runs_the_session_entry_at_the_tightened_tolerance() {
+fn a_tolerance_factor_of_one_runs_the_session_entry_at_the_problems_tolerance() {
     let r = 3;
     let (sites, inputs) = g0::fixture(r, "cttn").unwrap();
     let options = g0::options();
@@ -184,7 +186,7 @@ fn a_tolerance_factor_runs_the_session_entry_at_the_tightened_tolerance() {
     let problem = problem_of(&inputs[0], tolerance, Some(64), 5);
     let engine = TreeAciInterpolator::new(options.clone())
         .unwrap()
-        .with_tolerance_factor(3.0)
+        .with_tolerance_factor(1.0)
         .unwrap();
     let outcome = run(&engine, &problem, &inputs, &g0_map).unwrap();
 
@@ -196,7 +198,7 @@ fn a_tolerance_factor_runs_the_session_entry_at_the_tightened_tolerance() {
             g0::operator,
             &inputs,
             &TreeAciOptions {
-                tolerance: tolerance / 3.0,
+                tolerance,
                 scale_tolerance: false,
                 max_bond_dim: Some(64),
                 rng_seed: 5,
@@ -218,7 +220,7 @@ fn a_tolerance_factor_runs_the_session_entry_at_the_tightened_tolerance() {
     assert_eq!(dense(&outcome.network), dense(&direct.tree));
     assert_eq!(outcome.termination, InterpolationTermination::Converged);
     assert_eq!(outcome.error_estimate, *direct.max_errors.last().unwrap());
-    assert!(outcome.error_estimate <= tolerance / 3.0);
+    assert!(outcome.error_estimate <= tolerance);
 }
 
 /// A single node is evaluated exactly: its sample scale is the largest |f|

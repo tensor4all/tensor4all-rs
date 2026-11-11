@@ -142,6 +142,8 @@ struct Args {
     scale_tolerance: bool,
     /// `TreeAciInterpolator::with_tolerance_factor` of the patched TreeACI
     /// kernel: it runs at `tau / factor`, the acceptance stays at `tau`.
+    /// Pinned to 1 unless given, as in the 2026-11-11 report, although the
+    /// library's default is 3.
     engine_tol_factor: f64,
 }
 

@@ -126,7 +126,11 @@ fn errors_are_classified_by_their_cause() {
 fn the_tolerance_factor_divides_the_problems_tolerance() {
     let problem = problem(Some(4));
     let plain = TreeAciInterpolator::default();
-    assert_eq!(plain.run_options(&problem).tolerance, 1e-8);
+    assert_eq!(plain.run_options(&problem).tolerance, 1e-8 / 3.0);
+    let untightened = TreeAciInterpolator::default()
+        .with_tolerance_factor(1.0)
+        .unwrap();
+    assert_eq!(untightened.run_options(&problem).tolerance, 1e-8);
     let tightened = TreeAciInterpolator::default()
         .with_tolerance_factor(4.0)
         .unwrap();
