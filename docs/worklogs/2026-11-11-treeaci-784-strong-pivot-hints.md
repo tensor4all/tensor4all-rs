@@ -111,6 +111,58 @@ The controls do not identify a unique root cause.
 `min_sweeps` remains 2 and checks growth on every edge. A constant maximum
 rank does not establish that all edge ranks are stable, nor that Guard's
 window is clear. The supplied logs lack per-edge rank and Guard histories;
-the R10/seed 2026 case needs those traces and surviving/accepted hint counts
-before another selection-policy change. No tolerance, stopping rule, pass
-limit, rank floor or Guard setting is changed in response to this report.
+the follow-up below captures them. Surviving/accepted hint counts remain an
+additional diagnostic before another selection-policy change. No tolerance,
+stopping rule, pass limit, rank floor or Guard setting is changed.
+
+## Seed 2026 nesting audit
+
+The [structural audit](../experiments/treeaci-784-nesting/README.md) and
+[seven-case results](../experiments/treeaci-784-seed2026-nesting.json)
+distinguish full nesting, center-directed partial nesting, and closure of the
+complete candidate sets. Both relative R10/seed 2026 arms reproduce every
+maximum rank and local error from the M6a binaries. The fix captures 3,001
+snapshots. A construction without instrumentation gives the same histories.
+All chain controls preserve center-directed pivot-to-candidate and
+pivot-to-pivot membership at every snapshot; full nesting fails during reset
+updates. All seven controls preserve pivot-to-candidate membership toward
+the center and on each newly committed edge.
+
+There is a separate Guard candidate closure gap. After pass 3 in the relative
+fix, a candidate on node 22→21 references a missing child on node 24→22. The
+child list has 16 entries but only 15 unique samples and is already at its
+algebraic capacity of 16. Paired Guard padding can append a duplicate while
+the opposite projection is new; projection through an inactive child cut
+creates its arena record without activating it in that child's candidate
+list. The relevant edge update in pass 4 repairs the gap. Related inspection
+should cover the masked projection and mixed-capacity paths in
+`samples.rs` and `global_guard.rs` alongside #854/#794.
+
+The gap also occurs in the fresh-pivot baseline and convergent controls, so
+it does not establish a cause of late cycling. In passes 39–50, Guard finds
+zero points but smaller cuts keep growing, resetting the all-cut stability
+counter to 1 while maximum rank stays 372. At pass 50, node 1→3 grows 60→63
+and node 4→6 grows 170→172. The stopping rule is behaving as specified.
+
+The R4 CTTN control has ten center-directed pivot-to-pivot failures while
+pivot-to-candidate membership holds, and still converges in four passes.
+The stronger chain observation must not be advertised as a universal tree
+invariant. Structural membership also does not certify numerical cardinality,
+interpolation error identities, or frame conditioning.
+
+The supplementary absolute-mode audit matches the original maximum ranks
+through pass 26, then diverges; both stop at 46. Its instrumented and clean
+versions agree exactly. That cross-harness difference is unresolved and is
+not used as an exact M6a replay. The main relative-mode conclusion is exact.
+The retained private reproducer builds in release mode for the expensive R10
+workload and restores all temporary production edits. No diagnostic timing
+is used for performance claims, and no production algorithm changes here.
+
+Validation: all seven release diagnostic cases and both clean construction
+controls exit successfully; inward-missing and outward-only positive controls
+pass in every case. The retained reproducer is built and independently rerun
+on R10/seed 2026 relative mode, reproducing all 3,001 snapshots' counts and
+the complete original maximum-rank/local-error histories. JSON consistency,
+relative links, source-restoration hashes, Rust formatting and deterministic
+repository-rules dry run pass. The existing library suites are not repeated
+for this documentation and standalone diagnostic update.

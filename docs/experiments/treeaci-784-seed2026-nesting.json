@@ -1,0 +1,1605 @@
+{
+  "status": "Structural investigation complete; convergence root cause unresolved. Production algorithm unchanged.",
+  "issue": 784,
+  "umbrella": 854,
+  "base_commit": "b71ee950370b0a78c1e1200b1359faa082de0f1c",
+  "binary": {
+    "sha256": "cea7152f83260e19a5c19ef3586efb439872d87adee67dbdb34e62b564c4e095",
+    "base_commit": "b71ee950370b0a78c1e1200b1359faa082de0f1c",
+    "purpose": "Read-only structural and stopping-rule audit; diagnostic timings are not performance evidence."
+  },
+  "reproducer": "treeaci-784-nesting/README.md",
+  "measurement": "Missing child membership only. No numerical interpolation, gauge or conditioning certificate. Diagnostic timings are excluded.",
+  "settings": {
+    "inputs": 3,
+    "explicit_session": true,
+    "rank_cap": 4000,
+    "min_sweeps": 2,
+    "max_sweeps": 50,
+    "temperature": 0.01,
+    "relative_tolerance": 0.0001,
+    "absolute_tolerance": 0.003183,
+    "guard": "unchanged defaults",
+    "budgets_bytes": 8589934592,
+    "thread_variables": {
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "RAYON_NUM_THREADS": "1"
+    },
+    "cpu_affinity": 14
+  },
+  "definitions": {
+    "full": "both directions of every cut",
+    "active": "directed toward current canonical center",
+    "pc": "pivot sample child in child candidates",
+    "pp": "pivot sample child in child pivots",
+    "cc": "candidate sample child in child candidates",
+    "counts": "missing child references, including multiplicity; snapshots_with_failure counts states rather than bad cuts",
+    "local_pc": "both sides of updated edge; assert only after-update snapshots"
+  },
+  "cases": [
+    {
+      "name": "r10-seed2026-rel-fix",
+      "run": {
+        "command": [
+          "target/issue784/nesting/nesting-probe",
+          "10",
+          "nblock",
+          "0.01",
+          "2026",
+          "true"
+        ],
+        "hints": true,
+        "returncode": 0,
+        "purpose": "nesting audit only; not a timing comparison"
+      },
+      "trace_sha256": "0d57ea355b0a9c45c93bc42c03c1c8bc6f467bcc108c33893eb780942684f3a3",
+      "stdout_sha256": "0a6ebf050fd64293d02239fd717f1dfe0ee63e551a9faad915d7469c27180e19",
+      "termination": "MaxSweeps",
+      "passes": 50,
+      "maximum_ranks": [2, 14, 34, 76, 145, 253, 358, 377, 376, 377, 375, 376, 374, 375, 372, 375, 372, 373, 372, 370, 372, 372, 377, 374, 377, 377, 373, 373, 373, 374, 370, 373, 372, 373, 372, 372, 373, 372, 372, 372, 374, 375, 372, 372, 372, 372, 372, 372, 372, 372],
+      "local_errors": [8.493452350786915e-05, 9.134017525093734e-05, 9.998795306933107e-05, 9.677655300044619e-05, 9.832056469252826e-05, 9.826565585964176e-05, 9.936827891525133e-05, 9.710740935935569e-05, 9.877925742115812e-05, 9.991745671888337e-05, 9.984053080504311e-05, 9.848586980387015e-05, 9.959016717777858e-05, 9.992726469394518e-05, 9.964620694036403e-05, 9.946038675390455e-05, 9.957601438314842e-05, 9.886598455364976e-05, 9.868881958365137e-05, 9.899433859932852e-05, 9.817435187049289e-05, 9.781329519066695e-05, 9.969065597984094e-05, 9.939745122367299e-05, 9.9990260874145e-05, 9.868748847379729e-05, 9.914373020811321e-05, 9.898767776282024e-05, 9.802792574553537e-05, 9.993368865422141e-05, 9.993368865320279e-05, 9.918722224181737e-05, 9.988087321136885e-05, 9.921731019390848e-05, 9.892145083688511e-05, 9.913229736404677e-05, 9.985099405464657e-05, 9.451009720741076e-05, 9.921330606162305e-05, 9.638815751925467e-05, 9.750376125310538e-05, 9.850060969589243e-05, 9.697680969972806e-05, 9.832305411462111e-05, 9.980913182091201e-05, 9.913568850371092e-05, 9.974935106194341e-05, 9.901701363803367e-05, 9.904973473604848e-05, 9.71432773983136e-05],
+      "guard_counts": [5, 5, 5, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "snapshots": 3001,
+      "positive_controls": [
+        {
+          "active_missing_detected": true,
+          "outward_only_distinguished": true
+        }
+      ],
+      "snapshots_with_failure": {
+        "full_pc": 2931,
+        "active_pc": 0,
+        "full_pp": 2939,
+        "active_pp": 0,
+        "full_cc": 2931,
+        "active_cc": 50,
+        "prefix_mismatches": 0,
+        "dimension_mismatches": 0
+      },
+      "after_update_local_pc_failure_snapshots": 0,
+      "active_cc_failure_snapshots_by_stage": {
+        "after-guard": 1,
+        "before-update": 25,
+        "after-update": 24
+      },
+      "first_failures": {
+        "full_pc": {
+          "pass": 2,
+          "stage": "after-update",
+          "updated": 30,
+          "center": 17,
+          "full_pc": 2,
+          "active_pc": 0,
+          "full_pp": 8,
+          "active_pp": 0,
+          "full_cc": 2,
+          "active_cc": 0,
+          "first": [36, 0, 30, 0],
+          "active_first": []
+        },
+        "full_pp": {
+          "pass": 2,
+          "stage": "after-update",
+          "updated": 6,
+          "center": 5,
+          "full_pc": 0,
+          "active_pc": 0,
+          "full_pp": 1,
+          "active_pp": 0,
+          "full_cc": 0,
+          "active_cc": 0,
+          "first": [],
+          "active_first": []
+        },
+        "full_cc": {
+          "pass": 2,
+          "stage": "after-update",
+          "updated": 30,
+          "center": 17,
+          "full_pc": 2,
+          "active_pc": 0,
+          "full_pp": 8,
+          "active_pp": 0,
+          "full_cc": 2,
+          "active_cc": 0,
+          "first": [36, 0, 30, 0],
+          "active_first": []
+        },
+        "active_cc": {
+          "pass": 3,
+          "stage": "after-guard",
+          "updated": -1,
+          "center": 2,
+          "full_pc": 25,
+          "active_pc": 0,
+          "full_pp": 26,
+          "active_pp": 0,
+          "full_cc": 26,
+          "active_cc": 1,
+          "first": [0, 10, 3, 8],
+          "active_first": []
+        }
+      },
+      "guard_candidate_witnesses": [
+        {
+          "pass": 3,
+          "parent_edge": 45,
+          "parent_id": 9,
+          "child_edge": 47,
+          "child_id": 9,
+          "child_candidates": [1, 2, 0, 3, 4, 5, 6, 10, 7, 11, 12, 13, 14, 8, 15, 11],
+          "child_unique_count": 15,
+          "child_rank": 16,
+          "child_algebraic_bound": 16
+        }
+      ],
+      "after_pass_stability_counts": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      "comparison_with_m6a": {
+        "all_maximum_ranks_equal": true,
+        "all_local_errors_equal": true,
+        "first_different_maximum_rank_pass": null,
+        "first_different_local_error_pass": null
+      },
+      "per_pass_edge_ranks": [
+        [2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 1, 1, 2, 1, 1, 2, 1, 1, 2, 1, 1, 2, 1, 1, 2, 1, 1, 2, 1],
+        [13, 10, 14, 2, 14, 14, 4, 12, 12, 6, 10, 10, 7, 10, 8, 8, 8, 8, 9, 8, 8, 9, 8, 8, 9, 8, 4, 9, 2],
+        [22, 14, 29, 2, 34, 33, 4, 33, 29, 6, 28, 23, 6, 23, 23, 8, 19, 18, 10, 17, 17, 12, 17, 15, 13, 8, 4, 14, 2],
+        [36, 19, 56, 2, 74, 76, 4, 68, 66, 6, 56, 56, 6, 56, 48, 8, 44, 42, 10, 42, 40, 12, 30, 16, 14, 8, 4, 16, 2],
+        [39, 20, 61, 2, 111, 124, 4, 145, 120, 6, 130, 105, 6, 113, 111, 8, 97, 85, 10, 83, 64, 12, 32, 16, 14, 8, 4, 16, 2],
+        [38, 19, 64, 2, 119, 165, 4, 228, 253, 6, 219, 236, 6, 232, 204, 8, 180, 174, 10, 128, 64, 12, 32, 16, 14, 8, 4, 16, 2],
+        [39, 20, 64, 2, 119, 171, 4, 248, 276, 6, 325, 306, 6, 358, 334, 8, 320, 249, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2],
+        [39, 20, 65, 2, 121, 171, 4, 248, 286, 6, 330, 342, 6, 377, 357, 8, 354, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 18, 2],
+        [39, 20, 61, 2, 119, 172, 4, 248, 286, 6, 328, 343, 6, 376, 357, 8, 354, 256, 10, 128, 64, 13, 32, 16, 15, 8, 4, 17, 2],
+        [39, 20, 63, 2, 119, 173, 4, 247, 284, 6, 328, 347, 6, 377, 357, 8, 355, 256, 10, 128, 64, 12, 32, 16, 15, 8, 4, 18, 2],
+        [39, 20, 65, 2, 119, 172, 4, 246, 283, 6, 328, 343, 6, 375, 361, 8, 355, 256, 10, 128, 64, 12, 32, 16, 15, 8, 4, 17, 2],
+        [40, 20, 62, 2, 119, 172, 4, 246, 287, 6, 328, 343, 6, 376, 362, 8, 355, 256, 10, 128, 64, 12, 32, 16, 15, 8, 4, 17, 2],
+        [39, 20, 64, 2, 118, 174, 4, 246, 284, 6, 327, 349, 7, 374, 359, 8, 355, 256, 10, 128, 64, 12, 32, 16, 16, 8, 4, 18, 2],
+        [39, 20, 62, 2, 121, 172, 4, 246, 285, 6, 327, 349, 7, 375, 359, 8, 355, 256, 10, 128, 64, 12, 32, 16, 16, 8, 4, 18, 2],
+        [39, 21, 62, 2, 120, 172, 4, 243, 288, 6, 331, 345, 6, 372, 356, 8, 355, 256, 10, 128, 64, 12, 32, 16, 16, 8, 4, 18, 2],
+        [40, 21, 62, 2, 119, 170, 4, 241, 281, 6, 328, 345, 6, 375, 357, 8, 353, 256, 10, 128, 64, 12, 32, 16, 16, 8, 4, 18, 2],
+        [40, 20, 61, 2, 118, 172, 4, 241, 279, 6, 325, 342, 6, 372, 358, 8, 353, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 18, 2],
+        [38, 20, 62, 2, 118, 171, 4, 243, 278, 6, 333, 342, 6, 373, 358, 8, 353, 256, 10, 128, 64, 12, 32, 16, 15, 8, 4, 18, 2],
+        [38, 20, 62, 2, 118, 169, 4, 243, 279, 6, 328, 342, 6, 372, 358, 8, 353, 256, 10, 128, 64, 12, 32, 16, 16, 8, 4, 18, 2],
+        [40, 20, 64, 2, 122, 175, 4, 245, 289, 6, 327, 342, 6, 370, 356, 8, 354, 256, 10, 128, 64, 12, 32, 16, 16, 8, 4, 18, 2],
+        [40, 20, 64, 2, 121, 176, 4, 247, 286, 6, 330, 347, 6, 372, 360, 8, 354, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2],
+        [41, 21, 64, 2, 116, 169, 4, 242, 288, 6, 330, 347, 6, 372, 355, 8, 355, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2],
+        [40, 19, 65, 2, 119, 171, 4, 240, 284, 6, 328, 343, 7, 377, 358, 8, 355, 256, 10, 128, 64, 12, 32, 16, 15, 8, 4, 17, 2],
+        [40, 20, 62, 2, 118, 173, 4, 244, 280, 6, 327, 343, 7, 374, 359, 8, 355, 256, 10, 128, 64, 12, 32, 16, 15, 8, 4, 17, 2],
+        [40, 20, 63, 2, 119, 172, 4, 242, 279, 6, 329, 348, 7, 377, 357, 8, 355, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 16, 2],
+        [40, 20, 63, 2, 120, 175, 4, 247, 286, 6, 326, 348, 7, 377, 358, 8, 358, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2],
+        [40, 20, 63, 2, 123, 173, 4, 247, 288, 6, 330, 343, 7, 373, 358, 8, 358, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2],
+        [39, 20, 62, 2, 117, 167, 4, 245, 289, 6, 331, 343, 7, 373, 363, 8, 358, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2],
+        [38, 20, 63, 2, 117, 170, 4, 245, 285, 6, 329, 343, 6, 373, 363, 8, 358, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2],
+        [38, 20, 64, 2, 122, 177, 4, 249, 288, 6, 327, 343, 6, 374, 363, 8, 357, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2],
+        [39, 20, 64, 2, 123, 176, 4, 253, 286, 6, 326, 343, 6, 370, 358, 8, 357, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2],
+        [39, 20, 64, 2, 120, 173, 4, 249, 285, 6, 326, 345, 6, 373, 358, 8, 357, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2],
+        [38, 19, 64, 2, 122, 173, 4, 252, 287, 6, 326, 342, 6, 372, 359, 8, 357, 256, 10, 128, 64, 11, 32, 16, 14, 8, 4, 17, 2],
+        [38, 19, 64, 2, 120, 173, 4, 246, 286, 6, 323, 344, 6, 373, 359, 8, 360, 256, 10, 128, 64, 11, 32, 16, 15, 8, 4, 17, 2],
+        [38, 20, 64, 2, 118, 172, 4, 245, 286, 6, 330, 344, 7, 372, 359, 8, 360, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2],
+        [38, 19, 65, 2, 119, 172, 4, 248, 282, 6, 330, 344, 7, 372, 359, 8, 360, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2],
+        [38, 19, 66, 2, 121, 172, 4, 246, 279, 6, 328, 345, 6, 373, 357, 8, 360, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2],
+        [38, 19, 64, 2, 122, 176, 4, 250, 285, 6, 329, 344, 6, 372, 357, 8, 358, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2],
+        [38, 19, 64, 2, 123, 176, 4, 250, 286, 6, 333, 346, 6, 372, 359, 8, 358, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2],
+        [38, 20, 63, 2, 119, 171, 4, 241, 281, 6, 329, 346, 6, 372, 360, 8, 359, 256, 10, 128, 64, 12, 32, 16, 15, 8, 4, 17, 2],
+        [38, 20, 61, 2, 117, 170, 4, 240, 278, 6, 327, 344, 6, 374, 360, 8, 359, 256, 10, 128, 64, 12, 32, 16, 15, 8, 4, 17, 2],
+        [40, 20, 65, 2, 122, 177, 4, 247, 284, 6, 327, 344, 6, 375, 360, 8, 359, 256, 10, 128, 64, 12, 32, 16, 15, 8, 4, 17, 2],
+        [39, 20, 64, 2, 123, 176, 4, 246, 287, 6, 327, 347, 7, 372, 360, 8, 359, 256, 10, 128, 64, 12, 32, 16, 15, 8, 4, 17, 2],
+        [39, 20, 62, 2, 116, 167, 4, 239, 282, 6, 327, 344, 7, 372, 360, 8, 359, 256, 10, 128, 64, 12, 32, 16, 15, 8, 4, 18, 2],
+        [39, 20, 62, 2, 115, 169, 4, 240, 281, 6, 331, 349, 7, 372, 360, 8, 359, 256, 10, 128, 64, 12, 32, 16, 15, 8, 4, 18, 2],
+        [38, 19, 62, 2, 117, 170, 4, 241, 282, 6, 331, 349, 7, 372, 360, 8, 359, 256, 10, 128, 64, 12, 32, 16, 15, 8, 4, 17, 2],
+        [38, 20, 61, 2, 117, 169, 4, 243, 286, 6, 329, 349, 7, 372, 360, 8, 359, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 18, 2],
+        [40, 21, 63, 2, 118, 173, 4, 243, 283, 6, 328, 349, 7, 372, 360, 8, 359, 256, 10, 128, 64, 12, 32, 16, 15, 8, 4, 18, 2],
+        [40, 20, 60, 2, 119, 170, 4, 242, 279, 6, 328, 349, 7, 372, 360, 8, 359, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 18, 2],
+        [40, 20, 63, 2, 121, 172, 4, 242, 279, 6, 329, 349, 7, 372, 360, 8, 359, 256, 10, 128, 64, 12, 32, 16, 14, 8, 4, 17, 2]
+      ],
+      "edge_node_positions": [
+        [0, 1],
+        [0, 29],
+        [1, 3],
+        [2, 5],
+        [3, 4],
+        [4, 6],
+        [5, 8],
+        [6, 7],
+        [7, 9],
+        [8, 11],
+        [9, 10],
+        [10, 12],
+        [11, 14],
+        [12, 13],
+        [13, 15],
+        [14, 17],
+        [15, 16],
+        [16, 18],
+        [17, 20],
+        [18, 19],
+        [19, 21],
+        [20, 23],
+        [21, 22],
+        [22, 24],
+        [23, 26],
+        [24, 25],
+        [25, 27],
+        [26, 29],
+        [27, 28]
+      ],
+      "active_cc_last_failure": {
+        "pass": 4,
+        "stage": "before-update",
+        "updated": 44,
+        "center": 21,
+        "full_pc": 22,
+        "active_pc": 0,
+        "full_pp": 28,
+        "active_pp": 0,
+        "full_cc": 28,
+        "active_cc": 1,
+        "first": [1, 55, 5, 48],
+        "active_first": []
+      },
+      "late_passes": [
+        {
+          "pass": 39,
+          "maximum_rank": 372,
+          "stability_counter": 1,
+          "guard_count": 0,
+          "growing_edges": [
+            {
+              "nodes": [3, 4],
+              "before": 122,
+              "after": 123
+            },
+            {
+              "nodes": [7, 9],
+              "before": 285,
+              "after": 286
+            },
+            {
+              "nodes": [9, 10],
+              "before": 329,
+              "after": 333
+            },
+            {
+              "nodes": [10, 12],
+              "before": 344,
+              "after": 346
+            },
+            {
+              "nodes": [13, 15],
+              "before": 357,
+              "after": 359
+            }
+          ]
+        },
+        {
+          "pass": 40,
+          "maximum_rank": 372,
+          "stability_counter": 1,
+          "guard_count": 0,
+          "growing_edges": [
+            {
+              "nodes": [0, 29],
+              "before": 19,
+              "after": 20
+            },
+            {
+              "nodes": [13, 15],
+              "before": 359,
+              "after": 360
+            },
+            {
+              "nodes": [15, 16],
+              "before": 358,
+              "after": 359
+            },
+            {
+              "nodes": [23, 26],
+              "before": 14,
+              "after": 15
+            }
+          ]
+        },
+        {
+          "pass": 41,
+          "maximum_rank": 374,
+          "stability_counter": 1,
+          "guard_count": 0,
+          "growing_edges": [
+            {
+              "nodes": [12, 13],
+              "before": 372,
+              "after": 374
+            }
+          ]
+        },
+        {
+          "pass": 42,
+          "maximum_rank": 375,
+          "stability_counter": 1,
+          "guard_count": 0,
+          "growing_edges": [
+            {
+              "nodes": [0, 1],
+              "before": 38,
+              "after": 40
+            },
+            {
+              "nodes": [1, 3],
+              "before": 61,
+              "after": 65
+            },
+            {
+              "nodes": [3, 4],
+              "before": 117,
+              "after": 122
+            },
+            {
+              "nodes": [4, 6],
+              "before": 170,
+              "after": 177
+            },
+            {
+              "nodes": [6, 7],
+              "before": 240,
+              "after": 247
+            },
+            {
+              "nodes": [7, 9],
+              "before": 278,
+              "after": 284
+            },
+            {
+              "nodes": [12, 13],
+              "before": 374,
+              "after": 375
+            }
+          ]
+        },
+        {
+          "pass": 43,
+          "maximum_rank": 372,
+          "stability_counter": 1,
+          "guard_count": 0,
+          "growing_edges": [
+            {
+              "nodes": [3, 4],
+              "before": 122,
+              "after": 123
+            },
+            {
+              "nodes": [7, 9],
+              "before": 284,
+              "after": 287
+            },
+            {
+              "nodes": [10, 12],
+              "before": 344,
+              "after": 347
+            },
+            {
+              "nodes": [11, 14],
+              "before": 6,
+              "after": 7
+            }
+          ]
+        },
+        {
+          "pass": 44,
+          "maximum_rank": 372,
+          "stability_counter": 1,
+          "guard_count": 0,
+          "growing_edges": [
+            {
+              "nodes": [26, 29],
+              "before": 17,
+              "after": 18
+            }
+          ]
+        },
+        {
+          "pass": 45,
+          "maximum_rank": 372,
+          "stability_counter": 1,
+          "guard_count": 0,
+          "growing_edges": [
+            {
+              "nodes": [4, 6],
+              "before": 167,
+              "after": 169
+            },
+            {
+              "nodes": [6, 7],
+              "before": 239,
+              "after": 240
+            },
+            {
+              "nodes": [9, 10],
+              "before": 327,
+              "after": 331
+            },
+            {
+              "nodes": [10, 12],
+              "before": 344,
+              "after": 349
+            }
+          ]
+        },
+        {
+          "pass": 46,
+          "maximum_rank": 372,
+          "stability_counter": 1,
+          "guard_count": 0,
+          "growing_edges": [
+            {
+              "nodes": [3, 4],
+              "before": 115,
+              "after": 117
+            },
+            {
+              "nodes": [4, 6],
+              "before": 169,
+              "after": 170
+            },
+            {
+              "nodes": [6, 7],
+              "before": 240,
+              "after": 241
+            },
+            {
+              "nodes": [7, 9],
+              "before": 281,
+              "after": 282
+            }
+          ]
+        },
+        {
+          "pass": 47,
+          "maximum_rank": 372,
+          "stability_counter": 1,
+          "guard_count": 0,
+          "growing_edges": [
+            {
+              "nodes": [0, 29],
+              "before": 19,
+              "after": 20
+            },
+            {
+              "nodes": [6, 7],
+              "before": 241,
+              "after": 243
+            },
+            {
+              "nodes": [7, 9],
+              "before": 282,
+              "after": 286
+            },
+            {
+              "nodes": [26, 29],
+              "before": 17,
+              "after": 18
+            }
+          ]
+        },
+        {
+          "pass": 48,
+          "maximum_rank": 372,
+          "stability_counter": 1,
+          "guard_count": 0,
+          "growing_edges": [
+            {
+              "nodes": [0, 1],
+              "before": 38,
+              "after": 40
+            },
+            {
+              "nodes": [0, 29],
+              "before": 20,
+              "after": 21
+            },
+            {
+              "nodes": [1, 3],
+              "before": 61,
+              "after": 63
+            },
+            {
+              "nodes": [3, 4],
+              "before": 117,
+              "after": 118
+            },
+            {
+              "nodes": [4, 6],
+              "before": 169,
+              "after": 173
+            },
+            {
+              "nodes": [23, 26],
+              "before": 14,
+              "after": 15
+            }
+          ]
+        },
+        {
+          "pass": 49,
+          "maximum_rank": 372,
+          "stability_counter": 1,
+          "guard_count": 0,
+          "growing_edges": [
+            {
+              "nodes": [3, 4],
+              "before": 118,
+              "after": 119
+            }
+          ]
+        },
+        {
+          "pass": 50,
+          "maximum_rank": 372,
+          "stability_counter": 1,
+          "guard_count": 0,
+          "growing_edges": [
+            {
+              "nodes": [1, 3],
+              "before": 60,
+              "after": 63
+            },
+            {
+              "nodes": [3, 4],
+              "before": 119,
+              "after": 121
+            },
+            {
+              "nodes": [4, 6],
+              "before": 170,
+              "after": 172
+            },
+            {
+              "nodes": [9, 10],
+              "before": 328,
+              "after": 329
+            }
+          ]
+        }
+      ],
+      "candidate_missing_last_observed_before_update_of_cut": 44
+    },
+    {
+      "name": "r10-seed2026-rel-base",
+      "run": {
+        "command": [
+          "target/issue784/nesting/nesting-probe",
+          "10",
+          "nblock",
+          "0.01",
+          "2026",
+          "true"
+        ],
+        "hints": false,
+        "returncode": 0,
+        "purpose": "nesting audit only; not a timing comparison"
+      },
+      "trace_sha256": "d6eeff5133455d167ca597cd62f79717b30e8c1bf3fbeef6408446f8f5420e0a",
+      "stdout_sha256": "c1a9b64538efe22849772370950a64bde0546a08530c10ba3c61ed9d22e65a45",
+      "termination": "MaxSweeps",
+      "passes": 50,
+      "maximum_ranks": [2, 14, 34, 76, 144, 233, 347, 373, 372, 376, 374, 374, 371, 378, 375, 374, 373, 374, 376, 375, 373, 376, 372, 375, 372, 374, 371, 370, 375, 373, 371, 373, 374, 372, 373, 370, 376, 375, 372, 378, 370, 370, 372, 374, 377, 371, 374, 375, 370, 375],
+      "local_errors": [4.5554084465436176e-05, 9.197194902567512e-05, 9.600519198333479e-05, 9.592045663060425e-05, 9.95452843081802e-05, 9.895340665614567e-05, 9.675201044405758e-05, 9.946930525626016e-05, 9.866577637299659e-05, 9.848929155823681e-05, 9.811428024167714e-05, 9.8077077797512e-05, 9.973483545341957e-05, 9.903169422291457e-05, 9.709542023207892e-05, 9.96337097312787e-05, 9.963370973060549e-05, 9.96407559507473e-05, 9.973021101613688e-05, 9.931930995332173e-05, 9.990472460097907e-05, 9.840401920523091e-05, 9.864843439968569e-05, 9.770888241807795e-05, 9.85162625677169e-05, 9.892032539654709e-05, 9.895815223686656e-05, 9.640841728484602e-05, 9.972937974542692e-05, 9.764440044290005e-05, 9.851366959970564e-05, 9.939449761998126e-05, 9.790077775978067e-05, 9.474914672724836e-05, 9.444285739380701e-05, 9.961487305375543e-05, 9.65557501961671e-05, 9.98535680298166e-05, 9.872195858586977e-05, 9.980656228663553e-05, 9.793205408337069e-05, 9.95859440746269e-05, 9.597548084148383e-05, 9.959747859700249e-05, 9.922720020577739e-05, 9.899441772253227e-05, 9.981375355323987e-05, 9.613866357547971e-05, 9.929008191561304e-05, 9.80217152879288e-05],
+      "guard_counts": [5, 5, 5, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "snapshots": 3001,
+      "positive_controls": [
+        {
+          "active_missing_detected": true,
+          "outward_only_distinguished": true
+        }
+      ],
+      "snapshots_with_failure": {
+        "full_pc": 2999,
+        "active_pc": 0,
+        "full_pp": 2999,
+        "active_pp": 0,
+        "full_cc": 2999,
+        "active_cc": 60,
+        "prefix_mismatches": 0,
+        "dimension_mismatches": 0
+      },
+      "after_update_local_pc_failure_snapshots": 0,
+      "active_cc_failure_snapshots_by_stage": {
+        "after-guard": 2,
+        "before-update": 30,
+        "after-update": 28
+      },
+      "first_failures": {
+        "full_pc": {
+          "pass": 1,
+          "stage": "after-update",
+          "updated": 57,
+          "center": 27,
+          "full_pc": 1,
+          "active_pc": 0,
+          "full_pp": 1,
+          "active_pp": 0,
+          "full_cc": 1,
+          "active_cc": 0,
+          "first": [53, 0, 57, 0],
+          "active_first": []
+        },
+        "full_pp": {
+          "pass": 1,
+          "stage": "after-update",
+          "updated": 57,
+          "center": 27,
+          "full_pc": 1,
+          "active_pc": 0,
+          "full_pp": 1,
+          "active_pp": 0,
+          "full_cc": 1,
+          "active_cc": 0,
+          "first": [53, 0, 57, 0],
+          "active_first": []
+        },
+        "full_cc": {
+          "pass": 1,
+          "stage": "after-update",
+          "updated": 57,
+          "center": 27,
+          "full_pc": 1,
+          "active_pc": 0,
+          "full_pp": 1,
+          "active_pp": 0,
+          "full_cc": 1,
+          "active_cc": 0,
+          "first": [53, 0, 57, 0],
+          "active_first": []
+        },
+        "active_cc": {
+          "pass": 1,
+          "stage": "after-guard",
+          "updated": -1,
+          "center": 2,
+          "full_pc": 11,
+          "active_pc": 0,
+          "full_pp": 11,
+          "active_pp": 0,
+          "full_cc": 16,
+          "active_cc": 2,
+          "first": [26, 1, 22, 0],
+          "active_first": []
+        }
+      },
+      "guard_candidate_witnesses": [
+        {
+          "pass": 1,
+          "parent_edge": 53,
+          "parent_id": 3,
+          "child_edge": 57,
+          "child_id": 0,
+          "child_candidates": [1, 1],
+          "child_unique_count": 1,
+          "child_rank": 2,
+          "child_algebraic_bound": 2
+        },
+        {
+          "pass": 1,
+          "parent_edge": 53,
+          "parent_id": 0,
+          "child_edge": 57,
+          "child_id": 0,
+          "child_candidates": [1, 1],
+          "child_unique_count": 1,
+          "child_rank": 2,
+          "child_algebraic_bound": 2
+        },
+        {
+          "pass": 2,
+          "parent_edge": 52,
+          "parent_id": 4,
+          "child_edge": 50,
+          "child_id": 4,
+          "child_candidates": [7, 8, 9, 10, 11, 12, 13, 14],
+          "child_unique_count": 8,
+          "child_rank": 8,
+          "child_algebraic_bound": 8
+        },
+        {
+          "pass": 2,
+          "parent_edge": 52,
+          "parent_id": 3,
+          "child_edge": 50,
+          "child_id": 3,
+          "child_candidates": [7, 8, 9, 10, 11, 12, 13, 14],
+          "child_unique_count": 8,
+          "child_rank": 8,
+          "child_algebraic_bound": 8
+        }
+      ],
+      "after_pass_stability_counts": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      "comparison_with_m6a": {
+        "all_maximum_ranks_equal": true,
+        "all_local_errors_equal": true,
+        "first_different_maximum_rank_pass": null,
+        "first_different_local_error_pass": null
+      }
+    },
+    {
+      "name": "r10-seed2026-abs-fix",
+      "run": {
+        "command": [
+          "target/issue784/nesting/nesting-probe",
+          "10",
+          "nblock",
+          "0.01",
+          "2026",
+          "false"
+        ],
+        "hints": true,
+        "returncode": 0,
+        "purpose": "nesting audit only; not a timing comparison"
+      },
+      "trace_sha256": "4fcbe0b00f4cc2ec7bf94aefc8bab340a5efc10594b27e5db9da518b463dc4b4",
+      "stdout_sha256": "152fd66b10b4bffe1689e8997a74d728ddc6bb61b6603e5929e1213415a4a3d7",
+      "termination": "Converged",
+      "passes": 46,
+      "maximum_ranks": [2, 10, 28, 66, 121, 236, 356, 375, 374, 374, 374, 375, 372, 374, 374, 373, 373, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375, 375],
+      "local_errors": [0.002252156031079074, 0.002749501125408431, 0.003020764957949156, 0.003020764957949131, 0.0031442550377509967, 0.0029690635611412065, 0.003148283817691747, 0.0031792881584068312, 0.003177590498917072, 0.003147584706860986, 0.0031564967295866185, 0.003169346680894019, 0.003169346680855875, 0.003169346680894019, 0.003180706618055381, 0.003169346680894019, 0.0031696710060883726, 0.003169346680894019, 0.003169346680855875, 0.003169346680894019, 0.003169346680855875, 0.003169346680894019, 0.003169346680855875, 0.003169346680894019, 0.003172332963839804, 0.003169346680894019, 0.003169346680855875, 0.003169346680894019, 0.003169346680855875, 0.003169346680894019, 0.003169346680855875, 0.003169346680894019, 0.003169346680855875, 0.003169346680894019, 0.003169346680855875, 0.003169346680894019, 0.003169346680855875, 0.0031747270927964147, 0.003169346680855875, 0.003169346680894019, 0.003169346680855875, 0.003169346680894019, 0.003169346680855875, 0.003169346680894019, 0.003169346680855875, 0.003169346680894019],
+      "guard_counts": [5, 5, 5, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "snapshots": 2761,
+      "positive_controls": [
+        {
+          "active_missing_detected": true,
+          "outward_only_distinguished": true
+        }
+      ],
+      "snapshots_with_failure": {
+        "full_pc": 2697,
+        "active_pc": 0,
+        "full_pp": 2699,
+        "active_pp": 0,
+        "full_cc": 2701,
+        "active_cc": 56,
+        "prefix_mismatches": 0,
+        "dimension_mismatches": 0
+      },
+      "after_update_local_pc_failure_snapshots": 0,
+      "active_cc_failure_snapshots_by_stage": {
+        "after-guard": 1,
+        "before-update": 28,
+        "after-update": 27
+      },
+      "first_failures": {
+        "full_pc": {
+          "pass": 2,
+          "stage": "after-update",
+          "updated": 12,
+          "center": 8,
+          "full_pc": 1,
+          "active_pc": 0,
+          "full_pp": 4,
+          "active_pp": 0,
+          "full_cc": 4,
+          "active_cc": 3,
+          "first": [7, 1, 13, 1],
+          "active_first": []
+        },
+        "full_pp": {
+          "pass": 2,
+          "stage": "after-update",
+          "updated": 6,
+          "center": 5,
+          "full_pc": 0,
+          "active_pc": 0,
+          "full_pp": 1,
+          "active_pp": 0,
+          "full_cc": 3,
+          "active_cc": 3,
+          "first": [],
+          "active_first": []
+        },
+        "full_cc": {
+          "pass": 1,
+          "stage": "after-guard",
+          "updated": -1,
+          "center": 2,
+          "full_pc": 0,
+          "active_pc": 0,
+          "full_pp": 0,
+          "active_pp": 0,
+          "full_cc": 3,
+          "active_cc": 3,
+          "first": [],
+          "active_first": []
+        },
+        "active_cc": {
+          "pass": 1,
+          "stage": "after-guard",
+          "updated": -1,
+          "center": 2,
+          "full_pc": 0,
+          "active_pc": 0,
+          "full_pp": 0,
+          "active_pp": 0,
+          "full_cc": 3,
+          "active_cc": 3,
+          "first": [],
+          "active_first": []
+        }
+      },
+      "guard_candidate_witnesses": [
+        {
+          "pass": 1,
+          "parent_edge": 51,
+          "parent_id": 3,
+          "child_edge": 53,
+          "child_id": 3,
+          "child_candidates": [0, 1, 2, 1],
+          "child_unique_count": 3,
+          "child_rank": 4,
+          "child_algebraic_bound": 4
+        },
+        {
+          "pass": 1,
+          "parent_edge": 51,
+          "parent_id": 3,
+          "child_edge": 53,
+          "child_id": 3,
+          "child_candidates": [0, 1, 2, 1],
+          "child_unique_count": 3,
+          "child_rank": 4,
+          "child_algebraic_bound": 4
+        },
+        {
+          "pass": 1,
+          "parent_edge": 53,
+          "parent_id": 2,
+          "child_edge": 57,
+          "child_id": 1,
+          "child_candidates": [0, 0],
+          "child_unique_count": 1,
+          "child_rank": 2,
+          "child_algebraic_bound": 2
+        }
+      ],
+      "after_pass_stability_counts": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2],
+      "comparison_with_m6a": {
+        "all_maximum_ranks_equal": false,
+        "all_local_errors_equal": false,
+        "first_different_maximum_rank_pass": 27,
+        "first_different_local_error_pass": 28
+      }
+    },
+    {
+      "name": "r10-seed42-rel-fix",
+      "run": {
+        "command": [
+          "target/issue784/nesting/nesting-probe",
+          "10",
+          "nblock",
+          "0.01",
+          "42",
+          "true"
+        ],
+        "hints": true,
+        "returncode": 0,
+        "purpose": "nesting audit only; not a timing comparison"
+      },
+      "trace_sha256": "260c04542cb206c25a2587f614ca5f8d2f8b22c278f9d52639ee93bbf1c1d6a9",
+      "stdout_sha256": "4827cbcb0a6cb637acb54ab170d4cf33157b235d5330f74fe45e645b0ccfd280",
+      "termination": "Converged",
+      "passes": 15,
+      "maximum_ranks": [2, 10, 30, 68, 128, 212, 297, 368, 372, 370, 372, 372, 374, 374, 372],
+      "local_errors": [8.493452350786915e-05, 8.500105017280193e-05, 9.84456916246431e-05, 8.585878900043716e-05, 9.958953203876038e-05, 9.934623714315785e-05, 9.880283883707258e-05, 9.789833020144117e-05, 9.989107762360788e-05, 9.983021737050262e-05, 9.968748250697964e-05, 9.851170358475547e-05, 9.851170358377436e-05, 9.97397160163434e-05, 9.624755703304831e-05],
+      "guard_counts": [4, 5, 5, 5, 5, 5, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+      "snapshots": 901,
+      "positive_controls": [
+        {
+          "active_missing_detected": true,
+          "outward_only_distinguished": true
+        }
+      ],
+      "snapshots_with_failure": {
+        "full_pc": 831,
+        "active_pc": 0,
+        "full_pp": 839,
+        "active_pp": 0,
+        "full_cc": 831,
+        "active_cc": 0,
+        "prefix_mismatches": 0,
+        "dimension_mismatches": 0
+      },
+      "after_update_local_pc_failure_snapshots": 0,
+      "active_cc_failure_snapshots_by_stage": {},
+      "first_failures": {
+        "full_pc": {
+          "pass": 2,
+          "stage": "after-update",
+          "updated": 30,
+          "center": 17,
+          "full_pc": 2,
+          "active_pc": 0,
+          "full_pp": 7,
+          "active_pp": 0,
+          "full_cc": 2,
+          "active_cc": 0,
+          "first": [36, 0, 30, 0],
+          "active_first": []
+        },
+        "full_pp": {
+          "pass": 2,
+          "stage": "after-update",
+          "updated": 6,
+          "center": 5,
+          "full_pc": 0,
+          "active_pc": 0,
+          "full_pp": 1,
+          "active_pp": 0,
+          "full_cc": 0,
+          "active_cc": 0,
+          "first": [],
+          "active_first": []
+        },
+        "full_cc": {
+          "pass": 2,
+          "stage": "after-update",
+          "updated": 30,
+          "center": 17,
+          "full_pc": 2,
+          "active_pc": 0,
+          "full_pp": 7,
+          "active_pp": 0,
+          "full_cc": 2,
+          "active_cc": 0,
+          "first": [36, 0, 30, 0],
+          "active_first": []
+        }
+      },
+      "guard_candidate_witnesses": [],
+      "after_pass_stability_counts": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2],
+      "comparison_with_m6a": {
+        "all_maximum_ranks_equal": true,
+        "all_local_errors_equal": true,
+        "first_different_maximum_rank_pass": null,
+        "first_different_local_error_pass": null
+      }
+    },
+    {
+      "name": "r9-seed2026-rel-fix",
+      "run": {
+        "command": [
+          "target/issue784/nesting/nesting-probe",
+          "9",
+          "nblock",
+          "0.01",
+          "2026",
+          "true"
+        ],
+        "hints": true,
+        "returncode": 0,
+        "purpose": "nesting audit only; not a timing comparison"
+      },
+      "trace_sha256": "266a537cc83978f887855ba494ff0f015679cebcd63535e342a5067a56beeb4a",
+      "stdout_sha256": "96d4aa3274c0580aa7b8e1fe19c66ca740a6d1af1fbc241fd829522245ce03bc",
+      "termination": "Converged",
+      "passes": 30,
+      "maximum_ranks": [2, 14, 34, 78, 147, 230, 323, 343, 343, 349, 349, 348, 348, 348, 348, 348, 348, 348, 348, 348, 348, 348, 348, 348, 348, 348, 348, 348, 348, 348],
+      "local_errors": [8.37877853795748e-05, 8.230071062841728e-05, 9.794757385861112e-05, 9.752625315713431e-05, 9.845730082763633e-05, 9.347685745311299e-05, 9.915589874127427e-05, 9.999390063091e-05, 9.86922199710187e-05, 9.928207093653135e-05, 9.86922199710187e-05, 9.997802300314888e-05, 9.997802300389592e-05, 9.977640824784791e-05, 9.977640824891464e-05, 9.977640824784791e-05, 9.977640824891464e-05, 9.977640824784791e-05, 9.977640824891464e-05, 9.977640824784791e-05, 9.977640824891464e-05, 9.977640824784791e-05, 9.977640824891464e-05, 9.977640824784791e-05, 9.977640824891464e-05, 9.977640824784791e-05, 9.977640824891464e-05, 9.977640824784791e-05, 9.977640824891464e-05, 9.97844088609992e-05],
+      "guard_counts": [5, 5, 5, 5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "snapshots": 1621,
+      "positive_controls": [
+        {
+          "active_missing_detected": true,
+          "outward_only_distinguished": true
+        }
+      ],
+      "snapshots_with_failure": {
+        "full_pc": 1551,
+        "active_pc": 0,
+        "full_pp": 1565,
+        "active_pp": 0,
+        "full_cc": 1559,
+        "active_cc": 50,
+        "prefix_mismatches": 0,
+        "dimension_mismatches": 0
+      },
+      "after_update_local_pc_failure_snapshots": 0,
+      "active_cc_failure_snapshots_by_stage": {
+        "after-guard": 1,
+        "before-update": 25,
+        "after-update": 24
+      },
+      "first_failures": {
+        "full_pc": {
+          "pass": 2,
+          "stage": "after-update",
+          "updated": 18,
+          "center": 11,
+          "full_pc": 2,
+          "active_pc": 0,
+          "full_pp": 6,
+          "active_pp": 0,
+          "full_cc": 3,
+          "active_cc": 1,
+          "first": [24, 0, 18, 0],
+          "active_first": []
+        },
+        "full_pp": {
+          "pass": 2,
+          "stage": "after-update",
+          "updated": 6,
+          "center": 5,
+          "full_pc": 0,
+          "active_pc": 0,
+          "full_pp": 2,
+          "active_pp": 0,
+          "full_cc": 1,
+          "active_cc": 1,
+          "first": [],
+          "active_first": []
+        },
+        "full_cc": {
+          "pass": 1,
+          "stage": "after-guard",
+          "updated": -1,
+          "center": 2,
+          "full_pc": 0,
+          "active_pc": 0,
+          "full_pp": 0,
+          "active_pp": 0,
+          "full_cc": 1,
+          "active_cc": 1,
+          "first": [],
+          "active_first": []
+        },
+        "active_cc": {
+          "pass": 1,
+          "stage": "after-guard",
+          "updated": -1,
+          "center": 2,
+          "full_pc": 0,
+          "active_pc": 0,
+          "full_pp": 0,
+          "active_pp": 0,
+          "full_cc": 1,
+          "active_cc": 1,
+          "first": [],
+          "active_first": []
+        }
+      },
+      "guard_candidate_witnesses": [
+        {
+          "pass": 1,
+          "parent_edge": 47,
+          "parent_id": 1,
+          "child_edge": 51,
+          "child_id": 1,
+          "child_candidates": [0, 0],
+          "child_unique_count": 1,
+          "child_rank": 2,
+          "child_algebraic_bound": 2
+        }
+      ],
+      "after_pass_stability_counts": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2],
+      "comparison_with_m6a": {
+        "all_maximum_ranks_equal": true,
+        "all_local_errors_equal": true,
+        "first_different_maximum_rank_pass": null,
+        "first_different_local_error_pass": null
+      }
+    },
+    {
+      "name": "r9-seed42-rel-fix",
+      "run": {
+        "command": [
+          "target/issue784/nesting/nesting-probe",
+          "9",
+          "nblock",
+          "0.01",
+          "42",
+          "true"
+        ],
+        "hints": true,
+        "returncode": 0,
+        "purpose": "nesting audit only; not a timing comparison"
+      },
+      "trace_sha256": "963677166cecee024367d1152878748880670cf61bbc0162712376de2a3cc7d4",
+      "stdout_sha256": "deea45901df05676a2b9c64fccf8419f0dd96c092b1b0aa07ee29aa4146acb60",
+      "termination": "Converged",
+      "passes": 12,
+      "maximum_ranks": [2, 14, 38, 84, 158, 272, 343, 347, 347, 344, 344, 344],
+      "local_errors": [8.37877853795748e-05, 8.99728341001501e-05, 8.970869334120182e-05, 9.445873101389834e-05, 9.444795788323727e-05, 9.992882903068188e-05, 9.934068406416802e-05, 9.983063808835572e-05, 9.932422422657553e-05, 9.946810575359356e-05, 9.946810575376655e-05, 9.952729352410789e-05],
+      "guard_counts": [5, 5, 5, 5, 5, 5, 0, 0, 0, 0, 0, 0],
+      "snapshots": 649,
+      "positive_controls": [
+        {
+          "active_missing_detected": true,
+          "outward_only_distinguished": true
+        }
+      ],
+      "snapshots_with_failure": {
+        "full_pc": 589,
+        "active_pc": 0,
+        "full_pp": 593,
+        "active_pp": 0,
+        "full_cc": 595,
+        "active_cc": 48,
+        "prefix_mismatches": 0,
+        "dimension_mismatches": 0
+      },
+      "after_update_local_pc_failure_snapshots": 0,
+      "active_cc_failure_snapshots_by_stage": {
+        "after-guard": 1,
+        "before-update": 24,
+        "after-update": 23
+      },
+      "first_failures": {
+        "full_pc": {
+          "pass": 2,
+          "stage": "after-update",
+          "updated": 18,
+          "center": 11,
+          "full_pc": 1,
+          "active_pc": 0,
+          "full_pp": 4,
+          "active_pp": 0,
+          "full_cc": 2,
+          "active_cc": 1,
+          "first": [13, 4, 19, 6],
+          "active_first": []
+        },
+        "full_pp": {
+          "pass": 2,
+          "stage": "after-update",
+          "updated": 6,
+          "center": 5,
+          "full_pc": 0,
+          "active_pc": 0,
+          "full_pp": 1,
+          "active_pp": 0,
+          "full_cc": 1,
+          "active_cc": 1,
+          "first": [],
+          "active_first": []
+        },
+        "full_cc": {
+          "pass": 1,
+          "stage": "after-guard",
+          "updated": -1,
+          "center": 2,
+          "full_pc": 0,
+          "active_pc": 0,
+          "full_pp": 0,
+          "active_pp": 0,
+          "full_cc": 1,
+          "active_cc": 1,
+          "first": [],
+          "active_first": []
+        },
+        "active_cc": {
+          "pass": 1,
+          "stage": "after-guard",
+          "updated": -1,
+          "center": 2,
+          "full_pc": 0,
+          "active_pc": 0,
+          "full_pp": 0,
+          "active_pp": 0,
+          "full_cc": 1,
+          "active_cc": 1,
+          "first": [],
+          "active_first": []
+        }
+      },
+      "guard_candidate_witnesses": [
+        {
+          "pass": 1,
+          "parent_edge": 45,
+          "parent_id": 3,
+          "child_edge": 47,
+          "child_id": 3,
+          "child_candidates": [0, 1, 2, 0],
+          "child_unique_count": 3,
+          "child_rank": 4,
+          "child_algebraic_bound": 4
+        }
+      ],
+      "after_pass_stability_counts": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2],
+      "comparison_with_m6a": {
+        "all_maximum_ranks_equal": true,
+        "all_local_errors_equal": true,
+        "first_different_maximum_rank_pass": null,
+        "first_different_local_error_pass": null
+      }
+    },
+    {
+      "name": "r4-seed2026-rel-fix-cttn",
+      "run": {
+        "command": [
+          "target/issue784/nesting/nesting-probe",
+          "4",
+          "cttn",
+          "0.01",
+          "2026",
+          "true"
+        ],
+        "hints": true,
+        "returncode": 0,
+        "purpose": "nesting audit only; not a timing comparison"
+      },
+      "trace_sha256": "805a89d9dffa3548a6359cf9bc32ae8f85346af9acc7c1ff27fae0534a1bd10e",
+      "stdout_sha256": "6167fd1e3461fba99557e26ac0f1dc6f0c15f912a723bc3157dd3fd4cacabb9c",
+      "termination": "Converged",
+      "passes": 4,
+      "maximum_ranks": [4, 9, 10, 10],
+      "local_errors": [0.0, 8.784696756664901e-15, 1.379594708613123e-05, 7.480232678565053e-05],
+      "guard_counts": [5, 5, 0, 0],
+      "snapshots": 97,
+      "positive_controls": [
+        {
+          "active_missing_detected": true,
+          "outward_only_distinguished": true
+        }
+      ],
+      "snapshots_with_failure": {
+        "full_pc": 71,
+        "active_pc": 0,
+        "full_pp": 73,
+        "active_pp": 10,
+        "full_cc": 77,
+        "active_cc": 16,
+        "prefix_mismatches": 0,
+        "dimension_mismatches": 0
+      },
+      "after_update_local_pc_failure_snapshots": 0,
+      "active_cc_failure_snapshots_by_stage": {
+        "after-guard": 2,
+        "before-update": 8,
+        "after-update": 6
+      },
+      "first_failures": {
+        "full_pc": {
+          "pass": 1,
+          "stage": "after-update",
+          "updated": 6,
+          "center": 4,
+          "full_pc": 1,
+          "active_pc": 0,
+          "full_pp": 1,
+          "active_pp": 0,
+          "full_cc": 1,
+          "active_cc": 0,
+          "first": [12, 0, 6, 0],
+          "active_first": []
+        },
+        "full_pp": {
+          "pass": 1,
+          "stage": "after-update",
+          "updated": 6,
+          "center": 4,
+          "full_pc": 1,
+          "active_pc": 0,
+          "full_pp": 1,
+          "active_pp": 0,
+          "full_cc": 1,
+          "active_cc": 0,
+          "first": [12, 0, 6, 0],
+          "active_first": []
+        },
+        "active_pp": {
+          "pass": 3,
+          "stage": "after-update",
+          "updated": 6,
+          "center": 4,
+          "full_pc": 7,
+          "active_pc": 0,
+          "full_pp": 13,
+          "active_pp": 1,
+          "full_cc": 7,
+          "active_cc": 0,
+          "first": [2, 5, 1, 5],
+          "active_first": []
+        },
+        "full_cc": {
+          "pass": 1,
+          "stage": "after-update",
+          "updated": 6,
+          "center": 4,
+          "full_pc": 1,
+          "active_pc": 0,
+          "full_pp": 1,
+          "active_pp": 0,
+          "full_cc": 1,
+          "active_cc": 0,
+          "first": [12, 0, 6, 0],
+          "active_first": []
+        },
+        "active_cc": {
+          "pass": 1,
+          "stage": "after-guard",
+          "updated": -1,
+          "center": 9,
+          "full_pc": 0,
+          "active_pc": 0,
+          "full_pp": 0,
+          "active_pp": 0,
+          "full_cc": 2,
+          "active_cc": 1,
+          "first": [],
+          "active_first": []
+        }
+      },
+      "guard_candidate_witnesses": [
+        {
+          "pass": 1,
+          "parent_edge": 1,
+          "parent_id": 7,
+          "child_edge": 7,
+          "child_id": 6,
+          "child_candidates": [0, 2, 3, 4, 3, 5, 0, 2],
+          "child_unique_count": 5,
+          "child_rank": 8,
+          "child_algebraic_bound": 8
+        },
+        {
+          "pass": 2,
+          "parent_edge": 4,
+          "parent_id": 6,
+          "child_edge": 7,
+          "child_id": 6,
+          "child_candidates": [0, 2, 3, 4, 3, 5, 0, 2],
+          "child_unique_count": 5,
+          "child_rank": 8,
+          "child_algebraic_bound": 8
+        },
+        {
+          "pass": 2,
+          "parent_edge": 4,
+          "parent_id": 13,
+          "child_edge": 7,
+          "child_id": 7,
+          "child_candidates": [0, 2, 3, 4, 3, 5, 0, 2],
+          "child_unique_count": 5,
+          "child_rank": 8,
+          "child_algebraic_bound": 8
+        },
+        {
+          "pass": 2,
+          "parent_edge": 4,
+          "parent_id": 14,
+          "child_edge": 7,
+          "child_id": 1,
+          "child_candidates": [0, 2, 3, 4, 3, 5, 0, 2],
+          "child_unique_count": 5,
+          "child_rank": 8,
+          "child_algebraic_bound": 8
+        }
+      ],
+      "after_pass_stability_counts": [1, 1, 1, 2],
+      "active_pp_failure_snapshots": [
+        {
+          "pass": 3,
+          "stage": "after-update",
+          "center": 4,
+          "directions": [
+            [6, 1, 4, 1, 0, 1, 0, 8]
+          ]
+        },
+        {
+          "pass": 3,
+          "stage": "before-update",
+          "center": 4,
+          "directions": [
+            [6, 1, 4, 1, 0, 1, 0, 8]
+          ]
+        },
+        {
+          "pass": 3,
+          "stage": "after-update",
+          "center": 7,
+          "directions": [
+            [6, 1, 4, 1, 0, 1, 0, 8]
+          ]
+        },
+        {
+          "pass": 3,
+          "stage": "before-update",
+          "center": 7,
+          "directions": [
+            [6, 1, 4, 1, 0, 1, 0, 8]
+          ]
+        },
+        {
+          "pass": 3,
+          "stage": "after-update",
+          "center": 10,
+          "directions": [
+            [6, 1, 4, 1, 0, 1, 0, 8]
+          ]
+        },
+        {
+          "pass": 3,
+          "stage": "before-update",
+          "center": 10,
+          "directions": [
+            [6, 1, 4, 1, 0, 1, 0, 8]
+          ]
+        },
+        {
+          "pass": 3,
+          "stage": "after-update",
+          "center": 7,
+          "directions": [
+            [6, 1, 4, 1, 0, 1, 0, 8]
+          ]
+        },
+        {
+          "pass": 3,
+          "stage": "before-update",
+          "center": 7,
+          "directions": [
+            [6, 1, 4, 1, 0, 1, 0, 8]
+          ]
+        },
+        {
+          "pass": 3,
+          "stage": "after-update",
+          "center": 4,
+          "directions": [
+            [6, 1, 4, 1, 0, 1, 0, 8]
+          ]
+        },
+        {
+          "pass": 3,
+          "stage": "before-update",
+          "center": 4,
+          "directions": [
+            [6, 1, 4, 1, 0, 1, 0, 8]
+          ]
+        }
+      ]
+    }
+  ],
+  "clean_controls": [
+    {
+      "mode": "rel",
+      "run": {
+        "command": [
+          "taskset",
+          "-c",
+          "14",
+          "target/issue784/nesting/nesting-clean-control",
+          "10",
+          "nblock",
+          "0.01",
+          "2026",
+          "true"
+        ],
+        "returncode": 0,
+        "sha256": "0ea6330791ccf9ed975735655bd9615ae9a198a07761865476200732964608bc"
+      },
+      "stdout_sha256": "2d92b8743c24a59a357d0db413fa160db6876255c09e23a16e85d8b8c3f9c565",
+      "termination": "MaxSweeps",
+      "passes": 50,
+      "maximum_ranks_equal_instrumented": true,
+      "local_errors_equal_instrumented": true
+    },
+    {
+      "mode": "abs",
+      "run": {
+        "command": [
+          "taskset",
+          "-c",
+          "14",
+          "target/issue784/nesting/nesting-clean-control",
+          "10",
+          "nblock",
+          "0.01",
+          "2026",
+          "false"
+        ],
+        "returncode": 0,
+        "sha256": "0ea6330791ccf9ed975735655bd9615ae9a198a07761865476200732964608bc"
+      },
+      "stdout_sha256": "e1cbfa7a73f47ee8b5015133cd997360e73d7d1e1a411da971cb390a2962af11",
+      "termination": "Converged",
+      "passes": 46,
+      "maximum_ranks_equal_instrumented": true,
+      "local_errors_equal_instrumented": true
+    }
+  ],
+  "conclusions": [
+    "Full nesting breaks under reset updates in all controls; it is distinct from the center-directed partial relation.",
+    "Both active pc and pp hold in every recorded chain snapshot. All seven cases pass active pc and newly committed edge pc.",
+    "Main relative fix: Guard creates one center-directed candidate-child membership gap after pass3; updating cut45 in pass4 repairs it. A child candidate list at raw algebraic capacity16 has only15 unique samples and misses child9, while sample11 is duplicated.",
+    "The paired Guard append and raw-dimension capacity path permits candidate closure gaps through inactive child cuts. Duplicates alone are allowed by CandidateSets. Inspect this path alongside mixed-capacity work in854/794; no production change is made here.",
+    "Candidate closure gaps also occur in baseline and convergent controls; a cause of late rank cycling is not established.",
+    "Main relative fix passes39-50 have no new Guard pivots, unchanged maximum rank372, and stability_counter1 because smaller cuts still regrow.",
+    "The R4 CTTN control has ten active pp failure snapshots but no active pc failures and converges in4. Chain pp results do not establish a universal tree invariant.",
+    "Absolute control differs from original M6a ranks starting pass27 and errors starting pass28, although both converge46. Clean and instrumented versions agree; cross-harness divergence remains unresolved.",
+    "No numerical tolerance, stopping condition, pass limit, Guard rule or selection policy was changed. Numerical interpolation and conditioning remain untested by this structural audit."
+  ],
+  "paper": {
+    "url": "https://arxiv.org/html/2407.02454v3",
+    "sections": "4.2 and 4.3.1",
+    "scope": "Reset two-site chain TCI distinguishes full and partial nesting. The diagnostic center-directed tree interpretation is not a general numerical proof."
+  },
+  "provenance": {
+    "cargo_lock_sha256": "8ded3c65081402526b9b69d86e096df2c1bb62c9339e32f3fbdcf4f2365b3a27",
+    "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "original_diagnostic_audit_source_sha256": "7d5cc6ff60977e833040acbcc134f795334ecad218106f7e895658c3fecabb4f",
+    "full_trace_location": "target/issue784/nesting/ (ignored task artifacts; regenerate using retained sources)",
+    "reproducer_files_sha256": {
+      "build_probe.py": "a6905c9ef4b2fd1d14f2f401d90243907ddf9054fff6aa0036df667ff2a19c40",
+      "audit.rs": "36b4f294855f000a3bb96de4de5717caea1d112d978b4d8864e4cc77c1fbe7af",
+      "README.md": "5104273cc3f2846c5e4c88fbdbb934df27f9188b0467a41c7de063441fcc9073",
+      "probe.rs": "495a181787176e304d8bb67f7ada2de10e8e825abc793c3707de6ae651c64618"
+    },
+    "original_source_hashes": {
+      "crates/tensor4all-treeaci/src/lib.rs": "849e5038577f59caacd32b29374f64652da8767b1c128aa57afb652bce848fcd",
+      "crates/tensor4all-treeaci/src/state.rs": "1e4feaeb132ac78fe6bdf23b7f2073def4013174df68d9ceec29ef52d5c1699f",
+      "crates/tensor4all-treeaci/src/transaction.rs": "319719a736682632964550b5de1ec53df1464aac1412365da6bdeadbe1f4ffe9",
+      "crates/tensor4all-treeaci/src/schedule.rs": "a8f3b752e6e2b522c79f8705038cca1a03ad3a27bec9f04f8c0361e83a7341ad",
+      "crates/tensor4all-treeaci/tests/support/g0.rs": "51d5c74729a9cc90797416d458f5ef7ac2f0ce107557691dc1c7f0391bd7a500"
+    }
+  },
+  "reproducer_verification": {
+    "build": {
+      "base_commit": "b71ee950370b0a78c1e1200b1359faa082de0f1c",
+      "sha256": "a5c6e061fb29321682529deee7f76865654c1a65b21a95da392be7c0af20ffb9",
+      "instrumented": true
+    },
+    "run": {
+      "command": [
+        "taskset",
+        "-c",
+        "14",
+        "target/issue784/nesting/nesting-probe",
+        "10",
+        "nblock",
+        "0.01",
+        "2026",
+        "true"
+      ],
+      "returncode": 0
+    },
+    "trace_sha256": "0d57ea355b0a9c45c93bc42c03c1c8bc6f467bcc108c33893eb780942684f3a3",
+    "stdout_sha256": "35bb8f0b39f7fe3928b1448254a99125ed6f89cf476c66fc247c09747e73462a",
+    "all_maximum_ranks_equal_original_diagnostic": true,
+    "all_local_errors_equal_original_diagnostic": true,
+    "snapshot_count": 3001,
+    "active_pc_failure_snapshots": 0,
+    "active_pp_failure_snapshots": 0,
+    "active_cc_failure_snapshots": 50,
+    "guard_candidate_witnesses": [
+      {
+        "pass": 3,
+        "parent_edge": 45,
+        "parent_id": 9,
+        "child_edge": 47,
+        "child_id": 9,
+        "child_candidates": [1, 2, 0, 3, 4, 5, 6, 10, 7, 11, 12, 13, 14, 8, 15, 11],
+        "child_unique_count": 15,
+        "child_rank": 16,
+        "child_algebraic_bound": 16
+      }
+    ]
+  }
+}

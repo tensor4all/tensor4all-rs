@@ -159,7 +159,8 @@ reads to the existing elimination. Empty hints use the original specialization
 without those inverse maps. The Core working estimate covers the inverse maps;
 TreeACI separately charges its borrowed hint buffer in every local phase.
 
-Guard-injected candidates enter the current matrix on every following update.
+Guard-injected candidates feed neighboring candidate spaces as local updates
+proceed.
 An old hint cannot terminate selection while an above-threshold residual
 remains, and there is no fresh-rank ceiling or preference-refresh flag. The
 unchanged #874 regressions continue to exercise Guard discovery and cleanup.
@@ -170,7 +171,11 @@ The R10/seed 2026 tt_nblock witness at relative tolerance 1e-4 still reaches
 MaxSweeps/50; the hints are a partial repair of #784/#854. The
 [R10 evidence](../experiments/treeaci-784-r10-counterexample.json) also records
 R9/seed 2026 taking 30 passes, compared with 12 at seed 42. Maximum-rank plateaus
-do not establish the per-edge stability or Guard conditions.
+do not establish the per-edge stability or Guard conditions. The
+[seed 2026 nesting audit](../experiments/treeaci-784-nesting/README.md)
+preserves center-directed selected-pivot nesting in the exact relative-mode
+chain replay. It separately exposes a transient Guard candidate closure gap,
+without establishing that gap as the cause of later small-cut regrowth.
 
 Relative local stopping does not bound pointwise relative error or the global
 Frobenius error. In particular, held-out random points can underestimate a
