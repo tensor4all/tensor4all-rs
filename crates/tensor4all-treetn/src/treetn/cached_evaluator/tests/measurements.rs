@@ -48,6 +48,7 @@ fn evaluate_batched_uncached(
         &component_batches,
         &environment_cache,
         &mut CachedEvaluationRoute::global(),
+        Parallelism::Serial,
     )
 }
 
