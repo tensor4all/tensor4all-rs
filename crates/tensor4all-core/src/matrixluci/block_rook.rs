@@ -30,6 +30,19 @@ use tensor4all_tensorbackend::{mat_mul, solve_matrix, Matrix};
 /// remaining residual block, which is the dense kernel's meaning, for every
 /// way the factorization ends. Each scan costs one evaluation of every
 /// unselected entry, again one column at a time.
+///
+/// Two things keep that scan rare, both internal and invisible to callers:
+///
+/// * A walk starts on the pivot column the previous factorization of the same
+///   candidate matrix chose ([`PivotKernelOptions::seeds`]), as `arrlu` starts
+///   from its `I0`/`J0`, instead of rediscovering it from the first remaining
+///   column.
+/// * A walk that proposes a stop first probes a strided sample of the remaining
+///   block. Any sampled entry above the threshold proves the factorization has
+///   not converged, so it becomes the pivot and the exact scan is skipped. The
+///   sample can only prove non-convergence: a probe that finds nothing still
+///   escalates to the exact scan, which alone may certify a stop
+///   (tensor4all-rs#1258).
 #[derive(Default)]
 pub struct LazyBlockRookKernel;
 
@@ -184,12 +197,32 @@ fn remaining_indices(total: usize, selected: &[usize]) -> Vec<usize> {
     (0..total).filter(|&idx| !used[idx]).collect()
 }
 
+/// Position of `index` in `indices`, which is ascending.
+fn position_of(indices: &[usize], index: usize) -> Option<usize> {
+    indices.binary_search(&index).ok()
+}
+
+/// The first seed whose row and column are both still unselected.
+///
+/// Seeds arrive in the order of the previous factorization's pivots, so taking
+/// them in order presents the k-th walk with the k-th pivot of that run.
+fn next_seed(
+    seeds: &mut impl Iterator<Item = (usize, usize)>,
+    remaining_rows: &[usize],
+    remaining_cols: &[usize],
+) -> Option<(usize, usize)> {
+    seeds.find(|&(row, col)| {
+        position_of(remaining_rows, row).is_some() && position_of(remaining_cols, col).is_some()
+    })
+}
+
 fn rook_pivot<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     source: &S,
     remaining_rows: &[usize],
     remaining_cols: &[usize],
     selected_rows: &[usize],
     selected_cols: &[usize],
+    seed: Option<(usize, usize)>,
 ) -> Result<(usize, usize, f64)> {
     let operands = WalkOperands::load(
         source,
@@ -201,14 +234,23 @@ fn rook_pivot<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     let operands = operands.as_ref();
     let mut current_col_pos;
     let mut current_row_pos;
-    // INVARIANT: a zero fiber does not certify a zero residual. Scan lazily
-    // until a nonzero starting column is found; never materialize the full
-    // remaining matrix. The ordinary nonzero-column path performs no extra
-    // block evaluations.
+    // A seeded walk starts on the column the previous factorization pivoted on,
+    // which is where `arrlu` starts from its `J0`. The scan below stays the
+    // fallback: it is what a first factorization of a matrix has, and what a
+    // seeded column with no residual left falls back to.
+    let mut seeded = seed.and_then(|(_, col)| position_of(remaining_cols, col));
     let mut columns = 0..remaining_cols.len();
     loop {
-        let Some(col_pos) = columns.next() else {
-            return Ok((remaining_rows[0], remaining_cols[0], 0.0));
+        let col_pos = match seeded.take() {
+            Some(col_pos) => col_pos,
+            None => match columns.next() {
+                Some(col_pos) => col_pos,
+                // INVARIANT: a zero fiber does not certify a zero residual.
+                // Scan lazily until a nonzero starting column is found; never
+                // materialize the full remaining matrix. The ordinary
+                // nonzero-column path performs no extra block evaluations.
+                None => return Ok((remaining_rows[0], remaining_cols[0], 0.0)),
+            },
         };
         current_col_pos = col_pos;
         let col_residual =
@@ -312,6 +354,8 @@ fn residual_argmax_abs<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
             load_block(source, remaining_rows, selected_cols),
         )
     };
+    #[cfg(test)]
+    stats::update(|c| c.exact_scans += 1);
     let chunk_width = selected_rows.len().max(1);
     let mut best = (0usize, 0usize, 0.0f64);
     for (chunk_idx, chunk) in remaining_cols.chunks(chunk_width).enumerate() {
@@ -329,9 +373,121 @@ fn residual_argmax_abs<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     Ok((remaining_rows[best.0], remaining_cols[best.1], best.2))
 }
 
+/// Counters the tests read to tell a probe from an exact scan.
+///
+/// Thread-local, because the test harness factorizes on several threads at
+/// once and each of these describes one walk of one factorization.
+#[cfg(test)]
+pub(super) mod stats {
+    use std::cell::Cell;
+
+    /// Which of the two paths a proposed stop took, and how the walks started.
+    #[derive(Default, Clone, Copy)]
+    pub(super) struct Counters {
+        pub(super) exact_scans: usize,
+        pub(super) probes: usize,
+        pub(super) probe_hits: usize,
+        pub(super) seeded_starts: usize,
+    }
+
+    thread_local! {
+        static COUNTERS: Cell<Counters> = const {
+            Cell::new(Counters {
+                exact_scans: 0,
+                probes: 0,
+                probe_hits: 0,
+                seeded_starts: 0,
+            })
+        };
+    }
+
+    pub(super) fn update(change: impl FnOnce(&mut Counters)) {
+        COUNTERS.with(|counters| {
+            let mut value = counters.get();
+            change(&mut value);
+            counters.set(value);
+        });
+    }
+
+    pub(super) fn reset() {
+        COUNTERS.with(|counters| counters.set(Counters::default()));
+    }
+
+    pub(super) fn snapshot() -> Counters {
+        COUNTERS.with(Cell::get)
+    }
+}
+
+/// Side of the strided sample a proposed stop probes before the exact scan.
+///
+/// Eight per side is at most 64 entries, 0.04 % of a 400 x 400 block, with one
+/// of the eight reserved for the last position so the bound is exact. The
+/// operands any residual needs dominate the probe: one row of `A[I, :]` per
+/// sampled column plus the rank x rank pivot block, both far below the scan of
+/// the whole block that a hit replaces.
+const RESIDUAL_SAMPLE_SIDE: usize = 8;
+
+/// Positions of a strided sample of `0..total`, at most `side` of them.
+///
+/// The first entry is always included and the last is added when the stride
+/// skips it, so the sample is not confined to the leading corner of the block.
+fn sampled_positions(total: usize, side: usize) -> Vec<usize> {
+    if total <= side {
+        return (0..total).collect();
+    }
+    let stride = total / side;
+    // One of the `side` slots is reserved for the last position, so the sample
+    // is exactly `side` long and reaches both ends.
+    let mut positions: Vec<usize> = (0..total).step_by(stride).take(side - 1).collect();
+    if positions.last().copied() != Some(total - 1) {
+        positions.push(total - 1);
+    }
+    positions
+}
+
+/// Largest magnitude of a strided sample of the residual block, as a source
+/// row and column index.
+///
+/// The sample only ever *rules out* a stop: an entry above the threshold proves
+/// that the remaining residual is not below it, which is all a pivot needs to
+/// be. It cannot certify convergence, so a caller must still run the exact scan
+/// over the whole block before ending the factorization.
+fn sampled_residual_argmax_abs<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
+    source: &S,
+    remaining_rows: &[usize],
+    remaining_cols: &[usize],
+    selected_rows: &[usize],
+    selected_cols: &[usize],
+) -> Result<(usize, usize, f64)> {
+    let rows: Vec<usize> = sampled_positions(remaining_rows.len(), RESIDUAL_SAMPLE_SIDE)
+        .into_iter()
+        .map(|pos| remaining_rows[pos])
+        .collect();
+    let cols: Vec<usize> = sampled_positions(remaining_cols.len(), RESIDUAL_SAMPLE_SIDE)
+        .into_iter()
+        .map(|pos| remaining_cols[pos])
+        .collect();
+    let (pivot, a_rj) = if selected_rows.is_empty() {
+        (Matrix::zeros(0, 0), Matrix::zeros(rows.len(), 0))
+    } else {
+        (
+            load_block(source, selected_rows, selected_cols),
+            load_block(source, &rows, selected_cols),
+        )
+    };
+    let residual = residual_from(source, &rows, &cols, selected_rows, &pivot, &a_rj)?;
+    let (row_pos, col_pos, value) = argmax_abs(&residual);
+    if !value.is_finite() {
+        return Err(MatrixLuciError::NaNEncountered {
+            matrix: "rook residual",
+        });
+    }
+    Ok((rows[row_pos], cols[col_pos], value))
+}
+
 fn factorize_lazy<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     source: &S,
-    options: &PivotKernelOptions,
+    options: &PivotKernelOptions<'_>,
 ) -> Result<PivotSelectionCore> {
     let nrows = source.nrows();
     let ncols = source.ncols();
@@ -351,6 +507,7 @@ fn factorize_lazy<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     let mut accepted = Vec::with_capacity(max_bond_dim + 1);
     let mut max_error = 0.0f64;
     let mut last_error = f64::NAN;
+    let mut seeds = options.seeds.iter().copied();
 
     while selected_rows.len() < max_bond_dim {
         let remaining_rows = remaining_indices(nrows, &selected_rows);
@@ -359,12 +516,18 @@ fn factorize_lazy<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
             break;
         }
 
+        let seed = next_seed(&mut seeds, &remaining_rows, &remaining_cols);
+        #[cfg(test)]
+        if seed.is_some() {
+            stats::update(|c| c.seeded_starts += 1);
+        }
         let (mut pivot_row, mut pivot_col, mut pivot_abs) = rook_pivot(
             source,
             &remaining_rows,
             &remaining_cols,
             &selected_rows,
             &selected_cols,
+            seed,
         )?;
         // Checked before the stopping test: NaN compares false against every
         // threshold and must not be read as a converged residual.
@@ -385,22 +548,42 @@ fn factorize_lazy<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
             break;
         }
         if stops(pivot_abs, selected_rows.len()) {
-            // INVARIANT: the factorization only ends on the exact maximum of
-            // the remaining residual. A rook pivot is a local maximum of its
-            // own row and column and is not a bound for the rest of the block
-            // (tensor4all-rs#1256).
-            let (row, col, value) = residual_argmax_abs(
+            // A sample that finds an entry above the threshold proves the
+            // factorization has not converged, so it may take the place of the
+            // exact scan; the block is sampled before it is scanned, so the
+            // scan runs only when the sample found nothing.
+            #[cfg(test)]
+            stats::update(|c| c.probes += 1);
+            let (sampled_row, sampled_col, sampled_abs) = sampled_residual_argmax_abs(
                 source,
                 &remaining_rows,
                 &remaining_cols,
                 &selected_rows,
                 &selected_cols,
             )?;
-            if stops(value, selected_rows.len()) {
-                last_error = value;
-                break;
+            if !stops(sampled_abs, selected_rows.len()) {
+                #[cfg(test)]
+                stats::update(|c| c.probe_hits += 1);
+                (pivot_row, pivot_col, pivot_abs) = (sampled_row, sampled_col, sampled_abs);
+            } else {
+                // INVARIANT: the factorization only ends on the exact maximum
+                // of the remaining residual. A rook pivot is a local maximum
+                // of its own row and column and is not a bound for the rest of
+                // the block, and a sample is not a bound either
+                // (tensor4all-rs#1256).
+                let (row, col, value) = residual_argmax_abs(
+                    source,
+                    &remaining_rows,
+                    &remaining_cols,
+                    &selected_rows,
+                    &selected_cols,
+                )?;
+                if stops(value, selected_rows.len()) {
+                    last_error = value;
+                    break;
+                }
+                (pivot_row, pivot_col, pivot_abs) = (row, col, value);
             }
-            (pivot_row, pivot_col, pivot_abs) = (row, col, value);
         }
 
         max_error = max_error.max(pivot_abs);
@@ -439,7 +622,7 @@ macro_rules! impl_lazy_block_rook_kernel {
             fn factorize<S: CandidateMatrixSource<$t>>(
                 &self,
                 source: &S,
-                options: &PivotKernelOptions,
+                options: &PivotKernelOptions<'_>,
             ) -> Result<PivotSelectionCore> {
                 factorize_lazy(source, options)
             }

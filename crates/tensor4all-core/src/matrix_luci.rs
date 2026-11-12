@@ -541,6 +541,21 @@ where
     F: Fn(&[usize], &[usize], &mut [T]),
     LazyBlockRookKernel: PivotKernel<T>,
 {
+    lazy_matrix_luci_factors_from_blocks_seeded(nrows, ncols, fill_block, &[], options)
+}
+
+pub(crate) fn lazy_matrix_luci_factors_from_blocks_seeded<T, F>(
+    nrows: usize,
+    ncols: usize,
+    fill_block: F,
+    seeds: &[(usize, usize)],
+    options: RrLUOptions,
+) -> Result<MatrixLuciFactors<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+    F: Fn(&[usize], &[usize], &mut [T]),
+    LazyBlockRookKernel: PivotKernel<T>,
+{
     validate_luci_options(&options)?;
     let source = LazyMatrixSource::new(nrows, ncols, fill_block);
     let kernel_options = PivotKernelOptions {
@@ -548,6 +563,7 @@ where
         rel_tol: options.rel_tol,
         abs_tol: options.abs_tol,
         left_orthogonal: options.left_orthogonal,
+        seeds,
     };
 
     let selection = LazyBlockRookKernel
@@ -871,6 +887,35 @@ where
 {
     <T as crate::MatrixLuciScalar>::matrix_luci_factors_from_blocks(
         nrows, ncols, fill_block, options,
+    )
+}
+
+/// [`matrix_luci_factors_from_blocks`] that also hands the rook kernel the
+/// pivots of the previous factorization of the same candidate matrix.
+///
+/// `seeds` are `(row, col)` pairs of source indices, in the order the previous
+/// factorization accepted them. They decide where each rook walk starts
+/// (`arrlu`'s `I0`/`J0`), which can change which pivots are accepted and
+/// therefore the rank and the `pivot_errors` history: a walk that starts
+/// elsewhere converges to another local rook. What does not change is the
+/// guarantee on the last `pivot_errors` entry, the exact maximum of the
+/// remaining residual, because a seed only moves a walk and never certifies a
+/// stop. Internal plumbing for callers that factorize the same matrix once per
+/// sweep; see `tensorci2::update_pivots`.
+#[doc(hidden)]
+pub fn matrix_luci_factors_from_blocks_seeded<T, F>(
+    nrows: usize,
+    ncols: usize,
+    fill_block: F,
+    seeds: &[(usize, usize)],
+    options: RrLUOptions,
+) -> Result<MatrixLuciFactors<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+    F: Fn(&[usize], &[usize], &mut [T]),
+{
+    <T as crate::MatrixLuciScalar>::matrix_luci_factors_from_blocks_seeded(
+        nrows, ncols, fill_block, seeds, options,
     )
 }
 

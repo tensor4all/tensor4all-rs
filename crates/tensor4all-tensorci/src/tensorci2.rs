@@ -10,7 +10,7 @@ use rand::SeedableRng;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use tensor4all_core::{
-    matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix_owned,
+    matrix_luci_factors_from_blocks_seeded, matrix_luci_factors_from_matrix_owned,
     matrix_luci_factors_from_matrix_owned_on_session, MatrixLuciFactors, MatrixLuciScalar,
     MultiIndex, RrLUOptions, Scalar,
 };
@@ -2285,12 +2285,18 @@ where
             context.batched_f,
             tci.max_sample_value,
         );
-        let factors_result = matrix_luci_factors_from_blocks(
+        // Start each rook walk on the pivot this bond had at the end of the
+        // previous sweep, as `arrlu` starts from its `I0`/`J0`, instead of
+        // rediscovering it from the first remaining column.
+        let seed_pivots =
+            seed_positions(&tci.i_set[b + 1], &tci.j_set[b], &i_combined, &j_combined);
+        let factors_result = matrix_luci_factors_from_blocks_seeded(
             i_combined.len(),
             j_combined.len(),
             |rows, cols, out: &mut [T]| {
                 evaluator.fill_block(rows, cols, out);
             },
+            &seed_pivots,
             RrLUOptions {
                 max_bond_dim: context.options.max_bond_dim.unwrap_or(usize::MAX),
                 abs_tol: context.abs_tol,
@@ -2380,6 +2386,30 @@ where
     }
 
     Ok(())
+}
+
+/// Positions in `combined_rows` / `combined_cols` of the pivot pairs a bond had
+/// at the end of the previous sweep.
+///
+/// These are `arrlu`'s `I0`/`J0`: the k-th pair is the k-th pivot the bond's
+/// last update accepted. A pair is dropped when either index is missing from the
+/// combined candidates, which a bond update on a neighbouring bond can cause by
+/// replacing the Kronecker list; dropping both halves keeps the pairs aligned.
+fn seed_positions(
+    previous_rows: &[MultiIndex],
+    previous_cols: &[MultiIndex],
+    combined_rows: &[MultiIndex],
+    combined_cols: &[MultiIndex],
+) -> Vec<(usize, usize)> {
+    previous_rows
+        .iter()
+        .zip(previous_cols)
+        .filter_map(|(row_index, col_index)| {
+            let row = combined_rows.iter().position(|index| index == row_index)?;
+            let col = combined_cols.iter().position(|index| index == col_index)?;
+            Some((row, col))
+        })
+        .collect()
 }
 
 fn update_max_sample_value<T: Scalar + TTScalar>(tci: &mut TensorCI2<T>, value: T) {

@@ -1,4 +1,4 @@
-use crate::matrixluci::block_rook::LazyBlockRookKernel;
+use crate::matrixluci::block_rook::{remaining_indices, residual_max_abs, LazyBlockRookKernel};
 use crate::matrixluci::dense::DenseLuKernel;
 use crate::matrixluci::kernel::PivotKernel;
 use crate::matrixluci::source::{CandidateMatrixSource, DenseMatrixSource, LazyMatrixSource};
@@ -162,12 +162,13 @@ fn lazy_block_rook_certifies_zero_without_materializing_matrix() {
     }
 }
 
-fn rank_cap_options(max_bond_dim: usize) -> PivotKernelOptions {
+fn rank_cap_options(max_bond_dim: usize) -> PivotKernelOptions<'static> {
     PivotKernelOptions {
         max_bond_dim,
         rel_tol: 0.0,
         abs_tol: 0.0,
         left_orthogonal: true,
+        seeds: &[],
     }
 }
 
@@ -566,6 +567,7 @@ fn lazy_rook_walk_loads_the_pivot_operands_once_and_selects_the_same_pivots() {
             &remaining_cols,
             selected_rows,
             selected_cols,
+            None,
         )
         .unwrap();
         let (oracle_row, oracle_col, oracle_abs) = reloading_rook_pivot(
@@ -679,4 +681,300 @@ fn lazy_block_rook_tolerance_stop_reports_the_true_interpolation_error() {
             rel_tol * first_pivot
         );
     }
+}
+
+#[test]
+fn sampled_positions_cover_the_block_including_both_ends() {
+    use super::sampled_positions;
+    let side = super::RESIDUAL_SAMPLE_SIDE;
+
+    // A block smaller than the sample is sampled whole.
+    assert_eq!(sampled_positions(0, side), Vec::<usize>::new());
+    assert_eq!(sampled_positions(1, side), vec![0]);
+    assert_eq!(sampled_positions(side, side), (0..side).collect::<Vec<_>>());
+
+    // A larger block keeps the side, starts at zero and reaches the last index,
+    // so the probe cannot be confined to the leading corner of the residual.
+    for total in [side + 1, 37, 200, 400] {
+        let positions = sampled_positions(total, side);
+        assert_eq!(positions.first(), Some(&0), "total {total}");
+        assert_eq!(positions.last(), Some(&(total - 1)), "total {total}");
+        assert!(positions.len() <= side, "total {total}");
+        assert!(positions.windows(2).all(|w| w[0] < w[1]), "total {total}");
+    }
+}
+
+#[test]
+fn lazy_stop_probes_the_unselected_block_before_it_scans_exactly() {
+    use super::stats;
+    // The #1256 ridge: the rook walk stops on a pivot 500x below the remaining
+    // maximum, so this is the case the probe exists for. Every proposed stop
+    // must probe first, and a probe that rules out a stop must not also run the
+    // scan.
+    let n = 200;
+    let data = smooth_ridge_matrix(n);
+    let options = PivotKernelOptions {
+        rel_tol: 1e-8,
+        abs_tol: 0.0,
+        ..PivotKernelOptions::default()
+    };
+    let source = CountingSource::new(dense_to_lazy(data.clone(), n, n));
+    stats::reset();
+    let out = LazyBlockRookKernel.factorize(&source, &options).unwrap();
+    let probes = stats::snapshot().probes;
+    let hits = stats::snapshot().probe_hits;
+    let scans = stats::snapshot().exact_scans;
+
+    assert!(probes >= 1, "no stop was probed");
+    assert_eq!(
+        probes,
+        scans + hits,
+        "every probe either became a pivot or escalated to the scan"
+    );
+    assert!(
+        hits >= 1 && scans >= 1,
+        "probes {probes} hits {hits} scans {scans}"
+    );
+    // A probe reads a strided sample, so probes alone must not read the block
+    // the way a scan does: the wide requests in this run belong to the scans.
+    let distinct_entries = n * n;
+    assert!(source.unique() <= distinct_entries);
+
+    // The stop is still certified by the exact maximum, not by the sample.
+    let remaining_rows = remaining_indices(n, &out.row_indices);
+    let remaining_cols = remaining_indices(n, &out.col_indices);
+    let exact = residual_max_abs(
+        &dense_to_lazy(data, n, n),
+        &remaining_rows,
+        &remaining_cols,
+        &out.row_indices,
+        &out.col_indices,
+    )
+    .unwrap();
+    assert_eq!(*out.pivot_errors.last().unwrap(), exact);
+    assert!(
+        exact < options.rel_tol * out.pivot_errors[0],
+        "the certified stop is above the tolerance"
+    );
+}
+
+#[test]
+fn lazy_seeded_walk_requests_less_and_still_certifies_the_stop() {
+    use super::stats;
+    // Seeding is what `arrlu` does with its `I0`/`J0`: the previous pivots are
+    // where the walks start. On the #1256 ridge that cuts the entries a walk
+    // asks for by roughly a quarter and reaches the same certified stop.
+    let n = 200;
+    let data = smooth_ridge_matrix(n);
+    let options = PivotKernelOptions {
+        rel_tol: 1e-8,
+        abs_tol: 0.0,
+        ..PivotKernelOptions::default()
+    };
+
+    stats::reset();
+    let unseeded_source = CountingSource::new(dense_to_lazy(data.clone(), n, n));
+    let unseeded = LazyBlockRookKernel
+        .factorize(&unseeded_source, &options)
+        .unwrap();
+    assert_eq!(stats::snapshot().seeded_starts, 0);
+
+    let seeds: Vec<(usize, usize)> = unseeded
+        .row_indices
+        .iter()
+        .copied()
+        .zip(unseeded.col_indices.iter().copied())
+        .collect();
+    let seeded_options = PivotKernelOptions {
+        seeds: &seeds,
+        ..options
+    };
+    stats::reset();
+    let seeded_source = CountingSource::new(dense_to_lazy(data.clone(), n, n));
+    let seeded = LazyBlockRookKernel
+        .factorize(&seeded_source, &seeded_options)
+        .unwrap();
+
+    // The seeds are used for the walks, not merely tolerated.
+    let seeded_starts = stats::snapshot().seeded_starts;
+    assert!(
+        seeded_starts > seeds.len() / 2,
+        "only {seeded_starts} of {} walks started on a seed",
+        seeds.len()
+    );
+    assert!(
+        seeded_source.requested() < unseeded_source.requested(),
+        "seeded walk requested {} entries, unseeded {}",
+        seeded_source.requested(),
+        unseeded_source.requested()
+    );
+
+    // Whenever the walk starts, the stop it reaches is still certified exactly.
+    let remaining_rows = remaining_indices(n, &seeded.row_indices);
+    let remaining_cols = remaining_indices(n, &seeded.col_indices);
+    let exact = residual_max_abs(
+        &dense_to_lazy(data, n, n),
+        &remaining_rows,
+        &remaining_cols,
+        &seeded.row_indices,
+        &seeded.col_indices,
+    )
+    .unwrap();
+    assert_eq!(*seeded.pivot_errors.last().unwrap(), exact);
+    assert!(exact < options.rel_tol * seeded.pivot_errors[0]);
+}
+
+/// The pivot sweep of `lazy_rank_cap_error_matches_dense_kernel_across_shapes_and_caps`,
+/// factorized a second time with the first run's pivots as seeds.
+///
+/// On this sweep the walk converges on the same pivots wherever it starts, so
+/// seeding has to change neither the selection nor the errors. That is a
+/// property of these matrices, not a promise of seeding in general: elsewhere a
+/// seed moves a walk to a different local rook (see
+/// `lazy_seeded_walk_requests_less_and_still_certifies_the_stop`). What seeding
+/// never changes is that the trailing error is the exact remaining maximum.
+#[test]
+fn lazy_seeded_sweep_matches_the_unseeded_and_dense_kernels() {
+    for (nrows, ncols) in [(4usize, 4usize), (6, 6), (8, 5), (5, 8), (12, 12), (20, 10)] {
+        let full_rank = nrows.min(ncols);
+        for cap in 1..full_rank {
+            for seed in 1..=5u64 {
+                let data = decreasing_pivot_matrix(nrows, ncols, seed);
+                let dense_source = DenseMatrixSource::from_column_major(&data, nrows, ncols);
+                let lazy_source = dense_to_lazy(data.clone(), nrows, ncols);
+                let options = rank_cap_options(cap);
+
+                let dense_out = DenseLuKernel.factorize(&dense_source, &options).unwrap();
+                let unseeded = LazyBlockRookKernel
+                    .factorize(&lazy_source, &options)
+                    .unwrap();
+                let seeds: Vec<(usize, usize)> = unseeded
+                    .row_indices
+                    .iter()
+                    .copied()
+                    .zip(unseeded.col_indices.iter().copied())
+                    .collect();
+                let seeded = LazyBlockRookKernel
+                    .factorize(
+                        &dense_to_lazy(data, nrows, ncols),
+                        &PivotKernelOptions {
+                            seeds: &seeds,
+                            ..options
+                        },
+                    )
+                    .unwrap();
+
+                let case = format!("{nrows}x{ncols} cap {cap} seed {seed}");
+                assert_eq!(seeded.row_indices, unseeded.row_indices, "{case}");
+                assert_eq!(seeded.col_indices, unseeded.col_indices, "{case}");
+                assert_eq!(seeded.row_indices, dense_out.row_indices, "{case}");
+                assert_eq!(seeded.pivot_errors, unseeded.pivot_errors, "{case}");
+                let dense_error = *dense_out.pivot_errors.last().unwrap();
+                let seeded_error = *seeded.pivot_errors.last().unwrap();
+                let relative = (dense_error - seeded_error).abs() / dense_error.abs();
+                assert!(
+                    relative <= 4.0 * f64::EPSILON,
+                    "{case}: dense {dense_error:e} seeded {seeded_error:e}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn lazy_walk_ignores_seeds_that_do_not_lead_anywhere() {
+    // Seeds are a starting point, not a constraint. Nonsense seeds (pivots of
+    // something else, in reverse, repeated) must change nothing but where the
+    // walk begins: the reported stop is still the exact remaining maximum.
+    let n = 40;
+    let data = decreasing_pivot_matrix(n, n, 11);
+    let options = PivotKernelOptions {
+        rel_tol: 1e-6,
+        abs_tol: 0.0,
+        ..PivotKernelOptions::default()
+    };
+    let nonsense: Vec<(usize, usize)> = (0..n).rev().map(|index| (index, index)).collect();
+    let out = LazyBlockRookKernel
+        .factorize(
+            &dense_to_lazy(data.clone(), n, n),
+            &PivotKernelOptions {
+                seeds: &nonsense,
+                ..options
+            },
+        )
+        .unwrap();
+
+    let remaining_rows = remaining_indices(n, &out.row_indices);
+    let remaining_cols = remaining_indices(n, &out.col_indices);
+    let reported = *out.pivot_errors.last().unwrap();
+    if out.rank == n {
+        // Nothing is left to measure.
+        assert_eq!(reported, 0.0);
+    } else {
+        let exact = residual_max_abs(
+            &dense_to_lazy(data, n, n),
+            &remaining_rows,
+            &remaining_cols,
+            &out.row_indices,
+            &out.col_indices,
+        )
+        .unwrap();
+        assert_eq!(reported, exact);
+    }
+    assert_eq!(out.rank, out.row_indices.len());
+    assert_eq!(out.col_indices.len(), out.rank);
+}
+
+#[test]
+fn the_seeded_entry_point_forwards_the_seeds_to_the_kernel() {
+    // The kernel tests above call `LazyBlockRookKernel` directly. Callers reach
+    // it through `matrix_luci_factors_from_blocks` and its seeded sibling, so
+    // cover the forwarding as well: dropping the seeds on the way would leave
+    // every test above green.
+    use std::cell::Cell;
+    let n = 120;
+    let data = smooth_ridge_matrix(n);
+    let options = crate::RrLUOptions {
+        rel_tol: 1e-8,
+        abs_tol: 0.0,
+        ..crate::RrLUOptions::default()
+    };
+    let run = |seeds: &[(usize, usize)]| -> (usize, crate::MatrixLuciFactors<f64>) {
+        let requested = Cell::new(0usize);
+        let factors = crate::matrix_luci_factors_from_blocks_seeded(
+            n,
+            n,
+            |rows, cols, out: &mut [f64]| {
+                requested.set(requested.get() + rows.len() * cols.len());
+                for (j, &col) in cols.iter().enumerate() {
+                    for (i, &row) in rows.iter().enumerate() {
+                        out[i + rows.len() * j] = data[row + n * col];
+                    }
+                }
+            },
+            seeds,
+            options.clone(),
+        )
+        .unwrap();
+        (requested.get(), factors)
+    };
+
+    let (unseeded_requested, unseeded) = run(&[]);
+    let seeds: Vec<(usize, usize)> = unseeded
+        .row_indices
+        .iter()
+        .copied()
+        .zip(unseeded.col_indices.iter().copied())
+        .collect();
+    let (seeded_requested, seeded) = run(&seeds);
+
+    assert_eq!(unseeded.rank, seeded.rank);
+    assert!(
+        seeded_requested < unseeded_requested,
+        "seeded entry point requested {seeded_requested} entries, unseeded {unseeded_requested}"
+    );
+    assert!(
+        *seeded.pivot_errors.last().unwrap() < options.rel_tol * seeded.pivot_errors[0],
+        "the seeded factorization stopped above the tolerance"
+    );
 }
