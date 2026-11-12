@@ -49,7 +49,11 @@ fn terminations_map_to_the_engine_contract() {
         (T::Converged, 3, None, I::Converged),
         (T::Converged, 3, Some(4), I::Converged),
         (T::Converged, 4, Some(4), I::BondCapReached),
-        (T::RankLimited, 2, Some(4), I::BondCapReached),
+        (T::RankLimited, 4, Some(4), I::BondCapReached),
+        // Below the cap a rank-limited run stopped at algebraic rank bounds,
+        // not at the cap.
+        (T::RankLimited, 2, Some(4), I::IterationLimit),
+        (T::RankLimited, 2, None, I::IterationLimit),
         (T::MaxSweeps, 2, Some(4), I::IterationLimit),
         (T::MaxSweeps, 4, Some(4), I::IterationLimit),
     ];

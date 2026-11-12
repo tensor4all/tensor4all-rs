@@ -163,8 +163,11 @@ pub trait ElementwiseInterpolator<T, Op> {
   compile, as the roadmap requires.
 - The outcome is M1's `InterpolationOutcome`, so the driver's accept, split,
   embed and report code is shared. `termination` maps from the kernels:
-  TreeACI `Converged` to `Converged`, `RankLimited` to `BondCapReached`,
-  `MaxSweeps` to `IterationLimit`; tree RSI reports `BondCapReached` when an
+  TreeACI `Converged` to `Converged` (`BondCapReached` at the cap),
+  `RankLimited` to `BondCapReached` at the cap and to `IterationLimit` below
+  it (every inaccurate edge at its algebraic rank bound; changed 2026-11-12
+  after the review of PR #1278), `MaxSweeps` to `IterationLimit`; tree RSI
+  reports `BondCapReached` when an
   edge reached the cap (`rank_limit_reached`), otherwise `ErrorNotMeasured`,
   since it estimates no error.
 - **Restriction to active sites.** The driver removes the fixed sites from

@@ -107,7 +107,8 @@ literals, or named public types:
   `TreeInterpolator` on point evaluations of the inputs.
 - `tensor4all-treeaci`: `TreeAciInterpolator`, tree ACI as an element-wise
   engine. Its kernel runs at the problem's tolerance divided by a tolerance
-  factor (`with_tolerance_factor`, default 3).
+  factor (`with_tolerance_factor`, default 3). A `RankLimited` run is
+  `BondCapReached` at the cap and `IterationLimit` below it.
 - `tensor4all-treersi`: `TreeRsiInterpolator`, tree RSI as an element-wise
   engine for products.
 - `tensor4all-partitionedtreetn`: `adaptive_interpolation::patched_elementwise`,

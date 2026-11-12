@@ -62,9 +62,10 @@ use crate::{
 ///
 /// The outcome maps tree ACI's result as follows:
 ///
-/// - `termination`: `Converged` below the cap is `Converged`; `Converged` at
-///   the cap and `RankLimited` are `BondCapReached`; `MaxSweeps` is
-///   `IterationLimit`.
+/// - `termination`: `Converged` below the cap is `Converged`; `Converged` and
+///   `RankLimited` at the cap are `BondCapReached`; `MaxSweeps`, and
+///   `RankLimited` below the cap (every inaccurate edge at its algebraic rank
+///   bound), are `IterationLimit`.
 /// - `error_estimate`: the last sweep's largest local error, which with an
 ///   absolute tolerance is in the units of `f`; zero on the exact single-node
 ///   path. It is compared with the tightened tolerance inside the run, not
@@ -420,7 +421,10 @@ where
     let termination = match result.termination {
         TreeAciTermination::Converged if at_cap => InterpolationTermination::BondCapReached,
         TreeAciTermination::Converged => InterpolationTermination::Converged,
-        TreeAciTermination::RankLimited => InterpolationTermination::BondCapReached,
+        TreeAciTermination::RankLimited if at_cap => InterpolationTermination::BondCapReached,
+        // Every inaccurate edge sits at its algebraic rank bound below the
+        // cap: the run stopped without converging and not at the cap.
+        TreeAciTermination::RankLimited => InterpolationTermination::IterationLimit,
         TreeAciTermination::MaxSweeps => InterpolationTermination::IterationLimit,
     };
     InterpolationOutcome {
