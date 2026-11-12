@@ -28,6 +28,7 @@ mod schedule;
 mod target;
 
 pub use engine::reconstruct;
+pub(crate) use engine::truncate_toward_allowance;
 pub use schedule::{
     schedule_merge_refine, CoordinateGroup, CoverageContract, MergeRefineOptions,
     MergeRefineReport, MergeRefineResult,

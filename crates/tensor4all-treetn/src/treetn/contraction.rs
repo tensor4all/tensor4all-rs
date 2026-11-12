@@ -64,6 +64,12 @@ pub(super) enum ZipupTopologyMode {
 
 pub(super) mod randomized;
 pub use randomized::{contract_with_rng, contract_with_rng_in};
+mod outcome;
+mod zipup_control;
+pub use outcome::{
+    contract_with_outcome, contract_with_outcome_in, ContractionOutcome, ContractionReport,
+    EdgeRank,
+};
 mod src_chain;
 mod src_probe;
 mod src_tree;
@@ -1466,6 +1472,7 @@ where
         Ok(result)
     }
 
+    // INVARIANT: this owner-level entry passes the existing schedule and execution strategy intact.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn contract_zipup_impl(
         &self,
@@ -1478,6 +1485,38 @@ where
         identity_nodes: &IdentityNodes<T::Index, V>,
         leaves: &dyn LeafOps<T>,
     ) -> Result<Self>
+    where
+        V: Ord,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
+        self.contract_zipup_controlled(
+            other,
+            center,
+            form,
+            svd_policy,
+            max_bond_dim,
+            topology_mode,
+            identity_nodes,
+            leaves,
+            zipup_control::Complete,
+        )
+    }
+
+    // INVARIANT: the completion policy is static; the schedule and numerical leaves are shared.
+    #[allow(clippy::too_many_arguments)]
+    fn contract_zipup_controlled<C: zipup_control::ZipupControl<T, V>>(
+        &self,
+        other: &Self,
+        center: &V,
+        form: CanonicalForm,
+        svd_policy: Option<SvdTruncationPolicy>,
+        max_bond_dim: Option<usize>,
+        topology_mode: ZipupTopologyMode,
+        identity_nodes: &IdentityNodes<T::Index, V>,
+        leaves: &dyn LeafOps<T>,
+        control: C,
+    ) -> Result<C::Output>
     where
         V: Ord,
         <T::Index as IndexLike>::Id:
@@ -1515,7 +1554,7 @@ where
                     // does not take `identity_nodes` into account; a chain-shaped
                     // first operand therefore keeps this schedule and factorizes
                     // every node.
-                    return self.contract_zipup_chain(
+                    let network = self.contract_zipup_chain(
                         other,
                         center,
                         &chain,
@@ -1523,7 +1562,8 @@ where
                         max_bond_dim,
                         topology_mode,
                         leaves,
-                    );
+                    )?;
+                    return control.finish(network);
                 }
             }
         }
@@ -1563,7 +1603,7 @@ where
             let mut result = TreeTN::new();
             result.add_tensor(node_name.clone(), contracted)?;
             result.set_canonical_region(std::iter::once(center.clone()))?;
-            return Ok(result);
+            return control.finish(result);
         }
 
         // 5. Initialize intermediate tensors storage: HashMap<node_name, Vec<intermediate_tensor>>
@@ -1715,6 +1755,17 @@ where
                 })
                 .context("Failed to factorize")?;
 
+            #[cfg(test)]
+            zipup_control::tests::record_factorization();
+
+            // INVARIANT: pruning happens before this factorization. Its retained
+            // link is passed to the parent and never resized again on this path;
+            // see the tree-specific proof in treetn-contraction-outcome.md.
+            if let Some(output) = control.edge(source_name, destination_name, factorize_result.rank)
+            {
+                return Ok(output);
+            }
+
             // Store left factor as result tensor for source node
             result_tensors.insert(source_name.clone(), factorize_result.left);
 
@@ -1844,7 +1895,7 @@ where
             result.set_canonical_region(std::iter::once(center.clone()))?;
         }
 
-        Ok(result)
+        control.finish(result)
     }
 
     /// Contract two TreeTNs using naive full contraction.

@@ -35,6 +35,7 @@ tenferro-provider-inject = [
 ]
 
 [dependencies]
+anyhow.workspace = true
 rand_chacha.workspace = true
 num-complex.workspace = true
 rand.workspace = true

@@ -55,11 +55,14 @@ use tensor4all_core::{
 };
 use tensor4all_tensorbackend::Storage;
 use tensor4all_treetn::interpolation::{
-    EvalContext, InterpolationTermination, Parallelism, TreeInterpolator,
+    ElementwiseInterpolator, ElementwiseOperator, EvalContext, InterpolationTermination,
+    Parallelism, TreeInterpolator,
 };
 use tensor4all_treetn::NodeNameNetwork;
 
 use super::cache::CacheLayout;
+use super::elementwise::{prepare, Prepared};
+use super::engine::{BlackBox, PatchEngine};
 use super::layout::SiteLayout;
 use super::options::PatchedInterpolationOptions;
 use super::report::{
@@ -71,7 +74,7 @@ use super::{
     References, Shared, Totals, Verdict, WaveControl, WavePins, Waves,
 };
 use crate::subdomain_tree_tn::SubDomainTreeTN;
-use crate::{PartitionedTreeTNError, Projector};
+use crate::{PartitionedTreeTN, PartitionedTreeTNError, Projector};
 
 #[cfg(all(feature = "hataori-mpi", feature = "hataori-mpi-rsmpi-rt"))]
 compile_error!(
@@ -454,6 +457,9 @@ fn decode_patch_record(record: WirePatchRecord, projector: Projector) -> PatchRe
         acceptance: record.acceptance.map(decode_measurement),
         audit: record.audit.map(decode_measurement),
         status: decode_status(record.status),
+        // The log-norm travels beside the record and is attached when the
+        // root assembles the result.
+        log_norm: None,
     }
 }
 
@@ -784,7 +790,7 @@ fn encode_outcome<T, V, E>(
 where
     T: CommonScalar + TensorElement + Serialize + Copy,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
 {
     let PatchRun {
         path,
@@ -834,7 +840,7 @@ fn decode_outcome<T, V, E>(
 where
     T: CommonScalar + TensorElement + Copy,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
 {
     let WireOutcome {
         path,
@@ -901,7 +907,7 @@ impl<T, V, E, C, F> Waves<T, V, E> for MpiWaves<'_, '_, C, F>
 where
     T: CommonScalar + TensorElement + Send + Serialize + for<'de> Deserialize<'de> + Copy,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T> + Sync,
+    E: PatchEngine<T, V> + Sync,
     C: Communicator,
     F: Fn(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>> + Sync,
 {
@@ -1155,6 +1161,104 @@ where
     F: Fn(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>> + Sync,
     C: Communicator,
 {
+    let engine = BlackBox(engine);
+    let validation = Plan::validated(&engine, topology, node_sites, initial_pivots, options);
+    run_mpi(world, lanes, root, validation, evaluate)
+}
+
+/// Compute `f(x_1, ..., x_k)` of partitions, distributing every wave of
+/// patches over the ranks of an MPI world: the distributed counterpart of
+/// [`patched_elementwise`](super::patched_elementwise) and
+/// [`patched_elementwise_on_lanes`](super::patched_elementwise_on_lanes), as
+/// [`patched_interpolate_mpi`] is of the interpolation entries.
+///
+/// A patch runs on the rank and lane that pulled it, so every rank restricts
+/// and evaluates the inputs itself: every rank must pass the same `inputs`,
+/// held in its own memory (a partition is not sent over MPI). Each rank
+/// validates its own inputs and options, and the rank-local results are
+/// gathered first, so an invalid input on one rank fails the whole run.
+///
+/// # Arguments
+///
+/// * `world`, `lanes`, `root` - As in [`patched_interpolate_mpi`].
+/// * `engine`, `residual_engine`, `inputs`, `operator`, `options` - As in
+///   [`patched_elementwise`](super::patched_elementwise), identical on every
+///   rank; the engines and the operator must be `Sync`.
+///
+/// # Returns
+///
+/// `Ok(Some(result))` on the root and `Ok(None)` on every other rank.
+///
+/// # Errors
+///
+/// The input errors of [`patched_elementwise`](super::patched_elementwise),
+/// and the collective errors of [`patched_interpolate_mpi`].
+///
+/// # Examples
+///
+/// This entry needs an initialized MPI universe, which a rustdoc example
+/// cannot provide; `tests/adaptive_mpi.rs` runs it under a launcher through
+/// `scripts/check-mpi-smoke.sh` and compares it with the serial entry.
+#[allow(clippy::too_many_arguments)]
+pub fn patched_elementwise_mpi<T, V, E, Op, R, C>(
+    world: &C,
+    lanes: &mut TenferroLanes,
+    root: i32,
+    engine: &E,
+    residual_engine: &R,
+    inputs: &[&PartitionedTreeTN<V>],
+    operator: &Op,
+    options: &PatchedInterpolationOptions,
+) -> Result<Option<PatchedInterpolationResult<V>>, PatchedInterpolationError>
+where
+    T: CommonScalar + TensorElement + Send + Serialize + for<'de> Deserialize<'de> + Copy,
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    E: ElementwiseInterpolator<T, Op> + Sync,
+    Op: ElementwiseOperator<T> + Sync,
+    R: TreeInterpolator<T> + Sync,
+    C: Communicator,
+{
+    match prepare(engine, residual_engine, inputs, operator, options) {
+        Ok(Prepared {
+            engine,
+            target,
+            topology,
+            node_sites,
+            pivots,
+        }) => {
+            let validation = Plan::validated(&engine, topology, node_sites, pivots, options);
+            run_mpi(world, lanes, root, validation, |batch, ctx| {
+                target.evaluate(batch, ctx)
+            })
+        }
+        // The other ranks must still take part in the validation collective.
+        Err(error) => run_mpi::<T, V, BlackBox<'_, R>, _, C>(
+            world,
+            lanes,
+            root,
+            Err(error),
+            |_: ColMajorArrayRef<'_, usize>, _: &mut EvalContext<'_>| Ok(Vec::new()),
+        ),
+    }
+}
+
+/// Agree on a plan's validation across ranks, run its waves over MPI, and
+/// assemble the result on the root: the body of every MPI entry. `validation`
+/// is each rank's own validation of its inputs; any rank's failure fails all.
+pub(super) fn run_mpi<T, V, E, F, C>(
+    world: &C,
+    lanes: &mut TenferroLanes,
+    root: i32,
+    validation: Result<Plan<'_, T, V, E>, PatchedInterpolationError>,
+    evaluate: F,
+) -> Result<Option<PatchedInterpolationResult<V>>, PatchedInterpolationError>
+where
+    T: CommonScalar + TensorElement + Send + Serialize + for<'de> Deserialize<'de> + Copy,
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    E: PatchEngine<T, V> + Sync,
+    F: Fn(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>> + Sync,
+    C: Communicator,
+{
     let rank = world.rank();
     let size = world.size();
     if root < 0 || root >= size {
@@ -1162,7 +1266,6 @@ where
             message: format!("the MPI root {root} is outside the world of {size} ranks"),
         });
     }
-    let validation = Plan::validated(engine, topology, node_sites, initial_pivots, options);
     let local_error = validation.as_ref().err().map(ToString::to_string);
     agree_on_validation(world, root, rank, local_error)?;
     let plan = validation?;

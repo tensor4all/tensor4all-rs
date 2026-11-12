@@ -125,9 +125,9 @@ impl TreeAciScalar for Complex64 {
 /// accepts::<usize>();
 /// accepts::<String>();
 /// ```
-pub trait TreeAciNode: Clone + Debug + Eq + Hash + Ord + Send + Sync + 'static {}
+pub trait TreeAciNode: Clone + Debug + Eq + Hash + Ord + Send + Sync {}
 
-impl<V> TreeAciNode for V where V: Clone + Debug + Eq + Hash + Ord + Send + Sync + 'static {}
+impl<V> TreeAciNode for V where V: Clone + Debug + Eq + Hash + Ord + Send + Sync {}
 
 #[cfg(test)]
 mod tests;

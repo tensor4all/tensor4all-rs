@@ -1,4 +1,6 @@
 use super::*;
+mod layouts;
+mod lazy_contraction;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
@@ -390,14 +392,9 @@ fn run_group(
         split_strategy,
         sum_engine: SumEngine::Binary,
     };
-    let result = contract_group_project_first(
-        group.pairs.clone(),
-        None,
-        &group.center,
-        &contraction,
-        &patching,
-    )
-    .unwrap();
+    let result =
+        contract_group_project_first(group.pairs.clone(), &group.center, &contraction, &patching)
+            .unwrap();
     (result, DISCARDED_GROUP_PROBES.with(|count| count.get()))
 }
 

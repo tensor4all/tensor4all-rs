@@ -92,7 +92,9 @@ pub enum PartitionedTreeTNError {
     /// The automatic refinement of differing patch layouts in
     /// [`PartitionedTreeTN::add`](crate::PartitionedTreeTN::add),
     /// [`PartitionedTreeTN::add_truncated`](crate::PartitionedTreeTN::add_truncated),
-    /// or [`PartitionedTreeTN::contract`](crate::PartitionedTreeTN::contract)
+    /// [`PartitionedTreeTN::contract`](crate::PartitionedTreeTN::contract),
+    /// [`contract_adaptive`](crate::contract_adaptive), or
+    /// [`contract_adaptive_selected`](crate::contract_adaptive_selected)
     /// needs more layout projectors than
     /// [`AUTOMATIC_REFINEMENT_LIMIT`](crate::AUTOMATIC_REFINEMENT_LIMIT).
     ///
@@ -107,7 +109,9 @@ pub enum PartitionedTreeTNError {
     RefinementTooLarge {
         /// Number of layout projectors the refinement needs, saturating at
         /// `usize::MAX`. For `contract` this is the larger of the two
-        /// operands' grids.
+        /// operands' grids; for adaptive contraction it is the full candidate
+        /// output grid after selecting original pair keys, including uncovered
+        /// cells.
         atoms: usize,
         /// The limit that `atoms` exceeds.
         limit: usize,

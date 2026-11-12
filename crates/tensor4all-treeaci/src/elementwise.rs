@@ -308,6 +308,7 @@ where
         tree: state.output,
         max_ranks: history.max_ranks,
         max_errors: history.max_errors,
+        max_sample_magnitude: state.max_sample_magnitude,
         global_pivots_found: history.global_pivots_found,
         termination: history.termination,
         diagnostics: TreeAciDiagnostics {

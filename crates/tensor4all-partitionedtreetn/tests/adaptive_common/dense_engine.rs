@@ -39,6 +39,9 @@ pub(crate) enum Fault {
     IterationLimit,
     /// Report `Converged` whatever the rank, even at the cap.
     ConvergedAtCap,
+    /// Report `ErrorNotMeasured` whatever the rank, as an engine without an
+    /// error estimate (tree RSI) does below the cap.
+    Unmeasured,
     /// Sample only the initial pivots and stop at the cap with an empty
     /// network: unused when the driver splits, an engine fault when it
     /// retains the patch.
@@ -160,6 +163,8 @@ where
             InterpolationTermination::IterationLimit
         } else if self.fault == Fault::ConvergedAtCap {
             InterpolationTermination::Converged
+        } else if self.fault == Fault::Unmeasured {
+            InterpolationTermination::ErrorNotMeasured
         } else if problem.max_bond_dim().is_some_and(|cap| rank >= cap.get()) {
             InterpolationTermination::BondCapReached
         } else {

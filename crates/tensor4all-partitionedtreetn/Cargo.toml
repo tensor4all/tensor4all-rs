@@ -81,6 +81,16 @@ tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform", defau
 # library itself depends only on the engine trait in tensor4all-treetn. Its
 # backend provider is inherited from this crate's selected provider feature.
 tensor4all-treetci = { path = "../tensor4all-treetci", default-features = false }
+# Path-only cross-layer dev-dependency (stripped from published manifests) so
+# the patched element-wise tests can run tree ACI as the per-patch kernel; the
+# library itself depends only on the element-wise engine trait in
+# tensor4all-treetn. Its backend provider is inherited from this crate's
+# selected provider feature.
+tensor4all-treeaci = { path = "../tensor4all-treeaci", default-features = false }
+# Path-only cross-layer dev-dependency (stripped from published manifests) so
+# the patched product tests can run tree RSI as the per-patch kernel. Its
+# backend provider is inherited from this crate's selected provider feature.
+tensor4all-treersi = { path = "../tensor4all-treersi", default-features = false }
 rand.workspace = true
 rand_chacha.workspace = true
 
