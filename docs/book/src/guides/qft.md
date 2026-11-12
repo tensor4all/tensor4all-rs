@@ -125,94 +125,78 @@ configuration (b_0, b_1, ..., b_{R-1}) corresponds to frequency index
 k = b_{R-1} * 2^{R-1} + ... + b_1 * 2 + b_0 (i.e., the bit-reversal of
 b_0 * 2^{R-1} + ... + b_{R-1}).
 
-## 2D QFT via Partial Apply
+## Multi-axis QFT
 
-A dedicated multivar Fourier API is not yet available. This example
-shows how to use partial apply to perform a 2D transform by applying a 1D
-Fourier operator to non-contiguous sites.
-
-For a 2D function in interleaved quantics encoding with R bits per variable,
-the TreeTN has 2R sites: `[x_1, y_1, x_2, y_2, ..., x_R, y_R]` (node names
-`0, 1, 2, 3, ..., 2R-1`).
-
-### Approach
-
-To apply a 1D Fourier transform to the x-variable:
-
-1. Build the 1D Fourier operator (R sites, node names 0..R-1)
-2. Rename operator nodes to match x-variable sites: 0 -> 0, 1 -> 2, 2 -> 4, ...
-3. Set input/output mappings from the state
-4. Call `apply_linear_operator` -- Steiner tree partial apply handles the gaps
-
-The Steiner tree mechanism automatically inserts identity tensors at the
-y-variable sites (1, 3, 5) so the operator acts only on the x-variable.
-The same approach works for applying the Fourier transform to the y-variable
-(rename operator nodes to 1, 3, 5 instead).
+`quantics_fourier_operator_multiaxis` builds a product transform with one
+abstract node per selected bit. `AxisBit { axis, bit }` specifies the axis and
+input significance (`bit = 0` is the MSB); axis and bit numbers start at zero
+without gaps. Each axis has at least two bits. For example, the layout
+`[(0,0), (1,0), (0,1), (1,1)]` interleaves two two-bit axes.
 
 ```rust
-use std::f64::consts::PI;
-use tensor4all_quanticstci::{
-    pointwise_index_batch,
-    quanticscrossinterpolate_discrete_batch, QtciOptions, UnfoldingScheme,
-};
-use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
-use tensor4all_treetci::materialize::to_treetn;
-use tensor4all_treetn::{apply_linear_operator, ApplyOptions};
-use tensor4all_treetn::Operator;
-
-let r = 3;
-let n = 1usize << r; // 8
-
-// f(x, y) = cos(2*pi*x/N), 0-indexed -- depends only on x
-let f = move |idx: &[usize]| -> f64 {
-    let x = idx[0] as f64;
-    (2.0 * PI * x / n as f64).cos()
-};
-
-// Build QTT with interleaved encoding
-let sizes = vec![n, n];
-let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete_batch::<f64, _>(
-    &sizes, pointwise_index_batch(f), None,
-    QtciOptions::default()
-        .with_tolerance(1e-12)
-        .with_unfoldingscheme(UnfoldingScheme::Interleaved)).unwrap();
-assert!(*errors.last().unwrap() < 1e-10);
-
-// Convert to TreeTN (6 sites: 0,1,2,3,4,5)
-let tci_state = qtci.tci();
-let grid = qtci.inherent_grid().unwrap().clone();
-let batch_eval = move |batch: tensor4all_treetci::GlobalIndexBatch<'_>|
-    -> anyhow::Result<Vec<f64>>
-{
-    let mut values = Vec::with_capacity(batch.n_points());
-    let mut quantics = vec![0usize; batch.n_sites()];
-    for p in 0..batch.n_points() {
-        for (site, value) in quantics.iter_mut().enumerate() {
-            *value = batch.get(site, p).unwrap();
-        }
-        let grid_idx = grid.quantics_to_grididx(&quantics)?;
-        values.push((2.0 * PI * grid_idx[0] as f64 / n as f64).cos());
-    }
-    Ok(values)
-};
-let state = to_treetn(tci_state, batch_eval, Some(0)).unwrap();
-
-// Build 1D Fourier operator (nodes 0,1,2)
-let fourier_op = quantics_fourier_operator(
-    r, FourierOptions { normalize: true, ..Default::default() },
-).unwrap();
-
-// Rename nodes to x-variable sites: 0->0, 1->2, 2->4
-let x_site_mapping: Vec<_> = (0..r).map(|i| (i, 2 * i)).collect();
-let mut fourier_op = fourier_op.rename_nodes(&x_site_mapping).unwrap();
-
-// Match operator's true indices to state's site indices
-fourier_op.set_input_space_from_state(&state).unwrap();
-fourier_op.set_output_space_from_state(&state).unwrap();
-
-// Apply -- Steiner tree inserts identity at y-sites {1, 3, 5}
-let result = apply_linear_operator(
-    &fourier_op, &state, ApplyOptions::default(),
-).unwrap();
-assert_eq!(result.node_count(), 2 * r);
+use tensor4all_quanticstransform::{quantics_fourier_operator_multiaxis, AxisBit, FourierOptions};
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let layout = [AxisBit { axis: 0, bit: 0 }, AxisBit { axis: 1, bit: 0 },
+              AxisBit { axis: 0, bit: 1 }, AxisBit { axis: 1, bit: 1 }];
+let operator = quantics_fourier_operator_multiaxis(&layout, FourierOptions::forward())?;
+// The normalized 16-by-16 product has Frobenius norm sqrt(16).
+assert!((operator.mpo().clone().norm()? - 4.0).abs() < 1e-10);
+# Ok(())
+# }
 ```
+
+Bind the operator's node `j` to the desired selected state index using its
+input/output mappings and `apply_linear_operator_to_indices`. Node ordering
+is separate from bit significance: the layout can also be grouped or permuted.
+Each axis is built with `FourierOptions`, then the product is restructured
+exactly to the requested layout. The resulting bonds can exceed the per-axis
+`max_bond_dim`; reordering adds no intentional truncation.
+
+## Patched QFT on an index subset
+
+Enable `tensor4all-quanticstransform`'s optional `partitioned` feature to use
+`patched_fourier_transform`. Pass an existing `PartitionedTreeTN`, a center
+node, and each axis's full binary indices in MSB-first order. The selected
+indices must lie on one path; they may skip spectator nodes or share a node
+with other selected indices or spectators. Branching selections are rejected.
+State node names need not be integers.
+
+`PatchedFourierOptions` defaults to relative reconstruction tolerance `1e-6`
+and an exact full-depth schedule. Set `merge_refine.target_bond_dim` for adaptive
+compression, and use its output-depth/region and work/term limits as needed.
+Leave `coordinate_groups` unset; the front end derives them from the axes.
+The returned `MergeRefineResult` keeps output regions and their retained terms
+lazy. `into_partition()` requires one final term per region. Requested output
+regions select intersecting schedule cells and can return coarser cells.
+Repeated exact transforms can grow intermediate bonds substantially; the small
+round-trip example below uses a rank goal with a tight reconstruction tolerance.
+
+Output significance reverses **within each axis**. For a normalized inverse
+round trip use `axes_inv[a] = axes[a].iter().rev().cloned().collect()` with
+`FourierOptions::inverse()`. Reusing the forward axes unchanged is incorrect.
+With `normalize: false`, both directions omit scaling and the round trip
+multiplies by `2^total_selected_bits`.
+
+`report().error_bound` measures reconstruction against the constructed
+operator, excluding operator construction error and backend roundoff. Test
+reconstruction with a stated roundoff allowance, and compare to a direct DFT
+separately. Neither `FourierOptions::tolerance` nor `normalize` certifies an
+exact-DFT error bound for the approximated operator.
+
+The runnable example transforms six k-space patches into 2D r-space
+regions, checks all sixteen values against a direct DFT, and verifies the
+reversed-axes inverse call. It intentionally uses a tiny dense input/oracle.
+
+```bash
+cargo run -p tensor4all-quanticstransform --features partitioned --example patched_fourier
+```
+
+The complete [example source](https://github.com/tensor4all/tensor4all-rs/blob/main/crates/tensor4all-quanticstransform/examples/patched_fourier.rs)
+is also executed by the guide doctest harness.
+
+Future input generators such as issue #1276 may return a TT over only a patch's
+remaining bits. Before forming `SubDomainTreeTN`, restore the fixed prefix bits
+as one-hot sites (through the existing simplett bridge), split any fused levels,
+and use the same full index identities and named topology for every patch. A
+prefix projector alone cannot introduce missing site indices. Input generation
+is separate from this Fourier API.

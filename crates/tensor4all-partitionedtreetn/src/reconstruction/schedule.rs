@@ -1171,6 +1171,8 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// Restriction happens before addition, so no sum over the whole output domain
 /// is assembled and every computed object is reused level by level.
 ///
+/// Operator node names may have a different type from the state node names;
+/// sorted operator nodes bind positionally to `selection` before owner grouping.
 /// `center` is an existing node used by local operator application. `subset`
 /// pins the reference scale exactly as in
 /// [`ReconstructionTarget::from_subset_operator`]: `unitary = true` uses the
@@ -1304,10 +1306,10 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// # Ok(())
 /// # }
 /// ```
-pub fn schedule_merge_refine<V>(
+pub fn schedule_merge_refine<V, OperatorV>(
     preimage: &ReconstructionTarget<V>,
     center: &V,
-    operator: &LinearOperator<IdxTensor, V>,
+    operator: &LinearOperator<IdxTensor, OperatorV>,
     selection: &[DynIndex],
     subset: &SubsetOperatorOptions,
     tolerance: ReconstructionTolerance,
@@ -1315,6 +1317,7 @@ pub fn schedule_merge_refine<V>(
 ) -> Result<MergeRefineResult<V>>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+    OperatorV: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     validate_tolerance(tolerance)?;
     let geometry = ScheduleGeometry::new(selection, options.coordinate_groups.as_deref())?;

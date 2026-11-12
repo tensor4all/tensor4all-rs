@@ -31,7 +31,7 @@ facade, and each crate can be used on its own.
 
    Crates that still use both stacks (crossing through treetn::simplett_bridge):
    tensor4all-quanticstci        (treetci + treetn + simplett)
-   tensor4all-quanticstransform  (treetn + simplett)
+   tensor4all-quanticstransform  (treetn + simplett; optional partitionedtreetn)
 
    tensor4all-capi  (C FFI for language bindings; depends on both stacks)
    tensor4all-hdf5  (MPS serialization, ITensors.jl-compatible)
@@ -61,6 +61,11 @@ operates directly on named `TreeTN<IdxTensor, V>` values and does not depend on
 simplett, itensorlike, or TCI crates. Its adaptive interpolation driver sees
 interpolation engines only through the `TreeInterpolator` trait in
 `tensor4all-treetn`; engines such as `tensor4all-treetci` implement that trait.
+
+With quanticstransform's optional `partitioned` feature, it also depends on
+partitionedtreetn for the Fourier-specific lazy reconstruction front end. This
+edge points from the transform layer to the TreeTN patch layer; partitionedtreetn
+still has no runtime dependency on quanticstransform or simplett.
 
 One deliberate exception exists: `tensor4all-quanticstransform` builds
 TreeTN-based `LinearOperator`s from simplett **MPO** data (two site indices
@@ -234,7 +239,7 @@ requirements onto unrelated generic code.
 
 | Crate | Description |
 |-------|-------------|
-| **quanticstransform** | Quantics transformation operators: shift, flip, Fourier, affine, and more. Consumes simplett-stack data; constructs TreeTN-based `LinearOperator`s (see the bridge exception above). |
+| **quanticstransform** | Quantics transformation operators: shift, flip, Fourier (including explicit multi-axis layouts), affine, and more. Optional `partitioned` feature: lazy patched Fourier transforms on indices lying on one tree path. Consumes simplett-stack data; constructs TreeTN-based `LinearOperator`s (see the bridge exception above). |
 | **interpolativeqtt** | Interpolative QTT construction on a coarse grid (simplett stack). See the [interpolative-QTT tutorial](tutorials/quantics-basics/interpolative-qtt.md). |
 
 ### Applications
@@ -265,6 +270,7 @@ requirements onto unrelated generic code.
 | Subdomain decomposition on named TreeTNs | `tensor4all-partitionedtreetn` |
 | Adaptive patched interpolation of a function on a named tree | `tensor4all-partitionedtreetn::adaptive_interpolation` with an engine such as `tensor4all-treetci::TreeTciInterpolator` |
 | Reconstruct orthogonal patches or tensor products with a global L2 tolerance | `tensor4all-partitionedtreetn::reconstruction` |
+| Lazy patched Fourier transform on selected axes | `tensor4all-quanticstransform` with `partitioned` (see [QFT guide](guides/qft.md#patched-qft-on-an-index-subset)) |
 | Quantics transform operators | `tensor4all-quanticstransform` |
 | HDF5 I/O compatible with Julia | `tensor4all-hdf5` |
 | Interpolative QTT on a coarse grid | `tensor4all-interpolativeqtt` |

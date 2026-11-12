@@ -109,7 +109,7 @@ impl Default for FourierOptions {
 }
 
 impl FourierOptions {
-    fn validate(&self) -> std::result::Result<(), QuanticsTransformError> {
+    pub(crate) fn validate(&self) -> std::result::Result<(), QuanticsTransformError> {
         if self.sign != -1.0 && self.sign != 1.0 {
             return Err(QuanticsTransformError::InvalidConfiguration {
                 message: "sign must be exactly -1.0 or 1.0".to_string(),

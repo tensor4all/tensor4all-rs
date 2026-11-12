@@ -57,3 +57,7 @@ mod tests;
 // the source here so workspace doctests exercise it without that preprocessor.
 #[doc = concat!("```rust\n", include_str!("../../../crates/tensor4all-treersi/examples/validated_product.rs"), "\n``` ")]
 mod tree_rsi {}
+
+// Execute the patched-QFT example from the same source linked by the QFT guide.
+#[doc = concat!("```rust\n", include_str!("../../../crates/tensor4all-quanticstransform/examples/patched_fourier.rs"), "\n``` ")]
+mod patched_fourier {}

@@ -23,6 +23,14 @@ pub enum QuanticsTransformError {
         /// Description of the invalid configuration.
         message: String,
     },
+    /// Validation, resource limits, or execution failed in patched reconstruction.
+    #[cfg(feature = "partitioned")]
+    #[error("patched Fourier reconstruction failed: {source}")]
+    Reconstruction {
+        /// Typed scheduler error, including its repair guidance and source chain.
+        #[from]
+        source: tensor4all_partitionedtreetn::PartitionedTreeTNError,
+    },
     /// An underlying tensor, operator, or backend operation failed.
     #[error("quantics transform operation failed: {source}")]
     Operation {

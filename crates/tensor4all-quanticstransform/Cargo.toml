@@ -14,7 +14,11 @@ license.workspace = true
 repository.workspace = true
 description = "Quantics transformation operators for tensor train methods"
 
+[package.metadata.docs.rs]
+features = ["partitioned"]
+
 [features]
+partitioned = ["dep:tensor4all-partitionedtreetn"]
 default = ["tenferro-cpu-platform"]
 # The platform default: Apple Accelerate on macOS, faer elsewhere
 # (see the `tensor4all-cpu-platform` crate).
@@ -22,24 +26,29 @@ tenferro-cpu-platform = [
     "tensor4all-core/tenferro-cpu-platform",
     "tensor4all-simplett/tenferro-cpu-platform",
     "tensor4all-treetn/tenferro-cpu-platform",
+    "tensor4all-partitionedtreetn?/tenferro-cpu-platform",
 ]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
     "tensor4all-simplett/tenferro-cpu-faer",
     "tensor4all-treetn/tenferro-cpu-faer",
+    "tensor4all-partitionedtreetn?/tenferro-cpu-faer",
 ]
 tenferro-system-blas = [
     "tensor4all-core/tenferro-system-blas",
     "tensor4all-simplett/tenferro-system-blas",
     "tensor4all-treetn/tenferro-system-blas",
+    "tensor4all-partitionedtreetn?/tenferro-system-blas",
 ]
 tenferro-provider-inject = [
     "tensor4all-core/tenferro-provider-inject",
     "tensor4all-simplett/tenferro-provider-inject",
     "tensor4all-treetn/tenferro-provider-inject",
+    "tensor4all-partitionedtreetn?/tenferro-provider-inject",
 ]
 
 [dependencies]
+tensor4all-partitionedtreetn = { path = "../tensor4all-partitionedtreetn", optional = true, default-features = false }
 tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false, features = ["simplett-bridge"] }
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
@@ -55,3 +64,7 @@ sprs = "0.11"
 
 [dev-dependencies]
 approx.workspace = true
+
+[[example]]
+name = "patched_fourier"
+required-features = ["partitioned"]

@@ -68,6 +68,9 @@ mod cumsum;
 mod difference_kernel;
 mod flip;
 mod fourier;
+mod multiaxis_fourier;
+#[cfg(feature = "partitioned")]
+mod patched_fourier;
 mod phase_rotation;
 mod shift;
 
@@ -88,3 +91,12 @@ pub use flip::{flip_operator, flip_operator_multivar};
 pub use fourier::{quantics_fourier_operator, FTCore, FourierOptions};
 pub use phase_rotation::{phase_rotation_operator, phase_rotation_operator_multivar};
 pub use shift::{shift_operator, shift_operator_multivar};
+
+pub use multiaxis_fourier::{quantics_fourier_operator_multiaxis, AxisBit};
+#[cfg(feature = "partitioned")]
+pub use patched_fourier::{patched_fourier_transform, PatchedFourierOptions};
+#[cfg(feature = "partitioned")]
+pub use tensor4all_partitionedtreetn::reconstruction::{
+    CoordinateGroup, CoverageContract, MergeRefineOptions, MergeRefineReport, MergeRefineResult,
+    ReconstructionTolerance,
+};

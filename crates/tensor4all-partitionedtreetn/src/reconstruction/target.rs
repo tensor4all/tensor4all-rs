@@ -254,7 +254,9 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// Prepare the images of `preimage` under `operator` acting on an ordered subset.
     ///
     /// `selection` lists one full site index per operator node, in the operator's
-    /// own node order. That node order defines the logical bit order: for a
+    /// sorted node order. Operator node names may have a different type from
+    /// the state node names; binding and exact owner grouping happen here.
+    /// That node order defines the logical bit order: for a
     /// quantics Fourier transform its node 0 is the most significant input bit
     /// (`k1`), and the output at node `j` carries the bit-reversed frequency bit
     /// `r_(R+1-j)`, so no output bit-reversal permutation is applied here.
@@ -361,13 +363,16 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// ```
     ///
     /// [`SubsetOperatorOptions::unitary`]: super::SubsetOperatorOptions::unitary
-    pub fn from_subset_operator(
+    pub fn from_subset_operator<OperatorV>(
         preimage: &Self,
         center: &V,
-        operator: &LinearOperator<IdxTensor, V>,
+        operator: &LinearOperator<IdxTensor, OperatorV>,
         selection: &[DynIndex],
         options: &SubsetOperatorOptions,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        OperatorV: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+    {
         if preimage.patches.is_empty() {
             if selection.is_empty() {
                 return Ok(Self {
@@ -416,14 +421,17 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// # Errors
     /// Propagates the selection, operator-mapping, node-merging, and application
     /// errors documented on [`Self::from_subset_operator`].
-    pub(super) fn prepare_subset_images(
+    pub(super) fn prepare_subset_images<OperatorV>(
         preimage: &Self,
         center: &V,
-        operator: &LinearOperator<IdxTensor, V>,
+        operator: &LinearOperator<IdxTensor, OperatorV>,
         selection: &[DynIndex],
         options: &SubsetOperatorOptions,
         apply: Option<&ApplyOptions<V>>,
-    ) -> Result<PreparedImages<V>> {
+    ) -> Result<PreparedImages<V>>
+    where
+        OperatorV: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+    {
         let mut operator_nodes = operator.mpo().node_names();
         operator_nodes.sort();
         if operator_nodes.len() != selection.len() {
@@ -450,7 +458,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         // index. Singleton groups make this a pure node rename.
         let mpo_network = operator.mpo().site_index_network();
         let mut target = SiteIndexNetwork::<V, DynIndex>::new();
-        let mut owners: HashMap<V, V> = HashMap::with_capacity(operator_nodes.len());
+        let mut owners: HashMap<OperatorV, V> = HashMap::with_capacity(operator_nodes.len());
         let mut input_pairs = Vec::with_capacity(selection.len());
         let mut output_pairs = Vec::with_capacity(selection.len());
         for (node, target_index) in operator_nodes.iter().zip(selection) {
@@ -490,7 +498,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         // absorbing sites that belong elsewhere, so reject it with guidance
         // instead of mis-binding a multi-site operator node.
         for owner in target.node_names().into_iter().cloned().collect::<Vec<V>>() {
-            let members: HashSet<V> = owners
+            let members: HashSet<OperatorV> = owners
                 .iter()
                 .filter(|(_, candidate)| **candidate == owner)
                 .map(|(node, _)| node.clone())
