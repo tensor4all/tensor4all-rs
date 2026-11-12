@@ -57,7 +57,8 @@
 // (unpatched TreeACI: `--tol` relative to the sampled scale, as gw-rs runs it,
 // instead of absolute), `--max-sweeps` (unpatched TreeACI's sweep limit,
 // 50 unless given), `--topology`, `--in2-cap`, `--in2-rtol`
-// (the second factor of `g0sq-mixed`), `--samples`, `--seed`,
+// (the second factor of `g0sq-mixed`), `--samples`, `--seed`, `--trace-calls`
+// (patched TreeACI: one `engine_call` line per kernel and residual-TT run),
 // and `--variants "cap=32;cap=128,rtol=1e-4"`, which runs the method once per
 // `;`-separated set of overrides on the same inputs and samples (peak RSS
 // then covers every variant), and `--exhaustive true`, which compares at
@@ -131,6 +132,10 @@ struct Args {
     exhaustive: bool,
     /// Emit one line per accepted patch of the patched methods.
     dump_patches: bool,
+    /// Emit one `engine_call` line per kernel and residual-TT run of the
+    /// patched TreeACI method: active sites, tolerance, cap, termination,
+    /// rank, wall time and the points evaluated.
+    trace_calls: bool,
     /// Diagnostics (small `R` only): compare every TreeACI product run with
     /// the dense product of its restricted inputs.
     audit_kernel: bool,
@@ -170,6 +175,7 @@ fn set(args: &mut Args, key: &str, value: &str) -> Result<()> {
         "--seed" => args.seed = value.parse()?,
         "--exhaustive" => args.exhaustive = value.parse()?,
         "--dump-patches" => args.dump_patches = value.parse()?,
+        "--trace-calls" => args.trace_calls = value.parse()?,
         "--audit-kernel" => args.audit_kernel = value.parse()?,
         "--aci-margin" => args.aci_margin = value.parse()?,
         "--topology" => args.topology = value.to_string(),
@@ -236,6 +242,7 @@ fn parse_args() -> Result<Args> {
         variants: vec![String::new()],
         exhaustive: false,
         dump_patches: false,
+        trace_calls: false,
         audit_kernel: false,
         aci_margin: 10.0,
         engine_tol_factor: 1.0,
@@ -492,7 +499,13 @@ impl Grid {
 }
 
 /// The Dyson map of the `g0` workload on a `[3, n_points]` batch.
+/// Points evaluated by the patched Dyson map, so a traced kernel run of `g0`
+/// reports how many points it evaluated (the library's `Product` is not
+/// counted, so `g0sq` traces report 0).
+static OPERATOR_POINTS: AtomicU64 = AtomicU64::new(0);
+
 fn dyson(inputs: ColMajorArrayRef<'_, Complex64>, output: &mut [Complex64]) -> Result<()> {
+    OPERATOR_POINTS.fetch_add(output.len() as u64, Ordering::Relaxed);
     let data = inputs.data();
     for (p, value) in output.iter_mut().enumerate() {
         let (cx, cy, w) = (data[3 * p], data[3 * p + 1], data[3 * p + 2]);
@@ -787,6 +800,8 @@ struct Timed<E> {
     inner: E,
     nanos: AtomicU64,
     calls: AtomicUsize,
+    /// `Some(role)` emits one `engine_call` line per run (`--trace-calls`).
+    trace: Option<&'static str>,
 }
 
 impl<E> Timed<E> {
@@ -795,7 +810,47 @@ impl<E> Timed<E> {
             inner,
             nanos: AtomicU64::new(0),
             calls: AtomicUsize::new(0),
+            trace: None,
         }
+    }
+
+    fn traced(mut self, role: &'static str, enabled: bool) -> Self {
+        self.trace = enabled.then_some(role);
+        self
+    }
+
+    /// The `engine_call` line of one run, if traced.
+    fn trace_call<V>(
+        &self,
+        problem: &InterpolationProblem<V>,
+        outcome: &Result<InterpolationOutcome<V>, InterpolationError>,
+        seconds: f64,
+        points: u64,
+    ) where
+        V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    {
+        let Some(role) = self.trace else { return };
+        let (termination, rank, estimate) = match outcome {
+            Ok(outcome) => (
+                format!("{:?}", outcome.termination),
+                outcome.network.link_dims().into_iter().max().unwrap_or(1),
+                outcome.error_estimate,
+            ),
+            Err(error) => (format!("error: {error}"), 0, f64::NAN),
+        };
+        emit(json!({
+            "kind": "engine_call",
+            "role": role,
+            "call": self.calls.load(Ordering::Relaxed),
+            "active": problem.site_order().len(),
+            "tolerance": problem.absolute_tolerance(),
+            "cap": problem.max_bond_dim().map(|c| c.get()),
+            "termination": termination,
+            "rank": rank,
+            "estimate": estimate,
+            "seconds": seconds,
+            "points": points,
+        }));
     }
 
     fn time<R>(&self, run: impl FnOnce() -> R) -> R {
@@ -826,10 +881,15 @@ impl<T, Op, E: ElementwiseInterpolator<T, Op>> ElementwiseInterpolator<T, Op> fo
     where
         V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
     {
-        self.time(|| {
+        let before = OPERATOR_POINTS.load(Ordering::Relaxed);
+        let start = Instant::now();
+        let outcome = self.time(|| {
             self.inner
                 .interpolate_elementwise(problem, inputs, operator, ctx)
-        })
+        });
+        let points = OPERATOR_POINTS.load(Ordering::Relaxed) - before;
+        self.trace_call(problem, &outcome, start.elapsed().as_secs_f64(), points);
+        outcome
     }
 }
 
@@ -844,7 +904,17 @@ impl<T, E: TreeInterpolator<T>> TreeInterpolator<T> for Timed<E> {
         V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
         F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
     {
-        self.time(|| self.inner.interpolate(problem, ctx, evaluate))
+        let mut evaluate = evaluate;
+        let mut points = 0u64;
+        let start = Instant::now();
+        let outcome = self.time(|| {
+            self.inner.interpolate(problem, ctx, |batch, ctx| {
+                points += batch.shape().get(1).copied().unwrap_or(0) as u64;
+                evaluate(batch, ctx)
+            })
+        });
+        self.trace_call(problem, &outcome, start.elapsed().as_secs_f64(), points);
+        outcome
     }
 }
 
@@ -1017,9 +1087,11 @@ fn run_method(
             let engine = Timed::new(
                 TreeAciInterpolator::new(aci_options(args.aci_margin))?
                     .with_tolerance_factor(args.engine_tol_factor)?,
-            );
+            )
+            .traced("kernel", args.trace_calls);
             let kernel = &engine;
-            let residual = Timed::new(TreeTciInterpolator::default());
+            let residual =
+                Timed::new(TreeTciInterpolator::default()).traced("residual", args.trace_calls);
             let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
             let result = if product && args.audit_kernel {
                 patched_elementwise::<Complex64, _, _, _, _>(
@@ -1202,6 +1274,7 @@ fn g0_input(
         rtol,
         tol: args.in_tol,
         dump_patches: false,
+        trace_calls: false,
         audit_kernel: false,
         // The inputs keep TreeACI's default margin whatever the product uses.
         aci_margin: 10.0,
