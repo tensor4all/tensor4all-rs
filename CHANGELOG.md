@@ -121,7 +121,19 @@ literals, or named public types:
 - `tensor4all-partitionedtreetn`: `contract_adaptive` groups compatible pairs by
   predicted output projector before any numerical work and, with a cap and
   `PatchSplitStrategy::Sequential`, stops a group at its first saturated
-  contribution instead of contracting every pair first.
+  contribution instead of contracting every pair first. Layouts accepted
+  before give the same partition and values. Output projectors that overlap
+  without being equal, which used to return `OverlappingProjectors`, are now
+  refined onto a disjoint grid; a grid above `AUTOMATIC_REFINEMENT_LIMIT`
+  returns `RefinementTooLarge`. `contract_adaptive_selected` forms only the
+  pairs whose output key equals a wanted key, so a pair whose key overlaps a
+  wanted key without being equal to it is not formed.
+- `tensor4all-partitionedtreetn`: under the L2 error norm, the adaptive
+  interpolation driver now measures an engine run that ends with
+  `ErrorNotMeasured` below the cap, and can accept or retry it like a
+  converged run, where it used to split it. Besides tree RSI this covers
+  TreeTCI runs that end with `DegenerateCandidateSet` in
+  `patched_interpolate`.
 
 ### Public-API renames and removals since v0.2.0
 

@@ -742,6 +742,8 @@ where
 /// * `wanted` - Exact output projector keys, compared by equality with the
 ///   pre-split output key of each pair. Duplicates are ignored. A key that no
 ///   pair produces has no output; an empty slice returns an empty partition.
+///   A pair whose key overlaps a wanted key without being equal to it is not
+///   formed, so a wanted region holds only the pairs whose key equals it.
 ///
 /// # Returns
 ///
