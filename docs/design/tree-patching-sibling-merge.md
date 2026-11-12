@@ -119,6 +119,13 @@ a merge never weakens the basis of its members:
   standard errors combined by their weights. `t_Q` is deterministic and adds
   no variance.
 
+Amendment (2026-11-12, review of PR #1278): the first rule took the slack
+from the acceptance alone. With sampled members whose audits exceed their
+acceptance, a truncation could then spend slack the audit did not have and
+report an audited estimate above `tau`. The slack is now taken against the
+larger of the combined acceptance and the combined audit, so both stay
+within `a_Q`; an exact merge (`t_Q = 0`) leaves both unchanged as before.
+
 The global `GlobalL2Error` of the merged result is assembled by the same
 code as the producer's, from the merged regions as contributions. A run
 without any accepted merge therefore reports exactly the producer's global
@@ -192,7 +199,9 @@ For each complete group, deepest first:
 1. If any member is `ToleranceNotMet`, reject.
 2. If every member is zero, accept as a zero region.
 3. Sum the nonzero members exactly (disjoint masked networks, direct sum).
-4. `slack = a_Q - sqrt(sum e_i^2)`. If `slack > 0`, truncate the sum toward
+4. `slack = a_Q - max(sqrt(sum e_i^2), sqrt(sum u_i^2))`, with `u_i` the
+   members' audited errors when every member has one (amended 2026-11-12,
+   see below). If `slack > 0`, truncate the sum toward
    `slack` and measure `t_Q` on the difference network; a candidate whose
    measured `t_Q` exceeds `slack` is discarded and the exact sum kept with
    `t_Q = 0`. This is `reconstruction::engine::truncate_toward_allowance`,

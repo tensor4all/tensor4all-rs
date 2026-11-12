@@ -8,11 +8,13 @@
 //! that keeps the run's L2 contract and stays below the cap.
 //!
 //! The rule spends only the slack that the members' measured errors leave
-//! inside the merged region `Q`: with members `P_i` of measured errors `e_i`
-//! and truncation residual `t_Q`, a merge is accepted when
-//! `sqrt(sum e_i^2) + t_Q <= tau * sqrt(|Q|)`. Every region of the result
-//! therefore still meets its volume-proportional allowance, and the global
-//! bound `E <= delta` of the run holds without a second budget. The design is
+//! inside the merged region `Q`: with members `P_i` of measured errors `e_i`,
+//! audited errors `u_i` when every member has an audit, and truncation
+//! residual `t_Q`, a merge is accepted when
+//! `max(sqrt(sum e_i^2), sqrt(sum u_i^2)) + t_Q <= tau * sqrt(|Q|)`. Every
+//! region of the result therefore still meets its volume-proportional
+//! allowance, by its acceptance and by its audit, and the global bound
+//! `E <= delta` of the run holds without a second budget. The design is
 //! recorded in `docs/design/tree-patching-sibling-merge.md`.
 //!
 //! # Derivation notice
@@ -202,10 +204,13 @@ where
 ///    would hide the miss inside a larger region;
 /// 2. becomes a zero region when every member is a zero patch;
 /// 3. otherwise its members are summed exactly, and the sum is truncated
-///    toward the slack `tau * sqrt(|Q|) - sqrt(sum e_i^2)` when that is
-///    positive. The truncation residual `t_Q` is measured on the explicit
-///    difference network; a candidate exceeding the slack is discarded and
-///    the exact sum kept with `t_Q = 0`;
+///    toward the slack `tau * sqrt(|Q|) - max(sqrt(sum e_i^2), sqrt(sum u_i^2))`
+///    when that is positive, where `u_i` are the members' audited errors when
+///    every member has an audit (the acceptance itself for an `Exact` or
+///    `Exhaustive` member), so the truncation keeps both the acceptance and
+///    the audit of the region within its allowance. The truncation residual
+///    `t_Q` is measured on the explicit difference network; a candidate
+///    exceeding the slack is discarded and the exact sum kept with `t_Q = 0`;
 /// 4. is accepted when the merged patch's largest bond dimension is strictly
 ///    below the cap.
 ///
@@ -573,9 +578,14 @@ where
         },
     )?;
     let root_points = combined.patch_points.sqrt();
-    // The slack in L2 units; `tau * sqrt(|Q|)` can overflow only when the
+    // The slack in L2 units, against the larger of the combined acceptance
+    // and the combined audit: the truncation adds to both, so either may
+    // otherwise end above `tau`. `tau * sqrt(|Q|)` can overflow only when the
     // networks' own norms do.
-    let slack = (tau - combined.rms) * root_points;
+    let spent = combined
+        .audited
+        .map_or(combined.rms, |audit| audit.rms.max(combined.rms));
+    let slack = (tau - spent) * root_points;
     let (merged, residual) = if slack > 0.0 && slack.is_finite() {
         truncate_toward_allowance(&sum, center, slack)?
     } else {
