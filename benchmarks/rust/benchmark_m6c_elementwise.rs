@@ -62,7 +62,8 @@
 // `--trace-history` (patched TreeACI on `g0`: per-pass history of every
 // kernel run below the cap, from a rerun),
 // `--error-norm` (`l2` or `sampled-max`, patched methods), `--audit` (the
-// driver's L2 audit, `true` unless given),
+// driver's L2 audit, `true` unless given), `--max-reference` (`pinned`,
+// `exact` or a number: the max-norm reference of `sampled-max`),
 // and `--variants "cap=32;cap=128,rtol=1e-4"`, which runs the method once per
 // `;`-separated set of overrides on the same inputs and samples (peak RSS
 // then covers every variant), and `--exhaustive true`, which compares at
@@ -175,6 +176,11 @@ struct Args {
     /// The driver's independent audit of every sampled L2 acceptance (the
     /// library default `true`); it never changes the partition.
     audit: bool,
+    /// Under `--error-norm sampled-max`: `pinned` (the default) pins
+    /// `max_reference` from the root sample; `exact` gives the exact
+    /// `max |G0|` of the grid (to the workload's power); a number gives it
+    /// directly (`ErrorNorm::sampled_max_with_reference`).
+    max_reference: String,
 }
 
 fn set(args: &mut Args, key: &str, value: &str) -> Result<()> {
@@ -204,6 +210,7 @@ fn set(args: &mut Args, key: &str, value: &str) -> Result<()> {
         "--engine-tol-factor" => args.engine_tol_factor = value.parse()?,
         "--error-norm" => args.error_norm = value.to_string(),
         "--audit" => args.audit = value.parse()?,
+        "--max-reference" => args.max_reference = value.to_string(),
         "--max-sweeps" => args.max_sweeps = value.parse()?,
         "--variants" => {
             args.variants = value.split(';').map(str::to_string).collect();
@@ -234,6 +241,7 @@ fn variant(args: &Args, overrides: &str) -> Result<Args> {
                 | "max-sweeps"
                 | "error-norm"
                 | "audit"
+                | "max-reference"
         ) {
             bail!("variant key {key} would change the inputs or the samples");
         }
@@ -275,6 +283,7 @@ fn parse_args() -> Result<Args> {
         max_sweeps: 50,
         error_norm: "l2".to_string(),
         audit: true,
+        max_reference: "pinned".to_string(),
         topology: "cttn".to_string(),
         scale_tolerance: false,
     };
@@ -1210,7 +1219,21 @@ impl<Op: ElementwiseOperator<Complex64>> ElementwiseInterpolator<Complex64, Op>
 fn patched_options(grid: &Grid, args: &Args, norm: f64) -> Result<PatchedInterpolationOptions> {
     let error_norm = match args.error_norm.as_str() {
         "l2" => ErrorNorm::l2(L2Reference::Given(norm)),
-        "sampled-max" => ErrorNorm::sampled_max(),
+        "sampled-max" => match args.max_reference.as_str() {
+            "pinned" => ErrorNorm::sampled_max(),
+            "exact" => ErrorNorm::sampled_max_with_reference(g0_max_abs(grid).powi(
+                if args.workload.starts_with("g0sq") {
+                    2
+                } else {
+                    1
+                },
+            )),
+            value => {
+                ErrorNorm::sampled_max_with_reference(value.parse().with_context(|| {
+                    format!("--max-reference {value}: pinned, exact or a number")
+                })?)
+            }
+        },
         other => bail!("unknown --error-norm {other} (l2 or sampled-max)"),
     };
     Ok(PatchedInterpolationOptions::new(args.cap)
@@ -1490,7 +1513,7 @@ fn main() -> Result<()> {
         "workload": args.workload, "method": args.method, "r": args.r,
         "temperature": args.temperature, "mu": MU, "topology": args.topology,
         "scale_tolerance": args.scale_tolerance, "max_sweeps": args.max_sweeps,
-        "error_norm": args.error_norm, "audit": args.audit,
+        "error_norm": args.error_norm, "audit": args.audit, "max_reference": args.max_reference,
         "cap": args.cap, "rtol": args.rtol, "tol": args.tol,
         "rsi_rtol": args.rsi_rtol, "rsi_cap": args.rsi_cap,
         "in_cap": args.in_cap, "in_rtol": args.in_rtol, "in_tol": args.in_tol,
