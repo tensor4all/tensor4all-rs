@@ -1,0 +1,9 @@
+binary_sha256=daa2098483044f6a7d467a2e670f7a8be994e553aabd13be69cc42847057880c
+source_commit=4af11916c2cf6c14813a9cf238c503b05b2b57ee
+branch=bench/patching-overhead-1274
+dirty_files=0
+build=cargo build --release -p tensor4all-benchmarks --example benchmark_m6c_elementwise
+harness=benchmarks/rust/benchmark_m6c_elementwise.rs
+host=AMD Ryzen 9 6900HX with Radeon Graphics, 16 logical CPUs, 6.18.58.1-microsoft-standard-WSL2
+threads=RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1, one taskset core per process (cores 4, 6, 8), three processes side by side
+runs=run-seed.sh, started 2026-11-12T05:36:33+01:00; load average at start: 2.82 8.30 7.15
