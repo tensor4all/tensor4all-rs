@@ -50,6 +50,8 @@ assert_eq!(flip_op.mpo().node_count(), r);
 ## Multi-axis and patched Fourier transforms
 
 `quantics_fourier_operator_multiaxis` accepts an explicit `AxisBit` layout.
+Grouped and interleaved layouts are built exactly without site swaps; the bond
+at each cut is the product of the per-axis bonds.
 Enable the optional `partitioned` feature for `patched_fourier_transform`,
 which transforms selected axes of existing TreeTN patches and returns lazy
 output regions. Selections must lie on one tree path; inverse calls reverse

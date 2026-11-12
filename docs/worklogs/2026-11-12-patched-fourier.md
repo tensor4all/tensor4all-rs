@@ -47,3 +47,38 @@
   harness used the shared debug target's dependency path explicitly.
 - No full workspace suite, alternate BLAS/CUDA execution, MPI, publication,
   or performance validation is claimed.
+
+## Review follow-up: large validation (PR #1277)
+
+- Oracle: a shifted periodic Gaussian defined by a finite Fourier series (12
+  modes), so its normalized discrete DFT is known exactly; no continuous-FT
+  quadrature error enters. 35 seeded sample points per case; inputs are built by
+  interpolative QTT and never materialized on the full grid.
+- Release build, `RAYON_NUM_THREADS=1`, 8 GiB address-space limit, 4 dyadic
+  input patches per 2D case (2 in 1D), `rtol = 1e-6`, rank goal 8, output depth 1:
+
+  | case | input bond | operator bond | operator s | scheduler s | sample error | reconstruction bound | peak RSS |
+  |---|---|---|---|---|---|---|---|
+  | R=10 1D | 8 | 12 | 0.0016 | 0.032 | 4.1e-14 | 7.9e-9 | 41 MB |
+  | R=10 2D grouped | 8 | 12 | 0.0028 | 0.30 | 8.7e-14 | 7.7e-9 | 70 MB |
+  | R=20 1D | 8 | 12 | 0.0034 | 0.25 | 2.2e-13 | 3.5e-10 | 92 MB |
+  | R=20 2D grouped | 8 | 12 | 0.0068 | 1.53 | 4.2e-13 | 6.9e-9 | 124 MB |
+  | R=10 2D interleaved | 50 | 144 | 0.014 | OOM | — | — | >14 GiB |
+  | R=20 2D interleaved | 49 | 144 | 0.059 | OOM | — | — | >8 GiB |
+
+- Interleaved operator construction originally composed the axes in grouped
+  order and restructured by site swaps. Exact swaps at R=10 failed above 4 GiB
+  (3.6 GiB RSS before the failed allocation); capping swap ranks at 16 kept
+  memory bounded but gave sample error 1.1e-4. An exact R=6 dense check showed
+  the interleaved Schmidt ranks are the products of the per-axis ranks (8 per
+  axis, 59 interleaved), so no small cap can be accurate.
+- Monotone layouts (each axis increasing or decreasing along the chain) are now
+  built directly: each axis's core is embedded with the other axes' bonds passed
+  through. This is exact without factorization; R=10 interleaved takes 0.02 s and
+  47 MB, R=20 0.07 s and 99 MB, with bond 144 = 12 x 12. The restructure-options
+  API added during the review was removed again because it no longer bounds
+  anything for these layouts. Non-monotone layouts keep the exact swap route.
+- The remaining interleaved limit is the scheduler's exact reference
+  application (`ReconstructionTarget::from_subset_operator`), whose bonds reach
+  input bond x operator bond. It is tracked in #1279; the heavy suite covers
+  1D and 2D grouped only.

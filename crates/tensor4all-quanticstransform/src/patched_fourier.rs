@@ -21,7 +21,8 @@ use tensor4all_treetn::SiteIndexNetwork;
 ///
 /// Unlike [`FourierOptions`], these options govern reconstruction of an already
 /// constructed operator. Defaults use relative tolerance `1e-6`, complete input
-/// coverage, and an exact full-depth schedule with no rank goal. Set
+/// coverage, and an exact full-depth schedule with no rank goal. Exact output
+/// cells and intermediate bonds can grow substantially with bit count. Set
 /// `merge_refine.target_bond_dim` to request adaptive compression; the goal is
 /// soft and never overrides the error allowance or resource limits.
 ///
@@ -59,10 +60,13 @@ impl<V> Default for PatchedFourierOptions<V> {
 /// order, with at least two bits. All indices must be distinct and lie on one
 /// path of the state's topology; spectators, including those on selected nodes,
 /// keep their identities. `center` must name an existing state node.
+/// [`PartitionedTreeTN`] validates that all patches share the same named topology,
+/// full site-index placement and dimensions at construction and mutation. The
+/// front end therefore reads this common topology from any one patch.
 ///
-/// The front end derives physical path order and coordinate groups, builds an
-/// exact layout permutation of the per-axis operators specified by `options`,
-/// and delegates to the merge-refine scheduler. It never globally sums patches.
+/// The front end derives physical path order and coordinate groups, builds the
+/// exact layout product of the per-axis operators specified by `options` (see
+/// [`quantics_fourier_operator_multiaxis`]), and delegates to the merge-refine scheduler. It never globally sums patches.
 /// A region can retain several terms, so `into_partition()` can fail. Requested
 /// `output_regions` select intersecting schedule cells, which can be coarser
 /// than the request. See [`MergeRefineOptions`] for limits and coverage contracts.
@@ -98,8 +102,11 @@ impl<V> Default for PatchedFourierOptions<V> {
 /// let tree = TreeTN::from_tensors(
 ///     vec![IdxTensor::from_dense(bits.clone(), vec![1.0; 4])?], vec!["site"])?;
 /// let state = PartitionedTreeTN::from_subdomain(SubDomainTreeTN::from_treetn(tree)?)?;
+/// let mut policy = PatchedFourierOptions::default();
+/// policy.merge_refine.target_bond_dim = Some(4);
+/// policy.merge_refine.output_depth = Some(2);
 /// let result = patched_fourier_transform(&state, &"site", &[bits],
-///     FourierOptions::forward(), &PatchedFourierOptions::default())?;
+///     FourierOptions::forward(), &policy)?;
 /// // A normalized four-point DFT maps the constant function to 2 at zero.
 /// let partition = result.into_partition()?;
 /// assert!((partition.norm()? - 2.0).abs() < 1e-10);
@@ -116,7 +123,6 @@ pub fn patched_fourier_transform<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    options.validate()?;
     if patched.merge_refine.coordinate_groups.is_some() {
         return Err(invalid(
             "coordinate_groups is derived from Fourier axes; leave it unset",

@@ -455,8 +455,11 @@ indices; owner grouping, index binding and exact restructuring remain owned by
 state nodes use names or hold several selected indices.
 
 `tensor4all-quanticstransform` provides `quantics_fourier_operator_multiaxis`
-with an explicit axis/bit layout. It composes adjacent separated axes pairwise
-and restructures exactly to the desired bit-node path. The optional `partitioned`
+with an explicit axis/bit layout. When every axis is monotone along the path it
+embeds the per-axis trains directly, passing the other axes' bonds through, so
+the product is exact with bond equal to the product of per-axis bonds. Other
+layouts compose adjacent separated axes pairwise and restructure exactly by site
+swaps, which can grow intermediate bonds far beyond that product. The optional `partitioned`
 feature supplies `patched_fourier_transform`: it derives selection path order
 and coordinate groups and delegates to `schedule_merge_refine`, returning the
 lazy result directly. Branching selections remain unsupported.

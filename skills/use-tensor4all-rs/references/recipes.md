@@ -388,5 +388,6 @@ The normalized inverse reverses each axis's index vector and uses
 `FourierOptions::inverse()`. Reconstruction error bounds exclude the Fourier
 operator's construction error and backend roundoff. For unpatched products use
 `quantics_fourier_operator_multiaxis` with an explicit `AxisBit` layout. Exact
-layout restructuring may increase bonds beyond the per-axis construction cap.
+layouts multiply the per-axis bonds (about `12 * 12` for two interleaved axes),
+beyond the per-axis construction cap; grouped layouts keep the per-axis bond.
 See the [QFT guide](../../../docs/book/src/guides/qft.md) and its checked example.

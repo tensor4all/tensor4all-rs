@@ -148,9 +148,17 @@ assert!((operator.mpo().clone().norm()? - 4.0).abs() < 1e-10);
 Bind the operator's node `j` to the desired selected state index using its
 input/output mappings and `apply_linear_operator_to_indices`. Node ordering
 is separate from bit significance: the layout can also be grouped or permuted.
-Each axis is built with `FourierOptions`, then the product is restructured
-exactly to the requested layout. The resulting bonds can exceed the per-axis
-`max_bond_dim`; reordering adds no intentional truncation.
+Each axis is built with `FourierOptions`. If some axis's bits are not monotone
+along the layout, the product is composed in separated axis order and
+restructured exactly by site swaps; its intermediate and final bonds can exceed
+the per-axis `max_bond_dim`, and reordering adds no intentional truncation.
+
+When every axis's bits are monotone along the layout, as in grouped and
+interleaved layouts, the per-axis operators are embedded directly instead: each
+site passes the other axes' bonds through unchanged. This is exact and needs no
+site swaps; the bond at each cut is the product of the per-axis bonds there. Two
+interleaved axes at the default options therefore reach bond `12 * 12 = 144`,
+while a grouped layout keeps the per-axis bond `12`.
 
 ## Patched QFT on an index subset
 
@@ -168,8 +176,13 @@ Leave `coordinate_groups` unset; the front end derives them from the axes.
 The returned `MergeRefineResult` keeps output regions and their retained terms
 lazy. `into_partition()` requires one final term per region. Requested output
 regions select intersecting schedule cells and can return coarser cells.
-Repeated exact transforms can grow intermediate bonds substantially; the small
-round-trip example below uses a rank goal with a tight reconstruction tolerance.
+Repeated exact transforms can grow intermediate bonds substantially. A rank
+goal is soft and does not bound the initial operator application, which is
+always performed exactly: its bonds are the input bond times the operator bond.
+For large transforms set an appropriate output depth/region selection and a
+rank goal. The defaults preserve exact behavior and should not
+be treated as a scalable memory policy. The small round-trip example uses a
+rank goal with a tight reconstruction tolerance.
 
 Output significance reverses **within each axis**. For a normalized inverse
 round trip use `axes_inv[a] = axes[a].iter().rev().cloned().collect()` with
@@ -200,3 +213,42 @@ as one-hot sites (through the existing simplett bridge), split any fused levels,
 and use the same full index identities and named topology for every patch. A
 prefix projector alone cannot introduce missing site indices. Input generation
 is separate from this Fourier API.
+
+## Large periodic-Gaussian validation
+
+`patched_fourier_large` builds shifted periodic Gaussians by single-scale
+interpolative QTT construction, cuts input prefix patches and transforms them
+without enumerating a dense grid. The Gaussian is defined by a finite Fourier
+series with known discrete coefficients, so its DFT oracle has no continuous-FT
+quadrature or aliasing approximation. The 2D function is the product of the two
+shifted Gaussians. Inputs and outputs are checked at a fixed seeded set of
+random points, including nonzero low frequencies and both frequency signs.
+
+The example uses explicit input/layout rank policies, reconstruction tolerance
+and output depth. These are example choices, not a certified construction-error
+bound or a new default. Its output reports input/operator bond dimensions,
+operator construction time, isolated scheduler time, front-end time (which also
+includes operator/target construction), and sampled error alongside the
+reconstruction bound. The small dense examples above remain the primary
+layout and bit-significance regression checks.
+
+```bash
+RAYON_NUM_THREADS=1 cargo run --release -p tensor4all-quanticstransform --features partitioned --example patched_fourier_large -- 10 1 grouped
+RAYON_NUM_THREADS=1 cargo run --release -p tensor4all-quanticstransform --features partitioned --example patched_fourier_large -- 10 2 grouped
+```
+
+A small R=10 1D smoke check runs in the ordinary suite. The full R=10/20 1D and
+2D grouped cases live in `heavy_patched_fourier.rs` and run in the scheduled
+heavy-test workflow. Run them locally in release mode:
+
+```bash
+RAYON_NUM_THREADS=1 cargo test --release -p tensor4all-quanticstransform --features partitioned --test heavy_patched_fourier -- --ignored --nocapture --test-threads=1
+```
+
+Two interleaved axes are not yet practical at this size. The operator itself
+is cheap (bond 144, built in well under a second at R=20), but the scheduler
+always applies it exactly to each input patch as its error reference, so that
+application has bonds up to input bond times operator bond: 50 x 144 = 7200
+for the R=10 interleaved Gaussian, which exhausted a 14 GiB limit. Prefer a
+grouped layout for patched multi-axis transforms until the scheduler bounds
+that application (issue #1279).

@@ -63,8 +63,15 @@ anyhow.workspace = true
 sprs = "0.11"
 
 [dev-dependencies]
+tensor4all-interpolativeqtt = { path = "../tensor4all-interpolativeqtt", default-features = false }
+rand.workspace = true
+rand_chacha.workspace = true
 approx.workspace = true
 
 [[example]]
 name = "patched_fourier"
+required-features = ["partitioned"]
+
+[[example]]
+name = "patched_fourier_large"
 required-features = ["partitioned"]

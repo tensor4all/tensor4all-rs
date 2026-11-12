@@ -2,6 +2,26 @@
 
 ## v0.3.0
 
+### Patched Fourier transforms (#1275)
+
+- `tensor4all-quanticstransform` adds `AxisBit` and
+  `quantics_fourier_operator_multiaxis` for explicit axis/bit layouts. Layouts
+  whose axes are monotone along the chain (grouped, interleaved) are built
+  exactly without site swaps; their bond is the product of the per-axis bonds.
+  Its optional `partitioned` feature adds `patched_fourier_transform`,
+  `PatchedFourierOptions`, and the reconstruction option/result re-exports.
+  Input patches stay lazy output-region terms; inverse calls reverse each
+  axis's index order. Reconstruction error excludes operator construction
+  error and backend roundoff.
+- `schedule_merge_refine` and `ReconstructionTarget::from_subset_operator`
+  accept an independent `OperatorV` generic parameter. Explicit turbofish
+  call sites need an additional inferred `_` (for example,
+  `schedule_merge_refine::<V, _>`).
+- `QuanticsTransformError` is now `#[non_exhaustive]`; exhaustive matches must
+  add a wildcard arm. The `partitioned` feature adds the typed `Reconstruction`
+  variant. Later feature unification or new variants do not require another
+  exhaustive-match migration.
+
 ### Breaking Rust API changes
 
 Fixed-rank randomized factorization (#1108) and the partitioned TreeTN error
