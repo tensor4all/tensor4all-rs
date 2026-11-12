@@ -13,6 +13,9 @@ authors = [
 license.workspace = true
 repository.workspace = true
 description = "Quantics transformation operators for tensor train methods"
+# Integration tests are listed explicitly so that heavy tests can be modules
+# of `tests/main.rs` (see scripts/check-test-targets.py).
+autotests = false
 
 [package.metadata.docs.rs]
 features = ["partitioned"]
@@ -75,3 +78,32 @@ required-features = ["partitioned"]
 [[example]]
 name = "patched_fourier_large"
 required-features = ["partitioned"]
+
+[[test]]
+name = "integration_test"
+path = "tests/integration_test.rs"
+
+[[test]]
+name = "large_fourier_smoke"
+path = "tests/large_fourier_smoke.rs"
+
+[[test]]
+name = "multiaxis_fourier"
+path = "tests/multiaxis_fourier.rs"
+
+[[test]]
+name = "patched_fourier"
+path = "tests/patched_fourier.rs"
+
+[[test]]
+name = "phase_rotation_precision"
+path = "tests/phase_rotation_precision.rs"
+
+[[test]]
+name = "qft_reconstruction"
+path = "tests/qft_reconstruction.rs"
+
+# Heavy tests (`#[ignore]`, selected by `test(/^heavy_/)` in heavy-tests.yml).
+[[test]]
+name = "heavy"
+path = "tests/main.rs"

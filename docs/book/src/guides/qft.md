@@ -242,7 +242,7 @@ A small R=10 1D smoke check runs in the ordinary suite. The full R=10/20 1D and
 heavy-test workflow. Run them locally in release mode:
 
 ```bash
-RAYON_NUM_THREADS=1 cargo test --release -p tensor4all-quanticstransform --features partitioned --test heavy_patched_fourier -- --ignored --nocapture --test-threads=1
+RAYON_NUM_THREADS=1 cargo test --release -p tensor4all-quanticstransform --features partitioned --test heavy -- --ignored --nocapture --test-threads=1
 ```
 
 Two interleaved axes are not yet practical at this size. The operator itself
