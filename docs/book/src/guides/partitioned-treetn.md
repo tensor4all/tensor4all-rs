@@ -674,3 +674,5 @@ carries the same partition algebra on named `TreeTN` values:
 The adaptive interpolation driver needs an engine that implements
 `TreeInterpolator`; `tensor4all-treetci::TreeTciInterpolator` is the TreeTCI
 one. `benchmarks/rust/benchmark_patching.rs` is the ported patching benchmark.
+
+For a Fourier-specific entry point, see [Patched QFT on an index subset](qft.md#patched-qft-on-an-index-subset). Enable quanticstransform's `partitioned` feature to derive axis layout and coordinate groups automatically while retaining lazy output regions.

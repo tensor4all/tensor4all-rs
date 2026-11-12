@@ -1,3 +1,5 @@
+#![cfg(feature = "partitioned")]
+
 //! Subset QFT integration for orthogonal-target reconstruction.
 //!
 //! These tests bind a real `tensor4all_quanticstransform` Fourier operator to an

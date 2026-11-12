@@ -48,7 +48,7 @@ fn checked_tensor3_size(
     checked_allocation_len::<Complex64>(&[left_dim, site_dim, right_dim], name)
 }
 
-fn zero_tensor3(
+pub(crate) fn zero_tensor3(
     left_dim: usize,
     site_dim: usize,
     right_dim: usize,
@@ -109,7 +109,7 @@ impl Default for FourierOptions {
 }
 
 impl FourierOptions {
-    fn validate(&self) -> std::result::Result<(), QuanticsTransformError> {
+    pub(crate) fn validate(&self) -> std::result::Result<(), QuanticsTransformError> {
         if self.sign != -1.0 && self.sign != 1.0 {
             return Err(QuanticsTransformError::InvalidConfiguration {
                 message: "sign must be exactly -1.0 or 1.0".to_string(),
@@ -284,7 +284,7 @@ pub fn quantics_fourier_operator(
 }
 
 /// Create the QFT MPO as a SimpleTensorTrain using Chen & Lindsey construction.
-fn quantics_fourier_mpo(
+pub(crate) fn quantics_fourier_mpo(
     r: usize,
     options: &FourierOptions,
 ) -> std::result::Result<SimpleTensorTrain<Complex64>, QuanticsTransformError> {

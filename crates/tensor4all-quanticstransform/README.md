@@ -46,3 +46,14 @@ assert_eq!(flip_op.mpo().node_count(), r);
 
 - [User Guide: Quantics](https://tensor4all.org/tensor4all-rs/guides/quantics.html)
 - [API Reference](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_quanticstransform/)
+
+## Multi-axis and patched Fourier transforms
+
+`quantics_fourier_operator_multiaxis` accepts an explicit `AxisBit` layout.
+Grouped and interleaved layouts are built exactly without site swaps; the bond
+at each cut is the product of the per-axis bonds.
+Enable the optional `partitioned` feature for `patched_fourier_transform`,
+which transforms selected axes of existing TreeTN patches and returns lazy
+output regions. Selections must lie on one tree path; inverse calls reverse
+each axis's index order. Reconstruction bounds exclude operator construction
+error and backend roundoff. See the [QFT guide](https://tensor4all.org/tensor4all-rs/guides/qft.html).

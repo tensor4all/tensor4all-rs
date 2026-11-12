@@ -4,6 +4,9 @@ use thiserror::Error;
 
 /// Error returned by quantics transform operator construction.
 ///
+/// This enum is non-exhaustive: include a wildcard arm when matching so that
+/// enabling optional features or adding error variants remains additive.
+///
 /// # Examples
 ///
 /// ```
@@ -13,6 +16,7 @@ use thiserror::Error;
 /// assert!(err.to_string().contains("backend failed"));
 /// ```
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum QuanticsTransformError {
     /// Invalid transform configuration or grid parameters.
     /// # Remedy
@@ -22,6 +26,17 @@ pub enum QuanticsTransformError {
     InvalidConfiguration {
         /// Description of the invalid configuration.
         message: String,
+    },
+    /// Validation, resource limits, or execution failed in patched reconstruction.
+    /// # Remedy
+    /// Inspect `source` for the scheduler's configuration, coverage, or resource
+    /// diagnostic and its repair guidance; preserve it when reporting failures.
+    #[cfg(feature = "partitioned")]
+    #[error("patched Fourier reconstruction failed: {source}")]
+    Reconstruction {
+        /// Typed scheduler error, including its repair guidance and source chain.
+        #[from]
+        source: tensor4all_partitionedtreetn::PartitionedTreeTNError,
     },
     /// An underlying tensor, operator, or backend operation failed.
     #[error("quantics transform operation failed: {source}")]

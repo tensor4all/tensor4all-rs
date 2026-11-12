@@ -154,8 +154,9 @@ are supported.
 The QFT selection is independent of reconstruction's `patch_order`.
 Input bits are ordered from most to least significant. A full transform is
 the same interface with all desired axes selected. Multidimensional axes each
-carry their own ordered subset and are applied as separate calls; normalization
-is unitary on selected axes. The transform is never silently padded and its length
+carry their own ordered subset. They may be applied separately or composed with
+`quantics_fourier_operator_multiaxis` and supplied as one scheduled transform
+with a `CoordinateGroup` per axis. Normalization is unitary on selected axes. The transform is never silently padded and its length
 is never changed: the operator's input and output are the same selected indices, so a
 caller that needs a different output space owns that embedding outside this API.
 
@@ -444,3 +445,31 @@ out of the schedule: a later opt-in padding API must define the embedding, the
 extra bits per transformed coordinate, physical spacing and frequency grid,
 normalization, and output interpretation, and the selected transform length is
 never changed silently.
+
+## Fourier front end and operator node names
+
+The subset reconstruction entry points accept independent state and operator
+node-name types. Sorted operator nodes bind positionally to the selected full
+indices; owner grouping, index binding and exact restructuring remain owned by
+`prepare_subset_images`. This supports abstract integer bit nodes even when
+state nodes use names or hold several selected indices.
+
+`tensor4all-quanticstransform` provides `quantics_fourier_operator_multiaxis`
+with an explicit axis/bit layout. When every axis is monotone along the path it
+embeds the per-axis trains directly, passing the other axes' bonds through, so
+the product is exact with bond equal to the product of per-axis bonds. Other
+layouts compose adjacent separated axes pairwise and restructure exactly by site
+swaps, which can grow intermediate bonds far beyond that product. The optional `partitioned`
+feature supplies `patched_fourier_transform`: it derives selection path order
+and coordinate groups and delegates to `schedule_merge_refine`, returning the
+lazy result directly. Branching selections remain unsupported.
+
+Fourier construction error and reconstruction error are separate. Exact layout
+restructuring can increase the bonds beyond the cap used per axis. A normalized
+inverse call reverses each axis's index vector to account for output bit
+reversal. See the [QFT guide](../book/src/guides/qft.md) for the checked example.
+
+Input generation is independent (#1276). A TT over only a patch's remaining
+bits must be extended with fixed prefix one-hot sites and assigned the shared
+full indices/topology before it can become a `SubDomainTreeTN`. Projectors mask
+existing sites; they never introduce missing indices.
