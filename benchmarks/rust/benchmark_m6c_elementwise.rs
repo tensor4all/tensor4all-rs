@@ -83,7 +83,7 @@ use rand_chacha::ChaCha8Rng;
 use serde_json::{json, Value};
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
 use tensor4all_partitionedtreetn::adaptive_interpolation::{
-    patched_elementwise, patched_interpolate, PatchedInterpolationOptions,
+    patched_elementwise, patched_interpolate, NormReport, PatchedInterpolationOptions,
     PatchedInterpolationResult, VerificationOptions,
 };
 use tensor4all_partitionedtreetn::{
@@ -573,6 +573,23 @@ fn product_batch(
 // ---------------------------------------------------------------------------
 // Exact norms and the sampling measure
 
+/// The exact `max |G0|` over the grid: the smallest `|omega| = pi T` with the
+/// smallest `|mu + 2 cos kx + 2 cos ky|`; `cos` takes `size / 2 + 1`
+/// distinct values.
+fn g0_max_abs(grid: &Grid) -> f64 {
+    let size = grid.size();
+    let cosines: Vec<f64> = (0..=size / 2)
+        .map(|k| (2.0 * PI * k as f64 / size as f64).cos())
+        .collect();
+    let mut smallest = f64::INFINITY;
+    for &ci in &cosines {
+        for &cj in &cosines {
+            smallest = smallest.min((MU + 2.0 * ci + 2.0 * cj).abs());
+        }
+    }
+    1.0 / smallest.hypot(PI * grid.temperature)
+}
+
 /// `s[h]`, for the nonnegative frequency `h` (`omega = 2 pi T (h + 1/2)`), is
 /// the sum of `|G0|^(2 power)` over all `kx, ky`; each frequency `-omega`
 /// gives the same sum.
@@ -818,7 +835,29 @@ fn report_stats<K, R>(
         "verification_failures": report.verification_failures,
         "engine_retries": report.engine_retries,
         "global_l2": format!("{:?}", report.norm.l2_error().map(|e| &e.global)),
+        "norm": norm_stats(&report.norm),
     })
+}
+
+/// The acceptance reference of a patched run: under `SampledMax` the pinned
+/// `max_reference`, its source and the engine tolerance; under L2 the RMS
+/// allowance `tau`.
+fn norm_stats(norm: &NormReport) -> Value {
+    match norm {
+        NormReport::SampledMax {
+            max_reference,
+            source,
+            engine_tolerance,
+            ..
+        } => json!({
+            "kind": "sampled_max",
+            "max_reference": max_reference,
+            "source": format!("{source:?}"),
+            "engine_tolerance": engine_tolerance,
+        }),
+        NormReport::L2 { tau, .. } => json!({ "kind": "l2", "tau": tau }),
+        other => json!({ "kind": format!("{other:?}") }),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1480,6 +1519,7 @@ fn main() -> Result<()> {
     };
     emit(json!({
         "kind": "reference", "norm": samples.norm, "g0_norm": g0_norm,
+        "max_abs": g0_max_abs(&grid).powi(power),
         "seconds": t.elapsed().as_secs_f64(),
     }));
 
