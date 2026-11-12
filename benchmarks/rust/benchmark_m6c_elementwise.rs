@@ -59,6 +59,8 @@
 // 50 unless given), `--topology`, `--in2-cap`, `--in2-rtol`
 // (the second factor of `g0sq-mixed`), `--samples`, `--seed`, `--trace-calls`
 // (patched TreeACI: one `engine_call` line per kernel and residual-TT run),
+// `--trace-history` (patched TreeACI on `g0`: per-pass history of every
+// kernel run below the cap, from a rerun),
 // `--error-norm` (`l2` or `sampled-max`, patched methods), `--audit` (the
 // driver's L2 audit, `true` unless given),
 // and `--variants "cap=32;cap=128,rtol=1e-4"`, which runs the method once per
@@ -90,14 +92,15 @@ use tensor4all_partitionedtreetn::{
 use tensor4all_tensorbackend::explicit::Session;
 use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_treeaci::{
-    tree_elementwise_batched_with_rng_on_session, TreeAciInterpolator, TreeAciOptions,
-    TreeElementwiseBatch,
+    tree_elementwise_batched_with_rng_on_session, TreeAciInterpolator, TreeAciNode, TreeAciOptions,
+    TreeAciTermination, TreeElementwiseBatch,
 };
 use tensor4all_treersi::{hadamard_many_with_rng_on_session, TreeRsiInterpolator, TreeRsiOptions};
 use tensor4all_treetci::TreeTciInterpolator;
 use tensor4all_treetn::interpolation::{
-    ElementwiseInterpolator, EvalContext, InterpolationError, InterpolationOutcome,
-    InterpolationProblem, Parallelism, Product, TreeInterpolator,
+    ElementwiseInterpolator, ElementwiseOperator, EvalContext, InterpolationError,
+    InterpolationOutcome, InterpolationProblem, InterpolationTermination, Parallelism, Product,
+    TreeInterpolator,
 };
 use tensor4all_treetn::{NodeNameNetwork, TreeTN};
 
@@ -138,6 +141,11 @@ struct Args {
     /// patched TreeACI method: active sites, tolerance, cap, termination,
     /// rank, wall time and the points evaluated.
     trace_calls: bool,
+    /// Patched TreeACI on `g0` only: rerun every kernel run that ends below
+    /// the cap with the same inputs, options and seed, and emit one
+    /// `kernel_history` line with its per-pass ranks, errors and Guard
+    /// pivots, which the adapter does not keep.
+    trace_history: bool,
     /// Diagnostics (small `R` only): compare every TreeACI product run with
     /// the dense product of its restricted inputs.
     audit_kernel: bool,
@@ -188,6 +196,7 @@ fn set(args: &mut Args, key: &str, value: &str) -> Result<()> {
         "--exhaustive" => args.exhaustive = value.parse()?,
         "--dump-patches" => args.dump_patches = value.parse()?,
         "--trace-calls" => args.trace_calls = value.parse()?,
+        "--trace-history" => args.trace_history = value.parse()?,
         "--audit-kernel" => args.audit_kernel = value.parse()?,
         "--aci-margin" => args.aci_margin = value.parse()?,
         "--topology" => args.topology = value.to_string(),
@@ -259,6 +268,7 @@ fn parse_args() -> Result<Args> {
         exhaustive: false,
         dump_patches: false,
         trace_calls: false,
+        trace_history: false,
         audit_kernel: false,
         aci_margin: 10.0,
         engine_tol_factor: 1.0,
@@ -277,6 +287,9 @@ fn parse_args() -> Result<Args> {
     }
     if !matches!(args.workload.as_str(), "g0" | "g0sq" | "g0sq-mixed") {
         bail!("workload must be g0, g0sq, or g0sq-mixed");
+    }
+    if args.trace_history && (args.method != "patched-aci" || args.workload != "g0") {
+        bail!("--trace-history covers patched-aci on g0 only");
     }
     if args.workload == "g0sq-mixed" && args.method.starts_with("unpatched") {
         bail!(
@@ -1051,6 +1064,107 @@ impl<E: ElementwiseInterpolator<Complex64, Product>> ElementwiseInterpolator<Com
     }
 }
 
+/// A TreeACI kernel that, after every run ending below the cap, reruns the
+/// same problem through `tree_elementwise_batched_with_rng_on_session` with
+/// the adapter's options and seed, and emits the per-pass history of
+/// `TreeAciResult` that the adapter drops. `reproduced` says whether the
+/// rerun ended exactly like the measured run (same final estimate, rank and
+/// termination). The rerun is outside the kernel's timing. Diagnostics only.
+struct HistoryProbe<'a> {
+    kernel: &'a Timed<TreeAciInterpolator>,
+    margin: f64,
+}
+
+impl<Op: ElementwiseOperator<Complex64>> ElementwiseInterpolator<Complex64, Op>
+    for HistoryProbe<'_>
+{
+    fn interpolate_elementwise<V>(
+        &self,
+        problem: &InterpolationProblem<V>,
+        inputs: &[TreeTN<IdxTensor, V>],
+        operator: &Op,
+        ctx: &mut EvalContext<'_>,
+    ) -> Result<InterpolationOutcome<V>, InterpolationError>
+    where
+        V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    {
+        let outcome = self
+            .kernel
+            .interpolate_elementwise(problem, inputs, operator, ctx)?;
+        if outcome.termination == InterpolationTermination::BondCapReached {
+            return Ok(outcome);
+        }
+        let call = self.kernel.calls.load(Ordering::Relaxed);
+        // The adapter's `run_options`, with the harness's base options.
+        let options = TreeAciOptions {
+            tolerance: problem.absolute_tolerance() / self.kernel.inner.tolerance_factor(),
+            scale_tolerance: false,
+            max_bond_dim: problem.max_bond_dim().map(|cap| cap.get()),
+            rng_seed: problem.seed(),
+            ..aci_options::<V>(self.margin)
+        };
+        let mut rng = ChaCha8Rng::seed_from_u64(problem.seed());
+        let callback = |batch: TreeElementwiseBatch<'_, Complex64>,
+                        output: &mut [Complex64]|
+         -> tensor4all_treeaci::Result<()> {
+            let shape = [batch.n_inputs(), batch.n_points()];
+            ColMajorArrayRef::new(batch.as_col_major_slice(), &shape)
+                .map_err(anyhow::Error::from)
+                .and_then(|values| operator.apply(values, output))
+                .map_err(|error| tensor4all_treeaci::TreeAciError::Callback {
+                    message: error.to_string(),
+                })
+        };
+        let line = match tree_elementwise_batched_with_rng_on_session(
+            callback,
+            inputs,
+            &options,
+            &mut rng,
+            ctx.session(),
+        ) {
+            Ok(rerun) => {
+                let rank = rerun
+                    .diagnostics
+                    .edge_ranks
+                    .iter()
+                    .map(|&(_, _, rank)| rank)
+                    .max()
+                    .unwrap_or(0);
+                // Below the cap, as the measured run was; a later variant
+                // of the non-exhaustive enum counts as not reproduced.
+                let termination = match rerun.termination {
+                    TreeAciTermination::Converged => Some(InterpolationTermination::Converged),
+                    TreeAciTermination::MaxSweeps => Some(InterpolationTermination::IterationLimit),
+                    _ => None,
+                };
+                let outcome_rank = outcome.network.link_dims().into_iter().max().unwrap_or(0);
+                json!({
+                    "kind": "kernel_history",
+                    "call": call,
+                    "active": problem.site_order().len(),
+                    "termination": format!("{:?}", outcome.termination),
+                    "engine_tolerance": options.tolerance,
+                    "min_sweeps": options.min_sweeps,
+                    "max_sweeps": options.max_sweeps,
+                    "reproduced": rerun.max_errors.last().copied() == Some(outcome.error_estimate)
+                        && rank == outcome_rank
+                        && termination == Some(outcome.termination),
+                    "max_ranks": rerun.max_ranks,
+                    "max_errors": rerun.max_errors,
+                    "global_pivots_found": rerun.global_pivots_found,
+                })
+            }
+            Err(error) => json!({
+                "kind": "kernel_history",
+                "call": call,
+                "rerun_error": error.to_string(),
+            }),
+        };
+        emit(line);
+        Ok(outcome)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Methods
 
@@ -1072,7 +1186,7 @@ fn patched_options(grid: &Grid, args: &Args, norm: f64) -> Result<PatchedInterpo
         .with_seed(args.seed))
 }
 
-fn aci_options(margin: f64) -> TreeAciOptions<usize> {
+fn aci_options<V: TreeAciNode>(margin: f64) -> TreeAciOptions<V> {
     TreeAciOptions {
         max_sweeps: 50,
         global_tolerance_margin: margin,
@@ -1106,7 +1220,7 @@ fn run_method(
     let (partition, stats) = match args.method.as_str() {
         "patched-aci" => {
             let engine = Timed::new(
-                TreeAciInterpolator::new(aci_options(args.aci_margin))?
+                TreeAciInterpolator::new(aci_options::<usize>(args.aci_margin))?
                     .with_tolerance_factor(args.engine_tol_factor)?,
             )
             .traced("kernel", args.trace_calls);
@@ -1126,6 +1240,14 @@ fn run_method(
             } else if product {
                 patched_elementwise::<Complex64, _, _, _, _>(
                     kernel, &residual, &refs, &Product, &mut ctx, &options,
+                )?
+            } else if args.trace_history {
+                let probe = HistoryProbe {
+                    kernel,
+                    margin: args.aci_margin,
+                };
+                patched_elementwise::<Complex64, _, _, _, _>(
+                    &probe, &residual, &refs, &dyson, &mut ctx, &options,
                 )?
             } else {
                 patched_elementwise::<Complex64, _, _, _, _>(
@@ -1296,6 +1418,7 @@ fn g0_input(
         tol: args.in_tol,
         dump_patches: false,
         trace_calls: false,
+        trace_history: false,
         audit_kernel: false,
         // The inputs keep TreeACI's default margin whatever the product uses.
         aci_margin: 10.0,
