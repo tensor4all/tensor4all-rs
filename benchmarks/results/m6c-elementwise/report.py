@@ -395,6 +395,169 @@ def nblock_trace():
     return table(["part", "runs", "time [s]", "share", "points evaluated"], rows)
 
 
+# ---------------------------------------------------------------------------
+# #1274: acceptance, per-pass history and the max-norm reference
+
+
+def rtol_of(result):
+    return variant_value(result["variant"], "rtol", "")
+
+
+def kernel_terminations(path):
+    """Per result of `path`: (result, {termination: [runs, seconds]}) of its
+    kernel `engine_call` lines, which precede the result line."""
+    out, current = [], {}
+    for d in lines(path):
+        if d.get("kind") == "engine_call" and d["role"] == "kernel":
+            n, t = current.get(d["termination"], (0, 0.0))
+            current[d["termination"]] = (n + 1, t + d["seconds"])
+        elif d.get("kind") == "result":
+            out.append((d, current))
+            current = {}
+    return out
+
+
+def acceptance_runs():
+    rows = []
+    for seed in (42, 2026, 7):
+        for name, label in [("l2-noaudit", "L2, k 3, audit off"),
+                            ("sampledmax", "sampled-max (pinned), k 1")]:
+            path = RAW / "nblock-T0.01-R12-acceptance" / f"s{seed}-{name}.jsonl"
+            for r, kernel in kernel_terminations(path):
+                total = sum(t for _, t in kernel.values())
+                n_it, t_it = kernel.get("IterationLimit", (0, 0.0))
+                rows.append([seed, label, rtol_of(r), f"{r['seconds']:.0f}", r["patches"],
+                             r["params"], g(r["accuracy"]["rel_l2"], 3),
+                             f"{n_it} / {100 * t_it / total:.0f} %",
+                             f"{r['engine']['residual_engine']['seconds']:.0f}"])
+    return table(["seed", "acceptance", "rtol", "time [s]", "patches", "parameters",
+                  "sampled rel. L2 error", "kernel IterationLimit runs / share of kernel time",
+                  "measurement [s]"], rows)
+
+
+def history():
+    """Which TreeACI stop condition fails in the kernel runs that end at the
+    sweep limit, over passes 11 to 50. Convergence after pass c needs (1)
+    error <= tolerance, (2) no edge rank growth in the last `min_sweeps`
+    passes and (3) no Guard pivots in them; where (1) and (3) hold and the
+    run went on, (2) failed."""
+    rows, total = [], None
+    for seed in (42, 2026, 7):
+        path = RAW / "nblock-T0.01-R12-history" / f"s{seed}-history.jsonl"
+        result = lines(path, "result")[0]
+        calls = lines(path, "kernel_history")
+        c = dict(below=len(calls), repro=sum(d["reproduced"] for d in calls), it=0, passes=0,
+                 f1=0, f3=0, f2=0, changed=0, up=0, down=0)
+        for d in calls:
+            if d["termination"] != "IterationLimit":
+                continue
+            c["it"] += 1
+            tol, m = d["engine_tolerance"], d["min_sweeps"]
+            e, gp, rk = d["max_errors"], d["global_pivots_found"], d["max_ranks"]
+            for i in range(10, len(e)):
+                c1 = e[i] <= tol
+                c3 = all(x == 0 for x in gp[i + 1 - m:i + 1])
+                c["passes"] += 1
+                c["f1"] += not c1
+                c["f3"] += not c3
+                c["f2"] += c1 and c3
+                c["changed"] += rk[i] != rk[i - 1]
+                c["up"] += rk[i] > rk[i - 1]
+                c["down"] += rk[i] < rk[i - 1]
+        total = {k: (total or {}).get(k, 0) + v for k, v in c.items()}
+        rows.append([seed, result["patches"], f"{c['below']} ({c['repro']})", c["it"], c["passes"],
+                     c["f1"], c["f3"], c["f2"], c["changed"], f"{c['up']} / {c['down']}"])
+    t = total
+    rows.append(["all", "", f"{t['below']} ({t['repro']})", t["it"], t["passes"], t["f1"],
+                 t["f3"], t["f2"], t["changed"], f"{t['up']} / {t['down']}"])
+    return table(["seed", "patches", "kernel runs below the cap (reproduced by the rerun)",
+                  "IterationLimit runs", "passes 11 to 50 of those runs",
+                  "(1) error > tolerance", "(3) Guard pivots in the last 2 passes",
+                  "(1) and (3) hold, so (2) fails", "max rank changed",
+                  "max rank up / down"], rows)
+
+
+def reference_group(name, seed, k):
+    """(reference line, results) of a sampled-max process; the k = 1 runs of
+    the pinned group must reproduce those of `nblock-T0.01-R12-acceptance`."""
+    path = RAW / f"nblock-T0.01-R12-{name}" / f"s{seed}-{'sampledmax' if name == 'reference' else 'given'}-k{k}.jsonl"
+    results = lines(path, "result")
+    if name == "reference" and k == 1:
+        first = lines(RAW / "nblock-T0.01-R12-acceptance" / f"s{seed}-sampledmax.jsonl", "result")
+        key = lambda r: (r["patches"], r["params"], r["accuracy"]["rel_l2"])
+        if [key(r) for r in results] != [key(r) for r in first]:
+            raise SystemExit(f"seed {seed}: the pinned k = 1 rerun differs from the first run")
+    return lines(path, "reference")[0], results
+
+
+def reference_pinned():
+    rows = []
+    for seed in (42, 2026, 7):
+        ref, results = reference_group("reference", seed, 1)
+        norm = results[0]["engine"]["norm"]
+        rows.append([seed, g(norm["max_reference"], 3), norm["source"],
+                     f"{ref['max_abs'] / norm['max_reference']:.0f}"])
+    return table(["seed", "pinned max_reference", "source", "exact max abs(G0) / pinned"], rows)
+
+
+def reference_spread():
+    rows = []
+    for name, label in [("reference", "pinned"), ("given", "exact (given)")]:
+        for k in (1, 3):
+            errors = {}
+            for seed in (42, 2026, 7):
+                _, results = reference_group(name, seed, k)
+                for r in results:
+                    errors.setdefault(rtol_of(r), []).append(r["accuracy"]["rel_l2"])
+            for rtol, es in errors.items():
+                rows.append([label, k, rtol, ", ".join(g(e, 3) for e in es),
+                             f"{max(es) / min(es):.3g}"])
+    return table(["reference", "k", "rtol", "errors of seeds 42, 2026, 7", "largest / smallest"],
+                 rows)
+
+
+def given_matched():
+    """Each exact-reference sampled-max run with k = 1 against the L2 run
+    (k = 3, audit off) of the same seed whose error is the closest one not
+    smaller than its own, within a factor 2."""
+    rows = []
+    for seed in (42, 2026, 7):
+        l2 = lines(RAW / "nblock-T0.01-R12-acceptance" / f"s{seed}-l2-noaudit.jsonl", "result")
+        _, given = reference_group("given", seed, 1)
+        for s in given:
+            es = s["accuracy"]["rel_l2"]
+            matches = [l for l in l2 if es <= l["accuracy"]["rel_l2"] <= 2 * es]
+            if not matches:
+                rows.append([seed, f"{rtol_of(s)}, {g(es, 3)}, {s['seconds']:.0f} s",
+                             "none within a factor 2", "", "", ""])
+                continue
+            l = min(matches, key=lambda l: l["accuracy"]["rel_l2"])
+            el = l["accuracy"]["rel_l2"]
+            rows.append([seed, f"{rtol_of(s)}, {g(es, 3)}, {s['seconds']:.0f} s",
+                         f"{rtol_of(l)}, {g(el, 3)}, {l['seconds']:.0f} s", g(el / es, 3),
+                         g(s["seconds"] / l["seconds"], 2), g(s["params"] / l["params"], 3)])
+    return table(["seed", "exact reference, k 1: rtol, error, time",
+                  "L2, k 3, audit off: rtol, error, time", "L2 error / its error",
+                  "time / L2 time", "parameters / L2 parameters"], rows)
+
+
+def acceptance_memory():
+    def rss(path):
+        found = re.search(r"Maximum resident set size \(kbytes\): (\d+)", path.read_text())
+        return f"{int(found.group(1)) / 1024 ** 2:.2f}"
+    rows = []
+    for seed in (42, 2026, 7):
+        rows.append([seed,
+                     rss(RAW / "nblock-T0.01-R12-acceptance" / f"s{seed}-l2-noaudit.time"),
+                     rss(RAW / "nblock-T0.01-R12-reference" / f"s{seed}-sampledmax-k1.time"),
+                     rss(RAW / "nblock-T0.01-R12-reference" / f"s{seed}-sampledmax-k3.time"),
+                     rss(RAW / "nblock-T0.01-R12-given" / f"s{seed}-given-k1.time"),
+                     rss(RAW / "nblock-T0.01-R12-given" / f"s{seed}-given-k3.time")])
+    return table(["seed", "L2, k 3, audit off", "sampled-max pinned, k 1",
+                  "sampled-max pinned, k 3", "sampled-max exact, k 1", "sampled-max exact, k 3"],
+                 rows)
+
+
 GENERATORS = {
     "exhaustive": exhaustive,
     "layouts": layouts,
@@ -411,6 +574,12 @@ GENERATORS = {
     "nblock-sweeps": nblock_sweeps,
     "nblock-matched-sweeps": nblock_matched_sweeps,
     "nblock-trace": nblock_trace,
+    "acceptance-runs": acceptance_runs,
+    "history": history,
+    "reference-pinned": reference_pinned,
+    "reference-spread": reference_spread,
+    "given-matched": given_matched,
+    "acceptance-memory": acceptance_memory,
 }
 
 

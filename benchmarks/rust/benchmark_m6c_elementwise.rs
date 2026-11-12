@@ -59,6 +59,11 @@
 // 50 unless given), `--topology`, `--in2-cap`, `--in2-rtol`
 // (the second factor of `g0sq-mixed`), `--samples`, `--seed`, `--trace-calls`
 // (patched TreeACI: one `engine_call` line per kernel and residual-TT run),
+// `--trace-history` (patched TreeACI on `g0`: per-pass history of every
+// kernel run below the cap, from a rerun),
+// `--error-norm` (`l2` or `sampled-max`, patched methods), `--audit` (the
+// driver's L2 audit, `true` unless given), `--max-reference` (`pinned`,
+// `exact` or a number: the max-norm reference of `sampled-max`),
 // and `--variants "cap=32;cap=128,rtol=1e-4"`, which runs the method once per
 // `;`-separated set of overrides on the same inputs and samples (peak RSS
 // then covers every variant), and `--exhaustive true`, which compares at
@@ -79,8 +84,8 @@ use rand_chacha::ChaCha8Rng;
 use serde_json::{json, Value};
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
 use tensor4all_partitionedtreetn::adaptive_interpolation::{
-    patched_elementwise, patched_interpolate, PatchedInterpolationOptions,
-    PatchedInterpolationResult,
+    patched_elementwise, patched_interpolate, NormReport, PatchedInterpolationOptions,
+    PatchedInterpolationResult, VerificationOptions,
 };
 use tensor4all_partitionedtreetn::{
     ErrorNorm, ErrorTolerance, L2Reference, PartitionedTreeTN, SubDomainTreeTN,
@@ -88,14 +93,15 @@ use tensor4all_partitionedtreetn::{
 use tensor4all_tensorbackend::explicit::Session;
 use tensor4all_tensorbackend::CpuBackend;
 use tensor4all_treeaci::{
-    tree_elementwise_batched_with_rng_on_session, TreeAciInterpolator, TreeAciOptions,
-    TreeElementwiseBatch,
+    tree_elementwise_batched_with_rng_on_session, TreeAciInterpolator, TreeAciNode, TreeAciOptions,
+    TreeAciTermination, TreeElementwiseBatch,
 };
 use tensor4all_treersi::{hadamard_many_with_rng_on_session, TreeRsiInterpolator, TreeRsiOptions};
 use tensor4all_treetci::TreeTciInterpolator;
 use tensor4all_treetn::interpolation::{
-    ElementwiseInterpolator, EvalContext, InterpolationError, InterpolationOutcome,
-    InterpolationProblem, Parallelism, Product, TreeInterpolator,
+    ElementwiseInterpolator, ElementwiseOperator, EvalContext, InterpolationError,
+    InterpolationOutcome, InterpolationProblem, InterpolationTermination, Parallelism, Product,
+    TreeInterpolator,
 };
 use tensor4all_treetn::{NodeNameNetwork, TreeTN};
 
@@ -136,6 +142,11 @@ struct Args {
     /// patched TreeACI method: active sites, tolerance, cap, termination,
     /// rank, wall time and the points evaluated.
     trace_calls: bool,
+    /// Patched TreeACI on `g0` only: rerun every kernel run that ends below
+    /// the cap with the same inputs, options and seed, and emit one
+    /// `kernel_history` line with its per-pass ranks, errors and Guard
+    /// pivots, which the adapter does not keep.
+    trace_history: bool,
     /// Diagnostics (small `R` only): compare every TreeACI product run with
     /// the dense product of its restricted inputs.
     audit_kernel: bool,
@@ -155,6 +166,21 @@ struct Args {
     /// Pinned to 1 unless given, as in the 2026-11-11 report, although the
     /// library's default is 3.
     engine_tol_factor: f64,
+    /// Acceptance of the patched methods: `l2` (the driver measures every
+    /// patch against `rtol` times the exact grid norm, the default) or
+    /// `sampled-max` (`ErrorNorm::sampled_max`: the engine's own estimate
+    /// against `rtol` times `max |f|` pinned from the root sample, with no
+    /// measurement, as in Grosso et al.'s pQTCI). The same `rtol` is not the
+    /// same accuracy under the two.
+    error_norm: String,
+    /// The driver's independent audit of every sampled L2 acceptance (the
+    /// library default `true`); it never changes the partition.
+    audit: bool,
+    /// Under `--error-norm sampled-max`: `pinned` (the default) pins
+    /// `max_reference` from the root sample; `exact` gives the exact
+    /// `max |G0|` of the grid (to the workload's power); a number gives it
+    /// directly (`ErrorNorm::sampled_max_with_reference`).
+    max_reference: String,
 }
 
 fn set(args: &mut Args, key: &str, value: &str) -> Result<()> {
@@ -176,11 +202,15 @@ fn set(args: &mut Args, key: &str, value: &str) -> Result<()> {
         "--exhaustive" => args.exhaustive = value.parse()?,
         "--dump-patches" => args.dump_patches = value.parse()?,
         "--trace-calls" => args.trace_calls = value.parse()?,
+        "--trace-history" => args.trace_history = value.parse()?,
         "--audit-kernel" => args.audit_kernel = value.parse()?,
         "--aci-margin" => args.aci_margin = value.parse()?,
         "--topology" => args.topology = value.to_string(),
         "--scale-tolerance" => args.scale_tolerance = value.parse()?,
         "--engine-tol-factor" => args.engine_tol_factor = value.parse()?,
+        "--error-norm" => args.error_norm = value.to_string(),
+        "--audit" => args.audit = value.parse()?,
+        "--max-reference" => args.max_reference = value.to_string(),
         "--max-sweeps" => args.max_sweeps = value.parse()?,
         "--variants" => {
             args.variants = value.split(';').map(str::to_string).collect();
@@ -209,6 +239,9 @@ fn variant(args: &Args, overrides: &str) -> Result<Args> {
                 | "engine-tol-factor"
                 | "aci-margin"
                 | "max-sweeps"
+                | "error-norm"
+                | "audit"
+                | "max-reference"
         ) {
             bail!("variant key {key} would change the inputs or the samples");
         }
@@ -243,10 +276,14 @@ fn parse_args() -> Result<Args> {
         exhaustive: false,
         dump_patches: false,
         trace_calls: false,
+        trace_history: false,
         audit_kernel: false,
         aci_margin: 10.0,
         engine_tol_factor: 1.0,
         max_sweeps: 50,
+        error_norm: "l2".to_string(),
+        audit: true,
+        max_reference: "pinned".to_string(),
         topology: "cttn".to_string(),
         scale_tolerance: false,
     };
@@ -259,6 +296,9 @@ fn parse_args() -> Result<Args> {
     }
     if !matches!(args.workload.as_str(), "g0" | "g0sq" | "g0sq-mixed") {
         bail!("workload must be g0, g0sq, or g0sq-mixed");
+    }
+    if args.trace_history && (args.method != "patched-aci" || args.workload != "g0") {
+        bail!("--trace-history covers patched-aci on g0 only");
     }
     if args.workload == "g0sq-mixed" && args.method.starts_with("unpatched") {
         bail!(
@@ -542,6 +582,23 @@ fn product_batch(
 // ---------------------------------------------------------------------------
 // Exact norms and the sampling measure
 
+/// The exact `max |G0|` over the grid: the smallest `|omega| = pi T` with the
+/// smallest `|mu + 2 cos kx + 2 cos ky|`; `cos` takes `size / 2 + 1`
+/// distinct values.
+fn g0_max_abs(grid: &Grid) -> f64 {
+    let size = grid.size();
+    let cosines: Vec<f64> = (0..=size / 2)
+        .map(|k| (2.0 * PI * k as f64 / size as f64).cos())
+        .collect();
+    let mut smallest = f64::INFINITY;
+    for &ci in &cosines {
+        for &cj in &cosines {
+            smallest = smallest.min((MU + 2.0 * ci + 2.0 * cj).abs());
+        }
+    }
+    1.0 / smallest.hypot(PI * grid.temperature)
+}
+
 /// `s[h]`, for the nonnegative frequency `h` (`omega = 2 pi T (h + 1/2)`), is
 /// the sum of `|G0|^(2 power)` over all `kx, ky`; each frequency `-omega`
 /// gives the same sum.
@@ -787,7 +844,29 @@ fn report_stats<K, R>(
         "verification_failures": report.verification_failures,
         "engine_retries": report.engine_retries,
         "global_l2": format!("{:?}", report.norm.l2_error().map(|e| &e.global)),
+        "norm": norm_stats(&report.norm),
     })
+}
+
+/// The acceptance reference of a patched run: under `SampledMax` the pinned
+/// `max_reference`, its source and the engine tolerance; under L2 the RMS
+/// allowance `tau`.
+fn norm_stats(norm: &NormReport) -> Value {
+    match norm {
+        NormReport::SampledMax {
+            max_reference,
+            source,
+            engine_tolerance,
+            ..
+        } => json!({
+            "kind": "sampled_max",
+            "max_reference": max_reference,
+            "source": format!("{source:?}"),
+            "engine_tolerance": engine_tolerance,
+        }),
+        NormReport::L2 { tau, .. } => json!({ "kind": "l2", "tau": tau }),
+        other => json!({ "kind": format!("{other:?}") }),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1033,25 +1112,143 @@ impl<E: ElementwiseInterpolator<Complex64, Product>> ElementwiseInterpolator<Com
     }
 }
 
+/// A TreeACI kernel that, after every run ending below the cap, reruns the
+/// same problem through `tree_elementwise_batched_with_rng_on_session` with
+/// the adapter's options and seed, and emits the per-pass history of
+/// `TreeAciResult` that the adapter drops. `reproduced` says whether the
+/// rerun ended exactly like the measured run (same final estimate, rank and
+/// termination). The rerun is outside the kernel's timing. Diagnostics only.
+struct HistoryProbe<'a> {
+    kernel: &'a Timed<TreeAciInterpolator>,
+    margin: f64,
+}
+
+impl<Op: ElementwiseOperator<Complex64>> ElementwiseInterpolator<Complex64, Op>
+    for HistoryProbe<'_>
+{
+    fn interpolate_elementwise<V>(
+        &self,
+        problem: &InterpolationProblem<V>,
+        inputs: &[TreeTN<IdxTensor, V>],
+        operator: &Op,
+        ctx: &mut EvalContext<'_>,
+    ) -> Result<InterpolationOutcome<V>, InterpolationError>
+    where
+        V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    {
+        let outcome = self
+            .kernel
+            .interpolate_elementwise(problem, inputs, operator, ctx)?;
+        if outcome.termination == InterpolationTermination::BondCapReached {
+            return Ok(outcome);
+        }
+        let call = self.kernel.calls.load(Ordering::Relaxed);
+        // The adapter's `run_options`, with the harness's base options.
+        let options = TreeAciOptions {
+            tolerance: problem.absolute_tolerance() / self.kernel.inner.tolerance_factor(),
+            scale_tolerance: false,
+            max_bond_dim: problem.max_bond_dim().map(|cap| cap.get()),
+            rng_seed: problem.seed(),
+            ..aci_options::<V>(self.margin)
+        };
+        let mut rng = ChaCha8Rng::seed_from_u64(problem.seed());
+        let callback = |batch: TreeElementwiseBatch<'_, Complex64>,
+                        output: &mut [Complex64]|
+         -> tensor4all_treeaci::Result<()> {
+            let shape = [batch.n_inputs(), batch.n_points()];
+            ColMajorArrayRef::new(batch.as_col_major_slice(), &shape)
+                .map_err(anyhow::Error::from)
+                .and_then(|values| operator.apply(values, output))
+                .map_err(|error| tensor4all_treeaci::TreeAciError::Callback {
+                    message: error.to_string(),
+                })
+        };
+        let line = match tree_elementwise_batched_with_rng_on_session(
+            callback,
+            inputs,
+            &options,
+            &mut rng,
+            ctx.session(),
+        ) {
+            Ok(rerun) => {
+                let rank = rerun
+                    .diagnostics
+                    .edge_ranks
+                    .iter()
+                    .map(|&(_, _, rank)| rank)
+                    .max()
+                    .unwrap_or(0);
+                // Below the cap, as the measured run was; a later variant
+                // of the non-exhaustive enum counts as not reproduced.
+                let termination = match rerun.termination {
+                    TreeAciTermination::Converged => Some(InterpolationTermination::Converged),
+                    TreeAciTermination::MaxSweeps => Some(InterpolationTermination::IterationLimit),
+                    _ => None,
+                };
+                let outcome_rank = outcome.network.link_dims().into_iter().max().unwrap_or(0);
+                json!({
+                    "kind": "kernel_history",
+                    "call": call,
+                    "active": problem.site_order().len(),
+                    "termination": format!("{:?}", outcome.termination),
+                    "engine_tolerance": options.tolerance,
+                    "min_sweeps": options.min_sweeps,
+                    "max_sweeps": options.max_sweeps,
+                    "reproduced": rerun.max_errors.last().copied() == Some(outcome.error_estimate)
+                        && rank == outcome_rank
+                        && termination == Some(outcome.termination),
+                    "max_ranks": rerun.max_ranks,
+                    "max_errors": rerun.max_errors,
+                    "global_pivots_found": rerun.global_pivots_found,
+                })
+            }
+            Err(error) => json!({
+                "kind": "kernel_history",
+                "call": call,
+                "rerun_error": error.to_string(),
+            }),
+        };
+        emit(line);
+        Ok(outcome)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Methods
 
-fn patched_options(
-    grid: &Grid,
-    cap: usize,
-    rtol: f64,
-    norm: f64,
-    seed: u64,
-) -> PatchedInterpolationOptions {
-    PatchedInterpolationOptions::new(cap)
-        .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
-        .with_tolerance(ErrorTolerance { rtol, atol: 0.0 })
+fn patched_options(grid: &Grid, args: &Args, norm: f64) -> Result<PatchedInterpolationOptions> {
+    let error_norm = match args.error_norm.as_str() {
+        "l2" => ErrorNorm::l2(L2Reference::Given(norm)),
+        "sampled-max" => match args.max_reference.as_str() {
+            "pinned" => ErrorNorm::sampled_max(),
+            "exact" => ErrorNorm::sampled_max_with_reference(g0_max_abs(grid).powi(
+                if args.workload.starts_with("g0sq") {
+                    2
+                } else {
+                    1
+                },
+            )),
+            value => {
+                ErrorNorm::sampled_max_with_reference(value.parse().with_context(|| {
+                    format!("--max-reference {value}: pinned, exact or a number")
+                })?)
+            }
+        },
+        other => bail!("unknown --error-norm {other} (l2 or sampled-max)"),
+    };
+    Ok(PatchedInterpolationOptions::new(args.cap)
+        .with_error_norm(error_norm)
+        .with_verification(VerificationOptions::new().with_audit(args.audit))
+        .with_tolerance(ErrorTolerance {
+            rtol: args.rtol,
+            atol: 0.0,
+        })
         .with_patch_order(grid.sites.clone())
         .with_variables(grid.variables())
-        .with_seed(seed)
+        .with_seed(args.seed))
 }
 
-fn aci_options(margin: f64) -> TreeAciOptions<usize> {
+fn aci_options<V: TreeAciNode>(margin: f64) -> TreeAciOptions<V> {
     TreeAciOptions {
         max_sweeps: 50,
         global_tolerance_margin: margin,
@@ -1079,13 +1276,13 @@ fn run_method(
     product: bool,
 ) -> Result<(Partition, Value, f64)> {
     let mut backend = CpuBackend::with_threads(1)?;
-    let options = patched_options(grid, args.cap, args.rtol, norm, args.seed);
+    let options = patched_options(grid, args, norm)?;
     let refs: Vec<&Partition> = inputs.iter().collect();
     let start = Instant::now();
     let (partition, stats) = match args.method.as_str() {
         "patched-aci" => {
             let engine = Timed::new(
-                TreeAciInterpolator::new(aci_options(args.aci_margin))?
+                TreeAciInterpolator::new(aci_options::<usize>(args.aci_margin))?
                     .with_tolerance_factor(args.engine_tol_factor)?,
             )
             .traced("kernel", args.trace_calls);
@@ -1105,6 +1302,14 @@ fn run_method(
             } else if product {
                 patched_elementwise::<Complex64, _, _, _, _>(
                     kernel, &residual, &refs, &Product, &mut ctx, &options,
+                )?
+            } else if args.trace_history {
+                let probe = HistoryProbe {
+                    kernel,
+                    margin: args.aci_margin,
+                };
+                patched_elementwise::<Complex64, _, _, _, _>(
+                    &probe, &residual, &refs, &dyson, &mut ctx, &options,
                 )?
             } else {
                 patched_elementwise::<Complex64, _, _, _, _>(
@@ -1275,10 +1480,14 @@ fn g0_input(
         tol: args.in_tol,
         dump_patches: false,
         trace_calls: false,
+        trace_history: false,
         audit_kernel: false,
         // The inputs keep TreeACI's default margin whatever the product uses.
         aci_margin: 10.0,
         engine_tol_factor: 1.0,
+        // The inputs keep the L2 acceptance whatever the product uses.
+        error_norm: "l2".into(),
+        audit: true,
         ..args.clone()
     };
     let exact = grid
@@ -1304,6 +1513,7 @@ fn main() -> Result<()> {
         "workload": args.workload, "method": args.method, "r": args.r,
         "temperature": args.temperature, "mu": MU, "topology": args.topology,
         "scale_tolerance": args.scale_tolerance, "max_sweeps": args.max_sweeps,
+        "error_norm": args.error_norm, "audit": args.audit, "max_reference": args.max_reference,
         "cap": args.cap, "rtol": args.rtol, "tol": args.tol,
         "rsi_rtol": args.rsi_rtol, "rsi_cap": args.rsi_cap,
         "in_cap": args.in_cap, "in_rtol": args.in_rtol, "in_tol": args.in_tol,
@@ -1332,6 +1542,7 @@ fn main() -> Result<()> {
     };
     emit(json!({
         "kind": "reference", "norm": samples.norm, "g0_norm": g0_norm,
+        "max_abs": g0_max_abs(&grid).powi(power),
         "seconds": t.elapsed().as_secs_f64(),
     }));
 
