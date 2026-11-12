@@ -59,6 +59,8 @@
 // 50 unless given), `--topology`, `--in2-cap`, `--in2-rtol`
 // (the second factor of `g0sq-mixed`), `--samples`, `--seed`, `--trace-calls`
 // (patched TreeACI: one `engine_call` line per kernel and residual-TT run),
+// `--error-norm` (`l2` or `sampled-max`, patched methods), `--audit` (the
+// driver's L2 audit, `true` unless given),
 // and `--variants "cap=32;cap=128,rtol=1e-4"`, which runs the method once per
 // `;`-separated set of overrides on the same inputs and samples (peak RSS
 // then covers every variant), and `--exhaustive true`, which compares at
@@ -80,7 +82,7 @@ use serde_json::{json, Value};
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
 use tensor4all_partitionedtreetn::adaptive_interpolation::{
     patched_elementwise, patched_interpolate, PatchedInterpolationOptions,
-    PatchedInterpolationResult,
+    PatchedInterpolationResult, VerificationOptions,
 };
 use tensor4all_partitionedtreetn::{
     ErrorNorm, ErrorTolerance, L2Reference, PartitionedTreeTN, SubDomainTreeTN,
@@ -155,6 +157,16 @@ struct Args {
     /// Pinned to 1 unless given, as in the 2026-11-11 report, although the
     /// library's default is 3.
     engine_tol_factor: f64,
+    /// Acceptance of the patched methods: `l2` (the driver measures every
+    /// patch against `rtol` times the exact grid norm, the default) or
+    /// `sampled-max` (`ErrorNorm::sampled_max`: the engine's own estimate
+    /// against `rtol` times `max |f|` pinned from the root sample, with no
+    /// measurement, as in Grosso et al.'s pQTCI). The same `rtol` is not the
+    /// same accuracy under the two.
+    error_norm: String,
+    /// The driver's independent audit of every sampled L2 acceptance (the
+    /// library default `true`); it never changes the partition.
+    audit: bool,
 }
 
 fn set(args: &mut Args, key: &str, value: &str) -> Result<()> {
@@ -181,6 +193,8 @@ fn set(args: &mut Args, key: &str, value: &str) -> Result<()> {
         "--topology" => args.topology = value.to_string(),
         "--scale-tolerance" => args.scale_tolerance = value.parse()?,
         "--engine-tol-factor" => args.engine_tol_factor = value.parse()?,
+        "--error-norm" => args.error_norm = value.to_string(),
+        "--audit" => args.audit = value.parse()?,
         "--max-sweeps" => args.max_sweeps = value.parse()?,
         "--variants" => {
             args.variants = value.split(';').map(str::to_string).collect();
@@ -209,6 +223,8 @@ fn variant(args: &Args, overrides: &str) -> Result<Args> {
                 | "engine-tol-factor"
                 | "aci-margin"
                 | "max-sweeps"
+                | "error-norm"
+                | "audit"
         ) {
             bail!("variant key {key} would change the inputs or the samples");
         }
@@ -247,6 +263,8 @@ fn parse_args() -> Result<Args> {
         aci_margin: 10.0,
         engine_tol_factor: 1.0,
         max_sweeps: 50,
+        error_norm: "l2".to_string(),
+        audit: true,
         topology: "cttn".to_string(),
         scale_tolerance: false,
     };
@@ -1036,19 +1054,22 @@ impl<E: ElementwiseInterpolator<Complex64, Product>> ElementwiseInterpolator<Com
 // ---------------------------------------------------------------------------
 // Methods
 
-fn patched_options(
-    grid: &Grid,
-    cap: usize,
-    rtol: f64,
-    norm: f64,
-    seed: u64,
-) -> PatchedInterpolationOptions {
-    PatchedInterpolationOptions::new(cap)
-        .with_error_norm(ErrorNorm::l2(L2Reference::Given(norm)))
-        .with_tolerance(ErrorTolerance { rtol, atol: 0.0 })
+fn patched_options(grid: &Grid, args: &Args, norm: f64) -> Result<PatchedInterpolationOptions> {
+    let error_norm = match args.error_norm.as_str() {
+        "l2" => ErrorNorm::l2(L2Reference::Given(norm)),
+        "sampled-max" => ErrorNorm::sampled_max(),
+        other => bail!("unknown --error-norm {other} (l2 or sampled-max)"),
+    };
+    Ok(PatchedInterpolationOptions::new(args.cap)
+        .with_error_norm(error_norm)
+        .with_verification(VerificationOptions::new().with_audit(args.audit))
+        .with_tolerance(ErrorTolerance {
+            rtol: args.rtol,
+            atol: 0.0,
+        })
         .with_patch_order(grid.sites.clone())
         .with_variables(grid.variables())
-        .with_seed(seed)
+        .with_seed(args.seed))
 }
 
 fn aci_options(margin: f64) -> TreeAciOptions<usize> {
@@ -1079,7 +1100,7 @@ fn run_method(
     product: bool,
 ) -> Result<(Partition, Value, f64)> {
     let mut backend = CpuBackend::with_threads(1)?;
-    let options = patched_options(grid, args.cap, args.rtol, norm, args.seed);
+    let options = patched_options(grid, args, norm)?;
     let refs: Vec<&Partition> = inputs.iter().collect();
     let start = Instant::now();
     let (partition, stats) = match args.method.as_str() {
@@ -1279,6 +1300,9 @@ fn g0_input(
         // The inputs keep TreeACI's default margin whatever the product uses.
         aci_margin: 10.0,
         engine_tol_factor: 1.0,
+        // The inputs keep the L2 acceptance whatever the product uses.
+        error_norm: "l2".into(),
+        audit: true,
         ..args.clone()
     };
     let exact = grid
@@ -1304,6 +1328,7 @@ fn main() -> Result<()> {
         "workload": args.workload, "method": args.method, "r": args.r,
         "temperature": args.temperature, "mu": MU, "topology": args.topology,
         "scale_tolerance": args.scale_tolerance, "max_sweeps": args.max_sweeps,
+        "error_norm": args.error_norm, "audit": args.audit,
         "cap": args.cap, "rtol": args.rtol, "tol": args.tol,
         "rsi_rtol": args.rsi_rtol, "rsi_cap": args.rsi_cap,
         "in_cap": args.in_cap, "in_rtol": args.in_rtol, "in_tol": args.in_tol,
