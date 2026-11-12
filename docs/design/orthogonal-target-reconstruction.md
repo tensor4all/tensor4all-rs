@@ -446,6 +446,165 @@ extra bits per transformed coordinate, physical spacing and frequency grid,
 normalization, and output interpretation, and the selected transform length is
 never changed silently.
 
+### Exact application without product-width bonds (#1279)
+
+Status: implemented (#1279).
+
+The exact application that both `from_subset_operator` and the schedule perform
+(above) used `ApplyOptions::naive()`. The naive local product gives every site
+tensor of `A x` both bonds equal to input bond × operator bond, so a patched
+Fourier transform over two interleaved axes at R = 10 (input bond 50, operator
+bond 144) forms 7200-wide site tensors, about 1.7 GB each in complex f64, and
+fails with an allocation error under an 8 GiB or a 14 GiB limit. The product's
+rank at a bond is also bounded by the physical dimension of each side of it,
+which is at most 1024 there, so most of that width carries nothing.
+
+**Change.** `prepare_subset_images` applies the operator exactly with zip-up
+instead: `ApplyOptions::zipup()` with
+`svd_policy = Some(SvdTruncationPolicy::new(0.0))` and no `max_bond_dim`,
+centred at the balanced node, the node that minimizes the largest total
+`log2` site dimension of the subtrees around it (ties by node order). A
+threshold of zero discards no nonzero singular value, so the application is
+exact up to backend roundoff, as the naive path is. The threshold must be
+given: `svd_policy = None` resolves to the default relative cutoff of `1e-12`
+and is not exact. No path of `prepare_subset_images` keeps the naive
+application.
+
+**Why the bonds stay bounded, by tree shape.**
+
+- *Chains* (every node on one path, the QFT layouts): zip-up takes its chain
+  schedule. It first puts both operands in QR form at the first sweep site,
+  so each operand's bond toward the far end is bounded by the physical
+  dimension of the far side, and it then sweeps in one direction with an SVD
+  per site, so the swept bond is bounded by the physical dimension of the swept
+  side. Every block it factorizes is bounded on both sides although the sweep
+  runs one way; the final canonicalization to the centre leaves the image's
+  bonds at the smaller side's physical dimension. The centre changes the sweep
+  direction, not these bounds.
+- *Other trees* (spectator branches, multi-site nodes): zip-up processes the
+  nodes from the leaves towards the centre. The operands are not
+  pre-canonicalized there, so a block's parent side is the full product bond,
+  and only its processed side is bounded by that side's physical dimension;
+  the balanced centre keeps every processed side at most about half of the
+  total. A spectator subtree, one that holds no operator node and not the
+  centre, is emitted unchanged by the exact identity skip of zip-up (#1186)
+  and adds no work; a spectator node between operator nodes and the centre is
+  factorized like any other. On such trees the peak is therefore of order
+  `2^(half the site bits) × input bond × operator bond` rather than the
+  chain's two-sided bound, and the centre contracts the remainders of all its
+  branches at once, so three wide branches multiply; no QFT layout of the
+  front end has this shape and none of it has been measured. On a chain the
+  chain schedule factorizes every node, spectators included, within the chain
+  bounds above.
+
+**Guard on other trees.** Before any application, `prepare_subset_images`
+estimates the largest block of every term on a tree that is not a chain, by
+following the tree zip-up from the leaves to the centre: a node whose subtree
+holds no operator node is emitted and leaves only its state bond to its parent;
+every other node forms `(children's remainders × its site dimensions) ×
+(state bond × operator bond)` towards its parent and passes on the smaller
+factor, the operator's largest bond standing in for every operator bond; the
+centre forms the product of its remainders and site dimensions. A term whose
+estimate exceeds `2^28` elements, 4 GiB in complex `f64`, is refused with
+`ResourceLimit` instead of allocated; the limit is fixed, and the remedy is a
+chain layout or fewer selected sites. Chains are not checked, since their
+blocks are bounded. Three branches of 16 binary sites with bonds 128 already
+estimate `2^43` at the centre. The guard is an upper estimate of the block the
+factorization sees, not of every temporary the contraction planner forms.
+
+**Error accounting is unchanged.** Exact mode still reports
+`error_bound == 0`. With `MergeRefineOptions::apply_options` the schedule still
+applies the caller's truncating options as well and charges the measured
+`||exact - approximate||` of each leaf; the exact image this measurement needs
+is now affordable, and the difference network's bond is the sum of the two
+images' bonds. Charging the discarded weights of a canonical-form truncation
+instead, as first proposed on #1279, is not needed for the bound and is left
+out. Restricting the application to requested output regions (option 2 of
+#1279) is also left out: it cannot help a caller that requests the whole
+output, as the R = 10 interleaved case does, and is a separate optimization.
+
+**Measured** (R = 10, two interleaved axes, 20 binary sites, 4 input
+patches, release, one thread, `ulimit -v` 8 GiB, the front end only). The case
+completes in 827 s; the process peaks at 4.0 GiB RSS, and the sampled DFT
+error, 1.45e-13, is inside the reported bound, 1.66e-8. Every image has bonds
+`[2, 4, ..., 512, 1024, 512, ..., 4, 2]`, the physical bound on each side. The
+block the chain zip-up factorizes at each sweep site of the first image, in
+millions of elements (one element is 16 bytes), measured on the final code
+with a temporary probe; the two operands' bonds toward the far end are the
+second and fourth dimensions, the remainder's bond the first:
+
+| sweep site | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| block [M elements] | 0.38 | 1.8 | 3.1 | 5.9 | 10.0 | 17.1 | 20.4 | 7.7 | 1.8 | 0.28 |
+| dimensions | 64·31·2·96 | 128·49·2·144 | 256·42·2·144 | 512·40·2·144 | 1024·34·2·144 | 2048·29·2·144 | 4096·26·2·96 | 2496·24·2·64 | 1536·18·2·32 | 576·15·2·16 |
+
+Sites 0 to 5 and 16 to 17 are below 0.1M and the final two-site block has 64
+elements. The largest block over all four images is 21.2M elements
+(0.32 GiB), at site 12 of the third image. The remainder carries the swept
+side's physical dimension, up to 4096, while the operands' far-side bonds stay
+at most 49 and 144; the image's bonds are at most 1024 only after the closing
+canonicalization. On the prototype, the default centre (node 0, sweep from
+node 19) reached at least 28.9M elements (0.43 GiB) before its run hit a time
+limit after site 13, which is why the balanced centre is used.
+
+**The peak follows the physical bond, not the compressed rank.** The exact
+images keep every singular value and reach the physical bound (1024 here),
+although the compressed result has rank 8, so the rank goal does not bound the
+memory of the exact application. The 4.0 GiB peak is measured, not bounded;
+the heavy test therefore runs this case in a child process under an 8 GiB
+address-space ceiling and prints its peak RSS, so an allocation above the
+ceiling fails the test instead of leaving the runner's OOM killer to end the
+job.
+
+The cost is time: on the prototype each exact image took 180 to 197 s, 765 s
+of the schedule's 824 s, spent in SVDs of blocks up to 8192 × 2496. The exact
+images keep every singular value, including those at roundoff, which is why
+their bonds reach the physical bound although the compressed result has rank
+8. A QR-based exact zip-up would be cheaper; zip-up offers only SVD for the
+unitary form today, so that is a follow-up.
+
+On the cases that already passed, the zip-up gives the naive path's result up
+to roundoff, faster and with less memory (release, one thread, single runs on
+one host; the naive column was measured before the change):
+
+| case | reported bound, naive / zip-up | sampled error, naive / zip-up | schedule [s], naive / zip-up | peak RSS [MB], naive / zip-up |
+|---|---|---|---|---|
+| R = 10, 1D | 7.912518e-9 / 7.912519e-9 | 4.11e-14 / 4.07e-14 | 0.033 / 0.025 | 40 / 31 |
+| R = 10, 2D grouped | 7.705055e-9 / 7.705055e-9 | 8.75e-14 / 9.32e-14 | 0.31 / 0.17 | 67 / 36 |
+| R = 20, 1D | 3.455769e-10 / 3.455768e-10 | 2.24e-13 / 2.21e-13 | 0.26 / 0.23 | 89 / 61 |
+| R = 20, 2D grouped | 6.853537e-9 / 6.853537e-9 | 4.23e-13 / 4.44e-13 | 1.57 / 1.23 | 121 / 102 |
+
+**Tests.**
+
+- `tests/subset_operator_exact.rs` (`tensor4all-partitionedtreetn`): the images
+  equal the dense product of the dense operator and the dense state, on a
+  chain whose balanced centre is a spectator node and on a branched tree with
+  a spectator branch and a node carrying two selected sites, for real and
+  complex data. A truncating threshold fails all four.
+- The `balanced_center` unit tests: chains, bits rather than node counts,
+  non-binary sites, a branched tree, ties. The guard's unit tests: no
+  estimate on a chain, a hand-computed estimate on a branched tree with and
+  without spectator subtrees, the deep three-branch tree above, and the
+  refusal only above the limit.
+- The existing schedule tests cover exact mode (`error_bound == 0`) and a
+  truncating `apply_options` whose measured deviation is charged. One existing
+  test changed: in `subset_operator_scale_is_not_measured_under_destructive_interference`
+  the two images are now exact negatives, so zero-tolerance reconstruction
+  merges them into the zero function and keeps no term or region; the naive
+  images summed to a 6e-16 residual and both stayed.
+- Heavy: `heavy_gaussian_2d_interleaved_r10` in
+  `tensor4all-quanticstransform/tests/heavy_patched_fourier.rs`. It runs the
+  front end only, one schedule (about 14 minutes here with one thread, 332 s
+  with four in the `ci` profile), not the separately timed direct schedule as
+  well, since the whole nightly heavy job has 60 minutes, 25 of them spent
+  building. It runs under the 8 GiB ceiling above; with the ceiling lowered to
+  2 GiB it fails with the backend's allocation error.
+
+**Out of scope.** R = 20 interleaved (40 sites): there the physical bound
+exceeds the product bond over the middle of the chain, so an exact image can
+really be 7200 wide; it needs truncation during the sweep with a proven bound
+and is a separate issue.
+
 ## Fourier front end and operator node names
 
 The subset reconstruction entry points accept independent state and operator

@@ -229,8 +229,10 @@ and output depth. These are example choices, not a certified construction-error
 bound or a new default. Its output reports input/operator bond dimensions,
 operator construction time, isolated scheduler time, front-end time (which also
 includes operator/target construction), and sampled error alongside the
-reconstruction bound. The small dense examples above remain the primary
-layout and bit-significance regression checks.
+reconstruction bound. The arguments are the bits per axis, the number of axes
+and the layout; a fourth argument `frontend-only` skips the isolated scheduler
+run. The small dense examples above remain the primary layout and
+bit-significance regression checks.
 
 ```bash
 RAYON_NUM_THREADS=1 cargo run --release -p tensor4all-quanticstransform --features partitioned --example patched_fourier_large -- 10 1 grouped
@@ -238,17 +240,24 @@ RAYON_NUM_THREADS=1 cargo run --release -p tensor4all-quanticstransform --featur
 ```
 
 A small R=10 1D smoke check runs in the ordinary suite. The full R=10/20 1D and
-2D grouped cases live in `heavy_patched_fourier.rs` and run in the scheduled
-heavy-test workflow. Run them locally in release mode:
+2D grouped cases and the R=10 2D interleaved case live in
+`heavy_patched_fourier.rs` and run in the scheduled heavy-test workflow. Run
+them locally in release mode:
 
 ```bash
 RAYON_NUM_THREADS=1 cargo test --release -p tensor4all-quanticstransform --features partitioned --test heavy -- --ignored --nocapture --test-threads=1
 ```
 
-Two interleaved axes are not yet practical at this size. The operator itself
-is cheap (bond 144, built in well under a second at R=20), but the scheduler
-always applies it exactly to each input patch as its error reference, so that
-application has bonds up to input bond times operator bond: 50 x 144 = 7200
-for the R=10 interleaved Gaussian, which exhausted a 14 GiB limit. Prefer a
-grouped layout for patched multi-axis transforms until the scheduler bounds
-that application (issue #1279).
+Two interleaved axes work at R=10 but are slow. The operator itself is cheap
+(bond 144, built in well under a second at R=20), but the scheduler applies it
+exactly to each input patch as its error reference. That application keeps
+every bond at its physical bound, at most 1024 for the R=10 interleaved
+Gaussian, and the case completes with a 4.0 GiB peak; it takes about 14
+minutes with one thread, almost all of it in those exact applications. At
+R=20 the exact application itself can be 50 x 144 = 7200 wide, so that case
+is still out of reach. Prefer a grouped layout for patched multi-axis
+transforms where the layout is free (issue #1279):
+
+```bash
+RAYON_NUM_THREADS=1 cargo run --release -p tensor4all-quanticstransform --features partitioned --example patched_fourier_large -- 10 2 interleaved frontend-only
+```
