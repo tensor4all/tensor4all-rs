@@ -1232,7 +1232,11 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// requested contract, non-finite tolerances, and non-finite or non-positive
 /// checked counts; [`PartitionedTreeTNError::ResourceLimit`] when a level holds
 /// more than `max_work_items` items or the retained term count exceeds
-/// `max_terms`; [`PartitionedTreeTNError::InvalidOptions`]
+/// `max_terms`, and before any application when the state is a tree that is
+/// not a chain and the exact application of some leaf is estimated to form a
+/// zip-up block above `2^28` elements (as for
+/// [`ReconstructionTarget::from_subset_operator`]);
+/// [`PartitionedTreeTNError::InvalidOptions`]
 /// again when the measured application error of
 /// [`MergeRefineOptions::apply_options`] already exceeds the allowance;
 /// [`PartitionedTreeTNError::ProjectorMismatch`]

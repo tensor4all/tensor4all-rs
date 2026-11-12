@@ -563,10 +563,11 @@ fn subset_operator_scale_is_not_measured_under_destructive_interference() {
         norm_of(&applied)
     );
 
-    // Separate-term retention: preparation stores the two images independently,
-    // so reconstruction at zero tolerance keeps both. This observes the retained
-    // representation only; it cannot see a temporary network built and discarded
-    // during preparation.
+    // Preparation stores the two images independently; they are exact negatives
+    // of each other here, so reconstruction at zero tolerance merges them into
+    // the zero function at no charge and keeps no term or region. (With the
+    // earlier naive application the two images summed to a roundoff residual of
+    // 6e-16, so the merge did not pay and both terms stayed, #1279.)
     let output = reconstruct(
         &target,
         &0,
@@ -580,8 +581,9 @@ fn subset_operator_scale_is_not_measured_under_destructive_interference() {
         },
     )
     .expect("reconstruction");
-    assert_eq!(output.report().term_count, 2);
-    assert_eq!(output.report().region_count, 1);
+    assert_eq!(output.report().term_count, 0);
+    assert_eq!(output.report().region_count, 0);
+    assert_eq!(output.report().error_bound, 0.0);
     assert_eq!(output.report().reference_scale, target.reference_scale());
 }
 
