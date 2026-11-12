@@ -73,6 +73,9 @@ literals, or named public types:
   `BackendScalar` and `AnyScalar` remain the two wrappers. The new public surface
   is additive; the removed core items were `pub(crate)`, so no external caller
   loses a path.
+- `tensor4all-treeaci`: `TreeAciResult` adds `max_sample_magnitude`, the
+  largest `|f|` among the samples the interpolation was built from (the global
+  guard's search samples excluded). Update complete struct literals.
 
 ### Fixed
 
@@ -94,6 +97,31 @@ literals, or named public types:
   previous behaviour of refining every region at `output_depth`; `Some(regions)`
   prunes every output prefix that intersects none of them, so the result, the
   report counters and `error_bound` cover the selected part of the output.
+- `tensor4all-treetn`: `contraction::contract_with_outcome` and
+  `contract_with_outcome_in` return a `ContractionOutcome`: a completed
+  contraction with a `ContractionReport` of its edge ranks (`EdgeRank`), or the
+  first edge that reached a rank threshold (`Saturated`).
+- `tensor4all-treetn`: the element-wise interpolation contract
+  `interpolation::ElementwiseInterpolator`, with `ElementwiseOperator`, the
+  binary `Product`, and `PointwiseElementwise`, which runs any
+  `TreeInterpolator` on point evaluations of the inputs.
+- `tensor4all-treeaci`: `TreeAciInterpolator`, tree ACI as an element-wise
+  engine. Its kernel runs at the problem's tolerance divided by a tolerance
+  factor (`with_tolerance_factor`, default 3).
+- `tensor4all-treersi`: `TreeRsiInterpolator`, tree RSI as an element-wise
+  engine for products.
+- `tensor4all-partitionedtreetn`: `adaptive_interpolation::patched_elementwise`,
+  `patched_elementwise_on_lanes` and, with the MPI features,
+  `patched_elementwise_mpi` compute `f(x_1, ..., x_k)` of partitions on one
+  site space as a partition, under the L2 contract of `patched_interpolate`.
+- `tensor4all-partitionedtreetn`: `adaptive_interpolation::merge_siblings`
+  merges complete groups of sibling patches of a patched interpolation result
+  without breaking its L2 error contract (`SiblingMergeOptions`,
+  `SiblingMergeReport`).
+- `tensor4all-partitionedtreetn`: `contract_adaptive` groups compatible pairs by
+  predicted output projector before any numerical work and, with a cap and
+  `PatchSplitStrategy::Sequential`, stops a group at its first saturated
+  contribution instead of contracting every pair first.
 
 ### Public-API renames and removals since v0.2.0
 
