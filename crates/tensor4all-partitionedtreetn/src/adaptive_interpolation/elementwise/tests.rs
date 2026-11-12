@@ -498,6 +498,29 @@ fn invalid_inputs_fail_before_any_evaluation() {
         "{:?}",
         result.err()
     );
+    // f64 inputs with an f32 result type are rejected as a dtype mismatch
+    // before the kernel runs.
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut ctx = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+    let result = patched_elementwise::<f32, _, _, _, _>(
+        &TreeAciInterpolator::default(),
+        &TreeTciInterpolator::default(),
+        &[&x, &y],
+        &Product,
+        &mut ctx,
+        &options,
+    );
+    assert!(
+        matches!(
+            &result,
+            Err(PatchedInterpolationError::Partition {
+                source: crate::PartitionedTreeTNError::DTypeMismatch { expected, actual },
+                ..
+            }) if expected == "f32" && actual == "f64"
+        ),
+        "{:?}",
+        result.err()
+    );
 }
 
 /// The canonical form of a result's layout: accepted and zero projectors.

@@ -81,6 +81,9 @@ struct Spec {
     fixed: Vec<usize>,
     network: Option<TreeTN<IdxTensor, usize>>,
     rms: f64,
+    /// `Some(audit_rms)` makes the acceptance a sampled measurement with an
+    /// audit of that RMS; `None` keeps an exhaustive (certified) acceptance.
+    audit: Option<f64>,
     status: PatchStatus,
 }
 
@@ -89,13 +92,18 @@ fn leaf(fixed: &[usize], network: Option<TreeTN<IdxTensor, usize>>, rms: f64) ->
         fixed: fixed.to_vec(),
         network,
         rms,
+        audit: None,
         status: PatchStatus::WithinTolerance,
     }
 }
 
 fn measurement(rms: f64, patch_points: f64) -> L2Measurement {
+    measurement_by(MeasurementMethod::Exhaustive, rms, patch_points)
+}
+
+fn measurement_by(method: MeasurementMethod, rms: f64, patch_points: f64) -> L2Measurement {
     L2Measurement {
-        method: MeasurementMethod::Exhaustive,
+        method,
         points: patch_points as usize,
         patch_points,
         rms,
@@ -128,7 +136,21 @@ fn synthetic(
         )
         .unwrap();
         let patch_points = domain_points / (1usize << spec.fixed.len()) as f64;
-        let acceptance = Some(measurement(spec.rms, patch_points));
+        let (acceptance, audit) = match spec.audit {
+            Some(audit_rms) => (
+                Some(measurement_by(
+                    MeasurementMethod::Sampled,
+                    spec.rms,
+                    patch_points,
+                )),
+                Some(measurement_by(
+                    MeasurementMethod::Sampled,
+                    audit_rms,
+                    patch_points,
+                )),
+            ),
+            None => (Some(measurement(spec.rms, patch_points)), None),
+        };
         match spec.network {
             Some(network) => {
                 let subdomain = SubDomainTreeTN::new(network, projector.clone()).unwrap();
@@ -141,7 +163,7 @@ fn synthetic(
                     max_bond_dim: subdomain.max_bond_dim(),
                     retries_used: 0,
                     acceptance,
-                    audit: None,
+                    audit,
                     status: spec.status,
                     log_norm: data.log_norm().ok(),
                 });
@@ -150,7 +172,7 @@ fn synthetic(
             None => zero_patches.push(ZeroPatchRecord {
                 projector,
                 acceptance,
-                audit: None,
+                audit,
             }),
         }
     }
@@ -391,6 +413,65 @@ fn a_truncation_is_kept_only_within_the_slack() {
     )
     .unwrap();
     assert_eq!(small.merge.rejected_by_cap, 1);
+}
+
+#[test]
+fn a_truncation_keeps_the_audited_estimate_within_tau() {
+    let s = sites();
+    let eps = 1e-3;
+    let dropped = (dense(&s, |p| {
+        if p[0] == 1 {
+            eps * product_value(B, p)
+        } else {
+            0.0
+        }
+    }))
+    .norm()
+    .unwrap();
+    let region_points = 16.0_f64;
+    // The truncation of the small half costs `tau / 100` in RMS units.
+    let tau = 100.0 * dropped / region_points.sqrt();
+    let halves = |audit: f64| {
+        let mut small = B;
+        small[0] = [eps * B[0][0], eps * B[0][1]];
+        let mut specs = vec![
+            leaf(&[0], Some(product(&s, A)), 0.1 * tau),
+            leaf(&[1], Some(product(&s, small)), 0.1 * tau),
+        ];
+        for spec in &mut specs {
+            spec.audit = Some(audit);
+        }
+        synthetic(&s, specs, 2, tau)
+    };
+    let audited = |result: &SiblingMergeResult<usize>| match result.merge.error.global {
+        GlobalL2Error::Audited {
+            rms_error_estimate, ..
+        } => rms_error_estimate,
+        ref other => panic!("audited members give an audited estimate, got {other:?}"),
+    };
+
+    // An audit well inside tau leaves room for the truncation.
+    let roomy = merge_siblings(halves(0.5 * tau), &0, &Default::default()).unwrap();
+    assert_eq!(roomy.merge.merges.len(), 1);
+    assert!(roomy.merge.merges[0].truncation_rms > 0.0);
+    assert!(
+        audited(&roomy) <= tau,
+        "{:e} > tau {tau:e}",
+        audited(&roomy)
+    );
+
+    // The acceptance (0.1 tau) leaves the same slack, but the audit
+    // (0.995 tau) does not: spending the acceptance's slack would put the
+    // audited estimate above tau. The exact sum is kept instead, and its
+    // rank reaches the cap.
+    let tight = merge_siblings(halves(0.995 * tau), &0, &Default::default()).unwrap();
+    assert!(
+        audited(&tight) <= tau,
+        "audited estimate {:e} > tau {tau:e}",
+        audited(&tight)
+    );
+    assert!(tight.merge.merges.is_empty());
+    assert_eq!(tight.merge.rejected_by_cap, 1);
 }
 
 #[test]

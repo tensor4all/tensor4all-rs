@@ -11,8 +11,9 @@ approved by the maintainer on 2026-11-10 (see
 an exploratory report for the TreeACI kernel
 ([2026-11-11](../../benchmarks/results/2026-11-11-m6c-elementwise.md)); on
 `tt_nblock` at T = 0.01 it measures about half the parameters of unpatched
-TreeACI at matched accuracy, the timing comparison there waits for #784, and
-tree RSI is parked. This record answers the two open questions the roadmap left to it
+TreeACI at matched accuracy and 20 to 36 times the time of unpatched runs
+stopped after 10 sweeps (overhead discussed in #1274), and tree RSI is
+parked. This record answers the two open questions the roadmap left to it
 (acceptance and driver).
 
 The 2026-11-09 ruling stands: Hadamard is the case `k = 2, f = product` of a
@@ -162,8 +163,11 @@ pub trait ElementwiseInterpolator<T, Op> {
   compile, as the roadmap requires.
 - The outcome is M1's `InterpolationOutcome`, so the driver's accept, split,
   embed and report code is shared. `termination` maps from the kernels:
-  TreeACI `Converged` to `Converged`, `RankLimited` to `BondCapReached`,
-  `MaxSweeps` to `IterationLimit`; tree RSI reports `BondCapReached` when an
+  TreeACI `Converged` to `Converged` (`BondCapReached` at the cap),
+  `RankLimited` to `BondCapReached` at the cap and to `IterationLimit` below
+  it (every inaccurate edge at its algebraic rank bound; changed 2026-11-12
+  after the review of PR #1278), `MaxSweeps` to `IterationLimit`; tree RSI
+  reports `BondCapReached` when an
   edge reached the cap (`rank_limit_reached`), otherwise `ErrorNotMeasured`,
   since it estimates no error.
 - **Restriction to active sites.** The driver removes the fixed sites from

@@ -313,6 +313,88 @@ def b0_status():
                  rows)
 
 
+def unpatched_by_sweeps(seed):
+    """The unpatched runs of one seed on tt_nblock, T = 0.01, R = 12: the
+    50-sweep runs and the same runs stopped after 10, 20 and 30 sweeps, as
+    (tol, sweeps, result). A stopped run must be the prefix of its 50-sweep
+    run (same seed), which is checked here."""
+    full = {variant_value(r["variant"], "tol", c["tol"]): r
+            for c, r in group_runs("nblock-T0.01-R12").get((seed, "unpatched"), [])}
+    out = [(tol, 50, r) for tol, r in full.items()]
+    for c, r in group_runs("nblock-T0.01-R12-sweeps").get((seed, "unpatched"), []):
+        tol = variant_value(r["variant"], "tol", c["tol"])
+        n = int(variant_value(r["variant"], "max-sweeps", "50"))
+        f = full[tol]["engine"]
+        if (r["engine"]["max_ranks"] != f["max_ranks"][:n]
+                or r["engine"]["max_errors"] != f["max_errors"][:n]):
+            raise SystemExit(f"seed {seed} tol {tol} sweeps {n} is not a prefix of its 50-sweep run")
+        out.append((tol, n, r))
+    return sorted(out, key=lambda t: (-float(t[0]), t[1]))
+
+
+def nblock_sweeps():
+    rows = []
+    for seed in (42, 2026, 7):
+        for tol, n, r in unpatched_by_sweeps(seed):
+            rows.append([seed, tol, n, f"{r['seconds']:.1f}", r["max_rank"], r["params"],
+                         f"{g(r['accuracy']['rel_l2'], 3)} ± {g(r['accuracy']['rel_l2_se'], 1)}"])
+    return table(["seed", "tol", "sweeps", "time [s]", "max rank", "parameters",
+                  "sampled rel. L2 error ± s.e."], rows)
+
+
+def nblock_matched_sweeps():
+    """Each patched run against the fastest unpatched run of the same seed,
+    at any sweep limit, whose sampled error is not larger."""
+    rows = []
+    for (seed, method), items in sorted(group_runs("nblock-T0.01-R12").items()):
+        if method != "patched":
+            continue
+        unpatched = unpatched_by_sweeps(seed)
+        for c, r in items:
+            err = r["accuracy"]["rel_l2"]
+            match = [(tol, n, u) for tol, n, u in unpatched if u["accuracy"]["rel_l2"] <= err]
+            tol, n, u = min(match, key=lambda t: t[2]["seconds"])
+            uerr = u["accuracy"]["rel_l2"]
+            rows.append([seed, run_setting(method, c, r), g(err, 3),
+                         f"tol {tol}, {n} sweeps ({g(uerr, 3)})", g(err / uerr, 2),
+                         g(r["seconds"] / u["seconds"], 3), g(r["params"] / u["params"], 3)])
+    return table(["seed", "patched run", "its error", "unpatched match (error)",
+                  "its error / match error", "time patched / unpatched",
+                  "parameters patched / unpatched"], rows)
+
+
+def nblock_trace():
+    """The time of the traced patched run by engine role and termination.
+    A residual run is attributed to the kernel run it follows: the first
+    after an accepted run is its acceptance measurement, the second its
+    audit."""
+    path = RAW / "nblock-T0.01-R12-trace" / "s42-patched-trace.jsonl"
+    calls = lines(path, "engine_call")
+    result = lines(path, "result")[0]
+    parts = {}
+    def add(name, call):
+        n, t, pts = parts.get(name, (0, 0.0, 0))
+        parts[name] = (n + 1, t + call["seconds"], pts + call["points"])
+    last = None
+    following = 0
+    for call in calls:
+        if call["role"] == "kernel":
+            last, following = call, 0
+            add(f"kernel, {call['termination']}", call)
+        else:
+            following += 1
+            accepted = last is not None and last["termination"] == "Converged"
+            role = ("acceptance" if following == 1 else "audit") if accepted else "other"
+            add(f"residual TT, {role}", call)
+    total = result["seconds"]
+    rows = [[name, n, f"{t:.1f}", f"{100 * t / total:.0f} %", pts]
+            for name, (n, t, pts) in sorted(parts.items(), key=lambda kv: -kv[1][1])]
+    rest = total - sum(t for _, t, _ in parts.values())
+    rows.append(["rest of the driver", "", f"{rest:.1f}", f"{100 * rest / total:.1f} %", ""])
+    rows.append(["total", "", f"{total:.1f}", "", ""])
+    return table(["part", "runs", "time [s]", "share", "points evaluated"], rows)
+
+
 GENERATORS = {
     "exhaustive": exhaustive,
     "layouts": layouts,
@@ -326,6 +408,9 @@ GENERATORS = {
     "nblock-runs": lambda: runs_table("nblock-T0.01-R12"),
     "nblock-matched": lambda: matched_table("nblock-T0.01-R12"),
     "nblock-processes": lambda: processes("nblock-T0.01-R12"),
+    "nblock-sweeps": nblock_sweeps,
+    "nblock-matched-sweeps": nblock_matched_sweeps,
+    "nblock-trace": nblock_trace,
 }
 
 

@@ -98,9 +98,14 @@ pub struct TCI2Options {
     /// Pivot search strategy (default: [`PivotSearchStrategy::Full`]).
     ///
     /// `Full` materializes the entire candidate matrix and finds the best
-    /// pivot exactly. `Rook` uses lazy block-rook search and can reduce
-    /// evaluations for large local dimensions, but may miss some pivots.
-    /// Certifying an exactly zero residual can require all remaining entries.
+    /// pivot exactly. `Rook` uses lazy block-rook search, which may choose
+    /// different pivots and a different rank. A rook pivot is only a local
+    /// maximum of the residual, so before a bond update stops on tolerance the
+    /// remaining residual is scanned exactly; the reported bond error is then
+    /// the maximum residual over the candidate matrix, as with `Full`. That
+    /// scan evaluates every remaining candidate entry whenever a bond update
+    /// stops on tolerance, so `Rook` then evaluates about as many distinct
+    /// entries as `Full`.
     pub pivot_search: PivotSearchStrategy,
     /// Whether to normalize the bond error by the maximum observed sample
     /// value (default: `true`).

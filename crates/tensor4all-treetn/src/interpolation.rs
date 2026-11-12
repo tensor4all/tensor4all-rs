@@ -853,7 +853,9 @@ pub enum InterpolationTermination {
     /// criterion holds at a rank equal to the cap. The result may be
     /// inaccurate.
     BondCapReached,
-    /// The run stopped at the engine's iteration limit.
+    /// The run stopped without converging and below the cap: at the
+    /// engine's iteration limit, or at another limit of the engine's own
+    /// (for tree ACI, every inaccurate edge at its algebraic rank bound).
     IterationLimit,
     /// The engine's error criterion held on its recorded estimates, but some
     /// of those estimates were not measurements (for example a candidate set

@@ -45,7 +45,14 @@ where
 /// axis first or last; components in descending (as the evaluator builds them) and ascending axis order.
 fn assert_matches_reference<T>(mut random: impl FnMut(&mut ChaCha8Rng) -> T, seed: u64)
 where
-    T: Copy + Default + PartialEq + Debug + std::ops::AddAssign + std::ops::Mul<Output = T>,
+    T: Copy
+        + Default
+        + PartialEq
+        + Debug
+        + std::ops::AddAssign
+        + std::ops::Mul<Output = T>
+        + Send
+        + Sync,
 {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let bond_sets: [&[usize]; 7] = [
@@ -122,9 +129,15 @@ where
                     })
                     .collect();
                 reset_raw_center_core_visits_for_test();
-                let actual =
-                    contract_raw_center(&core, &dims, physical_axis, &physical_values, &components)
-                        .unwrap();
+                let actual = contract_raw_center(
+                    &core,
+                    &dims,
+                    physical_axis,
+                    &physical_values,
+                    &components,
+                    Parallelism::Serial,
+                )
+                .unwrap();
                 // Debug formatting is the shortest exact representation, so it tells -0.0 from +0.0.
                 assert_eq!(
                     format!("{actual:?}"),
@@ -182,7 +195,8 @@ fn fold_and_reference(specials: &[f64]) -> Vec<(f64, f64)> {
         })
         .collect();
     let strides = [1, 1, 5];
-    let actual = contract_raw_center(&core, &dims, 0, &[0; 5], &components).unwrap();
+    let actual =
+        contract_raw_center(&core, &dims, 0, &[0; 5], &components, Parallelism::Serial).unwrap();
     assert_eq!(actual.len(), points);
     (0..points)
         .map(|point| {
@@ -212,7 +226,15 @@ fn raw_center_fold_numbers_the_points_of_every_block() {
             values: vec![1.0],
         },
     ];
-    let actual = contract_raw_center(&[1.0], &[1, 1, 1], 0, &[0; 8], &components).unwrap();
+    let actual = contract_raw_center(
+        &[1.0],
+        &[1, 1, 1],
+        0,
+        &[0; 8],
+        &components,
+        Parallelism::Serial,
+    )
+    .unwrap();
     assert_eq!(actual, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
 }
 

@@ -19,10 +19,11 @@ error control, and its `rel_tol` is an LU pivot threshold, not an accuracy
 setting.
 
 Open: on gw-rs's low-temperature topology (`tt_nblock`, T = 0.01,
-R = 12) the parameter counts are measured (section 7), but the timing
-comparison waits for #784, because every unpatched run there cycles until
-its sweep limit (sections 5 and 7). B0 was tried on one seed and did not
-finish within its 2 h limit (section 6).
+R = 12) patching needs about half the parameters of unpatched TreeACI but
+takes 20 to 36 times as long as unpatched runs stopped after 10 sweeps
+(section 7); whether those runs are the right baseline, and where the
+patching overhead can be reduced, is discussed in #1274. B0 was tried on
+one seed and did not finish within its 2 h limit (section 6).
 
 Not reported: a first round of runs on 2026-11-10/11 used the comb CTTN at
 T = 0.01 and R = 12. That is the comb's worst regime for G0 (section 4), its
@@ -436,14 +437,127 @@ within a factor 1.6 of each other (seed 2026 at `rtol = 1e-2`, seed 7 at
 `rtol = 1e-3`, and every seed at `rtol = 1e-4`), the patched result has 0.40
 to 0.47 times the parameters of the unpatched one.
 
-**Time.** In those same pairs the patched run took 1.5 to 2.5 times as long.
-About half of each patched run is the driver's L2 measurement. Every
-unpatched run ends at `MaxSweeps` after 50 sweeps. Its maximum rank is within
-3 % of its final value from sweep 7 to 9 in eight of nine runs, and from
-sweep 28 in the ninth (seed 42, `tol = 1e-4`); it last changes at sweep 49
-or 50. Most unpatched sweeps therefore run after the rank has settled, as in
-section 5, and the unpatched times measure #784 as well as the operation.
-How much faster a converging unpatched run would be is not measured here.
+**Time against the 50-sweep runs.** In those same pairs the patched run took
+1.5 to 2.5 times as long. Every unpatched run ends at `MaxSweeps` after 50
+sweeps. Its maximum rank is within 3 % of its final value from sweep 7 to 9
+in eight of nine runs, and from sweep 28 in the ninth (seed 42,
+`tol = 1e-4`); it last changes at sweep 49 or 50. Most unpatched sweeps
+therefore run after the rank has settled, as in section 5, and the unpatched
+times measure #784 as well as the operation.
+
+### Unpatched runs stopped after 10, 20 and 30 sweeps
+
+The same unpatched runs again, stopped after 10, 20 and 30 sweeps
+(`nblock-T0.01-R12-sweeps/`, harness option `--max-sweeps`, three processes
+side by side on cores 4, 6 and 8 of an otherwise idle host). With the same
+seed a stopped run is the prefix of its 50-sweep run: `report.py` checks that
+its per-sweep ranks and errors equal the first sweeps of the 50-sweep run.
+
+<!-- BEGIN GENERATED: nblock-sweeps -->
+| seed | tol | sweeps | time [s] | max rank | parameters | sampled rel. L2 error ± s.e. |
+|---|---|---|---|---|---|---|
+| 42 | 1e-3 | 10 | 9.6 | 412 | 2770100 | 0.00153 ± 9e-06 |
+| 42 | 1e-3 | 20 | 33.1 | 414 | 2769932 | 0.00218 ± 1e-05 |
+| 42 | 1e-3 | 30 | 54.9 | 417 | 2790262 | 0.00258 ± 2e-05 |
+| 42 | 1e-3 | 50 | 112.3 | 412 | 2789402 | 0.00376 ± 2e-05 |
+| 42 | 1e-4 | 10 | 11.6 | 495 | 3826566 | 0.000317 ± 2e-06 |
+| 42 | 1e-4 | 20 | 53.4 | 497 | 3838898 | 0.000283 ± 1e-06 |
+| 42 | 1e-4 | 30 | 95.1 | 499 | 3822802 | 0.000241 ± 1e-06 |
+| 42 | 1e-4 | 50 | 189.7 | 498 | 3830752 | 0.000274 ± 1e-06 |
+| 42 | 1e-5 | 10 | 18.0 | 579 | 5102316 | 1.84e-05 ± 1e-07 |
+| 42 | 1e-5 | 20 | 89.5 | 579 | 5067854 | 1.48e-05 ± 7e-08 |
+| 42 | 1e-5 | 30 | 155.2 | 578 | 5085544 | 1.98e-05 ± 1e-07 |
+| 42 | 1e-5 | 50 | 300.5 | 579 | 5082308 | 1.81e-05 ± 8e-08 |
+| 2026 | 1e-3 | 10 | 9.0 | 417 | 2774742 | 0.00288 ± 2e-05 |
+| 2026 | 1e-3 | 20 | 33.6 | 415 | 2751288 | 0.00189 ± 1e-05 |
+| 2026 | 1e-3 | 30 | 55.3 | 412 | 2777368 | 0.00194 ± 1e-05 |
+| 2026 | 1e-3 | 50 | 102.6 | 416 | 2768540 | 0.00201 ± 1e-05 |
+| 2026 | 1e-4 | 10 | 11.5 | 497 | 3830718 | 0.000277 ± 1e-06 |
+| 2026 | 1e-4 | 20 | 54.9 | 497 | 3839092 | 0.000308 ± 1e-06 |
+| 2026 | 1e-4 | 30 | 97.6 | 497 | 3830336 | 0.000261 ± 1e-06 |
+| 2026 | 1e-4 | 50 | 180.3 | 501 | 3854996 | 0.000291 ± 1e-06 |
+| 2026 | 1e-5 | 10 | 18.9 | 568 | 5068648 | 1.7e-05 ± 1e-07 |
+| 2026 | 1e-5 | 20 | 96.2 | 573 | 5068928 | 1.98e-05 ± 1e-07 |
+| 2026 | 1e-5 | 30 | 156.0 | 578 | 5077776 | 1.48e-05 ± 8e-08 |
+| 2026 | 1e-5 | 50 | 300.3 | 572 | 5075724 | 1.65e-05 ± 1e-07 |
+| 7 | 1e-3 | 10 | 8.4 | 419 | 2756096 | 0.00399 ± 2e-05 |
+| 7 | 1e-3 | 20 | 31.2 | 417 | 2774804 | 0.00229 ± 2e-05 |
+| 7 | 1e-3 | 30 | 56.4 | 415 | 2755700 | 0.00217 ± 1e-05 |
+| 7 | 1e-3 | 50 | 111.2 | 414 | 2786054 | 0.00357 ± 2e-05 |
+| 7 | 1e-4 | 10 | 13.0 | 497 | 3858834 | 0.000187 ± 9e-07 |
+| 7 | 1e-4 | 20 | 56.3 | 495 | 3835230 | 0.000254 ± 1e-06 |
+| 7 | 1e-4 | 30 | 97.3 | 499 | 3838972 | 0.000308 ± 1e-06 |
+| 7 | 1e-4 | 50 | 187.7 | 498 | 3866342 | 0.000244 ± 1e-06 |
+| 7 | 1e-5 | 10 | 21.8 | 573 | 5095788 | 1.47e-05 ± 7e-08 |
+| 7 | 1e-5 | 20 | 87.0 | 575 | 5096084 | 2.43e-05 ± 1e-07 |
+| 7 | 1e-5 | 30 | 158.0 | 571 | 5065446 | 1.84e-05 ± 1e-07 |
+| 7 | 1e-5 | 50 | 296.6 | 579 | 5064770 | 1.57e-05 ± 1e-07 |
+<!-- END GENERATED: nblock-sweeps -->
+
+More sweeps do not make the result more accurate: the error after 10 sweeps
+is 0.41 to 1.43 times the error after 50 (lower in four of nine cases), and
+the parameters differ by at most 1.1 %. The 10-sweep runs took 8.4 to 21.8 s,
+against 102.6 to 300.5 s for 50 sweeps.
+
+Each patched run against the fastest unpatched run of the same seed, at any
+sweep limit, whose sampled error is not larger:
+
+<!-- BEGIN GENERATED: nblock-matched-sweeps -->
+| seed | patched run | its error | unpatched match (error) | its error / match error | time patched / unpatched | parameters patched / unpatched |
+|---|---|---|---|---|---|---|
+| 7 | rtol 1e-2, k 3 | 0.00201 | tol 1e-4, 10 sweeps (0.000187) | 11 | 19.6 | 0.287 |
+| 7 | rtol 1e-3, k 3 | 0.000257 | tol 1e-4, 10 sweeps (0.000187) | 1.4 | 35.8 | 0.429 |
+| 7 | rtol 1e-4, k 3 | 2.38e-05 | tol 1e-5, 10 sweeps (1.47e-05) | 1.6 | 20.6 | 0.465 |
+| 42 | rtol 1e-2, k 3 | 0.00255 | tol 1e-3, 10 sweeps (0.00153) | 1.7 | 28.7 | 0.4 |
+| 42 | rtol 1e-3, k 3 | 0.000273 | tol 1e-5, 10 sweeps (1.84e-05) | 15 | 23.8 | 0.323 |
+| 42 | rtol 1e-4, k 3 | 2.2e-05 | tol 1e-5, 10 sweeps (1.84e-05) | 1.2 | 24.8 | 0.463 |
+| 2026 | rtol 1e-2, k 3 | 0.00203 | tol 1e-4, 10 sweeps (0.000277) | 7.3 | 20.3 | 0.291 |
+| 2026 | rtol 1e-3, k 3 | 0.000286 | tol 1e-4, 10 sweeps (0.000277) | 1 | 32.9 | 0.431 |
+| 2026 | rtol 1e-4, k 3 | 2.24e-05 | tol 1e-5, 10 sweeps (1.7e-05) | 1.3 | 25.2 | 0.468 |
+<!-- END GENERATED: nblock-matched-sweeps -->
+
+Every match is a 10-sweep run. Where the two errors are within a factor 1.7
+of each other, the patched run took 20.6 to 35.8 times as long and has 0.40
+to 0.47 times the parameters. The 10-sweep stop was chosen after the fact:
+unpatched TreeACI has no criterion that stops it there on this workload, and
+its result is not verified independently. These times are what an unpatched
+run would cost if it stopped once its error had settled, not what it costs
+as configured, and #1274 does not use them as a baseline.
+
+### Where the patched time goes
+
+Seed 42 at `rtol = 1e-3` again, as one process on an otherwise idle host,
+with one `engine_call` line per kernel and residual-TT run
+(`nblock-T0.01-R12-trace/`, harness option `--trace-calls`). It gives the
+same 90 patches, parameters and error as the run above, in 290.7 s instead
+of 429.0 s with four processes on the host. A residual run is attributed to
+the kernel run it follows: an accepted run's first is its acceptance
+measurement, the second its audit.
+
+<!-- BEGIN GENERATED: nblock-trace -->
+| part | runs | time [s] | share | points evaluated |
+|---|---|---|---|---|
+| kernel, Converged | 90 | 73.1 | 25 % | 54381350 |
+| residual TT, acceptance | 90 | 73.0 | 25 % | 6302620 |
+| residual TT, audit | 90 | 69.9 | 24 % | 6263528 |
+| kernel, IterationLimit | 18 | 55.8 | 19 % | 47832281 |
+| kernel, BondCapReached | 71 | 17.5 | 6 % | 33830091 |
+| rest of the driver |  | 1.5 | 0.5 % |  |
+| total |  | 290.7 |  |  |
+<!-- END GENERATED: nblock-trace -->
+
+- The driver's L2 measurement takes about half of the run, split evenly
+  between the acceptance and the audit. The audit never changes the
+  partition, and the reported error is the harness's own.
+- The 18 kernel runs that end at the sweep limit (`IterationLimit`) stay
+  below the cap, with final estimates of 0.87 to 0.998 times the kernel
+  tolerance `tau / 3`; the driver splits them without measuring them.
+- The 71 parents that reach the cap are discarded. TreeACI takes no pivots,
+  so their children start from scratch.
+
+A comparison of the L2 acceptance with acceptance on the engine's own
+estimate (`ErrorNorm::sampled_max`, as in Grosso et al.'s pQTCI) is in
+#1274.
 
 ## Conclusions
 
@@ -461,7 +575,10 @@ How much faster a converging unpatched run would be is not measured here.
   0.47 times the parameters of unpatched TreeACI at close to equal accuracy,
   on all three seeds. This is the first workload of this report where
   patching pays in parameters (section 7).
-- Its timing is open. The patched runs took 1.3 to 2.5 times as long as
-  their unpatched matches, but every unpatched run cycled until its sweep
-  limit (#784), so its times include sweeps after the rank had settled. A
-  timing conclusion on this workload waits for #784 (sections 5 and 7).
+- There patching is slower. The patched runs took 1.3 to 2.5 times as long
+  as unpatched runs that cycle until their sweep limit (#784), and 20 to 36
+  times as long as the same runs stopped after 10 sweeps, by when their
+  error has settled. In a traced run, half of the patched time is the L2
+  measurement (acceptance and audit), a fifth is kernel runs that end at
+  their sweep limit and are split unmeasured, and a quarter is the accepted
+  kernel runs (section 7, #1274).

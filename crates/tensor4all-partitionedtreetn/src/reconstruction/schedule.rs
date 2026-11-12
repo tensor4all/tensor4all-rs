@@ -27,6 +27,18 @@
 //! the level and region where it was measured, so the reported bound does not grow
 //! with the number of refined regions.
 //!
+//! [`MergeRefineOptions::output_regions`] names the output regions the caller
+//! needs. `None` (the default) computes every region at the requested output
+//! depth, and `Some(regions)` prunes a child prefix that intersects none of them
+//! before it is restricted, merged or kept, mirroring how
+//! [`MergeRefineOptions::coverage`] decides which input leaves are present. The
+//! retained output is then limited to those regions, and the reported bound
+//! covers the computed regions only. The counters do not shrink the same way:
+//! they count the work that is executed, and the operator is still applied over
+//! the whole output domain once per input leaf (and, with a rank goal, probes are
+//! accumulated before a child is discarded), so `applied_operator_count` and the
+//! first `work_items_per_level` entries stay at the unselected schedule's values.
+//!
 //! With [`MergeRefineOptions::target_bond_dim`] unset the trajectory is uniform
 //! and exact: every region is refined down to the requested depth and
 //! [`MergeRefineReport::error_bound`] stays zero. With a rank goal it becomes
@@ -78,6 +90,7 @@ use crate::{
 /// assert_eq!(options.max_terms, 1 << 20);
 /// assert_eq!(options.target_bond_dim, None);
 /// assert_eq!(options.coverage, CoverageContract::Complete);
+/// assert!(options.output_regions.is_none());
 /// assert!(options.apply_options.is_none());
 /// ```
 #[derive(Debug, Clone)]
@@ -131,6 +144,26 @@ pub struct MergeRefineOptions<V> {
     /// assignment contributes exactly zero, while [`CoverageContract::Complete`]
     /// rejects such a preimage with repair guidance.
     pub coverage: CoverageContract,
+    /// Which output regions the caller needs, default `None`.
+    ///
+    /// `None` computes every region at [`Self::output_depth`]. `Some(regions)`
+    /// computes only the regions that intersect one of `regions`, and a region
+    /// that intersects none of them is never restricted, merged, retained or
+    /// counted, so both the work and the result shrink with the selection. Each
+    /// `regions` entry fixes a contiguous prefix of the output indices of every
+    /// coordinate group and leaves the remaining output indices free, so a
+    /// region at the full output depth names one single output coordinate and a
+    /// shallower region names every coordinate below it. Listing no region is
+    /// invalid.
+    ///
+    /// The trajectory refines prefixes, so this option filters whole work items
+    /// instead of re-tiling the output: a region that only partially overlaps a
+    /// requested one is still computed, and a request deeper than
+    /// [`Self::output_depth`] yields the schedule cell that contains it, or the
+    /// several cells that intersect it when the requested per-axis depths differ.
+    /// The input side is selected by [`Self::coverage`]; the two selections
+    /// compose.
+    pub output_regions: Option<Vec<Projector>>,
     /// Truncating operator-application options, default `None`.
     ///
     /// `None` applies the operator exactly. `Some(options)` applies it with those
@@ -174,6 +207,7 @@ impl<V> Default for MergeRefineOptions<V> {
             output_depth: None,
             max_work_items: 4096,
             coordinate_groups: None,
+            output_regions: None,
             target_bond_dim: None,
             max_terms: 1 << 20,
             coverage: CoverageContract::default(),
@@ -234,7 +268,13 @@ pub struct MergeRefineReport {
     /// of different levels can be nested and add by the triangle inequality. Each
     /// component is therefore counted once, however many regions it later spreads
     /// into. It is an a posteriori numerical bound that excludes backend roundoff,
-    /// and it excludes construction error in the caller's operator.
+    /// and it excludes construction error in the caller's operator. It bounds the
+    /// computed output regions: under [`MergeRefineOptions::output_regions`] the
+    /// unrequested regions are not part of the result, and their truncation
+    /// residuals and dropped norms are not measured. The level-zero application
+    /// error of [`MergeRefineOptions::apply_options`] is measured on the whole
+    /// output domain before any restriction and is included unchanged, so the
+    /// bound stays conservative.
     pub error_bound: f64,
     /// Number of executed level transitions.
     pub level_count: usize,
@@ -391,6 +431,10 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     /// Borrow each output region's projector and its overlapping terms.
+    ///
+    /// Only the regions this run computed are present, so a run with
+    /// [`MergeRefineOptions::output_regions`] exposes the selected part of the
+    /// output and says nothing about the regions it was not asked for.
     ///
     /// # Examples
     ///
@@ -593,7 +637,9 @@ where
     /// # Errors
     /// Returns [`PartitionedTreeTNError::InvalidOptions`] when a region retains
     /// several overlapping terms; inspect [`Self::regions`] instead, or refine to
-    /// the full output depth. Propagates partition site, dtype, and projector
+    /// the full output depth. A run with
+    /// [`MergeRefineOptions::output_regions`] partitions the selected part of the
+    /// output only. Propagates partition site, dtype, and projector
     /// validation errors.
     ///
     /// # Examples
@@ -922,6 +968,78 @@ impl ScheduleGeometry {
         children
     }
 
+    /// Read the per-axis output prefix a requested output region fixes.
+    ///
+    /// Fails when the projector fixes a non-contiguous set of output indices on
+    /// some axis, because a free output index followed by a fixed one describes a
+    /// region the level structure cannot restrict; when it fixes a coordinate
+    /// other than zero or one, which the binary level structure cannot express and
+    /// which a look-alike index of another dimension could smuggle in, since index
+    /// identity ignores the dimension; or when it names an index that is not one of
+    /// the selection's outputs, which would silently request everything.
+    fn output_prefix(&self, projector: &Projector) -> Result<OutputKey> {
+        for index in projector.projected_indices() {
+            if !self.axes.iter().any(|axis| axis.outputs.contains(index)) {
+                return Err(invalid(
+                    "a requested output region must fix only output indices of the selection",
+                ));
+            }
+        }
+        let mut key = Vec::with_capacity(self.axes.len());
+        for axis in &self.axes {
+            let mut depth = 0usize;
+            let mut value = 0usize;
+            let mut free_seen = false;
+            for index in &axis.outputs {
+                match projector.get(index) {
+                    Some(bit) => {
+                        if free_seen {
+                            return Err(invalid(
+                                "a requested output region must fix a contiguous prefix of each coordinate group and leave the trailing output indices free",
+                            ));
+                        }
+                        if bit > 1 {
+                            return Err(invalid(
+                                "a requested output region must fix binary output coordinates",
+                            ));
+                        }
+                        depth += 1;
+                        value = (value << 1) | bit;
+                    }
+                    None => free_seen = true,
+                }
+            }
+            key.push((depth, value));
+        }
+        Ok(key)
+    }
+
+    /// The child output regions of `key` at `level` that `wanted` keeps.
+    ///
+    /// `None` keeps every child. With a selection, a child is kept exactly when
+    /// its region intersects one of the requested regions; two prefix regions
+    /// intersect when they agree on the shorter of their per-axis prefix lengths,
+    /// so a requested region at the full depth keeps one path of children and a
+    /// shallower one keeps every child below it. At least one child survives when
+    /// the parent region intersects a requested one, because a child only extends
+    /// the parent's prefix.
+    fn kept_children(
+        &self,
+        key: &OutputKey,
+        level: usize,
+        wanted: Option<&[OutputKey]>,
+    ) -> Vec<OutputKey> {
+        let mut children = self.output_children(key, level);
+        match wanted {
+            None => children,
+            Some(wanted) => {
+                children
+                    .retain(|child| wanted.iter().any(|region| prefixes_overlap(child, region)));
+                children
+            }
+        }
+    }
+
     /// Total number of selected bits across every axis.
     fn bit_count(&self) -> usize {
         self.axes.iter().map(|axis| axis.inputs.len()).sum()
@@ -1004,7 +1122,7 @@ where
             if key == other {
                 continue;
             }
-            if input_prefixes_overlap(key, other) {
+            if prefixes_overlap(key, other) {
                 return Err(invalid(
                     "input leaves must not overlap: on every axis one leaf's prefix must not be a prefix of the other's selected indices, because the two would cover the same coordinates",
                 ));
@@ -1019,14 +1137,14 @@ where
     Ok(leaves)
 }
 
-/// Whether two input-prefix keys overlap, in the sense that their per-axis
+/// Whether two per-axis prefix keys overlap, in the sense that their per-axis
 /// prefixes nest on every axis.
 ///
 /// Nesting is tested per axis in either direction: axis 0 may have `key` shorter
-/// than `other` while axis 1 has it longer. Two leaves overlap exactly when every
-/// axis overlaps, because then they share a sub-rectangle of the selected
-/// coordinates.
-fn input_prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
+/// than `other` while axis 1 has it longer. Two regions overlap exactly when every
+/// axis overlaps, because then they share a sub-rectangle of the coordinates.
+/// `InputKey` and `OutputKey` are the same prefix-key type.
+fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
     key.iter()
         .zip(other)
         .all(|((depth, value), (other_depth, other_value))| {
@@ -1058,7 +1176,15 @@ fn input_prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// [`ReconstructionTarget::from_subset_operator`]: `unitary = true` uses the
 /// preimage scale, otherwise it is multiplied by the selected-space operator's
 /// Frobenius norm. `tolerance` supplies `max(atol, rtol * reference_scale)`.
-/// `options` selects the output depth, the work limit, and the soft rank goal.
+/// `options` selects the output depth, the work limit, the soft rank goal, the
+/// covered input leaves, and the output regions the caller needs.
+///
+/// With [`MergeRefineOptions::output_regions`] set, only the output regions that
+/// intersect one of the requested regions are restricted, merged and returned, so
+/// the counters, the reported bound and [`MergeRefineResult::regions`] describe
+/// the selected part of the output and not the whole transform. A requested region
+/// that only partially overlaps a refined region, or that has per-axis depths the
+/// refined level cannot reproduce, yields the schedule cells that intersect it.
 ///
 /// With [`MergeRefineOptions::target_bond_dim`] unset and no
 /// [`MergeRefineOptions::apply_options`], nothing is truncated and the reported
@@ -1095,7 +1221,10 @@ fn input_prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 ///
 /// # Errors
 /// Returns [`PartitionedTreeTNError::InvalidOptions`] for a non-binary or empty
-/// selection, an `output_depth` above the selection depth, a `max_work_items`
+/// selection, an `output_depth` above the selection depth, an empty
+/// [`MergeRefineOptions::output_regions`], an output region that does not fix a
+/// contiguous prefix of output indices on every coordinate group or that names an
+/// index outside the selection, a `max_work_items`
 /// limit below the present input-leaf count, a zero `target_bond_dim`, a preimage
 /// whose leaves do not form a valid dyadic prefix code or do not cover the
 /// requested contract, non-finite tolerances, and non-finite or non-positive
@@ -1196,6 +1325,22 @@ where
             "output_depth must not exceed the longest coordinate group",
         ));
     }
+    // A requested output region is a prefix key. `None` computes every region, so
+    // the unselected trajectory is untouched.
+    let wanted: Option<Vec<OutputKey>> = match options.output_regions.as_deref() {
+        None => None,
+        Some([]) => {
+            return Err(invalid(
+                "output_regions must name at least one region when specified",
+            ))
+        }
+        Some(regions) => Some(
+            regions
+                .iter()
+                .map(|projector| geometry.output_prefix(projector))
+                .collect::<Result<Vec<_>>>()?,
+        ),
+    };
     // Validate the dyadic input geometry before applying any operator, so an
     // unsupported partition costs no transform work.
     let present = validate_leaf_geometry(preimage, &geometry, options.coverage)?;
@@ -1308,7 +1453,8 @@ where
     let mut stopped: BTreeSet<OutputKey> = BTreeSet::new();
     for level_index in 1..=output_depth {
         let levels_left = output_depth - level_index + 1;
-        let charges = level_charge_bound(&level, &stopped, &geometry, level_index)?;
+        let charges =
+            level_charge_bound(&level, &stopped, &geometry, level_index, wanted.as_deref())?;
         // Without a rank goal nothing is approximated: a zero share still drops an
         // exactly cancelling contribution but never a small nonzero one, so the
         // reported bound stays exactly zero as documented.
@@ -1343,10 +1489,10 @@ where
                 next.insert(region, merged);
                 continue;
             }
-            // Probe every child region: restrict first, then merge input siblings.
-            // One axis contributes two children, so several axes contribute the
-            // product of their choices in one synchronized level.
-            let child_keys = geometry.output_children(&region, level_index);
+            // Probe the child regions the caller needs: restrict first, then merge
+            // input siblings. One axis contributes two children, so several axes
+            // contribute the product of their choices in one synchronized level.
+            let child_keys = geometry.kept_children(&region, level_index, wanted.as_deref());
             let mut children = Vec::with_capacity(child_keys.len());
             for child in child_keys {
                 let projector = geometry.output_projector(&child)?;
@@ -1574,6 +1720,7 @@ fn level_charge_bound<V>(
     stopped: &BTreeSet<OutputKey>,
     geometry: &ScheduleGeometry,
     level_index: usize,
+    wanted: Option<&[OutputKey]>,
 ) -> Result<usize>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
@@ -1585,7 +1732,9 @@ where
             charges = checked_add(charges, own)?;
             continue;
         }
-        let children = geometry.output_children(region, level_index).len();
+        // Only the children this level actually probes can charge this level, so
+        // a pruned child reserves no share of the allowance.
+        let children = geometry.kept_children(region, level_index, wanted).len();
         let probes = own
             .checked_mul(children)
             .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;

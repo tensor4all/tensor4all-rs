@@ -1,0 +1,53 @@
+{
+  "purpose": "Locate the first R9/seed2026 divergence, then replay identical Guard injection points and diagnose LU conditioning. Diagnostic overhead is excluded from performance conclusions.",
+  "base": "5909b1848439a2f09df365c40fe97ed97d636002",
+  "candidate": "query-pool prototype frozen before instrumentation",
+  "cases": [
+    {
+      "r": 9,
+      "seed": 2026,
+      "topology": "nblock",
+      "temperature": 0.01,
+      "relative_tolerance": 0.0001,
+      "cap": 4000,
+      "max_sweeps": 50
+    }
+  ],
+  "cpu": 14,
+  "threads": {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "RAYON_NUM_THREADS": "1"
+  },
+  "validation": "5000 original importance points (seed2026 xor0x5eed) +1094 existing peak-aware points, fixed across all phases",
+  "initial_arms": [
+    "baseline-natural",
+    "candidate-natural"
+  ],
+  "followup": "Determine the first semantic candidate/matrix/pivot divergence, trace held-out error within that pass, dump the divergent local matrices for SVD. Replay baseline and candidate Guard points in both implementations, with self-replay negative controls. Preserve every outcome.",
+  "validity": "Natural traced output must reproduce frozen uninstrumented ranks, error history, Guard counts, termination and held-out errors to roundoff; self replay must reproduce own natural trajectory. No accuracy threshold or stopping changes.",
+  "adaptive_followup": {
+    "reason": "Crossed Guard injection sequences swap complete final outputs. At pass2 baseline retains two old points whereas candidate retains none.",
+    "case": "R9/seed2026, unchanged parameters; truncate the diagnostic run to two nominal sweeps only to inspect Guard residuals, not for an accuracy acceptance claim. Final cleanup may add local commits without a new Guard call.",
+    "arms": [
+      "baseline-probe",
+      "candidate-probe"
+    ],
+    "measurement": "Record actual random starts, known residuals and threshold with no extra random draws or numerical evaluations; compare the first two passes against full natural traces."
+  },
+  "prefix_replay": {
+    "purpose": "Find whether replacing the first two or three Guard injection batches suffices; later batches are generated normally, with unchanged RNG and residual checks.",
+    "arms": [
+      "baseline-replay-candidate-prefix2",
+      "candidate-replay-baseline-prefix2",
+      "baseline-replay-candidate-prefix3",
+      "candidate-replay-baseline-prefix3"
+    ],
+    "validity": "Retain all four outcomes, independently of whether they reproduce either full trajectory. These are artificial injection ablations, not acceptable production fixes."
+  },
+  "candidate_patch_sha256": "a9fb13ca76d4b5663eb12db3cab9c24a498da4980ab4735bf3a3b66271877901",
+  "notice": "Rejected prototype preserved only for reproduction of the accuracy investigation; this patch is not an accepted production fix.",
+  "canonical_context_patch_sha256": "70451c8e3765bd5038503090474397aae84edcd983a668a29fcde4cf4906d43f",
+  "patch_format": "Empty unified-diff context lines omit their optional space marker; Git applies the identical source changes."
+}

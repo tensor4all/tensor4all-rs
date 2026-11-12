@@ -210,13 +210,17 @@ predicted output projectors overlap without being equal, the pairs are refined
 onto a disjoint grid of the fixed output indices, under the same
 `AUTOMATIC_REFINEMENT_LIMIT`; here the limit applies to the whole candidate
 output grid, which is more conservative than `contract`'s per-operand count.
+Before this refinement, overlapping output projectors made `contract_adaptive`
+return `PartitionedTreeTNError::OverlappingProjectors`; such inputs are now
+accepted, and a candidate grid above the limit returns `RefinementTooLarge`.
 `contract_adaptive_selected` selects by the original pair output keys first, so
-a returned key can be a refinement of a wanted key. With a bond-dimension cap
-and `PatchSplitStrategy::Sequential`, a group that has a split candidate stops
-at its first contribution whose bond dimension reaches the cap and is
-recomputed on projected children; the remaining pairs of that group are not
-contracted. The resulting partition layout and values are the same as before
-this shortcut.
+a returned key can be a refinement of a wanted key, and a pair whose key
+overlaps a wanted key without being equal to it is not formed. With a
+bond-dimension cap and `PatchSplitStrategy::Sequential`, a group that has a
+split candidate stops at its first contribution whose bond dimension reaches
+the cap and is recomputed on projected children; the remaining pairs of that
+group are not contracted. For layouts accepted before, the resulting partition
+layout and values are unchanged.
 
 ## Adaptive patched interpolation
 

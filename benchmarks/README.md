@@ -96,6 +96,41 @@ the paired protocol below does not apply; keep the thread variables and affinity
 pinned anyway so the timings are comparable. Recorded output:
 [`2026-09-16-merge-refine-schedule.md`](results/2026-09-16-merge-refine-schedule.md).
 
+#### Merge-refine in the intended regime (#777 item F4)
+
+`benchmark_merge_refine_intended_regime` runs the same schedule against the same
+whole-state application on a localized chirp input whose patch transforms are
+high rank, with few input patches and many output bits. It sweeps the output bit
+count, and it prints one JSON line per output depth so a per-level table costs no
+library instrumentation (each depth is a separate run of the prefix trajectory).
+The body lives in `rust/benchmark_merge_refine_intended_regime.rs`; one method per
+process keeps the `/usr/bin/time` peak RSS attributable to it, and
+`rust/collect_merge_refine_intended_regime.py` folds a directory of those
+per-process logs into one CSV.
+
+```bash
+T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
+  cargo build --release -p tensor4all-benchmarks --example benchmark_merge_refine_intended_regime
+# one cell is three invocations; this is the exact arm, writing the collector's pair
+RAYON_NUM_THREADS=8 OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 MKL_NUM_THREADS=8 VECLIB_MAXIMUM_THREADS=8 \
+  taskset -c 8-15 /usr/bin/time -f "wall_s %e cpu_pct %P maxrss_kb %M" \
+  ./target/release/examples/benchmark_merge_refine_intended_regime \
+  --bits 20 --input-depth 2 --output-depth 2 --goal 8 --rtol 1e-6 --repeats 1 \
+  --schedule-only --only exact > target/f4/r20.only-exact.jsonl 2> target/f4/r20.only-exact.err
+python3 benchmarks/rust/collect_merge_refine_intended_regime.py --dir target/f4 --out out.csv
+```
+
+`--baseline-only`, `--schedule-only --only exact|adaptive`, `--no-per-level` and
+`--no-deviation` select what one process measures. The input generator (a
+windowed chirp, `chirp()` in the harness) and the dense reference DFT are part of
+the harness, so `--no-deviation` drops the output reference and the dense
+per-term comparison; the dense input construction remains, so a cell's peak RSS is
+only a statement about the schedule up to that construction cost. Arguments are
+the bit count, the input patch depth, the output depth, the rank goal, the
+tolerance, the chirp rate and the repeat count; `--input-tol` sets the TT-SVD
+threshold that builds the input chain. Recorded output:
+[`2026-11-11-merge-refine-intended-regime.md`](results/2026-11-11-merge-refine-intended-regime.md).
+
 #### TreeACI branch cost attribution (#732)
 
 `benchmark_branch_cost` uses the same hub core coefficients and the same
@@ -255,7 +290,7 @@ cargo run --release -p tensor4all-benchmarks \
 ```
 
 The exploratory runs, the TreeACI kernel tolerance factor and the
-`tt_nblock` comparison (parameters measured, timing open until #784) are in
+`tt_nblock` comparison (parameters, time and a traced breakdown) are in
 [`2026-11-11-m6c-elementwise.md`](results/2026-11-11-m6c-elementwise.md); its
 tables are generated from the raw output by
 `results/m6c-elementwise/report.py`.

@@ -35,7 +35,7 @@ use super::{
     PatchedInterpolationResult, Plan,
 };
 use crate::partitioned_tree_tn::PatchLocator;
-use crate::subdomain_tree_tn::{ensure_same_dtype, ensure_same_tree_structure};
+use crate::subdomain_tree_tn::{ensure_same_dtype, ensure_same_tree_structure, scalar_kind_of};
 use crate::{PartitionedTreeTN, Projector, SubDomainTreeTN};
 use hataori_tenferro::TenferroLanes;
 
@@ -309,7 +309,7 @@ where
 /// * `inputs` - At least one partition. Every patch of every input must have
 ///   the same topology, the same site indices (identity and dimension), and
 ///   the same dtype, which is `T`; rename equivalent sites with
-///   [`TreeTN::replace_indices`](tensor4all_treetn::TreeTN::replace_indices)
+///   [`TensorIndex::replace_indices`](tensor4all_core::TensorIndex::replace_indices)
 ///   beforehand. An empty partition is the zero function. At least one input
 ///   must have a patch.
 /// * `operator` - The pointwise map; its batch rows follow `inputs`.
@@ -331,7 +331,9 @@ where
 /// Returns [`PatchedInterpolationError::InvalidInput`] for an empty input
 /// list, inputs without any patch, or a `patch_order` that omits a site an
 /// input projector fixes; [`PatchedInterpolationError::Partition`] for inputs
-/// whose patches differ in topology, sites, or dtype; and every error of
+/// whose patches differ in topology or sites, or whose dtype is not `T`
+/// ([`PartitionedTreeTNError::DTypeMismatch`](crate::PartitionedTreeTNError::DTypeMismatch));
+/// and every error of
 /// `patched_interpolate`, an operator failure being an evaluator error.
 ///
 /// # Examples
@@ -564,7 +566,8 @@ where
              needed to know the site space",
         )
     })?;
-    let dtype = template.scalar_kind()?;
+    // The inputs share one dtype, and it is the result's scalar type `T`.
+    let dtype = Some(scalar_kind_of::<T>()?);
     for patch in ordered.iter().flatten() {
         ensure_same_tree_structure(template.data(), patch.data())?;
         ensure_same_dtype(dtype, patch.scalar_kind()?)?;

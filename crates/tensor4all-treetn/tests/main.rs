@@ -5,6 +5,7 @@
 
 mod ad_treetn;
 mod basic;
+mod batch_parallelism;
 mod bug_swap_values;
 mod cached_evaluator_determinism;
 mod context_adoption;
