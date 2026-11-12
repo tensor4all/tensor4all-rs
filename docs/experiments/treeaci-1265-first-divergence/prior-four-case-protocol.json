@@ -1,0 +1,77 @@
+{
+  "purpose": "Paired correctness check of query candidate pools independent of output basis, with prefix restriction after local factorization; Guard does not pad output bonds. No performance claim.",
+  "base": "5909b1848439a2f09df365c40fe97ed97d636002",
+  "candidate_diff_sha256": "108129bf84b54c5456684b702591bcd071e55e33387f2955cf95ccf51864676d",
+  "cases": [
+    {
+      "r": 9,
+      "seed": 42
+    },
+    {
+      "r": 9,
+      "seed": 2026
+    },
+    {
+      "r": 10,
+      "seed": 42
+    },
+    {
+      "r": 10,
+      "seed": 2026
+    }
+  ],
+  "arms": [
+    "baseline",
+    "candidate"
+  ],
+  "tolerance": 0.0001,
+  "relative": true,
+  "rank_cap": 4000,
+  "max_sweeps": 50,
+  "guard": "unchanged defaults",
+  "cpu": 14,
+  "threads": {
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "RAYON_NUM_THREADS": "1"
+  },
+  "accuracy": "Same 5000 M6a importance samples; same1094 peak-aware points; no numerical thresholds relaxed.",
+  "gates": {
+    "importance_l2_max_ratio": 1.05,
+    "sampled_max_error_max_ratio": 1.05,
+    "sampled_max_error_hard_limit": 0.0005,
+    "sampled_l2_hard_limit": 0.007,
+    "max_passes": "no more than baseline for each case",
+    "status": "no new RankLimited under nonbinding configured rank cap; no Converged to MaxSweeps regression"
+  },
+  "repetitions": 1,
+  "scope": "This is not a complete convergence fix or performance study; all outcomes will be retained.",
+  "new_production_sources_sha256": {
+    "crates/tensor4all-treeaci/src/basis_projection.rs": "987a127a482b417647728127a83fdc19e7cca9329966899b2c2431cac9614c72",
+    "crates/tensor4all-treeaci/src/basis_projection/tests.rs": "2c8506478133804b6c744999ddb491e165d3d4aaac0d85a8ebf1141ad7cfe20a",
+    "crates/tensor4all-treeaci/src/samples/activation.rs": "e9be34e9263a6c1921f883253e4b519923e975330fabfc6d49d4b12ee700538d",
+    "crates/tensor4all-treeaci/src/samples/activation/tests.rs": "c164b15b2a06ad6dd27e63ed2df03799dfd4554de980d8b34d2dc163a6d6e9aa"
+  },
+  "fixture_source": {
+    "revision": "9a0f3861",
+    "path": "crates/tensor4all-treeaci/tests/support/g0.rs",
+    "sha256_with_frequency_order_adapter": "02a4ff74d7228f0d9e2b43ba447638fdfac27276a050b67f9cbd193f877b82c6"
+  },
+  "probe_sha256": "5c450d8afdb273264a814652dbf01990cf187bb544291137682ab2ecace51794",
+  "sources_sha256": {
+    "crates/tensor4all-treeaci/src/global_guard.rs": "14d593db5517d664a78d3dda4b3e5c77605143a99fa5878a8a7d8a25530da4c0",
+    "crates/tensor4all-treeaci/src/global_guard/tests/candidate_closure.rs": "d6a60a211bafc92cbdc13cf10aee7b6d43f92e1e910fe833597929ac517b0420",
+    "crates/tensor4all-treeaci/src/global_guard/tests/mod.rs": "45dd3f2caae752c466b90d48b774d55efa697206def58122f01444255a526f6c",
+    "crates/tensor4all-treeaci/src/lib.rs": "562de6104d46226cf7281c4b6b2e159cc052acef30c39fb28afd052e229fa5ba",
+    "crates/tensor4all-treeaci/src/samples.rs": "78f52ffa90e394ab74455f842c6c952b654ab7b7542724308b7633abc69c2810",
+    "crates/tensor4all-treeaci/src/samples/tests/mod.rs": "348edadb12b1f168671196adf0547aac54289e426f1071c0ef89224e8d9b83e8",
+    "crates/tensor4all-treeaci/src/state.rs": "b5f98ed8a8bdd9abf4c027770ddba047a36de95475a56d9fdc5452471675ab3d",
+    "crates/tensor4all-treeaci/src/state/tests/mod.rs": "13282e5a21bf87316da6540dc7be0302eb2ef1fd16fcc1ca368e5fa6bc4f4494",
+    "crates/tensor4all-treeaci/src/transaction.rs": "b2403f799b4efaec8cae961f6bd26d9156e8e00644c9ecaa1e93635691de1283",
+    "crates/tensor4all-treeaci/src/basis_projection.rs": "987a127a482b417647728127a83fdc19e7cca9329966899b2c2431cac9614c72",
+    "crates/tensor4all-treeaci/src/basis_projection/tests.rs": "2c8506478133804b6c744999ddb491e165d3d4aaac0d85a8ebf1141ad7cfe20a",
+    "crates/tensor4all-treeaci/src/samples/activation.rs": "e9be34e9263a6c1921f883253e4b519923e975330fabfc6d49d4b12ee700538d",
+    "crates/tensor4all-treeaci/src/samples/activation/tests.rs": "c164b15b2a06ad6dd27e63ed2df03799dfd4554de980d8b34d2dc163a6d6e9aa"
+  }
+}

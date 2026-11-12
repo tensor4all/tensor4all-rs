@@ -74,6 +74,7 @@ validated in CI. Longer runnable examples live in the
 - **[Design Documents](docs/design/index.md)** — architecture and design decisions
 - **[Provenance and Citation Policy](docs/PROVENANCE_AND_CITATION_POLICY.md)** — which components build on which external projects, algorithm origins, and how to cite
 - **[Contributing](CONTRIBUTING.md)** — issue intake, development conventions, validation, and pull requests
+- **[Maintainers](docs/MAINTAINERS.md)** — project stewards and merge authority
 - **[Changelog](CHANGELOG.md)** — breaking API changes and release notes
 
 ## Agent Skill

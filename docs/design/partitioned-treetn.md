@@ -180,9 +180,10 @@ how a sum is built; truncation and the split rule are unaffected.
 
 The routines that return a partition do not report a `NaryWithin` fallback;
 `to_treetn_with` and `TreeTN::exact_sum` do, through `ExactSum::used_nary`
-and `ExactSum::estimated_nary_bytes`. A reporting variant of the partition
-routines can be added when a caller needs one; a statistics type was not added
-ahead of that need.
+and `ExactSum::estimated_nary_bytes`. The `_with_report` variants described
+under [truncation convention](#truncation-convention-cross-patch-discarded-weight-cutoff)
+report the bond cap only, not the engine; a statistics type for the engine was
+not added ahead of that need.
 
 `PartitionedTreeTN::add`, `PartitionedTreeTN::add_truncated`, `reconstruct`
 and `schedule_merge_refine` take no engine: every sum they form has two terms
@@ -380,6 +381,27 @@ bounds the discarded singular-value **weight** (sum of squared singular
 values). It is best effort for the final whole-network norm error;
 `max_bond_dim` is a hard cap and takes precedence over `cutoff`. No API claims
 a global relative-error bound.
+
+A patch that a `max_bond_dim` cap truncated looks like a patch whose exact rank
+equals the cap: both arrive with bonds of that dimension and no discarded weight
+is exposed. `add_with_patching_with_report` and
+`contract_adaptive_with_report` therefore return the partition together with a
+`PatchingReport`, one `PatchCapRecord` per returned patch with the patch's bond
+dimensions and a `cap_truncated` flag. The flag is set when a returned bond sits
+exactly at the cap and the same cutoff applied without the cap retains a larger
+bond dimension: that is the case in which the split loop ran out of
+`patch_order` indices, and it separates the cap from a cutoff that would have
+retained the cap anyway. A patch whose exact rank equals the cap, and one that
+the cutoff alone brought below it, is not flagged. The comparison is
+patch-level, from the largest bond dimension on each side, not per bond.
+
+Answering it costs one further truncation of each patch that keeps a bond
+exactly at the cap, with the same threshold and no cap; a patch below the cap
+cannot have been capped and pays nothing, and the functions without
+`_with_report` never pay it. The discarded weight is not reported:
+`TreeTN::truncate` returns no singular values, so recomputing it would need a
+separate decomposition of the patch. The functions without `_with_report` keep
+their signature and return no report, so existing callers are unaffected.
 
 `cutoff` is a direct discarded-weight threshold, not a re-labelled relative
 tolerance. The default is `cutoff = 1e-24`, the exact square of the superseded

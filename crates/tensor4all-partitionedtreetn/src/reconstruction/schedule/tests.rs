@@ -1,4 +1,4 @@
-use super::{input_prefixes_overlap, level_share, merge_group_charge_bound};
+use super::{level_share, merge_group_charge_bound, prefixes_overlap};
 
 /// Two axes: axis 0 nests `first` inside `second`, axis 1 nests `second`
 /// inside `first`. Each axis overlaps, so the leaves overlap even though
@@ -7,28 +7,28 @@ use super::{input_prefixes_overlap, level_share, merge_group_charge_bound};
 fn per_axis_prefixes_detect_two_way_nesting() {
     let first = vec![(1usize, 0usize), (2, 0)];
     let second = vec![(2usize, 0usize), (1, 0)];
-    assert!(input_prefixes_overlap(&first, &second));
-    assert!(input_prefixes_overlap(&second, &first));
+    assert!(prefixes_overlap(&first, &second));
+    assert!(prefixes_overlap(&second, &first));
 
     // Same-direction nesting on every axis is also an overlap.
     let nested = vec![(1usize, 0usize), (1, 0)];
     let deeper = vec![(2usize, 0usize), (2, 0)];
-    assert!(input_prefixes_overlap(&nested, &deeper));
-    assert!(input_prefixes_overlap(&deeper, &nested));
+    assert!(prefixes_overlap(&nested, &deeper));
+    assert!(prefixes_overlap(&deeper, &nested));
 
     // A disagreement on any axis makes the two disjoint.
     let disjoint = vec![(1usize, 0usize), (1, 1)];
-    assert!(!input_prefixes_overlap(&nested, &disjoint));
-    assert!(!input_prefixes_overlap(&disjoint, &nested));
+    assert!(!prefixes_overlap(&nested, &disjoint));
+    assert!(!prefixes_overlap(&disjoint, &nested));
 
     // One axis nests while the other is disjoint: still disjoint.
     let split = vec![(2usize, 0usize), (1, 1)];
-    assert!(!input_prefixes_overlap(&first, &split));
-    assert!(!input_prefixes_overlap(&split, &first));
+    assert!(!prefixes_overlap(&first, &split));
+    assert!(!prefixes_overlap(&split, &first));
 
     // Different depths on both axes without nesting are disjoint.
     let sideways = vec![(1usize, 1usize), (1, 1)];
-    assert!(!input_prefixes_overlap(&first, &sideways));
+    assert!(!prefixes_overlap(&first, &sideways));
 }
 
 /// A merge of two multi-term items charges the summed operand term count: two

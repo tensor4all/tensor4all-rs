@@ -2313,6 +2313,211 @@ fn merge_refine_schedule_transforms_two_coordinate_axes_in_one_level() {
     assert!(error < TOL, "max error {error:e}");
 }
 
+/// The projector fixing the first `depth` output indices of one `CoordinateGroup`.
+fn output_prefix_projector(group: &CoordinateGroup, depth: usize, prefix: usize) -> Projector {
+    let pairs = group
+        .outputs
+        .iter()
+        .take(depth)
+        .enumerate()
+        .map(|(position, index)| (index.clone(), (prefix >> (depth - 1 - position)) & 1));
+    Projector::from_pairs(pairs).expect("projector")
+}
+
+/// The dense values of `region`'s single term, reordered to the index order of
+/// `indices`.
+fn region_dense(
+    regions: &MergeRefineResult<usize>,
+    region: &Projector,
+    indices: &[DynIndex],
+) -> Vec<Complex64> {
+    let term = regions
+        .regions()
+        .find(|(output, _)| *output == region)
+        .expect("the region must be present")
+        .1[0]
+        .data()
+        .to_dense()
+        .expect("dense");
+    reorder(
+        &term.to_vec::<Complex64>().expect("vector"),
+        term.indices(),
+        indices,
+    )
+}
+
+#[test]
+fn merge_refine_schedule_computes_only_the_selected_output_regions() {
+    let r = 4usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| Complex64::new((m as f64 * 0.8).sin() + 1.0, (m as f64 * 0.5).cos()))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+    let tolerance = ReconstructionTolerance {
+        rtol: 1e-12,
+        atol: 0.0,
+    };
+
+    // Unselected, the trajectory refines all 16 output coordinates and repeats the
+    // 8 + 4 + 2 + 1 input merges for every child of every level.
+    let all = schedule_exact(&preimage, &operator, &sites, None, 64);
+    assert_eq!(all.report().additions, 64);
+    assert_eq!(all.report().work_items_per_level, vec![16, 16, 16, 16, 16]);
+    assert_eq!(all.report().region_count, 16);
+
+    // The caller needs the one output coordinate with every bit zero, so one child
+    // per level keeps one path and merges the input siblings along it once.
+    let group = CoordinateGroup::new(sites.clone());
+    let wanted = output_prefix_projector(&group, r, 0);
+    let selected = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        tolerance,
+        &MergeRefineOptions {
+            output_regions: Some(vec![wanted.clone()]),
+            ..Default::default()
+        },
+    )
+    .expect("selected schedule");
+    let report = selected.report().clone();
+    assert_eq!(report.applied_operator_count, 16);
+    assert_eq!(report.additions, 15);
+    assert_eq!(report.work_items_per_level, vec![16, 8, 4, 2, 1]);
+    assert_eq!(report.region_count, 1);
+    assert_eq!(report.term_count, 1);
+    assert_eq!(report.error_bound, 0.0);
+
+    // The computed region is the same region, bit for bit, that the unselected
+    // trajectory returns among its 16.
+    let (indices, dense) = dense_of_regions(&selected);
+    let unselected = region_dense(&all, &wanted, &indices);
+    assert_eq!(
+        max_error(&dense, &unselected),
+        0.0,
+        "the selected region must equal the unselected one"
+    );
+}
+
+#[test]
+fn merge_refine_schedule_rejects_an_invalid_output_selection() {
+    let sites: Vec<DynIndex> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..4)
+        .map(|m| Complex64::new(1.0 + m as f64, 0.5 * m as f64))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = quantics_fourier_operator(2, FourierOptions::default()).expect("fourier");
+    let tolerance = ReconstructionTolerance::default();
+    let run = |output_regions| {
+        schedule_merge_refine(
+            &preimage,
+            &0,
+            &operator,
+            &sites,
+            &SubsetOperatorOptions { unitary: true },
+            tolerance,
+            &MergeRefineOptions {
+                output_regions,
+                ..Default::default()
+            },
+        )
+    };
+
+    // Naming no region asks for nothing, so it is rejected instead of returning an
+    // empty result.
+    let error = run(Some(Vec::new())).expect_err("an empty selection is invalid");
+    assert!(error.to_string().contains("at least one region"));
+
+    // A region must fix a contiguous prefix per axis: the outputs are the reversed
+    // sites, so fixing the second output index alone leaves a free index before it.
+    let group = CoordinateGroup::new(sites.clone());
+    let gap = Projector::from_pairs([(group.outputs[1].clone(), 0usize)]).expect("projector");
+    let error = run(Some(vec![gap])).expect_err("a non-prefix region is invalid");
+    assert!(error.to_string().contains("contiguous prefix"));
+
+    // An index outside the selection would silently request the whole output.
+    let stray = Projector::from_pairs([(DynIndex::new_dyn(2), 0usize)]).expect("projector");
+    let error = run(Some(vec![stray])).expect_err("a foreign index is invalid");
+    assert!(error
+        .to_string()
+        .contains("must fix only output indices of the selection"));
+
+    // Index identity ignores the dimension, so a look-alike index of dimension
+    // three stores coordinate two in an equal projector. The binary level
+    // structure must reject it instead of encoding a corrupt prefix key.
+    let ternary = Projector::from_pairs([(DynIndex::new(group.outputs[0].id, 3), 2usize)])
+        .expect("projector");
+    let error = run(Some(vec![ternary])).expect_err("a ternary coordinate is invalid");
+    assert!(error.to_string().contains("binary output coordinates"));
+}
+
+#[test]
+fn merge_refine_schedule_selects_an_output_region_across_two_axes_with_sparse_input() {
+    let sites: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..16)
+        .map(|m| Complex64::new(1.0 + (m as f64 * 0.4).sin(), 0.1 * m as f64))
+        .collect();
+    let tree = mps(&sites, &values);
+    // Input leaf 7 is omitted and read as zero under the explicit contract.
+    let keep: Vec<usize> = (0..16).filter(|leaf| *leaf != 7).collect();
+    let preimage = sparse_input_leaves(&tree, &sites, &keep);
+    let operator = two_axis_fourier_operator(&sites);
+    let groups = vec![
+        CoordinateGroup::new(sites[0..2].to_vec()),
+        CoordinateGroup::new(sites[2..4].to_vec()),
+    ];
+    let tolerance = ReconstructionTolerance {
+        rtol: 1e-12,
+        atol: 0.0,
+    };
+    let run = |output_regions| {
+        schedule_merge_refine(
+            &preimage,
+            &0,
+            &operator,
+            &sites,
+            &SubsetOperatorOptions { unitary: true },
+            tolerance,
+            &MergeRefineOptions {
+                coordinate_groups: Some(groups.clone()),
+                coverage: CoverageContract::ZeroForMissingLeaves,
+                max_work_items: 64,
+                output_regions,
+                ..Default::default()
+            },
+        )
+    };
+
+    // One output coordinate of the product grid, so a two-axis level keeps one of
+    // its four children.
+    let wanted = output_prefix_projector(&groups[0], 2, 0b10)
+        .intersection(&output_prefix_projector(&groups[1], 2, 0b01))
+        .expect("the two axis regions fix disjoint indices");
+    let selected = run(Some(vec![wanted.clone()])).expect("selected schedule");
+    let all = run(None).expect("unselected schedule");
+    assert_eq!(all.report().region_count, 16);
+    assert_eq!(selected.report().region_count, 1);
+    assert_eq!(selected.report().applied_operator_count, 15);
+    assert_eq!(selected.report().error_bound, 0.0);
+    assert!(
+        selected.report().additions < all.report().additions,
+        "a selection must skip work: {} is not below {}",
+        selected.report().additions,
+        all.report().additions
+    );
+
+    // The selected region matches the same region of the unselected run exactly.
+    let (indices, dense) = dense_of_regions(&selected);
+    let unselected = region_dense(&all, &wanted, &indices);
+    assert_eq!(max_error(&dense, &unselected), 0.0);
+}
+
 #[test]
 fn merge_refine_schedule_rejects_inconsistent_coordinate_groups() {
     let sites: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
