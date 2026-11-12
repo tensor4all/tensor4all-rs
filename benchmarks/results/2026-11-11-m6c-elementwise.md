@@ -40,7 +40,12 @@ host and the thread environment. Every group except `784probe/bin-fix` and
 release from a clean `feat/tree-patching-m6a-contraction` at `9dde54ca`.
 `nblock-T0.01-R12` uses `8805647a…`, built from a clean `06ebafaa`, which
 only changes the library's default tolerance factor; the harness still
-passes `k` explicitly. Harness:
+passes `k` explicitly. The groups added for sections 7 and 8 record their
+own binary and commit, each built from a clean tree that adds only harness
+options. They predate the review fixes of #1278 (sibling-merge slack, input
+dtype check, `RankLimited` below the cap), whose code paths these runs do
+not take: they merge no siblings, their inputs have the result type, and
+every `BondCapReached` kernel run in their traces has its rank at the cap. Harness:
 [`benchmark_m6c_elementwise`](../rust/benchmark_m6c_elementwise.rs).
 
 Host: AMD Ryzen 9 6900HX (8 cores, 16 logical CPUs), WSL2 kernel 6.18,
@@ -555,9 +560,186 @@ measurement, the second its audit.
 - The 71 parents that reach the cap are discarded. TreeACI takes no pivots,
   so their children start from scratch.
 
-A comparison of the L2 acceptance with acceptance on the engine's own
-estimate (`ErrorNorm::sampled_max`, as in Grosso et al.'s pQTCI) is in
-#1274.
+Section 8 takes these items further: the L2 measurement with the audit
+off, acceptance on the engine's own estimate, and which stop condition the
+`IterationLimit` runs fail.
+
+## 8. Patched overhead and acceptance on `tt_nblock` (#1274)
+
+Exploratory measurements made for the discussion in #1274, on the workload
+of section 7 (G0, `tt_nblock`, T = 0.01, R = 12, cap 64, seeds 42, 2026 and
+7). Each group ran as three single-thread processes side by side, one per
+seed, at different times, so times compare within a table and only
+indicatively across tables. Harness options: `--audit false` (the driver's
+L2 audit off), `--error-norm sampled-max` (`ErrorNorm::sampled_max`: each
+patch is accepted on the engine's own estimate against `rtol` times a
+max-norm reference, with no driver measurement, as in Grosso et al.'s
+pQTCI), `--max-reference exact` (the exact max |G0| = 31.83 of the grid as
+a given reference) and `--trace-history true` (below).
+
+### L2 without the audit, and sampled-max with a pinned reference
+
+`nblock-T0.01-R12-acceptance/`: L2 with `k = 3` and the audit off at the
+`rtol` of section 7, and `ErrorNorm::sampled_max()` with `k = 1`, whose
+reference is pinned from the root sample.
+
+<!-- BEGIN GENERATED: acceptance-runs -->
+| seed | acceptance | rtol | time [s] | patches | parameters | sampled rel. L2 error | kernel IterationLimit runs / share of kernel time | measurement [s] |
+|---|---|---|---|---|---|---|---|---|
+| 42 | L2, k 3, audit off | 1e-2 | 206 | 54 | 1107036 | 0.00255 | 14 / 44 % | 63 |
+| 42 | L2, k 3, audit off | 1e-3 | 288 | 90 | 1650302 | 0.000273 | 18 / 37 % | 104 |
+| 42 | L2, k 3, audit off | 1e-4 | 324 | 98 | 2364356 | 2.2e-05 | 18 / 34 % | 124 |
+| 42 | sampled-max (pinned), k 1 | 1e-3 | 140 | 59 | 1132218 | 0.00222 | 19 / 49 % | 0 |
+| 42 | sampled-max (pinned), k 1 | 1e-4 | 153 | 85 | 1668926 | 0.000251 | 13 / 32 % | 0 |
+| 42 | sampled-max (pinned), k 1 | 1e-5 | 234 | 107 | 2410400 | 2.22e-05 | 27 / 42 % | 0 |
+| 2026 | L2, k 3, audit off | 1e-2 | 156 | 49 | 1115356 | 0.00203 | 9 / 32 % | 54 |
+| 2026 | L2, k 3, audit off | 1e-3 | 255 | 82 | 1650740 | 0.000286 | 10 / 24 % | 98 |
+| 2026 | L2, k 3, audit off | 1e-4 | 332 | 98 | 2369936 | 2.24e-05 | 18 / 33 % | 123 |
+| 2026 | sampled-max (pinned), k 1 | 1e-3 | 72 | 26 | 700360 | 0.029 | 10 / 48 % | 0 |
+| 2026 | sampled-max (pinned), k 1 | 1e-4 | 142 | 62 | 1089214 | 0.00226 | 21 / 53 % | 0 |
+| 2026 | sampled-max (pinned), k 1 | 1e-5 | 186 | 88 | 1633330 | 0.000254 | 18 / 37 % | 0 |
+| 7 | L2, k 3, audit off | 1e-2 | 201 | 55 | 1108356 | 0.00201 | 15 / 47 % | 61 |
+| 7 | L2, k 3, audit off | 1e-3 | 329 | 96 | 1653924 | 0.000257 | 24 / 41 % | 108 |
+| 7 | L2, k 3, audit off | 1e-4 | 342 | 97 | 2368598 | 2.38e-05 | 17 / 32 % | 125 |
+| 7 | sampled-max (pinned), k 1 | 1e-3 | 172 | 93 | 2102616 | 4.26e-05 | 13 / 26 % | 0 |
+| 7 | sampled-max (pinned), k 1 | 1e-4 | 284 | 119 | 2962472 | 5.5e-06 | 39 / 52 % | 0 |
+| 7 | sampled-max (pinned), k 1 | 1e-5 | 277 | 185 | 4326760 | 3.78e-07 | 25 / 30 % | 0 |
+<!-- END GENERATED: acceptance-runs -->
+
+- With the audit off, every L2 run has the patches, parameters and error of
+  its audited run in section 7, and one residual-TT run per measurement
+  instead of two.
+- Kernel runs ending at `IterationLimit` occur under both acceptances: 9 to
+  24 per run under L2 and 10 to 39 under sampled-max, taking 24 to 53 % of
+  the kernel time.
+- Under sampled-max the error at one `rtol` varies widely between seeds; the
+  next two subsections trace this to the pinned reference.
+
+### Which stop condition fails in the `IterationLimit` runs
+
+`nblock-T0.01-R12-history/`: L2 with `k = 3` and the audit, `rtol = 1e-3`.
+The harness option `--trace-history` reruns every kernel run that ends below
+the cap through `tree_elementwise_batched_with_rng_on_session`, with the
+adapter's options, inputs and seed, and records the per-pass maximum ranks,
+errors and Guard pivots that the adapter drops; `reproduced` checks that the
+rerun ended exactly like the measured run. After pass `c`, TreeACI converges
+when (1) the pass error is at most its tolerance, (2) no edge rank grew in
+the last `min_sweeps` (2) passes, and (3) no Guard pivot was found in them.
+The recorded errors and Guard counts are what the criterion reads, so in a
+pass where (1) and (3) hold and the run went on, (2) failed.
+
+<!-- BEGIN GENERATED: history -->
+| seed | patches | kernel runs below the cap (reproduced by the rerun) | IterationLimit runs | passes 11 to 50 of those runs | (1) error > tolerance | (3) Guard pivots in the last 2 passes | (1) and (3) hold, so (2) fails | max rank changed | max rank up / down |
+|---|---|---|---|---|---|---|---|---|---|
+| 42 | 90 | 108 (108) | 18 | 720 | 0 | 7 | 713 | 247 | 121 / 126 |
+| 2026 | 82 | 92 (92) | 10 | 400 | 0 | 3 | 397 | 142 | 77 / 65 |
+| 7 | 96 | 121 (121) | 24 | 960 | 0 | 12 | 948 | 374 | 193 / 181 |
+| all |  | 321 (321) | 52 | 2080 | 0 | 22 | 2058 | 763 | 391 / 372 |
+<!-- END GENERATED: history -->
+
+- Every rerun reproduced its measured run, and the partitions are those of
+  section 7.
+- In passes 11 to 50 of the 52 `IterationLimit` runs, (1) always holds;
+  Guard pivots block 22 passes, and in the other 2,058 (98.9 %) an edge rank
+  grew within the last two passes. The maximum rank changes in 763 of them,
+  391 times up and 372 times down, so the stop is blocked by edge ranks
+  moving back and forth, not by the error.
+- Which edges move, and why, is not measured: per-edge ranks per pass are
+  not recorded. #1273 (past-pivot retention) is the candidate mechanism.
+
+### The pinned max-norm reference
+
+`nblock-T0.01-R12-reference/` repeats the sampled-max runs with `k = 1`
+(`report.py` checks that they reproduce the runs above) and adds `k = 3`,
+now recording the pinned reference. `nblock-T0.01-R12-given/` runs
+sampled-max with the exact maximum as a given reference, at `rtol` 1e-5 to
+1e-7, `k = 1` and `k = 3`.
+
+<!-- BEGIN GENERATED: reference-pinned -->
+| seed | pinned max_reference | source | exact max abs(G0) / pinned |
+|---|---|---|---|
+| 42 | 0.478 | MaxOfRootCandidates | 67 |
+| 2026 | 5.72 | MaxOfRootCandidates | 6 |
+| 7 | 0.0117 | MaxOfRootCandidates | 2711 |
+<!-- END GENERATED: reference-pinned -->
+
+The root has no parent and no cache, so its candidates are the user pivots
+and random points up to `n_initial_pivots` (5 by default), and the pinned
+reference is the largest of a handful of random values of a sharply peaked
+function: 6 to 2711 times below the exact maximum, depending on the seed.
+
+<!-- BEGIN GENERATED: reference-spread -->
+| reference | k | rtol | errors of seeds 42, 2026, 7 | largest / smallest |
+|---|---|---|---|---|
+| pinned | 1 | 1e-3 | 0.00222, 0.029, 4.26e-05 | 681 |
+| pinned | 1 | 1e-4 | 0.000251, 0.00226, 5.5e-06 | 411 |
+| pinned | 1 | 1e-5 | 2.22e-05, 0.000254, 3.78e-07 | 673 |
+| pinned | 3 | 1e-3 | 0.000739, 0.00866, 2.36e-05 | 366 |
+| pinned | 3 | 1e-4 | 5.51e-05, 0.000825, 1.51e-06 | 547 |
+| pinned | 3 | 1e-5 | 8.8e-06, 8.6e-05, 1.72e-07 | 501 |
+| exact (given) | 1 | 1e-5 | 0.00135, 0.00183, 0.00143 | 1.35 |
+| exact (given) | 1 | 1e-6 | 0.000139, 0.000148, 0.000135 | 1.09 |
+| exact (given) | 1 | 1e-7 | 1.84e-05, 1.52e-05, 1.95e-05 | 1.28 |
+| exact (given) | 3 | 1e-5 | 0.000561, 0.000557, 0.000498 | 1.13 |
+| exact (given) | 3 | 1e-6 | 3.85e-05, 4.63e-05, 3.97e-05 | 1.2 |
+| exact (given) | 3 | 1e-7 | 4.76e-06, 6.46e-06, 4.45e-06 | 1.45 |
+<!-- END GENERATED: reference-spread -->
+
+With the pinned reference, the errors of the three seeds at one `rtol` and
+`k` differ by factors of 366 to 681, ordered like the pinned references.
+With the exact reference they differ by 1.09 to 1.45.
+
+### Exact reference against L2
+
+Each exact-reference run with `k = 1` against the L2 run (`k = 3`, audit
+off) of the same seed whose error is the closest one not smaller than its
+own, within a factor 2:
+
+<!-- BEGIN GENERATED: given-matched -->
+| seed | exact reference, k 1: rtol, error, time | L2, k 3, audit off: rtol, error, time | L2 error / its error | time / L2 time | parameters / L2 parameters |
+|---|---|---|---|---|---|
+| 42 | 1e-5, 0.00135, 135 s | 1e-2, 0.00255, 206 s | 1.89 | 0.66 | 1.08 |
+| 42 | 1e-6, 0.000139, 209 s | 1e-3, 0.000273, 288 s | 1.97 | 0.73 | 1.08 |
+| 42 | 1e-7, 1.84e-05, 257 s | 1e-4, 2.2e-05, 324 s | 1.19 | 0.79 | 1.08 |
+| 2026 | 1e-5, 0.00183, 148 s | 1e-2, 0.00203, 156 s | 1.11 | 0.94 | 1.08 |
+| 2026 | 1e-6, 0.000148, 198 s | 1e-3, 0.000286, 255 s | 1.94 | 0.77 | 1.08 |
+| 2026 | 1e-7, 1.52e-05, 249 s | 1e-4, 2.24e-05, 332 s | 1.47 | 0.75 | 1.08 |
+| 7 | 1e-5, 0.00143, 164 s | 1e-2, 0.00201, 201 s | 1.4 | 0.82 | 1.08 |
+| 7 | 1e-6, 0.000135, 208 s | 1e-3, 0.000257, 329 s | 1.9 | 0.63 | 1.09 |
+| 7 | 1e-7, 1.95e-05, 226 s | 1e-4, 2.38e-05, 342 s | 1.22 | 0.66 | 1.08 |
+<!-- END GENERATED: given-matched -->
+
+In all nine pairs the exact-reference run is at least as accurate and takes
+0.63 to 0.94 of the L2 time with 1.08 to 1.09 times the parameters. The
+driver does not know the exact maximum, so this is the ideal case of a
+better root reference, not a result of the driver as it is; the audited L2
+default was not timed under the same load.
+
+### Memory
+
+Peak RSS of each process, GiB (inputs, runs and accuracy checks):
+
+<!-- BEGIN GENERATED: acceptance-memory -->
+| seed | L2, k 3, audit off | sampled-max pinned, k 1 | sampled-max pinned, k 3 | sampled-max exact, k 1 | sampled-max exact, k 3 |
+|---|---|---|---|---|---|
+| 42 | 1.43 | 0.18 | 0.18 | 0.17 | 0.19 |
+| 2026 | 1.42 | 0.15 | 0.16 | 0.17 | 0.18 |
+| 7 | 1.43 | 0.23 | 0.26 | 0.17 | 0.19 |
+<!-- END GENERATED: acceptance-memory -->
+
+Sampled-max processes peak at 0.15 to 0.26 GiB with either reference and
+either `k`, the L2 processes at 1.42 to 1.43 GiB, so the difference goes
+with the L2 acceptance path, not with `k`. Which structure on that path
+holds it was not measured.
+
+### Decisions in #1274
+
+The maintainer's decisions (2026-11-12): L2 acceptance with `k = 3` and the
+audit stays the default; sampled-max stays experimental until the root
+reference is a searched maximum (greedy coordinate ascent from the initial
+pivots, as `optfirstpivot` in the Julia stack), tracked as a follow-up of
+#1274; a given reference remains the explicit override; the edge-rank churn
+of the `IterationLimit` runs is left to #1273.
 
 ## Conclusions
 
@@ -582,3 +764,11 @@ estimate (`ErrorNorm::sampled_max`, as in Grosso et al.'s pQTCI) is in
   measurement (acceptance and audit), a fifth is kernel runs that end at
   their sweep limit and are split unmeasured, and a quarter is the accepted
   kernel runs (section 7, #1274).
+- Those sweep-limited kernel runs meet their error target from the first
+  pass; edge ranks moving back and forth keep them from stopping. Accepting
+  on the engine's own estimate (sampled-max) instead of the L2 measurement
+  is only as good as its max-norm reference: pinned from the root sample it
+  is 6 to 2711 times too small, and the error at one `rtol` varies by up to
+  681 between seeds; with the exact maximum it takes 0.63 to 0.94 of the
+  audit-off L2 time at equal or better accuracy. L2 with the audit stays
+  the default (section 8, #1274).
