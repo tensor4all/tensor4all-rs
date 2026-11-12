@@ -1,0 +1,23 @@
+	Command being timed: "timeout 3h taskset -c 6 ./bin g0 patched-aci --r 12 --temperature 0.01 --topology tt_nblock --samples 30000 --seed 2026 --cap 64 --trace-calls true --variants rtol=1e-3,error-norm=sampled-max,engine-tol-factor=3;rtol=1e-4,error-norm=sampled-max,engine-tol-factor=3;rtol=1e-5,error-norm=sampled-max,engine-tol-factor=3"
+	User time (seconds): 538.55
+	System time (seconds): 0.62
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 8:59.19
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 172156
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 222892
+	Voluntary context switches: 7
+	Involuntary context switches: 748
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 312
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
