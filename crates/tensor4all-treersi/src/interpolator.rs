@@ -140,6 +140,12 @@ impl TreeRsiInterpolator {
     /// the type documentation); the other fields configure the run. `root` and
     /// `probes` name nodes of one network and must be unset.
     ///
+    /// The cap comes from each problem, so it cannot be checked here: an engine
+    /// without `sketch_dim` runs only problems that carry a cap, and returns
+    /// [`InterpolationError::InvalidProblem`] for one without. The patched
+    /// driver always passes a cap; set `sketch_dim` to run uncapped problems
+    /// directly.
+    ///
     /// # Errors
     ///
     /// Returns [`TreeRsiError::InvalidOption`] when `root` or `probes` is set,
