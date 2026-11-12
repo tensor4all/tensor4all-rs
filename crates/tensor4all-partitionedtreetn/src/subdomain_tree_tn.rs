@@ -8,7 +8,7 @@ use crate::error::{PartitionedTreeTNError, Result};
 use crate::projector::Projector;
 use tensor4all_core::{
     validate_svd_truncation_options, DynIndex, IdxTensor, IndexLike, SvdTruncationOptionsError,
-    TagSetLike,
+    TagSetLike, TensorElement,
 };
 use tensor4all_treetn::{
     contraction::{self, ContractionMethod, ContractionOptions},
@@ -1104,6 +1104,13 @@ impl ScalarKind {
             Self::F64 | Self::C64 => f64::EPSILON,
         }
     }
+}
+
+/// The scalar kind of the element type `T`, read from a one-element tensor
+/// of `T`, for checking that a partition holds the type a caller names.
+pub(crate) fn scalar_kind_of<T: TensorElement + Default>() -> Result<ScalarKind> {
+    let probe = IdxTensor::from_dense(vec![DynIndex::new_dyn(1)], vec![T::default()])?;
+    scalar_kind(&probe)
 }
 
 fn scalar_kind(tensor: &IdxTensor) -> Result<ScalarKind> {
