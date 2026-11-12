@@ -255,7 +255,7 @@ cargo run --release -p tensor4all-benchmarks \
 ```
 
 The exploratory runs, the TreeACI kernel tolerance factor and the
-`tt_nblock` comparison (parameters measured, timing open until #784) are in
+`tt_nblock` comparison (parameters, time and a traced breakdown) are in
 [`2026-11-11-m6c-elementwise.md`](results/2026-11-11-m6c-elementwise.md); its
 tables are generated from the raw output by
 `results/m6c-elementwise/report.py`.
