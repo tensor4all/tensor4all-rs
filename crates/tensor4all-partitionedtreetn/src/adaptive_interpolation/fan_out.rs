@@ -13,7 +13,7 @@
 //! # One engine per lane
 //!
 //! Every wave runs one patch per lane, whatever its size: a lane owns one
-//! fixed [`CpuEngine`](tenferro_cpu::CpuEngine) that the caller built and
+//! fixed `tenferro_cpu::CpuEngine` that the caller built and
 //! sized, and a patch runs on the engine of the lane that pulled it. A wave
 //! with fewer patches than lanes leaves the remaining lanes idle. The driver
 //! opens no child sessions and does not divide a pool between items, so the
@@ -103,7 +103,7 @@ where
 /// # Arguments
 ///
 /// * `lanes` - The caller's lane executor, built from one
-///   [`CpuEngine`](tenferro_cpu::CpuEngine) per lane
+///   `tenferro_cpu::CpuEngine` per lane
 ///   ([`TenferroLanes::new`](hataori_tenferro::TenferroLanes::new)). Its lane
 ///   count is the fan-out width; the caller sizes each lane's engine, and a
 ///   one-lane executor runs every patch on that lane.

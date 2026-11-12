@@ -178,7 +178,7 @@ where
     .map_err(TreeTNOperationError::from)
 }
 
-/// Factorize a dense [`IdxTensor`] into a `TreeTN` on a caller-owned explicit `Session`.
+/// Factorize a dense [`IdxTensor`](tensor4all_core::IdxTensor) into a `TreeTN` on a caller-owned explicit `Session`.
 ///
 /// The runtime-free counterpart of [`factorize_tensor_to_treetn_with`]: the topology validation, the
 /// traversal, the factorization placement and the network construction are the same code paths, while
@@ -187,7 +187,7 @@ where
 ///
 /// # Arguments
 ///
-/// * `tensor` - The dense tensor to decompose. It must be a plain host-storage [`IdxTensor`].
+/// * `tensor` - The dense tensor to decompose. It must be a plain host-storage [`IdxTensor`](tensor4all_core::IdxTensor).
 /// * `topology` - Tree topology specifying nodes, edges, and physical index assignments.
 /// * `options` - Factorization options; validated exactly as the eager entry validates them.
 /// * `root` - Name of the requested canonical center, which must exist in the topology.
