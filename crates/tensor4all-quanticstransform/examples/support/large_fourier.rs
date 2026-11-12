@@ -77,6 +77,19 @@ fn sample(
     )?)
 }
 
+/// Which schedules a case runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Runs {
+    /// `schedule_merge_refine` directly, timed on its own, then the front end.
+    ScheduleAndFrontEnd,
+    /// Only the front end, which also produces the sampled spectrum. Each
+    /// schedule of the two-axis interleaved R = 10 case takes about 14 minutes
+    /// with one thread (#1279), so its heavy test runs one.
+    // The smoke-test target includes this module but never runs this mode.
+    #[allow(dead_code)]
+    FrontEndOnly,
+}
+
 #[derive(Debug)]
 pub(crate) struct Measurement {
     pub(crate) bits: usize,
@@ -84,7 +97,8 @@ pub(crate) struct Measurement {
     pub(crate) interleaved: bool,
     pub(crate) input_seconds: f64,
     pub(crate) operator_seconds: f64,
-    pub(crate) schedule_seconds: f64,
+    /// `None` with [`Runs::FrontEndOnly`].
+    pub(crate) schedule_seconds: Option<f64>,
     pub(crate) frontend_seconds: f64,
     pub(crate) operator_bond: usize,
     pub(crate) input_bond: usize,
@@ -97,9 +111,12 @@ pub(crate) struct Measurement {
 
 impl std::fmt::Display for Measurement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "bits={},dimensions={},interleaved={},input_seconds={:.6},operator_seconds={:.6},schedule_seconds={:.6},frontend_seconds={:.6},operator_bond={},input_bond={},samples={},sample_error={:.6e},reconstruction_bound={:.6e},compressions={},output_regions={}",
+        let schedule = self
+            .schedule_seconds
+            .map_or_else(|| "skipped".to_string(), |seconds| format!("{seconds:.6}"));
+        write!(f, "bits={},dimensions={},interleaved={},input_seconds={:.6},operator_seconds={:.6},schedule_seconds={},frontend_seconds={:.6},operator_bond={},input_bond={},samples={},sample_error={:.6e},reconstruction_bound={:.6e},compressions={},output_regions={}",
             self.bits,self.dimensions,self.interleaved,self.input_seconds,self.operator_seconds,
-            self.schedule_seconds,self.frontend_seconds,self.operator_bond,self.input_bond,self.samples,self.sample_error,
+            schedule,self.frontend_seconds,self.operator_bond,self.input_bond,self.samples,self.sample_error,
             self.reconstruction_bound,self.compressions,self.output_regions)
     }
 }
@@ -107,7 +124,12 @@ impl std::fmt::Display for Measurement {
 /// A shifted periodic Gaussian defined by a finite Fourier series. Because
 /// MODES < N/2, its normalized discrete DFT is exactly the listed coefficients;
 /// there is no continuous-FT/quadrature/aliasing approximation in the oracle.
-pub(crate) fn run_case(bits: usize, dimensions: usize, interleaved: bool) -> Result<Measurement> {
+pub(crate) fn run_case(
+    bits: usize,
+    dimensions: usize,
+    interleaved: bool,
+    runs: Runs,
+) -> Result<Measurement> {
     assert!((10..=20).contains(&bits));
     assert!((1..=2).contains(&dimensions));
     let start = Instant::now();
@@ -248,25 +270,28 @@ pub(crate) fn run_case(bits: usize, dimensions: usize, interleaved: bool) -> Res
     options.merge_refine.max_terms = 256;
     // Time the scheduler separately from the operator and target preparation.
     // Then exercise the public Fourier front end with the same policy.
-    let preimage = ReconstructionTarget::from_partition(&state)?;
-    let mut schedule = options.merge_refine.clone();
-    schedule.coordinate_groups = Some(axes.iter().cloned().map(CoordinateGroup::new).collect());
-    let schedule_start = Instant::now();
-    let scheduled = schedule_merge_refine(
-        &preimage,
-        &0,
-        &operator,
-        &physical,
-        &SubsetOperatorOptions { unitary: true },
-        options.tolerance,
-        &schedule,
-    )?;
-    let schedule_seconds = schedule_start.elapsed().as_secs_f64();
-    assert!(scheduled.report().error_bound <= scheduled.report().absolute_tolerance);
-    drop(scheduled);
+    let schedule_seconds = if runs == Runs::ScheduleAndFrontEnd {
+        let preimage = ReconstructionTarget::from_partition(&state)?;
+        let mut schedule = options.merge_refine.clone();
+        schedule.coordinate_groups = Some(axes.iter().cloned().map(CoordinateGroup::new).collect());
+        let schedule_start = Instant::now();
+        let scheduled = schedule_merge_refine(
+            &preimage,
+            &0,
+            &operator,
+            &physical,
+            &SubsetOperatorOptions { unitary: true },
+            options.tolerance,
+            &schedule,
+        )?;
+        let schedule_seconds = schedule_start.elapsed().as_secs_f64();
+        assert!(scheduled.report().error_bound <= scheduled.report().absolute_tolerance);
+        eprintln!("scheduler finished in {schedule_seconds} seconds");
+        Some(schedule_seconds)
+    } else {
+        None
+    };
     drop(operator);
-    drop(preimage);
-    eprintln!("scheduler finished in {schedule_seconds} seconds");
     let frontend_start = Instant::now();
     let result = patched_fourier_transform(&state, &0, &axes, FourierOptions::forward(), &options)?;
     let frontend_seconds = frontend_start.elapsed().as_secs_f64();
