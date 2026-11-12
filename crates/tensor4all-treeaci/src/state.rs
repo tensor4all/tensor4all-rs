@@ -146,6 +146,8 @@ pub(crate) struct TreeAciState<'a, T: TreeAciScalar, V: TreeAciNode> {
     pub(crate) algebraic_edge_bounds: Vec<usize>,
     pub(crate) edge_errors: Vec<f64>,
     pub(crate) edge_scales: Vec<f64>,
+    /// Running maximum of the committed `edge_scales`.
+    pub(crate) max_sample_magnitude: f64,
     pub(crate) generation: u64,
 }
 
@@ -243,6 +245,7 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
             algebraic_edge_bounds,
             edge_errors: vec![0.0; edge_count],
             edge_scales: vec![0.0; edge_count],
+            max_sample_magnitude: 0.0,
             generation,
         })
     }

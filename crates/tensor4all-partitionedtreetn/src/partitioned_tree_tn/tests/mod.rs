@@ -169,8 +169,8 @@ fn sorted(mut projectors: Vec<Projector>) -> Vec<Projector> {
     projectors
 }
 
-/// Run `operation` and return its result with the number of top-level pairs
-/// it contracted.
+/// Run `operation` and count numeric pair attempts. Adaptive calls include
+/// child attempts; the no-cap fixtures below have top-level pairs only.
 fn count_pairs<T>(operation: impl FnOnce() -> T) -> (T, usize) {
     CONTRACTED_PAIRS.with(|count| count.set(0));
     let result = operation();

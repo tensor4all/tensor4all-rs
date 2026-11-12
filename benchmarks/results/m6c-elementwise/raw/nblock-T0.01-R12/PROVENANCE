@@ -1,0 +1,8 @@
+binary_sha256=8805647a4d7f46c32ea0383be2d8b3f6aeed0824d38e1a365aea32cc248d3abe
+source_commit=06ebafaa4a95242da396326a04305096cf7cc4dd
+dirty_files=0
+build=cargo build --release -p tensor4all-benchmarks --example benchmark_m6c_elementwise
+harness=benchmarks/rust/benchmark_m6c_elementwise.rs
+host=AMD Ryzen 9 6900HX with Radeon Graphics, 16 logical CPUs, 6.18.58.1-microsoft-standard-WSL2
+threads=RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1, one taskset core per process (cores 4, 6, 8); another session's single-thread job pinned to core 14 ran concurrently
+unpatched_runs=run-seed-unpatched.sh, same binary, cores 4, 6, 8, started 2026-11-11T17:31:02+01:00 on an otherwise idle host

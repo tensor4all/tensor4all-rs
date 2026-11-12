@@ -2,6 +2,8 @@
 
 mod evaluate;
 
+pub(crate) use evaluate::PatchLocator;
+
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -89,6 +91,9 @@ pub(crate) type ContractedPair<'a, V> = (
     SubDomainTreeTN<V>,
 );
 
+/// A compatible pair and its predicted output projector, without contraction.
+pub(crate) type PlannedPair<'a, V> = (&'a SubDomainTreeTN<V>, &'a SubDomainTreeTN<V>, Projector);
+
 /// The patch templates of a contraction with its output site space.
 pub(crate) type ContractionPreparation<'a, V> = (
     &'a SubDomainTreeTN<V>,
@@ -98,16 +103,17 @@ pub(crate) type ContractionPreparation<'a, V> = (
 
 #[cfg(test)]
 thread_local! {
-    /// Top-level patch pairs passed to `SubDomainTreeTN::contract` by
-    /// `PartitionedTreeTN::contract_pairs`.
+    /// Numeric pair attempts in partition contraction and adaptive groups;
+    /// planning pairs alone does not advance this counter.
     pub(crate) static CONTRACTED_PAIRS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Largest number of atoms that [`PartitionedTreeTN::add`],
-/// [`PartitionedTreeTN::add_truncated`], and [`PartitionedTreeTN::contract`]
+/// [`PartitionedTreeTN::add_truncated`], [`PartitionedTreeTN::contract`],
+/// [`crate::contract_adaptive`], and [`crate::contract_adaptive_selected`]
 /// refine onto automatically.
 ///
-/// Those methods refine operands whose patch layouts overlap without being
+/// The non-adaptive methods refine operands whose patch layouts overlap without being
 /// equal onto a layout of disjoint projectors, the atoms: the common
 /// refinement for `add`, and for `contract` the grid of the uncontracted
 /// indices that the patches fix, whose size is the product of their
@@ -116,10 +122,20 @@ thread_local! {
 /// return [`PartitionedTreeTNError::RefinementTooLarge`] before refining
 /// anything.
 ///
+/// Adaptive contraction checks the full candidate **output** grid after
+/// selecting original pair keys, counting the product of all fixed output
+/// dimensions before removing uncovered cells. This is more conservative than
+/// `contract`, which checks each operand's grid separately. Disjoint selected
+/// output layouts need no refinement and are not limited by this constant.
+/// The bound limits layout expansion, not tensor bytes or the number of input
+/// pairs; adaptive rank-triggered splitting has its separate patching policy.
+///
 /// The explicit [`PartitionedTreeTN::common_refinement`] and
 /// [`PartitionedTreeTN::refine_to`] are not limited. To combine operands
 /// that need more atoms, refine them explicitly: operands with equal layouts
-/// are combined without a further refinement.
+/// are combined without a further refinement. For adaptive selected calls,
+/// explicit operand refinement changes the original keys that `wanted` must
+/// name; select the intended refined pair keys explicitly.
 ///
 /// # Where the number comes from
 ///
@@ -517,7 +533,7 @@ where
 
     /// Stored patches in canonical patch order, independent of insertion and
     /// hash order.
-    fn ordered_patches(&self) -> Vec<&SubDomainTreeTN<V>> {
+    pub(crate) fn ordered_patches(&self) -> Vec<&SubDomainTreeTN<V>> {
         let mut patches: Vec<_> = self.data.values().collect();
         sort_by_patch_order(
             &mut patches,
@@ -1059,15 +1075,7 @@ where
             return Ok(None);
         }
 
-        let mut fixed: Vec<DynIndex> = Vec::new();
-        for output in &outputs {
-            for index in output.projected_indices() {
-                if !fixed.contains(index) {
-                    fixed.push(index.clone());
-                }
-            }
-        }
-        fixed.sort_by(canonical_index_cmp);
+        let fixed = fixed_projector_indices(&outputs);
         let (left_sites, _) = left_template
             .data()
             .all_site_indices()
@@ -1265,13 +1273,40 @@ where
         options: &ContractionOptions,
         wanted: Option<&HashSet<Projector>>,
     ) -> Result<Vec<ContractedPair<'a, V>>> {
+        let mut contracted = Vec::new();
+        self.for_each_planned_pair(other, center, wanted, |(left, right, output)| {
+            #[cfg(test)]
+            CONTRACTED_PAIRS.with(|count| count.set(count.get() + 1));
+            let Some(contribution) = left.contract(right, center, options.clone())? else {
+                return Ok(());
+            };
+            debug_assert_eq!(
+                contribution.projector(),
+                &output,
+                "predicted output projector differs from the contracted pair's"
+            );
+            contracted.push((left, right, contribution));
+            Ok(())
+        })?;
+        Ok(contracted)
+    }
+
+    /// Plan compatible pairs in the same logical left-then-right order as
+    /// `contract_pairs`, preserving template validation even for an empty selection.
+    /// Each pair is passed to `visit` without retaining a second full pair list.
+    pub(crate) fn for_each_planned_pair<'a>(
+        &'a self,
+        other: &'a Self,
+        center: &V,
+        wanted: Option<&HashSet<Projector>>,
+        mut visit: impl FnMut(PlannedPair<'a, V>) -> Result<()>,
+    ) -> Result<()> {
         let Some((_, _, output_sites)) = prepare_contraction(self, other, center)? else {
-            return Ok(Vec::new());
+            return Ok(());
         };
 
         let left_patches = self.ordered_patches();
         let right_patches = other.ordered_patches();
-        let mut contracted = Vec::new();
         for left in left_patches {
             for &right in &right_patches {
                 let Some(merged) = left.projector().intersection(right.projector()) else {
@@ -1281,20 +1316,10 @@ where
                 if wanted.is_some_and(|wanted| !wanted.contains(&output)) {
                     continue;
                 }
-                #[cfg(test)]
-                CONTRACTED_PAIRS.with(|count| count.set(count.get() + 1));
-                let Some(contribution) = left.contract(right, center, options.clone())? else {
-                    continue;
-                };
-                debug_assert_eq!(
-                    contribution.projector(),
-                    &output,
-                    "predicted output projector differs from the contracted pair's"
-                );
-                contracted.push((left, right, contribution));
+                visit((left, right, output))?;
             }
         }
-        Ok(contracted)
+        Ok(())
     }
 
     /// Sum eager patches in logical patch-key order.
@@ -1481,6 +1506,26 @@ fn ensure_refinement_within(atoms: usize, limit: usize) -> Result<()> {
         return Err(PartitionedTreeTNError::RefinementTooLarge { atoms, limit });
     }
     Ok(())
+}
+
+/// Collect fixed full index identities in the shared refinement-grid order.
+pub(crate) fn fixed_projector_indices(projectors: &[Projector]) -> Vec<DynIndex> {
+    let mut fixed = Vec::new();
+    for projector in projectors {
+        for index in projector.projected_indices() {
+            if !fixed.contains(index) {
+                fixed.push(index.clone());
+            }
+        }
+    }
+    fixed.sort_by(canonical_index_cmp);
+    fixed
+}
+
+/// Check the entire candidate grid before allocating any projector cells.
+pub(crate) fn bounded_value_grid(indices: &[DynIndex], limit: usize) -> Result<Vec<Projector>> {
+    ensure_refinement_within(grid_len(indices), limit)?;
+    Ok(value_grid(indices))
 }
 
 fn value_grid(indices: &[DynIndex]) -> Vec<Projector> {

@@ -337,15 +337,16 @@ fn compress<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
 
 /// Truncate `source` toward the SVD allowance derived from `allowance`.
 ///
-/// Shared by the greedy reconstruction engine and the merge-refine schedule, so
-/// both measure a candidate residual the same way. Returns the candidate, which
+/// Shared by the greedy reconstruction engine, the merge-refine schedule, and
+/// the sibling merge of patched interpolation results, so all of them measure
+/// a candidate residual the same way. Returns the candidate, which
 /// is `source` itself when truncation is disabled, cannot pay for itself, or
 /// exceeds the allowance, together with the measured residual against
 /// `source`.
 ///
 /// # Errors
 /// Propagates canonicalization, SVD, remasking, and norm errors.
-pub(super) fn truncate_toward_allowance<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
+pub(crate) fn truncate_toward_allowance<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
     source: &SubDomainTreeTN<V>,
     center: &V,
     allowance: f64,

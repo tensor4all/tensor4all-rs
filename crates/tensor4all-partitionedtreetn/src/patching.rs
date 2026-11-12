@@ -9,6 +9,9 @@
 //! policy of [`TreeTN::truncate`](tensor4all_treetn::TreeTN::truncate). This
 //! module does not implement adaptive interpolation or copy TCIAlgorithms.jl
 //! code.
+//! Local rank-triggered stopping is motivated by Sec. 4.3 of that paper. The
+//! lazy group loop independently preserves the existing per-contribution
+//! split heuristic; it does not infer a final sum's rank from one term.
 
 mod report;
 
@@ -22,17 +25,15 @@ use crate::error::{PartitionedTreeTNError, Result};
 use crate::partitioned_tree_tn::PartitionedTreeTN;
 use crate::projector::Projector;
 use crate::subdomain_tree_tn::{
-    ensure_center, sort_by_patch_order, validate_contraction_options, PatchOrderKey, ScalarKind,
+    contraction_output_site_indices, ensure_center, sort_by_patch_order,
+    validate_contraction_options, PatchOrderKey, ScalarKind, SubDomainContractionOutcome,
     SubDomainTreeTN,
 };
 use report::record_patch;
 use tensor4all_core::{validate_svd_truncation_options, SvdTruncationPolicy};
 use tensor4all_treetn::{contraction::ContractionOptions, SumEngine, TruncationOptions};
 
-type ContractGroup<V> = (
-    Vec<(SubDomainTreeTN<V>, SubDomainTreeTN<V>)>,
-    Vec<SubDomainTreeTN<V>>,
-);
+mod contraction_plan;
 
 /// Records of one closing truncation, in the order the patches were retained.
 type CapRecords<V> = Vec<(PatchOrderKey<V>, PatchCapRecord)>;
@@ -186,6 +187,9 @@ pub struct PatchingOptions {
     ///
     /// Entries are matched by complete index identity, including tags and
     /// prime level; an entry absent from the TreeTN is rejected.
+    /// An empty order uses the completed result's node/site order. Adaptive
+    /// Sequential contraction then completes its first contribution before
+    /// selecting a candidate; an explicit order permits probing from the first pair.
     pub patch_order: Vec<tensor4all_core::DynIndex>,
 
     /// Candidate-selection strategy used for over-cap patches.
@@ -513,13 +517,23 @@ where
 /// Contract two partitions and adaptively truncate the output.
 ///
 /// Contraction uses the already eager-masked patches and the supplied TreeTN
-/// contraction options. Its output is then retruncated with cutoffs computed
-/// from the corrected output norm. When a contribution or a group sum reaches
-/// `patching_options.max_bond_dim`, the group is split: `patch_order` supplies
-/// the candidate split indices (every unprojected output index when it is
-/// empty) and `split_strategy` picks one of them. A capped output therefore
-/// becomes several patches whose projectors refine the original one; when no
-/// unprojected split index is left, the truncated group is returned unsplit.
+/// contraction options. Compatible pairs are grouped by predicted output
+/// projector before numerical work, in logical left-then-right patch order.
+/// Unequal overlapping output keys are refined onto a disjoint value grid of
+/// their fixed output indices before any masking or contraction, subject to
+/// [`crate::AUTOMATIC_REFINEMENT_LIMIT`]. Operand restrictions are masked
+/// exactly and cached per original patch; contributions retain pair order.
+/// With a cap and [`PatchSplitStrategy::Sequential`], a group stops at its
+/// first saturated contribution and retries projected original operands when
+/// a split candidate exists. An explicit patch order permits the first pair
+/// to use the TreeTN outcome hook; an empty order completes the first pair
+/// to preserve its actual node/site order. Chain, Fit and randomized contractions
+/// complete each attempted pair, but later pairs can still be skipped.
+/// [`PatchSplitStrategy::ExactParameterGain`], an absent cap or an exhausted
+/// split order needs all contributions. A completed group's exact sum is
+/// truncated once, and the output is then retruncated with budgets computed
+/// from the corrected output norm. Saturation is a refinement heuristic,
+/// not an error certificate or a proof that the sum has the same rank.
 ///
 /// # Arguments
 ///
@@ -548,11 +562,14 @@ where
 /// [`PartitionedTreeTNError::SiteIndexMismatch`] for incompatible patches,
 /// [`PartitionedTreeTNError::DTypeMismatch`] for mixed dtypes,
 /// [`PartitionedTreeTNError::InvalidCenter`] when `center` is absent,
-/// [`PartitionedTreeTNError::OverlappingProjectors`] when output patches
-/// overlap, and [`PartitionedTreeTNError::TreeTN`],
+/// [`PartitionedTreeTNError::OverlappingProjectors`] for invalid operand layouts,
+/// [`PartitionedTreeTNError::RefinementTooLarge`] when the overlapping outputs'
+/// candidate grid exceeds [`crate::AUTOMATIC_REFINEMENT_LIMIT`], and
+/// [`PartitionedTreeTNError::TreeTN`],
 /// [`PartitionedTreeTNError::VolumeOverflow`], or
 /// [`PartitionedTreeTNError::NonFiniteAdaptiveValue`] from contraction or
-/// output truncation. Neither input is mutated.
+/// output truncation. Errors in skipped numerical work are not evaluated.
+/// Neither input is mutated.
 ///
 /// # Examples
 ///
@@ -696,8 +713,12 @@ where
 /// [`PartitionedTreeTN::contract`]. A patch pair whose output projector is not
 /// in `wanted` is skipped and never contracted. A selected output group is
 /// split as in [`contract_adaptive`], so each returned patch has a wanted
-/// projector or, after a split, a refinement of one
+/// projector or, after overlap resolution or a split, a refinement of one
 /// ([`Projector::is_subset_of`] a wanted key).
+/// Selection compares the original pair output keys before refinement. An
+/// unselected group's contributions stay excluded even where its region
+/// overlaps a selected key. Only selected keys enter the refinement-grid limit;
+/// selecting all original keys gives the ordinary adaptive operation.
 ///
 /// # Budget rule
 ///
@@ -721,6 +742,8 @@ where
 /// * `wanted` - Exact output projector keys, compared by equality with the
 ///   pre-split output key of each pair. Duplicates are ignored. A key that no
 ///   pair produces has no output; an empty slice returns an empty partition.
+///   A pair whose key overlaps a wanted key without being equal to it is not
+///   formed, so a wanted region holds only the pairs whose key equals it.
 ///
 /// # Returns
 ///
@@ -737,12 +760,14 @@ where
 /// [`PartitionedTreeTNError::SiteIndexMismatch`] for incompatible patches,
 /// [`PartitionedTreeTNError::DTypeMismatch`] for mixed dtypes,
 /// [`PartitionedTreeTNError::InvalidCenter`] when `center` is absent,
-/// [`PartitionedTreeTNError::OverlappingProjectors`] when output patches
-/// overlap, and [`PartitionedTreeTNError::TreeTN`],
+/// [`PartitionedTreeTNError::OverlappingProjectors`] for invalid operand layouts,
+/// [`PartitionedTreeTNError::RefinementTooLarge`] when the selected overlapping
+/// outputs' candidate grid exceeds [`crate::AUTOMATIC_REFINEMENT_LIMIT`], and
+/// [`PartitionedTreeTNError::TreeTN`],
 /// [`PartitionedTreeTNError::VolumeOverflow`], or
 /// [`PartitionedTreeTNError::NonFiniteAdaptiveValue`] from contraction or
 /// output truncation. The operand checks run even when no pair is selected.
-/// Neither input is mutated.
+/// Errors in skipped numerical work are not evaluated. Neither input is mutated.
 ///
 /// # Examples
 ///
@@ -826,37 +851,17 @@ where
     validate_contraction_options(contract_options)?;
     validate_patching_options(patching_options)?;
 
-    // The selection applies to the top-level pairs only. The child pairs of a
-    // split group refine that group's projector, so they all lie in the
-    // selected output and need no filter.
-    let mut groups: HashMap<Projector, ContractGroup<V>> = HashMap::new();
-    for (left_patch, right_patch, contribution) in
-        left.contract_pairs(right, center, contract_options, wanted)?
-    {
-        let entry = groups.entry(contribution.projector().clone()).or_default();
-        entry.0.push((left_patch.clone(), right_patch.clone()));
-        entry.1.push(contribution);
-    }
-
-    let mut grouped: Vec<_> = groups.into_iter().collect();
-    sort_by_patch_order(
-        &mut grouped,
-        |(_, (_, left)), (_, (_, right))| {
-            left.first()
-                .map(SubDomainTreeTN::patch_order_key)
-                .cmp(&right.first().map(SubDomainTreeTN::patch_order_key))
-        },
-        |(_, (_, contributions))| {
-            contributions
-                .first()
-                .and_then(SubDomainTreeTN::content_digest)
-        },
-    );
+    let groups = contraction_plan::plan_groups(
+        left,
+        right,
+        center,
+        wanted,
+        crate::AUTOMATIC_REFINEMENT_LIMIT,
+    )?;
     let mut subdomains = Vec::new();
-    for (_, (pairs, contributions)) in grouped {
+    for pairs in groups {
         subdomains.extend(contract_group_project_first(
             pairs,
-            Some(contributions),
             center,
             contract_options,
             patching_options,
@@ -876,7 +881,6 @@ where
 
 fn contract_group_project_first<V>(
     pairs: Vec<(SubDomainTreeTN<V>, SubDomainTreeTN<V>)>,
-    precomputed: Option<Vec<SubDomainTreeTN<V>>>,
     center: &V,
     contract_options: &ContractionOptions,
     patching_options: &PatchingOptions,
@@ -884,42 +888,93 @@ fn contract_group_project_first<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    let contributions = if let Some(contributions) = precomputed {
-        contributions
+    let sequential = patching_options.split_strategy == PatchSplitStrategy::Sequential
+        && patching_options.max_bond_dim.is_some();
+    let threshold = patching_options
+        .max_bond_dim
+        .and_then(std::num::NonZeroUsize::new);
+    // An explicit order depends only on the common output site space and
+    // projector. An implicit order uses the first completed contribution's
+    // actual site layout, preserving method-specific axis order and pruning.
+    let mut split_index = if sequential && !patching_options.patch_order.is_empty() {
+        if let Some((left, right)) = pairs.first() {
+            let output = contraction_output_site_indices(left.data(), right.data())?;
+            let projector = left
+                .projector()
+                .intersection(right.projector())
+                .ok_or(PartitionedTreeTNError::ProjectorConflict)?;
+            patching_options
+                .patch_order
+                .iter()
+                .find(|index| output.contains(index) && !projector.is_projected_at(index))
+                .cloned()
+        } else {
+            None
+        }
     } else {
-        let mut contributions = Vec::with_capacity(pairs.len());
-        for (left, right) in &pairs {
-            if let Some(contribution) = left.contract(right, center, contract_options.clone())? {
-                contributions.push(contribution);
+        None
+    };
+
+    #[cfg(test)]
+    let group_id = GROUP_PAIR_PROBES.with(|probes| {
+        let mut probes = probes.borrow_mut();
+        let id = probes.len();
+        probes.push((pairs.len(), 0, 0));
+        id
+    });
+    let mut contributions = Vec::with_capacity(pairs.len());
+    for (left, right) in &pairs {
+        #[cfg(test)]
+        GROUP_PAIR_PROBES.with(|probes| probes.borrow_mut()[group_id].1 += 1);
+        #[cfg(test)]
+        crate::partitioned_tree_tn::CONTRACTED_PAIRS.with(|count| count.set(count.get() + 1));
+        let contribution = if let Some((index, threshold)) = split_index.as_ref().zip(threshold) {
+            #[cfg(test)]
+            GROUP_PAIR_PROBES.with(|probes| probes.borrow_mut()[group_id].2 += 1);
+            match left.contract_with_outcome(right, center, contract_options.clone(), threshold)? {
+                Some(SubDomainContractionOutcome::Saturated) => {
+                    return split_group_project_first(
+                        &pairs,
+                        index,
+                        center,
+                        contract_options,
+                        patching_options,
+                    );
+                }
+                Some(SubDomainContractionOutcome::Completed(contribution)) => Some(contribution),
+                None => None,
+            }
+        } else {
+            left.contract(right, center, contract_options.clone())?
+        };
+        let Some(contribution) = contribution else {
+            continue;
+        };
+        if sequential {
+            if contributions.is_empty() && patching_options.patch_order.is_empty() {
+                split_index = choose_split_index(&contribution, center, patching_options)?;
+            }
+            // Bondless contributions have max_bond_dim() == 1 although the
+            // TreeTN outcome completes with an empty report. Keep the old rule.
+            if patching_options
+                .max_bond_dim
+                .is_some_and(|cap| contribution.max_bond_dim() >= cap)
+            {
+                if let Some(index) = &split_index {
+                    return split_group_project_first(
+                        &pairs,
+                        index,
+                        center,
+                        contract_options,
+                        patching_options,
+                    );
+                }
             }
         }
-        contributions
-    };
-    let Some(first) = contributions.first() else {
+        contributions.push(contribution);
+    }
+    if contributions.is_empty() {
         return Ok(Vec::new());
-    };
-    // With `Sequential`, the split index depends only on which output indices
-    // are still unprojected, which every contribution of the group shares, and
-    // the children are recomputed from the original pairs. When a single
-    // contribution already reaches the cap the group must split, so the exact
-    // group sum below could not change the result; skip it.
-    if let Some(cap) = patching_options.max_bond_dim {
-        let contribution_saturated = contributions
-            .iter()
-            .any(|contribution| contribution.max_bond_dim() >= cap);
-        if contribution_saturated
-            && patching_options.split_strategy == PatchSplitStrategy::Sequential
-        {
-            if let Some(index) = choose_split_index(first, center, patching_options)? {
-                return split_group_project_first(
-                    &pairs,
-                    &index,
-                    center,
-                    contract_options,
-                    patching_options,
-                );
-            }
-        }
     }
     // Exact-add the whole group without intermediate truncation (strict TreeTN
     // addition), then truncate the completed group exactly once. Repeated
@@ -983,6 +1038,10 @@ where
 
 #[cfg(test)]
 thread_local! {
+    /// Per group of `contract_group_project_first`: (available pairs,
+    /// attempted pairs, outcome calls).
+    static GROUP_PAIR_PROBES: std::cell::RefCell<Vec<(usize, usize, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
     /// Exact group sums built by `contract_group_project_first` and then
     /// discarded because the group was split.
     static DISCARDED_GROUP_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -1029,7 +1088,6 @@ where
         }
         children.extend(contract_group_project_first(
             child_pairs,
-            None,
             center,
             contract_options,
             patching_options,

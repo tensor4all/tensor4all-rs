@@ -150,3 +150,7 @@ test = true
 name = "benchmark_treersi_cuda_step1"
 path = "benchmark_treersi_cuda_step1.rs"
 required-features = ["cuda"]
+
+[[example]]
+name = "benchmark_m6c_elementwise"
+path = "benchmark_m6c_elementwise.rs"

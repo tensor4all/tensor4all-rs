@@ -175,3 +175,33 @@ impl<V> Default for TreeRsiOptions<V> {
         }
     }
 }
+
+impl<V> TreeRsiOptions<V> {
+    /// These options for node type `W`, without a root or probes, the two
+    /// fields that name nodes.
+    ///
+    /// The exhaustive destructuring makes a new field a compile error here
+    /// until it is carried over.
+    pub(crate) fn for_nodes<W>(&self) -> TreeRsiOptions<W> {
+        let Self {
+            max_bond_dim,
+            sketch_dim,
+            oversampling,
+            rel_tol,
+            seed,
+            max_local_elements,
+            root: _,
+            probes: _,
+        } = self;
+        TreeRsiOptions {
+            max_bond_dim: *max_bond_dim,
+            sketch_dim: *sketch_dim,
+            oversampling: *oversampling,
+            rel_tol: *rel_tol,
+            seed: *seed,
+            max_local_elements: *max_local_elements,
+            root: None,
+            probes: None,
+        }
+    }
+}

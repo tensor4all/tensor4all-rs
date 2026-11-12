@@ -404,6 +404,138 @@ pub(super) struct Contribution<'a> {
     pub(super) within_tolerance: bool,
 }
 
+/// The values of one region that the global error combines: an accepted or
+/// zero patch ([`Term::of`]), or a merged region ([`Term::merged`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct Term {
+    /// `|P|` as `f64`.
+    pub(super) patch_points: f64,
+    /// The deciding RMS error of the region.
+    pub(super) rms: f64,
+    /// Whether `rms` is exact up to rounding (an `Exact` or `Exhaustive`
+    /// acceptance, or a merge of such regions).
+    pub(super) certified: bool,
+    /// The region's part of an audited estimate: the acceptance itself when
+    /// certified, otherwise the audit; `None` for an unaudited estimate.
+    pub(super) audited: Option<AuditedTerm>,
+    /// `false` for a patch retained as `ToleranceNotMet`.
+    pub(super) within_tolerance: bool,
+}
+
+/// One region's part of an audited estimate, in RMS units.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct AuditedTerm {
+    /// The estimated RMS error.
+    pub(super) rms: f64,
+    /// The RMS of the sampled part, which carries the Monte Carlo variance.
+    pub(super) variance_rms: f64,
+    /// The relative standard error of the sampled part's mean square.
+    pub(super) mean_square_rel_std_error: f64,
+}
+
+impl Term {
+    /// The term of one accepted or zero patch.
+    pub(super) fn of(contribution: &Contribution<'_>) -> Self {
+        let certified = matches!(
+            contribution.acceptance.method,
+            MeasurementMethod::Exact | MeasurementMethod::Exhaustive
+        );
+        // A residual-TT measurement carries the seed sample's standard error
+        // only when the sample co-decided the value
+        // (`L2Measurement::residual_saturated`); its variance is measured by
+        // its sampled part.
+        let audited_term = |measurement: &L2Measurement| AuditedTerm {
+            rms: measurement.rms,
+            variance_rms: measurement.sample_rms.unwrap_or(measurement.rms),
+            mean_square_rel_std_error: measurement.mean_square_rel_std_error,
+        };
+        let audited = if certified {
+            Some(audited_term(contribution.acceptance))
+        } else {
+            contribution.audit.map(audited_term)
+        };
+        Self {
+            patch_points: contribution.patch_points,
+            rms: contribution.acceptance.rms,
+            certified,
+            audited,
+            within_tolerance: contribution.within_tolerance,
+        }
+    }
+
+    /// The term of the region formed by disjoint `members` whose truncated
+    /// sum differs from the exact sum by `truncation_rms` (an L2 norm over
+    /// the region divided by the square root of its point count).
+    ///
+    /// By the triangle inequality the region's error is at most the members'
+    /// combined error plus the truncation: `sqrt(sum w_i rms_i^2) +
+    /// truncation_rms` with `w_i = |P_i| / |Q|`. The truncation is computed
+    /// from networks, so it adds no variance: the sampled parts and their
+    /// standard errors combine as they would in the global error, which a
+    /// merge without truncation therefore leaves unchanged.
+    pub(super) fn merged(members: &[Self], truncation_rms: f64) -> Self {
+        let patch_points: f64 = members.iter().map(|m| m.patch_points).sum();
+        let weight = |m: &Self| {
+            if patch_points > 0.0 {
+                (m.patch_points / patch_points).sqrt()
+            } else {
+                0.0
+            }
+        };
+        let combined = |value: &dyn Fn(&Self) -> f64| {
+            let mut sum = ScaledSquares::default();
+            for member in members {
+                sum.add(weight(member) * value(member));
+            }
+            sum.norm()
+        };
+        let rms = combined(&|m| m.rms) + truncation_rms;
+        let audited = members
+            .iter()
+            .map(|m| m.audited)
+            .collect::<Option<Vec<_>>>()
+            .map(|parts| {
+                let pair: Vec<(f64, AuditedTerm)> = members
+                    .iter()
+                    .zip(parts)
+                    .map(|(member, part)| (weight(member), part))
+                    .collect();
+                let mut estimate = ScaledSquares::default();
+                let mut variance = ScaledSquares::default();
+                for &(w, part) in &pair {
+                    estimate.add(w * part.rms);
+                    variance.add(w * part.variance_rms);
+                }
+                let variance_rms = variance.norm();
+                // A member contributes w_i^2 v_i^2 rel_i to the standard error
+                // of the mean square; they combine in quadrature, and the
+                // region's relative error is that over its own v^2.
+                let mean_square_rel_std_error = if variance_rms > 0.0 && variance_rms.is_finite() {
+                    let mut deviation = ScaledSquares::default();
+                    for &(w, part) in &pair {
+                        let share = (w * part.variance_rms / variance_rms).powi(2);
+                        deviation.add(share * part.mean_square_rel_std_error);
+                    }
+                    deviation.norm()
+                } else {
+                    0.0
+                };
+                AuditedTerm {
+                    rms: estimate.norm() + truncation_rms,
+                    variance_rms,
+                    mean_square_rel_std_error,
+                }
+            });
+        Self {
+            patch_points,
+            rms,
+            certified: members.iter().all(|m| m.certified),
+            audited,
+            within_tolerance: members.iter().all(|m| m.within_tolerance),
+        }
+    }
+}
+
 /// The global error and the certified fraction of the domain, combined in
 /// the given (canonical path) order. A `ToleranceNotMet` contribution turns
 /// the M3 classification into [`GlobalL2Error::ToleranceNotMet`] with that
@@ -417,25 +549,25 @@ pub(super) fn global_error(
     approximation_rms: Option<f64>,
     epsilon: f64,
 ) -> (GlobalL2Error, f64) {
-    let exact = |m: &L2Measurement| {
-        matches!(
-            m.method,
-            MeasurementMethod::Exact | MeasurementMethod::Exhaustive
-        )
-    };
-    let certified_fraction: f64 = contributions
+    let terms: Vec<Term> = contributions.iter().map(Term::of).collect();
+    global_error_of_terms(&terms, domain_points, tau, approximation_rms, epsilon)
+}
+
+/// [`global_error`] of regions given as [`Term`]s, in the given order.
+pub(super) fn global_error_of_terms(
+    terms: &[Term],
+    domain_points: f64,
+    tau: f64,
+    approximation_rms: Option<f64>,
+    epsilon: f64,
+) -> (GlobalL2Error, f64) {
+    let certified_fraction: f64 = terms
         .iter()
-        .filter(|c| c.within_tolerance && exact(c.acceptance))
-        .map(|c| c.patch_points / domain_points)
+        .filter(|t| t.within_tolerance && t.certified)
+        .map(|t| t.patch_points / domain_points)
         .sum();
-    let (rms, basis) = classify(
-        contributions,
-        domain_points,
-        tau,
-        approximation_rms,
-        epsilon,
-    );
-    if contributions.iter().all(|c| c.within_tolerance) {
+    let (rms, basis) = classify(terms, domain_points, tau, approximation_rms, epsilon);
+    if terms.iter().all(|t| t.within_tolerance) {
         let global = match basis {
             ToleranceNotMetBasis::ExactOrExhaustive {
                 rounding_allowance_rms,
@@ -461,10 +593,10 @@ pub(super) fn global_error(
         };
         return (global, certified_fraction);
     }
-    let unmet_fraction = contributions
+    let unmet_fraction = terms
         .iter()
-        .filter(|c| !c.within_tolerance)
-        .map(|c| c.patch_points / domain_points)
+        .filter(|t| !t.within_tolerance)
+        .map(|t| t.patch_points / domain_points)
         .sum();
     let global = GlobalL2Error::ToleranceNotMet {
         measured_rms: rms,
@@ -479,25 +611,19 @@ pub(super) fn global_error(
 /// M3), acceptance-only when some sampled one has no audit, audited
 /// otherwise.
 fn classify(
-    contributions: &[Contribution<'_>],
+    terms: &[Term],
     domain_points: f64,
     tau: f64,
     approximation_rms: Option<f64>,
     epsilon: f64,
 ) -> (f64, ToleranceNotMetBasis) {
-    let weight = |c: &Contribution<'_>| (c.patch_points / domain_points).sqrt();
-    let exact = |m: &L2Measurement| {
-        matches!(
-            m.method,
-            MeasurementMethod::Exact | MeasurementMethod::Exhaustive
-        )
-    };
+    let weight = |t: &Term| (t.patch_points / domain_points).sqrt();
 
     let mut acceptance = ScaledSquares::default();
-    for c in contributions {
-        acceptance.add(weight(c) * c.acceptance.rms);
+    for t in terms {
+        acceptance.add(weight(t) * t.rms);
     }
-    if contributions.iter().all(|c| exact(c.acceptance)) {
+    if terms.iter().all(|t| t.certified) {
         let rms_error = acceptance.norm();
         let rounding = approximation_rms.map(|rms| MEASUREMENT_ROUNDING_FACTOR * epsilon * rms);
         let relative_error_bound = approximation_rms.zip(rounding).and_then(|(rms, rounding)| {
@@ -512,34 +638,28 @@ fn classify(
         };
         return (rms_error, basis);
     }
-    if contributions
+    let Some(parts) = terms
         .iter()
-        .any(|c| !exact(c.acceptance) && c.audit.is_none())
-    {
+        .map(|t| t.audited)
+        .collect::<Option<Vec<AuditedTerm>>>()
+    else {
         return (acceptance.norm(), ToleranceNotMetBasis::AcceptanceOnly);
-    }
+    };
 
     // Audited: exact and exhaustive contributions as measured, sampled ones
     // from their audits. Each term a_i = sqrt(w_i) rms_i defines the estimate
     // a_i^2; the relative standard error is a Monte-Carlo diagnostic, so the
     // variance of a term is measured by its sampled part
-    // (sqrt(w_i) * sample_rms_i) and its relative standard error is zero for a
-    // converged residual-TT estimate. A residual-TT measurement carries the
-    // seed sample's standard error only when the sample co-decided the value
-    // (`L2Measurement::residual_saturated`).
-    let terms: Vec<(f64, f64, f64)> = contributions
+    // (sqrt(w_i) * variance_rms_i) and its relative standard error is zero for
+    // a converged residual-TT estimate.
+    let terms: Vec<(f64, f64, f64)> = terms
         .iter()
-        .map(|c| {
-            let measurement = if exact(c.acceptance) {
-                c.acceptance
-            } else {
-                c.audit.unwrap_or(c.acceptance)
-            };
-            let variance = measurement.sample_rms.unwrap_or(measurement.rms);
+        .zip(parts)
+        .map(|(t, part)| {
             (
-                weight(c) * measurement.rms,
-                weight(c) * variance,
-                measurement.mean_square_rel_std_error,
+                weight(t) * part.rms,
+                weight(t) * part.variance_rms,
+                part.mean_square_rel_std_error,
             )
         })
         .collect();

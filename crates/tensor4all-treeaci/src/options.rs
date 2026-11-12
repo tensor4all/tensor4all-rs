@@ -249,6 +249,64 @@ impl<V: TreeAciNode> Default for TreeAciOptions<V> {
 }
 
 impl<V: TreeAciNode> TreeAciOptions<V> {
+    /// These options for node type `W`, without an initial guess or a root,
+    /// the two fields that name nodes.
+    ///
+    /// The exhaustive destructuring makes a new field a compile error here
+    /// until it is carried over.
+    pub(crate) fn for_nodes<W: TreeAciNode>(&self) -> TreeAciOptions<W> {
+        let Self {
+            max_sweeps,
+            min_sweeps,
+            max_bond_dim,
+            tolerance,
+            scale_tolerance,
+            rng_seed,
+            enable_global_guard,
+            message_cache_max_bytes,
+            nsearch_global_pivots,
+            max_nglobal_pivots,
+            nsweeps_global_search,
+            global_tolerance_margin,
+            max_candidate_rows,
+            max_candidate_cols,
+            max_local_matrix_elements,
+            max_core_elements,
+            max_frame_elements,
+            max_frame_bytes,
+            max_sample_arena_bytes,
+            max_working_bytes,
+            traversal_strategy,
+            initial_guess: _,
+            root: _,
+        } = self;
+        TreeAciOptions {
+            max_sweeps: *max_sweeps,
+            min_sweeps: *min_sweeps,
+            max_bond_dim: *max_bond_dim,
+            tolerance: *tolerance,
+            scale_tolerance: *scale_tolerance,
+            rng_seed: *rng_seed,
+            enable_global_guard: *enable_global_guard,
+            message_cache_max_bytes: *message_cache_max_bytes,
+            nsearch_global_pivots: *nsearch_global_pivots,
+            max_nglobal_pivots: *max_nglobal_pivots,
+            nsweeps_global_search: *nsweeps_global_search,
+            global_tolerance_margin: *global_tolerance_margin,
+            max_candidate_rows: *max_candidate_rows,
+            max_candidate_cols: *max_candidate_cols,
+            max_local_matrix_elements: *max_local_matrix_elements,
+            max_core_elements: *max_core_elements,
+            max_frame_elements: *max_frame_elements,
+            max_frame_bytes: *max_frame_bytes,
+            max_sample_arena_bytes: *max_sample_arena_bytes,
+            max_working_bytes: *max_working_bytes,
+            traversal_strategy: *traversal_strategy,
+            initial_guess: None,
+            root: None,
+        }
+    }
+
     pub(crate) fn tolerance_policy(&self) -> TolerancePolicy {
         TolerancePolicy {
             tolerance: self.tolerance,

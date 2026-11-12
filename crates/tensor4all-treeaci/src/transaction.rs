@@ -207,6 +207,7 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     state.edge_ranks[edge_number] = state.pivots.rank(edge_number);
     state.edge_errors[edge_number] = pivot_error;
     state.edge_scales[edge_number] = proposal.sampled_scale;
+    state.max_sample_magnitude = state.max_sample_magnitude.max(proposal.sampled_scale);
     state.generation = next_generation;
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| stats.commits += 1);

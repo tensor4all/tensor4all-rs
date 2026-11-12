@@ -58,6 +58,21 @@
 //! canonical order, and the run then reports the same
 //! [`PatchedInterpolationError::ResourceLimit`] as before.
 //!
+//! # Element-wise operations
+//!
+//! [`patched_elementwise`] runs the same driver on `f(x_1, ..., x_k)` of
+//! partitions, with an element-wise engine that receives the input networks
+//! restricted to each patch; patches that cross the inputs' patches are split
+//! before any evaluation.
+//!
+//! # Sibling merging
+//!
+//! The driver never undoes a split. [`merge_siblings`] post-processes an
+//! [`ErrorNorm::L2`] result: it merges complete groups of sibling patches,
+//! bottom-up, when their truncated sum stays below the bond cap and within
+//! the slack that the members' measured errors leave in the merged region,
+//! so the run's L2 contract still holds.
+//!
 //! # Derivation notice
 //!
 //! The patch queue, the accept-or-split flow, and pivot recycling are derived
@@ -200,7 +215,10 @@
 //! 5. The engine runs on the active sites. A
 //!    [`InterpolationTermination::Converged`] outcome strictly below the bond
 //!    cap is re-embedded (every fixed site re-attached by a one-hot factor)
-//!    and, under L2, measured on the stored network: exhaustively when the
+//!    and, under L2, measured on the stored network; under L2 an
+//!    [`InterpolationTermination::ErrorNotMeasured`] outcome strictly below
+//!    the cap (an engine without an error estimate, such as tree RSI) is
+//!    treated the same way. The measurement is taken exhaustively when the
 //!    patch has at most `max(max_exhaustive_points, samples)` points,
 //!    otherwise by [`VerificationOptions::estimator`] - the residual TT, or
 //!    the uniform Monte Carlo sample. It is accepted when the estimate is at
@@ -209,7 +227,8 @@
 //!    most that many active sites (generalized bits) is checked against the
 //!    cap and judged the same way (by the engine estimate under
 //!    `SampledMax`).
-//! 6. A failed verification of a converged run reruns the engine (up to
+//! 6. A failed verification of a converged (or, under L2, unmeasured) run
+//!    reruns the engine (up to
 //!    [`VerificationOptions::retries`] times) with the worst measured points
 //!    (under the residual estimator also its pivots with a nonzero residual)
 //!    and the outcome's pivots added to the initial pivots; a failed capped
@@ -339,9 +358,12 @@
 mod acceptance;
 mod cache;
 mod corners;
+mod elementwise;
 mod embed;
+mod engine;
 mod fan_out;
 mod layout;
+mod merge;
 #[cfg(any(feature = "hataori-mpi", feature = "hataori-mpi-rsmpi-rt"))]
 mod mpi;
 mod options;
@@ -376,13 +398,18 @@ use crate::{ErrorNorm, L2Reference, PartitionedTreeTN, Projector, SubDomainTreeT
 
 use acceptance::SizePolicy;
 use cache::{Counters, PatchCache, PatchSampler};
+use engine::{BlackBox, PatchEngine};
 use layout::SiteLayout;
 use sampling::{patch_candidates, patch_seeds, PatchDomain, PatchSeeds};
 use verify::{Contribution, MeasureError, MeasureTarget, Measured, PointPlan};
 
+pub use elementwise::{patched_elementwise, patched_elementwise_on_lanes};
 pub use fan_out::patched_interpolate_on_lanes;
+pub use merge::{
+    merge_siblings, SiblingMergeOptions, SiblingMergeRecord, SiblingMergeReport, SiblingMergeResult,
+};
 #[cfg(any(feature = "hataori-mpi", feature = "hataori-mpi-rsmpi-rt"))]
-pub use mpi::patched_interpolate_mpi;
+pub use mpi::{patched_elementwise_mpi, patched_interpolate_mpi};
 pub use options::{CappedPatches, L2Estimator, PatchedInterpolationOptions, VerificationOptions};
 pub use report::{
     GlobalL2Error, L2ErrorReport, L2Measurement, L2ReferenceSource, MaxReferenceSource,
@@ -714,13 +741,30 @@ where
     E: TreeInterpolator<T> + Sync,
     F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
-    let plan = Plan::validated(engine, topology, node_sites, initial_pivots, options)?;
+    let engine = BlackBox(engine);
+    let plan = Plan::validated(&engine, topology, node_sites, initial_pivots, options)?;
+    run_serial(ctx, &plan, evaluate)
+}
+
+/// Run the waves of a validated plan on the caller's session and assemble the
+/// result: the body of every serial entry.
+fn run_serial<T, V, E, F>(
+    ctx: &mut EvalContext<'_>,
+    plan: &Plan<'_, T, V, E>,
+    evaluate: F,
+) -> Result<PatchedInterpolationResult<V>, PatchedInterpolationError>
+where
+    T: CommonScalar + TensorElement,
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    E: PatchEngine<T, V>,
+    F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
+{
     let mut waves = SerialWaves {
         ctx,
         evaluate: RefCell::new(evaluate),
     };
-    let merged = run_waves(&plan, &mut waves)?;
-    assemble(&plan, merged)
+    let merged = run_waves(plan, &mut waves)?;
+    assemble(plan, merged)
 }
 
 fn invalid(message: impl Into<String>) -> PatchedInterpolationError {
@@ -1280,7 +1324,7 @@ impl<'a, T, V, E> Plan<'a, T, V, E>
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
 {
     /// Validate the inputs and options in their documented order.
     fn validated(
@@ -1375,7 +1419,7 @@ impl<T, V, E> Plan<'_, T, V, E>
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
 {
     fn sampler<'s>(
         &'s self,
@@ -1444,7 +1488,7 @@ where
         let sample = self.measure(tally, sampler, target, plan, projector, ctx)?;
         let before = tally.counters.evaluations.get();
         let estimate = residual::estimate(
-            self.engine,
+            self.engine.residual_engine(),
             &self.residual_problem(target, active, &sample, tolerance, residual_seed, projector)?,
             sampler,
             target,
@@ -1624,6 +1668,16 @@ where
         tally: &Tally,
         ctx: &mut EvalContext<'_>,
     ) -> Result<Verdict<T, V>, PatchedInterpolationError> {
+        let layout = &self.layout;
+        let active: Vec<usize> = (0..layout.sites.len())
+            .filter(|&position| patch.fixed[position].is_none())
+            .collect();
+        // A patch with at most one active site is evaluated exactly below,
+        // which needs no engine; any other patch must be one the engine can
+        // run on.
+        if active.len() > 1 && !self.engine.runs_on(projector)? {
+            return self.structural_split(patch, &active, projector);
+        }
         let Patch {
             path,
             fixed,
@@ -1631,10 +1685,6 @@ where
             recycled,
             worst,
         } = patch;
-        let layout = &self.layout;
-        let active: Vec<usize> = (0..layout.sites.len())
-            .filter(|&position| fixed[position].is_none())
-            .collect();
         if active.len() <= 1 {
             return self.exact_patch(
                 pins, evaluate, tally, &fixed, &active, cache, projector, ctx,
@@ -1792,10 +1842,18 @@ where
             .map_err(interpolation_error)?;
             let outcome = self
                 .engine
-                .interpolate(&problem, ctx, |batch, ctx| sampler.sample(batch, ctx))
+                .run(&problem, layout, &fixed, projector, ctx, |batch, ctx| {
+                    sampler.sample(batch, ctx)
+                })
                 .map_err(interpolation_error)?;
             let converged = outcome.termination == InterpolationTermination::Converged;
+            // Under L2 the library's measurement is the acceptance, so an
+            // engine that does not measure its own error (tree RSI) is
+            // verified like a converged one.
+            let unmeasured =
+                self.is_l2() && outcome.termination == InterpolationTermination::ErrorNotMeasured;
             if !converged
+                && !unmeasured
                 && !self
                     .policy
                     .capped_eligible(outcome.termination, active.len())
@@ -1803,6 +1861,10 @@ where
                 break (outcome, None);
             }
             let subdomain = self.checked_subdomain(&outcome, &fixed, projector, ctx)?;
+            // A rank at the cap splits, as for every engine.
+            if unmeasured && subdomain.max_bond_dim() >= self.options.max_bond_dim {
+                break (outcome, None);
+            }
             let mut record = self.record(projector, &outcome, &subdomain, attempt);
             if !self.is_l2() {
                 // A capped-eligible run is judged by the engine estimate.
@@ -1858,9 +1920,10 @@ where
                 measurement: measured.measurement,
                 worst,
             });
-            // Only a converged run is rerun: a capped run has exhausted its
-            // rank, and more pivots only raise its starting rank.
-            if converged && attempt < retries {
+            // Only a converged or unmeasured run is rerun: a capped run has
+            // exhausted its rank, and more pivots only raise its starting
+            // rank.
+            if (converged || unmeasured) && attempt < retries {
                 let pivots = active_pivots(outcome.pivots.as_ref(), &active, &layout.dims)
                     .map_err(|message| engine_error(projector, message))?;
                 added = added_pivots(&base_set, &all_worst, &pivots, limit);
@@ -1944,6 +2007,7 @@ where
             acceptance: None,
             audit: None,
             status: PatchStatus::WithinTolerance,
+            log_norm: None,
         }
     }
 
@@ -1997,6 +2061,32 @@ where
         let worst = failure
             .map(|failure| complete_points(&failure.worst, fixed))
             .unwrap_or_default();
+        let parent = Patch {
+            path,
+            fixed: fixed.to_vec(),
+            cache: sampler.cache.into_inner(),
+            recycled,
+            worst,
+        };
+        self.split_at(parent, active, split_position)
+    }
+
+    /// Split `parent` at `split_position` into one child per coordinate. Each
+    /// child receives its part of the parent's cache and of its recycled and
+    /// worst points.
+    fn split_at(
+        &self,
+        parent: Patch<T>,
+        active: &[usize],
+        split_position: usize,
+    ) -> Result<Verdict<T, V>, PatchedInterpolationError> {
+        let Patch {
+            path,
+            fixed,
+            cache,
+            recycled,
+            worst,
+        } = parent;
         let slot = active
             .iter()
             .position(|&position| position == split_position)
@@ -2008,13 +2098,13 @@ where
                 .cloned()
                 .collect()
         };
-        let mut children = sampling::reserve_vec(layout.dims[split_position], "patch children")
-            .map_err(invalid)?;
-        let caches = sampler.cache.into_inner().split(slot).map_err(invalid)?;
+        let dim = self.layout.dims[split_position];
+        let mut children = sampling::reserve_vec(dim, "patch children").map_err(invalid)?;
+        let caches = cache.split(slot).map_err(invalid)?;
         for (value, cache) in caches.into_iter().enumerate() {
             let mut child_path = path.clone();
             child_path.push((split_position, value));
-            let mut child_fixed = fixed.to_vec();
+            let mut child_fixed = fixed.clone();
             child_fixed[split_position] = Some(value);
             children.push(Patch {
                 path: child_path,
@@ -2025,6 +2115,31 @@ where
             });
         }
         Ok(Verdict::Split(children))
+    }
+
+    /// Split a patch the engine cannot run on at the next site of the split
+    /// order, before any evaluation. The size minimum does not block it: the
+    /// engine has no way to compute such a patch.
+    fn structural_split(
+        &self,
+        patch: Patch<T>,
+        active: &[usize],
+        projector: &Projector,
+    ) -> Result<Verdict<T, V>, PatchedInterpolationError> {
+        let split_position = self
+            .layout
+            .split_order
+            .iter()
+            .copied()
+            .find(|&position| patch.fixed[position].is_none())
+            .ok_or_else(|| {
+                invalid(format!(
+                    "the patch {projector:?} spans several patches of an input, and every site \
+                     of patch_order is fixed in it; list every site an input projector fixes in \
+                     patch_order"
+                ))
+            })?;
+        self.split_at(patch, active, split_position)
     }
 
     /// Evaluate a patch with at most one active site on all its points and
@@ -2099,6 +2214,7 @@ where
             acceptance,
             audit: None,
             status: PatchStatus::WithinTolerance,
+            log_norm: None,
         };
         Ok(accepted(record, subdomain, patch_points))
     }
@@ -2260,7 +2376,7 @@ fn patch_outcome<T, V, E>(
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
 {
     let tally = Tally::default();
     let path = patch.path.clone();
@@ -2393,7 +2509,7 @@ fn assemble<T, V, E>(
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
 {
     let RunMerged {
         references,
@@ -2410,7 +2526,10 @@ where
     let mut records = Vec::with_capacity(accepted.len());
     let mut subdomains = Vec::with_capacity(accepted.len());
     for (_, entry) in accepted {
-        records.push(entry.record);
+        records.push(PatchRecord {
+            log_norm: entry.log_norm,
+            ..entry.record
+        });
         subdomains.push(entry.subdomain);
     }
     let partition = PartitionedTreeTN::from_disjoint_subdomains(subdomains)?;
@@ -2418,6 +2537,13 @@ where
         partition,
         report: PatchedInterpolationReport {
             tolerance: plan.options.tolerance,
+            patch_order: plan
+                .layout
+                .split_order
+                .iter()
+                .map(|&position| plan.layout.sites[position].clone())
+                .collect(),
+            max_bond_dim: plan.options.max_bond_dim,
             norm,
             accepted: records,
             zero_patches: zeros.into_iter().map(|(_, record, _)| record).collect(),
@@ -2449,7 +2575,7 @@ fn run_waves<T, V, E, W>(
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
     W: Waves<T, V, E>,
 {
     let mut references = plan.initial_references();
@@ -2545,7 +2671,7 @@ impl<T, V, E, F> Waves<T, V, E> for SerialWaves<'_, '_, F>
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: PatchEngine<T, V>,
     F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>,
 {
     fn run_wave(

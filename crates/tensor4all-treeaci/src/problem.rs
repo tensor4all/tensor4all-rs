@@ -324,7 +324,7 @@ pub(crate) fn dependency_order<V>(
     Ok(order)
 }
 
-fn validate_options<V: TreeAciNode>(options: &TreeAciOptions<V>) -> Result<()> {
+pub(crate) fn validate_options<V: TreeAciNode>(options: &TreeAciOptions<V>) -> Result<()> {
     if options.min_sweeps == 0 || options.max_sweeps < options.min_sweeps {
         return Err(TreeAciError::InvalidOption {
             option: "min_sweeps/max_sweeps",

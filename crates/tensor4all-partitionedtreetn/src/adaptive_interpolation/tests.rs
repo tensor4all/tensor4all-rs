@@ -1943,8 +1943,14 @@ fn default_estimator_runs_are_identical_on_two_fresh_threads() {
         std::thread::spawn(|| {
             let engine = DenseNodeEngine::new(0.5, InterpolationTermination::Converged);
             let options = sampled_options(4.0, 0.5);
-            let result = run_single_node(&engine, &[2, 2, 2, 2], |_| 1.0, &options).unwrap();
-            format!("{:?}", result.report)
+            let mut report = run_single_node(&engine, &[2, 2, 2, 2], |_| 1.0, &options)
+                .unwrap()
+                .report;
+            // Every run creates fresh site indices, whose identities differ;
+            // the recorded split order is compared by length only.
+            assert_eq!(report.patch_order.len(), 4);
+            report.patch_order.clear();
+            format!("{report:?}")
         })
         .join()
         .unwrap()

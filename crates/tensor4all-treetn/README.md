@@ -10,6 +10,9 @@ truncation, naive/zip-up/fit/SRC contraction, and linear solving.
 - `canonicalize()` — orthogonalize towards any center node
 - `truncate()` — bond dimension truncation with configurable tolerance
 - `to_dense()` — contract all bonds into a single dense tensor
+- `contraction::contract_with_outcome()` / `contract_with_outcome_in()` —
+  contract two networks and report the bond dimension of every output edge, or
+  return `Saturated` when an edge reaches a caller-given rank threshold
 
 ## Example
 
