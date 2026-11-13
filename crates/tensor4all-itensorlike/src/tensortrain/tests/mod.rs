@@ -1902,3 +1902,17 @@ fn cg_solves_tiny_scale_tensor_train_identity_system() {
         "relative error {error:e}"
     );
 }
+
+#[test]
+fn is_complex_reports_any_complex_site_tensor() {
+    let (s0, link, s1) = (idx(901, 2), idx(902, 2), idx(903, 2));
+    let left = make_tensor(vec![s0, link.clone()]);
+    let right = make_tensor(vec![link, s1]);
+    let real = TensorTrain::new(vec![left.clone(), right.clone()]).unwrap();
+    let complex_right = right
+        .scale(tensor4all_core::AnyScalar::new_complex(0.0, 1.0))
+        .unwrap();
+    let mixed = TensorTrain::new(vec![left, complex_right]).unwrap();
+    assert!(!TensorVectorSpace::is_complex(&real));
+    assert!(TensorVectorSpace::is_complex(&mixed));
+}

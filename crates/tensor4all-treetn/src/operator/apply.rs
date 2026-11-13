@@ -86,7 +86,8 @@ use crate::error::{
     LinearOperatorTaggedApplyError,
 };
 use crate::operator::compose::{
-    compose_exclusive_linear_operators, compose_exclusive_linear_operators_unchecked,
+    any_complex_operator, compose_exclusive_linear_operators,
+    compose_exclusive_linear_operators_unchecked, identity_factor, in_common_dtype,
 };
 use crate::treetn::contraction::{
     contract, ContractionMethod, ContractionOptions, IdentityNodes, SrcOptions,
@@ -1284,6 +1285,8 @@ where
 {
     let op_nodes: HashSet<V> = operator.node_names();
     let mut tensors_by_node: HashMap<V, T> = HashMap::new();
+    // The composed network takes the operator's common scalar type.
+    let complex = any_complex_operator(&[operator]);
 
     let mut state_node_names: Vec<V> = state_network.node_names().into_iter().cloned().collect();
     state_node_names.sort();
@@ -1302,7 +1305,7 @@ where
                     node
                 )
             })?;
-            tensors_by_node.insert(node.clone(), tensor.clone());
+            tensors_by_node.insert(node.clone(), in_common_dtype(tensor.clone(), complex)?);
         } else {
             let index_pairs = gap_site_indices.get(node).ok_or_else(|| {
                 anyhow::anyhow!(
@@ -1313,18 +1316,13 @@ where
             let input_indices: Vec<T::Index> = index_pairs.iter().map(|(i, _)| i.clone()).collect();
             let output_indices: Vec<T::Index> =
                 index_pairs.iter().map(|(_, o)| o.clone()).collect();
-            let tensor = if input_indices.is_empty() {
-                T::delta(&[], &[]).context(
-                    "compose_operator_along_state_paths: failed to build scalar identity",
-                )?
-            } else {
-                T::delta(&input_indices, &output_indices).with_context(|| {
+            let tensor = identity_factor::<T>(&input_indices, &output_indices, complex)
+                .with_context(|| {
                     format!(
                         "compose_operator_along_state_paths: failed to build identity for gap {:?}",
                         node
                     )
-                })?
-            };
+                })?;
             tensors_by_node.insert(node.clone(), tensor);
         }
     }
@@ -1423,9 +1421,10 @@ where
                 .node_name(path[i])
                 .ok_or_else(|| anyhow::anyhow!("compose_operator_along_state_paths: missing mid"))?
                 .clone();
-            let delta = T::delta(
+            let delta = identity_factor::<T>(
                 std::slice::from_ref(&chain_bonds[i - 1]),
                 std::slice::from_ref(&chain_bonds[i]),
+                complex,
             )
             .with_context(|| {
                 format!(

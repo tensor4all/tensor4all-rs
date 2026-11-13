@@ -2239,6 +2239,12 @@ impl TensorVectorSpace for TensorTrain {
             .any(TensorVectorSpace::is_single_precision)
     }
 
+    fn is_complex(&self) -> bool {
+        self.tensors()
+            .into_iter()
+            .any(TensorVectorSpace::is_complex)
+    }
+
     fn axpby(
         &self,
         a: AnyScalar,

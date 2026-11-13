@@ -6834,6 +6834,10 @@ impl TensorVectorSpace for IdxTensor {
         self.is_f32() || self.is_c32()
     }
 
+    fn is_complex(&self) -> bool {
+        IdxTensor::is_complex(self)
+    }
+
     fn norm(&self) -> std::result::Result<f64, Self::Error> {
         IdxTensor::norm(self)
     }

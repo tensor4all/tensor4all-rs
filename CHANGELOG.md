@@ -22,6 +22,14 @@
   from the bond's previous pivots. `PivotSearchStrategy::Full` stays the
   default and remains certified; use it when a bound is required. The same
   contract applies to `matrix_luci_factors_from_blocks`.
+- `tensor4all-treetn` composes operators in one scalar type (#1298).
+  `compose_exclusive_linear_operators`, and the extension of a partial operator
+  inside `apply_linear_operator`, built their identity gaps and bridges with
+  `T::delta`, which is real. A complex operator therefore became a network
+  mixing `f64` and `Complex64` tensors, which `PartitionedTreeTN` rejects. When
+  any operator tensor is complex, the identities and the real operator tensors
+  are now promoted to complex, an exact conversion; real operators are
+  unchanged.
 
 ### Breaking Rust API changes
 
@@ -33,6 +41,10 @@
   unaffected.
 - `tensor4all-partitionedtreetn`: `MaxReferenceSource::MaxOfRootCandidates`
   is replaced by `MaxReferenceSource::SearchedRootMaximum` (#1274).
+- `tensor4all-core` adds the required method `TensorVectorSpace::is_complex`
+  (#1298), the complex counterpart of `is_single_precision`. An implementor
+  outside this workspace must add it; a container reports `true` when any part
+  is complex.
 - `tensor4all-simplett` removes the `EinsumScalar` marker (#1283). Use
   `TTScalar` in generic tensor-train code. The supported scalar types remain
   `f32`, `f64`, `Complex32`, and `Complex64`.
