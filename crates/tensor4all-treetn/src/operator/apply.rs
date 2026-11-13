@@ -318,6 +318,12 @@ impl<V> ApplyOptions<V> {
 /// also makes the zip-up factorize every node it does not pass through by
 /// untruncated QR instead of SVD, on both schedules.
 ///
+/// A passed-through tensor retains its input canonical certificate only when
+/// the state records the unitary form and its bond points towards the requested
+/// centre. If any skipped tensor lacks that certificate, the result has an empty
+/// canonical region, no canonical form, and no edge orientations. Its values are
+/// still exact; canonicalize the result to establish a canonical centre.
+///
 /// Consequently the untouched region is left at its input bond dimensions, which
 /// is what "exact" means here; compress the result afterwards if that region
 /// should be smaller. Only the general tree schedule passes nodes through; a

@@ -1708,6 +1708,11 @@ where
                 .cloned()
         };
 
+        // A skipped tensor has not been factorized here. Certify the result
+        // only if every such tensor already has the requested canonical form
+        // towards its parent. Otherwise leave all canonical metadata unset.
+        let mut canonical_certified = true;
+
         // 8. Process edges from leaves towards root
         for (source_name, destination_name) in &edges {
             // Get tensors from both networks
@@ -1778,6 +1783,14 @@ where
                             )
                         })?;
                     }
+                    // Consult the original operand: its bond indices own the
+                    // input certificates, before sim_internal_inds relabels them.
+                    let certified = self.canonical_form() == Some(form)
+                        && self
+                            .edge_between(source_name, destination_name)
+                            .and_then(|edge| self.ortho_towards_node(edge))
+                            == Some(destination_name);
+                    canonical_certified &= certified;
                     result_tensors.insert(source_name.clone(), emitted);
                     orphan_identity_legs
                         .entry(destination_name.clone())
@@ -1968,9 +1981,17 @@ where
             }
         }
 
-        // 11. Set canonical center
-        if result.node_index(center).is_some() {
+        // 11. Certify the canonical center and the surviving edges together.
+        // As in canonicalize_impl, directions describe the selected form:
+        // LU/CI left factors are unit-diagonal rather than isometric.
+        if canonical_certified && result.node_index(center).is_some() {
             result.set_canonical_region(std::iter::once(center.clone()))?;
+            result.set_canonical_form(Some(form));
+            for (source, destination) in &edges {
+                if let Some(edge) = result.edge_between(source, destination) {
+                    result.set_edge_ortho_towards(edge, Some(destination.clone()))?;
+                }
+            }
         }
 
         control.finish(result)

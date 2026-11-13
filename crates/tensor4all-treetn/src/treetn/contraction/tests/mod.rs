@@ -2172,3 +2172,5 @@ fn test_every_entry_rejects_zero_initial_max_bond_dim() {
     assert!(format!("{err:#}").contains("initial_max_bond_dim"));
 }
 mod exact_qr;
+
+mod canonical_metadata;

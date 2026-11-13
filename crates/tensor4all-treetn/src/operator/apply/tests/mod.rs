@@ -1,3 +1,5 @@
+mod identity_metadata;
+
 use super::*;
 use crate::random::{random_treetn, LinkSpace};
 use crate::treetn::contraction::SrcOptions;
@@ -2544,6 +2546,11 @@ fn apply_zipup_skips_the_nodes_its_operator_does_not_touch() {
     // still contracted and factorized.
     let skipped = zipup_identity_node_skips() - skipped_before;
     assert_eq!(skipped, 4, "untouched branch nodes skipped");
+    result.validate_ortho_consistency().unwrap();
+    assert_eq!(
+        result.canonical_region(),
+        &["hub".to_string()].into_iter().collect()
+    );
 
     for name in ["b0", "b1", "d0", "d1"] {
         assert_node_passed_through(&result, &state, name);
@@ -2883,6 +2890,11 @@ fn apply_zipup_never_skips_without_an_explicit_exact_policy() {
         1,
         "a zero threshold opts the untouched leaf into the pass-through"
     );
+
+    default_result.validate_ortho_consistency().unwrap();
+    exact_result.validate_ortho_consistency().unwrap();
+    assert!(exact_result.canonical_region().is_empty());
+    assert_eq!(exact_result.canonical_form(), None);
 
     // Both are exact against the naive apply, and the opted-in path is not less
     // accurate: skipping a node whose factorization cannot cut anything removes a

@@ -112,6 +112,7 @@ fn check_tree<T: TensorElement>(real: impl Fn(f64) -> T + Copy, phased: impl Fn(
             let options = ContractionOptions::zipup().with_max_bond_dim(2);
             let full = CountedLeaves::new(base);
             let network = run(&fixture, &options, &full, Complete).unwrap();
+            network.validate_ortho_consistency().unwrap();
             assert_dense(
                 &network,
                 &fixture.expected,
@@ -142,6 +143,8 @@ fn check_tree<T: TensorElement>(real: impl Fn(f64) -> T + Copy, phased: impl Fn(
                 )
                 .unwrap();
                 if threshold <= 2 {
+                    // Saturated carries only an EdgeRank, so an early abort
+                    // cannot expose a partially certified TreeTN.
                     let ContractionOutcome::Saturated { edge } = outcome else {
                         panic!("expected abort")
                     };
@@ -151,6 +154,7 @@ fn check_tree<T: TensorElement>(real: impl Fn(f64) -> T + Copy, phased: impl Fn(
                 } else {
                     let (network, actual) = completed(outcome);
                     assert_eq!(actual, report);
+                    network.validate_ortho_consistency().unwrap();
                     assert_eq!(counted.factorizations.get(), full.factorizations.get());
                     assert_dense(
                         &network,
