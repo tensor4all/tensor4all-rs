@@ -265,10 +265,10 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
             checked_local_mul(n_inputs, n_missing, "local batch input value count")?;
         let mut input_values = vec![T::zero(); input_value_count];
         for (point, (&row, &col)) in missing_rows.iter().zip(&missing_cols).enumerate() {
-            for input in 0..n_inputs {
+            for (input, factors) in self.input_factors[..n_inputs].iter().enumerate() {
                 let offset = checked_local_mul(n_inputs, point, "local input offset")?;
                 let index = checked_local_add(input, offset, "local input offset")?;
-                input_values[index] = self.input_factors[input].value(row, col)?;
+                input_values[index] = factors.value(row, col)?;
             }
         }
 
@@ -345,8 +345,8 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
             return Ok(input_values);
         }
 
-        for input in 0..n_inputs {
-            let values = self.input_factors[input].materialize_values()?;
+        for (input, factors) in self.input_factors[..n_inputs].iter().enumerate() {
+            let values = factors.materialize_values()?;
             if values.len() != n_points {
                 return Err(AciError::InvalidInitialGuess {
                     message: format!(

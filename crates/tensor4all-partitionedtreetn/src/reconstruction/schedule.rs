@@ -876,9 +876,9 @@ impl ScheduleGeometry {
     fn input_projector(&self, key: &InputKey) -> Result<Projector> {
         let mut projector = Projector::new();
         for (axis, (depth, value)) in self.axes.iter().zip(key) {
-            for position in 0..*depth {
+            for (position, site) in axis.inputs[..*depth].iter().enumerate() {
                 let bit = (value >> (depth - 1 - position)) & 1;
-                projector.insert(axis.inputs[position].clone(), bit)?;
+                projector.insert(site.clone(), bit)?;
             }
         }
         Ok(projector)
@@ -888,9 +888,9 @@ impl ScheduleGeometry {
     fn output_projector(&self, key: &OutputKey) -> Result<Projector> {
         let mut projector = Projector::new();
         for (axis, (depth, value)) in self.axes.iter().zip(key) {
-            for position in 0..*depth {
+            for (position, site) in axis.outputs[..*depth].iter().enumerate() {
                 let bit = (value >> (depth - 1 - position)) & 1;
-                projector.insert(axis.outputs[position].clone(), bit)?;
+                projector.insert(site.clone(), bit)?;
             }
         }
         Ok(projector)
@@ -1232,7 +1232,11 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// requested contract, non-finite tolerances, and non-finite or non-positive
 /// checked counts; [`PartitionedTreeTNError::ResourceLimit`] when a level holds
 /// more than `max_work_items` items or the retained term count exceeds
-/// `max_terms`; [`PartitionedTreeTNError::InvalidOptions`]
+/// `max_terms`, and before any application when the state is a tree that is
+/// not a chain and the exact application of some leaf is estimated to form a
+/// zip-up block above `2^28` elements (as for
+/// [`ReconstructionTarget::from_subset_operator`]);
+/// [`PartitionedTreeTNError::InvalidOptions`]
 /// again when the measured application error of
 /// [`MergeRefineOptions::apply_options`] already exceeds the allowance;
 /// [`PartitionedTreeTNError::ProjectorMismatch`]

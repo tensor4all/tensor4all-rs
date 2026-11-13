@@ -4,7 +4,7 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tensor4all_simplett::mpo::{tensor4_from_data, tensor4_zeros, MPOError, MPO};
 use tensor4all_simplett::{
-    tensor3_from_data, tensor3_zeros, AbstractTensorTrain, EinsumScalar, SimpleTensorTrain,
+    tensor3_from_data, tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain,
     SimpleTensorTrainError, TTScalar,
 };
 
@@ -29,7 +29,7 @@ fn compare<T: TTScalar>(data: &[T], shape: &[usize], evaluate: impl Fn(&[usize])
     }
 }
 
-fn random_cases<T: TTScalar + EinsumScalar>(mut sample: impl FnMut(&mut ChaCha8Rng) -> T) {
+fn random_cases<T: TTScalar>(mut sample: impl FnMut(&mut ChaCha8Rng) -> T) {
     let mut rng = ChaCha8Rng::seed_from_u64(1060);
     for dims in [vec![3], vec![2, 3], vec![2, 1, 3, 2, 2], vec![2, 2, 2]] {
         for bond in [1, 3, 8, 0] {
@@ -91,7 +91,7 @@ fn random_complex_matches_every_point_without_conjugating() {
     random_cases(|rng| Complex64::new(rng.random_range(-0.5..0.5), rng.random_range(-0.5..0.5)));
 }
 
-fn nonuniform_bonds<T: TTScalar + EinsumScalar>(mut sample: impl FnMut(&mut ChaCha8Rng) -> T) {
+fn nonuniform_bonds<T: TTScalar>(mut sample: impl FnMut(&mut ChaCha8Rng) -> T) {
     let mut rng = ChaCha8Rng::seed_from_u64(1065);
     let bonds = [1, 3, 2, 1];
     let tt_dims = [2, 3, 2];

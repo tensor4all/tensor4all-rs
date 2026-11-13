@@ -7,9 +7,7 @@ use crate::{
     AciError, AciOptions, AciResult, AciTermination, ElementwiseBatch, ElementwiseProblem, Result,
 };
 use rand::SeedableRng;
-use tensor4all_simplett::{
-    tensor3_from_data, AbstractTensorTrain, EinsumScalar, SimpleTensorTrain,
-};
+use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain};
 
 /// Runs batched elementwise ACI over tensor-train inputs.
 ///
@@ -112,7 +110,7 @@ pub fn elementwise_batched<T, F>(
     options: &AciOptions<T>,
 ) -> Result<AciResult<T>>
 where
-    T: AciScalar + EinsumScalar + PartialEq,
+    T: AciScalar + PartialEq,
     F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
 {
     // The seeded high-level path uses an explicitly named RNG and delegates to
@@ -140,7 +138,7 @@ pub fn elementwise_batched_with_rng<T, F, R>(
     rng: &mut R,
 ) -> Result<AciResult<T>>
 where
-    T: AciScalar + EinsumScalar + PartialEq,
+    T: AciScalar + PartialEq,
     F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
     R: rand::Rng + ?Sized,
 {
@@ -177,7 +175,7 @@ pub fn elementwise_batched_with_rng_in<T, F, R>(
     context: &tensor4all_tensorbackend::CpuExecutionContext,
 ) -> Result<AciResult<T>>
 where
-    T: AciScalar + EinsumScalar + PartialEq,
+    T: AciScalar + PartialEq,
     F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
     R: rand::Rng + ?Sized,
 {
@@ -193,7 +191,7 @@ fn elementwise_batched_erased<T, F>(
     context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
 ) -> Result<AciResult<T>>
 where
-    T: AciScalar + EinsumScalar + PartialEq,
+    T: AciScalar + PartialEq,
     F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
 {
     validate_options(options)?;
@@ -394,7 +392,7 @@ pub fn elementwise<T, F>(
     options: &AciOptions<T>,
 ) -> Result<AciResult<T>>
 where
-    T: AciScalar + EinsumScalar + PartialEq,
+    T: AciScalar + PartialEq,
     F: FnMut(&[T]) -> T,
 {
     let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rng_seed);
@@ -418,7 +416,7 @@ pub fn elementwise_with_rng<T, F, R>(
     rng: &mut R,
 ) -> Result<AciResult<T>>
 where
-    T: AciScalar + EinsumScalar + PartialEq,
+    T: AciScalar + PartialEq,
     F: FnMut(&[T]) -> T,
     R: rand::Rng + ?Sized,
 {

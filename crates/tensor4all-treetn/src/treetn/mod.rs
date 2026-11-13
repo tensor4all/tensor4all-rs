@@ -1978,13 +1978,8 @@ where
             .filter(|b| other.ortho_towards.contains_key(b))
             .count();
 
-        if self_bond_ortho_count != self_total_bond_entries
-            || other_bond_ortho_count != other_total_bond_entries
-        {
-            return false;
-        }
-
-        true
+        self_bond_ortho_count == self_total_bond_entries
+            && other_bond_ortho_count == other_total_bond_entries
     }
 
     /// Perform an in-place adjacent swap on the edge (node_a, node_b).

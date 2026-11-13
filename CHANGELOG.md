@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased (next minor)
+
+### Breaking Rust API changes
+
+- `tensor4all-simplett` removes the `EinsumScalar` marker (#1283). Use
+  `TTScalar` in generic tensor-train code. The supported scalar types remain
+  `f32`, `f64`, `Complex32`, and `Complex64`.
+
 ## v0.3.0
 
 ### Patched Fourier transforms (#1275)
@@ -17,6 +25,23 @@
   accept an independent `OperatorV` generic parameter. Explicit turbofish
   call sites need an additional inferred `_` (for example,
   `schedule_merge_refine::<V, _>`).
+- `schedule_merge_refine` and `ReconstructionTarget::from_subset_operator`
+  apply the operator exactly by zip-up with a zero SVD threshold, centred at
+  the node that balances the site bits, instead of the naive local product
+  (#1279). The naive product's bonds were input bond × operator bond, 7200 for
+  two interleaved axes at R = 10, which ran out of memory; the zip-up keeps
+  the images' bonds at their physical bound, and that case now completes with
+  a 4.0 GiB peak. Results are unchanged up to roundoff. On a tree that is not a
+  chain, a patch whose zip-up is estimated to form a block above `2^28`
+  elements is refused with `ResourceLimit` before any application. Two
+  interleaved axes at R = 20 remain out of reach.
+- An exact zip-up request in `tensor4all-treetn` (`CanonicalForm::Unitary`,
+  `svd_policy = Some(SvdTruncationPolicy::new(0.0))`, no `max_bond_dim`) now
+  factorizes every block by untruncated QR instead of SVD (#1285). Bonds and
+  results are unchanged up to roundoff; no singular values are computed. The
+  exact subset-operator application uses this path: two interleaved axes at
+  R = 10 take 364 s instead of 837 s with a 2.4 GiB instead of 4.0 GiB peak
+  (release, one thread).
 - `QuanticsTransformError` is now `#[non_exhaustive]`; exhaustive matches must
   add a wildcard arm. The `partitioned` feature adds the typed `Reconstruction`
   variant. Later feature unification or new variants do not require another

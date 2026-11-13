@@ -5,9 +5,7 @@
 
 use super::error::{MPOError, Result};
 use super::types::{tensor4_zeros, LocalIndex, Tensor4, Tensor4Ops};
-use crate::einsum_helper::{
-    einsum_tensors, row_vector_times_matrix, tensor_to_col_major_vec, EinsumScalar,
-};
+use crate::einsum_helper::{einsum_tensors, row_vector_times_matrix, tensor_to_col_major_vec};
 use crate::traits::TTScalar;
 use tenferro_tensor::TensorValue;
 use tensor4all_tensorbackend::{
@@ -259,10 +257,7 @@ impl<T: TTScalar> MPO<T> {
     /// final contraction is not scalar; [`MPOError::Empty`] for an empty MPO;
     /// and [`MPOError::IndexOutOfBounds`] for an out-of-range physical index.
     ///
-    pub fn evaluate(&self, indices: &[LocalIndex]) -> Result<T>
-    where
-        T: EinsumScalar,
-    {
+    pub fn evaluate(&self, indices: &[LocalIndex]) -> Result<T> {
         if indices.len() != 2 * self.len() {
             return Err(MPOError::InvalidOperation {
                 message: format!(
@@ -348,10 +343,7 @@ impl<T: TTScalar> MPO<T> {
     /// assert!((sum - 12.0).abs() < 1e-10);
     /// ```
     #[allow(clippy::needless_range_loop)]
-    pub fn sum(&self) -> Result<T>
-    where
-        T: EinsumScalar,
-    {
+    pub fn sum(&self) -> Result<T> {
         if self.is_empty() {
             return Ok(T::zero());
         }
@@ -435,10 +427,7 @@ impl<T: TTScalar> MPO<T> {
     /// # Errors
     /// Returns [`MPOError::InvalidOperation`] when the dense element count
     /// overflows or an evaluation fails.
-    pub fn full_tensor(&self) -> Result<(Vec<T>, Vec<usize>)>
-    where
-        T: EinsumScalar,
-    {
+    pub fn full_tensor(&self) -> Result<(Vec<T>, Vec<usize>)> {
         if self.is_empty() {
             return Ok((Vec::new(), Vec::new()));
         }

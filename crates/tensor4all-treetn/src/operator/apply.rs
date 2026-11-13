@@ -314,7 +314,9 @@ impl<V> ApplyOptions<V> {
 /// "no truncation" would let the skip change a caller's numerics without them
 /// asking. A non-zero threshold does not qualify either, even on a node the state
 /// certifies as isometric toward the centre: the isometry argument holds for that
-/// node, but it is not a property the caller requested.
+/// node, but it is not a property the caller requested. The same exact request
+/// also makes the zip-up factorize every node it does not pass through by
+/// untruncated QR instead of SVD, on both schedules.
 ///
 /// Consequently the untouched region is left at its input bond dimensions, which
 /// is what "exact" means here; compress the result afterwards if that region
