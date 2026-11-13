@@ -30,8 +30,10 @@
     "crates/tensor4all-treetn/src/dmrg/mod.rs": 72,
     "crates/tensor4all-treetn/src/gse.rs": 74,
     "crates/tensor4all-partitionedtreetn/src/adaptive_interpolation/options.rs": 73,
+    "crates/tensor4all-core/src/matrixluci/scalar.rs": 74,
     "docs/tutorial-code/src/qtt_interval_common.rs": 74
   },
   "_comment_hdf5": "crates/tensor4all-hdf5/src/compat.rs (62): HDF5 I/O internals are exercised by crates/tensor4all-hdf5/tests/test_hdf5.rs under `cargo test` (dlopen-based tests cannot run under nextest or llvm-cov); release llvm-cov cannot attribute them. Remove when the HDF5 suite runs under a coverage-compatible harness.",
-  "_comment_tutorial_code": "docs/tutorial-code/src/qtt_interval_common.rs: shared helper for the tutorial binaries; release coverage is CI-variant (74.4% on the hosted runner, >=75 locally) because the long-running tutorial binaries (docs/tutorial-code/src/bin/*) exercise different path sets per run. The tutorials themselves are the deterministic artifact; pinned at 74. Remove when tutorial-code gains a stable unit suite."
+  "_comment_tutorial_code": "docs/tutorial-code/src/qtt_interval_common.rs: shared helper for the tutorial binaries; release coverage is CI-variant (74.4% on the hosted runner, >=75 locally) because the long-running tutorial binaries (docs/tutorial-code/src/bin/*) exercise different path sets per run. The tutorials themselves are the deterministic artifact; pinned at 74. Remove when tutorial-code gains a stable unit suite.",
+  "_comment_matrixluci_scalar": "crates/tensor4all-core/src/matrixluci/scalar.rs (74): the only uncovered lines are the signature and body of MatrixLuciScalar::matrix_luci_factors_from_blocks_seeded's default implementation, which no in-crate type instantiates (all four scalar impls override it). The default is deliberate: MatrixLuciScalar is a public unsealed trait, so making the method required would break downstream implementors (raised in the #1282 review). Release llvm-cov therefore counts ~13 dead lines; measured 74.5% (38/51) at afed41c6. Remove when a test implementor exists or the trait is sealed."
 }
