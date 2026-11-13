@@ -1,9 +1,10 @@
 use super::*;
 use crate::einsum_helper::{
     einsum_tensors, matrix_times_col_vector, row_vector_times_matrix, tensor_to_col_major_vec,
-    typed_tensor_from_col_major_slice, typed_tensor_reshape, EinsumScalar,
+    typed_tensor_from_col_major_slice, typed_tensor_reshape,
 };
 use crate::types::{tensor3_zeros, Tensor3};
+use tensor4all_core::Scalar;
 
 #[test]
 fn test_dot_constant() {
@@ -120,7 +121,7 @@ fn test_dot_empty() {
     assert!((result - 0.0).abs() < 1e-15);
 }
 
-fn test_dot_generic<T: TTScalar + tensor4all_core::Scalar + Default + EinsumScalar>() {
+fn test_dot_generic<T: TTScalar>() {
     let tt1 = SimpleTensorTrain::<T>::constant(&[2, 3], T::from_f64(2.0));
     let tt2 = SimpleTensorTrain::<T>::constant(&[2, 3], T::from_f64(3.0));
 
@@ -133,12 +134,10 @@ fn test_dot_generic<T: TTScalar + tensor4all_core::Scalar + Default + EinsumScal
 }
 
 #[test]
-fn test_dot_f64() {
+fn test_dot_all_scalar_types() {
+    test_dot_generic::<f32>();
     test_dot_generic::<f64>();
-}
-
-#[test]
-fn test_dot_c64() {
+    test_dot_generic::<num_complex::Complex32>();
     test_dot_generic::<num_complex::Complex64>();
 }
 

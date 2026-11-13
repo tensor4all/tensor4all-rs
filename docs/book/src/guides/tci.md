@@ -76,10 +76,8 @@ error normalization. Tensor-train evaluations use a shared cache and batches
 of coordinate candidates.
 
 Custom `GlobalPivotFinder` implementations return `Result<Vec<MultiIndex>>`
-and require `T: Scalar + TTScalar + EinsumScalar`; use `Ok(pivots)` for a
-successful search. `optimize_with_finder` propagates search failures. The
-`EinsumScalar` bound also applies to `crossinterpolate2`, `integrate`, and
-the adaptive interpolation entry points that call them.
+and declare `T: Scalar + TTScalar` on `find_global_pivots`. Return `Ok(pivots)`
+for a successful search. `optimize_with_finder` propagates search failures.
 
 ### Convergence diagnostics
 

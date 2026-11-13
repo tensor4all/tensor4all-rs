@@ -22,7 +22,7 @@ use crate::scalar::AciScalar;
 use crate::{AciError, AciOptions, ElementwiseBatch, ElementwiseProblem, Result};
 use rand::Rng as _;
 use tensor4all_core::floating_zone_walk;
-use tensor4all_simplett::{AbstractTensorTrain, EinsumScalar, TTCache};
+use tensor4all_simplett::{AbstractTensorTrain, TTCache};
 
 /// Search for global multi-indices where the current solution is wrong.
 ///
@@ -52,7 +52,7 @@ pub(crate) fn find_global_pivots<T, F>(
     rng: &mut dyn rand::RngCore,
 ) -> Result<Vec<Vec<usize>>>
 where
-    T: AciScalar + EinsumScalar,
+    T: AciScalar,
     F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
 {
     let n_sites = problem.len();

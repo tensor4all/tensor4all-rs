@@ -3,7 +3,7 @@
 //! This module provides functions for computing left and right environments
 //! used in variational algorithms and efficient MPO evaluation.
 
-use crate::einsum_helper::{einsum_tensors, typed_tensor_reshape, EinsumScalar};
+use crate::einsum_helper::{einsum_tensors, typed_tensor_reshape};
 
 use super::error::{MPOError, Result};
 use super::factorize::SVDScalar;
@@ -50,10 +50,7 @@ fn validate_environment_site(len: usize, site: usize) -> Result<()> {
 /// dimensions disagree, or [`MPOError::InvalidOperation`] when the einsum
 /// contraction or reshape fails.
 ///
-pub fn contract_site_tensors<T: SVDScalar + EinsumScalar>(
-    a: &Tensor4<T>,
-    b: &Tensor4<T>,
-) -> Result<Tensor4<T>>
+pub fn contract_site_tensors<T: SVDScalar>(a: &Tensor4<T>, b: &Tensor4<T>) -> Result<Tensor4<T>>
 where
     <T as num_complex::ComplexFloat>::Real: Into<f64>,
 {
@@ -111,7 +108,7 @@ where
 /// another error when the environment construction fails (a shared-dimension
 /// mismatch or a backend failure).
 ///
-pub fn left_environment<T: SVDScalar + EinsumScalar>(
+pub fn left_environment<T: SVDScalar>(
     mpo_a: &MPO<T>,
     mpo_b: &MPO<T>,
     site: usize,
@@ -194,7 +191,7 @@ where
 /// another error when the environment construction fails (a shared-dimension
 /// mismatch or a backend failure).
 ///
-pub fn right_environment<T: SVDScalar + EinsumScalar>(
+pub fn right_environment<T: SVDScalar>(
     mpo_a: &MPO<T>,
     mpo_b: &MPO<T>,
     site: usize,

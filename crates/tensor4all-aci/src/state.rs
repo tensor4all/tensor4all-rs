@@ -10,8 +10,7 @@ use tensor4all_core::{
     matrix_luci_factors_from_matrix_owned_in, RrLUOptions,
 };
 use tensor4all_simplett::{
-    tensor3_from_data, AbstractTensorTrain, EinsumScalar, SimpleTensorTrain, TTCache, Tensor3,
-    Tensor3Ops,
+    tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain, TTCache, Tensor3, Tensor3Ops,
 };
 use tensor4all_tensorbackend::{batched_mat_mul_same_shape_owned, mat_mul, mat_mul_owned, Matrix};
 
@@ -74,10 +73,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         inputs: Vec<SimpleTensorTrain<T>>,
         options: AciOptions<T>,
         context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
-    ) -> Result<Self>
-    where
-        T: EinsumScalar,
-    {
+    ) -> Result<Self> {
         let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(options.rng_seed);
         Self::new_with_rng(inputs, options, &mut rng, context)
     }
@@ -91,10 +87,7 @@ impl<T: AciScalar> ElementwiseProblem<T> {
         options: AciOptions<T>,
         rng: &mut dyn rand::RngCore,
         context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
-    ) -> Result<Self>
-    where
-        T: EinsumScalar,
-    {
+    ) -> Result<Self> {
         let solution = initial_guess_with_rng(&inputs, &options, rng)?;
         let n = solution.len();
         let n_inputs = inputs.len();

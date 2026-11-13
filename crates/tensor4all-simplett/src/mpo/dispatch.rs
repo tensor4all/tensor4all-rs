@@ -19,7 +19,6 @@ use super::contraction::ContractionOptions;
 use super::error::Result;
 use super::factorize::SVDScalar;
 use super::mpo::MPO;
-use crate::einsum_helper::EinsumScalar;
 
 /// Unified contraction function with algorithm dispatch
 ///
@@ -61,7 +60,7 @@ use crate::einsum_helper::EinsumScalar;
 /// let result = contract(&mpo_a, &mpo_b, ContractionAlgorithm::ZipUp, &options).unwrap();
 /// assert_eq!(result.len(), 2);
 /// ```
-pub fn contract<T: SVDScalar + EinsumScalar>(
+pub fn contract<T: SVDScalar>(
     mpo_a: &MPO<T>,
     mpo_b: &MPO<T>,
     algorithm: ContractionAlgorithm,
