@@ -759,8 +759,10 @@ remaining part of `A x` on the unswept side, as a map from the joint bond
    complex data), plus the diagonal rounding of `t - g_ii`.
 5. *Bound.* `sqrt(sum_k e_k^2)`. The per-step budget share is
    `budget / sqrt(N - 1)`, and a step that spends less leaves the rest to
-   later steps. The closing step canonicalizes exactly by QR and truncates
-   nothing, so nothing outside the certificate is discarded.
+   later steps. The bound covers the sweep steps only. **The closing step is
+   the one place where nothing may be discarded:** it canonicalizes exactly
+   by QR and truncates nothing. A truncation added there would remove weight
+   that no `e_k` charges, and the reported bound would no longer hold.
 
 **What the certificate covers.** The norms and `lambda_max` of the *computed*
 `L_k` and `D_k`. The roundoff made while contracting and factorizing `L_k`
@@ -807,11 +809,19 @@ and `C_k` is backend roundoff, which the report already excludes.
   reporting the measured peak, the per-step bounds and the total bound. Its
   sampled DFT error must be inside the reported bound.
 
-**Open for review.**
+**Open for review.** These are public API, so the maintainer decides them
+with this record.
 1. The API names and placement above.
 2. Opt-in or automatic: whether the front end should choose the certified
    application itself when the exact one would exceed its limits.
 3. The default share of the global allowance given to the application.
+
+Reviewer recommendation on #1296, explicitly not a decision:
+- keep the certified path an **explicit opt-in**, because the reported error
+  changes meaning and that should be visible at the call site;
+- make the application's share of the allowance a **required argument**, not
+  a hidden default;
+- keep the proposed names.
 
 ## Fourier front end and operator node names
 
