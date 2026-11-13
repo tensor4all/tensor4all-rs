@@ -876,9 +876,9 @@ impl ScheduleGeometry {
     fn input_projector(&self, key: &InputKey) -> Result<Projector> {
         let mut projector = Projector::new();
         for (axis, (depth, value)) in self.axes.iter().zip(key) {
-            for position in 0..*depth {
+            for (position, site) in axis.inputs[..*depth].iter().enumerate() {
                 let bit = (value >> (depth - 1 - position)) & 1;
-                projector.insert(axis.inputs[position].clone(), bit)?;
+                projector.insert(site.clone(), bit)?;
             }
         }
         Ok(projector)
@@ -888,9 +888,9 @@ impl ScheduleGeometry {
     fn output_projector(&self, key: &OutputKey) -> Result<Projector> {
         let mut projector = Projector::new();
         for (axis, (depth, value)) in self.axes.iter().zip(key) {
-            for position in 0..*depth {
+            for (position, site) in axis.outputs[..*depth].iter().enumerate() {
                 let bit = (value >> (depth - 1 - position)) & 1;
-                projector.insert(axis.outputs[position].clone(), bit)?;
+                projector.insert(site.clone(), bit)?;
             }
         }
         Ok(projector)

@@ -1057,15 +1057,13 @@ impl<T: TreeAciScalar> InputFrameStore<T> {
                         context: "new directed frame elements",
                     })?;
                 let mut data = Vec::with_capacity(new_elements);
-                for sample in known_samples[edge]..sample_count {
+                for slot in &mut builder.memo[edge][known_samples[edge]..sample_count] {
                     // Only newly interned rows are materialized here. Old rows
                     // remain in `previous` and are addressed through the
                     // persistent prefix rather than copied into this vector.
-                    let values = std::mem::take(&mut builder.memo[edge][sample]).ok_or(
-                        TreeAciError::InternalInvariant {
-                            message: "new directed frame memoization left a sample uncomputed",
-                        },
-                    )?;
+                    let values = std::mem::take(slot).ok_or(TreeAciError::InternalInvariant {
+                        message: "new directed frame memoization left a sample uncomputed",
+                    })?;
                     if values.len() != bond_dim {
                         return Err(TreeAciError::InternalInvariant {
                             message: "computed frame length differs from cut bond dimension",
