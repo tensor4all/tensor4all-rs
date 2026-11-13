@@ -24,8 +24,9 @@ use super::sampling::{
 };
 use super::verify;
 use super::{
-    active_pivots, added_pivots, complete_points, patched_interpolate, residual, Exclusive,
-    L2Estimator, MeasurementMethod, PatchStatus, PatchedInterpolationOptions, VerificationOptions,
+    active_pivots, added_pivots, complete_points, patched_interpolate, residual,
+    search_max_magnitude_in_batches, Exclusive, L2Estimator, MeasurementMethod, PatchStatus,
+    PatchedInterpolationOptions, VerificationOptions,
 };
 use crate::{
     ErrorNorm, ErrorTolerance, L2Reference, PartitionedTreeTN, PartitionedTreeTNError, Projector,
@@ -727,6 +728,49 @@ fn batch_values(
 ) -> anyhow::Result<Vec<f64>> {
     let shape = [2, data.len() / 2];
     sampler.sample(ColMajorArrayRef::new(data, &shape)?, ctx)
+}
+
+/// The coordinate ascent of the max-reference search, with at most
+/// `batch_points` points per sampler batch: its result, the sizes of the
+/// batches that reached the evaluator, and the evaluation count.
+fn search_in_batches(batch_points: usize) -> ((f64, Vec<usize>, usize), Vec<usize>, usize) {
+    // |f| on the active coordinates (a, b) of the sampler's patch [a, 1, b]:
+    // a global max 5 at (0, 2) and a local max 4 at (1, 1).
+    const TABLE: [[f64; 3]; 2] = [[3.0, 1.0, 5.0], [2.0, 4.0, 0.0]];
+    let sizes = std::rc::Rc::new(RefCell::new(Vec::new()));
+    let log = sizes.clone();
+    let evaluate: BoxedEvaluator = Box::new(move |batch, _ctx| {
+        log.borrow_mut().push(batch.shape()[1]);
+        Ok(batch
+            .data()
+            .chunks(3)
+            .map(|point| -TABLE[point[0]][point[2]])
+            .collect())
+    });
+    let starts = [1, 0, 1, 1, 0, 2];
+    let values = [-2.0, -4.0, -5.0];
+    let (result, evaluations, _) = with_sampler(evaluate, |sampler, ctx| {
+        search_max_magnitude_in_batches(sampler, &starts, &values, &[2, 3], batch_points, ctx)
+            .unwrap()
+    });
+    let sizes = sizes.borrow().clone();
+    (result, sizes, evaluations)
+}
+
+#[test]
+fn max_reference_search_splits_large_site_scans_without_changing_the_result() {
+    let (whole, whole_sizes, whole_evaluations) = search_in_batches(usize::MAX);
+    let (split, split_sizes, split_evaluations) = search_in_batches(4);
+    // From (1, 0) the ascent climbs to the global max through (0, 0); the
+    // start at the local max (1, 1) stays there.
+    assert_eq!(whole, (5.0, vec![0, 2], 2));
+    assert_eq!(split, whole);
+    assert_eq!(split_evaluations, whole_evaluations);
+    // Unsplit, the first site scan sends all six points of the patch at once;
+    // split, no batch exceeds the limit of four points.
+    assert_eq!(whole_sizes.iter().max(), Some(&6));
+    assert!(split_sizes.iter().all(|&size| size <= 4), "{split_sizes:?}");
+    assert!(split_sizes.len() > whole_sizes.len());
 }
 
 #[test]

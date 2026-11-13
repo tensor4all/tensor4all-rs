@@ -37,6 +37,7 @@ fn sampled_max() -> NormReport {
         max_reference: 2.0,
         source: MaxReferenceSource::Given,
         engine_tolerance: 1e-3,
+        search: None,
     }
 }
 

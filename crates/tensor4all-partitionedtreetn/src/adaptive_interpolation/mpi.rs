@@ -66,8 +66,8 @@ use super::engine::{BlackBox, PatchEngine};
 use super::layout::SiteLayout;
 use super::options::PatchedInterpolationOptions;
 use super::report::{
-    L2Measurement, L2ReferenceSource, MaxReferenceSource, MeasurementMethod, PatchRecord,
-    PatchStatus, PatchedInterpolationResult, ZeroPatchRecord,
+    L2Measurement, L2ReferenceSource, MaxReferenceSearch, MaxReferenceSource, MeasurementMethod,
+    PatchRecord, PatchStatus, PatchedInterpolationResult, ZeroPatchRecord,
 };
 use super::{
     assemble, run_waves, Accepted, L2Pin, Patch, PatchRun, PatchedInterpolationError, Pins, Plan,
@@ -211,7 +211,7 @@ enum WireL2Source {
 enum WireMaxSource {
     Given,
     ExactRoot,
-    MaxOfRootCandidates,
+    SearchedRootMaximum,
 }
 
 /// The pinned L2 reference and allowance.
@@ -223,10 +223,22 @@ struct WireL2Pin {
 }
 
 /// The reference norms a run pinned.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct WireReferences {
     l2: Option<WireL2Pin>,
     max_reference: Option<(f64, WireMaxSource)>,
+    max_search: Option<WireMaxSearch>,
+}
+
+/// The root search behind a searched max reference.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct WireMaxSearch {
+    starts: Vec<Vec<usize>>,
+    maximizer: Vec<usize>,
+    sweeps: usize,
+    evaluations: usize,
+    cache_hits: usize,
+    seconds: f64,
 }
 
 /// One accepted patch.
@@ -421,7 +433,7 @@ fn encode_max_source(source: MaxReferenceSource) -> WireMaxSource {
     match source {
         MaxReferenceSource::Given => WireMaxSource::Given,
         MaxReferenceSource::ExactRoot => WireMaxSource::ExactRoot,
-        MaxReferenceSource::MaxOfRootCandidates => WireMaxSource::MaxOfRootCandidates,
+        MaxReferenceSource::SearchedRootMaximum => WireMaxSource::SearchedRootMaximum,
     }
 }
 
@@ -429,7 +441,7 @@ fn decode_max_source(source: WireMaxSource) -> MaxReferenceSource {
     match source {
         WireMaxSource::Given => MaxReferenceSource::Given,
         WireMaxSource::ExactRoot => MaxReferenceSource::ExactRoot,
-        WireMaxSource::MaxOfRootCandidates => MaxReferenceSource::MaxOfRootCandidates,
+        WireMaxSource::SearchedRootMaximum => MaxReferenceSource::SearchedRootMaximum,
     }
 }
 
@@ -473,6 +485,14 @@ fn encode_references(references: References) -> WireReferences {
         max_reference: references
             .max_reference
             .map(|(value, source)| (value, encode_max_source(source))),
+        max_search: references.max_search.map(|search| WireMaxSearch {
+            starts: search.starts,
+            maximizer: search.maximizer,
+            sweeps: search.sweeps,
+            evaluations: search.evaluations,
+            cache_hits: search.cache_hits,
+            seconds: search.seconds,
+        }),
     }
 }
 
@@ -488,6 +508,17 @@ fn decode_references(references: &WireReferences) -> References {
     if let Some((value, source)) = references.max_reference {
         decoded.max_reference = Some((value, decode_max_source(source)));
     }
+    decoded.max_search = references
+        .max_search
+        .as_ref()
+        .map(|search| MaxReferenceSearch {
+            starts: search.starts.clone(),
+            maximizer: search.maximizer.clone(),
+            sweeps: search.sweeps,
+            evaluations: search.evaluations,
+            cache_hits: search.cache_hits,
+            seconds: search.seconds,
+        });
     decoded
 }
 

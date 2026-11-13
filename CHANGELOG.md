@@ -4,6 +4,14 @@
 
 ### Behavior changes
 
+- `tensor4all-partitionedtreetn`: `ErrorNorm::sampled_max()` pins its
+  reference to the largest `|f|` that a greedy coordinate ascent reaches from
+  the root patch's candidate samples (#1274), as `optfirstpivot` does in
+  TensorCrossInterpolation.jl. It used to take the largest candidate sample,
+  which for a peaked function was up to 2711 times too small. This changes
+  the tolerance of `sampled_max()` runs.
+  - A root whose candidate samples are all zero still fails as before.
+  - `sampled_max_with_reference` is unchanged.
 - `PivotSearchStrategy::Rook` is now documented and implemented as a heuristic
   strategy (#1271, #1282). A bond update stops when the current rook pivot is
   below tolerance, and the trailing `pivot_errors` entry (and so the TCI2 bond
@@ -23,6 +31,8 @@
   not produce MatrixLUCI factors; the supported scalar types stay `f32`, `f64`,
   `Complex32`, and `Complex64`. Generic `T: MatrixLuciScalar` code is
   unaffected.
+- `tensor4all-partitionedtreetn`: `MaxReferenceSource::MaxOfRootCandidates`
+  is replaced by `MaxReferenceSource::SearchedRootMaximum` (#1274).
 - `tensor4all-simplett` removes the `EinsumScalar` marker (#1283). Use
   `TTScalar` in generic tensor-train code. The supported scalar types remain
   `f32`, `f64`, `Complex32`, and `Complex64`.

@@ -43,6 +43,15 @@
 //! evaluations, terminations, bond dimensions, and every nonzero float are
 //! unchanged; 40 stored zeros changed sign (`-0.0` to `0.0`).
 //!
+//! `dense_exact_one_site_patches` was re-recorded when the `SampledMax`
+//! reference became a searched maximum (#1274). From its single root
+//! candidate, `f(1, 0) = 1`, the coordinate ascent reaches `f(1, 7) = 8`, so
+//! `reference_scale` is 8 instead of 1, and `cache_hits` is 48 instead of 26,
+//! because the search revisits cached points. Its splits, evaluations, patches
+//! and every stored float are unchanged. The other scenarios were kept as
+//! recorded: they give their reference, or their candidates already hold the
+//! maximum.
+//!
 //! `treetci_quantics_tree_recycled` was re-recorded again when TreeTCI began
 //! enriching the initial pivots around vertices of local dimension 1 (#1153;
 //! the junction `r` carries no site): 8188 cache hits became 8314, from

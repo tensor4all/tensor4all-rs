@@ -16,7 +16,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, Index, IndexLike, TagSet};
 use tensor4all_partitionedtreetn::adaptive_interpolation::{
-    PatchedInterpolationError, PatchedInterpolationResult,
+    MaxReferenceSource, NormReport, PatchedInterpolationError, PatchedInterpolationResult,
 };
 use tensor4all_partitionedtreetn::{ErrorNorm, Projector};
 use tensor4all_treetn::interpolation::{
@@ -350,8 +350,10 @@ fn one_site_patches_below_the_root_are_evaluated_exactly() {
     let engine = DenseEngine::new();
     let result = run(&engine, &problem, &f, &[vec![1, 0]], &options).unwrap();
     let report = &result.report;
-    // The scale is pinned from the single root candidate, f(1, 0) = 1.
-    assert_eq!(max_reference(report), 1.0);
+    // The scale is searched from the single root candidate f(1, 0) = 1 by
+    // coordinate ascent (#1274): scanning t reaches f(1, 7) = 8, which is
+    // max |f|; no coordinate of s improves on it.
+    assert_eq!(max_reference(report), 8.0);
     assert_eq!(report.splits, 1);
     assert_eq!(engine.seen().len(), 1);
     assert_eq!(
@@ -369,6 +371,84 @@ fn one_site_patches_below_the_root_are_evaluated_exactly() {
     assert_eq!(report.function_evaluations, 24);
     let (residual, _) = dense_residual(&result, &problem, &f);
     assert_eq!(residual, 0.0);
+}
+
+/// `f` is a separable peak of `4^3 = 64` at `peak`, and 1 elsewhere on each axis.
+fn separable_peak(peak: [usize; 3]) -> impl Fn(&[usize]) -> f64 {
+    move |p: &[usize]| {
+        (0..3)
+            .map(|axis| if p[axis] == peak[axis] { 4.0 } else { 1.0 })
+            .product()
+    }
+}
+
+#[test]
+fn sampled_max_searches_the_root_reference_by_coordinate_ascent() {
+    // The only root candidate, (0, 0, 0), has f = 1; max |f| = 64 lies at
+    // (3, 1, 2). Coordinate ascent from the candidate reaches it in one sweep
+    // (#1274), where the pinned candidate maximum would have been 1.
+    let problem = Problem::new(
+        &[("a", &[4]), ("b", &[4]), ("c", &[4])],
+        &[("a", "b"), ("b", "c")],
+    );
+    let f = separable_peak([3, 1, 2]);
+    let options = sampled_max(4).with_n_initial_pivots(1);
+    let result = run(
+        &DenseEngine::new(),
+        &problem,
+        &f,
+        &[vec![0, 0, 0]],
+        &options,
+    )
+    .unwrap();
+    match result.report.norm {
+        NormReport::SampledMax {
+            max_reference,
+            source,
+            ref search,
+            ..
+        } => {
+            assert_eq!(max_reference, 64.0);
+            assert_eq!(source, MaxReferenceSource::SearchedRootMaximum);
+            let search = search
+                .as_ref()
+                .expect("a searched reference reports its search");
+            assert_eq!(search.starts, [vec![0, 0, 0]]);
+            assert_eq!(search.maximizer, [3, 1, 2]);
+            // One sweep moves every site to its peak; the second moves nothing.
+            assert_eq!(search.sweeps, 2);
+            // Each sweep scans 3 sites x 4 coordinates for the one start, and
+            // every scanned point is either evaluated or found in the cache.
+            assert_eq!(search.evaluations + search.cache_hits, 2 * 3 * 4);
+            assert!(search.evaluations > 0);
+            assert!(search.seconds >= 0.0);
+        }
+        ref other => panic!("expected a SampledMax report, got {other:?}"),
+    }
+    // The function is rank one, so the patch is exact.
+    let (residual, _) = dense_residual(&result, &problem, &f);
+    assert!(residual <= 1e-12, "residual {residual:e}");
+}
+
+#[test]
+fn the_searched_reference_is_never_below_the_candidate_maximum() {
+    // Starting at the peak, the ascent has nothing to improve: the reference
+    // is the candidate's own value.
+    let problem = Problem::new(
+        &[("a", &[4]), ("b", &[4]), ("c", &[4])],
+        &[("a", "b"), ("b", "c")],
+    );
+    let f = separable_peak([3, 1, 2]);
+    let options = sampled_max(4).with_n_initial_pivots(1);
+    let result = run(
+        &DenseEngine::new(),
+        &problem,
+        &f,
+        &[vec![3, 1, 2]],
+        &options,
+    )
+    .unwrap();
+    assert_eq!(max_reference(&result.report), 64.0);
 }
 
 #[test]

@@ -55,10 +55,11 @@ pub enum ErrorNorm {
     /// bound nor a measured error.
     #[non_exhaustive]
     SampledMax {
-        /// A known `max |f|`, finite and positive. `None` pins it to the
-        /// largest magnitude among the root patch's candidate samples (or its
-        /// exact values when the root has at most one site), a sampled lower
-        /// bound on `max |f|`.
+        /// A known `max |f|`, finite and positive. `None` pins it at the root
+        /// patch to the largest magnitude a greedy coordinate ascent reaches
+        /// from the root's candidate samples (or to its exact values when the
+        /// root has at most one site), a searched lower bound on `max |f|`
+        /// ([`MaxReferenceSource::SearchedRootMaximum`](crate::adaptive_interpolation::MaxReferenceSource::SearchedRootMaximum)).
         max_reference: Option<f64>,
     },
     /// Placeholder: the maximum norm over the whole domain. For a black-box
@@ -84,8 +85,11 @@ impl ErrorNorm {
         Self::L2 { reference }
     }
 
-    /// The M2 sampled max-norm criterion with the reference pinned from the
-    /// root patch.
+    /// The M2 sampled max-norm criterion with the reference searched at the
+    /// root patch: the largest `|f|` that a greedy coordinate ascent reaches
+    /// from the root's candidate samples (#1274). This is still a lower bound
+    /// of `max |f|`; give [`Self::sampled_max_with_reference`] when the
+    /// maximum is known.
     ///
     /// # Examples
     ///

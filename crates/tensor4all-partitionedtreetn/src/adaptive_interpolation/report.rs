@@ -493,7 +493,7 @@ pub enum L2ReferenceSource {
 /// ```
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::MaxReferenceSource;
 ///
-/// assert_ne!(MaxReferenceSource::Given, MaxReferenceSource::MaxOfRootCandidates);
+/// assert_ne!(MaxReferenceSource::Given, MaxReferenceSource::SearchedRootMaximum);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -502,8 +502,13 @@ pub enum MaxReferenceSource {
     Given,
     /// The largest exact value of a root patch with at most one site.
     ExactRoot,
-    /// The largest magnitude among the root patch's candidate samples.
-    MaxOfRootCandidates,
+    /// The largest magnitude a greedy coordinate ascent reached from the root
+    /// patch's candidate samples (#1274): from every candidate, each active
+    /// site in turn is set to the coordinate of largest `|f|` with the others
+    /// fixed, until a sweep changes nothing. Sites with a local dimension
+    /// above 4096 are not scanned. It is at least the largest candidate
+    /// sample, and a lower bound of `max |f|`.
+    SearchedRootMaximum,
 }
 
 /// The global L2 error `E = ||f - f~||` of a run, by what it can claim.
@@ -1067,7 +1072,46 @@ pub enum NormReport {
         source: MaxReferenceSource,
         /// The engine's absolute tolerance `max(atol, rtol * max_reference)`.
         engine_tolerance: f64,
+        /// The root search that pinned `max_reference`, when
+        /// `source` is [`MaxReferenceSource::SearchedRootMaximum`].
+        search: Option<MaxReferenceSearch>,
     },
+}
+
+/// The coordinate ascent that pinned a
+/// [`MaxReferenceSource::SearchedRootMaximum`] reference (#1274).
+///
+/// Points are in the run's site order, one coordinate per site. The search
+/// runs once, at the root patch, before any engine call; its evaluations are
+/// also part of the run's function evaluations and cache hits, and are
+/// reported here separately.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtreetn::adaptive_interpolation::MaxReferenceSearch;
+///
+/// fn evaluations(search: &MaxReferenceSearch) -> usize {
+///     search.evaluations
+/// }
+/// let _ = evaluations;
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct MaxReferenceSearch {
+    /// The start points: the root patch's candidate samples.
+    pub starts: Vec<Vec<usize>>,
+    /// The point where the largest `|f|` was reached.
+    pub maximizer: Vec<usize>,
+    /// Sweeps run, the last of which moved no start (unless the sweep limit
+    /// was reached).
+    pub sweeps: usize,
+    /// Points the search sent to the function, after the cache.
+    pub evaluations: usize,
+    /// Points the search found in the cache.
+    pub cache_hits: usize,
+    /// Wall time of the search in seconds.
+    pub seconds: f64,
 }
 
 impl NormReport {

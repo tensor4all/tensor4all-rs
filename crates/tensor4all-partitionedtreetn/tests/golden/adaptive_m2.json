@@ -1415,7 +1415,7 @@
             "termination": "Converged"
           }
         ],
-        "cache_hits": 26,
+        "cache_hits": 48,
         "engine_terminations": [],
         "function_evaluations": 24,
         "splits": 1,
@@ -1474,7 +1474,7 @@
           }
         ],
         "engine_calls": [],
-        "reference_scale": 1.0
+        "reference_scale": 8.0
       },
       "name": "dense_exact_one_site_patches"
     },
