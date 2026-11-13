@@ -405,10 +405,23 @@ fn sampled_max_searches_the_root_reference_by_coordinate_ascent() {
         NormReport::SampledMax {
             max_reference,
             source,
+            ref search,
             ..
         } => {
             assert_eq!(max_reference, 64.0);
             assert_eq!(source, MaxReferenceSource::SearchedRootMaximum);
+            let search = search
+                .as_ref()
+                .expect("a searched reference reports its search");
+            assert_eq!(search.starts, [vec![0, 0, 0]]);
+            assert_eq!(search.maximizer, [3, 1, 2]);
+            // One sweep moves every site to its peak; the second moves nothing.
+            assert_eq!(search.sweeps, 2);
+            // Each sweep scans 3 sites x 4 coordinates for the one start, and
+            // every scanned point is either evaluated or found in the cache.
+            assert_eq!(search.evaluations + search.cache_hits, 2 * 3 * 4);
+            assert!(search.evaluations > 0);
+            assert!(search.seconds >= 0.0);
         }
         ref other => panic!("expected a SampledMax report, got {other:?}"),
     }

@@ -265,7 +265,7 @@ where
         // One patch's view of the references: a copy per patch, written back
         // through the outcome, so a wave merge sees the pins of the root wave
         // in canonical order.
-        let mut references = start;
+        let mut references = start.clone();
         let pins = if root_wave {
             Pins::Root(&mut references)
         } else {

@@ -849,20 +849,29 @@ fn report_stats<K, R>(
 }
 
 /// The acceptance reference of a patched run: under `SampledMax` the pinned
-/// `max_reference`, its source and the engine tolerance; under L2 the RMS
-/// allowance `tau`.
+/// `max_reference`, its source, the engine tolerance and the root search that
+/// found it (#1274); under L2 the RMS allowance `tau`.
 fn norm_stats(norm: &NormReport) -> Value {
     match norm {
         NormReport::SampledMax {
             max_reference,
             source,
             engine_tolerance,
+            search,
             ..
         } => json!({
             "kind": "sampled_max",
             "max_reference": max_reference,
             "source": format!("{source:?}"),
             "engine_tolerance": engine_tolerance,
+            "search": search.as_ref().map(|search| json!({
+                "starts": search.starts,
+                "maximizer": search.maximizer,
+                "sweeps": search.sweeps,
+                "evaluations": search.evaluations,
+                "cache_hits": search.cache_hits,
+                "seconds": search.seconds,
+            })),
         }),
         NormReport::L2 { tau, .. } => json!({ "kind": "l2", "tau": tau }),
         other => json!({ "kind": format!("{other:?}") }),

@@ -109,12 +109,21 @@ fn references_cross_the_wire_with_their_provenance() {
             tau: 0.5,
         }),
         max_reference: Some((3.5, MaxReferenceSource::SearchedRootMaximum)),
+        max_search: Some(MaxReferenceSearch {
+            starts: vec![vec![0, 1], vec![2, 0]],
+            maximizer: vec![2, 1],
+            sweeps: 2,
+            evaluations: 7,
+            cache_hits: 3,
+            seconds: 0.25,
+        }),
     };
-    let wire = encode_references(references);
+    let wire = encode_references(references.clone());
     let decoded = decode_references(&wire);
-    assert_eq!(encode_references(decoded), wire);
+    assert_eq!(encode_references(decoded.clone()), wire);
     assert_eq!(decoded.l2.map(|pin| pin.tau), Some(0.5));
     assert_eq!(decoded.l2.map(|pin| pin.reference_rms), Some(Some(0.25)));
+    assert_eq!(decoded.max_search, references.max_search);
 
     let empty = encode_references(References::default());
     assert!(decode_references(&empty).l2.is_none());

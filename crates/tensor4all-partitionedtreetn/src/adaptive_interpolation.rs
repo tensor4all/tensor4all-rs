@@ -414,10 +414,10 @@ pub use merge::{
 pub use mpi::{patched_elementwise_mpi, patched_interpolate_mpi};
 pub use options::{CappedPatches, L2Estimator, PatchedInterpolationOptions, VerificationOptions};
 pub use report::{
-    GlobalL2Error, L2ErrorReport, L2Measurement, L2ReferenceSource, MaxReferenceSource,
-    MeasurementMethod, NormReport, PatchRecord, PatchStatus, PatchedInterpolationReport,
-    PatchedInterpolationResult, ToleranceNotMetBasis, ZeroPatchRecord, GLOBAL_ROUNDING_MARGIN,
-    MEASUREMENT_ROUNDING_FACTOR,
+    GlobalL2Error, L2ErrorReport, L2Measurement, L2ReferenceSource, MaxReferenceSearch,
+    MaxReferenceSource, MeasurementMethod, NormReport, PatchRecord, PatchStatus,
+    PatchedInterpolationReport, PatchedInterpolationResult, ToleranceNotMetBasis, ZeroPatchRecord,
+    GLOBAL_ROUNDING_MARGIN, MEASUREMENT_ROUNDING_FACTOR,
 };
 
 /// Error returned by [`patched_interpolate`].
@@ -883,12 +883,14 @@ struct L2Pin {
 /// while wave 0 runs and complete afterwards; every later wave reads them. The
 /// order of the wave merge is what makes the pinned values a function of the
 /// problem, not of the schedule.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct References {
     /// Under L2: the pinned reference and allowance.
     l2: Option<L2Pin>,
     /// Under `SampledMax`: the given reference, or the one pinned from the root.
     max_reference: Option<(f64, MaxReferenceSource)>,
+    /// The root search behind a searched `max_reference`.
+    max_search: Option<MaxReferenceSearch>,
 }
 
 impl References {
@@ -906,6 +908,9 @@ impl References {
                 )));
             }
             _ => {}
+        }
+        if self.max_search.is_none() {
+            self.max_search = other.max_search;
         }
         match (self.max_reference, other.max_reference) {
             (None, Some(reference)) => self.max_reference = Some(reference),
@@ -969,6 +974,15 @@ impl Pins<'_> {
     }
 
     /// Pin the max reference unless one is pinned already.
+    /// Record the root search behind a searched reference; only the root pins.
+    fn pin_max_search(&mut self, search: MaxReferenceSearch) {
+        if let Self::Root(references) = self {
+            if references.max_search.is_none() {
+                references.max_search = Some(search);
+            }
+        }
+    }
+
     fn pin_max_reference(
         &mut self,
         reference: (f64, MaxReferenceSource),
@@ -994,8 +1008,8 @@ impl Pins<'_> {
     /// The references as this patch sees them, for a wave merge.
     fn snapshot(&self) -> References {
         match self {
-            Self::Root(references) => **references,
-            Self::Later(references) => **references,
+            Self::Root(references) => (**references).clone(),
+            Self::Later(references) => (**references).clone(),
         }
     }
 }
@@ -1012,8 +1026,8 @@ impl<'a> WavePins<'a> {
     /// The references the wave starts from.
     fn start(&self) -> References {
         match self {
-            Self::Root(references) => **references,
-            Self::Later(references) => **references,
+            Self::Root(references) => (**references).clone(),
+            Self::Later(references) => (**references).clone(),
         }
     }
 
@@ -1204,14 +1218,15 @@ const MAX_REFERENCE_SCAN_DIM: usize = 4096;
 /// [`MAX_REFERENCE_SCAN_DIM`] are not scanned. The ascent stops when a sweep
 /// moves nothing, or after [`MAX_REFERENCE_SWEEPS`]. Every value goes through `sampler`, so it is
 /// cached and counted like any other evaluation. Returns the largest `|f|`
-/// reached, which is at least the largest start value.
+/// reached, which is at least the largest start value, the point reaching it
+/// (in active coordinates), and the number of sweeps run.
 fn search_max_magnitude<T: CommonScalar + TensorElement>(
     sampler: &cache::PatchSampler<'_, T>,
     starts: &[usize],
     values: &[T],
     active_dims: &[usize],
     ctx: &mut EvalContext<'_>,
-) -> anyhow::Result<f64> {
+) -> anyhow::Result<(f64, Vec<usize>, usize)> {
     let n_active = active_dims.len();
     let mut points: Vec<Vec<usize>> = starts.chunks(n_active).map(<[usize]>::to_vec).collect();
     let mut best: Vec<f64> = values.iter().map(|value| value.abs_val()).collect();
@@ -1221,10 +1236,27 @@ fn search_max_magnitude<T: CommonScalar + TensorElement>(
         points.len(),
         best.len()
     );
+    let result = |points: &[Vec<usize>], best: &[f64], sweeps: usize| {
+        let (index, value) =
+            best.iter()
+                .copied()
+                .enumerate()
+                .fold(
+                    (0, 0.0),
+                    |acc, (index, value)| if value > acc.1 { (index, value) } else { acc },
+                );
+        (
+            value,
+            points.get(index).cloned().unwrap_or_default(),
+            sweeps,
+        )
+    };
     if n_active == 0 || points.is_empty() {
-        return Ok(best.iter().copied().fold(0.0, f64::max));
+        return Ok(result(&points, &best, 0));
     }
+    let mut sweeps = 0;
     for _ in 0..MAX_REFERENCE_SWEEPS {
+        sweeps += 1;
         let mut moved = false;
         for (site, &dim) in active_dims.iter().enumerate() {
             if dim > MAX_REFERENCE_SCAN_DIM {
@@ -1256,7 +1288,7 @@ fn search_max_magnitude<T: CommonScalar + TensorElement>(
             break;
         }
     }
-    Ok(best.iter().copied().fold(0.0, f64::max))
+    Ok(result(&points, &best, sweeps))
 }
 
 fn max_magnitude<T: CommonScalar>(values: &[T]) -> f64 {
@@ -1885,7 +1917,10 @@ where
                     // The largest candidate sample can be orders of magnitude
                     // below max |f| for a peaked function (#1274), so ascend
                     // from every candidate before pinning the reference.
-                    let searched = search_max_magnitude(
+                    let started = std::time::Instant::now();
+                    let evaluations = tally.counters.evaluations.get();
+                    let cache_hits = tally.counters.cache_hits.get();
+                    let (searched, maximizer, sweeps) = search_max_magnitude(
                         &sampler,
                         &candidates.points,
                         &samples,
@@ -1893,7 +1928,21 @@ where
                         ctx,
                     )
                     .map_err(|source| evaluator_error(projector, source))?;
+                    let complete = |point: &[usize]| complete_points(&[point.to_vec()], &fixed);
+                    let search = MaxReferenceSearch {
+                        starts: candidates
+                            .points
+                            .chunks(active.len())
+                            .flat_map(complete)
+                            .collect(),
+                        maximizer: complete(&maximizer).into_iter().next().unwrap_or_default(),
+                        sweeps,
+                        evaluations: tally.counters.evaluations.get() - evaluations,
+                        cache_hits: tally.counters.cache_hits.get() - cache_hits,
+                        seconds: started.elapsed().as_secs_f64(),
+                    };
                     pins.pin_max_reference((searched, MaxReferenceSource::SearchedRootMaximum))?;
+                    pins.pin_max_search(search);
                     searched
                 }
             };
@@ -2344,6 +2393,7 @@ where
                 max_reference,
                 source,
                 engine_tolerance: self.options.tolerance.allowance(max_reference),
+                search: references.max_search.clone(),
             });
         }
         let pin = references
