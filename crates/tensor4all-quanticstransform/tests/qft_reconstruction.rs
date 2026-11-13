@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, IdxTensor};
+use tensor4all_core::{AnyScalar, DynIndex, IdxTensor};
 use tensor4all_partitionedtreetn::{
     reconstruction::*, PartitionedTreeTN, PartitionedTreeTNError, Projector, SubDomainTreeTN,
     TreeTN,
@@ -563,10 +563,11 @@ fn subset_operator_scale_is_not_measured_under_destructive_interference() {
         norm_of(&applied)
     );
 
-    // Separate-term retention: preparation stores the two images independently,
-    // so reconstruction at zero tolerance keeps both. This observes the retained
-    // representation only; it cannot see a temporary network built and discarded
-    // during preparation.
+    // Preparation stores the two images independently. Whether their roundoff
+    // residual cancels exactly depends on the platform's SVD: on Linux the
+    // zip-up images merge into the zero function and no term or region stays,
+    // while on macOS (Accelerate) both terms stay (#1279). Either way nothing
+    // is charged and the output is the zero function to roundoff.
     let output = reconstruct(
         &target,
         &0,
@@ -580,9 +581,26 @@ fn subset_operator_scale_is_not_measured_under_destructive_interference() {
         },
     )
     .expect("reconstruction");
-    assert_eq!(output.report().term_count, 2);
-    assert_eq!(output.report().region_count, 1);
-    assert_eq!(output.report().reference_scale, target.reference_scale());
+    let report = output.report();
+    assert_eq!(report.error_bound, 0.0);
+    assert_eq!(report.reference_scale, target.reference_scale());
+    assert!(report.term_count <= 2, "term count {}", report.term_count);
+    let mut sum = tree.scale(AnyScalar::new_real(0.0)).expect("zero");
+    for (_, terms) in output.regions() {
+        for term in terms {
+            sum = sum.add(term.data()).expect("sum");
+        }
+    }
+    let dense = sum
+        .to_dense()
+        .expect("dense")
+        .to_vec::<Complex64>()
+        .expect("vector");
+    assert!(
+        norm_of(&dense) <= 1e-12 * report.reference_scale,
+        "output norm {}",
+        norm_of(&dense)
+    );
 }
 
 #[test]

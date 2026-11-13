@@ -2171,3 +2171,4 @@ fn test_every_entry_rejects_zero_initial_max_bond_dim() {
     let err = contract_src_with_rng_in(&a, &b, &center, src(), &mut rng, &context).unwrap_err();
     assert!(format!("{err:#}").contains("initial_max_bond_dim"));
 }
+mod exact_qr;
