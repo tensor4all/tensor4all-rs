@@ -194,7 +194,7 @@ aliases:
 | Capability | Purpose |
 |------------|---------|
 | `tensor4all_core::Scalar` | common value arithmetic and conversion |
-| `tensor4all_core::MatrixLuciScalar` | core `Scalar` plus MatrixLUCI backend dispatch |
+| `tensor4all_core::MatrixLuciScalar` | core `Scalar` plus MatrixLUCI backend dispatch; sealed to the four supported scalars |
 | `tensor4all_tensorbackend::TensorElement` | supported Rust scalar ↔ native tensor conversion |
 | `tensor4all_tensorbackend::StorageScalar` | compact storage construction |
 | tensorbackend matrix/linalg traits | individual backend kernel capabilities |
