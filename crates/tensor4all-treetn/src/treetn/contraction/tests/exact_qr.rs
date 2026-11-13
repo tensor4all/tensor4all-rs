@@ -152,12 +152,9 @@ fn host(tensor: &IdxTensor) -> IdxTensor {
     IdxTensor::from_storage(tensor.indices().to_vec(), tensor.to_storage().unwrap()).unwrap()
 }
 
-/// `chain` selects the chain schedule, which also records the edge
-/// orientations; the general-tree schedule sets only the canonical region.
 fn check<T: TensorElement>(
     edges: &[(usize, usize)],
     centers: &[usize],
-    chain: bool,
     entry: fn(&mut ChaCha8Rng) -> T,
 ) {
     let context = context();
@@ -222,9 +219,8 @@ fn check<T: TensorElement>(
 
             // Every tensor but the center is an isometry towards it, so the
             // center carries the whole norm.
-            if chain {
-                exact.validate_ortho_consistency().unwrap();
-            }
+            exact.validate_ortho_consistency().unwrap();
+            svd.validate_ortho_consistency().unwrap();
             assert_eq!(exact.canonical_region(), &std::iter::once(center).collect());
             let center_tensor = host(exact.tensor(exact.node_index(&center).unwrap()).unwrap());
             let center_norm = center_tensor.norm().unwrap();
@@ -243,20 +239,20 @@ const BRANCHED: [(usize, usize); 5] = [(0, 1), (1, 2), (1, 3), (3, 4), (3, 5)];
 
 #[test]
 fn exact_chain_zipup_factorizes_by_qr_and_matches_untruncated_svd_real() {
-    check(&CHAIN, &[5, 0, 2], true, real);
+    check(&CHAIN, &[5, 0, 2], real);
 }
 
 #[test]
 fn exact_chain_zipup_factorizes_by_qr_and_matches_untruncated_svd_complex() {
-    check(&CHAIN, &[5, 0, 2], true, complex);
+    check(&CHAIN, &[5, 0, 2], complex);
 }
 
 #[test]
 fn exact_tree_zipup_factorizes_by_qr_and_matches_untruncated_svd_real() {
-    check(&BRANCHED, &[1, 3, 5], false, real);
+    check(&BRANCHED, &[1, 3, 5], real);
 }
 
 #[test]
 fn exact_tree_zipup_factorizes_by_qr_and_matches_untruncated_svd_complex() {
-    check(&BRANCHED, &[1, 3, 5], false, complex);
+    check(&BRANCHED, &[1, 3, 5], complex);
 }
