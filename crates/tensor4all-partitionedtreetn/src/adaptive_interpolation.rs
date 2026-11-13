@@ -108,8 +108,10 @@
 //!   limit.
 //! - [`ErrorNorm::SampledMax`]: the M2 criterion, the engine's sampled error
 //!   estimate against `max(atol, rtol * max_reference)`, with `max_reference`
-//!   a function value. No measurement runs; it is neither a certified bound
-//!   nor a measured error, and makes no L2 claim.
+//!   a function value. Unless given, it is pinned at the root as the largest
+//!   `|f|` a greedy coordinate ascent reaches from the root's candidate
+//!   samples. No measurement runs; it is neither a certified bound nor a
+//!   measured error, and makes no L2 claim.
 //! - [`ErrorNorm::MaxAbs`] and [`ErrorNorm::WeightedL2`] are placeholders that
 //!   fail with [`PatchedInterpolationError::UnsupportedNorm`] before any
 //!   evaluation.
@@ -1184,6 +1186,79 @@ fn merged_points<'a>(points: impl Iterator<Item = &'a Vec<usize>>) -> Vec<Vec<us
         .collect()
 }
 
+/// Sweeps of [`search_max_magnitude`] before it stops without converging.
+const MAX_REFERENCE_SWEEPS: usize = 64;
+
+/// Largest local dimension [`search_max_magnitude`] scans; a larger site keeps
+/// its coordinate, so the result stays a lower bound of `max |f|`.
+const MAX_REFERENCE_SCAN_DIM: usize = 4096;
+
+/// Greedy coordinate ascent of `|f|` from every start, as `optfirstpivot` of
+/// TensorCrossInterpolation.jl (#1274).
+///
+/// `starts` holds the start points column-major, `active_dims.len()`
+/// coordinates each, and `values` their sampled values. Each sweep visits the
+/// active sites in order; at a site it samples every coordinate value of that
+/// site for all starts in one batch and moves a start only on a strict
+/// increase of `|f|`. Sites with a local dimension above
+/// [`MAX_REFERENCE_SCAN_DIM`] are not scanned. The ascent stops when a sweep
+/// moves nothing, or after [`MAX_REFERENCE_SWEEPS`]. Every value goes through `sampler`, so it is
+/// cached and counted like any other evaluation. Returns the largest `|f|`
+/// reached, which is at least the largest start value.
+fn search_max_magnitude<T: CommonScalar + TensorElement>(
+    sampler: &cache::PatchSampler<'_, T>,
+    starts: &[usize],
+    values: &[T],
+    active_dims: &[usize],
+    ctx: &mut EvalContext<'_>,
+) -> anyhow::Result<f64> {
+    let n_active = active_dims.len();
+    let mut points: Vec<Vec<usize>> = starts.chunks(n_active).map(<[usize]>::to_vec).collect();
+    let mut best: Vec<f64> = values.iter().map(|value| value.abs_val()).collect();
+    anyhow::ensure!(
+        points.len() == best.len(),
+        "{} start points but {} start values",
+        points.len(),
+        best.len()
+    );
+    if n_active == 0 || points.is_empty() {
+        return Ok(best.iter().copied().fold(0.0, f64::max));
+    }
+    for _ in 0..MAX_REFERENCE_SWEEPS {
+        let mut moved = false;
+        for (site, &dim) in active_dims.iter().enumerate() {
+            if dim > MAX_REFERENCE_SCAN_DIM {
+                continue;
+            }
+            let count = points.len() * dim;
+            let mut batch = Vec::with_capacity(count * n_active);
+            for point in &points {
+                for coordinate in 0..dim {
+                    batch.extend_from_slice(point);
+                    let last = batch.len() - n_active + site;
+                    batch[last] = coordinate;
+                }
+            }
+            let shape = [n_active, count];
+            let sampled = sampler.sample(ColMajorArrayRef::new(&batch, &shape)?, ctx)?;
+            for (start, (point, best)) in points.iter_mut().zip(&mut best).enumerate() {
+                for coordinate in 0..dim {
+                    let magnitude = sampled[start * dim + coordinate].abs_val();
+                    if magnitude > *best {
+                        *best = magnitude;
+                        point[site] = coordinate;
+                        moved = true;
+                    }
+                }
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
+    Ok(best.iter().copied().fold(0.0, f64::max))
+}
+
 fn max_magnitude<T: CommonScalar>(values: &[T]) -> f64 {
     values
         .iter()
@@ -1794,6 +1869,9 @@ where
         } else {
             let scale = match pins.max_reference() {
                 Some((scale, _)) => scale,
+                // An all-zero root keeps failing here: accepting it as a zero
+                // patch is only safe when nothing nonzero is known, and a
+                // nonzero value found by the search below would not be.
                 None if largest == 0.0 => {
                     return Err(invalid(format!(
                         "the max_reference of ErrorNorm::SampledMax cannot be pinned: all {} \
@@ -1804,8 +1882,19 @@ where
                     )));
                 }
                 None => {
-                    pins.pin_max_reference((largest, MaxReferenceSource::MaxOfRootCandidates))?;
-                    largest
+                    // The largest candidate sample can be orders of magnitude
+                    // below max |f| for a peaked function (#1274), so ascend
+                    // from every candidate before pinning the reference.
+                    let searched = search_max_magnitude(
+                        &sampler,
+                        &candidates.points,
+                        &samples,
+                        &active_dims,
+                        ctx,
+                    )
+                    .map_err(|source| evaluator_error(projector, source))?;
+                    pins.pin_max_reference((searched, MaxReferenceSource::SearchedRootMaximum))?;
+                    searched
                 }
             };
             if largest == 0.0 {

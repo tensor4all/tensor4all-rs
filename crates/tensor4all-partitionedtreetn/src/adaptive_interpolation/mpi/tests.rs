@@ -108,7 +108,7 @@ fn references_cross_the_wire_with_their_provenance() {
             },
             tau: 0.5,
         }),
-        max_reference: Some((3.5, MaxReferenceSource::MaxOfRootCandidates)),
+        max_reference: Some((3.5, MaxReferenceSource::SearchedRootMaximum)),
     };
     let wire = encode_references(references);
     let decoded = decode_references(&wire);

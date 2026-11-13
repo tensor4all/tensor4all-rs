@@ -211,7 +211,7 @@ enum WireL2Source {
 enum WireMaxSource {
     Given,
     ExactRoot,
-    MaxOfRootCandidates,
+    SearchedRootMaximum,
 }
 
 /// The pinned L2 reference and allowance.
@@ -421,7 +421,7 @@ fn encode_max_source(source: MaxReferenceSource) -> WireMaxSource {
     match source {
         MaxReferenceSource::Given => WireMaxSource::Given,
         MaxReferenceSource::ExactRoot => WireMaxSource::ExactRoot,
-        MaxReferenceSource::MaxOfRootCandidates => WireMaxSource::MaxOfRootCandidates,
+        MaxReferenceSource::SearchedRootMaximum => WireMaxSource::SearchedRootMaximum,
     }
 }
 
@@ -429,7 +429,7 @@ fn decode_max_source(source: WireMaxSource) -> MaxReferenceSource {
     match source {
         WireMaxSource::Given => MaxReferenceSource::Given,
         WireMaxSource::ExactRoot => MaxReferenceSource::ExactRoot,
-        WireMaxSource::MaxOfRootCandidates => MaxReferenceSource::MaxOfRootCandidates,
+        WireMaxSource::SearchedRootMaximum => MaxReferenceSource::SearchedRootMaximum,
     }
 }
 

@@ -493,7 +493,7 @@ pub enum L2ReferenceSource {
 /// ```
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::MaxReferenceSource;
 ///
-/// assert_ne!(MaxReferenceSource::Given, MaxReferenceSource::MaxOfRootCandidates);
+/// assert_ne!(MaxReferenceSource::Given, MaxReferenceSource::SearchedRootMaximum);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -502,8 +502,13 @@ pub enum MaxReferenceSource {
     Given,
     /// The largest exact value of a root patch with at most one site.
     ExactRoot,
-    /// The largest magnitude among the root patch's candidate samples.
-    MaxOfRootCandidates,
+    /// The largest magnitude a greedy coordinate ascent reached from the root
+    /// patch's candidate samples (#1274): from every candidate, each active
+    /// site in turn is set to the coordinate of largest `|f|` with the others
+    /// fixed, until a sweep changes nothing. Sites with a local dimension
+    /// above 4096 are not scanned. It is at least the largest candidate
+    /// sample, and a lower bound of `max |f|`.
+    SearchedRootMaximum,
 }
 
 /// The global L2 error `E = ||f - f~||` of a run, by what it can claim.
