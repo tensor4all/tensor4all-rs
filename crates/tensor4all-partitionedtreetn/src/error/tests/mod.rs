@@ -29,6 +29,12 @@ fn every_variant_has_the_documented_display() {
         "strict subdomain addition requires identical projector keys",
     );
     assert_display(
+        PartitionedTreeTNError::SpectatorMismatch,
+        "input patches disagree on spectator constraints (coordinates fixed on indices outside \
+         the transform's selection); partition on the selected indices only, or refine to a \
+         common spectator layout and transform each spectator group separately",
+    );
+    assert_display(
         PartitionedTreeTNError::InvalidCenter,
         "the requested TreeTN center is absent; choose an existing node name",
     );

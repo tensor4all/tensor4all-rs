@@ -82,13 +82,32 @@ impl<V> Default for PatchedFourierOptions<V> {
 /// `options.max_bond_dim` limits per-axis construction, not exact layout
 /// restructuring. No total exact-DFT error bound is promised.
 ///
+/// # Input partition
+///
+/// The patches of `state` must form dyadic input leaves of the selected bits:
+/// - each patch fixes a contiguous most-significant prefix of every axis and
+///   leaves the remaining bits of that axis free;
+/// - every patch fixes **the same coordinates on the spectator indices**, the
+///   site indices outside `axes`, or none of them.
+///
+/// The second condition fails for most partitions from the patched producers
+/// (patched interpolation, elementwise products, adaptive contraction) once
+/// their patch order includes a spectator index. Partition such inputs on the
+/// selected indices only. Otherwise refine every patch to a common spectator
+/// layout with [`PartitionedTreeTN::refine_to`], split the patches by their
+/// spectator constraint, and transform each group separately. Every output
+/// term keeps its group's spectator constraint, and the group results sum to
+/// the transform of the whole input.
+///
 /// # Errors
 /// Returns [`QuanticsTransformError::InvalidConfiguration`] for empty/short
 /// axes, duplicate/unknown/nonbinary indices, a missing center, an empty state,
 /// branching selections, or caller-supplied coordinate groups. Construction and
 /// restructuring failures retain their operation source; scheduler validation,
 /// coverage, resource and backend failures are preserved by
-/// [`QuanticsTransformError::Reconstruction`], including repair guidance.
+/// [`QuanticsTransformError::Reconstruction`], including repair guidance. A
+/// partition whose patches disagree on spectator constraints is reported there
+/// as [`PartitionedTreeTNError::SpectatorMismatch`](tensor4all_partitionedtreetn::PartitionedTreeTNError::SpectatorMismatch).
 ///
 /// # Examples
 /// ```

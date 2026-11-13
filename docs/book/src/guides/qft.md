@@ -169,6 +169,15 @@ indices must lie on one path; they may skip spectator nodes or share a node
 with other selected indices or spectators. Branching selections are rejected.
 State node names need not be integers.
 
+The input patches must be dyadic leaves of the selected bits: each fixes a
+contiguous most-significant prefix of every axis, and all fix the same
+coordinates on spectator indices (or none). Partitions from patched
+interpolation or adaptive contraction whose patch order includes a spectator
+usually break the second condition and are rejected with
+`PartitionedTreeTNError::SpectatorMismatch`. Partition such inputs on the
+selected indices only, or refine them to a common spectator layout with
+`refine_to` and transform each spectator group separately.
+
 `PatchedFourierOptions` defaults to relative reconstruction tolerance `1e-6`
 and an exact full-depth schedule. Set `merge_refine.target_bond_dim` for adaptive
 compression, and use its output-depth/region and work/term limits as needed.

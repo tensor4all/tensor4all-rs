@@ -1199,7 +1199,7 @@ fn merge_refine_schedule_rejects_leaf_spectator_mismatch() {
     .expect_err("spectator constraints must agree across leaves");
     assert!(matches!(
         error,
-        tensor4all_partitionedtreetn::PartitionedTreeTNError::ProjectorMismatch
+        tensor4all_partitionedtreetn::PartitionedTreeTNError::SpectatorMismatch
     ));
 }
 
