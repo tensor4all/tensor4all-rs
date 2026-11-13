@@ -814,6 +814,12 @@ pub fn matrix_luci_factors_working_bytes<T: Scalar>(
 /// can require inspecting all remaining entries, without materializing the
 /// full candidate matrix.
 ///
+/// Each pivot costs one rook walk over residual rows and columns, and the
+/// factorization stops heuristically: when the current rook pivot is below
+/// tolerance, without scanning the rest of the matrix. Use
+/// [`MatrixLUCI::from_matrix`] or [`rrlu`](crate::rrlu) on the materialized
+/// matrix when a certified bound on the remaining residual is required.
+///
 /// # Arguments
 ///
 /// * `nrows` - Number of matrix rows.
@@ -826,10 +832,11 @@ pub fn matrix_luci_factors_working_bytes<T: Scalar>(
 /// # Returns
 ///
 /// A [`MatrixLuciFactors`] value containing the pivot metadata and
-/// factors. Its trailing `pivot_errors` entry is the largest magnitude of the
-/// remaining residual, so a rank cap reports a residual instead of the last
-/// accepted pivot. Measuring it exactly evaluates every unselected entry, in
-/// column chunks, so a rank cap costs one extra pass over that block.
+/// factors. Its trailing `pivot_errors` entry is the last rook pivot: the
+/// pivot the search rejected on tolerance, or, at a rank cap, the pivot one
+/// extra rook walk finds next. It is `0.0` at full rank or when the remaining
+/// residual is exactly zero. It is not an upper bound on the remaining
+/// residual: a larger entry outside the walked rows and columns is not seen.
 ///
 /// # Errors
 ///
@@ -858,8 +865,8 @@ pub fn matrix_luci_factors_working_bytes<T: Scalar>(
 /// assert_eq!(factors.rank, 2);
 ///
 /// // A = [[4, 2, 0], [2, 4, 0], [0, 0, 1]] in column-major order. A rank cap
-/// // reports the residual pivot the search rejects next, here the largest
-/// // entry of the Schur complement [[3, 0], [0, 1]].
+/// // reports the rook pivot the search rejects next; here the walk on the
+/// // Schur complement [[3, 0], [0, 1]] starts in its first column and finds 3.
 /// let capped = matrix_luci_factors_from_blocks(
 ///     3,
 ///     3,
@@ -897,11 +904,12 @@ where
 /// factorization accepted them. They decide where each rook walk starts
 /// (`arrlu`'s `I0`/`J0`), which can change which pivots are accepted and
 /// therefore the rank and the `pivot_errors` history: a walk that starts
-/// elsewhere converges to another local rook. What does not change is the
-/// guarantee on the last `pivot_errors` entry, the exact maximum of the
-/// remaining residual, because a seed only moves a walk and never certifies a
-/// stop. Internal plumbing for callers that factorize the same matrix once per
-/// sweep; see `tensorci2::update_pivots`.
+/// elsewhere converges to another local rook. Seeds do not restore any error
+/// guarantee: the stop is as heuristic as in
+/// [`matrix_luci_factors_from_blocks`], and the trailing `pivot_errors` entry is
+/// still the last rook pivot, not a bound on the remaining residual. Internal
+/// plumbing for callers that factorize the same matrix once per sweep; see
+/// `tensorci2::update_pivots`.
 #[doc(hidden)]
 pub fn matrix_luci_factors_from_blocks_seeded<T, F>(
     nrows: usize,

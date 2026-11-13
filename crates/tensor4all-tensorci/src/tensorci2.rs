@@ -97,15 +97,16 @@ pub struct TCI2Options {
     pub max_bond_dim: Option<usize>,
     /// Pivot search strategy (default: [`PivotSearchStrategy::Full`]).
     ///
-    /// `Full` materializes the entire candidate matrix and finds the best
-    /// pivot exactly. `Rook` uses lazy block-rook search, which may choose
-    /// different pivots and a different rank. A rook pivot is only a local
-    /// maximum of the residual, so before a bond update stops on tolerance the
-    /// remaining residual is scanned exactly; the reported bond error is then
-    /// the maximum residual over the candidate matrix, as with `Full`. That
-    /// scan evaluates every remaining candidate entry whenever a bond update
-    /// stops on tolerance, so `Rook` then evaluates about as many distinct
-    /// entries as `Full`.
+    /// `Full` is recommended. It materializes the entire candidate matrix,
+    /// picks each pivot as the exact residual maximum, and its bond error is
+    /// the maximum remaining residual over the candidate matrix, a certified
+    /// bound.
+    ///
+    /// `Rook` trades that guarantee for fewer evaluations: it finds each pivot
+    /// with an O(d) rook walk and stops a bond update when the current rook
+    /// pivot is below tolerance. Its bond errors are the last rook pivots, not
+    /// bounds, so [`TCI2Termination::Converged`] under `Rook` does not prove
+    /// the tolerance. See [`PivotSearchStrategy::Rook`].
     pub pivot_search: PivotSearchStrategy,
     /// Whether to normalize the bond error by the maximum observed sample
     /// value (default: `true`).
@@ -222,6 +223,10 @@ impl Default for TCI2Options {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TCI2Termination {
     /// Bond error, global-pivot history, and rank stability all converged.
+    ///
+    /// Under [`PivotSearchStrategy::Full`] the bond errors are certified
+    /// residual maxima. Under [`PivotSearchStrategy::Rook`] they are the last
+    /// rook pivots, so this variant does not prove the tolerance.
     Converged,
     /// The recent rank history reached the configured maximum bond dimension.
     MaxBondDimension,
@@ -307,21 +312,36 @@ struct PivotUpdateContext<'a, B> {
 pub enum PivotSearchStrategy {
     /// Evaluate the entire candidate matrix and pick the best pivot.
     ///
-    /// Exact but costs O(D_left * d * d * D_right) evaluations per bond,
-    /// where d is the local dimension. This is the default and recommended
-    /// for most problems.
+    /// Exact and certified: each pivot is the maximum of the remaining
+    /// residual, and the bond error is the maximum residual left over the
+    /// candidate matrix, an upper bound. Costs O(D_left * d * d * D_right)
+    /// evaluations per bond, where d is the local dimension. This is the
+    /// default and recommended for most problems; use it whenever a certified
+    /// bound is required.
     #[default]
     Full,
-    /// Use lazy block-rook pivoting over partial matrix blocks.
+    /// Heuristic lazy block-rook pivoting over partial matrix blocks.
     ///
-    /// Avoids materializing the full candidate matrix. Exactly zero starting
-    /// residual columns are skipped; an all-zero residual can require all
-    /// remaining entries to be inspected, one column at a time. Nonzero local
-    /// maxima are still heuristic. Error normalization uses the maximum sample
-    /// value observed through lazy requests rather than a full-grid scan.
-    /// The per-edge evaluator memoizes sampled entries, so this strategy is
-    /// not a cache-memory cap: exhaustive zero certification can retain the
-    /// complete candidate grid even though requests remain partial batches.
+    /// Each pivot is found by an O(d)-sized rook walk that alternates residual
+    /// column and row maxima until they agree, so the full candidate matrix is
+    /// never materialized. A rook pivot is the largest entry of its own
+    /// residual row and column only.
+    ///
+    /// The stop is heuristic: a bond update stops when the current rook pivot
+    /// is below tolerance, which does **not** certify that the remaining
+    /// residual is below tolerance. The bond error recorded in `pivot_errors`
+    /// and the sweep `errors` is that last rook pivot, not an upper bound, and
+    /// [`TCI2Termination::Converged`] under `Rook` is not a proof that the
+    /// tolerance holds. Use [`Full`](Self::Full) when a certified bound is
+    /// required.
+    ///
+    /// Exactly zero starting residual columns are skipped; an all-zero residual
+    /// can require all remaining entries to be inspected, one column at a time.
+    /// Error normalization uses the maximum sample value observed through lazy
+    /// requests rather than a full-grid scan. The per-edge evaluator memoizes
+    /// sampled entries, so this strategy is not a cache-memory cap: exhaustive
+    /// zero certification can retain the complete candidate grid even though
+    /// requests remain partial batches.
     Rook,
 }
 
