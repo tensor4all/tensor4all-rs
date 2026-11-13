@@ -431,14 +431,18 @@ const RESIDUAL_SAMPLE_SIDE: usize = 8;
 ///
 /// The first entry is always included and the last is added when the stride
 /// skips it, so the sample is not confined to the leading corner of the block.
+/// The stride is `ceil(total / (side - 1))`, which spreads the `side - 1`
+/// strided slots over the whole block; `total / side` would be 1 whenever
+/// `side < total < 2 * side` and collapse the sample to a contiguous prefix.
 fn sampled_positions(total: usize, side: usize) -> Vec<usize> {
     if total <= side {
         return (0..total).collect();
     }
-    let stride = total / side;
     // One of the `side` slots is reserved for the last position, so the sample
-    // is exactly `side` long and reaches both ends.
-    let mut positions: Vec<usize> = (0..total).step_by(stride).take(side - 1).collect();
+    // is at most `side` long and reaches both ends.
+    let strided_slots = side.saturating_sub(1);
+    let stride = total.div_ceil(strided_slots.max(1));
+    let mut positions: Vec<usize> = (0..total).step_by(stride).take(strided_slots).collect();
     if positions.last().copied() != Some(total - 1) {
         positions.push(total - 1);
     }

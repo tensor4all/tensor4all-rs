@@ -704,6 +704,27 @@ fn sampled_positions_cover_the_block_including_both_ends() {
     }
 }
 
+/// Between one and two sides, a stride of `total / side` is 1 and the sample
+/// collapses to a contiguous prefix plus the last index. The stride must spread
+/// the `side - 1` strided slots over the whole block instead.
+#[test]
+fn sampled_positions_stay_strided_between_one_and_two_sides() {
+    use super::sampled_positions;
+    let side = super::RESIDUAL_SAMPLE_SIDE;
+    assert_eq!(side, 8, "the pinned samples below assume a side of 8");
+
+    // stride = ceil(15 / 7) = 3, not 15 / 8 = 1 (which gave 0..=6 plus 14).
+    assert_eq!(sampled_positions(15, side), vec![0, 3, 6, 9, 12, 14]);
+    // stride = ceil(9 / 7) = 2, and the stride itself lands on the last index.
+    assert_eq!(sampled_positions(9, side), vec![0, 2, 4, 6, 8]);
+    // A large block: stride = ceil(200 / 7) = 29, seven strided slots plus the
+    // last index.
+    assert_eq!(
+        sampled_positions(200, side),
+        vec![0, 29, 58, 87, 116, 145, 174, 199]
+    );
+}
+
 #[test]
 fn lazy_stop_probes_the_unselected_block_before_it_scans_exactly() {
     use super::stats;

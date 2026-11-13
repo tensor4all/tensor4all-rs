@@ -2395,18 +2395,35 @@ where
 /// last update accepted. A pair is dropped when either index is missing from the
 /// combined candidates, which a bond update on a neighbouring bond can cause by
 /// replacing the Kronecker list; dropping both halves keeps the pairs aligned.
+///
+/// Each combined list is indexed once, so a bond costs O(k + m) hash lookups
+/// for k previous pivots and m candidates rather than O(k * m) `MultiIndex`
+/// comparisons. If a candidate occurs more than once, its first position is
+/// used.
 fn seed_positions(
     previous_rows: &[MultiIndex],
     previous_cols: &[MultiIndex],
     combined_rows: &[MultiIndex],
     combined_cols: &[MultiIndex],
 ) -> Vec<(usize, usize)> {
+    if previous_rows.is_empty() || previous_cols.is_empty() {
+        return Vec::new();
+    }
+    fn first_positions(list: &[MultiIndex]) -> HashMap<&MultiIndex, usize> {
+        let mut positions = HashMap::with_capacity(list.len());
+        for (pos, index) in list.iter().enumerate() {
+            positions.entry(index).or_insert(pos);
+        }
+        positions
+    }
+    let row_positions = first_positions(combined_rows);
+    let col_positions = first_positions(combined_cols);
     previous_rows
         .iter()
         .zip(previous_cols)
         .filter_map(|(row_index, col_index)| {
-            let row = combined_rows.iter().position(|index| index == row_index)?;
-            let col = combined_cols.iter().position(|index| index == col_index)?;
+            let row = *row_positions.get(row_index)?;
+            let col = *col_positions.get(col_index)?;
             Some((row, col))
         })
         .collect()

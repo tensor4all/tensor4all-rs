@@ -1457,6 +1457,20 @@ fn seed_positions_pair_previous_pivots_by_position_in_the_combined_lists() {
         vec![(1, 0), (3, 1)]
     );
 
+    // A candidate listed twice maps to its first position, as a linear scan
+    // would, so indexing the lists does not change which entry is seeded.
+    let duplicated_rows = multi(&[3, 7, 3, 9, 7]);
+    let duplicated_cols = multi(&[6, 4, 8, 4, 6]);
+    assert_eq!(
+        super::seed_positions(
+            &previous_rows,
+            &previous_cols,
+            &duplicated_rows,
+            &duplicated_cols
+        ),
+        vec![(1, 1), (0, 2), (3, 0)]
+    );
+
     // Nothing to seed from on the first sweep, and a half-written state must
     // not panic.
     assert!(super::seed_positions(&[], &[], &combined_rows, &combined_cols).is_empty());
