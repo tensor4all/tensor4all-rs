@@ -4,7 +4,8 @@ Interpolative Quantics Tensor Train construction for tensor4all-rs.
 
 This crate ports the tested public algorithms from
 `InterpolativeQTT.jl` to Rust and returns `tensor4all-simplett`
-`SimpleTensorTrain<f64>` values.
+`SimpleTensorTrain<T>` values, where `T` is the value type of the sampled
+function: `f64` or `Complex64`.
 
 ```rust
 use tensor4all_interpolativeqtt::prelude::*;

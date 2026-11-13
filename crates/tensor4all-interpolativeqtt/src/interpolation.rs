@@ -1,10 +1,11 @@
 //! Interpolation constructors and analysis routines.
 
+use tensor4all_core::{CommonScalar, MatrixLuciScalar};
 use tensor4all_simplett::{
-    AbstractTensorTrain, CompressionMethod, CompressionOptions, SimpleTensorTrain, Tensor3,
-    Tensor3Ops,
+    AbstractTensorTrain, CompressionMethod, CompressionOptions, SimpleTensorTrain, TTScalar,
+    Tensor3, Tensor3Ops,
 };
-use tensor4all_tensorbackend::{mat_mul, Matrix};
+use tensor4all_tensorbackend::{mat_mul, BackendLinalgScalar, BlasMul, Matrix};
 
 use crate::basis::{
     angular_local_lagrange, direct_product_core_tensors, get_chebyshev_grid, interpolation_tensor,
@@ -14,11 +15,66 @@ use crate::error::{invalid_argument, Result};
 use crate::interval::{Interval, NInterval};
 use crate::options::InterpolativeQttOptions;
 
+/// The value type of an interpolative QTT: `f64` or `Complex64`.
+///
+/// Every constructor in this crate is generic over it. The function is sampled
+/// in `T` and every core of the result is stored in `T`. The local Lagrange
+/// basis and the refinement cores are computed in `f64` and lifted with
+/// [`CommonScalar::from_f64`]. For `T = f64` that lift is the identity, so a
+/// real interpolant is bit-for-bit the one the real-only constructors built.
+///
+/// The trait has a blanket implementation; it only names the bounds the
+/// construction and the compression need, so callers can write
+/// `T: InterpolativeScalar` in their own generic code. Its real type is `f64`
+/// (`TTScalar<Real = f64>`), the precision of the basis.
+///
+/// # Examples
+/// ```
+/// use num_complex::Complex64;
+/// use tensor4all_interpolativeqtt::{
+///     interpolate_single_scale, AbstractTensorTrain, InterpolativeQttOptions,
+///     InterpolativeScalar,
+/// };
+///
+/// fn at_origin<T: InterpolativeScalar>(f: impl Fn(f64) -> T) -> T {
+///     let tt = interpolate_single_scale(f, 0.0, 1.0, 4, 6, &InterpolativeQttOptions::default())
+///         .unwrap();
+///     tt.evaluate(&[0, 0, 0, 0]).unwrap()
+/// }
+///
+/// assert!((at_origin(|x| 1.0 + x) - 1.0).abs() < 1e-12);
+/// let z = at_origin(|x| Complex64::new(1.0 + x, -2.0));
+/// assert!((z - Complex64::new(1.0, -2.0)).norm() < 1e-12);
+/// ```
+pub trait InterpolativeScalar:
+    TTScalar<Real = f64> + CommonScalar + MatrixLuciScalar + BackendLinalgScalar + BlasMul + Copy
+{
+}
+
+impl<T> InterpolativeScalar for T where
+    T: TTScalar<Real = f64>
+        + CommonScalar
+        + MatrixLuciScalar
+        + BackendLinalgScalar
+        + BlasMul
+        + Copy
+{
+}
+
+/// Lift a real basis core into the value type of the interpolant.
+fn lift<T: InterpolativeScalar>(core: &Tensor3<f64>) -> Result<Tensor3<T>> {
+    Ok(Tensor3::from_fn(
+        [core.left_dim(), core.site_dim(), core.right_dim()],
+        |[left, site, right]| T::from_f64(*core.get3(left, site, right)),
+    )?)
+}
+
 /// Construct a one-dimensional single-scale interpolative QTT.
 /// `f` is sampled through a Chebyshev-Lobatto local basis on `[a, b)`.
 /// `num_bits` is the number of quantics sites, and `polynomial_degree`
 /// controls the local interpolation order. The result is a binary
-/// `SimpleTensorTrain<f64>` whose site indices are zero-based quantics digits.
+/// `SimpleTensorTrain<T>` whose site indices are zero-based quantics digits;
+/// `T` is the value type of `f` ([`InterpolativeScalar`]).
 /// # Errors
 /// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when the
 /// domain bounds, `num_bits`, `polynomial_degree`, or `options` are invalid,
@@ -40,16 +96,17 @@ use crate::options::InterpolativeQttOptions;
 /// let value = tt.evaluate(&[0, 0, 0, 0]).unwrap();
 /// assert!(value.abs() < 1e-10);
 /// ```
-pub fn interpolate_single_scale<F>(
+pub fn interpolate_single_scale<T, F>(
     f: F,
     a: f64,
     b: f64,
     num_bits: usize,
     polynomial_degree: usize,
     options: &InterpolativeQttOptions,
-) -> Result<SimpleTensorTrain<f64>>
+) -> Result<SimpleTensorTrain<T>>
 where
-    F: Fn(f64) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(f64) -> T,
 {
     interpolate_single_scale_nd(
         |coords| f(coords[0]),
@@ -86,16 +143,17 @@ where
 /// assert_eq!(tt.len(), 3);
 /// assert_eq!(tt.site_dims(), vec![4, 4, 4]);
 /// ```
-pub fn interpolate_single_scale_nd<F>(
+pub fn interpolate_single_scale_nd<T, F>(
     f: F,
     lower: &[f64],
     upper: &[f64],
     num_bits: usize,
     polynomial_degree: usize,
     options: &InterpolativeQttOptions,
-) -> Result<SimpleTensorTrain<f64>>
+) -> Result<SimpleTensorTrain<T>>
 where
-    F: Fn(&[f64]) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(&[f64]) -> T,
 {
     validate_common(lower, upper, num_bits, polynomial_degree, options)?;
     let ndims = lower.len();
@@ -110,13 +168,13 @@ where
     cores.push(left_core_nd(&f, lower, upper, &basis, site_dim, basis_dim)?);
 
     let center_1d = interpolation_tensor(&basis)?;
-    let center = direct_product_core_tensors(&vec![center_1d; ndims])?;
+    let center = lift(&direct_product_core_tensors(&vec![center_1d; ndims])?)?;
     for _ in 0..num_bits.saturating_sub(2) {
         cores.push(center.clone());
     }
 
     let right_1d = right_core_1d(&basis)?;
-    cores.push(direct_product_core_tensors(&vec![right_1d; ndims])?);
+    cores.push(lift(&direct_product_core_tensors(&vec![right_1d; ndims])?)?);
 
     compress_train(cores, options)
 }
@@ -148,7 +206,7 @@ where
 /// assert_eq!(tt.len(), 4);
 /// assert!((tt.evaluate(&[0, 0, 0, 0]).unwrap() - 1.0).abs() < 1e-10);
 /// ```
-pub fn interpolate_multi_scale<F>(
+pub fn interpolate_multi_scale<T, F>(
     f: F,
     a: f64,
     b: f64,
@@ -156,9 +214,10 @@ pub fn interpolate_multi_scale<F>(
     polynomial_degree: usize,
     cusp_locations: &[f64],
     options: &InterpolativeQttOptions,
-) -> Result<SimpleTensorTrain<f64>>
+) -> Result<SimpleTensorTrain<T>>
 where
-    F: Fn(f64) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(f64) -> T,
 {
     let cusps: Vec<_> = cusp_locations.iter().map(|&x| vec![x]).collect();
     interpolate_multi_scale_nd(
@@ -197,7 +256,7 @@ where
 /// ).unwrap();
 /// assert_eq!(tt.site_dims(), vec![4, 4, 4]);
 /// ```
-pub fn interpolate_multi_scale_nd<F>(
+pub fn interpolate_multi_scale_nd<T, F>(
     f: F,
     lower: &[f64],
     upper: &[f64],
@@ -205,9 +264,10 @@ pub fn interpolate_multi_scale_nd<F>(
     polynomial_degree: usize,
     cusp_locations: &[Vec<f64>],
     options: &InterpolativeQttOptions,
-) -> Result<SimpleTensorTrain<f64>>
+) -> Result<SimpleTensorTrain<T>>
 where
-    F: Fn(&[f64]) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(&[f64]) -> T,
 {
     validate_common(lower, upper, num_bits, polynomial_degree, options)?;
     validate_points(cusp_locations, lower.len(), "cusp location")?;
@@ -253,7 +313,7 @@ where
 /// assert_eq!(tt.len(), 4);
 /// ```
 #[allow(clippy::too_many_arguments)]
-pub fn interpolate_adaptive<F>(
+pub fn interpolate_adaptive<T, F>(
     f: F,
     a: f64,
     b: f64,
@@ -262,9 +322,10 @@ pub fn interpolate_adaptive<F>(
     adaptive_tolerance: f64,
     singularities: &[f64],
     options: &InterpolativeQttOptions,
-) -> Result<SimpleTensorTrain<f64>>
+) -> Result<SimpleTensorTrain<T>>
 where
-    F: Fn(f64) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(f64) -> T,
 {
     let singularities_nd: Vec<_> = singularities.iter().map(|&x| vec![x]).collect();
     interpolate_adaptive_nd(
@@ -307,7 +368,7 @@ where
 /// assert_eq!(tt.len(), 3);
 /// ```
 #[allow(clippy::too_many_arguments)]
-pub fn interpolate_adaptive_nd<F>(
+pub fn interpolate_adaptive_nd<T, F>(
     f: F,
     lower: &[f64],
     upper: &[f64],
@@ -316,9 +377,10 @@ pub fn interpolate_adaptive_nd<F>(
     adaptive_tolerance: f64,
     singularities: &[Vec<f64>],
     options: &InterpolativeQttOptions,
-) -> Result<SimpleTensorTrain<f64>>
+) -> Result<SimpleTensorTrain<T>>
 where
-    F: Fn(&[f64]) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(&[f64]) -> T,
 {
     validate_common(lower, upper, num_bits, polynomial_degree, options)?;
     if !adaptive_tolerance.is_finite() || adaptive_tolerance < 0.0 {
@@ -382,7 +444,7 @@ where
 /// ).unwrap();
 /// assert_eq!(tt.len(), 4);
 /// ```
-pub fn interpolate_single_scale_sparse<F>(
+pub fn interpolate_single_scale_sparse<T, F>(
     f: F,
     a: f64,
     b: f64,
@@ -390,9 +452,10 @@ pub fn interpolate_single_scale_sparse<F>(
     polynomial_degree: usize,
     window_radius: usize,
     options: &InterpolativeQttOptions,
-) -> Result<SimpleTensorTrain<f64>>
+) -> Result<SimpleTensorTrain<T>>
 where
-    F: Fn(f64) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(f64) -> T,
 {
     interpolate_single_scale_sparse_nd(
         |coords| f(coords[0]),
@@ -430,7 +493,7 @@ where
 /// ).unwrap();
 /// assert_eq!(tt.site_dims(), vec![4, 4, 4]);
 /// ```
-pub fn interpolate_single_scale_sparse_nd<F>(
+pub fn interpolate_single_scale_sparse_nd<T, F>(
     f: F,
     lower: &[f64],
     upper: &[f64],
@@ -438,9 +501,10 @@ pub fn interpolate_single_scale_sparse_nd<F>(
     polynomial_degree: usize,
     window_radius: usize,
     options: &InterpolativeQttOptions,
-) -> Result<SimpleTensorTrain<f64>>
+) -> Result<SimpleTensorTrain<T>>
 where
-    F: Fn(&[f64]) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(&[f64]) -> T,
 {
     validate_common(lower, upper, num_bits, polynomial_degree, options)?;
     let ndims = lower.len();
@@ -455,13 +519,13 @@ where
     cores.push(left_core_nd(&f, lower, upper, &basis, site_dim, basis_dim)?);
 
     let center_1d = angular_local_lagrange(&basis, window_radius)?;
-    let center = direct_product_core_tensors(&vec![center_1d; ndims])?;
+    let center = lift(&direct_product_core_tensors(&vec![center_1d; ndims])?)?;
     for _ in 0..num_bits.saturating_sub(2) {
         cores.push(center.clone());
     }
 
     let right_1d = right_core_1d(&basis)?;
-    cores.push(direct_product_core_tensors(&vec![right_1d; ndims])?);
+    cores.push(lift(&direct_product_core_tensors(&vec![right_1d; ndims])?)?);
 
     compress_train(cores, options)
 }
@@ -469,7 +533,9 @@ where
 /// Recover multiresolution Chebyshev-Lobatto values from a binary QTT.
 /// The returned vector has one matrix per coarse level. Matrix `k - 1` has
 /// `2^k` rows and `basis.len()` columns, where each row corresponds to one
-/// subinterval and each column to one local Chebyshev-Lobatto node.
+/// subinterval and each column to one local Chebyshev-Lobatto node. The
+/// matrices carry the train's value type `T`; the restriction between levels is
+/// real.
 ///
 /// # Accuracy of the finest level
 /// The last QTT core holds the interpolant of each finest subinterval at the two
@@ -535,11 +601,11 @@ where
 /// // Node `c = 0` of the first finest subinterval is the point x = 0.
 /// assert!((values[3][[0, 0]] - 1.0).abs() < 1.0e-6);
 /// ```
-pub fn invert_qtt(
-    tt: &SimpleTensorTrain<f64>,
+pub fn invert_qtt<T: InterpolativeScalar>(
+    tt: &SimpleTensorTrain<T>,
     basis: &LagrangePolynomials,
     q: usize,
-) -> Result<Vec<Matrix<f64>>> {
+) -> Result<Vec<Matrix<T>>> {
     let num_sites = tt.len();
     if !(1..num_sites).contains(&q) {
         return Err(invalid_argument(format!(
@@ -570,7 +636,7 @@ pub fn invert_qtt(
 /// Estimate the local interpolation error on a one-dimensional interval.
 /// The function is sampled at the basis nodes, then the interpolant is checked
 /// on a denser Chebyshev-Lobatto grid. The return value is a maximum absolute
-/// error estimate.
+/// error estimate, the modulus of the difference for a complex function.
 /// # Errors
 /// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when an
 /// interval endpoint is not finite, when a test-point count overflows `usize`,
@@ -584,26 +650,28 @@ pub fn invert_qtt(
 /// let err = estimate_interpolation_error(|x| x.sin(), 0.0, 1.0, &basis).unwrap();
 /// assert!(err >= 0.0);
 /// ```
-pub fn estimate_interpolation_error<F>(
+pub fn estimate_interpolation_error<T, F>(
     f: F,
     a: f64,
     b: f64,
     basis: &LagrangePolynomials,
 ) -> Result<f64>
 where
-    F: Fn(f64) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(f64) -> T,
 {
     let interval = Interval::new(a, b)?;
     estimate_interpolation_error_interval(&f, &interval, basis)
 }
 
-fn estimate_interpolation_error_interval<F>(
+fn estimate_interpolation_error_interval<T, F>(
     f: &F,
     interval: &Interval,
     basis: &LagrangePolynomials,
 ) -> Result<f64>
 where
-    F: Fn(f64) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(f64) -> T,
 {
     let values = eval_interval_1d(f, interval, basis);
     let test_points = dense_test_points(basis.len())?;
@@ -611,11 +679,11 @@ where
 
     for t in test_points {
         let x = interval.start() + interval.length() * t;
-        let mut interp_value = 0.0;
-        for (alpha, value) in values.iter().enumerate() {
-            interp_value += value * basis.evaluate(alpha, t)?;
+        let mut interp_value = T::zero();
+        for (alpha, &value) in values.iter().enumerate() {
+            interp_value = interp_value + value * T::from_f64(basis.evaluate(alpha, t)?);
         }
-        max_error = max_error.max((interp_value - f(x)).abs());
+        max_error = max_error.max((interp_value - f(x)).abs_val());
     }
     Ok(max_error)
 }
@@ -640,26 +708,28 @@ where
 /// assert!(err >= 0.0);
 /// assert!(err < 1e-10);
 /// ```
-pub fn estimate_interpolation_error_nd<F>(
+pub fn estimate_interpolation_error_nd<T, F>(
     f: F,
     lower: &[f64],
     upper: &[f64],
     basis: &LagrangePolynomials,
 ) -> Result<f64>
 where
-    F: Fn(&[f64]) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(&[f64]) -> T,
 {
     let interval = NInterval::new(lower, upper)?;
     estimate_interpolation_error_ninterval(&f, &interval, basis)
 }
 
-fn estimate_interpolation_error_ninterval<F>(
+fn estimate_interpolation_error_ninterval<T, F>(
     f: &F,
     interval: &NInterval,
     basis: &LagrangePolynomials,
 ) -> Result<f64>
 where
-    F: Fn(&[f64]) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(&[f64]) -> T,
 {
     let ndims = interval.ndims();
     let basis_len = basis.len();
@@ -676,17 +746,17 @@ where
             .map(|d| interval.start()[d] + lengths[d] * ts[d])
             .collect();
 
-        let mut interp_value = 0.0;
+        let mut interp_value = T::zero();
         for alpha_index in MultiIndexIter::new(&vec![basis_len; ndims]) {
             let alpha_flat = flatten_index(&alpha_index, basis_len)?;
             let mut basis_value = 1.0;
             for d in 0..ndims {
                 basis_value *= basis.evaluate(alpha_index[d], ts[d])?;
             }
-            interp_value += values[alpha_flat] * basis_value;
+            interp_value = interp_value + values[alpha_flat] * T::from_f64(basis_value);
         }
 
-        max_error = max_error.max((interp_value - f(&x)).abs());
+        max_error = max_error.max((interp_value - f(&x)).abs_val());
     }
 
     Ok(max_error)
@@ -797,16 +867,17 @@ fn decode_index(mut flat: usize, base: usize, ndims: usize) -> Vec<usize> {
     index
 }
 
-fn left_core_nd<F>(
+fn left_core_nd<T, F>(
     f: &F,
     lower: &[f64],
     upper: &[f64],
     basis: &LagrangePolynomials,
     site_dim: usize,
     basis_dim: usize,
-) -> Result<Tensor3<f64>>
+) -> Result<Tensor3<T>>
 where
-    F: Fn(&[f64]) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(&[f64]) -> T,
 {
     let ndims = lower.len();
     let basis_len = basis.len();
@@ -842,10 +913,10 @@ fn right_core_1d(basis: &LagrangePolynomials) -> Result<Tensor3<f64>> {
     })?)
 }
 
-fn compress_train(
-    cores: Vec<Tensor3<f64>>,
+fn compress_train<T: InterpolativeScalar>(
+    cores: Vec<Tensor3<T>>,
     options: &InterpolativeQttOptions,
-) -> Result<SimpleTensorTrain<f64>> {
+) -> Result<SimpleTensorTrain<T>> {
     let tt = SimpleTensorTrain::new(cores)?;
     if options.tolerance == 0.0 && options.max_bond_dim.is_none() {
         return Ok(tt);
@@ -859,9 +930,10 @@ fn compress_train(
     })?)
 }
 
-fn eval_interval_1d<F>(f: &F, interval: &Interval, basis: &LagrangePolynomials) -> Vec<f64>
+fn eval_interval_1d<T, F>(f: &F, interval: &Interval, basis: &LagrangePolynomials) -> Vec<T>
 where
-    F: Fn(f64) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(f64) -> T,
 {
     basis
         .grid()
@@ -870,18 +942,19 @@ where
         .collect()
 }
 
-fn eval_interval_nd<F>(
+fn eval_interval_nd<T, F>(
     f: &F,
     interval: &NInterval,
     basis: &LagrangePolynomials,
     basis_dim: usize,
-) -> Result<Vec<f64>>
+) -> Result<Vec<T>>
 where
-    F: Fn(&[f64]) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(&[f64]) -> T,
 {
     let ndims = interval.ndims();
     let lengths = interval.lengths();
-    let mut values = vec![0.0; basis_dim];
+    let mut values = vec![T::zero(); basis_dim];
     for alpha_index in MultiIndexIter::new(&vec![basis.len(); ndims]) {
         let alpha_flat = flatten_index(&alpha_index, basis.len())?;
         let coords: Vec<_> = (0..ndims)
@@ -892,16 +965,17 @@ where
     Ok(values)
 }
 
-fn build_refined_qtt<F, S>(
+fn build_refined_qtt<T, F, S>(
     f: &F,
     domain: &NInterval,
     num_bits: usize,
     basis: &LagrangePolynomials,
     options: &InterpolativeQttOptions,
     is_safe: S,
-) -> Result<SimpleTensorTrain<f64>>
+) -> Result<SimpleTensorTrain<T>>
 where
-    F: Fn(&[f64]) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(&[f64]) -> T,
     S: Fn(&NInterval, usize) -> bool,
 {
     let ndims = domain.ndims();
@@ -931,14 +1005,14 @@ where
         first_unsafe.len(),
         "first refined core right dimension",
     )?;
-    let mut first = Tensor3::from_elem([1, site_dim, first_right_dim], 0.0)?;
+    let mut first = Tensor3::from_elem([1, site_dim, first_right_dim], T::zero())?;
     for (site, values) in first_safe_values {
         for (beta, value) in values.into_iter().enumerate() {
             first[[0, site, beta]] = value;
         }
     }
     for (site, next) in first_unsafe {
-        first[[0, site, basis_dim + next]] = 1.0;
+        first[[0, site, basis_dim + next]] = T::one();
     }
     cores.push(first);
 
@@ -967,7 +1041,7 @@ where
             next_intervals.len(),
             "refined core right dimension",
         )?;
-        let mut core = Tensor3::from_elem([core_left_dim, site_dim, core_right_dim], 0.0)?;
+        let mut core = Tensor3::from_elem([core_left_dim, site_dim, core_right_dim], T::zero())?;
         copy_core(&center, &mut core, 0, 0);
 
         for (interval_index, site, values) in safe_values {
@@ -976,7 +1050,7 @@ where
             }
         }
         for (interval_index, site, next) in transitions {
-            core[[basis_dim + interval_index, site, basis_dim + next]] = 1.0;
+            core[[basis_dim + interval_index, site, basis_dim + next]] = T::one();
         }
 
         cores.push(core);
@@ -987,25 +1061,26 @@ where
     compress_train(cores, options)
 }
 
-fn build_adaptive_qtt<F>(
+fn build_adaptive_qtt<T, F>(
     f: &F,
     domain: &NInterval,
     num_bits: usize,
     basis: &LagrangePolynomials,
     dangerous_at_level: &[Vec<NInterval>],
     options: &InterpolativeQttOptions,
-) -> Result<SimpleTensorTrain<f64>>
+) -> Result<SimpleTensorTrain<T>>
 where
-    F: Fn(&[f64]) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(&[f64]) -> T,
 {
     build_refined_qtt(f, domain, num_bits, basis, options, |interval, level| {
         !is_dangerous(interval, &dangerous_at_level[level])
     })
 }
 
-fn copy_core(
+fn copy_core<T: InterpolativeScalar>(
     source: &Tensor3<f64>,
-    target: &mut Tensor3<f64>,
+    target: &mut Tensor3<T>,
     left_offset: usize,
     right_offset: usize,
 ) {
@@ -1013,27 +1088,28 @@ fn copy_core(
         for site in 0..source.site_dim() {
             for right in 0..source.right_dim() {
                 target[[left_offset + left, site, right_offset + right]] =
-                    *source.get3(left, site, right);
+                    T::from_f64(*source.get3(left, site, right));
             }
         }
     }
 }
 
-fn last_core<F>(
+fn last_core<T, F>(
     f: &F,
     basis: &LagrangePolynomials,
     ndims: usize,
     site_dim: usize,
     basis_dim: usize,
     intervals: &[NInterval],
-) -> Result<Tensor3<f64>>
+) -> Result<Tensor3<T>>
 where
-    F: Fn(&[f64]) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(&[f64]) -> T,
 {
     let right_1d = right_core_1d(basis)?;
     let right = direct_product_core_tensors(&vec![right_1d; ndims])?;
     let last_left_dim = checked_dim_add(basis_dim, intervals.len(), "last core left dimension")?;
-    let mut last = Tensor3::from_elem([last_left_dim, site_dim, 1], 0.0)?;
+    let mut last = Tensor3::from_elem([last_left_dim, site_dim, 1], T::zero())?;
     copy_core(&right, &mut last, 0, 0);
 
     for (interval_index, interval) in intervals.iter().enumerate() {
@@ -1071,7 +1147,7 @@ fn add_singularity_path(
     Ok(())
 }
 
-fn detect_dangerous_intervals<F>(
+fn detect_dangerous_intervals<T, F>(
     dangerous_at_level: &mut [Vec<NInterval>],
     f: &F,
     interval: &NInterval,
@@ -1081,7 +1157,8 @@ fn detect_dangerous_intervals<F>(
     tolerance: f64,
 ) -> Result<()>
 where
-    F: Fn(&[f64]) -> f64,
+    T: InterpolativeScalar,
+    F: Fn(&[f64]) -> T,
 {
     if level > max_level {
         return Ok(());
@@ -1119,11 +1196,11 @@ fn same_point(a: &[f64], b: &[f64]) -> bool {
             .all(|(&left, &right)| (left - right).abs() < 1.0e-14)
 }
 
-fn matrix_from_fn(
+fn matrix_from_fn<T: InterpolativeScalar>(
     nrows: usize,
     ncols: usize,
-    mut f: impl FnMut(usize, usize) -> f64,
-) -> Result<Matrix<f64>> {
+    mut f: impl FnMut(usize, usize) -> T,
+) -> Result<Matrix<T>> {
     let len = nrows
         .checked_mul(ncols)
         .ok_or_else(|| invalid_argument("matrix shape overflows usize"))?;
@@ -1167,10 +1244,10 @@ fn matrix_from_fn(
 /// not the rank of the represented function, so a full-rank train of a low-rank
 /// function takes the exact route and a compressed train that happens to agree with
 /// the exact values does not.
-pub(crate) fn finest_level_scale(
-    tt: &SimpleTensorTrain<f64>,
+pub(crate) fn finest_level_scale<T: InterpolativeScalar>(
+    tt: &SimpleTensorTrain<T>,
     basis: &LagrangePolynomials,
-) -> Result<Option<f64>> {
+) -> Result<Option<T>> {
     let num_sites = tt.len();
     if num_sites < 2 {
         return Ok(None);
@@ -1195,25 +1272,27 @@ pub(crate) fn finest_level_scale(
     }
     // The anchor is the entry of largest magnitude, so this division is the best
     // conditioned one available.
-    let scale = *last.get3(anchor.0 / 2, anchor.0 % 2, 0) / expected[anchor.0];
-    if !scale.is_finite() {
+    let scale = last
+        .get3(anchor.0 / 2, anchor.0 % 2, 0)
+        .div_real(expected[anchor.0]);
+    if !scale.abs_val().is_finite() {
         return Ok(None);
     }
     for alpha in 0..basis.len() {
         for sigma in 0..2 {
             let stored = *last.get3(alpha, sigma, 0);
-            let canonical = scale * expected[alpha * 2 + sigma];
+            let canonical = scale * T::from_f64(expected[alpha * 2 + sigma]);
             // Proportional, not bit-exact: `scale_mut` applied twice multiplies the
             // core twice and the products do not associate, so a legitimate rescale
             // differs from `scale * L_alpha(sigma / 2)` by an ulp or two. The bound
             // stays far below any deviation that would matter, and a canonical zero
             // has to be an exact zero.
-            let tolerance = if canonical == 0.0 {
+            let tolerance = if canonical.abs_val() == 0.0 {
                 0.0
             } else {
-                1.0e-14 * canonical.abs()
+                1.0e-14 * canonical.abs_val()
             };
-            if (stored - canonical).abs() > tolerance {
+            if (stored - canonical).abs_val() > tolerance {
                 return Ok(None);
             }
         }
@@ -1240,7 +1319,10 @@ pub(crate) fn finest_level_scale(
 /// The last cell has no successor to meet, so a perturbation confined to its
 /// interior is not detectable: the train stores two samples per cell and does not
 /// carry that information at all.
-fn finest_level_is_continuous(current: &Matrix<f64>, basis: &LagrangePolynomials) -> Result<bool> {
+fn finest_level_is_continuous<T: InterpolativeScalar>(
+    current: &Matrix<T>,
+    basis: &LagrangePolynomials,
+) -> Result<bool> {
     let cells = current.nrows();
     if current.ncols() != basis.len() {
         return Ok(false);
@@ -1250,20 +1332,23 @@ fn finest_level_is_continuous(current: &Matrix<f64>, basis: &LagrangePolynomials
         end.push(basis.evaluate(alpha, 1.0)?);
     }
     for cell in 0..cells.saturating_sub(1) {
-        let mut value = 0.0;
+        let mut value = T::zero();
         for alpha in 0..basis.len() {
-            value += current[[cell, alpha]] * end[alpha];
+            value = value + current[[cell, alpha]] * T::from_f64(end[alpha]);
         }
         let next = current[[cell + 1, 0]];
-        let tolerance = 1.0e-12 * value.abs().max(next.abs()).max(1.0);
-        if (value - next).abs() > tolerance {
+        let tolerance = 1.0e-12 * value.abs_val().max(next.abs_val()).max(1.0);
+        if (value - next).abs_val() > tolerance {
             return Ok(false);
         }
     }
     Ok(true)
 }
 
-fn invert_stage1(tt: &SimpleTensorTrain<f64>, basis: &LagrangePolynomials) -> Result<Matrix<f64>> {
+fn invert_stage1<T: InterpolativeScalar>(
+    tt: &SimpleTensorTrain<T>,
+    basis: &LagrangePolynomials,
+) -> Result<Matrix<T>> {
     let cores = tt.site_tensors();
     let num_sites = cores.len();
     let k_out = num_sites - 1;
@@ -1285,9 +1370,9 @@ fn invert_stage1(tt: &SimpleTensorTrain<f64>, basis: &LagrangePolynomials) -> Re
         for row in 0..current.nrows() {
             for site in 0..core.site_dim() {
                 for right in 0..core.right_dim() {
-                    let mut sum = 0.0;
+                    let mut sum = T::zero();
                     for left in 0..core.left_dim() {
-                        sum += current[[row, left]] * *core.get3(left, site, right);
+                        sum = sum + current[[row, left]] * *core.get3(left, site, right);
                     }
                     next[[row * core.site_dim() + site, right]] = sum;
                 }
@@ -1310,9 +1395,10 @@ fn invert_stage1(tt: &SimpleTensorTrain<f64>, basis: &LagrangePolynomials) -> Re
             let value = match exact_scale {
                 // Uncompressed: `left` is the local basis index, so evaluate the
                 // parent-basis interpolant at the node instead of blending.
-                Some(scale) => basis.evaluate(left, c)? * scale,
+                Some(scale) => T::from_f64(basis.evaluate(left, c)?) * scale,
                 None => {
-                    *last.get3(left, 0, 0) * (1.0 - 2.0 * c) + *last.get3(left, 1, 0) * (2.0 * c)
+                    *last.get3(left, 0, 0) * T::from_f64(1.0 - 2.0 * c)
+                        + *last.get3(left, 1, 0) * T::from_f64(2.0 * c)
                 }
             };
             decode[[left, beta]] = value;
@@ -1351,21 +1437,21 @@ fn build_restriction(basis: &LagrangePolynomials) -> Result<(Matrix<f64>, Matrix
     Ok((left, right))
 }
 
-fn apply_stage2(
-    fine: &Matrix<f64>,
+fn apply_stage2<T: InterpolativeScalar>(
+    fine: &Matrix<T>,
     r_left: &Matrix<f64>,
     r_right: &Matrix<f64>,
-) -> Result<Matrix<f64>> {
+) -> Result<Matrix<T>> {
     if !fine.nrows().is_multiple_of(2) {
         return Err(invalid_argument("fine matrix row count must be even"));
     }
     let mut coarse = Matrix::zeros(fine.nrows() / 2, fine.ncols());
     for row in 0..coarse.nrows() {
         for gamma in 0..coarse.ncols() {
-            let mut value = 0.0;
+            let mut value = T::zero();
             for beta in 0..fine.ncols() {
-                value += r_left[[gamma, beta]] * fine[[2 * row, beta]];
-                value += r_right[[gamma, beta]] * fine[[2 * row + 1, beta]];
+                value = value + T::from_f64(r_left[[gamma, beta]]) * fine[[2 * row, beta]];
+                value = value + T::from_f64(r_right[[gamma, beta]]) * fine[[2 * row + 1, beta]];
             }
             coarse[[row, gamma]] = value;
         }

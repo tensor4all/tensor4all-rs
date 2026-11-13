@@ -2,10 +2,14 @@ use approx::assert_relative_eq;
 use quanticsgrids::{DiscretizedGrid, UnfoldingScheme};
 use tensor4all_simplett::{Tensor3, Tensor3Ops};
 
+use tensor4all_core::CommonScalar;
+
 use crate::interpolation::{checked_dim_add, dense_test_points, finest_level_scale, flatten_index};
 use crate::interval::NInterval;
 
 use super::*;
+
+mod complex;
 
 fn quantics_to_indices(quantics: &[usize]) -> Vec<usize> {
     quantics.to_vec()
@@ -72,10 +76,10 @@ fn for_each_grid_index(ndims: usize, points_per_dim: usize, mut f: impl FnMut(&[
     }
 }
 
-fn assert_tt_matches_grid_1d(
-    tt: &SimpleTensorTrain<f64>,
+fn assert_tt_matches_grid_1d<T: InterpolativeScalar + std::fmt::Debug>(
+    tt: &SimpleTensorTrain<T>,
     grid: &DiscretizedGrid,
-    f: impl Fn(f64) -> f64,
+    f: impl Fn(f64) -> T,
     tol: f64,
 ) {
     let n = 1usize << grid.rs()[0];
@@ -86,17 +90,17 @@ fn assert_tt_matches_grid_1d(
         let value = tt.evaluate(&quantics_to_indices(&quantics)).unwrap();
         let expected = f(coords[0]);
         assert!(
-            (value - expected).abs() < tol,
-            "grid index {grid_idx:?}: value {value}, expected {expected}, diff {}",
-            (value - expected).abs()
+            (value - expected).abs_val() < tol,
+            "grid index {grid_idx:?}: value {value:?}, expected {expected:?}, diff {}",
+            (value - expected).abs_val()
         );
     }
 }
 
-fn assert_tt_matches_grid_nd(
-    tt: &SimpleTensorTrain<f64>,
+fn assert_tt_matches_grid_nd<T: InterpolativeScalar + std::fmt::Debug>(
+    tt: &SimpleTensorTrain<T>,
     grid: &DiscretizedGrid,
-    f: impl Fn(&[f64]) -> f64,
+    f: impl Fn(&[f64]) -> T,
     tol: f64,
 ) {
     let ndims = grid.ndims();
@@ -107,9 +111,9 @@ fn assert_tt_matches_grid_nd(
         let value = tt.evaluate(&quantics_to_indices(&quantics)).unwrap();
         let expected = f(&coords);
         assert!(
-            (value - expected).abs() < tol,
-            "grid index {grid_idx:?}: value {value}, expected {expected}, diff {}",
-            (value - expected).abs()
+            (value - expected).abs_val() < tol,
+            "grid index {grid_idx:?}: value {value:?}, expected {expected:?}, diff {}",
+            (value - expected).abs_val()
         );
     });
 }
@@ -795,17 +799,18 @@ fn invert_qtt_compressed() {
     assert!(max_err < 1.0e-6);
 }
 
-#[test]
-fn invert_qtt_round_trip_uncompressed() {
-    let r = 8;
-    let degree = 10;
-    let a = 0.0;
-    let b = 1.0;
-    let f = |x: f64| (-x * x).exp();
+/// The largest distance between the finest inverted level of `f`'s interpolant
+/// on `[0, 1)` and the train's own values at the two samples of each cell.
+fn invert_round_trip_error<T: InterpolativeScalar>(
+    f: impl Fn(f64) -> T,
+    r: usize,
+    degree: usize,
+    opts: &InterpolativeQttOptions,
+) -> f64 {
+    let (a, b) = (0.0, 1.0);
     let basis = get_chebyshev_grid(degree).unwrap();
-    let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
 
-    let tt = interpolate_single_scale(f, a, b, r, degree, &opts).unwrap();
+    let tt = interpolate_single_scale(f, a, b, r, degree, opts).unwrap();
     let result = invert_qtt(&tt, &basis, 1).unwrap();
     let s = &result[r - 2];
     let grid = grid_1d(r, a, b);
@@ -819,51 +824,29 @@ fn invert_qtt_round_trip_uncompressed() {
         let tt_left = tt.evaluate(&quantics_to_indices(&left_q)).unwrap();
         let tt_right = tt.evaluate(&quantics_to_indices(&right_q)).unwrap();
 
-        let mut v_left = 0.0;
-        let mut v_right = 0.0;
+        let mut v_left = T::zero();
+        let mut v_right = T::zero();
         for beta in 0..=degree {
-            v_left += basis.evaluate(beta, 0.0).unwrap() * s[[i, beta]];
-            v_right += basis.evaluate(beta, 0.5).unwrap() * s[[i, beta]];
+            v_left = v_left + T::from_f64(basis.evaluate(beta, 0.0).unwrap()) * s[[i, beta]];
+            v_right = v_right + T::from_f64(basis.evaluate(beta, 0.5).unwrap()) * s[[i, beta]];
         }
-        max_err = max_err.max((v_left - tt_left).abs());
-        max_err = max_err.max((v_right - tt_right).abs());
+        max_err = max_err.max((v_left - tt_left).abs_val());
+        max_err = max_err.max((v_right - tt_right).abs_val());
     }
+    max_err
+}
+
+#[test]
+fn invert_qtt_round_trip_uncompressed() {
+    let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
+    let max_err = invert_round_trip_error(|x: f64| (-x * x).exp(), 8, 10, &opts);
     assert!(max_err < 1.0e-11);
 }
 
 #[test]
 fn invert_qtt_round_trip_compressed() {
-    let r = 10;
-    let degree = 10;
-    let a = 0.0;
-    let b = 1.0;
-    let f = |x: f64| (-x * x).exp();
-    let basis = get_chebyshev_grid(degree).unwrap();
     let opts = InterpolativeQttOptions::default().with_tolerance(1e-8);
-
-    let tt = interpolate_single_scale(f, a, b, r, degree, &opts).unwrap();
-    let result = invert_qtt(&tt, &basis, 1).unwrap();
-    let s = &result[r - 2];
-    let grid = grid_1d(r, a, b);
-
-    let mut max_err = 0.0_f64;
-    for i in 0..(1usize << (r - 1)) {
-        let left_idx = [2 * i];
-        let right_idx = [2 * i + 1];
-        let left_q = grid.grididx_to_quantics(&left_idx).unwrap();
-        let right_q = grid.grididx_to_quantics(&right_idx).unwrap();
-        let tt_left = tt.evaluate(&quantics_to_indices(&left_q)).unwrap();
-        let tt_right = tt.evaluate(&quantics_to_indices(&right_q)).unwrap();
-
-        let mut v_left = 0.0;
-        let mut v_right = 0.0;
-        for beta in 0..=degree {
-            v_left += basis.evaluate(beta, 0.0).unwrap() * s[[i, beta]];
-            v_right += basis.evaluate(beta, 0.5).unwrap() * s[[i, beta]];
-        }
-        max_err = max_err.max((v_left - tt_left).abs());
-        max_err = max_err.max((v_right - tt_right).abs());
-    }
+    let max_err = invert_round_trip_error(|x: f64| (-x * x).exp(), 10, 10, &opts);
     assert!(max_err < 1.0e-6);
 }
 
