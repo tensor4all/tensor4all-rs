@@ -21,7 +21,7 @@ use tensor4all_tensorbackend::{capped_full_piv_lu, CappedFullPivLuScalar, Matrix
 pub struct DenseLuKernel;
 
 impl DenseLuKernel {
-    fn is_no_truncation(options: &PivotKernelOptions, full_rank: usize) -> bool {
+    fn is_no_truncation(options: &PivotKernelOptions<'_>, full_rank: usize) -> bool {
         options.max_bond_dim >= full_rank && options.rel_tol == 0.0 && options.abs_tol == 0.0
     }
 
@@ -29,7 +29,7 @@ impl DenseLuKernel {
         diag_abs: &[f64],
         nrows: usize,
         ncols: usize,
-        options: &PivotKernelOptions,
+        options: &PivotKernelOptions<'_>,
     ) -> Vec<f64> {
         let full_rank = nrows.min(ncols);
         if full_rank == 0 {
@@ -92,7 +92,7 @@ impl DenseLuKernel {
         data: &[T],
         nrows: usize,
         ncols: usize,
-        options: &PivotKernelOptions,
+        options: &PivotKernelOptions<'_>,
     ) -> Result<PivotSelectionCore> {
         let lu_options = RrLUOptions {
             max_bond_dim: options.max_bond_dim,
@@ -133,7 +133,7 @@ impl DenseLuKernel {
     fn factorize_square_with_backend<T: MatrixLuciScalar + CappedFullPivLuScalar>(
         data: &[T],
         n: usize,
-        options: &PivotKernelOptions,
+        options: &PivotKernelOptions<'_>,
     ) -> Result<(PivotSelectionCore, usize)> {
         if data.iter().any(|&value| !value.abs_val().is_finite()) {
             return Err(MatrixLuciError::NaNEncountered {
@@ -203,7 +203,7 @@ macro_rules! impl_dense_kernel {
             fn factorize<S: CandidateMatrixSource<$t>>(
                 &self,
                 source: &S,
-                options: &PivotKernelOptions,
+                options: &PivotKernelOptions<'_>,
             ) -> Result<PivotSelectionCore> {
                 let run = |data: &[$t]| -> Result<PivotSelectionCore> {
                     let nrows = source.nrows();

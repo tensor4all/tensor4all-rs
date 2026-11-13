@@ -1416,3 +1416,66 @@ fn test_crossinterpolate2_numerically_zero_subdomain_issue598() {
     assert_eq!(tt.link_dims(), vec![1; R - PREFIX.len() - 1]);
     assert_eq!(result.termination, crate::TCI2Termination::Converged);
 }
+
+/// A bond's previous pivots become the rook search's seeds, expressed as
+/// positions in the combined candidate lists (`arrlu`'s `I0`/`J0`).
+///
+/// The halves of a pair come from two different lists, so a mapping that
+/// dropped one without the other would silently pair a pivot row with another
+/// wide column's index.
+#[test]
+fn seed_positions_pair_previous_pivots_by_position_in_the_combined_lists() {
+    let multi = |values: &[usize]| values.iter().map(|&v| vec![v]).collect::<Vec<_>>();
+    let previous_rows = multi(&[7, 3, 9]);
+    let previous_cols = multi(&[4, 8, 6]);
+    // The combined lists are the candidate rows and columns in their own order,
+    // not the previous pivot order.
+    let combined_rows = multi(&[1, 3, 5, 7, 9]);
+    let combined_cols = multi(&[8, 6, 4, 2]);
+
+    assert_eq!(
+        super::seed_positions(
+            &previous_rows,
+            &previous_cols,
+            &combined_rows,
+            &combined_cols
+        ),
+        vec![(3, 2), (1, 0), (4, 1)],
+        "pairs must follow the previous pivot order, not the combined order"
+    );
+
+    // A pivot whose row is gone loses its column too, so the remaining pairs
+    // stay aligned.
+    let combined_rows = multi(&[1, 3, 5, 9]);
+    assert_eq!(
+        super::seed_positions(
+            &previous_rows,
+            &previous_cols,
+            &combined_rows,
+            &combined_cols
+        ),
+        vec![(1, 0), (3, 1)]
+    );
+
+    // A candidate listed twice maps to its first position, as a linear scan
+    // would, so indexing the lists does not change which entry is seeded.
+    let duplicated_rows = multi(&[3, 7, 3, 9, 7]);
+    let duplicated_cols = multi(&[6, 4, 8, 4, 6]);
+    assert_eq!(
+        super::seed_positions(
+            &previous_rows,
+            &previous_cols,
+            &duplicated_rows,
+            &duplicated_cols
+        ),
+        vec![(1, 1), (0, 2), (3, 0)]
+    );
+
+    // Nothing to seed from on the first sweep, and a half-written state must
+    // not panic.
+    assert!(super::seed_positions(&[], &[], &combined_rows, &combined_cols).is_empty());
+    assert_eq!(
+        super::seed_positions(&previous_rows[..1], &[], &combined_rows, &combined_cols),
+        Vec::<(usize, usize)>::new()
+    );
+}
