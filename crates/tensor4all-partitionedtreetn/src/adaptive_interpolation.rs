@@ -973,7 +973,6 @@ impl Pins<'_> {
         }
     }
 
-    /// Pin the max reference unless one is pinned already.
     /// Record the root search behind a searched reference; only the root pins.
     fn pin_max_search(&mut self, search: MaxReferenceSearch) {
         if let Self::Root(references) = self {
@@ -983,6 +982,7 @@ impl Pins<'_> {
         }
     }
 
+    /// Pin the max reference unless one is pinned already.
     fn pin_max_reference(
         &mut self,
         reference: (f64, MaxReferenceSource),
@@ -1207,14 +1207,22 @@ const MAX_REFERENCE_SWEEPS: usize = 64;
 /// its coordinate, so the result stays a lower bound of `max |f|`.
 const MAX_REFERENCE_SCAN_DIM: usize = 4096;
 
+/// Most points [`search_max_magnitude`] sends to the sampler in one batch.
+/// A site scan of many starts is split into chunks of whole starts, so the
+/// batch buffer stays near `MAX_REFERENCE_BATCH_POINTS * n_active` coordinates
+/// however many starts there are; a start whose site alone is larger still
+/// goes in one batch, bounded by [`MAX_REFERENCE_SCAN_DIM`].
+const MAX_REFERENCE_BATCH_POINTS: usize = 1 << 16;
+
 /// Greedy coordinate ascent of `|f|` from every start, as `optfirstpivot` of
 /// TensorCrossInterpolation.jl (#1274).
 ///
 /// `starts` holds the start points column-major, `active_dims.len()`
 /// coordinates each, and `values` their sampled values. Each sweep visits the
 /// active sites in order; at a site it samples every coordinate value of that
-/// site for all starts in one batch and moves a start only on a strict
-/// increase of `|f|`. Sites with a local dimension above
+/// site for every start, in batches of at most [`MAX_REFERENCE_BATCH_POINTS`]
+/// points, and moves a start only on a strict increase of `|f|`. Starts move
+/// independently, so the batch split does not change the result. Sites with a local dimension above
 /// [`MAX_REFERENCE_SCAN_DIM`] are not scanned. The ascent stops when a sweep
 /// moves nothing, or after [`MAX_REFERENCE_SWEEPS`]. Every value goes through `sampler`, so it is
 /// cached and counted like any other evaluation. Returns the largest `|f|`
@@ -1225,6 +1233,26 @@ fn search_max_magnitude<T: CommonScalar + TensorElement>(
     starts: &[usize],
     values: &[T],
     active_dims: &[usize],
+    ctx: &mut EvalContext<'_>,
+) -> anyhow::Result<(f64, Vec<usize>, usize)> {
+    search_max_magnitude_in_batches(
+        sampler,
+        starts,
+        values,
+        active_dims,
+        MAX_REFERENCE_BATCH_POINTS,
+        ctx,
+    )
+}
+
+/// [`search_max_magnitude`] with at most `batch_points` points per sampler
+/// batch (at least one whole start per batch).
+fn search_max_magnitude_in_batches<T: CommonScalar + TensorElement>(
+    sampler: &cache::PatchSampler<'_, T>,
+    starts: &[usize],
+    values: &[T],
+    active_dims: &[usize],
+    batch_points: usize,
     ctx: &mut EvalContext<'_>,
 ) -> anyhow::Result<(f64, Vec<usize>, usize)> {
     let n_active = active_dims.len();
@@ -1262,24 +1290,30 @@ fn search_max_magnitude<T: CommonScalar + TensorElement>(
             if dim > MAX_REFERENCE_SCAN_DIM {
                 continue;
             }
-            let count = points.len() * dim;
-            let mut batch = Vec::with_capacity(count * n_active);
-            for point in &points {
-                for coordinate in 0..dim {
-                    batch.extend_from_slice(point);
-                    let last = batch.len() - n_active + site;
-                    batch[last] = coordinate;
+            let starts_per_batch = (batch_points / dim).max(1);
+            for (points, best) in points
+                .chunks_mut(starts_per_batch)
+                .zip(best.chunks_mut(starts_per_batch))
+            {
+                let count = points.len() * dim;
+                let mut batch = Vec::with_capacity(count * n_active);
+                for point in points.iter() {
+                    for coordinate in 0..dim {
+                        batch.extend_from_slice(point);
+                        let last = batch.len() - n_active + site;
+                        batch[last] = coordinate;
+                    }
                 }
-            }
-            let shape = [n_active, count];
-            let sampled = sampler.sample(ColMajorArrayRef::new(&batch, &shape)?, ctx)?;
-            for (start, (point, best)) in points.iter_mut().zip(&mut best).enumerate() {
-                for coordinate in 0..dim {
-                    let magnitude = sampled[start * dim + coordinate].abs_val();
-                    if magnitude > *best {
-                        *best = magnitude;
-                        point[site] = coordinate;
-                        moved = true;
+                let shape = [n_active, count];
+                let sampled = sampler.sample(ColMajorArrayRef::new(&batch, &shape)?, ctx)?;
+                for (start, (point, best)) in points.iter_mut().zip(best.iter_mut()).enumerate() {
+                    for coordinate in 0..dim {
+                        let magnitude = sampled[start * dim + coordinate].abs_val();
+                        if magnitude > *best {
+                            *best = magnitude;
+                            point[site] = coordinate;
+                            moved = true;
+                        }
                     }
                 }
             }
