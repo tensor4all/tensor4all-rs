@@ -685,9 +685,11 @@ numerically (the centre carries the whole norm) rather than through
 
 ### Truncating application with a certified bound (#1286)
 
-Status: design, under review in
-[#1286](https://github.com/tensor4all/tensor4all-rs/issues/1286). Nothing
-below is implemented yet.
+Status: the API was agreed on
+[#1296](https://github.com/tensor4all/tensor4all-rs/pull/1296#issuecomment-6867000238)
+(see "Decisions" at the end of this section). The treetn kernel is implemented
+as `apply_linear_operator_certified`; "Implementation notes" records where it
+departs from the algorithm as first written.
 
 **Problem.** Two interleaved axes at R = 20 give 40 binary sites. Over the
 middle of the chain the exact image can be as wide as the product bond (input
@@ -809,19 +811,44 @@ and `C_k` is backend roundoff, which the report already excludes.
   reporting the measured peak, the per-step bounds and the total bound. Its
   sampled DFT error must be inside the reported bound.
 
-**Open for review.** These are public API, so the maintainer decides them
-with this record.
-1. The API names and placement above.
-2. Opt-in or automatic: whether the front end should choose the certified
-   application itself when the exact one would exceed its limits.
-3. The default share of the global allowance given to the application.
+**Implementation notes** (treetn kernel).
+- *No fallback certificate.* The `||D_k||_F sigma_k` fallback of step 4 is not
+  implemented, because it cannot pay off. Write `g_a = gamma_{2m+2}`,
+  `g_b = gamma_{2n+2}` and `s = ||L_k||_2 >= ||L_k||_F / sqrt(n)`. The product
+  error bound gives `fl(||D L||) <= (||D|| s + g_b ||D|| ||L||_F)(1 + g_a)`, so
+  the linear form is at most `||D|| s ((1 + g_a)^2 + 2 g_b (1 + g_a) sqrt(n))`.
+  The fallback is therefore smaller by at most a relative
+  `O(gamma_{2n+2} sqrt(n))`, about `3e-10` at the R = 20 maximum `n = 7056`,
+  and never enough to change a kept rank. A step whose linear form exceeds its
+  share keeps one more direction instead.
+- *Sweep direction.* The sweep runs in the direction whose estimate is
+  smaller. For R = 20 that is the "last to first" direction of step 2; the
+  choice now follows from the measured bonds instead of a fixed orientation.
+- *Memory estimate.* The gate counts the stored factors plus the largest
+  working tensor: a factor QR input and its `Q`, or a block, its projection and
+  its discarded part. The bond dimensions are the input ones, which bound the
+  canonicalized ones.
+- *Rounding of the margin and the sum.* The computed `||D_k||_F` and
+  `||L_k||_F` in the margin are rounded up by `1 + gamma_{2c+2}` (`c` entries),
+  and the total `sqrt(sum e_k^2)` by `1 + gamma_{N+1}`. The shares come from the
+  budget divided by that last factor, so the reported bound never exceeds the
+  budget.
+- *Rank search.* The first candidate is the smallest rank whose
+  exact-arithmetic tail plus the margin (with `||C_k||` for `||D_k||`) fits the
+  share; the certificate of the actual `D_k` then accepts it, or the rank grows
+  by one. At the largest rank the SVD offers, a step that still does not fit
+  reports `BudgetUnreachable`.
 
-Reviewer recommendation on #1296, explicitly not a decision:
-- keep the certified path an **explicit opt-in**, because the reported error
-  changes meaning and that should be visible at the call site;
-- make the application's share of the allowance a **required argument**, not
-  a hidden default;
-- keep the proposed names.
+**Decisions** (#1296, maintainer).
+1. Names as proposed: `apply_linear_operator_certified`,
+   `CertifiedApplyOptions { budget, memory_limit }`, `CertifiedApplication`.
+   In the partitioned options the application choice is one enum (exact,
+   certified with a share, measured), not a combination of flags.
+2. Explicit opt-in, no automatic choice: the reported error changes meaning
+   (measured difference vs. certified bound), and an automatic switch would
+   contradict the no-silent-fallback rule of the memory gate.
+3. The application's share of the allowance is a required argument with no
+   default, validated as a typed error outside `(0, 1]`.
 
 ## Fourier front end and operator node names
 

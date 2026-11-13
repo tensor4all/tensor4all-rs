@@ -54,6 +54,13 @@
   type. It is the operand a `PartitionedTreeTN` contraction such as
   `contract_adaptive` needs, without rewriting indices or promoting dtypes by
   hand.
+- `tensor4all-treetn` adds `apply_linear_operator_certified` and
+  `apply_linear_operator_certified_to_indices`, with `CertifiedApplyOptions`,
+  `CertifiedApplication` and `CertifiedApplyError` (#1286). On a chain state
+  they truncate during the zip-up sweep and return a proved bound on
+  `||A x - y||`, at most the caller's absolute budget, without forming the exact
+  image. The exact factors the certificate needs are estimated before they are
+  built, and an estimate above the memory limit (4 GiB by default) is refused.
 
 ### Breaking Rust API changes
 

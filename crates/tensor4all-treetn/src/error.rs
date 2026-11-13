@@ -127,6 +127,87 @@ pub enum LinearOperatorIndexApplyError {
     },
 }
 
+/// Error returned by [`apply_linear_operator_certified`](crate::apply_linear_operator_certified)
+/// and its index-binding form.
+///
+/// Every variant is a refusal, never a relaxation: the application does not fall
+/// back to an unchecked or differently truncated run, and an unreachable budget
+/// is reported instead of being widened.
+///
+/// # Examples
+/// ```
+/// use tensor4all_treetn::CertifiedApplyError;
+///
+/// let err = CertifiedApplyError::MemoryLimit {
+///     estimated_bytes: 6 << 30,
+///     limit_bytes: 4 << 30,
+/// };
+/// assert!(err.to_string().contains("memory limit"));
+/// ```
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum CertifiedApplyError {
+    /// The options are invalid: a budget that is negative or not finite.
+    #[error("invalid certified-application options: {reason}")]
+    InvalidOptions {
+        /// What is wrong with the options.
+        reason: String,
+    },
+    /// The state, or the operator on it, is not a chain. The certificate relies
+    /// on the chain sweep, where the step errors are mutually orthogonal.
+    #[error("certified application is unsupported here: {reason}")]
+    UnsupportedTopology {
+        /// Which part of the topology is unsupported.
+        reason: String,
+    },
+    /// The estimated memory of the exact factors and the largest working
+    /// tensor exceeds the limit. Raised before any factor is built.
+    ///
+    /// # Remedy
+    ///
+    /// Raise [`CertifiedApplyOptions::memory_limit`](crate::CertifiedApplyOptions::memory_limit)
+    /// if the machine has the memory, or apply the operator to smaller pieces of
+    /// the state (finer patches), whose bonds are smaller.
+    #[error(
+        "certified application needs an estimated {estimated_bytes} bytes, above the memory limit \
+         of {limit_bytes} bytes; raise the limit or apply the operator to finer patches"
+    )]
+    MemoryLimit {
+        /// Estimated peak bytes: the stored factors plus the largest working tensor.
+        estimated_bytes: usize,
+        /// The limit from the options.
+        limit_bytes: usize,
+    },
+    /// Even keeping every direction the sweep can keep, the certified error of
+    /// a step exceeds its share of the budget. This happens only for a budget
+    /// at the level of floating-point roundoff.
+    #[error(
+        "error budget {budget:e} cannot be certified: step {step} is bounded by {step_bound:e} \
+         at full rank, above its share {share:e}"
+    )]
+    BudgetUnreachable {
+        /// The requested budget.
+        budget: f64,
+        /// Index of the sweep step, counted from the start of the sweep.
+        step: usize,
+        /// The smallest certified bound of that step.
+        step_bound: f64,
+        /// The step's share of the budget.
+        share: f64,
+    },
+    /// Rebinding the operator's true indices failed before application.
+    #[error("failed to bind operator indices: {0}")]
+    BindIndices(#[from] LinearOperatorIndexBindingError),
+    /// Extending the operator, transforming indices, or a tensor operation of
+    /// the sweep failed.
+    #[error("certified application failed: {source}")]
+    Operation {
+        /// The underlying failure.
+        #[source]
+        source: TreeTNOperationError,
+    },
+}
+
 /// Error returned when applying a linear operator to state indices selected by
 /// numbered tags.
 ///

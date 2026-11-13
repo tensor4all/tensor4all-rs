@@ -64,6 +64,7 @@ pub(super) enum ZipupTopologyMode {
 
 pub(super) mod randomized;
 pub use randomized::{contract_with_rng, contract_with_rng_in};
+pub(crate) mod certified;
 mod outcome;
 mod zipup_control;
 pub use outcome::{
