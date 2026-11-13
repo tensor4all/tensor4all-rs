@@ -38,6 +38,12 @@ pub trait MatrixLuciScalar:
 
     /// [`Self::matrix_luci_factors_from_blocks`] with the previous pivots of
     /// the same candidate matrix as the rook search's starting points.
+    ///
+    /// The default ignores `seeds` and forwards to
+    /// [`Self::matrix_luci_factors_from_blocks`], so adding this method does
+    /// not require existing implementations to change. Seeds only move where
+    /// rook walks start and carry no error guarantee, so ignoring them is a
+    /// valid, unseeded factorization. Core's implementations override it.
     #[doc(hidden)]
     fn matrix_luci_factors_from_blocks_seeded<F>(
         nrows: usize,
@@ -48,7 +54,11 @@ pub trait MatrixLuciScalar:
     ) -> Result<MatrixLuciFactors<Self>>
     where
         F: Fn(&[usize], &[usize], &mut [Self]),
-        Self: Sized;
+        Self: Sized,
+    {
+        let _ = seeds;
+        Self::matrix_luci_factors_from_blocks(nrows, ncols, fill_block, options)
+    }
 
     /// Triangular solve on an explicit session (non-unit diagonal, no transpose).
     #[doc(hidden)]
