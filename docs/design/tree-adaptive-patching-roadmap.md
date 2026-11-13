@@ -385,8 +385,12 @@ implemented. Library tests cover the three layouts of Grosso et al.
 (arXiv:2602.22372v3, section 4.4 and appendix D) on a star with a
 degree-three hub: they check the compatible-pair count (`N_p`, `N_p^2`,
 `N_p^1.5`), the output grouping, dense values with and without a cap, and
-that a capped output is below the cap or has no split candidate left. The
-overhead items and the benchmark half of the exit are open.
+that a capped output is below the cap or has no split candidate left. A
+trie over the patch projectors (`projector/index.rs`, #1293) replaces the
+pairwise disjointness validation and the `N_A * N_B` pair enumeration, which
+were quadratic and dominated `contract` beyond a few thousand output patches.
+The `norm`/`norm_squared` caching and the benchmark half of the exit are
+open.
 
 Exit: library tests cover the worst, best, and general patch layouts on
 branched trees; a benchmark reproduces their qualitative ordering under the

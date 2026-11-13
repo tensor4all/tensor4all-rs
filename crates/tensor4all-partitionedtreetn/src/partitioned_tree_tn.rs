@@ -9,6 +9,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use crate::error::{PartitionedTreeTNError, Result};
+use crate::projector::index::{has_overlapping_pair, sets_overlap, ProjectorIndex};
 use crate::projector::{canonical_index_cmp, Projector};
 use crate::subdomain_tree_tn::{
     contraction_output_site_indices, ensure_center, ensure_same_dtype, ensure_same_topology,
@@ -339,11 +340,13 @@ where
             }
         }
         debug_assert!(
-            subdomains.iter().enumerate().all(|(position, left)| {
-                subdomains[position + 1..]
+            !has_overlapping_pair(
+                &subdomains
                     .iter()
-                    .all(|right| !left.projector().is_compatible_with(right.projector()))
-            }),
+                    .map(SubDomainTreeTN::projector)
+                    .collect::<Vec<_>>(),
+                false
+            ),
             "from_disjoint_subdomains requires pairwise disjoint projectors"
         );
         let data = subdomains
@@ -450,15 +453,7 @@ where
             ensure_same_dtype(left.scalar_kind()?, right.scalar_kind()?)?;
         }
 
-        for right_projector in other.data.keys() {
-            for left_projector in self.data.keys() {
-                if right_projector != left_projector
-                    && right_projector.is_compatible_with(left_projector)
-                {
-                    return Err(PartitionedTreeTNError::OverlappingProjectors);
-                }
-            }
-        }
+        ensure_union_disjoint(&self.data, &other.data)?;
 
         for (projector, subdomain) in other.data {
             self.data.remove(&projector);
@@ -955,26 +950,28 @@ where
         other: &Self,
         truncation: Option<(&V, TruncationOptions)>,
     ) -> Result<Self> {
+        // The union is disjoint up to equal keys, which are summed into one
+        // patch, so the result needs no per-insert overlap scan.
         ensure_union_disjoint(&self.data, &other.data)?;
 
-        let mut result = Self::new();
+        let mut data = HashMap::with_capacity(self.data.len() + other.data.len());
         for (projector, left) in &self.data {
             if let Some(right) = other.data.get(projector) {
                 let mut sum = left.add(right)?;
                 if let Some((center, options)) = truncation {
                     sum.truncate(center, options)?;
                 }
-                result.insert_prevalidated(sum)?;
+                data.insert(projector.clone(), sum);
             } else {
-                result.insert_prevalidated(left.clone())?;
+                data.insert(projector.clone(), left.clone());
             }
         }
         for (projector, right) in &other.data {
             if !self.data.contains_key(projector) {
-                result.insert_prevalidated(right.clone())?;
+                data.insert(projector.clone(), right.clone());
             }
         }
-        Ok(result)
+        Ok(Self { data })
     }
 
     /// Contract two partitions at an explicit center.
@@ -1057,21 +1054,23 @@ where
             return Ok(None);
         };
 
+        // Only overlapping pairs have an output; the index lists them in the
+        // order of the right operand's patches, as the pairwise loop did.
+        let rights: Vec<&SubDomainTreeTN<V>> = other.data.values().collect();
+        let right_projectors: Vec<&Projector> =
+            rights.iter().map(|right| right.projector()).collect();
+        let right_index = ProjectorIndex::new(&right_projectors);
         let mut outputs: Vec<Projector> = Vec::new();
-        let mut overlaps = false;
         for left in self.data.values() {
-            for right in other.data.values() {
-                let Some(merged) = left.projector().intersection(right.projector()) else {
+            for position in right_index.overlapping(left.projector()) {
+                let Some(merged) = left.projector().intersection(right_projectors[position]) else {
                     continue;
                 };
-                let output = merged.filter_indices(&output_sites);
-                overlaps |= outputs
-                    .iter()
-                    .any(|seen| seen != &output && seen.is_compatible_with(&output));
-                outputs.push(output);
+                outputs.push(merged.filter_indices(&output_sites));
             }
         }
-        if !overlaps {
+        let output_references: Vec<&Projector> = outputs.iter().collect();
+        if !has_overlapping_pair(&output_references, true) {
             return Ok(None);
         }
 
@@ -1307,8 +1306,16 @@ where
 
         let left_patches = self.ordered_patches();
         let right_patches = other.ordered_patches();
+        // The index returns the overlapping right patches by position, so pairs
+        // keep the left-then-right logical order of the pairwise loop.
+        let right_projectors: Vec<&Projector> = right_patches
+            .iter()
+            .map(|right| right.projector())
+            .collect();
+        let right_index = ProjectorIndex::new(&right_projectors);
         for left in left_patches {
-            for &right in &right_patches {
+            for position in right_index.overlapping(left.projector()) {
+                let right = right_patches[position];
                 let Some(merged) = left.projector().intersection(right.projector()) else {
                     continue;
                 };
@@ -1435,14 +1442,9 @@ where
         }
     }
 
-    for (position, left) in candidates.iter().enumerate() {
-        for right in candidates.iter().skip(position + 1) {
-            if left.projector() != right.projector()
-                && left.projector().is_compatible_with(right.projector())
-            {
-                return Err(PartitionedTreeTNError::OverlappingProjectors);
-            }
-        }
+    let projectors: Vec<&Projector> = candidates.iter().map(|c| c.projector()).collect();
+    if has_overlapping_pair(&projectors, true) {
+        return Err(PartitionedTreeTNError::OverlappingProjectors);
     }
     Ok(())
 }
@@ -1554,14 +1556,10 @@ fn ensure_union_disjoint<V>(
 where
     V: Clone + Hash + Eq + Send + Sync + Debug,
 {
-    for left_projector in left.keys() {
-        for right_projector in right.keys() {
-            if left_projector != right_projector
-                && left_projector.is_compatible_with(right_projector)
-            {
-                return Err(PartitionedTreeTNError::OverlappingProjectors);
-            }
-        }
+    let left: Vec<&Projector> = left.keys().collect();
+    let right: Vec<&Projector> = right.keys().collect();
+    if sets_overlap(&left, &right, true) {
+        return Err(PartitionedTreeTNError::OverlappingProjectors);
     }
     Ok(())
 }
