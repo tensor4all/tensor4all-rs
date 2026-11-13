@@ -23,8 +23,7 @@
   (#1279). The naive product's bonds were input bond × operator bond, 7200 for
   two interleaved axes at R = 10, which ran out of memory; the zip-up keeps
   the images' bonds at their physical bound, and that case now completes with
-  a 4.0 GiB peak. Results are unchanged up to roundoff; images that cancel
-  exactly can now merge into zero at zero tolerance. On a tree that is not a
+  a 4.0 GiB peak. Results are unchanged up to roundoff. On a tree that is not a
   chain, a patch whose zip-up is estimated to form a block above `2^28`
   elements is refused with `ResourceLimit` before any application. Two
   interleaved axes at R = 20 remain out of reach.

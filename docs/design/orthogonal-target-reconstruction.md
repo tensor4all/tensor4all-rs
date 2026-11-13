@@ -589,9 +589,12 @@ one host; the naive column was measured before the change):
 - The existing schedule tests cover exact mode (`error_bound == 0`) and a
   truncating `apply_options` whose measured deviation is charged. One existing
   test changed: in `subset_operator_scale_is_not_measured_under_destructive_interference`
-  the two images are now exact negatives, so zero-tolerance reconstruction
-  merges them into the zero function and keeps no term or region; the naive
-  images summed to a 6e-16 residual and both stayed.
+  the two images are negatives of each other. Whether their roundoff residual
+  cancels exactly depends on the platform's SVD: on Linux the zip-up images
+  merge into the zero function and no term stays, while on macOS (Accelerate)
+  both stay, as both naive images did. The test therefore asserts what holds
+  on every platform: nothing is charged, at most the two terms stay, and their
+  sum is zero to roundoff.
 - Heavy: `heavy_gaussian_2d_interleaved_r10` in
   `tensor4all-quanticstransform/tests/heavy_patched_fourier.rs`. It runs the
   front end only, one schedule (about 14 minutes here with one thread, 332 s
