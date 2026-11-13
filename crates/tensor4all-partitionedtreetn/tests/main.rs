@@ -18,6 +18,7 @@ mod adaptive_m2_golden;
 mod adaptive_patch_size;
 mod adaptive_rounding_calibration;
 mod heavy_adaptive_l2_corner_miss;
+mod operator_state_network;
 mod partitioned_tree_tn;
 mod patch_order_determinism;
 mod patching;

@@ -1168,9 +1168,30 @@ where
     <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    let state_network = state.site_index_network();
+    extend_operator_on_network(operator, state.site_index_network(), &|name: &V| {
+        state.node_site_indices(name)
+    })
+}
+
+/// [`extend_operator_to_full_space`] on a site index network.
+///
+/// `site_order` lists a node's site indices in the order the gap identity at
+/// that node stores its legs; it must return every index of the node's site
+/// space.
+#[allow(clippy::type_complexity)]
+pub(crate) fn extend_operator_on_network<T, V>(
+    operator: &LinearOperator<T, V>,
+    state_network: &crate::site_index_network::SiteIndexNetwork<V, T::Index>,
+    site_order: &dyn Fn(&V) -> Option<Vec<T::Index>>,
+) -> Result<(LinearOperator<T, V>, IdentityNodes<T::Index, V>)>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
     let op_nodes: HashSet<V> = operator.node_names();
-    let state_nodes: HashSet<V> = state.node_names().into_iter().collect();
+    let state_nodes: HashSet<V> = state_network.node_names().into_iter().cloned().collect();
     let mut op_node_indices: HashSet<petgraph::stable_graph::NodeIndex> = HashSet::new();
     for name in &op_nodes {
         let node_index = state_network.node_index(name).ok_or_else(|| {
@@ -1200,8 +1221,7 @@ where
     for gap_name in &gap_nodes {
         // Site legs in the state tensor's leg order, so the identity tensor's
         // layout does not depend on hash-set iteration order.
-        let site_space = state
-            .node_site_indices(gap_name)
+        let site_space = site_order(gap_name)
             .ok_or_else(|| anyhow::anyhow!("Gap node {:?} has no site space", gap_name))?;
 
         // For identity at gap nodes:
