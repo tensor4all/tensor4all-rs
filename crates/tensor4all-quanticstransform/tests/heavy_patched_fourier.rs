@@ -45,15 +45,16 @@ fn peak_rss_kib() -> Option<u64> {
 // 1024 here (#1279). Its peak follows that physical bound, not the compressed
 // rank, so the case runs in a child process under an 8 GiB address-space
 // ceiling: an allocation above it fails the child and so this test, instead of
-// the runner's OOM killer ending the job. Each schedule spends about 6
-// minutes on the exact images with one thread (QR since #1285), so the case
-// runs the front end only. R = 20 interleaved, where the exact image itself can be 7200 wide, is
-// not covered.
+// the runner's OOM killer ending the job. Since the exact images factorize by
+// QR (#1285) each schedule takes about 6 minutes with one thread, so the case
+// runs the separately timed schedule and the front end, as the other cases do.
+// R = 20 interleaved, where the exact image itself can be 7200 wide, is not
+// covered.
 #[test]
 #[ignore = "heavy: runs in the scheduled heavy-tests workflow (see CONTRIBUTING.md)"]
 fn heavy_gaussian_2d_interleaved_r10() {
     if std::env::var_os(INTERLEAVED_CHILD).is_some() || !cfg!(target_os = "linux") {
-        let measured = large_fourier::run_case(10, 2, true, Runs::FrontEndOnly).unwrap();
+        let measured = large_fourier::run_case(10, 2, true, Runs::ScheduleAndFrontEnd).unwrap();
         assert!(measured.reconstruction_bound > 0.0);
         assert!(measured.compressions > 0);
         match peak_rss_kib() {
