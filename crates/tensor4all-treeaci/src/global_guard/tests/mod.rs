@@ -540,14 +540,14 @@ fn exact_output_has_no_global_pivot_and_injection_updates_every_cut() {
 /// This is the defect the candidate/pivot split exists to prevent: the old
 /// single `ActivePivotSets` let an injection push a repeated id onto the
 /// already-represented side of a cut, which put two identical rows in `P_e`.
-/// Candidate sets may carry that repeat harmlessly — the rank-revealing step
-/// simply declines to select it twice — but the pivot pairs must not.
+/// Query candidates must remain distinct without changing the pivot pairs.
 #[test]
 fn injection_leaves_pivot_pairs_untouched_and_keeps_bonds_in_step() {
     let (input, _, _) = delta_tree();
     let options = TreeAciOptions::default();
     let inputs = vec![input];
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let ranks_before = state.edge_ranks.clone();
     let pivots_before = state.pivots.clone();
 
     inject_global_pivots(
@@ -580,16 +580,19 @@ fn injection_leaves_pivot_pairs_untouched_and_keeps_bonds_in_step() {
         );
     }
 
-    // INVARIANT: in the moving-centre representation an output core's incoming
-    // axes are reshaped over the candidate row space, so each bond dimension
-    // must equal both directed candidate-set sizes. This is what forces
-    // injection to pad the bond, and to grow both orientations together.
-    for edge_number in 0..state.edge_ranks.len() {
-        let forward = state.candidates.ids[2 * edge_number].len();
-        let reverse = state.candidates.ids[2 * edge_number + 1].len();
-        assert_eq!(forward, reverse, "cut {edge_number} grew asymmetrically");
-        assert_eq!(state.output.link_dims()[edge_number], forward);
-    }
+    // Query pools can grow independently in each orientation. Selected output
+    // dimensions continue to match the pivot basis, not query pool lengths.
+    assert_eq!(state.edge_ranks, ranks_before);
+    assert_eq!(state.output.link_dims(), ranks_before);
+    assert_eq!(
+        state
+            .candidates
+            .ids
+            .iter()
+            .map(Vec::len)
+            .collect::<Vec<_>>(),
+        vec![2, 2]
+    );
 }
 
 /// Gate 1 of the three growth gates inherited from train ACI: the guard offers
@@ -626,7 +629,7 @@ fn max_nglobal_pivots_caps_what_the_guard_offers() {
 /// Gate 3: a point already represented in every candidate set adds nothing.
 ///
 /// Gate 2, algebraic saturation, is covered by
-/// `injection_skips_saturated_cuts_but_retains_recursive_records`.
+/// `injection_retains_records_without_publishing_a_blocked_parent`.
 #[test]
 fn an_already_represented_point_adds_nothing() {
     let (input, _, _) = delta_tree();
@@ -649,7 +652,7 @@ fn an_already_represented_point_adds_nothing() {
 }
 
 #[test]
-fn injection_skips_saturated_cuts_but_retains_recursive_records() {
+fn injection_retains_records_without_publishing_a_blocked_parent() {
     let site0 = DynIndex::new_dyn(2);
     let site1 = DynIndex::new_dyn(2);
     let site2 = DynIndex::new_dyn(2);
@@ -691,14 +694,18 @@ fn injection_skips_saturated_cuts_but_retains_recursive_records() {
     assert_eq!(injected, 1);
     assert_eq!(state.candidates.ids[0].len(), before[0]);
     assert_eq!(state.candidates.ids[1].len(), before[1]);
-    assert_eq!(state.candidates.ids[2].len(), before[2] + 1);
+    assert_eq!(
+        state.candidates.ids[2].len(),
+        before[2],
+        "the blocked parent is not a useful candidate"
+    );
     assert_eq!(state.candidates.ids[3].len(), before[3] + 1);
-    assert_eq!(state.edge_ranks, vec![1, 2]);
-    assert_eq!(state.output.link_dims(), vec![1, 2]);
+    assert_eq!(state.edge_ranks, vec![1, 1]);
+    assert_eq!(state.output.link_dims(), vec![1, 1]);
     assert_eq!(
         state.output.bond_index(saturated_edge),
         Some(&saturated_bond),
-        "padding another cut must not replace an inactive bond"
+        "query activation must not replace a selected basis bond"
     );
     assert!(state.sample_arena.record_count() > records_before);
     run_directional_pass(
@@ -749,8 +756,8 @@ fn injection_never_exceeds_the_remaining_cut_capacity() {
     .unwrap();
 
     assert_eq!(injected, 1);
-    assert_eq!(state.edge_ranks, vec![2]);
-    assert_eq!(state.output.link_dims(), vec![2]);
+    assert_eq!(state.edge_ranks, vec![1]);
+    assert_eq!(state.output.link_dims(), vec![1]);
     assert!(state
         .candidates
         .ids
@@ -795,7 +802,7 @@ fn empty_global_pivot_injection_validates_capacity_without_mutating_state() {
 }
 
 #[test]
-fn injection_rank_overflow_rolls_back_every_staged_state_change() {
+fn injection_candidate_limit_overflow_leaves_every_state_component_unchanged() {
     let (input, _, _) = delta_tree();
     let options = TreeAciOptions {
         max_bond_dim: Some(1),
@@ -822,12 +829,12 @@ fn injection_rank_overflow_rolls_back_every_staged_state_change() {
         &[1],
         &mut crate::exec::Exec::Global,
     )
-    .expect_err("rank overflow must be reported before publication");
+    .expect_err("candidate limit overflow must be reported before publication");
 
     assert!(matches!(
         error,
         crate::TreeAciError::SizeOverflow {
-            context: "global-pivot output rank"
+            context: "global-pivot candidate limit"
         }
     ));
     assert!(state
@@ -992,18 +999,10 @@ fn scan_site_selects_the_hinted_center() {
     assert_eq!(evaluators.hint_for_scan_site(Some(99)).center, None);
 }
 
-/// Padding rejects an over-budget request before allocating any padded core.
-///
-/// Sizing and allocation used to share one loop, with the aggregate
-/// `max_working_bytes` comparison after it, so every core was already allocated
-/// and retained by the time the caller was told the request was refused. The
-/// per-core `max_core_elements` bound did not help: N nodes each just under it
-/// still peak at N times that, whatever the working ceiling says.
-///
-/// The check now runs on the planned total, so a one-byte ceiling refuses the
-/// request outright.
+/// Candidate activation rejects an over-budget plan before projecting samples.
+/// Guard no longer allocates or pads output cores.
 #[test]
-fn padding_refuses_an_over_budget_request() {
+fn candidate_planning_refuses_an_over_budget_request() {
     let (input, _, _) = delta_tree();
     let options = TreeAciOptions {
         max_bond_dim: Some(1),
@@ -1011,7 +1010,7 @@ fn padding_refuses_an_over_budget_request() {
     };
     let inputs = vec![input];
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
-    // Tighten after preparation so this exercises the padding check rather than
+    // Tighten after preparation so this exercises the candidate planning check rather than
     // the preparation-time one, which would reject the run before injection.
     state.problem.max_working_bytes = 1;
     let error = inject_global_pivots(
@@ -1020,7 +1019,7 @@ fn padding_refuses_an_over_budget_request() {
         &[1],
         &mut crate::exec::Exec::Global,
     )
-    .expect_err("a one-byte working ceiling must refuse padding");
+    .expect_err("a one-byte working ceiling must refuse candidate planning");
     assert!(
         matches!(
             error,

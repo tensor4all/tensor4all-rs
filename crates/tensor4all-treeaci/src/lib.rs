@@ -45,6 +45,7 @@
 //! benchmark when that distinction matters. This crate is the native choice
 //! for genuinely branched trees.
 
+mod basis_projection;
 mod batch;
 #[cfg(feature = "diagnostics")]
 pub mod branch_diagnostics;

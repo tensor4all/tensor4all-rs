@@ -371,12 +371,11 @@ fn profile_high_rank_chain_phases_and_candidate_cache() {
             profile.output_metadata,
         );
         eprintln!(
-            "high-rank chain chi={chi} global guard enabled={enable_global_guard}: search={:?}, injection={:?} {{candidate_clone={:?}, projection={:?}, output_padding={:?}, frame_extension={:?}}}, input_eval={:?}/{} calls/{} scalar results, output_eval={:?}/{} calls/{} scalar results",
+            "high-rank chain chi={chi} global guard enabled={enable_global_guard}: search={:?}, injection={:?} {{candidate_clone={:?}, projection={:?}, frame_extension={:?}}}, input_eval={:?}/{} calls/{} scalar results, output_eval={:?}/{} calls/{} scalar results",
             profile.global_guard,
             profile.global_injection,
             profile.guard_candidate_clone,
             profile.guard_projection,
-            profile.guard_output_padding,
             profile.guard_frame_extension,
             profile.guard_input_evaluation,
             profile.guard_input_calls,
@@ -617,12 +616,11 @@ fn profile_unequal_incident_bonds_at_coordination_four() {
             crate::frames::debug_stats::core_element_reads(),
         );
         eprintln!(
-            "spider {name} global guard enabled={enable_global_guard}: search={:?}, injection={:?} {{candidate_clone={:?}, projection={:?}, output_padding={:?}, frame_extension={:?}}}, input_eval={:?}/{} calls/{} scalar results, output_eval={:?}/{} calls/{} scalar results",
+            "spider {name} global guard enabled={enable_global_guard}: search={:?}, injection={:?} {{candidate_clone={:?}, projection={:?}, frame_extension={:?}}}, input_eval={:?}/{} calls/{} scalar results, output_eval={:?}/{} calls/{} scalar results",
             profile.global_guard,
             profile.global_injection,
             profile.guard_candidate_clone,
             profile.guard_projection,
-            profile.guard_output_padding,
             profile.guard_frame_extension,
             profile.guard_input_evaluation,
             profile.guard_input_calls,

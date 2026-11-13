@@ -2,6 +2,10 @@
 
 use std::{collections::HashMap, mem::size_of};
 
+mod activation;
+use activation::CandidateActivation;
+pub(crate) use activation::CandidateCapacity;
+
 use crate::{
     problem::{DirectedEdgeId, PreparedTreeProblem},
     Result, TreeAciError, TreeAciNode,
@@ -63,11 +67,10 @@ pub(crate) struct SampleArenaCheckpoint {
 
 /// Candidate component samples per directed cut.
 ///
-/// These feed the candidate row and column spaces of *neighbouring* edges. They
-/// are replaced when their own edge is updated and appended to by global pivot
-/// injection. They are deliberately not the same thing as the pivot pairs that
-/// set a bond's rank: a duplicate here is a harmless redundant candidate, while
-/// a duplicate in a pivot list makes `P_e` singular.
+/// These feed neighbouring edges' search grids and may contain more samples
+/// than the current output bond has basis axes. Only distinct useful samples
+/// are stored. The selected child pivots occupy the unchanged prefix; local
+/// factor construction restricts an enlarged grid back to that child basis.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CandidateSets {
     pub(crate) generation: u64,
@@ -343,13 +346,7 @@ impl SampleArena {
         problem: &PreparedTreeProblem<V>,
         point: &[usize],
     ) -> Result<InjectionReport> {
-        self.inject_global_point_impl(
-            candidates,
-            problem,
-            point,
-            &vec![true; problem.directed_edges.len()],
-            false,
-        )
+        self.inject_global_point_impl(candidates, problem, point, None)
     }
 
     pub(crate) fn inject_global_point_masked<V: TreeAciNode>(
@@ -357,9 +354,9 @@ impl SampleArena {
         candidates: &mut CandidateSets,
         problem: &PreparedTreeProblem<V>,
         point: &[usize],
-        activate_directed_cut: &[bool],
+        budget: CandidateCapacity<'_>,
     ) -> Result<InjectionReport> {
-        self.inject_global_point_impl(candidates, problem, point, activate_directed_cut, true)
+        self.inject_global_point_impl(candidates, problem, point, Some(budget))
     }
 
     fn inject_global_point_impl<V: TreeAciNode>(
@@ -367,8 +364,7 @@ impl SampleArena {
         candidates: &mut CandidateSets,
         problem: &PreparedTreeProblem<V>,
         point: &[usize],
-        activate_directed_cut: &[bool],
-        pair_opposite_cuts: bool,
+        budget: Option<CandidateCapacity<'_>>,
     ) -> Result<InjectionReport> {
         self.validate_point(problem, point)?;
         if candidates.ids.len() != problem.directed_edges.len() {
@@ -376,17 +372,16 @@ impl SampleArena {
                 message: "candidate-set count differs from directed edge count",
             });
         }
-        if activate_directed_cut.len() != problem.directed_edges.len() {
-            return Err(TreeAciError::InternalInvariant {
-                message: "global-pivot activation mask differs from directed edge count",
-            });
-        }
+        let requested = match budget {
+            Some(budget) => budget.requested(problem, candidates)?,
+            None => vec![true; problem.directed_edges.len()],
+        };
 
         // Projection appends immutable records. A checkpoint therefore gives
         // the same failure atomicity as cloning the complete arena, without an
         // O(retained records) copy for every global-pivot candidate.
         let checkpoint = self.checkpoint();
-        let projected = self.project_components(problem, point, activate_directed_cut);
+        let projected = self.project_components(problem, point, &requested);
         let projected = match projected {
             Ok(projected) => projected,
             Err(error) => {
@@ -394,35 +389,21 @@ impl SampleArena {
                 return Err(error);
             }
         };
-        let mut added_by_edge = vec![0; projected.len()];
-        if pair_opposite_cuts {
-            for forward in (0..projected.len()).step_by(2) {
-                let reverse = problem.directed_edges[forward].reverse;
-                if activate_directed_cut[forward]
-                    && activate_directed_cut[reverse]
-                    && (!candidates.ids[forward].contains(&projected[forward].ok_or(
-                        TreeAciError::InternalInvariant {
-                            message: "active directed cut has no projected component sample",
-                        },
-                    )?) || !candidates.ids[reverse].contains(&projected[reverse].ok_or(
-                        TreeAciError::InternalInvariant {
-                            message: "active reverse cut has no projected component sample",
-                        },
-                    )?))
-                {
-                    added_by_edge[forward] = 1;
-                    added_by_edge[reverse] = 1;
-                }
-            }
-        } else {
-            for (edge, id) in projected.iter().copied().enumerate() {
-                if let Some(id) = id {
-                    if !candidates.ids[edge].contains(&id) {
-                        added_by_edge[edge] = 1;
-                    }
-                }
-            }
-        }
+        let activation = match budget {
+            Some(budget) => CandidateActivation::plan(problem, candidates, &projected, budget),
+            None => CandidateActivation {
+                additions: projected
+                    .iter()
+                    .enumerate()
+                    .map(|(e, &id)| id.filter(|id| !candidates.ids[e].contains(id)))
+                    .collect(),
+            },
+        };
+        let added_by_edge: Vec<_> = activation
+            .additions
+            .iter()
+            .map(|id| usize::from(id.is_some()))
+            .collect();
         let total_added = added_by_edge.iter().sum();
         if total_added > 0 {
             let next_generation =
@@ -439,11 +420,9 @@ impl SampleArena {
                     return Err(error);
                 }
             };
-            for (edge, id) in projected.into_iter().enumerate() {
+            for (edge, id) in activation.additions.into_iter().enumerate() {
                 if let Some(id) = id {
-                    if added_by_edge[edge] == 1 {
-                        candidates.ids[edge].push(id);
-                    }
+                    candidates.ids[edge].push(id);
                 }
             }
             candidates.generation = next_generation;
