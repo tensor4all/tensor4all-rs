@@ -22,6 +22,6 @@ pub use crate::{
     get_chebyshev_grid, interpolate_adaptive, interpolate_adaptive_nd, interpolate_multi_scale,
     interpolate_multi_scale_nd, interpolate_single_scale, interpolate_single_scale_nd,
     interpolate_single_scale_sparse, interpolate_single_scale_sparse_nd, interpolation_tensor,
-    invert_qtt, AbstractTensorTrain, InterpolativeQttOptions, LagrangePolynomials,
-    SimpleTensorTrain,
+    invert_qtt, AbstractTensorTrain, InterpolativeQttOptions, InterpolativeScalar,
+    LagrangePolynomials, SimpleTensorTrain,
 };

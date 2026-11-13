@@ -5,6 +5,8 @@
 //! `InterpolativeQTT.jl` to Rust. Constructors return
 //! [`SimpleTensorTrain`] values from `tensor4all-simplett`, so callers can use the
 //! same evaluation, compression, and norm APIs as the other tensor4all crates.
+//! Every constructor takes real (`f64`) or complex (`Complex64`) function
+//! values; see [`InterpolativeScalar`].
 //!
 //! # Examples
 //!
@@ -47,7 +49,7 @@ pub use interpolation::{
     estimate_interpolation_error, estimate_interpolation_error_nd, interpolate_adaptive,
     interpolate_adaptive_nd, interpolate_multi_scale, interpolate_multi_scale_nd,
     interpolate_single_scale, interpolate_single_scale_nd, interpolate_single_scale_sparse,
-    interpolate_single_scale_sparse_nd, invert_qtt,
+    interpolate_single_scale_sparse_nd, invert_qtt, InterpolativeScalar,
 };
 pub use options::InterpolativeQttOptions;
 pub use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};

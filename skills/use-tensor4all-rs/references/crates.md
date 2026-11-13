@@ -184,7 +184,7 @@ Ports TreeTCI.jl. Cross interpolation on tree-structured graphs → TreeTN.
 
 ## tensor4all-interpolativeqtt — interpolative QTT
 
-Ports InterpolativeQTT.jl; returns `SimpleTensorTrain<f64>`.
+Ports InterpolativeQTT.jl; returns `SimpleTensorTrain<T>` for a real (`f64`) or complex (`Complex64`) function.
 
 - `interpolate_single_scale(f, x_min, x_max, R, oversampling, &InterpolativeQttOptions::default())`.
 

@@ -2613,8 +2613,10 @@ name = "tensor4all-interpolativeqtt"
 version = "0.3.0"
 dependencies = [
  "approx 0.5.1",
+ "num-complex 0.4.6",
  "quanticsgrids",
  "rand",
+ "tensor4all-core",
  "tensor4all-simplett",
  "tensor4all-tensorbackend",
  "thiserror 2.0.20",
