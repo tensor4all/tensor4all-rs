@@ -63,7 +63,6 @@ pub(crate) mod profile_debug_stats {
         pub(crate) global_injection: Duration,
         pub(crate) guard_candidate_clone: Duration,
         pub(crate) guard_projection: Duration,
-        pub(crate) guard_output_padding: Duration,
         pub(crate) guard_frame_extension: Duration,
         pub(crate) guard_input_evaluation: Duration,
         pub(crate) guard_output_evaluation: Duration,

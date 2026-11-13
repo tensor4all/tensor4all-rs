@@ -1,10 +1,10 @@
 //! Global floating-zone validation for locally sampled tree ACI sweeps.
 
 use rand::Rng as _;
-use std::{collections::HashMap, mem::size_of};
+use std::mem::size_of;
 
 use tensor4all_core::floating_zone_walk_with_initial_error;
-use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
+use tensor4all_core::{ColMajorArrayRef, IdxTensor};
 use tensor4all_treetn::{
     CachedEvaluatorOptions, CachedEvaluatorPlan, EvaluationHint, TreeTN, TreeTNCachedEvaluator,
 };
@@ -327,6 +327,27 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
     if points.is_empty() {
         return Ok(0);
     }
+    let center =
+        state
+            .output
+            .canonical_region()
+            .iter()
+            .next()
+            .ok_or(TreeAciError::InternalInvariant {
+                message: "Guard output has no canonical center",
+            })?;
+    let mut required_closure = vec![false; state.problem.directed_edges.len()];
+    for &cut in &state.problem.directed_dependency_order {
+        let edge = &state.problem.directed_edges[cut];
+        required_closure[cut] = &edge.from == center
+            || edge
+                .incoming_to_from
+                .iter()
+                .any(|&child| required_closure[child]);
+    }
+    for contains_center in &mut required_closure {
+        *contains_center = !*contains_center;
+    }
     let checkpoint = state.sample_arena.checkpoint();
     #[cfg(test)]
     let clone_started = std::time::Instant::now();
@@ -336,70 +357,44 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
         stats.guard_candidate_clone += clone_started.elapsed();
     });
     let mut injected = 0usize;
-    let mut growth = vec![0usize; state.edge_ranks.len()];
+    let limits = state
+        .edge_ranks
+        .iter()
+        .zip(growth_capacity)
+        .map(|(&basis, &headroom)| {
+            basis
+                .checked_add(headroom)
+                .ok_or(TreeAciError::SizeOverflow {
+                    context: "global-pivot candidate limit",
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
     let staged = (|| {
         #[cfg(test)]
         let projection_started = std::time::Instant::now();
         for point in points {
-            let activate_directed_cut = growth_capacity
-                .iter()
-                .zip(&growth)
-                .flat_map(|(&capacity, &grown)| {
-                    let active = grown < capacity;
-                    [active, active]
-                })
-                .collect::<Vec<_>>();
-            if !activate_directed_cut.iter().any(|active| *active) {
-                break;
-            }
             let report = state.sample_arena.inject_global_point_masked(
                 &mut proposed_active,
                 &state.problem,
                 point,
-                &activate_directed_cut,
+                crate::samples::CandidateCapacity {
+                    limits: &limits,
+                    required_closure: &required_closure,
+                },
             )?;
             if report.total_added > 0 {
                 injected = injected.checked_add(1).ok_or(TreeAciError::SizeOverflow {
                     context: "injected global pivot count",
                 })?;
-                for (edge, added) in report.added_by_edge.as_chunks::<2>().0.iter().enumerate() {
-                    if added[0] != added[1] {
-                        return Err(TreeAciError::InternalInvariant {
-                            message: "global pivot changed only one direction of a tree cut",
-                        });
-                    }
-                    growth[edge] =
-                        growth[edge]
-                            .checked_add(added[0])
-                            .ok_or(TreeAciError::SizeOverflow {
-                                context: "global-pivot bond growth",
-                            })?;
-                }
             }
         }
         #[cfg(test)]
         crate::state::profile_debug_stats::record(|stats| {
             stats.guard_projection += projection_started.elapsed();
         });
-        if growth
-            .iter()
-            .zip(growth_capacity)
-            .any(|(&grown, &capacity)| grown > capacity)
-        {
-            return Err(TreeAciError::InternalInvariant {
-                message: "global-pivot injection exceeded a cut's growth capacity",
-            });
-        }
         if injected == 0 {
             return Ok(None);
         }
-        #[cfg(test)]
-        let padding_started = std::time::Instant::now();
-        let proposed_output = pad_output_bonds(state, &growth, exec)?;
-        #[cfg(test)]
-        crate::state::profile_debug_stats::record(|stats| {
-            stats.guard_output_padding += padding_started.elapsed();
-        });
         #[cfg(test)]
         let frames_started = std::time::Instant::now();
         let proposed_frames =
@@ -410,9 +405,9 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
         crate::state::profile_debug_stats::record(|stats| {
             stats.guard_frame_extension += frames_started.elapsed();
         });
-        Ok(Some((proposed_output, proposed_frames)))
+        Ok(Some(proposed_frames))
     })();
-    let Some((proposed_output, proposed_frames)) = (match staged {
+    let Some(proposed_frames) = (match staged {
         Ok(staged) => staged,
         Err(error) => {
             state.sample_arena.rollback(checkpoint)?;
@@ -422,273 +417,12 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
         state.sample_arena.rollback(checkpoint)?;
         return Ok(0);
     };
-    // Validate the last fallible arithmetic before publishing any staged
-    // state. The old order assigned `output`, `candidates`, and `input_frames`
-    // first, then used `checked_add` while updating `edge_ranks`; a malformed
-    // or test-injected rank overflow could therefore return an error with a
-    // partially committed state. This precomputed vector makes the following
-    // replacement block no-failure and preserves transaction atomicity.
-    let next_edge_ranks = state
-        .edge_ranks
-        .iter()
-        .zip(&growth)
-        .map(|(&rank, &added)| {
-            rank.checked_add(added).ok_or(TreeAciError::SizeOverflow {
-                context: "global-pivot output rank",
-            })
-        })
-        .collect::<Result<Vec<_>>>();
-    let next_edge_ranks = match next_edge_ranks {
-        Ok(ranks) => ranks,
-        Err(error) => {
-            state.sample_arena.rollback(checkpoint)?;
-            return Err(error);
-        }
-    };
-    state.output = proposed_output;
+    // Only query membership and input frames are published. The represented
+    // output, selected pivots and paired basis dimensions remain untouched.
     state.candidates = proposed_active;
     state.input_frames = proposed_frames;
-    state.edge_ranks = next_edge_ranks;
     state.generation = state.candidates.generation;
     Ok(injected)
-}
-
-fn pad_output_bonds<T: TreeAciScalar, V: TreeAciNode>(
-    state: &TreeAciState<'_, T, V>,
-    growth: &[usize],
-    exec: &mut crate::exec::Exec<'_, '_>,
-) -> Result<tensor4all_treetn::TreeTN<IdxTensor, V>> {
-    if growth.iter().all(|&amount| amount == 0) {
-        return Ok(state.output.clone());
-    }
-    let mut replacement_edges = Vec::with_capacity(growth.len());
-    let mut replacement_indices = HashMap::with_capacity(growth.len());
-    for (edge_number, &amount) in growth.iter().enumerate() {
-        if amount == 0 {
-            continue;
-        }
-        let directed = &state.problem.directed_edges[2 * edge_number];
-        let graph_edge = state
-            .output
-            .edge_between(&directed.from, &directed.to)
-            .ok_or(TreeAciError::InternalInvariant {
-                message: "global-pivot padding references a missing output edge",
-            })?;
-        let old = state
-            .output
-            .bond_index(graph_edge)
-            .ok_or(TreeAciError::InternalInvariant {
-                message: "global-pivot padding references an output edge without a bond",
-            })?
-            .clone();
-        let dimension = old
-            .dim()
-            .checked_add(amount)
-            .ok_or(TreeAciError::SizeOverflow {
-                context: "global-pivot padded bond dimension",
-            })?;
-        let new = DynIndex::new_dyn(dimension);
-        replacement_indices.insert(old, new.clone());
-        replacement_edges.push((graph_edge, new));
-    }
-
-    // Plan every affected core before allocating any of it. Sizing and
-    // allocation used to share one loop, so the aggregate `max_working_bytes`
-    // check only ran after every core was already allocated and retained: a
-    // caller could set a small ceiling and still pay the full peak before being
-    // told the request was rejected. Unaffected cores are deliberately omitted:
-    // rebuilding them used to replace inactive bond identities and copy the
-    // complete output even when the guard grew only one cut.
-    // Holds the node name rather than its index: `TreeTN::node_index` returns
-    // petgraph's `NodeIndex`, which treetn does not re-export, so naming it
-    // here would mean depending on petgraph directly. Re-resolving the name is
-    // a hash lookup and keeps the dependency boundary intact.
-    struct PaddedCorePlan<V> {
-        node: V,
-        new_indices: Vec<DynIndex>,
-        old_dims: Vec<usize>,
-        new_strides: Vec<usize>,
-        new_len: usize,
-    }
-
-    let mut plans = Vec::with_capacity(state.problem.node_order.len());
-    let mut working_elements = 0usize;
-    let mut largest_source_core = 0usize;
-    for node in &state.problem.node_order {
-        let node_index = state
-            .output
-            .node_index(node)
-            .ok_or(TreeAciError::InternalInvariant {
-                message: "global-pivot padding references a missing output node",
-            })?;
-        let tensor = state
-            .output
-            .tensor(node_index)
-            .ok_or(TreeAciError::InternalInvariant {
-                message: "global-pivot padding references a missing output tensor",
-            })?;
-        let old_indices = tensor.indices();
-        if !old_indices
-            .iter()
-            .any(|index| replacement_indices.contains_key(index))
-        {
-            continue;
-        }
-        let new_indices = old_indices
-            .iter()
-            .map(|index| {
-                replacement_indices
-                    .get(index)
-                    .cloned()
-                    .unwrap_or_else(|| index.clone())
-            })
-            .collect::<Vec<_>>();
-        let old_dims = old_indices.iter().map(IndexLike::dim).collect::<Vec<_>>();
-        let new_dims = new_indices.iter().map(IndexLike::dim).collect::<Vec<_>>();
-        let old_len = old_dims.iter().try_fold(1usize, |product, &dimension| {
-            product
-                .checked_mul(dimension)
-                .ok_or(TreeAciError::SizeOverflow {
-                    context: "global-pivot source core elements",
-                })
-        })?;
-        let new_len = new_dims.iter().try_fold(1usize, |product, &dimension| {
-            product
-                .checked_mul(dimension)
-                .ok_or(TreeAciError::SizeOverflow {
-                    context: "global-pivot padded core elements",
-                })
-        })?;
-        let mut new_strides = Vec::with_capacity(new_dims.len());
-        let mut new_stride = 1usize;
-        for &dimension in &new_dims {
-            new_strides.push(new_stride);
-            new_stride = new_stride
-                .checked_mul(dimension)
-                .ok_or(TreeAciError::SizeOverflow {
-                    context: "global-pivot padded core strides",
-                })?;
-        }
-        if new_stride != new_len {
-            return Err(TreeAciError::InternalInvariant {
-                message: "global-pivot padded core length disagrees with its strides",
-            });
-        }
-        if new_len > state.problem.max_core_elements {
-            return Err(TreeAciError::ResourceLimit {
-                resource: "core elements",
-                requested: new_len,
-                limit: state.problem.max_core_elements,
-            });
-        }
-        working_elements =
-            working_elements
-                .checked_add(new_len)
-                .ok_or(TreeAciError::SizeOverflow {
-                    context: "global-pivot padding working elements",
-                })?;
-        largest_source_core = largest_source_core.max(old_len);
-        plans.push(PaddedCorePlan {
-            node: node.clone(),
-            new_indices,
-            old_dims,
-            new_strides,
-            new_len,
-        });
-    }
-
-    // `to_vec` materializes one source core while all already-built padded
-    // cores and the current destination allocation are live. Charge the
-    // largest such source buffer in addition to the final padded payload.
-    let peak_elements =
-        working_elements
-            .checked_add(largest_source_core)
-            .ok_or(TreeAciError::SizeOverflow {
-                context: "global-pivot padding peak elements",
-            })?;
-    let planned_bytes =
-        peak_elements
-            .checked_mul(size_of::<T>())
-            .ok_or(TreeAciError::SizeOverflow {
-                context: "global-pivot padding working bytes",
-            })?;
-    if planned_bytes > state.problem.max_working_bytes {
-        return Err(TreeAciError::ResourceLimit {
-            resource: "working bytes",
-            requested: planned_bytes,
-            limit: state.problem.max_working_bytes,
-        });
-    }
-
-    let mut tensors = Vec::with_capacity(plans.len());
-    for PaddedCorePlan {
-        node,
-        new_indices,
-        old_dims,
-        new_strides,
-        new_len,
-    } in plans
-    {
-        let node_index = state
-            .output
-            .node_index(&node)
-            .ok_or(TreeAciError::InternalInvariant {
-                message: "global-pivot padding references a missing output node",
-            })?;
-        let tensor = state
-            .output
-            .tensor(node_index)
-            .ok_or(TreeAciError::InternalInvariant {
-                message: "global-pivot padding references a missing output tensor",
-            })?;
-        let mut padded = vec![T::default(); new_len];
-        let values = exec
-            .values::<T>(tensor)
-            .map_err(|error| TreeAciError::Numerical {
-                message: error.to_string(),
-            })?;
-        for (old_linear, value) in values.into_iter().enumerate() {
-            let mut quotient = old_linear;
-            let mut new_linear = 0usize;
-            for (&old_dim, &new_stride) in old_dims.iter().zip(&new_strides) {
-                let coordinate = quotient % old_dim;
-                quotient /= old_dim;
-                let offset =
-                    coordinate
-                        .checked_mul(new_stride)
-                        .ok_or(TreeAciError::SizeOverflow {
-                            context: "global-pivot padded core offset",
-                        })?;
-                new_linear = new_linear
-                    .checked_add(offset)
-                    .ok_or(TreeAciError::SizeOverflow {
-                        context: "global-pivot padded core offset",
-                    })?;
-            }
-            let slot = padded
-                .get_mut(new_linear)
-                .ok_or(TreeAciError::InternalInvariant {
-                    message: "global-pivot padded core offset is out of bounds",
-                })?;
-            *slot = value;
-        }
-        tensors.push((
-            node_index,
-            exec.tensor(new_indices, padded)
-                .map_err(|error| TreeAciError::Numerical {
-                    message: error.to_string(),
-                })?,
-        ));
-    }
-    let mut output = state.output.clone();
-    for (edge, new) in &replacement_edges {
-        output.replace_edge_bond(*edge, new.clone())?;
-    }
-    for (node, tensor) in tensors {
-        output.replace_tensor(node, tensor)?;
-    }
-    output.verify_internal_consistency()?;
-    Ok(output)
 }
 
 pub(crate) struct InputEvaluators<'a, V: TreeAciNode> {

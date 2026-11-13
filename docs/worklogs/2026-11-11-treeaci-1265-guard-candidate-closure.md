@@ -62,3 +62,33 @@ The original four-case accuracy gates remain failed. Keep candidate closure,
 Guard proposal-quality research and #784/#854 stopping policies distinct;
 repaired points must not be labeled unresolved failures to recover a favorable
 trajectory. Root README capabilities remain unchanged.
+
+## Landing the abstraction change (2026-11-13)
+
+After #1265 was reopened, the maintainer restated the next step as the owning
+abstraction change of scope items 2 and 4, with the characterization fixtures
+flipped to required-closure assertions. The query-pool patch archived in the
+follow-up record (`candidate.patch`) is that change. It now lands unchanged on
+main `501ebb4a`, and it applies without conflicts. The fixtures assert the
+required closure in both orientations, including the truly-full child.
+
+The matched four-case study was rerun on `501ebb4a`. Each arm had its own
+target directory: the baseline was a detached worktree at `501ebb4a`, the
+candidate this branch. The study used the unchanged probe, protocol and
+validation sets of the preceding record. All eight runs reproduce the 11-11
+values to every printed digit:
+
+| R | Seed | Importance L2, baseline → candidate | Sampled max error | Termination |
+|---|------|-------------------------------------|-------------------|-------------|
+| 9 | 42 | 0.0031916785 → 0.0031916785 (0.0%) | 1.56e-4 → 1.56e-4 | MaxSweeps/50 both |
+| 9 | 2026 | 0.0024271927 → 0.0037736277 (+55.5%) | 1.18e-4 → 2.05e-4 | MaxSweeps/50 both |
+| 10 | 42 | 0.0050954290 → 0.0039258703 (−23.0%) | 1.93e-4 → 1.34e-4 | MaxSweeps/50 both |
+| 10 | 2026 | 0.0027517176 → 0.0031243721 (+13.5%) | 1.09e-4 → 1.16e-4 | MaxSweeps/50 both |
+
+In every case the maximum rank and the Guard call count are unchanged. The
+5% per-case gate was predeclared by this work, not by the issue's acceptance
+list. The seed-2026 cases still exceed it. The cause recorded in the
+follow-up stands: correctly repaired Guard points change the later random
+proposals. The change is landed as the structural fix it is. It is not a
+convergence or accuracy improvement, and the #784/#854 rank-cycling work
+stays separate. No tolerance, rank floor, Guard setting or sweep limit changed.

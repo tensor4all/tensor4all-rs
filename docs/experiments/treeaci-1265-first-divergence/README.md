@@ -1,5 +1,12 @@
 # First divergence of the #1265 candidate prototype
 
+> **Update 2026-11-13.** `candidate.patch` has since landed unchanged as the
+> #1265 abstraction change. It is a structural fix, not an accuracy
+> improvement: the seed-2026 regressions below still reproduce exactly on main
+> `501ebb4a`. See the "Landing the abstraction change" section of the
+> [work log](../../worklogs/2026-11-11-treeaci-1265-guard-candidate-closure.md).
+> The text below describes the record as it was made.
+
 The R9/seed-2026 error regression is localized to an adaptive Guard feedback path.
 Replacing **only the second Guard proposal batch** swaps the final numerical
 trajectory in both directions. Subsequent Guard searches run normally.
