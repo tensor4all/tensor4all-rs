@@ -323,10 +323,10 @@ impl TensorContractionLike for DefaultOnlyTensor {
             })
             .collect();
         let mut data = vec![0.0; self.data.len()];
-        for linear in 0..self.data.len() {
+        for (linear, &value) in self.data.iter().enumerate() {
             let old_coords = coords_from_linear(linear, &old_dims);
             let new_coords: Vec<usize> = axis_map.iter().map(|&axis| old_coords[axis]).collect();
-            data[linear_index(&new_coords, &new_dims)] = self.data[linear];
+            data[linear_index(&new_coords, &new_dims)] = value;
         }
         Ok(Self {
             indices: new_order.to_vec(),
