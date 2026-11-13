@@ -83,8 +83,8 @@ pub(crate) enum Runs {
     /// `schedule_merge_refine` directly, timed on its own, then the front end.
     ScheduleAndFrontEnd,
     /// Only the front end, which also produces the sampled spectrum. Each
-    /// schedule of the two-axis interleaved R = 10 case takes about 14 minutes
-    /// with one thread (#1279), so its heavy test runs one.
+    /// schedule of the two-axis interleaved R = 10 case takes about 6 minutes
+    /// with one thread (#1279, #1285), so its heavy test runs one.
     // The smoke-test target includes this module but never runs this mode.
     #[allow(dead_code)]
     FrontEndOnly,

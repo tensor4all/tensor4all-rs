@@ -45,9 +45,9 @@ fn peak_rss_kib() -> Option<u64> {
 // 1024 here (#1279). Its peak follows that physical bound, not the compressed
 // rank, so the case runs in a child process under an 8 GiB address-space
 // ceiling: an allocation above it fails the child and so this test, instead of
-// the runner's OOM killer ending the job. Each schedule spends about 14
-// minutes on the exact images with one thread, so the case runs the front end
-// only. R = 20 interleaved, where the exact image itself can be 7200 wide, is
+// the runner's OOM killer ending the job. Each schedule spends about 6
+// minutes on the exact images with one thread (QR since #1285), so the case
+// runs the front end only. R = 20 interleaved, where the exact image itself can be 7200 wide, is
 // not covered.
 #[test]
 #[ignore = "heavy: runs in the scheduled heavy-tests workflow (see CONTRIBUTING.md)"]

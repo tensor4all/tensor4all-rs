@@ -252,8 +252,9 @@ Two interleaved axes work at R=10 but are slow. The operator itself is cheap
 (bond 144, built in well under a second at R=20), but the scheduler applies it
 exactly to each input patch as its error reference. That application keeps
 every bond at its physical bound, at most 1024 for the R=10 interleaved
-Gaussian, and the case completes with a 4.0 GiB peak; it takes about 14
-minutes with one thread, almost all of it in those exact applications. At
+Gaussian, and the case completes with a 2.4 GiB peak; it takes about 6
+minutes with one thread, almost all of it in those exact applications, which
+factorize by QR rather than SVD (issue #1285). At
 R=20 the exact application itself can be 50 x 144 = 7200 wide, so that case
 is still out of reach. Prefer a grouped layout for patched multi-axis
 transforms where the layout is free (issue #1279):

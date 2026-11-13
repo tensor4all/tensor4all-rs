@@ -465,7 +465,9 @@ instead: `ApplyOptions::zipup()` with
 centred at the balanced node, the node that minimizes the largest total
 `log2` site dimension of the subtrees around it (ties by node order). A
 threshold of zero discards no nonzero singular value, so the application is
-exact up to backend roundoff, as the naive path is. The threshold must be
+exact up to backend roundoff, as the naive path is. Since #1285 that request
+factorizes every zip-up block by untruncated QR instead of SVD; see
+[Exact zip-up by QR](#exact-zip-up-by-qr-1285). The threshold must be
 given: `svd_policy = None` resolves to the default relative cutoff of `1e-12`
 and is not exact. No path of `prepare_subset_images` keeps the naive
 application.
@@ -560,8 +562,8 @@ The cost is time: on the prototype each exact image took 180 to 197 s, 765 s
 of the schedule's 824 s, spent in SVDs of blocks up to 8192 × 2496. The exact
 images keep every singular value, including those at roundoff, which is why
 their bonds reach the physical bound although the compressed result has rank
-8. A QR-based exact zip-up would be cheaper; zip-up offers only SVD for the
-unitary form today, so that is a follow-up.
+8. #1285 replaces those SVDs by QR; see
+[Exact zip-up by QR](#exact-zip-up-by-qr-1285).
 
 On the cases that already passed, the zip-up gives the naive path's result up
 to roundoff, faster and with less memory (release, one thread, single runs on
@@ -607,6 +609,79 @@ one host; the naive column was measured before the change):
 exceeds the product bond over the middle of the chain, so an exact image can
 really be 7200 wide; it needs truncation during the sweep with a proven bound
 and is a separate issue.
+
+### Exact zip-up by QR (#1285)
+
+**Problem.** The exact application above spends almost all of its time in
+SVDs whose singular values it never uses: with a zero threshold every value
+is kept, roundoff included, and the rank reduction happens later, in the
+compression.
+
+**Change.** An exact zip-up request (`Unitary`, a zero SVD threshold, no
+`max_bond_dim`; the predicate `zipup_is_exact` in
+`tensor4all-treetn/src/treetn/contraction.rs`) now factorizes every block by
+QR with `qr_rtol = 0`, on both schedules. Every row of `R` is retained, so each
+bond is `min(rows, cols)` of its block, the width the zero-threshold SVD
+keeps, and the memory picture of #1279 is unchanged. QR has only a
+left-canonical form, so the chain schedule factorizes its final two-site block
+with the last site's indices on the orthogonal side: `Q` goes to the last
+node, `R` to the penultimate one, and the numerical centre stays where the SVD
+schedule left it. The closing zero-threshold truncation of the chain schedule
+is unchanged; it costs about 8 s of each 75 s image below. A request that is
+not exact keeps the SVD schedule unchanged.
+
+**The identity skip (#1186, #1197).** The same predicate gates the
+pass-through of untouched leaves. Skipping a node is a relabeling of its
+parent's view only when no factorization of the schedule truncates; QR with a
+zero tolerance truncates nothing, as the zero-threshold SVD did, so the
+condition holds unchanged. The #1197 four-node counterexample is run under
+the exact request with the skip on and off, and both give the exact
+amplitudes.
+
+**Measured** (release, one thread pinned to one core, `ulimit -v` 8 GiB,
+single runs on one host; the SVD column is the #1279 branch tip measured on
+the same day):
+
+| case | quantity | SVD | QR |
+|---|---|---|---|
+| R = 10, two interleaved axes | front end [s] | 837 | 364 |
+| | schedule [s] | — | 364 |
+| | one exact image [s] | 180 to 197 (#1279 probe) | 73 to 77 |
+| | peak RSS [GiB] | 3.96 | 2.37 (front end only), 2.44 (schedule and front end) |
+| | sampled error / reported bound | 1.45e-13 / 1.66e-8 | 1.31e-13 / 1.66e-8 |
+| R = 10, 1D | schedule [s] | 0.028 | 0.024 |
+| R = 10, 2D grouped | schedule [s] | 0.18 | 0.16 |
+| R = 20, 1D | schedule [s] | 0.22 | 0.21 |
+| R = 20, 2D grouped | schedule [s] | 1.24 | 1.20 |
+
+The reported bounds of the four small cases agree to six or seven digits and
+their sampled errors to roundoff; their peak RSS is within 5 MB. The
+per-image time comes from a temporary timing probe that is not committed. Of
+each 73 to 77 s image, 47 to 49 s go into the QR factorizations, 18 to 20 s
+into the block contractions and about 8 s into the closing truncation; the
+four images take about 304 s of the 364-s front end. The remaining cost is
+the QR of the blocks up to 8192 × 3744 that the exact application forms at
+the physical bond, which is inherent to an exact image of that width.
+
+**Tests.**
+
+- `tensor4all-treetn`, `contraction/tests/exact_qr.rs`: an exact request
+  factorizes only by QR, and its result equals the untruncated SVD zip-up
+  (smallest positive threshold) and the dense product to `1e-12` relative, with
+  the same bond dimensions and the whole norm at the centre. It covers the
+  chain and a branched tree with two degree-three nodes, several centres, real
+  and complex data, and the process-global and context leaf routes.
+- `tests/subset_operator_exact.rs`: on the same shapes, `schedule_merge_refine`
+  with an untruncated SVD zip-up as `apply_options` measures each QR image
+  against its SVD image under `rtol = 1e-12`; a truncating threshold of `0.3`
+  fails all four.
+- `apply_zipup_never_skips_without_an_explicit_exact_policy` also compares the
+  exact result with the skip on and off.
+
+The general-tree schedule sets only the canonical region, not the edge
+orientations, for SVD and QR alike, so the tree cases check the isometries
+numerically (the centre carries the whole norm) rather than through
+`validate_ortho_consistency`.
 
 ## Fourier front end and operator node names
 
