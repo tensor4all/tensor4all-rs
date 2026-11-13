@@ -36,6 +36,12 @@ if [[ -z "$extern_args" ]]; then
     exit 1
 fi
 
+# Since Cargo 1.100 each crate is built in its own `build/<pkg>/<hash>/out`
+# directory, not in `target/<profile>/deps`, and the rustdoc command names
+# every such directory with `-L dependency=...`. Forward those search paths
+# too, or the chapters cannot resolve their externs' own dependencies.
+search_args="$(printf '%s\n' "$rustdoc_line" | grep -oE -- ' -L [^ ]+' | sed 's/^ -L //' || true)"
+
 real_rustdoc="$(rustup which rustdoc)"
 # book-tests' dependency closure includes tensor4all-hdf5, whose doctests
 # link the native HDF5 library. The raw rustdoc invocation cannot see the
@@ -57,6 +63,10 @@ fi
     for ((i = 0; i < ${#native_link_args[@]}; i += 2)); do
         printf '%q %q ' "${native_link_args[i]}" "${native_link_args[i + 1]}"
     done
+    while IFS= read -r search_arg; do
+        [[ -n "$search_arg" ]] || continue
+        printf '%q %q ' -L "$search_arg"
+    done <<< "$search_args"
     while IFS= read -r extern_arg; do
         [[ -n "$extern_arg" ]] || continue
         crate_name="${extern_arg%%=*}"
