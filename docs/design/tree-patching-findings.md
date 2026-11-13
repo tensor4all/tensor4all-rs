@@ -114,7 +114,7 @@ No representation decision has been made; see the M4 status in the roadmap.
 | Saturated probes are discarded and recomputed at every recursion level, with no early abort | same | M6 (contraction outcome API) |
 | Default `ExactParameterGain` projects and truncates every candidate's children for each split decision, about `L * d` truncations when `patch_order` is empty | `split_child_parameter_count` | M5 |
 | Eager masking makes contraction and factorization iterate over zero coordinates; each projection adds a `64 * eps` compression sweep | `mask_index`, `project_if_present` | M4 |
-| Pairwise disjointness validation on every partition construction and `N_A * N_B` pair enumeration in contraction | `partitioned_tree_tn.rs` pairwise loop | M6, before M7 |
+| Pairwise disjointness validation on every partition construction and `N_A * N_B` pair enumeration in contraction | `partitioned_tree_tn.rs` pairwise loop | M6a; resolved by the projector index of [#1293](https://github.com/tensor4all/tensor4all-rs/issues/1293): at 16,384 output patches, `contract` takes 36 s instead of 106 s, and the remaining time is the pair kernels |
 | `norm` and `norm_squared` clone and canonicalize on every call | `SubDomainTreeTN::norm` | M6 |
 | TreeTCI has no engine-local evaluation cache; the M2 driver now caches fallible batches and transfers parent samples to children once | `adaptive_interpolation/cache.rs` | M2 resolved at the driver boundary |
 

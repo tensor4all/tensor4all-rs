@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use crate::error::{PartitionedTreeTNError, Result};
 use tensor4all_core::{DynIndex, TagSetLike};
 
+pub(crate) mod index;
+
 /// A map from full dynamic site indices to fixed zero-based coordinates.
 ///
 /// Index equality is the core index contract: IDs, tags, and prime levels are
@@ -217,7 +219,17 @@ impl Projector {
 
     /// Return whether two projectors describe an overlapping region.
     pub fn is_compatible_with(&self, other: &Self) -> bool {
-        self.intersection(other).is_some()
+        // Same answer as `self.intersection(other).is_some()`, without building
+        // the intersection: every index fixed by both must carry one coordinate.
+        let (small, large) = if self.data.len() <= other.data.len() {
+            (self, other)
+        } else {
+            (other, self)
+        };
+        small
+            .data
+            .iter()
+            .all(|(index, value)| large.data.get(index).is_none_or(|stored| stored == value))
     }
 
     /// Return whether `self` fixes at least all coordinates fixed by `other`.
@@ -233,14 +245,8 @@ impl Projector {
 
     /// Return whether all projectors in `projectors` are pairwise disjoint.
     pub fn are_disjoint(projectors: &[Self]) -> bool {
-        for (i, left) in projectors.iter().enumerate() {
-            for right in projectors.iter().skip(i + 1) {
-                if left.is_compatible_with(right) {
-                    return false;
-                }
-            }
-        }
-        true
+        let references: Vec<&Self> = projectors.iter().collect();
+        !index::has_overlapping_pair(&references, false)
     }
 
     /// Return a projector restricted to the supplied full index set.
