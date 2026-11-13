@@ -2869,7 +2869,8 @@ fn apply_zipup_never_skips_without_an_explicit_exact_policy() {
     );
 
     // An explicit zero threshold is the same request for exactness, and buys the
-    // skip.
+    // skip. Since #1285 the same request factorizes every other node by
+    // untruncated QR, so this is the fence for the skip under the QR form.
     let exact_options = ApplyOptions {
         center: Some("r".to_string()),
         svd_policy: Some(SvdTruncationPolicy::new(0.0)),
@@ -2901,6 +2902,16 @@ fn apply_zipup_never_skips_without_an_explicit_exact_policy() {
         exact_deviation <= default_deviation,
         "the pass-through ({exact_deviation:e}) must not be less accurate than the \
          factorized path ({default_deviation:e})"
+    );
+
+    // Under the QR form the pass-through is still a pure relabeling: the same
+    // exact request with the skip off factorizes `b` by QR as well and gives
+    // the same tensor.
+    let unskipped = apply_without_identity_skip(&operator, &state, "r", &exact_options);
+    let skip_deviation = dense_deviation(&exact_result, &unskipped);
+    assert!(
+        skip_deviation <= 1.0e-15,
+        "the pass-through changed the exact QR result by {skip_deviation:e}"
     );
 }
 

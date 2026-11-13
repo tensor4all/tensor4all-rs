@@ -6,17 +6,25 @@
 //! on a chain whose balanced centre is a spectator node and on a branched tree
 //! with a spectator branch and a node carrying two selected sites, for real and
 //! complex data.
+//!
+//! The exact application factorizes every zip-up block by QR (#1285). The same
+//! shapes also run through `schedule_merge_refine` with an untruncated SVD
+//! zip-up as its `apply_options`: the schedule then measures, per image, the
+//! distance between the QR image and the SVD image, so a tight tolerance checks
+//! that the two factorizations give the same images to roundoff.
 
 use std::collections::HashMap;
 
 use num_complex::Complex64;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use tensor4all_core::{contract, AnyScalar, DynIndex, IdxTensor, IndexLike, TensorElement};
+use tensor4all_core::{
+    contract, AnyScalar, DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy, TensorElement,
+};
 use tensor4all_partitionedtreetn::{
     reconstruction::*, PartitionedTreeTN, Projector, SubDomainTreeTN, TreeTN,
 };
-use tensor4all_treetn::{IndexMapping, LinearOperator};
+use tensor4all_treetn::{ApplyOptions, IndexMapping, LinearOperator};
 
 /// A tree tensor network with the given sites per node and edges, filled with
 /// seeded random entries; bond dimensions are 3.
@@ -185,6 +193,55 @@ fn check<T: TensorElement>(
     assert!(
         error <= 1e-12 * scale,
         "max error {error:e} against max entry {scale:e}"
+    );
+
+    // QR images against untruncated SVD images (#1285). The smallest positive
+    // threshold keeps every nonzero singular value. The schedule charges the
+    // measured distance of every image pair to its bound and rejects a pair
+    // above the allowance, so success under `rtol = 1e-12` with no rank goal
+    // means each QR image equals its SVD image to roundoff. The schedule needs
+    // every patch to fix a prefix of the selected bits, so this preimage splits
+    // the same state on the first selected index.
+    let prefix_patch = |value| {
+        SubDomainTreeTN::new(
+            state.clone(),
+            Projector::from_pairs([(selection[0].clone(), value)]).unwrap(),
+        )
+        .unwrap()
+    };
+    let preimage = ReconstructionTarget::from_partition(
+        &PartitionedTreeTN::from_subdomains(vec![prefix_patch(0), prefix_patch(1)]).unwrap(),
+    )
+    .unwrap();
+    let tolerance = ReconstructionTolerance {
+        rtol: 1e-12,
+        atol: 0.0,
+    };
+    let compared = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        selection,
+        &SubsetOperatorOptions::default(),
+        tolerance,
+        &MergeRefineOptions {
+            apply_options: Some(ApplyOptions {
+                svd_policy: Some(SvdTruncationPolicy::new(f64::MIN_POSITIVE)),
+                max_bond_dim: None,
+                ..ApplyOptions::zipup()
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let report = compared.report();
+    assert_eq!(report.applied_operator_count, 2);
+    assert_eq!(report.compression_attempts, 0);
+    assert!(
+        report.error_bound <= report.absolute_tolerance,
+        "QR and SVD images differ by {:e} against an allowance of {:e}",
+        report.error_bound,
+        report.absolute_tolerance
     );
 }
 
