@@ -71,7 +71,6 @@ pub use cache::TTCache;
 pub use canonical::{center_canonicalize, SiteTensorTrain};
 pub use compression::{CompressionMethod, CompressionOptions};
 pub use contraction::{inner_product, ContractionOptions};
-pub use einsum_helper::EinsumScalar;
 pub use error::{Result, SimpleTensorTrainError};
 pub use tensortrain::SimpleTensorTrain;
 

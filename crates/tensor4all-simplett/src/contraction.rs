@@ -5,13 +5,12 @@
 
 use crate::compression::CompressionMethod;
 use crate::einsum_helper::{
-    einsum_tensors, tensor_to_col_major_vec, typed_tensor_from_col_major_slice, EinsumScalar,
+    einsum_tensors, tensor_to_col_major_vec, typed_tensor_from_col_major_slice,
 };
 use crate::error::{Result, SimpleTensorTrainError};
 use crate::tensortrain::SimpleTensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::Tensor3Ops;
-use tensor4all_core::Scalar;
 use tensor4all_tensorbackend::Matrix;
 
 fn contraction_helper_error(context: &str, err: impl std::fmt::Display) -> SimpleTensorTrainError {
@@ -55,7 +54,7 @@ impl Default for ContractionOptions {
     }
 }
 
-impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
+impl<T: TTScalar> SimpleTensorTrain<T> {
     /// Inner product (inner_product product) of two tensor trains.
     ///
     /// Computes `sum_i self[i] * other[i]` by contracting the site tensors
@@ -327,10 +326,7 @@ impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
 /// // 3*4 * 2*3 = 72
 /// assert!((d - 72.0).abs() < 1e-10);
 /// ```
-pub fn inner_product<T: TTScalar + Scalar + Default + EinsumScalar>(
-    a: &SimpleTensorTrain<T>,
-    b: &SimpleTensorTrain<T>,
-) -> Result<T> {
+pub fn inner_product<T: TTScalar>(a: &SimpleTensorTrain<T>, b: &SimpleTensorTrain<T>) -> Result<T> {
     a.inner_product(b)
 }
 

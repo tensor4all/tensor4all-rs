@@ -2,7 +2,6 @@
 
 use super::mpo::MPO;
 use super::types::tensor4_from_data;
-use crate::einsum_helper::EinsumScalar;
 use crate::mpo::factorize::SVDScalar;
 
 /// Deterministic pseudo-random MPO with the given bond dimensions.
@@ -20,7 +19,7 @@ pub(crate) fn random_mpo<T>(
     from_f64: impl Fn(f64) -> T,
 ) -> MPO<T>
 where
-    T: SVDScalar + EinsumScalar,
+    T: SVDScalar,
 {
     let mut state = seed;
     let mut next = || {

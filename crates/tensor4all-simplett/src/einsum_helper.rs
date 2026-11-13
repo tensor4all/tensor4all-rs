@@ -87,7 +87,7 @@ fn shape_element_count(shape: &[usize]) -> Result<usize> {
     })
 }
 
-pub(crate) fn einsum_tensors<T: EinsumScalar>(
+pub(crate) fn einsum_tensors<T: TTScalar>(
     subscripts: &str,
     operands: &[&TypedTensor<T>],
 ) -> Result<TypedTensor<T>> {
@@ -246,15 +246,3 @@ pub(crate) fn matrix_times_col_vector<T: TTScalar>(
         })
         .collect())
 }
-
-/// Scalar types supported by the tenferro-backed einsum helpers used in
-/// `tensor4all-simplett`.
-pub trait EinsumScalar: TensorScalar + Sized {}
-
-macro_rules! impl_einsum_scalar {
-    ($($t:ty),*) => {
-        $(impl EinsumScalar for $t {})*
-    };
-}
-
-impl_einsum_scalar!(f64, f32, num_complex::Complex64, num_complex::Complex32);
