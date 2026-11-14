@@ -1,6 +1,6 @@
 //! Interpolation constructors and analysis routines.
 
-use tensor4all_core::{CommonScalar, MatrixLuciScalar};
+use tensor4all_core::{ColMajorArrayRef, CommonScalar, MatrixLuciScalar};
 use tensor4all_simplett::{
     AbstractTensorTrain, CompressionMethod, CompressionOptions, SimpleTensorTrain, TTScalar,
     Tensor3, Tensor3Ops,
@@ -953,16 +953,14 @@ where
     F: Fn(&[f64]) -> T,
 {
     let ndims = interval.ndims();
-    let lengths = interval.lengths();
-    let mut values = vec![T::zero(); basis_dim];
-    for alpha_index in MultiIndexIter::new(&vec![basis.len(); ndims]) {
-        let alpha_flat = flatten_index(&alpha_index, basis.len())?;
-        let coords: Vec<_> = (0..ndims)
-            .map(|d| interval.start()[d] + lengths[d] * basis.grid()[alpha_index[d]])
-            .collect();
-        values[alpha_flat] = f(&coords);
-    }
-    Ok(values)
+    eval_interval_batched(
+        &mut |batch: SampleBatch<'_>| {
+            Ok(batch.points().data().chunks_exact(ndims).map(f).collect())
+        },
+        interval,
+        basis,
+        basis_dim,
+    )
 }
 
 /// One batch of sample points requested by [`build_refined_cores`].
@@ -975,15 +973,15 @@ pub(crate) enum SampleBatch<'a> {
     /// over the per-axis basis index (axis zero fastest).
     Nodes {
         interval: &'a NInterval,
-        points: &'a [Vec<f64>],
+        points: ColMajorArrayRef<'a, f64>,
     },
     /// Exact grid points of the last core; they carry no polynomial structure.
-    Grid { points: &'a [Vec<f64>] },
+    Grid { points: ColMajorArrayRef<'a, f64> },
 }
 
 impl<'a> SampleBatch<'a> {
     /// The points of this batch, whatever its kind.
-    pub(crate) fn points(&self) -> &'a [Vec<f64>] {
+    pub(crate) fn points(&self) -> ColMajorArrayRef<'a, f64> {
         match *self {
             Self::Nodes { points, .. } | Self::Grid { points } => points,
         }
@@ -1001,19 +999,38 @@ where
     F: FnMut(SampleBatch<'_>) -> Result<Vec<T>>,
 {
     let ndims = interval.ndims();
+    let points = interval_points(interval, basis.grid())?;
+    let shape = [ndims, basis_dim];
+    let points =
+        ColMajorArrayRef::new(&points, &shape).map_err(|e| invalid_argument(e.to_string()))?;
+    f(SampleBatch::Nodes { interval, points })
+}
+
+/// Coordinates `[D, n]` of a tensor-product grid, axis zero fastest.
+/// The single coordinate buffer is shared by pointwise and batched sampling.
+pub(crate) fn interval_points(interval: &NInterval, grid: &[f64]) -> Result<Vec<f64>> {
+    let ndims = interval.ndims();
+    let count = pow_usize(grid.len(), ndims)?;
+    let len = count
+        .checked_mul(ndims)
+        .filter(|&len| len <= isize::MAX as usize / std::mem::size_of::<f64>())
+        .ok_or_else(|| invalid_argument("sample coordinate byte count overflows"))?;
     let lengths = interval.lengths();
-    // INVARIANT: basis_dim was checked as basis.len()^ndims by the assembly.
-    let mut points = vec![Vec::new(); basis_dim];
-    for alpha in MultiIndexIter::new(&vec![basis.len(); ndims]) {
-        let flat = flatten_index(&alpha, basis.len())?;
-        points[flat] = (0..ndims)
-            .map(|d| interval.start()[d] + lengths[d] * basis.grid()[alpha[d]])
-            .collect();
+    let mut points = Vec::with_capacity(len);
+    let mut index = vec![0; ndims];
+    for _ in 0..count {
+        for d in 0..ndims {
+            points.push(interval.start()[d] + lengths[d] * grid[index[d]]);
+        }
+        for i in &mut index {
+            *i += 1;
+            if *i < grid.len() {
+                break;
+            }
+            *i = 0;
+        }
     }
-    f(SampleBatch::Nodes {
-        interval,
-        points: &points,
-    })
+    Ok(points)
 }
 
 fn build_refined_qtt<T, F, S>(
@@ -1030,7 +1047,14 @@ where
     S: Fn(&NInterval, usize) -> bool,
 {
     let cores = build_refined_cores(
-        &mut |batch: SampleBatch<'_>| Ok(batch.points().iter().map(|point| f(point)).collect()),
+        &mut |batch: SampleBatch<'_>| {
+            Ok(batch
+                .points()
+                .data()
+                .chunks_exact(domain.ndims())
+                .map(f)
+                .collect())
+        },
         domain,
         num_bits,
         basis,
@@ -1190,15 +1214,15 @@ where
     copy_core(&right, &mut last, 0, 0);
 
     for (interval_index, interval) in intervals.iter().enumerate() {
-        let points: Vec<_> = interval
-            .split()?
-            .into_iter()
-            .map(|piece| piece.start().to_vec())
+        let pieces = interval.split()?;
+        let points: Vec<_> = pieces
+            .iter()
+            .flat_map(|piece| piece.start().iter().copied())
             .collect();
-        for (site, value) in f(SampleBatch::Grid { points: &points })?
-            .into_iter()
-            .enumerate()
-        {
+        let shape = [ndims, site_dim];
+        let points =
+            ColMajorArrayRef::new(&points, &shape).map_err(|e| invalid_argument(e.to_string()))?;
+        for (site, value) in f(SampleBatch::Grid { points })?.into_iter().enumerate() {
             last[[basis_dim + interval_index, site, 0]] = value;
         }
     }

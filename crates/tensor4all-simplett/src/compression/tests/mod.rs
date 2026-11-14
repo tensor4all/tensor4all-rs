@@ -463,3 +463,60 @@ fn compression_revalidates_replaced_site_tensors() {
         assert!(tt.compress(&CompressionOptions::default()).is_err());
     }
 }
+
+// This helper deliberately has no MatrixLuciScalar bound: compiling it checks
+// the public session API's SVD-only scalar contract.
+fn compress_svd_only<T>(tt: &mut SimpleTensorTrain<T>, session: &mut Session<'_>)
+where
+    T: TTScalar<Real = f64> + Scalar + Default + Copy + BackendLinalgScalar,
+{
+    tt.compress_svd_with_session(session, 1e-12, None).unwrap();
+}
+
+#[test]
+fn session_svd_requires_no_lu_pivoting_bound() {
+    fn check<T>()
+    where
+        T: TTScalar<Real = f64> + Scalar + Default + Copy + BackendLinalgScalar,
+    {
+        let mut backend = tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap();
+        let mut session = Session::new(backend.engine_mut());
+        let mut tt = SimpleTensorTrain::constant(&[2, 2, 2], <T as Scalar>::from_f64(3.0));
+        compress_svd_only(&mut tt, &mut session);
+        let (dense, _) = tt.full_tensor().unwrap();
+        let residual = dense
+            .into_iter()
+            .map(|x| (x - <T as Scalar>::from_f64(3.0)).abs_val())
+            .fold(0.0_f64, f64::max);
+        assert!(residual < 1e-12, "residual {residual}");
+    }
+    check::<f64>();
+    check::<Complex64>();
+}
+
+#[test]
+fn session_compression_rejects_unsupported_methods_before_mutation_or_shortcuts() {
+    let mut backend = tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap();
+    let mut session = Session::new(backend.engine_mut());
+    for method in [CompressionMethod::LU, CompressionMethod::CI] {
+        for dims in [&[2][..], &[2, 2, 2][..]] {
+            let mut tt = SimpleTensorTrain::<f64>::constant(dims, 3.0);
+            let original = tt.site_tensors().to_vec();
+            let error = tt
+                .compress_impl(
+                    &CompressionOptions {
+                        method,
+                        ..Default::default()
+                    },
+                    &mut Some(&mut session),
+                    |_, _, _, _| panic!("unsupported session method reached factorization"),
+                )
+                .unwrap_err();
+            assert!(
+                matches!(error, SimpleTensorTrainError::UnsupportedCompressionMethod { method: actual } if actual == method)
+            );
+            assert_eq!(tt.site_tensors(), original);
+            assert!(error.to_string().contains("use CompressionMethod::SVD"));
+        }
+    }
+}

@@ -409,42 +409,6 @@ fn multiply_for_sweep<T: tensor4all_tensorbackend::BlasMul>(
     }
 }
 
-fn factorize_for_sweep<T>(
-    session: &mut Option<&mut Session<'_>>,
-    matrix: &Matrix<T>,
-    options: &CompressionOptions,
-    left_orthogonal: bool,
-) -> Result<(Matrix<T>, Matrix<T>, usize)>
-where
-    T: TTScalar
-        + Scalar
-        + tensor4all_core::MatrixLuciScalar
-        + Default
-        + Copy
-        + BackendLinalgScalar
-        + TensorScalar,
-    f64: From<<T as TensorScalar>::Real>,
-{
-    match session {
-        Some(_) => factorize_svd_impl(
-            matrix,
-            options.tolerance,
-            options.normalize_error,
-            options.max_bond_dim,
-            left_orthogonal,
-            session,
-        ),
-        None => factorize(
-            matrix,
-            options.method,
-            options.tolerance,
-            options.normalize_error,
-            options.max_bond_dim,
-            left_orthogonal,
-        ),
-    }
-}
-
 impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     /// Compress the tensor train **in place**, reducing bond dimensions.
     ///
@@ -486,7 +450,16 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
         T: tensor4all_core::MatrixLuciScalar + Copy + BackendLinalgScalar + TensorScalar,
         f64: From<<T as TensorScalar>::Real>,
     {
-        self.compress_impl(options, &mut None)
+        self.compress_impl(options, &mut None, |_, matrix, options, left_orthogonal| {
+            factorize(
+                matrix,
+                options.method,
+                options.tolerance,
+                options.normalize_error,
+                options.max_bond_dim,
+                left_orthogonal,
+            )
+        })
     }
 
     /// Compress in place by SVD on a caller-held session.
@@ -495,7 +468,9 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     /// singular value at each bond; `1e-12` is a nearly lossless default.
     /// `max_bond_dim` optionally imposes a positive rank cap. All decompositions
     /// and products use `session`, with the same sweeps and retained ranks as
-    /// [`Self::compress`] with [`CompressionMethod::SVD`].
+    /// [`Self::compress`] with [`CompressionMethod::SVD`]. The scalar bounds
+    /// require tensor storage (`TensorScalar`) and backend SVD and matrix
+    /// multiplication (`BackendLinalgScalar`); LU/CI pivoting is not required.
     ///
     /// # Errors
     /// Returns [`SimpleTensorTrainError::InvalidOperation`] for an invalid
@@ -528,7 +503,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
         max_bond_dim: Option<usize>,
     ) -> Result<()>
     where
-        T: tensor4all_core::MatrixLuciScalar + Copy + BackendLinalgScalar + TensorScalar,
+        T: Copy + BackendLinalgScalar + TensorScalar,
         f64: From<<T as TensorScalar>::Real>,
     {
         if !tolerance.is_finite() || tolerance < 0.0 || max_bond_dim == Some(0) {
@@ -546,6 +521,16 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
                 normalize_error: true,
             },
             &mut Some(session),
+            |session, matrix, options, left_orthogonal| {
+                factorize_svd_impl(
+                    matrix,
+                    options.tolerance,
+                    options.normalize_error,
+                    options.max_bond_dim,
+                    left_orthogonal,
+                    session,
+                )
+            },
         )
     }
 
@@ -553,11 +538,22 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
         &mut self,
         options: &CompressionOptions,
         session: &mut Option<&mut Session<'_>>,
+        mut factorize: impl FnMut(
+            &mut Option<&mut Session<'_>>,
+            &Matrix<T>,
+            &CompressionOptions,
+            bool,
+        ) -> Result<(Matrix<T>, Matrix<T>, usize)>,
     ) -> Result<()>
     where
-        T: tensor4all_core::MatrixLuciScalar + Copy + BackendLinalgScalar + TensorScalar,
+        T: Copy + BackendLinalgScalar + TensorScalar,
         f64: From<<T as TensorScalar>::Real>,
     {
+        if session.is_some() && options.method != CompressionMethod::SVD {
+            return Err(SimpleTensorTrainError::UnsupportedCompressionMethod {
+                method: options.method,
+            });
+        }
         crate::tensortrain::validate_site_tensors(self.site_tensors())?;
         let n = self.len();
         if n <= 1 {
@@ -581,7 +577,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
             let mat = tensor3_to_left_matrix(&tensors[ell]);
 
             // Factorize without truncation
-            let (left_factor, right_factor, new_bond_dim) = factorize_for_sweep(
+            let (left_factor, right_factor, new_bond_dim) = factorize(
                 session,
                 &mat,
                 &left_options,
@@ -638,7 +634,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
             let mat = tensor3_to_right_matrix(&tensors[ell]);
 
             // Factorize with truncation
-            let (left_factor, right_factor, new_bond_dim) = factorize_for_sweep(
+            let (left_factor, right_factor, new_bond_dim) = factorize(
                 session, &mat, options, false, // right orthogonal
             )?;
 

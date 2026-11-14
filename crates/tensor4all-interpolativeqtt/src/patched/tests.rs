@@ -1,3 +1,4 @@
+mod compression;
 mod stencil;
 
 use super::*;
@@ -390,7 +391,7 @@ fn uncompressed_train_matches_the_child_interpolants_it_is_checked_against() {
             let mut children = Vec::new();
             let cores = build_refined_cores(
                 &mut |batch: SampleBatch<'_>| {
-                    let values: Vec<T> = batch.points().iter().map(|p| f(p)).collect();
+                    let values: Vec<T> = batch.points().data().chunks_exact(dims).map(&f).collect();
                     if let SampleBatch::Nodes { interval, .. } = batch {
                         children.push((interval.clone(), values.clone()));
                     }
@@ -557,7 +558,7 @@ fn nonrepresentable_grid_is_rejected_before_sampling() {
         ));
     }
     let domain = NInterval::new(&[-0.1], &[0.2]).unwrap();
-    let children = split_box(&domain).unwrap();
+    let children = domain.split().unwrap();
     assert_eq!(children[0].start(), domain.start());
     assert_eq!(children[0].stop(), children[1].start());
     assert_eq!(children[1].stop(), domain.stop());
@@ -637,7 +638,9 @@ fn physical_bounds_and_overflowing_residuals() {
     assert!(checked_product(usize::MAX, 2).is_err());
     assert!(checked_power(usize::MAX / 2, 3).is_err());
     assert!(
-        split_box(&NInterval::new(&[1.0], &[f64::from_bits(1.0_f64.to_bits() + 1)]).unwrap())
+        NInterval::new(&[1.0], &[f64::from_bits(1.0_f64.to_bits() + 1)])
+            .unwrap()
+            .split()
             .is_err()
     );
 }
@@ -648,7 +651,9 @@ fn broken_engine_error_is_preserved() {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = engine.with_exec(|_| panic!("break test engine"));
     }));
-    let result = sample(&|p, _| batch(p, |_| 1.0), &mut engine, &[vec![0.0]]);
+    let shape = [1, 1];
+    let points = ColMajorArrayRef::new(&[0.0], &shape).unwrap();
+    let result = sample(&|p, _| batch(p, |_| 1.0), &mut engine, points);
     assert!(matches!(
         result,
         Err(InterpolativeQttError::Execution { .. })

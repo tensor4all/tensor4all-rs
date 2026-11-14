@@ -2,11 +2,11 @@
 
 use std::error::Error;
 use tensor4all_core::ColMajorArrayRef;
-use tensor4all_simplett::tensor3_from_data;
+use tensor4all_simplett::{tensor3_from_data, TTCache};
 use tensor4all_tensorbackend::{explicit::Session, CpuEngine, CpuExecutionContext, Exec, Matrix};
 
 use crate::error::{invalid_argument, InterpolativeQttError, Result};
-use crate::interpolation::{build_refined_cores, dense_test_points, SampleBatch};
+use crate::interpolation::{build_refined_cores, dense_test_points, interval_points, SampleBatch};
 use crate::interval::NInterval;
 use crate::{
     get_chebyshev_grid, AbstractTensorTrain, InterpolativeScalar, LagrangePolynomials,
@@ -253,7 +253,7 @@ struct Plan<'a, T: InterpolativeScalar> {
     basis: LagrangePolynomials,
     /// Per-axis validation coordinates in `[0, 1]`, increasing.
     test_points_1d: Vec<f64>,
-    test_points: Vec<Vec<f64>>,
+    num_test_points: usize,
     /// Per-axis basis indices of each flattened Chebyshev node, axis zero fastest.
     nodes: Vec<Vec<usize>>,
     /// One axis of the tensor-product stencil, shape `[2 * order, order]`.
@@ -306,7 +306,6 @@ impl<T: InterpolativeScalar> Plan<'_, T> {
         )?;
         let basis = get_chebyshev_grid(degree)?;
         let test_points_1d = dense_test_points(order)?;
-        let test_points = product_points(&test_points_1d, ndims, test_dim);
         let nodes = product_indices(order, ndims, basis_dim);
         let mut weights = Vec::with_capacity(stencil_len);
         for alpha in 0..order {
@@ -321,7 +320,7 @@ impl<T: InterpolativeScalar> Plan<'_, T> {
             site_dim,
             basis,
             test_points_1d,
-            test_points,
+            num_test_points: test_dim,
             nodes,
             weights: Matrix::from_col_major_vec(tests, order, weights),
             options,
@@ -391,7 +390,7 @@ fn run_waves<T: InterpolativeScalar>(
                     limit: plan.options.max_patches,
                 });
             }
-            let children = split_box(&domain)?;
+            let children = domain.split()?;
             for (mask, domain) in children.into_iter().enumerate() {
                 let mut prefix = patch.prefix.clone();
                 for (axis, bits) in prefix.iter_mut().enumerate() {
@@ -426,9 +425,15 @@ where
     // Chebyshev node values of each immediate child, in sampling order.
     let mut children: Vec<(NInterval, Vec<T>)> = Vec::new();
     let (mut tt, interpolation_error) = if remaining == 1 {
-        let pieces = split_box(&patch.domain)?;
-        let points: Vec<_> = pieces.iter().map(|piece| piece.start().to_vec()).collect();
-        let values = sample(evaluate, engine, &points)?;
+        let pieces = patch.domain.split()?;
+        let points: Vec<_> = pieces
+            .iter()
+            .flat_map(|piece| piece.start().iter().copied())
+            .collect();
+        let shape = [patch.domain.ndims(), pieces.len()];
+        let points =
+            ColMajorArrayRef::new(&points, &shape).map_err(|e| invalid_argument(e.to_string()))?;
+        let values = sample(evaluate, engine, points)?;
         (
             SimpleTensorTrain::new(vec![tensor3_from_data(values, 1, plan.site_dim, 1)?])?,
             0.0,
@@ -444,19 +449,11 @@ where
                     return Ok(values);
                 };
                 children.push((interval.clone(), values.clone()));
-                let start = interval.start();
-                let lengths = interval.lengths();
-                let tests: Vec<Vec<f64>> = plan
-                    .test_points
-                    .iter()
-                    .map(|p| {
-                        p.iter()
-                            .enumerate()
-                            .map(|(d, &x)| start[d] + lengths[d] * x)
-                            .collect()
-                    })
-                    .collect();
-                let reference = sample(evaluate, engine, &tests)?;
+                let tests = interval_points(interval, &plan.test_points_1d)?;
+                let shape = [interval.ndims(), plan.num_test_points];
+                let tests = ColMajorArrayRef::new(&tests, &shape)
+                    .map_err(|e| invalid_argument(e.to_string()))?;
+                let reference = sample(evaluate, engine, tests)?;
                 let predictions = plan.apply_stencil(&values, &mut Session::new(engine))?;
                 for (&prediction, &target) in predictions.iter().zip(&reference) {
                     let residual = (prediction - target).abs_val();
@@ -567,68 +564,77 @@ fn compression_change<T: InterpolativeScalar>(
     let half = 1u64 << (sites - 1);
     let axis = compression_check_indices(&plan.test_points_1d, sites);
     let count = checked_power(axis.len(), ndims)?;
-    let mut max_change = 0.0_f64;
-    let mut quantics = vec![0; sites];
-    let mut lagrange = vec![Vec::with_capacity(plan.basis.len()); ndims];
-    for multi in product_indices(axis.len(), ndims, count) {
-        let mut child = 0;
-        for (d, &i) in multi.iter().enumerate() {
-            let k = axis[i];
-            let upper = k >= half;
-            child |= usize::from(upper) << d;
-            let local = (k - u64::from(upper) * half) as f64 / half as f64;
-            lagrange[d].clear();
-            for alpha in 0..plan.basis.len() {
-                lagrange[d].push(plan.basis.evaluate(alpha, local)?);
-            }
+    checked_product(count, checked_product(sites, std::mem::size_of::<usize>())?)?;
+    checked_product(count, std::mem::size_of::<Vec<usize>>())?;
+    checked_product(count, std::mem::size_of::<T>())?;
+    // Every axis uses the same normalized child coordinates. Compute this
+    // table once and share it across axes and all tensor-product points.
+    let mut lagrange = Vec::with_capacity(checked_product(axis.len(), plan.basis.len())?);
+    for &k in &axis {
+        let local = (k % half) as f64 / half as f64;
+        for alpha in 0..plan.basis.len() {
+            lagrange.push(plan.basis.evaluate(alpha, local)?);
         }
+    }
+    let mut interpolants = Vec::with_capacity(count);
+    let mut indices = Vec::with_capacity(count);
+    for multi in product_indices(axis.len(), ndims, count) {
+        let child = multi.iter().enumerate().fold(0, |mask, (d, &i)| {
+            mask | (usize::from(axis[i] >= half) << d)
+        });
         let mut interpolant = T::zero();
         for (node, &value) in plan.nodes.iter().zip(node_values[child]) {
             let weight: f64 = node
                 .iter()
                 .enumerate()
-                .map(|(d, &alpha)| lagrange[d][alpha])
+                .map(|(d, &alpha)| lagrange[multi[d] * plan.basis.len() + alpha])
                 .product();
             interpolant = interpolant + value * T::from_f64(weight);
         }
-        for (level, site) in quantics.iter_mut().enumerate() {
-            let shift = sites - 1 - level;
-            *site = multi
-                .iter()
-                .enumerate()
-                .map(|(d, &i)| (((axis[i] >> shift) & 1) as usize) << d)
-                .sum();
-        }
-        let change = (compressed.evaluate(&quantics)? - interpolant).abs_val();
-        max_change = max_change.max(change);
+        interpolants.push(interpolant);
+        indices.push(
+            (0..sites)
+                .map(|level| {
+                    let shift = sites - 1 - level;
+                    multi
+                        .iter()
+                        .enumerate()
+                        .map(|(d, &i)| (((axis[i] >> shift) & 1) as usize) << d)
+                        .sum()
+                })
+                .collect(),
+        );
     }
-    Ok(max_change)
+    // A full left prefix preserves evaluate()'s left-to-right accumulation
+    // order bit for bit, while the cache reuses all common prefixes. This
+    // check owns the cache; its at most count * sites prefixes live only here.
+    let values = TTCache::new(compressed).evaluate_many(&indices, Some(sites))?;
+    Ok(values
+        .into_iter()
+        .zip(interpolants)
+        .map(|(value, interpolant)| (value - interpolant).abs_val())
+        .fold(0.0_f64, f64::max))
 }
 
-fn sample<T, F, E>(evaluate: &F, engine: &mut CpuEngine, points: &[Vec<f64>]) -> Result<Vec<T>>
+fn sample<T, F, E>(
+    evaluate: &F,
+    engine: &mut CpuEngine,
+    points: ColMajorArrayRef<'_, f64>,
+) -> Result<Vec<T>>
 where
     T: InterpolativeScalar,
     F: Fn(ColMajorArrayRef<'_, f64>, Exec<'_>) -> std::result::Result<Vec<T>, E>,
     E: Into<Box<dyn Error + Send + Sync>>,
 {
-    let ndims = points.first().map_or(0, Vec::len);
-    let len = checked_product(ndims, points.len())?;
-    let mut coordinates = Vec::with_capacity(len);
-    for point in points {
-        coordinates.extend_from_slice(point);
-    }
-    let shape = [ndims, points.len()];
-    let batch =
-        ColMajorArrayRef::new(&coordinates, &shape).map_err(|e| invalid_argument(e.to_string()))?;
     let values = engine
-        .with_exec(|exec| evaluate(batch, exec.token()))
+        .with_exec(|exec| evaluate(points, exec.token()))
         .map_err(|e| InterpolativeQttError::Execution {
             source: Box::new(e),
         })?
         .map_err(|e| InterpolativeQttError::Evaluation { source: e.into() })?;
-    if values.len() != points.len() {
+    if values.len() != points.shape()[1] {
         return Err(InterpolativeQttError::BatchLength {
-            expected: points.len(),
+            expected: points.shape()[1],
             actual: values.len(),
         });
     }
@@ -660,25 +666,6 @@ fn product_indices(base: usize, ndims: usize, count: usize) -> Vec<Vec<usize>> {
                 .collect()
         })
         .collect()
-}
-
-fn product_points(grid: &[f64], ndims: usize, count: usize) -> Vec<Vec<f64>> {
-    product_indices(grid.len(), ndims, count)
-        .into_iter()
-        .map(|point| point.into_iter().map(|i| grid[i]).collect())
-        .collect()
-}
-
-fn split_box(domain: &NInterval) -> Result<Vec<NInterval>> {
-    for (&lower, &upper) in domain.start().iter().zip(domain.stop()) {
-        let midpoint = lower + (upper - lower) * 0.5;
-        if midpoint <= lower || midpoint >= upper {
-            return Err(invalid_argument(
-                "dyadic midpoint is not representable; reduce num_bits or rescale bounds",
-            ));
-        }
-    }
-    domain.split()
 }
 
 fn validate(

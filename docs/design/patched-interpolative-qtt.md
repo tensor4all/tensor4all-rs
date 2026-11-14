@@ -17,7 +17,9 @@ box from its points. Samples on each immediate child's Chebyshev grid also feed 
 validation stencil on a grid with twice as many nodes per axis. The stencil is
 stored as one `(2p+2) × (p+1)` matrix, built once. Successive axis
 contractions run through the supplied engine's GEMM; column-major rotations
-restore the original axis-zero-fastest validation order. No dense Kronecker
+restore the original axis-zero-fastest validation order. All sample coordinates are written
+directly into one column-major `[D, n]` buffer per batch, shared by pointwise
+and batched node sampling. No dense Kronecker
 stencil is allocated.
 
 SVD compression uses `SimpleTensorTrain::compress_svd_with_session`. Its sweeps
@@ -31,7 +33,10 @@ every box of the driver is safe, the
 uncompressed train equals the owning child's Chebyshev interpolant at each grid
 point, so the comparison uses the sampled node values and costs
 `(degree + 1)^D` products per point rather than an evaluation of the
-uncompressed rank. The error estimate is the maximum interpolation residual plus
+uncompressed rank. The 1D Lagrange values for the selected child coordinates
+are precomputed once and reused on every axis. A call-local `TTCache` reads the
+compressed train with `evaluate_many` and a full left split, sharing prefixes
+while preserving the previous left-to-right accumulation order. The error estimate is the maximum interpolation residual plus
 the maximum compression change. A box is accepted when that estimate is at most
 the absolute tolerance and its compressed rank is at most the optional cap. A
 cutoff or cap that visibly degrades the train therefore leads to splitting. On
@@ -51,7 +56,8 @@ and grows roughly with the square root of its grid size, so it is not used.
 The error is an estimate for interpolation: an arbitrary feature between all
 sample points can be missed. It is not an interval-arithmetic certificate.
 Bounds must be finite and strictly increasing, bit depth is limited to 52, and
-splits whose midpoints cannot be represented are rejected.
+`NInterval::split` rejects splits whose midpoints cannot be represented. This
+same check covers multiscale/adaptive constructors as well as the patch driver.
 
 ## Execution and ordering
 

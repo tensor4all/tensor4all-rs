@@ -3,8 +3,13 @@ use super::*;
 // Original dense Kronecker implementation, confined to small reference tests.
 fn dense_stencil<T: InterpolativeScalar>(plan: &Plan<'_, T>) -> Matrix<T> {
     let mut weights = Vec::new();
+    let tests = product_points(
+        &plan.test_points_1d,
+        plan.domain.ndims(),
+        plan.num_test_points,
+    );
     for alpha in &plan.nodes {
-        for point in &plan.test_points {
+        for point in &tests {
             let mut value = 1.0;
             for (&index, &coordinate) in alpha.iter().zip(point) {
                 value *= plan.basis.evaluate(index, coordinate).unwrap();
@@ -12,7 +17,7 @@ fn dense_stencil<T: InterpolativeScalar>(plan: &Plan<'_, T>) -> Matrix<T> {
             weights.push(T::from_f64(value));
         }
     }
-    Matrix::from_col_major_vec(plan.test_points.len(), plan.nodes.len(), weights)
+    Matrix::from_col_major_vec(plan.num_test_points, plan.nodes.len(), weights)
 }
 
 fn compare_stencils<T: InterpolativeScalar>(f: impl Fn(&[f64]) -> T) {
@@ -29,7 +34,10 @@ fn compare_stencils<T: InterpolativeScalar>(f: impl Fn(&[f64]) -> T) {
                 .iter()
                 .map(|point| f(point))
                 .collect();
-            let targets: Vec<_> = plan.test_points.iter().map(|point| f(point)).collect();
+            let targets: Vec<_> = product_points(&plan.test_points_1d, dims, plan.num_test_points)
+                .iter()
+                .map(|point| f(point))
+                .collect();
             let expected = session
                 .mat_mul(
                     &dense_stencil(&plan),
@@ -126,4 +134,12 @@ fn higher_dimensional_degrees_run_with_default_options() {
         assert_eq!(patches.len(), 1);
         check_partition(&patches, dims, 2, f, 1e-8);
     }
+}
+
+// Original point construction is test-only, to verify coordinate ordering.
+fn product_points(grid: &[f64], ndims: usize, count: usize) -> Vec<Vec<f64>> {
+    product_indices(grid.len(), ndims, count)
+        .into_iter()
+        .map(|point| point.into_iter().map(|i| grid[i]).collect())
+        .collect()
 }

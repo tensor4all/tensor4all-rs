@@ -477,6 +477,10 @@ impl<T: TTScalar> TTCache<T> {
     ///
     /// This method efficiently evaluates the tensor train at multiple indices
     /// by splitting at a given position and computing unique left/right environments.
+    /// A full left split (`Some(self.len())`) traverses the batch in lexicographic
+    /// order with transient shared prefixes, retaining left-to-right arithmetic
+    /// without populating the persistent partial caches. Other splits reuse and
+    /// populate those caches. Results always follow the caller's input order.
     ///
     /// # Arguments
     /// * `indices` - The indices to evaluate
@@ -527,6 +531,10 @@ impl<T: TTScalar> TTCache<T> {
             return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!("Invalid split position: {} (n_sites={})", split, n),
             });
+        }
+
+        if split == n {
+            return self.evaluate_many_full_left(indices);
         }
 
         // Get local dimensions for flat index computation
@@ -600,6 +608,67 @@ impl<T: TTScalar> TTCache<T> {
             .collect();
 
         Ok(results)
+    }
+
+    // Full-left batches need neither a left/right index mapper nor a hash
+    // lookup and retained vector for every prefix. A sorted traversal needs
+    // only one environment per level; adjacent points share their common prefix.
+    fn evaluate_many_full_left(&self, indices: &[MultiIndex]) -> Result<Vec<T>> {
+        let n = self.len();
+        let mut order: Vec<usize> = (0..indices.len()).collect();
+        order.sort_unstable_by_key(|&position| &indices[position]);
+        let mut environments: Vec<Vec<T>> = Vec::with_capacity(n);
+        let mut previous: &[usize] = &[];
+        let mut results = Vec::with_capacity(indices.len());
+        for position in order {
+            let index = &indices[position];
+            let common = index
+                .iter()
+                .zip(previous)
+                .take_while(|(a, b)| a == b)
+                .count();
+            for site in common..n {
+                let tensor = &self.tensors[site];
+                // evaluate_many validated the full flat site index batch once.
+                let slice = tensor.slice_site(index[site]);
+                let environment = if site == 0 {
+                    slice
+                } else {
+                    row_vector_times_matrix(
+                        &environments[site - 1],
+                        &slice,
+                        tensor.left_dim(),
+                        tensor.right_dim(),
+                    )
+                    .map_err(|err| {
+                        SimpleTensorTrainError::InvalidOperation {
+                            message: format!(
+                                "Failed to evaluate left environment at site {}: {err}",
+                                site + 1
+                            ),
+                        }
+                    })?
+                };
+                if site == environments.len() {
+                    environments.push(environment);
+                } else {
+                    environments[site] = environment;
+                }
+            }
+            // INVARIANT: n > 0 and every index has n sites (checked by
+            // evaluate_many); the first traversal initialized all n environments.
+            let last = &environments[n - 1];
+            if last.len() != 1 {
+                return Err(SimpleTensorTrainError::InvalidOperation {
+                    message: format!("Final environment has {} left and 1 right elements, expected equal lengths", last.len()),
+                });
+            }
+            // Match the existing one-element left/right reduction exactly.
+            results.push((position, T::zero() + last[0] * T::one()));
+            previous = index;
+        }
+        results.sort_unstable_by_key(|&(position, _)| position);
+        Ok(results.into_iter().map(|(_, value)| value).collect())
     }
 
     /// Find a good split position using 3-point sampling heuristic
