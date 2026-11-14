@@ -6,6 +6,7 @@ fn split_rejects_unrepresentable_midpoints_on_any_axis() {
     let smallest = f64::from_bits(1);
     for (lower, upper) in [
         (vec![1.0], vec![one_ulp]),
+        (vec![one_ulp], vec![f64::from_bits(1.0_f64.to_bits() + 2)]),
         (vec![0.0], vec![smallest]),
         (vec![0.0, 1.0], vec![1.0, one_ulp]),
         (vec![1.0], vec![1.0]),

@@ -82,7 +82,11 @@ fn coordinate_buffer_preserves_tensor_product_order_and_rounding() {
 #[test]
 fn coordinate_buffer_checks_element_and_byte_products_before_allocation() {
     use crate::interpolation::interval_points;
-    for dims in [usize::BITS as usize - 4, usize::BITS as usize] {
+    for dims in [
+        usize::BITS as usize - 9,
+        usize::BITS as usize - 4,
+        usize::BITS as usize,
+    ] {
         let domain = NInterval::new(&vec![0.0; dims], &vec![1.0; dims]).unwrap();
         assert!(matches!(
             interval_points(&domain, &[0.0, 1.0]),
