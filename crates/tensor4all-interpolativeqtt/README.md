@@ -30,7 +30,7 @@ boxes into independent `InterpolativePatch<T>` values. It runs in a
 its fixed leading bits, the local compressed train, and an absolute per-value
 error estimate of that train (interpolation residual plus compression change),
 which decides acceptance. Options bound rank,
-split depth, patch count and Chebyshev stencil size. Sampling can miss features
+split depth and patch count. Sampling can miss features
 between validation points, so the estimate is not a certificate for arbitrary
 functions.
 

@@ -1,3 +1,5 @@
+mod stencil;
+
 use super::*;
 use num_complex::Complex64;
 use std::convert::Infallible;
@@ -302,14 +304,6 @@ fn validate_before_calling_evaluator() {
         },
         PatchedInterpolativeOptions {
             max_patches: 0,
-            ..Default::default()
-        },
-        PatchedInterpolativeOptions {
-            max_stencil_elements: 0,
-            ..Default::default()
-        },
-        PatchedInterpolativeOptions {
-            max_stencil_elements: 1,
             ..Default::default()
         },
     ] {
