@@ -1,5 +1,6 @@
 //! Error types for tensor cross interpolation operations
 
+use tensor4all_core::FloatingZoneError;
 use thiserror::Error;
 
 /// Result type for TCI operations
@@ -21,6 +22,21 @@ pub(crate) fn validate_positive(name: &str, value: usize) -> Result<()> {
         });
     }
     Ok(())
+}
+
+/// Converts a floating-zone walk failure into this crate's error type.
+///
+/// The walk validates its own arguments, so every variant except
+/// [`FloatingZoneError::Evaluation`] reports an input this crate already
+/// derived from its own options or state; the callback error passes through
+/// unchanged.
+pub(crate) fn floating_zone_error(error: FloatingZoneError<TCIError>) -> TCIError {
+    match error {
+        FloatingZoneError::Evaluation(error) => error,
+        error => TCIError::InvalidConfiguration {
+            message: error.to_string(),
+        },
+    }
 }
 
 /// Errors that can occur during tensor cross interpolation operations

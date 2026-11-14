@@ -10,7 +10,7 @@ use rand::{Rng, RngCore};
 use tensor4all_core::{floating_zone_walk, MultiIndex, Scalar};
 use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTCache, TTScalar, Tensor3Ops};
 
-use crate::error::{validate_nonnegative_finite, Result, TCIError};
+use crate::error::{floating_zone_error, validate_nonnegative_finite, Result, TCIError};
 
 /// Snapshot of the current TCI state, passed to [`GlobalPivotFinder`].
 pub struct GlobalPivotSearchInput<T: Scalar + TTScalar> {
@@ -253,7 +253,8 @@ impl GlobalPivotFinder for DefaultGlobalPivotFinder {
                         })
                         .collect::<Result<Vec<_>>>()
                 },
-            )?;
+            )
+            .map_err(floating_zone_error)?;
 
             // Add point if error exceeds threshold
             if best_error > threshold {

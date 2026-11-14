@@ -13,7 +13,7 @@
 //! and runs after every optimization sweep, except after the final sweep of a
 //! run that stops at `max_iter` or through the bond-dimension saturation stop.
 
-use crate::error::Result as TreeTciResult;
+use crate::error::{Result as TreeTciResult, TreeTciError};
 use crate::evaluation::{BatchExecution, Compatibility};
 use crate::{
     batch::EVALUATION_CHUNK_POINTS, materialize::to_treetn_chunked, GlobalIndexBatch, MultiIndex,
@@ -620,7 +620,13 @@ where
             }
             Ok(errors)
         },
-    )?;
+    )
+    .map_err(|error| match error {
+        tensor4all_core::FloatingZoneError::Evaluation(error) => TreeTciError::from(error),
+        error => TreeTciError::InvalidConfiguration {
+            message: error.to_string(),
+        },
+    })?;
     Ok((error, point))
 }
 

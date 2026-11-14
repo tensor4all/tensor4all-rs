@@ -155,7 +155,13 @@ where
                     .collect::<Vec<f64>>();
                 Ok(errors)
             },
-        )?;
+        )
+        .map_err(|error| match error {
+            tensor4all_core::FloatingZoneError::Evaluation(error) => error,
+            error => AciError::InvalidOptions {
+                message: error.to_string(),
+            },
+        })?;
         if error > threshold {
             best.push((error, pivot));
         }
