@@ -79,10 +79,6 @@ pub struct PatchedInterpolativeOptions {
     pub max_depth: Option<usize>,
     /// Maximum number of accepted plus pending boxes; default 4096.
     pub max_patches: usize,
-    /// Maximum entries in the dense Chebyshev validation stencil; default
-    /// 1,048,576. Its size is `((degree + 1) * (2 * degree + 2))^D`,
-    /// independent of the quantics grid size. Raise explicitly for high degree/dimension.
-    pub max_stencil_elements: usize,
 }
 
 impl Default for PatchedInterpolativeOptions {
@@ -93,7 +89,6 @@ impl Default for PatchedInterpolativeOptions {
             max_bond_dim: None,
             max_depth: None,
             max_patches: 4096,
-            max_stencil_elements: 1 << 20,
         }
     }
 }
@@ -261,6 +256,7 @@ struct Plan<'a, T: InterpolativeScalar> {
     test_points: Vec<Vec<f64>>,
     /// Per-axis basis indices of each flattened Chebyshev node, axis zero fastest.
     nodes: Vec<Vec<usize>>,
+    /// One axis of the tensor-product stencil, shape `[2 * order, order]`.
     weights: Matrix<T>,
     options: &'a PatchedInterpolativeOptions,
 }
@@ -299,10 +295,8 @@ impl<T: InterpolativeScalar> Plan<'_, T> {
             .ok_or_else(|| invalid_argument("validation order overflows"))?;
         let basis_dim = checked_power(order, ndims)?;
         let test_dim = checked_power(tests, ndims)?;
-        let stencil_len = checked_product(basis_dim, test_dim)?;
-        if stencil_len > options.max_stencil_elements {
-            return Err(invalid_argument("Chebyshev stencil exceeds max_stencil_elements; reduce degree/dimension or raise the limit"));
-        }
+        let stencil_len = checked_product(order, tests)?;
+        checked_product(test_dim, std::mem::size_of::<T>())?;
         checked_product(stencil_len, std::mem::size_of::<T>())?;
         let center_elements = checked_product(site_dim, checked_product(basis_dim, basis_dim)?)?;
         checked_product(center_elements, std::mem::size_of::<T>())?;
@@ -315,15 +309,9 @@ impl<T: InterpolativeScalar> Plan<'_, T> {
         let test_points = product_points(&test_points_1d, ndims, test_dim);
         let nodes = product_indices(order, ndims, basis_dim);
         let mut weights = Vec::with_capacity(stencil_len);
-        // INVARIANT: the bounded stencil is independent of num_bits and built once
-        // per run, not once per patch. GEMM performs all value contractions.
-        for alpha in &nodes {
-            for point in &test_points {
-                let mut value = 1.0;
-                for (&index, &coordinate) in alpha.iter().zip(point) {
-                    value *= basis.evaluate(index, coordinate)?;
-                }
-                weights.push(T::from_f64(value));
+        for alpha in 0..order {
+            for &point in &test_points_1d {
+                weights.push(T::from_f64(basis.evaluate(alpha, point)?));
             }
         }
         Ok(Plan {
@@ -335,9 +323,25 @@ impl<T: InterpolativeScalar> Plan<'_, T> {
             test_points_1d,
             test_points,
             nodes,
-            weights: Matrix::from_col_major_vec(test_dim, basis_dim, weights),
+            weights: Matrix::from_col_major_vec(tests, order, weights),
             options,
         })
+    }
+
+    /// Apply the Kronecker stencil without forming its dense product.
+    fn apply_stencil(&self, values: &[T], session: &mut Session<'_>) -> Result<Vec<T>> {
+        let order = self.basis.len();
+        let mut values = values.to_vec();
+        for _ in 0..self.domain.ndims() {
+            // The current axis is first (contiguous). Rotate its new test axis
+            // to the end, exposing the next node axis for the next GEMM.
+            // After D rotations the original axis-zero-fastest order is restored.
+            let columns = values.len() / order;
+            let input = Matrix::from_col_major_vec(order, columns, values);
+            let output = session.mat_mul(&self.weights, &input)?;
+            values = tensor4all_tensorbackend::transpose(&output).into_col_major_vec();
+        }
+        Ok(values)
     }
 }
 
@@ -453,18 +457,15 @@ where
                     })
                     .collect();
                 let reference = sample(evaluate, engine, &tests)?;
-                let values = Matrix::from_col_major_vec(values.len(), 1, values);
-                let predictions = Session::new(engine).mat_mul(&plan.weights, &values)?;
-                for (&prediction, &target) in
-                    predictions.as_col_major_slice().iter().zip(&reference)
-                {
+                let predictions = plan.apply_stencil(&values, &mut Session::new(engine))?;
+                for (&prediction, &target) in predictions.iter().zip(&reference) {
                     let residual = (prediction - target).abs_val();
                     if !residual.is_finite() {
                         return Err(InterpolativeQttError::NonFinite);
                     }
                     error = error.max(residual);
                 }
-                Ok(values.into_col_major_vec())
+                Ok(values)
             },
             &patch.domain,
             remaining,
@@ -718,7 +719,6 @@ fn validate(
     if options.max_depth.is_some_and(|d| d >= num_bits)
         || options.max_bond_dim == Some(0)
         || options.max_patches == 0
-        || options.max_stencil_elements == 0
     {
         return Err(invalid_argument(
             "max_depth must be below num_bits and resource limits must be positive",

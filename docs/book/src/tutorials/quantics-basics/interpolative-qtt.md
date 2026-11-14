@@ -157,7 +157,9 @@ residual plus the largest change compression made at sampled grid points
 (every point on short axes), so it describes the train that is returned. A box splits
 when this estimate exceeds `tolerance`, or its compressed rank exceeds
 `max_bond_dim`. With one site left it is sampled exactly. Hitting `max_depth` or `max_patches` produces
-an error. Validation samples can miss an arbitrary feature, so this is an error
+an error. The Chebyshev validation uses a single 1D stencil applied along each
+axis through the supplied engine, preserving the order of the test points.
+Validation samples can miss an arbitrary feature, so this is an error
 estimate rather than a rigorous certificate for unsampled points.
 
 Every local site fuses one bit per axis, with axis zero varying fastest. For

@@ -15,7 +15,10 @@ constructors. Each batch is tagged as either the Chebyshev nodes of a named
 interval or exact last-core grid points, so the sampler never reconstructs a
 box from its points. Samples on each immediate child's Chebyshev grid also feed a
 validation stencil on a grid with twice as many nodes per axis. The stencil is
-built once and its contraction runs through the supplied engine's GEMM.
+stored as one `(2p+2) × (p+1)` matrix, built once. Successive axis
+contractions run through the supplied engine's GEMM; column-major rotations
+restore the original axis-zero-fastest validation order. No dense Kronecker
+stencil is allocated.
 
 SVD compression uses `SimpleTensorTrain::compress_svd_with_session`. Its sweeps
 and retained-rank rules are shared with ordinary compression. The compressed
@@ -38,8 +41,8 @@ is an estimate rather than a bound.
 A failed candidate fixes the next bit of every axis and becomes `2^D` child
 boxes. With one site remaining, direct sampling yields an exact local train;
 zero-site trains are unnecessary. A configured depth or patch limit returns a
-typed error instead of an unaccepted result. Dense storage scales with the
-explicitly bounded Chebyshev stencil, not with the full quantics grid.
+typed error instead of an unaccepted result. Validation storage scales with the tensor-product node and test-point
+batches plus the single 1D stencil, independently of the full quantics grid.
 
 Acceptance compares only per-value quantities with the per-value tolerance. The
 Frobenius norm of the discarded singular values covers the whole patch tensor
