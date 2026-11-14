@@ -1,6 +1,33 @@
 use super::*;
 use num_complex::Complex64;
 use std::convert::Infallible;
+use tensor4all_tensorbackend::CpuBackend;
+
+// Run the serial entry on a freshly configured one-thread engine.
+fn serial<T, F, E>(
+    evaluate: F,
+    lower: &[f64],
+    upper: &[f64],
+    num_bits: usize,
+    degree: usize,
+    options: &PatchedInterpolativeOptions,
+) -> Result<Vec<InterpolativePatch<T>>>
+where
+    T: InterpolativeScalar,
+    F: Fn(ColMajorArrayRef<'_, f64>, Exec<'_>) -> std::result::Result<Vec<T>, E>,
+    E: Into<Box<dyn Error + Send + Sync>>,
+{
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    interpolate_patched_nd(
+        backend.engine_mut(),
+        evaluate,
+        lower,
+        upper,
+        num_bits,
+        degree,
+        options,
+    )
+}
 
 fn batch<T: InterpolativeScalar>(
     points: ColMajorArrayRef<'_, f64>,
@@ -66,7 +93,7 @@ fn check_partition<T: InterpolativeScalar>(
 
 fn smooth<T: InterpolativeScalar>(f: impl Fn(&[f64]) -> T) {
     for dims in [1, 2] {
-        let patches = interpolate_patched_nd(
+        let patches = serial(
             |p, _| batch(p, &f),
             &vec![0.0; dims],
             &vec![1.0; dims],
@@ -96,7 +123,7 @@ fn localized<T: InterpolativeScalar>(f: impl Fn(&[f64]) -> T) {
             tolerance: 1e-4,
             ..Default::default()
         };
-        let patches = interpolate_patched_nd(
+        let patches = serial(
             |p, _| batch(p, &f),
             &vec![0.0; dims],
             &vec![1.0; dims],
@@ -130,7 +157,7 @@ fn last_site_is_exact_and_rank_cap_triggers_splitting() {
     };
     let f = |x: &[f64]| (3.0 * x[0] + x.get(1).copied().unwrap_or(0.0)).exp();
     for dims in [1, 2] {
-        let p = interpolate_patched_nd(
+        let p = serial(
             |p, _| batch(p, f),
             &vec![0.0; dims],
             &vec![1.0; dims],
@@ -143,8 +170,7 @@ fn last_site_is_exact_and_rank_cap_triggers_splitting() {
         assert!(p.iter().all(|p| p.tt.rank() == 1));
         check_partition(&p, dims, 3, f, options.tolerance);
     }
-    let p = interpolate_patched_nd(|p, _| batch(p, lorentzian), &[0.0], &[1.0], 1, 2, &options)
-        .unwrap();
+    let p = serial(|p, _| batch(p, lorentzian), &[0.0], &[1.0], 1, 2, &options).unwrap();
     assert_eq!(p.len(), 1);
     assert_eq!(p[0].error_estimate, 0.0);
     check_partition(&p, 1, 1, lorentzian, options.tolerance);
@@ -153,7 +179,7 @@ fn last_site_is_exact_and_rank_cap_triggers_splitting() {
 #[test]
 fn limits_and_nonfinite_values_are_errors() {
     let run = |options: &PatchedInterpolativeOptions| {
-        interpolate_patched_nd(|p, _| batch(p, lorentzian), &[0.0], &[1.0], 4, 3, options)
+        serial(|p, _| batch(p, lorentzian), &[0.0], &[1.0], 4, 3, options)
     };
     assert!(matches!(
         run(&PatchedInterpolativeOptions {
@@ -170,7 +196,7 @@ fn limits_and_nonfinite_values_are_errors() {
         Err(InterpolativeQttError::PatchLimit { limit: 1 })
     ));
     for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-        let result = interpolate_patched_nd(
+        let result = serial(
             |p, _| batch(p, |_| value),
             &[0.0],
             &[1.0],
@@ -180,7 +206,7 @@ fn limits_and_nonfinite_values_are_errors() {
         );
         assert!(matches!(result, Err(InterpolativeQttError::NonFinite)));
     }
-    let result = interpolate_patched_nd(
+    let result = serial(
         |p, _| batch(p, |_| Complex64::new(0.0, f64::NAN)),
         &[0.0],
         &[1.0],
@@ -189,7 +215,7 @@ fn limits_and_nonfinite_values_are_errors() {
         &Default::default(),
     );
     assert!(matches!(result, Err(InterpolativeQttError::NonFinite)));
-    let result = interpolate_patched_nd(
+    let result = serial(
         |_, _| Ok::<Vec<f64>, Infallible>(vec![]),
         &[0.0],
         &[1.0],
@@ -209,7 +235,7 @@ struct TargetError;
 
 #[test]
 fn evaluator_error_preserves_source() {
-    let result = interpolate_patched_nd(
+    let result = serial(
         |_, _| Err::<Vec<f64>, _>(TargetError),
         &[0.0],
         &[1.0],
@@ -230,7 +256,7 @@ fn evaluator_error_preserves_source() {
 fn validate_before_calling_evaluator() {
     let invalid =
         |lower: &[f64], upper: &[f64], bits, degree, options: &PatchedInterpolativeOptions| {
-            let result = interpolate_patched_nd(
+            let result = serial(
                 |_, _| -> std::result::Result<Vec<f64>, Infallible> {
                     panic!("invalid inputs reached evaluator")
                 },
@@ -306,8 +332,7 @@ fn shared_multiscale_values_are_unchanged() {
         ..Default::default()
     };
     let f = |p: &[f64]| (p[0] + 2.0 * p[1]).exp();
-    let patches =
-        interpolate_patched_nd(|p, _| batch(p, f), &[0.0; 2], &[1.0; 2], 4, 7, &options).unwrap();
+    let patches = serial(|p, _| batch(p, f), &[0.0; 2], &[1.0; 2], 4, 7, &options).unwrap();
     assert_eq!(patches.len(), 1);
     let expected = crate::interpolate_multi_scale_nd(
         f,
@@ -323,13 +348,17 @@ fn shared_multiscale_values_are_unchanged() {
 }
 
 #[test]
-fn compression_bound_prevents_false_acceptance() {
+fn truncation_is_reported_but_does_not_drive_acceptance() {
+    // An aggressive relative cutoff truncates the rank-2 train of 1 + x to rank
+    // one. Acceptance still follows the interpolation residual alone; the
+    // discarded weight is reported and bounds the actual pointwise change.
     let f = |p: &[f64]| 1.0 + p[0];
-    let result = interpolate_patched_nd(
+    let bits = 4;
+    let patches = serial(
         |p, _| batch(p, f),
         &[0.0],
         &[1.0],
-        4,
+        bits,
         3,
         &PatchedInterpolativeOptions {
             tolerance: 1e-6,
@@ -337,11 +366,87 @@ fn compression_bound_prevents_false_acceptance() {
             max_depth: Some(0),
             ..Default::default()
         },
+    )
+    .unwrap();
+    assert_eq!(patches.len(), 1);
+    let patch = &patches[0];
+    assert_eq!(patch.tt.rank(), 1);
+    assert!(patch.error_estimate <= 1e-6);
+    let max_change = (0..1u64 << bits)
+        .map(|i| {
+            (evaluate_on_grid(&patches, bits, &[i]) - f(&[i as f64 / (1 << bits) as f64])).abs()
+        })
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_change > 1e-6,
+        "rank one must lose accuracy: {max_change}"
     );
-    assert!(matches!(
-        result,
-        Err(InterpolativeQttError::NotConverged { .. })
-    ));
+    assert!(
+        max_change <= patch.error_estimate + patch.truncation_bound,
+        "change {max_change}, bound {}",
+        patch.truncation_bound
+    );
+}
+
+/// Evaluate the patch that owns grid point `indices` (one integer per axis).
+fn evaluate_on_grid<T: InterpolativeScalar>(
+    patches: &[InterpolativePatch<T>],
+    bits: usize,
+    indices: &[u64],
+) -> T {
+    let bit = |axis: usize, level: usize| ((indices[axis] >> (bits - 1 - level)) & 1) as usize;
+    let patch = patches
+        .iter()
+        .find(|p| {
+            p.prefix
+                .iter()
+                .enumerate()
+                .all(|(axis, prefix)| prefix.iter().enumerate().all(|(l, &b)| b == bit(axis, l)))
+        })
+        .unwrap();
+    let depth = patch.prefix[0].len();
+    let sites: Vec<usize> = (depth..bits)
+        .map(|level| {
+            (0..indices.len())
+                .map(|axis| bit(axis, level) << axis)
+                .sum()
+        })
+        .collect();
+    patch.tt.evaluate(&sites).unwrap()
+}
+
+#[test]
+fn default_options_do_not_over_refine_deep_2d_grids() {
+    // tensor4all-rs#1307 review: a Frobenius truncation bound over 2^(2R) values
+    // must not be compared with the per-value tolerance. At R = 30 this used to
+    // exhaust the default patch budget even for a constant.
+    let smooth = |p: &[f64]| (p[0] + 0.5 * p[1]).exp();
+    let constant = |_: &[f64]| 1.0;
+    let options = PatchedInterpolativeOptions::default();
+    for (f, bits) in [
+        (&constant as &dyn Fn(&[f64]) -> f64, 30),
+        (&smooth, 30),
+        (&smooth, 40),
+    ] {
+        let patches = serial(|p, _| batch(p, f), &[0.0; 2], &[1.0; 2], bits, 8, &options).unwrap();
+        assert!(patches.len() <= 4, "{bits} bits: {} patches", patches.len());
+        let size = 1u64 << bits;
+        let mut max_error = 0.0_f64;
+        for (i, j) in [
+            (0, 0),
+            (1, size - 1),
+            (size / 3, 2 * size / 3),
+            (size - 1, size - 1),
+        ] {
+            let point = [i as f64 / size as f64, j as f64 / size as f64];
+            max_error =
+                max_error.max((evaluate_on_grid(&patches, bits, &[i, j]) - f(&point)).abs());
+        }
+        assert!(
+            max_error <= options.tolerance,
+            "{bits} bits: error {max_error}"
+        );
+    }
 }
 
 #[cfg(feature = "parallel")]
@@ -351,7 +456,7 @@ mod parallel;
 fn nonrepresentable_grid_is_rejected_before_sampling() {
     let adjacent = f64::from_bits(1.0_f64.to_bits() + 1);
     for bits in [1, 3] {
-        let result = interpolate_patched_nd(
+        let result = serial(
             |_, _| -> std::result::Result<Vec<f64>, Infallible> {
                 panic!("invalid grid reached evaluator")
             },
@@ -377,7 +482,7 @@ fn nonrepresentable_grid_is_rejected_before_sampling() {
 fn long_grid_stays_in_tensor_train_storage() {
     // Exercise the untruncated path: the extensive Frobenius bound is
     // intentionally conservative on very long grids. No dense tensor fits here.
-    let patches = interpolate_patched_nd(
+    let patches = serial(
         |p, _| batch(p, |_| 3.0_f64),
         &[0.0],
         &[1.0],
@@ -400,7 +505,7 @@ fn physical_bounds_and_overflowing_residuals() {
     let lower = [-0.1, 1.2];
     let upper = [0.2, 2.3];
     let f = |p: &[f64]| Complex64::new(1.0 + p[0], 2.0 * p[1]);
-    let patches = interpolate_patched_nd(
+    let patches = serial(
         |p, _| batch(p, f),
         &lower,
         &upper,
@@ -428,7 +533,7 @@ fn physical_bounds_and_overflowing_residuals() {
     // depend on how the BLAS provider orders or fuses the products.
     let degree = 3;
     let test_batch = 2 * (degree + 1);
-    let result = interpolate_patched_nd(
+    let result = serial(
         |p, _| {
             let target = if p.shape()[1] == test_batch {
                 -f64::MAX

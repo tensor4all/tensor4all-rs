@@ -50,7 +50,7 @@ pub enum InterpolativeQttError {
     NotConverged {
         /// Fixed leading bits per axis.
         prefix: Vec<Vec<usize>>,
-        /// Local absolute error estimate including the compression bound.
+        /// Maximum absolute interpolation residual at the validation points.
         error_estimate: f64,
         /// Largest bond dimension.
         rank: usize,

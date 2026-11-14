@@ -23,7 +23,7 @@ fn compare<T: InterpolativeScalar + Send + Sync + PartialEq + std::fmt::Debug>(
             tolerance: 1e-4,
             ..Default::default()
         };
-        let serial = interpolate_patched_nd(
+        let serial = serial(
             |p, _| batch(p, &f),
             &vec![0.0; dims],
             &vec![1.0; dims],

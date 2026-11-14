@@ -2862,6 +2862,7 @@ dependencies = [
  "tensor4all-quanticstci",
  "tensor4all-quanticstransform",
  "tensor4all-simplett",
+ "tensor4all-tensorbackend",
  "tensor4all-treetn",
 ]
 

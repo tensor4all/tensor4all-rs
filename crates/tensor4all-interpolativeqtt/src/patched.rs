@@ -3,10 +3,10 @@
 use std::error::Error;
 use tensor4all_core::ColMajorArrayRef;
 use tensor4all_simplett::tensor3_from_data;
-use tensor4all_tensorbackend::{explicit::Session, CpuBackend, CpuEngine, Exec, Matrix};
+use tensor4all_tensorbackend::{explicit::Session, CpuEngine, Exec, Matrix};
 
 use crate::error::{invalid_argument, InterpolativeQttError, Result};
-use crate::interpolation::{build_refined_cores, dense_test_points};
+use crate::interpolation::{build_refined_cores, dense_test_points, SampleBatch};
 use crate::interval::NInterval;
 use crate::{
     get_chebyshev_grid, AbstractTensorTrain, InterpolativeScalar, LagrangePolynomials,
@@ -26,9 +26,10 @@ use crate::{
 ///     prefix: vec![vec![1], vec![0]],
 ///     tt: SimpleTensorTrain::<f64>::constant(&[4, 4], 2.0),
 ///     error_estimate: 0.0,
+///     truncation_bound: 0.0,
 /// };
 /// assert_eq!(patch.prefix, vec![vec![1], vec![0]]);
-/// assert_eq!(patch.error_estimate, 0.0);
+/// assert_eq!(patch.error_estimate + patch.truncation_bound, 0.0);
 /// ```
 #[derive(Debug, Clone)]
 pub struct InterpolativePatch<T: InterpolativeScalar> {
@@ -36,9 +37,16 @@ pub struct InterpolativePatch<T: InterpolativeScalar> {
     pub prefix: Vec<Vec<usize>>,
     /// QTT on the remaining bits, with fused site dimension `2^D`.
     pub tt: SimpleTensorTrain<T>,
-    /// Maximum checked interpolation residual plus a Frobenius SVD truncation bound.
-    /// This is an estimate, not a certificate for arbitrary unsampled functions.
+    /// Maximum absolute interpolation residual at the Chebyshev validation
+    /// points; this per-value quantity alone decides acceptance against
+    /// [`PatchedInterpolativeOptions::tolerance`]. It is an estimate, not a
+    /// certificate for arbitrary unsampled functions.
     pub error_estimate: f64,
+    /// Frobenius norm of the singular values discarded by compression, reported
+    /// separately from acceptance. It bounds the change of the whole patch
+    /// tensor and therefore of every value in it, so a pointwise error estimate
+    /// of the returned TT is `error_estimate + truncation_bound`.
+    pub truncation_bound: f64,
 }
 
 /// Accuracy and resource limits for patched construction.
@@ -56,10 +64,14 @@ pub struct InterpolativePatch<T: InterpolativeScalar> {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PatchedInterpolativeOptions {
-    /// Absolute local error target, finite and nonnegative; default `1e-8`.
+    /// Absolute per-value interpolation error target, finite and nonnegative;
+    /// default `1e-8`. A box is accepted when its validation residual
+    /// ([`InterpolativePatch::error_estimate`]) is at most this value.
     pub tolerance: f64,
-    /// Relative SVD cutoff; default `1e-12`. Its discarded weight is included
-    /// in the acceptance estimate. Use zero to retain every singular value.
+    /// Relative SVD cutoff applied to each accepted patch; default `1e-12`.
+    /// It does not take part in acceptance: the discarded weight is reported as
+    /// [`InterpolativePatch::truncation_bound`]. Keep it small relative to
+    /// `tolerance / max|f|`; use zero to retain every singular value.
     pub compression_tolerance: f64,
     /// Accept only bonds at most this positive size; `None` imposes no cap.
     pub max_bond_dim: Option<usize>,
@@ -89,19 +101,25 @@ impl Default for PatchedInterpolativeOptions {
 
 /// Construct real or complex interpolative QTT patches on a dyadic box.
 ///
+/// `engine` is the caller's configured CPU engine, for example
+/// `CpuBackend::with_threads(1)?` followed by `engine_mut()`. Every box runs on
+/// it in turn: the evaluator receives its [`Exec`] token, and the validation
+/// GEMM and SVD compression use it. No backend is created internally.
 /// `lower` and `upper` are finite, strictly increasing bounds for each axis;
 /// `num_bits` (at least one) is the bit depth per axis and `polynomial_degree`
 /// (at least one) sets the Chebyshev order. The fallible evaluator receives
-/// column-major points of shape `[D, n_points]` and a serial [`Exec`] token.
+/// column-major points of shape `[D, n_points]` and the engine's token.
 /// It must return one value per point in the same order. Errors retain their
 /// original source type. See [`PatchedInterpolativeOptions`] for limits.
 ///
 /// Each box reuses the multiscale Chebyshev construction with its remaining
-/// bits. Boxes whose checked error or compressed rank exceeds the limit split
-/// along every axis. The last site is sampled exactly. The returned vector is
-/// sorted lexicographically by per-axis prefix and partitions the full grid.
-/// This sampling algorithm cannot detect arbitrary features missed by its
-/// Chebyshev validation points; the error field is an estimate.
+/// bits. Boxes whose interpolation residual or compressed rank exceeds the
+/// limit split along every axis; the SVD truncation bound is reported per
+/// patch but does not drive splitting. The last site is sampled exactly. The
+/// returned vector is sorted lexicographically by per-axis prefix and
+/// partitions the full grid. This sampling algorithm cannot detect arbitrary
+/// features missed by its Chebyshev validation points; the error fields are
+/// estimates.
 ///
 /// # Errors
 /// Returns [`InterpolativeQttError::InvalidArgument`] for invalid bounds,
@@ -115,9 +133,12 @@ impl Default for PatchedInterpolativeOptions {
 /// # Examples
 /// ```
 /// use std::convert::Infallible;
+/// use tensor4all_tensorbackend::CpuBackend;
 /// use tensor4all_interpolativeqtt::{interpolate_patched_nd, PatchedInterpolativeOptions,
 ///     AbstractTensorTrain};
+/// let mut backend = CpuBackend::with_threads(1)?;
 /// let patches = interpolate_patched_nd(
+///     backend.engine_mut(),
 ///     |points, _exec| Ok::<_, Infallible>(points.data().chunks(2)
 ///         .map(|p| 1.0 + p[0] + 2.0 * p[1]).collect()),
 ///     &[0.0, 0.0], &[1.0, 1.0], 5, 3, &PatchedInterpolativeOptions::default(),
@@ -128,6 +149,7 @@ impl Default for PatchedInterpolativeOptions {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn interpolate_patched_nd<T, F, E>(
+    engine: &mut CpuEngine,
     evaluate: F,
     lower: &[f64],
     upper: &[f64],
@@ -141,22 +163,18 @@ where
     E: Into<Box<dyn Error + Send + Sync>>,
 {
     let plan = Plan::new(lower, upper, num_bits, polynomial_degree, options)?;
-    let mut backend =
-        CpuBackend::with_threads(1).map_err(|e| InterpolativeQttError::Execution {
-            source: Box::new(e),
-        })?;
     run_waves(&plan, |wave| {
         wave.into_iter()
-            .map(|patch| patch_body(&plan, &evaluate, patch, backend.engine_mut()))
+            .map(|patch| patch_body(&plan, &evaluate, patch, engine))
             .collect()
     })
 }
 
 /// Construct patches on caller-owned lanes, sharing each lane's engine with the evaluator.
 ///
-/// This has the same arguments and acceptance rules as [`interpolate_patched_nd`].
-/// The caller builds `P` engines with `B` threads each and passes them through
-/// `lanes`. Both evaluation and compression use the engine of the lane that
+/// This has the same acceptance rules as [`interpolate_patched_nd`], with
+/// `lanes` in place of the single engine. The caller builds `P` engines with
+/// `B` threads each and passes them through `lanes`. Both evaluation and compression use the engine of the lane that
 /// pulls the box. No global backend is entered. A wave with fewer than `P`
 /// boxes leaves lanes idle; the driver does not rebalance their thread budgets.
 ///
@@ -167,8 +185,11 @@ where
 /// Floating-point backend roundoff can matter for a decision exactly on a
 /// threshold; choose tolerances with a margin above roundoff.
 ///
-/// The `parallel` feature selects faer. On macOS use `default-features = false`
-/// to avoid selecting Accelerate too; native/faer plus BLAS is rejected upstream.
+/// The `parallel` feature adds only the lane executor and keeps whichever CPU
+/// provider the build selects. With native/faer, each lane's linear algebra
+/// runs within its `B` threads. A BLAS provider (Accelerate, system BLAS) runs
+/// its own threading outside that budget, and bit-identical results across
+/// lane counts then rely on that library being deterministic.
 ///
 /// # Errors
 /// Returns the same errors as [`interpolate_patched_nd`], plus
@@ -393,23 +414,22 @@ where
     } else {
         let mut error = 0.0_f64;
         let cores = build_refined_cores(
-            &mut |points: &[Vec<f64>]| {
-                let values = sample(evaluate, engine, points)?;
-                // Every sampled batch is a child box's tensor-product Chebyshev
-                // nodes in column-major order. Its endpoints are the first/last node.
-                let first = points
-                    .first()
-                    .ok_or_else(|| invalid_argument("empty Chebyshev batch"))?;
-                let last = points
-                    .last()
-                    .ok_or_else(|| invalid_argument("empty Chebyshev batch"))?;
+            &mut |batch: SampleBatch<'_>| {
+                let values = sample(evaluate, engine, batch.points())?;
+                // Only a Chebyshev node set carries the polynomial the stencil
+                // validates; exact grid samples have nothing to check.
+                let SampleBatch::Nodes { interval, .. } = batch else {
+                    return Ok(values);
+                };
+                let start = interval.start();
+                let lengths = interval.lengths();
                 let tests: Vec<Vec<f64>> = plan
                     .test_points
                     .iter()
                     .map(|p| {
                         p.iter()
                             .enumerate()
-                            .map(|(d, &x)| first[d] + (last[d] - first[d]) * x)
+                            .map(|(d, &x)| start[d] + lengths[d] * x)
                             .collect()
                     })
                     .collect();
@@ -434,20 +454,20 @@ where
         )?;
         (SimpleTensorTrain::new(cores)?, error)
     };
-    let bound = tt.compress_svd_with_session(
+    let truncation_bound = tt.compress_svd_with_session(
         &mut Session::new(engine),
         plan.options.compression_tolerance,
         None,
     )?;
-    let error_estimate = interpolation_error + bound;
-    if !error_estimate.is_finite() {
+    if !interpolation_error.is_finite() || !truncation_bound.is_finite() {
         return Err(InterpolativeQttError::NonFinite);
     }
     Ok(PatchOutcome {
         patch: InterpolativePatch {
             prefix: patch.prefix,
             tt,
-            error_estimate,
+            error_estimate: interpolation_error,
+            truncation_bound,
         },
         domain: patch.domain,
         depth: patch.depth,

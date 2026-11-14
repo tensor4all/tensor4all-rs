@@ -965,6 +965,31 @@ where
     Ok(values)
 }
 
+/// One batch of sample points requested by [`build_refined_cores`].
+///
+/// The kind is explicit so a sampler never has to infer the geometry of a
+/// batch from its points.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SampleBatch<'a> {
+    /// The tensor-product Chebyshev nodes of `interval`, flattened column-major
+    /// over the per-axis basis index (axis zero fastest).
+    Nodes {
+        interval: &'a NInterval,
+        points: &'a [Vec<f64>],
+    },
+    /// Exact grid points of the last core; they carry no polynomial structure.
+    Grid { points: &'a [Vec<f64>] },
+}
+
+impl<'a> SampleBatch<'a> {
+    /// The points of this batch, whatever its kind.
+    pub(crate) fn points(&self) -> &'a [Vec<f64>] {
+        match *self {
+            Self::Nodes { points, .. } | Self::Grid { points } => points,
+        }
+    }
+}
+
 fn eval_interval_batched<T, F>(
     f: &mut F,
     interval: &NInterval,
@@ -973,7 +998,7 @@ fn eval_interval_batched<T, F>(
 ) -> Result<Vec<T>>
 where
     T: InterpolativeScalar,
-    F: FnMut(&[Vec<f64>]) -> Result<Vec<T>>,
+    F: FnMut(SampleBatch<'_>) -> Result<Vec<T>>,
 {
     let ndims = interval.ndims();
     let lengths = interval.lengths();
@@ -985,7 +1010,10 @@ where
             .map(|d| interval.start()[d] + lengths[d] * basis.grid()[alpha[d]])
             .collect();
     }
-    f(&points)
+    f(SampleBatch::Nodes {
+        interval,
+        points: &points,
+    })
 }
 
 fn build_refined_qtt<T, F, S>(
@@ -1002,7 +1030,7 @@ where
     S: Fn(&NInterval, usize) -> bool,
 {
     let cores = build_refined_cores(
-        &mut |points: &[Vec<f64>]| Ok(points.iter().map(|point| f(point)).collect()),
+        &mut |batch: SampleBatch<'_>| Ok(batch.points().iter().map(|point| f(point)).collect()),
         domain,
         num_bits,
         basis,
@@ -1012,7 +1040,9 @@ where
 }
 
 // The multiscale assembly is shared by the pointwise constructors and the
-// fallible batched patch driver. Sampling and execution ownership stay outside it.
+// fallible batched patch driver. Sampling and execution ownership stay outside it;
+// every request names its batch kind (`SampleBatch`), so the sampler never
+// reconstructs a box from the points it receives.
 pub(crate) fn build_refined_cores<T, F, S>(
     f: &mut F,
     domain: &NInterval,
@@ -1022,7 +1052,7 @@ pub(crate) fn build_refined_cores<T, F, S>(
 ) -> Result<Vec<Tensor3<T>>>
 where
     T: InterpolativeScalar,
-    F: FnMut(&[Vec<f64>]) -> Result<Vec<T>>,
+    F: FnMut(SampleBatch<'_>) -> Result<Vec<T>>,
     S: Fn(&NInterval, usize) -> bool,
 {
     let ndims = domain.ndims();
@@ -1151,7 +1181,7 @@ fn last_core<T, F>(
 ) -> Result<Tensor3<T>>
 where
     T: InterpolativeScalar,
-    F: FnMut(&[Vec<f64>]) -> Result<Vec<T>>,
+    F: FnMut(SampleBatch<'_>) -> Result<Vec<T>>,
 {
     let right_1d = right_core_1d(basis)?;
     let right = direct_product_core_tensors(&vec![right_1d; ndims])?;
@@ -1165,7 +1195,10 @@ where
             .into_iter()
             .map(|piece| piece.start().to_vec())
             .collect();
-        for (site, value) in f(&points)?.into_iter().enumerate() {
+        for (site, value) in f(SampleBatch::Grid { points: &points })?
+            .into_iter()
+            .enumerate()
+        {
             last[[basis_dim + interval_index, site, 0]] = value;
         }
     }

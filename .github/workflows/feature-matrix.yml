@@ -66,11 +66,14 @@ jobs:
             audit: true
             check: >
               -p tensor4all-partitionedtreetn --features hataori-mpi
+          # Lane fan-out is provider-neutral: it must compose with the platform
+          # default and with an explicit BLAS provider.
           - name: interpolativeqtt-parallel
-            apt: ""
+            apt: libopenblas-dev
             audit: true
-            check: >
-              -p tensor4all-interpolativeqtt --no-default-features --features parallel
+            check: |
+              -p tensor4all-interpolativeqtt --features parallel
+              -p tensor4all-interpolativeqtt --no-default-features --features parallel,tenferro-system-blas
           # Diagnostics instrumentation stays additive to the default features.
           - name: diagnostics
             apt: ""
@@ -120,16 +123,11 @@ jobs:
             cargo check --locked --all-targets $selection
           done <<< "$SELECTIONS"
 
-      - name: Test interpolative QTT lanes and provider exclusion
+      - name: Test interpolative QTT lanes
         if: matrix.name == 'interpolativeqtt-parallel'
-        run: |
-          cargo test --locked -p tensor4all-interpolativeqtt --no-default-features --features parallel
-          if cargo check --locked -p tensor4all-interpolativeqtt --no-default-features \
-              --features parallel,tenferro-system-blas > provider-conflict.log 2>&1; then
-            cat provider-conflict.log
-            exit 1
-          fi
-          grep -F 'native and blas are mutually exclusive' provider-conflict.log
+        # Bit-identical lane layouts are asserted on the default provider (faer
+        # on Linux), whose kernels stay within each lane's thread budget.
+        run: cargo test --locked -p tensor4all-interpolativeqtt --features parallel
 
       - name: Audit panic paths for the configuration
         # A configuration selects a subset of the workspace, so the audit keeps

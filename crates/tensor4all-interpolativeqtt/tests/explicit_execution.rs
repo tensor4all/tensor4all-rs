@@ -1,7 +1,7 @@
 //! This separate process proves construction never initializes the global backend.
 use std::{convert::Infallible, num::NonZeroUsize};
 use tensor4all_interpolativeqtt::{interpolate_patched_nd, PatchedInterpolativeOptions};
-use tensor4all_tensorbackend::set_default_cpu_threads;
+use tensor4all_tensorbackend::{set_default_cpu_threads, CpuBackend};
 
 #[test]
 fn patched_construction_leaves_global_backend_uninitialized() {
@@ -13,12 +13,26 @@ fn patched_construction_leaves_global_backend_uninitialized() {
                     _: tensor4all_tensorbackend::Exec<'_>| {
         Ok::<_, Infallible>(p.data().iter().map(|x| 1.0 + x).collect())
     };
-    let patches = interpolate_patched_nd(evaluate, &[0.0], &[1.0], 4, 3, &options).unwrap();
+    // The serial entry runs on the caller's engine: the evaluator sees its
+    // two-thread budget, not an internally created one-thread backend.
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let patches = interpolate_patched_nd(
+        backend.engine_mut(),
+        |p, exec: tensor4all_tensorbackend::Exec<'_>| {
+            assert_eq!(exec.budget().get(), 2);
+            evaluate(p, exec)
+        },
+        &[0.0],
+        &[1.0],
+        4,
+        3,
+        &options,
+    )
+    .unwrap();
     assert!(patches.len() > 1);
     #[cfg(feature = "parallel")]
     {
         use tensor4all_interpolativeqtt::interpolate_patched_nd_on_lanes;
-        use tensor4all_tensorbackend::CpuBackend;
         let mut lanes = hataori_tenferro::TenferroLanes::new(
             (0..2)
                 .map(|_| CpuBackend::with_threads(2).unwrap().into_engine())

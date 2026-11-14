@@ -122,10 +122,12 @@ two-dimensional fused sites are more expensive than the one-dimensional sites.
 ## Independent dyadic patches
 
 `interpolate_patched_nd` constructs separate boxes instead of refining inside a
-single train. Its evaluator receives column-major `[D, n_points]` coordinates
-and a serial execution token. Real and complex values use the same API. Each
-accepted `InterpolativePatch` contains the fixed leading bits of each axis, a
-QTT over the remaining bits, and an absolute local error estimate.
+single train. It runs on a CPU engine the caller configures. Its evaluator
+receives column-major `[D, n_points]` coordinates and that engine's execution
+token. Real and complex values use the same API. Each accepted
+`InterpolativePatch` contains the fixed leading bits of each axis, a QTT over
+the remaining bits, an absolute local interpolation error estimate, and the SVD
+truncation bound.
 
 The [patched tutorial source](../../../../tutorial-code/src/bin/patched_interpolative_qtt.rs)
 constructs a complex two-dimensional Green's function, converts the patches to
@@ -138,6 +140,7 @@ sixteen-point direct DFT. Run it with
 # use std::convert::Infallible;
 # use num_complex::Complex64;
 # use tensor4all_interpolativeqtt::{interpolate_patched_nd, PatchedInterpolativeOptions};
+# use tensor4all_tensorbackend::CpuBackend;
 # fn green(point: &[f64]) -> Complex64 {
 #     let energy = (2.0 * std::f64::consts::PI * point[0]).cos()
 #         + (2.0 * std::f64::consts::PI * point[1]).cos();
@@ -148,8 +151,12 @@ sixteen-point direct DFT. Run it with
 # }
 ```
 
-A box splits when its checked Chebyshev residual plus SVD truncation bound
-exceeds `tolerance`, or its compressed rank exceeds `max_bond_dim`. With one
+The caller creates the CPU engine and passes it in; construction never creates
+a backend. A box splits when its checked Chebyshev residual exceeds
+`tolerance`, or its compressed rank exceeds `max_bond_dim`. Each patch also
+reports `truncation_bound`, the Frobenius weight that SVD compression with the
+relative `compression_tolerance` discarded; it does not drive splitting, and
+`error_estimate + truncation_bound` estimates the pointwise error of the train. With one
 site left it is sampled exactly. Hitting `max_depth` or `max_patches` produces
 an error. Validation samples can miss an arbitrary feature, so this is an error
 estimate rather than a rigorous certificate for unsampled points.
@@ -167,5 +174,6 @@ executing engine's `Exec` token: ignore it for serial callbacks, use
 `for_ranges`/`fork`, or call external libraries inside `external`. Algebra and
 compression use the same lane engine; narrow waves leave lanes idle. Keep the
 callback pure and independent of thread count. Patches are merged and returned
-in canonical prefix order. The feature selects faer; on macOS disable default
-features to avoid combining it with Accelerate. BLAS plus `parallel` is rejected.
+in canonical prefix order. The feature adds only the lane executor and keeps the
+selected CPU provider. With a BLAS provider such as Accelerate, that library's
+own threading lies outside the lane budget.

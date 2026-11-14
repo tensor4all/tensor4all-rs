@@ -10,6 +10,7 @@ use crate::interval::NInterval;
 use super::*;
 
 mod complex;
+mod refined_batches;
 
 fn quantics_to_indices(quantics: &[usize]) -> Vec<usize> {
     quantics.to_vec()
