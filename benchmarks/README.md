@@ -38,6 +38,87 @@ macOS also set `VECLIB_MAXIMUM_THREADS=1`.
 
 ### Rust
 
+#### ACI summation gate (#1127)
+
+`sum_benchmark` and `scripts/run-sum-benchmark.py` prepare the complete
+same-library comparison of one ACI run, sequential and balanced pairwise
+truncation, density-matrix summation, an exact N-ary sum, and an exact N-ary
+sum truncated once. They use existing public APIs; this harness does not add
+an ACI summation API or establish that the proposal passes its gate.
+
+Use a clean, committed checkout on **Linux** with Rust, Cargo and Python 3.9+.
+Choose CPU numbers from the actual machine's topology, for example with
+`lscpu -e=CPU,CORE,SOCKET,ONLINE`. Reserve the measured CPU and its SMT siblings
+for the experiment. Confine every other userspace process, including shells,
+editors and any agent, to observer CPUs before starting. The runner audits
+thread affinities and refuses overlapping or unverifiable placement; it does
+not reconfigure other processes or the machine. Merely running the command
+under `taskset` does not confine its ancestors or other agents.
+
+The launch mask must initially include both the measured and observer CPUs;
+the runner immediately confines itself to observers and gives only the child
+the measured CPU. From the repository root, substitute your reserved CPU sets
+and a new output directory. Keep it under ignored `target/` or outside the checkout so run
+artifacts cannot make the measured source dirty:
+
+```bash
+taskset -c 0-4 python3 scripts/run-sum-benchmark.py \
+  --cpu 4 --observer-cpus 0-3 \
+  --output target/sum-gate
+```
+
+The runner builds the locked release example itself, records the actual
+commit, build command, default CPU provider, toolchain, source/lockfile and
+binary hashes, and freezes the protocol before sampling. On Linux the default
+CPU provider is faer. Each operation runs in a fresh process with all seven
+CPU-library thread variables set to one. Identical time-based priming,
+input preparation and oracle construction are outside operation timing.
+Per-process peak RSS includes those phases and dense verification. The
+runner holds a checkout lock, checks provenance and host validity throughout,
+retains raw errors, and never overwrites an existing run or selectively
+retries a cell. Use host-visible `/proc` without `hidepid` in the initial PID
+namespace; container-only process visibility cannot prove host isolation. The
+default guards require readable, positive `scaling_cur_freq` observations on
+every protected CPU, stable frequency, low protected-core idle activity and
+low timing dispersion. For each protected CPU, the ratio of the highest to
+the lowest frequency across all sample endpoints must stay within the
+declared limit. Missing frequency observations invalidate the run. Configure
+a stable performance governor or frequency on the isolated host if observed
+clock changes violate the declared bound.
+
+The full suite covers the seeded Fourier cancellation case with 4, 5 and 6
+Fourier qubits plus three spectators, including three input seeds at the
+principal 6-qubit case. It also covers #1107's smooth, random and mixed
+complex chains at `R=12`, `D=10`, and `N=8,16,32,64`. Every output is compared
+with a bounded dense reference; Fourier outputs also use an independent
+normalized DFT with the documented bit order. Pointwise cancellation is
+measured as `|sum_i t_i(x)| / sum_i |t_i(x)|`, with error on those entries
+reported separately.
+
+Defaults use five repetitions and a fixed grid of ACI tolerances
+`1e-8,1e-10` and squared discarded-weight cutoffs `1e-16,1e-20`. The declared
+accuracy limits are relative Frobenius error and maximum absolute error
+divided by the reference maximum, both at most `1e-8`. The summary selects
+the fastest configuration meeting those limits for every repetition; all
+inaccurate configurations remain in the raw record. These are comparisons
+within the declared grid, not a claim of globally optimal tuning.
+
+The proposed winning threshold is a time ratio at most `0.8` against both
+the fastest accurate pairwise method and density summation on every principal
+Fourier seed, using the upper 95% bootstrap bound. At least 10% of each
+principal grid must have a cancellation ratio at most `0.1`. This 20%
+threshold is the harness's declared proposal, not an additional requirement
+imposed by the maintainer. Missing accurate arms, incomplete samples or
+failed host/provenance checks make the result `INCONCLUSIVE`; accurate runs
+without the required advantage fail the proposed performance gate. A smoke
+run cannot pass the full gate.
+
+Use `--help` for settings, smoke execution and analysis of a preserved run.
+Commit any protocol changes before running; settings are frozen before the
+first sample. The complete suite launches hundreds of fresh processes and
+can take substantial time. A positive summary still needs maintainer review
+of the case, accuracy and resource costs before any new public API is added.
+
 #### Density-matrix sums (#1126)
 
 `density_sum_benchmark` compares two summation methods in the same library:
