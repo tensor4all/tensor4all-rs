@@ -83,6 +83,15 @@ while the estimated size of the summed network fits the limit.
 `to_treetn_with(engine)` reports which method ran and the size estimate. Inputs
 that share an equal projector key are summed before patching.
 
+To apply a `LinearOperator` that acts on part of the tree with
+`contract_adaptive`, first write it on the state's whole tree with
+`LinearOperator::to_state_network(state.site_index_network())`. The result is a
+`TreeTN` with the state's nodes and edges, identities where the operator does
+not act, and one scalar type, so `SubDomainTreeTN::from_treetn` and
+`PartitionedTreeTN::from_subdomain` turn it into the left operand. Its output
+legs are fresh copies of the state's site indices; `outputs()` pairs each with
+the declared index, so the result can be renamed back afterwards.
+
 The treetn crate also offers the same pairwise reduction with a truncation after
 every add, `TreeTN::pairwise_sum(terms, PairwiseSumOrder::{Sequential, Balanced},
 Option<PerAddCutoff>)`, in place of one exact sum followed by one truncation.

@@ -11,7 +11,7 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 use petgraph::stable_graph::NodeIndex;
 
-use tensor4all_core::{IndexLike, TensorLike};
+use tensor4all_core::{AnyScalar, IndexLike, TensorLike};
 
 use super::index_mapping::IndexMapping;
 use super::linear_operator::LinearOperator;
@@ -138,10 +138,54 @@ where
     true
 }
 
+/// Whether any tensor of any of `operators` is complex: the identity factors
+/// that complete them must then be complex too, so the composed network has
+/// one scalar type.
+pub(crate) fn any_complex_operator<T, V>(operators: &[&LinearOperator<T, V>]) -> bool
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + Debug,
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    operators.iter().any(|op| {
+        let mpo = &op.mpo;
+        mpo.node_indices()
+            .into_iter()
+            .filter_map(|node| mpo.tensor(node))
+            .any(|tensor| tensor.is_complex())
+    })
+}
+
+/// `tensor` in the common scalar type: promoted to complex when `complex` and
+/// it is real, unchanged otherwise.
+pub(crate) fn in_common_dtype<T: TensorLike>(tensor: T, complex: bool) -> Result<T> {
+    if complex && !tensor.is_complex() {
+        Ok(tensor.scale(AnyScalar::new_complex(1.0, 0.0))?)
+    } else {
+        Ok(tensor)
+    }
+}
+
+/// The identity `T::delta(inputs, outputs)`, made complex when `complex`.
+///
+/// `T::delta` builds a real tensor; an operator completed by real identities
+/// would mix scalar types, which callers that require one dtype per network
+/// (such as `PartitionedTreeTN`) reject.
+pub(crate) fn identity_factor<T: TensorLike>(
+    inputs: &[T::Index],
+    outputs: &[T::Index],
+    complex: bool,
+) -> Result<T> {
+    in_common_dtype(T::delta(inputs, outputs)?, complex)
+}
+
 /// Compose exclusive LinearOperators into a single LinearOperator.
 /// This function takes multiple non-overlapping operators and combines them into
 /// a single operator that acts on the full target space. Gap positions (nodes not
-/// covered by any operator) are filled with identity operators using `T::delta()`.
+/// covered by any operator) are filled with identity operators. The composed
+/// network has one scalar type, the operators' common one: when any operator
+/// tensor is complex, the real operator tensors and the identities are promoted
+/// to complex (an exact conversion); otherwise everything stays real.
 /// # Arguments
 /// * `target` - The full site index network (defines the output structure)
 /// * `operators` - Non-overlapping LinearOperators to compose
@@ -253,6 +297,7 @@ where
     }
 
     // 5. Build tensors and mappings
+    let complex = any_complex_operator(operators);
     let mut tensors: Vec<T> = Vec::new();
     let mut result_node_names: Vec<V> = Vec::new();
     let mut combined_input_mapping: HashMap<V, Vec<IndexMapping<T::Index>>> = HashMap::new();
@@ -269,11 +314,13 @@ where
                 .mpo()
                 .node_index(&name)
                 .ok_or_else(|| anyhow::anyhow!("Node {:?} not found in operator", name))?;
-            let mut tensor = op
-                .mpo()
-                .tensor(node_idx)
-                .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", name))?
-                .clone();
+            let mut tensor = in_common_dtype(
+                op.mpo()
+                    .tensor(node_idx)
+                    .ok_or_else(|| anyhow::anyhow!("Tensor not found for node {:?}", name))?
+                    .clone(),
+                complex,
+            )?;
 
             // Add dummy links via outer product with ones tensor
             if let Some(links) = dummy_links_for_node.get(&name) {
@@ -328,13 +375,8 @@ where
         }
 
         // Create delta tensor for site indices
-        let mut identity_tensor = if input_indices.is_empty() {
-            T::delta(&[], &[]).context("Failed to create scalar identity tensor")?
-        } else {
-            T::delta(&input_indices, &output_indices).with_context(|| {
-                format!("Failed to build identity tensor for gap {:?}", gap_name)
-            })?
-        };
+        let mut identity_tensor = identity_factor::<T>(&input_indices, &output_indices, complex)
+            .with_context(|| format!("Failed to build identity tensor for gap {:?}", gap_name))?;
 
         // Add dummy links via outer product (bond indices, not site indices)
         if let Some(links) = dummy_links_for_node.get(&gap_name) {

@@ -794,6 +794,30 @@ pub trait TensorVectorSpace: TensorIndex {
     /// ```
     fn is_single_precision(&self) -> bool;
 
+    /// Returns whether entries are stored as complex numbers (`Complex32` or
+    /// `Complex64`).
+    ///
+    /// Code that builds new tensors to combine with existing ones, such as
+    /// identity factors, uses this to choose a matching scalar type: scaling a
+    /// real tensor by a complex one with [`scale`](Self::scale) makes it
+    /// complex. A container reports `true` when any of its parts is complex.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorVectorSpace};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let real = IdxTensor::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
+    /// let complex =
+    ///     IdxTensor::from_dense(vec![i], vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0)])
+    ///         .unwrap();
+    /// assert!(!real.is_complex());
+    /// assert!(complex.is_complex());
+    /// ```
+    fn is_complex(&self) -> bool;
+
     /// Compute the Frobenius norm of the tensor.
     ///
     /// The default takes the square root of [`Self::norm_squared`]. Override

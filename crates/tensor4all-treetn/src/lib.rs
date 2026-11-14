@@ -75,7 +75,7 @@ pub use operator::{
     apply_linear_operator, apply_linear_operator_to_indices,
     apply_linear_operator_to_numbered_tags, are_exclusive_operators, bind_linear_operator_indices,
     build_identity_operator_tensor, compose_exclusive_linear_operators, ApplyOptions,
-    ArcLinearOperator, IndexMapping, LinearOperator, Operator,
+    ArcLinearOperator, IndexMapping, LinearOperator, Operator, StateOperatorNetwork,
 };
 pub use options::{CanonicalizationOptions, RestructureOptions, SplitOptions, TruncationOptions};
 pub use random::{random_treetn, LinkSpace};

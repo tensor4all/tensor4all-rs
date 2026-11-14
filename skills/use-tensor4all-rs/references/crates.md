@@ -137,6 +137,7 @@ Every constructor returns a `LinearOperator` (from `tensor4all-treetn`). All use
 - `AffineParams::new(a: Vec<Rational64>, b: Vec<Rational64>, n_out, n_in)`.
 - `LinearOperator`: `.mpo()`, `.node_count()`, `.rename_nodes(&[(from, to)])`, `.set_input_space_from_state(&state)`, `.set_output_space_from_state(&state)`, `.get_input_mapping(&i)`, `.get_output_mapping(&i)`.
 - Apply via `tensor4all_treetn::apply_linear_operator(&op, &state, ApplyOptions)`. Partial apply (subset of sites) builds a Steiner tree automatically — no manual identity tensors.
+- `op.to_state_network(state.site_index_network()) -> StateOperatorNetwork`: the operator as a plain `TreeTN` on the state's whole tree (identity gaps, bonds routed along state paths, one scalar type), e.g. as a `contract_adaptive` operand. `.network()`, `.outputs()` = `(declared, leg)` pairs (legs are fresh where the declared output is a state index), `.into_parts()`.
 - Error conditions: `r == 0`; `r == 1` for cumsum/triangle/fourier; `r >= 64` for shift (overflow); NaN/Inf `theta`.
 
 ## tensor4all-treetn — tree tensor networks

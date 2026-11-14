@@ -3013,3 +3013,47 @@ fn test_linear_operator_replace_indices_rejects_duplicate_and_occupied_targets()
         b
     );
 }
+
+#[test]
+fn extending_a_complex_operator_across_a_steiner_gap_keeps_one_dtype() {
+    use crate::operator::apply_linear_operator;
+    use tensor4all_core::AnyScalar;
+
+    // `i * I` on site0 and site2 of a four-site chain: site1 is a Steiner gap
+    // bridging the operator's bond, site3 an outer gap. Only the site0 tensor
+    // is complex, so the site2 tensor must be promoted as well.
+    let (state, sites) = build_chain_state();
+    let mut operator = build_bonded_identity_operator(&[sites[0].clone(), sites[2].clone()]);
+    let site0 = operator.mpo.node_index(&sites[0].0).unwrap();
+    let complex_core = operator
+        .mpo
+        .tensor(site0)
+        .unwrap()
+        .scale(AnyScalar::new_complex(0.0, 1.0))
+        .unwrap();
+    operator.mpo.replace_tensor(site0, complex_core).unwrap();
+
+    let (extended, _) = extend_operator_to_full_space(&operator, &state).unwrap();
+    assert_eq!(extended.mpo.node_count(), state.node_count());
+    for node in extended.mpo.node_indices() {
+        assert!(
+            extended.mpo.tensor(node).unwrap().is_complex(),
+            "node {node:?} is real"
+        );
+    }
+
+    let result = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+    let expected = state
+        .to_dense()
+        .unwrap()
+        .scale(AnyScalar::new_complex(0.0, 1.0))
+        .unwrap();
+    let error = result
+        .to_dense()
+        .unwrap()
+        .sub(&expected)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    assert!(error < 1e-12, "i * I differs by {error}");
+}

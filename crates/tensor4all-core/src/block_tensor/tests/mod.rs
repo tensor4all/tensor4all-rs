@@ -773,3 +773,14 @@ fn test_onehot_unsupported() {
     let result = BlockTensor::<IdxTensor>::onehot(&[(idx, 0)]);
     assert!(result.is_err());
 }
+
+#[test]
+fn is_complex_reports_any_complex_block() {
+    let index = DynIndex::new_dyn(1);
+    let real = make_vector_with_index(vec![1.0], &index);
+    let complex = real.scale(crate::AnyScalar::new_complex(0.0, 1.0)).unwrap();
+    let all_real = BlockTensor::new(vec![real.clone(), real.clone()], (2, 1)).unwrap();
+    let mixed = BlockTensor::new(vec![real, complex], (2, 1)).unwrap();
+    assert!(!TensorVectorSpace::is_complex(&all_real));
+    assert!(TensorVectorSpace::is_complex(&mixed));
+}
