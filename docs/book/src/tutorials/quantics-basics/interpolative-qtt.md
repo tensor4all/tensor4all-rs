@@ -159,6 +159,10 @@ when this estimate exceeds `tolerance`, or its compressed rank exceeds
 `max_bond_dim`. With one site left it is sampled exactly. Hitting `max_depth` or `max_patches` produces
 an error. The Chebyshev validation uses a single 1D stencil applied along each
 axis through the supplied engine, preserving the order of the test points.
+Node and validation coordinates use a single column-major buffer per batch.
+Compression checks reuse the 1D Lagrange values and cached TT prefixes without
+changing the estimated residual. Dyadic splits, including those in the existing
+multiscale and adaptive constructors, fail if a midpoint is not representable.
 Validation samples can miss an arbitrary feature, so this is an error
 estimate rather than a rigorous certificate for unsampled points.
 

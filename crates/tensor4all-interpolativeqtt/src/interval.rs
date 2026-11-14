@@ -155,7 +155,7 @@ impl NInterval {
     /// # Errors
     ///
     /// Returns an error if the dimension count is too large for `usize`
-    /// shifting.
+    /// shifting, or an axis has no finite, strictly interior representable midpoint.
     ///
     pub(crate) fn split(&self) -> Result<Vec<Self>> {
         if self.ndims() >= usize::BITS as usize {
@@ -165,8 +165,16 @@ impl NInterval {
             .start
             .iter()
             .zip(&self.stop)
-            .map(|(&a, &b)| a + (b - a) / 2.0)
-            .collect();
+            .map(|(&a, &b)| {
+                let midpoint = a + (b - a) / 2.0;
+                if !midpoint.is_finite() || midpoint <= a || midpoint >= b {
+                    return Err(invalid_argument(
+                        "dyadic midpoint is not representable; reduce num_bits or rescale bounds",
+                    ));
+                }
+                Ok(midpoint)
+            })
+            .collect::<Result<_>>()?;
         let count = 1usize << self.ndims();
         let mut pieces = Vec::with_capacity(count);
 

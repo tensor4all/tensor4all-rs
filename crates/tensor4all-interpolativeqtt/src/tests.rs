@@ -11,6 +11,7 @@ use super::*;
 
 mod complex;
 mod refined_batches;
+mod split;
 
 fn quantics_to_indices(quantics: &[usize]) -> Vec<usize> {
     quantics.to_vec()
