@@ -42,8 +42,9 @@ pub struct CertifiedApplyOptions {
     /// Default [`Self::DEFAULT_MEMORY_LIMIT`] (4 GiB). Building the exact
     /// factors is estimated from the bond dimensions before anything is
     /// allocated; each sweep step is checked from its actual dimensions, with
-    /// the factors still stored, before its block is formed. Either estimate
-    /// above the limit fails.
+    /// the factors still resident, before its block is formed. Either estimate
+    /// above the limit fails, and the second fails after the factors were
+    /// built.
     pub memory_limit: usize,
 }
 
@@ -167,7 +168,8 @@ where
 ///   or a full-coverage operator does not have the state's edges;
 /// - [`CertifiedApplyError::MemoryLimit`] when an estimate exceeds
 ///   `options.memory_limit`: building the factors, checked before any factor
-///   is built, or a sweep step, checked before its block is formed;
+///   is built, or a sweep step, checked before its block is formed with the
+///   factors still resident;
 /// - [`CertifiedApplyError::BudgetUnreachable`] when a step cannot be certified
 ///   within its share even at full rank (a budget at roundoff level);
 /// - [`CertifiedApplyError::Operation`] when the operator's nodes are not a

@@ -160,10 +160,15 @@ pub enum CertifiedApplyError {
         /// Which part of the topology is unsupported.
         reason: String,
     },
-    /// An estimated memory exceeds the limit: building the exact factors
-    /// (checked before any factor is built), or a sweep step's working tensors
-    /// next to the factors still stored (checked before that step's block is
-    /// formed).
+    /// An estimated memory exceeds the limit. Two checks raise it:
+    ///
+    /// - **Factor build**, from the bond dimensions, before anything is
+    ///   allocated.
+    /// - **Sweep step**, from that step's actual dimensions, before its block
+    ///   is formed. This one fires **with the exact factors still resident**:
+    ///   they were built, and `estimated_bytes` includes the ones still
+    ///   stored, so the refusal is attributable to the step's working tensors
+    ///   on top of them.
     ///
     /// # Remedy
     ///
