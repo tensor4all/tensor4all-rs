@@ -39,9 +39,10 @@ pub struct InterpolativePatch<T: InterpolativeScalar> {
     /// Per-value error estimate of the returned train, compared with
     /// [`PatchedInterpolativeOptions::tolerance`] for acceptance: the maximum
     /// absolute interpolation residual at the Chebyshev validation points plus
-    /// the maximum change that SVD compression made at the grid points nearest
-    /// to them. It is an estimate, not a certificate for arbitrary unsampled
-    /// functions.
+    /// the maximum change that SVD compression made at sampled grid points
+    /// (every grid point on short trains; otherwise points spread over both
+    /// halves of each axis, including the patch midpoint). It is an estimate,
+    /// not a certificate for arbitrary unsampled functions.
     pub error_estimate: f64,
 }
 
@@ -65,9 +66,11 @@ pub struct PatchedInterpolativeOptions {
     /// includes the compression change, is at most this value.
     pub tolerance: f64,
     /// Relative SVD cutoff for each candidate train; default `1e-12`. The
-    /// change it causes is measured per value and counts against `tolerance`,
-    /// so a cutoff that is too aggressive leads to splitting, not to an
-    /// inaccurate patch. Use zero to retain every singular value.
+    /// change it causes is measured per value at sampled grid points and counts
+    /// against `tolerance`, so a cutoff that visibly degrades the train leads
+    /// to splitting rather than acceptance. On long trains the check is
+    /// sampled, so keep the cutoff well below `tolerance / max|f|`; use zero
+    /// to retain every singular value.
     pub compression_tolerance: f64,
     /// Accept only bonds at most this positive size; `None` imposes no cap.
     pub max_bond_dim: Option<usize>,
@@ -498,15 +501,41 @@ where
     })
 }
 
-/// Maximum `|compressed train - interpolant|` over the patch grid points
-/// nearest to the validation coordinates.
+/// Per-axis grid indices of an `L`-site patch at which compression is checked.
+///
+/// When the axis has at most `2 * validation` points, every index is returned.
+/// Otherwise each of the two child halves contributes the indices nearest to
+/// the validation coordinates mapped onto that half, so both child boundaries
+/// (including the patch midpoint, where the child interpolants meet) and the
+/// child interiors are sampled. The result is sorted and unique.
+fn compression_check_indices(test_points_1d: &[f64], sites: usize) -> Vec<u64> {
+    // INVARIANT: 1 <= sites <= 52 (validated num_bits), so grid indices fit in
+    // u64 and are exactly representable in f64.
+    let size = 1u64 << sites;
+    if size <= 2 * test_points_1d.len() as u64 {
+        return (0..size).collect();
+    }
+    let half = size / 2;
+    let last = (half - 1) as f64;
+    let mut indices: Vec<u64> = [0, half]
+        .iter()
+        .flat_map(|&offset| {
+            test_points_1d
+                .iter()
+                .map(move |&t| offset + (t * last).round() as u64)
+        })
+        .collect();
+    indices.dedup();
+    indices
+}
+
+/// Maximum `|compressed train - interpolant|` over the grid points from
+/// [`compression_check_indices`] on every axis.
 ///
 /// Every box of the patch driver is safe, so the uncompressed multiscale train
 /// equals, at each grid point, the Chebyshev interpolant of the immediate child
 /// that owns the point. That interpolant costs `(degree + 1)^D` products per
-/// point, against `L r^2` for evaluating the uncompressed rank-`r` train. Each
-/// axis of an `L`-site train has `2^L` points; when that is no more than the
-/// validation count every point is checked, otherwise the nearest ones.
+/// point, against `L r^2` for evaluating the uncompressed rank-`r` train.
 fn compression_change<T: InterpolativeScalar>(
     plan: &Plan<'_, T>,
     domain: &NInterval,
@@ -516,7 +545,8 @@ fn compression_change<T: InterpolativeScalar>(
     let sites = compressed.len();
     let ndims = domain.ndims();
     // Match sampled node sets to children by their exact intervals: the
-    // assembly splits this domain with the same `NInterval::split`.
+    // assembly splits this domain with the same `NInterval::split`, and every
+    // box of the driver is safe, so each child was sampled exactly once.
     let pieces = domain.split()?;
     let node_values: Vec<&[T]> = pieces
         .iter()
@@ -525,19 +555,16 @@ fn compression_change<T: InterpolativeScalar>(
                 .iter()
                 .find(|(interval, _)| interval == piece)
                 .map(|(_, values)| values.as_slice())
-                .ok_or_else(|| invalid_argument("child Chebyshev values were not sampled"))
+                .unwrap_or_else(|| {
+                    tensor4all_tensorbackend::invariant_violated(
+                        "patched compression check",
+                        "a child box was not sampled on its Chebyshev nodes",
+                    )
+                })
         })
-        .collect::<Result<_>>()?;
-    // INVARIANT: 2 <= sites <= 52 (validated num_bits), so grid indices fit in
-    // u64 and are exactly representable in f64.
-    let half = 1u64 << (sites - 1);
-    let last = ((1u64 << sites) - 1) as f64;
-    let mut axis: Vec<u64> = plan
-        .test_points_1d
-        .iter()
-        .map(|&t| (t * last).round() as u64)
         .collect();
-    axis.dedup();
+    let half = 1u64 << (sites - 1);
+    let axis = compression_check_indices(&plan.test_points_1d, sites);
     let count = checked_power(axis.len(), ndims)?;
     let mut max_change = 0.0_f64;
     let mut quantics = vec![0; sites];

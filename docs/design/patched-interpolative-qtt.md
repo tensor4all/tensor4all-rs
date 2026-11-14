@@ -19,17 +19,21 @@ built once and its contraction runs through the supplied engine's GEMM.
 
 SVD compression uses `SimpleTensorTrain::compress_svd_with_session`. Its sweeps
 and retained-rank rules are shared with ordinary compression. The compressed
-train is then checked per value: at the patch grid points nearest to the
-validation coordinates (every grid point on short trains) it is compared with
-the uncompressed train. Because every box of the driver is safe, the
+train is then checked per value against the uncompressed train. An axis with at
+most `2(2p+2)` grid points is checked at every point. A longer axis is checked,
+in each child half, at the grid points nearest to the validation coordinates
+mapped onto that half, so both child boundaries (including the patch midpoint,
+where the child interpolants meet) and the child interiors are sampled. Because
+every box of the driver is safe, the
 uncompressed train equals the owning child's Chebyshev interpolant at each grid
 point, so the comparison uses the sampled node values and costs
 `(degree + 1)^D` products per point rather than an evaluation of the
 uncompressed rank. The error estimate is the maximum interpolation residual plus
 the maximum compression change. A box is accepted when that estimate is at most
-the absolute tolerance and its compressed rank is at most the optional cap, so
-neither the relative SVD cutoff nor the cap can make an inaccurate train
-acceptable; they lead to splitting instead.
+the absolute tolerance and its compressed rank is at most the optional cap. A
+cutoff or cap that visibly degrades the train therefore leads to splitting. On
+long axes the compression check is sampled, like the interpolation check, so it
+is an estimate rather than a bound.
 
 A failed candidate fixes the next bit of every axis and becomes `2^D` child
 boxes. With one site remaining, direct sampling yields an exact local train;

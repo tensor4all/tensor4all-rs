@@ -418,6 +418,43 @@ fn uncompressed_train_matches_the_child_interpolants_it_is_checked_against() {
 }
 
 #[test]
+fn compression_check_indices_cover_short_axes_and_both_halves_of_long_ones() {
+    for degree in 1..=8 {
+        let tests = dense_test_points(degree + 1).unwrap();
+        for sites in 1..=12 {
+            let size = 1u64 << sites;
+            let half = size / 2;
+            let indices = compression_check_indices(&tests, sites);
+            assert!(
+                indices.windows(2).all(|w| w[0] < w[1]),
+                "p={degree}, L={sites}"
+            );
+            assert!(indices.iter().all(|&k| k < size));
+            if size <= 2 * tests.len() as u64 {
+                // Short axes: every grid point, including those the rounded
+                // Chebyshev coordinates would skip (p=3, L=3 misses 2 and 5).
+                assert_eq!(
+                    indices,
+                    (0..size).collect::<Vec<_>>(),
+                    "p={degree}, L={sites}"
+                );
+            } else {
+                // Long axes: both ends of both halves, so the patch midpoint
+                // where the child interpolants meet is checked, plus interior
+                // points in each half.
+                for k in [0, half - 1, half, size - 1] {
+                    assert!(indices.contains(&k), "p={degree}, L={sites}: {k}");
+                }
+                for range in [1..half - 1, half + 1..size - 1] {
+                    assert!(indices.iter().any(|k| range.contains(k)));
+                }
+                assert!(indices.len() <= 2 * tests.len());
+            }
+        }
+    }
+}
+
+#[test]
 fn reentering_the_context_is_an_execution_error() {
     let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
     let result = context

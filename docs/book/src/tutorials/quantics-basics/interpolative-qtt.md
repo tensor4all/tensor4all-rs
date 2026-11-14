@@ -153,8 +153,8 @@ sixteen-point direct DFT. Run it with
 The caller creates the CPU execution context and passes it in; construction
 never creates a backend. Each box is interpolated and then compressed with the
 relative `compression_tolerance`. Its `error_estimate` is the checked Chebyshev
-residual plus the largest change compression made at grid points near the
-validation points, so it describes the train that is returned. A box splits
+residual plus the largest change compression made at sampled grid points
+(every point on short axes), so it describes the train that is returned. A box splits
 when this estimate exceeds `tolerance`, or its compressed rank exceeds
 `max_bond_dim`. With one site left it is sampled exactly. Hitting `max_depth` or `max_patches` produces
 an error. Validation samples can miss an arbitrary feature, so this is an error

@@ -268,7 +268,6 @@ where
         max_bond_dim,
         left_orthogonal,
         &mut None,
-        &mut 0.0,
     )
 }
 
@@ -279,7 +278,6 @@ fn factorize_svd_impl<T>(
     max_bond_dim: Option<usize>,
     left_orthogonal: bool,
     session: &mut Option<&mut Session<'_>>,
-    discarded_norm: &mut f64,
 ) -> Result<(Matrix<T>, Matrix<T>, usize)>
 where
     T: TTScalar + Scalar + Default + Copy + BackendLinalgScalar + TensorScalar,
@@ -363,9 +361,6 @@ where
         rank += 1;
     }
     rank = rank.max(1);
-    for &value in s_data.iter().skip(rank) {
-        *discarded_norm = discarded_norm.hypot(value);
-    }
 
     // Build result matrices
     let mut left = Matrix::zeros(m, rank);
@@ -416,7 +411,6 @@ fn multiply_for_sweep<T: tensor4all_tensorbackend::BlasMul>(
 
 fn factorize_for_sweep<T>(
     session: &mut Option<&mut Session<'_>>,
-    discarded_norm: &mut f64,
     matrix: &Matrix<T>,
     options: &CompressionOptions,
     left_orthogonal: bool,
@@ -439,7 +433,6 @@ where
             options.max_bond_dim,
             left_orthogonal,
             session,
-            discarded_norm,
         ),
         None => factorize(
             matrix,
@@ -493,18 +486,16 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
         T: tensor4all_core::MatrixLuciScalar + Copy + BackendLinalgScalar + TensorScalar,
         f64: From<<T as TensorScalar>::Real>,
     {
-        self.compress_impl(options, &mut None).map(|_| ())
+        self.compress_impl(options, &mut None)
     }
 
-    /// Compress in place by SVD on a caller-held session and return a truncation error bound.
+    /// Compress in place by SVD on a caller-held session.
     ///
     /// `tolerance` is a finite nonnegative threshold relative to the largest
     /// singular value at each bond; `1e-12` is a nearly lossless default.
     /// `max_bond_dim` optionally imposes a positive rank cap. All decompositions
-    /// and products use `session`, with the same sweeps as [`Self::compress`].
-    /// The returned Frobenius truncation bound combines discarded singular
-    /// values in quadrature (excluding floating-point roundoff), and therefore
-    /// also bounds the absolute error of each tensor entry.
+    /// and products use `session`, with the same sweeps and retained ranks as
+    /// [`Self::compress`] with [`CompressionMethod::SVD`].
     ///
     /// # Errors
     /// Returns [`SimpleTensorTrainError::InvalidOperation`] for an invalid
@@ -520,8 +511,8 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     /// let mut backend = CpuBackend::with_threads(1)?;
     /// let mut session = Session::new(backend.engine_mut());
     /// let mut tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 3.0);
-    /// let bound = tt.compress_svd_with_session(&mut session, 1e-12, None)?;
-    /// assert!(bound < 1e-12);
+    /// tt.compress_svd_with_session(&mut session, 1e-12, None)?;
+    /// assert_eq!(tt.rank(), 1);
     /// assert!((tt.evaluate(&[1, 0, 1])? - 3.0).abs() < 1e-12);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -530,7 +521,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
         session: &mut Session<'_>,
         tolerance: f64,
         max_bond_dim: Option<usize>,
-    ) -> Result<f64>
+    ) -> Result<()>
     where
         T: tensor4all_core::MatrixLuciScalar + Copy + BackendLinalgScalar + TensorScalar,
         f64: From<<T as TensorScalar>::Real>,
@@ -557,16 +548,15 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
         &mut self,
         options: &CompressionOptions,
         session: &mut Option<&mut Session<'_>>,
-    ) -> Result<f64>
+    ) -> Result<()>
     where
         T: tensor4all_core::MatrixLuciScalar + Copy + BackendLinalgScalar + TensorScalar,
         f64: From<<T as TensorScalar>::Real>,
     {
         crate::tensortrain::validate_site_tensors(self.site_tensors())?;
-        let mut discarded_norm = 0.0;
         let n = self.len();
         if n <= 1 {
-            return Ok(0.0);
+            return Ok(());
         }
 
         let tensors = self.site_tensors_mut();
@@ -588,7 +578,6 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
             // Factorize without truncation
             let (left_factor, right_factor, new_bond_dim) = factorize_for_sweep(
                 session,
-                &mut discarded_norm,
                 &mat,
                 &left_options,
                 true, // left orthogonal
@@ -645,11 +634,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
 
             // Factorize with truncation
             let (left_factor, right_factor, new_bond_dim) = factorize_for_sweep(
-                session,
-                &mut discarded_norm,
-                &mat,
-                options,
-                false, // right orthogonal
+                session, &mat, options, false, // right orthogonal
             )?;
 
             // Update current tensor from right_factor
@@ -690,7 +675,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
             tensors[ell - 1] = new_prev_tensor;
         }
 
-        Ok(discarded_norm)
+        Ok(())
     }
 
     /// Return a compressed copy of the tensor train (non-mutating).
