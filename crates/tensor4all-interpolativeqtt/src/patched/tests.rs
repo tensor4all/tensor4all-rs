@@ -1,9 +1,9 @@
 use super::*;
 use num_complex::Complex64;
 use std::convert::Infallible;
-use tensor4all_tensorbackend::CpuBackend;
+use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
 
-// Run the serial entry on a freshly configured one-thread engine.
+// Run the serial entry on a freshly configured one-thread context.
 fn serial<T, F, E>(
     evaluate: F,
     lower: &[f64],
@@ -17,16 +17,8 @@ where
     F: Fn(ColMajorArrayRef<'_, f64>, Exec<'_>) -> std::result::Result<Vec<T>, E>,
     E: Into<Box<dyn Error + Send + Sync>>,
 {
-    let mut backend = CpuBackend::with_threads(1).unwrap();
-    interpolate_patched_nd(
-        backend.engine_mut(),
-        evaluate,
-        lower,
-        upper,
-        num_bits,
-        degree,
-        options,
-    )
+    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
+    interpolate_patched_nd(&context, evaluate, lower, upper, num_bits, degree, options)
 }
 
 fn batch<T: InterpolativeScalar>(
@@ -348,44 +340,103 @@ fn shared_multiscale_values_are_unchanged() {
 }
 
 #[test]
-fn truncation_is_reported_but_does_not_drive_acceptance() {
-    // An aggressive relative cutoff truncates the rank-2 train of 1 + x to rank
-    // one. Acceptance still follows the interpolation residual alone; the
-    // discarded weight is reported and bounds the actual pointwise change.
+fn compression_change_counts_against_the_tolerance() {
+    // A relative cutoff of 0.9 truncates the rank-2 train of 1 + x on [0, 1]
+    // to rank one, which changes values by far more than the tolerance. The
+    // change is measured on the returned train, so the root box is rejected.
     let f = |p: &[f64]| 1.0 + p[0];
     let bits = 4;
-    let patches = serial(
+    let lossy = PatchedInterpolativeOptions {
+        tolerance: 1e-6,
+        compression_tolerance: 0.9,
+        ..Default::default()
+    };
+    let rejected = serial(
         |p, _| batch(p, f),
         &[0.0],
         &[1.0],
         bits,
         3,
         &PatchedInterpolativeOptions {
-            tolerance: 1e-6,
-            compression_tolerance: 0.9,
             max_depth: Some(0),
-            ..Default::default()
+            ..lossy
         },
-    )
-    .unwrap();
-    assert_eq!(patches.len(), 1);
-    let patch = &patches[0];
-    assert_eq!(patch.tt.rank(), 1);
-    assert!(patch.error_estimate <= 1e-6);
-    let max_change = (0..1u64 << bits)
-        .map(|i| {
-            (evaluate_on_grid(&patches, bits, &[i]) - f(&[i as f64 / (1 << bits) as f64])).abs()
+    );
+    assert!(matches!(
+        rejected,
+        Err(InterpolativeQttError::NotConverged { error_estimate, rank: 1, .. })
+            if error_estimate > 1e-6
+    ));
+    // With splitting allowed, and with a rank cap that the truncated rank-one
+    // train would satisfy, every accepted patch still meets the tolerance on
+    // the whole grid.
+    for max_bond_dim in [None, Some(1)] {
+        let options = PatchedInterpolativeOptions {
+            max_bond_dim,
+            ..lossy
+        };
+        let patches = serial(|p, _| batch(p, f), &[0.0], &[1.0], bits, 3, &options).unwrap();
+        assert!(patches.len() > 1);
+        check_partition(&patches, 1, bits, f, options.tolerance);
+    }
+}
+
+#[test]
+fn uncompressed_train_matches_the_child_interpolants_it_is_checked_against() {
+    // compression_change compares the compressed train with the immediate
+    // children's Chebyshev interpolants. Against the uncompressed train the
+    // difference must be roundoff, for both value types, 1D and 2D, and for
+    // trains short enough that every grid point is checked.
+    fn check<T: InterpolativeScalar>(f: impl Fn(&[f64]) -> T) {
+        for (dims, sites, degree) in [(1, 2, 3), (1, 6, 4), (2, 5, 3), (2, 3, 2)] {
+            let options = PatchedInterpolativeOptions::default();
+            let lower = vec![-0.3; dims];
+            let upper = vec![0.9; dims];
+            let plan = Plan::<T>::new(&lower, &upper, sites, degree, &options).unwrap();
+            let mut children = Vec::new();
+            let cores = build_refined_cores(
+                &mut |batch: SampleBatch<'_>| {
+                    let values: Vec<T> = batch.points().iter().map(|p| f(p)).collect();
+                    if let SampleBatch::Nodes { interval, .. } = batch {
+                        children.push((interval.clone(), values.clone()));
+                    }
+                    Ok(values)
+                },
+                &plan.domain,
+                sites,
+                &plan.basis,
+                |_, _| true,
+            )
+            .unwrap();
+            let train = SimpleTensorTrain::new(cores).unwrap();
+            let change = compression_change(&plan, &plan.domain, &children, &train).unwrap();
+            assert!(change < 1e-13, "D={dims}, L={sites}, p={degree}: {change}");
+        }
+    }
+    check(|p: &[f64]| (p[0] - 0.5 * p.get(1).copied().unwrap_or(0.0)).exp());
+    check(|p: &[f64]| Complex64::new(p[0].sin(), p.iter().sum::<f64>().cos()));
+}
+
+#[test]
+fn reentering_the_context_is_an_execution_error() {
+    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
+    let result = context
+        .with_session(|_| {
+            interpolate_patched_nd(
+                &context,
+                |p, _| batch(p, |_| 1.0),
+                &[0.0],
+                &[1.0],
+                3,
+                3,
+                &Default::default(),
+            )
         })
-        .fold(0.0_f64, f64::max);
-    assert!(
-        max_change > 1e-6,
-        "rank one must lose accuracy: {max_change}"
-    );
-    assert!(
-        max_change <= patch.error_estimate + patch.truncation_bound,
-        "change {max_change}, bound {}",
-        patch.truncation_bound
-    );
+        .unwrap();
+    assert!(matches!(
+        result,
+        Err(InterpolativeQttError::Execution { .. })
+    ));
 }
 
 /// Evaluate the patch that owns grid point `indices` (one integer per axis).
@@ -417,9 +468,9 @@ fn evaluate_on_grid<T: InterpolativeScalar>(
 
 #[test]
 fn default_options_do_not_over_refine_deep_2d_grids() {
-    // tensor4all-rs#1307 review: a Frobenius truncation bound over 2^(2R) values
-    // must not be compared with the per-value tolerance. At R = 30 this used to
-    // exhaust the default patch budget even for a constant.
+    // Acceptance compares only per-value quantities with the per-value
+    // tolerance, so default options keep a deep smooth 2D grid in one patch and
+    // its estimate below the tolerance.
     let smooth = |p: &[f64]| (p[0] + 0.5 * p[1]).exp();
     let constant = |_: &[f64]| 1.0;
     let options = PatchedInterpolativeOptions::default();
@@ -430,6 +481,9 @@ fn default_options_do_not_over_refine_deep_2d_grids() {
     ] {
         let patches = serial(|p, _| batch(p, f), &[0.0; 2], &[1.0; 2], bits, 8, &options).unwrap();
         assert!(patches.len() <= 4, "{bits} bits: {} patches", patches.len());
+        assert!(patches
+            .iter()
+            .all(|p| p.error_estimate <= options.tolerance));
         let size = 1u64 << bits;
         let mut max_error = 0.0_f64;
         for (i, j) in [

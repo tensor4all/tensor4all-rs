@@ -3,8 +3,7 @@
 The `tensor4all-interpolativeqtt` patch driver implements the main construction
 of #1276, following generic scalar support in #1302. It returns
 `Vec<InterpolativePatch<T>>`: a prefix per axis, a local `SimpleTensorTrain<T>`,
-an absolute local interpolation error estimate and a separate SVD truncation
-bound. Retaining the prefix is necessary to map
+and an absolute per-value error estimate. Retaining the prefix is necessary to map
 the train back to the original grid. There is no TreeTN production dependency.
 
 ## Construction and acceptance
@@ -19,13 +18,18 @@ validation stencil on a grid with twice as many nodes per axis. The stencil is
 built once and its contraction runs through the supplied engine's GEMM.
 
 SVD compression uses `SimpleTensorTrain::compress_svd_with_session`. Its sweeps
-and retained-rank rules are shared with ordinary compression. The quadrature
-sum of discarded singular values bounds Frobenius truncation error, excluding
-roundoff; it also bounds each entry's truncation error. A box is accepted when
-the maximum checked interpolation residual is at most the absolute tolerance,
-and its compressed rank is at most the optional cap. The cap never silently
-truncates a candidate to make it acceptable. The truncation bound is reported
-per patch as `truncation_bound` and does not take part in acceptance.
+and retained-rank rules are shared with ordinary compression. The compressed
+train is then checked per value: at the patch grid points nearest to the
+validation coordinates (every grid point on short trains) it is compared with
+the uncompressed train. Because every box of the driver is safe, the
+uncompressed train equals the owning child's Chebyshev interpolant at each grid
+point, so the comparison uses the sampled node values and costs
+`(degree + 1)^D` products per point rather than an evaluation of the
+uncompressed rank. The error estimate is the maximum interpolation residual plus
+the maximum compression change. A box is accepted when that estimate is at most
+the absolute tolerance and its compressed rank is at most the optional cap, so
+neither the relative SVD cutoff nor the cap can make an inaccurate train
+acceptable; they lead to splitting instead.
 
 A failed candidate fixes the next bit of every axis and becomes `2^D` child
 boxes. With one site remaining, direct sampling yields an exact local train;
@@ -33,14 +37,9 @@ zero-site trains are unnecessary. A configured depth or patch limit returns a
 typed error instead of an unaccepted result. Dense storage scales with the
 explicitly bounded Chebyshev stencil, not with the full quantics grid.
 
-Acceptance compares only per-value quantities with the per-value tolerance.
-The Frobenius bound covers the whole patch tensor, so it grows roughly with the
-square root of the patch's grid size, and the relative SVD cutoff discards
-roundoff-level singular values whose total exceeds an absolute per-value target
-on fine grids. Adding it to the residual made a constant 2D function at 30 bits
-split until the default patch budget was exhausted. `compression_tolerance`
-therefore controls compression only; choose it small relative to
-`tolerance / max|f|`, or zero to retain the full interpolation ranks.
+Acceptance compares only per-value quantities with the per-value tolerance. The
+Frobenius norm of the discarded singular values covers the whole patch tensor
+and grows roughly with the square root of its grid size, so it is not used.
 
 The error is an estimate for interpolation: an arbitrary feature between all
 sample points can be missed. It is not an interval-arithmetic certificate.
@@ -49,8 +48,9 @@ splits whose midpoints cannot be represented are rejected.
 
 ## Execution and ordering
 
-The serial entry runs every box on one CPU engine the caller configures and
-passes in; it never creates a backend. The optional `parallel`
+The serial entry takes the caller's `CpuExecutionContext` and runs the whole
+construction in one session of its engine, so re-entry is detected by the
+context; it never creates a backend. The optional `parallel`
 entry uses `hataori::map_in_lanes` and caller-owned `TenferroLanes`. The caller
 chooses P lanes and B threads per engine; neither entry consults the global
 backend. Each evaluator batch receives the lane engine's `threadteam::Exec`
@@ -66,11 +66,14 @@ Floating-point backend arithmetic remains subject to roundoff, especially for
 acceptance thresholds at machine precision.
 
 `parallel` enables only the lane executor (`hataori`, `hataori-tenferro`), both
-provider-neutral, so it composes with the platform default and every explicit
-provider feature. With native/faer each lane's algebra stays within its B
-threads; a BLAS provider such as Accelerate threads on its own, and bit-identical
-results across layouts then rely on that library's determinism. MPI and
-automatic lane sizing remain outside this API.
+provider-neutral, so it builds with the platform default and every explicit
+provider feature. Lane execution is validated on native/faer only: there each
+lane's algebra stays within its B threads, and the nightly lane tests assert
+bit-identical results across layouts. With a BLAS provider such as Accelerate or
+system BLAS, each of the P lanes calls a library with its own threading, which
+can oversubscribe the cores and relies on the library's thread safety and
+determinism; CI only checks that combination compiles. MPI and automatic lane
+sizing remain outside this API.
 
 ## Downstream conversion
 

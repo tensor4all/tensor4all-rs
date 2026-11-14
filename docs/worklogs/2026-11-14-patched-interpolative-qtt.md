@@ -10,11 +10,13 @@
   process-global backend use. Each batch names its kind (Chebyshev nodes of an
   interval, or exact last-core grid points), so the residual check never infers
   a box from its points.
-- Accept on the per-value interpolation residual and use the rank cap to trigger
-  splitting; the cap never truncates. The SVD discarded-weight bound is
-  reported per patch as `truncation_bound` but stays out of acceptance (review
-  round, below).
-- Both entries run on caller-supplied engines; neither creates a backend.
+- Accept on a per-value estimate of the returned train: the interpolation
+  residual plus the change compression made at grid points near the validation
+  points. The rank cap triggers splitting and never truncates, and neither the
+  cap nor the SVD cutoff can make an inaccurate train acceptable (review rounds,
+  below).
+- The serial entry runs in a caller-supplied `CpuExecutionContext`, the lanes
+  entry on caller-supplied engines; neither creates a backend.
 - Preserve parent endpoints when splitting dyadic boxes. Recomputing the upper
   endpoint as two additions of the half length can change it by an ulp, leaving
   a gap or overlap in non-binary-exact physical domains.
@@ -52,7 +54,28 @@
   forced faer selection made `features = ["parallel"]` fail to build on macOS.
   Bit-identical lane layouts are asserted on faer, where each lane's kernels
   stay within its thread budget.
-- The per-axis validation stencil is tracked in #1310.
+- The per-axis validation stencil is tracked in #1310, the smaller cleanups in
+  #1311.
+
+## Second review round (#1307)
+
+- Accepting on the residual alone left compression unchecked: an aggressive
+  cutoff, or a cutoff that brought the rank under `max_bond_dim`, produced
+  accepted patches above `tolerance`. The compressed train is now compared per
+  value with the uncompressed one, and the change counts against `tolerance`.
+  The separate Frobenius `truncation_bound` field was removed; on deep grids it
+  scales with `max|f| sqrt(N)` and is no useful pointwise estimate.
+- Evaluating the uncompressed rank-`(p+1)^D` train at every check point cost as
+  much as the SVD (the deep 2D test went from 9 s to 62 s unoptimized). The
+  uncompressed train equals the owning child's Chebyshev interpolant at grid
+  points, so the check evaluates that interpolant from the sampled node values
+  instead (10.6 s for the patched suite); a test asserts the equality to
+  roundoff in 1D/2D for real and complex values.
+- `parallel` docs now claim only what CI covers: it builds with every provider,
+  lane execution is tested on faer.
+- The serial entry takes `&CpuExecutionContext` and runs in one session, so
+  re-entry is a typed error and the upstream engine type stays out of its
+  signature.
 
 The durable contract is in [the design](../design/patched-interpolative-qtt.md).
 No throughput or scaling claim is made; comparisons use identical accuracy

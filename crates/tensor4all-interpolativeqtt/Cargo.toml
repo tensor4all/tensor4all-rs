@@ -36,8 +36,9 @@ tenferro-provider-inject = [
     "tensor4all-tensorbackend/tenferro-provider-inject",
 ]
 
-# Lane fan-out over caller-owned engines. Provider-neutral: the CPU provider
-# stays whatever the default or an explicit `tenferro-*` feature selects.
+# Lane fan-out over caller-owned engines. It builds with any CPU provider the
+# default or an explicit `tenferro-*` feature selects; lane execution is tested
+# on faer only.
 parallel = ["dep:hataori", "dep:hataori-tenferro"]
 
 [dependencies]

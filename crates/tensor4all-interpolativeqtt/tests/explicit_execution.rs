@@ -1,7 +1,7 @@
 //! This separate process proves construction never initializes the global backend.
 use std::{convert::Infallible, num::NonZeroUsize};
 use tensor4all_interpolativeqtt::{interpolate_patched_nd, PatchedInterpolativeOptions};
-use tensor4all_tensorbackend::{set_default_cpu_threads, CpuBackend};
+use tensor4all_tensorbackend::{set_default_cpu_threads, CpuBackend, CpuExecutionContext};
 
 #[test]
 fn patched_construction_leaves_global_backend_uninitialized() {
@@ -13,11 +13,11 @@ fn patched_construction_leaves_global_backend_uninitialized() {
                     _: tensor4all_tensorbackend::Exec<'_>| {
         Ok::<_, Infallible>(p.data().iter().map(|x| 1.0 + x).collect())
     };
-    // The serial entry runs on the caller's engine: the evaluator sees its
+    // The serial entry runs in the caller's context: the evaluator sees its
     // two-thread budget, not an internally created one-thread backend.
-    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(2).unwrap());
     let patches = interpolate_patched_nd(
-        backend.engine_mut(),
+        &context,
         |p, exec: tensor4all_tensorbackend::Exec<'_>| {
             assert_eq!(exec.budget().get(), 2);
             evaluate(p, exec)

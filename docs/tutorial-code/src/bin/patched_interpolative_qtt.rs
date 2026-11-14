@@ -8,7 +8,7 @@ use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN
 use tensor4all_quanticstransform::{
     patched_fourier_transform, FourierOptions, PatchedFourierOptions,
 };
-use tensor4all_tensorbackend::CpuBackend;
+use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
 use tensor4all_treetn::{
     insert_onehot_site_in_treetn_chain, tensor_train_to_treetn_with_names, SiteIndexNetwork,
     SplitOptions,
@@ -27,10 +27,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         max_bond_dim: Some(1),
         ..Default::default()
     };
-    // The caller owns the CPU engine; construction never creates a backend.
-    let mut backend = CpuBackend::with_threads(1)?;
+    // The caller owns the execution context; construction never creates a backend.
+    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
     let patches = interpolate_patched_nd(
-        backend.engine_mut(),
+        &context,
         |points, _exec| Ok::<_, Infallible>(points.data().chunks(2).map(green).collect()),
         &[0.0, 0.0],
         &[1.0, 1.0],

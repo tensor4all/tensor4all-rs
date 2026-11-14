@@ -3,7 +3,7 @@
 use std::error::Error;
 use tensor4all_core::ColMajorArrayRef;
 use tensor4all_simplett::tensor3_from_data;
-use tensor4all_tensorbackend::{explicit::Session, CpuEngine, Exec, Matrix};
+use tensor4all_tensorbackend::{explicit::Session, CpuEngine, CpuExecutionContext, Exec, Matrix};
 
 use crate::error::{invalid_argument, InterpolativeQttError, Result};
 use crate::interpolation::{build_refined_cores, dense_test_points, SampleBatch};
@@ -26,10 +26,9 @@ use crate::{
 ///     prefix: vec![vec![1], vec![0]],
 ///     tt: SimpleTensorTrain::<f64>::constant(&[4, 4], 2.0),
 ///     error_estimate: 0.0,
-///     truncation_bound: 0.0,
 /// };
 /// assert_eq!(patch.prefix, vec![vec![1], vec![0]]);
-/// assert_eq!(patch.error_estimate + patch.truncation_bound, 0.0);
+/// assert_eq!(patch.error_estimate, 0.0);
 /// ```
 #[derive(Debug, Clone)]
 pub struct InterpolativePatch<T: InterpolativeScalar> {
@@ -37,16 +36,13 @@ pub struct InterpolativePatch<T: InterpolativeScalar> {
     pub prefix: Vec<Vec<usize>>,
     /// QTT on the remaining bits, with fused site dimension `2^D`.
     pub tt: SimpleTensorTrain<T>,
-    /// Maximum absolute interpolation residual at the Chebyshev validation
-    /// points; this per-value quantity alone decides acceptance against
-    /// [`PatchedInterpolativeOptions::tolerance`]. It is an estimate, not a
-    /// certificate for arbitrary unsampled functions.
+    /// Per-value error estimate of the returned train, compared with
+    /// [`PatchedInterpolativeOptions::tolerance`] for acceptance: the maximum
+    /// absolute interpolation residual at the Chebyshev validation points plus
+    /// the maximum change that SVD compression made at the grid points nearest
+    /// to them. It is an estimate, not a certificate for arbitrary unsampled
+    /// functions.
     pub error_estimate: f64,
-    /// Frobenius norm of the singular values discarded by compression, reported
-    /// separately from acceptance. It bounds the change of the whole patch
-    /// tensor and therefore of every value in it, so a pointwise error estimate
-    /// of the returned TT is `error_estimate + truncation_bound`.
-    pub truncation_bound: f64,
 }
 
 /// Accuracy and resource limits for patched construction.
@@ -64,14 +60,14 @@ pub struct InterpolativePatch<T: InterpolativeScalar> {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PatchedInterpolativeOptions {
-    /// Absolute per-value interpolation error target, finite and nonnegative;
-    /// default `1e-8`. A box is accepted when its validation residual
-    /// ([`InterpolativePatch::error_estimate`]) is at most this value.
+    /// Absolute per-value error target, finite and nonnegative; default `1e-8`.
+    /// A box is accepted when [`InterpolativePatch::error_estimate`], which
+    /// includes the compression change, is at most this value.
     pub tolerance: f64,
-    /// Relative SVD cutoff applied to each accepted patch; default `1e-12`.
-    /// It does not take part in acceptance: the discarded weight is reported as
-    /// [`InterpolativePatch::truncation_bound`]. Keep it small relative to
-    /// `tolerance / max|f|`; use zero to retain every singular value.
+    /// Relative SVD cutoff for each candidate train; default `1e-12`. The
+    /// change it causes is measured per value and counts against `tolerance`,
+    /// so a cutoff that is too aggressive leads to splitting, not to an
+    /// inaccurate patch. Use zero to retain every singular value.
     pub compression_tolerance: f64,
     /// Accept only bonds at most this positive size; `None` imposes no cap.
     pub max_bond_dim: Option<usize>,
@@ -101,10 +97,13 @@ impl Default for PatchedInterpolativeOptions {
 
 /// Construct real or complex interpolative QTT patches on a dyadic box.
 ///
-/// `engine` is the caller's configured CPU engine, for example
-/// `CpuBackend::with_threads(1)?` followed by `engine_mut()`. Every box runs on
-/// it in turn: the evaluator receives its [`Exec`] token, and the validation
-/// GEMM and SVD compression use it. No backend is created internally.
+/// `context` is the caller's configured CPU execution context, for example
+/// `CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?)`. The whole
+/// construction runs in one session of its engine: the evaluator receives that
+/// engine's [`Exec`] token, and the validation GEMM and SVD compression use it.
+/// No backend is created internally. Calling this from inside a session of the
+/// same context fails with [`InterpolativeQttError::Execution`]; an evaluator
+/// that enters a session of `context` receives the context's re-entry error.
 /// `lower` and `upper` are finite, strictly increasing bounds for each axis;
 /// `num_bits` (at least one) is the bit depth per axis and `polynomial_degree`
 /// (at least one) sets the Chebyshev order. The fallible evaluator receives
@@ -113,13 +112,12 @@ impl Default for PatchedInterpolativeOptions {
 /// original source type. See [`PatchedInterpolativeOptions`] for limits.
 ///
 /// Each box reuses the multiscale Chebyshev construction with its remaining
-/// bits. Boxes whose interpolation residual or compressed rank exceeds the
-/// limit split along every axis; the SVD truncation bound is reported per
-/// patch but does not drive splitting. The last site is sampled exactly. The
+/// bits and compresses the result. Boxes whose per-value error estimate
+/// (interpolation residual plus compression change) or compressed rank exceeds
+/// the limit split along every axis. The last site is sampled exactly. The
 /// returned vector is sorted lexicographically by per-axis prefix and
 /// partitions the full grid. This sampling algorithm cannot detect arbitrary
-/// features missed by its Chebyshev validation points; the error fields are
-/// estimates.
+/// features missed by its validation points; the error field is an estimate.
 ///
 /// # Errors
 /// Returns [`InterpolativeQttError::InvalidArgument`] for invalid bounds,
@@ -133,12 +131,12 @@ impl Default for PatchedInterpolativeOptions {
 /// # Examples
 /// ```
 /// use std::convert::Infallible;
-/// use tensor4all_tensorbackend::CpuBackend;
+/// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
 /// use tensor4all_interpolativeqtt::{interpolate_patched_nd, PatchedInterpolativeOptions,
 ///     AbstractTensorTrain};
-/// let mut backend = CpuBackend::with_threads(1)?;
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let patches = interpolate_patched_nd(
-///     backend.engine_mut(),
+///     &context,
 ///     |points, _exec| Ok::<_, Infallible>(points.data().chunks(2)
 ///         .map(|p| 1.0 + p[0] + 2.0 * p[1]).collect()),
 ///     &[0.0, 0.0], &[1.0, 1.0], 5, 3, &PatchedInterpolativeOptions::default(),
@@ -149,7 +147,7 @@ impl Default for PatchedInterpolativeOptions {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn interpolate_patched_nd<T, F, E>(
-    engine: &mut CpuEngine,
+    context: &CpuExecutionContext,
     evaluate: F,
     lower: &[f64],
     upper: &[f64],
@@ -163,17 +161,23 @@ where
     E: Into<Box<dyn Error + Send + Sync>>,
 {
     let plan = Plan::new(lower, upper, num_bits, polynomial_degree, options)?;
-    run_waves(&plan, |wave| {
-        wave.into_iter()
-            .map(|patch| patch_body(&plan, &evaluate, patch, engine))
-            .collect()
-    })
+    context
+        .with_session(|engine| {
+            run_waves(&plan, |wave| {
+                wave.into_iter()
+                    .map(|patch| patch_body(&plan, &evaluate, patch, engine))
+                    .collect()
+            })
+        })
+        .map_err(|e| InterpolativeQttError::Execution {
+            source: Box::new(e),
+        })?
 }
 
 /// Construct patches on caller-owned lanes, sharing each lane's engine with the evaluator.
 ///
 /// This has the same acceptance rules as [`interpolate_patched_nd`], with
-/// `lanes` in place of the single engine. The caller builds `P` engines with
+/// `lanes` in place of the single execution context. The caller builds `P` engines with
 /// `B` threads each and passes them through `lanes`. Both evaluation and compression use the engine of the lane that
 /// pulls the box. No global backend is entered. A wave with fewer than `P`
 /// boxes leaves lanes idle; the driver does not rebalance their thread budgets.
@@ -185,11 +189,13 @@ where
 /// Floating-point backend roundoff can matter for a decision exactly on a
 /// threshold; choose tolerances with a margin above roundoff.
 ///
-/// The `parallel` feature adds only the lane executor and keeps whichever CPU
-/// provider the build selects. With native/faer, each lane's linear algebra
-/// runs within its `B` threads. A BLAS provider (Accelerate, system BLAS) runs
-/// its own threading outside that budget, and bit-identical results across
-/// lane counts then rely on that library being deterministic.
+/// The `parallel` feature adds only the lane executor and builds with any CPU
+/// provider, but lane execution is validated on native/faer only, where each
+/// lane's linear algebra stays within its `B` threads and results are
+/// bit-identical across lane layouts. With a BLAS provider (Accelerate, system
+/// BLAS) each of the `P` lanes calls a library that threads on its own, which
+/// can oversubscribe the cores and relies on the library's thread safety and
+/// determinism; that combination is not tested.
 ///
 /// # Errors
 /// Returns the same errors as [`interpolate_patched_nd`], plus
@@ -247,7 +253,11 @@ struct Plan<'a, T: InterpolativeScalar> {
     max_depth: usize,
     site_dim: usize,
     basis: LagrangePolynomials,
+    /// Per-axis validation coordinates in `[0, 1]`, increasing.
+    test_points_1d: Vec<f64>,
     test_points: Vec<Vec<f64>>,
+    /// Per-axis basis indices of each flattened Chebyshev node, axis zero fastest.
+    nodes: Vec<Vec<usize>>,
     weights: Matrix<T>,
     options: &'a PatchedInterpolativeOptions,
 }
@@ -298,7 +308,8 @@ impl<T: InterpolativeScalar> Plan<'_, T> {
             checked_product(ndims, std::mem::size_of::<f64>())?,
         )?;
         let basis = get_chebyshev_grid(degree)?;
-        let test_points = product_points(&dense_test_points(order)?, ndims, test_dim);
+        let test_points_1d = dense_test_points(order)?;
+        let test_points = product_points(&test_points_1d, ndims, test_dim);
         let nodes = product_indices(order, ndims, basis_dim);
         let mut weights = Vec::with_capacity(stencil_len);
         // INVARIANT: the bounded stencil is independent of num_bits and built once
@@ -318,7 +329,9 @@ impl<T: InterpolativeScalar> Plan<'_, T> {
             max_depth: options.max_depth.unwrap_or(num_bits - 1),
             site_dim,
             basis,
+            test_points_1d,
             test_points,
+            nodes,
             weights: Matrix::from_col_major_vec(test_dim, basis_dim, weights),
             options,
         })
@@ -403,6 +416,8 @@ where
     E: Into<Box<dyn Error + Send + Sync>>,
 {
     let remaining = plan.num_bits - patch.depth;
+    // Chebyshev node values of each immediate child, in sampling order.
+    let mut children: Vec<(NInterval, Vec<T>)> = Vec::new();
     let (mut tt, interpolation_error) = if remaining == 1 {
         let pieces = split_box(&patch.domain)?;
         let points: Vec<_> = pieces.iter().map(|piece| piece.start().to_vec()).collect();
@@ -421,6 +436,7 @@ where
                 let SampleBatch::Nodes { interval, .. } = batch else {
                     return Ok(values);
                 };
+                children.push((interval.clone(), values.clone()));
                 let start = interval.start();
                 let lengths = interval.lengths();
                 let tests: Vec<Vec<f64>> = plan
@@ -454,24 +470,111 @@ where
         )?;
         (SimpleTensorTrain::new(cores)?, error)
     };
-    let truncation_bound = tt.compress_svd_with_session(
+    // The discarded Frobenius weight covers the whole patch tensor and grows
+    // with its grid size, so it is not comparable with the per-value tolerance.
+    // Measure the change per value on the train actually returned instead.
+    tt.compress_svd_with_session(
         &mut Session::new(engine),
         plan.options.compression_tolerance,
         None,
     )?;
-    if !interpolation_error.is_finite() || !truncation_bound.is_finite() {
+    let error_estimate = if remaining == 1 {
+        // A one-site train has no bond to truncate.
+        interpolation_error
+    } else {
+        interpolation_error + compression_change(plan, &patch.domain, &children, &tt)?
+    };
+    if !error_estimate.is_finite() {
         return Err(InterpolativeQttError::NonFinite);
     }
     Ok(PatchOutcome {
         patch: InterpolativePatch {
             prefix: patch.prefix,
             tt,
-            error_estimate: interpolation_error,
-            truncation_bound,
+            error_estimate,
         },
         domain: patch.domain,
         depth: patch.depth,
     })
+}
+
+/// Maximum `|compressed train - interpolant|` over the patch grid points
+/// nearest to the validation coordinates.
+///
+/// Every box of the patch driver is safe, so the uncompressed multiscale train
+/// equals, at each grid point, the Chebyshev interpolant of the immediate child
+/// that owns the point. That interpolant costs `(degree + 1)^D` products per
+/// point, against `L r^2` for evaluating the uncompressed rank-`r` train. Each
+/// axis of an `L`-site train has `2^L` points; when that is no more than the
+/// validation count every point is checked, otherwise the nearest ones.
+fn compression_change<T: InterpolativeScalar>(
+    plan: &Plan<'_, T>,
+    domain: &NInterval,
+    children: &[(NInterval, Vec<T>)],
+    compressed: &SimpleTensorTrain<T>,
+) -> Result<f64> {
+    let sites = compressed.len();
+    let ndims = domain.ndims();
+    // Match sampled node sets to children by their exact intervals: the
+    // assembly splits this domain with the same `NInterval::split`.
+    let pieces = domain.split()?;
+    let node_values: Vec<&[T]> = pieces
+        .iter()
+        .map(|piece| {
+            children
+                .iter()
+                .find(|(interval, _)| interval == piece)
+                .map(|(_, values)| values.as_slice())
+                .ok_or_else(|| invalid_argument("child Chebyshev values were not sampled"))
+        })
+        .collect::<Result<_>>()?;
+    // INVARIANT: 2 <= sites <= 52 (validated num_bits), so grid indices fit in
+    // u64 and are exactly representable in f64.
+    let half = 1u64 << (sites - 1);
+    let last = ((1u64 << sites) - 1) as f64;
+    let mut axis: Vec<u64> = plan
+        .test_points_1d
+        .iter()
+        .map(|&t| (t * last).round() as u64)
+        .collect();
+    axis.dedup();
+    let count = checked_power(axis.len(), ndims)?;
+    let mut max_change = 0.0_f64;
+    let mut quantics = vec![0; sites];
+    let mut lagrange = vec![Vec::with_capacity(plan.basis.len()); ndims];
+    for multi in product_indices(axis.len(), ndims, count) {
+        let mut child = 0;
+        for (d, &i) in multi.iter().enumerate() {
+            let k = axis[i];
+            let upper = k >= half;
+            child |= usize::from(upper) << d;
+            let local = (k - u64::from(upper) * half) as f64 / half as f64;
+            lagrange[d].clear();
+            for alpha in 0..plan.basis.len() {
+                lagrange[d].push(plan.basis.evaluate(alpha, local)?);
+            }
+        }
+        let mut interpolant = T::zero();
+        for (node, &value) in plan.nodes.iter().zip(node_values[child]) {
+            let weight: f64 = node
+                .iter()
+                .enumerate()
+                .map(|(d, &alpha)| lagrange[d][alpha])
+                .product();
+            interpolant = interpolant + value * T::from_f64(weight);
+        }
+        for (level, site) in quantics.iter_mut().enumerate() {
+            let shift = sites - 1 - level;
+            *site = multi
+                .iter()
+                .enumerate()
+                .map(|(d, &i)| (((axis[i] >> shift) & 1) as usize) << d)
+                .sum();
+        }
+        let change = (compressed.evaluate(&quantics)? - interpolant).abs_val();
+        max_change = max_change.max(change);
+    }
+    Ok(max_change)
 }
 
 fn sample<T, F, E>(evaluate: &F, engine: &mut CpuEngine, points: &[Vec<f64>]) -> Result<Vec<T>>
