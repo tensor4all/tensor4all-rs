@@ -827,7 +827,10 @@ and `C_k` is backend roundoff, which the report already excludes.
   The fallback is therefore smaller by at most a relative
   `O(gamma_{2n+2} sqrt(n))`, about `3e-10` at the R = 20 maximum `n = 7056`,
   and never enough to change a kept rank. A step whose linear form exceeds its
-  share keeps one more direction instead.
+  share keeps one more direction instead. The reported bound is therefore
+  slightly conservative: it can exceed the smaller of the two certificates by
+  at most that relative amount. The missing fallback is not a gap in the
+  certificate.
 - *Sweep direction.* The sweep runs in the direction whose estimate is
   smaller. For R = 20 that is the "last to first" direction of step 2; the
   choice now follows from the measured bonds instead of a fixed orientation.
@@ -837,7 +840,8 @@ and `C_k` is backend roundoff, which the report already excludes.
   working tensors (a block, its projection, its discarded part and the
   weighted block) depend on the ranks the sweep keeps, so each step checks
   them from the actual dimensions, with the factors still stored, before
-  forming the block. An a-priori bound on the kept rank is the factor's
+  forming the block, so a refusal there happens **with the factors still
+  resident**. An a-priori bound on the kept rank is the factor's
   column count, thousands over the middle of R = 20, against kept ranks
   below 50 at R = 10; with it, R = 20 was refused at 4.30 GB against a
   4 GiB limit.
