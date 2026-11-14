@@ -7,6 +7,7 @@ use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::One;
 use std::f64::consts::PI;
+use tensor4all_core::DenseElementBudget;
 use tensor4all_simplett::{types::tensor3_zeros, SimpleTensorTrain, Tensor3Ops};
 
 use crate::common::{
@@ -79,22 +80,34 @@ pub fn phase_rotation_operator(
 /// * `theta` - Phase angle in radians
 /// * `nvariables` - Total number of variables
 /// * `target_var` - Which variable to apply phase rotation to (0-indexed)
+/// * `budget` - Element-count budget for the embedded operator sites
 ///
 /// # Errors
 ///
-/// Returns an error when `r == 0`;
+/// Returns [`QuanticsTransformError::Operation`] when `r == 0`, when
+/// `nvariables` or `target_var` is invalid or the embedded site dimension
+/// overflows, or when a tensor allocation fails;
 /// [`QuanticsTransformError::InvalidConfiguration`] when `theta` is not finite
-/// or `theta * 2^(r-1)` overflows `f64`; and an error when `nvariables` or
-/// `target_var` is invalid or the embedded site dimension overflows.
+/// or `theta * 2^(r-1)` overflows `f64`; and
+/// [`QuanticsTransformError::DenseBudget`] when the embedded operator exceeds
+/// `budget`.
 ///
 /// # Examples
 ///
 /// ```
 /// use tensor4all_quanticstransform::phase_rotation_operator_multivar;
+/// use tensor4all_core::DenseElementBudget;
 /// use std::f64::consts::PI;
 ///
 /// // Phase rotate only the x-variable of a 2-variable function f(x, y)
-/// let op = phase_rotation_operator_multivar(4, PI / 4.0, 2, 0).unwrap();
+/// let op = phase_rotation_operator_multivar(
+///     4,
+///     PI / 4.0,
+///     2,
+///     0,
+///     DenseElementBudget::default(),
+/// )
+/// .unwrap();
 /// assert_eq!(op.mpo().node_count(), 4);
 /// ```
 pub fn phase_rotation_operator_multivar(
@@ -102,12 +115,13 @@ pub fn phase_rotation_operator_multivar(
     theta: f64,
     nvariables: usize,
     target_var: usize,
+    budget: DenseElementBudget,
 ) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     validate_phase_rotation_input(r, theta)?;
 
     let (dim_multi, _) = checked_multivar_dims(nvariables)?;
     let mpo = phase_rotation_mpo(r, theta)?;
-    let embedded = embed_single_var_mpo(&mpo, nvariables, target_var)?;
+    let embedded = embed_single_var_mpo(&mpo, nvariables, target_var, budget)?;
     let mut dims =
         try_vec_with_capacity::<usize>("phase rotation multivariable site dimensions", r)?;
     dims.resize(r, dim_multi);
