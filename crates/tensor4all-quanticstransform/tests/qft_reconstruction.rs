@@ -1648,7 +1648,7 @@ fn schedule_with_application(
         &MergeRefineOptions {
             output_depth: None,
             max_work_items: 4 * leaves,
-            apply_options: Some(apply_options),
+            application: OperatorApplication::Measured(apply_options),
             ..Default::default()
         },
     )

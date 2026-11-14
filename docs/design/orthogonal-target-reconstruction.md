@@ -432,7 +432,7 @@ operator and compares it against the two one-dimensional transforms applied in
 sequence.
 
 Approximate operator application is available as an opt-in on the schedule:
-`MergeRefineOptions::apply_options` applies the operator with the caller's
+`OperatorApplication::Measured` (formerly `MergeRefineOptions::apply_options`) applies the operator with the caller's
 truncating options *and* always applies it exactly, measures the per-leaf
 deviation `||exact - approximate||`, and charges that sum to the item bounds before
 any scheduling compression. The exact application is therefore the measured
@@ -515,7 +515,7 @@ estimate `2^43` at the centre. The guard is an upper estimate of the block the
 factorization sees, not of every temporary the contraction planner forms.
 
 **Error accounting is unchanged.** Exact mode still reports
-`error_bound == 0`. With `MergeRefineOptions::apply_options` the schedule still
+`error_bound == 0`. With a measured application the schedule still
 applies the caller's truncating options as well and charges the measured
 `||exact - approximate||` of each leaf; the exact image this measurement needs
 is now affordable, and the difference network's bond is the sum of the two
@@ -589,7 +589,7 @@ one host; the naive column was measured before the change):
   without spectator subtrees, the deep three-branch tree above, and the
   refusal only above the limit.
 - The existing schedule tests cover exact mode (`error_bound == 0`) and a
-  truncating `apply_options` whose measured deviation is charged. One existing
+  truncating measured application whose deviation is charged. One existing
   test changed: in `subset_operator_scale_is_not_measured_under_destructive_interference`
   the two images are negatives of each other. Whether their roundoff residual
   cancels exactly depends on the platform's SVD: on Linux the zip-up images
@@ -672,7 +672,7 @@ the physical bond, which is inherent to an exact image of that width.
   chain and a branched tree with two degree-three nodes, several centres, real
   and complex data, and the process-global and context leaf routes.
 - `tests/subset_operator_exact.rs`: on the same shapes, `schedule_merge_refine`
-  with an untruncated SVD zip-up as `apply_options` measures each QR image
+  with an untruncated SVD zip-up as its measured application measures each QR image
   against its SVD image under `rtol = 1e-12`; a truncating threshold of `0.3`
   fails all four.
 - `apply_zipup_never_skips_without_an_explicit_exact_policy` also compares the
@@ -682,6 +682,190 @@ The general-tree schedule sets only the canonical region, not the edge
 orientations, for SVD and QR alike, so the tree cases check the isometries
 numerically (the centre carries the whole norm) rather than through
 `validate_ortho_consistency`.
+
+### Truncating application with a certified bound (#1286)
+
+Status: the API was agreed on
+[#1296](https://github.com/tensor4all/tensor4all-rs/pull/1296#issuecomment-6867000238)
+(see "Decisions" at the end of this section). The treetn kernel is implemented
+as `apply_linear_operator_certified`; "Implementation notes" records where it
+departs from the algorithm as first written.
+
+**Problem.** Two interleaved axes at R = 20 give 40 binary sites. Over the
+middle of the chain the exact image can be as wide as the product bond (input
+bond × operator bond), so the exact application of #1279/#1285 has no bounded
+intermediates there. The application has to truncate during its sweep. What it
+discards must be charged to the report as a proved bound, without ever forming
+the exact image.
+
+**Rejected certificates.** The small-case study on #1286 compared three
+candidates against the dense exact product
+([choice](https://github.com/tensor4all/tensor4all-rs/issues/1286#issuecomment-6844793567),
+[repair](https://github.com/tensor4all/tensor4all-rs/issues/1286#issuecomment-6845339762),
+[reproducer](https://github.com/tensor4all/tensor4all-rs/issues/1286#issuecomment-6845427962)):
+
+- `||Ax||^2 - 2 Re<Ax, y> + ||y||^2` evaluated by contraction cancels down to
+  a `sqrt(eps) ||Ax||` floor.
+- Density-matrix eigenvalue sums have the same floor. One case claimed 0
+  against a true 6.8e-12.
+- A truncating zip-up that picks each rank from the singular values of its own
+  block, charging `||D_k||_F sigma_k`, is valid. But the block spectrum is the
+  wrong one, so it kept 2–4× the optimal bonds, above even the exact product's.
+
+**The identity.** A chain zip-up replaces each block `C_k` by `P_k C_k`, where
+`P_k = U_k U_k^H` and `U_k` is an isometry. The projectors are nested: each new
+range lies in the previous range tensored with the next site. So the
+step errors are mutually orthogonal, and for any choice of isometries
+
+`||Ax - y||^2 = sum_k ||D_k M_k||_F^2 = sum_k ||D_k L_k||_F^2`.
+
+Here `D_k = (I - P_k) C_k` is the discarded block, and `M_k` the exact
+remaining part of `A x` on the unswept side, as a map from the joint bond
+(operator bond, state bond). `L_k` is a factor of its Gram matrix:
+`M_k = L_k Q_k`, with `Q_k` having orthonormal rows.
+
+**Algorithm** (chain only, sweeping from the last node to the first):
+
+1. *Factors.* The unswept side of step k is the left part, so `L_k` is built
+   from the left end by recursion. Contract the previous factor with the
+   operator and state tensors of site k, and keep the triangular factor of a
+   QR, exact and untruncated. `L_k` has `chi_A,k chi_x,k` rows and at most
+   `min(rows, 2^(k+1))` columns, because the physical dimension on the left
+   bounds its rank.
+2. *Memory gate.* Before the first QR, the factor sizes are computed from the
+   state's and the operator's actual bond dimensions. Above a budget (default
+   4 GiB) the application fails with a resource-limit error, before allocating
+   anything. The measured peak is reported. There is no silent fallback, either
+   to the block-spectrum truncation or to an unchecked run. Disk spill is the
+   extension for an input whose factors do not fit. Patches are applied one at
+   a time, so the worst single patch sets the gate.
+3. *Sweep.* At step k:
+   - Form the block `C_k` (the remainder times the site tensors).
+   - Take the projector from the SVD of `C_k L_k`. That is the actual Schmidt
+     spectrum of the current state at the cut, which is why the kept bonds were
+     optimal on every small case.
+   - Keep the smallest rank whose certified step error is within the step's
+     share of the budget.
+   - The remainder passed on is `U_k^H C_k`.
+4. *Certificate per step* (primary, linear):
+
+   `e_k <= fl(||D_k L_k||_F) (1 + gamma_{2m+2}) + gamma_{2n+2} ||D_k||_F ||L_k||_F`
+
+   with `n` the inner and `m` the output dimension of the product. The margin
+   is linear in the precision and scales with `||D_k||`, not `||Ax||`, so this
+   is not the density-matrix floor. Fallback, computed only when the linear
+   form exceeds the share: `e_k <= ||D_k||_F sigma_k`. Here `sigma_k` is
+   certified as `sqrt(t)` with `t >= lambda_max(L_k L_k^H)`, proved by a
+   floating-point Cholesky of `fl(t I - G) - c I` with Rump's margin
+   `c >= gamma/(1 - gamma) tr(A)` (BIT 46 (2006), Thm 2.3; `gamma_{2n+2}` for
+   complex data), plus the diagonal rounding of `t - g_ii`.
+5. *Bound.* `sqrt(sum_k e_k^2)`. The per-step budget share is
+   `budget / sqrt(N - 1)`, and a step that spends less leaves the rest to
+   later steps. The bound covers the sweep steps only. **The closing step is
+   the one place where nothing may be discarded:** it canonicalizes exactly
+   by QR and truncates nothing. A truncation added there would remove weight
+   that no `e_k` charges, and the reported bound would no longer hold.
+
+**What the certificate covers.** The norms and `lambda_max` of the *computed*
+`L_k` and `D_k`. The roundoff made while contracting and factorizing `L_k`
+and `C_k` is backend roundoff, which the report already excludes.
+
+**Measured basis.** For R = 20, as built by the heavy test:
+- **profile:** the operator bond is 144 over the middle and the input patch
+  bonds peak at 49, so only bond 7 reaches the 7056-row maximum;
+- **storage:** the left factors of one patch total 1.96 GiB, against 4.18 GiB
+  for the right factors of the opposite sweep;
+- **cost:** the largest QR (8192 × 3888) takes 22 s with one thread, and an
+  estimated 1.5–2 min builds one patch's factors
+  ([profile](https://github.com/tensor4all/tensor4all-rs/issues/1286#issuecomment-6846379023)).
+
+**Proposed API.**
+
+- `tensor4all-treetn`:
+  - `apply_linear_operator_certified` and its index-binding form, with
+    `CertifiedApplyOptions { budget, memory_limit }`. The budget is an absolute
+    error; the memory limit defaults to 4 GiB.
+  - The result is a `CertifiedApplication`: the network, the bound, the step
+    bounds, and the factor bytes (estimated and measured).
+  - Typed errors for a non-chain state (unsupported), the memory gate (resource
+    limit), and an unreachable budget. The last is reported, not relaxed.
+  - The kernel is a private chain zip-up variant that shares the existing
+    schedule. The exact and truncating zip-ups are unchanged.
+- `tensor4all-partitionedtreetn`: `MergeRefineOptions::application`, one enum
+  `OperatorApplication` replacing `apply_options`:
+  - `Exact` (the default, as today);
+  - `Certified { share, memory_limit }`, with `certified(share)` for the
+    default limit. `share` of the global allowance is split equally over the
+    input leaves; the images overlap, so their bounds add;
+  - `Measured(ApplyOptions)`, the former `apply_options`.
+
+  A certified image's bound is charged as its application error, in place of
+  the measured difference to an exact image that is never formed.
+  `SubsetOperatorOptions` keeps only the amplification flag: it is also taken
+  by `ReconstructionTarget::from_subset_operator`, whose target carries no
+  application error to charge, and `schedule_merge_refine` takes both option
+  sets, so a second application field there would be the combination of flags
+  the decision rules out.
+- `tensor4all-quanticstransform`: `PatchedFourierOptions` exposes the same
+  choice. The R = 20 interleaved heavy case opts in.
+
+**Validation plan.**
+- Small cases against the exact application, for real and complex data and
+  several centres: the bound is never below the true error, and the kept bonds
+  are within a stated factor of the optimal.
+- A test that the memory gate fails before allocating.
+- The R = 20 interleaved heavy case under the 8 GiB address-space ceiling,
+  reporting the measured peak, the per-step bounds and the total bound. Its
+  sampled DFT error must be inside the reported bound.
+
+**Implementation notes** (treetn kernel).
+- *No fallback certificate.* The `||D_k||_F sigma_k` fallback of step 4 is not
+  implemented, because it cannot pay off. Write `g_a = gamma_{2m+2}`,
+  `g_b = gamma_{2n+2}` and `s = ||L_k||_2 >= ||L_k||_F / sqrt(n)`. The product
+  error bound gives `fl(||D L||) <= (||D|| s + g_b ||D|| ||L||_F)(1 + g_a)`, so
+  the linear form is at most `||D|| s ((1 + g_a)^2 + 2 g_b (1 + g_a) sqrt(n))`.
+  The fallback is therefore smaller by at most a relative
+  `O(gamma_{2n+2} sqrt(n))`, about `3e-10` at the R = 20 maximum `n = 7056`,
+  and never enough to change a kept rank. A step whose linear form exceeds its
+  share keeps one more direction instead. The reported bound is therefore
+  slightly conservative: it can exceed the smaller of the two certificates by
+  at most that relative amount. The missing fallback is not a gap in the
+  certificate.
+- *Sweep direction.* The sweep runs in the direction whose estimate is
+  smaller. For R = 20 that is the "last to first" direction of step 2; the
+  choice now follows from the measured bonds instead of a fixed orientation.
+- *Memory gate in two parts.* Before anything is allocated, the gate counts
+  the stored factors plus the largest factor QR input and its `Q`, from the
+  input bond dimensions (which bound the canonicalized ones). The sweep's
+  working tensors (a block, its projection, its discarded part and the
+  weighted block) depend on the ranks the sweep keeps, so each step checks
+  them from the actual dimensions, with the factors still stored, before
+  forming the block, so a refusal there happens **with the factors still
+  resident**. An a-priori bound on the kept rank is the factor's
+  column count, thousands over the middle of R = 20, against kept ranks
+  below 50 at R = 10; with it, R = 20 was refused at 4.30 GB against a
+  4 GiB limit.
+- *Rounding of the margin and the sum.* The computed `||D_k||_F` and
+  `||L_k||_F` in the margin are rounded up by `1 + gamma_{2c+2}` (`c` entries),
+  and the total `sqrt(sum e_k^2)` by `1 + gamma_{N+1}`. The shares come from the
+  budget divided by that last factor, so the reported bound never exceeds the
+  budget.
+- *Rank search.* The first candidate is the smallest rank whose
+  exact-arithmetic tail plus the margin (with `||C_k||` for `||D_k||`) fits the
+  share; the certificate of the actual `D_k` then accepts it, or the rank grows
+  by one. At the largest rank the SVD offers, a step that still does not fit
+  reports `BudgetUnreachable`.
+
+**Decisions** (#1296, maintainer).
+1. Names as proposed: `apply_linear_operator_certified`,
+   `CertifiedApplyOptions { budget, memory_limit }`, `CertifiedApplication`.
+   In the partitioned options the application choice is one enum (exact,
+   certified with a share, measured), not a combination of flags.
+2. Explicit opt-in, no automatic choice: the reported error changes meaning
+   (measured difference vs. certified bound), and an automatic switch would
+   contradict the no-silent-fallback rule of the memory gate.
+3. The application's share of the allowance is a required argument with no
+   default, validated as a typed error outside `(0, 1]`.
 
 ## Fourier front end and operator node names
 

@@ -354,10 +354,12 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   four input children and produce four output children), and the transform is never
   padded. `error_bound` records every measured
   component once, at the level and region where it was measured, so it does not grow
-  with the number of refined regions. `MergeRefineOptions::apply_options` opts into a truncating operator
-  application: the schedule applies both exactly and with those options, measures
-  each leaf's deviation, and charges the sum before any compression, rejecting an
-  application error above the allowance. All other entry points apply exactly. The `MergeRefineReport` reports `level_count`,
+  with the number of refined regions. `MergeRefineOptions::application` opts into a truncating operator
+  application: `OperatorApplication::Measured` applies both exactly and with the
+  caller's options, measures each leaf's deviation, and charges the sum before any
+  compression, rejecting an application error above the allowance;
+  `OperatorApplication::certified(share)` (chain states only) never forms the exact
+  image and charges proved bounds within `share` of the allowance. All other entry points apply exactly. The `MergeRefineReport` reports `level_count`,
   `applied_operator_count`, `additions`, `projections`, `compression_attempts`,
   `compressions`, `work_items_per_level`, `peak_work_items`, `refined_regions`,
   `stopped_regions`, region/term counts, `max_bond_dim`,

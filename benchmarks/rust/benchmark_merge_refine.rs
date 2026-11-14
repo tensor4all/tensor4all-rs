@@ -167,7 +167,9 @@ impl Case {
             "merge_refine_adaptive_truncated_apply",
             &MergeRefineOptions {
                 target_bond_dim: Some(GOAL),
-                apply_options: Some(ApplyOptions::zipup().with_max_bond_dim(GOAL)),
+                application: OperatorApplication::Measured(
+                    ApplyOptions::zipup().with_max_bond_dim(GOAL),
+                ),
                 ..Default::default()
             },
             reference,

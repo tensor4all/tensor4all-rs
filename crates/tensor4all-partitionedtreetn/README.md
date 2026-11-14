@@ -241,9 +241,12 @@ with `dropped_terms` and `dropped_error` reporting it and a fully dropped region
 omitted while its measured norm still counts. Every measured component is recorded
 once, at the level and region where it was measured, so `error_bound` does not grow
 with the number of refined regions. Exceeding `max_terms` returns a
-resource-limit error. `MergeRefineOptions::apply_options` opts into a
-truncating application whose measured deviation from the exact application is
-charged to the same bound, and an application error above the allowance is
+resource-limit error. `MergeRefineOptions::application` chooses how each input
+leaf is transformed: exactly (the default); `OperatorApplication::Measured`, a
+truncating application whose measured deviation from the exact one is charged to
+the same bound; or `OperatorApplication::Certified`, a truncating application on
+chain states that never forms the exact image and charges proved bounds within
+a required share of the allowance. An application error above the allowance is
 rejected. Several coordinate axes may be transformed in one synchronized level through
 `MergeRefineOptions::coordinate_groups`, each stating its own input and output order;
 the transform is never padded and its length never changes. Per-input-branch refinement

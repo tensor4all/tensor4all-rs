@@ -55,8 +55,9 @@ pub use algorithm::{CanonicalForm, CompressionAlgorithm, ContractionAlgorithm};
 pub use cuda::{CudaTreeTNError, CudaTreeTNPendingDownload};
 pub use dmrg::{dmrg, dmrg_with_treetn_operator, DmrgError, DmrgOptions, DmrgResult};
 pub use error::{
-    LinearOperatorIndexApplyError, LinearOperatorIndexBindingError, LinearOperatorTaggedApplyError,
-    NumberedTagSelectionError, SelectedIndexContractionError, TreeTNOperationError,
+    CertifiedApplyError, LinearOperatorIndexApplyError, LinearOperatorIndexBindingError,
+    LinearOperatorTaggedApplyError, NumberedTagSelectionError, SelectedIndexContractionError,
+    TreeTNOperationError,
 };
 pub use gse::{
     global_subspace_expand, global_subspace_expand_with_references, gse_tdvp, GseError, GseOptions,
@@ -72,10 +73,12 @@ pub use link_index_network::LinkIndexNetwork;
 pub use named_graph::NamedGraph;
 pub use node_name_network::{CanonicalizeEdges, NodeNameNetwork};
 pub use operator::{
-    apply_linear_operator, apply_linear_operator_to_indices,
+    apply_linear_operator, apply_linear_operator_certified,
+    apply_linear_operator_certified_to_indices, apply_linear_operator_to_indices,
     apply_linear_operator_to_numbered_tags, are_exclusive_operators, bind_linear_operator_indices,
     build_identity_operator_tensor, compose_exclusive_linear_operators, ApplyOptions,
-    ArcLinearOperator, IndexMapping, LinearOperator, Operator, StateOperatorNetwork,
+    ArcLinearOperator, CertifiedApplication, CertifiedApplyOptions, IndexMapping, LinearOperator,
+    Operator, StateOperatorNetwork,
 };
 pub use options::{CanonicalizationOptions, RestructureOptions, SplitOptions, TruncationOptions};
 pub use random::{random_treetn, LinkSpace};
