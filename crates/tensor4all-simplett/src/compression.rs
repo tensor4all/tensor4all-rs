@@ -510,10 +510,15 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     /// use tensor4all_tensorbackend::{CpuBackend, explicit::Session};
     /// let mut backend = CpuBackend::with_threads(1)?;
     /// let mut session = Session::new(backend.engine_mut());
-    /// let mut tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 3.0);
+    /// // The sum of two constants is stored with bond dimension 2 but has rank 1.
+    /// let mut tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0)
+    ///     .add(&SimpleTensorTrain::constant(&[2, 2, 2], 1.0))?;
+    /// assert_eq!(tt.rank(), 2);
     /// tt.compress_svd_with_session(&mut session, 1e-12, None)?;
     /// assert_eq!(tt.rank(), 1);
-    /// assert!((tt.evaluate(&[1, 0, 1])? - 3.0).abs() < 1e-12);
+    /// for index in [[0, 0, 0], [1, 0, 1], [1, 1, 1]] {
+    ///     assert!((tt.evaluate(&index)? - 3.0).abs() < 1e-12);
+    /// }
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn compress_svd_with_session(
