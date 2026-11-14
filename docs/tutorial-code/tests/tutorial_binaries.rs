@@ -131,6 +131,12 @@ fn tutorial_binaries_run_current_api_flows() -> Result<(), Box<dyn Error>> {
             ],
         },
         TutorialBinary {
+            name: "patched_interpolative_qtt",
+            path: env!("CARGO_BIN_EXE_patched_interpolative_qtt"),
+            env: &[],
+            expected_csvs: &[],
+        },
+        TutorialBinary {
             name: "qtt_elementwise_product",
             path: env!("CARGO_BIN_EXE_qtt_elementwise_product"),
             env: &[],
