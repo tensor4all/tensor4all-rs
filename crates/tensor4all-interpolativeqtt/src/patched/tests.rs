@@ -422,12 +422,25 @@ fn physical_bounds_and_overflowing_residuals() {
         },
         1e-8,
     );
+    // Keep the Chebyshev node values small enough that the stencil GEMM cannot
+    // overflow, and put -MAX only at the residual test points: the residual is
+    // then ~(1 + 2^-10) * MAX in every summation order, so the overflow does not
+    // depend on how the BLAS provider orders or fuses the products.
+    let degree = 3;
+    let test_batch = 2 * (degree + 1);
     let result = interpolate_patched_nd(
-        |p, _| batch(p, |_| f64::MAX),
+        |p, _| {
+            let target = if p.shape()[1] == test_batch {
+                -f64::MAX
+            } else {
+                f64::MAX / 1024.0
+            };
+            batch(p, |_| target)
+        },
         &[0.0],
         &[1.0],
         3,
-        3,
+        degree,
         &Default::default(),
     );
     assert!(matches!(result, Err(InterpolativeQttError::NonFinite)));
