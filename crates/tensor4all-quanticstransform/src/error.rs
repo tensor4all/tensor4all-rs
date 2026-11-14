@@ -45,6 +45,12 @@ pub enum QuanticsTransformError {
         #[source]
         source: anyhow::Error,
     },
+    /// A dense operator object would exceed the caller's element budget.
+    /// # Remedy
+    /// Raise the [`DenseElementBudget`](tensor4all_core::DenseElementBudget)
+    /// passed to the constructor, or reduce the number of sites or variables.
+    #[error("quantics transform dense materialization: {0}")]
+    DenseBudget(#[from] tensor4all_core::DenseBudgetError),
 }
 
 impl From<anyhow::Error> for QuanticsTransformError {

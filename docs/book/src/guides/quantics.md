@@ -242,6 +242,11 @@ Each site's local dimension is `2^num_vars`.  This interleaved layout is the
 standard quantics multi-variable representation and is equivalent to
 interleaving the bit planes of all variables.
 
+Because each embedded site is a dense `left × 4^num_vars × right` matrix, the
+constructors take a trailing `DenseElementBudget` and reject the embedded
+operator before allocating it when the summed element count of its sites
+exceeds the budget (`DenseElementBudget::default()` is `2^24` elements).
+
 ---
 
 ## Boundary Conditions

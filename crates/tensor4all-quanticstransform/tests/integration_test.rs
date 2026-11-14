@@ -15,7 +15,7 @@ use num_complex::Complex64;
 use num_traits::{One, Zero};
 
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::{IdxTensor, IndexLike, TensorIndex};
+use tensor4all_core::{DenseBudgetError, DenseElementBudget, IdxTensor, IndexLike, TensorIndex};
 use tensor4all_simplett::{
     types::tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops,
 };
@@ -25,7 +25,7 @@ use tensor4all_quanticstransform::{
     difference_kernel_mpo, difference_kernel_operator, flip_operator, flip_operator_multivar,
     phase_rotation_operator_multivar, quantics_fourier_operator, shift_operator,
     shift_operator_multivar, triangle_operator, BoundaryCondition, FTCore, FourierOptions,
-    TriangleType,
+    QuanticsOperator, QuanticsTransformError, TriangleType,
 };
 
 /// Type alias for the default index type.
@@ -2465,6 +2465,122 @@ fn multivar_flat_index(values: &[usize], nvariables: usize, r: usize) -> usize {
     idx
 }
 
+/// Every multivariable constructor rejects an embedded site dimension above the
+/// default dense element budget instead of allocating it.
+#[test]
+fn multivar_constructors_reject_site_dim_over_default_dense_budget() {
+    // 4^13 = 67_108_864 elements per site, above 2^24.
+    type Case = (
+        &'static str,
+        fn() -> std::result::Result<(), QuanticsTransformError>,
+    );
+    let cases: [Case; 3] = [
+        ("shift", || {
+            shift_operator_multivar(
+                1,
+                0,
+                BoundaryCondition::Periodic,
+                13,
+                0,
+                DenseElementBudget::default(),
+            )
+            .map(|_| ())
+        }),
+        ("flip", || {
+            flip_operator_multivar(
+                2,
+                BoundaryCondition::Periodic,
+                13,
+                0,
+                DenseElementBudget::default(),
+            )
+            .map(|_| ())
+        }),
+        ("phase", || {
+            phase_rotation_operator_multivar(1, 0.0, 13, 0, DenseElementBudget::default())
+                .map(|_| ())
+        }),
+    ];
+
+    for (name, run) in cases {
+        let error = run().unwrap_err();
+        assert!(
+            matches!(error, QuanticsTransformError::DenseBudget(_)),
+            "{name}: unexpected error: {error}"
+        );
+    }
+}
+
+/// The exact element count of the embedded operator is an accepted budget and
+/// yields the same operator as the default budget.
+#[test]
+fn multivar_exact_dense_budget_keeps_the_operator() {
+    use std::f64::consts::PI;
+
+    fn assert_exact_budget_keeps_operator(
+        build: impl Fn(
+            DenseElementBudget,
+        ) -> std::result::Result<QuanticsOperator, QuanticsTransformError>,
+    ) {
+        let elements = match build(DenseElementBudget::new(0)).unwrap_err() {
+            QuanticsTransformError::DenseBudget(DenseBudgetError::Exceeded {
+                elements, ..
+            }) => elements,
+            other => panic!("expected a budget error, got {other}"),
+        };
+        assert!(
+            build(DenseElementBudget::new(elements - 1)).is_err(),
+            "one element less must be rejected"
+        );
+
+        let reference = apply_multivar_operator_to_dense_matrix(
+            &build(DenseElementBudget::default()).unwrap(),
+            3,
+            2,
+        );
+        let exact = apply_multivar_operator_to_dense_matrix(
+            &build(DenseElementBudget::new(elements)).unwrap(),
+            3,
+            2,
+        );
+        assert_eq!(exact, reference);
+        assert!(
+            reference.iter().flatten().any(|z| z.norm() > 0.5),
+            "the compared operator must not be trivial"
+        );
+    }
+
+    assert_exact_budget_keeps_operator(|budget| {
+        shift_operator_multivar(3, 1, BoundaryCondition::Periodic, 2, 0, budget)
+    });
+    assert_exact_budget_keeps_operator(|budget| {
+        flip_operator_multivar(3, BoundaryCondition::Periodic, 2, 0, budget)
+    });
+    assert_exact_budget_keeps_operator(|budget| {
+        phase_rotation_operator_multivar(3, PI / 3.0, 2, 0, budget)
+    });
+}
+
+/// A site shape that cannot be allocated at all still reports the structural
+/// byte-length error instead of the budget.
+#[test]
+fn multivar_operators_reject_unallocatable_sites_before_the_dense_budget() {
+    // 4^29 elements per site with a two-dimensional bond exceeds the usize byte
+    // limit on 64-bit, and the site dimension itself overflows on 32-bit.
+    let error = flip_operator_multivar(
+        2,
+        BoundaryCondition::Periodic,
+        29,
+        0,
+        DenseElementBudget::default(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, QuanticsTransformError::Operation { .. }),
+        "unexpected error: {error}"
+    );
+}
+
 /// Test flip_operator_multivar: each variable flipped independently in a 2D system.
 #[test]
 fn test_flip_2d() {
@@ -2473,8 +2589,14 @@ fn test_flip_2d() {
     let nvariables = 2;
 
     for target_var in 0..nvariables {
-        let op =
-            flip_operator_multivar(r, BoundaryCondition::Periodic, nvariables, target_var).unwrap();
+        let op = flip_operator_multivar(
+            r,
+            BoundaryCondition::Periodic,
+            nvariables,
+            target_var,
+            DenseElementBudget::default(),
+        )
+        .unwrap();
         let matrix = apply_multivar_operator_to_dense_matrix(&op, r, nvariables);
 
         let total_dim = (1usize << nvariables).pow(r as u32);
@@ -2532,6 +2654,7 @@ fn test_shift_2d() {
                 BoundaryCondition::Periodic,
                 nvariables,
                 target_var,
+                DenseElementBudget::default(),
             )
             .unwrap();
             let matrix = apply_multivar_operator_to_dense_matrix(&op, r, nvariables);
@@ -2589,7 +2712,14 @@ fn test_phase_rotation_2d() {
 
     for target_var in 0..nvariables {
         let theta = PI / 3.0;
-        let op = phase_rotation_operator_multivar(r, theta, nvariables, target_var).unwrap();
+        let op = phase_rotation_operator_multivar(
+            r,
+            theta,
+            nvariables,
+            target_var,
+            DenseElementBudget::default(),
+        )
+        .unwrap();
         let matrix = apply_multivar_operator_to_dense_matrix(&op, r, nvariables);
 
         let total_dim = (1usize << nvariables).pow(r as u32);

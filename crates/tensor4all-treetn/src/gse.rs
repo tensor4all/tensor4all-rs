@@ -18,9 +18,9 @@ use std::hash::Hash;
 
 use anyhow::Result;
 use tensor4all_core::{
-    contract_pair_with_operand_options, AnyScalar, Canonical, DynIndex, FactorizeAlg, IdxTensor,
-    IndexLike, LinearizationOrder, PairwiseContractionOptions, SvdTruncationPolicy,
-    TensorContractionLike, TensorFactorizationLike, TensorIndex,
+    contract_pair_with_operand_options, AnyScalar, Canonical, DenseBudgetError, DenseElementBudget,
+    DynIndex, FactorizeAlg, IdxTensor, IndexLike, LinearizationOrder, PairwiseContractionOptions,
+    SvdTruncationPolicy, TensorContractionLike, TensorFactorizationLike, TensorIndex,
 };
 use tensor4all_tensorbackend::invariant_violated;
 use thiserror::Error;
@@ -51,6 +51,17 @@ pub struct GseOptions<V> {
     pub density_weight_cutoff: f64,
     /// Hermitian tolerance for local projected-density eigendecompositions.
     pub hermitian_tol: f64,
+    /// Element-count budget for one dense object built during expansion.
+    ///
+    /// Expansion builds a dense `q_dim × q_dim` projected reference density and
+    /// a dense eigensolve of the same shape, where `q_dim` is the product of the
+    /// processed child's external dimensions. The check runs before the first
+    /// allocation, so an oversized edge fails with
+    /// [`GseError::DenseBudget`] instead of exhausting memory. Units are
+    /// elements: bytes = elements × `size_of::<T>()`. The default is
+    /// [`DenseElementBudget::default`]; keep it unless the caller has a tighter
+    /// memory bound.
+    pub dense_budget: DenseElementBudget,
     /// Normalize each generated Krylov reference after operator application.
     pub normalize_references: bool,
     /// Whether [`gse_tdvp`] expands before the first TDVP sweep.
@@ -66,6 +77,7 @@ impl<V> Default for GseOptions<V> {
             reference_svd_policy: None,
             density_weight_cutoff: 1.0e-12,
             hermitian_tol: 1.0e-12,
+            dense_budget: DenseElementBudget::default(),
             normalize_references: true,
             expand_before_first_sweep: true,
         }
@@ -88,6 +100,12 @@ impl<V> GseOptions<V> {
     /// Set the Hermitian tolerance for local density eigendecompositions.
     pub fn with_hermitian_tol(mut self, hermitian_tol: f64) -> Self {
         self.hermitian_tol = hermitian_tol;
+        self
+    }
+
+    /// Set the element-count budget for dense objects built during expansion.
+    pub fn with_dense_budget(mut self, dense_budget: DenseElementBudget) -> Self {
+        self.dense_budget = dense_budget;
         self
     }
 
@@ -235,6 +253,9 @@ pub enum GseError {
         #[source]
         source: TdvpError,
     },
+    /// A dense object built during expansion would exceed the element budget.
+    #[error("GSE dense materialization: {0}")]
+    DenseBudget(#[from] DenseBudgetError),
     /// A lower-level tensor-network or linalg operation failed.
     #[error("{context}: {source}")]
     Algorithm {
@@ -290,7 +311,8 @@ struct EdgeExpansionStats {
 /// target, fails with [`GseError::UnsupportedStateSiteCount`] or
 /// [`GseError::InvalidMapping`]. Failures of the underlying operator
 /// application, norm or canonicalization are reported as
-/// [`GseError::Algorithm`].
+/// [`GseError::Algorithm`]. An edge whose dense projected density exceeds
+/// [`GseOptions::dense_budget`] fails with [`GseError::DenseBudget`].
 ///
 pub fn global_subspace_expand<V>(
     operator: &LinearOperator<IdxTensor, V>,
@@ -330,7 +352,9 @@ where
 /// [`GseError::UnsupportedStateSiteCount`] or [`GseError::InvalidMapping`] when
 /// a reference or the target violates the single-site state contract.
 /// Failures of the underlying canonicalization, index relabeling or edge
-/// expansion are reported as [`GseError::Algorithm`].
+/// expansion are reported as [`GseError::Algorithm`], and an edge whose dense
+/// projected density exceeds [`GseOptions::dense_budget`] fails with
+/// [`GseError::DenseBudget`].
 ///
 pub fn global_subspace_expand_with_references<V>(
     init: TreeTN<IdxTensor, V>,
@@ -398,8 +422,8 @@ where
 /// # Errors
 ///
 /// Returns [`GseError::InvalidOption`] for invalid GSE options, the errors of
-/// [`global_subspace_expand`] for each expansion, and [`GseError::Tdvp`] when a
-/// TDVP sweep fails.
+/// [`global_subspace_expand`] for each expansion (including
+/// [`GseError::DenseBudget`]), and [`GseError::Tdvp`] when a TDVP sweep fails.
 ///
 pub fn gse_tdvp<V>(
     operator: &LinearOperator<IdxTensor, V>,
@@ -682,6 +706,10 @@ where
         .filter(|idx| idx != &old_bond)
         .collect::<Vec<_>>();
     let q_dim = product_dim(&q_indices)?;
+    options.dense_budget.check_dims(
+        "GSE projected reference density (q_dim x q_dim)",
+        &[q_dim, q_dim],
+    )?;
 
     let factorized = child_tensor
         .factorize_full_rank(

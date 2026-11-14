@@ -8,7 +8,7 @@ use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::One;
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::IdxTensor;
+use tensor4all_core::{DenseElementBudget, IdxTensor};
 use tensor4all_simplett::{
     tensor3_from_data, types::tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops,
 };
@@ -574,20 +574,44 @@ pub(crate) fn checked_multivar_dims(nvariables: usize) -> Result<(usize, usize)>
 /// * `mpo` - Single-variable MPO (R sites, site_dim = 4)
 /// * `nvariables` - Total number of variables (must be >= 2)
 /// * `target_var` - Which variable to apply the operator to (0-indexed)
+/// * `budget` - Element-count budget for the embedded sites, checked before
+///   any of them is allocated
+///
+/// # Errors
+///
+/// Returns [`QuanticsTransformError::Operation`] when `nvariables`,
+/// `target_var` or a site dimension is invalid or a tensor allocation fails,
+/// and [`QuanticsTransformError::DenseBudget`] when the embedded sites exceed
+/// `budget`.
 pub(crate) fn embed_single_var_mpo(
     mpo: &SimpleTensorTrain<Complex64>,
     nvariables: usize,
     target_var: usize,
-) -> Result<SimpleTensorTrain<Complex64>> {
+    budget: DenseElementBudget,
+) -> std::result::Result<SimpleTensorTrain<Complex64>, QuanticsTransformError> {
     if target_var >= nvariables {
         return Err(anyhow::anyhow!(
             "target_var {} must be less than nvariables {}",
             target_var,
             nvariables
-        ));
+        )
+        .into());
     }
     let (dim_multi, site_dim_new) = checked_multivar_dims(nvariables)?;
     let r = mpo.len();
+    let mut site_shapes = try_vec_with_capacity::<[usize; 3]>("embedded MPO site shapes", r)?;
+    for i in 0..r {
+        let tensor = mpo.site_tensor(i);
+        let shape = [tensor.left_dim(), site_dim_new, tensor.right_dim()];
+        // Keep the structural byte-length error reachable for shapes that cannot be
+        // allocated at all; the budget is a policy limit, not an allocation limit.
+        checked_allocation_len::<Complex64>(&shape, "embedded MPO tensor")?;
+        site_shapes.push(shape);
+    }
+    budget.check_total(
+        "multivariable quantics embedded MPO",
+        site_shapes.iter().map(|shape| &shape[..]),
+    )?;
     let mut new_tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
         "embedded MPO tensor list",
         r,
@@ -654,7 +678,7 @@ pub(crate) fn embed_single_var_mpo(
     }
 
     SimpleTensorTrain::new(new_tensors)
-        .map_err(|e| anyhow::anyhow!("Failed to create embedded MPO: {}", e))
+        .map_err(|e| anyhow::anyhow!("Failed to create embedded MPO: {}", e).into())
 }
 
 /// Create an identity MPO for `r` binary sites.

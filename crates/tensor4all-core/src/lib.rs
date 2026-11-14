@@ -45,6 +45,10 @@ pub mod smallstring;
 pub mod tagset;
 pub mod truncation;
 
+/// Shared element-count budget for dense materialization in production paths.
+pub mod dense_budget;
+pub use dense_budget::{DenseBudgetError, DenseElementBudget, DEFAULT_MAX_DENSE_ELEMENTS};
+
 // TCI substrate absorbed from tensor4all-tcicore (dissolved, #639): matrix
 // cross interpolation (LU/LUCI/ACA), common scalar trait, floating-zone
 // pivot search, caching, and index sets.

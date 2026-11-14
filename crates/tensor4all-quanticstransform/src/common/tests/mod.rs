@@ -1,4 +1,5 @@
 use super::*;
+use tensor4all_core::DenseBudgetError;
 
 #[test]
 fn test_boundary_condition_default() {
@@ -51,6 +52,32 @@ fn checked_allocation_len_covers_product_and_zero_size_branches() {
 fn identity_mpo_rejects_oversized_site_list() {
     let error = identity_mpo(usize::MAX).unwrap_err();
     assert!(error.to_string().contains("site list"));
+}
+
+#[test]
+fn embed_rejects_total_over_budget() {
+    // `identity_mpo(2)` sites are 1x4x1, so two embedded 2-variable sites are
+    // 2 * 16 = 32 elements.
+    let mpo = identity_mpo(2).unwrap();
+    let error = embed_single_var_mpo(&mpo, 2, 0, DenseElementBudget::new(31)).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            QuanticsTransformError::DenseBudget(DenseBudgetError::Exceeded {
+                elements: 32,
+                max_elements: 31,
+                ..
+            })
+        ),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn embed_accepts_total_at_budget() {
+    let mpo = identity_mpo(2).unwrap();
+    let embedded = embed_single_var_mpo(&mpo, 2, 0, DenseElementBudget::new(32)).unwrap();
+    assert_eq!(embedded.len(), 2);
 }
 
 #[test]

@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy, TensorContractionLike};
+use tensor4all_core::{
+    DenseBudgetError, DenseElementBudget, DynIndex, IdxTensor, IndexLike, SvdTruncationPolicy,
+    TensorContractionLike,
+};
 use tensor4all_treetn::{
     global_subspace_expand, global_subspace_expand_with_references, gse_tdvp, GseError, GseOptions,
     GseTdvpOptions, IndexMapping, LinearOperator, TdvpOptions, TreeTN,
@@ -410,6 +413,62 @@ fn global_subspace_expand_preserves_state_and_grows_chain_bond() {
     let missing_site_direction_norm =
         child_basis_data[2].norm_sqr() + child_basis_data[3].norm_sqr();
     assert!(missing_site_direction_norm > 1.0 - 1.0e-10);
+}
+
+#[test]
+fn global_subspace_expand_rejects_q_dim_over_dense_budget() {
+    let zero = Complex64::new(0.0, 0.0);
+    let one = Complex64::new(1.0, 0.0);
+    let (state, _) = product_chain_state([[one, zero], [one, zero]]);
+    let (reference, _) = product_chain_state([[one, zero], [zero, one]]);
+
+    // The processed child "site1" has q_dim = 2, so the projected density is 4
+    // elements.
+    let error = global_subspace_expand_with_references(
+        state,
+        vec![reference],
+        &"site0",
+        GseOptions::default().with_dense_budget(DenseElementBudget::new(3)),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            GseError::DenseBudget(DenseBudgetError::Exceeded {
+                elements: 4,
+                max_elements: 3,
+                ..
+            })
+        ),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn global_subspace_expand_accepts_q_dim_at_dense_budget() {
+    let zero = Complex64::new(0.0, 0.0);
+    let one = Complex64::new(1.0, 0.0);
+    let (state, _) = product_chain_state([[one, zero], [one, zero]]);
+    let (reference, _) = product_chain_state([[one, zero], [zero, one]]);
+    let initial_bond_dim = edge_dim(&state, "site0", "site1");
+
+    let result = global_subspace_expand_with_references(
+        state.clone(),
+        vec![reference],
+        &"site0",
+        GseOptions::default()
+            .with_density_weight_cutoff(1.0e-14)
+            .with_dense_budget(DenseElementBudget::new(4)),
+    )
+    .unwrap();
+
+    assert_eq!(result.references_built, 1);
+    assert_eq!(result.edges_processed, 1);
+    assert_eq!(
+        edge_dim(&result.state, "site0", "site1"),
+        initial_bond_dim + 1
+    );
+    assert!(dense_distance(&result.state, &state) < 1.0e-10);
 }
 
 #[test]

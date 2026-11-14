@@ -1,5 +1,6 @@
 use super::*;
 use approx::assert_relative_eq;
+use tensor4all_core::DenseElementBudget;
 use tensor4all_simplett::AbstractTensorTrain;
 
 #[test]
@@ -111,7 +112,7 @@ fn test_phase_rotation_error_scaled_angle_overflow() {
     // theta * 2^(r-1) is not (#961 computes it before reducing mod 2π).
     for result in [
         phase_rotation_operator(2, f64::MAX),
-        phase_rotation_operator_multivar(2, -f64::MAX, 2, 0),
+        phase_rotation_operator_multivar(2, -f64::MAX, 2, 0, DenseElementBudget::default()),
     ] {
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -130,6 +131,6 @@ fn test_phase_rotation_error_neg_inf() {
 
 #[test]
 fn test_phase_rotation_multivar_error_nan() {
-    let result = phase_rotation_operator_multivar(4, f64::NAN, 2, 0);
+    let result = phase_rotation_operator_multivar(4, f64::NAN, 2, 0, DenseElementBudget::default());
     assert!(result.is_err());
 }
