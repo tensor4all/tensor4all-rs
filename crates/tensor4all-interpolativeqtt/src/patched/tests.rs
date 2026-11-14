@@ -391,12 +391,7 @@ fn uncompressed_train_matches_the_child_interpolants_it_is_checked_against() {
             let mut children = Vec::new();
             let cores = build_refined_cores(
                 &mut |batch: SampleBatch<'_>| {
-                    let values: Vec<T> = batch
-                        .points()
-                        .data()
-                        .chunks_exact(dims)
-                        .map(|p| f(p))
-                        .collect();
+                    let values: Vec<T> = batch.points().data().chunks_exact(dims).map(&f).collect();
                     if let SampleBatch::Nodes { interval, .. } = batch {
                         children.push((interval.clone(), values.clone()));
                     }
