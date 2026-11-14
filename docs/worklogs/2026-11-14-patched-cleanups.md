@@ -22,9 +22,14 @@
 
 ## Verification conclusions and constraints
 
-- Test-only references retain the previous residual calculation for bitwise
-  comparison and a paired release experiment. See the
-  [predeclared experiment](../experiments/2026-11-14-compression-check/protocol.md).
+- Real/complex residual comparisons, shared multiscale values and lane
+  determinism pass. The final matched release experiment has a geometric mean
+  time ratio of 0.691, with all six cases faster and every residual bitwise equal.
+  See the [complete results](../experiments/2026-11-14-compression-check/results.md)
+  and [predeclared protocol](../experiments/2026-11-14-compression-check/protocol.md).
+- Full crate tests, workspace doctests, affected doctests after the cache
+  refinement, strict workspace Clippy, mdBook and the four required audits pass.
+  Local execution covers Linux/native faer; Accelerate remains CI-owned.
 - Cache memory is bounded by the validation batch and remaining sites and is
   released after each compression check. It trades temporary prefix storage
   for repeated contractions.
