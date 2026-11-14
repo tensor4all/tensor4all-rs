@@ -214,8 +214,10 @@ where
 /// // The image is rank one, so nothing needs to be discarded: it equals the
 /// // exact application.
 /// let exact = apply_linear_operator(&operator, &state, ApplyOptions::naive())?;
-/// let error = certified.network().to_dense()?.sub(&exact.to_dense()?)?.norm()?;
-/// assert!(error <= certified.bound().max(1e-14));
+/// let exact = exact.to_dense()?;
+/// let error = certified.network().to_dense()?.sub(&exact)?.norm()?;
+/// // The bound covers truncation, not the roundoff of the dense comparison.
+/// assert!(error <= certified.bound() + 1e-12 * exact.norm()?);
 /// assert_eq!(certified.step_bounds().len(), 1);
 /// # Ok(())
 /// # }
