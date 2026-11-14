@@ -9,7 +9,7 @@ use rand::Rng;
 use tensor4all_core::{floating_zone_walk, MultiIndex, Scalar};
 use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTCache, TTScalar, Tensor3Ops};
 
-use crate::error::{Result, TCIError};
+use crate::error::{floating_zone_error, Result, TCIError};
 
 /// Estimate the true interpolation error by searching for worst-case indices.
 ///
@@ -227,7 +227,8 @@ where
                 .collect::<Vec<f64>>();
             Ok::<Vec<f64>, TCIError>(errors)
         },
-    )?;
+    )
+    .map_err(floating_zone_error)?;
 
     Ok((pivot, error))
 }

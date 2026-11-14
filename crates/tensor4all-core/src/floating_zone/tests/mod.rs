@@ -18,6 +18,129 @@ fn rejected_without_evaluation(
     .unwrap_err()
 }
 
+fn walk_rejected_without_evaluation(
+    dimensions: &[usize],
+    start: Vec<usize>,
+    sweeps: usize,
+    tolerance: f64,
+) -> FloatingZoneError<std::convert::Infallible> {
+    floating_zone_walk::<_, std::convert::Infallible>(
+        dimensions,
+        &start,
+        sweeps,
+        tolerance,
+        |_, _| panic!("invalid arguments reached the evaluator"),
+    )
+    .unwrap_err()
+}
+
+/// The seed-evaluating entry point applies the same checks as its sibling, and
+/// applies them before the seed call that would otherwise panic on the walk's
+/// unchecked `pivot[site]` index.
+#[test]
+fn floating_zone_walk_rejects_invalid_inputs_before_evaluating() {
+    for sweeps in [0, 1] {
+        for start in [vec![], vec![0, 0]] {
+            let actual = start.len();
+            assert_eq!(
+                walk_rejected_without_evaluation(&[2], start, sweeps, 1.0),
+                FloatingZoneError::StartingPointLength {
+                    expected: 1,
+                    actual
+                },
+            );
+        }
+        assert_eq!(
+            walk_rejected_without_evaluation(&[2, 0], vec![0, 0], sweeps, 1.0),
+            FloatingZoneError::InvalidLocalDimension { site: 1 },
+        );
+        for coordinate in [2, 3, usize::MAX] {
+            assert_eq!(
+                walk_rejected_without_evaluation(&[1, 2], vec![0, coordinate], sweeps, 1.0),
+                FloatingZoneError::StartingCoordinate {
+                    site: 1,
+                    coordinate,
+                    dimension: 2
+                },
+            );
+        }
+        for value in [-1.0, f64::NEG_INFINITY, f64::NAN] {
+            match walk_rejected_without_evaluation(&[2], vec![0], sweeps, value) {
+                FloatingZoneError::InvalidTolerance { value: actual } => {
+                    assert_eq!(actual.to_bits(), value.to_bits());
+                }
+                error => panic!("unexpected error: {error:?}"),
+            }
+        }
+    }
+
+    // The candidate-storage guard needs a scan batch to exist, so it applies
+    // only with at least one sweep.
+    let vector_bytes = std::mem::size_of::<Vec<usize>>();
+    for dimensions in [vec![usize::MAX], vec![usize::MAX / vector_bytes]] {
+        assert_eq!(
+            walk_rejected_without_evaluation(&dimensions, vec![0; dimensions.len()], 1, 1.0),
+            FloatingZoneError::AllocationSizeOverflow { site: 0 },
+        );
+    }
+
+    // With zero sweeps the walk still evaluates only its seed, and allocates
+    // no scan batch at an unrepresentable size.
+    let mut evaluated = 0usize;
+    let result = floating_zone_walk::<_, std::convert::Infallible>(
+        &[usize::MAX],
+        &vec![0],
+        0,
+        f64::INFINITY,
+        |site, points| {
+            assert_eq!(site, None);
+            evaluated += points.len();
+            Ok(vec![2.0])
+        },
+    )
+    .unwrap();
+    assert_eq!(result, (vec![0], 2.0));
+    assert_eq!(evaluated, 1);
+}
+
+#[test]
+fn floating_zone_walk_wraps_evaluation_failure() {
+    // The callback error type need not implement Display or std::error::Error.
+    #[derive(Debug, PartialEq)]
+    struct Token(u8);
+
+    // A seed failure is reported before any scan site is declared.
+    let result = floating_zone_walk(
+        &[2],
+        &vec![0],
+        1,
+        1.0,
+        |site, _| -> Result<Vec<f64>, Token> {
+            assert_eq!(site, None);
+            Err(Token(1))
+        },
+    );
+    assert_eq!(result, Err(FloatingZoneError::Evaluation(Token(1))));
+
+    // A scan failure is reported after the seed succeeded.
+    let mut sites = Vec::new();
+    let result = floating_zone_walk(
+        &[2, 3],
+        &vec![0, 0],
+        1,
+        1.0,
+        |site, _| -> Result<Vec<f64>, Token> {
+            sites.push(site);
+            match site {
+                None => Ok(vec![0.0]),
+                Some(_) => Err(Token(2)),
+            }
+        },
+    );
+    assert_eq!(result, Err(FloatingZoneError::Evaluation(Token(2))));
+    assert_eq!(sites, vec![None, Some(0)]);
+}
+
 #[test]
 fn invalid_starting_points_are_rejected_even_with_zero_sweeps() {
     for sweeps in [0, 1] {
