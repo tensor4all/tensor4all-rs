@@ -14,6 +14,12 @@
   Use a call-local TTCache with a full left split to reuse prefixes without
   reassociating floating-point contractions.
 
+- The initial matched experiment found a 1.326 time ratio, so the first cache
+  integration was rejected on performance. The full-left batch boundary now
+  uses a lexicographic traversal in simplett instead of a two-sided mapper and
+  persistent per-prefix entries. Its temporary stack holds one vector per level;
+  other TTCache splits retain their persistent-cache behavior.
+
 ## Verification conclusions and constraints
 
 - Test-only references retain the previous residual calculation for bitwise

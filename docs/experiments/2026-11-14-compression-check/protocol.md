@@ -35,3 +35,15 @@ outside the timed region. No vendor or LAPACK source was consulted.
 The recorder resolves source pins with Git before executing the binary; they
 are not transcribed into this protocol by hand. Its output accompanies the
 complete raw CSV and generated results page.
+
+## Candidate refinement
+
+The first complete valid experiment missed the primary gate (ratio 1.326).
+Its complete evidence is retained under `initial/`; it is not discarded or
+reclassified. Full-left `evaluate_many` paid for two-sided index mapping and
+persistent hash/vector entries despite the compression check's call-local owner.
+The revised candidate specializes that natural split boundary in simplett with
+a lexicographic batch traversal and one transient prefix environment per level.
+It preserves input result order and the full left-to-right arithmetic. The
+complete original case grid, statistic, gates and repetition policy apply again;
+no cases or thresholds change.
