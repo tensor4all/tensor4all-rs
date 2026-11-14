@@ -104,7 +104,8 @@ pub struct TCI2Options {
     ///
     /// `Rook` trades that guarantee for fewer evaluations: it finds each pivot
     /// with an O(d) rook walk and stops a bond update when the current rook
-    /// pivot is below tolerance. Its bond errors are the last rook pivots, not
+    /// pivot, and two more walks started from other columns, find nothing
+    /// above tolerance. Its bond errors are the last rook pivots, not
     /// bounds, so [`TCI2Termination::Converged`] under `Rook` does not prove
     /// the tolerance. See [`PivotSearchStrategy::Rook`].
     pub pivot_search: PivotSearchStrategy,
@@ -327,9 +328,11 @@ pub enum PivotSearchStrategy {
     /// never materialized. A rook pivot is the largest entry of its own
     /// residual row and column only.
     ///
-    /// The stop is heuristic: a bond update stops when the current rook pivot
-    /// is below tolerance, which does **not** certify that the remaining
-    /// residual is below tolerance. The bond error recorded in `pivot_errors`
+    /// The stop is heuristic: when the current rook pivot is below tolerance,
+    /// two more walks start from columns spread over the remaining block, and
+    /// the bond update stops only if neither finds a pivot above tolerance.
+    /// This catches a walk that stopped on one small local maximum, but it
+    /// does **not** certify that the remaining residual is below tolerance. The bond error recorded in `pivot_errors`
     /// and the sweep `errors` is that last rook pivot, not an upper bound, and
     /// [`TCI2Termination::Converged`] under `Rook` is not a proof that the
     /// tolerance holds. Use [`Full`](Self::Full) when a certified bound is
