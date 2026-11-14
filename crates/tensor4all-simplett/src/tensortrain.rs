@@ -66,6 +66,34 @@ pub struct SimpleTensorTrain<T: TTScalar> {
     tensors: Vec<Tensor3<T>>,
 }
 
+// Recheck the constructor contract after callers replace site tensors in place.
+pub(crate) fn validate_site_tensors<T: TTScalar>(tensors: &[Tensor3<T>]) -> Result<()> {
+    // Validate dimensions
+    for i in 0..tensors.len().saturating_sub(1) {
+        if tensors[i].right_dim() != tensors[i + 1].left_dim() {
+            return Err(SimpleTensorTrainError::DimensionMismatch { site: i });
+        }
+    }
+
+    // First tensor should have left_dim = 1
+    if !tensors.is_empty() && tensors[0].left_dim() != 1 {
+        return Err(SimpleTensorTrainError::InvalidOperation {
+            message: "First tensor must have left dimension 1".to_string(),
+        });
+    }
+
+    // Last tensor should have right_dim = 1
+    if let Some(last) = tensors.last()
+        && last.right_dim() != 1
+    {
+        return Err(SimpleTensorTrainError::InvalidOperation {
+            message: "Last tensor must have right dimension 1".to_string(),
+        });
+    }
+
+    Ok(())
+}
+
 impl<T: TTScalar> SimpleTensorTrain<T> {
     /// Create a new tensor train from a list of rank-3 core tensors.
     ///
@@ -103,29 +131,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// assert!((val - 30.0).abs() < 1e-12);
     /// ```
     pub fn new(tensors: Vec<Tensor3<T>>) -> Result<Self> {
-        // Validate dimensions
-        for i in 0..tensors.len().saturating_sub(1) {
-            if tensors[i].right_dim() != tensors[i + 1].left_dim() {
-                return Err(SimpleTensorTrainError::DimensionMismatch { site: i });
-            }
-        }
-
-        // First tensor should have left_dim = 1
-        if !tensors.is_empty() && tensors[0].left_dim() != 1 {
-            return Err(SimpleTensorTrainError::InvalidOperation {
-                message: "First tensor must have left dimension 1".to_string(),
-            });
-        }
-
-        // Last tensor should have right_dim = 1
-        if let Some(last) = tensors.last()
-            && last.right_dim() != 1
-        {
-            return Err(SimpleTensorTrainError::InvalidOperation {
-                message: "Last tensor must have right dimension 1".to_string(),
-            });
-        }
-
+        validate_site_tensors(&tensors)?;
         Ok(Self { tensors })
     }
 

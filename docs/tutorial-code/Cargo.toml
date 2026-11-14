@@ -9,8 +9,10 @@ tensor4all-core = { path = "../../crates/tensor4all-core" }
 tensor4all-simplett = { path = "../../crates/tensor4all-simplett" }
 tensor4all-quanticstci = { path = "../../crates/tensor4all-quanticstci" }
 tensor4all-interpolativeqtt = { path = "../../crates/tensor4all-interpolativeqtt" }
-tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform" }
+tensor4all-partitionedtreetn = { path = "../../crates/tensor4all-partitionedtreetn" }
+tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform", features = ["partitioned"] }
 tensor4all-treetn = { path = "../../crates/tensor4all-treetn" }
+tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend" }
 num-complex.workspace = true
 
 [[test]]

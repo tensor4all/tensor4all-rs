@@ -25,3 +25,7 @@ pub use crate::{
     invert_qtt, AbstractTensorTrain, InterpolativeQttOptions, InterpolativeScalar,
     LagrangePolynomials, SimpleTensorTrain,
 };
+
+#[cfg(feature = "parallel")]
+pub use crate::interpolate_patched_nd_on_lanes;
+pub use crate::{interpolate_patched_nd, InterpolativePatch, PatchedInterpolativeOptions};

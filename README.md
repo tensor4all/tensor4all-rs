@@ -58,7 +58,7 @@ validated in CI. Longer runnable examples live in the
 | [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology; one-site ALS and two-site MALS linear solves with GMRES, CG or BiCGSTAB local solvers |
 | [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI2 primary, TCI1 legacy) |
 | [tensor4all-quanticstci](crates/tensor4all-quanticstci/) | High-level Quantics TCI interface |
-| [tensor4all-interpolativeqtt](crates/tensor4all-interpolativeqtt/) | Interpolative QTT construction |
+| [tensor4all-interpolativeqtt](crates/tensor4all-interpolativeqtt/) | Interpolative QTT construction with adaptive dyadic patches and optional CPU lanes |
 | [tensor4all-quanticstransform](crates/tensor4all-quanticstransform/) | Quantics transformation operators |
 | [tensor4all-treetci](crates/tensor4all-treetci/) | Tree-structured cross interpolation |
 | [tensor4all-partitionedtreetn](crates/tensor4all-partitionedtreetn/) | Partitioned TreeTNs with eager masking, adaptive patching, and adaptive patched interpolation |

@@ -41,7 +41,8 @@ thiserror.workspace = true
 rand.workspace = true
 rustc-hash.workspace = true
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
-tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
+# `compress_svd_with_session` takes a caller-owned explicit `Session`.
+tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false, features = ["explicit-context"] }
 tenferro-tensor.workspace = true
 
 [dev-dependencies]

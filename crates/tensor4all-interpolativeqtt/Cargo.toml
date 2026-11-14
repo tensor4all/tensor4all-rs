@@ -36,15 +36,24 @@ tenferro-provider-inject = [
     "tensor4all-tensorbackend/tenferro-provider-inject",
 ]
 
+# Lane fan-out over caller-owned engines. It builds with any CPU provider the
+# default or an explicit `tenferro-*` feature selects; lane execution is tested
+# on faer only.
+parallel = ["dep:hataori", "dep:hataori-tenferro"]
+
 [dependencies]
+hataori = { workspace = true, optional = true }
+hataori-tenferro = { workspace = true, optional = true }
 thiserror.workspace = true
 # Scalar traits only (`MatrixLuciScalar`, `CommonScalar`); already a
 # dependency of tensor4all-simplett.
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
-tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
+# The public API takes caller-owned `CpuEngine`s (`explicit-context`).
+tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false, features = ["explicit-context"] }
 
 [dev-dependencies]
+rayon.workspace = true
 approx.workspace = true
 num-complex.workspace = true
 quanticsgrids.workspace = true

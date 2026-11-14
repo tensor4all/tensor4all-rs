@@ -8,7 +8,7 @@ use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 use tenferro_tensor::TensorScalar;
 use tensor4all_core::Scalar;
 use tensor4all_core::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions};
-use tensor4all_tensorbackend::{mat_mul, BackendLinalgScalar, Matrix};
+use tensor4all_tensorbackend::{explicit::Session, mat_mul, BackendLinalgScalar, Matrix};
 
 /// Matrix decomposition method used during TT compression.
 ///
@@ -261,6 +261,28 @@ where
     T: TTScalar + Scalar + Default + Copy + BackendLinalgScalar + TensorScalar,
     f64: From<<T as TensorScalar>::Real>,
 {
+    factorize_svd_impl(
+        matrix,
+        tolerance,
+        normalize_error,
+        max_bond_dim,
+        left_orthogonal,
+        &mut None,
+    )
+}
+
+fn factorize_svd_impl<T>(
+    matrix: &Matrix<T>,
+    tolerance: f64,
+    normalize_error: bool,
+    max_bond_dim: Option<usize>,
+    left_orthogonal: bool,
+    session: &mut Option<&mut Session<'_>>,
+) -> Result<(Matrix<T>, Matrix<T>, usize)>
+where
+    T: TTScalar + Scalar + Default + Copy + BackendLinalgScalar + TensorScalar,
+    f64: From<<T as TensorScalar>::Real>,
+{
     let m = matrix.nrows();
     let n = matrix.ncols();
 
@@ -275,10 +297,12 @@ where
             message: format!("Failed to prepare SVD input matrix: {err}"),
         })?;
 
-    let svd_result = tensor4all_tensorbackend::svd_backend(&a_tensor).map_err(|e| {
-        crate::error::SimpleTensorTrainError::InvalidOperation {
-            message: format!("SVD computation failed: {e:?}"),
-        }
+    let svd_result = match session {
+        Some(session) => session.svd_backend(&a_tensor),
+        None => tensor4all_tensorbackend::svd_backend(&a_tensor),
+    }
+    .map_err(|e| crate::error::SimpleTensorTrainError::InvalidOperation {
+        message: format!("SVD computation failed: {e:?}"),
     })?;
 
     let u = Matrix::from_col_major_vec(
@@ -373,6 +397,54 @@ where
     Ok((left, right, rank))
 }
 
+// Execution selection is outside the numerical kernels; the sweep is shared.
+fn multiply_for_sweep<T: tensor4all_tensorbackend::BlasMul>(
+    session: &mut Option<&mut Session<'_>>,
+    a: &Matrix<T>,
+    b: &Matrix<T>,
+) -> std::result::Result<Matrix<T>, tensor4all_tensorbackend::MatrixMulError> {
+    match session {
+        Some(session) => session.mat_mul(a, b),
+        None => mat_mul(a, b),
+    }
+}
+
+fn factorize_for_sweep<T>(
+    session: &mut Option<&mut Session<'_>>,
+    matrix: &Matrix<T>,
+    options: &CompressionOptions,
+    left_orthogonal: bool,
+) -> Result<(Matrix<T>, Matrix<T>, usize)>
+where
+    T: TTScalar
+        + Scalar
+        + tensor4all_core::MatrixLuciScalar
+        + Default
+        + Copy
+        + BackendLinalgScalar
+        + TensorScalar,
+    f64: From<<T as TensorScalar>::Real>,
+{
+    match session {
+        Some(_) => factorize_svd_impl(
+            matrix,
+            options.tolerance,
+            options.normalize_error,
+            options.max_bond_dim,
+            left_orthogonal,
+            session,
+        ),
+        None => factorize(
+            matrix,
+            options.method,
+            options.tolerance,
+            options.normalize_error,
+            options.max_bond_dim,
+            left_orthogonal,
+        ),
+    }
+}
+
 impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     /// Compress the tensor train **in place**, reducing bond dimensions.
     ///
@@ -385,7 +457,9 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns [`SimpleTensorTrainError::MatrixCI`] when the LU/CI
+    /// Returns [`SimpleTensorTrainError::DimensionMismatch`] for inconsistent
+    /// adjacent bonds after caller mutation, or
+    /// [`SimpleTensorTrainError::MatrixCI`] when the LU/CI
     /// factorization fails, or
     /// [`SimpleTensorTrainError::InvalidOperation`] when the SVD factorization,
     /// a matrix multiply, or a tensor allocation fails.
@@ -412,12 +486,91 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
         T: tensor4all_core::MatrixLuciScalar + Copy + BackendLinalgScalar + TensorScalar,
         f64: From<<T as TensorScalar>::Real>,
     {
+        self.compress_impl(options, &mut None)
+    }
+
+    /// Compress in place by SVD on a caller-held session.
+    ///
+    /// `tolerance` is a finite nonnegative threshold relative to the largest
+    /// singular value at each bond; `1e-12` is a nearly lossless default.
+    /// `max_bond_dim` optionally imposes a positive rank cap. All decompositions
+    /// and products use `session`, with the same sweeps and retained ranks as
+    /// [`Self::compress`] with [`CompressionMethod::SVD`].
+    ///
+    /// # Errors
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] for an invalid
+    /// tolerance, a zero cap, invalid boundary bonds, or failed SVD, matrix
+    /// multiplication or allocation. Returns
+    /// [`SimpleTensorTrainError::DimensionMismatch`] for inconsistent adjacent
+    /// bonds after caller mutation of the site tensors.
+    ///
+    /// # Examples
+    /// ```
+    /// use tensor4all_simplett::{SimpleTensorTrain, AbstractTensorTrain};
+    /// use tensor4all_tensorbackend::{CpuBackend, explicit::Session};
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let mut session = Session::new(backend.engine_mut());
+    /// // The sum of two constants is stored with bond dimension 2 but has rank 1.
+    /// let mut tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0)
+    ///     .add(&SimpleTensorTrain::constant(&[2, 2, 2], 1.0))?;
+    /// assert_eq!(tt.rank(), 2);
+    /// tt.compress_svd_with_session(&mut session, 1e-12, None)?;
+    /// assert_eq!(tt.rank(), 1);
+    /// for index in [[0, 0, 0], [1, 0, 1], [1, 1, 1]] {
+    ///     assert!((tt.evaluate(&index)? - 3.0).abs() < 1e-12);
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn compress_svd_with_session(
+        &mut self,
+        session: &mut Session<'_>,
+        tolerance: f64,
+        max_bond_dim: Option<usize>,
+    ) -> Result<()>
+    where
+        T: tensor4all_core::MatrixLuciScalar + Copy + BackendLinalgScalar + TensorScalar,
+        f64: From<<T as TensorScalar>::Real>,
+    {
+        if !tolerance.is_finite() || tolerance < 0.0 || max_bond_dim == Some(0) {
+            return Err(SimpleTensorTrainError::InvalidOperation {
+                message:
+                    "SVD compression requires a finite nonnegative tolerance and a positive cap"
+                        .into(),
+            });
+        }
+        self.compress_impl(
+            &CompressionOptions {
+                method: CompressionMethod::SVD,
+                tolerance,
+                max_bond_dim,
+                normalize_error: true,
+            },
+            &mut Some(session),
+        )
+    }
+
+    fn compress_impl(
+        &mut self,
+        options: &CompressionOptions,
+        session: &mut Option<&mut Session<'_>>,
+    ) -> Result<()>
+    where
+        T: tensor4all_core::MatrixLuciScalar + Copy + BackendLinalgScalar + TensorScalar,
+        f64: From<<T as TensorScalar>::Real>,
+    {
+        crate::tensortrain::validate_site_tensors(self.site_tensors())?;
         let n = self.len();
         if n <= 1 {
             return Ok(());
         }
 
         let tensors = self.site_tensors_mut();
+        let left_options = CompressionOptions {
+            method: options.method,
+            tolerance: 0.0,
+            normalize_error: true,
+            max_bond_dim: None,
+        };
 
         // Left-to-right sweep: make left-orthogonal without truncation
         for ell in 0..n - 1 {
@@ -428,12 +581,10 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
             let mat = tensor3_to_left_matrix(&tensors[ell]);
 
             // Factorize without truncation
-            let (left_factor, right_factor, new_bond_dim) = factorize(
+            let (left_factor, right_factor, new_bond_dim) = factorize_for_sweep(
+                session,
                 &mat,
-                options.method,
-                0.0,  // No truncation in left sweep
-                true, // relative machine-precision floor only
-                None, // No max bond dim in left sweep
+                &left_options,
                 true, // left orthogonal
             )?;
 
@@ -459,11 +610,12 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
             let next_mat = tensor3_to_right_matrix(&tensors[ell + 1]);
 
             // Multiply: right_factor * next_mat
-            let contracted = mat_mul(&right_factor, &next_mat).map_err(|err| {
-                SimpleTensorTrainError::InvalidOperation {
-                    message: format!("left-to-right compression multiply failed: {err}"),
-                }
-            })?;
+            let contracted =
+                multiply_for_sweep(session, &right_factor, &next_mat).map_err(|err| {
+                    SimpleTensorTrainError::InvalidOperation {
+                        message: format!("left-to-right compression multiply failed: {err}"),
+                    }
+                })?;
 
             // Update next tensor
             let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim)?;
@@ -486,13 +638,8 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
             let mat = tensor3_to_right_matrix(&tensors[ell]);
 
             // Factorize with truncation
-            let (left_factor, right_factor, new_bond_dim) = factorize(
-                &mat,
-                options.method,
-                options.tolerance,
-                options.normalize_error,
-                options.max_bond_dim,
-                false, // right orthogonal
+            let (left_factor, right_factor, new_bond_dim) = factorize_for_sweep(
+                session, &mat, options, false, // right orthogonal
             )?;
 
             // Update current tensor from right_factor
@@ -514,11 +661,12 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
             let prev_mat = tensor3_to_left_matrix(&tensors[ell - 1]);
 
             // Multiply: prev_mat * left_factor
-            let contracted = mat_mul(&prev_mat, &left_factor).map_err(|err| {
-                SimpleTensorTrainError::InvalidOperation {
-                    message: format!("right-to-left compression multiply failed: {err}"),
-                }
-            })?;
+            let contracted =
+                multiply_for_sweep(session, &prev_mat, &left_factor).map_err(|err| {
+                    SimpleTensorTrainError::InvalidOperation {
+                        message: format!("right-to-left compression multiply failed: {err}"),
+                    }
+                })?;
 
             // Update prev tensor
             let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim)?;
@@ -541,7 +689,9 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns [`SimpleTensorTrainError::MatrixCI`] when the LU/CI
+    /// Returns [`SimpleTensorTrainError::DimensionMismatch`] for inconsistent
+    /// adjacent bonds after caller mutation, or
+    /// [`SimpleTensorTrainError::MatrixCI`] when the LU/CI
     /// factorization fails, or
     /// [`SimpleTensorTrainError::InvalidOperation`] when the SVD factorization,
     /// a matrix multiply, or a tensor allocation fails.
