@@ -26,6 +26,7 @@
 | Document | Description |
 |----------|-------------|
 | [tree-tci-cleanup.md](./tree-tci-cleanup.md) | Unassigned numerical selection, bounded evaluation/cache, and general-tree correctness contracts; assigned-feature exclusions and dependencies |
+| [patched-interpolative-qtt.md](./patched-interpolative-qtt.md) | Dyadic Chebyshev patches, error/rank acceptance and caller-owned CPU lanes |
 | [adaptive-tci-interpolation.md](./adaptive-tci-interpolation.md) | Adaptive TCI patching, convergence, pivot recycling, and structured embedding |
 | [treetci-termination.md](./treetci-termination.md) | TreeTCI stopping reasons, sampled convergence, global-search scheduling, and limit precedence |
 | [adaptive-tci-parallel-execution.md](./adaptive-tci-parallel-execution.md) | Optional Hataori/Rayon/MPI patch scheduling and one-pass cache projection |

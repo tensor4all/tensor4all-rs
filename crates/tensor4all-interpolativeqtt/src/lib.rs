@@ -40,6 +40,7 @@ mod error;
 mod interpolation;
 mod interval;
 mod options;
+mod patched;
 
 pub use basis::{
     direct_product_core_tensors, get_chebyshev_grid, interpolation_tensor, LagrangePolynomials,
@@ -52,6 +53,9 @@ pub use interpolation::{
     interpolate_single_scale_sparse_nd, invert_qtt, InterpolativeScalar,
 };
 pub use options::InterpolativeQttOptions;
+#[cfg(feature = "parallel")]
+pub use patched::interpolate_patched_nd_on_lanes;
+pub use patched::{interpolate_patched_nd, InterpolativePatch, PatchedInterpolativeOptions};
 pub use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
 
 #[cfg(test)]

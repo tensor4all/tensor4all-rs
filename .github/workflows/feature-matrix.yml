@@ -66,6 +66,11 @@ jobs:
             audit: true
             check: >
               -p tensor4all-partitionedtreetn --features hataori-mpi
+          - name: interpolativeqtt-parallel
+            apt: ""
+            audit: true
+            check: >
+              -p tensor4all-interpolativeqtt --no-default-features --features parallel
           # Diagnostics instrumentation stays additive to the default features.
           - name: diagnostics
             apt: ""
@@ -114,6 +119,17 @@ jobs:
             echo "cargo check --locked --all-targets $selection"
             cargo check --locked --all-targets $selection
           done <<< "$SELECTIONS"
+
+      - name: Test interpolative QTT lanes and provider exclusion
+        if: matrix.name == 'interpolativeqtt-parallel'
+        run: |
+          cargo test --locked -p tensor4all-interpolativeqtt --no-default-features --features parallel
+          if cargo check --locked -p tensor4all-interpolativeqtt --no-default-features \
+              --features parallel,tenferro-system-blas > provider-conflict.log 2>&1; then
+            cat provider-conflict.log
+            exit 1
+          fi
+          grep -F 'native and blas are mutually exclusive' provider-conflict.log
 
       - name: Audit panic paths for the configuration
         # A configuration selects a subset of the workspace, so the audit keeps

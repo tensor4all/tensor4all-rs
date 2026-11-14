@@ -118,3 +118,54 @@ multiscale cases need larger internal spaces near the refined point, and the
 two-dimensional fused sites are more expensive than the one-dimensional sites.
 
 ![Bond dimensions for Interpolative QTT examples](interpolative_qtt_bond_dims.png)
+
+## Independent dyadic patches
+
+`interpolate_patched_nd` constructs separate boxes instead of refining inside a
+single train. Its evaluator receives column-major `[D, n_points]` coordinates
+and a serial execution token. Real and complex values use the same API. Each
+accepted `InterpolativePatch` contains the fixed leading bits of each axis, a
+QTT over the remaining bits, and an absolute local error estimate.
+
+The [patched tutorial source](../../../../tutorial-code/src/bin/patched_interpolative_qtt.rs)
+constructs a complex two-dimensional Green's function, converts the patches to
+`PartitionedTreeTN`, and checks the patched Fourier transform against a
+sixteen-point direct DFT. Run it with
+`cargo run -p tensor4all-tutorial-code --bin patched_interpolative_qtt`.
+
+```rust
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+# use std::convert::Infallible;
+# use num_complex::Complex64;
+# use tensor4all_interpolativeqtt::{interpolate_patched_nd, PatchedInterpolativeOptions};
+# fn green(point: &[f64]) -> Complex64 {
+#     let energy = (2.0 * std::f64::consts::PI * point[0]).cos()
+#         + (2.0 * std::f64::consts::PI * point[1]).cos();
+#     Complex64::new(1.0, 0.0) / Complex64::new(0.2 - energy, 0.1)
+# }
+{{#include ../../../../tutorial-code/src/bin/patched_interpolative_qtt.rs:construction}}
+# Ok(())
+# }
+```
+
+A box splits when its checked Chebyshev residual plus SVD truncation bound
+exceeds `tolerance`, or its compressed rank exceeds `max_bond_dim`. With one
+site left it is sampled exactly. Hitting `max_depth` or `max_patches` produces
+an error. Validation samples can miss an arbitrary feature, so this is an error
+estimate rather than a rigorous certificate for unsampled points.
+
+Every local site fuses one bit per axis, with axis zero varying fastest. For
+conversion, the tutorial uses `tensor_train_to_treetn_with_names`, inserts
+one-hot prefix sites, unfuses with `LinearizationOrder::ColumnMajor`, and calls
+`TreeTN::split_to`. All physical sites must exist before `SubDomainTreeTN::new`
+applies the prefix projector.
+
+For thread parallelism, enable `parallel` and call
+`interpolate_patched_nd_on_lanes` with caller-owned `hataori_tenferro::TenferroLanes`.
+Choose P engines of B threads each explicitly. Evaluator batches receive the
+executing engine's `Exec` token: ignore it for serial callbacks, use
+`for_ranges`/`fork`, or call external libraries inside `external`. Algebra and
+compression use the same lane engine; narrow waves leave lanes idle. Keep the
+callback pure and independent of thread count. Patches are merged and returned
+in canonical prefix order. The feature selects faer; on macOS disable default
+features to avoid combining it with Accelerate. BLAS plus `parallel` is rejected.

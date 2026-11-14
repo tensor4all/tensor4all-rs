@@ -356,3 +356,114 @@ fn factorize_svd_keeps_a_larger_value_that_follows_a_smaller_one() {
         );
     }
 }
+
+fn test_svd_session_generic<T>()
+where
+    T: TTScalar<Real = f64>
+        + Scalar
+        + Default
+        + tensor4all_core::MatrixLuciScalar
+        + Copy
+        + PartialEq
+        + std::fmt::Debug,
+{
+    use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut session = Session::new(backend.engine_mut());
+    let tt = SimpleTensorTrain::new(vec![
+        Tensor3::from_fn([1, 2, 2], |[_, s, r]| {
+            <T as Scalar>::from_f64((1 + s + 2 * r) as f64)
+        })
+        .unwrap(),
+        Tensor3::from_fn([2, 2, 2], |[l, s, r]| {
+            <T as Scalar>::from_f64((1 + 3 * l + s + r * r) as f64)
+        })
+        .unwrap(),
+        Tensor3::from_fn([2, 2, 1], |[l, s, _]| {
+            <T as Scalar>::from_f64((2 + l + s * s) as f64)
+        })
+        .unwrap(),
+    ])
+    .unwrap();
+    let (reference, _) = tt.full_tensor().unwrap();
+    for (tol, cap) in [(1e-12, None), (0.0, Some(1)), (0.5, None)] {
+        let mut actual = tt.clone();
+        let bound = actual
+            .compress_svd_with_session(&mut session, tol, cap)
+            .unwrap();
+        let (dense, _) = actual.full_tensor().unwrap();
+        let residual = reference
+            .iter()
+            .zip(&dense)
+            .map(|(&a, &b)| (a - b).abs_val().powi(2))
+            .sum::<f64>()
+            .sqrt();
+        assert!(
+            residual <= bound + 1e-10,
+            "residual {residual}, bound {bound}"
+        );
+        if let Some(cap) = cap {
+            assert!(actual.rank() <= cap);
+        }
+        let expected = tt
+            .compressed(&CompressionOptions {
+                method: CompressionMethod::SVD,
+                tolerance: tol,
+                max_bond_dim: cap,
+                normalize_error: true,
+            })
+            .unwrap();
+        assert_eq!(actual.site_tensors(), expected.site_tensors());
+    }
+}
+
+#[test]
+fn svd_session_f64() {
+    test_svd_session_generic::<f64>();
+}
+
+#[test]
+fn svd_session_c64() {
+    test_svd_session_generic::<Complex64>();
+}
+
+#[test]
+fn svd_session_validates_before_single_site_shortcut() {
+    use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut session = Session::new(backend.engine_mut());
+    let mut tt = SimpleTensorTrain::<f64>::constant(&[2], 3.0);
+    for tolerance in [-1.0, f64::NAN, f64::INFINITY] {
+        assert!(tt
+            .compress_svd_with_session(&mut session, tolerance, None)
+            .is_err());
+    }
+    assert!(tt
+        .compress_svd_with_session(&mut session, 0.0, Some(0))
+        .is_err());
+    assert_eq!(
+        tt.compress_svd_with_session(&mut session, 0.0, None)
+            .unwrap(),
+        0.0
+    );
+    assert_eq!(tt.evaluate(&[1]).unwrap(), 3.0);
+}
+
+#[test]
+fn compression_revalidates_replaced_site_tensors() {
+    use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut session = Session::new(backend.engine_mut());
+    for (dims, tensor) in [
+        (vec![2], Tensor3::from_elem([2, 2, 1], 1.0_f64).unwrap()),
+        (vec![2], Tensor3::from_elem([1, 2, 2], 1.0_f64).unwrap()),
+        (vec![2, 2], Tensor3::from_elem([1, 2, 2], 1.0_f64).unwrap()),
+    ] {
+        let mut tt = SimpleTensorTrain::constant(&dims, 1.0_f64);
+        tt.site_tensors_mut()[0] = tensor;
+        assert!(tt
+            .compress_svd_with_session(&mut session, 1e-12, None)
+            .is_err());
+        assert!(tt.compress(&CompressionOptions::default()).is_err());
+    }
+}

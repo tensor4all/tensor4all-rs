@@ -161,22 +161,26 @@ impl NInterval {
         if self.ndims() >= usize::BITS as usize {
             return Err(invalid_argument("too many dimensions to split interval"));
         }
-        let side_lengths = self.lengths();
-        let half_lengths: Vec<_> = side_lengths.iter().map(|len| len / 2.0).collect();
+        let midpoints: Vec<_> = self
+            .start
+            .iter()
+            .zip(&self.stop)
+            .map(|(&a, &b)| a + (b - a) / 2.0)
+            .collect();
         let count = 1usize << self.ndims();
         let mut pieces = Vec::with_capacity(count);
 
         for mask in 0..count {
             let mut start = Vec::with_capacity(self.ndims());
             let mut stop = Vec::with_capacity(self.ndims());
-            for (d, half_length) in half_lengths.iter().enumerate().take(self.ndims()) {
-                let offset = if (mask >> d) & 1 == 0 {
-                    0.0
+            for (d, &midpoint) in midpoints.iter().enumerate() {
+                let (a, b) = if (mask >> d) & 1 == 0 {
+                    (self.start[d], midpoint)
                 } else {
-                    *half_length
+                    (midpoint, self.stop[d])
                 };
-                start.push(self.start[d] + offset);
-                stop.push(self.start[d] + offset + *half_length);
+                start.push(a);
+                stop.push(b);
             }
             pieces.push(Self::new(&start, &stop)?);
         }

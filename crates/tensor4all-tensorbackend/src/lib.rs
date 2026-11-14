@@ -161,3 +161,7 @@ pub fn invariant_violated(context: &str, error: impl std::fmt::Display) -> ! {
 
 #[cfg(all(test, feature = "global-defaults"))]
 mod tests;
+
+// Execution vocabulary for downstream algorithms that borrow caller-owned lanes.
+#[cfg(feature = "explicit-context")]
+pub use tenferro_cpu::{threadteam::Exec, CpuEngine};

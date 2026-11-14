@@ -36,7 +36,13 @@ tenferro-provider-inject = [
     "tensor4all-tensorbackend/tenferro-provider-inject",
 ]
 
+# Lane fan-out uses only the native/faer provider. On macOS disable default
+# features to avoid combining native with the platform Accelerate provider.
+parallel = ["tenferro-cpu-faer", "dep:hataori", "dep:hataori-tenferro"]
+
 [dependencies]
+hataori = { workspace = true, optional = true }
+hataori-tenferro = { workspace = true, optional = true }
 thiserror.workspace = true
 # Scalar traits only (`MatrixLuciScalar`, `CommonScalar`); already a
 # dependency of tensor4all-simplett.
@@ -45,6 +51,7 @@ tensor4all-simplett = { path = "../tensor4all-simplett", default-features = fals
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 
 [dev-dependencies]
+rayon.workspace = true
 approx.workspace = true
 num-complex.workspace = true
 quanticsgrids.workspace = true

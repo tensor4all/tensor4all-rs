@@ -965,6 +965,29 @@ where
     Ok(values)
 }
 
+fn eval_interval_batched<T, F>(
+    f: &mut F,
+    interval: &NInterval,
+    basis: &LagrangePolynomials,
+    basis_dim: usize,
+) -> Result<Vec<T>>
+where
+    T: InterpolativeScalar,
+    F: FnMut(&[Vec<f64>]) -> Result<Vec<T>>,
+{
+    let ndims = interval.ndims();
+    let lengths = interval.lengths();
+    // INVARIANT: basis_dim was checked as basis.len()^ndims by the assembly.
+    let mut points = vec![Vec::new(); basis_dim];
+    for alpha in MultiIndexIter::new(&vec![basis.len(); ndims]) {
+        let flat = flatten_index(&alpha, basis.len())?;
+        points[flat] = (0..ndims)
+            .map(|d| interval.start()[d] + lengths[d] * basis.grid()[alpha[d]])
+            .collect();
+    }
+    f(&points)
+}
+
 fn build_refined_qtt<T, F, S>(
     f: &F,
     domain: &NInterval,
@@ -976,6 +999,30 @@ fn build_refined_qtt<T, F, S>(
 where
     T: InterpolativeScalar,
     F: Fn(&[f64]) -> T,
+    S: Fn(&NInterval, usize) -> bool,
+{
+    let cores = build_refined_cores(
+        &mut |points: &[Vec<f64>]| Ok(points.iter().map(|point| f(point)).collect()),
+        domain,
+        num_bits,
+        basis,
+        is_safe,
+    )?;
+    compress_train(cores, options)
+}
+
+// The multiscale assembly is shared by the pointwise constructors and the
+// fallible batched patch driver. Sampling and execution ownership stay outside it.
+pub(crate) fn build_refined_cores<T, F, S>(
+    f: &mut F,
+    domain: &NInterval,
+    num_bits: usize,
+    basis: &LagrangePolynomials,
+    is_safe: S,
+) -> Result<Vec<Tensor3<T>>>
+where
+    T: InterpolativeScalar,
+    F: FnMut(&[Vec<f64>]) -> Result<Vec<T>>,
     S: Fn(&NInterval, usize) -> bool,
 {
     let ndims = domain.ndims();
@@ -991,7 +1038,7 @@ where
     let mut first_safe_values = Vec::new();
     for (site, interval) in domain.split()?.into_iter().enumerate() {
         if is_safe(&interval, 0) {
-            let values = eval_interval_nd(f, &interval, basis, basis_dim)?;
+            let values = eval_interval_batched(f, &interval, basis, basis_dim)?;
             first_safe_values.push((site, values));
         } else {
             let next = first_unsafe.len();
@@ -1025,7 +1072,7 @@ where
         for (interval_index, interval) in intervals.iter().enumerate() {
             for (site, subinterval) in interval.split()?.into_iter().enumerate() {
                 if is_safe(&subinterval, level) {
-                    let values = eval_interval_nd(f, &subinterval, basis, basis_dim)?;
+                    let values = eval_interval_batched(f, &subinterval, basis, basis_dim)?;
                     safe_values.push((interval_index, site, values));
                 } else {
                     let next = next_intervals.len();
@@ -1058,7 +1105,7 @@ where
     }
 
     cores.push(last_core(f, basis, ndims, site_dim, basis_dim, &intervals)?);
-    compress_train(cores, options)
+    Ok(cores)
 }
 
 fn build_adaptive_qtt<T, F>(
@@ -1095,7 +1142,7 @@ fn copy_core<T: InterpolativeScalar>(
 }
 
 fn last_core<T, F>(
-    f: &F,
+    f: &mut F,
     basis: &LagrangePolynomials,
     ndims: usize,
     site_dim: usize,
@@ -1104,7 +1151,7 @@ fn last_core<T, F>(
 ) -> Result<Tensor3<T>>
 where
     T: InterpolativeScalar,
-    F: Fn(&[f64]) -> T,
+    F: FnMut(&[Vec<f64>]) -> Result<Vec<T>>,
 {
     let right_1d = right_core_1d(basis)?;
     let right = direct_product_core_tensors(&vec![right_1d; ndims])?;
@@ -1113,8 +1160,13 @@ where
     copy_core(&right, &mut last, 0, 0);
 
     for (interval_index, interval) in intervals.iter().enumerate() {
-        for (site, subinterval) in interval.split()?.into_iter().enumerate() {
-            last[[basis_dim + interval_index, site, 0]] = f(subinterval.start());
+        let points: Vec<_> = interval
+            .split()?
+            .into_iter()
+            .map(|piece| piece.start().to_vec())
+            .collect();
+        for (site, value) in f(&points)?.into_iter().enumerate() {
+            last[[basis_dim + interval_index, site, 0]] = value;
         }
     }
 

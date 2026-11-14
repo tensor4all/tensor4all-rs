@@ -2613,9 +2613,12 @@ name = "tensor4all-interpolativeqtt"
 version = "0.3.0"
 dependencies = [
  "approx 0.5.1",
+ "hataori",
+ "hataori-tenferro",
  "num-complex 0.4.6",
  "quanticsgrids",
  "rand",
+ "rayon",
  "tensor4all-core",
  "tensor4all-simplett",
  "tensor4all-tensorbackend",
@@ -2855,6 +2858,7 @@ dependencies = [
  "num-complex 0.4.6",
  "tensor4all-core",
  "tensor4all-interpolativeqtt",
+ "tensor4all-partitionedtreetn",
  "tensor4all-quanticstci",
  "tensor4all-quanticstransform",
  "tensor4all-simplett",
