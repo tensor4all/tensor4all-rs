@@ -61,12 +61,24 @@
   `||A x - y||`, at most the caller's absolute budget, without forming the exact
   image. The exact factors the certificate needs are estimated before they are
   built, and an estimate above the memory limit (4 GiB by default) is refused.
+- `tensor4all-partitionedtreetn` adds `OperatorApplication::Certified`
+  (#1286): `schedule_merge_refine`, and so `patched_fourier_transform`, can apply
+  the operator to each input leaf with the certified truncation, given a
+  required share of the allowance, and charge the proved bounds instead of a
+  measured difference. The exact image is never formed, so two interleaved
+  axes at R = 20 now fit in memory.
 
 ### Breaking Rust API changes
 
 - `tensor4all-partitionedtreetn`: `PatchingOptions` has the new field
   `group_sum_limit_bytes` (#1309). A complete struct literal must add it; one
   that ends in `..PatchingOptions::default()` is unaffected.
+- `tensor4all-partitionedtreetn`: `MergeRefineOptions::apply_options:
+  Option<ApplyOptions<V>>` is replaced by `MergeRefineOptions::application:
+  OperatorApplication<V>` (#1286). `None` becomes `OperatorApplication::Exact`
+  (the default) and `Some(options)` becomes
+  `OperatorApplication::Measured(options)`; the new `Certified` variant is the
+  third choice, so the three cannot be combined.
 - `tensor4all_core::MatrixLuciScalar` is sealed and
   `matrix_luci_factors_from_blocks_seeded` is a required method (#1300). The
   trait dispatches to crate-internal kernels, so a foreign implementation could

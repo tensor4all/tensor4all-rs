@@ -635,11 +635,17 @@ global allowance. An unaffordable or gainless candidate is retained exactly rath
 than violating the accuracy contract, and exceeding `MergeRefineOptions::max_terms`
 returns a resource-limit error.
 
-`MergeRefineOptions::apply_options` opts into a truncating operator application.
-The schedule then applies the operator with those options *and* exactly, measures
-each leaf's deviation, and charges that sum before any scheduling compression, so
-an approximate application is never a silent error; a measured application error
-already above the allowance is rejected. Every other entry point applies exactly. `MergeRefineReport` records the schedule shape
+`MergeRefineOptions::application` opts into a truncating operator application,
+and the choice is explicit because the charged error means different things.
+With `OperatorApplication::Measured(options)` the schedule applies the operator
+with those options *and* exactly, measures each leaf's deviation, and charges
+that sum before any scheduling compression, so an approximate application is
+never a silent error; a measured application error already above the allowance
+is rejected. `OperatorApplication::certified(share)` is for images too large to
+form exactly: on a chain state each leaf is applied by
+`apply_linear_operator_certified` with an equal part of `share` times the
+allowance, and the proved bounds are charged instead. Every other entry point
+applies exactly. `MergeRefineReport` records the schedule shape
 (`level_count`, `applied_operator_count`, `additions`, `projections`,
 `compression_attempts`, `compressions`, `work_items_per_level`, `peak_work_items`,
 `refined_regions`, `stopped_regions`) next to the pinned reference scale, the

@@ -432,7 +432,7 @@ operator and compares it against the two one-dimensional transforms applied in
 sequence.
 
 Approximate operator application is available as an opt-in on the schedule:
-`MergeRefineOptions::apply_options` applies the operator with the caller's
+`OperatorApplication::Measured` (formerly `MergeRefineOptions::apply_options`) applies the operator with the caller's
 truncating options *and* always applies it exactly, measures the per-leaf
 deviation `||exact - approximate||`, and charges that sum to the item bounds before
 any scheduling compression. The exact application is therefore the measured
@@ -515,7 +515,7 @@ estimate `2^43` at the centre. The guard is an upper estimate of the block the
 factorization sees, not of every temporary the contraction planner forms.
 
 **Error accounting is unchanged.** Exact mode still reports
-`error_bound == 0`. With `MergeRefineOptions::apply_options` the schedule still
+`error_bound == 0`. With a measured application the schedule still
 applies the caller's truncating options as well and charges the measured
 `||exact - approximate||` of each leaf; the exact image this measurement needs
 is now affordable, and the difference network's bond is the sum of the two
@@ -589,7 +589,7 @@ one host; the naive column was measured before the change):
   without spectator subtrees, the deep three-branch tree above, and the
   refusal only above the limit.
 - The existing schedule tests cover exact mode (`error_bound == 0`) and a
-  truncating `apply_options` whose measured deviation is charged. One existing
+  truncating measured application whose deviation is charged. One existing
   test changed: in `subset_operator_scale_is_not_measured_under_destructive_interference`
   the two images are negatives of each other. Whether their roundoff residual
   cancels exactly depends on the platform's SVD: on Linux the zip-up images
@@ -672,7 +672,7 @@ the physical bond, which is inherent to an exact image of that width.
   chain and a branched tree with two degree-three nodes, several centres, real
   and complex data, and the process-global and context leaf routes.
 - `tests/subset_operator_exact.rs`: on the same shapes, `schedule_merge_refine`
-  with an untruncated SVD zip-up as `apply_options` measures each QR image
+  with an untruncated SVD zip-up as its measured application measures each QR image
   against its SVD image under `rtol = 1e-12`; a truncating threshold of `0.3`
   fails all four.
 - `apply_zipup_never_skips_without_an_explicit_exact_policy` also compares the
@@ -791,14 +791,21 @@ and `C_k` is backend roundoff, which the report already excludes.
     limit), and an unreachable budget. The last is reported, not relaxed.
   - The kernel is a private chain zip-up variant that shares the existing
     schedule. The exact and truncating zip-ups are unchanged.
-- `tensor4all-partitionedtreetn`: `MergeRefineOptions` and
-  `SubsetOperatorOptions` get a choice of application:
-  - exact (the default, as today);
-  - certified, with a share of the global allowance;
-  - the existing measured `apply_options`.
+- `tensor4all-partitionedtreetn`: `MergeRefineOptions::application`, one enum
+  `OperatorApplication` replacing `apply_options`:
+  - `Exact` (the default, as today);
+  - `Certified { share, memory_limit }`, with `certified(share)` for the
+    default limit. `share` of the global allowance is split equally over the
+    input leaves; the images overlap, so their bounds add;
+  - `Measured(ApplyOptions)`, the former `apply_options`.
 
   A certified image's bound is charged as its application error, in place of
   the measured difference to an exact image that is never formed.
+  `SubsetOperatorOptions` keeps only the amplification flag: it is also taken
+  by `ReconstructionTarget::from_subset_operator`, whose target carries no
+  application error to charge, and `schedule_merge_refine` takes both option
+  sets, so a second application field there would be the combination of flags
+  the decision rules out.
 - `tensor4all-quanticstransform`: `PatchedFourierOptions` exposes the same
   choice. The R = 20 interleaved heavy case opts in.
 
@@ -824,10 +831,16 @@ and `C_k` is backend roundoff, which the report already excludes.
 - *Sweep direction.* The sweep runs in the direction whose estimate is
   smaller. For R = 20 that is the "last to first" direction of step 2; the
   choice now follows from the measured bonds instead of a fixed orientation.
-- *Memory estimate.* The gate counts the stored factors plus the largest
-  working tensor: a factor QR input and its `Q`, or a block, its projection and
-  its discarded part. The bond dimensions are the input ones, which bound the
-  canonicalized ones.
+- *Memory gate in two parts.* Before anything is allocated, the gate counts
+  the stored factors plus the largest factor QR input and its `Q`, from the
+  input bond dimensions (which bound the canonicalized ones). The sweep's
+  working tensors (a block, its projection, its discarded part and the
+  weighted block) depend on the ranks the sweep keeps, so each step checks
+  them from the actual dimensions, with the factors still stored, before
+  forming the block. An a-priori bound on the kept rank is the factor's
+  column count, thousands over the middle of R = 20, against kept ranks
+  below 50 at R = 10; with it, R = 20 was refused at 4.30 GB against a
+  4 GiB limit.
 - *Rounding of the margin and the sum.* The computed `||D_k||_F` and
   `||L_k||_F` in the margin are rounded up by `1 + gamma_{2c+2}` (`c` entries),
   and the total `sqrt(sum e_k^2)` by `1 + gamma_{N+1}`. The shares come from the

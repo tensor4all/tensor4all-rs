@@ -66,24 +66,24 @@ impl Rounding {
     }
 }
 
-/// Memory estimate of one sweep direction, in elements.
+/// Memory estimate of building the factors for one sweep direction, in
+/// elements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Estimate {
     factor_elements: u128,
     peak_elements: u128,
 }
 
-/// Estimate the stored factors and the peak working set of a sweep along a
-/// chain with joint bond dimensions `rows[k]` (cut between sites `k` and
-/// `k + 1`) and output dimensions `outputs[k]`.
+/// Estimate the stored factors and the peak working set of building them,
+/// along a chain with joint bond dimensions `rows[k]` (cut between sites `k`
+/// and `k + 1`) and output dimensions `outputs[k]`.
 ///
 /// Factor `L_k` has `rows[k]` rows and
 /// `cols[k] = min(rows[k], outputs[k + 1] * cols[k + 1])` columns, with one
-/// column beyond the last site. The working
-/// set adds the largest transient: the QR input and its `Q` while the factors
-/// are built, or a block, its projection and its discarded part during the
-/// sweep, where the retained rank is bounded by the factor and by the outputs
-/// already swept.
+/// column beyond the last site. The peak adds the largest QR input and its
+/// `Q`. Both are exact functions of the bond dimensions. The sweep's working
+/// tensors are not included: their size depends on the ranks the sweep keeps,
+/// so the sweep checks each block against the limit before forming it.
 fn estimate_sweep(rows: &[usize], outputs: &[usize]) -> Estimate {
     let cuts = rows.len();
     let mut cols = vec![0_u128; cuts];
@@ -104,21 +104,19 @@ fn estimate_sweep(rows: &[usize], outputs: &[usize]) -> Estimate {
             .saturating_mul(after);
         transient = transient.max(qr_input.saturating_mul(2));
     }
-    let mut retained = 1_u128;
-    for k in 0..cuts {
-        let block = retained
-            .saturating_mul(outputs[k] as u128)
-            .saturating_mul(rows[k] as u128);
-        let projected = retained
-            .saturating_mul(outputs[k] as u128)
-            .saturating_mul(cols[k]);
-        transient = transient.max(block.saturating_mul(3).saturating_add(projected));
-        retained = retained.saturating_mul(outputs[k] as u128).min(cols[k]);
-    }
     Estimate {
         factor_elements,
         peak_elements: factor_elements.saturating_add(transient),
     }
+}
+
+/// `indices` without those in `excluded`.
+fn all_but_list<I: Clone + PartialEq>(indices: &[I], excluded: &[I]) -> Vec<I> {
+    indices
+        .iter()
+        .filter(|index| !excluded.contains(index))
+        .cloned()
+        .collect()
 }
 
 fn element_count<T: TensorLike>(tensor: &T) -> usize {
@@ -146,8 +144,10 @@ where
     ///
     /// `mpo` must have the state's nodes and edges; the two networks contract
     /// over their shared site indices. The result is canonical at `center`. The
-    /// sweep direction is the one with the smaller memory estimate, and an
-    /// estimate above `memory_limit` bytes fails before any factor is built.
+    /// sweep direction is the one whose factors take less memory to build. A
+    /// build estimate above `memory_limit` bytes fails before any factor is
+    /// built, and a sweep block whose working set with the remaining factors
+    /// would exceed it fails before that block is formed.
     pub(crate) fn contract_certified_chain(
         &self,
         mpo: &Self,
@@ -291,6 +291,7 @@ where
             rounding,
             element_bytes,
             estimated_bytes,
+            memory_limit,
         )
         .map_err(|error| match error.downcast::<CertifiedApplyError>() {
             Ok(error) => error,
@@ -307,8 +308,10 @@ where
         budget: f64,
         rounding: Rounding,
         element_bytes: usize,
-        estimated_bytes: usize,
+        build_estimate: usize,
+        memory_limit: usize,
     ) -> anyhow::Result<CertifiedChain<T, V>> {
+        let mut estimated_bytes = build_estimate;
         let node_count = chain.len();
         let cuts = node_count - 1;
 
@@ -368,6 +371,7 @@ where
         // `M_k = L_k Q_k` with `L_k` indexed by the joint bond of cut `k` and
         // one new column index.
         let mut factors: Vec<Option<T>> = vec![None; cuts];
+        let mut factor_sizes = vec![0_usize; cuts];
         let mut factor_bytes = 0_usize;
         for k in (0..cuts).rev() {
             let site_product = match &factors.get(k + 1).and_then(Option::as_ref) {
@@ -379,10 +383,16 @@ where
             let qr = site_product
                 .factorize_full_rank(&columns, FactorizeAlg::QR, Canonical::Left)
                 .context("certified zip-up: factor QR")?;
-            factor_bytes =
-                factor_bytes.saturating_add(element_count(&qr.right).saturating_mul(element_bytes));
+            factor_sizes[k] = element_count(&qr.right).saturating_mul(element_bytes);
+            factor_bytes = factor_bytes.saturating_add(factor_sizes[k]);
             factors[k] = Some(qr.right);
         }
+        // Factors still stored at step k: those of cuts k and beyond.
+        let mut stored_after = vec![0_usize; cuts + 1];
+        for k in (0..cuts).rev() {
+            stored_after[k] = stored_after[k + 1].saturating_add(factor_sizes[k]);
+        }
+        let dims = |indices: &[T::Index]| -> usize { indices.iter().map(IndexLike::dim).product() };
 
         // The bound is inflated once for the rounding of its own sum, so the
         // shares are taken from a budget deflated by the same factor.
@@ -396,6 +406,48 @@ where
             let factor = factors[k]
                 .take()
                 .ok_or_else(|| anyhow::anyhow!("certified zip-up: factor {k} missing"))?;
+            // Check the working set of this step from the actual dimensions:
+            // the block, its projection and its discarded part, and the
+            // weighted block, next to the factors still stored.
+            let incoming = remainder.as_ref().map_or(1, |remainder| {
+                dims(&all_but(remainder, &joint_bonds[k - 1]))
+            });
+            let mut site_legs: Vec<T::Index> = states[k].external_indices();
+            for index in operators[k].external_indices() {
+                if let Some(position) = site_legs.iter().position(|leg| leg == &index) {
+                    site_legs.swap_remove(position);
+                } else {
+                    site_legs.push(index);
+                }
+            }
+            let mut excluded: Vec<T::Index> = joint_bonds[k].to_vec();
+            if k > 0 {
+                excluded.extend(joint_bonds[k - 1].iter().cloned());
+            }
+            let outputs = dims(&all_but_list(&site_legs, &excluded));
+            let rows = dims(&joint_bonds[k]);
+            let columns = element_count(&factor) / rows.max(1);
+            let block_elements = (incoming as u128)
+                .saturating_mul(outputs as u128)
+                .saturating_mul(rows as u128);
+            let weighted_elements = (incoming as u128)
+                .saturating_mul(outputs as u128)
+                .saturating_mul(columns as u128);
+            let working = block_elements
+                .saturating_mul(3)
+                .saturating_add(weighted_elements)
+                .saturating_mul(element_bytes as u128);
+            let step_bytes = usize::try_from(working)
+                .unwrap_or(usize::MAX)
+                .saturating_add(stored_after[k]);
+            estimated_bytes = estimated_bytes.max(step_bytes);
+            if step_bytes > memory_limit {
+                return Err(CertifiedApplyError::MemoryLimit {
+                    estimated_bytes: step_bytes,
+                    limit_bytes: memory_limit,
+                }
+                .into());
+            }
             let block = match &remainder {
                 Some(remainder) => T::contract(&[remainder, &states[k], &operators[k]]),
                 None => T::contract(&[&states[k], &operators[k]]),

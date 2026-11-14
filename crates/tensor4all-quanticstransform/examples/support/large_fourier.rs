@@ -8,7 +8,8 @@ use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, SvdTruncationPolicy
 use tensor4all_interpolativeqtt::{interpolate_single_scale, InterpolativeQttOptions};
 use tensor4all_partitionedtreetn::{
     reconstruction::{
-        schedule_merge_refine, CoordinateGroup, ReconstructionTarget, SubsetOperatorOptions,
+        schedule_merge_refine, CoordinateGroup, OperatorApplication, ReconstructionTarget,
+        SubsetOperatorOptions,
     },
     PartitionedTreeTN, Projector, SubDomainTreeTN,
 };
@@ -86,7 +87,7 @@ pub(crate) enum Runs {
     /// schedule of the two-axis interleaved R = 10 case takes about 6 minutes
     /// with one thread (#1279, #1285); the example's `frontend-only` argument
     /// selects this mode to halve that.
-    // The smoke-test and heavy targets include this module but never run this mode.
+    // The smoke-test target includes this module but never runs this mode.
     #[allow(dead_code)]
     FrontEndOnly,
 }
@@ -96,6 +97,9 @@ pub(crate) struct Measurement {
     pub(crate) bits: usize,
     pub(crate) dimensions: usize,
     pub(crate) interleaved: bool,
+    /// Share of the allowance given to a certified application, `None` for the
+    /// exact one.
+    pub(crate) certified_share: Option<f64>,
     pub(crate) input_seconds: f64,
     pub(crate) operator_seconds: f64,
     /// `None` with [`Runs::FrontEndOnly`].
@@ -115,7 +119,11 @@ impl std::fmt::Display for Measurement {
         let schedule = self
             .schedule_seconds
             .map_or_else(|| "skipped".to_string(), |seconds| format!("{seconds:.6}"));
-        write!(f, "bits={},dimensions={},interleaved={},input_seconds={:.6},operator_seconds={:.6},schedule_seconds={},frontend_seconds={:.6},operator_bond={},input_bond={},samples={},sample_error={:.6e},reconstruction_bound={:.6e},compressions={},output_regions={}",
+        let application = self.certified_share.map_or_else(
+            || "exact".to_string(),
+            |share| format!("certified({share})"),
+        );
+        write!(f, "bits={},dimensions={},interleaved={},application={application},input_seconds={:.6},operator_seconds={:.6},schedule_seconds={},frontend_seconds={:.6},operator_bond={},input_bond={},samples={},sample_error={:.6e},reconstruction_bound={:.6e},compressions={},output_regions={}",
             self.bits,self.dimensions,self.interleaved,self.input_seconds,self.operator_seconds,
             schedule,self.frontend_seconds,self.operator_bond,self.input_bond,self.samples,self.sample_error,
             self.reconstruction_bound,self.compressions,self.output_regions)
@@ -125,11 +133,15 @@ impl std::fmt::Display for Measurement {
 /// A shifted periodic Gaussian defined by a finite Fourier series. Because
 /// MODES < N/2, its normalized discrete DFT is exactly the listed coefficients;
 /// there is no continuous-FT/quadrature/aliasing approximation in the oracle.
+///
+/// `certified_share` selects the certified application with that share of the
+/// allowance (#1286); `None` applies the operator exactly.
 pub(crate) fn run_case(
     bits: usize,
     dimensions: usize,
     interleaved: bool,
     runs: Runs,
+    certified_share: Option<f64>,
 ) -> Result<Measurement> {
     assert!((10..=20).contains(&bits));
     assert!((1..=2).contains(&dimensions));
@@ -269,6 +281,9 @@ pub(crate) fn run_case(
     options.merge_refine.target_bond_dim = Some(8);
     options.merge_refine.output_depth = Some(1);
     options.merge_refine.max_terms = 256;
+    if let Some(share) = certified_share {
+        options.merge_refine.application = OperatorApplication::certified(share);
+    }
     // Time the scheduler separately from the operator and target preparation.
     // Then exercise the public Fourier front end with the same policy.
     let schedule_seconds = if runs == Runs::ScheduleAndFrontEnd {
@@ -328,6 +343,7 @@ pub(crate) fn run_case(
         bits,
         dimensions,
         interleaved,
+        certified_share,
         input_seconds,
         operator_seconds,
         schedule_seconds,

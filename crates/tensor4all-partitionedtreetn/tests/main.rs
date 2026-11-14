@@ -25,5 +25,6 @@ mod patching;
 mod project_first_add;
 mod reconstruction;
 mod subdomain_tree_tn;
+mod subset_operator_certified;
 mod subset_operator_exact;
 mod sum_engine;
