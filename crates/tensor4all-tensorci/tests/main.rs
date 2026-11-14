@@ -5,6 +5,7 @@
 
 mod global_pivot_coordinate_search;
 mod rng_stream_contract;
+mod rook_four_site_ridge;
 mod rook_zero_fibers;
 mod session_entry;
 mod small_values;

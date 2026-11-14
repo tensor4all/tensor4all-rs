@@ -20,13 +20,18 @@ use tensor4all_tensorbackend::{mat_mul, solve_matrix, Matrix};
 /// residual may inspect every remaining entry, one column at a time.
 ///
 /// Each pivot is found by an O(d) rook walk: alternate residual column and row
-/// argmax until a row and a column agree. A rook pivot is therefore the largest
+/// argmax until a row and a column agree. The walk moves only to a strictly
+/// larger magnitude, so it ends at the first entry that no row or column step
+/// improves. A rook pivot is therefore the largest
 /// entry of its own residual row and column only, and its magnitude can be far
 /// below the maximum of the remaining residual.
 ///
 /// The stop is heuristic. The factorization ends when the current rook pivot
 /// passes the stopping test (tolerance or undividable pivot) or the rank cap is
-/// reached, without scanning the remaining block. The trailing `pivot_errors`
+/// reached, without scanning the remaining block. Before a tolerance stop, a
+/// few more walks start from columns spread over the remaining block, and the
+/// first pivot they find above the threshold is taken instead; this makes a
+/// false stop on one local maximum less likely, but does not exclude it. The trailing `pivot_errors`
 /// entry is that last rook pivot, the one the factorization rejected (at a rank
 /// cap, one extra walk measures it), or `0.0` at full rank or when the walk
 /// found the remaining residual exactly zero. It is **not** an upper bound on
@@ -41,6 +46,12 @@ use tensor4all_tensorbackend::{mat_mul, solve_matrix, Matrix};
 /// not add any error guarantee.
 #[derive(Default)]
 pub struct LazyBlockRookKernel;
+
+/// Extra walks from spread-out starting columns before a tolerance stop.
+///
+/// On the tensor4all-rs#1256 ridge and a 4-site ridge, two walks remove the
+/// false stops that one walk makes; four and eight walks give the same result.
+const STOP_CHECK_WALKS: usize = 2;
 
 /// Subtract `a_rj * pivot^{-1} * a_ic` from `residual` in place.
 fn eliminate<T: MatrixLuciScalar>(
@@ -207,6 +218,8 @@ fn rook_pivot<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     let operands = operands.as_ref();
     let mut current_col_pos;
     let mut current_row_pos;
+    // Magnitude of the entry the walk stands on.
+    let mut current_abs;
     // A seeded walk starts on the column the previous factorization pivoted on,
     // which is where `arrlu` starts from its `J0`. The scan below stays the
     // fallback: it is what a first factorization of a matrix has, and what a
@@ -233,12 +246,27 @@ fn rook_pivot<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
         // the kernel's existing numerical-error check, not look like zeros.
         if best_abs != 0.0 {
             current_row_pos = best_row_pos;
+            current_abs = best_abs;
             break;
         }
     }
+    if !current_abs.is_finite() {
+        return Ok((
+            remaining_rows[current_row_pos],
+            remaining_cols[current_col_pos],
+            current_abs,
+        ));
+    }
 
+    // The walk moves only to a strictly larger magnitude. At roundoff level the
+    // same residual entry computed from its row and from its column can differ
+    // in the last bits, so "the row maximum is in another column" does not mean
+    // that column holds a larger entry; following it lets the walk cycle among
+    // roundoff-sized entries until `max_steps`.
     let max_steps = remaining_rows.len() + remaining_cols.len() + 1;
     for _ in 0..max_steps {
+        #[cfg(test)]
+        stats::update(|c| c.walk_steps += 1);
         let row_residual = residual_row(
             source,
             remaining_rows,
@@ -247,15 +275,23 @@ fn rook_pivot<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
             operands,
         )?;
         let (_, best_col_pos, best_abs) = argmax_abs(&row_residual);
-
-        if best_col_pos == current_col_pos {
+        if !best_abs.is_finite() {
             return Ok((
                 remaining_rows[current_row_pos],
-                remaining_cols[current_col_pos],
+                remaining_cols[best_col_pos],
                 best_abs,
             ));
         }
+
+        if best_col_pos == current_col_pos || best_abs <= current_abs {
+            return Ok((
+                remaining_rows[current_row_pos],
+                remaining_cols[current_col_pos],
+                current_abs.max(best_abs),
+            ));
+        }
         current_col_pos = best_col_pos;
+        current_abs = best_abs;
         let col_residual = residual_column(
             source,
             remaining_rows,
@@ -263,8 +299,18 @@ fn rook_pivot<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
             current_col_pos,
             operands,
         )?;
-        let (best_row_pos, _, _) = argmax_abs(&col_residual);
-        current_row_pos = best_row_pos;
+        let (best_row_pos, _, col_best_abs) = argmax_abs(&col_residual);
+        if !col_best_abs.is_finite() {
+            return Ok((
+                remaining_rows[best_row_pos],
+                remaining_cols[current_col_pos],
+                col_best_abs,
+            ));
+        }
+        if col_best_abs > current_abs {
+            current_row_pos = best_row_pos;
+            current_abs = col_best_abs;
+        }
     }
 
     let row_residual = residual_row(
@@ -282,7 +328,7 @@ fn rook_pivot<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
     ))
 }
 
-/// Counters the tests read to tell a seeded walk from an unseeded one.
+/// Counters the tests read to observe the walks.
 ///
 /// Thread-local, because the test harness factorizes on several threads at
 /// once and each of these describes one factorization.
@@ -290,14 +336,23 @@ fn rook_pivot<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
 pub(super) mod stats {
     use std::cell::Cell;
 
-    /// How many walks started on a seed.
+    /// How many walks started on a seed, how many row steps all walks took,
+    /// and how many stop-check walks ran.
     #[derive(Default, Clone, Copy)]
     pub(super) struct Counters {
         pub(super) seeded_starts: usize,
+        pub(super) walk_steps: usize,
+        pub(super) stop_check_walks: usize,
     }
 
     thread_local! {
-        static COUNTERS: Cell<Counters> = const { Cell::new(Counters { seeded_starts: 0 }) };
+        static COUNTERS: Cell<Counters> = const {
+            Cell::new(Counters {
+                seeded_starts: 0,
+                walk_steps: 0,
+                stop_check_walks: 0,
+            })
+        };
     }
 
     pub(super) fn update(change: impl FnOnce(&mut Counters)) {
@@ -383,8 +438,38 @@ fn factorize_lazy<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(
         // (`PivotSearchStrategy::Full`). At the rank cap the walk above is the
         // one extra O(d) walk that measures the rejected pivot.
         let n_selected = selected_rows.len();
-        let below_tolerance = n_selected > 0
-            && (pivot_abs < options.rel_tol * max_error || pivot_abs < options.abs_tol);
+        let passes_stop = |abs: f64| abs < options.rel_tol * max_error || abs < options.abs_tol;
+        let mut below_tolerance = n_selected > 0 && passes_stop(pivot_abs);
+        let (mut pivot_row, mut pivot_col, mut pivot_abs) = (pivot_row, pivot_col, pivot_abs);
+        // Before a tolerance stop, walk again from a few columns spread over
+        // the remaining block. A walk that finds a pivot above the threshold
+        // replaces the stopping pivot; the factorization stops only if none
+        // does. This is still a heuristic, not a bound.
+        if below_tolerance && n_selected < max_bond_dim {
+            for k in 1..=STOP_CHECK_WALKS {
+                let start = remaining_cols[k * remaining_cols.len() / (STOP_CHECK_WALKS + 1)];
+                #[cfg(test)]
+                stats::update(|c| c.stop_check_walks += 1);
+                let (row, col, abs) = rook_pivot(
+                    source,
+                    &remaining_rows,
+                    &remaining_cols,
+                    &selected_rows,
+                    &selected_cols,
+                    Some((remaining_rows[0], start)),
+                )?;
+                if !abs.is_finite() {
+                    return Err(MatrixLuciError::NaNEncountered {
+                        matrix: "rook residual",
+                    });
+                }
+                if !passes_stop(abs) {
+                    (pivot_row, pivot_col, pivot_abs) = (row, col, abs);
+                    below_tolerance = false;
+                    break;
+                }
+            }
+        }
         if n_selected == max_bond_dim || below_tolerance || pivot_is_undividable::<T>(pivot_abs) {
             break pivot_abs;
         }

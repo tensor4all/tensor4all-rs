@@ -5,10 +5,12 @@
 //! the reported error plus a `tolerance` allowance for the final 1-site cleanup
 //! sweep, which `errors` does not record.
 //!
-//! `Rook` stops when the current rook pivot is below tolerance. On this ridge
-//! that pivot is a local maximum far below the remaining residual, so `Rook`
-//! terminates `Converged` with a true error above the tolerance. The second test
-//! pins that limitation of the heuristic contract.
+//! `Rook` stops when the current rook pivot is below tolerance, after a few
+//! stop-check walks from other columns found nothing above it. On this ridge a
+//! single walk stopped on a local maximum and `Rook` returned `Converged` with
+//! a true error of 1.3e-6; the stop-check walks find the missed pivots. That is
+//! an improvement on this ridge, not a bound: `Converged` under `Rook` is still
+//! not a proof of the tolerance.
 use tensor4all_simplett::AbstractTensorTrain;
 use tensor4all_tensorci::{crossinterpolate2, PivotSearchStrategy, TCI2Options, TCI2Termination};
 
@@ -86,18 +88,20 @@ fn full_true_error_within_reported_bond_error_plus_cleanup_allowance_on_a_smooth
 }
 
 #[test]
-fn rook_converged_is_not_a_proof_of_the_tolerance_on_a_smooth_ridge() {
-    // The rook walk stops on a pivot 2.5e-9 of the maximum while the
-    // interpolant is off by 1.3e-6, and TCI2 still reports `Converged`.
-    let (termination, reported, true_rel) = run(PivotSearchStrategy::Rook, 0);
-    assert_eq!(termination, TCI2Termination::Converged);
-    assert!(
-        reported < TOL,
-        "reported {reported:.2e} not below {TOL:.0e}"
-    );
-    assert!(
-        true_rel > 100.0 * TOL,
-        "true error {true_rel:.2e} is no longer far above the tolerance; \
-         the limitation this test pins has changed"
-    );
+fn rook_stop_check_walks_reach_the_tolerance_on_a_smooth_ridge() {
+    // With one walk per stop, `Rook` returned `Converged` here with a true
+    // error of 1.3e-6 (`max_nglobal_pivot = 0`) or 1.5e-7 (`= 5`). With the
+    // stop-check walks both runs reach rank 69 with true error 6.6e-9.
+    for max_nglobal_pivot in [0, 5] {
+        let (termination, reported, true_rel) = run(PivotSearchStrategy::Rook, max_nglobal_pivot);
+        assert_eq!(termination, TCI2Termination::Converged);
+        assert!(
+            reported < TOL,
+            "reported {reported:.2e} not below {TOL:.0e}"
+        );
+        assert!(
+            true_rel < TOL,
+            "true error {true_rel:.2e} above tolerance {TOL:.0e}"
+        );
+    }
 }

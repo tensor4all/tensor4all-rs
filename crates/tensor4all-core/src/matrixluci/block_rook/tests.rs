@@ -522,7 +522,7 @@ fn reloading_rook_pivot<S: CandidateMatrixSource<f64>>(
     };
 
     let mut columns = remaining_cols.iter().copied();
-    let (mut current_row, mut current_col);
+    let (mut current_row, mut current_col, mut current_abs);
     loop {
         let Some(col) = columns.next() else {
             return (remaining_rows[0], remaining_cols[0], 0.0);
@@ -531,18 +531,23 @@ fn reloading_rook_pivot<S: CandidateMatrixSource<f64>>(
         let (row_pos, _, best_abs) = argmax_abs(&block(remaining_rows, &[col]));
         if best_abs != 0.0 {
             current_row = remaining_rows[row_pos];
+            current_abs = best_abs;
             break;
         }
     }
     for _ in 0..remaining_rows.len() + remaining_cols.len() + 1 {
         let (_, col_pos, best_abs) = argmax_abs(&block(&[current_row], remaining_cols));
         let next_col = remaining_cols[col_pos];
-        if next_col == current_col {
-            return (current_row, current_col, best_abs);
+        if next_col == current_col || best_abs <= current_abs {
+            return (current_row, current_col, current_abs.max(best_abs));
         }
         current_col = next_col;
-        let (row_pos, _, _) = argmax_abs(&block(remaining_rows, &[current_col]));
-        current_row = remaining_rows[row_pos];
+        current_abs = best_abs;
+        let (row_pos, _, col_best_abs) = argmax_abs(&block(remaining_rows, &[current_col]));
+        if col_best_abs > current_abs {
+            current_row = remaining_rows[row_pos];
+            current_abs = col_best_abs;
+        }
     }
     let (_, col_pos, best_abs) = argmax_abs(&block(&[current_row], remaining_cols));
     (current_row, remaining_cols[col_pos], best_abs)
@@ -701,13 +706,17 @@ fn dense_tolerance_stop_reports_the_true_interpolation_error() {
 }
 
 #[test]
-fn rook_tolerance_stop_on_the_1256_ridge_underestimates_the_true_error() {
-    // The heuristic contract on realistic data: the walk stops on a rook pivot
-    // 2.5e-9 of the first pivot while the interpolant it returns is off by
-    // 1.3e-6, above the 1e-8 tolerance. `pivot_errors` is not a bound.
+fn rook_stop_check_walks_keep_the_1256_ridge_within_tolerance() {
+    use super::stats;
+    // One walk stops this ridge at rank 63 on a rook pivot 2.5e-9 of the first
+    // pivot while the interpolant is off by 1.3e-6 (tensor4all-rs#1256). The
+    // stop-check walks from spread-out columns find the pivots that walk
+    // missed: rank 70, true error 4.5e-9, below the 1e-8 tolerance. This pins
+    // the improvement on this matrix; it is not a bound in general.
     let n = 200;
     let options = ridge_options();
     let data = smooth_ridge_matrix(n);
+    stats::reset();
     let rook = LazyBlockRookKernel
         .factorize(&dense_to_lazy(data.clone(), n, n), &options)
         .unwrap();
@@ -719,18 +728,21 @@ fn rook_tolerance_stop_on_the_1256_ridge_underestimates_the_true_error() {
         "rook did not stop on tolerance"
     );
     assert!(
-        true_err > 100.0 * options.rel_tol * first_pivot,
-        "true error {true_err:.3e} is no longer far above the tolerance; \
-         the limitation this test pins has changed"
+        stats::snapshot().stop_check_walks > 0,
+        "the tolerance stop ran no stop-check walk"
+    );
+    assert!(
+        true_err < options.rel_tol * first_pivot,
+        "true error {true_err:.3e} >= tolerance {:.3e}",
+        options.rel_tol * first_pivot
     );
 }
 
-/// The smallest case of the heuristic contract: after the first pivot the next
-/// walk starts in column 1, whose only residual entry is a local pivot below
-/// tolerance, so `Rook` stops there and reports it, although the remaining
-/// block still holds the entry 5. `Full` takes 5 as its second pivot.
+/// After the first pivot of diag(10, 0.01, 5) the first walk starts in column
+/// 1, whose only residual entry 0.01 passes the stopping test. A stop-check
+/// walk starts in column 2 and finds 5, so `Rook` takes it as `Full` does.
 #[test]
-fn rook_stops_on_a_small_local_pivot_and_misses_a_larger_remaining_entry() {
+fn rook_stop_check_walk_finds_the_entry_the_first_walk_missed() {
     // diag(10, 0.01, 5), column-major.
     let data = vec![
         10.0, 0.0, 0.0, //
@@ -748,23 +760,65 @@ fn rook_stops_on_a_small_local_pivot_and_misses_a_larger_remaining_entry() {
     let full = DenseLuKernel
         .factorize(&DenseMatrixSource::from_column_major(&data, 3, 3), &options)
         .unwrap();
+    for out in [&rook, &full] {
+        assert_eq!(out.rank, 2);
+        assert_eq!(out.col_indices, vec![0, 2]);
+        assert_eq!(out.pivot_errors, vec![10.0, 5.0, 0.01]);
+        assert_eq!(
+            interpolation_max_error(&data, 3, &out.row_indices, &out.col_indices),
+            0.01
+        );
+    }
+}
 
-    // Rook: one pivot, then a stop on 0.01 < 1e-2 * 10. The reported error is
-    // the local pivot, 500x below the true remaining error.
+/// The heuristic contract that remains: in diag(10, 0.01, 0.01, 0.01, 0.01, 5)
+/// the first walk starts in column 1 and the two stop-check walks in columns 2
+/// and 4, so no walk visits column 5. `Rook` stops after one pivot and reports
+/// 0.01, 500x below the true remaining error 5.
+#[test]
+fn rook_stops_on_a_small_local_pivot_when_no_walk_visits_the_larger_entry() {
+    let n = 6;
+    let mut data = vec![0.0; n * n];
+    for (i, value) in [10.0, 0.01, 0.01, 0.01, 0.01, 5.0].into_iter().enumerate() {
+        data[i + n * i] = value;
+    }
+    let options = PivotKernelOptions {
+        rel_tol: 1e-2,
+        abs_tol: 0.0,
+        ..PivotKernelOptions::default()
+    };
+    let rook = LazyBlockRookKernel
+        .factorize(&dense_to_lazy(data.clone(), n, n), &options)
+        .unwrap();
     assert_eq!(rook.rank, 1);
     assert_eq!(rook.pivot_errors, vec![10.0, 0.01]);
     assert_eq!(
-        interpolation_max_error(&data, 3, &rook.row_indices, &rook.col_indices),
+        interpolation_max_error(&data, n, &rook.row_indices, &rook.col_indices),
         5.0
     );
+}
 
-    // Full does not stop there: it accepts 5 and stops on the true maximum.
-    assert_eq!(full.rank, 2);
-    assert_eq!(full.col_indices, vec![0, 2]);
-    assert_eq!(full.pivot_errors, vec![10.0, 5.0, 0.01]);
-    assert_eq!(
-        interpolation_max_error(&data, 3, &full.row_indices, &full.col_indices),
-        0.01
+#[test]
+fn rook_walk_does_not_cycle_on_a_roundoff_residual() {
+    use super::stats;
+    // Past the exact rank the residual is roundoff only, and the same entry
+    // computed from its row and from its column differs in the last bits. A
+    // walk that follows "the row maximum is in another column" without
+    // requiring a larger magnitude cycles until its step limit: 1,733 row
+    // steps for these 41 walks. Moving only to a strictly larger magnitude
+    // takes 83.
+    let (n, exact_rank, cap) = (200usize, 20usize, 40usize);
+    let data = exact_rank_matrix(n, exact_rank, 1);
+    stats::reset();
+    let out = LazyBlockRookKernel
+        .factorize(&dense_to_lazy(data, n, n), &rank_cap_options(cap))
+        .unwrap();
+    assert_eq!(out.rank, cap);
+    let steps = stats::snapshot().walk_steps;
+    assert!(
+        steps < 4 * (cap + 1),
+        "{steps} row steps for {} walks: the walk cycles on roundoff",
+        cap + 1
     );
 }
 

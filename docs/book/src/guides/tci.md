@@ -93,7 +93,8 @@ Within one two-site update the strategies differ. `PivotSearchStrategy::Full`
 (the default) records the maximum remaining residual of the candidate matrix
 as the bond error, a certified bound for that matrix. `PivotSearchStrategy::Rook`
 finds each pivot with an O(d) rook walk and stops when the current rook pivot
-is below the threshold; its bond error is that last rook pivot, not a bound, so
+and two more walks from other columns all find nothing above the threshold; its
+bond error is that last rook pivot, not a bound, so
 `TCI2Termination::Converged` under `Rook` does not prove the tolerance. Use
 `Full` when a certified bound is required.
 

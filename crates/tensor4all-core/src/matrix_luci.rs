@@ -815,8 +815,9 @@ pub fn matrix_luci_factors_working_bytes<T: Scalar>(
 /// full candidate matrix.
 ///
 /// Each pivot costs one rook walk over residual rows and columns, and the
-/// factorization stops heuristically: when the current rook pivot is below
-/// tolerance, without scanning the rest of the matrix. Use
+/// factorization stops heuristically: when the current rook pivot, and two
+/// more walks started from other columns, find nothing above tolerance,
+/// without scanning the rest of the matrix. Use
 /// [`MatrixLUCI::from_matrix`] or [`rrlu`](crate::rrlu) on the materialized
 /// matrix when a certified bound on the remaining residual is required.
 ///
