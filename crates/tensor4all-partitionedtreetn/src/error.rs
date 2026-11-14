@@ -63,6 +63,27 @@ pub enum PartitionedTreeTNError {
     #[error("strict subdomain addition requires identical projector keys")]
     ProjectorMismatch,
 
+    /// The input patches of a merge-refine schedule fix different coordinates
+    /// on spectator indices, the indices outside the transform's selection.
+    ///
+    /// Returned by
+    /// [`schedule_merge_refine`](crate::reconstruction::schedule_merge_refine)
+    /// and the transforms built on it, which need one spectator constraint
+    /// shared by every input patch.
+    ///
+    /// # Remedy
+    /// Partition the input on the selected indices only. Or refine every patch
+    /// to a common spectator layout with
+    /// [`PartitionedTreeTN::refine_to`](crate::PartitionedTreeTN::refine_to),
+    /// then transform each group of patches that shares one spectator
+    /// constraint separately.
+    #[error(
+        "input patches disagree on spectator constraints (coordinates fixed on indices outside \
+         the transform's selection); partition on the selected indices only, or refine to a \
+         common spectator layout and transform each spectator group separately"
+    )]
+    SpectatorMismatch,
+
     /// An explicit TreeTN center is absent from the network.
     #[error("the requested TreeTN center is absent; choose an existing node name")]
     InvalidCenter,

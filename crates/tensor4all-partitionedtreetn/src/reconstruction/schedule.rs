@@ -1091,7 +1091,7 @@ where
         match &spectators {
             None => spectators = Some(patch_spectators),
             Some(expected) if *expected != patch_spectators => {
-                return Err(PartitionedTreeTNError::ProjectorMismatch);
+                return Err(PartitionedTreeTNError::SpectatorMismatch);
             }
             Some(_) => {}
         }
@@ -1239,7 +1239,7 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// [`PartitionedTreeTNError::InvalidOptions`]
 /// again when the measured application error of
 /// [`MergeRefineOptions::apply_options`] already exceeds the allowance;
-/// [`PartitionedTreeTNError::ProjectorMismatch`]
+/// [`PartitionedTreeTNError::SpectatorMismatch`]
 /// when leaves disagree on spectator constraints; and the operator-mapping,
 /// node-merging, application, projection, addition, and backend errors reported
 /// by the underlying TreeTN operations.

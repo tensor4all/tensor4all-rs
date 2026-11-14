@@ -43,6 +43,15 @@
   unchanged and ordinary calls compile as before; only a call that names the
   closure type with a turbofish (`::<F>`) has to add `T` (`::<f64, F>`).
 
+### Diagnostics
+
+- `tensor4all-partitionedtreetn` adds `PartitionedTreeTNError::SpectatorMismatch`
+  (#1299). `schedule_merge_refine`, and so `patched_fourier_transform`, now
+  return it instead of `ProjectorMismatch` when input patches fix different
+  spectator coordinates, and the message names the remedy.
+  `patched_fourier_transform` documents its input-partition precondition.
+  Code matching `ProjectorMismatch` for this case must match the new variant.
+
 ### Performance
 
 - `tensor4all-partitionedtreetn` finds overlapping patch projectors through a

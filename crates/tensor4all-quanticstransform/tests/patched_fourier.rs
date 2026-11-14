@@ -190,6 +190,90 @@ fn spectator_and_single_patch_preserve_dense_application() {
     }
 }
 #[test]
+fn spectator_mismatch_is_named_and_the_documented_remedy_works() {
+    // One two-bit axis on sites 0 and 2; site 1 is a spectator.
+    let sites: Vec<_> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    let axes = vec![vec![sites[0].clone(), sites[2].clone()]];
+    let spectator = &sites[1];
+    let input = values(3);
+    let tree = chain(&sites, &input, &[0, 1, 2]);
+    // A producer split on the spectator below k0 = 0 but not below k0 = 1.
+    let state = partition(
+        &tree,
+        &[
+            vec![(sites[0].clone(), 0), (spectator.clone(), 0)],
+            vec![(sites[0].clone(), 0), (spectator.clone(), 1)],
+            vec![(sites[0].clone(), 1)],
+        ],
+    );
+    let error = patched_fourier_transform(
+        &state,
+        &0,
+        &axes,
+        FourierOptions::forward(),
+        &PatchedFourierOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        QuanticsTransformError::Reconstruction {
+            source: PartitionedTreeTNError::SpectatorMismatch
+        }
+    ));
+    assert!(error
+        .to_string()
+        .contains("disagree on spectator constraints"));
+
+    // The remedy: refine to a common spectator layout, then transform each
+    // spectator group on its own. The groups sum to the whole transform.
+    let layout: Vec<_> = [0, 1]
+        .into_iter()
+        .flat_map(|k0| [0, 1].into_iter().map(move |s| (k0, s)))
+        .map(|(k0, s)| {
+            Projector::from_pairs([(sites[0].clone(), k0), (spectator.clone(), s)]).unwrap()
+        })
+        .collect();
+    let refined = state.refine_to(&layout).unwrap();
+    let reference = constructed_reference(&tree, &sites, &axes, FourierOptions::forward());
+    let mut total: Option<IdxTensor> = None;
+    for s in 0..2 {
+        let group = PartitionedTreeTN::from_subdomains(
+            refined
+                .iter()
+                .filter(|(projector, _)| projector.get(spectator) == Some(s))
+                .map(|(_, patch)| patch.clone())
+                .collect(),
+        )
+        .unwrap();
+        let result = patched_fourier_transform(
+            &group,
+            &0,
+            &axes,
+            FourierOptions::forward(),
+            &PatchedFourierOptions::default(),
+        )
+        .unwrap();
+        // Each output term keeps its group's spectator constraint.
+        assert!(result
+            .regions()
+            .flat_map(|(_, terms)| terms)
+            .all(|term| term.projector().get(spectator) == Some(s)));
+        let dense = result_dense(&result);
+        total = Some(match total {
+            None => dense,
+            Some(sum) => sum.add(&dense).unwrap(),
+        });
+    }
+    let total = total.unwrap();
+    assert!(total.sub(&reference).unwrap().maxabs().unwrap() < ROUND_OFF);
+    assert_dense(
+        &reference,
+        &sites,
+        &dft(&input, &logical_layout(&sites, &axes), -1.0, true),
+        ROUND_OFF,
+    );
+}
+#[test]
 fn reversed_axes_inverse_restores_input_and_same_order_does_not() {
     let sites: Vec<_> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
     let axes = vec![
