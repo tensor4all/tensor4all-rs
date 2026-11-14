@@ -157,6 +157,7 @@ fn options(fixture: &Fixture, cap: Option<usize>, engine: SumEngine) -> Patching
         patch_order: vec![fixture.z.clone()],
         split_strategy: PatchSplitStrategy::Sequential,
         sum_engine: engine,
+        group_sum_limit_bytes: PatchingOptions::DEFAULT_GROUP_SUM_LIMIT_BYTES,
     }
 }
 

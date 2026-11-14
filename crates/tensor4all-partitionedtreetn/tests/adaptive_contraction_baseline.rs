@@ -114,6 +114,7 @@ impl Fixture {
             patch_order: vec![self.output_sites[usize::from(split)].clone()],
             split_strategy: strategy,
             sum_engine: engine,
+            group_sum_limit_bytes: PatchingOptions::DEFAULT_GROUP_SUM_LIMIT_BYTES,
         }
     }
 

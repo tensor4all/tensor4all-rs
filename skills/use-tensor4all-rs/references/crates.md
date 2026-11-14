@@ -145,7 +145,7 @@ Every constructor returns a `LinearOperator` (from `tensor4all-treetn`). All use
 Generic `TreeTN` over arbitrary tree topology (TT/MPS is the path-graph special case).
 
 - `TreeTN::<IdxTensor, V>::from_tensors(tensors, labels) -> Result` — topology inferred from shared bond indices; site indices appear once, bond indices appear twice. `V: Eq + Hash` labels vertices.
-- `.node_count()`, `.edge_count()`, `ttn[v]` access, `.norm()`, `.to_dense()` (test/small only), `.add(&b)` (same topology + matching site indices; bonds grow as direct sum), `TreeTN::exact_sum(&[&a, &b, &c], SumEngine)` (exact sum of many networks; default `Binary` add chain, opt-in `Nary` / `NaryWithin { limit_bytes }` one-pass direct sum, result reports `used_nary`), `TreeTN::add_many(&[&a, &b, &c])` (the N-ary pass itself), `.replaceind(&old, &new)`.
+- `.node_count()`, `.edge_count()`, `ttn[v]` access, `.norm()`, `.to_dense()` (test/small only), `.add(&b)` (same topology + matching site indices; bonds grow as direct sum), `TreeTN::exact_sum(&[&a, &b, &c], SumEngine)` (exact sum of many networks; default `Binary` add chain, opt-in `Nary` / `NaryWithin { limit_bytes }` one-pass direct sum, result reports `used_nary`), `TreeTN::estimate_exact_sum_bytes(&terms)` (the size of that sum, before building it), `TreeTN::add_many(&[&a, &b, &c])` (the N-ary pass itself), `.replaceind(&old, &new)`.
 - `.canonicalize([root], CanonicalizationOptions)`, `.truncate([root], TruncationOptions::default().with_max_bond_dim(n).with_rtol(t))`.
 - `TreeTN::density_matrix_sum(&refs, &center, cutoff, max_bond_dim)` builds a compressed sum without summed input bonds. Returns `DensityMatrixSumResult { network, discarded_weight }`: the weight bounds squared Frobenius error in exact arithmetic, including cap losses. Without a binding cap the relative bound is `sqrt((R - 1) * cutoff)`. Pair-overlap environments cost quadratic memory/work in the term count; density matrices square the singular spectrum, so roundoff and cancellation limit accuracy. Use `network` directly or as a `fit_sum_with_report` seed.
 - `TreeTN::pairwise_sum_fit(&terms, PairwiseSumOrder::{Sequential, Balanced}, PerAddCutoff { center, cutoff, max_bond_dim }, FitOptions)` builds a truncated seed and fits all original terms. Fit truncation/caps are independent; provide a larger fit cap or SVD policy to grow the seed. Returns `FitSumResult { network, truncations }`, with each fit region's absolute discarded norm, not an exact-sum error certificate. `fit_sum_with_report(&terms, &seed, &center, options)` accepts any caller-built seed; `fit_sum` keeps its network-only result. Zero sweeps preserve the seed.
@@ -213,8 +213,11 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   `TreeTN::evaluate` layout; each point goes to the patch that covers it, and
   uncovered points are zero.
 - `PatchingOptions { cutoff, allocation, max_bond_dim, patch_order,
-  split_strategy, sum_engine }` — `sum_engine` (default `Binary`) builds the
-  equal-key and contribution sums of `add_with_patching` / `contract_adaptive`;
+  split_strategy, sum_engine, group_sum_limit_bytes }` — `sum_engine` (default
+  `Binary`) builds the equal-key and contribution sums of `add_with_patching` /
+  `contract_adaptive`; `group_sum_limit_bytes` (default 4 GiB) refuses such a sum
+  before it is formed with `GroupSumLimit` (a global operator such as a Fourier
+  transform puts every pair in one group: use `schedule_merge_refine`);
   `cutoff` is a non-negative discarded-weight budget shared
   across patches (ITensorMPS `cutoff` convention), not an SVD truncation-policy
   knob, and best effort (no global error bound). `allocation:

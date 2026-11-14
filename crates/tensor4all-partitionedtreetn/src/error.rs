@@ -110,6 +110,42 @@ pub enum PartitionedTreeTNError {
         value: usize,
     },
 
+    /// The exact sum of one group of patches would exceed
+    /// [`PatchingOptions::group_sum_limit_bytes`](crate::PatchingOptions::group_sum_limit_bytes).
+    ///
+    /// Returned before the sum is formed by
+    /// [`contract_adaptive`](crate::contract_adaptive) and its variants, which
+    /// sum every contribution to one output projector, and by
+    /// [`add_with_patching`](crate::add_with_patching), which sums the input
+    /// patches that share one projector key. The size is the estimate of
+    /// [`TreeTN::estimate_exact_sum_bytes`](tensor4all_treetn::TreeTN::estimate_exact_sum_bytes).
+    ///
+    /// # Remedy
+    /// An operator that mixes every value of the indices the patches fix, such
+    /// as a Fourier transform on patches of the transformed variable, puts
+    /// every patch pair into one group whose summed bond is the sum of all
+    /// contribution bonds. Apply such an operator with
+    /// [`schedule_merge_refine`](crate::reconstruction::schedule_merge_refine)
+    /// (or the patched Fourier transform of `tensor4all-quanticstransform`,
+    /// built on it) instead. Otherwise raise the limit if the memory is
+    /// available, leaving room for the truncation that follows the sum.
+    #[error(
+        "{operation}: the exact sum of {terms} patches would take an estimated {estimated_bytes} \
+         bytes, above group_sum_limit_bytes = {limit_bytes}; an operator that mixes every value \
+         of the patched indices puts every pair in one group, so apply it with \
+         schedule_merge_refine instead, or raise the limit"
+    )]
+    GroupSumLimit {
+        /// Operation that would have formed the sum.
+        operation: &'static str,
+        /// Number of patches in the sum.
+        terms: usize,
+        /// Estimated size of the built sum, in bytes.
+        estimated_bytes: usize,
+        /// The limit it exceeds, in bytes.
+        limit_bytes: usize,
+    },
+
     /// The automatic refinement of differing patch layouts in
     /// [`PartitionedTreeTN::add`](crate::PartitionedTreeTN::add),
     /// [`PartitionedTreeTN::add_truncated`](crate::PartitionedTreeTN::add_truncated),
