@@ -31,6 +31,20 @@ pub trait TTScalar: tensor4all_core::CommonScalar + TensorScalar {}
 
 impl<T> TTScalar for T where T: tensor4all_core::CommonScalar + TensorScalar {}
 
+/// Refuse a train whose first core has a non-unit leading bond.
+///
+/// The reductions seed their environment from the `l == 0` component of the
+/// first core, so a leading bond above one would be silently projected away.
+/// This is the left-boundary sibling of the trailing-bond guard from #913.
+fn ensure_unit_leading_bond<T: TTScalar>(first: &Tensor3<T>) -> Result<()> {
+    if first.left_dim() != 1 {
+        return Err(SimpleTensorTrainError::InvalidOperation {
+            message: format!("Leading bond dimension is {}, expected 1", first.left_dim()),
+        });
+    }
+    Ok(())
+}
+
 /// Common interface implemented by all tensor train representations.
 ///
 /// Provides read-only access to site tensors plus derived operations:
@@ -131,7 +145,7 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     /// an empty train, [`SimpleTensorTrainError::IndexOutOfBounds`] when an
     /// index exceeds its site dimension, or
     /// [`SimpleTensorTrainError::InvalidOperation`] when the final contraction
-    /// is not scalar.
+    /// is not scalar, or when the first core has a non-unit leading bond.
     ///
     /// # Examples
     ///
@@ -163,6 +177,7 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
 
         // Start with the first tensor slice
         let first = self.site_tensor(0);
+        ensure_unit_leading_bond(first)?;
         let idx0 = indices[0];
         if idx0 >= first.site_dim() {
             return Err(SimpleTensorTrainError::IndexOutOfBounds {
@@ -236,7 +251,9 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     ///
     /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the final contraction does not leave exactly one
     /// element, which happens for a train whose last core has a non-unit right bond - a state reachable through
-    /// the public mutable accessors. The same check [`AbstractTensorTrain::evaluate`] applies to the same object.
+    /// the public mutable accessors. A first core with a non-unit leading bond is refused with the same variant,
+    /// for the same reason: the environment would be the `l == 0` projection. These are the same checks
+    /// [`AbstractTensorTrain::evaluate`] applies to the same object.
     fn sum(&self) -> Result<T> {
         if self.is_empty() {
             return Ok(T::zero());
@@ -244,6 +261,7 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
 
         // Start with sum over first tensor
         let first = self.site_tensor(0);
+        ensure_unit_leading_bond(first)?;
         let mut current = vec![T::zero(); first.right_dim()];
         for s in 0..first.site_dim() {
             for r in 0..first.right_dim() {
@@ -308,7 +326,9 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     ///
     /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the final contraction does not leave exactly one
     /// element, which happens for a train whose last core has a non-unit right bond - a state reachable through
-    /// the public mutable accessors. The same check [`AbstractTensorTrain::evaluate`] applies to the same object.
+    /// the public mutable accessors. A first core with a non-unit leading bond is refused with the same variant,
+    /// for the same reason: the environment would be the `l == 0` projection. These are the same checks
+    /// [`AbstractTensorTrain::evaluate`] applies to the same object.
     fn norm2(&self) -> Result<f64> {
         if self.is_empty() {
             return Ok(0.0);
@@ -317,6 +337,7 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
         // Contract tt with its conjugate
         // result[la, la_conj, ra, ra_conj] at each step
         let first = self.site_tensor(0);
+        ensure_unit_leading_bond(first)?;
         let right_dim = first.right_dim();
 
         // current[ra, ra_conj] = sum_s first[0, s, ra] * conj(first[0, s, ra_conj])
@@ -389,7 +410,9 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     ///
     /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the final contraction does not leave exactly one
     /// element, which happens for a train whose last core has a non-unit right bond - a state reachable through
-    /// the public mutable accessors. The same check [`AbstractTensorTrain::evaluate`] applies to the same object.
+    /// the public mutable accessors. A first core with a non-unit leading bond is refused with the same variant,
+    /// for the same reason: the environment would be the `l == 0` projection. These are the same checks
+    /// [`AbstractTensorTrain::evaluate`] applies to the same object.
     fn norm(&self) -> Result<f64> {
         Ok(self.norm2()?.sqrt())
     }
@@ -419,7 +442,9 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
     ///
     /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the final contraction does not leave exactly one
     /// element, which happens for a train whose last core has a non-unit right bond - a state reachable through
-    /// the public mutable accessors. The same check [`AbstractTensorTrain::evaluate`] applies to the same object.
+    /// the public mutable accessors. A first core with a non-unit leading bond is refused with the same variant,
+    /// for the same reason: the environment would be the `l == 0` projection. These are the same checks
+    /// [`AbstractTensorTrain::evaluate`] applies to the same object.
     fn log_norm(&self) -> Result<f64> {
         if self.is_empty() {
             return Ok(f64::NEG_INFINITY);
@@ -428,6 +453,7 @@ pub trait AbstractTensorTrain<T: TTScalar>: Sized {
         // Contract tt with its conjugate, normalizing at each step
         // to avoid overflow/underflow
         let first = self.site_tensor(0);
+        ensure_unit_leading_bond(first)?;
         let right_dim = first.right_dim();
 
         // current[ra, ra_conj] = sum_s first[0, s, ra] * conj(first[0, s, ra_conj])
