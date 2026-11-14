@@ -6,10 +6,9 @@ fn estimate_counts_factor_columns_from_the_far_end() {
     // cols[1] = min(4, 2 * 1) = 2; cols[0] = min(6, 2 * 2) = 4.
     let estimate = estimate_sweep(&[6, 4], &[2, 2, 2]);
     assert_eq!(estimate.factor_elements, 6 * 4 + 4 * 2);
-    // Largest transient: the block of step 1, with retained rank
-    // min(1 * 2, cols[0]) = 2: 3 * (2 * 2 * 4) + 2 * 2 * 2 = 56, against the
-    // QR inputs 2 * (6 * 2 * 2) = 48 and 2 * (4 * 2 * 1) = 16.
-    assert_eq!(estimate.peak_elements, estimate.factor_elements + 56);
+    // The largest QR input and its Q: 2 * (6 * 2 * 2) = 48, against
+    // 2 * (4 * 2 * 1) = 16.
+    assert_eq!(estimate.peak_elements, estimate.factor_elements + 48);
 }
 
 #[test]

@@ -41,7 +41,9 @@ pub struct PatchedFourierOptions<V> {
     pub tolerance: ReconstructionTolerance,
     /// Scheduler controls, including coverage, output regions/depth, rank goal
     /// and work/term limits. Leave `coordinate_groups` unset: axes determine it.
-    /// Without a rank goal or truncating apply options, no approximation is made.
+    /// Without a rank goal and with the default exact `application`, no
+    /// approximation is made. `merge_refine.application` also selects a
+    /// measured or a certified truncating application of the operator.
     pub merge_refine: MergeRefineOptions<V>,
 }
 

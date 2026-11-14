@@ -160,8 +160,10 @@ pub enum CertifiedApplyError {
         /// Which part of the topology is unsupported.
         reason: String,
     },
-    /// The estimated memory of the exact factors and the largest working
-    /// tensor exceeds the limit. Raised before any factor is built.
+    /// An estimated memory exceeds the limit: building the exact factors
+    /// (checked before any factor is built), or a sweep step's working tensors
+    /// next to the factors still stored (checked before that step's block is
+    /// formed).
     ///
     /// # Remedy
     ///
@@ -173,7 +175,7 @@ pub enum CertifiedApplyError {
          of {limit_bytes} bytes; raise the limit or apply the operator to finer patches"
     )]
     MemoryLimit {
-        /// Estimated peak bytes: the stored factors plus the largest working tensor.
+        /// The estimate that exceeded the limit, in bytes.
         estimated_bytes: usize,
         /// The limit from the options.
         limit_bytes: usize,

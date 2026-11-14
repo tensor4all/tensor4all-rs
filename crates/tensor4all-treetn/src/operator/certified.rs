@@ -38,10 +38,12 @@ pub struct CertifiedApplyOptions {
     /// of the result. Must be finite and non-negative. The certified bound of
     /// the result never exceeds it.
     pub budget: f64,
-    /// Upper limit, in bytes, on the estimated memory of the application: the
-    /// exact factors it stores plus its largest working tensor. Default
-    /// [`Self::DEFAULT_MEMORY_LIMIT`] (4 GiB). An estimate above it fails
-    /// before anything is allocated.
+    /// Upper limit, in bytes, on the estimated memory of the application.
+    /// Default [`Self::DEFAULT_MEMORY_LIMIT`] (4 GiB). Building the exact
+    /// factors is estimated from the bond dimensions before anything is
+    /// allocated; each sweep step is checked from its actual dimensions, with
+    /// the factors still stored, before its block is formed. Either estimate
+    /// above the limit fails.
     pub memory_limit: usize,
 }
 
@@ -115,7 +117,8 @@ where
         &self.step_bounds
     }
 
-    /// The memory estimate the limit was checked against, in bytes.
+    /// The largest memory estimate the limit was checked against, in bytes:
+    /// building the factors, or a sweep step with the factors still stored.
     pub fn estimated_bytes(&self) -> usize {
         self.estimated_bytes
     }
@@ -162,8 +165,9 @@ where
 /// - [`CertifiedApplyError::InvalidOptions`] for a negative or non-finite budget;
 /// - [`CertifiedApplyError::UnsupportedTopology`] when the state is not a chain,
 ///   or a full-coverage operator does not have the state's edges;
-/// - [`CertifiedApplyError::MemoryLimit`] when the estimate exceeds
-///   `options.memory_limit`, before any factor is built;
+/// - [`CertifiedApplyError::MemoryLimit`] when an estimate exceeds
+///   `options.memory_limit`: building the factors, checked before any factor
+///   is built, or a sweep step, checked before its block is formed;
 /// - [`CertifiedApplyError::BudgetUnreachable`] when a step cannot be certified
 ///   within its share even at full rank (a budget at roundoff level);
 /// - [`CertifiedApplyError::Operation`] when the operator's nodes are not a

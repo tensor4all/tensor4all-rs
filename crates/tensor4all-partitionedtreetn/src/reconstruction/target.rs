@@ -6,12 +6,13 @@ use std::{
 
 use tensor4all_core::{IdxTensor, IndexLike, SvdTruncationPolicy};
 use tensor4all_treetn::{
-    apply_linear_operator_to_indices, contraction::ContractionOptions, partial_contract,
-    ApplyOptions, LinearOperator, PartialContractionSpec, RestructureOptions, SiteIndexNetwork,
-    TreeTN,
+    apply_linear_operator_certified_to_indices, apply_linear_operator_to_indices,
+    contraction::ContractionOptions, partial_contract, ApplyOptions, CertifiedApplyOptions,
+    LinearOperator, PartialContractionSpec, RestructureOptions, SiteIndexNetwork, TreeTN,
 };
 
-use super::{finite, invalid, SubsetOperatorOptions};
+use super::application::{certified_failure, LeafApplication};
+use super::{absolute_allowance, finite, invalid, SubsetOperatorOptions};
 use crate::subdomain_tree_tn::{
     ensure_center, ensure_same_dtype, ensure_same_topology, ensure_same_tree_structure,
     sort_by_patch_order, PatchOrderKey,
@@ -53,8 +54,9 @@ where
     pub(super) source: Projector,
     /// Image retaining only the patch's spectator constraints.
     pub(super) image: SubDomainTreeTN<V>,
-    /// Measured deviation of `image` from the exact application, zero when the
-    /// operator was applied exactly.
+    /// Application error of `image`: zero for the exact application, the
+    /// measured deviation from it for a measured one, and the proved bound for a
+    /// certified one.
     pub(super) error: f64,
 }
 
@@ -394,8 +396,14 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             ));
         }
 
-        let prepared =
-            Self::prepare_subset_images(preimage, center, operator, selection, options, None)?;
+        let prepared = Self::prepare_subset_images(
+            preimage,
+            center,
+            operator,
+            selection,
+            options,
+            LeafApplication::Exact,
+        )?;
         let mut patches: Vec<_> = prepared
             .images
             .into_iter()
@@ -423,8 +431,9 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
     /// [`super::schedule_merge_refine`]. Every result keeps the preimage patch
     /// support it came from, so a caller that schedules the transform over dyadic
     /// input leaves can recover that leaf geometry instead of inferring it from
-    /// the spectator-only image projector. Application is exact, so an image
-    /// carries only backend roundoff.
+    /// the spectator-only image projector. `application` selects how each patch
+    /// is transformed and what error its image carries; the exact application
+    /// leaves only backend roundoff.
     ///
     /// # Errors
     /// Propagates the selection, operator-mapping, node-merging, and application
@@ -435,7 +444,7 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
         operator: &LinearOperator<IdxTensor, OperatorV>,
         selection: &[DynIndex],
         options: &SubsetOperatorOptions,
-        apply: Option<&ApplyOptions<V>>,
+        application: LeafApplication<'_, V>,
     ) -> Result<PreparedImages<V>>
     where
         OperatorV: Clone + Hash + Eq + Ord + Send + Sync + Debug,
@@ -540,10 +549,30 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             .restructure_to(&target, &RestructureOptions::default())
             .map_err(merging)?;
 
-        // INVARIANT: the exact application is always performed. It is the
-        // prepared image when the caller requests no truncation, and the measured
-        // reference when the caller does, so an approximate application never
-        // becomes a silent error that the report would mis-attribute.
+        // The output norm is deliberately not measured: doing so would need
+        // either a global direct sum of the images (TreeTN addition adds bond
+        // dimensions and restores the global-rank bottleneck) or a
+        // pairwise-overlap Gram sum (O(M^2) and cancellation-prone). Scale the
+        // preimage's reference scale by the operator's amplification factor
+        // instead. `unitary = true` is the caller's guarantee of factor 1;
+        // otherwise the selected-space operator's Frobenius norm is a norm-based
+        // upper bound. Successive applications multiply these factors. The
+        // scale is fixed before any application, because a certified
+        // application takes its budget from it.
+        let amplification = if options.unitary {
+            1.0
+        } else {
+            // `TreeTN::norm` canonicalizes a clone; the MPO is gauge-invariant.
+            finite(operator.mpo().clone().norm()?)?
+        };
+        let scale = finite(amplification * preimage.scale)?;
+
+        // INVARIANT: unless the application is certified, the exact application
+        // is always performed. It is the prepared image when the caller requests
+        // no truncation, and the measured reference when the caller does, so an
+        // approximate application never becomes a silent error that the report
+        // would mis-attribute. A certified application is never compared with an
+        // exact image: its proved bound is the charged error.
         //
         // It is a zip-up with a zero SVD threshold and no cap, centred at the
         // balanced node, not the naive local product: the naive product makes
@@ -579,10 +608,25 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
                     operator_bond,
                     term_center,
                 );
-                refuse_large_tree_block(peak, EXACT_TREE_BLOCK_LIMIT)?;
+                // The certified application forms no exact image; it estimates
+                // and gates its own memory, and supports chains only.
+                if !matches!(application, LeafApplication::Certified { .. }) {
+                    refuse_large_tree_block(peak, EXACT_TREE_BLOCK_LIMIT)?;
+                }
             }
             centers.push(term_center);
         }
+        // A certified application shares its part of the allowance equally
+        // over the patches; their bounds add, because the images overlap.
+        let certified_budget = match application {
+            LeafApplication::Certified {
+                share, tolerance, ..
+            } => {
+                let allowance = absolute_allowance(tolerance, scale)?;
+                Some(finite(share * allowance / terms.len().max(1) as f64)?)
+            }
+            _ => None,
+        };
         let mut images = Vec::with_capacity(preimage.patches.len());
         for (term, term_center) in terms.into_iter().zip(centers) {
             let exact_options = ApplyOptions {
@@ -603,14 +647,26 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
                     PartitionedTreeTNError::tree(format!("subset operator apply: {error}"))
                 })
             };
-            let exact = apply_with(exact_options)?;
-            let (data, error) = match apply {
-                None => (exact, 0.0),
-                Some(requested) => {
+            let (data, error) = match (application, certified_budget) {
+                (LeafApplication::Certified { memory_limit, .. }, Some(budget)) => {
+                    let certified = apply_linear_operator_certified_to_indices(
+                        &operator,
+                        term.data(),
+                        &input_pairs,
+                        &output_pairs,
+                        CertifiedApplyOptions::new(budget).with_memory_limit(memory_limit),
+                    )
+                    .map_err(certified_failure)?;
+                    let bound = certified.bound();
+                    (certified.into_network(), bound)
+                }
+                (LeafApplication::Measured(requested), _) => {
+                    let exact = apply_with(exact_options)?;
                     let approximate = apply_with(requested.clone())?;
                     let mut difference = exact.axpby(1.0, &approximate, -1.0)?;
                     (approximate, finite(difference.norm()?)?)
                 }
+                _ => (apply_with(exact_options)?, 0.0),
             };
             // Images of disjoint patches generally overlap and the selected
             // constraints no longer hold, so keep only the spectator ones. The
@@ -627,21 +683,6 @@ impl<V: Clone + Hash + Eq + Ord + Send + Sync + Debug> ReconstructionTarget<V> {
             });
         }
 
-        // The output norm is deliberately not measured: doing so would need
-        // either a global direct sum of the images (TreeTN addition adds bond
-        // dimensions and restores the global-rank bottleneck) or a
-        // pairwise-overlap Gram sum (O(M^2) and cancellation-prone). Scale the
-        // preimage's reference scale by the operator's amplification factor
-        // instead. `unitary = true` is the caller's guarantee of factor 1;
-        // otherwise the selected-space operator's Frobenius norm is a norm-based
-        // upper bound. Successive applications multiply these factors.
-        let amplification = if options.unitary {
-            1.0
-        } else {
-            // `TreeTN::norm` canonicalizes a clone; the MPO is gauge-invariant.
-            finite(operator.mpo().clone().norm()?)?
-        };
-        let scale = finite(amplification * preimage.scale)?;
         Ok(PreparedImages { images, scale })
     }
 
