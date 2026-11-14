@@ -561,6 +561,41 @@ where
     /// term is returned as a clone. Which method ran is not reported; the
     /// routines that sum patches document that.
     pub(crate) fn exact_sum(terms: &[&Self], engine: SumEngine) -> Result<Self> {
+        let first = Self::validate_sum_terms(terms)?;
+        Self::build_exact_sum(first, terms, engine)
+    }
+
+    /// [`exact_sum`](Self::exact_sum), refused before anything is allocated
+    /// when the estimated size of the built sum
+    /// ([`TreeTN::estimate_exact_sum_bytes`]) exceeds `limit_bytes`.
+    ///
+    /// A single term is returned as a clone without a check: it is already
+    /// held. `operation` names the caller in the error.
+    pub(crate) fn exact_sum_within(
+        terms: &[&Self],
+        engine: SumEngine,
+        limit_bytes: usize,
+        operation: &'static str,
+    ) -> Result<Self> {
+        let first = Self::validate_sum_terms(terms)?;
+        if terms.len() > 1 {
+            let data: Vec<_> = terms.iter().map(|term| &term.data).collect();
+            let estimated_bytes = TreeTN::estimate_exact_sum_bytes(&data)?;
+            if estimated_bytes > limit_bytes {
+                return Err(PartitionedTreeTNError::GroupSumLimit {
+                    operation,
+                    terms: terms.len(),
+                    estimated_bytes,
+                    limit_bytes,
+                });
+            }
+        }
+        Self::build_exact_sum(first, terms, engine)
+    }
+
+    /// Check every term of an exact sum as [`add`](Self::add) checks its
+    /// operands and return the first.
+    fn validate_sum_terms<'a>(terms: &[&'a Self]) -> Result<&'a Self> {
         let (first, rest) = terms.split_first().ok_or(PartitionedTreeTNError::Empty)?;
         first.validate_invariants()?;
         let first_kind = first.scalar_kind()?;
@@ -572,7 +607,11 @@ where
                 return Err(PartitionedTreeTNError::ProjectorMismatch);
             }
         }
+        Ok(first)
+    }
 
+    /// Build the exact sum of validated `terms`, whose first term is `first`.
+    fn build_exact_sum(first: &Self, terms: &[&Self], engine: SumEngine) -> Result<Self> {
         let data: Vec<_> = terms.iter().map(|term| &term.data).collect();
         let network = TreeTN::exact_sum(&data, engine)
             .map_err(PartitionedTreeTNError::from)?

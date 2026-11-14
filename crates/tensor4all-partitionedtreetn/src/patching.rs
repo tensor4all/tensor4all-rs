@@ -143,6 +143,7 @@ pub enum BudgetAllocation {
 /// assert!(options.patch_order.is_empty());
 /// assert_eq!(options.split_strategy, PatchSplitStrategy::ExactParameterGain);
 /// assert_eq!(options.sum_engine, SumEngine::Binary);
+/// assert_eq!(options.group_sum_limit_bytes, 4 * 1024 * 1024 * 1024);
 /// ```
 #[derive(Debug, Clone)]
 pub struct PatchingOptions {
@@ -217,6 +218,36 @@ pub struct PatchingOptions {
     /// [`PartitionedTreeTN::to_treetn_with`]. A reporting variant for the
     /// engine may be added when a caller needs it.
     pub sum_engine: SumEngine,
+
+    /// Largest estimated size, in bytes, of one exact group sum: the
+    /// contributions to one output projector in [`contract_adaptive`], or the
+    /// equal-key input patches in [`add_with_patching`].
+    ///
+    /// The estimate is
+    /// [`TreeTN::estimate_exact_sum_bytes`](tensor4all_treetn::TreeTN::estimate_exact_sum_bytes),
+    /// taken before the sum is formed; a larger sum is refused with
+    /// [`PartitionedTreeTNError::GroupSumLimit`] instead of being allocated.
+    /// The estimate counts the built sum only. The add chain of
+    /// [`SumEngine::Binary`] holds two partial sums at its last add, and the
+    /// truncation that follows needs a transient on top of the sum (see
+    /// [`SumEngine`]), so the peak can be several times the estimate.
+    ///
+    /// Defaults to [`Self::DEFAULT_GROUP_SUM_LIMIT_BYTES`] (4 GiB). A group of
+    /// one patch is never checked. `usize::MAX` disables the check.
+    pub group_sum_limit_bytes: usize,
+}
+
+impl PatchingOptions {
+    /// The default [`Self::group_sum_limit_bytes`]: 4 GiB.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_partitionedtreetn::PatchingOptions;
+    ///
+    /// assert_eq!(PatchingOptions::DEFAULT_GROUP_SUM_LIMIT_BYTES, 4 << 30);
+    /// ```
+    pub const DEFAULT_GROUP_SUM_LIMIT_BYTES: usize = 4 << 30;
 }
 
 impl Default for PatchingOptions {
@@ -230,6 +261,7 @@ impl Default for PatchingOptions {
             patch_order: Vec::new(),
             split_strategy: PatchSplitStrategy::default(),
             sum_engine: SumEngine::Binary,
+            group_sum_limit_bytes: Self::DEFAULT_GROUP_SUM_LIMIT_BYTES,
         }
     }
 }
@@ -280,7 +312,9 @@ impl Default for PatchingOptions {
 /// # Errors
 ///
 /// Returns [`PartitionedTreeTNError::InvalidOptions`] for invalid cutoff,
-/// cap, or split-order options; [`PartitionedTreeTNError::Empty`] only when a
+/// cap, or split-order options; [`PartitionedTreeTNError::GroupSumLimit`] when
+/// the exact sum of the patches sharing one projector key would exceed
+/// `options.group_sum_limit_bytes`; [`PartitionedTreeTNError::Empty`] only when a
 /// nonempty operand is required by a downstream TreeTN operation;
 /// [`PartitionedTreeTNError::InvalidCenter`] when `center` is absent;
 /// [`PartitionedTreeTNError::TopologyMismatch`],
@@ -422,7 +456,7 @@ where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     validate_patching_options(options)?;
-    let subdomains = combine_equal_key_subdomains(subdomains, options.sum_engine)?;
+    let subdomains = combine_equal_key_subdomains(subdomains, options)?;
     let partitioned = PartitionedTreeTN::from_subdomains(subdomains)?;
     if partitioned.is_empty() {
         return Ok(partitioned);
@@ -535,6 +569,19 @@ where
 /// from the corrected output norm. Saturation is a refinement heuristic,
 /// not an error certificate or a proof that the sum has the same rank.
 ///
+/// # Global operators
+///
+/// A group holds every pair with one output projector, and its exact sum has
+/// the sum of the contributions' bonds. An operator that mixes every value of
+/// the indices the patches fix, such as a Fourier transform applied to patches
+/// of the transformed variable, leaves no constraint on the output: every pair
+/// lands in one group, and splitting on an output index does not reduce it.
+/// That sum is checked against [`PatchingOptions::group_sum_limit_bytes`]
+/// before it is formed. Apply such an operator with
+/// [`schedule_merge_refine`](crate::reconstruction::schedule_merge_refine), or
+/// the patched Fourier transform of `tensor4all-quanticstransform` built on
+/// it, which never forms this sum.
+///
 /// # Arguments
 ///
 /// * `left` - First validated partition.
@@ -564,7 +611,9 @@ where
 /// [`PartitionedTreeTNError::InvalidCenter`] when `center` is absent,
 /// [`PartitionedTreeTNError::OverlappingProjectors`] for invalid operand layouts,
 /// [`PartitionedTreeTNError::RefinementTooLarge`] when the overlapping outputs'
-/// candidate grid exceeds [`crate::AUTOMATIC_REFINEMENT_LIMIT`], and
+/// candidate grid exceeds [`crate::AUTOMATIC_REFINEMENT_LIMIT`],
+/// [`PartitionedTreeTNError::GroupSumLimit`] when one group's exact sum would
+/// exceed `patching_options.group_sum_limit_bytes`, and
 /// [`PartitionedTreeTNError::TreeTN`],
 /// [`PartitionedTreeTNError::VolumeOverflow`], or
 /// [`PartitionedTreeTNError::NonFiniteAdaptiveValue`] from contraction or
@@ -980,8 +1029,15 @@ where
     // addition), then truncate the completed group exactly once. Repeated
     // add-and-truncate was hash-order dependent and re-approximated the sum at
     // every contribution; the single post-add truncation caps the group once.
+    // The sum is refused before it is formed when it would exceed the limit:
+    // a global operator puts every pair in this one group.
     let terms: Vec<_> = contributions.iter().collect();
-    let mut probe = SubDomainTreeTN::exact_sum(&terms, patching_options.sum_engine)?;
+    let mut probe = SubDomainTreeTN::exact_sum_within(
+        &terms,
+        patching_options.sum_engine,
+        patching_options.group_sum_limit_bytes,
+        "contract_adaptive",
+    )?;
     let truncation = truncation_options_from_contract(contract_options);
     probe.truncate(center, truncation)?;
 
@@ -1407,7 +1463,7 @@ where
 /// each other through `from_subdomains`' last-write-wins key semantics.
 fn combine_equal_key_subdomains<V>(
     subdomains: Vec<SubDomainTreeTN<V>>,
-    engine: SumEngine,
+    options: &PatchingOptions,
 ) -> Result<Vec<SubDomainTreeTN<V>>>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
@@ -1428,7 +1484,12 @@ where
                 return group.pop().ok_or(PartitionedTreeTNError::Empty);
             }
             let terms: Vec<_> = group.iter().collect();
-            SubDomainTreeTN::exact_sum(&terms, engine)
+            SubDomainTreeTN::exact_sum_within(
+                &terms,
+                options.sum_engine,
+                options.group_sum_limit_bytes,
+                "add_with_patching",
+            )
         })
         .collect()
 }

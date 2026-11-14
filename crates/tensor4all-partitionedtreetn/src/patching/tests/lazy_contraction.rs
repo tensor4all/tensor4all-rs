@@ -61,6 +61,7 @@ pub(super) fn options(
         patch_order: order,
         split_strategy: strategy,
         sum_engine: SumEngine::Binary,
+        group_sum_limit_bytes: PatchingOptions::DEFAULT_GROUP_SUM_LIMIT_BYTES,
     }
 }
 

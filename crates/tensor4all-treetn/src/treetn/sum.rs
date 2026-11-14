@@ -136,6 +136,57 @@ where
     T::Index: Eq + Hash,
     <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
 {
+    /// Estimate the size in bytes of the exact sum of `terms` without
+    /// building it.
+    ///
+    /// This is the estimate [`TreeTN::exact_sum`] reports as
+    /// [`ExactSum::estimated_nary_bytes`] and compares with the limit of
+    /// [`SumEngine::NaryWithin`]: for every node, the product of its site
+    /// dimensions and of its summed bond dimensions, times 16 bytes (one
+    /// `Complex64`, an upper bound for every supported scalar type). Every
+    /// engine builds a network of this size, so a caller can refuse a sum
+    /// before any of it is allocated. The add chain of
+    /// [`SumEngine::Binary`] holds two partial sums at its last add, and a
+    /// truncation sweep afterwards needs a transient on top of the built sum
+    /// (see [`SumEngine`]).
+    ///
+    /// # Arguments
+    /// * `terms` - The networks to sum, as for [`TreeTN::exact_sum`].
+    ///
+    /// # Returns
+    /// The estimated size in bytes, saturating at `usize::MAX`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreeTNOperationError`] when `terms` is empty, or when a term
+    /// differs from `terms[0]` in topology, site space or scalar type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_treetn::{SumEngine, TreeTN};
+    ///
+    /// let (s0, s1) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    /// let bond = DynIndex::new_dyn(1);
+    /// let t0 = IdxTensor::from_dense(vec![s0, bond.clone()], vec![1.0, 2.0]).unwrap();
+    /// let t1 = IdxTensor::from_dense(vec![bond, s1], vec![3.0, 4.0]).unwrap();
+    /// let term = TreeTN::<IdxTensor, usize>::from_tensors(vec![t0, t1], vec![0, 1]).unwrap();
+    /// let terms = [&term, &term, &term];
+    ///
+    /// // Summed bond 3: 2 x 3 elements at each of the two nodes, 16 bytes each.
+    /// let estimate = TreeTN::estimate_exact_sum_bytes(&terms).unwrap();
+    /// assert_eq!(estimate, 2 * 6 * 16);
+    /// let sum = TreeTN::exact_sum(&terms, SumEngine::Binary).unwrap();
+    /// assert_eq!(sum.estimated_nary_bytes, estimate);
+    /// ```
+    pub fn estimate_exact_sum_bytes(
+        terms: &[&Self],
+    ) -> std::result::Result<usize, TreeTNOperationError> {
+        Self::ensure_summable(terms)?;
+        estimate_nary_bytes(terms)
+    }
+
     /// Sum `terms` exactly, building the sum with the method chosen by
     /// `engine`.
     ///
@@ -186,14 +237,12 @@ where
         terms: &[&Self],
         engine: SumEngine,
     ) -> std::result::Result<ExactSum<T, V>, TreeTNOperationError> {
-        let first = Self::ensure_summable(terms)?;
-        let estimated_nary_bytes = estimate_nary_bytes(terms)?;
+        let estimated_nary_bytes = Self::estimate_exact_sum_bytes(terms)?;
         let used_nary = match engine {
             SumEngine::Binary | SumEngine::Balanced => false,
             SumEngine::Nary => true,
             SumEngine::NaryWithin { limit_bytes } => estimated_nary_bytes <= limit_bytes,
         };
-        let _ = first;
         let network = if used_nary {
             Self::add_many(terms)?
         } else {

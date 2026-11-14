@@ -34,9 +34,19 @@
   any operator tensor is complex, the identities and the real operator tensors
   are now promoted to complex, an exact conversion; real operators are
   unchanged.
+- `tensor4all-partitionedtreetn`: `contract_adaptive` and `add_with_patching`
+  check each exact group sum before forming it (#1309). A sum whose estimated
+  size exceeds `PatchingOptions::group_sum_limit_bytes` (default 4 GiB) returns
+  the new `PartitionedTreeTNError::GroupSumLimit` instead of being allocated.
+  A global operator, such as a Fourier transform on patches of the transformed
+  variable, puts every pair of `contract_adaptive` into one group whose summed
+  bond is the sum of all contribution bonds; it previously ran out of memory.
+  Such an operator is applied with `schedule_merge_refine` instead.
 
 ### Added
 
+- `tensor4all-treetn` adds `TreeTN::estimate_exact_sum_bytes` (#1309), the
+  size estimate of `TreeTN::exact_sum` taken before the sum is built.
 - `tensor4all-treetn` adds `LinearOperator::to_state_network` and
   `StateOperatorNetwork` (#1298): an operator on any subset of a state's nodes,
   written as a plain `TreeTN` on the state's whole tree, with true input
@@ -47,6 +57,9 @@
 
 ### Breaking Rust API changes
 
+- `tensor4all-partitionedtreetn`: `PatchingOptions` has the new field
+  `group_sum_limit_bytes` (#1309). A complete struct literal must add it; one
+  that ends in `..PatchingOptions::default()` is unaffected.
 - `tensor4all_core::MatrixLuciScalar` is sealed and
   `matrix_luci_factors_from_blocks_seeded` is a required method (#1300). The
   trait dispatches to crate-internal kernels, so a foreign implementation could

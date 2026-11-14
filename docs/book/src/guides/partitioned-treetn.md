@@ -80,6 +80,15 @@ level of partial sums in memory instead of a single accumulator.
 `SumEngine::Nary` builds each sum in one pass, which is much faster when many
 patches meet in one sum, and `SumEngine::NaryWithin { limit_bytes }` does so only
 while the estimated size of the summed network fits the limit.
+
+Whatever the engine, `add_with_patching` and `contract_adaptive` refuse a sum whose
+estimated size (`TreeTN::estimate_exact_sum_bytes`) exceeds
+`PatchingOptions::group_sum_limit_bytes` (default 4 GiB) with
+`PartitionedTreeTNError::GroupSumLimit`, before any of it is allocated. An operator
+that mixes every value of the indices the patches fix, such as a Fourier transform on
+patches of the transformed variable, puts every pair of `contract_adaptive` into one
+group; apply it with `reconstruction::schedule_merge_refine` or the patched Fourier
+transform instead.
 `to_treetn_with(engine)` reports which method ran and the size estimate. Inputs
 that share an equal projector key are summed before patching.
 
@@ -167,6 +176,7 @@ let result = add_with_patching(
         patch_order: vec![site0],
         split_strategy: PatchSplitStrategy::Sequential,
         sum_engine: SumEngine::Binary,
+        group_sum_limit_bytes: PatchingOptions::DEFAULT_GROUP_SUM_LIMIT_BYTES,
     },
 )?;
 
