@@ -227,10 +227,16 @@ pub struct PatchingOptions {
     /// [`TreeTN::estimate_exact_sum_bytes`](tensor4all_treetn::TreeTN::estimate_exact_sum_bytes),
     /// taken before the sum is formed; a larger sum is refused with
     /// [`PartitionedTreeTNError::GroupSumLimit`] instead of being allocated.
-    /// The estimate counts the built sum only. The add chain of
-    /// [`SumEngine::Binary`] holds two partial sums at its last add, and the
-    /// truncation that follows needs a transient on top of the sum (see
-    /// [`SumEngine`]), so the peak can be several times the estimate.
+    ///
+    /// **The limit bounds the built group sum, not peak memory.** The add chain
+    /// of [`SumEngine::Binary`] holds two partial sums at its last add, and the
+    /// truncation that follows the sum needs a transient on top of it, measured
+    /// in tensor4all/tensor4all-rs#1107 at 0.65 to 3.8 times the built sum (see
+    /// [`SumEngine`]). The peak of one group can therefore be several times
+    /// this limit, and the other groups' results and the operands are held as
+    /// well. To keep one group within a memory budget, set the limit to the
+    /// budget divided by that multiplier: up to about 5 by these figures, the
+    /// sum itself plus a transient of 3.8 times it.
     ///
     /// Defaults to [`Self::DEFAULT_GROUP_SUM_LIMIT_BYTES`] (4 GiB). A group of
     /// one patch is never checked. `usize::MAX` disables the check.
