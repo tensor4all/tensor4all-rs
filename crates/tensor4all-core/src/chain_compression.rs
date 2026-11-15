@@ -127,9 +127,17 @@ pub trait ChainCore<T>: Sized {
     type Error: From<ChainCompressionError>;
 
     /// Borrow the shape and flat data in column-major order.
+    ///
+    /// # Errors
+    /// Returns the adapter's error for noncompact or device-only storage,
+    /// or a shape mismatch between the declared extents and borrowed data.
     fn view(&self) -> Result<ColMajorArrayRef<'_, T>, Self::Error>;
 
     /// Rebuild a core from column-major data.
+    ///
+    /// # Errors
+    /// Returns the adapter's error for a shape mismatch with the data length
+    /// or a shape or stride overflow.
     fn from_col_major(shape: [usize; 3], data: Vec<T>) -> Result<Self, Self::Error>;
 }
 
