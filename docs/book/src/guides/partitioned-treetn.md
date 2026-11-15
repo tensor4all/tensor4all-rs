@@ -625,23 +625,25 @@ descendants.
 `MergeRefineOptions::output_depth` stops after that many levels; `None` (the
 default) refines every selected bit. `MergeRefineOptions::coordinate_groups` supplies
 several coordinate axes explicitly: each `CoordinateGroup` gives that axis' selected
-indices in input order and, separately, in output order, one level advances every
-non-exhausted axis by one bit, and a two-axis level therefore combines four input
-children and produces four output children. The default `None` treats `selection` as
-one axis with the documented reversed placement. `MergeRefineOptions::target_bond_dim` is a
-soft rank goal: `None` keeps the trajectory uniform and exact, while `Some(goal)`
-makes it adaptive. An output region is then merged without splitting first and stops
-as soon as that candidate fits the goal; a candidate above the goal is refined only
-when the children store no more parameters in total than the candidate they replace,
-because one split keeps one region per output child (two in one axis, eight with
-three axes) and a projected child still keeps every output site axis, so a rank drop
-by one is not a gain. A region that stops
-refining keeps its output key and still merges its input siblings on every later
-level, so it consolidates the input prefixes it held instead of freezing them. A
-merged pair is combined into one term when it fits the goal or lowers the bond
-dimension (otherwise both operands stay as separate terms of the region's
-superposition), and every truncation candidate must fit the item's share of the
-global allowance. An unaffordable or gainless candidate is retained exactly rather
+indices in input order and, separately, in output order, and one level advances every
+refining, non-exhausted axis by one bit, so a two-axis level combines four input
+children and, without a rank goal, produces four output children. The default `None`
+treats `selection` as one axis with the documented reversed placement.
+`MergeRefineOptions::target_bond_dim` is a soft rank goal: `None` keeps the
+trajectory uniform and exact, while `Some(goal)` makes it adaptive and decides each
+axis of a region on its own. An output region is then merged without splitting first
+and stops on every axis as soon as that candidate fits the goal; for a candidate above
+the goal, an axis is refined only when that axis' children store no more parameters in
+total than the candidate they replace, because a split keeps one region per output
+child and a projected child still keeps every output site axis, so a rank drop by one
+is not a gain. A level therefore splits into `2^(refining axes)` children instead of
+`2^(coordinate axes)`; a stopped axis keeps the region's shorter prefix for good while
+its other axes keep refining. A region whose axes have all stopped keeps its output key
+and still merges its input siblings on every later level, so it consolidates the input
+prefixes it held instead of freezing them. A merged pair is combined into one term when
+it fits the goal or lowers the bond dimension (otherwise both operands stay as separate
+terms of the region's superposition), and every truncation candidate must fit the
+item's share of the global allowance. An unaffordable or gainless candidate is retained exactly rather
 than violating the accuracy contract, and exceeding `MergeRefineOptions::max_terms`
 returns a resource-limit error.
 

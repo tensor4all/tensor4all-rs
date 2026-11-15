@@ -3,11 +3,101 @@ use std::time::{Duration, Instant};
 
 use super::{
     level_share, merge_group_charge_bound, prefixes_overlap, split_pays, validate_leaf_geometry,
-    CoverageContract, InputKey, ReconstructionTarget, ScheduleGeometry,
+    CoordinateGroup, CoverageContract, InputKey, OutputKey, ReconstructionTarget, ScheduleGeometry,
 };
 use crate::projector::index::has_overlapping_pair;
-use crate::reconstruction::CoordinateGroup;
 use crate::{DynIndex, IdxTensor, PartitionedTreeTN, Projector, SubDomainTreeTN, TreeTN};
+/// A region key with the given per-axis prefixes and no spectator constraint.
+fn prefix_key(prefix: Vec<(usize, usize)>) -> OutputKey {
+    OutputKey {
+        spectator: 0,
+        prefix,
+    }
+}
+
+/// Geometry over axes of the given bit lengths, one contiguous slice of binary
+/// selected indices per axis.
+fn axis_lengths_geometry(lengths: &[usize]) -> ScheduleGeometry {
+    let bits: Vec<DynIndex> = (0..lengths.iter().sum())
+        .map(|_| DynIndex::new_dyn(2))
+        .collect();
+    let mut offset = 0usize;
+    let mut axes = Vec::new();
+    for &length in lengths {
+        axes.push(CoordinateGroup::new(bits[offset..offset + length].to_vec()));
+        offset += length;
+    }
+    ScheduleGeometry::new(&bits, Some(&axes)).expect("geometry")
+}
+
+/// A region stops an axis by keeping that axis' prefix shorter, so the axes that
+/// still refine are exactly those whose prefix is one bit short of the level. The
+/// stop is one-way, and an exhausted axis is skipped rather than revived or
+/// reported as refining.
+#[test]
+fn refining_axes_reads_the_per_axis_stop_from_the_region_key() {
+    let geometry = axis_lengths_geometry(&[3, 3]);
+    let root = prefix_key(vec![(0, 0), (0, 0)]);
+    assert_eq!(geometry.refining_axes(&root, 1), vec![0, 1]);
+    assert_eq!(
+        geometry.refining_axes(&prefix_key(vec![(1, 1), (1, 0)]), 2),
+        vec![0, 1]
+    );
+
+    // Axis 1 stopped at level 2 while axis 0 kept refining.
+    assert_eq!(
+        geometry.refining_axes(&prefix_key(vec![(2, 3), (1, 0)]), 3),
+        vec![0]
+    );
+    // Axis 0 stopped at level 1 while axis 1 kept refining.
+    assert_eq!(
+        geometry.refining_axes(&prefix_key(vec![(0, 0), (2, 1)]), 3),
+        vec![1]
+    );
+    // Both stopped: the region only merges its input siblings from here on.
+    assert!(geometry
+        .refining_axes(&prefix_key(vec![(1, 1), (1, 0)]), 3)
+        .is_empty());
+
+    // Axis 0 fixed all of its single output bit, so it is exhausted rather than
+    // stopped even though its depth is one bit short of the level.
+    let uneven = axis_lengths_geometry(&[1, 2]);
+    assert_eq!(
+        uneven.refining_axes(&prefix_key(vec![(1, 0), (1, 1)]), 2),
+        vec![1]
+    );
+}
+
+/// A child deepens each listed axis by exactly one bit from that axis' own depth and
+/// keeps every unlisted axis' prefix, so a stopped axis cannot pull the refining
+/// axes back to its own depth. The requested-output filter still applies.
+#[test]
+fn child_keys_extend_only_the_listed_axes_by_one_bit() {
+    let geometry = axis_lengths_geometry(&[2, 2]);
+    let prefixes = |keys: Vec<OutputKey>| -> Vec<Vec<(usize, usize)>> {
+        keys.into_iter().map(|key| key.prefix).collect()
+    };
+    let root = prefix_key(vec![(0, 0), (0, 0)]);
+    assert_eq!(
+        prefixes(geometry.child_keys(&root, &[1], None)),
+        vec![vec![(0, 0), (1, 0)], vec![(0, 0), (1, 1)]]
+    );
+    assert_eq!(geometry.child_keys(&root, &[0, 1], None).len(), 4);
+
+    // Axis 0 already stopped at depth 1: the children of axis 1 stay there.
+    let lagging = prefix_key(vec![(1, 1), (1, 0)]);
+    assert_eq!(
+        prefixes(geometry.child_keys(&lagging, &[1], None)),
+        vec![vec![(1, 1), (2, 0)], vec![(1, 1), (2, 1)]]
+    );
+
+    // A requested region keeps one branch of a level.
+    let wanted: Vec<InputKey> = vec![vec![(0, 0), (1, 1)]];
+    assert_eq!(
+        prefixes(geometry.child_keys(&root, &[1], Some(&wanted))),
+        vec![vec![(0, 0), (1, 1)]]
+    );
+}
 
 /// Two axes: axis 0 nests `first` inside `second`, axis 1 nests `second`
 /// inside `first`. Each axis overlaps, so the leaves overlap even though
