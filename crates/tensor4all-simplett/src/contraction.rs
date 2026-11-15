@@ -9,7 +9,7 @@ use crate::einsum_helper::{
 };
 use crate::error::{Result, SimpleTensorTrainError};
 use crate::tensortrain::SimpleTensorTrain;
-use crate::traits::{AbstractTensorTrain, TTScalar};
+use crate::traits::{ensure_unit_leading_bond, AbstractTensorTrain, TTScalar};
 use crate::types::Tensor3Ops;
 use tensor4all_tensorbackend::Matrix;
 
@@ -64,7 +64,8 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// # Errors
     ///
     /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the two trains
-    /// differ in length or site dimensions, or when an intermediate environment
+    /// differ in length or site dimensions, when the first core of either train
+    /// has a non-unit leading bond, or when an intermediate environment
     /// contraction cannot be read.
     ///
     /// # Examples
@@ -100,6 +101,13 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
         // result[ra, rb] = sum_s a[0, s, ra] * b[0, s, rb]
         let a0 = self.site_tensor(0);
         let b0 = other.site_tensor(0);
+
+        // A train's first core starts from a unit boundary bond; `site_tensors_mut`
+        // can replace it afterwards. The fixed `asr,ast->rt` plan shares the leading
+        // label, so without this guard a non-unit leading bond would be summed
+        // away and produce a plausible but wrong scalar (#1340).
+        ensure_unit_leading_bond(a0)?;
+        ensure_unit_leading_bond(b0)?;
 
         if a0.site_dim() != b0.site_dim() {
             return Err(SimpleTensorTrainError::InvalidOperation {
@@ -187,10 +195,11 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the trains have different lengths, when a
-    /// site dimension differs at site 0 or at a later site, when the session rejects a contraction, when the
-    /// final environment cannot be read back, or when it is not the 1x1 environment the train invariants
-    /// imply - a core replaced through `site_tensors_mut` can break that.
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] when the trains have different lengths, when the
+    /// first core of either train has a non-unit leading bond, when a site dimension differs at site 0 or at a
+    /// later site, when the session rejects a contraction, when the final environment cannot be read back, or
+    /// when it is not the 1x1 environment the train invariants imply - a core replaced through
+    /// `site_tensors_mut` can break that.
     ///
     /// # Examples
     ///
@@ -231,6 +240,12 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
 
         let a0 = self.site_tensor(0);
         let b0 = other.site_tensor(0);
+
+        // The session route shares the fixed leading-label plan with the
+        // compatibility route above, so it needs the same boundary guard (#1340).
+        ensure_unit_leading_bond(a0)?;
+        ensure_unit_leading_bond(b0)?;
+
         if a0.site_dim() != b0.site_dim() {
             return Err(SimpleTensorTrainError::InvalidOperation {
                 message: format!(
