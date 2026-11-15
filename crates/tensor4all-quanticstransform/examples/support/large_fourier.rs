@@ -4,7 +4,7 @@ use num_complex::Complex64;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use std::{collections::HashSet, time::Instant};
-use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, SvdTruncationPolicy};
+use tensor4all_core::{outer_product, ColMajorArrayRef, DynIndex, IdxTensor, SvdTruncationPolicy};
 use tensor4all_interpolativeqtt::{interpolate_single_scale, InterpolativeQttOptions};
 use tensor4all_partitionedtreetn::{
     reconstruction::{
@@ -16,11 +16,9 @@ use tensor4all_quanticstransform::{
     patched_fourier_transform, quantics_fourier_operator_multiaxis, AxisBit, FourierOptions,
     PatchedFourierOptions,
 };
-use tensor4all_simplett::SimpleTensorTrain;
 use tensor4all_treetn::{
-    tensor_train_to_treetn_with_names_and_site_indices, CachedEvaluatorOptions, EvaluationHint,
-    RestructureOptions, SiteIndexNetwork, SwapOptions, TreeTN, TreeTNCachedEvaluator,
-    TruncationOptions,
+    CachedEvaluatorOptions, EvaluationHint, RestructureOptions, SiteIndexNetwork, SwapOptions,
+    TreeTN, TreeTNCachedEvaluator, TruncationOptions,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -136,12 +134,14 @@ pub(crate) fn run_case(
     let start = Instant::now();
     let n = 1usize << bits;
     let shifts = [0.375, 0.3125];
-    let axes: Vec<Vec<DynIndex>> = (0..dimensions)
-        .map(|_| (0..bits).map(|_| DynIndex::new_dyn(2)).collect())
-        .collect();
-    let mut cores = Vec::new();
-    for &shift in shifts.iter().take(dimensions) {
-        let tt = interpolate_single_scale(
+    // Dimension-one bonds join the independent Gaussian factors into a chain.
+    let joins: Vec<_> = (1..dimensions)
+        .map(|_| IdxTensor::ones(&[DynIndex::new_dyn(1)]))
+        .collect::<std::result::Result<_, _>>()?;
+    let mut axes = Vec::with_capacity(dimensions);
+    let mut tensors = Vec::with_capacity(bits * dimensions);
+    for (axis, &shift) in shifts.iter().take(dimensions).enumerate() {
+        let (factor, sites) = interpolate_single_scale(
             |x| gaussian(x, shift) / (n as f64).sqrt(),
             0.0,
             1.0,
@@ -149,16 +149,23 @@ pub(crate) fn run_case(
             48,
             &InterpolativeQttOptions::default(),
         )?;
-        cores.extend(tt.into_site_tensors());
+        for bit in 0..sites.len() {
+            let node = factor.node_index(&bit).ok_or("missing Gaussian node")?;
+            let mut tensor = factor
+                .tensor(node)
+                .ok_or("missing Gaussian tensor")?
+                .clone();
+            if bit == 0 && axis > 0 {
+                tensor = outer_product(&joins[axis - 1], &tensor)?;
+            }
+            if bit + 1 == sites.len() && axis < joins.len() {
+                tensor = outer_product(&tensor, &joins[axis])?;
+            }
+            tensors.push(tensor);
+        }
+        axes.push(sites);
     }
-    // Concatenate independent rank-one-ended TTs: this is their tensor product.
-    let tt = SimpleTensorTrain::new(cores)?;
-    let grouped_indices: Vec<_> = axes.iter().flatten().cloned().collect();
-    let mut tree = tensor_train_to_treetn_with_names_and_site_indices(
-        &tt,
-        (0..bits * dimensions).collect(),
-        grouped_indices,
-    )?;
+    let mut tree = TreeTN::from_tensors(tensors, (0..bits * dimensions).collect())?;
     let layout: Vec<_> = if interleaved {
         (0..bits)
             .flat_map(|bit| (0..dimensions).map(move |axis| AxisBit { axis, bit }))

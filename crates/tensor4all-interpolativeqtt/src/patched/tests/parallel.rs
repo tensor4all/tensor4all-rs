@@ -51,7 +51,7 @@ fn compare<T: InterpolativeScalar + Send + Sync + PartialEq + std::fmt::Debug>(
             for (a, z) in serial.iter().zip(&parallel) {
                 assert_eq!(a.prefix, z.prefix, "P={p}, B={b}");
                 assert_eq!(a.error_estimate, z.error_estimate, "P={p}, B={b}");
-                assert_eq!(a.tt.site_tensors(), z.tt.site_tensors(), "P={p}, B={b}");
+                assert_eq!(patch_cores::<T>(a), patch_cores::<T>(z), "P={p}, B={b}");
             }
         }
     }
@@ -123,7 +123,7 @@ fn serial_ranges_and_external_evaluators_agree() {
     assert_eq!(ranges.len(), external.len());
     for (a, b) in ranges.iter().zip(&external) {
         assert_eq!(a.prefix, b.prefix);
-        assert_eq!(a.tt.site_tensors(), b.tt.site_tensors());
+        assert_eq!(patch_cores::<f64>(a), patch_cores::<f64>(b));
     }
 }
 

@@ -1,17 +1,14 @@
 //! Deterministic breadth-first construction of independently compressed boxes.
 
 use std::error::Error;
-use tensor4all_core::ColMajorArrayRef;
-use tensor4all_simplett::{tensor3_from_data, TTCache};
+use tensor4all_core::{ColMajorArray, ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_tensorbackend::{explicit::Session, CpuEngine, CpuExecutionContext, Exec, Matrix};
+use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator};
 
 use crate::error::{invalid_argument, InterpolativeQttError, Result};
 use crate::interpolation::{build_refined_cores, dense_test_points, interval_points, SampleBatch};
 use crate::interval::NInterval;
-use crate::{
-    get_chebyshev_grid, AbstractTensorTrain, InterpolativeScalar, LagrangePolynomials,
-    SimpleTensorTrain,
-};
+use crate::{get_chebyshev_grid, InterpolativeScalar, LagrangePolynomials};
 
 /// One accepted dyadic box and its local QTT, unlike a full-domain multiscale QTT.
 ///
@@ -21,21 +18,25 @@ use crate::{
 ///
 /// # Examples
 /// ```
-/// use tensor4all_interpolativeqtt::{InterpolativePatch, SimpleTensorTrain};
-/// let patch = InterpolativePatch {
-///     prefix: vec![vec![1], vec![0]],
-///     tt: SimpleTensorTrain::<f64>::constant(&[4, 4], 2.0),
-///     error_estimate: 0.0,
-/// };
-/// assert_eq!(patch.prefix, vec![vec![1], vec![0]]);
-/// assert_eq!(patch.error_estimate, 0.0);
+/// use tensor4all_core::ColMajorArray;
+/// use tensor4all_interpolativeqtt::InterpolativePatch;
+/// use tensor4all_treetn::TreeTN;
+///
+/// let (tree, site_indices) = TreeTN::from_chain_cores(vec![
+///     ColMajorArray::new(vec![2.0, 3.0], vec![1, 2, 1]).unwrap(),
+/// ]).unwrap();
+/// let patch = InterpolativePatch { prefix: vec![vec![1]], tree, site_indices, error_estimate: 0.0 };
+/// assert_eq!(patch.prefix, vec![vec![1]]);
+/// assert_eq!(patch.tree.evaluate_point(&patch.site_indices, &[1]).unwrap().real(), 3.0);
 /// ```
 #[derive(Debug, Clone)]
-pub struct InterpolativePatch<T: InterpolativeScalar> {
+pub struct InterpolativePatch {
     /// Fixed most-significant-first bits of each axis; an empty prefix is the root.
     pub prefix: Vec<Vec<usize>>,
     /// QTT on the remaining bits, with fused site dimension `2^D`.
-    pub tt: SimpleTensorTrain<T>,
+    pub tree: TreeTN<IdxTensor, usize>,
+    /// Physical indices of the local tree in most-significant-first order.
+    pub site_indices: Vec<DynIndex>,
     /// Per-value error estimate of the returned train, compared with
     /// [`PatchedInterpolativeOptions::tolerance`] for acceptance: the maximum
     /// absolute interpolation residual at the Chebyshev validation points plus
@@ -123,15 +124,14 @@ impl Default for PatchedInterpolativeOptions {
 /// [`InterpolativeQttError::Evaluation`], [`InterpolativeQttError::BatchLength`]
 /// or [`InterpolativeQttError::NonFinite`] for invalid evaluator results;
 /// [`InterpolativeQttError::NotConverged`] or [`InterpolativeQttError::PatchLimit`]
-/// when refinement hits a limit; and execution, multiplication or tensor-train
+/// when refinement hits a limit; and execution, multiplication or TreeTN
 /// errors when the backend fails.
 ///
 /// # Examples
 /// ```
 /// use std::convert::Infallible;
 /// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
-/// use tensor4all_interpolativeqtt::{interpolate_patched_nd, PatchedInterpolativeOptions,
-///     AbstractTensorTrain};
+/// use tensor4all_interpolativeqtt::{interpolate_patched_nd, PatchedInterpolativeOptions};
 /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let patches = interpolate_patched_nd(
 ///     &context,
@@ -141,7 +141,7 @@ impl Default for PatchedInterpolativeOptions {
 /// )?;
 /// assert_eq!(patches.len(), 1);
 /// assert_eq!(patches[0].prefix, vec![Vec::<usize>::new(); 2]);
-/// assert!((patches[0].tt.evaluate(&[0; 5])? - 1.0).abs() < 1e-10);
+/// assert!((patches[0].tree.evaluate_point(&patches[0].site_indices, &[0; 5])?.real() - 1.0).abs() < 1e-10);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn interpolate_patched_nd<T, F, E>(
@@ -152,7 +152,7 @@ pub fn interpolate_patched_nd<T, F, E>(
     num_bits: usize,
     polynomial_degree: usize,
     options: &PatchedInterpolativeOptions,
-) -> Result<Vec<InterpolativePatch<T>>>
+) -> Result<Vec<InterpolativePatch>>
 where
     T: InterpolativeScalar,
     F: Fn(ColMajorArrayRef<'_, f64>, Exec<'_>) -> std::result::Result<Vec<T>, E>,
@@ -206,7 +206,7 @@ where
 /// use hataori_tenferro::TenferroLanes;
 /// use tensor4all_tensorbackend::CpuBackend;
 /// use tensor4all_interpolativeqtt::{interpolate_patched_nd_on_lanes,
-///     PatchedInterpolativeOptions, AbstractTensorTrain};
+///     PatchedInterpolativeOptions};
 /// let engines = (0..2).map(|_| CpuBackend::with_threads(2).map(|b| b.into_engine()))
 ///     .collect::<Result<Vec<_>, _>>()?;
 /// let mut lanes = TenferroLanes::new(engines)?;
@@ -214,7 +214,7 @@ where
 ///     |p, _exec| Ok::<_, Infallible>(p.data().iter().map(|x| 1.0 + x).collect()),
 ///     &[0.0], &[1.0], 4, 3, &PatchedInterpolativeOptions::default())?;
 /// assert_eq!(patches.len(), 1);
-/// assert!((patches[0].tt.evaluate(&[0; 4])? - 1.0).abs() < 1e-10);
+/// assert!((patches[0].tree.evaluate_point(&patches[0].site_indices, &[0; 4])?.real() - 1.0).abs() < 1e-10);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[cfg(feature = "parallel")]
@@ -226,7 +226,7 @@ pub fn interpolate_patched_nd_on_lanes<T, F, E>(
     num_bits: usize,
     polynomial_degree: usize,
     options: &PatchedInterpolativeOptions,
-) -> Result<Vec<InterpolativePatch<T>>>
+) -> Result<Vec<InterpolativePatch>>
 where
     T: InterpolativeScalar + Send + Sync,
     F: Fn(ColMajorArrayRef<'_, f64>, Exec<'_>) -> std::result::Result<Vec<T>, E> + Sync,
@@ -268,8 +268,8 @@ struct BoxSpec {
     depth: usize,
 }
 
-struct PatchOutcome<T: InterpolativeScalar> {
-    patch: InterpolativePatch<T>,
+struct PatchOutcome {
+    patch: InterpolativePatch,
     domain: NInterval,
     depth: usize,
 }
@@ -346,8 +346,8 @@ impl<T: InterpolativeScalar> Plan<'_, T> {
 
 fn run_waves<T: InterpolativeScalar>(
     plan: &Plan<'_, T>,
-    mut run: impl FnMut(Vec<BoxSpec>) -> Result<Vec<PatchOutcome<T>>>,
-) -> Result<Vec<InterpolativePatch<T>>> {
+    mut run: impl FnMut(Vec<BoxSpec>) -> Result<Vec<PatchOutcome>>,
+) -> Result<Vec<InterpolativePatch>> {
     let mut wave = vec![BoxSpec {
         domain: plan.domain.clone(),
         prefix: vec![vec![]; plan.domain.ndims()],
@@ -368,7 +368,7 @@ fn run_waves<T: InterpolativeScalar>(
             depth,
         } in results
         {
-            let rank = patch.tt.rank();
+            let rank = patch.tree.link_dims().into_iter().max().unwrap_or(1);
             if patch.error_estimate <= plan.options.tolerance
                 && plan.options.max_bond_dim.is_none_or(|cap| rank <= cap)
             {
@@ -415,7 +415,7 @@ fn patch_body<T, F, E>(
     evaluate: &F,
     patch: BoxSpec,
     engine: &mut CpuEngine,
-) -> Result<PatchOutcome<T>>
+) -> Result<PatchOutcome>
 where
     T: InterpolativeScalar,
     F: Fn(ColMajorArrayRef<'_, f64>, Exec<'_>) -> std::result::Result<Vec<T>, E>,
@@ -424,7 +424,7 @@ where
     let remaining = plan.num_bits - patch.depth;
     // Chebyshev node values of each immediate child, in sampling order.
     let mut children: Vec<(NInterval, Vec<T>)> = Vec::new();
-    let (mut tt, interpolation_error) = if remaining == 1 {
+    let (cores, interpolation_error) = if remaining == 1 {
         let pieces = patch.domain.split()?;
         let points: Vec<_> = pieces
             .iter()
@@ -435,7 +435,7 @@ where
             ColMajorArrayRef::new(&points, &shape).map_err(|e| invalid_argument(e.to_string()))?;
         let values = sample(evaluate, engine, points)?;
         (
-            SimpleTensorTrain::new(vec![tensor3_from_data(values, 1, plan.site_dim, 1)?])?,
+            vec![ColMajorArray::new(values, vec![1, plan.site_dim, 1])?],
             0.0,
         )
     } else {
@@ -469,21 +469,28 @@ where
             &plan.basis,
             |_, _| true,
         )?;
-        (SimpleTensorTrain::new(cores)?, error)
+        (cores, error)
     };
     // The discarded Frobenius weight covers the whole patch tensor and grows
     // with its grid size, so it is not comparable with the per-value tolerance.
     // Measure the change per value on the train actually returned instead.
-    tt.compress_svd_with_session(
-        &mut Session::new(engine),
-        plan.options.compression_tolerance,
-        None,
-    )?;
+    let (tree, site_indices) = TreeTN::from_chain_cores(cores)?;
+    let mut session = Session::new(engine);
+    let tree =
+        tree.compress_chain_on_session(plan.options.compression_tolerance, None, &mut session)?;
     let error_estimate = if remaining == 1 {
         // A one-site train has no bond to truncate.
         interpolation_error
     } else {
-        interpolation_error + compression_change(plan, &patch.domain, &children, &tt)?
+        interpolation_error
+            + compression_change(
+                plan,
+                &patch.domain,
+                &children,
+                &tree,
+                &site_indices,
+                &mut session,
+            )?
     };
     if !error_estimate.is_finite() {
         return Err(InterpolativeQttError::NonFinite);
@@ -491,7 +498,8 @@ where
     Ok(PatchOutcome {
         patch: InterpolativePatch {
             prefix: patch.prefix,
-            tt,
+            tree,
+            site_indices,
             error_estimate,
         },
         domain: patch.domain,
@@ -538,9 +546,11 @@ fn compression_change<T: InterpolativeScalar>(
     plan: &Plan<'_, T>,
     domain: &NInterval,
     children: &[(NInterval, Vec<T>)],
-    compressed: &SimpleTensorTrain<T>,
+    compressed: &TreeTN<IdxTensor, usize>,
+    site_indices: &[DynIndex],
+    session: &mut Session<'_>,
 ) -> Result<f64> {
-    let sites = compressed.len();
+    let sites = site_indices.len();
     let ndims = domain.ndims();
     // Match sampled node sets to children by their exact intervals: the
     // assembly splits this domain with the same `NInterval::split`, and every
@@ -565,7 +575,6 @@ fn compression_change<T: InterpolativeScalar>(
     let axis = compression_check_indices(&plan.test_points_1d, sites);
     let count = checked_power(axis.len(), ndims)?;
     checked_product(count, checked_product(sites, std::mem::size_of::<usize>())?)?;
-    checked_product(count, std::mem::size_of::<Vec<usize>>())?;
     checked_product(count, std::mem::size_of::<T>())?;
     // Every axis uses the same normalized child coordinates. Compute this
     // table once and share it across axes and all tensor-product points.
@@ -577,7 +586,7 @@ fn compression_change<T: InterpolativeScalar>(
         }
     }
     let mut interpolants = Vec::with_capacity(count);
-    let mut indices = Vec::with_capacity(count);
+    let mut indices = Vec::with_capacity(checked_product(sites, count)?);
     for multi in product_indices(axis.len(), ndims, count) {
         let child = multi.iter().enumerate().fold(0, |mask, (d, &i)| {
             mask | (usize::from(axis[i] >= half) << d)
@@ -592,28 +601,34 @@ fn compression_change<T: InterpolativeScalar>(
             interpolant = interpolant + value * T::from_f64(weight);
         }
         interpolants.push(interpolant);
-        indices.push(
-            (0..sites)
-                .map(|level| {
-                    let shift = sites - 1 - level;
-                    multi
-                        .iter()
-                        .enumerate()
-                        .map(|(d, &i)| (((axis[i] >> shift) & 1) as usize) << d)
-                        .sum()
-                })
-                .collect(),
-        );
+        indices.extend((0..sites).map(|level| {
+            let shift = sites - 1 - level;
+            multi
+                .iter()
+                .enumerate()
+                .map(|(d, &i)| (((axis[i] >> shift) & 1) as usize) << d)
+                .sum::<usize>()
+        }));
     }
-    // A full left prefix preserves evaluate()'s left-to-right accumulation
-    // order bit for bit, while the cache reuses all common prefixes. This
-    // check owns the cache; its at most count * sites prefixes live only here.
-    let values = TTCache::new(compressed).evaluate_many(&indices, Some(sites))?;
-    Ok(values
+    let shape = [sites, count];
+    let indices = ColMajorArrayRef::new(&indices, &shape)?;
+    let mut evaluator =
+        TreeTNCachedEvaluator::new(compressed, site_indices, CachedEvaluatorOptions::default())?;
+    let values = evaluator.evaluate_batched_typed_on_session::<T>(
+        session,
+        indices,
+        EvaluationHint::default(),
+    )?;
+    values
         .into_iter()
         .zip(interpolants)
-        .map(|(value, interpolant)| (value - interpolant).abs_val())
-        .fold(0.0_f64, f64::max))
+        .try_fold(0.0_f64, |worst, (value, interpolant)| {
+            let residual = (value - interpolant).abs_val();
+            if !residual.is_finite() {
+                return Err(InterpolativeQttError::NonFinite);
+            }
+            Ok(worst.max(residual))
+        })
 }
 
 fn sample<T, F, E>(

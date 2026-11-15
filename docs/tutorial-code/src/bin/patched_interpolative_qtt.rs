@@ -2,17 +2,16 @@
 //! The dense DFT oracle is explicitly limited to sixteen grid points.
 use num_complex::Complex64;
 use std::{collections::HashSet, convert::Infallible, error::Error};
-use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, LinearizationOrder};
+use tensor4all_core::{
+    outer_product, AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor, LinearizationOrder,
+};
 use tensor4all_interpolativeqtt::{interpolate_patched_nd, PatchedInterpolativeOptions};
 use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN};
 use tensor4all_quanticstransform::{
     patched_fourier_transform, FourierOptions, PatchedFourierOptions,
 };
 use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
-use tensor4all_treetn::{
-    insert_onehot_site_in_treetn_chain, tensor_train_to_treetn_with_names, SiteIndexNetwork,
-    SplitOptions,
-};
+use tensor4all_treetn::{SiteIndexNetwork, SplitOptions};
 
 fn green(point: &[f64]) -> Complex64 {
     let energy = (2.0 * std::f64::consts::PI * point[0]).cos()
@@ -55,20 +54,29 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut subdomains = Vec::new();
     for patch in patches {
         let depth = patch.prefix[0].len();
-        let (mut tree, mut fused) =
-            tensor_train_to_treetn_with_names(&patch.tt, (0..(2 - depth)).collect())?;
+        let mut tree = patch.tree;
         // All physical axes must exist before SubDomainTreeTN applies its mask.
-        // Insert one-hot fused prefix sites through the existing high-level bridge.
+        let mut first = tree.node_index(&0).ok_or("missing first QTT node")?;
         for level in (0..depth).rev() {
-            let site = DynIndex::new_dyn(4);
-            let value = patch.prefix[0][level] + 2 * patch.prefix[1][level];
-            tree = insert_onehot_site_in_treetn_chain::<Complex64>(tree, 0, site.clone(), value)?;
-            fused.insert(0, site);
+            let link = DynIndex::new_dyn(1);
+            let unit = IdxTensor::ones(std::slice::from_ref(&link))?;
+            let endpoint = tree.tensor(first).ok_or("missing QTT endpoint tensor")?;
+            tree.replace_tensor(first, outer_product(endpoint, &unit)?)?;
+            let prefix = IdxTensor::onehot(&[
+                (sites[2 * level].clone(), patch.prefix[0][level]),
+                (sites[2 * level + 1].clone(), patch.prefix[1][level]),
+                (link.clone(), 0),
+            ])?
+            .scale(AnyScalar::new_complex(1.0, 0.0))?;
+            let node = tree.add_tensor(patch.site_indices.len() + level, prefix)?;
+            tree.connect(node, &link, first, &link)?;
+            first = node;
         }
-        for (level, site) in fused.iter().enumerate() {
+        for (level, site) in patch.site_indices.iter().enumerate() {
+            let start = 2 * (depth + level);
             tree = tree.replace_site_index_with_indices(
                 site,
-                &sites[2 * level..2 * level + 2],
+                &sites[start..start + 2],
                 LinearizationOrder::ColumnMajor,
             )?;
         }

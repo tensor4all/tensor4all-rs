@@ -13,32 +13,15 @@ fn retarded(omega: f64, delta: f64, epsilon: f64) -> Complex64 {
 
 /// Asserts that `complex` is `real` with every value lifted to `Complex64`:
 /// the same core shapes, real parts bit for bit, imaginary parts zero.
-fn assert_lifted_exactly(real: &SimpleTensorTrain<f64>, complex: &SimpleTensorTrain<Complex64>) {
+fn assert_lifted_exactly(real: &InterpolativeQtt, complex: &InterpolativeQtt) {
+    let real = real.0.chain_cores::<f64>(&real.1).unwrap();
+    let complex = complex.0.chain_cores::<Complex64>(&complex.1).unwrap();
     assert_eq!(real.len(), complex.len());
-    for (site, (r, c)) in real
-        .site_tensors()
-        .iter()
-        .zip(complex.site_tensors())
-        .enumerate()
-    {
-        let shape = [r.left_dim(), r.site_dim(), r.right_dim()];
-        assert_eq!(
-            shape,
-            [c.left_dim(), c.site_dim(), c.right_dim()],
-            "site {site}"
-        );
-        for left in 0..shape[0] {
-            for s in 0..shape[1] {
-                for right in 0..shape[2] {
-                    let (x, z) = (*r.get3(left, s, right), *c.get3(left, s, right));
-                    assert_eq!(
-                        z.re.to_bits(),
-                        x.to_bits(),
-                        "site {site} [{left},{s},{right}]"
-                    );
-                    assert_eq!(z.im, 0.0, "site {site} [{left},{s},{right}]");
-                }
-            }
+    for (site, (r, c)) in real.iter().zip(&complex).enumerate() {
+        assert_eq!(r.shape(), c.shape(), "site {site}");
+        for (offset, (&x, &z)) in r.data().iter().zip(c.data()).enumerate() {
+            assert_eq!(z.re.to_bits(), x.to_bits(), "site {site}, offset {offset}");
+            assert_eq!(z.im, 0.0, "site {site}, offset {offset}");
         }
     }
 }
@@ -93,7 +76,7 @@ fn complex_single_scale_reproduces_the_retarded_propagator_2d() {
     )
     .unwrap();
 
-    assert_eq!(tt.site_dims(), vec![4; r]);
+    assert_eq!(site_dims(&tt), vec![4; r]);
     assert_tt_matches_grid_nd(&tt, &grid_nd(r, &lower, &upper), f, 1e-10);
 }
 
@@ -111,7 +94,7 @@ fn complex_adaptive_refines_around_the_quasiparticle_peak() {
 
     // Refinement shows in the bonds: a refined core carries `degree + 1` basis
     // functions plus one bond per refined interval.
-    assert!(adaptive.rank() > degree + 1, "rank {}", adaptive.rank());
+    assert!(rank(&adaptive) > degree + 1, "rank {}", rank(&adaptive));
     assert_tt_matches_grid_1d(&adaptive, &grid_1d(r, a, b), f, 1e-7);
 
     let single = interpolate_single_scale(f, a, b, r, degree, &options).unwrap();
@@ -120,7 +103,7 @@ fn complex_adaptive_refines_around_the_quasiparticle_peak() {
         .map(|i| {
             let q = grid.grididx_to_quantics(&[i]).unwrap();
             let x = grid.grididx_to_origcoord(&[i]).unwrap()[0];
-            (single.evaluate(&q).unwrap() - f(x)).norm()
+            (evaluate::<Complex64>(&single, &q) - f(x)).norm()
         })
         .fold(0.0, f64::max);
     assert!(single_error > 1e-4, "single-scale error {single_error}");
@@ -169,7 +152,7 @@ fn zero_imaginary_part_reproduces_the_real_construction_bit_for_bit() {
         &interpolate_multi_scale_nd(cg, &lower, &upper, 4, 4, &cusp, &options).unwrap(),
     );
     let real_adaptive = interpolate_adaptive(f, -1.0, 1.0, 6, 6, 1e-6, &[], &options).unwrap();
-    assert!(real_adaptive.rank() > 7, "the cusp at 0.3 must be refined");
+    assert!(rank(&real_adaptive) > 7, "the cusp at 0.3 must be refined");
     assert_lifted_exactly(
         &real_adaptive,
         &interpolate_adaptive(c, -1.0, 1.0, 6, 6, 1e-6, &[], &options).unwrap(),
@@ -210,11 +193,14 @@ fn zero_imaginary_part_agrees_with_the_real_path_after_compression() {
     let complex =
         interpolate_single_scale(|x| Complex64::new(f(x), 0.0), a, b, r, degree, &options).unwrap();
 
-    assert_eq!(real.link_dims(), complex.link_dims());
+    assert_eq!(real.0.link_dims(), complex.0.link_dims());
     let grid = grid_1d(r, a, b);
     for i in 0..1usize << r {
         let q = grid.grididx_to_quantics(&[i]).unwrap();
-        let (x, z) = (real.evaluate(&q).unwrap(), complex.evaluate(&q).unwrap());
+        let (x, z) = (
+            evaluate::<f64>(&real, &q),
+            evaluate::<Complex64>(&complex, &q),
+        );
         assert!(
             (z - Complex64::new(x, 0.0)).norm() < 1e-13,
             "grid index {i}: {x} vs {z}"
@@ -236,24 +222,20 @@ fn complex_invert_qtt_is_the_sum_of_the_real_and_imaginary_inversions() {
 
     {
         let options = InterpolativeQttOptions::default().with_tolerance(0.0);
-        let real = invert_qtt(
+        let real = invert::<f64>(
             &interpolate_single_scale(g, a, b, r, degree, &options).unwrap(),
             &basis,
-            1,
-        )
-        .unwrap();
-        let imag = invert_qtt(
+        );
+        let imag = invert::<f64>(
             &interpolate_single_scale(h, a, b, r, degree, &options).unwrap(),
             &basis,
-            1,
-        )
-        .unwrap();
+        );
         let complex_tt = interpolate_single_scale(gh, a, b, r, degree, &options).unwrap();
-        let complex = invert_qtt(&complex_tt, &basis, 1).unwrap();
+        let complex = invert::<Complex64>(&complex_tt, &basis);
 
         // The exact route is decided on the complex train itself.
         assert_eq!(
-            finest_level_scale(&complex_tt, &basis).unwrap(),
+            finest_level_scale::<Complex64>(&complex_tt, &basis).unwrap(),
             Some(Complex64::new(1.0, 0.0))
         );
         assert_eq!(complex.len(), r - 1);
@@ -277,19 +259,15 @@ fn complex_invert_qtt_matches_the_real_path_on_a_zero_imaginary_train() {
     let basis = get_chebyshev_grid(degree).unwrap();
     let options = InterpolativeQttOptions::default().with_tolerance(0.0);
 
-    let real = invert_qtt(
+    let real = invert::<f64>(
         &interpolate_single_scale(g, a, b, r, degree, &options).unwrap(),
         &basis,
-        1,
-    )
-    .unwrap();
-    let complex = invert_qtt(
+    );
+    let complex = invert::<Complex64>(
         &interpolate_single_scale(|x| Complex64::new(g(x), 0.0), a, b, r, degree, &options)
             .unwrap(),
         &basis,
-        1,
-    )
-    .unwrap();
+    );
 
     for level in 0..r - 1 {
         let distance = max_distance(&complex[level], &lift_matrix(&real[level]));
