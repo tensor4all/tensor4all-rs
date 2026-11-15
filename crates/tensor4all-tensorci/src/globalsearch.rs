@@ -107,10 +107,21 @@ where
     // Sort by descending error
     pivot_errors.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Remove duplicates (same pivot)
-    pivot_errors.dedup_by(|a, b| a.0 == b.0);
+    dedup_pivots(&mut pivot_errors);
 
     Ok(pivot_errors)
+}
+
+/// Remove repeated pivots, keeping the first (highest-error) occurrence.
+///
+/// The input is ordered by descending error, so a plain [`Vec::dedup_by`]
+/// would only collapse *adjacent* equal pivots: a pivot found from two starts
+/// survives whenever another pivot with exactly the same error sorts between
+/// the two copies. Deduplicating with a set keeps the contract independent of
+/// the error values.
+fn dedup_pivots(pivot_errors: &mut Vec<(MultiIndex, f64)>) {
+    let mut seen = std::collections::HashSet::with_capacity(pivot_errors.len());
+    pivot_errors.retain(|(pivot, _)| seen.insert(pivot.clone()));
 }
 
 /// Local search for the multi-index with the largest interpolation error.
