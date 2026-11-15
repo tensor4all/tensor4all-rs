@@ -139,6 +139,13 @@ fn max_error(left: &[Complex64], right: &[Complex64]) -> f64 {
         .fold(0.0_f64, f64::max)
 }
 
+/// L2 norm of the difference of two equally shaped dense values.
+fn l2_error(left: &[Complex64], right: &[Complex64]) -> f64 {
+    assert_eq!(left.len(), right.len());
+    let residual: Vec<Complex64> = left.iter().zip(right).map(|(a, b)| *a - *b).collect();
+    norm_of(&residual)
+}
+
 /// Dense oracle for a subset DFT with the documented conventions: selected bits
 /// are ordered most significant first, and the frequency bit `t` lands on
 /// selected position `t` (bit-reversed output placement).
@@ -1470,11 +1477,15 @@ fn merge_refine_schedule_stops_at_the_root_when_the_merged_candidate_fits_the_go
     // The retained superposition is still the exact normalized DFT.
     let (indices, dense) = dense_of_regions(&result);
     let expected = dft_oracle(&indices, &sites, &sites, &values);
-    let residual = max_error(&dense, &expected);
+    let bound = report.error_bound;
     assert!(
-        residual <= report.error_bound + 1e-12,
-        "residual {residual:e} exceeds the bound {:e}",
-        report.error_bound
+        max_error(&dense, &expected) <= bound + 1e-12,
+        "coordinate residual exceeds the bound {bound:e}"
+    );
+    let residual = l2_error(&dense, &expected);
+    assert!(
+        residual <= bound + 1e-12,
+        "L2 residual {residual:e} exceeds the bound {bound:e}"
     );
 }
 
@@ -2388,36 +2399,115 @@ fn axis_fourier_operator(nodes: &[usize], sites: &[DynIndex]) -> LinearOperator<
     bind_linear_operator_indices(&operator, &inputs, &outputs).expect("bind")
 }
 
+/// A chain network over `sites` with one node per site.
+fn chain_target(sites: &[DynIndex]) -> SiteIndexNetwork<usize, DynIndex> {
+    let mut target: SiteIndexNetwork<usize, DynIndex> = SiteIndexNetwork::new();
+    for (node, site) in sites.iter().enumerate() {
+        target.add_node(node, HashSet::new()).expect("target node");
+        target
+            .add_site_index(&node, site.clone())
+            .expect("site index");
+    }
+    for node in 0..sites.len().saturating_sub(1) {
+        target.add_edge(&node, &(node + 1)).expect("edge");
+    }
+    target
+}
+
+/// The product of the one-dimensional Fourier transforms of equal-length axis
+/// blocks, composed into one operator over the whole chain.
+fn chain_axis_fourier_operator(
+    axis_lengths: &[usize],
+    sites: &[DynIndex],
+) -> LinearOperator<IdxTensor, usize> {
+    assert_eq!(axis_lengths.iter().sum::<usize>(), sites.len());
+    let mut blocks = Vec::with_capacity(axis_lengths.len());
+    let mut start = 0usize;
+    for &length in axis_lengths {
+        blocks.push((
+            length,
+            axis_fourier_operator(
+                &(start..start + length).collect::<Vec<_>>(),
+                &sites[start..start + length],
+            ),
+        ));
+        start += length;
+    }
+    // The exclusivity check compares one representative node per operator, so a
+    // chain of three or more axes composes on its growing prefix instead of at
+    // once; every prefix is itself a chain over the leading sites.
+    let (length, mut composed) = blocks.remove(0);
+    let mut covered = length;
+    for (length, axis) in blocks {
+        covered += length;
+        composed = compose_exclusive_linear_operators(
+            &chain_target(&sites[..covered]),
+            &[&composed, &axis],
+            &HashMap::new(),
+        )
+        .expect("composition");
+    }
+    composed
+}
+
+/// Dense value of the product transform, applied one axis block at a time, in one
+/// canonical index order.
+fn axis_product_dense(
+    lengths: &[usize],
+    sites: &[DynIndex],
+    values: &[Complex64],
+) -> (Vec<DynIndex>, Vec<Complex64>) {
+    let mut tree = mps(sites, values);
+    let mut start = 0usize;
+    for &length in lengths {
+        let nodes: Vec<usize> = (start..start + length).collect();
+        let axis = axis_fourier_operator(&nodes, &sites[start..start + length]);
+        tree = apply_linear_operator_to_indices(&axis, &tree, &[], &[], ApplyOptions::naive())
+            .expect("reference apply");
+        start += length;
+    }
+    let dense = tree.to_dense().expect("dense");
+    (
+        dense.indices().to_vec(),
+        dense.to_vec::<Complex64>().expect("vector"),
+    )
+}
+
+/// One coordinate group per axis block of the chain.
+fn axis_groups(lengths: &[usize], sites: &[DynIndex]) -> Vec<CoordinateGroup> {
+    let mut groups = Vec::with_capacity(lengths.len());
+    let mut start = 0usize;
+    for &length in lengths {
+        groups.push(CoordinateGroup::new(sites[start..start + length].to_vec()));
+        start += length;
+    }
+    groups
+}
+
+/// Fixed leading output bits per axis of every region, in region order.
+fn axis_depths(result: &MergeRefineResult<usize>, groups: &[CoordinateGroup]) -> Vec<Vec<usize>> {
+    result
+        .regions()
+        .map(|(projector, _)| {
+            groups
+                .iter()
+                .map(|group| {
+                    group
+                        .outputs
+                        .iter()
+                        .take_while(|index| projector.get(index).is_some())
+                        .count()
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// The product of two one-dimensional Fourier transforms, composed into one
 /// operator over a four-node chain: axis `0` on `sites[0..2]`, axis `1` on
 /// `sites[2..4]`.
 fn two_axis_fourier_operator(sites: &[DynIndex]) -> LinearOperator<IdxTensor, usize> {
-    let axis_a = axis_fourier_operator(&[0, 1], &sites[0..2]);
-    let axis_b = axis_fourier_operator(&[2, 3], &sites[2..4]);
-    let mut target: SiteIndexNetwork<usize, DynIndex> = SiteIndexNetwork::new();
-    for (node, operator) in [(0usize, &axis_a), (1, &axis_a), (2, &axis_b), (3, &axis_b)] {
-        if !target.has_node(&node) {
-            target.add_node(node, HashSet::new()).expect("target node");
-        }
-        for mapping in operator.get_input_mappings(&node).expect("input mappings") {
-            target
-                .add_site_index(&node, mapping.internal_index.clone())
-                .expect("site index");
-        }
-        for mapping in operator
-            .get_output_mappings(&node)
-            .expect("output mappings")
-        {
-            target
-                .add_site_index(&node, mapping.internal_index.clone())
-                .expect("site index");
-        }
-    }
-    target.add_edge(&0usize, &1usize).expect("edge");
-    target.add_edge(&1usize, &2usize).expect("edge");
-    target.add_edge(&2usize, &3usize).expect("edge");
-    compose_exclusive_linear_operators(&target, &[&axis_a, &axis_b], &HashMap::new())
-        .expect("composition")
+    chain_axis_fourier_operator(&[2, 2], sites)
 }
 
 #[test]
@@ -2834,5 +2924,151 @@ fn merge_refine_schedule_refines_when_the_split_stores_no_more_than_the_candidat
         residual <= report.error_bound + 1e-9,
         "residual {residual:e} exceeds the bound {:e}",
         report.error_bound
+    );
+}
+
+#[test]
+fn merge_refine_schedule_stops_both_axes_when_the_merged_candidate_fits_the_goal() {
+    let lengths = [2usize, 2];
+    let sites: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..16)
+        .map(|m| {
+            let (x, y) = (m >> 2, m & 3);
+            Complex64::new(
+                1.0 + (x as f64 * 0.9).sin() + 0.3 * y as f64,
+                0.2 * (x + 2 * y) as f64,
+            )
+        })
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = chain_axis_fourier_operator(&lengths, &sites);
+    let groups = axis_groups(&lengths, &sites);
+    let schedule = |goal: Option<usize>, depth: usize| {
+        schedule_merge_refine(
+            &preimage,
+            &0,
+            &operator,
+            &sites,
+            &SubsetOperatorOptions { unitary: true },
+            ReconstructionTolerance {
+                rtol: 1e-12,
+                atol: 0.0,
+            },
+            &MergeRefineOptions {
+                coordinate_groups: Some(groups.clone()),
+                output_depth: Some(depth),
+                max_work_items: 4096,
+                target_bond_dim: goal,
+                ..Default::default()
+            },
+        )
+        .expect("schedule")
+    };
+
+    // A rank goal above the root's merged candidate stops every refining axis
+    // without a probe (one stop per axis), so the level keeps the root region
+    // instead of splitting into `2^2` children and the next level merges those four
+    // groups at the same key.
+    let adaptive = schedule(Some(64), 2);
+    let report = adaptive.report().clone();
+    assert_eq!(report.refined_regions, 0, "{report:?}");
+    assert_eq!(report.stopped_regions, 2, "{report:?}");
+    assert_eq!(report.region_count, 1);
+    assert_eq!(report.work_items_per_level, vec![16, 4, 1]);
+    assert_eq!(axis_depths(&adaptive, &groups), vec![vec![0, 0]]);
+
+    // The same level without a rank goal splits both axes, which is the `2^2`
+    // children the per-axis decision avoids.
+    let uniform = schedule(None, 1);
+    assert_eq!(uniform.report().region_count, 4);
+    assert_eq!(uniform.report().error_bound, 0.0);
+    assert_eq!(axis_depths(&uniform, &groups), vec![vec![1, 1]; 4]);
+    assert_eq!(
+        report.work_items_per_level[1] * (1 << lengths.len()),
+        uniform.report().work_items_per_level[1]
+    );
+
+    let (reference_indices, reference_values) = axis_product_dense(&lengths, &sites, &values);
+    for result in [&adaptive, &uniform] {
+        let (indices, dense) = dense_of_regions(result);
+        let expected = reorder(&reference_values, &reference_indices, &indices);
+        let bound = result.report().error_bound;
+        assert!(
+            max_error(&dense, &expected) <= bound + 1e-12,
+            "coordinate residual exceeds the bound {bound:e}"
+        );
+        let residual = l2_error(&dense, &expected);
+        assert!(
+            residual <= bound + 1e-12,
+            "L2 residual {residual:e} exceeds the bound {bound:e}"
+        );
+    }
+}
+
+#[test]
+fn merge_refine_schedule_stops_three_axes_when_the_merged_candidate_fits_the_goal() {
+    let lengths = [2usize, 2, 2];
+    let sites: Vec<DynIndex> = (0..6).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..64)
+        .map(|m| {
+            let (x, y, z) = (m >> 4, (m >> 2) & 3, m & 3);
+            Complex64::new(
+                1.0 + (x as f64 * 0.9).sin() + 0.3 * y as f64 + 0.05 * z as f64,
+                0.2 * (x + 2 * y + 3 * z) as f64,
+            )
+        })
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = chain_axis_fourier_operator(&lengths, &sites);
+    let groups = axis_groups(&lengths, &sites);
+
+    let result = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance {
+            rtol: 1e-12,
+            atol: 0.0,
+        },
+        &MergeRefineOptions {
+            coordinate_groups: Some(groups.clone()),
+            output_depth: Some(2),
+            max_work_items: 4096,
+            target_bond_dim: Some(64),
+            ..Default::default()
+        },
+    )
+    .expect("schedule");
+    let report = result.report().clone();
+
+    // The rank goal is above the root's merged candidate, so all three refining axes
+    // stop without a probe (one stop per axis). The level therefore keeps the root region
+    // instead of splitting it into `2^3` children, which is why it holds one group
+    // of eight work items where a uniform level holds sixty-four, and the next level
+    // merges those eight at the same output key instead of freezing them.
+    assert_eq!(report.refined_regions, 0, "{report:?}");
+    assert_eq!(report.stopped_regions, 3, "{report:?}");
+    assert_eq!(report.region_count, 1);
+    assert_eq!(report.level_count, 2);
+    assert_eq!(report.work_items_per_level, vec![64, 8, 1]);
+    assert_eq!(axis_depths(&result, &groups), vec![vec![0, 0, 0]]);
+
+    // The coarse region still reproduces the product transform inside the bound.
+    let (reference_indices, reference_values) = axis_product_dense(&lengths, &sites, &values);
+    let (indices, dense) = dense_of_regions(&result);
+    let expected = reorder(&reference_values, &reference_indices, &indices);
+    let bound = report.error_bound;
+    assert!(
+        max_error(&dense, &expected) <= bound + 1e-12,
+        "coordinate residual exceeds the bound {bound:e}"
+    );
+    let residual = l2_error(&dense, &expected);
+    assert!(
+        residual <= bound + 1e-12,
+        "L2 residual {residual:e} exceeds the bound {bound:e}"
     );
 }
