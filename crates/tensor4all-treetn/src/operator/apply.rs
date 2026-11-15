@@ -302,7 +302,8 @@ impl<V> ApplyOptions<V> {
 /// such a node through (`TreeTN::contract_zipup_skipping_identity_nodes`): its
 /// state tensor is emitted with the operator's output site indices and its bond
 /// dimensions are the ones it came in with, with no contraction and no
-/// factorization. An identity factor adds no rank, so factorizing such a node
+/// factorization, with ordinary real-to-complex promotion when the identity is
+/// complex. An identity factor adds no rank, so factorizing such a node
 /// emits the bond the state already has there; the skip keeps that bond instead
 /// of rebuilding it.
 ///

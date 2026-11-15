@@ -49,7 +49,7 @@ use anyhow::{Context, Result};
 use crate::algorithm::CanonicalForm;
 use tensor4all_core::{
     contract_pair_on_session, factorize_in, factorize_on_session, validate_svd_truncation_options,
-    Canonical, FactorizeAlg, FactorizeOptions, IndexLike, PairwiseContractionOptions,
+    AnyScalar, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, PairwiseContractionOptions,
     SvdTruncationPolicy, TensorContractionLike, TensorFactorizationLike, TensorIndex, TensorLike,
 };
 use tensor4all_tensorbackend::{default_cpu_execution_context, ExecutionContext};
@@ -1030,7 +1030,8 @@ where
     /// cap is set) as an isometry times a remainder. Skipping it keeps the bond
     /// and the node's amplitudes bit for bit (issue #1186). Its own bond indices
     /// stay on the edges they came from, so the untouched region of the result
-    /// carries the first operand's tensors and bonds unchanged. A node that
+    /// carries the first operand's values and bonds unchanged, promoting a real
+    /// tensor to complex when its identity operand is complex. A node that
     /// receives a remainder from an operator-carrying child is contracted and
     /// factorized as usual.
     ///
@@ -1776,6 +1777,12 @@ where
                     .filter(|pairs| !pairs.is_empty())
                 {
                     let mut emitted = tensor_a.clone();
+                    // Skipping the identity contraction must preserve its scalar
+                    // promotion too: a complex identity times a real state is
+                    // complex, including on untouched spectator branches.
+                    if tensor_b.is_complex() && !emitted.is_complex() {
+                        emitted = emitted.scale(AnyScalar::new_complex(1.0, 0.0))?;
+                    }
                     for (input, output) in pairs {
                         emitted = emitted.replaceind(input, output).with_context(|| {
                             format!(
