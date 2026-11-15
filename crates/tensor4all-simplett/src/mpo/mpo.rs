@@ -331,7 +331,11 @@ impl<T: TTScalar> MPO<T> {
     /// # Errors
     ///
     /// Returns [`MPOError::InvalidOperation`] when a tenferro-backed reduction
-    /// or read fails, or when an internally constructed MPO is inconsistent.
+    /// or read fails, when an internally constructed MPO is inconsistent, or
+    /// when the first core has a leading bond other than one. The leading bond
+    /// is validated in [`MPO::new`], but [`MPO::site_tensors_mut`] can replace
+    /// the first core afterwards; the same malformed state is refused here
+    /// instead of being silently projected onto the `l == 0` component.
     ///
     /// # Examples
     ///
@@ -346,6 +350,18 @@ impl<T: TTScalar> MPO<T> {
     pub fn sum(&self) -> Result<T> {
         if self.is_empty() {
             return Ok(T::zero());
+        }
+
+        // The reduction seeds `current` from the `l == 0` component of the first
+        // core, so a leading bond above one would be silently projected away.
+        // `MPO::new` rejects that shape, but `site_tensors_mut` can reintroduce it.
+        if self.tensors[0].left_dim() != 1 {
+            return Err(MPOError::InvalidOperation {
+                message: format!(
+                    "Leading bond dimension is {}, expected 1",
+                    self.tensors[0].left_dim()
+                ),
+            });
         }
 
         // Start with sum over first tensor

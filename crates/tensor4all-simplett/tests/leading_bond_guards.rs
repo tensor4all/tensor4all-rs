@@ -4,8 +4,10 @@
 //! (`site_tensors_mut`, `set_site_tensor`, `SiteTensorTrain::to_tensor_train`). Every reduction seeds its
 //! environment from the `l == 0` component of that core, so before this guard `evaluate`, `sum`, `norm2`, `norm`
 //! and `log_norm` returned the projection onto that component: a plausible but wrong scalar. This is the
-//! left-boundary sibling of #913.
+//! left-boundary sibling of #913. `MPO::sum` is the same surface for matrix-product operators: `MPO::new`
+//! checks the leading bond, but `site_tensors_mut` can replace the first core afterwards.
 
+use tensor4all_simplett::mpo::{tensor4_zeros, MPOError, Tensor4Ops, MPO};
 use tensor4all_simplett::{
     tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, SimpleTensorTrainError, SiteTensorTrain,
     Tensor3Ops,
@@ -66,5 +68,45 @@ fn the_reductions_refuse_a_broken_leading_bond_instead_of_projecting() {
             }
             other => panic!("{name} must refuse a broken leading bond, got {other:?}"),
         }
+    }
+}
+
+/// A valid one-site constant MPO, for the control assertion.
+fn valid_mpo() -> MPO<f64> {
+    MPO::<f64>::constant(&[(2, 2)], 1.0).expect("constant MPO")
+}
+
+/// The same MPO with its first core replaced through the public mutable accessor, so its leading bond is 2.
+///
+/// The `l == 0` component holds 1 and the `l == 1` component holds 2, so a silent projection would return 4
+/// instead of refusing the malformed operator.
+fn with_a_broken_mpo_leading_bond() -> MPO<f64> {
+    let mut mpo = valid_mpo();
+    let mut core = tensor4_zeros::<f64>(2, 2, 2, 1).unwrap();
+    for s1 in 0..2 {
+        for s2 in 0..2 {
+            core.set4(0, s1, s2, 0, 1.0);
+            core.set4(1, s1, s2, 0, 2.0);
+        }
+    }
+    mpo.site_tensors_mut()[0] = core;
+    mpo
+}
+
+#[test]
+fn a_valid_mpo_still_sums_every_entry() {
+    assert!((valid_mpo().sum().expect("sum") - 4.0).abs() < 1e-12);
+}
+
+#[test]
+fn mpo_sum_refuses_a_broken_leading_bond_instead_of_projecting() {
+    match with_a_broken_mpo_leading_bond().sum() {
+        Err(MPOError::InvalidOperation { message }) => {
+            assert!(
+                message.contains("expected 1"),
+                "sum should say what it expected: {message}"
+            );
+        }
+        other => panic!("sum must refuse a broken leading bond, got {other:?}"),
     }
 }
