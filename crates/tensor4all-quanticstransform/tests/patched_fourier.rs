@@ -1,19 +1,21 @@
 #![cfg(feature = "partitioned")]
 mod support;
 use num_complex::Complex64;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use support::*;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_partitionedtreetn::{
+    contract_adaptive,
     reconstruction::{ReconstructionTarget, SubsetOperatorOptions},
-    PartitionedTreeTN, PartitionedTreeTNError, Projector,
+    PartitionedTreeTN, PartitionedTreeTNError, PatchingOptions, Projector, SubDomainTreeTN,
 };
 use tensor4all_quanticstransform::{
     patched_fourier_transform, quantics_fourier_operator, quantics_fourier_operator_multiaxis,
     AxisBit, CoordinateGroup, FourierOptions, PatchedFourierOptions, QuanticsTransformError,
 };
 use tensor4all_treetn::{
-    apply_linear_operator_to_indices, ApplyOptions, RestructureOptions, SiteIndexNetwork, TreeTN,
+    apply_linear_operator_to_indices, contraction::ContractionOptions, ApplyOptions,
+    RestructureOptions, SiteIndexNetwork, TreeTN,
 };
 
 fn asym(axes: &[Vec<DynIndex>]) -> Vec<Vec<(DynIndex, usize)>> {
@@ -149,6 +151,50 @@ fn nonuniform_patches_match_constructed_operator_and_dft() {
         }
     }
 }
+#[test]
+fn fourier_operator_applies_through_adaptive_contraction() {
+    let operator = quantics_fourier_operator(3, FourierOptions::forward()).unwrap();
+    let sites: Vec<_> = (0..3)
+        .map(|j| operator.get_input_mapping(&j).unwrap().true_index.clone())
+        .collect();
+    let input = values(sites.len());
+    let tree = chain(&sites, &input, &[0, 1, 2]);
+    let axes = vec![sites];
+    let state = partition(&tree, &asym(&axes));
+
+    let (mpo, output_legs) = operator
+        .to_state_network(tree.site_index_network())
+        .unwrap()
+        .into_parts();
+    let operator_partition =
+        PartitionedTreeTN::from_subdomain(SubDomainTreeTN::from_treetn(mpo).unwrap()).unwrap();
+    let result = contract_adaptive(
+        &operator_partition,
+        &state,
+        &0,
+        &ContractionOptions::default(),
+        &PatchingOptions {
+            cutoff: 0.0,
+            max_bond_dim: None,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let actual = result
+        .values()
+        .map(|patch| patch.data().to_dense().unwrap())
+        .reduce(|total, patch| total.add(&patch).unwrap())
+        .unwrap();
+    let output_legs: HashMap<_, _> = output_legs.into_iter().collect();
+    let outputs: Vec<_> = (0..3)
+        .map(|j| &operator.get_output_mapping(&j).unwrap().true_index)
+        .map(|index| output_legs[index].clone())
+        .collect();
+    let expected = dft(&input, &logical_layout(&axes[0], &axes), -1.0, true);
+    assert_dense(&actual, &outputs, &expected, ROUND_OFF);
+}
+
 #[test]
 fn spectator_and_single_patch_preserve_dense_application() {
     let sites: Vec<_> = (0..5).map(|_| DynIndex::new_dyn(2)).collect();

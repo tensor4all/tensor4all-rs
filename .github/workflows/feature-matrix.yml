@@ -32,9 +32,9 @@ jobs:
   feature-configuration:
     name: ${{ matrix.name }}
     runs-on: ubuntu-22.04
-    # One configuration is one `cargo check --all-targets` plus, where marked,
-    # one panic-audit Clippy pass. This is the workflow's own bound; it is not
-    # part of the PR pipeline budget.
+    # Configurations run `cargo check --all-targets` or a downstream smoke
+    # example, with a panic-audit Clippy pass where marked. This is the
+    # workflow's own bound, outside the PR pipeline budget.
     timeout-minutes: 60
     strategy:
       # One failing configuration must not hide the others.
@@ -47,7 +47,7 @@ jobs:
             apt: libopenblas-dev libhdf5-dev
             audit: true
             check: |
-              -p tensor4all-core -p tensor4all-tensorbackend -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-capi --no-default-features --features tenferro-system-blas,tensor4all-quanticstransform/partitioned,tensor4all-treetn/simplett-bridge,tensor4all-treersi/global-defaults
+              -p tensor4all-core -p tensor4all-tensorbackend -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-capi --no-default-features --features tenferro-system-blas,tensor4all-quanticstransform/partitioned,tensor4all-quanticstransform/simplett-transforms,tensor4all-treetn/simplett-bridge,tensor4all-treersi/global-defaults
               -p tensor4all-hdf5 --no-default-features --features link,tenferro-system-blas
           # Provider injection: the caller supplies the execution provider.
           # Check-only is enough: compiling tests does not run them, so no
@@ -56,8 +56,11 @@ jobs:
             apt: libhdf5-dev
             audit: true
             check: |
-              -p tensor4all-core -p tensor4all-tensorbackend -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-capi --no-default-features --features tenferro-provider-inject,tensor4all-quanticstransform/partitioned,tensor4all-treetn/simplett-bridge,tensor4all-treersi/global-defaults
+              -p tensor4all-core -p tensor4all-tensorbackend -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-capi --no-default-features --features tenferro-provider-inject,tensor4all-quanticstransform/partitioned,tensor4all-quanticstransform/simplett-transforms,tensor4all-treetn/simplett-bridge,tensor4all-treersi/global-defaults
               -p tensor4all-hdf5 --no-default-features --features link,tenferro-provider-inject
+          - name: fourier-without-simplett
+            apt: ""
+            audit: false
           # MPI: the system-MPI backend of the adaptive patch driver. hataori's
           # `mpi` and `rsmpi-rt` backends are mutually exclusive; the runtime
           # backend is covered by scripts/check-mpi-smoke.sh.
@@ -113,6 +116,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Check the configuration
+        if: matrix.check != ''
         env:
           SELECTIONS: ${{ matrix.check }}
         run: |
@@ -128,6 +132,10 @@ jobs:
         # Bit-identical lane layouts are asserted on the default provider (faer
         # on Linux), whose kernels stay within each lane's thread budget.
         run: cargo test --locked -p tensor4all-interpolativeqtt --features parallel
+
+      - name: Run Fourier without SimpleTT
+        if: matrix.name == 'fourier-without-simplett'
+        run: ./scripts/check-fourier-dependencies.sh --run
 
       - name: Audit panic paths for the configuration
         # A configuration selects a subset of the workspace, so the audit keeps
@@ -168,7 +176,7 @@ jobs:
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           printf -v body '%s\n\n%s\n\n%s\n' \
             "The scheduled feature-configuration matrix failed in [run ${GITHUB_RUN_ID}](${run_url}) on \`${GITHUB_SHA:0:8}\`." \
-            "Reproduce locally with the failing row's \`cargo check --locked --all-targets ...\` and \`python3 scripts/audit-library-panics.py --config-name <name> ...\`; see CONTRIBUTING.md, \"Supported feature configurations\"." \
+            "See CONTRIBUTING.md, \"Supported feature configurations\", for the failing row's local verification commands." \
             "This matrix owns the non-default feature configurations that PR CI cannot build: CPU backends are mutually exclusive, so there is no \`--all-features\` pass."
           number=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$label" --state open \
             --search "in:title \"$title\"" --limit 1 --json number --jq '.[0].number // empty')

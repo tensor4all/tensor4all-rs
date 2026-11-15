@@ -2,15 +2,11 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use num_complex::Complex64;
 use tensor4all_core::{DynIndex, IdxTensor};
-use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, Tensor3, Tensor3Ops};
 use tensor4all_treetn::{compose_exclusive_linear_operators, RestructureOptions, SiteIndexNetwork};
 
-use crate::common::{
-    checked_allocation_len, tensortrain_to_linear_operator, try_vec_with_capacity,
-};
-use crate::fourier::{quantics_fourier_mpo, zero_tensor3};
+use crate::common::{binary_cores_to_operator, try_vec_with_capacity};
+use crate::fourier::{fourier_cores, zero_fourier_core};
 use crate::{quantics_fourier_operator, FourierOptions, QuanticsOperator, QuanticsTransformError};
 
 /// One logical axis bit at an abstract operator node.
@@ -187,27 +183,6 @@ fn is_monotone(positions: &[usize]) -> bool {
     positions.windows(2).all(|w| w[0] < w[1]) || positions.windows(2).all(|w| w[0] > w[1])
 }
 
-/// Reverse a train's site order; core `(l, s, r)` becomes `(r, s, l)`.
-fn reversed_train(
-    train: &SimpleTensorTrain<Complex64>,
-) -> Result<Vec<Tensor3<Complex64>>, QuanticsTransformError> {
-    let mut cores = try_vec_with_capacity("reversed Fourier train", train.len())?;
-    for j in (0..train.len()).rev() {
-        let core = train.site_tensor(j);
-        let (left, site, right) = (core.left_dim(), core.site_dim(), core.right_dim());
-        let mut reversed = zero_tensor3(right, site, left, "reversed Fourier core")?;
-        for l in 0..left {
-            for s in 0..site {
-                for r in 0..right {
-                    reversed.set3(r, s, l, *core.get3(l, s, r));
-                }
-            }
-        }
-        cores.push(reversed);
-    }
-    Ok(cores)
-}
-
 /// Build a product of per-axis Fourier trains directly in `layout` order.
 ///
 /// Each axis's bits must be monotone along the chain. A site of axis `a`
@@ -219,60 +194,51 @@ fn interleaved_fourier_operator(
     axes: &[Vec<usize>],
     options: &FourierOptions,
 ) -> Result<QuanticsOperator, QuanticsTransformError> {
-    let mut trains =
-        try_vec_with_capacity::<Vec<Tensor3<Complex64>>>("Fourier axis trains", axes.len())?;
+    let mut trains = try_vec_with_capacity("Fourier axis trains", axes.len())?;
     for positions in axes {
-        let train = quantics_fourier_mpo(positions.len(), options)?;
-        // A decreasing axis meets its least significant bit first.
-        let cores = if positions[0] < positions[positions.len() - 1] {
-            train.site_tensors().to_vec()
-        } else {
-            reversed_train(&train)?
-        };
-        trains.push(cores);
+        trains.push(fourier_cores(positions.len(), options)?);
     }
-    let mut consumed = vec![0usize; axes.len()];
     let mut bonds = vec![1usize; axes.len()];
-    let mut cores =
-        try_vec_with_capacity::<Tensor3<Complex64>>("Fourier product cores", layout.len())?;
+    let mut cores = try_vec_with_capacity("Fourier product cores", layout.len())?;
     for entry in layout {
         let axis = entry.axis;
-        let core = &trains[axis][consumed[axis]];
+        let core = &trains[axis][entry.bit];
+        let core_left = core.shape()[0];
+        let core_right = core.shape()[2];
+        let positions = &axes[axis];
+        // Decreasing axes swap their two bond axes in the source readout.
+        let (next_bond, src_left_stride, src_right_stride) =
+            if positions[0] < positions[positions.len() - 1] {
+                (core_right, 1, 4 * core_left)
+            } else {
+                (core_left, 4 * core_left, 1)
+            };
+
         let mut right_bonds = bonds.clone();
-        right_bonds[axis] = core.right_dim();
+        right_bonds[axis] = next_bond;
         let left_dim = checked_product(&bonds)?;
         let right_dim = checked_product(&right_bonds)?;
-        checked_allocation_len::<Complex64>(
-            &[left_dim, core.site_dim(), right_dim],
-            "Fourier product core",
-        )?;
         // Mixed radix with axis 0 least significant on both sides.
         let left_stride: usize = bonds[..axis].iter().product();
         let right_stride: usize = right_bonds[..axis].iter().product();
-        let mut product =
-            zero_tensor3(left_dim, core.site_dim(), right_dim, "Fourier product core")?;
+        let mut product = zero_fourier_core(left_dim, right_dim, "Fourier product core")?;
         for left in 0..left_dim {
             let low = left % left_stride;
             let digit = (left / left_stride) % bonds[axis];
             let high = left / (left_stride * bonds[axis]);
-            let base = low + high * right_stride * right_bonds[axis];
-            for s in 0..core.site_dim() {
-                for r in 0..right_bonds[axis] {
-                    let value = *core.get3(digit, s, r);
-                    product.set3(left, s, base + r * right_stride, value);
+            let base = low + high * right_stride * next_bond;
+            for r in 0..next_bond {
+                let right = base + r * right_stride;
+                for s in 0..4 {
+                    let src = digit * src_left_stride + s * core_left + r * src_right_stride;
+                    product.data_mut()[left + left_dim * (s + 4 * right)] = core.data()[src];
                 }
             }
         }
         cores.push(product);
         bonds = right_bonds;
-        consumed[axis] += 1;
     }
-    let train = SimpleTensorTrain::new(cores).map_err(|e| {
-        QuanticsTransformError::from(
-            anyhow::Error::new(e).context("Failed to assemble the multi-axis Fourier train"),
-        )
-    })?;
-    tensortrain_to_linear_operator(&train, &vec![2; layout.len()])
+    binary_cores_to_operator(&cores)
 }
 
 fn checked_product(dims: &[usize]) -> Result<usize, QuanticsTransformError> {

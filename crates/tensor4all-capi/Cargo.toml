@@ -44,7 +44,7 @@ crate-type = ["cdylib", "rlib"]
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
-tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform", default-features = false }
+tensor4all-quanticstransform = { path = "../tensor4all-quanticstransform", default-features = false, features = ["simplett-transforms"] }
 libc.workspace = true
 paste.workspace = true
 num-complex.workspace = true

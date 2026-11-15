@@ -14,14 +14,21 @@
 //! operator input indices from `get_input_mapping()`. The result then carries
 //! the operator output indices.
 //!
+//! Fourier constructors are available with any supported CPU provider. Enable
+//! `partitioned` for patched Fourier transforms, and disable default features
+//! and select a provider explicitly to build without SimpleTT.
+//!
 //! ## Available Transformations
+//!
+//! - **Fourier Transform**: Quantics Fourier Transform (QFT)
+//!
+//! The default `simplett-transforms` feature provides the following operators.
 //!
 //! - **Flip**: f(x) = g(2^R - x)
 //! - **Shift**: maps basis states as `|x> -> |x + offset>`; as a matrix action,
 //!   `(M g)[x] = g[x - offset]` with the selected boundary condition
 //! - **Phase Rotation**: f(x) = exp(i*θ*x) * g(x)
 //! - **Cumulative Sum**: y_i = Σ_{j<i} x_j
-//! - **Fourier Transform**: Quantics Fourier Transform (QFT)
 //! - **Affine Transform**: y = A*x + b with rational coefficients
 //! - **Constraint Row Normalization**: primitive integer rows for equality or
 //!   halfspace constraints before deriving transform operators
@@ -51,45 +58,58 @@
 //! # Example
 //!
 //! ```
-//! use tensor4all_quanticstransform::{flip_operator, BoundaryCondition};
+//! use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 //!
-//! // Create a flip operator for 8-bit quantics representation
-//! let op = flip_operator(8, BoundaryCondition::Periodic).unwrap();
-//! assert_eq!(op.mpo().node_count(), 8);
+//! let op = quantics_fourier_operator(3, FourierOptions::forward()).unwrap();
+//! assert_eq!(op.mpo().link_dims(), vec![2, 2]);
 //! ```
 
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
 
+#[cfg(feature = "simplett-transforms")]
 mod affine;
 mod common;
+#[cfg(feature = "simplett-transforms")]
 mod cumsum;
+#[cfg(feature = "simplett-transforms")]
 mod difference_kernel;
+#[cfg(feature = "simplett-transforms")]
 mod flip;
 mod fourier;
 mod multiaxis_fourier;
 #[cfg(feature = "partitioned")]
 mod patched_fourier;
+#[cfg(feature = "simplett-transforms")]
 mod phase_rotation;
+#[cfg(feature = "simplett-transforms")]
 mod shift;
 
 mod error;
 
+#[cfg(feature = "simplett-transforms")]
 pub use affine::{
     affine_operator, affine_operator_interleaved, affine_transform_matrix,
     affine_transform_tensors_unfused, AffineParams, LinearConstraintRow, UnfusedTensorInfo,
 };
+pub use common::QuanticsOperator;
+#[cfg(feature = "simplett-transforms")]
 pub use common::{
     identity_mpo, tensortrain_to_linear_operator, tensortrain_to_linear_operator_asymmetric,
-    BoundaryCondition, CarryDirection, QuanticsOperator,
+    BoundaryCondition, CarryDirection,
 };
+#[cfg(feature = "simplett-transforms")]
 pub use cumsum::{cumsum_operator, triangle_operator, TriangleType};
+#[cfg(feature = "simplett-transforms")]
 pub use difference_kernel::{difference_kernel_mpo, difference_kernel_operator};
 pub use error::QuanticsTransformError;
+#[cfg(feature = "simplett-transforms")]
 pub use flip::{flip_operator, flip_operator_multivar};
 pub use fourier::{quantics_fourier_operator, FTCore, FourierOptions};
+#[cfg(feature = "simplett-transforms")]
 pub use phase_rotation::{phase_rotation_operator, phase_rotation_operator_multivar};
+#[cfg(feature = "simplett-transforms")]
 pub use shift::{shift_operator, shift_operator_multivar};
 
 pub use multiaxis_fourier::{quantics_fourier_operator_multiaxis, AxisBit};

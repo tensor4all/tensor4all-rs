@@ -1,4 +1,6 @@
 use super::*;
+use crate::traits::AbstractTensorTrain;
+use crate::types::{tensor3_zeros, Tensor3Ops};
 use num_complex::Complex64;
 use tenferro_tensor::TensorScalar;
 
@@ -337,7 +339,7 @@ fn factorize_svd_keeps_a_larger_value_that_follows_a_smaller_one() {
     }
     for left_orthogonal in [true, false] {
         let (left, right, rank) =
-            factorize_svd(&matrix, 1e-12, true, None, left_orthogonal).unwrap();
+            factorize_svd_impl(&matrix, 1e-12, true, None, left_orthogonal, &mut None).unwrap();
         assert_eq!(rank, 2, "left_orthogonal = {left_orthogonal}");
         let mut error = 0.0;
         for i in 0..n {
@@ -503,13 +505,12 @@ fn session_compression_rejects_unsupported_methods_before_mutation_or_shortcuts(
             let mut tt = SimpleTensorTrain::<f64>::constant(dims, 3.0);
             let original = tt.site_tensors().to_vec();
             let error = tt
-                .compress_impl(
+                .compress_svd_impl(
                     &CompressionOptions {
                         method,
                         ..Default::default()
                     },
                     &mut Some(&mut session),
-                    |_, _, _, _| panic!("unsupported session method reached factorization"),
                 )
                 .unwrap_err();
             assert!(

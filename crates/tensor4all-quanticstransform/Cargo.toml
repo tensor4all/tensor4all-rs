@@ -22,51 +22,62 @@ features = ["partitioned"]
 
 [features]
 partitioned = ["dep:tensor4all-partitionedtreetn"]
-default = ["tenferro-cpu-platform"]
+default = ["tenferro-cpu-platform", "simplett-transforms"]
+simplett-transforms = [
+    "dep:tensor4all-simplett",
+    "dep:num-bigint",
+    "dep:num-integer",
+    "dep:num-rational",
+    "dep:num-traits",
+    "dep:sprs",
+]
 # The platform default: Apple Accelerate on macOS, faer elsewhere
 # (see the `tensor4all-cpu-platform` crate).
 tenferro-cpu-platform = [
     "tensor4all-core/tenferro-cpu-platform",
-    "tensor4all-simplett/tenferro-cpu-platform",
+    "tensor4all-simplett?/tenferro-cpu-platform",
     "tensor4all-treetn/tenferro-cpu-platform",
     "tensor4all-partitionedtreetn?/tenferro-cpu-platform",
 ]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
-    "tensor4all-simplett/tenferro-cpu-faer",
+    "tensor4all-simplett?/tenferro-cpu-faer",
     "tensor4all-treetn/tenferro-cpu-faer",
     "tensor4all-partitionedtreetn?/tenferro-cpu-faer",
 ]
 tenferro-system-blas = [
     "tensor4all-core/tenferro-system-blas",
-    "tensor4all-simplett/tenferro-system-blas",
+    "tensor4all-simplett?/tenferro-system-blas",
     "tensor4all-treetn/tenferro-system-blas",
     "tensor4all-partitionedtreetn?/tenferro-system-blas",
 ]
 tenferro-provider-inject = [
     "tensor4all-core/tenferro-provider-inject",
-    "tensor4all-simplett/tenferro-provider-inject",
+    "tensor4all-simplett?/tenferro-provider-inject",
     "tensor4all-treetn/tenferro-provider-inject",
     "tensor4all-partitionedtreetn?/tenferro-provider-inject",
 ]
 
 [dependencies]
 tensor4all-partitionedtreetn = { path = "../tensor4all-partitionedtreetn", optional = true, default-features = false }
-tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false, features = ["simplett-bridge"] }
+tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
-tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
+tensor4all-simplett = { path = "../tensor4all-simplett", optional = true, default-features = false }
 quanticsgrids.workspace = true
 num-complex.workspace = true
-num-traits.workspace = true
+num-traits = { workspace = true, optional = true }
 thiserror.workspace = true
-num-bigint = "0.4"
-num-rational = "0.4"
-num-integer = "0.1"
+num-bigint = { version = "0.4", optional = true }
+num-rational = { version = "0.4", optional = true }
+num-integer = { version = "0.1", optional = true }
 anyhow.workspace = true
-sprs = "0.11"
+sprs = { version = "0.11", optional = true }
 
 [dev-dependencies]
 tensor4all-interpolativeqtt = { path = "../tensor4all-interpolativeqtt", default-features = false }
+# The large Fourier example generates test input with InterpolativeQTT.
+tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
+tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false, features = ["simplett-bridge"] }
 # A real patched producer supplies the Fourier spectator-layout regression.
 tensor4all-treetci = { path = "../tensor4all-treetci", default-features = false }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
@@ -85,6 +96,7 @@ required-features = ["partitioned"]
 [[test]]
 name = "integration_test"
 path = "tests/integration_test.rs"
+required-features = ["simplett-transforms"]
 
 [[test]]
 name = "large_fourier_smoke"
@@ -101,6 +113,7 @@ path = "tests/patched_fourier.rs"
 [[test]]
 name = "phase_rotation_precision"
 path = "tests/phase_rotation_precision.rs"
+required-features = ["simplett-transforms"]
 
 [[test]]
 name = "qft_reconstruction"

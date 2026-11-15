@@ -2,12 +2,14 @@
 
 use crate::einsum_helper::{tensor_to_col_major_vec, typed_tensor_from_col_major_slice};
 use crate::error::{Result, SimpleTensorTrainError};
+use crate::tensor::{col_major_data_to_tensor, Tensor3};
 use crate::tensortrain::SimpleTensorTrain;
-use crate::traits::{AbstractTensorTrain, TTScalar};
-use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
+use crate::traits::TTScalar;
 use tenferro_tensor::TensorScalar;
-use tensor4all_core::Scalar;
-use tensor4all_core::{rrlu, AbstractMatrixCI, MatrixLUCI, RrLUOptions};
+use tensor4all_core::chain_compression::{
+    chain_rrlu_options, compress_chain_cores_mut, compress_chain_lu_cores_mut, ChainCore,
+};
+use tensor4all_core::{ChainCompressionError, ColMajorArrayRef, MatrixLUCI, Scalar};
 use tensor4all_tensorbackend::{explicit::Session, mat_mul, BackendLinalgScalar, Matrix};
 
 /// Matrix decomposition method used during TT compression.
@@ -123,105 +125,34 @@ impl Default for CompressionOptions {
     }
 }
 
-/// Convert Tensor3 to Matrix for factorization (left matrix view)
-fn tensor3_to_left_matrix<T: TTScalar + Scalar + Default>(tensor: &Tensor3<T>) -> Matrix<T> {
-    let left_dim = tensor.left_dim();
-    let site_dim = tensor.site_dim();
-    let right_dim = tensor.right_dim();
-    let rows = left_dim * site_dim;
-    let cols = right_dim;
+impl<T: TTScalar> ChainCore<T> for Tensor3<T> {
+    type Error = SimpleTensorTrainError;
 
-    let mut mat = Matrix::zeros(rows, cols);
-    for l in 0..left_dim {
-        for s in 0..site_dim {
-            for r in 0..right_dim {
-                mat[[l * site_dim + s, r]] = *tensor.get3(l, s, r);
+    fn view(&self) -> Result<ColMajorArrayRef<'_, T>> {
+        let data = self.as_inner().host_data().map_err(|error| {
+            SimpleTensorTrainError::InvalidOperation {
+                message: format!("simplett tensors must be host-backed: {error}"),
             }
-        }
+        })?;
+        ColMajorArrayRef::new(data, self.dims())
+            .map_err(ChainCompressionError::from)
+            .map_err(SimpleTensorTrainError::from)
     }
-    mat
+
+    fn from_col_major(shape: [usize; 3], data: Vec<T>) -> Result<Self> {
+        col_major_data_to_tensor(shape, data)
+    }
 }
 
-/// Convert Tensor3 to Matrix for factorization (right matrix view)
-fn tensor3_to_right_matrix<T: TTScalar + Scalar + Default>(tensor: &Tensor3<T>) -> Matrix<T> {
-    let left_dim = tensor.left_dim();
-    let site_dim = tensor.site_dim();
-    let right_dim = tensor.right_dim();
-    let rows = left_dim;
-    let cols = site_dim * right_dim;
-
-    let mut mat = Matrix::zeros(rows, cols);
-    for l in 0..left_dim {
-        for s in 0..site_dim {
-            for r in 0..right_dim {
-                mat[[l, s * right_dim + r]] = *tensor.get3(l, s, r);
-            }
+impl From<ChainCompressionError> for SimpleTensorTrainError {
+    fn from(error: ChainCompressionError) -> Self {
+        match error {
+            ChainCompressionError::BondMismatch { site, .. } => Self::DimensionMismatch { site },
+            ChainCompressionError::Factorization(source) => Self::MatrixCI(source),
+            error => Self::InvalidOperation {
+                message: error.to_string(),
+            },
         }
-    }
-    mat
-}
-
-/// Factorize a matrix into left and right factors
-fn factorize<T>(
-    matrix: &Matrix<T>,
-    method: CompressionMethod,
-    tolerance: f64,
-    normalize_error: bool,
-    max_bond_dim: Option<usize>,
-    left_orthogonal: bool,
-) -> crate::error::Result<(Matrix<T>, Matrix<T>, usize)>
-where
-    T: TTScalar
-        + Scalar
-        + tensor4all_core::MatrixLuciScalar
-        + Default
-        + Copy
-        + BackendLinalgScalar
-        + TensorScalar,
-    f64: From<<T as TensorScalar>::Real>,
-{
-    // `normalize_error` selects the meaning of `tolerance`: a threshold
-    // relative to the largest singular value / pivot of the bond, or an
-    // absolute threshold on the discarded weight. The non-truncating left
-    // sweep passes `tolerance == 0.0` and keeps the relative machine-precision
-    // floor in both modes.
-    let (reltol, abstol) = if tolerance > 0.0 && !normalize_error {
-        (0.0, tolerance)
-    } else if tolerance > 0.0 {
-        (tolerance, 0.0)
-    } else {
-        (1e-14, 0.0)
-    };
-
-    let options = RrLUOptions {
-        max_bond_dim: max_bond_dim.unwrap_or(usize::MAX),
-        rel_tol: reltol,
-        abs_tol: abstol,
-        left_orthogonal,
-    };
-
-    match method {
-        CompressionMethod::LU => {
-            let lu = rrlu(matrix, Some(options))?;
-            let left = lu.left(true); // permuted
-            let right = lu.right(true); // permuted
-            let npivots = lu.npivots();
-            Ok((left, right, npivots))
-        }
-        CompressionMethod::CI => {
-            let luci = MatrixLUCI::from_matrix(matrix, Some(options))?;
-            let left = luci.left();
-            let right = luci.right();
-            let npivots = luci.rank();
-            Ok((left, right, npivots))
-        }
-        CompressionMethod::SVD => factorize_svd(
-            matrix,
-            tolerance,
-            normalize_error,
-            max_bond_dim,
-            left_orthogonal,
-        ),
     }
 }
 
@@ -250,27 +181,6 @@ pub(crate) fn descending_order<S: Copy>(
 }
 
 /// SVD-based factorization for TT compression
-fn factorize_svd<T>(
-    matrix: &Matrix<T>,
-    tolerance: f64,
-    normalize_error: bool,
-    max_bond_dim: Option<usize>,
-    left_orthogonal: bool,
-) -> crate::error::Result<(Matrix<T>, Matrix<T>, usize)>
-where
-    T: TTScalar + Scalar + Default + Copy + BackendLinalgScalar + TensorScalar,
-    f64: From<<T as TensorScalar>::Real>,
-{
-    factorize_svd_impl(
-        matrix,
-        tolerance,
-        normalize_error,
-        max_bond_dim,
-        left_orthogonal,
-        &mut None,
-    )
-}
-
 fn factorize_svd_impl<T>(
     matrix: &Matrix<T>,
     tolerance: f64,
@@ -450,16 +360,30 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
         T: tensor4all_core::MatrixLuciScalar + Copy + BackendLinalgScalar + TensorScalar,
         f64: From<<T as TensorScalar>::Real>,
     {
-        self.compress_impl(options, &mut None, |_, matrix, options, left_orthogonal| {
-            factorize(
-                matrix,
-                options.method,
+        match options.method {
+            CompressionMethod::LU => compress_chain_lu_cores_mut(
+                self.site_tensors_mut(),
                 options.tolerance,
-                options.normalize_error,
                 options.max_bond_dim,
-                left_orthogonal,
-            )
-        })
+                options.normalize_error,
+            ),
+            CompressionMethod::CI => compress_chain_cores_mut(
+                self.site_tensors_mut(),
+                &mut (),
+                |(), matrix, left_orthogonal| {
+                    let options = chain_rrlu_options(
+                        options.tolerance,
+                        options.max_bond_dim,
+                        options.normalize_error,
+                        left_orthogonal,
+                    );
+                    let luci = MatrixLUCI::from_matrix(&matrix, Some(options))?;
+                    Ok((luci.left(), luci.right()))
+                },
+                |(), left, right| mat_mul(left, right),
+            ),
+            CompressionMethod::SVD => self.compress_svd_impl(options, &mut None),
+        }
     }
 
     /// Compress in place by SVD on a caller-held session.
@@ -513,7 +437,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
                         .into(),
             });
         }
-        self.compress_impl(
+        self.compress_svd_impl(
             &CompressionOptions {
                 method: CompressionMethod::SVD,
                 tolerance,
@@ -521,162 +445,48 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
                 normalize_error: true,
             },
             &mut Some(session),
-            |session, matrix, options, left_orthogonal| {
-                factorize_svd_impl(
-                    matrix,
-                    options.tolerance,
-                    options.normalize_error,
-                    options.max_bond_dim,
-                    left_orthogonal,
-                    session,
-                )
-            },
         )
     }
 
-    fn compress_impl(
+    fn compress_svd_impl(
         &mut self,
         options: &CompressionOptions,
         session: &mut Option<&mut Session<'_>>,
-        mut factorize: impl FnMut(
-            &mut Option<&mut Session<'_>>,
-            &Matrix<T>,
-            &CompressionOptions,
-            bool,
-        ) -> Result<(Matrix<T>, Matrix<T>, usize)>,
     ) -> Result<()>
     where
-        T: Copy + BackendLinalgScalar + TensorScalar,
+        T: BackendLinalgScalar,
         f64: From<<T as TensorScalar>::Real>,
     {
-        if session.is_some() && options.method != CompressionMethod::SVD {
+        if options.method != CompressionMethod::SVD {
             return Err(SimpleTensorTrainError::UnsupportedCompressionMethod {
                 method: options.method,
             });
         }
-        crate::tensortrain::validate_site_tensors(self.site_tensors())?;
-        let n = self.len();
-        if n <= 1 {
-            return Ok(());
-        }
-
-        let tensors = self.site_tensors_mut();
-        let left_options = CompressionOptions {
-            method: options.method,
-            tolerance: 0.0,
-            normalize_error: true,
-            max_bond_dim: None,
-        };
-
-        // Left-to-right sweep: make left-orthogonal without truncation
-        for ell in 0..n - 1 {
-            let left_dim = tensors[ell].left_dim();
-            let site_dim = tensors[ell].site_dim();
-
-            // Reshape to matrix: (left_dim * site_dim, right_dim)
-            let mat = tensor3_to_left_matrix(&tensors[ell]);
-
-            // Factorize without truncation
-            let (left_factor, right_factor, new_bond_dim) = factorize(
-                session,
-                &mat,
-                &left_options,
-                true, // left orthogonal
-            )?;
-
-            // Update current tensor
-            let mut new_tensor = tensor3_zeros(left_dim, site_dim, new_bond_dim)?;
-            for l in 0..left_dim {
-                for s in 0..site_dim {
-                    for r in 0..new_bond_dim {
-                        let row = l * site_dim + s;
-                        if row < left_factor.nrows() && r < left_factor.ncols() {
-                            new_tensor.set3(l, s, r, left_factor[[row, r]]);
-                        }
-                    }
-                }
-            }
-            tensors[ell] = new_tensor;
-
-            // Contract right_factor with next tensor
-            let next_site_dim = tensors[ell + 1].site_dim();
-            let next_right_dim = tensors[ell + 1].right_dim();
-
-            // Build next tensor as matrix (old_left_dim, site_dim * right_dim)
-            let next_mat = tensor3_to_right_matrix(&tensors[ell + 1]);
-
-            // Multiply: right_factor * next_mat
-            let contracted =
-                multiply_for_sweep(session, &right_factor, &next_mat).map_err(|err| {
-                    SimpleTensorTrainError::InvalidOperation {
-                        message: format!("left-to-right compression multiply failed: {err}"),
-                    }
-                })?;
-
-            // Update next tensor
-            let mut new_next_tensor = tensor3_zeros(new_bond_dim, next_site_dim, next_right_dim)?;
-            for l in 0..new_bond_dim {
-                for s in 0..next_site_dim {
-                    for r in 0..next_right_dim {
-                        new_next_tensor.set3(l, s, r, contracted[[l, s * next_right_dim + r]]);
-                    }
-                }
-            }
-            tensors[ell + 1] = new_next_tensor;
-        }
-
-        // Right-to-left sweep: truncate
-        for ell in (1..n).rev() {
-            let site_dim = tensors[ell].site_dim();
-            let right_dim = tensors[ell].right_dim();
-
-            // Reshape to matrix: (left_dim, site_dim * right_dim)
-            let mat = tensor3_to_right_matrix(&tensors[ell]);
-
-            // Factorize with truncation
-            let (left_factor, right_factor, new_bond_dim) = factorize(
-                session, &mat, options, false, // right orthogonal
-            )?;
-
-            // Update current tensor from right_factor
-            let mut new_tensor = tensor3_zeros(new_bond_dim, site_dim, right_dim)?;
-            for l in 0..new_bond_dim {
-                for s in 0..site_dim {
-                    for r in 0..right_dim {
-                        new_tensor.set3(l, s, r, right_factor[[l, s * right_dim + r]]);
-                    }
-                }
-            }
-            tensors[ell] = new_tensor;
-
-            // Contract previous tensor with left_factor
-            let prev_left_dim = tensors[ell - 1].left_dim();
-            let prev_site_dim = tensors[ell - 1].site_dim();
-
-            // Build prev tensor as matrix (left_dim * site_dim, old_right_dim)
-            let prev_mat = tensor3_to_left_matrix(&tensors[ell - 1]);
-
-            // Multiply: prev_mat * left_factor
-            let contracted =
-                multiply_for_sweep(session, &prev_mat, &left_factor).map_err(|err| {
-                    SimpleTensorTrainError::InvalidOperation {
-                        message: format!("right-to-left compression multiply failed: {err}"),
-                    }
-                })?;
-
-            // Update prev tensor
-            let mut new_prev_tensor = tensor3_zeros(prev_left_dim, prev_site_dim, new_bond_dim)?;
-            for l in 0..prev_left_dim {
-                for s in 0..prev_site_dim {
-                    for r in 0..new_bond_dim {
-                        new_prev_tensor.set3(l, s, r, contracted[[l * prev_site_dim + s, r]]);
-                    }
-                }
-            }
-            tensors[ell - 1] = new_prev_tensor;
-        }
-
-        Ok(())
+        compress_chain_cores_mut(
+            self.site_tensors_mut(),
+            session,
+            |session, matrix, left_orthogonal| {
+                let (tolerance, normalize_error, max_bond_dim) = if left_orthogonal {
+                    (0.0, true, None)
+                } else {
+                    (
+                        options.tolerance,
+                        options.normalize_error,
+                        options.max_bond_dim,
+                    )
+                };
+                let (left, right, _) = factorize_svd_impl(
+                    &matrix,
+                    tolerance,
+                    normalize_error,
+                    max_bond_dim,
+                    left_orthogonal,
+                    session,
+                )?;
+                Ok((left, right))
+            },
+            multiply_for_sweep,
+        )
     }
 
     /// Return a compressed copy of the tensor train (non-mutating).

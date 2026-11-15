@@ -1,6 +1,5 @@
 use super::*;
 use approx::assert_relative_eq;
-use tensor4all_simplett::AbstractTensorTrain;
 
 #[test]
 fn test_chebyshev_grid() {
@@ -43,15 +42,15 @@ fn test_lagrange_polynomial_at_grid_points() {
 #[test]
 fn test_fourier_mpo_structure() {
     let options = FourierOptions::default();
-    let mpo = quantics_fourier_mpo(4, &options).unwrap();
-    assert_eq!(mpo.len(), 4);
+    let cores = fourier_cores(4, &options).unwrap();
+    assert_eq!(cores.len(), 4);
 
     // Bond dimensions should be compressed from K+1
     // After compression, they should be <= max_bond_dim
-    for i in 0..3 {
+    for core in &cores[..3] {
         assert!(options
             .max_bond_dim
-            .is_none_or(|cap| mpo.site_tensor(i).right_dim() <= cap));
+            .is_none_or(|cap| core.shape()[2] <= cap));
     }
 }
 
