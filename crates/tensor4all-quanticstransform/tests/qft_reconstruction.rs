@@ -2759,10 +2759,11 @@ fn merge_refine_schedule_rejects_inconsistent_coordinate_groups() {
 #[test]
 fn merge_refine_schedule_refines_when_the_split_stores_no_more_than_the_candidate() {
     // Four unit peaks at the combinations of the two leading input bits. The merged,
-    // unsplit candidate has rank two and exceeds the goal, while restricting to half
-    // the output domain leaves one peak per child, so the children store no more
-    // parameters in total than the candidate: the split is accepted. The old decision
-    // compared the pre-merge leaves (rank one, at the goal) and stopped here.
+    // unsplit candidate exceeds the goal, while restricting to half the output domain
+    // leaves fewer peaks per child, so the children store no more parameters in total
+    // than the candidate and the split is accepted. This is the accept direction of
+    // the guard end to end: the discarded candidate contributes no component and the
+    // kept children carry their own.
     let r = 6usize;
     let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
     let values: Vec<Complex64> = (0..1usize << r)
@@ -2784,7 +2785,10 @@ fn merge_refine_schedule_refines_when_the_split_stores_no_more_than_the_candidat
     assert!(report.refined_regions >= 1, "{report:?}");
     assert_eq!(report.region_count, 2, "{report:?}");
     assert_eq!(report.max_bond_dim, 1, "{report:?}");
-    assert!(report.error_bound <= report.absolute_tolerance, "{report:?}");
+    assert!(
+        report.error_bound <= report.absolute_tolerance,
+        "{report:?}"
+    );
 
     // The retained superposition is the exact normalized DFT within the bound.
     let (indices, dense) = dense_of_regions(&result);

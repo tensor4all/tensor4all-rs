@@ -4,8 +4,10 @@
 //! domain before it considers splitting it. The Fourier-specific schedule here
 //! interleaves the two complementary directions instead: it merges input dyadic
 //! siblings one bit at a time while it fixes output prefix bits, and it restricts
-//! every contribution to its output region *before* adding, so a sum over the
-//! whole output domain is never assembled.
+//! every contribution to its child region *before* adding, so a sum over the whole
+//! output domain is never assembled on a refining trajectory. A rank goal also merges
+//! a region at its own prefix to decide whether to split at all, so a region that
+//! stops can consolidate the whole output domain there.
 //!
 //! A work item represents `P_B F_selected P_A w` for one input dyadic region `A`
 //! and one output prefix region `B`. The input regions form a dyadic prefix code
@@ -315,9 +317,10 @@ pub struct MergeRefineReport {
     /// Output regions refined into child prefix regions. Counted once per region
     /// per refinement, because refining is a decision made at one level.
     pub refined_regions: usize,
-    /// Output regions that stopped refining because it would not lower their
-    /// retained rank. Counted once per region, not once per remaining level. Such
-    /// a region keeps its output key and continues merging its input siblings at
+    /// Output regions whose rank-goal decision stopped refining: the merged candidate
+    /// already fit the goal, or the split would have stored more parameters than that
+    /// candidate. Counted once per region, not once per remaining level. Such a
+    /// region keeps its output key and continues merging its input siblings at
     /// every later level, so its terms are not frozen at the stop level; they
     /// report through [`MergeRefineResult::regions`].
     pub stopped_regions: usize,

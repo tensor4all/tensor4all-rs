@@ -31,14 +31,20 @@
   keeps one region at the goal instead of two). `…stops_above_the_goal_when_the_split_
   stores_more` pins the guard's reject direction.
 - Consequence of `ρ = 1` in the existing small-`r` test regime: a projected child
-  stores about as much as the merged candidate, so the guard refuses a split whose
-  retained rank only halves (measured: `r = 4`, goal 2, `rtol = 0.3`, one region with
-  64 stored parameters instead of four regions with 72). The soft goal decides
-  splitting, not truncation, so a refused split can leave a region above the goal;
-  `max_work_items` and `max_terms` remain the backstop. Consequently no test in the
-  QFT harness reaches the accept direction of the guard end to end; that direction is
-  covered by the unit test of the predicate, and the end-to-end evidence covers both
-  stop directions.
+  stores about as much as the merged candidate, so a split whose retained rank only
+  halves is refused (measured: `r = 4`, goal 1, `rtol = 1e-2`, the two children store
+  1.5x the candidate, so it keeps one region above the soft goal instead of two). The
+  same regime also has a case where the split does pay, when the region holds more
+  peaks than one child (four peaks at `r = 6`, goal 1: two regions, rank one).
+- The soft goal decides splitting, not truncation: a region that stops on the goal
+  keeps truncating toward its share of the allowance on every later level, so a
+  retained rank above the goal is expected and bounded, not a contract violation;
+  `max_work_items` and `max_terms` remain the backstop.
+- Fail/pass against the old decision (tests run against `origin/main`'s scheduler with
+  the new tests kept): `…stops_at_the_root_when_the_merged_candidate_fits_the_goal` and
+  `…stops_above_the_goal_when_the_split_stores_more` both obtain
+  `refined_regions = 1` from the old rule and pass with the new one, which reports
+  `0` for both.
 - Not verified here: the issue's planned 2D tight-binding measurement for the default
   growth factor, and any large-rank regime where a split does reduce total storage.
   The growth factor stays an open question for the maintainer.
