@@ -342,8 +342,10 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   whole output domain is assembled and each object is reused by its descendants.
   `MergeRefineOptions::output_depth` stops early; `None` refines every selected
   bit. `target_bond_dim` is a soft rank goal: `None` keeps the trajectory uniform
-  and exact, and `Some(goal)` makes it adaptive, refining a region only when that
-  lowers its maximum retained rank. A region that stops refining keeps its output
+  and exact, and `Some(goal)` makes it adaptive — a region is merged without
+  splitting first and stops as soon as that candidate fits the goal, and a candidate
+  above the goal is refined only when the children store no more parameters in total
+  than the candidate they replace. A region that stops refining keeps its output
   key and still merges its input siblings on the remaining levels, and a merged
   pair is combined when it fits the goal or lowers the bond dimension (otherwise
   both operands stay as separate terms). A truncation is

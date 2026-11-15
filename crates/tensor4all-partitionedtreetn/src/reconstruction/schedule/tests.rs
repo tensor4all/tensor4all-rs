@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use super::{
-    level_share, merge_group_charge_bound, prefixes_overlap, validate_leaf_geometry,
+    level_share, merge_group_charge_bound, prefixes_overlap, split_pays, validate_leaf_geometry,
     CoverageContract, InputKey, ReconstructionTarget, ScheduleGeometry,
 };
 use crate::projector::index::has_overlapping_pair;
@@ -393,4 +393,18 @@ fn leaf_validation_is_near_linear_at_ten_thousand_leaves() {
         }
         previous = Some((leaves, trie));
     }
+}
+
+/// A split is worth its regions only when it stores no more parameters in total
+/// than the merged candidate it replaces. Equal storage is the boundary the old
+/// max-bond test stopped on, and a rank drop by one rarely pays for `2^axes`
+/// regions, so a tie keeps refining and one extra stored parameter stops it.
+#[test]
+fn split_pays_only_when_the_children_store_no_more() {
+    assert!(split_pays(64, 64));
+    assert!(!split_pays(64, 65));
+    assert!(split_pays(64, 8));
+    // A region whose contributions were all dropped stores nothing.
+    assert!(split_pays(0, 0));
+    assert!(!split_pays(0, 1));
 }

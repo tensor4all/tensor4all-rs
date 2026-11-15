@@ -630,8 +630,12 @@ non-exhausted axis by one bit, and a two-axis level therefore combines four inpu
 children and produces four output children. The default `None` treats `selection` as
 one axis with the documented reversed placement. `MergeRefineOptions::target_bond_dim` is a
 soft rank goal: `None` keeps the trajectory uniform and exact, while `Some(goal)`
-makes it adaptive. An output region is then refined only when its retained terms
-exceed the goal and refining lowers its maximum retained rank. A region that stops
+makes it adaptive. An output region is then merged without splitting first and stops
+as soon as that candidate fits the goal; a candidate above the goal is refined only
+when the children store no more parameters in total than the candidate they replace,
+because one split keeps one region per output child (two in one axis, eight with
+three axes) and a projected child still keeps every output site axis, so a rank drop
+by one is not a gain. A region that stops
 refining keeps its output key and still merges its input siblings on every later
 level, so it consolidates the input prefixes it held instead of freezing them. A
 merged pair is combined into one term when it fits the goal or lowers the bond

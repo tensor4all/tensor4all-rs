@@ -1357,11 +1357,14 @@ fn merge_refine_schedule_truncates_within_the_global_allowance() {
     let limited = schedule_rank_limited(&preimage, &operator, &sites, 0.3, 2);
     let report = limited.report().clone();
 
-    // Truncation happened, respected the soft goal, and measured a residual that
-    // stayed inside the global allowance.
+    // Truncation happened and measured a residual that stayed inside the global
+    // allowance. The soft goal decides splitting, not truncation: this region's
+    // merged candidate already fits the goal, so the root stops and its later merges
+    // truncate toward the allowance, which can retain a rank above the goal.
     assert!(report.compression_attempts > 0, "{report:?}");
     assert!(report.compressions > 0, "{report:?}");
-    assert!(report.max_bond_dim <= 2, "{:?}", report.max_bond_dim);
+    assert_eq!(report.stopped_regions, 1, "{report:?}");
+    assert_eq!(report.region_count, 1, "{report:?}");
     assert!(
         report.max_transient_bond_dim > report.max_bond_dim,
         "transient {} retained {}",
@@ -1434,7 +1437,7 @@ fn merge_refine_schedule_keeps_exact_cancellation_with_a_rank_goal() {
 }
 
 #[test]
-fn merge_refine_schedule_stops_refinement_once_the_rank_goal_is_met() {
+fn merge_refine_schedule_stops_at_the_root_when_the_merged_candidate_fits_the_goal() {
     let r = 3usize;
     let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
     let values: Vec<Complex64> = (0..1usize << r)
@@ -1453,15 +1456,57 @@ fn merge_refine_schedule_stops_refinement_once_the_rank_goal_is_met() {
     let result = schedule_rank_limited(&preimage, &operator, &sites, 1e-3, 1);
     let report = result.report().clone();
 
-    // The refined plane wave reaches rank one after one level, so the schedule
-    // stops there instead of forcing the preset `2^r` output blocks.
-    assert_eq!(report.refined_regions, 1, "{report:?}");
-    assert!(report.stopped_regions >= 2, "{report:?}");
-    assert_eq!(report.region_count, 2);
+    // The candidate a stopped region keeps is the merged, unsplit plane wave, and
+    // it already fits the goal at the first level. The decision compares that
+    // candidate — not the pre-merge items — so the root stops without splitting and
+    // without probing a child, instead of forcing the preset `2^r` output blocks.
+    assert_eq!(report.refined_regions, 0, "{report:?}");
+    assert_eq!(report.stopped_regions, 1, "{report:?}");
+    assert_eq!(report.region_count, 1, "{report:?}");
+    assert_eq!(report.term_count, 1, "{report:?}");
     assert!(report.region_count < 1usize << r);
     assert_eq!(report.max_bond_dim, 1);
 
     // The retained superposition is still the exact normalized DFT.
+    let (indices, dense) = dense_of_regions(&result);
+    let expected = dft_oracle(&indices, &sites, &sites, &values);
+    let residual = max_error(&dense, &expected);
+    assert!(
+        residual <= report.error_bound + 1e-12,
+        "residual {residual:e} exceeds the bound {:e}",
+        report.error_bound
+    );
+}
+
+#[test]
+fn merge_refine_schedule_stops_above_the_goal_when_the_split_stores_more() {
+    // The merged candidate exceeds the goal, so the children are probed; their
+    // total stored parameters (two regions, each as large as the candidate) exceed
+    // the candidate's, so the split is refused and the region stays above the soft
+    // goal with one region instead of two.
+    let r = 4usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| Complex64::new(1.0 + (m as f64 * 0.7).sin(), (m as f64 * 0.3).cos()))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+
+    let result = schedule_rank_limited(&preimage, &operator, &sites, 1e-2, 1);
+    let report = result.report().clone();
+
+    assert_eq!(report.refined_regions, 0, "{report:?}");
+    assert_eq!(report.stopped_regions, 1, "{report:?}");
+    assert_eq!(report.region_count, 1, "{report:?}");
+    // The soft goal decides splitting, not truncation: a refused split leaves the
+    // region above the goal, and the work and term caps stay the backstop.
+    assert!(report.max_bond_dim > 1, "{report:?}");
+    assert!(
+        report.error_bound <= report.absolute_tolerance,
+        "{report:?}"
+    );
+
     let (indices, dense) = dense_of_regions(&result);
     let expected = dft_oracle(&indices, &sites, &sites, &values);
     let residual = max_error(&dense, &expected);
@@ -2709,4 +2754,85 @@ fn merge_refine_schedule_rejects_inconsistent_coordinate_groups() {
     assert!(error
         .to_string()
         .contains("assign every selected index exactly once"));
+}
+
+#[test]
+fn merge_refine_schedule_refines_when_the_split_stores_no_more_than_the_candidate() {
+    // The accept direction of the split guard, with every decision far from a
+    // rounding boundary.
+    //
+    // Input `w(x) = 1 + c e^{-2 pi i x / N}` has the exact normalized DFT
+    // `sqrt(N) (delta_0 + c delta_{N-1})`: two deltas whose output bit strings differ
+    // in every bit. Split into its two input halves (siblings at depth 1), the root's
+    // first level merges them, which compresses both the root candidate and each child.
+    //
+    // - Root candidate: the two deltas, exactly rank 2 across every bond with singular
+    //   values `sqrt(N)` and `|c| sqrt(N)`; dropping the second costs
+    //   `|c| sqrt(N) ~ 4.8`, against an allowance of `rtol * ||w|| ~ 1e-8`. So it
+    //   exceeds the goal of 1 under any arithmetic order.
+    // - Children: fixing any output bit keeps exactly one delta, so each child is
+    //   exactly rank 1; the second singular value is rounding noise, far below the
+    //   share it is compressed against.
+    // - Storage: one rank-1 child stores `2 r` = 12 parameters, two store 24, while
+    //   the rank-2 candidate stores `4 + 8 (r - 2) + 4` = 40, so the split pays by a
+    //   wide margin rather than by one parameter.
+    let r = 6usize;
+    let n = 1usize << r;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let c = Complex64::new(0.0, 0.6);
+    let values: Vec<Complex64> = (0..n)
+        .map(|x| {
+            Complex64::new(1.0, 0.0)
+                + c * Complex64::from_polar(1.0, -2.0 * std::f64::consts::PI * x as f64 / n as f64)
+        })
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = partitioned_target(&tree, &sites[0]);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+
+    let result = schedule_rank_limited(&preimage, &operator, &sites, 1e-8, 1);
+    let report = result.report().clone();
+
+    // One split at the root, accepted; each child then fits the goal and stops.
+    assert_eq!(report.refined_regions, 1, "{report:?}");
+    assert_eq!(report.region_count, 2, "{report:?}");
+    assert_eq!(report.stopped_regions, 2, "{report:?}");
+    assert_eq!(report.max_bond_dim, 1, "{report:?}");
+    // The rank-2 candidate was formed before the split.
+    assert!(report.max_transient_bond_dim >= 2, "{report:?}");
+    assert!(
+        report.error_bound <= report.absolute_tolerance,
+        "{report:?}"
+    );
+
+    let (indices, dense) = dense_of_regions(&result);
+    let expected = dft_oracle(&indices, &sites, &sites, &values);
+
+    // Premise, from the oracle rather than the schedule: the exact DFT is the two
+    // deltas, with magnitudes `sqrt(N)` and `|c| sqrt(N)`, at dense positions that
+    // differ in every output bit.
+    let scale = (n as f64).sqrt();
+    let peaks: Vec<(usize, Complex64)> = expected
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, value)| value.norm() > 1e-9 * scale)
+        .collect();
+    assert_eq!(peaks.len(), 2, "{peaks:?}");
+    let mut magnitudes: Vec<f64> = peaks
+        .iter()
+        .map(|(_, value)| value.norm() / scale)
+        .collect();
+    magnitudes.sort_by(f64::total_cmp);
+    assert!((magnitudes[0] - c.norm()).abs() < 1e-12, "{magnitudes:?}");
+    assert!((magnitudes[1] - 1.0).abs() < 1e-12, "{magnitudes:?}");
+    assert_eq!(peaks[0].0 ^ peaks[1].0, n - 1, "{peaks:?}");
+
+    // The retained superposition is the exact normalized DFT within the bound.
+    let residual = max_error(&dense, &expected);
+    assert!(
+        residual <= report.error_bound + 1e-9,
+        "residual {residual:e} exceeds the bound {:e}",
+        report.error_bound
+    );
 }

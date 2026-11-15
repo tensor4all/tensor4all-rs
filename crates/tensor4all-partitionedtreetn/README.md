@@ -232,8 +232,12 @@ zero. `MergeRefineOptions` selects the output depth, the
 work limit, an optional soft rank goal, and the retained term budget;
 `MergeRefineReport` records the structural counters plus the pinned allowance and
 the measured bound. With `target_bond_dim` unset the trajectory is uniform and
-exact (`error_bound` zero). With a goal it is adaptive: a region is refined only
-when that lowers its maximum retained rank, a merged pair is combined only when
+exact (`error_bound` zero). With a goal it is adaptive: a region is merged without
+splitting first and stops as soon as that candidate fits the goal, and a candidate
+above the goal is refined only when its children store no more parameters in total
+than the candidate they replace, because one split keeps one region per output child
+(two in one axis, eight with three axes) and a projected child still keeps every
+output site axis, so a rank drop by one is not a gain. A merged pair is combined only when
 combining pays off, and merged items are truncated only within an equal share of
 the allowance, so the measured bound never exceeds it. A merged or unpaired
 contribution is dropped only when its measured norm fits its share of the allowance,
