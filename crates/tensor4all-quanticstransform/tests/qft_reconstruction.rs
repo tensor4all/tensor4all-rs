@@ -1357,11 +1357,14 @@ fn merge_refine_schedule_truncates_within_the_global_allowance() {
     let limited = schedule_rank_limited(&preimage, &operator, &sites, 0.3, 2);
     let report = limited.report().clone();
 
-    // Truncation happened, respected the soft goal, and measured a residual that
-    // stayed inside the global allowance.
+    // Truncation happened and measured a residual that stayed inside the global
+    // allowance. The soft goal decides splitting, not truncation: this region's
+    // merged candidate already fits the goal, so the root stops and its later merges
+    // truncate toward the allowance, which can retain a rank above the goal.
     assert!(report.compression_attempts > 0, "{report:?}");
     assert!(report.compressions > 0, "{report:?}");
-    assert!(report.max_bond_dim <= 2, "{:?}", report.max_bond_dim);
+    assert_eq!(report.stopped_regions, 1, "{report:?}");
+    assert_eq!(report.region_count, 1, "{report:?}");
     assert!(
         report.max_transient_bond_dim > report.max_bond_dim,
         "transient {} retained {}",
@@ -1434,7 +1437,7 @@ fn merge_refine_schedule_keeps_exact_cancellation_with_a_rank_goal() {
 }
 
 #[test]
-fn merge_refine_schedule_stops_refinement_once_the_rank_goal_is_met() {
+fn merge_refine_schedule_stops_at_the_root_when_the_merged_candidate_fits_the_goal() {
     let r = 3usize;
     let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
     let values: Vec<Complex64> = (0..1usize << r)
@@ -1453,15 +1456,57 @@ fn merge_refine_schedule_stops_refinement_once_the_rank_goal_is_met() {
     let result = schedule_rank_limited(&preimage, &operator, &sites, 1e-3, 1);
     let report = result.report().clone();
 
-    // The refined plane wave reaches rank one after one level, so the schedule
-    // stops there instead of forcing the preset `2^r` output blocks.
-    assert_eq!(report.refined_regions, 1, "{report:?}");
-    assert!(report.stopped_regions >= 2, "{report:?}");
-    assert_eq!(report.region_count, 2);
+    // The candidate a stopped region keeps is the merged, unsplit plane wave, and
+    // it already fits the goal at the first level. The decision compares that
+    // candidate — not the pre-merge items — so the root stops without splitting and
+    // without probing a child, instead of forcing the preset `2^r` output blocks.
+    assert_eq!(report.refined_regions, 0, "{report:?}");
+    assert_eq!(report.stopped_regions, 1, "{report:?}");
+    assert_eq!(report.region_count, 1, "{report:?}");
+    assert_eq!(report.term_count, 1, "{report:?}");
     assert!(report.region_count < 1usize << r);
     assert_eq!(report.max_bond_dim, 1);
 
     // The retained superposition is still the exact normalized DFT.
+    let (indices, dense) = dense_of_regions(&result);
+    let expected = dft_oracle(&indices, &sites, &sites, &values);
+    let residual = max_error(&dense, &expected);
+    assert!(
+        residual <= report.error_bound + 1e-12,
+        "residual {residual:e} exceeds the bound {:e}",
+        report.error_bound
+    );
+}
+
+#[test]
+fn merge_refine_schedule_stops_above_the_goal_when_the_split_stores_more() {
+    // The merged candidate exceeds the goal, so the children are probed; their
+    // total stored parameters (two regions, each as large as the candidate) exceed
+    // the candidate's, so the split is refused and the region stays above the soft
+    // goal with one region instead of two.
+    let r = 4usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| Complex64::new(1.0 + (m as f64 * 0.7).sin(), (m as f64 * 0.3).cos()))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+
+    let result = schedule_rank_limited(&preimage, &operator, &sites, 1e-2, 1);
+    let report = result.report().clone();
+
+    assert_eq!(report.refined_regions, 0, "{report:?}");
+    assert_eq!(report.stopped_regions, 1, "{report:?}");
+    assert_eq!(report.region_count, 1, "{report:?}");
+    // The soft goal decides splitting, not truncation: a refused split leaves the
+    // region above the goal, and the work and term caps stay the backstop.
+    assert!(report.max_bond_dim > 1, "{report:?}");
+    assert!(
+        report.error_bound <= report.absolute_tolerance,
+        "{report:?}"
+    );
+
     let (indices, dense) = dense_of_regions(&result);
     let expected = dft_oracle(&indices, &sites, &sites, &values);
     let residual = max_error(&dense, &expected);

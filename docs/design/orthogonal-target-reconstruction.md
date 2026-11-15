@@ -375,9 +375,15 @@ target field is exposed downstream.
 With a rank goal the trajectory becomes adaptive, and the decision is made per
 output region so the final region set stays prefix-free:
 
-- An output region is refined only when its retained terms exceed the goal *and*
-  refining strictly lowers its maximum retained rank. Without that gain the region
-  stops refining, so a rank-one object is not forced into a preset output tiling.
+- An output region is merged without splitting first, and it stops as soon as that
+  candidate fits the goal. A candidate above the goal is refined only when the
+  children store no more parameters in total than the candidate they replace,
+  because one split keeps one region per output child (two in one axis, eight with
+  three axes) and a projected child still keeps every output site axis, so a rank drop
+  by one is not a gain (#1327). The test is made against the merged, unsplit
+  candidate because that is exactly what a stopped region keeps; the unmerged input
+  siblings are not a fair baseline. Without that gain the region stops refining, so a
+  rank-one object is not forced into a preset output tiling.
   A stopped region keeps its output key and still merges its input siblings on every
   later level; restricting it to its own region is a no-op, so it runs the merge
   half of the level with the same ledger share. Its measured probe components are

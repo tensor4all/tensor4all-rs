@@ -392,7 +392,9 @@ pub(super) fn checked_add(a: usize, b: usize) -> Result<usize> {
         .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)
 }
 
-fn parameter_count<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
+/// Total stored parameters of a term list, for the split-gain guards of both
+/// reconstruction schedulers.
+pub(super) fn parameter_count<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
     terms: &[SubDomainTreeTN<V>],
 ) -> Result<usize> {
     terms.iter().try_fold(0, |total, term| {
