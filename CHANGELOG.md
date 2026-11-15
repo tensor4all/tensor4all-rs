@@ -19,10 +19,12 @@
   single axis. A region with several axes can now stop every axis at a coarse level
   even though only the joint split would have paid, because no single axis pays on
   its own.
-- `tensor4all-simplett`: `evaluate`, `sum`, `norm2`, `norm`, and `log_norm`
-  now refuse a tensor train whose first core has a non-unit leading bond
-  (#1303), the left-boundary sibling of the trailing-bond guard from #913.
-  They previously read only the `l == 0` component and returned its projection.
+- `tensor4all-simplett`: `evaluate`, `sum`, `norm2`, `norm`, `log_norm`,
+  `inner_product`, and `inner_product_with_session` now refuse a tensor train
+  whose first core has a non-unit leading bond (#1303, #1340), the
+  left-boundary sibling of the trailing-bond guard from #913. They previously
+  read only the `l == 0` component and returned its projection; the
+  inner-product routes summed every leading component instead.
 - `tensor4all-partitionedtreetn`: `ErrorNorm::sampled_max()` pins its
   reference to the largest `|f|` that a greedy coordinate ascent reaches from
   the root patch's candidate samples (#1274), as `optfirstpivot` does in

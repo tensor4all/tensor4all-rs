@@ -110,3 +110,35 @@ fn mpo_sum_refuses_a_broken_leading_bond_instead_of_projecting() {
         other => panic!("sum must refuse a broken leading bond, got {other:?}"),
     }
 }
+
+#[test]
+fn inner_product_refuses_a_broken_leading_bond_instead_of_summing_it() {
+    let broken = with_a_broken_leading_bond();
+    let other = valid();
+
+    // The self-product is mathematically `norm2`, which already refuses this object.
+    // The fixed `asr,ast->rt` first-site plan shares the leading label, so without a
+    // guard it sums every leading component and returns 30 instead of an error (#1340).
+    for (name, outcome) in [
+        ("self", broken.inner_product(&broken).map(|_| ())),
+        ("broken lhs", broken.inner_product(&other).map(|_| ())),
+        ("broken rhs", other.inner_product(&broken).map(|_| ())),
+        (
+            "free function",
+            tensor4all_simplett::contraction::inner_product(&broken, &other).map(|_| ()),
+        ),
+    ] {
+        match outcome {
+            Err(SimpleTensorTrainError::InvalidOperation { message }) => {
+                assert!(
+                    message.contains("expected 1"),
+                    "{name} should say what it expected: {message}"
+                );
+            }
+            other => panic!("{name} must refuse a broken leading bond, got {other:?}"),
+        }
+    }
+
+    // The control train is still accepted.
+    assert!((other.inner_product(&other).expect("valid") - 6.0).abs() < 1e-12);
+}
