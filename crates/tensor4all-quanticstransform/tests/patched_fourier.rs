@@ -190,7 +190,7 @@ fn spectator_and_single_patch_preserve_dense_application() {
     }
 }
 #[test]
-fn spectator_mismatch_is_named_and_the_documented_remedy_works() {
+fn mixed_spectator_constraints_match_manual_grouping_and_dft() {
     // One two-bit axis on sites 0 and 2; site 1 is a spectator.
     let sites: Vec<_> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
     let axes = vec![vec![sites[0].clone(), sites[2].clone()]];
@@ -206,23 +206,23 @@ fn spectator_mismatch_is_named_and_the_documented_remedy_works() {
             vec![(sites[0].clone(), 1)],
         ],
     );
-    let error = patched_fourier_transform(
+    let result = patched_fourier_transform(
         &state,
         &0,
         &axes,
         FourierOptions::forward(),
         &PatchedFourierOptions::default(),
     )
-    .unwrap_err();
-    assert!(matches!(
-        error,
-        QuanticsTransformError::Reconstruction {
-            source: PartitionedTreeTNError::SpectatorMismatch
-        }
-    ));
-    assert!(error
-        .to_string()
-        .contains("disagree on spectator constraints"));
+    .unwrap();
+    assert_eq!(result.report().applied_operator_count, 3);
+    assert_eq!(result.report().work_items_per_level[0], 4);
+    assert_eq!(result.report().error_bound, 0.0);
+    let output = result.clone().into_partition().unwrap();
+    assert_eq!(output.len(), 8);
+    assert!(result
+        .regions()
+        .all(|(p, terms)| p.get(spectator).is_some() && terms.iter().all(|t| t.projector() == p)));
+    let actual = result_dense(&result);
 
     // The remedy: refine to a common spectator layout, then transform each
     // spectator group on its own. The groups sum to the whole transform.
@@ -266,11 +266,233 @@ fn spectator_mismatch_is_named_and_the_documented_remedy_works() {
     }
     let total = total.unwrap();
     assert!(total.sub(&reference).unwrap().maxabs().unwrap() < ROUND_OFF);
+    assert!(actual.sub(&total).unwrap().maxabs().unwrap() < ROUND_OFF);
     assert_dense(
         &reference,
         &sites,
         &dft(&input, &logical_layout(&sites, &axes), -1.0, true),
         ROUND_OFF,
+    );
+}
+
+fn spectator_fixture(complex: bool, branched: bool) -> (Vec<DynIndex>, TreeTN<IdxTensor, usize>) {
+    let selected = DynIndex::new_dyn(2);
+    // The selected bit and spectator have the same ID, but different primes.
+    let sites = vec![
+        selected.clone(),
+        selected.prime(),
+        DynIndex::new_dyn(2),
+        DynIndex::new_dyn(2),
+    ];
+    let payload = values(4);
+    let dense = if complex {
+        IdxTensor::from_dense(sites.clone(), payload).unwrap()
+    } else {
+        IdxTensor::from_dense(sites.clone(), payload.iter().map(|z| z.re).collect()).unwrap()
+    };
+    let source = TreeTN::from_tensors(vec![dense], vec![0usize]).unwrap();
+    let mut topology = SiteIndexNetwork::new();
+    for (node, site) in sites.iter().enumerate() {
+        topology
+            .add_node(node, HashSet::from([site.clone()]))
+            .unwrap();
+    }
+    let edges = if branched {
+        [(0, 1), (1, 2), (1, 3)]
+    } else {
+        [(0, 1), (1, 2), (2, 3)]
+    };
+    for (a, b) in edges {
+        topology.add_edge(&a, &b).unwrap();
+    }
+    (
+        sites,
+        source
+            .restructure_to(&topology, &RestructureOptions::default())
+            .unwrap(),
+    )
+}
+
+fn mixed_spectator_partition(
+    sites: &[DynIndex],
+    tree: &TreeTN<IdxTensor, usize>,
+) -> PartitionedTreeTN<usize> {
+    partition(
+        tree,
+        &[
+            vec![(sites[0].clone(), 0), (sites[1].clone(), 0)],
+            vec![
+                (sites[0].clone(), 0),
+                (sites[1].clone(), 1),
+                (sites[3].clone(), 0),
+            ],
+            vec![
+                (sites[0].clone(), 0),
+                (sites[1].clone(), 1),
+                (sites[3].clone(), 1),
+            ],
+            vec![(sites[0].clone(), 1)],
+        ],
+    )
+}
+
+#[test]
+fn spectator_refinement_on_chains_and_degree_three_trees_matches_dft_and_bounds() {
+    for complex in [false, true] {
+        for branched in [false, true] {
+            let (sites, tree) = spectator_fixture(complex, branched);
+            let axes = vec![vec![sites[0].clone(), sites[2].clone()]];
+            let state = mixed_spectator_partition(&sites, &tree);
+            let input = values(4)
+                .into_iter()
+                .map(|z| {
+                    if complex {
+                        z
+                    } else {
+                        Complex64::new(z.re, 0.0)
+                    }
+                })
+                .collect::<Vec<_>>();
+            let oracle = IdxTensor::from_dense(
+                sites.clone(),
+                dft(&input, &logical_layout(&sites, &axes), -1.0, true),
+            )
+            .unwrap();
+            for adaptive in [false, true] {
+                let mut policy = PatchedFourierOptions::default();
+                if adaptive {
+                    policy.tolerance.rtol = 0.05;
+                    policy.merge_refine.target_bond_dim = Some(1);
+                }
+                let result = patched_fourier_transform(
+                    &state,
+                    &0,
+                    &axes,
+                    FourierOptions::forward(),
+                    &policy,
+                )
+                .unwrap();
+                let report = result.report();
+                let actual = result_dense(&result);
+                let residual = actual.sub(&oracle).unwrap().norm().unwrap();
+                assert!(
+                    residual <= report.error_bound + ROUND_OFF,
+                    "{residual:e}, {report:?}"
+                );
+                assert!(report.error_bound <= report.absolute_tolerance);
+                assert_eq!(report.applied_operator_count, 4);
+                assert_eq!(report.work_items_per_level[0], 8);
+                let regions: Vec<_> = result.regions().map(|(p, _)| p.clone()).collect();
+                assert!(Projector::are_disjoint(&regions));
+                assert!(result.regions().all(|(p, terms)| {
+                    p.get(&sites[1]).is_some()
+                        && p.get(&sites[3]).is_some()
+                        && terms.iter().all(|term| {
+                            term.projector() == p
+                                && term.data().same_topology(&tree)
+                                && sites.iter().all(|site| {
+                                    term.site_index_network().find_node_by_index(site)
+                                        == tree.site_index_network().find_node_by_index(site)
+                                })
+                        })
+                }));
+                if !adaptive {
+                    assert_eq!(report.error_bound, 0.0);
+                    assert_eq!(result.clone().into_partition().unwrap().len(), 16);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn patched_elementwise_with_all_sites_in_patch_order_feeds_fourier_directly() {
+    use tensor4all_partitionedtreetn::{
+        adaptive_interpolation::{
+            patched_elementwise, PatchedInterpolationOptions, VerificationOptions,
+        },
+        ErrorNorm, ErrorTolerance, L2Reference,
+    };
+    use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+    use tensor4all_treetci::TreeTciInterpolator;
+    use tensor4all_treetn::interpolation::{
+        EvalContext, Parallelism, PointwiseElementwise, Product,
+    };
+
+    for branched in [false, true] {
+        let (sites, tree) = spectator_fixture(false, branched);
+        let input = mixed_spectator_partition(&sites, &tree);
+        let options = PatchedInterpolationOptions::new(8)
+            .with_patch_order(sites.clone())
+            .with_seed(1299)
+            .with_tolerance(ErrorTolerance {
+                rtol: 1e-12,
+                atol: 0.0,
+            })
+            .with_error_norm(ErrorNorm::l2(L2Reference::Given(input.norm().unwrap())))
+            .with_verification(VerificationOptions::new().with_max_exhaustive_points(16));
+        let mut backend = CpuBackend::with_threads(1).unwrap();
+        let mut context = EvalContext::new(Session::new(backend.engine_mut()), Parallelism::Serial);
+        let produced = patched_elementwise::<f64, _, _, _, _>(
+            &PointwiseElementwise(TreeTciInterpolator::default()),
+            &TreeTciInterpolator::default(),
+            &[&input],
+            &Product,
+            &mut context,
+            &options,
+        )
+        .unwrap()
+        .partition;
+        let spectator_keys: HashSet<_> = produced.projectors().map(|p| p.get(&sites[1])).collect();
+        assert!(spectator_keys.contains(&None) && spectator_keys.contains(&Some(0)));
+        let axes = vec![vec![sites[0].clone(), sites[2].clone()]];
+        let result = patched_fourier_transform(
+            &produced,
+            &0,
+            &axes,
+            FourierOptions::forward(),
+            &PatchedFourierOptions::default(),
+        )
+        .unwrap();
+        let expected = constructed_reference(&tree, &sites, &axes, FourierOptions::forward());
+        assert!(
+            result_dense(&result)
+                .sub(&expected)
+                .unwrap()
+                .maxabs()
+                .unwrap()
+                < ROUND_OFF
+        );
+        assert_eq!(result.report().applied_operator_count, produced.len());
+    }
+}
+
+#[test]
+fn spectator_cells_compose_with_selected_output_regions() {
+    let (sites, tree) = spectator_fixture(true, true);
+    let state = mixed_spectator_partition(&sites, &tree);
+    let axes = vec![vec![sites[0].clone(), sites[2].clone()]];
+    let mut options = PatchedFourierOptions::default();
+    options.merge_refine.output_depth = Some(1);
+    options.merge_refine.output_regions =
+        Some(vec![Projector::from_pairs([(sites[2].clone(), 1)]).unwrap()]);
+    let result =
+        patched_fourier_transform(&state, &0, &axes, FourierOptions::forward(), &options).unwrap();
+    assert_eq!(result.report().region_count, 4);
+    assert_eq!(result.report().applied_operator_count, state.len());
+    assert!(result.regions().all(|(p, _)| p.get(&sites[2]) == Some(1)
+        && p.get(&sites[1]).is_some()
+        && p.get(&sites[3]).is_some()));
+    let expected = constructed_reference(&tree, &sites, &axes, FourierOptions::forward())
+        .mask_index(&sites[2], 1)
+        .unwrap();
+    assert!(
+        result_dense(&result)
+            .sub(&expected)
+            .unwrap()
+            .maxabs()
+            .unwrap()
+            < ROUND_OFF
     );
 }
 #[test]

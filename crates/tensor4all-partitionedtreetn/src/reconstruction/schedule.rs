@@ -105,7 +105,9 @@ pub struct MergeRefineOptions<V> {
     /// Maximum live work items, default `4096`. A limit below the number of
     /// present input leaves is rejected before any operator is applied, and every
     /// level is checked as well, because unequal leaf depths let the live item
-    /// count grow with the number of refined regions.
+    /// count grow with the number of refined regions. Differing spectator
+    /// constraints are refined into disjoint cells before tensor operations; both
+    /// the varying-coordinate grid and the refined leaf count obey this limit.
     pub max_work_items: usize,
     /// Desired maximum bond dimension per retained term, default `None`.
     /// `None` disables truncation and keeps the trajectory uniform and exact.
@@ -263,7 +265,8 @@ pub struct MergeRefineReport {
     /// `max(atol, rtol * reference_scale)`.
     pub absolute_tolerance: f64,
     /// Measured bound assembled from the components this run measured: the
-    /// application errors at level zero, and the truncation residuals and dropped
+    /// original application errors at level zero (counted once before spectator
+    /// restriction), and the truncation residuals and dropped
     /// norms at the level and region where each was measured. Components of one
     /// level live in disjoint regions and combine by the Euclidean norm; components
     /// of different levels can be nested and add by the triangle inequality. Each
@@ -279,11 +282,13 @@ pub struct MergeRefineReport {
     pub error_bound: f64,
     /// Number of executed level transitions.
     pub level_count: usize,
-    /// Complete-transform applications, one per input leaf.
+    /// Complete-transform applications, one per original input patch, before
+    /// restricting images into disjoint spectator cells.
     pub applied_operator_count: usize,
     /// Pairwise additions performed by level transitions.
     pub additions: usize,
-    /// Region restrictions performed by level transitions.
+    /// Region restrictions, including the initial spectator restrictions and
+    /// those performed by level transitions.
     pub projections: usize,
     /// Contributions dropped as negligible under the global allowance. Their
     /// measured norm stays inside [`Self::error_bound`].
@@ -294,7 +299,8 @@ pub struct MergeRefineReport {
     pub compression_attempts: usize,
     /// Probes that strictly lowered the bond dimension and fit their share.
     pub compressions: usize,
-    /// Live work items after each level, starting with level zero.
+    /// Live work items across all spectator cells after each level, starting
+    /// with level zero after spectator restriction.
     pub work_items_per_level: Vec<usize>,
     /// Largest number of live work items.
     pub peak_work_items: usize,
@@ -777,7 +783,11 @@ impl CoordinateGroup {
 type InputKey = Vec<(usize, usize)>;
 
 /// An output region: per axis, how many leading output bits it fixes and their value.
-type OutputKey = Vec<(usize, usize)>;
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct OutputKey {
+    spectator: usize,
+    prefix: InputKey,
+}
 
 /// True when two index lists contain the same full indices with the same counts.
 ///
@@ -808,6 +818,8 @@ fn same_index_multiset(left: &[DynIndex], right: &[DynIndex]) -> bool {
 /// Prefix geometry of the merge-refine trajectory, one entry per coordinate axis.
 struct ScheduleGeometry {
     axes: Vec<CoordinateGroup>,
+    spectators: Vec<Projector>,
+    source_groups: Vec<Vec<usize>>,
 }
 
 impl ScheduleGeometry {
@@ -861,7 +873,11 @@ impl ScheduleGeometry {
                 "coordinate groups must assign every selected index exactly once",
             ));
         }
-        Ok(Self { axes })
+        Ok(Self {
+            axes,
+            spectators: vec![Projector::new()],
+            source_groups: Vec::new(),
+        })
     }
 
     /// Longest axis, which is the number of level transitions available.
@@ -887,8 +903,8 @@ impl ScheduleGeometry {
 
     /// The output region fixing the per-axis frequency prefix encoded by `key`.
     fn output_projector(&self, key: &OutputKey) -> Result<Projector> {
-        let mut projector = Projector::new();
-        for (axis, (depth, value)) in self.axes.iter().zip(key) {
+        let mut projector = self.spectators[key.spectator].clone();
+        for (axis, (depth, value)) in self.axes.iter().zip(&key.prefix) {
             for (position, site) in axis.outputs[..*depth].iter().enumerate() {
                 let bit = (value >> (depth - 1 - position)) & 1;
                 projector.insert(site.clone(), bit)?;
@@ -942,8 +958,11 @@ impl ScheduleGeometry {
     }
 
     /// The root output region: no axis fixes an output bit yet.
-    fn root_output(&self) -> OutputKey {
-        vec![(0, 0); self.axes.len()]
+    fn root_output(&self, spectator: usize) -> OutputKey {
+        OutputKey {
+            spectator,
+            prefix: vec![(0, 0); self.axes.len()],
+        }
     }
 
     /// The child output regions of `key` at `level`.
@@ -953,14 +972,14 @@ impl ScheduleGeometry {
     fn output_children(&self, key: &OutputKey, level: usize) -> Vec<OutputKey> {
         let mut children = vec![key.clone()];
         for (axis_index, axis) in self.axes.iter().enumerate() {
-            if level > axis.outputs.len() || key[axis_index].0 >= level {
+            if level > axis.outputs.len() || key.prefix[axis_index].0 >= level {
                 continue;
             }
             let mut next = Vec::with_capacity(children.len() * 2);
             for child in children {
                 for bit in 0..2usize {
                     let mut extended = child.clone();
-                    extended[axis_index] = (level, (child[axis_index].1 << 1) | bit);
+                    extended.prefix[axis_index] = (level, (child.prefix[axis_index].1 << 1) | bit);
                     next.push(extended);
                 }
             }
@@ -978,7 +997,7 @@ impl ScheduleGeometry {
     /// which a look-alike index of another dimension could smuggle in, since index
     /// identity ignores the dimension; or when it names an index that is not one of
     /// the selection's outputs, which would silently request everything.
-    fn output_prefix(&self, projector: &Projector) -> Result<OutputKey> {
+    fn output_prefix(&self, projector: &Projector) -> Result<InputKey> {
         for index in projector.projected_indices() {
             if !self.axes.iter().any(|axis| axis.outputs.contains(index)) {
                 return Err(invalid(
@@ -1028,14 +1047,17 @@ impl ScheduleGeometry {
         &self,
         key: &OutputKey,
         level: usize,
-        wanted: Option<&[OutputKey]>,
+        wanted: Option<&[InputKey]>,
     ) -> Vec<OutputKey> {
         let mut children = self.output_children(key, level);
         match wanted {
             None => children,
             Some(wanted) => {
-                children
-                    .retain(|child| wanted.iter().any(|region| prefixes_overlap(child, region)));
+                children.retain(|child| {
+                    wanted
+                        .iter()
+                        .any(|region| prefixes_overlap(&child.prefix, region))
+                });
                 children
             }
         }
@@ -1061,15 +1083,14 @@ impl ScheduleGeometry {
 /// Validate the input leaves and return their per-axis prefix keys.
 ///
 /// Runs on patch supports only, so an unsupported partition is rejected before the
-/// operator is applied to any patch.
-fn validate_leaf_geometry<V>(
-    preimage: &ReconstructionTarget<V>,
+/// operator is applied to any patch. The caller supplies only projectors whose
+/// spectator constraints are compatible with the same disjoint spectator cell.
+fn validate_leaf_geometry<'a>(
+    projectors: impl Iterator<Item = &'a Projector>,
     geometry: &ScheduleGeometry,
     coverage: CoverageContract,
-) -> Result<BTreeSet<InputKey>>
-where
-    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
-{
+) -> Result<BTreeSet<InputKey>> {
+    let projectors: Vec<&Projector> = projectors.collect();
     let bits = geometry.bit_count();
     let shift =
         u32::try_from(bits).map_err(|_| PartitionedTreeTNError::LogicalParameterCountOverflow)?;
@@ -1077,25 +1098,16 @@ where
         .checked_shl(shift)
         .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
     let mut leaves: BTreeSet<InputKey> = BTreeSet::new();
-    let mut spectators: Option<Projector> = None;
     // The Kraft sum of the total prefix lengths, in units of `2^-bits`: a
     // prefix-free set has sum at most `full`, and exactly `full` when it covers the
     // whole input domain.
     let mut kraft = 0usize;
-    for projector in preimage.patch_projectors() {
+    for projector in &projectors {
         let key = geometry.input_prefix(projector).ok_or_else(|| {
             invalid(
                 "every preimage patch must fix a contiguous prefix of each coordinate group and leave the trailing selected indices free",
             )
         })?;
-        let patch_spectators = geometry.spectator_part(projector);
-        match &spectators {
-            None => spectators = Some(patch_spectators),
-            Some(expected) if *expected != patch_spectators => {
-                return Err(PartitionedTreeTNError::SpectatorMismatch);
-            }
-            Some(_) => {}
-        }
         if !leaves.insert(key.clone()) {
             return Err(invalid(
                 "input leaves must not repeat a selected-coordinate assignment",
@@ -1116,11 +1128,10 @@ where
         kraft = checked_add(kraft, weight)?;
     }
     // Prefix-free: two leaves whose prefixes nest on every axis would cover part
-    // of the same region, so they would overlap. Every leaf shares the spectator
-    // constraint checked above, so two patch projectors agree on every index both
-    // fix exactly when their selected prefixes nest. The projector trie answers
-    // that for all leaves without an all-pairs scan.
-    let projectors: Vec<&Projector> = preimage.patch_projectors().collect();
+    // of the same region, so they would overlap. All supplied spectators are
+    // compatible with the same disjoint cell, so they agree wherever both fix an
+    // index. Two original patch projectors therefore overlap exactly when their
+    // selected prefixes nest. Keep #1329's trie path rather than scanning pairs.
     if has_overlapping_pair(&projectors, false) {
         return Err(invalid(
             "input leaves must not overlap: on every axis one leaf's prefix must not be a prefix of the other's selected indices, because the two would cover the same coordinates",
@@ -1140,7 +1151,7 @@ where
 /// Nesting is tested per axis in either direction: axis 0 may have `key` shorter
 /// than `other` while axis 1 has it longer. Two regions overlap exactly when every
 /// axis overlaps, because then they share a sub-rectangle of the coordinates.
-/// `InputKey` and `OutputKey` are the same prefix-key type.
+/// Output requests use the same selected-coordinate prefix representation.
 fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
     key.iter()
         .zip(other)
@@ -1156,15 +1167,24 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// Schedule `operator` on `selection` as a level-coupled merge-refine trajectory.
 ///
 /// `preimage` must already be partitioned into dyadic input leaves of the `d`
-/// selected binary indices, sharing identical constraints on every spectator
-/// index. A leaf fixes a contiguous prefix of those indices, so leaf depths may
-/// differ, but the leaves must form a prefix code: no leaf may fix a prefix of
+/// selected binary indices. Spectator constraints may differ: the scheduler
+/// prepares disjoint spectator cells and validates the selected leaves in each
+/// cell before applying the operator. A leaf fixes a contiguous prefix of those
+/// indices, so leaf depths may differ, but the leaves must form a prefix code:
+/// no leaf may fix a prefix of
 /// another leaf's indices. By default they must cover all `2^d` coordinate
 /// assignments; with [`MergeRefineOptions::coverage`] set to
 /// [`CoverageContract::ZeroForMissingLeaves`] omitted assignments are accepted and
-/// contribute exactly zero. Level zero applies the complete transform once per leaf;
+/// contribute exactly zero. Complete coverage is required separately in each
+/// represented spectator cell; unrepresented spectator space is outside the input
+/// support. Level zero applies the complete transform once per original patch;
 /// level `t` merges the input siblings by removing the constraint on
 /// `k_(d-t+1)` and restricts the sum to each child output prefix fixing `r_t`.
+/// Overlapping spectator constraints use a common grid of only their varying
+/// indices, bounded by `max_work_items` and `max_terms`; already disjoint
+/// spectator groups need no grid. Images are then restricted exactly to those
+/// cells without repeating the transform. Output projectors retain the cell's
+/// spectator constraints, so the output regions stay disjoint.
 /// Restriction happens before addition, so no sum over the whole output domain
 /// is assembled and every computed object is reused level by level.
 ///
@@ -1236,8 +1256,10 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// [`PartitionedTreeTNError::InvalidOptions`]
 /// again when the measured application error of
 /// [`MergeRefineOptions::apply_options`] already exceeds the allowance;
-/// [`PartitionedTreeTNError::SpectatorMismatch`]
-/// when leaves disagree on spectator constraints; and the operator-mapping,
+/// [`PartitionedTreeTNError::RefinementTooLarge`] when the varying spectator
+/// coordinate grid exceeds the work or term limit (before tensor operations);
+/// [`PartitionedTreeTNError::ResourceLimit`] when its refined leaf count exceeds
+/// those limits; and the operator-mapping,
 /// node-merging, application, projection, addition, and backend errors reported
 /// by the underlying TreeTN operations.
 ///
@@ -1321,7 +1343,10 @@ where
     OperatorV: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     validate_tolerance(tolerance)?;
-    let geometry = ScheduleGeometry::new(selection, options.coordinate_groups.as_deref())?;
+    if options.target_bond_dim == Some(0) {
+        return Err(invalid("target_bond_dim must be positive when specified"));
+    }
+    let mut geometry = ScheduleGeometry::new(selection, options.coordinate_groups.as_deref())?;
     let levels = geometry.level_count();
     let output_depth = options.output_depth.unwrap_or(levels);
     if output_depth > levels {
@@ -1331,7 +1356,7 @@ where
     }
     // A requested output region is a prefix key. `None` computes every region, so
     // the unselected trajectory is untouched.
-    let wanted: Option<Vec<OutputKey>> = match options.output_regions.as_deref() {
+    let wanted: Option<Vec<InputKey>> = match options.output_regions.as_deref() {
         None => None,
         Some([]) => {
             return Err(invalid(
@@ -1347,12 +1372,19 @@ where
     };
     // Validate the dyadic input geometry before applying any operator, so an
     // unsupported partition costs no transform work.
-    let present = validate_leaf_geometry(preimage, &geometry, options.coverage)?;
-    if present.len() > options.max_work_items {
+    let input_count = preimage.patch_projectors().count();
+    if input_count > options.max_work_items {
         return Err(invalid(
             "max_work_items must cover every present input leaf; raise the limit or reduce the selection",
         ));
     }
+    let leaf_count = spectators::prepare(
+        preimage.patch_projectors(),
+        &mut geometry,
+        options.coverage,
+        options.max_work_items,
+        options.max_terms,
+    )?;
     if preimage.patch_projectors().next().is_none() {
         // An empty preimage has no site topology to apply the operator to. Under
         // the zero-for-missing coverage contract every leaf is missing, so the
@@ -1395,15 +1427,16 @@ where
     )?;
     let super::target::PreparedImages { images, scale } = prepared;
     let allowance = absolute_allowance(tolerance, scale)?;
-    if options.target_bond_dim == Some(0) {
-        return Err(invalid("target_bond_dim must be positive when specified"));
-    }
     // Live output regions, keyed by their prefix value, each holding one item per
     // input prefix that has not been merged away yet.
     let mut level: BTreeMap<OutputKey, BTreeMap<InputKey, Item<V>>> = BTreeMap::new();
-    let mut first: BTreeMap<InputKey, Item<V>> = BTreeMap::new();
+    let applied_operator_count = images.len();
+    let mut normalization_projections = 0usize;
     let mut application_error = 0.0_f64;
-    for prepared in images {
+    // INVARIANT: prepared images and source_groups both follow the preimage's
+    // canonical patch order. Each recorded membership was validated before any
+    // tensor operation, so initialization visits only actual source/cell pairs.
+    for (prepared, groups) in images.into_iter().zip(&geometry.source_groups) {
         // `validate_leaf_geometry` already accepted this support, so its selected
         // prefix is present and contiguous.
         let leaf = geometry.input_prefix(&prepared.source).ok_or_else(|| {
@@ -1414,7 +1447,22 @@ where
         // Level zero: one complete transform per leaf over the whole output
         // domain, carrying only the measured application error of that leaf.
         application_error = finite(application_error + prepared.error)?;
-        first.insert(leaf, Item::single(prepared.image));
+        for &group in groups {
+            let cell = &geometry.spectators[group];
+            let value = if prepared.image.projector() == cell {
+                prepared.image.clone()
+            } else {
+                normalization_projections = checked_add(normalization_projections, 1)?;
+                prepared
+                    .image
+                    .project(cell)?
+                    .ok_or_else(|| invalid("spectator cell must intersect its source image"))?
+            };
+            level
+                .entry(geometry.root_output(group))
+                .or_default()
+                .insert(leaf.clone(), Item::single(value));
+        }
     }
     if application_error > allowance {
         return Err(invalid(
@@ -1433,23 +1481,21 @@ where
     // measured. A component is confined to the region that measured it, so two
     // components of one level live in disjoint regions and combine by the Euclidean
     // norm, while components of different levels can be nested and combine by the
-    // triangle inequality. Level zero has the single root region, which is why the
-    // application error is counted once instead of once per refined region.
+    // triangle inequality. Original application errors are charged globally,
+    // before their images spread into selected-prefix or spectator regions.
     let mut components: Vec<BTreeMap<OutputKey, f64>> = Vec::with_capacity(output_depth + 1);
-    let mut root_components = BTreeMap::new();
-    if application_error > 0.0 {
-        root_components.insert(geometry.root_output(), application_error);
-    }
-    components.push(root_components);
+    // The original full-domain application errors are charged once globally.
+    // Restricting the same image into several disjoint spectator cells does not
+    // repeat that error; subsequent level components have disjoint cell supports.
+    components.push(BTreeMap::new());
 
-    let applied_operator_count: usize = first.len();
     let mut counters = MergeCounters {
-        peak_work_items: first.len(),
+        peak_work_items: leaf_count,
+        projections: normalization_projections,
         ..MergeCounters::default()
     };
     let mut work_items_per_level = Vec::with_capacity(output_depth + 1);
-    work_items_per_level.push(first.len());
-    level.insert(geometry.root_output(), first);
+    work_items_per_level.push(leaf_count);
     check_term_budget(&level, options.max_terms)?;
     // A region that stops refining stays live at its own output key and keeps
     // merging its input siblings. The set makes that decision one-way and keeps
@@ -1599,7 +1645,7 @@ where
     // Components of different levels can be nested, so they add by the triangle
     // inequality, while the components of one level live in disjoint regions and
     // therefore combine by the Euclidean norm.
-    let mut error_bound = 0.0_f64;
+    let mut error_bound = application_error;
     for level_components in &components {
         let level_bound = level_components
             .values()
@@ -1724,7 +1770,7 @@ fn level_charge_bound<V>(
     stopped: &BTreeSet<OutputKey>,
     geometry: &ScheduleGeometry,
     level_index: usize,
-    wanted: Option<&[OutputKey]>,
+    wanted: Option<&[InputKey]>,
 ) -> Result<usize>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
@@ -1991,6 +2037,8 @@ where
         Ok((sum.clone(), 0.0))
     }
 }
+
+mod spectators;
 
 #[cfg(test)]
 mod tests;

@@ -66,6 +66,9 @@
 
 ### Breaking Rust API changes
 
+- `tensor4all-partitionedtreetn` removes the obsolete `SpectatorMismatch`
+  variant: differing spectator constraints are supported by the scheduler (#1299).
+
 - `tensor4all-core`: `floating_zone_walk` returns `FloatingZoneError<Err>`
   instead of the callback's own `Err`, and validates its arguments before
   evaluating the starting point, as `floating_zone_walk_with_initial_error`
@@ -100,12 +103,13 @@
 
 ### Diagnostics
 
-- `tensor4all-partitionedtreetn` adds `PartitionedTreeTNError::SpectatorMismatch`
-  (#1299). `schedule_merge_refine`, and so `patched_fourier_transform`, now
-  return it instead of `ProjectorMismatch` when input patches fix different
-  spectator coordinates, and the message names the remedy.
-  `patched_fourier_transform` documents its input-partition precondition.
-  Code matching `ProjectorMismatch` for this case must match the new variant.
+- `schedule_merge_refine` and `patched_fourier_transform` accept differing
+  spectator constraints (#1299). Disjoint groups are retained directly;
+  overlapping constraints use a common spectator grid checked against work and
+  term limits before tensor operations. Each original patch is transformed
+  once. The obsolete `PartitionedTreeTNError::SpectatorMismatch` is removed.
+- Exact zip-up identity skips promote real spectator tensors when the identity
+  operand is complex, matching ordinary contraction's scalar promotion.
 
 ### Performance
 
