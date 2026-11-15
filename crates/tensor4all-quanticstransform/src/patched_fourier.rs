@@ -84,20 +84,16 @@ impl<V> Default for PatchedFourierOptions<V> {
 ///
 /// # Input partition
 ///
-/// The patches of `state` must form dyadic input leaves of the selected bits:
-/// - each patch fixes a contiguous most-significant prefix of every axis and
-///   leaves the remaining bits of that axis free;
-/// - every patch fixes **the same coordinates on the spectator indices**, the
-///   site indices outside `axes`, or none of them.
-///
-/// The second condition fails for most partitions from the patched producers
-/// (patched interpolation, elementwise products, adaptive contraction) once
-/// their patch order includes a spectator index. Partition such inputs on the
-/// selected indices only. Otherwise refine every patch to a common spectator
-/// layout with [`PartitionedTreeTN::refine_to`], split the patches by their
-/// spectator constraint, and transform each group separately. Every output
-/// term keeps its group's spectator constraint, and the group results sum to
-/// the transform of the whole input.
+/// Each patch fixes a contiguous most-significant prefix of every selected axis
+/// and leaves its trailing bits free. Spectator constraints may differ between
+/// patches. The scheduler constructs disjoint spectator cells, using a bounded
+/// common grid only when constraints overlap, and checks selected-coordinate
+/// coverage in each represented cell. It applies the operator once per original
+/// patch and then restricts the images exactly; output regions and terms keep
+/// the spectator constraints. Refinement can increase the live item count, so the
+/// grid and refined leaf count are checked against `merge_refine.max_work_items`
+/// and `max_terms` before tensor operations. Raise those limits or limit the
+/// producer's patch order to selected indices if this refinement is too large.
 ///
 /// # Errors
 /// Returns [`QuanticsTransformError::InvalidConfiguration`] for empty/short
@@ -105,9 +101,8 @@ impl<V> Default for PatchedFourierOptions<V> {
 /// branching selections, or caller-supplied coordinate groups. Construction and
 /// restructuring failures retain their operation source; scheduler validation,
 /// coverage, resource and backend failures are preserved by
-/// [`QuanticsTransformError::Reconstruction`], including repair guidance. A
-/// partition whose patches disagree on spectator constraints is reported there
-/// as [`PartitionedTreeTNError::SpectatorMismatch`](tensor4all_partitionedtreetn::PartitionedTreeTNError::SpectatorMismatch).
+/// [`QuanticsTransformError::Reconstruction`], including repair guidance and
+/// refusal of spectator refinement above the work/term limits.
 ///
 /// # Examples
 /// ```

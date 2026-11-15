@@ -363,8 +363,12 @@ fn leaf_validation_is_near_linear_at_ten_thousand_leaves() {
         let mut keys = BTreeSet::new();
         for _ in 0..3 {
             let start = Instant::now();
-            keys = validate_leaf_geometry(&target, &geometry, CoverageContract::Complete)
-                .expect("full-depth dyadic leaves validate");
+            keys = validate_leaf_geometry(
+                target.patch_projectors(),
+                &geometry,
+                CoverageContract::Complete,
+            )
+            .expect("full-depth dyadic leaves validate");
             trie = trie.min(start.elapsed());
         }
         assert_eq!(keys, full_depth_keys(&axis_bits));

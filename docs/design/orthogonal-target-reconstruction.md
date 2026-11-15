@@ -261,12 +261,24 @@ separately, and adaptive stopping changes the counts.
 
 ### Geometry and provenance validation
 
-Selected indices must be binary and non-empty, and the preimage must already be
-partitioned into dyadic input leaves of those indices, sharing identical spectator
-constraints. A preimage that leaves a selected index free, repeats a
-selected-coordinate assignment, or disagrees on a spectator constraint is rejected
-before any operator is applied; a repair suggestion is required rather than an
-implicit normalization or padding step.
+Selected indices must be binary and non-empty, and every preimage patch must
+fix a contiguous prefix on each selected axis. Spectator constraints may differ.
+Preparation sorts and deduplicates spectator projectors by full index identity.
+If they are disjoint, they already define the spectator cells. Otherwise it
+keeps their common fixed coordinates and forms a Cartesian grid of only the
+varying spectator indices, excluding cells outside every input support. Both
+the candidate grid and the total leaf count after restriction obey the work
+and term limits, checked on metadata before tensor operations. The bounded grid
+may refuse a layout an adaptive refinement could handle; there is no silent
+fallback or unbounded refinement.
+
+The complete-coverage contract is checked separately in each represented
+spectator cell. Cells absent from the input support are outside its domain;
+missing selected leaves inside a cell still require `ZeroForMissingLeaves`.
+The operator is applied once per original patch, then its image is restricted
+exactly to the cells. Region keys include the spectator cell, so different
+cells never merge, and the returned output projectors include their spectator
+constraints. All cells participate in one schedule and resource ledger.
 
 Each leaf fixes a *contiguous prefix* of the selected indices, so the input tree may
 be nonuniform: leaf depths can differ as long as the leaves form a dyadic prefix
@@ -298,8 +310,9 @@ accepted truncation, and the measured norm of every dropped contribution.
 Every component is measured where it happens and recorded once, grouped by the level
 and the region that measured it:
 
-- an application error is measured before any split, so it belongs to level zero,
-  which has the single root region;
+- an original application error is measured before any selected or spectator
+  split, so it is charged once globally at level zero; restricting its image
+  into several cells does not charge it again;
 - a truncation residual or a dropped norm is measured inside the child region it is
   accepted in, so it belongs to that level and region.
 
@@ -308,9 +321,10 @@ supports, so their norms combine by the Euclidean norm. Two components of differ
 levels can be nested, so they add by the triangle inequality. The reported bound is
 
 ```text
-error_bound = sum over levels of
-              hypot over the regions of that level of
-              the components measured in that region at that level
+error_bound = sum of original patch application errors
+              + sum over later levels of
+                hypot over the selected-prefix/spectator regions of that level of
+                the components measured in that region at that level
 ```
 
 Counting the application error once at the root is the point: the same error network

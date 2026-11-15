@@ -5,6 +5,20 @@ use super::super::*;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
+#[test]
+fn unlimited_grid_budgets_still_reject_overflowing_counts_and_vec_layouts() {
+    for indices in [
+        vec![DynIndex::new_dyn(usize::MAX), DynIndex::new_dyn(2)],
+        vec![DynIndex::new_dyn(usize::MAX)],
+        vec![DynIndex::new_dyn(isize::MAX as usize)],
+    ] {
+        assert!(matches!(
+            bounded_value_grid(&indices, usize::MAX),
+            Err(PartitionedTreeTNError::LogicalParameterCountOverflow)
+        ));
+    }
+}
+
 fn single_node(indices: &[DynIndex]) -> TreeTN<IdxTensor, usize> {
     let len = indices.iter().map(|index| index.dim).product();
     let values: Vec<f64> = (0..len).map(|value| 1.0 + value as f64).collect();

@@ -607,12 +607,16 @@ output bit-reversal permutation. For contiguous output patches, supply
 &subset, tolerance, &MergeRefineOptions)` instead runs the complementary
 input-merge/output-refine trajectory of the patched Fourier algorithm. The
 preimage must already be the dyadic input leaves of the `d` selected binary
-indices, sharing identical spectator constraints. Each leaf fixes a contiguous
-prefix of those indices, so leaf depths may differ as long as the leaves form a
-prefix code; all `2^d` coordinate assignments must be covered by default, or a sparse
-subset with `CoverageContract::ZeroForMissingLeaves`, where every omitted assignment
-contributes exactly zero. Level zero applies the
-complete transform once per leaf. Level `t` merges the input siblings by removing
+indices. Different spectator constraints are supported: already disjoint groups
+are kept directly, while overlapping groups use a common grid of their varying
+spectator indices. The grid and refined leaf count are checked against work and
+term limits before tensor operations. Each leaf fixes a contiguous prefix of the
+selected indices; complete selected coverage is checked in each represented
+spectator cell, or omitted assignments contribute exact zero under
+`CoverageContract::ZeroForMissingLeaves`. Level zero applies the complete
+transform once per original patch, then restricts its image to the spectator
+cells without repeating application or its error charge. Level `t` merges the
+input siblings by removing
 the constraint on `k_(d-t+1)` and refines the output by fixing `r_t`, restricting
 every contribution to its output region *before* adding it, so no sum over the
 whole output domain is ever assembled and each computed object is reused by its

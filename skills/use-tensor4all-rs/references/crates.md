@@ -330,11 +330,14 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
 - `reconstruction::schedule_merge_refine(&preimage, &center, &operator, &selection,
   &SubsetOperatorOptions, tolerance, &MergeRefineOptions)` — level-coupled
   input-merge/output-refine QFT schedule. The preimage must be the `2^d` dyadic
-  input leaves of the `d` selected binary indices with identical spectator
-  constraints. Each leaf fixes a contiguous prefix, so depths may differ as long as
-  the leaves form a prefix code; all `2^d` assignments by default, or a sparse subset
-  under `CoverageContract::ZeroForMissingLeaves`, where an omitted assignment is an
-  exact zero. Level `t` merges the input bit `k_(d-t+1)` and fixes the output
+  input leaves of the `d` selected binary indices. Spectator constraints may
+  differ: disjoint groups are kept directly and overlapping constraints use a
+  common grid bounded by work and term limits before tensor operations. Each
+  leaf fixes a contiguous prefix; complete selected coverage is checked per
+  represented spectator cell, or missing leaves are exact zeros under
+  `CoverageContract::ZeroForMissingLeaves`. Each original patch is transformed
+  once and its application error is charged once before spectator restriction.
+  Level `t` merges the input bit `k_(d-t+1)` and fixes the output
   bit `r_t`, restricting to the child region before adding, so no sum over the
   whole output domain is assembled and each object is reused by its descendants.
   `MergeRefineOptions::output_depth` stops early; `None` refines every selected

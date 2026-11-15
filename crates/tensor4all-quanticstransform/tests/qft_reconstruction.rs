@@ -1162,7 +1162,7 @@ fn merge_refine_schedule_rejects_invalid_geometry() {
 }
 
 #[test]
-fn merge_refine_schedule_rejects_leaf_spectator_mismatch() {
+fn merge_refine_schedule_checks_selected_coverage_in_each_spectator_cell() {
     let selected = DynIndex::new_dyn(2);
     let spectator = DynIndex::new_dyn(2);
     let values: Vec<Complex64> = (0..4)
@@ -1181,26 +1181,42 @@ fn merge_refine_schedule_rejects_leaf_spectator_mismatch() {
             .expect("nonzero leaf")
     };
     // The two input leaves disagree on the spectator coordinate.
-    let preimage = ReconstructionTarget::from_partition(
-        &PartitionedTreeTN::from_subdomains(vec![leaf(0, 0), leaf(1, 1)]).expect("partition"),
-    )
-    .expect("target");
+    let input =
+        PartitionedTreeTN::from_subdomains(vec![leaf(0, 0), leaf(1, 1)]).expect("partition");
+    let preimage = ReconstructionTarget::from_partition(&input).expect("target");
     let operator = one_site_matrix(&selected, [1.0, 0.0, 0.0, 1.0]);
 
     let error = schedule_merge_refine(
         &preimage,
         &0,
         &operator,
-        &[selected],
+        std::slice::from_ref(&selected),
         &SubsetOperatorOptions { unitary: true },
         ReconstructionTolerance::default(),
         &MergeRefineOptions::default(),
     )
-    .expect_err("spectator constraints must agree across leaves");
-    assert!(matches!(
-        error,
-        tensor4all_partitionedtreetn::PartitionedTreeTNError::SpectatorMismatch
-    ));
+    .expect_err("each spectator cell is missing a selected leaf");
+    assert!(error
+        .to_string()
+        .contains("cover every selected-coordinate"));
+    let result = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &[selected],
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance::default(),
+        &MergeRefineOptions {
+            coverage: CoverageContract::ZeroForMissingLeaves,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let (indices, values) = dense_of_regions(&result);
+    let actual = IdxTensor::from_dense(indices, values).unwrap();
+    let expected = input.to_treetn().unwrap().to_dense().unwrap();
+    assert!(actual.sub(&expected).unwrap().maxabs().unwrap() < 1e-12);
+    assert_eq!(result.report().error_bound, 0.0);
 }
 
 #[test]
@@ -1764,6 +1780,116 @@ fn merge_refine_schedule_charges_a_truncating_application_to_the_bound() {
         "deviation {deviation:e} exceeds the bound {:e}",
         report.error_bound
     );
+}
+
+#[test]
+fn spectator_splits_charge_each_original_application_error_once() {
+    let sites: Vec<_> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<_> = (0..8)
+        .map(|m| Complex64::new(1.0 + (m as f64).sin(), (m as f64).cos()))
+        .collect();
+    let tree = mps(&sites, &values);
+    let partition = PartitionedTreeTN::from_subdomains(
+        [
+            vec![(sites[0].clone(), 0), (sites[1].clone(), 0)],
+            vec![(sites[0].clone(), 0), (sites[1].clone(), 1)],
+            vec![(sites[0].clone(), 1)],
+        ]
+        .into_iter()
+        .map(|pairs| {
+            SubDomainTreeTN::new(tree.clone(), Projector::from_pairs(pairs).unwrap()).unwrap()
+        })
+        .collect(),
+    )
+    .unwrap();
+    let preimage = ReconstructionTarget::from_partition(&partition).unwrap();
+    let selection = [sites[0].clone(), sites[2].clone()];
+    let operator = identity_plus_scaled_x_tensor(&selection, 0.1)
+        .rename_nodes(&[(0, 0), (1, 2)])
+        .unwrap();
+    let inputs: Vec<_> = selection
+        .iter()
+        .enumerate()
+        .map(|(j, index)| {
+            (
+                operator
+                    .get_input_mapping(&(2 * j))
+                    .unwrap()
+                    .true_index
+                    .clone(),
+                index.clone(),
+            )
+        })
+        .collect();
+    let outputs: Vec<_> = selection
+        .iter()
+        .enumerate()
+        .map(|(j, index)| {
+            (
+                operator
+                    .get_output_mapping(&(2 * j))
+                    .unwrap()
+                    .true_index
+                    .clone(),
+                index.clone(),
+            )
+        })
+        .collect();
+    let approximate = ApplyOptions::zipup().with_max_bond_dim(1);
+    let mut application_error = 0.0;
+    for patch in partition.values() {
+        let exact = apply_linear_operator_to_indices(
+            &operator,
+            patch.data(),
+            &inputs,
+            &outputs,
+            ApplyOptions {
+                center: Some(1),
+                svd_policy: Some(tensor4all_core::SvdTruncationPolicy::new(0.0)),
+                ..ApplyOptions::zipup()
+            },
+        )
+        .unwrap();
+        let rounded = apply_linear_operator_to_indices(
+            &operator,
+            patch.data(),
+            &inputs,
+            &outputs,
+            approximate.clone(),
+        )
+        .unwrap();
+        application_error += exact.axpby(1.0, &rounded, -1.0).unwrap().norm().unwrap();
+    }
+    assert!(application_error > 1e-6);
+    let (expected_indices, expected) = applied_dense(&operator, &tree, &selection);
+    for depth in 0..=2 {
+        let result = schedule_merge_refine(
+            &preimage,
+            &0,
+            &operator,
+            &selection,
+            &SubsetOperatorOptions { unitary: true },
+            ReconstructionTolerance {
+                rtol: 0.5,
+                atol: 0.0,
+            },
+            &MergeRefineOptions {
+                output_depth: Some(depth),
+                apply_options: Some(approximate.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let report = result.report();
+        assert_eq!(report.applied_operator_count, 3);
+        assert_eq!(report.work_items_per_level[0], 4);
+        assert!((report.error_bound - application_error).abs() < 1e-12);
+        assert!(report.error_bound <= report.absolute_tolerance);
+        let (indices, actual) = dense_of_regions(&result);
+        let oracle = IdxTensor::from_dense(expected_indices.clone(), expected.clone()).unwrap();
+        let actual = IdxTensor::from_dense(indices, actual).unwrap();
+        assert!(actual.sub(&oracle).unwrap().norm().unwrap() <= report.error_bound + 1e-12);
+    }
 }
 
 #[test]
