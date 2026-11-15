@@ -69,6 +69,7 @@ use super::{
     ReconstructionTarget, ReconstructionTolerance, SubsetOperatorOptions,
 };
 use crate::patching::logical_parameter_count;
+use crate::projector::index::has_overlapping_pair;
 use crate::{
     DynIndex, PartitionedTreeTN, PartitionedTreeTNError, Projector, Result, SubDomainTreeTN,
 };
@@ -1115,19 +1116,15 @@ where
         kraft = checked_add(kraft, weight)?;
     }
     // Prefix-free: two leaves whose prefixes nest on every axis would cover part
-    // of the same region, so they would overlap. Nesting may go either way on
-    // each axis independently, so the test is per axis in both directions.
-    for key in &leaves {
-        for other in &leaves {
-            if key == other {
-                continue;
-            }
-            if prefixes_overlap(key, other) {
-                return Err(invalid(
-                    "input leaves must not overlap: on every axis one leaf's prefix must not be a prefix of the other's selected indices, because the two would cover the same coordinates",
-                ));
-            }
-        }
+    // of the same region, so they would overlap. Every leaf shares the spectator
+    // constraint checked above, so two patch projectors agree on every index both
+    // fix exactly when their selected prefixes nest. The projector trie answers
+    // that for all leaves without an all-pairs scan.
+    let projectors: Vec<&Projector> = preimage.patch_projectors().collect();
+    if has_overlapping_pair(&projectors, false) {
+        return Err(invalid(
+            "input leaves must not overlap: on every axis one leaf's prefix must not be a prefix of the other's selected indices, because the two would cover the same coordinates",
+        ));
     }
     if coverage == CoverageContract::Complete && kraft != full {
         return Err(invalid(
