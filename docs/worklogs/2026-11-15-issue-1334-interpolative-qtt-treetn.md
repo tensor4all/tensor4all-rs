@@ -19,6 +19,13 @@
   rescaling, a perturbation at shared endpoints, and an interior rewrite
   that agrees with all stored samples. Invalid site order and dtype return
   errors.
+- Core sorts the singular values and permutes both factors together before
+  returning a session SVD. The full-rank factorization dispatches all four
+  supported dtypes through that path. The shared Core regression exercises
+  reordering of a complex spectrum, and the optional bridge tests compare
+  the ordered bond ranks and dense results of both compressors on a chain
+  with multiple bonds, with and without a cap. QR and SVD can choose
+  different gauges, so the comparison uses a numerical residual.
 - The default, faer and system BLAS parallel, and provider-injection
   dependency graphs omit both SimpleTT and the optional TreeTN bridge.
   The patched Fourier tutorial builds its prefix embedding from native
