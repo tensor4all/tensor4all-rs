@@ -32,8 +32,8 @@ jobs:
   feature-configuration:
     name: ${{ matrix.name }}
     runs-on: ubuntu-22.04
-    # Configurations run `cargo check --all-targets` or a downstream smoke
-    # example, with a panic-audit Clippy pass where marked. This is the
+    # Configurations run `cargo check --all-targets` or isolated downstream
+    # tests, with a panic-audit Clippy pass where marked. This is the
     # workflow's own bound, outside the PR pipeline budget.
     timeout-minutes: 60
     strategy:
@@ -133,7 +133,7 @@ jobs:
         # on Linux), whose kernels stay within each lane's thread budget.
         run: cargo test --locked -p tensor4all-interpolativeqtt --features parallel
 
-      - name: Run Fourier without SimpleTT
+      - name: Run Fourier regression suites without SimpleTT
         if: matrix.name == 'fourier-without-simplett'
         run: ./scripts/check-fourier-dependencies.sh --run
 

@@ -21,21 +21,23 @@ multiplies the resulting factor into the neighboring core.
 The existing non-Fourier transforms and SimpleTT conversion APIs remain under
 the default `simplett-transforms` feature. A consumer that needs only Fourier
 can disable defaults and select a CPU provider and, when needed, the
-`partitioned` feature. The Fourier-only dependency check uses Cargo's
-normal/build feature graph.
+`partitioned` feature. The Fourier-only dependency check uses Cargo's resolved
+feature graph, including the isolated fixture's test dependencies. The nightly
+feature matrix runs the layout and partitioned regression suites in that fixture.
 
 ## Matched release measurements
 
 The construction probe calls the production Fourier builders with
 `FourierOptions::forward()` on the same 1D and 2D layouts as the
-`patched_fourier_large` workload. It compares base `1647bc66` with the
-shared-LU implementation on an Apple M3 Pro, using Rust 1.98.1, the platform's
+`patched_fourier_large` workload. It compares base `1647bc66` with candidate
+`dcda800c` on an Apple M3 Pro, using Rust 1.98.1, the platform's
 Accelerate provider, `RAYON_NUM_THREADS=1`, and `VECLIB_MAXIMUM_THREADS=1`.
 Each case ran in five fresh processes with one warmup and fifteen timed
 constructions per process. Time is the median of the five process medians,
 with their range in parentheses. RSS is the median of the five process peak
 RSS values from macOS `/usr/bin/time -l`. The process includes provider startup
-and allocator overhead. The runs used ordinary macOS scheduling.
+and allocator overhead. The runs used ordinary macOS scheduling. See the
+[probe, commands, and process output](../experiments/2026-11-15-fourier-construction/README.md).
 
 | Bits per axis | Layout | Base time (ms) | Shared LU time (ms) | Base RSS (MiB) | Shared LU RSS (MiB) | Maximum operator bond |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |

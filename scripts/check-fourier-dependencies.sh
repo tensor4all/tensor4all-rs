@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Check the graph seen by a downstream user. Pass --run to also run the
-# Fourier layout tests and the small patched example in that configuration.
+# Fourier layout and partitioned regression suites and the small patched example.
 set -euo pipefail
 
 cd "$(dirname -- "${BASH_SOURCE[0]}")/.."
@@ -36,16 +36,25 @@ path = "../../crates/tensor4all-quanticstransform/examples/patched_fourier.rs"
 name = "multiaxis_fourier"
 path = "../../crates/tensor4all-quanticstransform/tests/multiaxis_fourier.rs"
 
+[[test]]
+name = "patched_fourier"
+path = "../../crates/tensor4all-quanticstransform/tests/patched_fourier.rs"
+
 [dependencies]
 num-complex = "0.4"
 tensor4all-core = { path = "../../crates/tensor4all-core", default-features = false, features = ["tenferro-cpu-platform"] }
 tensor4all-treetn = { path = "../../crates/tensor4all-treetn", default-features = false, features = ["tenferro-cpu-platform"] }
 tensor4all-partitionedtreetn = { path = "../../crates/tensor4all-partitionedtreetn", default-features = false, features = ["tenferro-cpu-platform"] }
 tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-platform"] }
+
+[dev-dependencies]
+tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend", default-features = false, features = ["tenferro-cpu-platform"] }
+tensor4all-treetci = { path = "../../crates/tensor4all-treetci", default-features = false, features = ["tenferro-cpu-platform"] }
 EOF
 
 manifest="$consumer/Cargo.toml"
-tree=$(cargo tree --manifest-path "$manifest" --edges normal,build,features --prefix none --color never)
+# Include fixture-only test dependencies so the checked graph also covers --run.
+tree=$(cargo tree --manifest-path "$manifest" --edges normal,build,dev,features --prefix none --color never)
 if grep -E '^(tensor4all-simplett v|tensor4all-treetn feature "simplett-bridge")' <<< "$tree"; then
     echo "check-fourier-dependencies: SimpleTT or its TreeTN bridge is enabled" >&2
     exit 1
@@ -54,6 +63,6 @@ echo "check-fourier-dependencies: the patched Fourier build has no SimpleTT or T
 
 if [[ ${1:-} == --run ]]; then
     build=(--locked --manifest-path "$manifest" --target-dir "${CARGO_TARGET_DIR:-target}")
-    cargo test "${build[@]}" --test multiaxis_fourier
+    cargo test "${build[@]}" --test multiaxis_fourier --test patched_fourier
     cargo run "${build[@]}" --bin patched_fourier
 fi
