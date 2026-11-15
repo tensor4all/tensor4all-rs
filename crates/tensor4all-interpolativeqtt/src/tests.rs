@@ -898,11 +898,10 @@ fn invert_round_trip_error<T: InterpolativeScalar>(
         .flat_map(|i| grid.grididx_to_quantics(&[i]).unwrap())
         .collect();
     let samples = evaluate_many::<T>(&tt, &indices);
+    let (pairs, remainder) = samples.as_chunks::<2>();
+    assert!(remainder.is_empty());
     let mut max_err = 0.0_f64;
-    for (i, pair) in samples.chunks_exact(2).enumerate() {
-        let tt_left = pair[0];
-        let tt_right = pair[1];
-
+    for (i, &[tt_left, tt_right]) in pairs.iter().enumerate() {
         let mut v_left = T::zero();
         let mut v_right = T::zero();
         for beta in 0..=degree {
