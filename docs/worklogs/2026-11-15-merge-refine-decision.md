@@ -42,3 +42,11 @@
 - Not verified here: the issue's planned 2D tight-binding measurement for the default
   growth factor, and any large-rank regime where a split does reduce total storage.
   The growth factor stays an open question for the maintainer.
+
+## Review
+
+- Plan review before implementation: `ollama-cloud/glm-5.3-flash:high`
+  (`reviewer-glm`, read-only) — `VERDICT: APPROVE`, no blocker; its two IMPORTANT
+  findings (do not state an unmeasured outcome for the r=3 boundary case; include the
+  two goal-using `patched_fourier` tests in the re-derivation list) and two MINOR
+  findings (two comments describing the old probe order) are addressed in this change.
