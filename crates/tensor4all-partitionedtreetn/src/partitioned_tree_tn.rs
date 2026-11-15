@@ -9,6 +9,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use crate::error::{PartitionedTreeTNError, Result};
+use crate::patching::PatchingOptions;
 use crate::projector::index::{has_overlapping_pair, sets_overlap, ProjectorIndex};
 use crate::projector::{canonical_index_cmp, Projector};
 use crate::subdomain_tree_tn::{
@@ -26,8 +27,7 @@ use tensor4all_treetn::{
 /// contracted, and how the contributions to one output projector are summed.
 ///
 /// A plain [`ContractionOptions`] converts into this type with
-/// [`SumEngine::Binary`], so `contract(&other, &center, contraction_options)`
-/// keeps its meaning.
+/// [`SumEngine::Binary`] and the default group-sum limit.
 ///
 /// # Summing contributions
 ///
@@ -51,14 +51,15 @@ use tensor4all_treetn::{
 /// # Examples
 ///
 /// ```
-/// use tensor4all_partitionedtreetn::PartitionedContractionOptions;
+/// use tensor4all_partitionedtreetn::{PartitionedContractionOptions, PatchingOptions};
 /// use tensor4all_treetn::{contraction::ContractionOptions, SumEngine};
 ///
 /// let default = PartitionedContractionOptions::default();
 /// assert_eq!(default.sum_engine, SumEngine::Binary);
-/// // A plain `ContractionOptions` means `Binary` as well.
+/// assert_eq!(default.group_sum_limit_bytes, PatchingOptions::DEFAULT_GROUP_SUM_LIMIT_BYTES);
 /// let plain = PartitionedContractionOptions::from(ContractionOptions::default());
 /// assert_eq!(plain.sum_engine, SumEngine::Binary);
+/// assert_eq!(plain.group_sum_limit_bytes, default.group_sum_limit_bytes);
 ///
 /// let nary = PartitionedContractionOptions {
 ///     sum_engine: SumEngine::Nary,
@@ -66,7 +67,7 @@ use tensor4all_treetn::{
 /// };
 /// assert_eq!(nary.sum_engine, SumEngine::Nary);
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PartitionedContractionOptions {
     /// How each compatible patch pair is contracted, and the truncation of
     /// every summed output projector.
@@ -74,6 +75,23 @@ pub struct PartitionedContractionOptions {
     /// How the contributions to one output projector are summed. Default:
     /// [`SumEngine::Binary`].
     pub sum_engine: SumEngine,
+    /// Maximum estimated size in bytes of the exact sum for one output
+    /// projector, checked before forming it with [`TreeTN::estimate_exact_sum_bytes`].
+    /// A larger sum returns [`PartitionedTreeTNError::GroupSumLimit`].
+    ///
+    /// **The limit bounds the built group sum, not peak memory.** The pairwise
+    /// contractions are already held when the check runs, and building and
+    /// truncating the sum can need additional memory.
+    ///
+    /// Defaults to [`PatchingOptions::DEFAULT_GROUP_SUM_LIMIT_BYTES`] (4 GiB).
+    /// A group of one contribution is never checked. `usize::MAX` disables the limit.
+    pub group_sum_limit_bytes: usize,
+}
+
+impl Default for PartitionedContractionOptions {
+    fn default() -> Self {
+        ContractionOptions::default().into()
+    }
 }
 
 impl From<ContractionOptions> for PartitionedContractionOptions {
@@ -81,6 +99,7 @@ impl From<ContractionOptions> for PartitionedContractionOptions {
         Self {
             contraction,
             sum_engine: SumEngine::Binary,
+            group_sum_limit_bytes: PatchingOptions::DEFAULT_GROUP_SUM_LIMIT_BYTES,
         }
     }
 }
@@ -982,6 +1001,8 @@ where
     /// directly from their eager stored data. Projector entries absent from the
     /// output site space are pruned, and duplicate output keys are combined by
     /// strict subdomain addition followed by the requested bond truncation.
+    /// [`PartitionedContractionOptions::group_sum_limit_bytes`] bounds the
+    /// estimated size of each exact sum before truncation.
     /// To form only some output keys, use [`Self::contract_selected`], which
     /// skips the pairs of every other key.
     ///
@@ -1011,8 +1032,9 @@ where
     /// [`PartitionedTreeTNError::OverlappingProjectors`] for an operand whose own
     /// stored layout is invalid, [`PartitionedTreeTNError::RefinementTooLarge`]
     /// when the refinement grid has more than [`AUTOMATIC_REFINEMENT_LIMIT`]
-    /// atoms, or a typed TreeTN/backend error. The operation returns a new
-    /// partition, so failure cannot mutate either input.
+    /// atoms, [`PartitionedTreeTNError::GroupSumLimit`] when an exact group sum
+    /// would exceed the configured limit, or a typed TreeTN/backend error.
+    /// The operation returns a new partition, so failure cannot mutate either input.
     pub fn contract(
         &self,
         other: &Self,
@@ -1117,7 +1139,7 @@ where
     ///
     /// * `other` - Second operand, with the same named topology.
     /// * `center` - Existing node used as the contraction and truncation center.
-    /// * `options` - Non-dense TreeTN contraction method and rank policy.
+    /// * `options` - TreeTN contraction method, rank policy, and group-sum options.
     /// * `wanted` - Exact output projector keys to form. They are compared by
     ///   equality with the output keys, which carry only uncontracted site
     ///   indices. Duplicates are ignored. A key that no pair produces has no
@@ -1137,8 +1159,10 @@ where
     /// [`PartitionedTreeTNError::InvalidCenter`],
     /// [`PartitionedTreeTNError::InvalidOptions`],
     /// [`PartitionedTreeTNError::OverlappingProjectors`] for overlapping wanted
-    /// output layouts, or a typed TreeTN/backend error. These checks run even
-    /// when no pair is selected. Neither input is mutated.
+    /// output layouts, [`PartitionedTreeTNError::GroupSumLimit`] when a wanted
+    /// output's exact sum would exceed the configured limit, or a typed
+    /// TreeTN/backend error. Operand validation runs even when no pair is
+    /// selected. Neither input is mutated.
     ///
     /// # Examples
     ///
@@ -1194,6 +1218,7 @@ where
         let PartitionedContractionOptions {
             contraction: options,
             sum_engine,
+            group_sum_limit_bytes,
         } = options;
         validate_contraction_options(&options)?;
         self.validate_contents()?;
@@ -1242,7 +1267,12 @@ where
                 continue;
             }
             let terms: Vec<_> = contributions.iter().collect();
-            let mut combined = SubDomainTreeTN::exact_sum(&terms, sum_engine)?;
+            let mut combined = SubDomainTreeTN::exact_sum_within(
+                &terms,
+                sum_engine,
+                group_sum_limit_bytes,
+                "contract",
+            )?;
             combined.truncate(center, duplicate_options)?;
             subdomains.push(combined);
         }

@@ -110,14 +110,16 @@ pub enum PartitionedTreeTNError {
         value: usize,
     },
 
-    /// The exact sum of one group of patches would exceed
-    /// [`PatchingOptions::group_sum_limit_bytes`](crate::PatchingOptions::group_sum_limit_bytes).
+    /// The exact sum of one group of patches would exceed the configured limit.
     ///
     /// Returned before the sum is formed by
-    /// [`contract_adaptive`](crate::contract_adaptive) and its variants, which
-    /// sum every contribution to one output projector, and by
-    /// [`add_with_patching`](crate::add_with_patching), which sums the input
-    /// patches that share one projector key. The size is the estimate of
+    /// [`PartitionedTreeTN::contract`](crate::PartitionedTreeTN::contract) and
+    /// [`PartitionedTreeTN::contract_selected`](crate::PartitionedTreeTN::contract_selected)
+    /// using [`PartitionedContractionOptions::group_sum_limit_bytes`](crate::PartitionedContractionOptions::group_sum_limit_bytes).
+    /// [`contract_adaptive`](crate::contract_adaptive), its variants, and
+    /// [`add_with_patching`](crate::add_with_patching) use
+    /// [`PatchingOptions::group_sum_limit_bytes`](crate::PatchingOptions::group_sum_limit_bytes).
+    /// The size is the estimate of
     /// [`TreeTN::estimate_exact_sum_bytes`](tensor4all_treetn::TreeTN::estimate_exact_sum_bytes).
     ///
     /// # Remedy

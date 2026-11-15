@@ -204,10 +204,12 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   projectors in `wanted` and never contracts the pairs of other outputs; each
   returned patch equals the one `contract` returns under that key.
   `contract`/`contract_selected` take `impl Into<PartitionedContractionOptions>`
-  (a plain treetn `ContractionOptions` works and means `SumEngine::Binary`);
+  (a plain treetn `ContractionOptions` uses the partitioned defaults);
   `PartitionedContractionOptions::sum_engine` chooses how contributions to one
   output projector are summed (`Binary` default, opt-in `Nary` /
-  `NaryWithin { limit_bytes }`). `to_treetn_with(engine) -> ExactSum` reports
+  `NaryWithin { limit_bytes }`). `group_sum_limit_bytes` (default 4 GiB) caps
+  the estimated size of the built sum and returns `GroupSumLimit` above the
+  cap. `to_treetn_with(engine) -> ExactSum` reports
   `used_nary` and `estimated_nary_bytes`; `to_treetn()` is `Binary`.
   `evaluate_batched(&indices, values)` evaluates points with the
   `TreeTN::evaluate` layout; each point goes to the patch that covers it, and

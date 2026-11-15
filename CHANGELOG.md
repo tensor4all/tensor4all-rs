@@ -66,6 +66,11 @@
 
 ### Breaking Rust API changes
 
+- `tensor4all-partitionedtreetn`: `PartitionedContractionOptions` has the new
+  field `group_sum_limit_bytes` (#1316). Complete struct literals must add it.
+  `contract` and `contract_selected` return `GroupSumLimit` before building a
+  sum whose estimate exceeds the limit. The default is 4 GiB, including when
+  passing plain `ContractionOptions`. Use `usize::MAX` to disable the limit.
 - `tensor4all-core`: `floating_zone_walk` returns `FloatingZoneError<Err>`
   instead of the callback's own `Err`, and validates its arguments before
   evaluating the starting point, as `floating_zone_walk_with_initial_error`

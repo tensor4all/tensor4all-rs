@@ -56,11 +56,9 @@ fn contraction_case() -> (
     PartitionedTreeTN<usize>,
     IdxTensor,
 ) {
-    let (x, y, k) = (
-        DynIndex::new_dyn(2),
-        DynIndex::new_dyn(2),
-        DynIndex::new_dyn(3),
-    );
+    let x = DynIndex::new_dyn(2);
+    let y = x.prime();
+    let k = DynIndex::new_dyn(3);
     let left = chain(&x, &k, 0);
     let right = chain(&y, &k, 10);
     let reference = contract(&[&left.to_dense().unwrap(), &right.to_dense().unwrap()]).unwrap();
@@ -83,6 +81,7 @@ fn contract_gives_the_same_result_with_every_engine() {
     for sum_engine in ENGINES {
         let options = PartitionedContractionOptions {
             sum_engine,
+            group_sum_limit_bytes: usize::MAX,
             ..ContractionOptions::default().into()
         };
         let result = left.contract(&right, &0, options.clone()).unwrap();
@@ -212,6 +211,36 @@ fn group_sum_limit(error: PartitionedTreeTNError) -> (&'static str, usize, usize
     }
 }
 
+#[test]
+fn partitioned_contract_refuses_a_group_sum_above_its_limit() {
+    let (left, right, reference) = contraction_case();
+    let wanted = [Projector::new()];
+    for selected in [false, true] {
+        let contract = |group_sum_limit_bytes| {
+            let options = PartitionedContractionOptions {
+                group_sum_limit_bytes,
+                ..PartitionedContractionOptions::default()
+            };
+            if selected {
+                left.contract_selected(&right, &0, options, &wanted)
+            } else {
+                left.contract(&right, &0, options)
+            }
+        };
+
+        let (operation, terms, estimate, limit) = group_sum_limit(contract(0).unwrap_err());
+        assert_eq!((operation, terms, limit), ("contract", 3, 0));
+        assert!(estimate > 0);
+        assert_eq!(
+            group_sum_limit(contract(estimate - 1).unwrap_err()),
+            ("contract", 3, estimate, estimate - 1)
+        );
+        let result = contract(estimate).unwrap();
+        let error = dense(&result).sub(&reference).unwrap().maxabs().unwrap();
+        assert!(error < 1e-10, "selected = {selected}: max error {error}");
+    }
+}
+
 /// Both operands are split on the contracted index `k`, as the patches of a
 /// global operator's input are: every pair keeps no output constraint, so the
 /// three pairs land in one group, which the limit checks before summing
@@ -267,10 +296,26 @@ fn a_single_patch_group_is_not_checked() {
     let (x, y) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
     let left = split(&chain(&x, &y, 0), &x);
     let right = PartitionedTreeTN::from_subdomain(
-        SubDomainTreeTN::from_treetn(chain(&DynIndex::new_dyn(2), &y, 5)).unwrap(),
+        SubDomainTreeTN::from_treetn(chain(&x.prime(), &y, 5)).unwrap(),
     )
     .unwrap();
     // Each left patch fixes the output index `x`: one pair per output group.
+    let reference = contract(&[&dense(&left), &dense(&right)]).unwrap();
+    let options = PartitionedContractionOptions {
+        group_sum_limit_bytes: 0,
+        ..PartitionedContractionOptions::default()
+    };
+    let wanted: Vec<_> = left.projectors().cloned().collect();
+    let result = left.contract(&right, &0, options.clone()).unwrap();
+    let selected = left
+        .contract_selected(&right, &0, options, &wanted)
+        .unwrap();
+    for partition in [result, selected] {
+        assert_eq!(partition.len(), 2);
+        let error = dense(&partition).sub(&reference).unwrap().maxabs().unwrap();
+        assert!(error < 1e-10, "max error {error}");
+    }
+
     let contracted = contract_adaptive(
         &left,
         &right,
