@@ -406,11 +406,8 @@ where
             let factor = factors[k]
                 .take()
                 .ok_or_else(|| anyhow::anyhow!("certified zip-up: factor {k} missing"))?;
-            // Check the working set of this step from the actual dimensions:
-            // the block, its projection and its discarded part, the weighted
-            // block with its SVD and its weighted discarded part, and the
-            // remainder handed to the next step, next to the factors still
-            // stored.
+            // Check the working set of this step from the actual dimensions,
+            // next to the factors still stored (see `working` below).
             let incoming = remainder.as_ref().map_or(1, |remainder| {
                 dims(&all_but(remainder, &joint_bonds[k - 1]))
             });
@@ -435,21 +432,34 @@ where
             let weighted_elements = (incoming as u128)
                 .saturating_mul(outputs as u128)
                 .saturating_mul(columns as u128);
-            // `next = kept^H block` has at most as many rows as `weighted` has
-            // singular values, `min(incoming * outputs, columns)`, over the
-            // joint bond of this cut.
-            let next_elements = (incoming as u128)
-                .saturating_mul(outputs as u128)
-                .min(columns as u128)
-                .saturating_mul(rows as u128);
-            // Live together inside the rank loop below: `block`, its projection
-            // and its discarded part (three blocks); `weighted`, the factors of
-            // its full SVD `full`, and `weighted_discarded` (counted as two
-            // weighted blocks); and the candidate remainder `next`.
+            // The weighted block is `m x n` with `m = incoming * outputs` (the
+            // left legs) and `n = columns`; it has `min(m, n)` singular values,
+            // so a kept factor is at most `m x min` and the remainder
+            // `next = kept^H block` at most `min x rows`.
+            let m = (incoming as u128).saturating_mul(outputs as u128);
+            let n = columns as u128;
+            let singular = m.min(n);
+            let svd_factors = singular.saturating_mul(m.saturating_add(n));
+            let kept_elements = m.saturating_mul(singular);
+            let next_elements = singular.saturating_mul(rows as u128);
+            // Live for the whole rank loop: `block` and `weighted`. On top of
+            // them, the larger of its two phases (the full SVD of `weighted`
+            // that gives the singular values is dropped before the loop, and
+            // needs no more than the first phase):
+            // - the truncated `factorize`: a matrix copy of its input, the
+            //   factors of its internal SVD and the left and right factors it
+            //   returns;
+            // - after it: the projection and the discarded block, the weighted
+            //   discarded block, the kept factor and the remainder `next`.
+            let factorize_phase = weighted_elements.saturating_add(svd_factors.saturating_mul(2));
+            let check_phase = block_elements
+                .saturating_mul(2)
+                .saturating_add(weighted_elements)
+                .saturating_add(kept_elements)
+                .saturating_add(next_elements);
             let working = block_elements
-                .saturating_mul(3)
-                .saturating_add(weighted_elements.saturating_mul(2))
-                .saturating_add(next_elements)
+                .saturating_add(weighted_elements)
+                .saturating_add(factorize_phase.max(check_phase))
                 .saturating_mul(element_bytes as u128);
             let step_bytes = usize::try_from(working)
                 .unwrap_or(usize::MAX)
@@ -470,10 +480,14 @@ where
             let left = all_but(&block, &joint_bonds[k]);
             let weighted =
                 T::contract(&[&block, &factor]).context("certified zip-up: weighted block")?;
-            let full = weighted
-                .factorize_full_rank(&left, FactorizeAlg::SVD, Canonical::Left)
-                .context("certified zip-up: weighted block SVD")?;
-            let singular_values = full.singular_values.unwrap_or_default();
+            // Only the singular values are used: the full SVD's left and right
+            // factors are dropped at the end of this block, before the rank loop.
+            let singular_values = {
+                let full = weighted
+                    .factorize_full_rank(&left, FactorizeAlg::SVD, Canonical::Left)
+                    .context("certified zip-up: weighted block SVD")?;
+                full.singular_values.unwrap_or_default()
+            };
             let max_rank = singular_values.len().max(1);
 
             let remaining_steps = (cuts - k) as f64;

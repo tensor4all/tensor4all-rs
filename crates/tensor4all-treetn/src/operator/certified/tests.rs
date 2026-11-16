@@ -328,50 +328,53 @@ fn the_step_gate_counts_the_whole_working_set_of_a_step() {
     // Three sites, state bond 4, operator bond 3, site dimension 2. The first
     // sweep step has `incoming = 1`, `outputs = 2`, a joint bond of `rows = 12`
     // and a far-end factor of `columns = 4`, next to 480 bytes of stored
-    // factors. In elements: block `1 * 2 * 12 = 24`, weighted `1 * 2 * 4 = 8`,
-    // next `min(1 * 2, 4) * 12 = 24`.
+    // factors. So the weighted block is `m x n = 2 x 4` with `min = 2` singular
+    // values, and in elements: block `2 * 12 = 24`, weighted `2 * 4 = 8`, kept
+    // factor `m * min = 4`, remainder `next = min * rows = 24`.
     //
-    // The step gate used to count `3 * block + weighted` = 80 elements, 1120
-    // bytes with the stored factors. The rank loop also holds the SVD of the
-    // weighted block, the weighted discarded block and the next remainder:
-    // `3 * block + 2 * weighted + next` = 112 elements, 1376 bytes. The
-    // factor-build gate estimates 1344 bytes for this chain. A limit of 1360
-    // bytes passes the build gate and the old step count, so only the corrected
-    // step gate refuses it, and it reports the step's 1376 bytes rather than the
-    // build estimate.
+    // The true peak of the step is in its rank loop, after the truncated SVD:
+    // block, weighted, the projection, the discarded block, the weighted
+    // discarded block, the kept factor and `next`, `3 * 24 + 2 * 8 + 4 + 24 =
+    // 116` elements, 1408 bytes with the stored factors (the factorize phase
+    // needs `24 + 8 + 8 + 2 * 2 * 6 = 64`). The gate first counted `3 * block +
+    // weighted` (1120 bytes), then `3 * block + 2 * weighted + next` (1376
+    // bytes, missing the kept factor); the factor-build gate estimates 1344
+    // bytes. A limit of 1392 bytes lies between the previous count and the true
+    // peak, above the build estimate: the old gates admitted it, and the step
+    // gate must refuse it with the step's 1408 bytes.
     let sites = chain(3);
     let nodes: Vec<usize> = (0..3).collect();
     let state = random_state(&sites, false, 4, 91);
     let operator = random_operator(&sites, &nodes, &chain_edges(&nodes), false, 3, 92);
-    let (build, old_step, corrected_step) = (1344_usize, 1120_usize, 1376_usize);
+    let (build, previous_count, peak) = (1344_usize, 1376_usize, 1408_usize);
 
     let passing =
         apply_linear_operator_certified(&operator, &state, CertifiedApplyOptions::new(1.0))
             .unwrap();
     // The first step binds the estimate, above the build estimate.
-    assert_eq!(passing.estimated_bytes(), corrected_step);
+    assert_eq!(passing.estimated_bytes(), peak);
 
-    let limit = 1360;
-    assert!(build <= limit && old_step <= limit && limit < corrected_step);
+    let limit = 1392;
+    assert!(build < limit && previous_count < limit && limit < peak);
     let error = apply_linear_operator_certified(
         &operator,
         &state,
         CertifiedApplyOptions::new(1.0).with_memory_limit(limit),
     )
-    .unwrap_err();
+    .expect_err("a limit below the step's peak must be refused, not passed");
     assert!(
         matches!(
             error,
             CertifiedApplyError::MemoryLimit { estimated_bytes, limit_bytes }
-                if estimated_bytes == corrected_step && limit_bytes == limit
+                if estimated_bytes == peak && limit_bytes == limit
         ),
         "{error:?}"
     );
-    // The corrected count itself passes.
+    // The peak itself passes.
     apply_linear_operator_certified(
         &operator,
         &state,
-        CertifiedApplyOptions::new(1.0).with_memory_limit(corrected_step),
+        CertifiedApplyOptions::new(1.0).with_memory_limit(peak),
     )
     .unwrap();
 }
