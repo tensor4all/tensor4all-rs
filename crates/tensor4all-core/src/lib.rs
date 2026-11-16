@@ -80,9 +80,12 @@ pub use matrix_luci::matrix_luci_factors_from_blocks_seeded;
 pub use matrix_luci::{
     matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix,
     matrix_luci_factors_from_matrix_owned, matrix_luci_factors_from_matrix_owned_in,
-    matrix_luci_factors_from_matrix_owned_on_session, matrix_luci_factors_working_bytes,
-    matrix_luci_row_interpolation_owned_in, matrix_luci_row_interpolation_owned_on_session,
-    MatrixLUCI, MatrixLuciFactors, MatrixLuciRowInterpolation,
+    matrix_luci_factors_from_matrix_owned_on_session,
+    matrix_luci_factors_from_matrix_owned_with_rank_selection,
+    matrix_luci_factors_from_matrix_owned_with_rank_selection_on_session,
+    matrix_luci_factors_working_bytes, matrix_luci_row_interpolation_owned_in,
+    matrix_luci_row_interpolation_owned_on_session, MatrixLUCI, MatrixLuciFactors,
+    MatrixLuciRowInterpolation,
 };
 pub use matrixaca::MatrixACA;
 pub use matrixlu::{rrlu, rrlu_mut, rrlu_pivots, RrLU, RrLUOptions, RrLUPivots};

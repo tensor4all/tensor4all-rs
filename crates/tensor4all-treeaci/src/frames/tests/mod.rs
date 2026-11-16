@@ -3947,6 +3947,7 @@ fn local_update_degrades_instead_of_refusing_an_aggregate_overrun() {
         edge,
         &options,
         true,
+        None,
         &mut square,
         &mut crate::exec::Exec::Global,
     )
@@ -3998,6 +3999,7 @@ fn local_update_degrades_instead_of_refusing_an_aggregate_overrun() {
         edge,
         &options,
         true,
+        None,
         &mut square,
         &mut crate::exec::Exec::Global,
     )

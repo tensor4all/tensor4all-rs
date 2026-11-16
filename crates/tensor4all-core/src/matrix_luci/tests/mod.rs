@@ -780,3 +780,134 @@ fn lazy_facades_reject_invalid_options() {
     check::<Complex64>();
     check::<Complex32>();
 }
+
+/// Selecting rank `k` after one search must equal a search capped at `k`,
+/// for every `k` from 0 past the found rank, in both gauges.
+fn assert_rank_selection_matches_capped_search<T>(matrix: Matrix<T>)
+where
+    T: Scalar + crate::MatrixLuciScalar + PartialEq + std::fmt::Debug,
+{
+    for left_orthogonal in [true, false] {
+        let options = RrLUOptions {
+            rel_tol: 0.0,
+            left_orthogonal,
+            ..RrLUOptions::default()
+        };
+        let full =
+            matrix_luci_factors_from_matrix_owned(matrix.clone(), Some(options.clone())).unwrap();
+        for keep in 0..=full.rank + 1 {
+            let mut seen = Vec::new();
+            let selected = matrix_luci_factors_from_matrix_owned_with_rank_selection(
+                matrix.clone(),
+                Some(options.clone()),
+                |errors| {
+                    seen = errors.to_vec();
+                    keep
+                },
+            )
+            .unwrap();
+            assert_eq!(seen, full.pivot_errors, "selection sees the full history");
+            let capped = matrix_luci_factors_from_matrix_owned(
+                matrix.clone(),
+                Some(RrLUOptions {
+                    max_bond_dim: keep,
+                    ..options.clone()
+                }),
+            )
+            .unwrap();
+            assert_eq!(selected.rank, keep.min(full.rank));
+            assert_eq!(selected.rank, capped.rank);
+            assert_eq!(selected.row_indices, capped.row_indices);
+            assert_eq!(selected.col_indices, capped.col_indices);
+            assert_eq!(selected.pivot_errors, capped.pivot_errors);
+            assert_eq!(selected.left.nrows(), capped.left.nrows());
+            assert_eq!(selected.left.ncols(), capped.left.ncols());
+            assert_eq!(selected.right.nrows(), capped.right.nrows());
+            assert_eq!(selected.right.ncols(), capped.right.ncols());
+            assert_eq!(
+                selected.left.as_col_major_slice(),
+                capped.left.as_col_major_slice()
+            );
+            assert_eq!(
+                selected.right.as_col_major_slice(),
+                capped.right.as_col_major_slice()
+            );
+        }
+    }
+}
+
+#[test]
+fn rank_selection_matches_capped_search_f64() {
+    assert_rank_selection_matches_capped_search(hilbert_matrix(6));
+    let rectangular = [
+        1.0, -2.0, 0.5, 3.0, 0.25, -1.5, 2.0, 4.0, -0.75, 1.0, 0.0, 2.5, 0.3, -0.7, 1.1,
+    ];
+    assert_rank_selection_matches_capped_search(Matrix::from_col_major_vec(
+        5,
+        3,
+        rectangular.to_vec(),
+    ));
+}
+
+#[test]
+fn rank_selection_matches_capped_search_c64() {
+    let z = |re: f64, im: f64| Complex64::new(re, im);
+    assert_rank_selection_matches_capped_search(from_vec2d(vec![
+        vec![z(1.0, 1.0), z(0.0, 2.0), z(3.0, -1.0), z(0.2, 0.1)],
+        vec![z(2.0, 0.0), z(-1.0, 1.0), z(0.5, 0.5), z(-0.4, 0.3)],
+        vec![z(0.1, -0.3), z(0.6, 0.2), z(-1.2, 0.4), z(0.9, -0.8)],
+    ]));
+}
+
+#[test]
+fn rank_selection_on_session_matches_global() {
+    let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+        tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap(),
+    );
+    let options = RrLUOptions {
+        rel_tol: 0.0,
+        ..RrLUOptions::default()
+    };
+    let expected = matrix_luci_factors_from_matrix_owned_with_rank_selection(
+        hilbert_matrix(5),
+        Some(options.clone()),
+        |_| 3,
+    )
+    .unwrap();
+    let actual = context
+        .with_concrete_session(|session| {
+            matrix_luci_factors_from_matrix_owned_with_rank_selection_on_session(
+                hilbert_matrix(5),
+                Some(options),
+                |_| 3,
+                session,
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(actual.rank, 3);
+    assert_eq!(actual.row_indices, expected.row_indices);
+    assert_eq!(actual.col_indices, expected.col_indices);
+    assert_eq!(actual.pivot_errors, expected.pivot_errors);
+    for (x, y) in [
+        (&actual.left, &expected.left),
+        (&actual.right, &expected.right),
+    ] {
+        for (a, b) in x.as_col_major_slice().iter().zip(y.as_col_major_slice()) {
+            assert!((a - b).abs() < 1.0e-14, "{a} != {b}");
+        }
+    }
+}
+
+#[test]
+fn rank_selection_rejects_invalid_options_before_selecting() {
+    let result = matrix_luci_factors_from_matrix_owned_with_rank_selection(
+        hilbert_matrix(3),
+        Some(RrLUOptions {
+            abs_tol: -1.0,
+            ..RrLUOptions::default()
+        }),
+        |_| -> usize { panic!("selection must not run for invalid options") },
+    );
+    assert!(matches!(result, Err(MatrixCIError::InvalidArgument { .. })));
+}

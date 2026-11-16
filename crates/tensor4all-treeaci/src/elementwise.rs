@@ -276,8 +276,15 @@ where
         } else {
             PassDirection::Reverse
         };
-        let cleanup =
-            run_directional_pass(&mut state, options, direction, &mut operator, &mut exec)?;
+        // The cleanup is the pass after the last recorded one.
+        let cleanup = run_directional_pass(
+            &mut state,
+            options,
+            direction,
+            crate::rank_hysteresis::applies_to_pass(history.max_ranks.len() + 1),
+            &mut operator,
+            &mut exec,
+        )?;
         evaluated_points = evaluated_points
             .checked_add(cleanup.evaluated_points)
             .ok_or(crate::TreeAciError::SizeOverflow {

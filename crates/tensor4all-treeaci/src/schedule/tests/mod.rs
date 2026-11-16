@@ -100,6 +100,7 @@ fn path_pass_matches_train_endpoint_order_and_exact_reverse() {
         &mut state,
         &options,
         PassDirection::Forward,
+        false,
         &mut identity,
         &mut crate::exec::Exec::Global,
     )
@@ -108,6 +109,7 @@ fn path_pass_matches_train_endpoint_order_and_exact_reverse() {
         &mut state,
         &options,
         PassDirection::Reverse,
+        false,
         &mut identity,
         &mut crate::exec::Exec::Global,
     )
@@ -135,6 +137,7 @@ fn branched_topologies_cover_every_edge_with_optimal_retracing() {
             &mut state,
             &options,
             PassDirection::Forward,
+            false,
             &mut identity,
             &mut crate::exec::Exec::Global,
         )
@@ -143,6 +146,7 @@ fn branched_topologies_cover_every_edge_with_optimal_retracing() {
             &mut state,
             &options,
             PassDirection::Reverse,
+            false,
             &mut identity,
             &mut crate::exec::Exec::Global,
         )
@@ -177,6 +181,7 @@ fn failed_update_preserves_all_commits_before_the_failing_edge() {
         &mut state,
         &options,
         PassDirection::Forward,
+        false,
         &mut fail_after_one,
         &mut crate::exec::Exec::Global,
     );
@@ -380,6 +385,7 @@ fn continuous_minimum_retracing_walk_preserves_pivot_gauges_on_binary_tree() {
             directed,
             &options,
             true,
+            false,
             &mut add,
             &mut crate::exec::Exec::Global,
         )
@@ -391,6 +397,7 @@ fn continuous_minimum_retracing_walk_preserves_pivot_gauges_on_binary_tree() {
             directed,
             &options,
             true,
+            false,
             &mut add,
             &mut crate::exec::Exec::Global,
         )

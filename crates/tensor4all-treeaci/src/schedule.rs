@@ -108,7 +108,14 @@ where
         } else {
             PassDirection::Reverse
         };
-        let report = run_directional_pass(state, options, direction, operator, exec)?;
+        let report = run_directional_pass(
+            state,
+            options,
+            direction,
+            crate::rank_hysteresis::applies_to_pass(pass + 1),
+            operator,
+            exec,
+        )?;
         stable_rank_passes =
             track_rank_stability(&mut previous_ranks, &state.edge_ranks, stable_rank_passes);
         evaluated_points = evaluated_points
@@ -233,6 +240,7 @@ pub(crate) fn run_directional_pass<T, V, F>(
     state: &mut TreeAciState<'_, T, V>,
     options: &TreeAciOptions<V>,
     direction: PassDirection,
+    rank_hysteresis: bool,
     operator: &mut F,
     exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<PassReport>
@@ -259,6 +267,7 @@ where
             state,
             options,
             phase,
+            rank_hysteresis,
             operator,
             &mut update_trace,
             &mut evaluated_points,
@@ -317,10 +326,12 @@ fn finalize_deferred_canonicalization<T: TreeAciScalar, V: TreeAciNode>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_phase_serial<T, V, F>(
     state: &mut TreeAciState<'_, T, V>,
     options: &TreeAciOptions<V>,
     phase: &PathPhase,
+    rank_hysteresis: bool,
     operator: &mut F,
     update_trace: &mut UpdateTrace,
     evaluated_points: &mut u64,
@@ -352,7 +363,15 @@ where
 
         for step in &path.steps {
             let directed = directed_edge_for_step(state, step)?;
-            let report = update_edge_transaction(state, directed, options, true, operator, exec)?;
+            let report = update_edge_transaction(
+                state,
+                directed,
+                options,
+                true,
+                rank_hysteresis,
+                operator,
+                exec,
+            )?;
             *evaluated_points = evaluated_points
                 .checked_add(u64::try_from(report.evaluated_points).map_err(|_| {
                     TreeAciError::SizeOverflow {

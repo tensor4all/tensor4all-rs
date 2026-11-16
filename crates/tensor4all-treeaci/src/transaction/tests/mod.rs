@@ -58,6 +58,7 @@ fn one_edge_commit_materializes_the_exact_operator_tree() {
         0,
         &options,
         true,
+        false,
         &mut identity,
         &mut crate::exec::Exec::Global,
     )
@@ -94,6 +95,7 @@ fn commit_sets_pivot_pairs_and_replaces_candidate_sets() {
         0,
         &options,
         true,
+        false,
         &mut identity,
         &mut crate::exec::Exec::Global,
     )
@@ -137,6 +139,7 @@ fn reverse_direction_commit_keeps_pivot_pairs_in_canonical_orientation() {
         1,
         &options,
         false,
+        false,
         &mut identity,
         &mut crate::exec::Exec::Global,
     )
@@ -175,6 +178,7 @@ fn proposal_error_leaves_output_samples_and_generation_unchanged() {
         0,
         &options,
         true,
+        false,
         &mut failing,
         &mut crate::exec::Exec::Global,
     );
@@ -215,6 +219,7 @@ fn frame_extension_error_rolls_back_interned_samples() {
         0,
         &options,
         true,
+        false,
         &mut identity,
         &mut crate::exec::Exec::Global,
     );
@@ -305,6 +310,7 @@ fn incomplete_commit_metadata_is_rejected_before_staging() {
         0,
         &options,
         true,
+        None,
         &mut identity,
         &mut crate::exec::Exec::Global,
     )
@@ -330,5 +336,65 @@ fn incomplete_commit_metadata_is_rejected_before_staging() {
         .isapprox(&output_before, 0.0, 0.0)
         .unwrap());
     assert_eq!(state.sample_arena.record_count(), records_before);
+    assert_eq!(state.generation, generation_before);
+}
+
+#[test]
+fn rank_hysteresis_holds_the_edge_rank_the_state_already_has() {
+    // diag(1, 5e-4): the second pivot is below the threshold 1e-3 but above
+    // the lowered threshold, so only hysteresis keeps it.
+    let inputs = vec![matrix_tree(2, vec![1.0, 0.0, 0.0, 5.0e-4])];
+    let options = TreeAciOptions {
+        tolerance: 1.0e-3,
+        ..TreeAciOptions::default()
+    };
+    let mut identity = |batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        for (point, value) in output.iter_mut().enumerate() {
+            *value = batch.get(0, point)?;
+        }
+        Ok(())
+    };
+    for (rank_hysteresis, expected_rank) in [(false, 1), (true, 2)] {
+        let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+        assert_eq!(state.edge_ranks, vec![2]);
+        let report = update_edge_transaction(
+            &mut state,
+            0,
+            &options,
+            true,
+            rank_hysteresis,
+            &mut identity,
+            &mut crate::exec::Exec::Global,
+        )
+        .unwrap();
+        assert_eq!(report.new_rank, expected_rank);
+        assert_eq!(state.edge_ranks, vec![expected_rank]);
+    }
+}
+
+#[test]
+fn rank_hysteresis_rejects_an_unknown_edge_before_any_update() {
+    let options = TreeAciOptions::default();
+    let inputs = vec![input_tree()];
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let generation_before = state.generation;
+    let mut unused = |_batch: crate::TreeElementwiseBatch<'_, f64>, _output: &mut [f64]| {
+        panic!("no local update may run for an unknown edge")
+    };
+    let result = update_edge_transaction(
+        &mut state,
+        8,
+        &options,
+        true,
+        true,
+        &mut unused,
+        &mut crate::exec::Exec::Global,
+    );
+    assert!(matches!(
+        result,
+        Err(TreeAciError::InternalInvariant {
+            message: "edge update references an unknown edge rank"
+        })
+    ));
     assert_eq!(state.generation, generation_before);
 }

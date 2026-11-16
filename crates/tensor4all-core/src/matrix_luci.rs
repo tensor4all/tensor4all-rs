@@ -756,6 +756,168 @@ where
     dense_matrix_luci_factors_from_matrix_owned(a, options, Linalg::Session(session))
 }
 
+/// Factorize a dense matrix with MatrixLUCI and let the caller choose how many
+/// of the selected pivots to keep.
+///
+/// The rank-revealing search runs once with `options`. `select_rank` then
+/// receives its pivot error history (one magnitude per selected pivot, then the
+/// remaining residual) and returns the rank to keep. Only that prefix is turned
+/// into factors. Use it when the kept rank depends on more than one threshold,
+/// for example when pivots between two tolerances are kept only under a
+/// condition: search with the looser tolerance and select the prefix, instead
+/// of factorizing twice.
+///
+/// The result equals [`matrix_luci_factors_from_matrix_owned`] with
+/// `max_bond_dim` set to the selected rank: full pivoting fixes a prefix of
+/// pivots once they are chosen. The trailing pivot error is the magnitude of
+/// the first discarded pivot, which is the largest entry of the remaining
+/// Schur complement.
+///
+/// # Arguments
+///
+/// * `a` - Dense column-major matrix to factorize; its storage is reused.
+/// * `options` - Rank and tolerance controls for the search. `None` uses the
+///   default LUCI settings. The selected rank never exceeds the rank this
+///   search finds.
+/// * `select_rank` - Called once with the pivot error history; returns the
+///   rank to keep. Values above the found rank keep every pivot.
+///
+/// # Returns
+///
+/// A [`MatrixLuciFactors`] value with the kept pivots, their error history,
+/// and factors satisfying `a ~= left * right`.
+///
+/// # Errors
+///
+/// Returns [`MatrixCIError::InvalidArgument`] for negative or nonfinite
+/// tolerances, infinite input magnitudes, or backend solve failures; returns
+/// [`MatrixCIError::NaNEncountered`] for NaN input or factors.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{
+///     matrix_luci_factors_from_matrix_owned, matrix_luci_factors_from_matrix_owned_with_rank_selection,
+///     RrLUOptions,
+/// };
+/// use tensor4all_tensorbackend::from_vec2d;
+///
+/// let a = from_vec2d(vec![
+///     vec![4.0_f64, 0.0, 0.0],
+///     vec![0.0, 2.0, 0.0],
+///     vec![0.0, 0.0, 1.0],
+/// ]);
+/// let options = RrLUOptions { rel_tol: 0.0, ..RrLUOptions::default() };
+/// // Keep the pivots above 1.5 only.
+/// let selected = matrix_luci_factors_from_matrix_owned_with_rank_selection(
+///     a.clone(),
+///     Some(options.clone()),
+///     |errors| errors.iter().take_while(|&&e| e > 1.5).count(),
+/// )?;
+/// let capped = matrix_luci_factors_from_matrix_owned(
+///     a,
+///     Some(RrLUOptions { max_bond_dim: 2, ..options }),
+/// )?;
+/// assert_eq!(selected.rank, 2);
+/// assert_eq!(selected.pivot_errors, vec![4.0, 2.0, 1.0]);
+/// assert_eq!(selected.row_indices, capped.row_indices);
+/// assert_eq!(selected.pivot_errors, capped.pivot_errors);
+/// assert_eq!(selected.left.as_col_major_slice(), capped.left.as_col_major_slice());
+/// assert_eq!(selected.right.as_col_major_slice(), capped.right.as_col_major_slice());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn matrix_luci_factors_from_matrix_owned_with_rank_selection<T, F>(
+    a: Matrix<T>,
+    options: Option<RrLUOptions>,
+    select_rank: F,
+) -> Result<MatrixLuciFactors<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+    F: FnOnce(&[f64]) -> usize,
+{
+    let options = options.unwrap_or_default();
+    validate_owned_luci_input(&a, &options)?;
+    dense_matrix_luci_factors_with_rank_selection(a, options, select_rank, Linalg::Global)
+}
+
+/// Session-taking counterpart of
+/// [`matrix_luci_factors_from_matrix_owned_with_rank_selection`].
+///
+/// The search and the rank selection are identical; the factor assembly runs
+/// on `session`, as in [`matrix_luci_factors_from_matrix_owned_on_session`].
+///
+/// # Arguments
+///
+/// * `a` - Dense column-major matrix to factorize; its storage is reused.
+/// * `options` - Rank and tolerance controls for the search. `None` uses the
+///   default LUCI settings.
+/// * `select_rank` - Called once with the pivot error history; returns the
+///   rank to keep. Values above the found rank keep every pivot.
+/// * `session` - An already-entered explicit session that runs the factor
+///   assembly.
+///
+/// # Returns
+///
+/// A [`MatrixLuciFactors`] value with the kept pivots, their error history,
+/// and factors satisfying `a ~= left * right`.
+///
+/// # Errors
+///
+/// Returns [`MatrixCIError::InvalidArgument`] for negative or nonfinite
+/// tolerances, infinite input magnitudes, or backend solve failures; returns
+/// [`MatrixCIError::NaNEncountered`] for NaN input or factors.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{matrix_luci_factors_from_matrix_owned_with_rank_selection_on_session, RrLUOptions};
+/// use tensor4all_tensorbackend::{from_vec2d, CpuBackend, CpuExecutionContext};
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::new());
+/// let a = from_vec2d(vec![vec![4.0_f64, 0.0], vec![0.0, 1.0]]);
+/// let factors = context.with_concrete_session(|session| {
+///     matrix_luci_factors_from_matrix_owned_with_rank_selection_on_session(
+///         a.clone(),
+///         Some(RrLUOptions { rel_tol: 0.0, ..RrLUOptions::default() }),
+///         |_| 1,
+///         session,
+///     )
+/// })??;
+/// assert_eq!(factors.rank, 1);
+/// assert_eq!(factors.row_indices, vec![0]);
+/// assert_eq!(factors.pivot_errors, vec![4.0, 1.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn matrix_luci_factors_from_matrix_owned_with_rank_selection_on_session<T, F>(
+    a: Matrix<T>,
+    options: Option<RrLUOptions>,
+    select_rank: F,
+    session: &mut Session<'_>,
+) -> Result<MatrixLuciFactors<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+    F: FnOnce(&[f64]) -> usize,
+{
+    let options = options.unwrap_or_default();
+    validate_owned_luci_input(&a, &options)?;
+    dense_matrix_luci_factors_with_rank_selection(a, options, select_rank, Linalg::Session(session))
+}
+
+fn dense_matrix_luci_factors_with_rank_selection<T, F>(
+    mut a: Matrix<T>,
+    options: RrLUOptions,
+    select_rank: F,
+    mut linalg: Linalg<'_, '_>,
+) -> Result<MatrixLuciFactors<T>>
+where
+    T: Scalar + crate::MatrixLuciScalar,
+    F: FnOnce(&[f64]) -> usize,
+{
+    let mut lu = rrlu_mut(&mut a, Some(options))?;
+    lu.truncate(select_rank(&lu.pivot_errors()));
+    factors_from_rrlu(&lu, &mut linalg)
+}
+
 /// Conservative logical working-byte estimate for owned dense LUCI factors.
 ///
 /// Includes the consumed matrix, rrLU L/U, factor construction, permutation
