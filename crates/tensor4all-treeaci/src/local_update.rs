@@ -10,6 +10,7 @@ use tensor4all_treetn::TreeTN;
 use crate::{
     frames::InputFrameStore,
     problem::{enforce_limit, DirectedEdgeId, PreparedTreeProblem},
+    rank_hysteresis::{kept_rank, RANK_HYSTERESIS_FACTOR},
     samples::{CandidateSets, ComponentSample},
     Result, TreeAciError, TreeAciNode, TreeAciOptions, TreeAciScalar, TreeElementwiseBatch,
 };
@@ -78,6 +79,7 @@ pub(crate) fn materialize_and_factor_edge<T, V, F>(
     forward: DirectedEdgeId,
     options: &TreeAciOptions<V>,
     left_orthogonal: bool,
+    previous_rank: Option<usize>,
     operator: &mut F,
     exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<LocalUpdateResult<T>>
@@ -396,13 +398,31 @@ where
     local_scale.normalize(&mut matrix);
     #[cfg(test)]
     let luci_started = std::time::Instant::now();
-    let lu_options = RrLUOptions {
-        max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
-        rel_tol: 0.0,
-        abs_tol: tolerance.local_threshold(),
-        left_orthogonal,
+    let threshold = tolerance.local_threshold();
+    let max_bond_dim = options.max_bond_dim.unwrap_or(usize::MAX);
+    let mut factors = match previous_rank {
+        None => exec.luci_factors(
+            matrix,
+            RrLUOptions {
+                max_bond_dim,
+                rel_tol: 0.0,
+                abs_tol: threshold,
+                left_orthogonal,
+            },
+        )?,
+        // Search down to the lowered threshold once, then keep the prefix the
+        // hysteresis rule allows (#784).
+        Some(previous_rank) => exec.luci_factors_with_rank_selection(
+            matrix,
+            RrLUOptions {
+                max_bond_dim,
+                rel_tol: 0.0,
+                abs_tol: threshold / RANK_HYSTERESIS_FACTOR,
+                left_orthogonal,
+            },
+            |pivot_errors| kept_rank(pivot_errors, threshold, previous_rank),
+        )?,
     };
-    let mut factors = exec.luci_factors(matrix, lu_options)?;
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {
         stats.luci += luci_started.elapsed();

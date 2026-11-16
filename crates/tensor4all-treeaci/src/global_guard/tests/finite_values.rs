@@ -73,6 +73,7 @@ fn finite_control_preserves_pivot_coordinates() {
         &mut state,
         &options,
         crate::schedule::PassDirection::Forward,
+        false,
         &mut |_batch: TreeElementwiseBatch<'_, f64>, out: &mut [f64]| {
             out.fill(0.0);
             Ok(())
@@ -110,6 +111,7 @@ fn nonfinite_walk_target_after_a_finite_start_is_rejected() {
             &mut state,
             &options,
             crate::schedule::PassDirection::Forward,
+            false,
             &mut |_batch: TreeElementwiseBatch<'_, f64>, out: &mut [f64]| {
                 out.fill(0.0);
                 Ok(())
