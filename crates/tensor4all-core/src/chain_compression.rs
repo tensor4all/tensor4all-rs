@@ -287,7 +287,14 @@ pub fn compress_chain_lu_mut<T: MatrixLuciScalar, C: ChainCore<T>>(
 ///
 /// # Errors
 ///
-/// The same as [`compress_chain_lu_mut`].
+/// Returns [`ChainCompressionError::InvalidTolerance`] for a negative or
+/// nonfinite tolerance and [`ChainCompressionError::ZeroBondCap`] for
+/// `max_bond_dim: Some(0)`, before touching any core. Returns
+/// [`ChainCompressionError::Multiply`] when a product fails on `session`.
+/// Invalid core shapes and factorization or allocation failures return the
+/// other [`ChainCompressionError`] variants, converted into the storage
+/// type's error. If a numerical operation fails, bonds updated before the
+/// failure keep their compressed values.
 ///
 /// # Examples
 ///
