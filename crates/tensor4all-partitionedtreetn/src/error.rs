@@ -89,30 +89,43 @@ pub enum PartitionedTreeTNError {
         value: usize,
     },
 
-    /// The exact sum of one group of patches would exceed
-    /// [`PatchingOptions::group_sum_limit_bytes`](crate::PatchingOptions::group_sum_limit_bytes).
+    /// The exact sum of one group of patches would exceed the configured limit.
     ///
     /// Returned before the sum is formed by
-    /// [`contract_adaptive`](crate::contract_adaptive) and its variants, which
-    /// sum every contribution to one output projector, and by
-    /// [`add_with_patching`](crate::add_with_patching), which sums the input
-    /// patches that share one projector key. The size is the estimate of
+    /// [`PartitionedTreeTN::contract`](crate::PartitionedTreeTN::contract) and
+    /// [`PartitionedTreeTN::contract_selected`](crate::PartitionedTreeTN::contract_selected)
+    /// using [`PartitionedContractionOptions::group_sum_limit_bytes`](crate::PartitionedContractionOptions::group_sum_limit_bytes).
+    /// [`contract_adaptive`](crate::contract_adaptive), its variants, and
+    /// [`add_with_patching`](crate::add_with_patching) use
+    /// [`PatchingOptions::group_sum_limit_bytes`](crate::PatchingOptions::group_sum_limit_bytes).
+    /// The size is the estimate of
     /// [`TreeTN::estimate_exact_sum_bytes`](tensor4all_treetn::TreeTN::estimate_exact_sum_bytes).
     ///
     /// # Remedy
-    /// An operator that mixes every value of the indices the patches fix, such
-    /// as a Fourier transform on patches of the transformed variable, puts
-    /// every patch pair into one group whose summed bond is the sum of all
-    /// contribution bonds. Apply such an operator with
-    /// [`schedule_merge_refine`](crate::reconstruction::schedule_merge_refine)
-    /// (or the patched Fourier transform of `tensor4all-quanticstransform`,
-    /// built on it) instead. Otherwise raise the limit if the memory is
-    /// available, leaving room for the truncation that follows the sum.
+    /// A group holds every contribution to one output: in a contraction, the
+    /// compatible patch pairs with one output projector; in
+    /// `add_with_patching`, the input patches with one key. Its summed bond is
+    /// the sum of the contribution bonds.
+    ///
+    /// - An operator that mixes every value of the indices the patches fix,
+    ///   such as a Fourier transform on patches of the transformed variable,
+    ///   puts every patch pair into one group. Apply such an operator with
+    ///   [`schedule_merge_refine`](crate::reconstruction::schedule_merge_refine)
+    ///   (or the patched Fourier transform of `tensor4all-quanticstransform`,
+    ///   built on it) instead of `contract` or `contract_adaptive`.
+    /// - [`PartitionedTreeTN::contract_selected`](crate::PartitionedTreeTN::contract_selected)
+    ///   and [`contract_adaptive_selected`](crate::contract_adaptive_selected)
+    ///   check and build only the groups of the wanted outputs, so an output
+    ///   that is not needed costs nothing.
+    /// - Otherwise raise the limit if the memory is available, leaving room for
+    ///   the truncation that follows the sum; see
+    ///   [`DEFAULT_GROUP_SUM_LIMIT_BYTES`](crate::DEFAULT_GROUP_SUM_LIMIT_BYTES)
+    ///   for a rule relating the limit to a memory budget.
     #[error(
         "{operation}: the exact sum of {terms} patches would take an estimated {estimated_bytes} \
-         bytes, above group_sum_limit_bytes = {limit_bytes}; an operator that mixes every value \
-         of the patched indices puts every pair in one group, so apply it with \
-         schedule_merge_refine instead, or raise the limit"
+         bytes, above group_sum_limit_bytes = {limit_bytes}; raise the limit, form only the \
+         outputs you need, or, for an operator that mixes every value of the patched indices, \
+         apply it with schedule_merge_refine"
     )]
     GroupSumLimit {
         /// Operation that would have formed the sum.

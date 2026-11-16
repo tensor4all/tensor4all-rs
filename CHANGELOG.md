@@ -87,9 +87,18 @@
 
 ### Breaking Rust API changes
 
-- `tensor4all-partitionedtreetn` removes the obsolete `SpectatorMismatch`
-  variant: differing spectator constraints are supported by the scheduler (#1299).
-
+- `tensor4all-partitionedtreetn`: `PartitionedContractionOptions` has the new
+  field `group_sum_limit_bytes` (#1316). Complete struct literals must add it.
+  `contract` and `contract_selected` return `GroupSumLimit` before building a
+  sum whose estimate exceeds the limit. The default is 4 GiB, including when
+  passing plain `ContractionOptions`. Use `usize::MAX` to disable the limit.
+- `tensor4all-partitionedtreetn`: the default group-sum limit is the crate-level
+  `DEFAULT_GROUP_SUM_LIMIT_BYTES`, shared by `PartitionedContractionOptions` and
+  `PatchingOptions`; `PatchingOptions::DEFAULT_GROUP_SUM_LIMIT_BYTES` is removed.
+  Where `usize` cannot represent 4 GiB, the default is `usize::MAX`.
+  `contract`, `contract_selected` and `add_with_patching` check every group
+  before building any group sum. The `GroupSumLimit` message also suggests
+  forming only the needed outputs.
 - `tensor4all-core`: `floating_zone_walk` returns `FloatingZoneError<Err>`
   instead of the callback's own `Err`, and validates its arguments before
   evaluating the starting point, as `floating_zone_walk_with_initial_error`

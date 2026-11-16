@@ -22,7 +22,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use crate::error::{PartitionedTreeTNError, Result};
-use crate::partitioned_tree_tn::PartitionedTreeTN;
+use crate::partitioned_tree_tn::{PartitionedTreeTN, DEFAULT_GROUP_SUM_LIMIT_BYTES};
 use crate::projector::Projector;
 use crate::subdomain_tree_tn::{
     contraction_output_site_indices, ensure_center, sort_by_patch_order,
@@ -134,6 +134,7 @@ pub enum BudgetAllocation {
 /// ```
 /// use tensor4all_partitionedtreetn::{
 ///     BudgetAllocation, PatchSplitStrategy, PatchingOptions, SumEngine,
+///     DEFAULT_GROUP_SUM_LIMIT_BYTES,
 /// };
 ///
 /// let options = PatchingOptions::default();
@@ -143,7 +144,7 @@ pub enum BudgetAllocation {
 /// assert!(options.patch_order.is_empty());
 /// assert_eq!(options.split_strategy, PatchSplitStrategy::ExactParameterGain);
 /// assert_eq!(options.sum_engine, SumEngine::Binary);
-/// assert_eq!(options.group_sum_limit_bytes, 4 * 1024 * 1024 * 1024);
+/// assert_eq!(options.group_sum_limit_bytes, DEFAULT_GROUP_SUM_LIMIT_BYTES);
 /// ```
 #[derive(Debug, Clone)]
 pub struct PatchingOptions {
@@ -227,33 +228,18 @@ pub struct PatchingOptions {
     /// [`TreeTN::estimate_exact_sum_bytes`](tensor4all_treetn::TreeTN::estimate_exact_sum_bytes),
     /// taken before the sum is formed; a larger sum is refused with
     /// [`PartitionedTreeTNError::GroupSumLimit`] instead of being allocated.
+    /// [`add_with_patching`] checks every equal-key group before building any
+    /// sum. A group of one patch is never checked. `usize::MAX` disables the
+    /// check.
     ///
-    /// **The limit bounds the built group sum, not peak memory.** The add chain
-    /// of [`SumEngine::Binary`] holds two partial sums at its last add, and the
-    /// truncation that follows the sum needs a transient on top of it, measured
-    /// in tensor4all/tensor4all-rs#1107 at 0.65 to 3.8 times the built sum (see
-    /// [`SumEngine`]). The peak of one group can therefore be several times
-    /// this limit, and the other groups' results and the operands are held as
-    /// well. To keep one group within a memory budget, set the limit to the
-    /// budget divided by that multiplier: up to about 5 by these figures, the
-    /// sum itself plus a transient of 3.8 times it.
+    /// The limit bounds the built sum, not peak memory. With a
+    /// [`SumEngine::NaryWithin`] limit at or above this one, every sum within
+    /// this limit is built with [`SumEngine::Nary`]. See
+    /// [`DEFAULT_GROUP_SUM_LIMIT_BYTES`] for both, with a rule for choosing the
+    /// limit from a memory budget.
     ///
-    /// Defaults to [`Self::DEFAULT_GROUP_SUM_LIMIT_BYTES`] (4 GiB). A group of
-    /// one patch is never checked. `usize::MAX` disables the check.
+    /// Defaults to [`DEFAULT_GROUP_SUM_LIMIT_BYTES`] (4 GiB).
     pub group_sum_limit_bytes: usize,
-}
-
-impl PatchingOptions {
-    /// The default [`Self::group_sum_limit_bytes`]: 4 GiB.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tensor4all_partitionedtreetn::PatchingOptions;
-    ///
-    /// assert_eq!(PatchingOptions::DEFAULT_GROUP_SUM_LIMIT_BYTES, 4 << 30);
-    /// ```
-    pub const DEFAULT_GROUP_SUM_LIMIT_BYTES: usize = 4 << 30;
 }
 
 impl Default for PatchingOptions {
@@ -267,7 +253,7 @@ impl Default for PatchingOptions {
             patch_order: Vec::new(),
             split_strategy: PatchSplitStrategy::default(),
             sum_engine: SumEngine::Binary,
-            group_sum_limit_bytes: Self::DEFAULT_GROUP_SUM_LIMIT_BYTES,
+            group_sum_limit_bytes: DEFAULT_GROUP_SUM_LIMIT_BYTES,
         }
     }
 }
@@ -1474,28 +1460,35 @@ fn combine_equal_key_subdomains<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    // Patches with one key are summed in input order, as the former running
-    // `add` did.
-    let mut groups: HashMap<Projector, Vec<SubDomainTreeTN<V>>> = HashMap::new();
+    // Patches with one key are summed in input order.
+    let mut by_key: HashMap<Projector, Vec<SubDomainTreeTN<V>>> = HashMap::new();
     for subdomain in subdomains {
-        groups
+        by_key
             .entry(subdomain.projector().clone())
             .or_default()
             .push(subdomain);
     }
+    // Every group is checked against the limit before any sum is built, in
+    // canonical key order, so a `GroupSumLimit` error names the same group on
+    // every run.
+    let mut groups: Vec<_> = by_key.into_iter().collect();
+    groups.sort_by(|(left, _), (right, _)| left.canonical_cmp(right));
+    for (_, group) in &groups {
+        let terms: Vec<_> = group.iter().collect();
+        SubDomainTreeTN::ensure_exact_sum_within(
+            &terms,
+            options.group_sum_limit_bytes,
+            "add_with_patching",
+        )?;
+    }
     groups
-        .into_values()
-        .map(|mut group| {
+        .into_iter()
+        .map(|(_, mut group)| {
             if group.len() == 1 {
                 return group.pop().ok_or(PartitionedTreeTNError::Empty);
             }
             let terms: Vec<_> = group.iter().collect();
-            SubDomainTreeTN::exact_sum_within(
-                &terms,
-                options.sum_engine,
-                options.group_sum_limit_bytes,
-                "add_with_patching",
-            )
+            SubDomainTreeTN::exact_sum_checked(&terms, options.sum_engine)
         })
         .collect()
 }

@@ -26,16 +26,17 @@ use tensor4all_treetn::{
 /// contracted, and how the contributions to one output projector are summed.
 ///
 /// A plain [`ContractionOptions`] converts into this type with
-/// [`SumEngine::Binary`], so `contract(&other, &center, contraction_options)`
-/// keeps its meaning.
+/// [`SumEngine::Binary`] and [`DEFAULT_GROUP_SUM_LIMIT_BYTES`].
 ///
 /// # Summing contributions
 ///
 /// Several patch pairs can contribute to the same output projector. Their
-/// exact sum is built with `sum_engine` and then truncated once with the
-/// truncation settings of `contraction`. The default, [`SumEngine::Binary`],
-/// adds the contributions one by one; it assumes few contributions per output
-/// projector, where the add chain is cheap. [`SumEngine::Nary`] builds the sum
+/// exact sum is refused when its estimated size exceeds
+/// `group_sum_limit_bytes`, and otherwise built with `sum_engine` and then
+/// truncated once with the truncation settings of `contraction`. The default,
+/// [`SumEngine::Binary`], adds the contributions one by one; it assumes few
+/// contributions per output projector, where the add chain is cheap.
+/// [`SumEngine::Nary`] builds the sum
 /// in one pass, which is much faster for many contributions, and
 /// [`SumEngine::NaryWithin`] does so only while the estimated size of the
 /// built sum fits `limit_bytes`. The estimate is
@@ -51,14 +52,17 @@ use tensor4all_treetn::{
 /// # Examples
 ///
 /// ```
-/// use tensor4all_partitionedtreetn::PartitionedContractionOptions;
+/// use tensor4all_partitionedtreetn::{
+///     PartitionedContractionOptions, DEFAULT_GROUP_SUM_LIMIT_BYTES,
+/// };
 /// use tensor4all_treetn::{contraction::ContractionOptions, SumEngine};
 ///
 /// let default = PartitionedContractionOptions::default();
 /// assert_eq!(default.sum_engine, SumEngine::Binary);
-/// // A plain `ContractionOptions` means `Binary` as well.
+/// assert_eq!(default.group_sum_limit_bytes, DEFAULT_GROUP_SUM_LIMIT_BYTES);
 /// let plain = PartitionedContractionOptions::from(ContractionOptions::default());
 /// assert_eq!(plain.sum_engine, SumEngine::Binary);
+/// assert_eq!(plain.group_sum_limit_bytes, default.group_sum_limit_bytes);
 ///
 /// let nary = PartitionedContractionOptions {
 ///     sum_engine: SumEngine::Nary,
@@ -66,7 +70,7 @@ use tensor4all_treetn::{
 /// };
 /// assert_eq!(nary.sum_engine, SumEngine::Nary);
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PartitionedContractionOptions {
     /// How each compatible patch pair is contracted, and the truncation of
     /// every summed output projector.
@@ -74,6 +78,28 @@ pub struct PartitionedContractionOptions {
     /// How the contributions to one output projector are summed. Default:
     /// [`SumEngine::Binary`].
     pub sum_engine: SumEngine,
+    /// Largest estimated size, in bytes, of the exact sum of the contributions
+    /// to one output projector.
+    ///
+    /// The estimate is [`TreeTN::estimate_exact_sum_bytes`]. Every group is
+    /// checked after the pairwise contractions and before any sum is built; a
+    /// larger sum returns [`PartitionedTreeTNError::GroupSumLimit`]. A group of
+    /// one contribution is never checked. `usize::MAX` disables the check.
+    ///
+    /// The limit bounds the built sum, not peak memory. With a
+    /// [`SumEngine::NaryWithin`] limit at or above this one, every sum within
+    /// this limit is built with [`SumEngine::Nary`]. See
+    /// [`DEFAULT_GROUP_SUM_LIMIT_BYTES`] for both, with a rule for choosing the
+    /// limit from a memory budget.
+    ///
+    /// Defaults to [`DEFAULT_GROUP_SUM_LIMIT_BYTES`] (4 GiB).
+    pub group_sum_limit_bytes: usize,
+}
+
+impl Default for PartitionedContractionOptions {
+    fn default() -> Self {
+        ContractionOptions::default().into()
+    }
 }
 
 impl From<ContractionOptions> for PartitionedContractionOptions {
@@ -81,6 +107,7 @@ impl From<ContractionOptions> for PartitionedContractionOptions {
         Self {
             contraction,
             sum_engine: SumEngine::Binary,
+            group_sum_limit_bytes: DEFAULT_GROUP_SUM_LIMIT_BYTES,
         }
     }
 }
@@ -181,6 +208,64 @@ thread_local! {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub const AUTOMATIC_REFINEMENT_LIMIT: usize = 4096;
+
+/// Default `group_sum_limit_bytes` of [`PartitionedContractionOptions`] and
+/// [`PatchingOptions`](crate::PatchingOptions): 4 GiB, or `usize::MAX` where
+/// `usize` cannot represent 4 GiB.
+///
+/// A group is a set of patches that one routine sums exactly: the
+/// contributions to one output projector in [`PartitionedTreeTN::contract`],
+/// [`PartitionedTreeTN::contract_selected`] and
+/// [`contract_adaptive`](crate::contract_adaptive), or the equal-key input
+/// patches in [`add_with_patching`](crate::add_with_patching). Before forming a
+/// group sum, these routines estimate its size with
+/// [`TreeTN::estimate_exact_sum_bytes`] and return
+/// [`PartitionedTreeTNError::GroupSumLimit`] when the estimate exceeds the
+/// limit. A group of one patch is never checked, and `usize::MAX` disables the
+/// check.
+///
+/// # Peak memory
+///
+/// The limit bounds the built group sum, not peak memory. The add chain of
+/// [`SumEngine::Binary`] holds two partial sums at its last add, and the
+/// truncation that follows the sum needs a transient on top of it, measured in
+/// tensor4all/tensor4all-rs#1107 at 0.65 to 3.8 times the built sum (see
+/// [`SumEngine`]). The peak of one group can therefore be several times the
+/// limit, and the operands, the other groups and, for a contraction, the
+/// pairwise contributions are held as well. To keep one group within a memory
+/// budget, set the limit to the budget divided by that multiplier: up to about
+/// 5 by these figures, the sum itself plus a transient of 3.8 times it.
+///
+/// # Relation to `SumEngine::NaryWithin`
+///
+/// [`SumEngine::NaryWithin`] compares the same estimate with its own
+/// `limit_bytes`, but only to choose how a sum is built: above that limit the
+/// sum is built with the add chain instead. The group-sum limit refuses the
+/// sum. A `NaryWithin` limit at or above the group-sum limit therefore acts as
+/// [`SumEngine::Nary`] on every sum that is built.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtreetn::{
+///     PartitionedContractionOptions, PatchingOptions, DEFAULT_GROUP_SUM_LIMIT_BYTES,
+/// };
+///
+/// assert_eq!(
+///     DEFAULT_GROUP_SUM_LIMIT_BYTES,
+///     usize::try_from(4_u64 << 30).unwrap_or(usize::MAX)
+/// );
+/// assert_eq!(PatchingOptions::default().group_sum_limit_bytes, DEFAULT_GROUP_SUM_LIMIT_BYTES);
+/// assert_eq!(
+///     PartitionedContractionOptions::default().group_sum_limit_bytes,
+///     DEFAULT_GROUP_SUM_LIMIT_BYTES
+/// );
+/// ```
+pub const DEFAULT_GROUP_SUM_LIMIT_BYTES: usize = if usize::BITS > 32 {
+    4 << 30
+} else {
+    usize::MAX
+};
 
 /// A collection of pairwise-disjoint, eagerly masked TreeTN patches.
 ///
@@ -982,6 +1067,8 @@ where
     /// directly from their eager stored data. Projector entries absent from the
     /// output site space are pruned, and duplicate output keys are combined by
     /// strict subdomain addition followed by the requested bond truncation.
+    /// [`PartitionedContractionOptions::group_sum_limit_bytes`] bounds the
+    /// estimated size of each exact sum before truncation.
     /// To form only some output keys, use [`Self::contract_selected`], which
     /// skips the pairs of every other key.
     ///
@@ -1011,8 +1098,9 @@ where
     /// [`PartitionedTreeTNError::OverlappingProjectors`] for an operand whose own
     /// stored layout is invalid, [`PartitionedTreeTNError::RefinementTooLarge`]
     /// when the refinement grid has more than [`AUTOMATIC_REFINEMENT_LIMIT`]
-    /// atoms, or a typed TreeTN/backend error. The operation returns a new
-    /// partition, so failure cannot mutate either input.
+    /// atoms, [`PartitionedTreeTNError::GroupSumLimit`] when an exact group sum
+    /// would exceed the configured limit, or a typed TreeTN/backend error.
+    /// The operation returns a new partition, so failure cannot mutate either input.
     pub fn contract(
         &self,
         other: &Self,
@@ -1117,7 +1205,7 @@ where
     ///
     /// * `other` - Second operand, with the same named topology.
     /// * `center` - Existing node used as the contraction and truncation center.
-    /// * `options` - Non-dense TreeTN contraction method and rank policy.
+    /// * `options` - TreeTN contraction method, rank policy, and group-sum options.
     /// * `wanted` - Exact output projector keys to form. They are compared by
     ///   equality with the output keys, which carry only uncontracted site
     ///   indices. Duplicates are ignored. A key that no pair produces has no
@@ -1137,8 +1225,10 @@ where
     /// [`PartitionedTreeTNError::InvalidCenter`],
     /// [`PartitionedTreeTNError::InvalidOptions`],
     /// [`PartitionedTreeTNError::OverlappingProjectors`] for overlapping wanted
-    /// output layouts, or a typed TreeTN/backend error. These checks run even
-    /// when no pair is selected. Neither input is mutated.
+    /// output layouts, [`PartitionedTreeTNError::GroupSumLimit`] when a wanted
+    /// output's exact sum would exceed the configured limit, or a typed
+    /// TreeTN/backend error. Operand validation runs even when no pair is
+    /// selected. Neither input is mutated.
     ///
     /// # Examples
     ///
@@ -1194,6 +1284,7 @@ where
         let PartitionedContractionOptions {
             contraction: options,
             sum_engine,
+            group_sum_limit_bytes,
         } = options;
         validate_contraction_options(&options)?;
         self.validate_contents()?;
@@ -1234,6 +1325,12 @@ where
                     .and_then(SubDomainTreeTN::content_digest)
             },
         );
+        // Check every group against the limit before building any sum, so a
+        // refused group costs no sum or truncation of the groups before it.
+        for (_, contributions) in &groups {
+            let terms: Vec<_> = contributions.iter().collect();
+            SubDomainTreeTN::ensure_exact_sum_within(&terms, group_sum_limit_bytes, "contract")?;
+        }
         let duplicate_options = truncation_options_from_contraction(&options);
         let mut subdomains = Vec::with_capacity(groups.len());
         for (_, mut contributions) in groups {
@@ -1242,7 +1339,7 @@ where
                 continue;
             }
             let terms: Vec<_> = contributions.iter().collect();
-            let mut combined = SubDomainTreeTN::exact_sum(&terms, sum_engine)?;
+            let mut combined = SubDomainTreeTN::exact_sum_checked(&terms, sum_engine)?;
             combined.truncate(center, duplicate_options)?;
             subdomains.push(combined);
         }
