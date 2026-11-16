@@ -103,6 +103,16 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// quarter of it, as long as the edge already had that many pivots. Ranks
     /// then stop oscillating around the target, at the cost of slightly more
     /// rank than a single truncation would keep.
+    ///
+    /// Known limitation: a pivot kept this way is dropped only once its error
+    /// falls below a quarter of the target, so on an edge whose pivot errors
+    /// sit close to the target the rank grows and rarely shrinks. A few such
+    /// edges can keep gaining a pivot for many passes. Each gain
+    /// restarts the [`min_sweeps`](Self::min_sweeps) window, so the run can
+    /// end with
+    /// [`TreeAciTermination::MaxSweeps`](crate::TreeAciTermination::MaxSweeps)
+    /// although its ranks no longer oscillate. See
+    /// [tensor4all-rs#1343](https://github.com/tensor4all/tensor4all-rs/issues/1343).
     pub tolerance: f64,
     /// Scale `tolerance` by sampled output magnitude. Default: `true`.
     ///

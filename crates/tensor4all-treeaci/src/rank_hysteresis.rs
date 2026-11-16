@@ -23,6 +23,17 @@
 //! The floor starts at pass [`RANK_HYSTERESIS_FIRST_PASS`]: the first pass
 //! grows edges from their bootstrap ranks and can overshoot, and using those
 //! ranks as the floor would keep the overshoot down to the lowered threshold.
+//!
+//! Known limitation (#1343): the floor drops a held pivot only once its error
+//! falls below the lowered threshold, so a threshold-limited edge's rank stays
+//! near the highest threshold rank it has reached. A rank increase is then a
+//! new record. Records tend to get rarer as the run goes on, but on
+//! near-threshold spectra they can keep arriving until
+//! `max_sweeps`, and the stopping rule restarts its window on every increase.
+//! Releasing the floor does not help: a release lowers the rank, so the next
+//! crossing becomes another increase. On the #784 DMRG fixture, releasing
+//! after 1, 2, 4 or 8 held updates converged 0, 1, 4 and 2 of 6 cases,
+//! against 5 of 6 without a release.
 
 /// Ratio between the local threshold and the lowest pivot error an edge may
 /// keep under hysteresis.

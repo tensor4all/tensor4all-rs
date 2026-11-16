@@ -24,6 +24,10 @@ pub enum TreeAciTermination {
     /// guard found an unresolved residual while all cuts were saturated.
     RankLimited,
     /// The configured sweep limit was reached.
+    ///
+    /// This includes runs whose ranks have settled except for a few
+    /// threshold-limited edges that keep gaining a pivot; see the known
+    /// limitation under [`TreeAciOptions::tolerance`](crate::TreeAciOptions::tolerance).
     #[default]
     MaxSweeps,
 }
