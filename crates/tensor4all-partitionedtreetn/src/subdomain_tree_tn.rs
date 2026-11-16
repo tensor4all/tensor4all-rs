@@ -610,6 +610,18 @@ where
         Self::check_sum_size(terms, limit_bytes, operation)
     }
 
+    /// [`exact_sum`](Self::exact_sum) of terms that
+    /// [`ensure_exact_sum_within`](Self::ensure_exact_sum_within) has accepted,
+    /// without checking them a second time.
+    ///
+    /// Terms that were not checked first and cannot be summed still fail, in
+    /// [`TreeTN::exact_sum`], with a TreeTN error instead of the typed mismatch
+    /// error [`exact_sum`](Self::exact_sum) returns.
+    pub(crate) fn exact_sum_checked(terms: &[&Self], engine: SumEngine) -> Result<Self> {
+        let first = terms.first().ok_or(PartitionedTreeTNError::Empty)?;
+        Self::build_exact_sum(first, terms, engine)
+    }
+
     /// Compare the estimated size of the exact sum of validated `terms` with
     /// `limit_bytes`.
     fn check_sum_size(terms: &[&Self], limit_bytes: usize, operation: &'static str) -> Result<()> {

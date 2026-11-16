@@ -86,10 +86,11 @@ pub struct PartitionedContractionOptions {
     /// larger sum returns [`PartitionedTreeTNError::GroupSumLimit`]. A group of
     /// one contribution is never checked. `usize::MAX` disables the check.
     ///
-    /// The limit bounds the built sum, not peak memory, and a
-    /// [`SumEngine::NaryWithin`] limit at or above this one leaves no sum to
-    /// the add chain; see [`DEFAULT_GROUP_SUM_LIMIT_BYTES`] for both, with a
-    /// rule for choosing the limit from a memory budget.
+    /// The limit bounds the built sum, not peak memory. With a
+    /// [`SumEngine::NaryWithin`] limit at or above this one, every sum within
+    /// this limit is built with [`SumEngine::Nary`]. See
+    /// [`DEFAULT_GROUP_SUM_LIMIT_BYTES`] for both, with a rule for choosing the
+    /// limit from a memory budget.
     ///
     /// Defaults to [`DEFAULT_GROUP_SUM_LIMIT_BYTES`] (4 GiB).
     pub group_sum_limit_bytes: usize,
@@ -1338,7 +1339,7 @@ where
                 continue;
             }
             let terms: Vec<_> = contributions.iter().collect();
-            let mut combined = SubDomainTreeTN::exact_sum(&terms, sum_engine)?;
+            let mut combined = SubDomainTreeTN::exact_sum_checked(&terms, sum_engine)?;
             combined.truncate(center, duplicate_options)?;
             subdomains.push(combined);
         }

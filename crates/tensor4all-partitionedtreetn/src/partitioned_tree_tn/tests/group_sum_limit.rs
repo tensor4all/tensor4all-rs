@@ -1,6 +1,7 @@
 //! The group-sum limit of `contract`, `contract_selected` and
 //! `add_with_patching` is checked for every group before any group sum is
-//! built, so a refused group leaves no work done on the groups before it.
+//! built, so a refused group leaves no sum or truncation done on the groups
+//! before it.
 
 use super::*;
 use crate::patching::add_with_patching;
@@ -111,4 +112,35 @@ fn add_with_patching_checks_every_group_sum_before_building_any() {
     let (result, built) = count_sums(|| add_with_patching(inputs, &0, &options(large - 1)));
     assert_eq!(refused(result), (3, large));
     assert_eq!(built, 0);
+}
+
+#[test]
+fn add_with_patching_reports_the_first_oversized_group_in_key_order() {
+    let product = BlockProduct::new(None, 1.0);
+    let key = |block: (usize, usize)| {
+        Projector::from_pairs([
+            (product.row.clone(), block.0),
+            (product.mid.clone(), block.1),
+        ])
+        .unwrap()
+    };
+    let patch = |block| product.a.get(&key(block)).unwrap().clone();
+    let options = PatchingOptions {
+        max_bond_dim: None,
+        group_sum_limit_bytes: 0,
+        ..PatchingOptions::default()
+    };
+    // Both groups are over the limit; the reported one is the first in
+    // canonical key order, whatever the input order.
+    let expected_terms = if key((0, 0)).canonical_cmp(&key((1, 1))).is_lt() {
+        2
+    } else {
+        3
+    };
+    let two = vec![patch((0, 0)); 2];
+    let three = vec![patch((1, 1)); 3];
+    for inputs in [[two.clone(), three.clone()].concat(), [three, two].concat()] {
+        let (terms, _) = refused(add_with_patching(inputs, &0, &options));
+        assert_eq!(terms, expected_terms);
+    }
 }

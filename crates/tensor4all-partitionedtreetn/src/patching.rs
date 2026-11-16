@@ -232,10 +232,11 @@ pub struct PatchingOptions {
     /// sum. A group of one patch is never checked. `usize::MAX` disables the
     /// check.
     ///
-    /// The limit bounds the built sum, not peak memory, and a
-    /// [`SumEngine::NaryWithin`] limit at or above this one leaves no sum to
-    /// the add chain; see [`DEFAULT_GROUP_SUM_LIMIT_BYTES`] for both, with a
-    /// rule for choosing the limit from a memory budget.
+    /// The limit bounds the built sum, not peak memory. With a
+    /// [`SumEngine::NaryWithin`] limit at or above this one, every sum within
+    /// this limit is built with [`SumEngine::Nary`]. See
+    /// [`DEFAULT_GROUP_SUM_LIMIT_BYTES`] for both, with a rule for choosing the
+    /// limit from a memory budget.
     ///
     /// Defaults to [`DEFAULT_GROUP_SUM_LIMIT_BYTES`] (4 GiB).
     pub group_sum_limit_bytes: usize,
@@ -1459,17 +1460,20 @@ fn combine_equal_key_subdomains<V>(
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
-    // Patches with one key are summed in input order, as the former running
-    // `add` did.
-    let mut groups: HashMap<Projector, Vec<SubDomainTreeTN<V>>> = HashMap::new();
+    // Patches with one key are summed in input order.
+    let mut by_key: HashMap<Projector, Vec<SubDomainTreeTN<V>>> = HashMap::new();
     for subdomain in subdomains {
-        groups
+        by_key
             .entry(subdomain.projector().clone())
             .or_default()
             .push(subdomain);
     }
-    // Check every group against the limit before building any sum.
-    for group in groups.values() {
+    // Every group is checked against the limit before any sum is built, in
+    // canonical key order, so a `GroupSumLimit` error names the same group on
+    // every run.
+    let mut groups: Vec<_> = by_key.into_iter().collect();
+    groups.sort_by(|(left, _), (right, _)| left.canonical_cmp(right));
+    for (_, group) in &groups {
         let terms: Vec<_> = group.iter().collect();
         SubDomainTreeTN::ensure_exact_sum_within(
             &terms,
@@ -1478,13 +1482,13 @@ where
         )?;
     }
     groups
-        .into_values()
-        .map(|mut group| {
+        .into_iter()
+        .map(|(_, mut group)| {
             if group.len() == 1 {
                 return group.pop().ok_or(PartitionedTreeTNError::Empty);
             }
             let terms: Vec<_> = group.iter().collect();
-            SubDomainTreeTN::exact_sum(&terms, options.sum_engine)
+            SubDomainTreeTN::exact_sum_checked(&terms, options.sum_engine)
         })
         .collect()
 }
