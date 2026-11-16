@@ -27,7 +27,9 @@
 
 - The default direct TreeTN consumer and isolated M6 library consumers resolve
   without SimpleTT or its bridge. Combined consumers cover all four CPU
-  providers at the graph level. Native benchmark graphs exclude unrelated
+  provider selections for package identity and bridge/legacy feature absence;
+  this gate does not assert provider-feature propagation. That is exercised
+  by the provider CI lanes. Native benchmark graphs exclude unrelated
   Fourier and legacy stacks; Fourier-only graphs exclude SimpleTT transforms.
 - No numerical kernel, tolerance, stop condition, or benchmark measurement
   protocol changed. No speedup claim or full numerical benchmark rerun is

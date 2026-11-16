@@ -31,6 +31,11 @@ class GraphChecks(unittest.TestCase):
             with self.subTest(package=package), self.assertRaisesRegex(ValueError, "unexpected dependencies"):
                 VERIFY(tree, ["tensor4all-treetn"])
 
+    def test_indented_child_line_still_fails_closed(self):
+        for indent in ("    ", "\t"):
+            with self.subTest(indent=indent), self.assertRaisesRegex(ValueError, "unexpected dependencies"):
+                VERIFY(TREE + indent + SIMPLETT, ["tensor4all-treetn"])
+
     def test_bridge_feature_alone_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "simplett-bridge enabled=True"):
             VERIFY(BRIDGE.replace(SIMPLETT, ""), ["tensor4all-treetn"])

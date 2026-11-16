@@ -31,7 +31,7 @@ def verify_tree(tree, required, *, bridge=False, fourier=False, comparisons=Fals
     """Fail on missing roots, unwanted packages, or leaked optional features."""
     packages = {}
     for line in tree.splitlines():
-        match = PACKAGE.match(line)
+        match = PACKAGE.match(line.strip())
         if match:
             packages.setdefault(match[1], set()).update(filter(None, match[2].split(",")))
     missing = set(required) - packages.keys()
