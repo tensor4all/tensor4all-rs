@@ -4,6 +4,55 @@ use super::*;
 use crate::{CanonicalForm, CanonicalizationOptions};
 
 #[test]
+fn exact_identity_skip_promotes_a_real_spectator_under_a_complex_operator() {
+    use crate::treetn::contraction::zipup_identity_node_skips;
+    use tensor4all_core::AnyScalar;
+
+    let (state, mut operator) = build_four_node_star();
+    let node = operator.mpo.node_indices()[0];
+    let tensor = operator
+        .mpo
+        .tensor(node)
+        .unwrap()
+        .scale(AnyScalar::new_complex(0.0, 1.0))
+        .unwrap();
+    operator.mpo.replace_tensor(node, tensor).unwrap();
+    let before = zipup_identity_node_skips();
+    let result = apply_linear_operator(
+        &operator,
+        &state,
+        ApplyOptions {
+            center: Some("r".to_string()),
+            svd_policy: Some(SvdTruncationPolicy::new(0.0)),
+            ..ApplyOptions::zipup()
+        },
+    )
+    .unwrap();
+    assert_eq!(zipup_identity_node_skips() - before, 1);
+    for node in result.node_indices() {
+        assert!(
+            result.tensor(node).unwrap().is_complex(),
+            "real output at {node:?}"
+        );
+    }
+    let expected = state
+        .to_dense()
+        .unwrap()
+        .scale(AnyScalar::new_complex(0.0, 1.0))
+        .unwrap();
+    assert!(
+        result
+            .to_dense()
+            .unwrap()
+            .sub(&expected)
+            .unwrap()
+            .maxabs()
+            .unwrap()
+            < 1e-12
+    );
+}
+
+#[test]
 fn apply_zipup_identity_skip_claims_a_center_only_for_matching_input_certificates() {
     use crate::treetn::contraction::zipup_identity_node_skips;
 

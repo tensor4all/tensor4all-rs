@@ -1,10 +1,33 @@
 # Patched interpolative QTT construction
 
-The `tensor4all-interpolativeqtt` patch driver implements the main construction
-of #1276, following generic scalar support in #1302. It returns
-`Vec<InterpolativePatch<T>>`: a prefix per axis, a local `SimpleTensorTrain<T>`,
-and an absolute per-value error estimate. Retaining the prefix is necessary to map
-the train back to the original grid. There is no TreeTN production dependency.
+The `tensor4all-interpolativeqtt` patch driver implements #1276, with generic
+scalar support from #1302 and native TreeTN output from #1334. A patch carries a
+prefix per axis, its local TreeTN with ordered physical indices, and an absolute
+per-value error estimate. The prefix maps the local chain back to the original
+grid.
+
+## Representation boundary
+
+Chebyshev basis construction, dyadic refinement and sampling operate on dense
+local arrays ordered `[left bond, fused physical digit, right bond]` in
+column-major layout. TreeTN assigns index identities when publishing those
+cores. Site zero is the most significant level. Within a fused digit the bit
+for axis zero varies fastest. The ordinary constructors and the patch driver
+share the same refinement and compression operations. Output storage supports
+real and complex values through the same TreeTN type.
+
+At zero tolerance with no bond cap, the ordinary constructors retain the
+assembled cores in their original gauge. Inverse reconstruction reads them in
+physical and bond order without canonicalizing. Its finest-level decoding
+checks the bond dimensions, the proportional finest core and agreement at
+shared endpoints. A compatible rescaling of that core preserves the exact
+route. Compression and other changes that fail these checks use the two-point
+blend. Deliberately modified cores that preserve the checked samples can still
+change interior reconstructed values, as documented by `invert_qtt`.
+
+TreeTN's optional SimpleTT bridge is outside the interpolation dependency
+graph. Removing the bridge does not change the interpolation algorithms or
+the result types.
 
 ## Construction and acceptance
 
@@ -22,9 +45,10 @@ directly into one column-major `[D, n]` buffer per batch, shared by pointwise
 and batched node sampling. No dense Kronecker
 stencil is allocated.
 
-SVD compression uses `SimpleTensorTrain::compress_svd_with_session`. Its sweeps
-and retained-rank rules are shared with ordinary compression. The compressed
-train is then checked per value against the uncompressed train. An axis with at
+Compression uses `TreeTN::compress_chain_on_session`, shared with ordinary
+construction. It sweeps towards the finest site with full-rank QR, then sweeps
+back with SVD using a threshold relative to each bond's largest singular value.
+The compressed train is checked per value against the uncompressed train. An axis with at
 most `2(2p+2)` grid points is checked at every point. A longer axis is checked,
 in each child half, at the grid points nearest to the validation coordinates
 mapped onto that half, so both child boundaries (including the patch midpoint,
@@ -34,9 +58,9 @@ uncompressed train equals the owning child's Chebyshev interpolant at each grid
 point, so the comparison uses the sampled node values and costs
 `(degree + 1)^D` products per point rather than an evaluation of the
 uncompressed rank. The 1D Lagrange values for the selected child coordinates
-are precomputed once and reused on every axis. A call-local `TTCache` reads the
-compressed train with `evaluate_many` and a full left split, sharing prefixes
-while preserving the previous left-to-right accumulation order. The error estimate is the maximum interpolation residual plus
+are precomputed once and reused on every axis. A call-local
+`TreeTNCachedEvaluator` shares message contractions across the batch and runs
+on the supplied session. The error estimate is the maximum interpolation residual plus
 the maximum compression change. A box is accepted when that estimate is at most
 the absolute tolerance and its compressed rank is at most the optional cap. A
 cutoff or cap that visibly degrades the train therefore leads to splitting. On
@@ -88,11 +112,10 @@ can oversubscribe the cores and relies on the library's thread safety and
 determinism; CI only checks that combination compiles. MPI and automatic lane
 sizing remain outside this API.
 
-## Downstream conversion
+## Downstream projector embedding
 
-Each local site fuses one bit of each axis, axis zero fastest. A caller can
-bridge its train to TreeTN, unfuse these sites with column-major ordering and
-split to an interleaved binary chain. Insert the prefix's one-hot sites before
-creating `SubDomainTreeTN`, which requires all physical axes to remain present.
-The executable tutorial demonstrates this conversion and the patched Fourier
-transform without changing the TreeTN library or its interpolation trait.
+Unfuse the ordered local sites in column-major order and split them into an
+interleaved binary chain. Attach the prefix's one-hot sites with dimension-one
+bonds before creating `SubDomainTreeTN`, which requires all physical sites to
+be present. The executable tutorial demonstrates the embedding and checks a
+patched Fourier transform against a dense reference.

@@ -185,9 +185,12 @@ Ports TreeTCI.jl. Cross interpolation on tree-structured graphs → TreeTN.
 
 ## tensor4all-interpolativeqtt — interpolative QTT
 
-Ports InterpolativeQTT.jl; returns `SimpleTensorTrain<T>` for a real (`f64`) or complex (`Complex64`) function.
+Builds `TreeTN<IdxTensor, usize>` chains for real (`f64`) or complex (`Complex64`) functions.
 
-- `interpolate_single_scale(f, x_min, x_max, R, oversampling, &InterpolativeQttOptions::default())`.
+- `interpolate_single_scale(f, x_min, x_max, num_bits, polynomial_degree, &InterpolativeQttOptions::default())`, the multiscale constructors, and the adaptive constructors return `(tree, site_indices)`. Node names start at `0` and site indices run from the most-significant to least-significant bit level. At a fused level, axis zero varies fastest.
+- Evaluate at one point with `tree.evaluate_point(&site_indices, &bits)` or use `TreeTNCachedEvaluator` for batches.
+- `interpolate_patched_nd` takes a caller-owned CPU execution context. Each `InterpolativePatch` carries its `tree`, ordered `site_indices`, fixed dyadic `prefix`, and absolute per-value `error_estimate` from sampling.
+- Use `invert_qtt::<T>(&tree, &site_indices, &basis, q)` for one-dimensional inverse reconstruction.
 
 ## tensor4all-partitionedtreetn — named TreeTN subdomains + adaptive patching
 
@@ -334,17 +337,22 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
 - `reconstruction::schedule_merge_refine(&preimage, &center, &operator, &selection,
   &SubsetOperatorOptions, tolerance, &MergeRefineOptions)` — level-coupled
   input-merge/output-refine QFT schedule. The preimage must be the `2^d` dyadic
-  input leaves of the `d` selected binary indices with identical spectator
-  constraints. Each leaf fixes a contiguous prefix, so depths may differ as long as
-  the leaves form a prefix code; all `2^d` assignments by default, or a sparse subset
-  under `CoverageContract::ZeroForMissingLeaves`, where an omitted assignment is an
-  exact zero. Level `t` merges the input bit `k_(d-t+1)` and fixes the output
+  input leaves of the `d` selected binary indices. Spectator constraints may
+  differ: disjoint groups are kept directly and overlapping constraints use a
+  common grid bounded by work and term limits before tensor operations. Each
+  leaf fixes a contiguous prefix; complete selected coverage is checked per
+  represented spectator cell, or missing leaves are exact zeros under
+  `CoverageContract::ZeroForMissingLeaves`. Each original patch is transformed
+  once and its application error is charged once before spectator restriction.
+  Level `t` merges the input bit `k_(d-t+1)` and fixes the output
   bit `r_t`, restricting to the child region before adding, so no sum over the
   whole output domain is assembled and each object is reused by its descendants.
   `MergeRefineOptions::output_depth` stops early; `None` refines every selected
   bit. `target_bond_dim` is a soft rank goal: `None` keeps the trajectory uniform
-  and exact, and `Some(goal)` makes it adaptive, refining a region only when that
-  lowers its maximum retained rank. A region that stops refining keeps its output
+  and exact, and `Some(goal)` makes it adaptive — a region is merged without
+  splitting first and stops as soon as that candidate fits the goal, and a candidate
+  above the goal is refined only when the children store no more parameters in total
+  than the candidate they replace. A region that stops refining keeps its output
   key and still merges its input siblings on the remaining levels, and a merged
   pair is combined when it fits the goal or lowers the bond dimension (otherwise
   both operands stay as separate terms). A truncation is

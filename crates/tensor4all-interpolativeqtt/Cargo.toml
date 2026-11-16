@@ -17,22 +17,22 @@ default = ["tenferro-cpu-platform"]
 # (see the `tensor4all-cpu-platform` crate).
 tenferro-cpu-platform = [
     "tensor4all-core/tenferro-cpu-platform",
-    "tensor4all-simplett/tenferro-cpu-platform",
+    "tensor4all-treetn/tenferro-cpu-platform",
     "tensor4all-tensorbackend/tenferro-cpu-platform",
 ]
 tenferro-cpu-faer = [
     "tensor4all-core/tenferro-cpu-faer",
-    "tensor4all-simplett/tenferro-cpu-faer",
+    "tensor4all-treetn/tenferro-cpu-faer",
     "tensor4all-tensorbackend/tenferro-cpu-faer",
 ]
 tenferro-system-blas = [
     "tensor4all-core/tenferro-system-blas",
-    "tensor4all-simplett/tenferro-system-blas",
+    "tensor4all-treetn/tenferro-system-blas",
     "tensor4all-tensorbackend/tenferro-system-blas",
 ]
 tenferro-provider-inject = [
     "tensor4all-core/tenferro-provider-inject",
-    "tensor4all-simplett/tenferro-provider-inject",
+    "tensor4all-treetn/tenferro-provider-inject",
     "tensor4all-tensorbackend/tenferro-provider-inject",
 ]
 
@@ -45,10 +45,8 @@ parallel = ["dep:hataori", "dep:hataori-tenferro"]
 hataori = { workspace = true, optional = true }
 hataori-tenferro = { workspace = true, optional = true }
 thiserror.workspace = true
-# Scalar traits only (`MatrixLuciScalar`, `CommonScalar`); already a
-# dependency of tensor4all-simplett.
 tensor4all-core = { path = "../tensor4all-core", default-features = false }
-tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
+tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 # The public API takes caller-owned `CpuEngine`s (`explicit-context`).
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false, features = ["explicit-context"] }
 

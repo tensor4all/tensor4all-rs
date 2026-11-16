@@ -27,6 +27,7 @@ facade, and each crate can be used on its own.
      |-- tensor4all-treetci (tree TCI)            tensor4all-tensorci (TCI1/TCI2)
      |-- tensor4all-treeaci (tree ACI)            tensor4all-aci (chain ACI)
      |-- tensor4all-partitionedtreetn (TreeTN patches)
+     |-- tensor4all-interpolativeqtt (interpolative QTT)
      `-- tensor4all-treersi (experimental RSI products)
 
    Crates that still use both stacks (crossing through treetn::simplett_bridge):
@@ -240,7 +241,7 @@ requirements onto unrelated generic code.
 | Crate | Description |
 |-------|-------------|
 | **quanticstransform** | Quantics transformation operators: shift, flip, Fourier (including explicit multi-axis layouts), affine, and more. Optional `partitioned` feature: lazy patched Fourier transforms on indices lying on one tree path. Consumes simplett-stack data; constructs TreeTN-based `LinearOperator`s (see the bridge exception above). |
-| **interpolativeqtt** | Interpolative QTT construction on a coarse grid (simplett stack). See the [interpolative-QTT tutorial](tutorials/quantics-basics/interpolative-qtt.md). |
+| **interpolativeqtt** | TreeTN-native Chebyshev interpolation on quantics grids, with ordered site indices and adaptive dyadic patches. See the [interpolative-QTT tutorial](tutorials/quantics-basics/interpolative-qtt.md). |
 
 ### Applications
 

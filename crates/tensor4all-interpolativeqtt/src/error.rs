@@ -64,7 +64,7 @@ pub enum InterpolativeQttError {
     },
 
     /// A supplied execution engine refused an evaluator call.
-    #[error("patch execution failed: {source}")]
+    #[error("interpolation execution failed: {source}")]
     Execution {
         /// Original backend error.
         #[source]
@@ -80,9 +80,13 @@ pub enum InterpolativeQttError {
     #[error("patch lane execution failed: {0}")]
     FanOut(#[source] hataori::MapInError),
 
-    /// Underlying tensor train operation failed.
+    /// Local core data did not match its column-major shape.
     #[error(transparent)]
-    SimpleTensorTrain(#[from] tensor4all_simplett::SimpleTensorTrainError),
+    CoreArray(#[from] tensor4all_core::col_major_array::ColMajorArrayError),
+
+    /// A TreeTN construction, compression, readout or evaluation failed.
+    #[error(transparent)]
+    Tree(#[from] tensor4all_treetn::TreeTNOperationError),
 }
 
 pub(crate) fn invalid_argument(message: impl Into<String>) -> InterpolativeQttError {

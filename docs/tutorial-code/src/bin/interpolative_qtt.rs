@@ -8,7 +8,6 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use tensor4all_interpolativeqtt::AbstractTensorTrain;
 use tensor4all_tutorial_code::interpolative_qtt_common::{
     build_multi_scale_inverse_square_1d_qtt, build_multi_scale_inverse_square_2d_qtt,
     build_single_scale_smooth_qtt, collect_1d_samples, collect_2d_samples, collect_bond_dims,
@@ -100,16 +99,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut samples_1d = smooth_samples.clone();
     samples_1d.extend(inverse_samples_1d);
 
-    let single_scale_bonds = single_scale.link_dims();
-    let multi_1d_bonds = multi_scale_1d.link_dims();
-    let multi_2d_bonds = multi_scale_2d.link_dims();
+    let single_scale_bonds = single_scale.0.link_dims();
+    let multi_1d_bonds = multi_scale_1d.0.link_dims();
+    let multi_2d_bonds = multi_scale_2d.0.link_dims();
     let bond_dims = collect_bond_dims(&single_scale_bonds, &multi_1d_bonds, &multi_2d_bonds);
 
     print_summary(
         &config,
-        &single_scale,
-        &multi_scale_1d,
-        &multi_scale_2d,
+        [&single_scale_bonds, &multi_1d_bonds, &multi_2d_bonds],
         smooth_max_error,
         multi_1d_max_error,
         multi_2d_max_error,

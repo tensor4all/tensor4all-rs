@@ -379,10 +379,12 @@ For a Fourier transform of existing `PartitionedTreeTN` patches, enable the
 `partitioned` feature on `tensor4all-quanticstransform` and call
 `patched_fourier_transform` with one MSB-first index vector per axis. Selected
 indices must lie on one tree path; spectators retain their identities. Every
-input patch must fix a contiguous MSB prefix of each axis and the same spectator
-coordinates (or none); otherwise the call fails with `SpectatorMismatch`, so
-partition on the selected indices only, or `refine_to` a common spectator layout
-and transform each spectator group separately. The
+input patch must fix a contiguous MSB prefix of each axis. Different spectator
+constraints are supported through disjoint cells; overlapping constraints use
+a common grid bounded by `merge_refine.max_work_items` and `max_terms` before
+tensor operations. Raise those limits or restrict the producer's patch order
+to selected indices if the grid is refused. Each original patch is transformed
+once, and output regions keep their spectator constraints. The
 result is lazy `MergeRefineResult`, and `into_partition()` requires one term per
 region. Leave `PatchedFourierOptions::merge_refine.coordinate_groups` unset.
 For repeated transforms, set a suitable `target_bond_dim` and reconstruction

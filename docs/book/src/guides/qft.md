@@ -170,13 +170,17 @@ with other selected indices or spectators. Branching selections are rejected.
 State node names need not be integers.
 
 The input patches must be dyadic leaves of the selected bits: each fixes a
-contiguous most-significant prefix of every axis, and all fix the same
-coordinates on spectator indices (or none). Partitions from patched
-interpolation or adaptive contraction whose patch order includes a spectator
-usually break the second condition and are rejected with
-`PartitionedTreeTNError::SpectatorMismatch`. Partition such inputs on the
-selected indices only, or refine them to a common spectator layout with
-`refine_to` and transform each spectator group separately.
+contiguous most-significant prefix of every axis. Spectator constraints may
+differ. The scheduler keeps disjoint spectator groups directly; overlapping
+constraints use a common coordinate grid of their varying spectator indices.
+The grid and refined leaf count are checked against `max_work_items` and
+`max_terms` before tensor operations. Each original patch is transformed once,
+then its image is restricted exactly to those cells. Output regions retain the
+spectator constraints. Complete selected-coordinate coverage is checked in each
+represented cell; omitted leaves require `ZeroForMissingLeaves`. Large common
+grids can be refused: raise the limits or restrict the producer's patch order
+to selected indices. The original application error is charged once globally,
+and later errors on disjoint output/spectator cells combine within each level.
 
 `PatchedFourierOptions` defaults to relative reconstruction tolerance `1e-6`
 and an exact full-depth schedule. Set `merge_refine.target_bond_dim` for adaptive

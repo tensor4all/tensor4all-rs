@@ -261,12 +261,24 @@ separately, and adaptive stopping changes the counts.
 
 ### Geometry and provenance validation
 
-Selected indices must be binary and non-empty, and the preimage must already be
-partitioned into dyadic input leaves of those indices, sharing identical spectator
-constraints. A preimage that leaves a selected index free, repeats a
-selected-coordinate assignment, or disagrees on a spectator constraint is rejected
-before any operator is applied; a repair suggestion is required rather than an
-implicit normalization or padding step.
+Selected indices must be binary and non-empty, and every preimage patch must
+fix a contiguous prefix on each selected axis. Spectator constraints may differ.
+Preparation sorts and deduplicates spectator projectors by full index identity.
+If they are disjoint, they already define the spectator cells. Otherwise it
+keeps their common fixed coordinates and forms a Cartesian grid of only the
+varying spectator indices, excluding cells outside every input support. Both
+the candidate grid and the total leaf count after restriction obey the work
+and term limits, checked on metadata before tensor operations. The bounded grid
+may refuse a layout an adaptive refinement could handle; there is no silent
+fallback or unbounded refinement.
+
+The complete-coverage contract is checked separately in each represented
+spectator cell. Cells absent from the input support are outside its domain;
+missing selected leaves inside a cell still require `ZeroForMissingLeaves`.
+The operator is applied once per original patch, then its image is restricted
+exactly to the cells. Region keys include the spectator cell, so different
+cells never merge, and the returned output projectors include their spectator
+constraints. All cells participate in one schedule and resource ledger.
 
 Each leaf fixes a *contiguous prefix* of the selected indices, so the input tree may
 be nonuniform: leaf depths can differ as long as the leaves form a dyadic prefix
@@ -298,8 +310,9 @@ accepted truncation, and the measured norm of every dropped contribution.
 Every component is measured where it happens and recorded once, grouped by the level
 and the region that measured it:
 
-- an application error is measured before any split, so it belongs to level zero,
-  which has the single root region;
+- an original application error is measured before any selected or spectator
+  split, so it is charged once globally at level zero; restricting its image
+  into several cells does not charge it again;
 - a truncation residual or a dropped norm is measured inside the child region it is
   accepted in, so it belongs to that level and region.
 
@@ -308,9 +321,10 @@ supports, so their norms combine by the Euclidean norm. Two components of differ
 levels can be nested, so they add by the triangle inequality. The reported bound is
 
 ```text
-error_bound = sum over levels of
-              hypot over the regions of that level of
-              the components measured in that region at that level
+error_bound = sum of original patch application errors
+              + sum over later levels of
+                hypot over the selected-prefix/spectator regions of that level of
+                the components measured in that region at that level
 ```
 
 Counting the application error once at the root is the point: the same error network
@@ -359,23 +373,33 @@ input ancestry is never inferred from spectator-only projectors and no private
 target field is exposed downstream.
 
 With a rank goal the trajectory becomes adaptive, and the decision is made per
-output region so the final region set stays prefix-free:
+output region and per coordinate axis so the final region set stays prefix-free:
 
-- An output region is refined only when its retained terms exceed the goal *and*
-  refining strictly lowers its maximum retained rank. Without that gain the region
-  stops refining, so a rank-one object is not forced into a preset output tiling.
-  A stopped region keeps its output key and still merges its input siblings on every
-  later level; restricting it to its own region is a no-op, so it runs the merge
-  half of the level with the same ledger share. Its measured probe components are
-  charged, but only the merge it keeps contributes a reported component.
+- An output region is merged without splitting first, and it stops on every axis as
+  soon as that candidate fits the goal. For a candidate above the goal, each axis is
+  decided on its own: the axis is refined only when that axis' children store no more
+  parameters in total than the candidate they replace, because a split keeps one region
+  per output child and a projected child still keeps every output site axis, so a rank
+  drop by one is not a gain (#1327). The test is made against the merged, unsplit
+  candidate because that is exactly what a stopped region keeps; the unmerged input
+  siblings are not a fair baseline. Without that gain the axis stops, so a rank-one
+  object is not forced into a preset output tiling and a level splits into
+  `2^(refining axes)` children instead of `2^(coordinate axes)` (#1328). A stopped axis
+  keeps the region's shorter prefix for good while the region's other axes keep
+  refining. A region whose axes have all stopped keeps its output key and still merges
+  its input siblings on every later level; restricting it to its own region is a no-op,
+  so it runs the merge half of the level with the same ledger share. Its measured probe
+  components are charged, but only the merge it keeps contributes a reported component.
 - Merging a pair combines the two operands into one term when the candidate fits the
   goal or strictly lowers the bond dimension against the naive sum; otherwise both
   stay as separate terms, which keeps the retained ranks small at the cost of a
   longer term list.
-- Refinement stops are reported (`refined_regions`, `stopped_regions`), with a
-  stopped region counted once rather than once per remaining level, and the
-  retained term count is bounded by `max_terms`, whose exhaustion is an explicit
-  resource-limit error rather than a silent accuracy relaxation.
+- Refinement stops are reported: `refined_regions` counts a region and level once,
+  however many of its axes refined, `stopped_regions` counts one region-axis
+  decision that stopped (a single-axis run therefore still counts one per stopping
+  region) rather than once per remaining level, and the retained term count is
+  bounded by `max_terms`, whose exhaustion is an explicit resource-limit error
+  rather than a silent accuracy relaxation.
 - A merged or unpaired contribution is dropped only when its measured norm fits its
   share of the allowance. Dropping costs that norm plus the inherited bound it
   already carried, both of which stay in the region's report, and a region whose

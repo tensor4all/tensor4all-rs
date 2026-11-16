@@ -3,14 +3,15 @@
 Interpolative Quantics Tensor Train construction for tensor4all-rs.
 
 This crate ports the tested public algorithms from
-`InterpolativeQTT.jl` to Rust and returns `tensor4all-simplett`
-`SimpleTensorTrain<T>` values, where `T` is the value type of the sampled
-function: `f64` or `Complex64`.
+`InterpolativeQTT.jl` to Rust. Single-scale, multiscale, sparse and adaptive
+constructors return a TreeTN and its physical indices in most-significant
+bit order. Each index fuses one bit per axis, with axis zero varying fastest.
+The TreeTN retains the sampled function's `f64` or `Complex64` dtype.
 
 ```rust
 use tensor4all_interpolativeqtt::prelude::*;
 
-let tt = interpolate_single_scale(
+let (tree, sites) = interpolate_single_scale(
     |x| (-x * x).exp(),
     -2.0,
     2.0,
@@ -19,15 +20,15 @@ let tt = interpolate_single_scale(
     &InterpolativeQttOptions::default(),
 ).unwrap();
 
-let value = tt.evaluate(&[0, 0, 0, 0, 0]).unwrap();
+let value = tree.evaluate_point(&sites, &[0, 0, 0, 0, 0]).unwrap().real();
 let expected = (-4.0_f64).exp();
 assert!((value - expected).abs() < 1e-10);
 ```
 
 For unknown localized features, `interpolate_patched_nd` splits failed dyadic
-boxes into independent `InterpolativePatch<T>` values. It runs in a
+boxes into independent `InterpolativePatch` values. It runs in a
 `CpuExecutionContext` the caller configures and passes in. Each patch carries
-its fixed leading bits, the local compressed train, and an absolute per-value
+its fixed leading bits, the local compressed TreeTN and its ordered site indices, and an absolute per-value
 error estimate of that train (interpolation residual plus compression change),
 which decides acceptance. Options bound rank,
 split depth and patch count. Sampling can miss features
@@ -43,5 +44,5 @@ default, but lane execution is tested on faer only. With a BLAS provider
 which can oversubscribe the cores.
 
 The [guide tutorial](../../docs/book/src/tutorials/quantics-basics/interpolative-qtt.md#independent-dyadic-patches)
-links an executable complex 2D construction, TreeTN conversion and patched
+links an executable complex 2D construction, TreeTN embedding and patched
 Fourier reference check.

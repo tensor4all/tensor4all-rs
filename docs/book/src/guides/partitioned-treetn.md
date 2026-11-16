@@ -615,12 +615,16 @@ output bit-reversal permutation. For contiguous output patches, supply
 &subset, tolerance, &MergeRefineOptions)` instead runs the complementary
 input-merge/output-refine trajectory of the patched Fourier algorithm. The
 preimage must already be the dyadic input leaves of the `d` selected binary
-indices, sharing identical spectator constraints. Each leaf fixes a contiguous
-prefix of those indices, so leaf depths may differ as long as the leaves form a
-prefix code; all `2^d` coordinate assignments must be covered by default, or a sparse
-subset with `CoverageContract::ZeroForMissingLeaves`, where every omitted assignment
-contributes exactly zero. Level zero applies the
-complete transform once per leaf. Level `t` merges the input siblings by removing
+indices. Different spectator constraints are supported: already disjoint groups
+are kept directly, while overlapping groups use a common grid of their varying
+spectator indices. The grid and refined leaf count are checked against work and
+term limits before tensor operations. Each leaf fixes a contiguous prefix of the
+selected indices; complete selected coverage is checked in each represented
+spectator cell, or omitted assignments contribute exact zero under
+`CoverageContract::ZeroForMissingLeaves`. Level zero applies the complete
+transform once per original patch, then restricts its image to the spectator
+cells without repeating application or its error charge. Level `t` merges the
+input siblings by removing
 the constraint on `k_(d-t+1)` and refines the output by fixing `r_t`, restricting
 every contribution to its output region *before* adding it, so no sum over the
 whole output domain is ever assembled and each computed object is reused by its
@@ -629,19 +633,25 @@ descendants.
 `MergeRefineOptions::output_depth` stops after that many levels; `None` (the
 default) refines every selected bit. `MergeRefineOptions::coordinate_groups` supplies
 several coordinate axes explicitly: each `CoordinateGroup` gives that axis' selected
-indices in input order and, separately, in output order, one level advances every
-non-exhausted axis by one bit, and a two-axis level therefore combines four input
-children and produces four output children. The default `None` treats `selection` as
-one axis with the documented reversed placement. `MergeRefineOptions::target_bond_dim` is a
-soft rank goal: `None` keeps the trajectory uniform and exact, while `Some(goal)`
-makes it adaptive. An output region is then refined only when its retained terms
-exceed the goal and refining lowers its maximum retained rank. A region that stops
-refining keeps its output key and still merges its input siblings on every later
-level, so it consolidates the input prefixes it held instead of freezing them. A
-merged pair is combined into one term when it fits the goal or lowers the bond
-dimension (otherwise both operands stay as separate terms of the region's
-superposition), and every truncation candidate must fit the item's share of the
-global allowance. An unaffordable or gainless candidate is retained exactly rather
+indices in input order and, separately, in output order, and one level advances every
+refining, non-exhausted axis by one bit, so a two-axis level combines four input
+children and, without a rank goal, produces four output children. The default `None`
+treats `selection` as one axis with the documented reversed placement.
+`MergeRefineOptions::target_bond_dim` is a soft rank goal: `None` keeps the
+trajectory uniform and exact, while `Some(goal)` makes it adaptive and decides each
+axis of a region on its own. An output region is then merged without splitting first
+and stops on every axis as soon as that candidate fits the goal; for a candidate above
+the goal, an axis is refined only when that axis' children store no more parameters in
+total than the candidate they replace, because a split keeps one region per output
+child and a projected child still keeps every output site axis, so a rank drop by one
+is not a gain. A level therefore splits into `2^(refining axes)` children instead of
+`2^(coordinate axes)`; a stopped axis keeps the region's shorter prefix for good while
+its other axes keep refining. A region whose axes have all stopped keeps its output key
+and still merges its input siblings on every later level, so it consolidates the input
+prefixes it held instead of freezing them. A merged pair is combined into one term when
+it fits the goal or lowers the bond dimension (otherwise both operands stay as separate
+terms of the region's superposition), and every truncation candidate must fit the
+item's share of the global allowance. An unaffordable or gainless candidate is retained exactly rather
 than violating the accuracy contract, and exceeding `MergeRefineOptions::max_terms`
 returns a resource-limit error.
 

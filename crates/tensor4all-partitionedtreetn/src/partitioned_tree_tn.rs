@@ -1623,6 +1623,19 @@ pub(crate) fn fixed_projector_indices(projectors: &[Projector]) -> Vec<DynIndex>
 /// Check the entire candidate grid before allocating any projector cells.
 pub(crate) fn bounded_value_grid(indices: &[DynIndex], limit: usize) -> Result<Vec<Projector>> {
     ensure_refinement_within(grid_len(indices), limit)?;
+    // A caller may explicitly set an unlimited atom budget. Saturating count
+    // estimates still must not turn an overflowing Vec layout into allocation.
+    let count = indices.iter().try_fold(1usize, |count, index| {
+        count
+            .checked_mul(index.dim)
+            .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)
+    })?;
+    let bytes = count
+        .checked_mul(std::mem::size_of::<Projector>())
+        .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)?;
+    if bytes > isize::MAX as usize {
+        return Err(PartitionedTreeTNError::LogicalParameterCountOverflow);
+    }
     Ok(value_grid(indices))
 }
 

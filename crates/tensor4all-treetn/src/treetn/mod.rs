@@ -10,6 +10,7 @@
 mod addition;
 mod cached_evaluator;
 mod canonicalize;
+mod chain;
 mod context;
 pub mod contraction;
 mod decompose;
@@ -842,7 +843,7 @@ where
         context: Option<&tensor4all_tensorbackend::ExecutionContext>,
     ) -> Result<()> {
         match context {
-            Some(execution) => self.sweep_edge_full_rank_with(
+            Some(execution) => self.sweep_edge_with(
                 src,
                 dst,
                 alg,
@@ -856,7 +857,7 @@ where
                 global_stack::<T>,
                 global_select::<T>,
             ),
-            None => self.sweep_edge_full_rank_with(
+            None => self.sweep_edge_with(
                 src,
                 dst,
                 alg,
@@ -875,15 +876,14 @@ where
 
     /// Process one edge with caller-supplied factorization and absorption.
     ///
-    /// The single body behind the process-global, execution-context and
-    /// explicit-session full-rank sweeps: only where the factorization and the
-    /// dst absorption run differs, so a site-free node and the exactness
-    /// contract stay identical on every route.
+    /// Shared by exact canonicalization and chain compression. The caller
+    /// chooses the factorization and where the local operations run; the
+    /// absorption, bond replacement and orthogonality updates are shared.
     // INVARIANT: the parameters are the seam's boundary (positions, algorithm,
     // factorization, contraction, and the two singleton-axis moves); grouping
     // them into a struct would only move the same values through one more layer.
     #[allow(clippy::too_many_arguments)]
-    fn sweep_edge_full_rank_with<Factorize, Contract, Stack, Select>(
+    fn sweep_edge_with<Factorize, Contract, Stack, Select>(
         &mut self,
         src: NodeIndex,
         dst: NodeIndex,
@@ -952,8 +952,7 @@ where
             tensor_src,
             &left_inds,
             |tensor, left| {
-                factorize(tensor, left)
-                    .with_context(|| format!("{alg:?} full-rank factorization failed"))
+                factorize(tensor, left).with_context(|| format!("{alg:?} factorization failed"))
             },
             stack,
             select,

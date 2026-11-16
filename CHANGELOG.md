@@ -4,10 +4,31 @@
 
 ### Behavior changes
 
-- `tensor4all-simplett`: `evaluate`, `sum`, `norm2`, `norm`, and `log_norm`
-  now refuse a tensor train whose first core has a non-unit leading bond
-  (#1303), the left-boundary sibling of the trailing-bond guard from #913.
-  They previously read only the `l == 0` component and returned its projection.
+- `tensor4all-interpolativeqtt` returns TreeTN chains with ordered physical indices
+  for ordinary and patched interpolation (#1334). Pass the tree and its site
+  indices to `invert_qtt::<T>` for binary chains. The interpolation crate no longer
+  depends on SimpleTT.
+- `tensor4all-partitionedtreetn`: `MergeRefineOptions::target_bond_dim` decides
+  one coordinate axis at a time (#1328). A level previously probed the joint
+  product of every refining axis and then fixed an output bit on all of them or
+  on none; it now probes each axis on its own and fixes output bits only on the
+  axes whose own children store no more parameters in total than the region's
+  merged, unsplit candidate (the #1327 guard, applied per axis; a candidate that
+  already fits the goal stops every axis without a probe). A level of
+  an `N`-axis schedule therefore splits into `2^(refining axes)` children instead
+  of `2^N`, and the stopped axes keep their region's shorter prefix while the
+  region's input siblings keep merging on every axis. Single-axis runs are
+  unaffected; `MergeRefineReport::stopped_regions` now counts one region-axis
+  decision per stopped axis instead of one region, which is the same value for a
+  single axis. A region with several axes can now stop every axis at a coarse level
+  even though only the joint split would have paid, because no single axis pays on
+  its own.
+- `tensor4all-simplett`: `evaluate`, `sum`, `norm2`, `norm`, `log_norm`,
+  `inner_product`, and `inner_product_with_session` now refuse a tensor train
+  whose first core has a non-unit leading bond (#1303, #1340), the
+  left-boundary sibling of the trailing-bond guard from #913. They previously
+  read only the `l == 0` component and returned its projection; the
+  inner-product routes summed every leading component instead.
 - `tensor4all-partitionedtreetn`: `ErrorNorm::sampled_max()` pins its
   reference to the largest `|f|` that a greedy coordinate ascent reaches from
   the root patch's candidate samples (#1274), as `optfirstpivot` does in
@@ -112,12 +133,13 @@
 
 ### Diagnostics
 
-- `tensor4all-partitionedtreetn` adds `PartitionedTreeTNError::SpectatorMismatch`
-  (#1299). `schedule_merge_refine`, and so `patched_fourier_transform`, now
-  return it instead of `ProjectorMismatch` when input patches fix different
-  spectator coordinates, and the message names the remedy.
-  `patched_fourier_transform` documents its input-partition precondition.
-  Code matching `ProjectorMismatch` for this case must match the new variant.
+- `schedule_merge_refine` and `patched_fourier_transform` accept differing
+  spectator constraints (#1299). Disjoint groups are retained directly;
+  overlapping constraints use a common spectator grid checked against work and
+  term limits before tensor operations. Each original patch is transformed
+  once. The obsolete `PartitionedTreeTNError::SpectatorMismatch` is removed.
+- Exact zip-up identity skips promote real spectator tensors when the identity
+  operand is complex, matching ordinary contraction's scalar promotion.
 
 ### Performance
 
@@ -128,6 +150,14 @@
   operands whose patches split on different indices, contracted into 16,384
   output patches, take 36 s instead of 106 s in `contract` (release, one
   thread); at about 100 patches nothing changes measurably.
+- `tensor4all-partitionedtreetn` validates merge-refine input leaves through
+  that same projector trie instead of comparing every pair of selected prefixes
+  (#1325). The check, its `InvalidOptions` message, and the error order are
+  unchanged, and the cost drops from `O(N^2 d)` to `O(N d)` for `N` leaves of
+  `d` selected bits, which is linear in the geometry the caller already supplies.
+  16,384 full-depth dyadic leaves validate in under 120 ms instead of about
+  720 ms (release profile, one core; two pinned runs), and each doubling costs
+  2.3x-2.7x instead of 4.0x.
 
 ## v0.3.0
 
