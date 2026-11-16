@@ -487,6 +487,7 @@ fn exact_output_has_no_global_pivot_and_injection_updates_every_cut() {
         &mut state,
         &options,
         PassDirection::Forward,
+        false,
         &mut identity,
         &mut crate::exec::Exec::Global,
     )
@@ -712,6 +713,7 @@ fn injection_retains_records_without_publishing_a_blocked_parent() {
         &mut state,
         &options,
         PassDirection::Forward,
+        false,
         &mut identity,
         &mut crate::exec::Exec::Global,
     )
@@ -722,6 +724,7 @@ fn injection_retains_records_without_publishing_a_blocked_parent() {
         0,
         &options,
         true,
+        false,
         &mut identity,
         &mut crate::exec::Exec::Global,
     )
@@ -1311,6 +1314,7 @@ fn guard_candidates_survive_a_failed_pass_and_fresh_luci_can_reduce_rank() {
         &mut state,
         &options,
         PassDirection::Forward,
+        false,
         &mut identity,
         &mut crate::exec::Exec::Global,
     )
@@ -1341,6 +1345,7 @@ fn guard_candidates_survive_a_failed_pass_and_fresh_luci_can_reduce_rank() {
         &mut state,
         &options,
         PassDirection::Reverse,
+        false,
         &mut |_, _| {
             Err(crate::TreeAciError::InternalInvariant {
                 message: "failed refresh pass fixture",
@@ -1355,6 +1360,7 @@ fn guard_candidates_survive_a_failed_pass_and_fresh_luci_can_reduce_rank() {
         &mut state,
         &options,
         PassDirection::Reverse,
+        false,
         &mut identity,
         &mut crate::exec::Exec::Global,
     )

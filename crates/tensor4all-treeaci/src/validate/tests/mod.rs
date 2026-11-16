@@ -65,6 +65,7 @@ fn run_one_directional_pass(
         state,
         options,
         PassDirection::Forward,
+        false,
         &mut operator,
         &mut crate::exec::Exec::Global,
     )
