@@ -97,6 +97,12 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// Optional rank cap on every output edge. Default: no explicit cap.
     pub max_bond_dim: Option<usize>,
     /// Relative or absolute local error target. Default: `1e-12`.
+    ///
+    /// A local update keeps every pivot at or above this target. From the
+    /// third pass on, an edge also keeps pivots that fall below it, down to a
+    /// quarter of it, as long as the edge already had that many pivots. Ranks
+    /// then stop oscillating around the target, at the cost of slightly more
+    /// rank than a single truncation would keep.
     pub tolerance: f64,
     /// Scale `tolerance` by sampled output magnitude. Default: `true`.
     ///

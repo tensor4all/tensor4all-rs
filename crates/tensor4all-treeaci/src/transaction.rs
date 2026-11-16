@@ -24,6 +24,7 @@ pub(crate) fn update_edge_transaction<T, V, F>(
     forward: DirectedEdgeId,
     options: &TreeAciOptions<V>,
     left_orthogonal: bool,
+    rank_hysteresis: bool,
     operator: &mut F,
     exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<EdgeCommitReport>
@@ -34,6 +35,18 @@ where
 {
     #[cfg(test)]
     let proposal_started = std::time::Instant::now();
+    let previous_rank = if rank_hysteresis {
+        Some(
+            *state
+                .edge_ranks
+                .get(forward / 2)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "edge update references an unknown edge rank",
+                })?,
+        )
+    } else {
+        None
+    };
     let proposal = materialize_and_factor_edge(
         state.inputs,
         &state.problem,
@@ -42,6 +55,7 @@ where
         forward,
         options,
         left_orthogonal,
+        previous_rank,
         operator,
         exec,
     )?;

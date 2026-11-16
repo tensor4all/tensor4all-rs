@@ -13,6 +13,8 @@ use std::hash::Hash;
 
 use tensor4all_core::{
     matrix_luci_factors_from_matrix_owned, matrix_luci_factors_from_matrix_owned_on_session,
+    matrix_luci_factors_from_matrix_owned_with_rank_selection,
+    matrix_luci_factors_from_matrix_owned_with_rank_selection_on_session,
     permute_indices_on_session, ColMajorArrayRef, DynIndex, IdxTensor, IdxTensorError,
     MatrixLuciFactors, RrLUOptions,
 };
@@ -92,6 +94,39 @@ impl<'s> Exec<'_, 's> {
             Self::Global => matrix_luci_factors_from_matrix_owned(matrix, Some(options)),
             Self::Session(session) => {
                 matrix_luci_factors_from_matrix_owned_on_session(matrix, Some(options), session)
+            }
+        }
+        .map_err(|error| crate::TreeAciError::Numerical {
+            message: error.to_string(),
+        })
+    }
+
+    /// The pivoted-LU cross-interpolation factors of `matrix`, keeping the
+    /// prefix of pivots that `select_rank` chooses from the search's error
+    /// history.
+    pub(crate) fn luci_factors_with_rank_selection<T, F>(
+        &mut self,
+        matrix: Matrix<T>,
+        options: RrLUOptions,
+        select_rank: F,
+    ) -> crate::Result<MatrixLuciFactors<T>>
+    where
+        T: TreeAciScalar,
+        F: FnOnce(&[f64]) -> usize,
+    {
+        match self {
+            Self::Global => matrix_luci_factors_from_matrix_owned_with_rank_selection(
+                matrix,
+                Some(options),
+                select_rank,
+            ),
+            Self::Session(session) => {
+                matrix_luci_factors_from_matrix_owned_with_rank_selection_on_session(
+                    matrix,
+                    Some(options),
+                    select_rank,
+                    session,
+                )
             }
         }
         .map_err(|error| crate::TreeAciError::Numerical {

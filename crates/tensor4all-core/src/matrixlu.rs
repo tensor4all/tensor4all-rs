@@ -306,6 +306,32 @@ impl<T: Scalar> RrLU<T> {
         }
     }
 
+    /// Keep only the first `rank` pivots of the decomposition.
+    ///
+    /// Full pivoting fixes the first `rank` columns of `L` and rows of `U`
+    /// once their pivots are chosen: later steps only swap their trailing
+    /// rows or columns. The result is therefore the decomposition a search
+    /// stopped by `max_bond_dim = rank` would return, and the residual
+    /// diagnostic becomes the magnitude of the next pivot, which full pivoting
+    /// chose as the largest entry of that Schur complement. A `rank` of at
+    /// least [`npivots`](Self::npivots) leaves the decomposition unchanged.
+    pub(crate) fn truncate(&mut self, rank: usize) {
+        if rank >= self.n_pivot {
+            return;
+        }
+        self.error = self.diag()[rank].abs_val();
+        let nrows = self.l.nrows();
+        let l = self.l.as_col_major_slice()[..nrows * rank].to_vec();
+        self.l = Matrix::from_col_major_vec(nrows, rank, l);
+        let ncols = self.u.ncols();
+        let mut u = Vec::with_capacity(rank * ncols);
+        for col in 0..ncols {
+            u.extend((0..rank).map(|row| self.u[[row, col]]));
+        }
+        self.u = Matrix::from_col_major_vec(rank, ncols, u);
+        self.n_pivot = rank;
+    }
+
     pub(crate) fn left_unpermuted(&self) -> &Matrix<T> {
         &self.l
     }

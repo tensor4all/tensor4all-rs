@@ -62,6 +62,7 @@ mod options;
 mod path_cover;
 pub mod prelude;
 mod problem;
+mod rank_hysteresis;
 mod result;
 mod samples;
 mod scalar;

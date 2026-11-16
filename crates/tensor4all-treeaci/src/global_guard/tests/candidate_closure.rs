@@ -151,6 +151,7 @@ fn a_genuinely_full_child_cannot_publish_an_unusable_parent() {
                 &mut state,
                 &options,
                 direction,
+                false,
                 &mut identity,
                 &mut crate::exec::Exec::Global,
             )
@@ -360,6 +361,7 @@ fn guard_proposals_preserve_selected_partial_nesting_at_every_chain_commit() {
                             cut,
                             &options,
                             true,
+                            false,
                             &mut operator,
                             &mut crate::exec::Exec::Global,
                         )
