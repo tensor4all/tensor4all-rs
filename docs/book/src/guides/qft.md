@@ -22,8 +22,8 @@ For patched Fourier, also enable `partitioned` on
 `tensor4all-quanticstransform` and declare `tensor4all-partitionedtreetn` with
 the same provider and its defaults disabled when importing it directly. On
 macOS, use `tenferro-cpu-faer` on all these crates to select faer explicitly.
-Direct TreeTN dependencies need their defaults disabled to leave the
-`simplett-bridge` feature off. Enable `simplett-transforms` if you also use
+TreeTN defaults leave `simplett-bridge` off; disabling them is needed only
+when selecting a different CPU provider. Enable `simplett-transforms` if you also use
 non-Fourier transforms or the transform crate's SimpleTT conversions.
 
 ## Background

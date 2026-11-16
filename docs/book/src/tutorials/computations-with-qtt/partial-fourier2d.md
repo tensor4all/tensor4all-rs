@@ -8,6 +8,10 @@ Runnable source: [`docs/tutorial-code/src/bin/qtt_partial_fourier2d.rs`](../../.
 
 ## Key API Pieces
 
+This example converts legacy Quantics TCI states through TreeTN's opt-in
+`simplett-bridge` feature. Enable it explicitly on the `tensor4all-treetn`
+dependency; the runnable tutorial package already selects it.
+
 For an interleaved two-variable QTT, the state nodes are ordered
 `x0, t0, x1, t1, ...`. A one-dimensional Fourier MPO has only `x` nodes, so the
 operator nodes are renamed onto the even state nodes. `apply_linear_operator`

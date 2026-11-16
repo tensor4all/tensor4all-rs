@@ -8,6 +8,10 @@ Runnable source: [`docs/tutorial-code/src/bin/qtt_affine.rs`](../../../../tutori
 
 ## Key API Pieces
 
+This example converts legacy Quantics TCI states through TreeTN's opt-in
+`simplett-bridge` feature. Enable it explicitly on the `tensor4all-treetn`
+dependency; the runnable tutorial package already selects it.
+
 `AffineParams` stores the matrix and offset. Boundary conditions say what
 happens when transformed coordinates leave the grid. The operator is
 applied via `tensor_train_to_treetn`, `align_to_state`, and

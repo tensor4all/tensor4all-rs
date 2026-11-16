@@ -4,6 +4,10 @@
 
 ### Behavior changes
 
+- `tensor4all-treetn` no longer enables `simplett-bridge` by default (#1335).
+  Enable it explicitly for SimpleTT conversions and the bridge's chain helpers.
+  Native M6 benchmark builds also exclude legacy comparisons and Fourier
+  construction unless their benchmark features are explicitly selected.
 - `tensor4all-interpolativeqtt` returns TreeTN chains with ordered physical indices
   for ordinary and patched interpolation (#1334). Pass the tree and its site
   indices to `invert_qtt::<T>` for binary chains. The interpolation crate no longer

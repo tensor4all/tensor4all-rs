@@ -8,8 +8,12 @@ repository.workspace = true
 description = "Tree tensor networks with arbitrary graph topology for tensor4all"
 autotests = false
 
+[package.metadata.docs.rs]
+features = ["simplett-bridge"]
+
 [features]
-default = ["tenferro-cpu-platform", "simplett-bridge"]
+default = ["tenferro-cpu-platform"]
+# Legacy interoperability is opt-in; native TreeTN consumers do not need SimpleTT.
 simplett-bridge = ["dep:tensor4all-simplett"]
 tenferro-cuda = [
     "tensor4all-core/tenferro-cuda",
@@ -70,6 +74,7 @@ criterion.workspace = true
 [[bench]]
 name = "cached_evaluator"
 harness = false
+required-features = ["simplett-bridge"]
 
 [[bench]]
 name = "fit_environment"

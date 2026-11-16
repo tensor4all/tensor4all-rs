@@ -36,6 +36,34 @@ macOS. Accelerate schedules its own threads, outside the tensor4all pool, and
 takes its thread limit from `VECLIB_MAXIMUM_THREADS`, so single-thread runs on
 macOS also set `VECLIB_MAXIMUM_THREADS=1`.
 
+### Cargo feature isolation
+
+The Rust benchmark package defaults to native TreeTN dependencies. M6a
+contraction, M6b sibling merging, and M6c elementwise library kernels do not
+require SimpleTT. The committed `benchmark_m6c_elementwise` harness builds with
+no extra feature. Input/operator generation is a separate dependency: #1333
+migrated Fourier construction, and #1334 migrated Interpolative QTT to TreeTN.
+Local, untracked M6a probes are not targets of this package.
+
+| Feature | Targets / dependencies enabled |
+| --- | --- |
+| `fourier` | `benchmark_merge_refine`, `benchmark_merge_refine_intended_regime`; native `quanticstransform` Fourier construction with `simplett-transforms` disabled |
+| `legacy-comparisons` | `issue566_perf_candidates`, `issue566_perf_candidates2`; explicit SimpleTT, TCI, and TreeTN bridge comparisons |
+| `itensorlike` | `benchmark_tt_ops`; TreeTN-backed ITensors-style facade |
+| `hdf5` | `inspect_mps_inputs`; HDF5 plus the ITensors-style facade |
+| `diagnostics` | TreeACI branch counters (no legacy dependencies) |
+| `cuda` | `benchmark_treersi_cuda_step1`; CUDA sketch execution |
+
+Select a feature with `--features <name>` when building the corresponding
+example. The TreeTN crate's separate `cached_evaluator` comparison benchmark
+requires `--features simplett-bridge`. Cargo unifies features across selected
+packages, so keep M6 builds separate from `legacy-comparisons` and from
+whole-workspace builds when auditing dependencies. Run
+`python3 scripts/check-m6-dependencies.py` to check resolved normal/build
+packages and activated features, including benchmark dev-dependencies.
+This packaging change preserves numerical tolerances and benchmark protocols;
+it makes no speedup claim.
+
 ### Rust
 
 #### Density-matrix sums (#1126)
@@ -86,7 +114,7 @@ body lives in `rust/benchmark_merge_refine.rs`.
 
 ```bash
 T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
-  cargo build --release -p tensor4all-benchmarks --example benchmark_merge_refine
+  cargo build --release -p tensor4all-benchmarks --features fourier --example benchmark_merge_refine
 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_merge_refine
 ```
@@ -110,7 +138,7 @@ per-process logs into one CSV.
 
 ```bash
 T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
-  cargo build --release -p tensor4all-benchmarks --example benchmark_merge_refine_intended_regime
+  cargo build --release -p tensor4all-benchmarks --features fourier --example benchmark_merge_refine_intended_regime
 # one cell is three invocations; this is the exact arm, writing the collector's pair
 RAYON_NUM_THREADS=8 OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 MKL_NUM_THREADS=8 VECLIB_MAXIMUM_THREADS=8 \
   taskset -c 8-15 /usr/bin/time -f "wall_s %e cpu_pct %P maxrss_kb %M" \
@@ -368,7 +396,7 @@ product perform different final work even when they return identical values.
 ```bash
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 TENFERRO_NUM_THREADS=1 \
-  taskset -c 2 cargo bench -p tensor4all-treetn --bench cached_evaluator -- \
+  taskset -c 2 cargo bench -p tensor4all-treetn --features simplett-bridge --bench cached_evaluator -- \
   hiroshi_chain_evaluator_parity --warm-up-time 1 --measurement-time 1
 ```
 
@@ -483,7 +511,7 @@ RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tenso
 TensorTrain-level operations against ITensorMPS:
 
 ```bash
-RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tt_ops --release -- --L 32 --zipup-L 10 --chis 4,8,16,32,64
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --features itensorlike --example benchmark_tt_ops --release -- --L 32 --zipup-L 10 --chis 4,8,16,32,64
 ```
 
 TreeTN-aware adaptive patching on a deterministic sum of randomly placed

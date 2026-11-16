@@ -1,7 +1,7 @@
 // Benchmark TensorTrain-level operations against ITensorMPS.jl.
 //
 // Run:
-//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tt_ops --release
+//   RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --features itensorlike --example benchmark_tt_ops --release
 //
 // Optional args:
 //   --L N

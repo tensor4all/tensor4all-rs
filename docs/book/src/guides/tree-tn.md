@@ -274,7 +274,9 @@ Choose based on your needs:
 **Rule of thumb**: If your tensor network is a linear chain and you want maximum performance,
 use `SimpleTensorTrain`. If you need branching structure, named nodes, or plan to compose multiple
 operators on a tree, use `TreeTN`. You can convert between them using
-`tensor_train_to_treetn` from the `simplett_bridge` module.
+`tensor_train_to_treetn` with the explicit `simplett-bridge` Cargo feature on
+`tensor4all-treetn`; the bridge is off by default. Native chains can use
+`TreeTN::from_chain_cores` directly.
 
 ## Sweep Counting
 

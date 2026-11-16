@@ -27,6 +27,7 @@ non-Fourier quantics transforms still produce or consume
      |-- tensor4all-treeaci (tree ACI)            tensor4all-aci (chain ACI)
      |-- tensor4all-partitionedtreetn (TreeTN patches)
      |-- tensor4all-treersi (experimental RSI products)
+     |-- tensor4all-interpolativeqtt (native interpolative chains)
      `-- tensor4all-quanticstransform (Fourier; optional partitionedtreetn)
 
    Crates that still use both stacks:
@@ -41,7 +42,8 @@ non-Fourier quantics transforms still produce or consume
 
 While both stacks exist, the only sanctioned place where they convert into each
 other is `treetn::simplett_bridge`, a migration aid rather than a permanent
-layer:
+layer. It is available only with the explicit `simplett-bridge` feature;
+TreeTN's default features do not resolve SimpleTT:
 
 - `tensor_train_to_treetn` / `tensor_train_to_treetn_with_names` /
   `tensor_train_to_treetn_with_names_and_site_indices`: simplett
@@ -220,7 +222,7 @@ requirements onto unrelated generic code.
 
 | Crate | Description |
 |-------|-------------|
-| **treetn** | Tree tensor networks with arbitrary graph topology. Supports canonicalization, truncation, contraction, DMRG/TDVP, and hosts the sanctioned `simplett_bridge`. |
+| **treetn** | Tree tensor networks with arbitrary graph topology. Supports canonicalization, truncation, contraction, DMRG/TDVP, and the opt-in `simplett-bridge` migration feature. |
 | **itensorlike** | ITensors.jl-inspired `TensorTrain` (tree-based) with orthogonality tracking and multiple canonical forms. |
 | **partitionedtreetn** | TreeTN-native eagerly masked subdomains, strict partition algebra, volume-budgeted adaptive patching, sequential adaptive patched interpolation through any `TreeInterpolator` engine, reconstruction against a fixed global L2 tolerance, and level-coupled merge-refine QFT scheduling. |
 | **treersi** | Experimental CPU Hadamard products on TreeTN via recursive sketched interpolation; requires independent accuracy checks. |
@@ -240,7 +242,7 @@ requirements onto unrelated generic code.
 | Crate | Description |
 |-------|-------------|
 | **quanticstransform** | Constructs TreeTN Fourier operators (including explicit multi-axis layouts). The optional `partitioned` feature provides lazy patched Fourier transforms on one tree path. The default `simplett-transforms` feature provides shift, flip, affine, and other transforms that use SimpleTT. |
-| **interpolativeqtt** | Interpolative QTT construction on a coarse grid (simplett stack). See the [interpolative-QTT tutorial](tutorials/quantics-basics/interpolative-qtt.md). |
+| **interpolativeqtt** | Native TreeTN interpolative QTT construction on a coarse grid, returning ordered physical indices. See the [interpolative-QTT tutorial](tutorials/quantics-basics/interpolative-qtt.md). |
 
 ### Applications
 

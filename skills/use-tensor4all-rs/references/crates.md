@@ -60,7 +60,8 @@ Plain generic tensor train (`f32`, `f64`, `Complex32`, or `Complex64` where the 
 - `CompressionOptions { tolerance, max_bond_dim, .. }` — `tolerance` is the relative truncation threshold. Default ~1e-12 near-lossless; 1e-8..1e-6 for science.
 - `SiteTensorTrain` (center-canonical), `VidalTensorTrain` (Vidal form with singular values).
 - `Tensor3Ops` (`.left_dim()/.site_dim()/.right_dim()/.set3()`), `types::tensor3_zeros(l, s, r)`.
-- Bridge: `tensor_train_to_treetn(&mps) -> (TreeTN, site_indices)` (re-exported from `tensor4all-treetn`).
+- Bridge: `tensor_train_to_treetn(&mps) -> (TreeTN, site_indices)` (re-exported
+  from `tensor4all-treetn`; requires its explicit `simplett-bridge` feature).
 
 ## tensor4all-itensorlike — ITensors.jl-style TT
 
@@ -133,8 +134,8 @@ Every constructor returns a `LinearOperator` (from `tensor4all-treetn`). All use
 
 - Fourier constructors and `FTCore` build TreeTN operators directly. For a
   Fourier-only build, disable defaults and select a CPU provider such as
-  `tenferro-cpu-platform`. Disable defaults and select the same provider on
-  any direct TreeTN dependency to keep `simplett-bridge` off. Add `partitioned`
+  `tenferro-cpu-platform`. TreeTN defaults leave `simplett-bridge` off; disable
+  defaults on direct compute dependencies when selecting another provider. Add `partitioned`
   for patched Fourier. The default `simplett-transforms` feature provides the
   other transforms and SimpleTT conversions.
 - `flip_operator(r, BoundaryCondition)`, `shift_operator(r, offset, BoundaryCondition)`, `phase_rotation_operator(r, theta)`, `cumsum_operator(r)`, `quantics_fourier_operator(r, FourierOptions)`, `affine_operator(r, &AffineParams, &bc)`.
@@ -160,7 +161,10 @@ Generic `TreeTN` over arbitrary tree topology (TT/MPS is the path-graph special 
   - `ApplyOptions::zipup().with_max_bond_dim(n).with_svd_policy(policy)` — default; single sweep, controllable.
   - `ApplyOptions::fit().with_max_bond_dim(n).with_nfullsweeps(k)` — iterative; best compression.
 - Sweep convention: `ApplyOptions::fit().with_nfullsweeps(k)` uses `nfullsweeps` (full = forward+back); `nfullsweeps = nhalfsweeps / 2`. The DMRG/TDVP option structs instead name the same full-sweep count `nsweeps` (no `full` prefix) — there is no `with_nfullsweeps` on `DmrgOptions`/`TdvpOptions`.
-- `tensor_train_to_treetn(&mps) -> (TreeTN, Vec<site_index>)` bridge from simplett.
+- `tensor_train_to_treetn(&mps) -> (TreeTN, Vec<site_index>)` bridge from simplett;
+  requires the explicit `simplett-bridge` feature (off by default). The reverse
+  conversion and the bridge's chain insertion/removal helpers require it too.
+  Native chains use `TreeTN::from_chain_cores` without SimpleTT.
 - Optimization sweeps (ground state + time evolution). All take a `LinearOperator` (or a bare MPO `TreeTN` via the `*_with_treetn_operator` wrappers), an initial `TreeTN` state, and a `center: &V` root node; the state is canonicalized at `center` first. v1: one input and one output site mapping per node. Build the mapping with `LinearOperator::from_mpo_and_state(mpo, &state)` when site indices are unambiguous, else hand-build `IndexMapping { true_index, internal_index }` input/output maps.
   - `dmrg(operator, init, center, DmrgOptions) -> Result<DmrgResult>` — two-site ground-state DMRG (Lanczos local solve; Rayleigh-quotient energy, no dense materialization). `DmrgOptions::default()` = `nsite 2, nsweeps 5, max_bond_dim None, svd_policy None, energy_tol None`. Builders: `with_nsweeps`, `with_max_bond_dim`, `with_svd_policy`, `with_energy_tol`, `with_lanczos_options`. `DmrgResult { state, energy, sweeps_completed, local_updates, converged, max_residual_norm }`. `nsite` must be 2.
   - `tdvp(operator, init, center, TdvpOptions) -> Result<TdvpResult>` — time-dependent variational principle via Krylov `exp(exponent_step·H)`. `exponent_step` is the Hamiltonian coefficient: real time `dt` → `Complex64::new(0.0, -dt)`; imaginary time `tau` → `-tau` (real negative). `TdvpOptions::default()` = `nsite 2, nsweeps 1, order 2, exponent_step -0.1i, max_bond_dim None, svd_policy None`. `order` ∈ {1,2,4} (Suzuki–Trotter/applyexp, ITensorNetworks.jl parity). `nsite 1` = fixed-rank one-site (rejects truncation options); `nsite 2` allows bond changes. For ITensors `cutoff` parity use `SvdTruncationPolicy::new(cutoff).with_squared_values().with_discarded_tail_sum()`. `TdvpResult { state, sweeps_completed, local_updates, max_error_estimate, max_krylov_iterations }`.

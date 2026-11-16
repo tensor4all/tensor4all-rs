@@ -46,6 +46,9 @@ jobs:
         # requirements are now repository-wide blocking (issue #566 PR3).
         run: cargo clippy --locked --workspace --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
 
+      - name: Check opt-in benchmark targets
+        run: cargo clippy --locked -p tensor4all-benchmarks -p tensor4all-treetn --all-targets --features tensor4all-benchmarks/fourier,tensor4all-benchmarks/legacy-comparisons,tensor4all-benchmarks/itensorlike -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+
   doctest:
     name: Doctests
     runs-on: ubuntu-22.04
@@ -288,6 +291,12 @@ jobs:
 
       - name: Check the Fourier-only dependency graph
         run: ./scripts/check-fourier-dependencies.sh
+
+      - name: Test M6 dependency graph assertions
+        run: python3 scripts/test-check-m6-dependencies.py
+
+      - name: Check isolated TreeTN and M6 dependency graphs
+        run: python3 scripts/check-m6-dependencies.py
 
       - name: Test the repository-rules review script
         run: python3 scripts/test-repository-rules-review.py

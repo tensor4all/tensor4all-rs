@@ -20,6 +20,13 @@
 //! - **Contraction**: Contract two networks using zip-up, fit, or SRC algorithms.
 //! - **Linear operators**: Apply and compose linear operators on tree tensor networks.
 //! - **Linear solvers**: Solve linear systems involving tree tensor network operators.
+//!
+//! # Cargo features
+//!
+//! The default selects `tenferro-cpu-platform` without a SimpleTT dependency.
+//! Enable `simplett-bridge` explicitly for legacy SimpleTT conversions and the
+//! chain insertion/removal helpers. Native chain construction and compression
+//! are available without the bridge.
 
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]

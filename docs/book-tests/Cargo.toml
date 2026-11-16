@@ -14,7 +14,8 @@ publish = false
 tensor4all-core = { path = "../../crates/tensor4all-core" }
 tensor4all-simplett = { path = "../../crates/tensor4all-simplett" }
 tensor4all-tensorci = { path = "../../crates/tensor4all-tensorci" }
-tensor4all-treetn = { path = "../../crates/tensor4all-treetn" }
+# The legacy-QTT tutorial snippets exercise SimpleTT state conversion.
+tensor4all-treetn = { path = "../../crates/tensor4all-treetn", features = ["simplett-bridge"] }
 tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend" }
 tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform", features = ["partitioned"] }
 tensor4all-quanticstci = { path = "../../crates/tensor4all-quanticstci" }
