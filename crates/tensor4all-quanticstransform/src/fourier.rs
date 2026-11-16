@@ -67,11 +67,11 @@ pub(crate) fn zero_fourier_core(
 /// | `normalize` | `true` | Scale each axis by `1/sqrt(2^r)` |
 ///
 /// Each axis is built from cores with bond dimension `k + 1` and then
-/// compressed by rank-revealing LU. The forward sweep of that compression
-/// never truncates. `tolerance` and `max_bond_dim` both limit the backward
-/// sweep, and the smaller resulting rank wins, so the bond never exceeds
-/// `min(k + 1, max_bond_dim)`. `k` sets the interpolation accuracy of the
-/// uncompressed construction. When in doubt, keep the defaults, which give a
+/// compressed by rank-revealing LU. The forward sweep applies a fixed
+/// `1e-14` relative pivot cutoff and no rank cap. The backward sweep uses
+/// `tolerance` and `max_bond_dim`. When a cap is set, the per-axis bond
+/// never exceeds `min(k + 1, max_bond_dim)`. `k` sets the interpolation accuracy
+/// of the uncompressed construction. The defaults give a
 /// per-axis bond of at most 12. Multi-axis products multiply the per-axis
 /// bonds at each cut, so their bonds can exceed `max_bond_dim`.
 /// # Examples
@@ -97,10 +97,10 @@ pub struct FourierOptions {
     /// Sign in the exponent: -1.0 (forward) or 1.0 (inverse)
     pub sign: f64,
     /// Positive cap on each per-axis bond after compression. `None` leaves the
-    /// bond limited by `tolerance` and `k + 1`.
+    /// bond limited by the pivot cutoffs and `k + 1`.
     pub max_bond_dim: Option<usize>,
-    /// Finite nonnegative LU pivot threshold, relative to the largest pivot of
-    /// each bond. Zero selects the `1e-14` floor.
+    /// Finite nonnegative LU pivot threshold for the backward sweep, relative
+    /// to the largest pivot of each bond. Zero selects the `1e-14` cutoff.
     pub tolerance: f64,
     /// Positive Chebyshev interpolation order, giving `k + 1` points.
     pub k: usize,

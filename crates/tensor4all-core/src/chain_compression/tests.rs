@@ -1,5 +1,5 @@
 use super::*;
-use tensor4all_tensorbackend::CpuBackend;
+use tensor4all_tensorbackend::default_cpu_execution_context;
 
 fn diagonal_chain(small: f64) -> [ColMajorArray<f64>; 2] {
     let identity = ColMajorArray::new(vec![1.0, 0.0, 0.0, 1.0], vec![1, 2, 2]).unwrap();
@@ -9,8 +9,8 @@ fn diagonal_chain(small: f64) -> [ColMajorArray<f64>; 2] {
 
 #[test]
 fn lu_compression_preserves_thresholds_and_rank_cap() {
-    let mut backend = CpuBackend::with_threads(1).unwrap();
-    let mut session = Session::new(backend.engine_mut());
+    // Holding the global context catches any fallback from the caller's session.
+    let context = default_cpu_execution_context();
     for (small, tolerance, max_bond_dim, normalize_error, rank) in [
         (1.0, 0.5, None, true, 1),
         (1.0, 0.5, None, false, 2),
@@ -28,7 +28,12 @@ fn lu_compression_preserves_thresholds_and_rank_cap() {
             let mut global = diagonal_chain(small);
             compress_chain_lu_mut(&mut global, &options).unwrap();
             let mut on_session = diagonal_chain(small);
-            compress_chain_lu_on_session(&mut session, &mut on_session, &options).unwrap();
+            context
+                .with_concrete_session(|session| {
+                    compress_chain_lu_on_session(session, &mut on_session, &options)
+                })
+                .unwrap()
+                .unwrap();
             assert_eq!(global, on_session, "{options:?}");
 
             let cores = global;

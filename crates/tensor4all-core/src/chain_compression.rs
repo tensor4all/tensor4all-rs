@@ -13,8 +13,8 @@ use tensor4all_tensorbackend::{
 
 use crate::col_major_array::ColMajorArrayError;
 use crate::{
-    rrlu_mut, ColMajorArray, ColMajorArrayRef, MatrixCIError, MatrixLUCI, MatrixLuciScalar,
-    RrLUOptions,
+    matrix_luci_factors_from_matrix_owned, matrix_luci_factors_from_matrix_owned_on_session,
+    rrlu_mut, ColMajorArray, ColMajorArrayRef, MatrixCIError, MatrixLuciScalar, RrLUOptions,
 };
 
 /// Relative pivot threshold used by the forward sweep, and by the backward
@@ -115,17 +115,17 @@ pub enum ChainLuFactorization {
     /// Rank-revealing LU with full pivoting ([`rrlu_mut`]).
     #[default]
     RrLu,
-    /// LU-based cross interpolation ([`MatrixLUCI`]), which selects the same
-    /// pivots through backend triangular solves.
+    /// LU-based cross interpolation ([`crate::MatrixLUCI`]), which selects the
+    /// same pivots and assembles the factors with backend products and solves.
     Luci,
 }
 
 /// Truncation settings for [`compress_chain_lu_mut`] and
 /// [`compress_chain_lu_on_session`].
 ///
-/// The forward sweep never truncates: it keeps every pivot above a `1e-14`
-/// relative threshold. These settings apply only to the backward sweep, where
-/// `tolerance` and `max_bond_dim` both limit the retained rank of each bond
+/// The forward sweep applies a fixed `1e-14` relative pivot cutoff and no
+/// rank cap. The truncation settings below apply only to the backward sweep,
+/// where `tolerance` and `max_bond_dim` both limit the retained rank of each bond
 /// and the smaller limit wins. `normalize_error` selects whether `tolerance`
 /// is relative to the largest pivot of that bond or absolute.
 ///
@@ -136,9 +136,8 @@ pub enum ChainLuFactorization {
 /// | `normalize_error` | `true` | Relative (`true`) or absolute (`false`) `tolerance` |
 /// | `factorization` | `RrLu` | Pivoted factorization at each bond |
 ///
-/// When in doubt, keep the defaults: `1e-12` is close to lossless, values from
-/// `1e-8` to `1e-6` suit most scientific work, and larger values compress more
-/// aggressively.
+/// Start with the defaults. Larger tolerances can retain fewer pivots, but a
+/// local pivot threshold does not bound the approximation error of the chain.
 ///
 /// # Examples
 ///
@@ -217,16 +216,22 @@ impl ChainLuOptions {
         &self,
         mut matrix: Matrix<T>,
         left_orthogonal: bool,
+        session: Option<&mut Session<'_>>,
     ) -> Result<(Matrix<T>, Matrix<T>), ChainCompressionError> {
-        let options = self.rrlu_options(left_orthogonal);
+        let options = Some(self.rrlu_options(left_orthogonal));
         match self.factorization {
             ChainLuFactorization::RrLu => {
-                let lu = rrlu_mut(&mut matrix, Some(options))?;
+                let lu = rrlu_mut(&mut matrix, options)?;
                 Ok((lu.left(true), lu.right(true)))
             }
             ChainLuFactorization::Luci => {
-                let luci = MatrixLUCI::from_matrix(&matrix, Some(options))?;
-                Ok((luci.left(), luci.right()))
+                let factors = match session {
+                    Some(session) => {
+                        matrix_luci_factors_from_matrix_owned_on_session(matrix, options, session)
+                    }
+                    None => matrix_luci_factors_from_matrix_owned(matrix, options),
+                }?;
+                Ok((factors.left, factors.right))
             }
         }
     }
@@ -237,10 +242,10 @@ impl ChainLuOptions {
 /// Each core has shape `[left_bond, site, right_bond]`. Neighboring bond
 /// dimensions must match and the outer bonds must have dimension one. An
 /// empty or single-core chain is validated and left unchanged. The forward
-/// sweep keeps every pivot above a `1e-14` relative threshold; the backward
-/// sweep truncates according to `options`. Products use the process-global
-/// CPU backend; [`compress_chain_lu_on_session`] runs them on a caller-held
-/// session instead.
+/// sweep applies a fixed `1e-14` relative pivot cutoff and no rank cap. The
+/// backward sweep truncates according to `options`. Backend operations use
+/// the process-global CPU context. [`compress_chain_lu_on_session`] runs them
+/// on a caller-held session.
 ///
 /// # Errors
 ///
@@ -273,17 +278,17 @@ pub fn compress_chain_lu_mut<T: MatrixLuciScalar, C: ChainCore<T>>(
     compress_chain_cores_mut(
         cores,
         &mut (),
-        |(), matrix, left_orthogonal| Ok(options.factorize(matrix, left_orthogonal)?),
+        |(), matrix, left_orthogonal| Ok(options.factorize(matrix, left_orthogonal, None)?),
         |(), left, right| mat_mul(left, right),
     )
 }
 
-/// Compress a chain of rank-3 cores in place with pivoted LU, multiplying on
-/// a caller-held session.
+/// Compress a chain of rank-3 cores in place with pivoted LU on a caller-held
+/// session.
 ///
 /// Identical to [`compress_chain_lu_mut`], including validation and retained
-/// ranks, except that every matrix product runs on `session`. The pivoted
-/// factorizations do not use the backend.
+/// ranks, with all matrix products and LUCI triangular solves running on
+/// `session`.
 ///
 /// # Errors
 ///
@@ -321,7 +326,9 @@ pub fn compress_chain_lu_on_session<T: MatrixLuciScalar, C: ChainCore<T>>(
     compress_chain_cores_mut(
         cores,
         session,
-        |_, matrix, left_orthogonal| Ok(options.factorize(matrix, left_orthogonal)?),
+        |session, matrix, left_orthogonal| {
+            Ok(options.factorize(matrix, left_orthogonal, Some(session))?)
+        },
         |session, left, right| session.mat_mul(left, right),
     )
 }
