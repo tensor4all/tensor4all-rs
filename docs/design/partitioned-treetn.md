@@ -175,10 +175,12 @@ measurements on real data first.
 
 `PartitionedContractionOptions` wraps treetn's `ContractionOptions`, which
 gains no field: a single treetn contraction never sums. A plain
-`ContractionOptions` converts into it with `Binary` and the default 4 GiB
-`group_sum_limit_bytes`. This limit applies to the estimated size of the exact
-sum for a group with multiple contributions. The pairwise contractions are
-already held when the limit is checked. The engine changes only how a sum is
+`ContractionOptions` converts into it with `Binary` and
+`DEFAULT_GROUP_SUM_LIMIT_BYTES` (4 GiB) as `group_sum_limit_bytes`, the default
+`PatchingOptions` shares. This limit applies to the estimated size of the exact
+sum for a group with multiple contributions. Every group is checked after the
+pairwise contractions and before any group sum is built, so a refusal costs the
+contractions but no sum or truncation. The engine changes only how a sum is
 built; truncation and the split rule are unaffected.
 
 The routines that return a partition do not report a `NaryWithin` fallback;

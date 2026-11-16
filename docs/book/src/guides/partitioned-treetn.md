@@ -86,10 +86,15 @@ Whatever the engine, `contract`, `contract_selected`, `contract_adaptive` and
 a sum whose estimated size (`TreeTN::estimate_exact_sum_bytes`) exceeds
 `group_sum_limit_bytes`. For `contract` and `contract_selected` the field is on
 `PartitionedContractionOptions`; the adaptive routines use `PatchingOptions`.
-Both default to 4 GiB and accept `usize::MAX` to disable the limit. Groups of
-one contribution pass without a check. The limit applies to the built sum.
-Peak memory also includes contributions already held and the workspace used
-to build and truncate the sum. An operator
+Both default to `DEFAULT_GROUP_SUM_LIMIT_BYTES` (4 GiB) and accept `usize::MAX`
+to disable the limit. Groups of one contribution pass without a check.
+`contract`, `contract_selected` and `add_with_patching` check every group before
+building any sum. The limit applies to the built sum. Peak memory also includes
+contributions already held and the workspace used to build and truncate the
+sum, up to about 5 times the limit for one group; the documentation of
+`DEFAULT_GROUP_SUM_LIMIT_BYTES` gives the measurements. A `NaryWithin` limit at
+or above `group_sum_limit_bytes` acts as `Nary`, since every larger sum is
+refused. An operator
 that mixes every value of the indices the patches fix, such as a Fourier transform on
 patches of the transformed variable, puts every pair of `contract_adaptive` into one
 group; apply it with `reconstruction::schedule_merge_refine` or the patched Fourier
@@ -181,7 +186,7 @@ let result = add_with_patching(
         patch_order: vec![site0],
         split_strategy: PatchSplitStrategy::Sequential,
         sum_engine: SumEngine::Binary,
-        group_sum_limit_bytes: PatchingOptions::DEFAULT_GROUP_SUM_LIMIT_BYTES,
+        group_sum_limit_bytes: tensor4all_partitionedtreetn::DEFAULT_GROUP_SUM_LIMIT_BYTES,
     },
 )?;
 

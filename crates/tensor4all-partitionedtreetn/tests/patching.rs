@@ -374,7 +374,7 @@ fn adaptive_patching_preserves_branched_complex_multisite_tree() {
         patch_order: sites[..2].to_vec(),
         split_strategy: PatchSplitStrategy::Sequential,
         sum_engine: SumEngine::Binary,
-        group_sum_limit_bytes: PatchingOptions::DEFAULT_GROUP_SUM_LIMIT_BYTES,
+        group_sum_limit_bytes: tensor4all_partitionedtreetn::DEFAULT_GROUP_SUM_LIMIT_BYTES,
     };
 
     let patched = add_with_patching(vec![patch], &center, &options).unwrap();
@@ -395,7 +395,7 @@ fn add_with_patching_splits_at_explicit_center() {
         patch_order: vec![site0.clone()],
         split_strategy: PatchSplitStrategy::Sequential,
         sum_engine: SumEngine::Binary,
-        group_sum_limit_bytes: PatchingOptions::DEFAULT_GROUP_SUM_LIMIT_BYTES,
+        group_sum_limit_bytes: tensor4all_partitionedtreetn::DEFAULT_GROUP_SUM_LIMIT_BYTES,
     };
 
     let result = add_with_patching(vec![subdomain], &0, &options).unwrap();
@@ -574,7 +574,7 @@ fn add_with_patching_norm_splits_only_the_patch_that_stays_over_cap() {
         patch_order: Vec::new(),
         split_strategy: PatchSplitStrategy::ExactParameterGain,
         sum_engine: SumEngine::Binary,
-        group_sum_limit_bytes: PatchingOptions::DEFAULT_GROUP_SUM_LIMIT_BYTES,
+        group_sum_limit_bytes: tensor4all_partitionedtreetn::DEFAULT_GROUP_SUM_LIMIT_BYTES,
     };
 
     let norm = add_with_patching(vec![heavy.clone(), light.clone()], &0, &options).unwrap();

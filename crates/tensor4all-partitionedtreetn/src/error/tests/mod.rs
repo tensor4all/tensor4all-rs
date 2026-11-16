@@ -54,6 +54,18 @@ fn every_variant_has_the_documented_display() {
         "merge-refine scheduling reached its max_terms limit of 2048; raise the limit or reduce the request",
     );
     assert_display(
+        PartitionedTreeTNError::GroupSumLimit {
+            operation: "contract",
+            terms: 3,
+            estimated_bytes: 1024,
+            limit_bytes: 512,
+        },
+        "contract: the exact sum of 3 patches would take an estimated 1024 bytes, above \
+         group_sum_limit_bytes = 512; raise the limit, form only the outputs you need, or, for \
+         an operator that mixes every value of the patched indices, apply it with \
+         schedule_merge_refine",
+    );
+    assert_display(
         PartitionedTreeTNError::VolumeOverflow,
         "partition volume overflowed usize; use smaller site dimensions or fewer patches",
     );

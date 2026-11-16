@@ -207,9 +207,10 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   (a plain treetn `ContractionOptions` uses the partitioned defaults);
   `PartitionedContractionOptions::sum_engine` chooses how contributions to one
   output projector are summed (`Binary` default, opt-in `Nary` /
-  `NaryWithin { limit_bytes }`). `group_sum_limit_bytes` (default 4 GiB) caps
-  the estimated size of the built sum and returns `GroupSumLimit` above the
-  cap. `to_treetn_with(engine) -> ExactSum` reports
+  `NaryWithin { limit_bytes }`). `group_sum_limit_bytes` (default
+  `DEFAULT_GROUP_SUM_LIMIT_BYTES`, 4 GiB) caps the estimated size of each built
+  sum; every group is checked before any sum is built, and one above the cap
+  returns `GroupSumLimit`. `to_treetn_with(engine) -> ExactSum` reports
   `used_nary` and `estimated_nary_bytes`; `to_treetn()` is `Binary`.
   `evaluate_batched(&indices, values)` evaluates points with the
   `TreeTN::evaluate` layout; each point goes to the patch that covers it, and
@@ -217,7 +218,8 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
 - `PatchingOptions { cutoff, allocation, max_bond_dim, patch_order,
   split_strategy, sum_engine, group_sum_limit_bytes }` — `sum_engine` (default
   `Binary`) builds the equal-key and contribution sums of `add_with_patching` /
-  `contract_adaptive`; `group_sum_limit_bytes` (default 4 GiB) refuses such a sum
+  `contract_adaptive`; `group_sum_limit_bytes` (default
+  `DEFAULT_GROUP_SUM_LIMIT_BYTES`, 4 GiB) refuses such a sum
   before it is formed with `GroupSumLimit` (a global operator such as a Fourier
   transform puts every pair in one group: use `schedule_merge_refine`);
   `cutoff` is a non-negative discarded-weight budget shared

@@ -79,6 +79,11 @@ thread_local! {
     /// without metadata ties computes none.
     pub(crate) static CONTENT_DIGEST_CALLS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+
+    /// Exact sums built (a single term counts as one), so a test can assert
+    /// that a refused group sum leaves no other group built first.
+    pub(crate) static EXACT_SUMS_BUILT: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
 }
 
 /// Fixed seed of the patch digest fold.
@@ -566,8 +571,8 @@ where
     }
 
     /// [`exact_sum`](Self::exact_sum), refused before anything is allocated
-    /// when the estimated size of the built sum
-    /// ([`TreeTN::estimate_exact_sum_bytes`]) exceeds `limit_bytes`.
+    /// when [`ensure_exact_sum_within`](Self::ensure_exact_sum_within) refuses
+    /// it.
     ///
     /// A single term is returned as a clone without a check: it is already
     /// held. `operation` names the caller in the error.
@@ -579,18 +584,46 @@ where
     ) -> Result<Self> {
         let first = Self::validate_sum_terms(terms)?;
         if terms.len() > 1 {
-            let data: Vec<_> = terms.iter().map(|term| &term.data).collect();
-            let estimated_bytes = TreeTN::estimate_exact_sum_bytes(&data)?;
-            if estimated_bytes > limit_bytes {
-                return Err(PartitionedTreeTNError::GroupSumLimit {
-                    operation,
-                    terms: terms.len(),
-                    estimated_bytes,
-                    limit_bytes,
-                });
-            }
+            Self::check_sum_size(terms, limit_bytes, operation)?;
         }
         Self::build_exact_sum(first, terms, engine)
+    }
+
+    /// Return [`PartitionedTreeTNError::GroupSumLimit`] when the estimated
+    /// size of the exact sum of `terms`
+    /// ([`TreeTN::estimate_exact_sum_bytes`]) exceeds `limit_bytes`.
+    ///
+    /// The terms are first checked as [`exact_sum`](Self::exact_sum) checks
+    /// them. Only metadata is read, so a routine that sums several groups can
+    /// check every group before building any. Fewer than two terms pass
+    /// without a check: a single term is already held. `operation` names the
+    /// caller in the error.
+    pub(crate) fn ensure_exact_sum_within(
+        terms: &[&Self],
+        limit_bytes: usize,
+        operation: &'static str,
+    ) -> Result<()> {
+        if terms.len() < 2 {
+            return Ok(());
+        }
+        Self::validate_sum_terms(terms)?;
+        Self::check_sum_size(terms, limit_bytes, operation)
+    }
+
+    /// Compare the estimated size of the exact sum of validated `terms` with
+    /// `limit_bytes`.
+    fn check_sum_size(terms: &[&Self], limit_bytes: usize, operation: &'static str) -> Result<()> {
+        let data: Vec<_> = terms.iter().map(|term| &term.data).collect();
+        let estimated_bytes = TreeTN::estimate_exact_sum_bytes(&data)?;
+        if estimated_bytes > limit_bytes {
+            return Err(PartitionedTreeTNError::GroupSumLimit {
+                operation,
+                terms: terms.len(),
+                estimated_bytes,
+                limit_bytes,
+            });
+        }
+        Ok(())
     }
 
     /// Check every term of an exact sum as [`add`](Self::add) checks its
@@ -612,6 +645,8 @@ where
 
     /// Build the exact sum of validated `terms`, whose first term is `first`.
     fn build_exact_sum(first: &Self, terms: &[&Self], engine: SumEngine) -> Result<Self> {
+        #[cfg(test)]
+        EXACT_SUMS_BUILT.with(|count| count.set(count.get() + 1));
         let data: Vec<_> = terms.iter().map(|term| &term.data).collect();
         let network = TreeTN::exact_sum(&data, engine)
             .map_err(PartitionedTreeTNError::from)?

@@ -81,7 +81,6 @@ fn contract_gives_the_same_result_with_every_engine() {
     for sum_engine in ENGINES {
         let options = PartitionedContractionOptions {
             sum_engine,
-            group_sum_limit_bytes: usize::MAX,
             ..ContractionOptions::default().into()
         };
         let result = left.contract(&right, &0, options.clone()).unwrap();
