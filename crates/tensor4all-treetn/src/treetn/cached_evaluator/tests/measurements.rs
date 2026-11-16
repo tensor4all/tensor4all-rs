@@ -3,6 +3,77 @@
 
 use super::*;
 
+// Preserve the old fixture's (left, site, right) RNG draw order, while building
+// the same column-major chain directly without the optional SimpleTT bridge.
+fn random_measurement_chain(
+    n_sites: usize,
+    local_dim: usize,
+    bond_dim: usize,
+    seed: u64,
+) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
+    use rand::{Rng, SeedableRng};
+    use rand_chacha::ChaCha8Rng;
+    use tensor4all_core::ColMajorArray;
+
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let cores = (0..n_sites)
+        .map(|site| {
+            let left = if site == 0 { 1 } else { bond_dim };
+            let right = if site == n_sites - 1 { 1 } else { bond_dim };
+            let mut data = vec![0.0; left * local_dim * right];
+            for l in 0..left {
+                for s in 0..local_dim {
+                    for r in 0..right {
+                        data[l + left * (s + local_dim * r)] = rng.random::<f64>();
+                    }
+                }
+            }
+            ColMajorArray::new(data, vec![left, local_dim, right]).unwrap()
+        })
+        .collect();
+    TreeTN::from_chain_cores(cores).unwrap()
+}
+
+#[cfg(feature = "simplett-bridge")]
+#[test]
+fn native_measurement_fixture_preserves_legacy_values() {
+    use rand::{Rng, SeedableRng};
+    use rand_chacha::ChaCha8Rng;
+    use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, Tensor3Ops};
+
+    // Reproduce the original SimpleTT fixture at small, non-binary dimensions
+    // to catch changes in RNG draw order, flat layout, and boundary cores.
+    for n_sites in [1, 3, 4] {
+        let (local_dim, bond_dim, seed) = (3, 2, 7);
+        let (native, sites) = random_measurement_chain(n_sites, local_dim, bond_dim, seed);
+        let mut rng = ChaCha8Rng::seed_from_u64(seed);
+        let tensors = (0..n_sites)
+            .map(|site| {
+                let left = if site == 0 { 1 } else { bond_dim };
+                let right = if site == n_sites - 1 { 1 } else { bond_dim };
+                let mut tensor = tensor3_zeros(left, local_dim, right).unwrap();
+                for l in 0..left {
+                    for s in 0..local_dim {
+                        for r in 0..right {
+                            tensor.set3(l, s, r, rng.random::<f64>());
+                        }
+                    }
+                }
+                tensor
+            })
+            .collect();
+        let legacy = SimpleTensorTrain::new(tensors).unwrap();
+        let (values, _) = legacy.full_tensor().unwrap();
+        let expected = IdxTensor::from_dense(sites, values).unwrap();
+        let actual = native.contract_to_tensor().unwrap();
+        let residual = actual.sub(&expected).unwrap().maxabs().unwrap();
+        assert!(
+            residual < 1.0e-12,
+            "fixture residual={residual}, sites={n_sites}"
+        );
+    }
+}
+
 /// Uncached-path duplicate of `evaluate_batched_with_hint`, calling
 /// `compute_stacked_message` directly instead of
 /// `get_or_compute_node_message`. Kept as measurement tooling (see
@@ -73,7 +144,6 @@ fn message_cache_wall_time_on_realistic_floating_zone_walk() {
     use rand_chacha::ChaCha8Rng;
     use std::time::Instant;
     use tensor4all_core::floating_zone_walk;
-    use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, Tensor3, Tensor3Ops};
 
     const N_SITES: usize = 16;
     const LOCAL_DIM: usize = 2;
@@ -82,23 +152,7 @@ fn message_cache_wall_time_on_realistic_floating_zone_walk() {
     const MAX_SWEEPS: usize = 100;
 
     fn build_tree(seed: u64) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        let mut rng = ChaCha8Rng::seed_from_u64(seed);
-        let mut tensors: Vec<Tensor3<f64>> = Vec::with_capacity(N_SITES);
-        for site in 0..N_SITES {
-            let left_dim = if site == 0 { 1 } else { BOND_DIM };
-            let right_dim = if site == N_SITES - 1 { 1 } else { BOND_DIM };
-            let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim).unwrap();
-            for l in 0..left_dim {
-                for s in 0..LOCAL_DIM {
-                    for r in 0..right_dim {
-                        tensor.set3(l, s, r, rng.random::<f64>());
-                    }
-                }
-            }
-            tensors.push(tensor);
-        }
-        let tt = SimpleTensorTrain::new(tensors).unwrap();
-        crate::tensor_train_to_treetn(&tt).unwrap()
+        random_measurement_chain(N_SITES, LOCAL_DIM, BOND_DIM, seed)
     }
 
     fn starts() -> Vec<Vec<usize>> {
@@ -243,7 +297,6 @@ fn diagnostic_chain_vs_comb_wall_time_on_realistic_floating_zone_walk() {
     use rand_chacha::ChaCha8Rng;
     use std::time::Instant;
     use tensor4all_core::floating_zone_walk;
-    use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, Tensor3, Tensor3Ops};
 
     const N_SITES: usize = 16;
     const LOCAL_DIM: usize = 2;
@@ -253,23 +306,7 @@ fn diagnostic_chain_vs_comb_wall_time_on_realistic_floating_zone_walk() {
     const ARM_LEN: usize = 5; // hub + 3*5 = 16 sites, matching N_SITES
 
     fn build_chain(seed: u64) -> (TreeTN<IdxTensor, usize>, Vec<DynIndex>) {
-        let mut rng = ChaCha8Rng::seed_from_u64(seed);
-        let mut tensors: Vec<Tensor3<f64>> = Vec::with_capacity(N_SITES);
-        for site in 0..N_SITES {
-            let left_dim = if site == 0 { 1 } else { BOND_DIM };
-            let right_dim = if site == N_SITES - 1 { 1 } else { BOND_DIM };
-            let mut tensor = tensor3_zeros(left_dim, LOCAL_DIM, right_dim).unwrap();
-            for l in 0..left_dim {
-                for s in 0..LOCAL_DIM {
-                    for r in 0..right_dim {
-                        tensor.set3(l, s, r, rng.random::<f64>());
-                    }
-                }
-            }
-            tensors.push(tensor);
-        }
-        let tt = SimpleTensorTrain::new(tensors).unwrap();
-        crate::tensor_train_to_treetn(&tt).unwrap()
+        random_measurement_chain(N_SITES, LOCAL_DIM, BOND_DIM, seed)
     }
 
     // Hub (node 0) + three arms of ARM_LEN sites each: arm a's sites are

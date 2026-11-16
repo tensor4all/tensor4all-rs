@@ -65,6 +65,9 @@ validated in CI. Longer runnable examples live in the
 | [tensor4all-hdf5](crates/tensor4all-hdf5/) | ITensors.jl-compatible HDF5 serialization |
 | [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
 
+TreeTN's default features do not pull in SimpleTT. Enable its optional
+`simplett-bridge` feature explicitly when migrating between the two types.
+
 ## Documentation
 
 - **[User Guide](https://tensor4all.org/tensor4all-rs/)** — tutorials, architecture, conventions

@@ -8,6 +8,10 @@ Runnable source: [`docs/tutorial-code/src/bin/qtt_fourier.rs`](../../../../tutor
 
 ## Key API Pieces
 
+This example converts legacy Quantics TCI states through TreeTN's opt-in
+`simplett-bridge` feature. Enable it explicitly on the `tensor4all-treetn`
+dependency; the runnable tutorial package already selects it.
+
 `quantics_fourier_operator` creates the operator. The tutorial binary then
 converts the state to TreeTN, aligns site indices, and applies it via
 `apply_linear_operator`. The input target function is the standard Gaussian

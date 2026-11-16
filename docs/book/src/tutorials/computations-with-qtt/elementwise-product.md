@@ -8,6 +8,10 @@ Runnable source: [`docs/tutorial-code/src/bin/qtt_elementwise_product.rs`](../..
 
 ## Key API Pieces
 
+This example converts legacy Quantics TCI states through TreeTN's opt-in
+`simplett-bridge` feature. Enable it explicitly on the `tensor4all-treetn`
+dependency; the runnable tutorial package already selects it.
+
 The first step is simply to build two QTTs on the same grid. Converting
 to TreeTN enables `partial_contract` with `diagonal_pairs` for the
 pointwise product. The two target functions are `f(x) = x^2` and
