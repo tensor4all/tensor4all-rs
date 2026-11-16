@@ -1,4 +1,6 @@
 use super::*;
+use crate::traits::AbstractTensorTrain;
+use crate::types::{tensor3_zeros, Tensor3Ops};
 use num_complex::Complex64;
 use tenferro_tensor::TensorScalar;
 
@@ -337,7 +339,7 @@ fn factorize_svd_keeps_a_larger_value_that_follows_a_smaller_one() {
     }
     for left_orthogonal in [true, false] {
         let (left, right, rank) =
-            factorize_svd(&matrix, 1e-12, true, None, left_orthogonal).unwrap();
+            factorize_svd_impl(&matrix, 1e-12, true, None, left_orthogonal, &mut None).unwrap();
         assert_eq!(rank, 2, "left_orthogonal = {left_orthogonal}");
         let mut error = 0.0;
         for i in 0..n {
@@ -495,6 +497,43 @@ fn session_svd_requires_no_lu_pivoting_bound() {
 }
 
 #[test]
+fn compress_rejects_invalid_truncation_for_every_method_before_mutation() {
+    let invalid = [
+        (-1e-8, None),
+        (f64::NAN, None),
+        (f64::INFINITY, None),
+        (1e-12, Some(0)),
+    ];
+    for method in [
+        CompressionMethod::LU,
+        CompressionMethod::CI,
+        CompressionMethod::SVD,
+    ] {
+        for (tolerance, max_bond_dim) in invalid {
+            let mut tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 3.0)
+                .add(&SimpleTensorTrain::constant(&[2, 2, 2], 1.0))
+                .unwrap();
+            let original = tt.site_tensors().to_vec();
+            let error = tt
+                .compress(&CompressionOptions {
+                    method,
+                    tolerance,
+                    max_bond_dim,
+                    normalize_error: true,
+                })
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("finite nonnegative tolerance and a positive cap"),
+                "{method:?}, {tolerance}, {max_bond_dim:?}: {error}"
+            );
+            assert_eq!(tt.site_tensors(), original);
+        }
+    }
+}
+
+#[test]
 fn session_compression_rejects_unsupported_methods_before_mutation_or_shortcuts() {
     let mut backend = tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap();
     let mut session = Session::new(backend.engine_mut());
@@ -503,13 +542,12 @@ fn session_compression_rejects_unsupported_methods_before_mutation_or_shortcuts(
             let mut tt = SimpleTensorTrain::<f64>::constant(dims, 3.0);
             let original = tt.site_tensors().to_vec();
             let error = tt
-                .compress_impl(
+                .compress_svd_impl(
                     &CompressionOptions {
                         method,
                         ..Default::default()
                     },
                     &mut Some(&mut session),
-                    |_, _, _, _| panic!("unsupported session method reached factorization"),
                 )
                 .unwrap_err();
             assert!(

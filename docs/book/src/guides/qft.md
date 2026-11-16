@@ -4,6 +4,28 @@ This guide demonstrates how to apply the quantics Fourier transform (QFT)
 operator to tensor trains. It corresponds to the Julia
 [Quantum Fourier Transform](https://tensor4all.org/T4APlutoExamples/qft.html) notebook.
 
+## Cargo features
+
+The Fourier constructors build TreeTN operators directly. To use them without
+SimpleTT, disable the transform crate's defaults and select a CPU provider.
+For a local checkout, the unpatched examples below use these dependencies.
+
+```toml
+[dependencies]
+num-complex = "0.4"
+tensor4all-core = { path = "../tensor4all-rs/crates/tensor4all-core", default-features = false, features = ["tenferro-cpu-platform"] }
+tensor4all-treetn = { path = "../tensor4all-rs/crates/tensor4all-treetn", default-features = false, features = ["tenferro-cpu-platform"] }
+tensor4all-quanticstransform = { path = "../tensor4all-rs/crates/tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-platform"] }
+```
+
+For patched Fourier, also enable `partitioned` on
+`tensor4all-quanticstransform` and declare `tensor4all-partitionedtreetn` with
+the same provider and its defaults disabled when importing it directly. On
+macOS, use `tenferro-cpu-faer` on all these crates to select faer explicitly.
+Direct TreeTN dependencies need their defaults disabled to leave the
+`simplett-bridge` feature off. Enable `simplett-transforms` if you also use
+non-Fourier transforms or the transform crate's SimpleTT conversions.
+
 ## Background
 
 The QFT operator converts a function from position space to frequency space
@@ -19,11 +41,11 @@ Key properties:
 
 ## Simple QFT Example
 
-Before working with TCI-constructed states, here is a minimal example that
-creates a QFT operator and verifies its structure.
+`FTCore` prepares forward and inverse operators with the same options. The
+example verifies their node and index mappings.
 
 ```rust
-use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions, FTCore};
+use tensor4all_quanticstransform::{FourierOptions, FTCore};
 
 let r = 4;
 
@@ -47,68 +69,56 @@ for i in 0..r {
 
 ## 1D QFT Application
 
-This example applies the QFT to a product state |0> (the uniform function)
-and verifies that the result has uniform magnitude 1/sqrt(N) at all
-frequency components -- a well-known property of the DFT.
+This example applies the QFT to the product state |0>, which is one at the
+origin and zero elsewhere. Its Fourier coefficients all equal 1/sqrt(N).
 
 ```rust
 use num_complex::Complex64;
-use num_traits::{One, Zero};
-use tensor4all_core::TensorIndex;
-use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, SimpleTensorTrain};
-use tensor4all_treetn::{apply_linear_operator, ApplyOptions, tensor_train_to_treetn};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
+use tensor4all_treetn::{apply_linear_operator, ApplyOptions, TreeTN};
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 
-let r = 3;
-let n = 1usize << r; // 8
+let r = 3usize;
+let n = 1usize << r;
+let qft_op = quantics_fourier_operator(r, FourierOptions::forward())?;
 
-// Create the |0> product state as a SimpleTensorTrain
-// |0> = |0> x |0> x ... x |0>  (all bits zero)
+// Each site uses its operator input index and shares a dimension-one bond
+// with each neighbor.
+let bonds: Vec<_> = (1..r).map(|_| DynIndex::new_dyn(1)).collect();
 let mut tensors = Vec::new();
-for _ in 0..r {
-    let mut t = tensor3_zeros(1, 2, 1).unwrap();
-    t.set3(0, 0, 0, Complex64::one()); // bit = 0
-    tensors.push(t);
-}
-let mps = SimpleTensorTrain::new(tensors).unwrap();
-
-// Convert MPS to TreeTN
-let (treetn, site_indices) = tensor_train_to_treetn(&mps).unwrap();
-
-// Create the forward QFT operator
-let qft_op = quantics_fourier_operator(r, FourierOptions::forward()).unwrap();
-
-// Replace TreeTN site indices with operator input indices
-let mut state = treetn;
 for i in 0..r {
-    let op_input = qft_op
+    let input = qft_op
         .get_input_mapping(&i)
-        .unwrap()
+        .ok_or("missing operator input mapping")?
         .true_index
         .clone();
-    state = state.replaceind(&site_indices[i], &op_input).unwrap();
+    let mut indices = vec![input];
+    if i > 0 {
+        indices.push(bonds[i - 1].clone());
+    }
+    if i + 1 < r {
+        indices.push(bonds[i].clone());
+    }
+    let zero_bit = vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)];
+    tensors.push(IdxTensor::from_dense(indices, zero_bit)?);
 }
+let state = TreeTN::from_tensors(tensors, (0..r).collect())?;
 
 // Apply the QFT with local exact naive apply. This can grow bond dimensions as
 // state/operator products, so use it for small exact/debug cases.
-let result = apply_linear_operator(&qft_op, &state, ApplyOptions::naive()).unwrap();
-
-// The result should exist and have the same number of nodes
-assert_eq!(result.node_count(), r);
+let result = apply_linear_operator(&qft_op, &state, ApplyOptions::naive())?;
 
 // This example is intentionally small, so dense verification is acceptable.
 // For production-size networks, prefer scalable residual norms or sampled
 // `evaluate()` checks rather than `contract_to_tensor()`.
-let dense = result.contract_to_tensor().unwrap();
-let data = dense.to_vec::<Complex64>().unwrap();
-
-// For |0> input, all Fourier coefficients should have magnitude 1/sqrt(N)
-let expected_mag = 1.0 / (n as f64).sqrt();
-for val in &data {
-    let mag = val.norm();
-    assert!((mag - expected_mag).abs() < 1e-6,
-        "Expected magnitude {}, got {}", expected_mag, mag);
-}
+let dense = result.contract_to_tensor()?;
+let coefficient = Complex64::new(1.0 / (n as f64).sqrt(), 0.0);
+let expected = IdxTensor::from_dense(dense.indices().to_vec(), vec![coefficient; n])?;
+let error = dense.sub(&expected)?.maxabs()?;
+assert!(error < 1e-6, "maximum coefficient error: {error}");
+# Ok(())
+# }
 ```
 
 ### Interpreting QFT Output
@@ -214,7 +224,7 @@ regions, checks all sixteen values against a direct DFT, and verifies the
 reversed-axes inverse call. It intentionally uses a tiny dense input/oracle.
 
 ```bash
-cargo run -p tensor4all-quanticstransform --features partitioned --example patched_fourier
+./scripts/check-fourier-dependencies.sh --run
 ```
 
 The complete [example source](https://github.com/tensor4all/tensor4all-rs/blob/main/crates/tensor4all-quanticstransform/examples/patched_fourier.rs)
@@ -222,17 +232,20 @@ is also executed by the guide doctest harness.
 
 Future input generators such as issue #1276 may return a TT over only a patch's
 remaining bits. Before forming `SubDomainTreeTN`, restore the fixed prefix bits
-as one-hot sites (through the existing simplett bridge), split any fused levels,
-and use the same full index identities and named topology for every patch. A
-prefix projector alone cannot introduce missing site indices. Input generation
-is separate from this Fourier API.
+as one-hot sites, split any fused levels, and use the same full index identities
+and named topology for every patch. A prefix projector alone cannot introduce
+missing site indices.
 
 ## Large periodic-Gaussian validation
 
 `patched_fourier_large` builds shifted periodic Gaussians by single-scale
 interpolative QTT construction, cuts input prefix patches and transforms them
-without enumerating a dense grid. The Gaussian is defined by a finite Fourier
-series with known discrete coefficients, so its DFT oracle has no continuous-FT
+without enumerating a dense grid. InterpolativeQTT returns the input as TreeTN
+chains, and the patched Fourier transform takes the resulting TreeTN patches
+without a SimpleTT conversion.
+
+The Gaussian is defined by a finite Fourier series with known discrete
+coefficients, so its DFT oracle has no continuous-FT
 quadrature or aliasing approximation. The 2D function is the product of the two
 shifted Gaussians. Inputs and outputs are checked at a fixed seeded set of
 random points, including nonzero low frequencies and both frequency signs.

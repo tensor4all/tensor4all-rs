@@ -9,11 +9,10 @@ on a single TreeTN-based interface.
 The workspace currently contains **two stacks**, each owning its tensor-train
 representation and its algorithm crates. The intended direction is a single
 interface: **`TreeTN` is the unified tensor-network type**, and the positional
-`SimpleTensorTrain` stack is being retired. That migration is not finished:
-TCI, quantics TCI and quantics transforms still produce or consume
-`SimpleTensorTrain` today. There is **no facade
-crate** that wraps everything: `tensor4all-capi` is a C FFI layer, not a Rust
-facade, and each crate can be used on its own.
+`SimpleTensorTrain` stack is being retired. TCI, parts of quantics TCI and
+non-Fourier quantics transforms still produce or consume
+`SimpleTensorTrain`. Each Rust crate can be used on its own.
+`tensor4all-capi` provides the C FFI layer.
 
 ```text
                         tensor4all-core (Index, Tensor, contraction, SVD/QR)
@@ -27,12 +26,12 @@ facade, and each crate can be used on its own.
      |-- tensor4all-treetci (tree TCI)            tensor4all-tensorci (TCI1/TCI2)
      |-- tensor4all-treeaci (tree ACI)            tensor4all-aci (chain ACI)
      |-- tensor4all-partitionedtreetn (TreeTN patches)
-     |-- tensor4all-interpolativeqtt (interpolative QTT)
-     `-- tensor4all-treersi (experimental RSI products)
+     |-- tensor4all-treersi (experimental RSI products)
+     `-- tensor4all-quanticstransform (Fourier; optional partitionedtreetn)
 
-   Crates that still use both stacks (crossing through treetn::simplett_bridge):
+   Crates that still use both stacks:
    tensor4all-quanticstci        (treetci + treetn + simplett)
-   tensor4all-quanticstransform  (treetn + simplett; optional partitionedtreetn)
+   tensor4all-quanticstransform  (with the default simplett-transforms feature)
 
    tensor4all-capi  (C FFI for language bindings; depends on both stacks)
    tensor4all-hdf5  (MPS serialization, ITensors.jl-compatible)
@@ -63,18 +62,18 @@ simplett, itensorlike, or TCI crates. Its adaptive interpolation driver sees
 interpolation engines only through the `TreeInterpolator` trait in
 `tensor4all-treetn`; engines such as `tensor4all-treetci` implement that trait.
 
-With quanticstransform's optional `partitioned` feature, it also depends on
-partitionedtreetn for the Fourier-specific lazy reconstruction front end. This
-edge points from the transform layer to the TreeTN patch layer; partitionedtreetn
-still has no runtime dependency on quanticstransform or simplett.
+The Fourier constructors in `tensor4all-quanticstransform` build operators
+directly as TreeTN. The optional `partitioned` feature adds a dependency on
+`tensor4all-partitionedtreetn` for the lazy reconstruction front end. The
+[QFT guide](guides/qft.md#cargo-features) shows how to select a CPU provider
+and build without SimpleTT or the TreeTN bridge.
 
-One deliberate exception exists: `tensor4all-quanticstransform` builds
-TreeTN-based `LinearOperator`s from simplett **MPO** data (two site indices
-per node) via `tensortrain_to_linear_operator`. That is operator construction,
-not a general stack conversion: the bridge stays MPS-shaped (one site index
-per node), and the transform layer keeps the MPO-specific index bookkeeping.
-No *new* ad hoc conversions may be added; MPO conversion belongs in the
-transform layer, and MPS conversion belongs in the bridge.
+The default `simplett-transforms` feature retains non-Fourier operators and
+SimpleTT conversions in the transform crate. Its
+`tensortrain_to_linear_operator` converts SimpleTT **MPO** data with two
+site indices per node into a TreeTN-based `LinearOperator`. MPO-specific
+index bookkeeping belongs in the transform layer. The TreeTN bridge handles
+MPS-shaped chains with one site index per node.
 
 ### Which stack does a new feature crate target?
 
@@ -240,8 +239,8 @@ requirements onto unrelated generic code.
 
 | Crate | Description |
 |-------|-------------|
-| **quanticstransform** | Quantics transformation operators: shift, flip, Fourier (including explicit multi-axis layouts), affine, and more. Optional `partitioned` feature: lazy patched Fourier transforms on indices lying on one tree path. Consumes simplett-stack data; constructs TreeTN-based `LinearOperator`s (see the bridge exception above). |
-| **interpolativeqtt** | TreeTN-native Chebyshev interpolation on quantics grids, with ordered site indices and adaptive dyadic patches. See the [interpolative-QTT tutorial](tutorials/quantics-basics/interpolative-qtt.md). |
+| **quanticstransform** | Constructs TreeTN Fourier operators (including explicit multi-axis layouts). The optional `partitioned` feature provides lazy patched Fourier transforms on one tree path. The default `simplett-transforms` feature provides shift, flip, affine, and other transforms that use SimpleTT. |
+| **interpolativeqtt** | Interpolative QTT construction on a coarse grid (simplett stack). See the [interpolative-QTT tutorial](tutorials/quantics-basics/interpolative-qtt.md). |
 
 ### Applications
 

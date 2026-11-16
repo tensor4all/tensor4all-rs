@@ -134,6 +134,10 @@ assert!(cf.num_cache_hits() > 0);
 
 ## Quantics transform: build + apply an operator
 
+The shift example uses the default `simplett-transforms` feature. Keep this
+feature if you disable defaults to choose a different provider and still need
+shifts or other non-Fourier transforms.
+
 ```rust
 use tensor4all_core::SvdTruncationPolicy;
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions, shift_operator, BoundaryCondition};
@@ -376,10 +380,12 @@ use tensor4all_hdf5::{load_mps, save_mps};
 ## Patched Fourier transforms
 
 For a Fourier transform of existing `PartitionedTreeTN` patches, enable the
-`partitioned` feature on `tensor4all-quanticstransform` and call
-`patched_fourier_transform` with one MSB-first index vector per axis. Selected
-indices must lie on one tree path; spectators retain their identities. Every
-input patch must fix a contiguous MSB prefix of each axis. Different spectator
+`partitioned` feature on `tensor4all-quanticstransform`. In a Fourier-only
+project disable defaults and select `tenferro-cpu-platform` or another CPU
+provider on the transform crate and any directly imported TreeTN crates.
+Call `patched_fourier_transform` with one MSB-first index vector per axis.
+Selected indices must lie on one tree path. Spectators retain their identities.
+Every input patch must fix a contiguous MSB prefix of each axis. Different spectator
 constraints are supported through disjoint cells; overlapping constraints use
 a common grid bounded by `merge_refine.max_work_items` and `max_terms` before
 tensor operations. Raise those limits or restrict the producer's patch order

@@ -22,6 +22,11 @@ tensor4all-quanticstransform = { path = "../tensor4all-rs/crates/tensor4all-quan
 tensor4all-treetn = { path = "../tensor4all-rs/crates/tensor4all-treetn" }
 ```
 
+These examples use the default `simplett-transforms` feature. If you disable
+the defaults to select a different CPU provider, enable `simplett-transforms`
+explicitly for the non-Fourier operators shown here. For a Fourier-only build,
+follow the [QFT guide](qft.md#cargo-features).
+
 ---
 
 ## Operator Overview

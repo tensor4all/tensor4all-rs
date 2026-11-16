@@ -57,7 +57,7 @@ fn col_major_index_from_linear<const N: usize>(mut linear: usize, dims: &[usize;
     idx
 }
 
-fn col_major_data_to_tensor<T: TensorScalar, const N: usize>(
+pub(crate) fn col_major_data_to_tensor<T: TensorScalar, const N: usize>(
     dims: [usize; N],
     data: Vec<T>,
 ) -> Result<Tensor<T, N>> {

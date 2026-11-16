@@ -286,6 +286,9 @@ jobs:
       - name: Check one version per dependency identity
         run: ./scripts/check-single-versions.sh
 
+      - name: Check the Fourier-only dependency graph
+        run: ./scripts/check-fourier-dependencies.sh
+
       - name: Test the repository-rules review script
         run: python3 scripts/test-repository-rules-review.py
 

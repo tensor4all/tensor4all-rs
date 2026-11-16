@@ -1,16 +1,20 @@
 use super::*;
+#[cfg(feature = "simplett-transforms")]
 use tensor4all_core::DenseBudgetError;
 
+#[cfg(feature = "simplett-transforms")]
 #[test]
 fn test_boundary_condition_default() {
     assert_eq!(BoundaryCondition::default(), BoundaryCondition::Periodic);
 }
 
+#[cfg(feature = "simplett-transforms")]
 #[test]
 fn test_carry_direction_default() {
     assert_eq!(CarryDirection::default(), CarryDirection::LeftToRight);
 }
 
+#[cfg(feature = "simplett-transforms")]
 #[test]
 fn test_identity_mpo() {
     let mpo = identity_mpo(4).unwrap();
@@ -23,6 +27,16 @@ fn test_identity_mpo() {
         assert_eq!(t.site_dim(), 4);
         assert_eq!(t.right_dim(), 1);
     }
+}
+
+#[cfg(feature = "simplett-transforms")]
+#[test]
+fn asymmetric_conversion_skips_empty_site_payload() {
+    let core = tensor3_zeros(1, 0, 1).unwrap();
+    let train = SimpleTensorTrain::new(vec![core]).unwrap();
+    let input = 1 << 30;
+    let error = tensortrain_to_linear_operator_asymmetric(&train, &[input], &[0]).unwrap_err();
+    assert!(error.to_string().contains("invalid dimension 0"));
 }
 
 #[test]
@@ -48,12 +62,14 @@ fn checked_allocation_len_covers_product_and_zero_size_branches() {
     );
 }
 
+#[cfg(feature = "simplett-transforms")]
 #[test]
 fn identity_mpo_rejects_oversized_site_list() {
     let error = identity_mpo(usize::MAX).unwrap_err();
     assert!(error.to_string().contains("site list"));
 }
 
+#[cfg(feature = "simplett-transforms")]
 #[test]
 fn embed_rejects_total_over_budget() {
     // `identity_mpo(2)` sites are 1x4x1, so two embedded 2-variable sites are
@@ -73,6 +89,7 @@ fn embed_rejects_total_over_budget() {
     );
 }
 
+#[cfg(feature = "simplett-transforms")]
 #[test]
 fn embed_accepts_total_at_budget() {
     let mpo = identity_mpo(2).unwrap();

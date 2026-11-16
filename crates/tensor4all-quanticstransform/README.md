@@ -11,6 +11,23 @@ Quantics transformation operators for tensor train methods. Port of Quantics.jl.
 - `affine_operator()` — affine transform y = A·x + b with rational coefficients
 - `LinearConstraintRow` — primitive integer row normalization for scale-invariant constraints
 
+## Cargo features
+
+Fourier operators, including `FTCore` and the multi-axis constructor, use
+TreeTN directly. For a Fourier-only build, disable default features and
+select a CPU provider such as `tenferro-cpu-platform`. Add `partitioned`
+for patched Fourier.
+
+```toml
+[dependencies]
+tensor4all-quanticstransform = { path = "../tensor4all-rs/crates/tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-platform", "partitioned"] }
+```
+
+If you also import `tensor4all-treetn` directly, disable its defaults and
+select the same provider to keep its SimpleTT bridge disabled. The
+`simplett-transforms` feature is enabled by default and provides the
+non-Fourier transforms and SimpleTT conversion APIs.
+
 ## Conventions
 
 - Operators carry their own input and output indices. Replace a state site's
@@ -28,16 +45,11 @@ Quantics transformation operators for tensor train methods. Port of Quantics.jl.
 
 ```rust
 # fn main() -> anyhow::Result<()> {
-use tensor4all_quanticstransform::{flip_operator, shift_operator, BoundaryCondition};
+use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
 
-// Create operators for R=4 sites (2^4 = 16 grid points)
-let r = 4;
-let shift_op = shift_operator(r, 3, BoundaryCondition::Periodic)?;
-let flip_op = flip_operator(r, BoundaryCondition::Periodic)?;
-
-// Operators are LinearOperator (TreeTN form).
-assert_eq!(shift_op.mpo().node_count(), r);
-assert_eq!(flip_op.mpo().node_count(), r);
+let op = quantics_fourier_operator(2, FourierOptions::forward())?;
+// The normalized four-point DFT has Frobenius norm sqrt(4).
+assert!((op.mpo().clone().norm()? - 2.0).abs() < 1e-10);
 # Ok(())
 # }
 ```
@@ -45,6 +57,7 @@ assert_eq!(flip_op.mpo().node_count(), r);
 ## Documentation
 
 - [User Guide: Quantics](https://tensor4all.org/tensor4all-rs/guides/quantics.html)
+- [User Guide: Quantum Fourier Transform](https://tensor4all.org/tensor4all-rs/guides/qft.html)
 - [API Reference](https://tensor4all.org/tensor4all-rs/rustdoc/tensor4all_quanticstransform/)
 
 ## Multi-axis and patched Fourier transforms
