@@ -4,6 +4,10 @@
 
 ### Behavior changes
 
+- `tensor4all-interpolativeqtt` returns TreeTN chains with ordered physical indices
+  for ordinary and patched interpolation (#1334). Pass the tree and its site
+  indices to `invert_qtt::<T>` for binary chains. The interpolation crate no longer
+  depends on SimpleTT.
 - `tensor4all-partitionedtreetn`: `MergeRefineOptions::target_bond_dim` decides
   one coordinate axis at a time (#1328). A level previously probed the joint
   product of every refining axis and then fixed an output bit on all of them or

@@ -6,6 +6,14 @@ use num_complex::Complex64;
 use std::convert::Infallible;
 use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
 
+fn patch_cores<T: InterpolativeScalar>(patch: &InterpolativePatch) -> Vec<ColMajorArray<T>> {
+    patch.tree.chain_cores(&patch.site_indices).unwrap()
+}
+
+fn patch_rank(patch: &InterpolativePatch) -> usize {
+    patch.tree.link_dims().into_iter().max().unwrap_or(1)
+}
+
 // Run the serial entry on a freshly configured one-thread context.
 fn serial<T, F, E>(
     evaluate: F,
@@ -14,7 +22,7 @@ fn serial<T, F, E>(
     num_bits: usize,
     degree: usize,
     options: &PatchedInterpolativeOptions,
-) -> Result<Vec<InterpolativePatch<T>>>
+) -> Result<Vec<InterpolativePatch>>
 where
     T: InterpolativeScalar,
     F: Fn(ColMajorArrayRef<'_, f64>, Exec<'_>) -> std::result::Result<Vec<T>, E>,
@@ -33,7 +41,7 @@ fn batch<T: InterpolativeScalar>(
 
 // Materialize each small patch once; compare all entries and exact grid ownership.
 fn check_partition<T: InterpolativeScalar>(
-    patches: &[InterpolativePatch<T>],
+    patches: &[InterpolativePatch],
     ndims: usize,
     bits: usize,
     f: impl Fn(&[f64]) -> T,
@@ -43,14 +51,21 @@ fn check_partition<T: InterpolativeScalar>(
     let mut visits = vec![0; axis_size.pow(ndims as u32)];
     for patch in patches {
         let depth = patch.prefix[0].len();
-        assert_eq!(patch.tt.len(), bits - depth);
+        assert_eq!(patch.site_indices.len(), bits - depth);
         assert!(patch.prefix.iter().all(|axis| axis.len() == depth));
         assert!(
             patch.error_estimate <= tolerance,
             "estimate {}",
             patch.error_estimate
         );
-        let (dense, _) = patch.tt.full_tensor().unwrap();
+        let dense = patch
+            .tree
+            .contract_to_tensor()
+            .unwrap()
+            .permute_indices(&patch.site_indices)
+            .unwrap()
+            .dense_host_values::<T>()
+            .unwrap();
         let mut max_error = 0.0_f64;
         for (mut flat, &actual) in dense.iter().enumerate() {
             let mut indices: Vec<usize> = patch
@@ -162,7 +177,7 @@ fn last_site_is_exact_and_rank_cap_triggers_splitting() {
         )
         .unwrap();
         assert!(p.len() > 1);
-        assert!(p.iter().all(|p| p.tt.rank() == 1));
+        assert!(p.iter().all(|p| patch_rank(p) == 1));
         check_partition(&p, dims, 3, f, options.tolerance);
     }
     let p = serial(|p, _| batch(p, lorentzian), &[0.0], &[1.0], 1, 2, &options).unwrap();
@@ -331,7 +346,10 @@ fn shared_multiscale_values_are_unchanged() {
         &crate::InterpolativeQttOptions::default(),
     )
     .unwrap();
-    assert_eq!(patches[0].tt.site_tensors(), expected.site_tensors());
+    assert_eq!(
+        patch_cores::<f64>(&patches[0]),
+        expected.0.chain_cores::<f64>(&expected.1).unwrap()
+    );
 }
 
 #[test]
@@ -377,6 +395,31 @@ fn compression_change_counts_against_the_tolerance() {
 }
 
 #[test]
+fn compression_change_rejects_nonfinite_readout() {
+    let options = PatchedInterpolativeOptions::default();
+    let plan = Plan::<f64>::new(&[0.0], &[1.0], 2, 2, &options).unwrap();
+    let children: Vec<_> = plan
+        .domain
+        .split()
+        .unwrap()
+        .into_iter()
+        .map(|piece| (piece, vec![0.0; plan.basis.len()]))
+        .collect();
+    let shape = vec![1, 2, 1];
+    let (tree, sites) = TreeTN::from_chain_cores(vec![
+        ColMajorArray::new(vec![1.0, 1.0], shape.clone()).unwrap(),
+        ColMajorArray::new(vec![f64::NAN, 1.0], shape).unwrap(),
+    ])
+    .unwrap();
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut session = Session::new(backend.engine_mut());
+    assert!(matches!(
+        compression_change(&plan, &plan.domain, &children, &tree, &sites, &mut session),
+        Err(InterpolativeQttError::NonFinite)
+    ));
+}
+
+#[test]
 fn uncompressed_train_matches_the_child_interpolants_it_is_checked_against() {
     // compression_change compares the compressed train with the immediate
     // children's Chebyshev interpolants. Against the uncompressed train the
@@ -403,8 +446,18 @@ fn uncompressed_train_matches_the_child_interpolants_it_is_checked_against() {
                 |_, _| true,
             )
             .unwrap();
-            let train = SimpleTensorTrain::new(cores).unwrap();
-            let change = compression_change(&plan, &plan.domain, &children, &train).unwrap();
+            let (tree, site_indices) = TreeTN::from_chain_cores(cores).unwrap();
+            let mut backend = CpuBackend::with_threads(1).unwrap();
+            let mut session = Session::new(backend.engine_mut());
+            let change = compression_change(
+                &plan,
+                &plan.domain,
+                &children,
+                &tree,
+                &site_indices,
+                &mut session,
+            )
+            .unwrap();
             assert!(change < 1e-13, "D={dims}, L={sites}, p={degree}: {change}");
         }
     }
@@ -472,11 +525,7 @@ fn reentering_the_context_is_an_execution_error() {
 }
 
 /// Evaluate the patch that owns grid point `indices` (one integer per axis).
-fn evaluate_on_grid<T: InterpolativeScalar>(
-    patches: &[InterpolativePatch<T>],
-    bits: usize,
-    indices: &[u64],
-) -> T {
+fn evaluate_on_grid(patches: &[InterpolativePatch], bits: usize, indices: &[u64]) -> f64 {
     let bit = |axis: usize, level: usize| ((indices[axis] >> (bits - 1 - level)) & 1) as usize;
     let patch = patches
         .iter()
@@ -495,7 +544,11 @@ fn evaluate_on_grid<T: InterpolativeScalar>(
                 .sum()
         })
         .collect();
-    patch.tt.evaluate(&sites).unwrap()
+    patch
+        .tree
+        .evaluate_point(&patch.site_indices, &sites)
+        .unwrap()
+        .real()
 }
 
 #[test]
@@ -581,9 +634,18 @@ fn long_grid_stays_in_tensor_train_storage() {
     )
     .unwrap();
     assert_eq!(patches.len(), 1);
-    assert_eq!(patches[0].tt.len(), 48);
-    assert!(patches[0].tt.rank() <= 4);
-    assert!((patches[0].tt.evaluate(&[1; 48]).unwrap() - 3.0).abs() < 1e-10);
+    assert_eq!(patches[0].site_indices.len(), 48);
+    assert!(patch_rank(&patches[0]) <= 4);
+    assert!(
+        (patches[0]
+            .tree
+            .evaluate_point(&patches[0].site_indices, &[1; 48])
+            .unwrap()
+            .real()
+            - 3.0)
+            .abs()
+            < 1e-10
+    );
 }
 
 #[test]

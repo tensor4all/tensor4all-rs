@@ -7,9 +7,11 @@ use std::collections::HashSet;
 use std::hash::Hash;
 
 use anyhow::Result;
+use petgraph::stable_graph::NodeIndex;
+use tensor4all_tensorbackend::explicit::Session;
 
 use crate::algorithm::CanonicalForm;
-use tensor4all_core::{Canonical, FactorizeAlg, TensorLike};
+use tensor4all_core::{Canonical, DynIndex, FactorizeAlg, FactorizeResult, IdxTensor, TensorLike};
 
 use super::TreeTN;
 use crate::options::CanonicalizationOptions;
@@ -411,47 +413,20 @@ where
             None => return Ok(()),
         };
 
-        let session = std::cell::RefCell::new(session);
         for (src, dst) in &sweep_ctx.edges {
-            self.sweep_edge_full_rank_with(
+            self.sweep_edge_with_on_session(
                 *src,
                 *dst,
                 alg,
                 context_name,
-                |tensor, left| {
+                session,
+                |session, tensor, left| {
                     tensor4all_core::factorize_full_rank_on_session(
-                        &mut session.borrow_mut(),
+                        session,
                         tensor,
                         left,
                         alg,
                         Canonical::Left,
-                    )
-                    .map_err(anyhow::Error::from)
-                },
-                |lhs, rhs| {
-                    tensor4all_core::contract_pair_on_session(
-                        &mut session.borrow_mut(),
-                        lhs,
-                        rhs,
-                        tensor4all_core::PairwiseContractionOptions::new(),
-                    )
-                    .map_err(anyhow::Error::from)
-                },
-                |tensor, index, axis| {
-                    tensor4all_core::stack_along_new_index_on_session(
-                        &mut session.borrow_mut(),
-                        &[tensor],
-                        index,
-                        axis,
-                    )
-                    .map_err(anyhow::Error::from)
-                },
-                |tensor, index, position| {
-                    tensor4all_core::select_indices_on_session(
-                        &mut session.borrow_mut(),
-                        tensor,
-                        std::slice::from_ref(index),
-                        &[position],
                     )
                     .map_err(anyhow::Error::from)
                 },
@@ -460,5 +435,55 @@ where
 
         self.canonical_form = Some(form);
         Ok(())
+    }
+
+    pub(super) fn sweep_edge_with_on_session(
+        &mut self,
+        src: NodeIndex,
+        dst: NodeIndex,
+        alg: FactorizeAlg,
+        context_name: &str,
+        session: &mut Session<'_>,
+        factorize: impl FnOnce(
+            &mut Session<'_>,
+            &IdxTensor,
+            &[DynIndex],
+        ) -> Result<FactorizeResult<IdxTensor>>,
+    ) -> Result<()> {
+        let session = std::cell::RefCell::new(session);
+        self.sweep_edge_with(
+            src,
+            dst,
+            alg,
+            context_name,
+            |tensor, left| factorize(&mut session.borrow_mut(), tensor, left),
+            |lhs, rhs| {
+                tensor4all_core::contract_pair_on_session(
+                    &mut session.borrow_mut(),
+                    lhs,
+                    rhs,
+                    tensor4all_core::PairwiseContractionOptions::new(),
+                )
+                .map_err(anyhow::Error::from)
+            },
+            |tensor, index, axis| {
+                tensor4all_core::stack_along_new_index_on_session(
+                    &mut session.borrow_mut(),
+                    &[tensor],
+                    index,
+                    axis,
+                )
+                .map_err(anyhow::Error::from)
+            },
+            |tensor, index, position| {
+                tensor4all_core::select_indices_on_session(
+                    &mut session.borrow_mut(),
+                    tensor,
+                    std::slice::from_ref(index),
+                    &[position],
+                )
+                .map_err(anyhow::Error::from)
+            },
+        )
     }
 }

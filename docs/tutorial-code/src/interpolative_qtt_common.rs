@@ -9,11 +9,13 @@ use std::io;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
+use tensor4all_core::ColMajorArrayRef;
 use tensor4all_interpolativeqtt::{
     interpolate_multi_scale, interpolate_multi_scale_nd, interpolate_single_scale,
-    AbstractTensorTrain, InterpolativeQttOptions, SimpleTensorTrain,
+    InterpolativeQtt, InterpolativeQttOptions,
 };
 use tensor4all_quanticstci::{DiscretizedGrid, UnfoldingScheme};
+use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTNCachedEvaluator};
 
 /// Configuration for the Interpolative QTT tutorial.
 #[derive(Debug, Clone, Copy)]
@@ -103,13 +105,11 @@ pub fn interpolation_options(config: &InterpolativeQttTutorialConfig) -> Interpo
 ///
 /// Returns [`tensor4all_interpolativeqtt::InterpolativeQttError::InvalidArgument`]
 /// when the interpolation configuration is invalid (for example non-finite bounds
-/// or a zero polynomial degree), and
-/// [`tensor4all_interpolativeqtt::InterpolativeQttError::SimpleTensorTrain`] when
-/// the tensor-train construction or SVD compression fails.
+/// or a zero polynomial degree), or reports a TreeTN construction or compression failure.
 ///
 pub fn build_single_scale_smooth_qtt(
     config: &InterpolativeQttTutorialConfig,
-) -> Result<SimpleTensorTrain<f64>, Box<dyn Error>> {
+) -> Result<InterpolativeQtt, Box<dyn Error>> {
     let options = interpolation_options(config);
     Ok(interpolate_single_scale(
         smooth_target,
@@ -126,13 +126,11 @@ pub fn build_single_scale_smooth_qtt(
 ///
 /// Returns [`tensor4all_interpolativeqtt::InterpolativeQttError::InvalidArgument`]
 /// when the interpolation configuration is invalid (for example non-finite bounds
-/// or a zero polynomial degree), and
-/// [`tensor4all_interpolativeqtt::InterpolativeQttError::SimpleTensorTrain`] when
-/// the tensor-train construction or SVD compression fails.
+/// or a zero polynomial degree), or reports a TreeTN construction or compression failure.
 ///
 pub fn build_multi_scale_inverse_square_1d_qtt(
     config: &InterpolativeQttTutorialConfig,
-) -> Result<SimpleTensorTrain<f64>, Box<dyn Error>> {
+) -> Result<InterpolativeQtt, Box<dyn Error>> {
     let options = interpolation_options(config);
     let epsilon = config.epsilon;
     Ok(interpolate_multi_scale(
@@ -151,13 +149,11 @@ pub fn build_multi_scale_inverse_square_1d_qtt(
 ///
 /// Returns [`tensor4all_interpolativeqtt::InterpolativeQttError::InvalidArgument`]
 /// when the interpolation configuration is invalid (for example non-finite bounds
-/// or a zero polynomial degree), and
-/// [`tensor4all_interpolativeqtt::InterpolativeQttError::SimpleTensorTrain`] when
-/// the tensor-train construction or SVD compression fails.
+/// or a zero polynomial degree), or reports a TreeTN construction or compression failure.
 ///
 pub fn build_multi_scale_inverse_square_2d_qtt(
     config: &InterpolativeQttTutorialConfig,
-) -> Result<SimpleTensorTrain<f64>, Box<dyn Error>> {
+) -> Result<InterpolativeQtt, Box<dyn Error>> {
     let options = interpolation_options(config);
     let epsilon = config.epsilon;
     let lower = [config.lower_bound, config.lower_bound];
@@ -192,8 +188,19 @@ fn grid_nd(bits: usize, lower: &[f64], upper: &[f64]) -> Result<DiscretizedGrid,
         .build()?)
 }
 
-fn quantics_to_tt_indices(quantics: &[usize]) -> Result<Vec<usize>, Box<dyn Error>> {
-    Ok(quantics.to_vec())
+fn evaluate_grid_points<const D: usize>(
+    (tree, sites): &InterpolativeQtt,
+    grid: &DiscretizedGrid,
+    grid_indices: &[[usize; D]],
+) -> Result<Vec<f64>, Box<dyn Error>> {
+    let mut points = Vec::new();
+    for index in grid_indices {
+        points.extend(grid.grididx_to_quantics(index)?);
+    }
+    let shape = [sites.len(), grid_indices.len()];
+    let values = ColMajorArrayRef::new(&points, &shape)?;
+    let mut evaluator = TreeTNCachedEvaluator::new(tree, sites, CachedEvaluatorOptions::default())?;
+    Ok(evaluator.evaluate_batched_typed(values, EvaluationHint::default())?)
 }
 
 /// Collect full one-dimensional grid samples for plotting and verification.
@@ -201,12 +208,12 @@ fn quantics_to_tt_indices(quantics: &[usize]) -> Result<Vec<usize>, Box<dyn Erro
 ///
 /// Returns a `quanticsgrids::QuanticsGridError` when the grid bounds or bit
 /// depth are invalid, a grid index is out of bounds, or a conversion has the
-/// wrong length, and [`tensor4all_simplett::SimpleTensorTrainError`] when the
-/// quantics point does not match the tensor-train site dimensions.
+/// wrong length, and [`tensor4all_treetn::TreeTNOperationError`] when the
+/// quantics points do not match the TreeTN site dimensions or evaluation fails.
 ///
 pub fn collect_1d_samples<F>(
     case_name: &'static str,
-    tt: &SimpleTensorTrain<f64>,
+    qtt: &InterpolativeQtt,
     bits: usize,
     lower: f64,
     upper: f64,
@@ -217,20 +224,18 @@ where
 {
     let grid = grid_1d(bits, lower, upper)?;
     let npoints = 1usize << bits;
+    let grid_indices: Vec<_> = (0..npoints).map(|index| [index]).collect();
+    let values = evaluate_grid_points(qtt, &grid, &grid_indices)?;
     let mut samples = Vec::with_capacity(npoints);
 
-    for index in 0..npoints {
-        let grid_index = [index];
-        let quantics = grid.grididx_to_quantics(&grid_index)?;
-        let tt_indices = quantics_to_tt_indices(&quantics)?;
-        let coords = grid.grididx_to_origcoord(&grid_index)?;
+    for (grid_index, qtt) in grid_indices.iter().zip(values) {
+        let coords = grid.grididx_to_origcoord(grid_index)?;
         let x = coords[0];
         let exact = exact_fn(x);
-        let qtt = tt.evaluate(&tt_indices)?;
         samples.push(InterpolativeQtt1dSample {
             case_name,
             // 1-based display index; grid indices themselves are 0-based.
-            index: index + 1,
+            index: grid_index[0] + 1,
             x,
             exact,
             qtt,
@@ -247,11 +252,11 @@ where
 /// Returns a `quanticsgrids::QuanticsGridError` when the grid bounds or bit
 /// depth are invalid or a grid index is out of bounds, [`std::io::Error`] when
 /// `lower` or `upper` does not have length 2, and
-/// [`tensor4all_simplett::SimpleTensorTrainError`] when the quantics point does
-/// not match the tensor-train site dimensions.
+/// [`tensor4all_treetn::TreeTNOperationError`] when the quantics points do not
+/// match the TreeTN site dimensions or evaluation fails.
 ///
 pub fn collect_2d_samples<F>(
-    tt: &SimpleTensorTrain<f64>,
+    qtt: &InterpolativeQtt,
     bits: usize,
     lower: &[f64],
     upper: &[f64],
@@ -268,27 +273,25 @@ where
 
     let grid = grid_nd(bits, lower, upper)?;
     let npoints = 1usize << bits;
+    let grid_indices: Vec<_> = (0..npoints)
+        .flat_map(|x| (0..npoints).map(move |y| [x, y]))
+        .collect();
+    let values = evaluate_grid_points(qtt, &grid, &grid_indices)?;
     let mut samples = Vec::with_capacity(npoints * npoints);
 
-    for x_index in 0..npoints {
-        for y_index in 0..npoints {
-            let grid_index = [x_index, y_index];
-            let quantics = grid.grididx_to_quantics(&grid_index)?;
-            let tt_indices = quantics_to_tt_indices(&quantics)?;
-            let coords = grid.grididx_to_origcoord(&grid_index)?;
-            let exact = exact_fn(&coords);
-            let qtt = tt.evaluate(&tt_indices)?;
-            samples.push(InterpolativeQtt2dSample {
-                // 1-based display indices; grid indices themselves are 0-based.
-                x_index: x_index + 1,
-                y_index: y_index + 1,
-                x: coords[0],
-                y: coords[1],
-                exact,
-                qtt,
-                abs_error: (exact - qtt).abs(),
-            });
-        }
+    for (grid_index, qtt) in grid_indices.iter().zip(values) {
+        let coords = grid.grididx_to_origcoord(grid_index)?;
+        let exact = exact_fn(&coords);
+        samples.push(InterpolativeQtt2dSample {
+            // 1-based display indices; grid indices themselves are 0-based.
+            x_index: grid_index[0] + 1,
+            y_index: grid_index[1] + 1,
+            x: coords[0],
+            y: coords[1],
+            exact,
+            qtt,
+            abs_error: (exact - qtt).abs(),
+        });
     }
 
     Ok(samples)
@@ -422,9 +425,7 @@ pub fn write_bond_dims_csv(
 /// Print a compact terminal summary for local tutorial runs.
 pub fn print_summary(
     config: &InterpolativeQttTutorialConfig,
-    smooth: &SimpleTensorTrain<f64>,
-    multi_1d: &SimpleTensorTrain<f64>,
-    multi_2d: &SimpleTensorTrain<f64>,
+    bonds: [&[usize]; 3],
     smooth_max_error: f64,
     multi_1d_max_error: f64,
     multi_2d_max_error: f64,
@@ -442,10 +443,8 @@ pub fn print_summary(
         "  max abs errors: smooth {:.3e}, inverse-square 1D {:.3e}, inverse-square 2D {:.3e}",
         smooth_max_error, multi_1d_max_error, multi_2d_max_error
     );
+    let [smooth, multi_1d, multi_2d] = bonds.map(|dims| dims.iter().copied().max().unwrap_or(1));
     println!(
-        "  ranks: smooth {}, inverse-square 1D {}, inverse-square 2D {}",
-        smooth.rank(),
-        multi_1d.rank(),
-        multi_2d.rank()
+        "  ranks: smooth {smooth}, inverse-square 1D {multi_1d}, inverse-square 2D {multi_2d}"
     );
 }
