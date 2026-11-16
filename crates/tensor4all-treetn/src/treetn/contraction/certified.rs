@@ -407,8 +407,10 @@ where
                 .take()
                 .ok_or_else(|| anyhow::anyhow!("certified zip-up: factor {k} missing"))?;
             // Check the working set of this step from the actual dimensions:
-            // the block, its projection and its discarded part, and the
-            // weighted block, next to the factors still stored.
+            // the block, its projection and its discarded part, the weighted
+            // block with its SVD and its weighted discarded part, and the
+            // remainder handed to the next step, next to the factors still
+            // stored.
             let incoming = remainder.as_ref().map_or(1, |remainder| {
                 dims(&all_but(remainder, &joint_bonds[k - 1]))
             });
@@ -433,9 +435,21 @@ where
             let weighted_elements = (incoming as u128)
                 .saturating_mul(outputs as u128)
                 .saturating_mul(columns as u128);
+            // `next = kept^H block` has at most as many rows as `weighted` has
+            // singular values, `min(incoming * outputs, columns)`, over the
+            // joint bond of this cut.
+            let next_elements = (incoming as u128)
+                .saturating_mul(outputs as u128)
+                .min(columns as u128)
+                .saturating_mul(rows as u128);
+            // Live together inside the rank loop below: `block`, its projection
+            // and its discarded part (three blocks); `weighted`, the factors of
+            // its full SVD `full`, and `weighted_discarded` (counted as two
+            // weighted blocks); and the candidate remainder `next`.
             let working = block_elements
                 .saturating_mul(3)
-                .saturating_add(weighted_elements)
+                .saturating_add(weighted_elements.saturating_mul(2))
+                .saturating_add(next_elements)
                 .saturating_mul(element_bytes as u128);
             let step_bytes = usize::try_from(working)
                 .unwrap_or(usize::MAX)

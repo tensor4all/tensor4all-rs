@@ -116,7 +116,10 @@ fn heavy_gaussian_2d_interleaved_r10() {
 fn heavy_gaussian_2d_interleaved_r20_certified() {
     under_interleaved_ceiling("heavy_gaussian_2d_interleaved_r20_certified", || {
         let measured = large_fourier::run_case(20, 2, true, Runs::FrontEndOnly, Some(0.5)).unwrap();
-        // `run_case` already checks the bound against the allowance.
+        // `run_case` (examples/support/large_fourier.rs) already asserts, on the
+        // front-end report, `error_bound <= absolute_tolerance` (the allowance,
+        // `max(atol, rtol * reference_scale)`) and that the sampled error is within
+        // `error_bound` plus its construction allowance.
         assert!(measured.reconstruction_bound > 0.0);
         assert_eq!(measured.certified_share, Some(0.5));
     });

@@ -324,6 +324,59 @@ fn the_memory_gate_refuses_an_estimate_above_the_limit() {
 }
 
 #[test]
+fn the_step_gate_counts_the_whole_working_set_of_a_step() {
+    // Three sites, state bond 4, operator bond 3, site dimension 2. The first
+    // sweep step has `incoming = 1`, `outputs = 2`, a joint bond of `rows = 12`
+    // and a far-end factor of `columns = 4`, next to 480 bytes of stored
+    // factors. In elements: block `1 * 2 * 12 = 24`, weighted `1 * 2 * 4 = 8`,
+    // next `min(1 * 2, 4) * 12 = 24`.
+    //
+    // The step gate used to count `3 * block + weighted` = 80 elements, 1120
+    // bytes with the stored factors. The rank loop also holds the SVD of the
+    // weighted block, the weighted discarded block and the next remainder:
+    // `3 * block + 2 * weighted + next` = 112 elements, 1376 bytes. The
+    // factor-build gate estimates 1344 bytes for this chain. A limit of 1360
+    // bytes passes the build gate and the old step count, so only the corrected
+    // step gate refuses it, and it reports the step's 1376 bytes rather than the
+    // build estimate.
+    let sites = chain(3);
+    let nodes: Vec<usize> = (0..3).collect();
+    let state = random_state(&sites, false, 4, 91);
+    let operator = random_operator(&sites, &nodes, &chain_edges(&nodes), false, 3, 92);
+    let (build, old_step, corrected_step) = (1344_usize, 1120_usize, 1376_usize);
+
+    let passing =
+        apply_linear_operator_certified(&operator, &state, CertifiedApplyOptions::new(1.0))
+            .unwrap();
+    // The first step binds the estimate, above the build estimate.
+    assert_eq!(passing.estimated_bytes(), corrected_step);
+
+    let limit = 1360;
+    assert!(build <= limit && old_step <= limit && limit < corrected_step);
+    let error = apply_linear_operator_certified(
+        &operator,
+        &state,
+        CertifiedApplyOptions::new(1.0).with_memory_limit(limit),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            CertifiedApplyError::MemoryLimit { estimated_bytes, limit_bytes }
+                if estimated_bytes == corrected_step && limit_bytes == limit
+        ),
+        "{error:?}"
+    );
+    // The corrected count itself passes.
+    apply_linear_operator_certified(
+        &operator,
+        &state,
+        CertifiedApplyOptions::new(1.0).with_memory_limit(corrected_step),
+    )
+    .unwrap();
+}
+
+#[test]
 fn the_estimate_counts_complex_entries_twice() {
     let sites = chain(4);
     let nodes: Vec<usize> = (0..4).collect();
