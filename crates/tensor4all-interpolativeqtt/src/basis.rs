@@ -2,8 +2,9 @@
 
 use std::f64::consts::PI;
 
-use tensor4all_simplett::{Tensor3, Tensor3Ops};
+use tensor4all_core::ColMajorArray;
 
+use crate::core_array::{core_at, core_buffer, core_from_fn};
 use crate::error::{invalid_argument, Result};
 
 /// Barycentric Lagrange basis on a one-dimensional interpolation grid.
@@ -11,9 +12,8 @@ use crate::error::{invalid_argument, Result};
 /// weights. It is used by the interpolative QTT constructors to transfer
 /// local polynomial information across binary refinement levels.
 /// # Related Types
-/// `LagrangePolynomials` provides the local basis. The generated core tensors
-/// are stored as `tensor4all-simplett` rank-3 tensors and assembled into a
-/// `SimpleTensorTrain`.
+/// The generated cores are column-major arrays that can be assembled into a
+/// [`TreeTN`](tensor4all_treetn::TreeTN) chain.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::get_chebyshev_grid;
@@ -315,44 +315,35 @@ fn chebyshev_lobatto_barycentric_weights(degree: usize) -> Vec<f64> {
 }
 
 /// Build the dense local interpolation core for a Lagrange basis.
-/// The returned tensor has shape `(degree + 1, 2, degree + 1)`. The middle
-/// index is the binary refinement digit `sigma`, and the value is
+/// The returned column-major array has shape `(degree + 1, 2, degree + 1)`.
+/// The middle index is the binary refinement digit `sigma`, and the value is
 /// `P_alpha((sigma + grid_beta) / 2)`.
 /// # Errors
 ///
-/// Returns [`crate::error::InterpolativeQttError::InvalidArgument`] when the
-/// core size overflows `usize` or a basis evaluation fails, or
-/// [`crate::error::InterpolativeQttError::SimpleTensorTrain`] when the tensor
-/// construction fails.
+/// Returns [`crate::InterpolativeQttError::InvalidArgument`] when the core
+/// dimensions overflow, allocation fails, or the basis evaluation fails.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::{get_chebyshev_grid, interpolation_tensor};
-/// use tensor4all_simplett::Tensor3Ops;
 /// let basis = get_chebyshev_grid(3).unwrap();
 /// let core = interpolation_tensor(&basis).unwrap();
-/// assert_eq!(core.left_dim(), 4);
-/// assert_eq!(core.site_dim(), 2);
-/// assert_eq!(core.right_dim(), 4);
+/// assert_eq!(core.shape(), &[4, 2, 4]);
+/// assert_eq!(core.get(&[0, 0, 0]), Some(&1.0));
+/// assert_eq!(core.get(&[1, 0, 0]), Some(&0.0));
 /// ```
-pub fn interpolation_tensor(basis: &LagrangePolynomials) -> Result<Tensor3<f64>> {
+pub fn interpolation_tensor(basis: &LagrangePolynomials) -> Result<ColMajorArray<f64>> {
     let n = basis.len();
-    let data_len = n
-        .checked_mul(2)
-        .and_then(|value| value.checked_mul(n))
-        .ok_or_else(|| invalid_argument("interpolation core size overflowed usize"))?;
-    let mut data = Vec::with_capacity(data_len);
-    for alpha in 0..n {
+    let dims = [n, 2, n];
+    let mut data = core_buffer(dims)?;
+    for &beta in basis.grid() {
         for sigma in 0..2 {
-            for beta in 0..n {
-                let x = (sigma as f64 + basis.grid[beta]) / 2.0;
+            let x = (sigma as f64 + beta) / 2.0;
+            for alpha in 0..n {
                 data.push(basis.evaluate(alpha, x)?);
             }
         }
     }
-
-    Ok(Tensor3::from_fn([n, 2, n], |[alpha, sigma, beta]| {
-        data[(alpha * 2 + sigma) * n + beta]
-    })?)
+    Ok(ColMajorArray::new(data, dims.to_vec())?)
 }
 
 /// Build the fused direct product of rank-3 core tensors.
@@ -360,26 +351,32 @@ pub fn interpolation_tensor(basis: &LagrangePolynomials) -> Result<Tensor3<f64>>
 /// `(prod_i a_i, prod_i s_i, prod_i b_i)`. Index `0` is the fastest-moving
 /// component in each fused axis, matching the fused quantics layout used by
 /// `quanticsgrids`.
-/// This is a dense local-core construction. For `D` fused dimensions and a
+/// Inputs and output store column-major data. This is a dense local-core construction. For `D` fused dimensions and a
 /// polynomial degree `p`, single-scale interpolation can produce bonds of
 /// size `(p + 1)^D` and a site dimension of `2^D`, so callers should keep
 /// `D` and `p` modest or use the sparse constructor.
 /// # Errors
-/// Returns an error when `cores` is empty or fused dimensions overflow
-/// `usize`.
+/// Returns [`crate::InterpolativeQttError::InvalidArgument`] when `cores` is empty,
+/// any core lacks three positive dimensions, or the fused array cannot be allocated.
 /// # Examples
 /// ```
 /// use tensor4all_interpolativeqtt::direct_product_core_tensors;
-/// use tensor4all_simplett::{Tensor3, Tensor3Ops};
-/// let a = Tensor3::from_fn([2, 2, 1], |[l, s, _]| (l + s) as f64).unwrap();
-/// let b = Tensor3::from_fn([3, 2, 1], |[l, s, _]| (10 + l + s) as f64).unwrap();
+/// use tensor4all_core::ColMajorArray;
+/// let a = ColMajorArray::new(vec![1.0, 2.0], vec![1, 2, 1]).unwrap();
+/// let b = ColMajorArray::new(vec![3.0, 4.0], vec![1, 2, 1]).unwrap();
 /// let fused = direct_product_core_tensors(&[a, b]).unwrap();
-/// assert_eq!(fused.left_dim(), 6);
-/// assert_eq!(fused.site_dim(), 4);
-/// assert_eq!(fused.right_dim(), 1);
-/// assert!((*fused.get3(1, 0, 0) - 10.0).abs() < 1e-12);
+/// assert_eq!(fused.shape(), &[1, 4, 1]);
+/// assert_eq!(fused.data(), &[3.0, 6.0, 4.0, 8.0]);
 /// ```
-pub fn direct_product_core_tensors(cores: &[Tensor3<f64>]) -> Result<Tensor3<f64>> {
+pub fn direct_product_core_tensors(cores: &[ColMajorArray<f64>]) -> Result<ColMajorArray<f64>> {
+    if cores
+        .iter()
+        .any(|core| core.ndim() != 3 || core.shape().contains(&0))
+    {
+        return Err(invalid_argument(
+            "each core must have three positive dimensions",
+        ));
+    }
     let first = cores
         .first()
         .ok_or_else(|| invalid_argument("at least one core tensor is required"))?;
@@ -395,35 +392,35 @@ fn checked_fused_dim(left: usize, right: usize, axis: &str) -> Result<usize> {
         .ok_or_else(|| invalid_argument(format!("fused {axis} dimension overflows usize")))
 }
 
-fn direct_product_two(a: &Tensor3<f64>, b: &Tensor3<f64>) -> Result<Tensor3<f64>> {
-    let left_a = a.left_dim();
-    let site_a = a.site_dim();
-    let right_a = a.right_dim();
-    let left_b = b.left_dim();
-    let site_b = b.site_dim();
-    let right_b = b.right_dim();
+fn direct_product_two(
+    a: &ColMajorArray<f64>,
+    b: &ColMajorArray<f64>,
+) -> Result<ColMajorArray<f64>> {
+    let left_a = a.shape()[0];
+    let site_a = a.shape()[1];
+    let right_a = a.shape()[2];
+    let left_b = b.shape()[0];
+    let site_b = b.shape()[1];
+    let right_b = b.shape()[2];
     let left_dim = checked_fused_dim(left_a, left_b, "left")?;
     let site_dim = checked_fused_dim(site_a, site_b, "site")?;
     let right_dim = checked_fused_dim(right_a, right_b, "right")?;
 
-    Ok(Tensor3::from_fn(
-        [left_dim, site_dim, right_dim],
-        |[left, site, right]| {
-            let left_0 = left % left_a;
-            let left_1 = left / left_a;
-            let site_0 = site % site_a;
-            let site_1 = site / site_a;
-            let right_0 = right % right_a;
-            let right_1 = right / right_a;
-            *a.get3(left_0, site_0, right_0) * *b.get3(left_1, site_1, right_1)
-        },
-    )?)
+    core_from_fn([left_dim, site_dim, right_dim], |[left, site, right]| {
+        let left_0 = left % left_a;
+        let left_1 = left / left_a;
+        let site_0 = site % site_a;
+        let site_1 = site / site_a;
+        let right_0 = right % right_a;
+        let right_1 = right / right_a;
+        core_at(a, left_0, site_0, right_0) * core_at(b, left_1, site_1, right_1)
+    })
 }
 
 pub(crate) fn angular_local_lagrange(
     basis: &LagrangePolynomials,
     window_radius: usize,
-) -> Result<Tensor3<f64>> {
+) -> Result<ColMajorArray<f64>> {
     let degree = basis.len() - 1;
     let double_window = window_radius
         .checked_mul(2)
@@ -437,32 +434,29 @@ pub(crate) fn angular_local_lagrange(
     let core_dim = degree
         .checked_add(1)
         .ok_or_else(|| invalid_argument("angular interpolation core dimension overflows usize"))?;
-    Ok(Tensor3::from_fn(
-        [core_dim, 2, core_dim],
-        |[alpha, sigma, beta]| {
-            let x = (sigma as f64 + basis.grid[beta]) / 2.0;
-            let theta = (1.0 - 2.0 * x).clamp(-1.0, 1.0).acos();
-            let nearest = (theta * degree as f64 / PI)
-                .round()
-                .clamp(0.0, degree as f64) as usize;
-            let lo = nearest
-                .saturating_sub(window_radius)
-                .min(degree - double_window);
-            let hi = lo + double_window;
-            if alpha < lo || alpha > hi {
-                return 0.0;
-            }
+    core_from_fn([core_dim, 2, core_dim], |[alpha, sigma, beta]| {
+        let x = (sigma as f64 + basis.grid[beta]) / 2.0;
+        let theta = (1.0 - 2.0 * x).clamp(-1.0, 1.0).acos();
+        let nearest = (theta * degree as f64 / PI)
+            .round()
+            .clamp(0.0, degree as f64) as usize;
+        let lo = nearest
+            .saturating_sub(window_radius)
+            .min(degree - double_window);
+        let hi = lo + double_window;
+        if alpha < lo || alpha > hi {
+            return 0.0;
+        }
 
-            let theta_alpha = PI * alpha as f64 / degree as f64;
-            let mut value = 1.0;
-            for gamma in lo..=hi {
-                if gamma == alpha {
-                    continue;
-                }
-                let theta_gamma = PI * gamma as f64 / degree as f64;
-                value *= (theta - theta_gamma) / (theta_alpha - theta_gamma);
+        let theta_alpha = PI * alpha as f64 / degree as f64;
+        let mut value = 1.0;
+        for gamma in lo..=hi {
+            if gamma == alpha {
+                continue;
             }
-            value
-        },
-    )?)
+            let theta_gamma = PI * gamma as f64 / degree as f64;
+            value *= (theta - theta_gamma) / (theta_alpha - theta_gamma);
+        }
+        value
+    })
 }

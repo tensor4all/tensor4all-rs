@@ -2620,8 +2620,8 @@ dependencies = [
  "rand",
  "rayon",
  "tensor4all-core",
- "tensor4all-simplett",
  "tensor4all-tensorbackend",
+ "tensor4all-treetn",
  "thiserror 2.0.20",
 ]
 

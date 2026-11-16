@@ -1,14 +1,16 @@
 use super::*;
+use crate::InterpolativeQtt;
 
-// Reference from the parent (#1310), retaining per-point Lagrange evaluation
-// and the original left-to-right TT evaluate(). Never used by production.
+// Reference retaining per-point Lagrange weights and independent digit packing.
+// Both paths batch TreeTN readout to isolate the sample/stencil comparison.
 fn compression_change_reference<T: InterpolativeScalar>(
     plan: &Plan<'_, T>,
     domain: &NInterval,
     children: &[(NInterval, Vec<T>)],
-    compressed: &SimpleTensorTrain<T>,
+    (tree, site_indices): &InterpolativeQtt,
+    session: &mut Session<'_>,
 ) -> Result<f64> {
-    let sites = compressed.len();
+    let sites = site_indices.len();
     let ndims = domain.ndims();
     // Match sampled node sets to children by their exact intervals: the
     // assembly splits this domain with the same `NInterval::split`, and every
@@ -32,7 +34,8 @@ fn compression_change_reference<T: InterpolativeScalar>(
     let half = 1u64 << (sites - 1);
     let axis = compression_check_indices(&plan.test_points_1d, sites);
     let count = checked_power(axis.len(), ndims)?;
-    let mut max_change = 0.0_f64;
+    let mut indices = Vec::with_capacity(count * sites);
+    let mut expected = Vec::with_capacity(count);
     let mut quantics = vec![0; sites];
     let mut lagrange = vec![Vec::with_capacity(plan.basis.len()); ndims];
     for multi in product_indices(axis.len(), ndims, count) {
@@ -64,17 +67,30 @@ fn compression_change_reference<T: InterpolativeScalar>(
                 .map(|(d, &i)| (((axis[i] >> shift) & 1) as usize) << d)
                 .sum();
         }
-        let change = (compressed.evaluate(&quantics)? - interpolant).abs_val();
-        max_change = max_change.max(change);
+        indices.extend_from_slice(&quantics);
+        expected.push(interpolant);
     }
-    Ok(max_change)
+    let shape = [sites, count];
+    let indices = ColMajorArrayRef::new(&indices, &shape)?;
+    let mut evaluator =
+        TreeTNCachedEvaluator::new(tree, site_indices, CachedEvaluatorOptions::default())?;
+    let samples = evaluator.evaluate_batched_typed_on_session::<T>(
+        session,
+        indices,
+        EvaluationHint::default(),
+    )?;
+    Ok(samples
+        .into_iter()
+        .zip(expected)
+        .map(|(sample, expected)| (sample - expected).abs_val())
+        .fold(0.0, f64::max))
 }
 
 fn fixture<T: InterpolativeScalar>(
     plan: &Plan<'_, T>,
     session: &mut Session<'_>,
     f: impl Fn(&[f64]) -> T,
-) -> (Vec<(NInterval, Vec<T>)>, SimpleTensorTrain<T>) {
+) -> (Vec<(NInterval, Vec<T>)>, InterpolativeQtt) {
     let mut children = Vec::new();
     let cores = build_refined_cores(
         &mut |batch: SampleBatch<'_>| {
@@ -95,11 +111,11 @@ fn fixture<T: InterpolativeScalar>(
         |_, _| true,
     )
     .unwrap();
-    let mut train = SimpleTensorTrain::new(cores).unwrap();
-    train
-        .compress_svd_with_session(session, 1e-10, Some(4))
+    let (tree, sites) = TreeTN::from_chain_cores(cores).unwrap();
+    let compressed = tree
+        .compress_chain_on_session(1e-10, Some(4), session)
         .unwrap();
-    (children, train)
+    (children, (compressed, sites))
 }
 
 fn target(p: &[f64]) -> f64 {
@@ -115,8 +131,18 @@ fn compare<T: InterpolativeScalar>(f: impl Fn(&[f64]) -> T) {
         let plan =
             Plan::<T>::new(&vec![-0.3; dims], &vec![0.9; dims], sites, degree, &options).unwrap();
         let (children, train) = fixture(&plan, &mut session, &f);
-        let old = compression_change_reference(&plan, &plan.domain, &children, &train).unwrap();
-        let new = compression_change(&plan, &plan.domain, &children, &train).unwrap();
+        let old =
+            compression_change_reference(&plan, &plan.domain, &children, &train, &mut session)
+                .unwrap();
+        let new = compression_change(
+            &plan,
+            &plan.domain,
+            &children,
+            &train.0,
+            &train.1,
+            &mut session,
+        )
+        .unwrap();
         assert_eq!(
             old.to_bits(),
             new.to_bits(),
@@ -151,14 +177,14 @@ fn compression_change_timing() {
         let plan =
             Plan::<f64>::new(&vec![-0.3; dims], &vec![0.9; dims], sites, degree, &options).unwrap();
         let (children, train) = fixture(&plan, &mut session, target);
-        let check = |reference| {
+        let mut check = |reference| {
             let p = black_box(&plan);
             let c = black_box(&children);
             let t = black_box(&train);
             if reference {
-                compression_change_reference(p, &p.domain, c, t)
+                compression_change_reference(p, &p.domain, c, t, &mut session)
             } else {
-                compression_change(p, &p.domain, c, t)
+                compression_change(p, &p.domain, c, &t.0, &t.1, &mut session)
             }
             .unwrap()
         };
@@ -182,7 +208,7 @@ fn compression_change_timing() {
             }
             println!(
                 "{dims},{sites},{degree},{},{pair},{iterations},{},{},{}",
-                train.rank(),
+                train.0.link_dims().into_iter().max().unwrap_or(1),
                 times[0],
                 times[1],
                 reference.to_bits()

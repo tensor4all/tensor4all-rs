@@ -36,7 +36,9 @@ impl<T> TTScalar for T where T: tensor4all_core::CommonScalar + TensorScalar {}
 /// The reductions seed their environment from the `l == 0` component of the
 /// first core, so a leading bond above one would be silently projected away.
 /// This is the left-boundary sibling of the trailing-bond guard from #913.
-fn ensure_unit_leading_bond<T: TTScalar>(first: &Tensor3<T>) -> Result<()> {
+/// It is `pub(crate)` so the inner-product routes in `contraction` share the
+/// same check and message as the reductions.
+pub(crate) fn ensure_unit_leading_bond<T: TTScalar>(first: &Tensor3<T>) -> Result<()> {
     if first.left_dim() != 1 {
         return Err(SimpleTensorTrainError::InvalidOperation {
             message: format!("Leading bond dimension is {}, expected 1", first.left_dim()),
