@@ -6,10 +6,10 @@ use crate::tensor::{col_major_data_to_tensor, Tensor3};
 use crate::tensortrain::SimpleTensorTrain;
 use crate::traits::TTScalar;
 use tenferro_tensor::TensorScalar;
-use tensor4all_core::chain_compression::{
-    chain_rrlu_options, compress_chain_cores_mut, compress_chain_lu_cores_mut, ChainCore,
+use tensor4all_core::{
+    compress_chain_cores_mut, compress_chain_lu_mut, ChainCompressionError, ChainCore,
+    ChainLuFactorization, ChainLuOptions, ColMajorArrayRef, Scalar,
 };
-use tensor4all_core::{ChainCompressionError, ColMajorArrayRef, MatrixLUCI, Scalar};
 use tensor4all_tensorbackend::{explicit::Session, mat_mul, BackendLinalgScalar, Matrix};
 
 /// Matrix decomposition method used during TT compression.
@@ -90,7 +90,8 @@ pub enum CompressionMethod {
 pub struct CompressionOptions {
     /// Decomposition method (LU, CI, or SVD).
     pub method: CompressionMethod,
-    /// Truncation tolerance per bond.
+    /// Finite nonnegative truncation tolerance per bond. Zero keeps LU/CI
+    /// pivots above a `1e-14` relative floor and every SVD singular value.
     ///
     /// With `normalize_error` (the default), singular values (or pivots)
     /// smaller than `tolerance * sigma_max` of that bond are discarded, so the
@@ -101,7 +102,8 @@ pub struct CompressionOptions {
     /// Hard upper bound on any bond dimension.
     ///
     /// Even if the tolerance would allow a larger rank, the bond dimension
-    /// is capped at this value. `None` (default) means no limit.
+    /// is capped at this value, which must be positive. `None` (default)
+    /// means no limit.
     pub max_bond_dim: Option<usize>,
     /// Whether [`tolerance`](Self::tolerance) is relative to the bond scale.
     ///
@@ -307,6 +309,16 @@ where
     Ok((left, right, rank))
 }
 
+fn validate_truncation(tolerance: f64, max_bond_dim: Option<usize>) -> Result<()> {
+    if !tolerance.is_finite() || tolerance < 0.0 || max_bond_dim == Some(0) {
+        return Err(SimpleTensorTrainError::InvalidOperation {
+            message: "compression requires a finite nonnegative tolerance and a positive cap"
+                .into(),
+        });
+    }
+    Ok(())
+}
+
 // Execution selection is outside the numerical kernels; the sweep is shared.
 fn multiply_for_sweep<T: tensor4all_tensorbackend::BlasMul>(
     session: &mut Option<&mut Session<'_>>,
@@ -331,7 +343,10 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns [`SimpleTensorTrainError::DimensionMismatch`] for inconsistent
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] for a negative or
+    /// nonfinite tolerance or `max_bond_dim: Some(0)`, before changing any
+    /// tensor. Otherwise returns
+    /// [`SimpleTensorTrainError::DimensionMismatch`] for inconsistent
     /// adjacent bonds after caller mutation, or
     /// [`SimpleTensorTrainError::MatrixCI`] when the LU/CI
     /// factorization fails, or
@@ -360,30 +375,21 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
         T: tensor4all_core::MatrixLuciScalar + Copy + BackendLinalgScalar + TensorScalar,
         f64: From<<T as TensorScalar>::Real>,
     {
-        match options.method {
-            CompressionMethod::LU => compress_chain_lu_cores_mut(
-                self.site_tensors_mut(),
-                options.tolerance,
-                options.max_bond_dim,
-                options.normalize_error,
-            ),
-            CompressionMethod::CI => compress_chain_cores_mut(
-                self.site_tensors_mut(),
-                &mut (),
-                |(), matrix, left_orthogonal| {
-                    let options = chain_rrlu_options(
-                        options.tolerance,
-                        options.max_bond_dim,
-                        options.normalize_error,
-                        left_orthogonal,
-                    );
-                    let luci = MatrixLUCI::from_matrix(&matrix, Some(options))?;
-                    Ok((luci.left(), luci.right()))
-                },
-                |(), left, right| mat_mul(left, right),
-            ),
-            CompressionMethod::SVD => self.compress_svd_impl(options, &mut None),
-        }
+        validate_truncation(options.tolerance, options.max_bond_dim)?;
+        let factorization = match options.method {
+            CompressionMethod::LU => ChainLuFactorization::RrLu,
+            CompressionMethod::CI => ChainLuFactorization::Luci,
+            CompressionMethod::SVD => return self.compress_svd_impl(options, &mut None),
+        };
+        compress_chain_lu_mut(
+            self.site_tensors_mut(),
+            &ChainLuOptions {
+                tolerance: options.tolerance,
+                max_bond_dim: options.max_bond_dim,
+                normalize_error: options.normalize_error,
+                factorization,
+            },
+        )
     }
 
     /// Compress in place by SVD on a caller-held session.
@@ -430,13 +436,7 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
         T: Copy + BackendLinalgScalar + TensorScalar,
         f64: From<<T as TensorScalar>::Real>,
     {
-        if !tolerance.is_finite() || tolerance < 0.0 || max_bond_dim == Some(0) {
-            return Err(SimpleTensorTrainError::InvalidOperation {
-                message:
-                    "SVD compression requires a finite nonnegative tolerance and a positive cap"
-                        .into(),
-            });
-        }
+        validate_truncation(tolerance, max_bond_dim)?;
         self.compress_svd_impl(
             &CompressionOptions {
                 method: CompressionMethod::SVD,
@@ -495,7 +495,10 @@ impl<T: TTScalar + Scalar + Default> SimpleTensorTrain<T> {
     ///
     /// # Errors
     ///
-    /// Returns [`SimpleTensorTrainError::DimensionMismatch`] for inconsistent
+    /// Returns [`SimpleTensorTrainError::InvalidOperation`] for a negative or
+    /// nonfinite tolerance or `max_bond_dim: Some(0)`, before changing any
+    /// tensor. Otherwise returns
+    /// [`SimpleTensorTrainError::DimensionMismatch`] for inconsistent
     /// adjacent bonds after caller mutation, or
     /// [`SimpleTensorTrainError::MatrixCI`] when the LU/CI
     /// factorization fails, or

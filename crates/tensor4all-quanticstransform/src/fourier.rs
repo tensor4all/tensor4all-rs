@@ -8,7 +8,7 @@ use crate::error::QuanticsTransformError;
 use anyhow::Result;
 use num_complex::Complex64;
 use std::f64::consts::PI;
-use tensor4all_core::{compress_chain_lu_mut, ColMajorArray};
+use tensor4all_core::{compress_chain_lu_mut, ChainLuOptions, ColMajorArray};
 
 use crate::common::{
     binary_cores_to_operator, checked_allocation_len, try_vec_with_capacity, QuanticsOperator,
@@ -57,6 +57,23 @@ pub(crate) fn zero_fourier_core(
 /// Options for Fourier transform construction.
 /// Controls the sign convention, compression parameters, and normalization
 /// of the quantics Fourier transform MPO.
+///
+/// | Field | Default | Meaning |
+/// |-------|---------|---------|
+/// | `sign` | `-1.0` | Exponent sign: `-1.0` forward, `1.0` inverse |
+/// | `max_bond_dim` | `Some(12)` | Cap on each per-axis bond |
+/// | `tolerance` | `1e-14` | Relative LU pivot threshold |
+/// | `k` | `25` | Chebyshev interpolation order (`k + 1` points) |
+/// | `normalize` | `true` | Scale each axis by `1/sqrt(2^r)` |
+///
+/// Each axis is built from cores with bond dimension `k + 1` and then
+/// compressed by rank-revealing LU. The forward sweep of that compression
+/// never truncates. `tolerance` and `max_bond_dim` both limit the backward
+/// sweep, and the smaller resulting rank wins, so the bond never exceeds
+/// `min(k + 1, max_bond_dim)`. `k` sets the interpolation accuracy of the
+/// uncompressed construction. When in doubt, keep the defaults, which give a
+/// per-axis bond of at most 12. Multi-axis products multiply the per-axis
+/// bonds at each cut, so their bonds can exceed `max_bond_dim`.
 /// # Examples
 /// ```
 /// use tensor4all_quanticstransform::FourierOptions;
@@ -79,9 +96,11 @@ pub(crate) fn zero_fourier_core(
 pub struct FourierOptions {
     /// Sign in the exponent: -1.0 (forward) or 1.0 (inverse)
     pub sign: f64,
-    /// Maximum bond dimension after per-axis compression. `None` leaves it uncapped.
+    /// Positive cap on each per-axis bond after compression. `None` leaves the
+    /// bond limited by `tolerance` and `k + 1`.
     pub max_bond_dim: Option<usize>,
-    /// Relative LU pivot threshold. Zero selects the default floor of `1e-14`.
+    /// Finite nonnegative LU pivot threshold, relative to the largest pivot of
+    /// each bond. Zero selects the `1e-14` floor.
     pub tolerance: f64,
     /// Positive Chebyshev interpolation order, giving `k + 1` points.
     pub k: usize,
@@ -290,7 +309,13 @@ pub(crate) fn fourier_cores(
     }
     cores.push(last);
 
-    compress_chain_lu_mut(&mut cores, options.tolerance, options.max_bond_dim, true)
+    let compression = ChainLuOptions {
+        tolerance: options.tolerance,
+        max_bond_dim: options.max_bond_dim,
+        normalize_error: true,
+        ..ChainLuOptions::default()
+    };
+    compress_chain_lu_mut(&mut cores, &compression)
         .map_err(|err| anyhow::Error::new(err).context("Fourier MPO compression failed"))?;
 
     if options.normalize {

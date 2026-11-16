@@ -1,20 +1,34 @@
-//! Two-sweep compression of column-major chain cores.
+//! Two-sweep compression of chains of rank-3 cores.
+//!
+//! [`compress_chain_lu_mut`] and [`compress_chain_lu_on_session`] compress a
+//! chain with pivoted LU factorizations. [`compress_chain_cores_mut`] runs the
+//! same two sweeps with a caller-supplied factorization and multiplication,
+//! and [`ChainCore`] adapts a storage type to the sweeps.
 
 use std::collections::TryReserveError;
 
-use tensor4all_tensorbackend::{mat_mul, Matrix, MatrixMulError, MatrixShapeError};
+use tensor4all_tensorbackend::{
+    explicit::Session, mat_mul, Matrix, MatrixMulError, MatrixShapeError,
+};
 
 use crate::col_major_array::ColMajorArrayError;
-use crate::{rrlu_mut, ColMajorArray, ColMajorArrayRef, MatrixCIError, RrLUOptions, Scalar};
+use crate::{
+    rrlu_mut, ColMajorArray, ColMajorArrayRef, MatrixCIError, MatrixLUCI, MatrixLuciScalar,
+    RrLUOptions,
+};
 
-/// Failure to validate or compress a chain of column-major cores.
+/// Relative pivot threshold used by the forward sweep, and by the backward
+/// sweep when [`ChainLuOptions::tolerance`] is zero.
+const PIVOT_FLOOR: f64 = 1e-14;
+
+/// Failure to validate or compress a chain of rank-3 cores.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{compress_chain_lu_mut, ChainCompressionError, ColMajorArray};
+/// use tensor4all_core::{compress_chain_lu_mut, ChainCompressionError, ChainLuOptions, ColMajorArray};
 /// let core = ColMajorArray::new(vec![1.0_f64], vec![1, 1])?;
-/// let error = compress_chain_lu_mut(&mut [core], 0.0, None, true).unwrap_err();
+/// let error = compress_chain_lu_mut(&mut [core], &ChainLuOptions::default()).unwrap_err();
 /// assert!(matches!(error, ChainCompressionError::CoreRank { site: 0, rank: 2 }));
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -47,12 +61,23 @@ pub enum ChainCompressionError {
     /// The right boundary bond must have dimension one.
     #[error("Last tensor must have right dimension 1")]
     RightBoundary,
-    /// The rank-revealing LU tolerance must be finite.
-    #[error("LU compression tolerance must be finite, got {0}")]
+    /// The pivot tolerance must be finite and nonnegative.
+    #[error("LU compression tolerance must be finite and nonnegative, got {0}")]
     InvalidTolerance(f64),
+    /// A rank cap of zero would discard every bond.
+    #[error("LU compression max_bond_dim must be positive when specified")]
+    ZeroBondCap,
     /// Fusing two core axes would overflow `usize`.
     #[error("unfolding core shape {0:?} overflows usize")]
     ShapeOverflow([usize; 3]),
+    /// A flat buffer does not hold a whole number of unfolding blocks.
+    #[error("flat buffer of length {len} is not a whole number of {block}-element blocks")]
+    BufferLength {
+        /// Length of the supplied buffer.
+        len: usize,
+        /// Element count of one block, or zero when a block dimension is zero.
+        block: usize,
+    },
     /// The flat buffer could not be allocated.
     #[error("cannot allocate a compression buffer: {0}")]
     Allocation(#[from] TryReserveError),
@@ -76,54 +101,242 @@ pub enum ChainCompressionError {
     },
 }
 
-/// Compress column-major chain cores in place with rank-revealing LU.
-///
-/// Each core has shape `[left_bond, site, right_bond]` with the left bond
-/// varying fastest. Neighboring bond dimensions must match and the outer
-/// bonds must have dimension one. An empty or single-core chain is unchanged.
-///
-/// The forward sweep uses a `1e-14` relative pivot threshold with unlimited
-/// rank. The backward sweep uses `tolerance` relative to the largest pivot
-/// when `normalize_error` is true, or as an absolute threshold otherwise.
-/// A nonpositive `tolerance` selects the `1e-14` relative threshold in either
-/// mode. `max_bond_dim` caps the retained rank of each internal bond. `None`
-/// leaves the rank uncapped. Products use the default CPU backend.
-///
-/// # Errors
-///
-/// Returns [`ChainCompressionError`] for invalid core shapes, nonfinite
-/// tolerance, or a matrix factorization, multiplication, or allocation failure.
-/// If a numerical operation fails, previously updated bonds remain compressed.
+/// Pivoted factorization applied at each bond by [`compress_chain_lu_mut`].
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::{compress_chain_lu_mut, ColMajorArray};
+/// use tensor4all_core::ChainLuFactorization;
+/// assert_eq!(ChainLuFactorization::default(), ChainLuFactorization::RrLu);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChainLuFactorization {
+    /// Rank-revealing LU with full pivoting ([`rrlu_mut`]).
+    #[default]
+    RrLu,
+    /// LU-based cross interpolation ([`MatrixLUCI`]), which selects the same
+    /// pivots through backend triangular solves.
+    Luci,
+}
+
+/// Truncation settings for [`compress_chain_lu_mut`] and
+/// [`compress_chain_lu_on_session`].
+///
+/// The forward sweep never truncates: it keeps every pivot above a `1e-14`
+/// relative threshold. These settings apply only to the backward sweep, where
+/// `tolerance` and `max_bond_dim` both limit the retained rank of each bond
+/// and the smaller limit wins. `normalize_error` selects whether `tolerance`
+/// is relative to the largest pivot of that bond or absolute.
+///
+/// | Field | Default | Meaning |
+/// |-------|---------|---------|
+/// | `tolerance` | `1e-12` | Pivot threshold; zero selects the `1e-14` relative floor |
+/// | `max_bond_dim` | `None` | Positive cap on each internal bond, or uncapped |
+/// | `normalize_error` | `true` | Relative (`true`) or absolute (`false`) `tolerance` |
+/// | `factorization` | `RrLu` | Pivoted factorization at each bond |
+///
+/// When in doubt, keep the defaults: `1e-12` is close to lossless, values from
+/// `1e-8` to `1e-6` suit most scientific work, and larger values compress more
+/// aggressively.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{ChainLuFactorization, ChainLuOptions};
+/// let options = ChainLuOptions {
+///     tolerance: 1e-8,
+///     max_bond_dim: Some(16),
+///     ..ChainLuOptions::default()
+/// };
+/// assert!(options.normalize_error);
+/// assert_eq!(options.factorization, ChainLuFactorization::RrLu);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChainLuOptions {
+    /// Finite nonnegative pivot threshold for the backward sweep. Zero selects
+    /// the `1e-14` relative floor regardless of `normalize_error`.
+    pub tolerance: f64,
+    /// Positive cap on each internal bond in the backward sweep. `None` leaves
+    /// the rank limited only by `tolerance`.
+    pub max_bond_dim: Option<usize>,
+    /// Whether a positive `tolerance` is relative to the largest pivot of each
+    /// bond (`true`) or an absolute pivot threshold (`false`).
+    pub normalize_error: bool,
+    /// Pivoted factorization applied at each bond.
+    pub factorization: ChainLuFactorization,
+}
+
+impl Default for ChainLuOptions {
+    fn default() -> Self {
+        Self {
+            tolerance: 1e-12,
+            max_bond_dim: None,
+            normalize_error: true,
+            factorization: ChainLuFactorization::RrLu,
+        }
+    }
+}
+
+impl ChainLuOptions {
+    fn validate(&self) -> Result<(), ChainCompressionError> {
+        if !self.tolerance.is_finite() || self.tolerance < 0.0 {
+            return Err(ChainCompressionError::InvalidTolerance(self.tolerance));
+        }
+        if self.max_bond_dim == Some(0) {
+            return Err(ChainCompressionError::ZeroBondCap);
+        }
+        Ok(())
+    }
+
+    fn rrlu_options(&self, left_orthogonal: bool) -> RrLUOptions {
+        if left_orthogonal {
+            return RrLUOptions {
+                max_bond_dim: usize::MAX,
+                rel_tol: PIVOT_FLOOR,
+                abs_tol: 0.0,
+                left_orthogonal,
+            };
+        }
+        let (rel_tol, abs_tol) = if self.tolerance == 0.0 {
+            (PIVOT_FLOOR, 0.0)
+        } else if self.normalize_error {
+            (self.tolerance, 0.0)
+        } else {
+            (0.0, self.tolerance)
+        };
+        RrLUOptions {
+            max_bond_dim: self.max_bond_dim.unwrap_or(usize::MAX),
+            rel_tol,
+            abs_tol,
+            left_orthogonal,
+        }
+    }
+
+    fn factorize<T: MatrixLuciScalar>(
+        &self,
+        mut matrix: Matrix<T>,
+        left_orthogonal: bool,
+    ) -> Result<(Matrix<T>, Matrix<T>), ChainCompressionError> {
+        let options = self.rrlu_options(left_orthogonal);
+        match self.factorization {
+            ChainLuFactorization::RrLu => {
+                let lu = rrlu_mut(&mut matrix, Some(options))?;
+                Ok((lu.left(true), lu.right(true)))
+            }
+            ChainLuFactorization::Luci => {
+                let luci = MatrixLUCI::from_matrix(&matrix, Some(options))?;
+                Ok((luci.left(), luci.right()))
+            }
+        }
+    }
+}
+
+/// Compress a chain of rank-3 cores in place with pivoted LU.
+///
+/// Each core has shape `[left_bond, site, right_bond]`. Neighboring bond
+/// dimensions must match and the outer bonds must have dimension one. An
+/// empty or single-core chain is validated and left unchanged. The forward
+/// sweep keeps every pivot above a `1e-14` relative threshold; the backward
+/// sweep truncates according to `options`. Products use the process-global
+/// CPU backend; [`compress_chain_lu_on_session`] runs them on a caller-held
+/// session instead.
+///
+/// # Errors
+///
+/// Returns [`ChainCompressionError::InvalidTolerance`] for a negative or
+/// nonfinite tolerance and [`ChainCompressionError::ZeroBondCap`] for
+/// `max_bond_dim: Some(0)`, before touching any core. Invalid core shapes and
+/// factorization, multiplication or allocation failures return the other
+/// [`ChainCompressionError`] variants, converted into the storage type's error.
+/// If a numerical operation fails, bonds updated before the failure keep
+/// their compressed values.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{compress_chain_lu_mut, ChainLuOptions, ColMajorArray};
 /// let mut cores = [
 ///     ColMajorArray::new(vec![2.0_f64, 2.0], vec![1, 1, 2])?,
 ///     ColMajorArray::new(vec![3.0, 3.0], vec![2, 1, 1])?,
 /// ];
-/// compress_chain_lu_mut(&mut cores, 0.0, None, true)?;
+/// compress_chain_lu_mut(&mut cores, &ChainLuOptions::default())?;
 /// assert_eq!(cores[0].shape(), &[1, 1, 1]);
 /// assert_eq!(cores[0].data()[0] * cores[1].data()[0], 12.0);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub fn compress_chain_lu_mut<T: Scalar>(
-    cores: &mut [ColMajorArray<T>],
-    tolerance: f64,
-    max_bond_dim: Option<usize>,
-    normalize_error: bool,
-) -> Result<(), ChainCompressionError> {
-    if !tolerance.is_finite() {
-        return Err(ChainCompressionError::InvalidTolerance(tolerance));
-    }
-    compress_chain_lu_cores_mut(cores, tolerance, max_bond_dim, normalize_error)
+pub fn compress_chain_lu_mut<T: MatrixLuciScalar, C: ChainCore<T>>(
+    cores: &mut [C],
+    options: &ChainLuOptions,
+) -> Result<(), C::Error> {
+    options.validate()?;
+    compress_chain_cores_mut(
+        cores,
+        &mut (),
+        |(), matrix, left_orthogonal| Ok(options.factorize(matrix, left_orthogonal)?),
+        |(), left, right| mat_mul(left, right),
+    )
 }
 
-/// Storage adapter used by SimpleTT and raw column-major cores.
-#[doc(hidden)]
+/// Compress a chain of rank-3 cores in place with pivoted LU, multiplying on
+/// a caller-held session.
+///
+/// Identical to [`compress_chain_lu_mut`], including validation and retained
+/// ranks, except that every matrix product runs on `session`. The pivoted
+/// factorizations do not use the backend.
+///
+/// # Errors
+///
+/// The same as [`compress_chain_lu_mut`].
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{compress_chain_lu_on_session, ChainLuOptions, ColMajorArray};
+/// use tensor4all_tensorbackend::{explicit::Session, CpuBackend};
+/// let mut backend = CpuBackend::with_threads(1)?;
+/// let mut session = Session::new(backend.engine_mut());
+/// let mut cores = [
+///     ColMajorArray::new(vec![2.0_f64, 2.0], vec![1, 1, 2])?,
+///     ColMajorArray::new(vec![3.0, 3.0], vec![2, 1, 1])?,
+/// ];
+/// compress_chain_lu_on_session(&mut session, &mut cores, &ChainLuOptions::default())?;
+/// assert_eq!(cores[1].shape(), &[1, 1, 1]);
+/// assert_eq!(cores[0].data()[0] * cores[1].data()[0], 12.0);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn compress_chain_lu_on_session<T: MatrixLuciScalar, C: ChainCore<T>>(
+    session: &mut Session<'_>,
+    cores: &mut [C],
+    options: &ChainLuOptions,
+) -> Result<(), C::Error> {
+    options.validate()?;
+    compress_chain_cores_mut(
+        cores,
+        session,
+        |_, matrix, left_orthogonal| Ok(options.factorize(matrix, left_orthogonal)?),
+        |session, left, right| session.mat_mul(left, right),
+    )
+}
+
+/// Storage adapter that lets the chain sweeps read and rebuild rank-3 cores.
+///
+/// [`ColMajorArray`] implements it directly; other crates implement it for
+/// their own core types so that [`compress_chain_lu_mut`] and
+/// [`compress_chain_cores_mut`] can update them in place.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{ChainCore, ColMajorArray};
+/// let core = <ColMajorArray<f64> as ChainCore<f64>>::from_col_major([1, 2, 1], vec![1.0, 2.0])?;
+/// let view = ChainCore::<f64>::view(&core)?;
+/// assert_eq!(view.shape(), &[1, 2, 1]);
+/// assert_eq!(view.data(), &[1.0, 2.0]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub trait ChainCore<T>: Sized {
-    /// Error returned when reading or rebuilding a core.
+    /// Error returned when reading or rebuilding a core, and by the sweeps.
     type Error: From<ChainCompressionError>;
 
     /// Borrow the shape and flat data in column-major order.
@@ -153,56 +366,53 @@ impl<T> ChainCore<T> for ColMajorArray<T> {
     }
 }
 
-/// Shared LU compression for the raw-core and SimpleTT storage types.
-#[doc(hidden)]
-pub fn compress_chain_lu_cores_mut<T: Scalar, C: ChainCore<T>>(
-    cores: &mut [C],
-    tolerance: f64,
-    max_bond_dim: Option<usize>,
-    normalize_error: bool,
-) -> Result<(), C::Error> {
-    compress_chain_cores_mut(
-        cores,
-        &mut (),
-        |(), mut matrix, left_orthogonal| {
-            let options =
-                chain_rrlu_options(tolerance, max_bond_dim, normalize_error, left_orthogonal);
-            let lu = rrlu_mut(&mut matrix, Some(options)).map_err(ChainCompressionError::from)?;
-            Ok((lu.left(true), lu.right(true)))
-        },
-        |(), left, right| mat_mul(left, right),
-    )
-}
-
-/// Select the historical LU/CI pivot threshold and orientation.
-#[doc(hidden)]
-pub fn chain_rrlu_options(
-    tolerance: f64,
-    max_bond_dim: Option<usize>,
-    normalize_error: bool,
-    left_orthogonal: bool,
-) -> RrLUOptions {
-    if left_orthogonal {
-        return RrLUOptions::default();
-    }
-    let (rel_tol, abs_tol) = if tolerance > 0.0 && !normalize_error {
-        (0.0, tolerance)
-    } else if tolerance > 0.0 {
-        (tolerance, 0.0)
-    } else {
-        (1e-14, 0.0)
-    };
-    RrLUOptions {
-        max_bond_dim: max_bond_dim.unwrap_or(usize::MAX),
-        rel_tol,
-        abs_tol,
-        left_orthogonal,
-    }
-}
-
-/// Run the common sweep with caller-selected factorization and multiplication.
-#[doc(hidden)]
-pub fn compress_chain_cores_mut<T: Scalar, C: ChainCore<T>, S>(
+/// Run the two compression sweeps with a caller-supplied factorization.
+///
+/// The cores are validated as in [`compress_chain_lu_mut`]. The forward sweep
+/// then visits each bond from left to right, unfolds the left core to a
+/// `(left_bond * site) x bond` matrix and calls `factorize(state, matrix,
+/// true)`. The backward sweep visits the bonds from right to left, unfolds the
+/// right core to a `bond x (site * right_bond)` matrix and calls
+/// `factorize(state, matrix, false)`. `factorize` returns factors `(L, R)`
+/// with `L * R` approximating the matrix; their shared dimension becomes the
+/// new bond. `multiply` absorbs the factor that does not replace the visited
+/// core into its neighbor. `state` is passed to both closures, for example a
+/// backend session.
+///
+/// Unfoldings index rows as `l * site + s` and columns as `s * right + r`.
+///
+/// # Errors
+///
+/// Returns invalid core shapes, factor shapes that disagree with the
+/// unfolding, multiplication and allocation failures as
+/// [`ChainCompressionError`] converted into `C::Error`, and passes through
+/// any error from `factorize`. If a step fails, bonds updated before the
+/// failure keep their new values.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_core::{compress_chain_cores_mut, rrlu_mut, ChainCompressionError, ColMajorArray};
+/// use tensor4all_tensorbackend::mat_mul;
+/// // A rank-one chain stored with bond dimension two.
+/// let mut cores = [
+///     ColMajorArray::new(vec![1.0_f64, 1.0, 2.0, 2.0], vec![1, 2, 2])?,
+///     ColMajorArray::new(vec![1.0, 1.0, 3.0, 3.0], vec![2, 2, 1])?,
+/// ];
+/// compress_chain_cores_mut(
+///     &mut cores,
+///     &mut (),
+///     |(), mut matrix, _| {
+///         let lu = rrlu_mut(&mut matrix, None).map_err(ChainCompressionError::from)?;
+///         Ok((lu.left(true), lu.right(true)))
+///     },
+///     |(), left, right| mat_mul(left, right),
+/// )?;
+/// assert_eq!(cores[0].shape(), &[1, 2, 1]);
+/// assert_eq!(cores[1].shape(), &[1, 2, 1]);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn compress_chain_cores_mut<T: Copy, C: ChainCore<T>, S>(
     cores: &mut [C],
     state: &mut S,
     mut factorize: impl FnMut(&mut S, Matrix<T>, bool) -> Result<(Matrix<T>, Matrix<T>), C::Error>,
@@ -339,8 +549,12 @@ fn matrix_data<T>(
     Ok(matrix.as_col_major_slice())
 }
 
-// Preserve the historical unfolding row l*site+s and column s*right+r.
-// Swap the two fused axes over chunks of the unchanged inner dimensions.
+// The fused row index is l * site + s and the fused column index is
+// s * right + r. Exact ties in pivot magnitude are broken in this order, so it
+// determines which pivots the sweeps retain; core storage is column-major, so
+// each unfolding swaps the two fused axes. `data` is a sequence of blocks of
+// `inner * first * second` elements; within each block, chunks of `inner`
+// elements are reordered from `first`-fastest to `second`-fastest.
 fn swap_blocks<T: Copy>(
     data: &[T],
     inner: usize,
@@ -349,17 +563,27 @@ fn swap_blocks<T: Copy>(
 ) -> Result<Vec<T>, ChainCompressionError> {
     let mut result = Vec::new();
     result.try_reserve_exact(data.len())?;
-    if data.is_empty() || first == 1 || second == 1 {
+    if data.is_empty() {
+        return Ok(result);
+    }
+    let block = inner
+        .checked_mul(first)
+        .and_then(|stride| stride.checked_mul(second))
+        .filter(|&block| block != 0 && data.len().is_multiple_of(block))
+        .ok_or(ChainCompressionError::BufferLength {
+            len: data.len(),
+            block: inner.saturating_mul(first).saturating_mul(second),
+        })?;
+    if first == 1 || second == 1 {
         result.extend_from_slice(data);
         return Ok(result);
     }
-    // INVARIANT: the nonempty core or unfolding has a validated element count.
     let stride = inner * first;
-    for block in data.chunks_exact(stride * second) {
+    for chunk in data.chunks_exact(block) {
         for k in 0..first {
             for j in 0..second {
                 let start = k * inner + j * stride;
-                result.extend_from_slice(&block[start..start + inner]);
+                result.extend_from_slice(&chunk[start..start + inner]);
             }
         }
     }

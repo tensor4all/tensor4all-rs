@@ -2,9 +2,11 @@
 
 The Fourier builders generate local Chen–Lindsey cores as column-major arrays
 with shape `[left_bond, 4, right_bond]`. The fused physical position is
-`2 * output_bit + input_bit`. Core owns the two compression sweeps, shared
-with SimpleTT compression. The forward sweep keeps the historical relative
-pivot floor of `1e-14` and applies no rank cap. The backward sweep uses the
+`2 * output_bit + input_bit`. Core owns the two compression sweeps
+(`compress_chain_lu_mut`, `compress_chain_lu_on_session`, and the generic
+`compress_chain_cores_mut` that SimpleTT's SVD path uses), and SimpleTT
+compresses its own cores through the `ChainCore` adapter. The forward sweep
+uses a relative pivot floor of `1e-14` and applies no rank cap. The backward sweep uses the
 Fourier options for the relative pivot threshold and rank cap, with the same
 floor when the threshold is zero. The matrix unfolding order stays fixed so a
 change in representation does not change pivot tie-breaking. Per-site

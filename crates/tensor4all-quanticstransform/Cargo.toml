@@ -75,8 +75,7 @@ sprs = { version = "0.11", optional = true }
 
 [dev-dependencies]
 tensor4all-interpolativeqtt = { path = "../tensor4all-interpolativeqtt", default-features = false }
-# The large Fourier example generates test input with InterpolativeQTT.
-tensor4all-simplett = { path = "../tensor4all-simplett", default-features = false }
+# `tests/integration_test.rs` converts SimpleTT states with the TreeTN bridge.
 tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false, features = ["simplett-bridge"] }
 # A real patched producer supplies the Fourier spectator-layout regression.
 tensor4all-treetci = { path = "../tensor4all-treetci", default-features = false }

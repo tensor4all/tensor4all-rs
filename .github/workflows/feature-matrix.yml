@@ -137,6 +137,12 @@ jobs:
         if: matrix.name == 'fourier-without-simplett'
         run: ./scripts/check-fourier-dependencies.sh --run
 
+      - name: Run the transform crate's tests without SimpleTT transforms
+        if: matrix.name == 'fourier-without-simplett'
+        # Unit tests, doctests and the integration tests whose required
+        # features are met compile with the `simplett-transforms` cfg off.
+        run: cargo test --locked -p tensor4all-quanticstransform --no-default-features --features tenferro-cpu-platform,partitioned
+
       - name: Audit panic paths for the configuration
         # A configuration selects a subset of the workspace, so the audit keeps
         # the reviewed default baseline as an allowlist and does not report

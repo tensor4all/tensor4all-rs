@@ -240,10 +240,9 @@ missing site indices.
 
 `patched_fourier_large` builds shifted periodic Gaussians by single-scale
 interpolative QTT construction, cuts input prefix patches and transforms them
-without enumerating a dense grid. This workload uses InterpolativeQTT and the
-SimpleTT bridge to prepare its input. The patched Fourier transform takes the
-resulting TreeTN patches. InterpolativeQTT's migration to TreeTN is tracked in
-[#1334](https://github.com/tensor4all/tensor4all-rs/issues/1334).
+without enumerating a dense grid. InterpolativeQTT returns the input as TreeTN
+chains, and the patched Fourier transform takes the resulting TreeTN patches
+without a SimpleTT conversion.
 
 The Gaussian is defined by a finite Fourier series with known discrete
 coefficients, so its DFT oracle has no continuous-FT

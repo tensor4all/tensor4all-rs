@@ -497,6 +497,43 @@ fn session_svd_requires_no_lu_pivoting_bound() {
 }
 
 #[test]
+fn compress_rejects_invalid_truncation_for_every_method_before_mutation() {
+    let invalid = [
+        (-1e-8, None),
+        (f64::NAN, None),
+        (f64::INFINITY, None),
+        (1e-12, Some(0)),
+    ];
+    for method in [
+        CompressionMethod::LU,
+        CompressionMethod::CI,
+        CompressionMethod::SVD,
+    ] {
+        for (tolerance, max_bond_dim) in invalid {
+            let mut tt = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 3.0)
+                .add(&SimpleTensorTrain::constant(&[2, 2, 2], 1.0))
+                .unwrap();
+            let original = tt.site_tensors().to_vec();
+            let error = tt
+                .compress(&CompressionOptions {
+                    method,
+                    tolerance,
+                    max_bond_dim,
+                    normalize_error: true,
+                })
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("finite nonnegative tolerance and a positive cap"),
+                "{method:?}, {tolerance}, {max_bond_dim:?}: {error}"
+            );
+            assert_eq!(tt.site_tensors(), original);
+        }
+    }
+}
+
+#[test]
 fn session_compression_rejects_unsupported_methods_before_mutation_or_shortcuts() {
     let mut backend = tensor4all_tensorbackend::CpuBackend::with_threads(1).unwrap();
     let mut session = Session::new(backend.engine_mut());

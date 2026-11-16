@@ -28,9 +28,11 @@ pub struct ReadmeDoctests;
 
 pub mod prelude;
 
-#[doc(hidden)]
 pub mod chain_compression;
-pub use chain_compression::{compress_chain_lu_mut, ChainCompressionError};
+pub use chain_compression::{
+    compress_chain_cores_mut, compress_chain_lu_mut, compress_chain_lu_on_session,
+    ChainCompressionError, ChainCore, ChainLuFactorization, ChainLuOptions,
+};
 
 pub mod col_major_array;
 pub use col_major_array::{ColMajorArray, ColMajorArrayMut, ColMajorArrayRef};
