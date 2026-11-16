@@ -777,3 +777,35 @@ fn test_update_site_tensor_from_matrix_decodes_left_and_right_fusions() {
         .unwrap();
     assert_eq!(tci.t_tensors[1], expected);
 }
+
+#[test]
+fn test_add_global_pivot_with_prefix_present_and_suffix_absent() {
+    // #1346: the pivot's prefix `[0]` is already in `i_set[1]`, while its
+    // suffix `[1, 1]` is new in `j_set[0]`. Growing only the suffix leaves the
+    // two index families at different cardinalities, so the train breaks.
+    let f = |idx: &Vec<usize>| 1.0 + (idx[1] as f64) * ((idx[0] + idx[2] + 1) as f64);
+    let mut tci = TensorCI1::<f64>::from_function(&f, vec![3, 3, 3], vec![0, 0, 0]).unwrap();
+
+    assert_eq!(tci.evaluate(&[0, 1, 1]).unwrap(), 2.0);
+    let error = tci.add_global_pivot(&f, vec![0, 1, 1], 0.0).unwrap_err();
+    assert!(matches!(error, TCIError::InvalidOperation { .. }));
+    assert!(error.to_string().contains("bond 0"));
+
+    // The refusal comes before any mutation: the original state still works.
+    assert_eq!(tci.evaluate(&[0, 1, 1]).unwrap(), 2.0);
+    assert_eq!(tci.to_tensor_train().unwrap().link_dims(), vec![1, 1]);
+}
+
+#[test]
+fn test_rebuild_aca_rejects_unequal_row_and_col_index_sets() {
+    // Defense in depth for #1346: a desynchronized state must not be shortened
+    // silently by zipping the two index lists.
+    let f = |idx: &Vec<usize>| 1.0 / ((idx[0] + idx[1] + 2) as f64);
+    let mut tci = TensorCI1::<f64>::from_function(&f, vec![4, 4], vec![0, 0]).unwrap();
+    tci.i_set[1].push(vec![1]);
+
+    let error = tci.rebuild_aca(0).unwrap_err();
+    assert!(matches!(error, TCIError::DimensionMismatch { .. }));
+    assert!(error.to_string().contains("row indices but"));
+    assert!(error.to_string().contains("column indices"));
+}
