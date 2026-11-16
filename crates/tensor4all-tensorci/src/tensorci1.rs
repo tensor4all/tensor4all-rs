@@ -682,6 +682,11 @@ where
     /// Returns [`TCIError::InvalidConfiguration`] when `abstol` is negative or
     /// non-finite. It also returns a [`TCIError`] if `pivot` is malformed or out
     /// of range, if a pivot update fails, or if index sets become inconsistent.
+    /// It returns [`TCIError::InvalidOperation`] without modifying the state
+    /// when, at some bond, the pivot's prefix is already an index-set entry
+    /// while its suffix is not (or the reverse): growing only one side would
+    /// break the bond rank contract, and a paired filler pivot is not chosen by
+    /// this method.
     ///
     /// # Examples
     ///
@@ -706,6 +711,30 @@ where
         let current = self.evaluate(&pivot)?;
         if Scalar::abs_sq(exact - current).sqrt() < abstol {
             return Ok(());
+        }
+
+        // A bond grows one row and one column together, so `i_set[bond + 1]`
+        // and `j_set[bond]` keep the same cardinality. When the pivot brings
+        // only one side to a bond, the paired side would have to come from a
+        // separately chosen filler pivot; refuse before touching any state
+        // rather than leave a malformed train behind (#1346).
+        for bond in 0..self.len() - 1 {
+            let prefix = pivot[..bond + 1].to_vec();
+            let suffix = pivot[bond + 1..].to_vec();
+            let prefix_present = self.i_set[bond + 1].contains(&prefix);
+            let suffix_present = self.j_set[bond].contains(&suffix);
+            if prefix_present != suffix_present {
+                return Err(TCIError::InvalidOperation {
+                    message: format!(
+                        "add_global_pivot: at bond {bond} the pivot's prefix is {} but its suffix is {}; \
+                         inserting one side without the other would desynchronize i_set[{}] and j_set[{}]",
+                        if prefix_present { "present" } else { "new" },
+                        if suffix_present { "present" } else { "new" },
+                        bond + 1,
+                        bond
+                    ),
+                });
+            }
         }
 
         for bond in 0..self.len() - 1 {
@@ -983,6 +1012,15 @@ where
     fn rebuild_aca(&mut self, bond: usize) -> Result<()> {
         let row_indices = positions_in_set(&self.pi_i_set[bond], self.i_set[bond + 1].values())?;
         let col_indices = positions_in_set(&self.pi_j_set[bond + 1], self.j_set[bond].values())?;
+        if row_indices.len() != col_indices.len() {
+            return Err(TCIError::DimensionMismatch {
+                message: format!(
+                    "rebuild_aca: bond {bond} has {} row indices but {} column indices",
+                    row_indices.len(),
+                    col_indices.len()
+                ),
+            });
+        }
         let mut aca = MatrixACA::new(self.pi[bond].nrows(), self.pi[bond].ncols());
         for (&row, &col) in row_indices.iter().zip(col_indices.iter()) {
             aca.add_pivot_col(&self.pi[bond], col)?;
