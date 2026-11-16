@@ -1159,7 +1159,7 @@ where
 /// Returns the extended operator together with the gap nodes' site index pairs,
 /// so a zip-up can skip the nodes whose operator factor is that identity.
 #[allow(clippy::type_complexity)]
-fn extend_operator_to_full_space<T, V>(
+pub(super) fn extend_operator_to_full_space<T, V>(
     operator: &LinearOperator<T, V>,
     state: &TreeTN<T, V>,
 ) -> Result<(LinearOperator<T, V>, IdentityNodes<T::Index, V>)>
@@ -1560,7 +1560,7 @@ where
 }
 
 /// Transform state's site indices to operator's input indices.
-fn transform_state_to_input<T, V>(
+pub(super) fn transform_state_to_input<T, V>(
     operator: &LinearOperator<T, V>,
     state: &TreeTN<T, V>,
 ) -> Result<TreeTN<T, V>>
@@ -1585,7 +1585,7 @@ where
 }
 
 /// Transform operator's output indices to true output indices.
-fn transform_output_to_true<T, V>(
+pub(super) fn transform_output_to_true<T, V>(
     operator: &LinearOperator<T, V>,
     mut result: TreeTN<T, V>,
 ) -> Result<TreeTN<T, V>>

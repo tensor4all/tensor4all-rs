@@ -9,7 +9,7 @@
 //!
 //! The exact application factorizes every zip-up block by QR (#1285). The same
 //! shapes also run through `schedule_merge_refine` with an untruncated SVD
-//! zip-up as its `apply_options`: the schedule then measures, per image, the
+//! zip-up as its measured application: the schedule then measures, per image, the
 //! distance between the QR image and the SVD image, so a tight tolerance checks
 //! that the two factorizations give the same images to roundoff.
 
@@ -28,7 +28,7 @@ use tensor4all_treetn::{ApplyOptions, IndexMapping, LinearOperator};
 
 /// A tree tensor network with the given sites per node and edges, filled with
 /// seeded random entries; bond dimensions are 3.
-fn random_tree<T: TensorElement>(
+pub(crate) fn random_tree<T: TensorElement>(
     sites: &[Vec<DynIndex>],
     edges: &[(usize, usize)],
     entry: fn(&mut ChaCha8Rng) -> T,
@@ -55,7 +55,7 @@ fn random_tree<T: TensorElement>(
 ///
 /// Node `k` acts on `selection[k]`, so the caller orders `selection` along a
 /// path of the state.
-fn random_operator<T: TensorElement>(
+pub(crate) fn random_operator<T: TensorElement>(
     selection: &[DynIndex],
     entry: fn(&mut ChaCha8Rng) -> T,
     random: &mut ChaCha8Rng,
@@ -101,7 +101,7 @@ fn random_operator<T: TensorElement>(
 
 /// The dense `A x`: the dense operator contracted with the dense state over the
 /// selected sites, the output written back onto the same site indices.
-fn dense_reference(
+pub(crate) fn dense_reference(
     operator: &LinearOperator<IdxTensor, usize>,
     state: &TreeTN<IdxTensor, usize>,
     selection: &[DynIndex],
@@ -225,7 +225,7 @@ fn check<T: TensorElement>(
         &SubsetOperatorOptions::default(),
         tolerance,
         &MergeRefineOptions {
-            apply_options: Some(ApplyOptions {
+            application: OperatorApplication::Measured(ApplyOptions {
                 svd_policy: Some(SvdTruncationPolicy::new(f64::MIN_POSITIVE)),
                 max_bond_dim: None,
                 ..ApplyOptions::zipup()
@@ -245,11 +245,11 @@ fn check<T: TensorElement>(
     );
 }
 
-fn real(random: &mut ChaCha8Rng) -> f64 {
+pub(crate) fn real(random: &mut ChaCha8Rng) -> f64 {
     random.random_range(-1.0..1.0)
 }
 
-fn complex(random: &mut ChaCha8Rng) -> Complex64 {
+pub(crate) fn complex(random: &mut ChaCha8Rng) -> Complex64 {
     Complex64::new(
         random.random_range(-1.0..1.0),
         random.random_range(-1.0..1.0),

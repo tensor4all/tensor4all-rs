@@ -70,8 +70,9 @@ use std::{
 };
 
 use tensor4all_core::IdxTensor;
-use tensor4all_treetn::{ApplyOptions, LinearOperator};
+use tensor4all_treetn::{ApplyOptions, CertifiedApplyOptions, LinearOperator};
 
+use super::application::LeafApplication;
 use super::engine::{checked_add, parameter_count, truncate_toward_allowance};
 use super::{
     absolute_allowance, finite, invalid, single_term_partition, validate_tolerance,
@@ -93,7 +94,9 @@ use crate::{
 /// # Examples
 ///
 /// ```
-/// use tensor4all_partitionedtreetn::reconstruction::{CoverageContract, MergeRefineOptions};
+/// use tensor4all_partitionedtreetn::reconstruction::{
+///     CoverageContract, MergeRefineOptions, OperatorApplication,
+/// };
 /// let options = MergeRefineOptions::<usize>::default();
 /// assert_eq!(options.output_depth, None);
 /// assert_eq!(options.max_work_items, 4096);
@@ -101,7 +104,7 @@ use crate::{
 /// assert_eq!(options.target_bond_dim, None);
 /// assert_eq!(options.coverage, CoverageContract::Complete);
 /// assert!(options.output_regions.is_none());
-/// assert!(options.apply_options.is_none());
+/// assert!(matches!(options.application, OperatorApplication::Exact));
 /// ```
 #[derive(Debug, Clone)]
 pub struct MergeRefineOptions<V> {
@@ -183,16 +186,75 @@ pub struct MergeRefineOptions<V> {
     /// The input side is selected by [`Self::coverage`]; the two selections
     /// compose.
     pub output_regions: Option<Vec<Projector>>,
-    /// Truncating operator-application options, default `None`.
-    ///
-    /// `None` applies the operator exactly. `Some(options)` applies it with those
-    /// options and measures the deviation from the exact application of the same
-    /// patch, so the truncation is charged to that item's error budget instead of
-    /// becoming a silent approximation. The exact application is always performed
-    /// as the reference, so requesting this costs a second application per input
-    /// leaf, and a measured application error above the global allowance is
-    /// rejected.
-    pub apply_options: Option<ApplyOptions<V>>,
+    /// How the operator is applied to each input leaf, default
+    /// [`OperatorApplication::Exact`]. See [`OperatorApplication`] for what each
+    /// choice charges to the error budget.
+    pub application: OperatorApplication<V>,
+}
+
+/// How [`schedule_merge_refine`] applies the operator to each input leaf, and
+/// which application error it charges.
+///
+/// The choice is explicit because the charged error means different things:
+/// nothing (exact), a measured difference (measured), or a proved bound
+/// (certified). The schedule never switches between them on its own.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtreetn::reconstruction::OperatorApplication;
+/// use tensor4all_treetn::ApplyOptions;
+///
+/// let exact = OperatorApplication::<usize>::default();
+/// assert!(matches!(exact, OperatorApplication::Exact));
+///
+/// // Half of the global allowance for the application, 4 GiB of factors.
+/// let certified = OperatorApplication::<usize>::certified(0.5);
+/// assert!(matches!(
+///     certified,
+///     OperatorApplication::Certified { share, memory_limit }
+///         if share == 0.5 && memory_limit == 4 << 30
+/// ));
+///
+/// let measured = OperatorApplication::Measured(ApplyOptions::<usize>::zipup().with_max_bond_dim(32));
+/// assert!(matches!(measured, OperatorApplication::Measured(_)));
+/// ```
+#[derive(Debug, Clone, Default)]
+pub enum OperatorApplication<V> {
+    /// Exact zip-up (zero SVD threshold, no cap). Nothing is charged; the image
+    /// carries only backend roundoff. The exact image of every leaf must fit in
+    /// memory.
+    #[default]
+    Exact,
+    /// Truncating application with a certified bound, through
+    /// [`apply_linear_operator_certified`](tensor4all_treetn::apply_linear_operator_certified).
+    /// The exact image is never formed. `share` of the global absolute
+    /// allowance is split equally over the input leaves as their budgets, and
+    /// each leaf's proved bound is charged as its application error. Supported
+    /// on chain-shaped states only.
+    Certified {
+        /// Fraction of the global allowance given to the application, in
+        /// `(0, 1]`. Required: what is left is all the merges may spend.
+        share: f64,
+        /// Memory limit of each leaf's application, in bytes; see
+        /// [`CertifiedApplyOptions::memory_limit`].
+        memory_limit: usize,
+    },
+    /// The caller's truncating options. Every leaf is also applied exactly as
+    /// the reference, and the measured difference is charged, so this costs a
+    /// second application per leaf and needs the exact image in memory.
+    Measured(ApplyOptions<V>),
+}
+
+impl<V> OperatorApplication<V> {
+    /// Certified application with `share` of the allowance and the default
+    /// memory limit ([`CertifiedApplyOptions::DEFAULT_MEMORY_LIMIT`]).
+    pub fn certified(share: f64) -> Self {
+        Self::Certified {
+            share,
+            memory_limit: CertifiedApplyOptions::DEFAULT_MEMORY_LIMIT,
+        }
+    }
 }
 
 /// How much of the dyadic input tree the preimage must cover.
@@ -230,7 +292,7 @@ impl<V> Default for MergeRefineOptions<V> {
             target_bond_dim: None,
             max_terms: 1 << 20,
             coverage: CoverageContract::default(),
-            apply_options: None,
+            application: OperatorApplication::Exact,
         }
     }
 }
@@ -292,9 +354,11 @@ pub struct MergeRefineReport {
     /// computed output regions: under [`MergeRefineOptions::output_regions`] the
     /// unrequested regions are not part of the result, and their truncation
     /// residuals and dropped norms are not measured. The level-zero application
-    /// error of [`MergeRefineOptions::apply_options`] is measured on the whole
+    /// error of [`MergeRefineOptions::application`] is measured on the whole
     /// output domain before any restriction and is included unchanged, so the
-    /// bound stays conservative.
+    /// bound stays conservative. For [`OperatorApplication::Certified`] the
+    /// application error is the sum of the leaves' certified bounds, so it is
+    /// proved rather than measured; the rest of the bound is still measured.
     pub error_bound: f64,
     /// Number of executed level transitions.
     pub level_count: usize,
@@ -1233,8 +1297,8 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// that only partially overlaps a refined region, or that has per-axis depths the
 /// refined level cannot reproduce, yields the schedule cells that intersect it.
 ///
-/// With [`MergeRefineOptions::target_bond_dim`] unset and no
-/// [`MergeRefineOptions::apply_options`], nothing is truncated and the reported
+/// With [`MergeRefineOptions::target_bond_dim`] unset and the exact
+/// [`MergeRefineOptions::application`], nothing is truncated and the reported
 /// bound is exactly zero. With a goal the trajectory is adaptive and the decision
 /// is made per axis: an output region is merged without splitting first and stops on
 /// every axis as soon as that candidate fits the goal; otherwise the region probes
@@ -1288,11 +1352,15 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// [`ReconstructionTarget::from_subset_operator`]);
 /// [`PartitionedTreeTNError::InvalidOptions`]
 /// again when the measured application error of
-/// [`MergeRefineOptions::apply_options`] already exceeds the allowance;
+/// [`OperatorApplication::Measured`] already exceeds the allowance, for a
+/// [`OperatorApplication::Certified`] share outside `(0, 1]`, for a certified
+/// application on a state that is not a chain, and for a certified leaf that
+/// cannot meet its budget even at full rank;
 /// [`PartitionedTreeTNError::RefinementTooLarge`] when the varying spectator
 /// coordinate grid exceeds the work or term limit (before tensor operations);
 /// [`PartitionedTreeTNError::ResourceLimit`] when its refined leaf count exceeds
-/// those limits; and the operator-mapping,
+/// those limits, and when a certified leaf's memory estimate exceeds its
+/// `memory_limit`, before that leaf is applied; and the operator-mapping,
 /// node-merging, application, projection, addition, and backend errors reported
 /// by the underlying TreeTN operations.
 ///
@@ -1379,6 +1447,13 @@ where
     if options.target_bond_dim == Some(0) {
         return Err(invalid("target_bond_dim must be positive when specified"));
     }
+    if let OperatorApplication::Certified { share, .. } = options.application {
+        if !(share > 0.0 && share <= 1.0) {
+            return Err(invalid(
+                "the certified application's share of the allowance must lie in (0, 1]",
+            ));
+        }
+    }
     let mut geometry = ScheduleGeometry::new(selection, options.coordinate_groups.as_deref())?;
     let levels = geometry.level_count();
     let output_depth = options.output_depth.unwrap_or(levels);
@@ -1456,7 +1531,18 @@ where
         operator,
         selection,
         subset,
-        options.apply_options.as_ref(),
+        match &options.application {
+            OperatorApplication::Exact => LeafApplication::Exact,
+            OperatorApplication::Measured(requested) => LeafApplication::Measured(requested),
+            OperatorApplication::Certified {
+                share,
+                memory_limit,
+            } => LeafApplication::Certified {
+                share: *share,
+                memory_limit: *memory_limit,
+                tolerance,
+            },
+        },
     )?;
     let super::target::PreparedImages { images, scale } = prepared;
     let allowance = absolute_allowance(tolerance, scale)?;
@@ -1499,7 +1585,7 @@ where
     }
     if application_error > allowance {
         return Err(invalid(
-            "the measured application error exceeds the global allowance; relax the tolerance or the truncating apply options",
+            "the measured application error exceeds the global allowance; relax the tolerance or the measured application's options",
         ));
     }
     // Conservative l1 allocation, spent level by level: the measured application
