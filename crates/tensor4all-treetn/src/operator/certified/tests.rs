@@ -383,14 +383,22 @@ fn the_step_gate_counts_the_whole_working_set_of_a_step() {
 fn the_estimate_counts_complex_entries_twice() {
     let sites = chain(4);
     let nodes: Vec<usize> = (0..4).collect();
+    // The step gate counts the kept rank of the previous step, so the kept
+    // ranks must not depend on the data: a budget far above `||Ax||` keeps
+    // rank one at every cut for both scalar types.
     let estimate = |complex: bool| {
         let state = random_state(&sites, complex, 3, 71);
         let operator = random_operator(&sites, &nodes, &chain_edges(&nodes), complex, 2, 72);
-        apply_linear_operator_certified(&operator, &state, CertifiedApplyOptions::new(1e3))
-            .unwrap()
-            .estimated_bytes()
+        let certified =
+            apply_linear_operator_certified(&operator, &state, CertifiedApplyOptions::new(1e12))
+                .unwrap();
+        assert_eq!(certified.network().link_dims(), vec![1; 3]);
+        (certified.factor_bytes(), certified.estimated_bytes())
     };
-    assert_eq!(estimate(true), 2 * estimate(false));
+    let (complex_factors, complex_estimate) = estimate(true);
+    let (real_factors, real_estimate) = estimate(false);
+    assert_eq!(complex_factors, 2 * real_factors);
+    assert_eq!(complex_estimate, 2 * real_estimate);
 }
 
 #[test]
