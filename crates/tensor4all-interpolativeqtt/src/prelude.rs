@@ -19,13 +19,14 @@
 
 pub use crate::{
     direct_product_core_tensors, estimate_interpolation_error, estimate_interpolation_error_nd,
-    get_chebyshev_grid, interpolate_adaptive, interpolate_adaptive_nd, interpolate_multi_scale,
-    interpolate_multi_scale_nd, interpolate_single_scale, interpolate_single_scale_nd,
-    interpolate_single_scale_sparse, interpolate_single_scale_sparse_nd, interpolation_tensor,
-    invert_qtt, InterpolativeQtt, InterpolativeQttOptions, InterpolativeScalar,
-    LagrangePolynomials,
+    get_chebyshev_grid, interpolate_adaptive, interpolate_adaptive_nd,
+    interpolate_chebyshev_patches, interpolate_multi_scale, interpolate_multi_scale_nd,
+    interpolate_single_scale, interpolate_single_scale_nd, interpolate_single_scale_sparse,
+    interpolate_single_scale_sparse_nd, interpolation_tensor, invert_qtt, ChebyshevPatch,
+    ChebyshevPatchOptions, ChebyshevPatches, ExtraValidation, InterpolativeQtt,
+    InterpolativeQttOptions, InterpolativeScalar, LagrangePolynomials,
 };
 
 #[cfg(feature = "parallel")]
-pub use crate::interpolate_patched_nd_on_lanes;
+pub use crate::{interpolate_chebyshev_patches_on_lanes, interpolate_patched_nd_on_lanes};
 pub use crate::{interpolate_patched_nd, InterpolativePatch, PatchedInterpolativeOptions};

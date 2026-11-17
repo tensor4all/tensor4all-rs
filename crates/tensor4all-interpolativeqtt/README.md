@@ -43,6 +43,17 @@ default, but lane execution is tested on faer only. With a BLAS provider
 (Accelerate, system BLAS) each lane calls a library with its own threading,
 which can oversubscribe the cores.
 
+`interpolate_chebyshev_patches` builds a plain piecewise Chebyshev interpolant
+instead of a QTT: an accepted dyadic box keeps its Chebyshev-Lobatto node values
+and nothing is compressed. A box that fails its sampled L-infinity residual
+splits into `2^D` children, whose node values are exactly the parent's validation
+points, so a child never resamples its node grid: it inherits those values and
+samples only its own validation points. (`ChebyshevPatches`)
+evaluates the result on the continuous box, and `ExtraValidation` optionally
+samples points beyond the inherited grid for a residual peak that lies between
+them. `parallel` adds `interpolate_chebyshev_patches_on_lanes` with the same
+lane contract; the inherited node values travel inside each lane's work item.
+
 The [guide tutorial](../../docs/book/src/tutorials/quantics-basics/interpolative-qtt.md#independent-dyadic-patches)
 links an executable complex 2D construction, TreeTN embedding and patched
 Fourier reference check.

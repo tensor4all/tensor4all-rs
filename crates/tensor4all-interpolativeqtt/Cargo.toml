@@ -50,6 +50,11 @@ tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 # The public API takes caller-owned `CpuEngine`s (`explicit-context`).
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false, features = ["explicit-context"] }
 
+[[bench]]
+name = "chebyshev_patches"
+harness = false
+path = "benches/chebyshev_patches.rs"
+
 [dev-dependencies]
 rayon.workspace = true
 approx.workspace = true

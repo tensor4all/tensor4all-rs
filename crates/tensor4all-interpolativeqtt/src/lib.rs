@@ -2,8 +2,11 @@
 //! Interpolative Quantics Tensor Train construction.
 //!
 //! This crate ports the tested construction surface of
-//! `InterpolativeQTT.jl` to Rust. Constructors return
-//! [`InterpolativeQtt`] values for evaluation through TreeTN.
+//! `InterpolativeQTT.jl` to Rust. The QTT constructors ([`interpolate_single_scale`],
+//! [`interpolate_multi_scale`], [`interpolate_adaptive`] and
+//! [`interpolate_patched_nd`]) return [`InterpolativeQtt`] values for evaluation
+//! through TreeTN; [`interpolate_chebyshev_patches`] instead returns a piecewise
+//! [`ChebyshevPatches`] interpolant that is evaluated directly.
 //! Every constructor takes real (`f64`) or complex (`Complex64`) function
 //! values; see [`InterpolativeScalar`].
 //!
@@ -35,6 +38,7 @@ pub struct ReadmeDoctests;
 pub mod prelude;
 
 mod basis;
+mod chebyshev_patches;
 mod core_array;
 mod error;
 mod interpolation;
@@ -44,6 +48,12 @@ mod patched;
 
 pub use basis::{
     direct_product_core_tensors, get_chebyshev_grid, interpolation_tensor, LagrangePolynomials,
+};
+#[cfg(feature = "parallel")]
+pub use chebyshev_patches::interpolate_chebyshev_patches_on_lanes;
+pub use chebyshev_patches::{
+    interpolate_chebyshev_patches, ChebyshevPatch, ChebyshevPatchOptions, ChebyshevPatches,
+    ExtraValidation,
 };
 pub use error::{InterpolativeQttError, Result};
 pub use interpolation::{
