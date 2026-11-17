@@ -17,7 +17,7 @@ use crate::error::{Result as TreeTciResult, TreeTciError};
 use crate::evaluation::{BatchExecution, Compatibility};
 use crate::{
     batch::EVALUATION_CHUNK_POINTS, materialize::to_treetn_chunked, GlobalIndexBatch, MultiIndex,
-    TreeTCI2,
+    SubtreeKey, TreeTCI2,
 };
 use anyhow::Result;
 use rand::{Rng, RngCore, SeedableRng};
@@ -32,7 +32,7 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 // move the same values through one more layer.
 /// Search for multi-indices where the current approximation error is large.
 ///
-/// Algorithm (mirrors `DefaultGlobalPivotFinder` in `tensor4all-tensorci`):
+/// Algorithm:
 ///
 /// 1. Materialize the current [`TreeTCI2`] state as a `TreeTN`.
 /// 2. Walk every caller-supplied start, then draw and walk `nsearch` random
@@ -40,8 +40,14 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 /// 3. Walk each start with [`floating_zone_walk`], retaining the maximizing
 ///    coordinate between site scans and repeating sweeps until no improvement,
 ///    an error above `10 * abs_tol * tol_margin`, or 100 sweeps.
-/// 4. Keep points whose error exceeds `abs_tol * tol_margin`.
-/// 5. Return at most `max_nglobal_pivot` distinct points.
+/// 4. Prefer points above `abs_tol * tol_margin`. If none cross that margin,
+///    keep observed errors above `abs_tol` instead.
+/// 5. If no point qualifies, confirm retained tail pivot pairs at edges with
+///    a dimension-one endpoint, then randomize their complementary subtrees
+///    while holding one observed subtree fixed. Each family adds at most
+///    `nsearch` walks, using `abs_tol` as its threshold. This helps a sparse
+///    target whose random starts fall on zero fibers.
+/// 6. Return at most `max_nglobal_pivot` distinct points.
 ///
 /// Caller-supplied starts let a caller aim the search at a region it already
 /// suspects, such as a corner of a patch. A corner-localized feature otherwise
@@ -63,12 +69,14 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 ///
 ///   [`optimize_with_proposer`](crate::optimize_with_proposer).
 /// * `nsearch` -- number of random starting points, drawn after the
-///   caller-supplied starts.
+///   caller-supplied starts; also bounds each confirmation family at unit
+///   endpoints. Zero disables both random and confirmation starts.
 /// * `starts` -- caller-supplied starting points as full-site multi-indices,
 ///   walked before the random ones. Each must have one coordinate per site and
 ///   an in-range coordinate. An empty slice adds none.
 /// * `max_nglobal_pivot` -- maximum number of pivots returned.
-/// * `tol_margin` -- acceptance margin over `abs_tol`.
+/// * `tol_margin` -- discovery margin over `abs_tol`; when no discovery
+///   crosses it, observed tolerance violations can still be returned.
 /// * `abs_tol` -- absolute interpolation-error threshold.
 /// * `seed` -- Seed passed to `ChaCha8Rng` to generate the random starting
 ///   points. Pivot selection also depends on the target values and the
@@ -78,7 +86,7 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 ///
 /// Up to `max_nglobal_pivot` distinct full-site multi-indices where the
 /// current approximation is (likely) poor, strongest first. An empty vector
-/// when nothing exceeds the threshold. Among positive equal errors, the lower
+/// when nothing exceeds the applicable threshold. Among positive equal errors, the lower
 /// local value wins at each site; an all-zero scan keeps the held coordinate.
 /// Across starts, the earlier start wins. This is a greedy local search and
 /// can stall on flat zero fibers.
@@ -203,6 +211,7 @@ where
         abs_tol,
         &mut stream,
     )
+    .map(|result| result.pivots)
 }
 
 /// The search body on an already erased stream.
@@ -222,7 +231,7 @@ pub(crate) fn find_global_pivots_erased<T>(
     tol_margin: f64,
     abs_tol: f64,
     rng: &mut dyn RngCore,
-) -> TreeTciResult<Vec<MultiIndex>>
+) -> TreeTciResult<GlobalPivotSearchResult>
 where
     T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
 {
@@ -241,6 +250,78 @@ where
         cached_walk_readout,
         cached_walk_readout_on_session::<T>,
     )
+}
+
+/// Pivots plus the largest actual residual sampled by a search.
+#[derive(Debug, Default)]
+pub(crate) struct GlobalPivotSearchResult {
+    pub(crate) pivots: Vec<MultiIndex>,
+    pub(crate) max_error: f64,
+}
+
+#[derive(Debug)]
+struct RetainedPivotStart {
+    point: MultiIndex,
+    varying_sites: SubtreeKey,
+}
+
+/// A bounded, spread-out set of retained pivot pairs at unit endpoints.
+fn retained_pivot_starts<T>(
+    state: &TreeTCI2<T>,
+    limit: usize,
+) -> TreeTciResult<Vec<RetainedPivotStart>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let edges: Vec<_> = state
+        .graph
+        .edges()
+        .into_iter()
+        .filter(|edge| state.local_dims[edge.u()] == 1 || state.local_dims[edge.v()] == 1)
+        .collect();
+    if edges.is_empty() {
+        return Ok(Vec::new());
+    }
+    let stride = edges.len().div_ceil(limit);
+    let mut starts = Vec::with_capacity(edges.len().min(limit));
+    for edge in edges.into_iter().step_by(stride).take(limit) {
+        let (left_key, right_key) = state.graph.subregion_vertices(edge)?;
+        let left = state
+            .pivot_set(&left_key)
+            .ok_or_else(|| anyhow::anyhow!("missing retained left pivots"))?;
+        let right = state
+            .pivot_set(&right_key)
+            .ok_or_else(|| anyhow::anyhow!("missing retained right pivots"))?;
+        let rank = crate::ncols_2d(left)?;
+        let tail = rank
+            .checked_sub(1)
+            .ok_or_else(|| anyhow::anyhow!("empty retained pivot set"))?;
+        let mut point = vec![0; state.local_dims.len()];
+        for (&site, &coordinate) in left_key
+            .as_slice()
+            .iter()
+            .zip(crate::column_2d(left, tail)?)
+        {
+            point[site] = coordinate;
+        }
+        for (&site, &coordinate) in right_key
+            .as_slice()
+            .iter()
+            .zip(crate::column_2d(right, tail)?)
+        {
+            point[site] = coordinate;
+        }
+        let varying_sites = if state.local_dims[edge.u()] == 1 {
+            left_key
+        } else {
+            right_key
+        };
+        starts.push(RetainedPivotStart {
+            point,
+            varying_sites,
+        });
+    }
+    Ok(starts)
 }
 
 /// Scalar parameters of one global pivot search, as passed to
@@ -361,7 +442,7 @@ fn search_with_readout<T, R>(
     rng: &mut dyn RngCore,
     mut readout: R,
     readout_on_session: SessionReadout<T>,
-) -> TreeTciResult<Vec<MultiIndex>>
+) -> TreeTciResult<GlobalPivotSearchResult>
 where
     T: FullPivLuScalar + Scalar + tensor4all_core::TensorElement + ScalarParts,
     R: FnMut(
@@ -390,7 +471,7 @@ where
         .into());
     }
     if nsearch == 0 && starts.is_empty() {
-        return Ok(Vec::new());
+        return Ok(GlobalPivotSearchResult::default());
     }
     let n_sites = state.local_dims.len();
     for (index, start) in starts.iter().enumerate() {
@@ -412,7 +493,7 @@ where
         }
     }
     if max_nglobal_pivot == 0 || n_sites == 0 {
-        return Ok(Vec::new());
+        return Ok(GlobalPivotSearchResult::default());
     }
 
     // Materialize the current approximation once per search. A degenerate or
@@ -462,6 +543,8 @@ where
     let mut flat = Vec::with_capacity(flat_capacity);
     let mut start = Vec::with_capacity(n_sites);
     let threshold = abs_tol * tol_margin;
+    let acceptance_floor = abs_tol.min(threshold);
+    let mut max_error = 0.0_f64;
     let mut best = Vec::with_capacity(starts.len().saturating_add(nsearch));
     for provided in starts {
         let (error, point) = walk_from_start(
@@ -477,7 +560,8 @@ where
             &mut readout,
             readout_on_session,
         )?;
-        if error > threshold {
+        max_error = max_error.max(error);
+        if error > acceptance_floor {
             best.push((error, point));
         }
     }
@@ -497,8 +581,76 @@ where
             &mut readout,
             readout_on_session,
         )?;
-        if error > threshold {
+        max_error = max_error.max(error);
+        if error > acceptance_floor {
             best.push((error, point));
+        }
+    }
+
+    // Prefer exploratory discoveries above the configured margin. If there
+    // are none, retain observed errors above the actual tolerance instead of
+    // discarding known failures of the convergence criterion.
+    if best.iter().any(|(error, _)| *error > threshold) {
+        best.retain(|(error, _)| *error > threshold);
+    }
+
+    // Random walks can stay on an exactly zero fiber (e.g. a sparse branch
+    // factor). Retained pivot pairs stay on observed support and expose
+    // inconsistencies between neighboring updates. Probe the tail pivots,
+    // where a newly discovered direction is most easily lost, only when the
+    // ordinary search found no pivot. Confirmation uses the requested
+    // tolerance rather than the discovery margin. The loop runs at most
+    // nsearch times; each pass walks at most one retained pair and one
+    // subtree-anchored restart, so at most 2 * nsearch walks are added (a
+    // probe that finds an error skips its restart). Scratch is reused.
+    if best.is_empty() {
+        let retained = retained_pivot_starts(state, nsearch)?;
+        let mut support_start = vec![0; n_sites];
+        for (probe, anchor) in retained.iter().cycle().take(nsearch).enumerate() {
+            if probe < retained.len() {
+                let (error, point) = walk_from_start(
+                    state,
+                    execution,
+                    &mut cache,
+                    &treetn,
+                    &site_indices,
+                    n_sites,
+                    &mut flat,
+                    &anchor.point,
+                    abs_tol,
+                    &mut readout,
+                    readout_on_session,
+                )?;
+                max_error = max_error.max(error);
+                if error > abs_tol {
+                    best.push((error, point));
+                    continue;
+                }
+            }
+            // Keep an observed subtree intact while randomizing its
+            // complement. Coordinate walks alone cannot cross a zero fiber
+            // whose support requires several coordinates to change together.
+            support_start.copy_from_slice(&anchor.point);
+            for &site in anchor.varying_sites.as_slice() {
+                support_start[site] = rng.random_range(0..state.local_dims[site]);
+            }
+            let (error, point) = walk_from_start(
+                state,
+                execution,
+                &mut cache,
+                &treetn,
+                &site_indices,
+                n_sites,
+                &mut flat,
+                &support_start,
+                abs_tol,
+                &mut readout,
+                readout_on_session,
+            )?;
+            max_error = max_error.max(error);
+            if error > abs_tol {
+                best.push((error, point));
+            }
         }
     }
 
@@ -513,7 +665,7 @@ where
             }
         }
     }
-    Ok(pivots)
+    Ok(GlobalPivotSearchResult { pivots, max_error })
 }
 
 /// Walk one starting point and return its best error and the point that holds

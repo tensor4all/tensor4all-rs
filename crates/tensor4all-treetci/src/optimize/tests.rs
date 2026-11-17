@@ -27,6 +27,14 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         }
     }
 
+    #[derive(Default)]
+    struct Observed(Vec<(f64, crate::TreeTciEvaluationStats)>);
+    impl crate::TreeTciObserver for Observed {
+        fn iteration(&mut self, it: &crate::TreeTciIteration<'_>) {
+            self.0.push((it.error, *it.evaluation));
+        }
+    }
+
     for enable_global_pivots in [false, true] {
         let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
         state.add_global_pivots(&[vec![0, 0]]).unwrap();
@@ -52,13 +60,14 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
             seed: Some(7),
             ..Default::default()
         };
+        let mut observed = Observed::default();
         let result = crate::optimize_with_proposer(
             &mut state,
             evaluate,
             &options,
             &InitialCrossOnly,
             &crate::AllEdges,
-            &mut (),
+            &mut observed,
         )
         .unwrap();
         let (reason, iterations) = if enable_global_pivots {
@@ -70,7 +79,23 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         };
         assert_eq!(result.termination, reason);
         assert_eq!(result.ranks, vec![1; iterations]);
-        assert_eq!(result.errors, vec![0.0; iterations]);
+        let expected_errors = if enable_global_pivots {
+            // The global search actually measured residual one. The final
+            // iteration skips search, so only its local zero is available.
+            vec![1.0, 1.0, 1.0, 0.0]
+        } else {
+            vec![0.0; iterations]
+        };
+        assert_eq!(result.errors, expected_errors);
+        assert_eq!(
+            observed
+                .0
+                .iter()
+                .map(|(error, _)| *error)
+                .collect::<Vec<_>>(),
+            result.errors
+        );
+        assert_eq!(observed.0.last().unwrap().1, result.evaluation);
         assert_swept_pivot_sets(&state, usize::MAX);
     }
 }

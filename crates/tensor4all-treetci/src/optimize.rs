@@ -105,9 +105,11 @@ pub enum TreeTciTermination {
 pub struct TreeTciOptimizationResult {
     /// Maximum bond dimension after each completed iteration.
     pub ranks: Vec<usize>,
-    /// Maximum sampled bond error after each iteration, normalized when requested.
+    /// Maximum sampled local/global residual after each iteration, normalized when requested.
     ///
-    /// Has the same length as `ranks`; these are not full-network residuals.
+    /// Has the same length as `ranks`. Each value combines local bond
+    /// residuals with residuals measured by the global search; both are
+    /// sampled, so these are diagnostics, not bounds on the full-network error.
     pub errors: Vec<f64>,
     /// The stopping condition evaluated by this call's optimization loop.
     pub termination: TreeTciTermination,
@@ -124,7 +126,7 @@ pub struct TreeTciOptimizationResult {
 ///
 /// | Field                     | Default       | Description                                         |
 /// |---------------------------|---------------|-----------------------------------------------------|
-/// | `tolerance`               | `1e-8`        | Relative stopping tolerance on normalized bond error |
+/// | `tolerance`               | `1e-8`        | Stopping tolerance on the sampled local/global error |
 /// | `max_iter`                | `20`          | Maximum number of edge-order iterations              |
 /// | `max_bond_dim`            | `None`        | Maximum bond dimension (no cap by default)           |
 /// | `scale_tolerance`         | `true`        | Scale tolerance by running max sample magnitude      |
@@ -132,7 +134,7 @@ pub struct TreeTciOptimizationResult {
 /// | `nsearch`                 | `5`           | Random starting points for the global pivot search   |
 /// | `global_search_starts`    | empty         | Extra caller-supplied starting points, walked first  |
 /// | `max_nglobal_pivot`       | `5`           | Global pivots added per iteration                    |
-/// | `tol_margin_global_search`| `10.0`        | Global pivot acceptance margin over `abs_tol`        |
+/// | `tol_margin_global_search`| `10.0`        | Global pivot discovery margin over `abs_tol`        |
 /// | `seed`                    | `None`        | RNG seed for the global pivot search                 |
 ///
 /// # Examples
@@ -172,9 +174,10 @@ pub struct TreeTciOptimizationResult {
 /// ```
 #[derive(Clone, Debug)]
 pub struct TreeTciOptions {
-    /// Relative stopping tolerance on the normalized bond error.
+    /// Stopping tolerance on the sampled local/global residual.
     ///
-    /// The optimization loop monitors the maximum bond error across all edges.
+    /// The optimization loop monitors the maximum bond error across all edges
+    /// and the largest residual observed by the enabled global search.
     /// When `scale_tolerance` is true, this error is divided by the running
     /// maximum observed sample magnitude, so the stopping threshold is
     /// `tolerance * max_sample_value`. Recommended range: `1e-6` to `1e-12`.
@@ -203,8 +206,8 @@ pub struct TreeTciOptions {
     /// observed sample magnitude.
     ///
     /// When `true`, the stopping criterion uses relative error
-    /// `max_bond_error / max_sample_value`, so `tolerance` is scaled by the
-    /// largest sample seen so far. When `false`, the raw absolute bond error is
+    /// `max_sampled_error / max_sample_value`, so `tolerance` is scaled by the
+    /// largest sample seen so far. When `false`, the raw absolute sampled error is
     /// compared with `tolerance`. Default: `true`.
     pub scale_tolerance: bool,
 
@@ -225,7 +228,10 @@ pub struct TreeTciOptions {
     ///
     /// Each starting point is locally optimized over all site coordinates.
     /// Larger values explore the index space more thoroughly at the cost of
-    /// more evaluations. Drawn after [`Self::global_search_starts`]. Ignored
+    /// more evaluations. At dimension-one endpoints, a search that finds no
+    /// pivot also uses up to this many retained-pair walks and this many
+    /// subtree-anchored restarts to check observed support. Zero disables
+    /// those confirmation walks. Drawn after [`Self::global_search_starts`]. Ignored
     /// when `enable_global_pivots` is `false`. Default: `5`.
     pub nsearch: usize,
 
@@ -252,8 +258,10 @@ pub struct TreeTciOptions {
 
     /// Tolerance margin for the global pivot search.
     ///
-    /// A candidate pivot is accepted when its interpolation error exceeds
-    /// `abs_tol * tol_margin_global_search`, where `abs_tol` is the sweep's
+    /// Exploratory candidates above `abs_tol * tol_margin_global_search`
+    /// take priority. When none cross that margin, observed errors above
+    /// `abs_tol` still qualify; unit-endpoint confirmation also uses
+    /// `abs_tol`. Here `abs_tol` is the sweep's
     /// absolute tolerance (`tolerance * max_sample_value` when
     /// `scale_tolerance` is enabled). The value is always validated (it must
     /// be finite and nonnegative) but only consulted when `enable_global_pivots`
@@ -903,22 +911,6 @@ where
 
         let max_bond_dim = state.max_bond_dim();
         ranks.push(max_bond_dim);
-        let normalized_error = if options.scale_tolerance && state.max_sample_value > 0.0 {
-            state.max_bond_error() / state.max_sample_value
-        } else {
-            state.max_bond_error()
-        };
-        errors.push(normalized_error);
-
-        // The observer sees exactly what the run just recorded, before any
-        // stopping check, so the last iteration is reported too.
-        observer.iteration(&TreeTciIteration {
-            iteration,
-            max_bond_dim,
-            error: normalized_error,
-            evaluation: &execution.stats(),
-        });
-
         // Mirrors `TreeTCI.jl`'s `convergencecriterion` third disjunct
         // (branch `local-fix-convergence`, commit 06563dd): once the rank has
         // saturated at `max_bond_dim` for the whole trailing window, further
@@ -939,10 +931,6 @@ where
                     .iter()
                     .all(|&r| r >= cap)
             });
-        if bond_dim_saturated {
-            termination = TreeTciTermination::MaxBondDimension;
-            break;
-        }
 
         // Global pivot search: after each sweep, materialize the current
         // approximation and inject pivots where |f - tt| is large, so
@@ -953,14 +941,15 @@ where
         // never be processed by a subsequent sweep, so the recorded error
         // and termination reason would not reflect it, and the unswept state
         // would not be materializable (see above).
-        if options.enable_global_pivots && iteration + 1 < options.max_iter {
+        let mut sampled_error = state.max_bond_error();
+        if !bond_dim_saturated && options.enable_global_pivots && iteration + 1 < options.max_iter {
             let error_scale = if options.scale_tolerance && state.max_sample_value > 0.0 {
                 state.max_sample_value
             } else {
                 1.0
             };
             let abs_tol = options.tolerance * error_scale;
-            let pivots = find_global_pivots_erased(
+            let search = find_global_pivots_erased(
                 state,
                 execution,
                 options.nsearch,
@@ -970,10 +959,31 @@ where
                 abs_tol,
                 streams.global(),
             )?;
-            state.add_global_pivots(&pivots)?;
-            nglobal_pivots_history.push(pivots.len());
+            sampled_error = sampled_error.max(search.max_error);
+            state.add_global_pivots(&search.pivots)?;
+            nglobal_pivots_history.push(search.pivots.len());
         } else {
             nglobal_pivots_history.push(0);
+        }
+
+        let normalized_error = if options.scale_tolerance && state.max_sample_value > 0.0 {
+            sampled_error / state.max_sample_value
+        } else {
+            sampled_error
+        };
+        errors.push(normalized_error);
+        // Report the same pre-injection approximation that the local updates
+        // and global residual search measured. Newly injected pivots are
+        // processed by the next sweep.
+        observer.iteration(&TreeTciIteration {
+            iteration,
+            max_bond_dim,
+            error: normalized_error,
+            evaluation: &execution.stats(),
+        });
+        if bond_dim_saturated {
+            termination = TreeTciTermination::MaxBondDimension;
+            break;
         }
 
         // This Rust loop applies an early-convergence break rather than
