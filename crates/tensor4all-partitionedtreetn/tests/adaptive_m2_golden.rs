@@ -67,6 +67,16 @@
 //! their accepted patches) went from 0.0 to values of order 1e-17, and two
 //! other estimates moved within 1e-16. Function evaluations, terminations,
 //! bond dimensions, and node data are unchanged.
+//!
+//! Both TreeTCI scenarios were re-recorded when TreeTCI's recorded error
+//! started including the residuals its global search measured, and the
+//! search began confirming retained pivots at dimension-one endpoints
+//! (#1352); the dense scenarios were kept as recorded. Cache hits went from
+//! 10196 to 12203 and from 10081 to 12052, from confirmation walks over points
+//! already in the evaluation memo. The rounding-level error estimates of the
+//! `Converged` engine calls moved from order 1e-17 to order 1e-16. Function
+//! evaluations (128 each), terminations, bond dimensions, and node data are
+//! unchanged.
 
 use crate::adaptive_common;
 

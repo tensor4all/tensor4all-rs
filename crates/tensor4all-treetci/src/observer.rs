@@ -6,8 +6,10 @@ use crate::TreeTciEvaluationStats;
 /// `ranks[iteration]` and `error` is `errors[iteration]` of the returned result,
 /// bitwise. `error` is the maximum of the local bond residuals and the global
 /// search residuals of the swept approximation, normalized when requested.
-/// The callback runs after that search; any newly injected pivots are only
-/// processed by the next iteration's sweep.
+/// It is a sampled diagnostic, not an error bound: a small value, and a
+/// `Converged` termination built on it, do not certify the full-network
+/// error. The callback runs after that search; any newly injected pivots are
+/// only processed by the next iteration's sweep.
 ///
 /// Only the optimizer builds one.
 #[derive(Clone, Copy, Debug)]
@@ -18,6 +20,8 @@ pub struct TreeTciIteration<'a> {
     /// Maximum bond dimension after the iteration, `ranks[iteration]` of the result.
     pub max_bond_dim: usize,
     /// Maximum sampled local/global residual of the iteration, `errors[iteration]` of the result.
+    ///
+    /// Sampled, not a bound on the full-network error.
     pub error: f64,
     /// Evaluation accounting of the run so far; it never decreases between calls.
     pub evaluation: &'a TreeTciEvaluationStats,

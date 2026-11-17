@@ -103,7 +103,9 @@ pub struct TreeTciOptimizationResult {
     pub ranks: Vec<usize>,
     /// Maximum sampled local/global residual after each iteration, normalized when requested.
     ///
-    /// Has the same length as `ranks`; these are not full-network residuals.
+    /// Has the same length as `ranks`. Each value combines local bond
+    /// residuals with residuals measured by the global search; both are
+    /// sampled, so these are diagnostics, not bounds on the full-network error.
     pub errors: Vec<f64>,
     /// The stopping condition evaluated by this call's optimization loop.
     pub termination: TreeTciTermination,
