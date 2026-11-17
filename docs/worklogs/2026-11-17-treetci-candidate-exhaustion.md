@@ -39,3 +39,20 @@
   orientations. Existing rank-one junction tests remain relevant.
 - This change qualifies a stopping diagnostic; it does not reduce the true
   approximation error or turn sampled convergence into a global error bound.
+- Downstream sampled-max patching now splits exhausted dimension-one patches
+  previously accepted as converged. The M2 TreeTCI goldens therefore change
+  from 3 to 5 splits without recycling and from 3 to 9 with recycling; target
+  evaluations stay at 128. These are intended stopping-decision changes, not
+  platform drift. Both scenarios check the full dense target at their original
+  tolerance before comparing or recording the goldens. Dense-engine records
+  and comparison tolerances are retained unchanged.
+
+- [Simon's follow-up](https://github.com/tensor4all/tensor4all-rs/issues/1352#issuecomment-6938688832)
+  independently confirms the chain diagnostic for both the Gaussian and a
+  weighted variant without exact ties. The weighted variant is included in
+  the real/complex dense and readout regressions for seeds 2 and 5.
+- The same follow-up reports a broader three-branch case whose candidate count
+  exceeds its rank but whose extra samples provide no independent direction.
+  The count-based guard does not detect that case. No complete reproducer is
+  attached yet; it remains an open limitation, and this PR must not close the
+  issue or claim global convergence certification.
