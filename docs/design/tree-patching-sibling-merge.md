@@ -284,6 +284,13 @@ and a patch's `|P|` is `N` over the dimensions its projector fixes. Groups,
 the allowance rule and the cap are those of `merge_siblings`; both entries
 share one bottom-up loop. A bound above `tau` acts as `ToleranceNotMet`.
 
+The bounds must form the prefix tree that the split order describes and cover
+the domain: exactly one bound per region, none for a region that is also a
+declared parent, and none missing. Indices must be the networks' sites with
+their dimensions, which index equality does not compare. A set that violates
+either rule is rejected as invalid instead of merged into a partition that no
+longer covers the domain or that weighs a patch at the wrong point count.
+
 `leaf_slack_share` (default `0`) truncates each input patch toward that share
 of its own slack, `share * (tau - rms) * sqrt(|P|)`, before merging, and adds
 the measured residual to the patch's `rms`. Exact embeddings of local

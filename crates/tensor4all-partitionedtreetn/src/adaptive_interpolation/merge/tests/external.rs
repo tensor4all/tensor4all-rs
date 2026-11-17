@@ -182,6 +182,115 @@ fn an_external_zero_patch_merges_with_its_sibling() {
 }
 
 #[test]
+fn bounds_that_leave_a_region_uncovered_are_rejected() {
+    // The right half's zero patch is missing, so half of the domain would
+    // silently vanish from the result while the report stays certified.
+    let s = sites();
+    let partition =
+        PartitionedTreeTN::from_subdomains(vec![patch(&s, &[0], product(&s, A))]).unwrap();
+    let error = merge_sibling_patches(
+        partition,
+        vec![certified(&s, &[0], 0.0)],
+        &s,
+        1e-8,
+        &0,
+        &SiblingPatchMergeOptions::new(2),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, PatchedInterpolationError::InvalidInput { .. }),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_patch_that_is_also_a_declared_zero_parent_is_rejected() {
+    // `[0]` is a real patch and its two children are declared zero. Merging
+    // them would replace the patch's network by the zero region.
+    let s = sites();
+    let partition = PartitionedTreeTN::from_subdomains(vec![
+        patch(&s, &[0], product(&s, A)),
+        patch(&s, &[1], product(&s, A)),
+    ])
+    .unwrap();
+    let bounds = vec![
+        certified(&s, &[0], 0.0),
+        certified(&s, &[0, 0], 0.0),
+        certified(&s, &[0, 1], 0.0),
+        certified(&s, &[1], 0.0),
+    ];
+    let error = merge_sibling_patches(
+        partition,
+        bounds,
+        &s,
+        1e-8,
+        &0,
+        &SiblingPatchMergeOptions::new(2),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, PatchedInterpolationError::InvalidInput { .. }),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_split_order_index_with_the_wrong_dimension_is_rejected() {
+    // Index equality ignores the dimension, so a dim-1 alias of a binary site
+    // would make the cut look complete while half of the domain stays missing.
+    let s = sites();
+    let partition =
+        PartitionedTreeTN::from_subdomains(vec![patch(&s, &[0], product(&s, A))]).unwrap();
+    let mut order = s.clone();
+    order[0].dim = 1;
+    let error = merge_sibling_patches(
+        partition,
+        vec![certified(&s, &[0], 0.0)],
+        &order,
+        1e-8,
+        &0,
+        &SiblingPatchMergeOptions::new(2),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, PatchedInterpolationError::InvalidInput { .. }),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_patch_bound_with_the_wrong_dimension_is_rejected() {
+    // A dim-4 alias of a binary site would weigh this half at N/4 points instead
+    // of N/2 and keep the merged error certified.
+    let s = sites();
+    let partition = PartitionedTreeTN::from_subdomains(vec![
+        patch(&s, &[0], product(&s, A)),
+        patch(&s, &[1], product(&s, A)),
+    ])
+    .unwrap();
+    let mut alias = s[0].clone();
+    alias.dim = 4;
+    let bounds = vec![
+        PatchErrorBound::new(Projector::from_pairs([(alias, 0)]).unwrap(), 0.0)
+            .with_certified(true),
+        certified(&s, &[1], 0.0),
+    ];
+    let error = merge_sibling_patches(
+        partition,
+        bounds,
+        &s,
+        1e-8,
+        &0,
+        &SiblingPatchMergeOptions::new(2),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, PatchedInterpolationError::InvalidInput { .. }),
+        "{error}"
+    );
+}
+
+#[test]
 fn invalid_external_inputs_fail_before_any_merge() {
     let s = sites();
     let build = || {

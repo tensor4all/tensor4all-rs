@@ -189,8 +189,11 @@ where
 ///   the domain size `N` is the product of their dimensions.
 /// * `patch_errors` - One bound per patch of `partition`, plus one per zero
 ///   patch that is absent from it. Together they must form a prefix tree over
-///   `patch_order`.
-/// * `patch_order` - The split order: every projector fixes a prefix of it.
+///   `patch_order` that covers the whole domain: one bound per region, no
+///   region declared both as a patch and as a parent, and no region left
+///   without a bound.
+/// * `patch_order` - The split order: every projector fixes a prefix of it,
+///   and every entry is a site of `partition` with that site's dimension.
 /// * `tau` - The RMS error budget, finite and nonnegative.
 /// * `center` - An existing node of the patch networks, the canonical center
 ///   of truncation.
@@ -208,8 +211,12 @@ where
 /// non-finite `tau` or `rms`, a zero cap, a `leaf_slack_share` outside
 /// `[0, 1]`, an empty `patch_errors`, an
 /// all-zero input (no network fixes the domain size), a patch without a bound
-/// or a bound duplicated, or projectors that are not a prefix tree over
-/// `patch_order`; [`PatchedInterpolationError::Partition`] for an unknown
+/// or a bound duplicated, an index that is not a site of the patches or that
+/// differs from it only in its dimension, or `patch_errors` that do not form a
+/// prefix tree over `patch_order` covering the whole domain (a region declared
+/// both as a patch and as its parents' zero children, or a region with no bound
+/// at all);
+/// [`PatchedInterpolationError::Partition`] for an unknown
 /// `center` and for failures of the sum, truncation, or norm.
 ///
 /// # Examples
@@ -291,6 +298,30 @@ where
         .flat_map(|space| space.iter().map(|index| index.dim as f64))
         .product();
 
+    // Index equality ignores `dim` (`Index::eq` compares id, tags, and plev), so
+    // a clone that differs only in its dimension passes every identity check
+    // while it changes the point count of a patch and the number of children the
+    // coverage check visits.
+    let mut physical_sites: HashMap<DynIndex, usize> = HashMap::new();
+    for domain in partition.values() {
+        for (site, _) in domain.projector().iter() {
+            physical_sites.insert(site.clone(), site.dim);
+        }
+        let network = domain.site_index_network();
+        for node in network.node_names() {
+            for site in network
+                .site_space(node)
+                .into_iter()
+                .flat_map(|space| space.iter())
+            {
+                physical_sites.insert(site.clone(), site.dim);
+            }
+        }
+    }
+    for site in patch_order {
+        check_site(&physical_sites, site)?;
+    }
+
     let mut patches: HashMap<Projector, SubDomainTreeTN<V>> = partition.into_iter().collect();
     let mut leaves = BTreeMap::new();
     let mut truncated_leaves = 0;
@@ -300,6 +331,9 @@ where
                 "the patch {:?} has a negative or non-finite rms {}",
                 bound.projector, bound.rms
             )));
+        }
+        for (site, _) in bound.projector.iter() {
+            check_site(&physical_sites, site)?;
         }
         let fixed: f64 = bound
             .projector
@@ -369,4 +403,24 @@ where
         merge,
         truncated_leaves,
     })
+}
+
+/// The physical dimension of `site`, rejecting an index that only differs from
+/// it in its dimension: index equality ignores `dim` (`Index::eq` compares id,
+/// tags, and plev), so such an alias would pass every identity check.
+fn check_site(
+    physical_sites: &HashMap<DynIndex, usize>,
+    site: &DynIndex,
+) -> Result<(), PatchedInterpolationError> {
+    match physical_sites.get(site) {
+        Some(&dim) if dim == site.dim => Ok(()),
+        Some(&dim) => Err(invalid(format!(
+            "the index {site:?} has dimension {}, but the patch network's site has dimension \
+             {dim}",
+            site.dim
+        ))),
+        None => Err(invalid(format!(
+            "the index {site:?} is not a site of the patches"
+        ))),
+    }
 }

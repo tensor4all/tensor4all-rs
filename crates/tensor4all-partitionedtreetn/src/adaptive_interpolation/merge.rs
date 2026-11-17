@@ -27,7 +27,7 @@
 //! the producer's measured errors, the complete-group rule, and the
 //! zero-patch handling are original to this crate.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -393,6 +393,7 @@ fn merge_leaves<V>(
 where
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
 {
+    validate_cut(&leaves, patch_order)?;
     let mut merges = Vec::new();
     let (mut rejected_by_cap, mut rejected_by_status) = (0, 0);
     let deepest = leaves.keys().map(Vec::len).max().unwrap_or(0);
@@ -451,6 +452,75 @@ where
         error,
     };
     Ok((partition, merge))
+}
+
+/// Reject `leaves` unless their keys form a prefix-free cut that covers the
+/// whole domain.
+///
+/// Both the merge tree and the assembled error assume a complete cut. Without
+/// this check a caller that omits a zero patch gets a result that silently
+/// drops that region while its report still claims a certified error, and a
+/// region declared both as a patch and as its parents' zero children has its
+/// network replaced by the children's sum.
+fn validate_cut<V>(
+    leaves: &BTreeMap<Vec<usize>, Leaf<V>>,
+    patch_order: &[DynIndex],
+) -> Result<(), PatchedInterpolationError>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    // A key sorts immediately after every proper prefix of it, so a patch that
+    // is also a declared parent shows up in a consecutive pair.
+    let mut previous: Option<&[usize]> = None;
+    for key in leaves.keys() {
+        if let Some(previous) = previous.filter(|previous| key.starts_with(previous)) {
+            return Err(invalid(format!(
+                "the patch bounds declare both {previous:?} and its child {key:?}; a region is \
+                 either a patch or a declared zero parent, not both"
+            )));
+        }
+        previous = Some(key);
+    }
+    // Every node of the tree the bounds describe: a key and all its proper
+    // prefixes. A region without a leaf must have all of its children here.
+    let nodes: BTreeSet<&[usize]> = leaves
+        .keys()
+        .flat_map(|key| (0..=key.len()).map(move |depth| &key[..depth]))
+        .collect();
+    cover(leaves, &nodes, patch_order, &mut Vec::new())
+}
+
+/// Descend `patch_order` from `prefix`: a leaf covers its region, and a region
+/// without a leaf must have every one of its children declared.
+fn cover<V>(
+    leaves: &BTreeMap<Vec<usize>, Leaf<V>>,
+    nodes: &BTreeSet<&[usize]>,
+    patch_order: &[DynIndex],
+    prefix: &mut Vec<usize>,
+) -> Result<(), PatchedInterpolationError>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    if leaves.contains_key(prefix.as_slice()) {
+        return Ok(());
+    }
+    let missing = |region: &[usize]| {
+        invalid(format!(
+            "no patch covers the region {region:?}; the bounds must cover the whole domain"
+        ))
+    };
+    let Some(site) = patch_order.get(prefix.len()) else {
+        return Err(missing(prefix));
+    };
+    for value in 0..site.dim {
+        prefix.push(value);
+        if !nodes.contains(prefix.as_slice()) {
+            return Err(missing(prefix));
+        }
+        cover(leaves, nodes, patch_order, prefix)?;
+        prefix.pop();
+    }
+    Ok(())
 }
 
 /// The leaves of the run, keyed by their values along the split order.
