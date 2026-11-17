@@ -56,8 +56,14 @@ harness = false
 path = "benches/chebyshev_patches.rs"
 
 [dev-dependencies]
+serde_json.workspace = true
+libc = "0.2"
 rayon.workspace = true
 approx.workspace = true
 num-complex.workspace = true
 quanticsgrids.workspace = true
 rand.workspace = true
+
+[[example]]
+name = "measure_clean_pins"
+required-features = ["parallel"]
