@@ -76,7 +76,9 @@ pub mod tensorci2;
 // Re-export main types
 pub use conversion::TensorCI2FromTensorTrainOptions;
 pub use error::{Result, TCIError};
-pub use globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput};
+pub use globalpivot::{
+    DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput, GlobalPivotSearchResult,
+};
 pub use globalsearch::{estimate_true_error, floating_zone};
 pub use optfirstpivot::opt_first_pivot;
 pub use tensorci1::{crossinterpolate1, TCI1Options, TCI1SweepStrategy, TensorCI1};

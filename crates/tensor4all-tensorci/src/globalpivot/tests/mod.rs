@@ -24,9 +24,14 @@ fn test_default_global_pivot_finder() {
     let finder = DefaultGlobalPivotFinder::new(10, 3, 1.0);
     let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
 
-    let pivots = finder
+    let search = finder
         .find_global_pivots(&input, &f, 0.1, &mut rng)
         .unwrap();
+    let pivots = &search.pivots;
+    // The reported maximum covers every walked residual, accepted or not.
+    for pivot in pivots {
+        assert!(f(pivot) <= search.max_sampled_error, "{pivot:?}");
+    }
 
     // Should find some pivots since the TT is zero but f is not
     // (except at i=0 or j=0)
@@ -48,13 +53,16 @@ fn test_custom_global_pivot_finder() {
             _f: &F,
             _abs_tol: f64,
             _rng: &mut dyn RngCore,
-        ) -> Result<Vec<MultiIndex>>
+        ) -> Result<GlobalPivotSearchResult>
         where
             T: Scalar + TTScalar,
             F: Fn(&MultiIndex) -> T,
         {
-            // Always return a fixed pivot
-            Ok(vec![vec![1, 2]])
+            // Always return a fixed pivot; this finder measures nothing.
+            Ok(GlobalPivotSearchResult {
+                pivots: vec![vec![1, 2]],
+                max_sampled_error: 0.0,
+            })
         }
     }
 
@@ -75,8 +83,9 @@ fn test_custom_global_pivot_finder() {
     };
 
     let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
-    let pivots = finder
+    let search = finder
         .find_global_pivots(&input, &f, 0.0, &mut rng)
         .unwrap();
-    assert_eq!(pivots, vec![vec![1, 2]]);
+    assert_eq!(search.pivots, vec![vec![1, 2]]);
+    assert_eq!(search.max_sampled_error, 0.0);
 }

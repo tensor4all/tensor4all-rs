@@ -26,6 +26,36 @@ pub struct GlobalPivotSearchInput<T: Scalar + TTScalar> {
     pub j_set: Vec<Vec<MultiIndex>>,
 }
 
+/// Outcome of one global pivot search: the pivots to add and the largest
+/// residual the search actually measured.
+///
+/// `max_sampled_error` is the largest `|f(idx) - tt(idx)|` over every point the
+/// search evaluated, in absolute units, whether or not that point became a
+/// pivot. The optimizer folds it into the recorded iteration error and the
+/// stopping rule, so a residual the search saw cannot be reported as
+/// converged. It is a sampled diagnostic, not a bound on the full error. A
+/// finder that measures nothing reports `0.0`.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorci::GlobalPivotSearchResult;
+///
+/// let result = GlobalPivotSearchResult {
+///     pivots: vec![vec![1, 0]],
+///     max_sampled_error: 0.25,
+/// };
+/// assert_eq!(result.pivots.len(), 1);
+/// assert_eq!(GlobalPivotSearchResult::default().max_sampled_error, 0.0);
+/// ```
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GlobalPivotSearchResult {
+    /// Multi-indices to add as global pivots, at most the finder's maximum.
+    pub pivots: Vec<MultiIndex>,
+    /// Largest absolute residual measured by the search; `0.0` if none.
+    pub max_sampled_error: f64,
+}
+
 /// Trait for global pivot finders.
 ///
 /// Implementors search for multi-indices where the interpolation error
@@ -59,15 +89,17 @@ pub struct GlobalPivotSearchInput<T: Scalar + TTScalar> {
 /// let finder = DefaultGlobalPivotFinder::default();
 /// let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
 ///
-/// // Every coordinate walk on f(i,j) = i+j reaches (3,3).
-/// let pivots = finder.find_global_pivots(
+/// // Every coordinate walk on f(i,j) = i+j reaches (3,3), where the
+/// // residual against the zero TT is 6.
+/// let search = finder.find_global_pivots(
 ///     &input,
 ///     &|idx: &Vec<usize>| (idx[0] + idx[1]) as f64,
 ///     0.5,
 ///     &mut rng,
 /// )?;
 ///
-/// assert_eq!(pivots, vec![vec![3, 3]; 5]);
+/// assert_eq!(search.pivots, vec![vec![3, 3]; 5]);
+/// assert_eq!(search.max_sampled_error, 6.0);
 /// # Ok::<(), tensor4all_tensorci::TCIError>(())
 /// ```
 pub trait GlobalPivotFinder {
@@ -84,8 +116,11 @@ pub trait GlobalPivotFinder {
     ///
     /// # Returns
     ///
-    /// Multi-indices where the interpolation error is large, up to the
-    /// implementation's maximum count.
+    /// A [`GlobalPivotSearchResult`]: multi-indices where the interpolation
+    /// error is large, up to the implementation's maximum count, and the
+    /// largest residual the search measured (`0.0` if it measured none). The
+    /// optimizer records that residual, so report every residual the search
+    /// evaluated, not only the accepted ones.
     ///
     /// # Errors
     ///
@@ -102,7 +137,7 @@ pub trait GlobalPivotFinder {
         f: &F,
         abs_tol: f64,
         rng: &mut dyn RngCore,
-    ) -> Result<Vec<MultiIndex>>
+    ) -> Result<GlobalPivotSearchResult>
     where
         T: Scalar + TTScalar,
         F: Fn(&MultiIndex) -> T;
@@ -116,13 +151,25 @@ pub trait GlobalPivotFinder {
 /// 2. For each point, retain each maximizing coordinate while sweeping the
 ///    dimensions. Repeat until a full sweep no longer improves the error,
 ///    the error exceeds `10 * abs_tol * tol_margin`, or 100 sweeps complete.
-/// 3. Keep points where the error exceeds `abs_tol * tol_margin`.
-/// 4. Return at most `max_nglobal_pivot` results.
+/// 3. Keep points where the error exceeds `abs_tol * tol_margin`. If none
+///    do, keep the measured errors above `abs_tol` instead, so a residual
+///    that violates the tolerance is not dropped.
+/// 4. If no walk exceeds `abs_tol`, also walk once from the most recent
+///    retained pivot pair of every bond, using `abs_tol` as the threshold.
+///    Random starts on a sparse target can all fall on exactly zero entries,
+///    which coordinate walks cannot leave; retained pivots lie on observed
+///    support. This adds at most `n - 1` walks for `n` sites and draws no
+///    random numbers. It needs the index sets in the input; without them it
+///    adds nothing.
+/// 5. Return at most `max_nglobal_pivot` results, together with the largest
+///    residual measured over all walks.
 ///
 /// The walk and stopping thresholds follow TensorCrossInterpolation.jl's
-/// default floating-zone search. Starts use the supplied RNG; repeated pivots
-/// are retained in search order. This does not guarantee identical Julia
-/// results, which also depend on RNGs, deduplication, and outer sweeps.
+/// default floating-zone search; step 4 and the `abs_tol` fallback in step 3
+/// are additions (#1358). Starts use the supplied RNG, `nsearch` draws of one
+/// starting point each. Repeated pivots are retained in search order. This
+/// does not guarantee identical Julia results, which also depend on RNGs,
+/// deduplication, and outer sweeps.
 ///
 /// # Examples
 ///
@@ -147,7 +194,8 @@ pub struct DefaultGlobalPivotFinder {
     pub nsearch: usize,
     /// Maximum number of pivots to add per iteration
     pub max_nglobal_pivot: usize,
-    /// Search for pivots with error > abs_tol × tol_margin.
+    /// Discovery margin: pivots with error > abs_tol × tol_margin take
+    /// priority. When none cross it, errors above abs_tol are kept instead.
     /// Must be finite and nonnegative; the default is 10.
     pub tol_margin: f64,
 }
@@ -180,7 +228,7 @@ impl GlobalPivotFinder for DefaultGlobalPivotFinder {
         f: &F,
         abs_tol: f64,
         rng: &mut dyn RngCore,
-    ) -> Result<Vec<MultiIndex>>
+    ) -> Result<GlobalPivotSearchResult>
     where
         T: Scalar + TTScalar,
         F: Fn(&MultiIndex) -> T,
@@ -206,7 +254,7 @@ impl GlobalPivotFinder for DefaultGlobalPivotFinder {
             });
         }
         if self.nsearch == 0 || self.max_nglobal_pivot == 0 {
-            return Ok(Vec::new());
+            return Ok(GlobalPivotSearchResult::default());
         }
 
         // Generate random initial points
@@ -222,17 +270,21 @@ impl GlobalPivotFinder for DefaultGlobalPivotFinder {
 
         // Reuse contractions across coordinate batches and random starts.
         let mut tt_cache = TTCache::new(&input.current_tt);
-        let mut found_pivots: Vec<MultiIndex> = Vec::new();
+        let mut found: Vec<(MultiIndex, f64)> = Vec::new();
+        let mut max_sampled_error = 0.0_f64;
+        let acceptance_floor = abs_tol.min(threshold);
 
-        for point in &initial_points {
+        // One floating-zone walk from `start`; returns the best point and its
+        // residual.
+        let mut walk = |start: &MultiIndex| -> Result<(MultiIndex, f64)> {
             // Match searchglobalpivots -> floatingzone in
             // TensorCrossInterpolation.jl v0.9.14, src/tensorci2.jl:
             // at most 100 sweeps, with early stopping at 10 * threshold.
             // Overflow in this *early-stop* bound means no early stop;
             // the acceptance threshold itself was validated above.
-            let (best_point, best_error) = floating_zone_walk(
+            floating_zone_walk(
                 &input.local_dims,
-                point,
+                start,
                 100,
                 10.0 * threshold,
                 |_site, points| {
@@ -254,19 +306,80 @@ impl GlobalPivotFinder for DefaultGlobalPivotFinder {
                         .collect::<Result<Vec<_>>>()
                 },
             )
-            .map_err(floating_zone_error)?;
+            .map_err(floating_zone_error)
+        };
 
-            // Add point if error exceeds threshold
-            if best_error > threshold {
-                found_pivots.push(best_point);
+        for point in &initial_points {
+            let (best_point, best_error) = walk(point)?;
+            max_sampled_error = max_sampled_error.max(best_error);
+            if best_error > acceptance_floor {
+                found.push((best_point, best_error));
             }
         }
 
-        // Limit number of pivots
-        found_pivots.truncate(self.max_nglobal_pivot);
+        // Random starts can all land where the target is exactly zero (a
+        // sparse factor), and a coordinate walk cannot leave such a region.
+        // Retained pivots lie on observed support. When the ordinary search
+        // found nothing above the tolerance, walk once from the most recent
+        // pivot pair of every bond, with `abs_tol` as the threshold. This adds
+        // at most `n - 1` walks and draws no random numbers (#1358).
+        if found.iter().all(|(_, error)| *error <= abs_tol) {
+            for start in retained_pivot_pairs(input) {
+                let (best_point, best_error) = walk(&start)?;
+                max_sampled_error = max_sampled_error.max(best_error);
+                if best_error > abs_tol {
+                    found.push((best_point, best_error));
+                }
+            }
+        }
 
-        Ok(found_pivots)
+        // Prefer discoveries above the margin. If there are none, keep the
+        // observed tolerance violations rather than dropping them.
+        if found.iter().any(|(_, error)| *error > threshold) {
+            found.retain(|(_, error)| *error > threshold);
+        }
+        let mut pivots: Vec<MultiIndex> = found.into_iter().map(|(point, _)| point).collect();
+        pivots.truncate(self.max_nglobal_pivot);
+
+        Ok(GlobalPivotSearchResult {
+            pivots,
+            max_sampled_error,
+        })
     }
+}
+
+/// The most recent retained pivot pair of every bond, as full multi-indices.
+///
+/// The pair at bond `p` joins the last left index of `i_set[p + 1]` with the
+/// last right index of `j_set[p]` (the two sets have the bond's rank). Bonds
+/// whose sets are absent, empty, or inconsistent with `local_dims` are
+/// skipped, so custom inputs without index sets yield none.
+fn retained_pivot_pairs<T: Scalar + TTScalar>(
+    input: &GlobalPivotSearchInput<T>,
+) -> Vec<MultiIndex> {
+    let n = input.local_dims.len();
+    let mut pairs = Vec::new();
+    for bond in 0..n.saturating_sub(1) {
+        let (Some(lefts), Some(rights)) = (input.i_set.get(bond + 1), input.j_set.get(bond)) else {
+            continue;
+        };
+        let Some(tail) = lefts.len().min(rights.len()).checked_sub(1) else {
+            continue;
+        };
+        let (left, right) = (&lefts[tail], &rights[tail]);
+        if left.len() != bond + 1 || right.len() != n - bond - 1 {
+            continue;
+        }
+        let point: MultiIndex = left.iter().chain(right).copied().collect();
+        if point
+            .iter()
+            .zip(&input.local_dims)
+            .all(|(&index, &dim)| index < dim)
+        {
+            pairs.push(point);
+        }
+    }
+    pairs
 }
 
 #[cfg(test)]

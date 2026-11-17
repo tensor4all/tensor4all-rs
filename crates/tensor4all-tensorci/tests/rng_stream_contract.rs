@@ -48,7 +48,8 @@ fn the_finder_consumes_exactly_one_starting_point_from_the_supplied_stream() {
 
     let pivots = finder
         .find_global_pivots(&input(), &f, 0.1, &mut stream)
-        .unwrap();
+        .unwrap()
+        .pivots;
     assert_eq!(pivots.len(), 1);
     let _ = (reference.random_range(0..4), reference.random_range(0..4));
 
@@ -119,6 +120,7 @@ fn the_low_level_entry_points_accept_an_erased_stream() {
         finder
             .find_global_pivots(&input(), &f, 0.1, erased)
             .unwrap()
+            .pivots
             .len(),
         1
     );

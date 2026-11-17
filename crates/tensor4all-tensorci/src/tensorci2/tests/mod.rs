@@ -1200,20 +1200,24 @@ fn test_custom_global_pivot_finder() {
             _f: &F,
             _abs_tol: f64,
             rng: &mut dyn rand::RngCore,
-        ) -> Result<Vec<MultiIndex>>
+        ) -> Result<crate::GlobalPivotSearchResult>
         where
             T: tensor4all_core::Scalar + tensor4all_simplett::TTScalar,
             F: Fn(&MultiIndex) -> T,
         {
-            Ok((0..self.npivots)
-                .map(|_| {
-                    input
-                        .local_dims
-                        .iter()
-                        .map(|&d| rng.random_range(0..d))
-                        .collect()
-                })
-                .collect())
+            // Random pivots, no residual measured.
+            Ok(crate::GlobalPivotSearchResult {
+                pivots: (0..self.npivots)
+                    .map(|_| {
+                        input
+                            .local_dims
+                            .iter()
+                            .map(|&d| rng.random_range(0..d))
+                            .collect()
+                    })
+                    .collect(),
+                max_sampled_error: 0.0,
+            })
         }
     }
 
@@ -1272,7 +1276,8 @@ fn test_custom_global_pivot_finder() {
     let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
     let pivots = finder
         .find_global_pivots(&input, &f, 1e-4, &mut rng)
-        .unwrap();
+        .unwrap()
+        .pivots;
 
     // Custom finder should return npivots random pivots
     assert_eq!(pivots.len(), 10);
@@ -1316,13 +1321,16 @@ fn test_optimize_with_finder_invokes_custom_finder() {
             _f: &F,
             _abs_tol: f64,
             _rng: &mut dyn rand::RngCore,
-        ) -> Result<Vec<MultiIndex>>
+        ) -> Result<crate::GlobalPivotSearchResult>
         where
             T: tensor4all_core::Scalar + tensor4all_simplett::TTScalar,
             F: Fn(&MultiIndex) -> T,
         {
             self.calls.set(self.calls.get() + 1);
-            Ok(vec![vec![input.local_dims[0] - 1, input.local_dims[1] - 1]])
+            Ok(crate::GlobalPivotSearchResult {
+                pivots: vec![vec![input.local_dims[0] - 1, input.local_dims[1] - 1]],
+                max_sampled_error: 0.0,
+            })
         }
     }
 
