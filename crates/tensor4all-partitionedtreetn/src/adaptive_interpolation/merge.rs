@@ -27,7 +27,7 @@
 //! the producer's measured errors, the complete-group rule, and the
 //! zero-patch handling are original to this crate.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -359,17 +359,46 @@ where
         }
     }
 
-    let mut leaves = initial_leaves(partition, &report)?;
-    let mut merge = SiblingMergeReport {
-        max_bond_dim: cap,
-        merges: Vec::new(),
-        rejected_by_cap: 0,
-        rejected_by_status: 0,
-        error: error.clone(),
-    };
+    let leaves = initial_leaves(partition, &report)?;
+    let (partition, merge) = merge_leaves(
+        leaves,
+        &report.patch_order,
+        center,
+        tau,
+        cap,
+        domain_points,
+        Some(error.clone()),
+    )?;
+    Ok(SiblingMergeResult {
+        partition,
+        producer: report,
+        merge,
+    })
+}
+
+/// Walk the split tree of `leaves` bottom-up and merge complete sibling
+/// groups; shared by [`merge_siblings`] and [`merge_sibling_patches`].
+///
+/// `initial_error` is the producer's error report, kept unchanged when no
+/// merge is accepted; without it the error of the leaves is assembled.
+fn merge_leaves<V>(
+    mut leaves: BTreeMap<Vec<usize>, Leaf<V>>,
+    patch_order: &[DynIndex],
+    center: &V,
+    tau: f64,
+    cap: usize,
+    domain_points: f64,
+    initial_error: Option<L2ErrorReport>,
+) -> Result<(PartitionedTreeTN<V>, SiblingMergeReport), PatchedInterpolationError>
+where
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+{
+    validate_cut(&leaves, patch_order)?;
+    let mut merges = Vec::new();
+    let (mut rejected_by_cap, mut rejected_by_status) = (0, 0);
     let deepest = leaves.keys().map(Vec::len).max().unwrap_or(0);
     for depth in (1..=deepest).rev() {
-        let site = &report.patch_order[depth - 1];
+        let site = &patch_order[depth - 1];
         let mut groups: BTreeMap<Vec<usize>, usize> = BTreeMap::new();
         for key in leaves.keys().filter(|key| key.len() == depth) {
             *groups.entry(key[..depth - 1].to_vec()).or_default() += 1;
@@ -396,29 +425,102 @@ where
                         leaves.remove(key);
                     }
                     leaves.insert(parent, leaf);
-                    merge.merges.push(record);
+                    merges.push(record);
                 }
-                Attempt::RejectedByCap => merge.rejected_by_cap += 1,
-                Attempt::RejectedByStatus => merge.rejected_by_status += 1,
+                Attempt::RejectedByCap => rejected_by_cap += 1,
+                Attempt::RejectedByStatus => rejected_by_status += 1,
             }
         }
     }
 
-    // The canonical order of the run (lexicographic over the split path) is
-    // the order of the value keys, because every patch fixes a prefix of the
-    // same split order.
+    // The canonical order (lexicographic over the split path) is the order
+    // of the value keys, because every patch fixes a prefix of the same split
+    // order.
     let leaves: Vec<Leaf<V>> = leaves.into_values().collect();
-    if !merge.merges.is_empty() {
-        merge.error = merged_error(&leaves, domain_points, tau)?;
-    }
+    let error = match initial_error {
+        Some(error) if merges.is_empty() => error,
+        _ => merged_error(&leaves, domain_points, tau)?,
+    };
     let partition = PartitionedTreeTN::from_disjoint_subdomains(
         leaves.into_iter().filter_map(|leaf| leaf.network).collect(),
     )?;
-    Ok(SiblingMergeResult {
-        partition,
-        producer: report,
-        merge,
-    })
+    let merge = SiblingMergeReport {
+        max_bond_dim: cap,
+        merges,
+        rejected_by_cap,
+        rejected_by_status,
+        error,
+    };
+    Ok((partition, merge))
+}
+
+/// Reject `leaves` unless their keys form a prefix-free cut that covers the
+/// whole domain.
+///
+/// Both the merge tree and the assembled error assume a complete cut. Without
+/// this check a caller that omits a zero patch gets a result that silently
+/// drops that region while its report still claims a certified error, and a
+/// region declared both as a patch and as its parents' zero children has its
+/// network replaced by the children's sum.
+fn validate_cut<V>(
+    leaves: &BTreeMap<Vec<usize>, Leaf<V>>,
+    patch_order: &[DynIndex],
+) -> Result<(), PatchedInterpolationError>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    // A key sorts immediately after every proper prefix of it, so a patch that
+    // is also a declared parent shows up in a consecutive pair.
+    let mut previous: Option<&[usize]> = None;
+    for key in leaves.keys() {
+        if let Some(previous) = previous.filter(|previous| key.starts_with(previous)) {
+            return Err(invalid(format!(
+                "the patch bounds declare both {previous:?} and its child {key:?}; a region is \
+                 either a patch or a declared zero parent, not both"
+            )));
+        }
+        previous = Some(key);
+    }
+    // Every node of the tree the bounds describe: a key and all its proper
+    // prefixes. A region without a leaf must have all of its children here.
+    let nodes: BTreeSet<&[usize]> = leaves
+        .keys()
+        .flat_map(|key| (0..=key.len()).map(move |depth| &key[..depth]))
+        .collect();
+    cover(leaves, &nodes, patch_order, &mut Vec::new())
+}
+
+/// Descend `patch_order` from `prefix`: a leaf covers its region, and a region
+/// without a leaf must have every one of its children declared.
+fn cover<V>(
+    leaves: &BTreeMap<Vec<usize>, Leaf<V>>,
+    nodes: &BTreeSet<&[usize]>,
+    patch_order: &[DynIndex],
+    prefix: &mut Vec<usize>,
+) -> Result<(), PatchedInterpolationError>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    if leaves.contains_key(prefix.as_slice()) {
+        return Ok(());
+    }
+    let missing = |region: &[usize]| {
+        invalid(format!(
+            "no patch covers the region {region:?}; the bounds must cover the whole domain"
+        ))
+    };
+    let Some(site) = patch_order.get(prefix.len()) else {
+        return Err(missing(prefix));
+    };
+    for value in 0..site.dim {
+        prefix.push(value);
+        if !nodes.contains(prefix.as_slice()) {
+            return Err(missing(prefix));
+        }
+        cover(leaves, nodes, patch_order, prefix)?;
+        prefix.pop();
+    }
+    Ok(())
 }
 
 /// The leaves of the run, keyed by their values along the split order.
@@ -654,6 +756,12 @@ where
 fn missing_leaf() -> PatchedInterpolationError {
     internal(anyhow::anyhow!("a complete sibling group lost a member"))
 }
+
+mod external;
+
+pub use external::{
+    merge_sibling_patches, PatchErrorBound, SiblingPatchMergeOptions, SiblingPatchMergeResult,
+};
 
 #[cfg(test)]
 mod tests;

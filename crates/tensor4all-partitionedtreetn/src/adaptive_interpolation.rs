@@ -408,7 +408,9 @@ use verify::{Contribution, MeasureError, MeasureTarget, Measured, PointPlan};
 pub use elementwise::{patched_elementwise, patched_elementwise_on_lanes};
 pub use fan_out::patched_interpolate_on_lanes;
 pub use merge::{
-    merge_siblings, SiblingMergeOptions, SiblingMergeRecord, SiblingMergeReport, SiblingMergeResult,
+    merge_sibling_patches, merge_siblings, PatchErrorBound, SiblingMergeOptions,
+    SiblingMergeRecord, SiblingMergeReport, SiblingMergeResult, SiblingPatchMergeOptions,
+    SiblingPatchMergeResult,
 };
 #[cfg(any(feature = "hataori-mpi", feature = "hataori-mpi-rsmpi-rt"))]
 pub use mpi::{patched_elementwise_mpi, patched_interpolate_mpi};

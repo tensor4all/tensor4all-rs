@@ -265,6 +265,40 @@ used for canonicalization, as in `reconstruct`.
 Errors (typed, no partial result): unsupported norm, unknown center, invalid
 cap, non-finite measurements or norms, and propagated TreeTN errors.
 
+## Patches from outside the driver
+
+`adaptive_interpolation::merge_sibling_patches` applies the same rule to any
+`PartitionedTreeTN` whose per-patch L2 errors the caller knows, for example
+piecewise Chebyshev patches embedded as projected interleaved QTTs. The
+caller passes, instead of a driver report:
+
+- one `PatchErrorBound { projector, rms, certified }` per patch, plus one per
+  zero patch absent from the partition; a sampled per-value maximum is a valid
+  conservative `rms`;
+- the split order `patch_order` and the RMS budget `tau`, usually
+  `rtol * ||f|| / sqrt(N)`;
+- `SiblingPatchMergeOptions { max_bond_dim, leaf_slack_share }`.
+
+The domain size `N` is the product of the site dimensions of the networks and
+must be positive and finite, since every point count is a quotient of it; a
+patch's `|P|` is `N` over the dimensions its projector fixes. Groups,
+the allowance rule and the cap are those of `merge_siblings`; both entries
+share one bottom-up loop. A bound above `tau` acts as `ToleranceNotMet`.
+
+The bounds must form the prefix tree that the split order describes and cover
+the domain: exactly one bound per region, none for a region that is also a
+declared parent, and none missing. Indices must be the networks' sites with
+their dimensions, which index equality does not compare. A set that violates
+either rule is rejected as invalid instead of merged into a partition that no
+longer covers the domain or that weighs a patch at the wrong point count.
+
+`leaf_slack_share` (default `0`) truncates each input patch toward that share
+of its own slack, `share * (tau - rms) * sqrt(|P|)`, before merging, and adds
+the measured residual to the patch's `rms`. Exact embeddings of local
+polynomials carry bonds far above what the tolerance needs, so without it a
+patch that never merges keeps those bonds. A share below one leaves the rest
+of the slack to the merges.
+
 ## Algebra outputs
 
 The roadmap's M6b outcome says "any `PartitionedTreeTN`". This record narrows

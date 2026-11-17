@@ -2660,6 +2660,7 @@ dependencies = [
  "serde_json",
  "tenferro-cpu",
  "tensor4all-core",
+ "tensor4all-interpolativeqtt",
  "tensor4all-tensorbackend",
  "tensor4all-treeaci",
  "tensor4all-treersi",
