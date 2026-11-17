@@ -279,8 +279,9 @@ caller passes, instead of a driver report:
   `rtol * ||f|| / sqrt(N)`;
 - `SiblingPatchMergeOptions { max_bond_dim, leaf_slack_share }`.
 
-The domain size `N` is the product of the site dimensions of the networks,
-and a patch's `|P|` is `N` over the dimensions its projector fixes. Groups,
+The domain size `N` is the product of the site dimensions of the networks and
+must be positive and finite, since every point count is a quotient of it; a
+patch's `|P|` is `N` over the dimensions its projector fixes. Groups,
 the allowance rule and the cap are those of `merge_siblings`; both entries
 share one bottom-up loop. A bound above `tau` acts as `ToleranceNotMet`.
 

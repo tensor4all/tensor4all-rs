@@ -209,13 +209,13 @@ where
 ///
 /// Returns [`PatchedInterpolationError::InvalidInput`] for a negative or
 /// non-finite `tau` or `rms`, a zero cap, a `leaf_slack_share` outside
-/// `[0, 1]`, an empty `patch_errors`, an
-/// all-zero input (no network fixes the domain size), a patch without a bound
-/// or a bound duplicated, an index that is not a site of the patches or that
-/// differs from it only in its dimension, or `patch_errors` that do not form a
-/// prefix tree over `patch_order` covering the whole domain (a region declared
-/// both as a patch and as its parents' zero children, or a region with no bound
-/// at all);
+/// `[0, 1]`, an empty `patch_errors`, an all-zero input (no network fixes the
+/// domain size), a patch without a bound or a bound duplicated, a domain whose
+/// point count is not positive and finite, an index that is not a site of the
+/// patches or that differs from it only in its dimension, or `patch_errors`
+/// that do not form a prefix tree over `patch_order` covering the whole domain
+/// (a region declared both as a patch and as its parents' zero children, or a
+/// region with no bound at all);
 /// [`PatchedInterpolationError::Partition`] for an unknown
 /// `center` and for failures of the sum, truncation, or norm.
 ///
@@ -291,12 +291,25 @@ where
         return Err(PartitionedTreeTNError::InvalidCenter.into());
     }
     let network = template.site_index_network();
-    let domain_points: f64 = network
+    let (mut domain_points, mut site_count) = (1.0_f64, 0_usize);
+    for site in network
         .node_names()
         .into_iter()
         .filter_map(|node| network.site_space(node))
-        .flat_map(|space| space.iter().map(|index| index.dim as f64))
-        .product();
+        .flat_map(|space| space.iter())
+    {
+        domain_points *= site.dim as f64;
+        site_count += 1;
+    }
+    // As in the driver's `ErrorNorm::L2`: every point count below divides this
+    // product, so a `0` or an `inf` here turns the per-patch error weights into
+    // NaN while the terms stay within tolerance.
+    if !(domain_points.is_finite() && domain_points > 0.0) {
+        return Err(invalid(format!(
+            "the domain's point count is {domain_points} (a product of {site_count} site \
+             dimensions); merging needs a positive, finite count for its error weights"
+        )));
+    }
 
     // Index equality ignores `dim` (`Index::eq` compares id, tags, and plev), so
     // a clone that differs only in its dimension passes every identity check

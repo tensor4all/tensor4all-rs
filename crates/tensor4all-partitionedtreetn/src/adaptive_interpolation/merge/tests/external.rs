@@ -290,6 +290,82 @@ fn a_patch_bound_with_the_wrong_dimension_is_rejected() {
     );
 }
 
+/// A rank-one chain network over `sites`: `prod_i factor[s_i]`.
+fn chain(sites: &[DynIndex], factor: [f64; 2]) -> TreeTN<IdxTensor, usize> {
+    let bonds: Vec<DynIndex> = (0..sites.len() - 1).map(|_| DynIndex::new_dyn(1)).collect();
+    let tensors = sites
+        .iter()
+        .enumerate()
+        .map(|(node, site)| {
+            let mut indices = vec![site.clone()];
+            if node > 0 {
+                indices.push(bonds[node - 1].clone());
+            }
+            if node + 1 < sites.len() {
+                indices.push(bonds[node].clone());
+            }
+            IdxTensor::from_dense(indices, factor.to_vec()).unwrap()
+        })
+        .collect();
+    TreeTN::from_tensors(tensors, (0..sites.len()).collect()).unwrap()
+}
+
+#[test]
+fn a_domain_size_f64_cannot_represent_is_rejected() {
+    // Two patches over 1025 binary sites: the domain product is 2^1025, which
+    // overflows to inf, so every point count divided from it was NaN while both
+    // bounds stayed within tolerance and the result reported Certified.
+    let s: Vec<DynIndex> = (0..1025).map(|_| DynIndex::new_dyn(2)).collect();
+    let partition = PartitionedTreeTN::from_subdomains(vec![
+        patch(&s, &[0], chain(&s, A[0])),
+        patch(&s, &[1], chain(&s, A[1])),
+    ])
+    .unwrap();
+    let bounds = vec![certified(&s, &[0], 0.0), certified(&s, &[1], 0.0)];
+    let error = merge_sibling_patches(
+        partition,
+        bounds,
+        &s,
+        1e-8,
+        &0,
+        &SiblingPatchMergeOptions::new(2),
+    )
+    .unwrap_err();
+    let PatchedInterpolationError::InvalidInput { message } = error else {
+        panic!("the domain product is rejected as input: {error}");
+    };
+    assert!(message.contains("is inf"), "{message}");
+}
+
+#[test]
+fn an_empty_domain_is_rejected() {
+    // A dim-0 site makes the domain product 0, so every weight is 0/0 and the
+    // empty domain was reported as Certified.
+    let site = DynIndex::new_dyn(0);
+    let network = TreeTN::from_tensors(
+        vec![IdxTensor::from_diag(vec![site.clone()], Vec::<f64>::new()).unwrap()],
+        vec![0usize],
+    )
+    .unwrap();
+    let partition =
+        PartitionedTreeTN::from_subdomains(vec![SubDomainTreeTN::from_treetn(network).unwrap()])
+            .unwrap();
+    let order = [site];
+    let error = merge_sibling_patches(
+        partition,
+        vec![certified(&order, &[], 0.0)],
+        &order,
+        1e-8,
+        &0,
+        &SiblingPatchMergeOptions::new(2),
+    )
+    .unwrap_err();
+    let PatchedInterpolationError::InvalidInput { message } = error else {
+        panic!("the empty domain is rejected as input: {error}");
+    };
+    assert!(message.contains("is 0"), "{message}");
+}
+
 #[test]
 fn invalid_external_inputs_fail_before_any_merge() {
     let s = sites();
