@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """Audit and freeze the exact downstream-pinned measurement source graph."""
-import hashlib,json,os,subprocess,sys,tomllib
+import difflib,hashlib,json,os,subprocess,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 def git(*args,cwd=ROOT):return subprocess.check_output(['git',*args],cwd=cwd,text=True).strip()
 def main():
     metadata=json.loads(Path(sys.argv[1]).read_text())
     baseline=git('merge-base','origin/main','HEAD')
-    original=tomllib.loads(git('show',baseline+':Cargo.lock'))['package']
-    current=tomllib.loads((ROOT/'Cargo.lock').read_text())['package']
+    original=git('show',baseline+':Cargo.lock').splitlines()
+    current=(ROOT/'Cargo.lock').read_text().strip().splitlines()
+    # Compare the complete lock text: only the fixture's two dev references
+    # may be added. No package/source/version/checksum entry may change.
+    delta=[line for line in difflib.unified_diff(original,current,n=0)
+           if line.startswith(('+','-')) and not line.startswith(('+++','---'))]
+    assert delta==['+ "libc",','+ "serde_json",'],delta
     relevant=lambda p:p['name'].startswith(('tenferro','threadteam','hataori','t4a-faer','cpueinsum','tcontract','strided','tlinalg'))
-    identity=lambda p:(p['name'],p['version'],p.get('source'),p.get('checksum'))
-    assert {identity(p) for p in original if relevant(p)}=={identity(p) for p in current if relevant(p)}
     production=git('diff',baseline,'--','Cargo.toml','.cargo/config.toml','crates/*/src')
     assert not production,'production source/config was changed'
     assert not git('status','--porcelain'),'commit the frozen harness before recording'
