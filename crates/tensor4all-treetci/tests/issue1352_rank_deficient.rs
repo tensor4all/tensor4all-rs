@@ -98,8 +98,11 @@ where
         let reference = IdxTensor::from_dense(indices.clone(), values)?;
         let difference = tn.to_dense()?.sub(&reference)?;
         let error = difference.maxabs()? / reference.maxabs()?;
+        // Every listed seed converges, and the dense comparison confirms it.
+        // Requiring `Converged` also catches a regression that gives up with
+        // a bad approximation instead of reporting a false convergence.
         assert!(
-            run.termination != TreeTciTermination::Converged || error <= options.tolerance,
+            run.termination == TreeTciTermination::Converged && error <= options.tolerance,
             "seed {seed}: {:?} with reported {:?}, true residual {error:e}",
             run.termination,
             run.errors.last()

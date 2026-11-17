@@ -20,7 +20,7 @@ The reasons describe the existing optimization loop, in its decision order:
 The recorded error is the maximum of local bond residuals and residuals
 actually observed by the global search during that iteration. With a positive
 sampled scale and normalization enabled, divide that maximum by
-`max_sample_value`; otherwise use its absolute value. The observer receives
+`max_sample_value`; otherwise use it unnormalized. The observer receives
 this same value after search, along with evaluation accounting including the
 search. New pivots are processed in the next sweep.
 

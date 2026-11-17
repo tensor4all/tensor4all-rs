@@ -599,8 +599,10 @@ where
     // inconsistencies between neighboring updates. Probe the tail pivots,
     // where a newly discovered direction is most easily lost, only when the
     // ordinary search found no pivot. Confirmation uses the requested
-    // tolerance rather than the discovery margin. At most nsearch retained
-    // walks and nsearch subtree-anchored walks are added; scratch is reused.
+    // tolerance rather than the discovery margin. The loop runs at most
+    // nsearch times; each pass walks at most one retained pair and one
+    // subtree-anchored restart, so at most 2 * nsearch walks are added (a
+    // probe that finds an error skips its restart). Scratch is reused.
     if best.is_empty() {
         let retained = retained_pivot_starts(state, nsearch)?;
         let mut support_start = vec![0; n_sites];
