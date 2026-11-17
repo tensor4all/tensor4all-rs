@@ -76,8 +76,9 @@ pub struct TCI2Options {
     /// Convergence tolerance (default: `1e-8`).
     ///
     /// When `normalize_error` is enabled (the default), this is the
-    /// *relative* threshold: the bond error is divided by the maximum
-    /// absolute function value seen so far. Typical choices are `1e-8` for
+    /// *relative* threshold: the recorded error (the larger of the bond error
+    /// and the residual measured by the global search) is divided by the
+    /// maximum absolute function value seen so far. Typical choices are `1e-8` for
     /// moderate accuracy and `1e-12` for high accuracy.
     /// With `normalize_error = false`, this is an absolute threshold.
     /// Each half-sweep fixes its absolute threshold before updating any bond;
@@ -124,7 +125,10 @@ pub struct TCI2Options {
     /// Number of random starting points for global pivot search (default: `5`).
     ///
     /// Each starting point undergoes local optimization to find regions of
-    /// high interpolation error.
+    /// high interpolation error. When none finds an error above the absolute
+    /// tolerance, the default finder also walks once from the latest retained
+    /// pivot pair of every bond (see [`DefaultGlobalPivotFinder`]). Zero
+    /// disables the search, including those walks.
     pub nsearch: usize,
     /// Sweep strategy for 2-site sweeps (default: [`Sweep2Strategy::BackAndForth`]).
     pub sweep_strategy: Sweep2Strategy,
@@ -140,8 +144,10 @@ pub struct TCI2Options {
     pub strictly_nested: bool,
     /// Tolerance margin for global pivot search (default: `10.0`).
     ///
-    /// Global pivots are accepted when their error exceeds
-    /// `abs_tolerance * tol_margin_global_search`.
+    /// Global pivots found above `abs_tolerance * tol_margin_global_search`
+    /// take priority. When the search finds none, walked residuals above
+    /// `abs_tolerance` are added instead. Residuals below the margin still
+    /// enter the recorded error.
     pub tol_margin_global_search: f64,
     /// Random seed for reproducibility (default: `None` = OS entropy).
     ///
@@ -223,11 +229,14 @@ impl Default for TCI2Options {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TCI2Termination {
-    /// Bond error, global-pivot history, and rank stability all converged.
+    /// The recorded error (bond errors and residuals measured by the global
+    /// search), global-pivot history, and rank stability all converged.
     ///
-    /// Under [`PivotSearchStrategy::Full`] the bond errors are certified
-    /// residual maxima. Under [`PivotSearchStrategy::Rook`] they are the last
-    /// rook pivots, so this variant does not prove the tolerance.
+    /// Under [`PivotSearchStrategy::Full`] the bond errors are residual
+    /// maxima over the sampled candidate rows and columns, not over the full
+    /// tensor. Under [`PivotSearchStrategy::Rook`] they are the last rook
+    /// pivots. Either way this variant is a sampled criterion and does not
+    /// prove the tolerance on unsampled entries.
     Converged,
     /// The recent rank history reached the configured maximum bond dimension.
     MaxBondDimension,
@@ -270,6 +279,11 @@ pub struct TCI2OptimizationResult<T: Scalar + TTScalar> {
     /// Bond dimension recorded after each half-sweep.
     pub ranks: Vec<usize>,
     /// Normalized or absolute error estimate recorded after each half-sweep.
+    ///
+    /// Each value is the larger of the maximum local bond error and the
+    /// largest residual the global pivot search measured on the swept
+    /// approximation. Both are sampled, so these are diagnostics, not bounds
+    /// on the full-tensor error.
     pub errors: Vec<f64>,
     /// Reason why optimization stopped.
     pub termination: TCI2Termination,
@@ -2126,11 +2140,6 @@ where
         // Fill site tensors after sweep
         tci.fill_site_tensors_on_session(&f, linalg)?;
 
-        // Record error
-        let error = tci.max_bond_error();
-        let error_normalized = error / error_normalization;
-        errors.push(error_normalized);
-
         // Global pivot search
         let tt = tci.to_tensor_train()?;
         let input = GlobalPivotSearchInput {
@@ -2144,9 +2153,18 @@ where
         // Erase the caller's RNG type once, so the generic pipeline below the
         // public boundary is instantiated a single time.
         let mut stream: &mut R = &mut *rng;
-        let global_pivots = finder.find_global_pivots(&input, &f, abs_tol, &mut stream)?;
-        let n_global = global_pivots.len();
-        tci.add_global_pivots(&global_pivots)?;
+        let search = finder.find_global_pivots(&input, &f, abs_tol, &mut stream)?;
+        validate_nonnegative_finite("max_sampled_error", search.max_sampled_error)?;
+
+        // Record the larger of the local bond errors and the residual the
+        // global search actually measured on the swept approximation. Both
+        // are sampled, so this is a diagnostic, not a bound (#1358).
+        let error = tci.max_bond_error().max(search.max_sampled_error);
+        let error_normalized = error / error_normalization;
+        errors.push(error_normalized);
+
+        let n_global = search.pivots.len();
+        tci.add_global_pivots(&search.pivots)?;
         nglobal_pivots_history.push(n_global);
 
         ranks.push(tci.rank());
