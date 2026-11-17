@@ -27,8 +27,10 @@ def main():
             directory=git('rev-parse','--show-toplevel',cwd=Path(p['manifest_path']).parent)
             head=git('rev-parse','HEAD',cwd=directory)
             assert head==p['source'].rsplit('#',1)[1]
-            assert not git('status','--porcelain',cwd=directory)
-            checkouts[directory]=head
+            status=git('status','--porcelain',cwd=directory).splitlines()
+            # Cargo itself writes this fetch-completion marker; it is not source.
+            assert all(line=='?? .cargo-ok' for line in status),status
+            checkouts[directory]=dict(commit=head,tracked_source_clean=True,cargo_generated_markers=status)
     binary=Path(sys.argv[2]).resolve()
     record=dict(root_base=baseline,harness_commit=git('rev-parse','HEAD'),dirty=False,production_unchanged=True,
         dependency_identities_match_downstream_lock=True,dependency_sources=sources,clean_git_checkouts=checkouts,
