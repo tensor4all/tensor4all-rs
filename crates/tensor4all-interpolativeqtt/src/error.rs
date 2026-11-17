@@ -63,6 +63,17 @@ pub enum InterpolativeQttError {
         limit: usize,
     },
 
+    /// A Chebyshev patch cannot be refined further within the configured limits.
+    #[error(
+        "Chebyshev patch at {prefix:?} did not converge: error {error_estimate}; increase max_depth or polynomial_degree, or relax tolerance"
+    )]
+    ChebyshevNotConverged {
+        /// Fixed leading bits per axis.
+        prefix: Vec<Vec<usize>>,
+        /// Maximum absolute interpolation residual at the validation points.
+        error_estimate: f64,
+    },
+
     /// A supplied execution engine refused an evaluator call.
     #[error("interpolation execution failed: {source}")]
     Execution {

@@ -329,18 +329,13 @@ impl<T: InterpolativeScalar> Plan<'_, T> {
 
     /// Apply the Kronecker stencil without forming its dense product.
     fn apply_stencil(&self, values: &[T], session: &mut Session<'_>) -> Result<Vec<T>> {
-        let order = self.basis.len();
-        let mut values = values.to_vec();
-        for _ in 0..self.domain.ndims() {
-            // The current axis is first (contiguous). Rotate its new test axis
-            // to the end, exposing the next node axis for the next GEMM.
-            // After D rotations the original axis-zero-fastest order is restored.
-            let columns = values.len() / order;
-            let input = Matrix::from_col_major_vec(order, columns, values);
-            let output = session.mat_mul(&self.weights, &input)?;
-            values = tensor4all_tensorbackend::transpose(&output).into_col_major_vec();
-        }
-        Ok(values)
+        apply_stencil(
+            std::slice::from_ref(&self.weights),
+            self.basis.len(),
+            self.domain.ndims(),
+            values,
+            session,
+        )
     }
 }
 
@@ -631,7 +626,33 @@ fn compression_change<T: InterpolativeScalar>(
         })
 }
 
-fn sample<T, F, E>(
+/// Apply a one-axis tensor-product stencil along every axis of the `order^D`, axis-zero-fastest
+/// `values`, without forming the dense Kronecker product.
+///
+/// `weights` holds one `[tests, order]` matrix per contracted axis, in axis order, or exactly one
+/// matrix that every axis shares.
+pub(crate) fn apply_stencil<T: InterpolativeScalar>(
+    weights: &[Matrix<T>],
+    order: usize,
+    ndims: usize,
+    values: &[T],
+    session: &mut Session<'_>,
+) -> Result<Vec<T>> {
+    let mut values = values.to_vec();
+    for axis in 0..ndims {
+        // The current axis is first (contiguous). Rotate its new test axis
+        // to the end, exposing the next node axis for the next GEMM.
+        // After D rotations the original axis-zero-fastest order is restored.
+        let columns = values.len() / order;
+        let input = Matrix::from_col_major_vec(order, columns, values);
+        let weights = weights.get(axis).unwrap_or(&weights[0]);
+        let output = session.mat_mul(weights, &input)?;
+        values = tensor4all_tensorbackend::transpose(&output).into_col_major_vec();
+    }
+    Ok(values)
+}
+
+pub(crate) fn sample<T, F, E>(
     evaluate: &F,
     engine: &mut CpuEngine,
     points: ColMajorArrayRef<'_, f64>,
@@ -659,17 +680,17 @@ where
     Ok(values)
 }
 
-fn checked_product(a: usize, b: usize) -> Result<usize> {
+pub(crate) fn checked_product(a: usize, b: usize) -> Result<usize> {
     a.checked_mul(b)
         .filter(|&n| n <= isize::MAX as usize)
         .ok_or_else(|| invalid_argument("interpolation shape or byte count overflows"))
 }
 
-fn checked_power(base: usize, exponent: usize) -> Result<usize> {
+pub(crate) fn checked_power(base: usize, exponent: usize) -> Result<usize> {
     (0..exponent).try_fold(1, |n, _| checked_product(n, base))
 }
 
-fn product_indices(base: usize, ndims: usize, count: usize) -> Vec<Vec<usize>> {
+pub(crate) fn product_indices(base: usize, ndims: usize, count: usize) -> Vec<Vec<usize>> {
     (0..count)
         .map(|mut flat| {
             (0..ndims)
