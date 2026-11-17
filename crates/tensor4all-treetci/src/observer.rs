@@ -4,10 +4,10 @@ use crate::TreeTciEvaluationStats;
 ///
 /// The values are the ones the run records for the iteration. `max_bond_dim` is
 /// `ranks[iteration]` and `error` is `errors[iteration]` of the returned result,
-/// bitwise. `error` is the bond error recorded after the iteration's edge
-/// updates and before the global pivot injection of that iteration: pivots
-/// injected afterwards are swept by the next iteration, so the next call can
-/// report a different error for the same state.
+/// bitwise. `error` is the maximum of the local bond residuals and the global
+/// search residuals of the swept approximation, normalized when requested.
+/// The callback runs after that search; any newly injected pivots are only
+/// processed by the next iteration's sweep.
 ///
 /// Only the optimizer builds one.
 #[derive(Clone, Copy, Debug)]
@@ -17,7 +17,7 @@ pub struct TreeTciIteration<'a> {
     pub iteration: usize,
     /// Maximum bond dimension after the iteration, `ranks[iteration]` of the result.
     pub max_bond_dim: usize,
-    /// Maximum sampled bond error of the iteration, `errors[iteration]` of the result.
+    /// Maximum sampled local/global residual of the iteration, `errors[iteration]` of the result.
     pub error: f64,
     /// Evaluation accounting of the run so far; it never decreases between calls.
     pub evaluation: &'a TreeTciEvaluationStats,

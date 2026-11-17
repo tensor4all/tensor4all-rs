@@ -1,6 +1,7 @@
 use super::{
     branch_slice_cache_max_bytes, cached_walk_readout, cached_walk_readout_on_session,
-    find_global_pivots, materialized_tree_bytes, search_with_readout, ScalarParts, SearchParams,
+    find_global_pivots, materialized_tree_bytes, retained_pivot_starts, search_with_readout,
+    ScalarParts, SearchParams,
 };
 use crate::{
     materialize::to_treetn, optimize_with_proposer, AllEdges, DefaultProposer, GlobalIndexBatch,
@@ -50,6 +51,105 @@ where
         readout,
         cached_walk_readout_on_session,
     )
+    .map(|result| result.pivots)
+}
+
+#[test]
+fn confirmation_starts_preserve_the_physical_subtree_at_both_unit_orientations() {
+    let mut state =
+        TreeTCI2::<f64>::new(vec![2, 1, 3], TreeTciGraph::linear_chain(3).unwrap()).unwrap();
+    let tail = vec![0, 0, 1];
+    state
+        .add_global_pivots(&[vec![1, 0, 2], tail.clone()])
+        .unwrap();
+    let starts = retained_pivot_starts(&state, 5).unwrap();
+    assert_eq!(starts.len(), 2);
+    assert_eq!(starts[0].point, tail);
+    assert_eq!(starts[0].varying_sites.as_slice(), &[1, 2]);
+    assert_eq!(starts[1].point, tail);
+    assert_eq!(starts[1].varying_sites.as_slice(), &[0, 1]);
+    assert!(retained_pivot_starts(&state, 0).unwrap().is_empty());
+    assert_eq!(retained_pivot_starts(&state, 1).unwrap().len(), 1);
+    // Graphs without unit endpoints need no retained-support confirmation.
+    assert!(retained_pivot_starts(&corner_state(), 5)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn confirmation_start_budget_spreads_across_unit_edges() {
+    let edges: Vec<_> = (1..=5).map(|site| TreeTciEdge::new(0, site)).collect();
+    let mut state = TreeTCI2::<f64>::new(
+        vec![1, 2, 2, 2, 2, 2],
+        TreeTciGraph::new(6, &edges).unwrap(),
+    )
+    .unwrap();
+    state.add_global_pivots(&[vec![0, 1, 1, 1, 1, 1]]).unwrap();
+    let starts = retained_pivot_starts(&state, 2).unwrap();
+    assert_eq!(starts.len(), 2);
+    assert_eq!(starts[0].varying_sites.as_slice(), &[0, 2, 3, 4, 5]);
+    assert_eq!(starts[1].varying_sites.as_slice(), &[0, 1, 2, 3, 5]);
+    // Two site-free endpoints are valid too; their only point is zero.
+    let mut units =
+        TreeTCI2::<f64>::new(vec![1, 1], TreeTciGraph::linear_chain(2).unwrap()).unwrap();
+    units.add_global_pivots(&[vec![0, 0]]).unwrap();
+    let starts = retained_pivot_starts(&units, 1).unwrap();
+    assert_eq!(starts[0].point, vec![0, 0]);
+    assert_eq!(starts[0].varying_sites.as_slice(), &[0]);
+}
+
+#[test]
+fn confirmation_start_construction_rejects_missing_or_empty_pivots() {
+    let mut state =
+        TreeTCI2::<f64>::new(vec![1, 2], TreeTciGraph::linear_chain(2).unwrap()).unwrap();
+    assert!(retained_pivot_starts(&state, 1).is_err());
+    state.add_global_pivots(&[vec![0, 0]]).unwrap();
+    let (left, right) = state
+        .graph
+        .subregion_vertices(TreeTciEdge::new(0, 1))
+        .unwrap();
+    let saved = state.ijset.remove(&right).unwrap();
+    assert!(retained_pivot_starts(&state, 1).is_err());
+    state.ijset.insert(right, saved);
+    state.ijset.remove(&left);
+    assert!(retained_pivot_starts(&state, 1).is_err());
+}
+
+#[test]
+fn sampled_residuals_are_preserved_below_the_discovery_margin() {
+    let mut state =
+        TreeTCI2::<f64>::new(vec![2, 2], TreeTciGraph::linear_chain(2).unwrap()).unwrap();
+    state.add_global_pivots(&[vec![0, 0]]).unwrap();
+    for (error, expected_pivots) in [(0.25, vec![]), (1.5, vec![vec![0, 0]])] {
+        let mut target = |batch: GlobalIndexBatch<'_>| Ok(vec![1.0; batch.n_points()]);
+        let mut execution = crate::evaluation::Compatibility::new(&mut target);
+        // Isolate search bookkeeping with a constant, exactly representable
+        // residual. A positive error below the margin must not become zero.
+        let readout = |_: &mut TreeTNCachedEvaluator<'_, usize>,
+                       _: &TreeTN<IdxTensor, usize>,
+                       _: &[DynIndex],
+                       points: ColMajorArrayRef<'_, usize>,
+                       _: Option<usize>| {
+            Ok(vec![AnyScalar::new_real(1.0 - error); points.shape()[1]])
+        };
+        let result = search_with_readout(
+            &state,
+            &mut execution,
+            SearchParams {
+                nsearch: 0,
+                max_nglobal_pivot: 1,
+                abs_tol: 1.0,
+                tol_margin: 10.0,
+            },
+            &[vec![0, 0]],
+            &mut seeded_rng(1),
+            readout,
+            cached_walk_readout_on_session,
+        )
+        .unwrap();
+        assert_eq!(result.max_error, error);
+        assert_eq!(result.pivots, expected_pivots);
+    }
 }
 
 /// Batch evaluator for a two-peak function on a 10-site chain.
@@ -857,17 +957,26 @@ fn full_runs_reproduce_recorded_ranks_and_errors() {
     // on purpose and must be re-recorded deliberately when the search, the
     // sweep or the RNG legitimately changes.
     //
-    // The previous recording (b1bb828d, both inner passes in sorted edge
+    // Re-recorded again when recorded errors started including residuals
+    // the global search measured (#1352): the chain now takes six iterations
+    // because sampled residuals between 1e-8 and 1.6e-8 no longer pass as a
+    // converged 9.7e-9 bond error. The prior chain recording was ranks
+    // [4, 8, 8, 8], errors [2.5205315287054708e-9, 6.416958743885642e-9,
+    // 9.666884024209921e-9, 9.666884024209921e-9].
+    //
+    // The recording before that (b1bb828d, both inner passes in sorted edge
     // order): chain ranks [4, 8, 8, 8], errors [4.210785455368414e-9,
     // 7.104994852102056e-9, 6.760951106568071e-9, 6.850685368779623e-9];
     // branched ranks [4, 16, 16, 16].
     let (ranks, errors, _) = chain_fixture().full_run();
-    assert_eq!(ranks, vec![4, 8, 8, 8]);
+    assert_eq!(ranks, vec![4, 8, 8, 8, 8, 8]);
     let recorded = [
-        2.5205315287054708e-9,
-        6.416958743885642e-9,
-        9.666884024209921e-9,
-        9.666884024209921e-9,
+        0.012773153086831206,
+        1.0025709087768116e-8,
+        1.5404162097480518e-8,
+        9.492341846461125e-9,
+        9.314919862766571e-9,
+        9.549166222994594e-9,
     ];
     assert_eq!(errors.len(), recorded.len());
     for (error, expected) in errors.iter().zip(recorded) {
@@ -880,10 +989,21 @@ fn full_runs_reproduce_recorded_ranks_and_errors() {
     let fixture = branched_fixture();
     let (ranks, errors, state) = fixture.full_run();
     assert_eq!(ranks, vec![8, 16, 16, 16]);
+    // The first iteration's rank-8 approximation is not exact. Its error now
+    // includes the residual the global search measured (#1352), instead of
+    // only the rounding-level local bond error recorded before.
+    assert_eq!(errors.len(), 4);
+    let first_recorded = 0.4463559058045017;
+    assert!(
+        (errors[0] - first_recorded).abs() <= 1e-9 * first_recorded,
+        "branched errors {errors:?}"
+    );
     // At rank 16 the branched fixture is represented exactly, so the error
     // estimates are rounding-level and alone say little about the run.
-    assert_eq!(errors.len(), 4);
-    assert!(errors.iter().all(|&error| error <= 1e-14), "{errors:?}");
+    assert!(
+        errors[1..].iter().all(|&error| error <= 1e-14),
+        "{errors:?}"
+    );
     // The stronger check: materialize the result once over all 2^13 points
     // and compare it with the dense target.
     let treetn = to_treetn(&state, fixture.evaluate(), None).unwrap();

@@ -17,10 +17,22 @@ The reasons describe the existing optimization loop, in its decision order:
 | `DegenerateCandidateSet` | The `Converged` condition holds on the recorded errors, but the most recent update of at least one edge could not measure its bond error. | The run stops where it would have reported `Converged`. The approximation may be inaccurate. |
 | `MaxIterations` | The requested iterations completed without either stopping condition. | A small final error alone does not establish convergence. |
 
-The error is `max_bond_error / max_sample_value` when normalization is enabled
-and the sampled scale is positive; otherwise it is the raw bond error. The
-global search uses `tolerance * max_sample_value` in normalized mode and
-`tolerance` otherwise, with `tol_margin_global_search` as its acceptance margin.
+The recorded error is the maximum of local bond residuals and residuals
+actually observed by the global search during that iteration. With a positive
+sampled scale and normalization enabled, divide that maximum by
+`max_sample_value`; otherwise use its absolute value. The observer receives
+this same value after search, along with evaluation accounting including the
+search. New pivots are processed in the next sweep.
+
+Global search uses `tolerance * max_sample_value` in normalized mode and
+`tolerance` otherwise. Discoveries above `tol_margin_global_search` times that
+absolute tolerance take priority; when none cross the margin, already observed
+tolerance violations still qualify. If ordinary starts yield no pivot, edges
+with a dimension-one endpoint supply retained tail pivot pairs and restarts
+that preserve one observed subtree while randomizing its complement. Each
+extra family is bounded by `nsearch` walks. These checks can escape sparse
+support that uniform random starts miss; they do not exhaust the domain or
+turn sampled convergence into an error bound.
 
 Global search is skipped after the final requested iteration and at a
 bond-saturation stop. An injected pivot must be processed by a later sweep:
