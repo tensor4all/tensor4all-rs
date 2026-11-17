@@ -16,6 +16,7 @@ mod issue1078_context_adoption;
 mod issue1153_degenerate_junction;
 mod issue1159_rank1_junction;
 mod issue1352_rank_deficient;
+mod issue1352_unit_site;
 mod iteration_visitor;
 mod materialize_context;
 mod optimizer_context;
