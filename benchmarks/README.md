@@ -314,7 +314,9 @@ unpatched G0 (`unpatched-src`), `patched_fourier_transform`
 (`patched-merge-refine`, optionally with the certified application through
 `--certified-share`, chains only), and SRC on every patch separately
 (`patched-src-each`, diagnostic). Accuracy is measured against the exact FFT
-on sampled Matsubara slices; `--check-dense true` compares with the dense DFT
+on sampled Matsubara slices, drawn from `--ref-seed` (default 42)
+independently of the interpolation `--seed`, so every seed is scored on the
+same points; `--check-dense true` compares with the dense DFT
 on the whole grid instead and validates the conventions at small `R`. The
 source lives in `rust/benchmark_m6a_fourier.rs`; it shares the G0 grid
 (`rust/g0_grid.rs`) with the M6c harness.
