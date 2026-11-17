@@ -23,6 +23,8 @@
 //! Accuracy is measured against the exact transform: for `--slices`
 //! Matsubara indices `n`, `G(r, n)` is the normalized 2D FFT of `G0(k, n)` on
 //! the full `2^R x 2^R` grid, sampled at `--samples` random points in total.
+//! The slices and points are drawn from `--ref-seed` (default 42), not from
+//! `--seed`, so runs at different seeds are scored on the same points.
 //! `--check-dense true` compares every arm with the dense DFT on the whole
 //! grid instead (small R only), which validates the conventions.
 //!
@@ -79,7 +81,11 @@ struct Args {
     r: usize,
     temperature: f64,
     topology: String,
+    /// Seed of the G0 interpolation (pivot search).
     seed: u64,
+    /// Seed of the accuracy reference (frequency slices and sample points),
+    /// kept apart from `seed` so every seed is scored on the same points.
+    ref_seed: u64,
     /// Patch cap of the patched G0 input.
     g0_cap: usize,
     /// Relative L2 tolerance of the G0 input (patched and unpatched).
@@ -119,6 +125,7 @@ fn parse_args() -> Result<Args> {
         temperature: 0.1,
         topology: "tt_nblock".into(),
         seed: 42,
+        ref_seed: 42,
         g0_cap: 64,
         g0_rtol: 1e-6,
         g0_patch_order: "all".into(),
@@ -142,6 +149,7 @@ fn parse_args() -> Result<Args> {
             "--temperature" => args.temperature = value.parse()?,
             "--topology" => args.topology = value.clone(),
             "--seed" => args.seed = value.parse()?,
+            "--ref-seed" => args.ref_seed = value.parse()?,
             "--g0-cap" => args.g0_cap = value.parse()?,
             "--g0-rtol" => args.g0_rtol = value.parse()?,
             "--g0-patch-order" => args.g0_patch_order = value.clone(),
@@ -460,7 +468,7 @@ struct Reference {
 
 fn reference(grid: &Grid, args: &Args) -> Reference {
     let size = grid.size();
-    let mut rng = ChaCha8Rng::seed_from_u64(args.seed ^ 0x6d61_6667);
+    let mut rng = ChaCha8Rng::seed_from_u64(args.ref_seed ^ 0x6d61_6667);
     // The two frequencies nearest the Fermi level, then random ones.
     let mut slices = vec![size / 2 - 1, size / 2];
     while slices.len() < args.slices.max(2) {
@@ -779,7 +787,7 @@ fn main() -> Result<()> {
     let grid = Grid::new(args.r, args.temperature, &args.topology)?;
     emit(json!({
         "kind": "config", "r": args.r, "temperature": args.temperature,
-        "topology": args.topology, "seed": args.seed, "g0_cap": args.g0_cap,
+        "topology": args.topology, "seed": args.seed, "ref_seed": args.ref_seed, "g0_cap": args.g0_cap,
         "g0_rtol": args.g0_rtol, "g0_patch_order": args.g0_patch_order, "arm": args.arm, "cap": args.cap, "rtol": args.rtol,
         "out_patch_order": args.out_patch_order, "contract": args.contract, "certified_share": args.certified_share,
         "slices": args.slices, "samples": args.samples, "check_dense": args.check_dense,
