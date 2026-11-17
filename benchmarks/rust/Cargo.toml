@@ -11,6 +11,8 @@ publish = false
 default = []
 # TreeTN Fourier construction only; the legacy SimpleTT transforms stay off.
 fourier = ["dep:tensor4all-quanticstransform"]
+# `patched_fourier_transform`, the lazy merge-refine front end (benchmark_m6a_fourier).
+patched-fourier = ["fourier", "tensor4all-quanticstransform/partitioned"]
 # Historical SimpleTT/TTCache/TCI comparisons, including the migration bridge.
 legacy-comparisons = [
     "dep:tensor4all-simplett",
@@ -168,3 +170,8 @@ required-features = ["cuda"]
 [[example]]
 name = "benchmark_m6c_elementwise"
 path = "benchmark_m6c_elementwise.rs"
+
+[[example]]
+name = "benchmark_m6a_fourier"
+path = "benchmark_m6a_fourier.rs"
+required-features = ["patched-fourier"]

@@ -43,11 +43,13 @@ contraction, M6b sibling merging, and M6c elementwise library kernels do not
 require SimpleTT. The committed `benchmark_m6c_elementwise` harness builds with
 no extra feature. Input/operator generation is a separate dependency: #1333
 migrated Fourier construction, and #1334 migrated Interpolative QTT to TreeTN.
-Local, untracked M6a probes are not targets of this package.
+The M6a Fourier harness `benchmark_m6a_fourier` needs the `patched-fourier`
+feature.
 
 | Feature | Targets / dependencies enabled |
 | --- | --- |
 | `fourier` | `benchmark_merge_refine`, `benchmark_merge_refine_intended_regime`; native `quanticstransform` Fourier construction with `simplett-transforms` disabled |
+| `patched-fourier` | `benchmark_m6a_fourier`; `fourier` plus `patched_fourier_transform` (`quanticstransform/partitioned`) |
 | `legacy-comparisons` | `issue566_perf_candidates`, `issue566_perf_candidates2`; explicit SimpleTT, TCI, and TreeTN bridge comparisons |
 | `itensorlike` | `benchmark_tt_ops`; TreeTN-backed ITensors-style facade |
 | `hdf5` | `inspect_mps_inputs`; HDF5 plus the ITensors-style facade |
@@ -300,6 +302,31 @@ cargo run --release -p tensor4all-benchmarks \
 
 The recorded runs, their matched-accuracy comparison, and their caveats are in
 [`2026-10-03-m5-fixed-depth-exploration.md`](results/2026-10-03-m5-fixed-depth-exploration.md).
+
+#### Patched momentum Fourier transform (M6a)
+
+`benchmark_m6a_fourier` applies the 2D momentum Fourier transform
+`G0(kx, ky, n) -> G(rx, ry, n)` to the gw-rs Matsubara G0 on the comb CTTN or
+`tt_nblock`, with one arm per route: `contract_adaptive` with the operator
+written on the state's whole tree by `LinearOperator::to_state_network`
+(`patched-contract`), `apply_linear_operator` with adaptive SRC on the
+unpatched G0 (`unpatched-src`), `patched_fourier_transform`
+(`patched-merge-refine`, optionally with the certified application through
+`--certified-share`, chains only), and SRC on every patch separately
+(`patched-src-each`, diagnostic). Accuracy is measured against the exact FFT
+on sampled Matsubara slices; `--check-dense true` compares with the dense DFT
+on the whole grid instead and validates the conventions at small `R`. The
+source lives in `rust/benchmark_m6a_fourier.rs`; it shares the G0 grid
+(`rust/g0_grid.rs`) with the M6c harness.
+
+```bash
+cargo run --release -p tensor4all-benchmarks --features patched-fourier \
+  --example benchmark_m6a_fourier -- \
+  --r 4 --temperature 0.1 --topology cttn --arm patched-contract \
+  --g0-cap 16 --cap 16 --rtol 1e-6 --check-dense true
+```
+
+No measurement at production size is recorded yet.
 
 #### Patched element-wise operations (M6c)
 
