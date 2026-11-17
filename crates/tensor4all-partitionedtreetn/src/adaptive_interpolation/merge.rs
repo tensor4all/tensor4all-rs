@@ -359,17 +359,45 @@ where
         }
     }
 
-    let mut leaves = initial_leaves(partition, &report)?;
-    let mut merge = SiblingMergeReport {
-        max_bond_dim: cap,
-        merges: Vec::new(),
-        rejected_by_cap: 0,
-        rejected_by_status: 0,
-        error: error.clone(),
-    };
+    let leaves = initial_leaves(partition, &report)?;
+    let (partition, merge) = merge_leaves(
+        leaves,
+        &report.patch_order,
+        center,
+        tau,
+        cap,
+        domain_points,
+        Some(error.clone()),
+    )?;
+    Ok(SiblingMergeResult {
+        partition,
+        producer: report,
+        merge,
+    })
+}
+
+/// Walk the split tree of `leaves` bottom-up and merge complete sibling
+/// groups; shared by [`merge_siblings`] and [`merge_sibling_patches`].
+///
+/// `initial_error` is the producer's error report, kept unchanged when no
+/// merge is accepted; without it the error of the leaves is assembled.
+fn merge_leaves<V>(
+    mut leaves: BTreeMap<Vec<usize>, Leaf<V>>,
+    patch_order: &[DynIndex],
+    center: &V,
+    tau: f64,
+    cap: usize,
+    domain_points: f64,
+    initial_error: Option<L2ErrorReport>,
+) -> Result<(PartitionedTreeTN<V>, SiblingMergeReport), PatchedInterpolationError>
+where
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+{
+    let mut merges = Vec::new();
+    let (mut rejected_by_cap, mut rejected_by_status) = (0, 0);
     let deepest = leaves.keys().map(Vec::len).max().unwrap_or(0);
     for depth in (1..=deepest).rev() {
-        let site = &report.patch_order[depth - 1];
+        let site = &patch_order[depth - 1];
         let mut groups: BTreeMap<Vec<usize>, usize> = BTreeMap::new();
         for key in leaves.keys().filter(|key| key.len() == depth) {
             *groups.entry(key[..depth - 1].to_vec()).or_default() += 1;
@@ -396,29 +424,33 @@ where
                         leaves.remove(key);
                     }
                     leaves.insert(parent, leaf);
-                    merge.merges.push(record);
+                    merges.push(record);
                 }
-                Attempt::RejectedByCap => merge.rejected_by_cap += 1,
-                Attempt::RejectedByStatus => merge.rejected_by_status += 1,
+                Attempt::RejectedByCap => rejected_by_cap += 1,
+                Attempt::RejectedByStatus => rejected_by_status += 1,
             }
         }
     }
 
-    // The canonical order of the run (lexicographic over the split path) is
-    // the order of the value keys, because every patch fixes a prefix of the
-    // same split order.
+    // The canonical order (lexicographic over the split path) is the order
+    // of the value keys, because every patch fixes a prefix of the same split
+    // order.
     let leaves: Vec<Leaf<V>> = leaves.into_values().collect();
-    if !merge.merges.is_empty() {
-        merge.error = merged_error(&leaves, domain_points, tau)?;
-    }
+    let error = match initial_error {
+        Some(error) if merges.is_empty() => error,
+        _ => merged_error(&leaves, domain_points, tau)?,
+    };
     let partition = PartitionedTreeTN::from_disjoint_subdomains(
         leaves.into_iter().filter_map(|leaf| leaf.network).collect(),
     )?;
-    Ok(SiblingMergeResult {
-        partition,
-        producer: report,
-        merge,
-    })
+    let merge = SiblingMergeReport {
+        max_bond_dim: cap,
+        merges,
+        rejected_by_cap,
+        rejected_by_status,
+        error,
+    };
+    Ok((partition, merge))
 }
 
 /// The leaves of the run, keyed by their values along the split order.
@@ -654,6 +686,12 @@ where
 fn missing_leaf() -> PatchedInterpolationError {
     internal(anyhow::anyhow!("a complete sibling group lost a member"))
 }
+
+mod external;
+
+pub use external::{
+    merge_sibling_patches, PatchErrorBound, SiblingPatchMergeOptions, SiblingPatchMergeResult,
+};
 
 #[cfg(test)]
 mod tests;

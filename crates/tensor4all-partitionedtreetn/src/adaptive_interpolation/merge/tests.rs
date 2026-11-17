@@ -723,3 +723,5 @@ fn invalid_inputs_fail_before_any_merge() {
         }
     ));
 }
+
+mod external;

@@ -87,6 +87,10 @@ tensor4all-treeaci = { path = "../tensor4all-treeaci", default-features = false 
 # the patched product tests can run tree RSI as the per-patch kernel. Its
 # backend provider is inherited from this crate's selected provider feature.
 tensor4all-treersi = { path = "../tensor4all-treersi", default-features = false }
+# Path-only cross-layer dev-dependency (stripped from published manifests) so
+# the Chebyshev patch merge example can build piecewise polynomial patches. Its
+# backend provider is inherited from this crate's selected provider feature.
+tensor4all-interpolativeqtt = { path = "../tensor4all-interpolativeqtt", default-features = false }
 rand.workspace = true
 rand_chacha.workspace = true
 
