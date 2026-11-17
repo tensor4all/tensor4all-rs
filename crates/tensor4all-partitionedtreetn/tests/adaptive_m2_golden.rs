@@ -67,6 +67,15 @@
 //! their accepted patches) went from 0.0 to values of order 1e-17, and two
 //! other estimates moved within 1e-16. Function evaluations, terminations,
 //! bond dimensions, and node data are unchanged.
+//!
+//! Both TreeTCI scenarios were re-recorded for #1352: exhausting the
+//! candidates at a dimension-one endpoint below the full subtree rank now
+//! reports `ErrorNotMeasured`. The sampled-max driver splits those patches
+//! instead of accepting their structural zero residuals. Splits increase from
+//! 3 to 5 without pivot recycling and from 3 to 9 with it; cache hits become
+//! 13721 and 20551. Both runs still evaluate the same 128 target points and
+//! reproduce the function at the original accuracy tolerance. Dense scenario
+//! records and all comparison tolerances are unchanged.
 
 use crate::adaptive_common;
 
@@ -544,6 +553,14 @@ fn run_scenario(scenario: &Scenario) -> (Value, Vec<EngineCall>) {
         (Engine::TreeTci, Function::Real(f)) => {
             let engine = RecordingTreeTci::default();
             let result = run_typed(&engine, scenario, f.as_ref());
+            // Re-recording must preserve the target, not only the driver's
+            // discrete decisions. Check every entry at the existing tolerance.
+            assert_accurate(
+                &result,
+                &scenario.problem,
+                f.as_ref(),
+                scenario.options.tolerance.rtol,
+            );
             let calls = engine.calls.lock().unwrap().clone();
             (capture(scenario, &result, &calls), calls)
         }

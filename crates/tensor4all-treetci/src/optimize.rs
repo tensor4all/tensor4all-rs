@@ -58,19 +58,23 @@ pub enum TreeTciTermination {
     /// the recorded errors, but at least one edge could not measure its bond
     /// error in its most recent update.
     ///
-    /// An edge's error is unmeasurable when one side of its candidate matrix
-    /// holds a single candidate while both sides of the edge have more than
-    /// one configuration. The first pivot then exhausts that side, and the
-    /// recorded error is zero by construction rather than by measurement.
+    /// An edge's error is unmeasurable when a candidate side has only one
+    /// entry, or the selected pivots exhaust the candidates at an endpoint
+    /// of local dimension 1, while both full subtrees have more
+    /// configurations than the stored rank. The recorded zero error
+    /// then follows from candidate exhaustion rather than a measured residual
+    /// (issues #1153 and #1352). If either subtree is fully represented at
+    /// that rank, exhaustion is legitimate and the error counts as measured.
     /// Around a vertex of local dimension 1 whose adjacent bonds all have
     /// rank 1, the junction side is the product of single pivots (issue
     /// #1153). [`crate::DefaultProposer`] and
     /// [`crate::TruncatedDefaultProposer`] keep the pivots enriched there as
     /// permanent candidates, so an exactly rank-1 bond is measured and can be
     /// reported `Converged` (issue #1159); a custom proposer that drops them
-    /// can reach this state. The approximation may be inaccurate; enabling
-    /// the global pivot search, supplying more initial pivots, or offering
-    /// more candidates on that side can let the bonds grow.
+    /// can reach this state. Higher-rank bonds can still exhaust their
+    /// candidates even with the built-in proposers. The approximation may be
+    /// inaccurate; enabling the global pivot search, supplying more initial
+    /// pivots, or offering more candidates on that side can let the bonds grow.
     DegenerateCandidateSet,
 }
 
@@ -993,9 +997,10 @@ where
             let rank_stable = last_ranks.iter().min().copied().unwrap_or(0)
                 == last_ranks.last().copied().unwrap_or(0);
             if errors_converged && no_global_pivots && rank_stable {
-                // A zero error from an exhausted single-candidate side is not
-                // evidence of convergence (#1153). Stop where `Converged`
-                // would have stopped and report that the error was not seen.
+                // A zero error from exhausted candidates is not evidence of
+                // convergence below the full bipartition rank (#1153, #1352).
+                // Stop where `Converged` would have stopped and report that
+                // the error was not seen.
                 termination = if state.unmeasured_bonds.is_empty() {
                     TreeTciTermination::Converged
                 } else {

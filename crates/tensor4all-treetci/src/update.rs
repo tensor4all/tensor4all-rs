@@ -111,19 +111,18 @@ where
 
     let last_error = selection.pivot_errors.last().copied().unwrap_or(0.0);
     state.update_bond_error(edge, last_error);
-    // A side with a single candidate is exhausted by the first pivot, so the
-    // LU stops with a zero residual whatever the function is. That zero is a
-    // property of the candidate set, not a measurement (#1153), unless the
-    // bond's rank is 1 anyway because one side of the edge has only one
-    // configuration (every site of local dimension 1).
-    let has_several_configurations = |key: &crate::SubtreeKey| {
-        key.as_slice()
-            .iter()
-            .any(|&site| state.local_dims[site] > 1)
-    };
-    let unmeasured = (left_candidates.len() == 1 || right_candidates.len() == 1)
-        && has_several_configurations(&left_key)
-        && has_several_configurations(&right_key);
+    // A unit endpoint has no local variation with which to probe beyond
+    // its neighboring pivots. Exhausting that side forces a zero residual
+    // at any rank (#1352), just as a single candidate does at rank one
+    // (#1153). Physical endpoints retain the ordinary sampled stopping
+    // criterion: their local expansion may legitimately be fully represented.
+    let rank = row_indices.len();
+    let candidates_exhausted = (rank == left_candidates.len()
+        && (rank == 1 || state.local_dims[edge.u()] == 1))
+        || (rank == right_candidates.len() && (rank == 1 || state.local_dims[edge.v()] == 1));
+    let unmeasured = candidates_exhausted
+        && subtree_has_more_configurations(&state.local_dims, &left_key, rank)
+        && subtree_has_more_configurations(&state.local_dims, &right_key, rank);
     if unmeasured {
         state.unmeasured_bonds.insert(edge);
     } else {
@@ -132,6 +131,21 @@ where
     state.update_pivot_errors(&selection.pivot_errors);
 
     Ok(selection)
+}
+
+/// Whether a subtree's full configuration count exceeds the stored rank.
+fn subtree_has_more_configurations(
+    local_dims: &[usize],
+    key: &crate::SubtreeKey,
+    rank: usize,
+) -> bool {
+    // Dimensions are nonzero and keys are graph-owned. Overflow means the
+    // configuration count exceeds every representable rank; no allocation
+    // or enumeration of the full subtree is needed.
+    key.as_slice()
+        .iter()
+        .try_fold(1usize, |count, &site| count.checked_mul(local_dims[site]))
+        .is_none_or(|count| count > rank)
 }
 
 /// Update one edge using the default proposer.
