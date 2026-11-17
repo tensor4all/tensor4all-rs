@@ -55,3 +55,6 @@ pub(super) fn certified_failure(error: CertifiedApplyError) -> PartitionedTreeTN
         other => PartitionedTreeTNError::tree(format!("certified operator application: {other}")),
     }
 }
+
+#[cfg(test)]
+mod tests;
