@@ -979,9 +979,15 @@ fn full_runs_reproduce_recorded_ranks_and_errors() {
         9.549166222994594e-9,
     ];
     assert_eq!(errors.len(), recorded.len());
+    // Errors are normalized to the sampled scale (about 1). Since #1352 some
+    // are global-search residuals |f - tt|, differences of O(1) values, so
+    // they carry absolute rounding of a few machine epsilons; macOS
+    // Accelerate differs from Linux by about 3.6e-16 at the 1e-8 level. The
+    // ranks above still lock the trajectory exactly.
+    let rounding = 64.0 * f64::EPSILON;
     for (error, expected) in errors.iter().zip(recorded) {
         assert!(
-            (error - expected).abs() <= 1e-9 * expected,
+            (error - expected).abs() <= 1e-9 * expected + rounding,
             "chain errors {errors:?}, recorded {recorded:?}"
         );
     }
