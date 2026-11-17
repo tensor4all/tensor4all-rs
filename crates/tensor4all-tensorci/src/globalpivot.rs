@@ -352,8 +352,8 @@ impl GlobalPivotFinder for DefaultGlobalPivotFinder {
 ///
 /// The pair at bond `p` joins the last left index of `i_set[p + 1]` with the
 /// last right index of `j_set[p]` (the two sets have the bond's rank). Bonds
-/// whose sets are absent, empty, or inconsistent with `local_dims` are
-/// skipped, so custom inputs without index sets yield none.
+/// whose sets are absent, empty, of different lengths, or inconsistent with
+/// `local_dims` are skipped, so custom inputs without index sets yield none.
 fn retained_pivot_pairs<T: Scalar + TTScalar>(
     input: &GlobalPivotSearchInput<T>,
 ) -> Vec<MultiIndex> {
@@ -363,10 +363,12 @@ fn retained_pivot_pairs<T: Scalar + TTScalar>(
         let (Some(lefts), Some(rights)) = (input.i_set.get(bond + 1), input.j_set.get(bond)) else {
             continue;
         };
-        let Some(tail) = lefts.len().min(rights.len()).checked_sub(1) else {
+        if lefts.len() != rights.len() {
+            continue;
+        }
+        let (Some(left), Some(right)) = (lefts.last(), rights.last()) else {
             continue;
         };
-        let (left, right) = (&lefts[tail], &rights[tail]);
         if left.len() != bond + 1 || right.len() != n - bond - 1 {
             continue;
         }
