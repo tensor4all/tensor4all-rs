@@ -535,7 +535,7 @@ fn test_pivot_mutations_invalidate_the_cached_tensor_train() {
     assert_eq!(normalized_tensor_train_builds(), 1);
 
     tci.add_global_pivot(&f, vec![2, 3], 0.0).unwrap();
-    let build_count_after_mutation = normalized_tensor_train_builds();
+    assert_eq!(normalized_tensor_train_builds(), 2);
     let reference = uncached_tensor_train(&tci);
     let after = tci.evaluate(&[2, 3]).unwrap();
     assert!(
@@ -548,8 +548,8 @@ fn test_pivot_mutations_invalidate_the_cached_tensor_train() {
     );
     assert_eq!(
         normalized_tensor_train_builds(),
-        build_count_after_mutation + 1,
-        "exactly one rebuild is needed after a successful pivot insertion"
+        2,
+        "evaluation must reuse the train validated by global pivot insertion"
     );
 
     // add_pivot: a fresh state whose local sweep genuinely inserts a pivot.
@@ -778,22 +778,108 @@ fn test_update_site_tensor_from_matrix_decodes_left_and_right_fusions() {
     assert_eq!(tci.t_tensors[1], expected);
 }
 
+fn asymmetric_global_pivot_target(idx: &MultiIndex) -> f64 {
+    1.0 + (idx[1] as f64) * ((idx[0] + idx[2] + 1) as f64)
+}
+
 #[test]
-fn test_add_global_pivot_with_prefix_present_and_suffix_absent() {
-    // #1346: the pivot's prefix `[0]` is already in `i_set[1]`, while its
-    // suffix `[1, 1]` is new in `j_set[0]`. Growing only the suffix leaves the
-    // two index families at different cardinalities, so the train breaks.
-    let f = |idx: &Vec<usize>| 1.0 + (idx[1] as f64) * ((idx[0] + idx[2] + 1) as f64);
-    let mut tci = TensorCI1::<f64>::from_function(&f, vec![3, 3, 3], vec![0, 0, 0]).unwrap();
+fn test_add_global_pivot_pairs_asymmetric_bonds() {
+    let f = asymmetric_global_pivot_target;
+    for (pivot, expects_row) in [(vec![0, 1, 1], true), (vec![1, 1, 0], false)] {
+        let mut tci = TensorCI1::from_function(&f, vec![3, 3, 3], vec![0, 0, 0]).unwrap();
+        assert_eq!(tci.evaluate(&pivot).unwrap(), 2.0);
 
-    assert_eq!(tci.evaluate(&[0, 1, 1]).unwrap(), 2.0);
-    let error = tci.add_global_pivot(&f, vec![0, 1, 1], 0.0).unwrap_err();
-    assert!(matches!(error, TCIError::InvalidOperation { .. }));
-    assert!(error.to_string().contains("bond 0"));
+        tci.add_global_pivot(&f, pivot.clone(), 0.0).unwrap();
+        let filler_set = if expects_row {
+            tci.i_set(1)
+        } else {
+            tci.j_set(1)
+        };
+        assert_eq!(filler_set, &[vec![0], vec![2]]);
+        for bond in 0..2 {
+            assert!(tci.i_set(bond + 1).contains(&pivot[..=bond].to_vec()));
+            assert!(tci.j_set(bond).contains(&pivot[bond + 1..].to_vec()));
+        }
+        let tt = tci.to_tensor_train().unwrap();
+        assert_eq!(tt.link_dims(), vec![2, 2]);
+        assert!((tt.evaluate(&pivot).unwrap() - 3.0).abs() < 1e-12);
+        assert!((tci.evaluate(&pivot).unwrap() - 3.0).abs() < 1e-12);
+        for bond in 0..2 {
+            tci.add_pivot(bond, &f, 1e-12).unwrap();
+        }
+        assert!((tci.evaluate(&pivot).unwrap() - 3.0).abs() < 1e-12);
+    }
+}
 
-    // The refusal comes before any mutation: the original state still works.
-    assert_eq!(tci.evaluate(&[0, 1, 1]).unwrap(), 2.0);
+#[test]
+fn test_crossinterpolate1_inserts_asymmetric_additional_pivot_before_sweeping() {
+    let pivot = vec![0, 1, 1];
+    let (tci, ranks, _) = crossinterpolate1(
+        asymmetric_global_pivot_target,
+        vec![3, 3, 3],
+        vec![0, 0, 0],
+        TCI1Options {
+            additional_pivots: vec![pivot.clone()],
+            max_iter: 2,
+            ..TCI1Options::default()
+        },
+    )
+    .unwrap();
+    assert!(ranks.is_empty());
+    assert_eq!(tci.link_dims(), vec![2, 2]);
+    assert!(tci.j_set(0).contains(&vec![1, 1]));
+    assert!((tci.evaluate(&pivot).unwrap() - 3.0).abs() < 1e-12);
+}
+
+#[test]
+fn test_add_global_pivot_chooses_a_usable_partner_at_mixed_scales() {
+    let scale = (1_u64 << 50) as f64;
+    let f = |idx: &MultiIndex| {
+        if idx[1..] == [1, 1] {
+            [2.0, 2.0 * scale + 0.5, 0.25][idx[0]]
+        } else {
+            [1.0, scale, 0.0][idx[0]]
+        }
+    };
+    let mut tci = TensorCI1::from_function(&f, vec![3, 3, 3], vec![0, 0, 0]).unwrap();
+    tci.add_global_pivot(&f, vec![0, 1, 1], 0.0).unwrap();
+    assert_eq!(tci.i_set(1), &[vec![0], vec![2]]);
+    assert!((tci.evaluate(&[0, 1, 1]).unwrap() - 2.0).abs() < 1e-12);
+}
+
+fn assert_unusable_global_pivot_preserves_train<T>(first_dim: usize, offset: f64, interaction: f64)
+where
+    T: Scalar + TTScalar + MatrixLuciScalar + MatrixSolveScalar,
+{
+    let pivot = vec![0, 1, 1];
+    let f = |idx: &MultiIndex| T::from_f64(offset + interaction * (idx[1] * idx[2]) as f64);
+    let mut tci = TensorCI1::from_function(&f, vec![first_dim, 3, 3], vec![0, 0, 0]).unwrap();
+    let before = tci.evaluate(&pivot).unwrap();
+    assert!(tci.add_global_pivot(&f, pivot.clone(), 0.0).is_err());
     assert_eq!(tci.to_tensor_train().unwrap().link_dims(), vec![1, 1]);
+    assert_eq!(tci.i_set(2), &[vec![0, 0]]);
+    assert_eq!(tci.j_set(0), &[vec![0, 0]]);
+    assert_eq!(Scalar::abs_val(tci.evaluate(&pivot).unwrap() - before), 0.0);
+}
+
+#[test]
+fn test_add_global_pivot_leaves_train_usable_without_a_viable_pair() {
+    // In the scaled cases, rounding can give identical rows an ACA pivot
+    // residual larger than machine epsilon.
+    for (first_dim, offset, interaction) in [
+        (1, 1.0, 1.0),
+        (3, 1.0, 1.0),
+        (3, 7.0, 22.0),
+        (3, 49.0, 15.0),
+    ] {
+        assert_unusable_global_pivot_preserves_train::<f64>(first_dim, offset, interaction);
+    }
+}
+
+#[test]
+fn test_add_global_pivot_rejects_single_precision_roundoff() {
+    assert_unusable_global_pivot_preserves_train::<f32>(3, 41.0, 13.0);
+    assert_unusable_global_pivot_preserves_train::<num_complex::Complex32>(3, 41.0, 13.0);
 }
 
 #[test]
