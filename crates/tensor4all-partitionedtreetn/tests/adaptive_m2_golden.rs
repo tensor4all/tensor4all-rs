@@ -76,6 +76,16 @@
 //! 13721 and 20551. Both runs still evaluate the same 128 target points and
 //! reproduce the function at the original accuracy tolerance. Dense scenario
 //! records and all comparison tolerances are unchanged.
+//!
+//! Both TreeTCI scenarios were re-recorded again when TreeTCI's recorded
+//! error started including the residuals its global search measured, and
+//! the search began confirming retained pivots at dimension-one endpoints
+//! (#1352, three-branch case). Cache hits went from 13721 to 16487 and from
+//! 20551 to 24879, from confirmation walks over points already in the
+//! evaluation memo. Engine-call error estimates that were 0 or below 1e-16
+//! became rounding-level values of at most 3.4e-16. Function evaluations (128
+//! each), splits (5 and 9), terminations, bond dimensions, and node data are
+//! unchanged; dense scenario records are kept.
 
 use crate::adaptive_common;
 

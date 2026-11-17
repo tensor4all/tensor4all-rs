@@ -3376,7 +3376,7 @@
             "termination": "Converged"
           }
         ],
-        "cache_hits": 13721,
+        "cache_hits": 16487,
         "engine_terminations": [
           "BondCapReached",
           "BondCapReached",
@@ -3397,7 +3397,7 @@
       "floating": {
         "accepted": [
           {
-            "error_estimate": 7.806255641895632e-18,
+            "error_estimate": 2.7755575615628914e-17,
             "max_sample_magnitude": 0.13329869104011136,
             "nodes": [
               [
@@ -3489,7 +3489,7 @@
             ]
           },
           {
-            "error_estimate": 5.898059818321144e-17,
+            "error_estimate": 1.1102230246251565e-16,
             "max_sample_magnitude": 1.2886281846995953,
             "nodes": [
               [
@@ -3581,7 +3581,7 @@
             ]
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 4.163336342344337e-17,
             "max_sample_magnitude": 0.14062500015339466,
             "nodes": [
               [
@@ -3655,7 +3655,7 @@
             ]
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 1.1102230246251565e-16,
             "max_sample_magnitude": 0.17190408670571847,
             "nodes": [
               [
@@ -3729,7 +3729,7 @@
             ]
           },
           {
-            "error_estimate": 1.6111461666199575e-17,
+            "error_estimate": 8.326672684688674e-17,
             "max_sample_magnitude": 0.24062500000476258,
             "nodes": [
               [
@@ -3821,7 +3821,7 @@
             ]
           },
           {
-            "error_estimate": 4.258834013191339e-17,
+            "error_estimate": 1.6653345369377348e-16,
             "max_sample_magnitude": 0.32812500000083916,
             "nodes": [
               [
@@ -3927,35 +3927,35 @@
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 7.806255641895632e-18,
+            "error_estimate": 2.7755575615628914e-17,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 5.898059818321144e-17,
+            "error_estimate": 1.1102230246251565e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 1.6957672395924997e-17,
+            "error_estimate": 1.1102230246251565e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 4.258834013191339e-17,
+            "error_estimate": 1.6653345369377348e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 5.095750210681871e-18,
+            "error_estimate": 1.1102230246251565e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 1.6111461666199575e-17,
+            "error_estimate": 8.326672684688674e-17,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 4.163336342344337e-17,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 1.1102230246251565e-16,
             "tolerance": 1.2886281846995953e-8
           }
         ],
@@ -4877,7 +4877,7 @@
             "termination": "Converged"
           }
         ],
-        "cache_hits": 20551,
+        "cache_hits": 24879,
         "engine_terminations": [
           "BondCapReached",
           "BondCapReached",
@@ -4906,7 +4906,7 @@
       "floating": {
         "accepted": [
           {
-            "error_estimate": 6.776263578034403e-21,
+            "error_estimate": 1.0408340855860843e-17,
             "max_sample_magnitude": 0.039691734377061944,
             "nodes": [
               [
@@ -4998,7 +4998,7 @@
             ]
           },
           {
-            "error_estimate": 7.806255641895632e-18,
+            "error_estimate": 2.7755575615628914e-17,
             "max_sample_magnitude": 0.13329869104011136,
             "nodes": [
               [
@@ -5090,7 +5090,7 @@
             ]
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 2.7755575615628914e-17,
             "max_sample_magnitude": 0.21186764001453046,
             "nodes": [
               [
@@ -5164,7 +5164,7 @@
             ]
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 6.938893903907228e-18,
             "max_sample_magnitude": 0.08123662774740142,
             "nodes": [
               [
@@ -5238,7 +5238,7 @@
             ]
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 3.3306690738754696e-16,
             "max_sample_magnitude": 1.2886281846995953,
             "nodes": [
               [
@@ -5312,7 +5312,7 @@
             ]
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 4.163336342344337e-17,
             "max_sample_magnitude": 0.351806463368741,
             "nodes": [
               [
@@ -5386,7 +5386,7 @@
             ]
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 4.163336342344337e-17,
             "max_sample_magnitude": 0.14062500015339466,
             "nodes": [
               [
@@ -5460,7 +5460,7 @@
             ]
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 1.1102230246251565e-16,
             "max_sample_magnitude": 0.17190408670571847,
             "nodes": [
               [
@@ -5534,7 +5534,7 @@
             ]
           },
           {
-            "error_estimate": 1.6111461666199575e-17,
+            "error_estimate": 8.326672684688674e-17,
             "max_sample_magnitude": 0.24062500000476258,
             "nodes": [
               [
@@ -5626,7 +5626,7 @@
             ]
           },
           {
-            "error_estimate": 4.258834013191339e-17,
+            "error_estimate": 1.6653345369377348e-16,
             "max_sample_magnitude": 0.32812500000083916,
             "nodes": [
               [
@@ -5732,67 +5732,67 @@
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 7.806255641895632e-18,
+            "error_estimate": 2.7755575615628914e-17,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 7.892991815694472e-17,
+            "error_estimate": 1.1102230246251565e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 1.8307770121954448e-17,
+            "error_estimate": 1.1102230246251565e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 4.258834013191339e-17,
+            "error_estimate": 1.6653345369377348e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 6.776263578034403e-21,
+            "error_estimate": 1.0408340855860843e-17,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 7.806255641895632e-18,
+            "error_estimate": 2.7755575615628914e-17,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 2.710505431213761e-20,
+            "error_estimate": 1.0408340855860843e-17,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 4.3151246464923076e-17,
+            "error_estimate": 1.1102230246251565e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 5.095750210681871e-18,
+            "error_estimate": 1.1102230246251565e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 1.6111461666199575e-17,
+            "error_estimate": 8.326672684688674e-17,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 2.7755575615628914e-17,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 6.938893903907228e-18,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 3.3306690738754696e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 4.163336342344337e-17,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 4.163336342344337e-17,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 0.0,
+            "error_estimate": 1.1102230246251565e-16,
             "tolerance": 1.2886281846995953e-8
           }
         ],
