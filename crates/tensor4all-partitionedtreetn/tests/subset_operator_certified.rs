@@ -151,7 +151,7 @@ fn a_share_outside_the_unit_interval_is_rejected_before_application() {
 }
 
 #[test]
-fn the_certified_memory_gate_is_a_resource_limit() {
+fn the_certified_memory_gate_reports_the_estimate_and_the_limit() {
     let case = case(real);
     let error = schedule(
         &case,
@@ -165,8 +165,11 @@ fn the_certified_memory_gate_is_a_resource_limit() {
     assert!(
         matches!(
             error,
-            PartitionedTreeTNError::ResourceLimit { limit, value, .. }
-                if limit == "memory_limit (bytes)" && value > 1
+            PartitionedTreeTNError::CertifiedMemoryLimit {
+                estimated_bytes,
+                limit_bytes: 1,
+                ..
+            } if estimated_bytes > 1
         ),
         "{error}"
     );
