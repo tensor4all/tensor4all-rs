@@ -4,12 +4,13 @@ use std::{any::TypeId, cell::RefCell};
 
 use crate::error::{validate_nonnegative_finite, validate_positive, Result, TCIError};
 use tensor4all_core::{
-    AbstractMatrixCI, IndexSet, MatrixACA, MatrixLuciScalar, MultiIndex, Scalar,
+    rrlu_pivots, AbstractMatrixCI, IndexSet, MatrixACA, MatrixLuciScalar, MultiIndex, RrLUOptions,
+    Scalar,
 };
 use tensor4all_simplett::{
     tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops,
 };
-use tensor4all_tensorbackend::{solve_matrix, transpose, Matrix, MatrixSolveScalar};
+use tensor4all_tensorbackend::{solve_matrix, submatrix, transpose, Matrix, MatrixSolveScalar};
 
 mod matrix_ci;
 
@@ -668,8 +669,9 @@ where
 
     /// Add a full multi-index as pivots across all bonds.
     ///
-    /// When a bond gains only a prefix or suffix, pair it with the unused
-    /// candidate on the other side with the largest usable local ACA residual.
+    /// When a bond gains only a prefix or suffix, try unused partners in order
+    /// of decreasing local ACA residual. A partner must pass a numerical
+    /// rank check on the enlarged pivot block after row and column scaling.
     ///
     /// # Arguments
     ///
@@ -679,21 +681,20 @@ where
     /// * `pivot` -- Zero-based global multi-index with one coordinate per
     ///
     ///   site.
-    /// * `abstol` -- Absolute error threshold. If the current approximation is
-    ///
-    ///   already within this threshold at `pivot`, no new pivots are inserted.
+    /// * `abstol` -- Absolute error threshold. No pivot is inserted when the
+    ///   error at `pivot` is zero or strictly below this threshold.
     ///
     /// # Returns
     ///
-    /// `Ok(())` after inserting any missing prefix/suffix pivots needed to
-    /// interpolate `pivot`.
+    /// `Ok(())` after inserting the missing prefix/suffix pivots and any
+    /// partners, or skipping insertion because the error is zero or below `abstol`.
     ///
     /// # Errors
     ///
     /// Returns [`TCIError::InvalidConfiguration`] when `abstol` is negative or
     /// non-finite. It also returns a [`TCIError`] if `pivot` is malformed or out
-    /// of range, the state is uninitialized, or a bond cannot grow with a
-    /// nonsingular pivot pair. A failed update preserves the existing train.
+    /// of range, the state is uninitialized, no usable partner is found, or
+    /// an update or normalization fails. A failed update preserves the train.
     ///
     /// # Examples
     ///
@@ -715,12 +716,13 @@ where
         validate_first_pivot(&self.local_dims, &pivot)?;
         let exact = f(&pivot);
         let current = self.evaluate(&pivot)?;
-        if Scalar::abs_sq(exact - current).sqrt() <= abstol {
+        let error = Scalar::abs_val(exact - current);
+        if error == 0.0 || error < abstol {
             return Ok(());
         }
 
-        // The directional passes temporarily leave bonds unpaired. Check the
-        // normalized train because roundoff in ACA can mask a singular block.
+        // The directional passes temporarily leave bonds unpaired. Keep the
+        // original train until the updates and normalization succeed.
         let mut staged = self.clone();
         staged.insert_global_pivot(f, &pivot)?;
         if !Scalar::abs_val(staged.evaluate(&pivot)?).is_finite() {
@@ -804,8 +806,7 @@ where
             f64::EPSILON
         };
         let pi = &self.pi[bond];
-        let mut best_pair = None;
-        let mut best_error = 0.0;
+        let mut candidates = Vec::new();
         for row in candidate_rows {
             for &col in &candidate_cols {
                 let exact = pi[[row, col]];
@@ -813,13 +814,33 @@ where
                 let error = Scalar::abs_val(exact - approx);
                 // A dependent candidate can have a nonzero residual from rounding.
                 let scale = Scalar::abs_val(exact).max(Scalar::abs_val(approx));
-                if error.is_finite() && error > epsilon * scale && error > best_error {
-                    best_pair = Some((row, col));
-                    best_error = error;
+                if error.is_finite() && error > epsilon * scale {
+                    candidates.push((error, row, col));
                 }
             }
         }
-        best_pair.ok_or_else(|| TCIError::InvalidPivot {
+        // Test the actual cross in residual order; the ACA residual alone
+        // can overstate the rank even after the cheap roundoff screen.
+        candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let mut rows = aca.row_indices().to_vec();
+        let mut cols = aca.col_indices().to_vec();
+        rows.push(0);
+        cols.push(0);
+        let options = RrLUOptions {
+            // Allow for rounding in both scaling passes and elimination.
+            rel_tol: 4.0 * rows.len() as f64 * epsilon,
+            ..Default::default()
+        };
+        for (_, row, col) in candidates {
+            rows[rank] = row;
+            cols[rank] = col;
+            let mut cross = submatrix(pi, &rows, &cols);
+            equilibrate_cross(&mut cross);
+            if rrlu_pivots(cross, Some(options.clone()))?.rank == rows.len() {
+                return Ok((row, col));
+            }
+        }
+        Err(TCIError::InvalidPivot {
             message: format!("bond {bond} has no usable partner for the global pivot"),
         })
     }
@@ -1246,6 +1267,30 @@ fn positions_in_set(set: &IndexSet<MultiIndex>, values: &[MultiIndex]) -> Result
             })
         })
         .collect()
+}
+
+// Rank screening should be insensitive to disparate row and column scales.
+fn equilibrate_cross<T: Scalar>(cross: &mut Matrix<T>) {
+    let size = cross.nrows();
+    for row in 0..size {
+        let scale = (0..size)
+            .map(|col| cross[[row, col]].abs_val())
+            .fold(0.0, f64::max);
+        if scale.is_finite() && scale > 0.0 {
+            for col in 0..size {
+                let entry = &mut cross[[row, col]];
+                *entry = entry.div_real(scale);
+            }
+        }
+    }
+    for col in cross.as_col_major_mut_slice().chunks_exact_mut(size) {
+        let scale = col.iter().copied().map(Scalar::abs_val).fold(0.0, f64::max);
+        if scale.is_finite() && scale > 0.0 {
+            for entry in col {
+                *entry = entry.div_real(scale);
+            }
+        }
+    }
 }
 
 fn right_solve<T>(a: &Matrix<T>, p: &Matrix<T>) -> Result<Matrix<T>>
