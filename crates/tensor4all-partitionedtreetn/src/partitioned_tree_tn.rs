@@ -380,13 +380,18 @@ where
 
     /// Iterate over immutable `(projector, patch)` pairs in canonical patch order.
     ///
-    /// Patches are ordered by their index signature, then by their own projector
-    /// coordinates; a patch pair that ties on both is ordered by payload content.
-    /// The order depends only on the stored patches, so two partitions holding
-    /// the same patches iterate identically whatever order they were built in,
-    /// and so do repeated runs of the same program. Order-dependent downstream
-    /// steps, such as a truncated pairwise sum, are therefore reproducible.
-    /// Collecting the order costs one sort of the patch list per call.
+    /// Patches are ordered by their site layout (node name, axis, tags,
+    /// dimension and prime level of every site leg), then by their projector
+    /// coordinates at those positions; patches that tie on both are ordered by
+    /// payload content. Index allocation ids and hash-map state never enter the
+    /// order, so two partitions holding the same patches iterate identically
+    /// whatever order they were built in, and so do repeated runs of the same
+    /// program. Order-dependent downstream steps, such as a truncated pairwise
+    /// sum, are therefore reproducible. The one exception is a tie on layout and
+    /// coordinates between payloads whose content cannot be read without
+    /// materializing them, which have no content digest; such patches keep
+    /// their stored order. Collecting the order costs one sort of
+    /// the patch list per call.
     ///
     /// # Examples
     ///
