@@ -360,7 +360,7 @@ where
     }
 
     let leaves = initial_leaves(partition, &report)?;
-    let (partition, merge) = merge_leaves(
+    let (leaves, merge) = merge_leaves(
         leaves,
         &report.patch_order,
         center,
@@ -370,7 +370,7 @@ where
         Some(error.clone()),
     )?;
     Ok(SiblingMergeResult {
-        partition,
+        partition: partition_from_leaves(leaves)?,
         producer: report,
         merge,
     })
@@ -389,7 +389,7 @@ fn merge_leaves<V>(
     cap: usize,
     domain_points: f64,
     initial_error: Option<L2ErrorReport>,
-) -> Result<(PartitionedTreeTN<V>, SiblingMergeReport), PatchedInterpolationError>
+) -> Result<(Vec<Leaf<V>>, SiblingMergeReport), PatchedInterpolationError>
 where
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
 {
@@ -441,9 +441,6 @@ where
         Some(error) if merges.is_empty() => error,
         _ => merged_error(&leaves, domain_points, tau)?,
     };
-    let partition = PartitionedTreeTN::from_disjoint_subdomains(
-        leaves.into_iter().filter_map(|leaf| leaf.network).collect(),
-    )?;
     let merge = SiblingMergeReport {
         max_bond_dim: cap,
         merges,
@@ -451,7 +448,19 @@ where
         rejected_by_status,
         error,
     };
-    Ok((partition, merge))
+    Ok((leaves, merge))
+}
+
+/// Assemble the nonzero regions after callers have read their accounted terms.
+fn partition_from_leaves<V>(
+    leaves: Vec<Leaf<V>>,
+) -> Result<PartitionedTreeTN<V>, PartitionedTreeTNError>
+where
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+{
+    PartitionedTreeTN::from_disjoint_subdomains(
+        leaves.into_iter().filter_map(|leaf| leaf.network).collect(),
+    )
 }
 
 /// Reject `leaves` unless their keys form a prefix-free cut that covers the
