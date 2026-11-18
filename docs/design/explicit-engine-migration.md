@@ -57,7 +57,11 @@ Four properties follow, and this document judges every call site by them.
 
 - **E1 — the parameter is mandatory.** A public numerical operation either takes the
   execution context/engine, or cannot run. `Option<&ExecutionContext>` with `None` =
-  "implicit" fails E1 by construction.
+  "implicit" fails E1 by construction. One exception is deliberate (§6.2): an operation
+  with no parameter slot, such as an `AnyScalar`/`IdxTensor` operator overload or value
+  method, may resolve the engine from its operands' **owner token**. That token was bound by
+  an explicit context when the value was created, and it fails with a typed error when the
+  token is absent or dead. It never falls back to a global context.
 - **E2 — no process-global resolution, not even as a fallback.** Reaching
   `default_context()`, `default_eager_ctx()`, or `default_cpu_execution_context()`
   anywhere inside an operation body fails E2, including in the "the value lost its
@@ -65,8 +69,10 @@ Four properties follow, and this document judges every call site by them.
 - **E3 — no owner-less value adoption.** A value created without owning context must not
   be silently attached to one; the operation that needs an engine reports a typed
   "value has no execution context" error instead.
-- **E4 — one parameter shape.** Two spellings of the same explicit parameter is a second
-  code path and fails E4 (§3.3).
+- **E4 — one parameter shape per role.** There are exactly two roles. *Entry* (`_in`,
+  `&ExecutionContext`) enters the context once. *Composition* (`_on_session`,
+  `&mut explicit::Session`) runs inside a session that is already held. A third spelling,
+  or two spellings for the same role, fails E4 (§3.11, §6.1).
 
 ---
 
@@ -83,11 +89,13 @@ therefore has its own command.
 
 `crates/tensor4all-core/src/defaults/eager_session.rs` defines three helpers that take
 `context: Option<&ExecutionContext>` and route `None` to `with_runtime_engine`
-(`:63`, `:97`, `:131`). Production code passes the literal `None` at **53 sites**:
+(`:63`, `:97`, `:131`). Production code passes the literal `None` at **53 sites**. The count uses a multi-line-safe
+query, because a single-line `grep` misses calls whose arguments wrap. Both give 53 at
+`20b42b0d`, but only the `rg -U` form stays correct after `rustfmt` reflows a call:
 
 ```bash
-grep -rnE "with_(eager_session|eager_session_typed|engine|execution_engine)\([^,]+, *None," \
-  --include=*.rs crates/*/src | awk -F: '{print $1}' | sort | uniq -c | sort -rn
+rg -U --pcre2 -c 'with_(eager_session(_typed)?|engine|execution_engine)\(\s*[^,()]+(\([^()]*\))?,\s*None\s*,' \
+  crates/*/src
 ```
 
 | File | Sites |
@@ -150,9 +158,15 @@ grep -rn "ExecutionContext::Cpu(default_cpu_execution_context())\|default_cpu_ex
 ```
 
 `treetn` and `treersi` at least *have* an explicit twin (`contract_in`,
-`hadamard_many_in`) and the implicit one is a thin adapter over it — the cheapest
-possible deletion. `interpolativeqtt` has no explicit twin at all and is the only public
-crate that reaches the global context without a feature gate in between.
+`hadamard_many_in`), and the implicit one is a thin adapter over it, so deleting it is
+cheap. `treersi`'s adapter is behind `global-defaults`. `treetn`'s two sites
+(`contract`, `contract_src_with_rng`) are **not** feature-gated, so a default build reaches
+the global context through them. `interpolativeqtt` has no explicit twin at all.
+`compress_train`'s three callers (`interpolate_single_scale_nd:146`,
+`interpolate_single_scale_sparse_nd:499`, `build_refined_qtt:1042`) are themselves
+context-free, so fixing that site needs `_in` twins for the public builders, not only a
+context parameter on `compress_train`. (`interpolate_chebyshev_patches` and
+`interpolate_patched_nd` already take a caller context and do not reach `compress_train`.)
 
 Verdict: **fails E2.** These are the sites that make `global-defaults` unremovable
 without an API change.
@@ -335,9 +349,16 @@ tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-featu
 
 The comment states the reason and it is accurate: `TensorElement` (`core/src/lib.rs:151`),
 `Matrix`/`mat_mul` in un-gated helpers, and `ExecutionContext` are re-exported by
-un-gated modules. Stage 3 therefore starts with moving those re-exports behind
-`explicit-context` and splitting `mat_mul` (which already has `mat_mul_in`) — not with
-deleting the feature.
+un-gated modules. It understates the dependency, though. Core also **calls a
+`global-defaults`-only function from un-gated code**:
+`core/src/defaults/eager_session.rs:15` imports `with_runtime_engine`, which is
+`#[cfg(feature = "global-defaults")]` (`tensorbackend/src/context.rs:1939`), and the F1
+helpers call it at `:63`, `:97`, `:131`. Core has no `global-defaults` cfg of its own.
+
+Dropping the requirement therefore needs two things. Stage 2 step 2 moves the re-exports
+and splits `mat_mul` (which already has `mat_mul_in`). Stage 1 plus §6.2 move
+`with_runtime_engine`, without its global fallback, out of the `global-defaults` gate.
+Only after both does stage 3 step 6 drop the requirement.
 
 ### 4.2 `treersi` enables `global-defaults` by default
 
@@ -354,6 +375,17 @@ eager runtime *is* the global one, and callers use it to choose the "legacy host
 (bitwise-identical numerics)". Removing the global route removes this branch. The numeric
 equality that holds today rests partly on it, so stage 3 needs parity evidence, not just
 deletion (§8).
+
+### 4.4 Crates that compile only through feature unification
+
+`crates/tensor4all-interpolativeqtt/Cargo.toml:51` asks `tensorbackend` for
+`explicit-context` only, yet `interpolation.rs:7` imports `default_cpu_execution_context`,
+which `tensorbackend/src/lib.rs:69-71` gates on `global-defaults`. The crate compiles only
+because `core` pins `global-defaults` (§4.1) and Cargo unifies features across the build.
+When stage 3 step 6 drops that pin, every crate in this situation fails to compile, and the
+manifests do not show it. Before that step, run an explicit-only `cargo check` per crate,
+or `cargo hack check --each-feature`, so the list comes from the compiler rather than a
+grep.
 
 ---
 
@@ -460,11 +492,17 @@ pub fn svd_in(t: &IdxTensor, opts: &SvdOptions, context: &ExecutionContext) -> R
 pub fn svd(t: &IdxTensor, opts: &SvdOptions) -> Result<..>;   // DELETE at stage 3
 ```
 
-`_in` becomes the single suffix for "takes `ExecutionContext`". The 32 `_on_session`
-entries are folded into the `_in` form during stage 2 (they already take the inner
-session, and `with_concrete_session` is the supported way to obtain one). `explicit::Session`
-then exists only inside a `with_concrete_session` scope — a `Stage`-level detail, not a
-public entry-point naming family.
+`_in` becomes the single suffix for "takes `ExecutionContext`" (the *entry* role in E4).
+The 32 `_on_session` entries are **not** folded wholesale. They exist so that a caller can
+compose many operations under one session entry; `treersi/src/engine.rs:110-120` and the
+TCI/RSI sweeps work this way. Calling an `_in` from inside a held session on the same
+context fails with `CpuExecutionContextError::Reentered`, and even where that cannot happen
+it pays one entry per operation. Stage 2 therefore:
+
+- keeps `_on_session` as the single *composition* spelling;
+- deletes an `_on_session` only where no caller holds a session around it;
+- removes any third spelling (`_with_session`, e.g. `inner_product_with_session`) by
+  renaming it to `_on_session`.
 
 Rejected: making every function generic over `E: Engine`. It duplicates tenferro's trait
 and cannot express the union or the caches (§9).
@@ -488,6 +526,15 @@ unable to be absent *or* silently filled:
   signature changes; the 53 F1 sites are not all engine operations.
 - `with_runtime_engine`'s `None` branch becomes `ExecutionContextEntryError::NoLiveOwner`.
   A runtime whose owner was dropped is an error, not a silent re-home.
+- **The owner resolver is kept, ungated, and is not part of the global surface.** Operator
+  overloads (`AnyScalar`'s `Add`/`Sub`/`Mul`/... at `core/src/any_scalar.rs:1225+`, through
+  `try_*` → `with_eager_session_typed(.., None, ..)`) and context-free value methods have no
+  parameter slot. For them, owner resolution *is* the explicit context: the one that created
+  the value. Once its global fallback is gone, `with_runtime_engine` (renamed to
+  `with_owner_engine` when it is ungated) is a pure value-token lookup and satisfies E1–E3.
+  The alternative is to remove the arithmetic overloads, as tenferro did (§5.4). That is
+  rejected here because it would break every `AnyScalar` expression in the workspace and
+  the bindings for no gain in explicitness.
 
 This is the minimum that satisfies E3. It also means **no** `IdxTensor` field changes
 shape and **no** `EagerRuntime` reference changes — only the resolution decision moves
@@ -524,9 +571,10 @@ t4a_status_code t4a_treetn_contract(const t4a_context *ctx, const t4a_treetn *a,
 
 Rules this must follow, from [CAPI_DESIGN.md](../CAPI_DESIGN.md):
 
-- **Opaque handle, `*_new(..., out)`, `*_release`, `*_clone` where meaningful.** `t4a_context`
-  is not cloneable: it owns one engine (`CpuBackend` is not `Clone`), and a second handle
-  would be a second context.
+- **Opaque handle, `*_new(..., out)`, `*_release`, `*_clone` where meaningful.**
+  `ExecutionContext::Cpu` holds `Arc<CpuExecutionContext>`, so `t4a_context_clone` would
+  share the **same** context. It would not create a second engine. Exposing it is a policy
+  choice, useful for handing a context to another binding object, not a constraint.
 - **A null context is `T4A_NULL_POINTER`, never "use the default".** That is the whole
   point of the change; a nullable context would reintroduce F2 at the ABI.
 - **No implicit global context remains reachable.** Once stage 4 lands, a binding that does
@@ -613,16 +661,23 @@ Ordered by dependency, not by crate count.
 
 ### Stage 3 — internal callers, then removal
 
-1. Migrate the 53 F1 sites to explicit contexts, classifying each as engine-bearing or
-   host-only (§6.2). This is the bulk of the mechanical work and it is confined to
-   `tensor4all-core`.
+1. Classify the 53 F1 sites three ways (§6.2) and migrate them:
+   - **(a)** an enclosing function that has, or gains, a context parameter → `Some(ctx)`;
+   - **(b)** an operator overload or value method with no parameter slot → keeps `None`,
+     which now means owner-token resolution with a typed error, never the global context;
+   - **(c)** host-only → no engine.
+
+   This is the bulk of the mechanical work, and it is confined to `tensor4all-core`.
 2. Migrate the 33 F2 `Option<&..Context>` parameters to `&ExecutionContext`.
 3. Delete the F3 implicit adapters (`crates/tensor4all-treetn/src/treetn/contraction.rs:3151,3227`,
    `crates/tensor4all-treersi/src/api.rs:34`, `crates/tensor4all-interpolativeqtt/src/interpolation.rs:925`).
 4. Delete the F4 implicit twins.
-5. Delete F6 (`mod defaults`, all nine items) and F7's module gate; move
-   `capped_full_piv_lu` to `explicit-context`.
-6. Flip the default: `default = ["tenferro-cpu-platform"]` in `tensorbackend`,
+5. Delete F6's global items (`mod defaults`, `default_context`, `with_default_*`,
+   `default_eager_ctx`, `default_cpu_execution_context`, the default-engine pool helpers)
+   and F7's module gate, and move `capped_full_piv_lu` to `explicit-context`.
+   `with_runtime_engine` is **not** deleted. It was already ungated and stripped of its
+   fallback (stage 1, §6.2) and stays as the owner resolver.
+6. Run the explicit-only per-crate check from §4.4 and fix every crate it finds. Then flip the default: `default = ["tenferro-cpu-platform"]` in `tensorbackend`,
    `treersi`, and drop `core`'s hard `global-defaults` requirement. `backend-tenferro`
    and `global-defaults` are then deleted, not deprecated (early-development policy).
 
@@ -638,6 +693,16 @@ Guide, tutorials, `README.md`, `llms.txt`, `skills/use-tensor4all-rs/`, every do
 Update [explicit-cpu-execution-context.md](explicit-cpu-execution-context.md) and
 [859-f7-consumer-inventory.md](859-f7-consumer-inventory.md) to their post-removal state
 rather than leaving them describing a deleted route.
+
+### Mapping to the split issues
+
+| Stage / item | Issue |
+| --- | --- |
+| Stage 1 (`NoLiveOwner`) and F1 classification | #1378 |
+| §4.1 core's `global-defaults` requirement, tensorbackend's internal `default_context()` calls | #1377 (lands with or after #1378) |
+| F3, F3c (`treetn` adapters, `interpolativeqtt::compress_train`, `treersi/engine.rs:118`) | #1379 |
+| ACI `Option<&CpuExecutionContext>` (F2) | #1382 |
+| Bridge and `Storage` re-exports (F7) | #1380 |
 
 ---
 
