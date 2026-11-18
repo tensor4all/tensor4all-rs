@@ -715,7 +715,7 @@ where
         validate_first_pivot(&self.local_dims, &pivot)?;
         let exact = f(&pivot);
         let current = self.evaluate(&pivot)?;
-        if Scalar::abs_sq(exact - current).sqrt() < abstol {
+        if Scalar::abs_sq(exact - current).sqrt() <= abstol {
             return Ok(());
         }
 

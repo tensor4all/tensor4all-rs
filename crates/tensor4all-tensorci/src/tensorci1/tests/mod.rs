@@ -154,6 +154,18 @@ fn test_tensorci1_global_pivot_is_inserted_and_deduplicated() {
 }
 
 #[test]
+fn test_add_global_pivot_at_zero_tolerance_noops_when_already_interpolated() {
+    let f = asymmetric_global_pivot_target;
+    let mut tci = TensorCI1::from_function(&f, vec![3, 3, 3], vec![0, 0, 0]).unwrap();
+    tci.add_global_pivot(&f, vec![0, 1, 1], 0.0).unwrap();
+    let ranks = tci.link_dims();
+    // A pivot the train already interpolates exactly is a no-op at abstol=0,
+    // even when the bond is at its true full rank (issue #1346).
+    tci.add_global_pivot(&f, vec![1, 1, 1], 0.0).unwrap();
+    assert_eq!(tci.link_dims(), ranks);
+}
+
+#[test]
 fn test_crossinterpolate1_forward_sweep_matches_manual_local_pivots() {
     let local_dims = vec![10; 5];
     let f = |idx: &MultiIndex| {
