@@ -15,7 +15,7 @@ Computes tensor cross interpolation on tree-structured graphs, producing TreeTN 
 - `TreeTciRunResult` — `treetn`, per-iteration `ranks` and `errors`, and `termination`
 - `TreeTciOptimizationResult` — diagnostics from optimizing a caller-owned state
 - `TreeTciTermination` — `Converged`, resource limits, `SampledErrorFloor`,
-  `ValidationBudgetExceeded`, or `DegenerateCandidateSet`
+  or `DegenerateCandidateSet`
 - `TreeTciEvaluationStats` — oracle requests, successful evaluations, memo
   accounting and validation-history storage
 
@@ -26,8 +26,10 @@ for the convergence window, global-search behavior, and limit precedence.
 
 Global pivot search uses the retained-coordinate floating-zone walk from
 chain TCI, with one cached tree evaluator shared across starts and scans.
-Known oracle samples are checked against every completed approximation without
-querying the target again, including final and capped sweeps. When ordinary
+A bounded pool of recent oracle samples and its strongest residual witness are
+replayed against every completed approximation without querying the target
+again. All current retained pivot pairs are checked independently, including
+final and capped sweeps. When ordinary
 starts find no pivot, every distinct retained full point across all edges seeds
 a confirmation walk. If those checks find none, each dimension-one endpoint
 edge gets up to `nsearch` subtree-anchored restarts in each direction.
@@ -35,10 +37,13 @@ Measured residuals contribute to the recorded iteration error even below the
 discovery margin. The walk is greedy and can still miss unseen features.
 
 Validation has an independent `validation_cache_bytes` budget (32 MiB by
-default). If a new sample cannot fit, the run reports `ValidationBudgetExceeded`.
-An unresolved measured violation after local recovery or at a bond cap reports
-`SampledErrorFloor`; read its value from the last recorded error. Neither reason
-is convergence. Disabling global pivots disables known-sample validation too.
+default). At capacity, old unprotected samples are evicted; the strongest
+currently measured residual witness is protected. Zero disables historical
+storage while current retained pairs are still checked. Pool pressure affects
+historical coverage and does not stop a run. An observed violation with unchanged swept pivots
+or a bond cap reports `SampledErrorFloor`; read its value from the last recorded
+error. Local LU truncation remains the requested tolerance in both search modes.
+Disabling global pivots disables global validation too.
 
 ## Documentation
 

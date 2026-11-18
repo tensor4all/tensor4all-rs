@@ -31,15 +31,19 @@ use crate::batch::{assemble_candidate_points, candidate_entries};
 pub struct TreeTciEvaluationStats {
     /// Points requested by TreeTCI, including duplicates and cache hits.
     pub requested_points: usize,
-    /// Distinct oracle samples retained during initialization and optimization.
+    /// Distinct oracle samples currently retained in the bounded validation pool.
     /// Returning the final materialized network does not extend this history.
     pub validation_samples: usize,
     /// Accounted bytes of validation history, including estimated table overhead.
     /// Spare capacity and process RSS are not included.
     pub validation_bytes: usize,
-    /// Whether a new sample could not fit the configured validation budget.
-    /// Such a run cannot report convergence based on an incomplete history.
+    /// Whether the validation pool has evicted or skipped a sample at its budget.
+    /// This limits historical coverage, without terminating interpolation.
     pub validation_limit_reached: bool,
+    /// Samples evicted from the bounded validation pool. The strongest residual
+    /// witness measured on the current approximation is protected from ordinary
+    /// sample traffic; a stronger measured witness can replace it.
+    pub validation_evictions: usize,
     /// Distinct misses successfully evaluated, or all points when memo is disabled.
     pub evaluated_points: usize,
     /// Persistent cache lookups served from retained values; zero when disabled.
@@ -108,9 +112,27 @@ pub(crate) trait BatchExecution<T: FullPivLuScalar> {
         0
     }
 
-    /// Whether this run could not retain all its known samples.
-    fn validation_exhausted(&self) -> bool {
+    /// Whether this run validates historical and current retained points.
+    fn validation_enabled(&self) -> bool {
         false
+    }
+
+    /// Reset witness scores for a new approximation without dropping its pool.
+    fn begin_validation(&mut self) {}
+
+    /// Whether a point was included in the retained pool's current validation.
+    fn validation_contains(&self, _point: &[usize]) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+
+    /// Retain the strongest currently measured residual as a protected witness.
+    fn observe_validation_residuals(
+        &mut self,
+        _batch: GlobalIndexBatch<'_>,
+        _values: &[T],
+        _errors: &[f64],
+    ) -> anyhow::Result<()> {
+        Ok(())
     }
 
     /// Prepare the per-side keys of one edge candidate matrix.
@@ -406,10 +428,32 @@ where
         })
     }
 
-    fn validation_exhausted(&self) -> bool {
+    fn validation_enabled(&self) -> bool {
+        self.validation.is_some()
+    }
+
+    fn begin_validation(&mut self) {
+        if let Some(history) = &mut self.validation {
+            history.begin_validation();
+        }
+    }
+
+    fn validation_contains(&self, point: &[usize]) -> anyhow::Result<bool> {
         self.validation
             .as_ref()
-            .is_some_and(|history| history.exhausted())
+            .map_or(Ok(false), |history| history.contains(point))
+    }
+
+    fn observe_validation_residuals(
+        &mut self,
+        batch: GlobalIndexBatch<'_>,
+        values: &[T],
+        errors: &[f64],
+    ) -> anyhow::Result<()> {
+        if let Some(history) = &mut self.validation {
+            history.observe_residuals(batch, values, errors)?;
+        }
+        Ok(())
     }
 
     fn call(&mut self, batch: GlobalIndexBatch<'_>) -> anyhow::Result<Vec<T>> {
@@ -558,7 +602,14 @@ where
                 .validation
                 .as_ref()
                 .map_or(0, |history| history.retained_bytes()),
-            validation_limit_reached: self.validation_exhausted(),
+            validation_limit_reached: self
+                .validation
+                .as_ref()
+                .is_some_and(|history| history.limit_reached()),
+            validation_evictions: self
+                .validation
+                .as_ref()
+                .map_or(0, |history| history.evictions()),
             requested_points: self.requested,
             evaluated_points: self.evaluated,
             ..Default::default()

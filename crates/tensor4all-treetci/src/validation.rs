@@ -7,11 +7,12 @@ use tensor4all_core::index_key::{FlatIndexer, IndexKey};
 
 #[derive(Debug)]
 struct Sample<T> {
+    key: IndexKey,
     point: Vec<usize>,
     value: T,
 }
 
-/// A bounded, insertion-ordered validation history, independent of oracle memoization.
+/// A bounded recent-sample pool with one protected residual witness.
 ///
 /// Integer keys deduplicate samples; full points are payload needed for replay.
 /// The byte budget accounts for payload and estimates container overhead. Spare
@@ -23,7 +24,11 @@ pub(crate) struct SampleHistory<T> {
     samples: Vec<Sample<T>>,
     bytes_per_sample: usize,
     limit: usize,
-    exhausted: bool,
+    next_evict: usize,
+    witness: Option<usize>,
+    best_error: f64,
+    limit_reached: bool,
+    evictions: usize,
     recording: bool,
 }
 
@@ -40,6 +45,7 @@ impl<T: Clone> SampleHistory<T> {
             .and_then(|n| n.checked_add(std::mem::size_of::<Sample<T>>()))
             .and_then(|n| n.checked_add(2 * std::mem::size_of::<(IndexKey, usize)>()))
             .and_then(|n| n.checked_add(key.owned_heap_bytes()))
+            .and_then(|n| n.checked_add(key.owned_heap_bytes()))
             .ok_or_else(|| anyhow::anyhow!("validation sample size overflowed usize"))?;
         Ok(Self {
             indexer,
@@ -47,7 +53,11 @@ impl<T: Clone> SampleHistory<T> {
             samples: Vec::new(),
             bytes_per_sample,
             limit,
-            exhausted: false,
+            next_evict: 0,
+            witness: None,
+            best_error: 0.0,
+            limit_reached: false,
+            evictions: 0,
             recording: true,
         })
     }
@@ -65,25 +75,106 @@ impl<T: Clone> SampleHistory<T> {
             "validation sample value count mismatch"
         );
         for (point, value) in batch.data().chunks_exact(batch.n_sites()).zip(values) {
-            let key = self.indexer.encode(point)?;
-            if let Some(&position) = self.positions.get(&key) {
-                self.samples[position].value = value.clone();
-                continue;
-            }
-            if self.samples.len() >= self.limit / self.bytes_per_sample {
-                self.exhausted = true;
-                continue;
-            }
-            // INVARIANT: one payload copy per distinct retained point is
-            // necessary for batched replay; integer keys deduplicate it and
-            // the configured budget bounds its lifetime and retained count.
-            self.positions.insert(key, self.samples.len());
+            self.insert(point, value, false)?;
+        }
+        Ok(())
+    }
+
+    fn insert(
+        &mut self,
+        point: &[usize],
+        value: &T,
+        replace_witness: bool,
+    ) -> Result<Option<usize>> {
+        let key = self.indexer.encode(point)?;
+        if let Some(&position) = self.positions.get(&key) {
+            self.samples[position].value.clone_from(value);
+            return Ok(Some(position));
+        }
+        if self.samples.len() < self.limit / self.bytes_per_sample {
+            let position = self.samples.len();
+            // INVARIANT: the compact key is kept beside its single point/value
+            // payload so eviction removes the index entry in constant time.
+            // Both packed-key copies are included in the sample accounting.
+            self.positions.insert(key.clone(), position);
             self.samples.push(Sample {
+                key,
                 point: point.to_vec(),
                 value: value.clone(),
             });
+            return Ok(Some(position));
+        }
+        self.limit_reached = true;
+        if self.samples.is_empty() {
+            return Ok(None);
+        }
+        let mut position = self.next_evict;
+        if !replace_witness && self.witness == Some(position) {
+            position = (position + 1) % self.samples.len();
+            if self.witness == Some(position) {
+                return Ok(None);
+            }
+        }
+        let sample = &mut self.samples[position];
+        self.positions.remove(&sample.key);
+        self.positions.insert(key.clone(), position);
+        sample.key = key;
+        sample.point.clear();
+        sample.point.extend_from_slice(point);
+        sample.value.clone_from(value);
+        self.next_evict = (position + 1) % self.samples.len();
+        self.evictions = self.evictions.saturating_add(1);
+        Ok(Some(position))
+    }
+
+    /// Start a new approximation's residual pass, keeping the old witness
+    /// protected until the retained pool has been replayed.
+    pub(crate) fn begin_validation(&mut self) {
+        self.best_error = 0.0;
+    }
+
+    /// Protect the largest residual measured on this approximation. Ordinary
+    /// oracle traffic cannot evict it; a stronger measured point may replace it.
+    pub(crate) fn observe_residuals(
+        &mut self,
+        batch: GlobalIndexBatch<'_>,
+        values: &[T],
+        errors: &[f64],
+    ) -> Result<()> {
+        if !self.recording {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            batch.n_sites() == self.indexer.len()
+                && batch.n_points() == values.len()
+                && values.len() == errors.len(),
+            "validation residual batch shape mismatch"
+        );
+        anyhow::ensure!(
+            errors
+                .iter()
+                .all(|error| error.is_finite() && *error >= 0.0),
+            "validation residuals must be finite and nonnegative"
+        );
+        for ((point, value), &error) in batch
+            .data()
+            .chunks_exact(batch.n_sites())
+            .zip(values)
+            .zip(errors)
+        {
+            if error > self.best_error {
+                let position = self.insert(point, value, true)?;
+                self.best_error = error;
+                if let Some(position) = position {
+                    self.witness = Some(position);
+                }
+            }
         }
         Ok(())
+    }
+
+    pub(crate) fn contains(&self, point: &[usize]) -> Result<bool> {
+        Ok(self.positions.contains_key(&self.indexer.encode(point)?))
     }
 
     pub(crate) fn finish_recording(&mut self) {
@@ -94,15 +185,18 @@ impl<T: Clone> SampleHistory<T> {
         self.samples.len()
     }
     pub(crate) fn retained_bytes(&self) -> usize {
-        // INVARIANT: record bounds len by limit / bytes_per_sample, so this
+        // INVARIANT: insert bounds len by limit / bytes_per_sample, so this
         // product is at most the configured usize limit.
         self.samples.len() * self.bytes_per_sample
     }
-    pub(crate) fn exhausted(&self) -> bool {
-        self.exhausted
+    pub(crate) fn limit_reached(&self) -> bool {
+        self.limit_reached
+    }
+    pub(crate) fn evictions(&self) -> usize {
+        self.evictions
     }
 
-    /// Copy one bounded batch into reusable readout scratch, in observation order.
+    /// Copy one bounded batch into reusable readout scratch, in slot order.
     pub(crate) fn copy_batch(
         &self,
         start: usize,

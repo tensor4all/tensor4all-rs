@@ -371,7 +371,6 @@ fn every_known_termination_crosses_the_wire() {
         InterpolationTermination::IterationLimit,
         InterpolationTermination::ErrorNotMeasured,
         InterpolationTermination::SampledErrorFloor,
-        InterpolationTermination::ValidationBudgetExceeded,
     ] {
         let wire = encode_termination(termination).unwrap();
         assert_eq!(decode_termination(wire), termination);

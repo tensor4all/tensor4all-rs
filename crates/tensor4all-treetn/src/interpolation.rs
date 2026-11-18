@@ -842,7 +842,6 @@ fn validate_point_columns(
 /// assert!(!accepted(InterpolationTermination::IterationLimit));
 /// assert!(!accepted(InterpolationTermination::ErrorNotMeasured));
 /// assert!(!accepted(InterpolationTermination::SampledErrorFloor));
-/// assert!(!accepted(InterpolationTermination::ValidationBudgetExceeded));
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -863,13 +862,10 @@ pub enum InterpolationTermination {
     /// of those estimates were not measurements (for example a candidate set
     /// too small to reveal a residual). The result may be inaccurate.
     ErrorNotMeasured,
-    /// Known sampled residuals remain above tolerance after the engine's
-    /// recovery attempt, or a resource cap prevents resolving them. The
+    /// Sampled residuals persist at or above tolerance through the engine's
+    /// stall window, or a resource cap prevents resolving them. The
     /// outcome's `error_estimate` records the measured floor.
     SampledErrorFloor,
-    /// The engine could not retain all samples within its validation budget.
-    /// Increase that engine's validation budget before retrying.
-    ValidationBudgetExceeded,
 }
 
 /// Result of one interpolation run.

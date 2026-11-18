@@ -29,6 +29,8 @@ use tensor4all_core::{floating_zone_walk, AnyScalar, ColMajorArrayRef, DynIndex,
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator};
 
+mod validation;
+
 // INVARIANT: the argument list is the search's boundary (state, evaluator,
 // search limits, tolerance, stream); grouping them into a struct would only
 // move the same values through one more layer.
@@ -64,10 +66,11 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 /// environments. The held coordinate is not evaluated again in its own scan.
 /// Site-free junctions (`local_dims[site] == 1`) need no coordinate scan.
 ///
-/// Optimizer calls also replay all known oracle samples against this same
-/// approximation, in bounded batches without querying the oracle again. The
-/// standalone finder has no run history. These checks improve coverage but
-/// remain sampled diagnostics, not a bound on the full index domain.
+/// Optimizer calls also replay a bounded historical pool and check every
+/// current retained pivot pair against this approximation. Historical replay
+/// reuses known values; missing current-pivot values are queried in bounded
+/// batches. The standalone finder has no run history. These checks improve
+/// coverage but remain sampled diagnostics, not a full-domain error bound.
 ///
 /// The returned pivots are full-site multi-indices ready for
 /// [`TreeTCI2::add_global_pivots`].
@@ -482,7 +485,7 @@ where
         )
         .into());
     }
-    if nsearch == 0 && starts.is_empty() && execution.validation_len() == 0 {
+    if nsearch == 0 && starts.is_empty() && !execution.validation_enabled() {
         return Ok(GlobalPivotSearchResult::default());
     }
     let n_sites = state.local_dims.len();
@@ -504,7 +507,7 @@ where
             }
         }
     }
-    if (max_nglobal_pivot == 0 && execution.validation_len() == 0) || n_sites == 0 {
+    if (max_nglobal_pivot == 0 && !execution.validation_enabled()) || n_sites == 0 {
         return Ok(GlobalPivotSearchResult::default());
     }
 
@@ -525,7 +528,7 @@ where
     }
 
     // Cache ownership is one search, across every start/site/sweep. Scratch
-    // is bounded by one site scan rather than nsearch * sum(local_dims).
+    // is reused for bounded validation batches and individual site scans.
     // A prepared branch slice is a re-layout of one branching site tensor, so
     // retaining all of them costs at most the materialized tree once more. A
     // byte cap below one slice (the default 32 MiB is a cubic bond of ~160)
@@ -558,37 +561,20 @@ where
     let acceptance_floor = abs_tol.min(threshold);
     let mut max_error = 0.0_f64;
     let mut best = Vec::with_capacity(starts.len().saturating_add(nsearch));
-    // Re-evaluate the current approximation at all known oracle samples,
-    // including points pruned from the pivot sets. Oracle values are retained
-    // by the run owner; replay needs only cached, batched approximation reads.
-    let known_count = execution.validation_len();
-    let mut expected = Vec::new();
-    let mut known_error = 0.0_f64;
-    let mut known_point = Vec::new();
-    for offset in (0..known_count).step_by(EVALUATION_CHUNK_POINTS) {
-        let count =
-            execution.validation_batch(offset, EVALUATION_CHUNK_POINTS, &mut flat, &mut expected);
-        let shape = [n_sites, count];
-        let points = ColMajorArrayRef::new(&flat, &shape).map_err(anyhow::Error::new)?;
-        let errors = read_batch_errors(
-            execution,
-            &mut cache,
-            &treetn,
-            &site_indices,
-            points,
-            None,
-            &expected,
-            &mut readout,
-            readout_on_session,
-        )?;
-        for (point, error) in flat.chunks_exact(n_sites).zip(errors) {
-            if error > known_error {
-                known_error = error;
-                known_point.clear();
-                known_point.extend_from_slice(point);
-            }
-        }
-    }
+    let validation::SampleValidation {
+        max_error: known_error,
+        point: known_point,
+        retained: validation_edges,
+    } = validation::validate_samples(
+        state,
+        execution,
+        &mut cache,
+        &treetn,
+        &site_indices,
+        &mut flat,
+        &mut readout,
+        readout_on_session,
+    )?;
     max_error = max_error.max(known_error);
     if max_nglobal_pivot == 0 {
         return Ok(GlobalPivotSearchResult {
@@ -653,7 +639,10 @@ where
     // falling back to random complementary-subtree restarts. The work is
     // bounded by the sum of those bond ranks, not the full index domain.
     if best.is_empty() && nsearch > 0 {
-        let retained = retained_pivot_edges(state)?;
+        let retained = match validation_edges {
+            Some(edges) => edges,
+            None => retained_pivot_edges(state)?,
+        };
         let indexer = FlatIndexer::try_new(&state.local_dims).map_err(anyhow::Error::new)?;
         // The same global pivot can occur on many cuts. Its deterministic
         // walk needs to run only once on this unchanged approximation. Compact
@@ -876,6 +865,11 @@ where
         errors.iter().all(|error| error.is_finite()),
         "non-finite global pivot residual"
     );
+    execution.observe_validation_residuals(
+        GlobalIndexBatch::new(points.data(), points.shape()[0], expected.len())?,
+        expected,
+        &errors,
+    )?;
     Ok(errors)
 }
 

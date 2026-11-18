@@ -4,6 +4,13 @@
 
 ### Behavior changes
 
+- `tensor4all-treetci`: validate current retained pivot pairs and a bounded
+  historical sample pool on every completed sweep (#1352, #1372). The strongest
+  measured residual witness is protected from round-robin eviction. A full pool
+  limits historical coverage without terminating interpolation. Sampled violations
+  with unchanged swept pivots report `SampledErrorFloor`; local LU truncation
+  is unchanged.
+
 - `tensor4all-partitionedtreetn`: `PartitionedTreeTN::iter`, `values`, `projectors`
   and both `IntoIterator` impls yield patches in canonical patch order (#1366):
   by index signature, then by the patch's projector coordinates. The order no
@@ -110,6 +117,13 @@
   axes at R = 20 now fit in memory.
 
 ### Breaking Rust API changes
+
+- `tensor4all-treetci`: `TreeTciOptions` adds `validation_cache_bytes` (32 MiB
+  by default; zero disables historical storage), and evaluation stats add
+  validation occupancy/eviction accounting. Complete struct literals must
+  supply the new fields or use defaults. `TreeTciTermination` and the common
+  `InterpolationTermination` add a measured-error-floor verdict, propagated by
+  MPI; this verdict is not convergence (#1352, #1372).
 
 - `tensor4all-partitionedtreetn`: `PartitionedContractionOptions` has the new
   field `group_sum_limit_bytes` (#1316). Complete struct literals must add it.

@@ -144,6 +144,53 @@ fn confirmation_rejects_missing_empty_or_mismatched_pivot_sets() {
 }
 
 #[test]
+fn current_retained_pairs_are_measured_without_history_or_discovery() {
+    let mut state =
+        TreeTCI2::<f64>::new(vec![2, 2], TreeTciGraph::linear_chain(2).unwrap()).unwrap();
+    state.add_global_pivots(&[vec![0, 0]]).unwrap();
+    for budget in [0, 1] {
+        for max_nglobal_pivot in [0, 1] {
+            let mut target = |batch: GlobalIndexBatch<'_>| Ok(vec![1.0; batch.n_points()]);
+            let mut source = crate::evaluation::Compatibility::new(&mut target);
+            let mut execution = crate::evaluation::CachedExecution::new(
+                &mut source,
+                &state.local_dims,
+                None,
+                Some(budget),
+            )
+            .unwrap();
+            let mut rng = seeded_rng(42);
+            let mut unchanged = rng.clone();
+            let result = search_with_readout(
+                &state,
+                &mut execution,
+                SearchParams {
+                    nsearch: 0,
+                    max_nglobal_pivot,
+                    abs_tol: 0.5,
+                    tol_margin: 1.0,
+                },
+                &[],
+                &mut rng,
+                |_, _, _, points, _| Ok(vec![AnyScalar::new_real(0.0); points.shape()[1]]),
+                cached_walk_readout_on_session,
+            )
+            .unwrap();
+            assert_eq!(result.max_error, 1.0);
+            assert_eq!(
+                result.pivots,
+                if max_nglobal_pivot == 0 {
+                    vec![]
+                } else {
+                    vec![vec![0, 0]]
+                }
+            );
+            assert_eq!(rng.next_u64(), unchanged.next_u64());
+        }
+    }
+}
+
+#[test]
 fn confirmation_walks_a_shared_retained_point_once_across_cuts() {
     let dims = vec![2; 6];
     let point = vec![0; 6];
@@ -1125,17 +1172,21 @@ fn global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree() {
 
 #[test]
 fn full_runs_reproduce_recorded_ranks_and_errors() {
-    // Fixed-seed recording after known-sample validation and per-edge local
-    // budgets (#1352, #1371). The stricter local budget retains rank nine and
-    // finishes in four iterations, replacing six iterations at rank eight.
+    // Deliberately re-recorded for bounded known-sample validation (#1352).
+    // Local truncation is unchanged: rank eight persists, but the protected
+    // witness remains above tolerance instead of disappearing from the sampled
+    // error. Three unchanged swept pivot sets expose the observed floor.
     // The numerical assertion tolerance and rounding allowance are unchanged.
     let (ranks, errors, _) = chain_fixture().full_run();
-    assert_eq!(ranks, vec![4, 9, 9, 9]);
+    assert_eq!(ranks, vec![4, 8, 8, 8, 8, 8, 8]);
     let recorded = [
-        0.01277315308681532,
-        1.1937828052596402e-9,
-        6.513574294270993e-10,
-        6.513578782006214e-10,
+        0.012773153086831206,
+        1.0025709087768116e-8,
+        1.5404162097480518e-8,
+        1.2118033060411148e-8,
+        1.2501453848633587e-8,
+        1.2501453848633587e-8,
+        1.2501453848633587e-8,
     ];
     assert_eq!(errors.len(), recorded.len());
     // Errors are normalized to the sampled scale (about 1). Since #1352 some

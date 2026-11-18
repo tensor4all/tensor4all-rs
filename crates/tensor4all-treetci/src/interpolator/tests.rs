@@ -30,12 +30,6 @@ fn map_termination_applies_the_cap_precedence() {
             cap,
             InterpolationTermination::SampledErrorFloor,
         ),
-        (
-            TreeTciTermination::ValidationBudgetExceeded,
-            2,
-            cap,
-            InterpolationTermination::ValidationBudgetExceeded,
-        ),
         // The criterion met strictly below the cap is accepted.
         (
             TreeTciTermination::Converged,

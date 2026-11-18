@@ -390,9 +390,6 @@ fn map_termination(
         TreeTciTermination::SampledErrorFloor { at_bond_cap: false } => {
             InterpolationTermination::SampledErrorFloor
         }
-        TreeTciTermination::ValidationBudgetExceeded => {
-            InterpolationTermination::ValidationBudgetExceeded
-        }
         TreeTciTermination::DegenerateCandidateSet => InterpolationTermination::ErrorNotMeasured,
     }
 }

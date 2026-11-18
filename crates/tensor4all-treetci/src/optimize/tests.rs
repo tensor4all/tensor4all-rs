@@ -35,7 +35,7 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         }
     }
 
-    for (enable_global_pivots, max_iter) in [(false, 4), (true, 4), (true, 10)] {
+    for (enable_global_pivots, max_iter) in [(false, 4), (true, 2), (true, 10)] {
         let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
         state.add_global_pivots(&[vec![0, 0]]).unwrap();
         state.max_sample_value = 1.0;
@@ -72,13 +72,13 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         .unwrap();
         let (reason, iterations) = if enable_global_pivots {
             assert!(residual_points_seen.get() > 0);
-            if max_iter > 4 {
+            if max_iter >= 3 {
                 (
                     crate::TreeTciTermination::SampledErrorFloor { at_bond_cap: false },
-                    6,
+                    3,
                 )
             } else {
-                (crate::TreeTciTermination::MaxIterations, 4)
+                (crate::TreeTciTermination::MaxIterations, max_iter)
             }
         } else {
             assert_eq!(residual_points_seen.get(), 0);
@@ -138,10 +138,6 @@ fn optimize_rejects_invalid_options_before_callback() {
     }
 
     for options in [
-        TreeTciOptions {
-            validation_cache_bytes: 0,
-            ..TreeTciOptions::default()
-        },
         TreeTciOptions {
             max_iter: 0,
             ..TreeTciOptions::default()

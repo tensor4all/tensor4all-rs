@@ -12,16 +12,16 @@ The reasons describe the optimization loop, in its decision order:
 
 | Reason | Condition | Consequence |
 | --- | --- | --- |
-| `ValidationBudgetExceeded` | A known oracle sample could not fit the validation history budget. | Increase `validation_cache_bytes` and retry. Incomplete validation cannot establish convergence. |
 | `SampledErrorFloor { at_bond_cap: true }` | Three trailing maximum ranks reach the cap and a measured error fails the strict tolerance comparison. | The final error records the sampled floor. The state remains swept and materializable. |
 | `MaxBondDimension` | Three trailing maximum ranks reach the cap without the measured floor above. | Still takes precedence over convergence; not every edge need be saturated. |
-| `SampledErrorFloor { at_bond_cap: false }` | A stable-rank, above-tolerance window persists for three recovery iterations. | The error records the measured stall, not a proof that no other approximation could improve it. |
+| `SampledErrorFloor { at_bond_cap: false }` | Three trailing swept pivot sets are unchanged while their measured errors fail the strict tolerance comparison. | The error records the measured stall, not a proof that no other approximation could improve it. |
 | `Converged` | Three trailing errors are strictly below `tolerance`, the final maximum rank equals the minimum in that window, and no global pivots were accepted in that window. | A sampled criterion, not an exhaustive bound over the full index domain. |
 | `DegenerateCandidateSet` | The convergence window holds, but an edge's most recent local update could not measure its bond error. | The approximation may be inaccurate. |
 | `MaxIterations` | The requested iterations completed without an earlier stop. | A small final error alone does not establish convergence. |
 
-The recorded error is the maximum of local bond residuals, residuals at **all
-retained oracle samples from this call**, and new global-search observations.
+The recorded error is the maximum of local bond residuals, residuals at the
+**bounded historical pool and all current retained pivot pairs**, and new
+global-search observations.
 Known points are checked against the current approximation even if they were
 pruned from the pivot sets. With normalization enabled and a positive sampled
 scale, divide this maximum by `max_sample_value`; otherwise use it unnormalized.
@@ -31,36 +31,47 @@ returned state has completed a sweep since its last injection.
 
 ### Local truncation and measured floors
 
-When global validation is enabled, the initial local absolute truncation budget
-is `tolerance * error_scale / number_of_edges`. The pointwise stopping threshold
-remains `tolerance * error_scale`. Sharing the budget across the bonds leaves
-room for their errors to accumulate; it is a heuristic allocation, not a uniform
-error certificate. With global search disabled the local budget remains the
-requested tolerance, and only local diagnostics are available.
+Local LU truncation remains `tolerance * error_scale`, independently of
+`enable_global_pivots`. This correction does not divide that threshold by the
+number of edges, disable absolute truncation, or introduce a recovery phase.
+Those numerical strategies belong to the separate #1371 experiment.
 
-If three consecutive maximum ranks are equal while their recorded errors all
-fail the strict tolerance comparison, recovery disables absolute local
-truncation. The existing numerical relative cutoff (`1e-14`) and the caller's
-bond cap still apply. If a stable-rank violating window persists after three
-recovery iterations, the run reports `SampledErrorFloor`. It never loosens the
-stopping tolerance or applies a calibrated multiplier to declare success.
+If three consecutive swept pivot sets (including their order) are unchanged
+while their recorded errors all fail the strict tolerance comparison, the run reports `SampledErrorFloor`.
+The last recorded error is the measured stall. This is an observed lack of
+progress, not proof that no other approximation or future trajectory can improve
+it. The stopping tolerance and the numerical relative cutoff remain unchanged.
 
 ### Validation ownership and search coverage
 
-Validation history belongs to one initialization/optimization call, independently
-of optional oracle memoization. Compact integer keys deduplicate known points;
-full points and observed values are payload needed for replay. The default
-`validation_cache_bytes` budget is 32 MiB of accounted sample storage, including
-estimated container overhead and excluding spare capacity and process RSS.
-`validation_samples`, `validation_bytes` and `validation_limit_reached` report
-its retained state. A full budget causes an explicit stop rather than silently
-dropping samples and reporting convergence. The history is frozen before the
-requested final materialization and dropped at return. Target values must be
-fixed during interpolation. A subsequent optimization call starts a new history.
+Historical validation belongs to one initialization/optimization call,
+independently of optional oracle memoization. Compact integer keys index a
+bounded pool of point/value payloads. The default `validation_cache_bytes` budget
+is 32 MiB of accounted sample storage, including both packed-key copies and
+estimated container overhead, excluding spare capacity, fixed indexing metadata
+and process RSS. Zero disables historical storage. The pool is frozen before the
+requested final materialization and dropped at return.
 
-One cached tree evaluator checks known samples in bounded batches without
-querying the oracle again. The largest known violation can become a global
-pivot, even when it is below the discovery margin. Fresh search uses
+At capacity, ordinary oracle traffic replaces old unprotected slots in rotating slot
+order, reusing their point buffers. The strongest residual witness measured on
+the current approximation is protected from ordinary insertion. Each new
+approximation first replays the retained pool, including the previous witness;
+a stronger newly measured point may replace it. This avoids silently discarding
+the largest observed violation while bounding retained memory. It is still a
+subset of historical samples, not a record of every oracle request ever made.
+
+Every current retained pivot pair is validated independently of that pool.
+Missing values are queried in bounded batches; pairs already replayed need no
+second read. This also runs with zero history budget, zero random starts, zero
+insertion allowance, and on final or capped sweeps. The budget limits historical
+coverage rather than terminating interpolation. `validation_samples`,
+`validation_bytes`, `validation_limit_reached` and `validation_evictions` expose
+the pool's occupancy and pressure. Target values must be fixed during a call.
+
+One cached tree evaluator serves historical replay, current pivots and fresh
+search. Replaying known values needs no oracle queries. The largest validation
+violation can become a global pivot, even below the discovery margin. Fresh
+search uses
 `tolerance * error_scale`, preferring discoveries above
 `tol_margin_global_search` times that threshold; when none cross the margin,
 observed tolerance violations still qualify.
@@ -81,13 +92,12 @@ known-sample validation still runs. It also runs when `nsearch` or
 `max_nglobal_pivot` is zero. `enable_global_pivots = false` disables the history
 and all global checks. Immediate materialization after an unswept injection
 can have inconsistent bond ranks
-([#692](https://github.com/tensor4all/tensor4all-rs/issues/692)); floor and budget
-stops therefore discard pending injections and return the measured state.
+([#692](https://github.com/tensor4all/tensor4all-rs/issues/692)); floor stops therefore discard pending injections and return the measured state.
 
 The named `TreeInterpolator` adapter maps a cap-caused floor to
 `BondCapReached`, preserving the common contract's cap precedence. An uncapped
-floor maps to `InterpolationTermination::SampledErrorFloor`; validation budget
-stops map to `ValidationBudgetExceeded`. MPI reports preserve both verdicts.
+floor maps to `InterpolationTermination::SampledErrorFloor`. MPI reports preserve
+that verdict.
 
 ## Unmeasured bond errors
 
@@ -158,7 +168,7 @@ missing, duplicated, or unknown edge before that pass updates any state, so the
 stale-bond-error and false-convergence cases cannot arise from an invalid order.
 
 Each call starts fresh ranks/errors/global-pivot diagnostics, a new convergence
-window, validation history, local recovery state and iteration budget. Final
+window, bounded validation pool and iteration budget. Final
 iterations validate known samples without injecting new pivots on every call. Several calls need not reproduce
 one longer call, nor a fresh uncapped run's pivot trajectory or ranks at each
 iteration. Increasing a cap permits growth; it does not guarantee convergence

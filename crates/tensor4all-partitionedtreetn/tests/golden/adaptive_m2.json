@@ -3376,7 +3376,7 @@
             "termination": "Converged"
           }
         ],
-        "cache_hits": 16487,
+        "cache_hits": 31663,
         "engine_terminations": [
           "BondCapReached",
           "BondCapReached",
@@ -3915,15 +3915,15 @@
         ],
         "engine_calls": [
           {
-            "error_estimate": 1.8735013540549517e-16,
+            "error_estimate": 3.3306690738754696e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 1.1449174941446927e-16,
+            "error_estimate": 1.6653345369377348e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 7.115690838070812e-17,
+            "error_estimate": 1.1102230246251565e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
@@ -4877,7 +4877,7 @@
             "termination": "Converged"
           }
         ],
-        "cache_hits": 24879,
+        "cache_hits": 51349,
         "engine_terminations": [
           "BondCapReached",
           "BondCapReached",
@@ -4906,7 +4906,7 @@
       "floating": {
         "accepted": [
           {
-            "error_estimate": 1.0408340855860843e-17,
+            "error_estimate": 1.3877787807814457e-17,
             "max_sample_magnitude": 0.039691734377061944,
             "nodes": [
               [
@@ -5720,15 +5720,15 @@
         ],
         "engine_calls": [
           {
-            "error_estimate": 1.8735013540549517e-16,
+            "error_estimate": 3.3306690738754696e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 1.1449174941446927e-16,
+            "error_estimate": 1.6653345369377348e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 7.115690838070812e-17,
+            "error_estimate": 1.1102230246251565e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {
@@ -5748,7 +5748,7 @@
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 1.0408340855860843e-17,
+            "error_estimate": 1.3877787807814457e-17,
             "tolerance": 1.2886281846995953e-8
           },
           {
@@ -5760,7 +5760,7 @@
             "tolerance": 1.2886281846995953e-8
           },
           {
-            "error_estimate": 1.1102230246251565e-16,
+            "error_estimate": 2.220446049250313e-16,
             "tolerance": 1.2886281846995953e-8
           },
           {

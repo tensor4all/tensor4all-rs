@@ -187,11 +187,11 @@ Ports TreeTCI.jl. Cross interpolation on tree-structured graphs → TreeTN.
   `result.ranks`, `result.errors`, and `result.termination`. Optimizers return
   `TreeTciOptimizationResult` with the same diagnostics. `TreeTciTermination`
   distinguishes `Converged`, `MaxBondDimension`, `MaxIterations`,
-  `SampledErrorFloor`, `ValidationBudgetExceeded`, and `DegenerateCandidateSet`
+  `SampledErrorFloor` and `DegenerateCandidateSet`
   (a bond error could not be measured); convergence
   describes sampled errors, not a full-network residual bound.
 - `tensor4all_treetci::materialize::to_treetn(tci_state, batch_eval, Some(root))` — materialize as TreeTN with a batched evaluator.
-- `optimize_with_proposer` / `optimize_default` return `TreeTciOptimizationResult { ranks, errors, termination, evaluation }`; only `TreeTciTermination::Converged` is convergence. Enabled global checking replays known samples on every completed sweep, including final/capped sweeps. `SampledErrorFloor` records an unresolved measured violation in the last error; `ValidationBudgetExceeded` asks for a larger `TreeTciOptions::validation_cache_bytes` budget (default 32 MiB). Oracle memoization is separate.
+- `optimize_with_proposer` / `optimize_default` return `TreeTciOptimizationResult { ranks, errors, termination, evaluation }`; only `TreeTciTermination::Converged` is convergence. Enabled global checking replays known samples on every completed sweep, including final/capped sweeps. `SampledErrorFloor` records an observed violation with unchanged swept pivots in the last error. `TreeTciOptions::validation_cache_bytes` (default 32 MiB) bounds a recent-sample pool with a protected residual witness; eviction limits historical coverage without stopping a run. Current pivot pairs are always checked. Oracle memoization is separate.
 - `TreeTciInterpolator` — implements `tensor4all_treetn::interpolation::TreeInterpolator` (validated `InterpolationProblem` with named nodes, several or zero active sites per node, absolute tolerance, bond cap, seed). Accept a result only on `InterpolationTermination::Converged`.
 
 ## tensor4all-interpolativeqtt — interpolative QTT

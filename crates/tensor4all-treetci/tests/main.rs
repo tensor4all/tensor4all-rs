@@ -27,4 +27,4 @@ mod termination;
 mod tree_interpolator;
 mod truncated_proposer_junction;
 
-mod issue1371_measured_floor;
+mod issue1352_validation_budget;

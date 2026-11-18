@@ -186,7 +186,6 @@ enum WireTermination {
     IterationLimit,
     ErrorNotMeasured,
     SampledErrorFloor,
-    ValidationBudgetExceeded,
 }
 
 /// Whether a retained patch meets its allowance.
@@ -371,9 +370,6 @@ fn encode_termination(
         InterpolationTermination::IterationLimit => Ok(WireTermination::IterationLimit),
         InterpolationTermination::ErrorNotMeasured => Ok(WireTermination::ErrorNotMeasured),
         InterpolationTermination::SampledErrorFloor => Ok(WireTermination::SampledErrorFloor),
-        InterpolationTermination::ValidationBudgetExceeded => {
-            Ok(WireTermination::ValidationBudgetExceeded)
-        }
         // `InterpolationTermination` is non-exhaustive; a verdict this build
         // does not know cannot be reported faithfully on another rank.
         _ => Err(wire_error(format!(
@@ -389,9 +385,6 @@ fn decode_termination(termination: WireTermination) -> InterpolationTermination 
         WireTermination::IterationLimit => InterpolationTermination::IterationLimit,
         WireTermination::ErrorNotMeasured => InterpolationTermination::ErrorNotMeasured,
         WireTermination::SampledErrorFloor => InterpolationTermination::SampledErrorFloor,
-        WireTermination::ValidationBudgetExceeded => {
-            InterpolationTermination::ValidationBudgetExceeded
-        }
     }
 }
 
