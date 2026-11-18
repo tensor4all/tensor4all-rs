@@ -7,6 +7,7 @@
 | [t4a_unified_tensor_backend.md](./t4a_unified_tensor_backend.md) | Unified tensor backend design (tenferro-rs integration) |
 | [tenferro-main-session-migration.md](./tenferro-main-session-migration.md) | First issue #623 slice: pin current tenferro main and migrate internal CPU calls to its canonical session API |
 | [explicit-cpu-execution-context.md](./explicit-cpu-execution-context.md) | Issue #663 explicit plain, graph, eager-AD, and logical reconstruction context |
+| [explicit-engine-migration.md](./explicit-engine-migration.md) | Issue #1376 inventory of every operation that still runs without an explicit engine, the tenferro comparison, the proposed parameter/token shape, and the staged removal of `global-defaults` |
 | [tensorbackend-session-entry.md](./tensorbackend-session-entry.md) | Issue #623 slice: centralize concrete CPU sessions on explicit contexts before CUDA dispatch |
 | [859-f1-core-operation-seam.md](./859-f1-core-operation-seam.md) | Issue #859 package F1, slice 1: pairwise contraction on a caller-held explicit session, its supported representations, typed refusals and evidence plan |
 | [859-f3-g0-stage-budget.md](./859-f3-g0-stage-budget.md) | Issue #670 / #859 F3: the measured worker-count diagnosis of the G0-shaped TreeTCI path (about 40% slower with four or more workers than with one) and what remains open |
