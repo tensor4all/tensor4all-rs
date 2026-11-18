@@ -14,6 +14,7 @@ use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
 mod group_sum_limit;
+mod iteration_order;
 mod refinement_limit;
 
 const BRANCHES: usize = 3;
