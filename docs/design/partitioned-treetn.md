@@ -657,12 +657,28 @@ sums. Charge the original measured or certified leaf-application bound `E_app`
 once, before spectator/output restriction. Start with remaining allowance
 `A - E_app`, rejecting an application bound above `A`.
 
-For tolerance mode only, derive potentially merging levels from input-prefix
-metadata, up to `output_depth`, before tensor work. A level with no potential
-merges gets no budget. At level `t`, divide the remaining allowance by the
-number `L_t` of potentially merging levels left, including this one:
-`e_t = remaining / L_t`. Conservative overestimates of future active levels are
-safe, but trailing levels known to contain no merges reserve nothing.
+For tolerance mode only, fix `D` to the validated effective `output_depth`
+(the longest coordinate group when unspecified). Predict potential merges
+without tensors: for each normalized spectator cell `g`, start with its set of
+input-prefix keys `K_g(0)`. At each level `s = 1..D`, apply the scheduler's
+`input_parent` map (remove one trailing fixed bit from every nonempty axis
+prefix), group equal parent keys, and retain one key per group as `K_g(s)`.
+The potential pair count is `M_s = sum_g (|K_g(s-1)| - |K_g(s)|)`. Thus
+`S_D = {s in 1..D : M_s > 0}` is fixed before tensor work and
+`L_t = |{s in S_D : s >= t}|`. Never include a level beyond `D`, even if more
+input merges would occur in a full-depth run. For `D = 0`, `S_D` is empty and
+there are no level allocations. For example, potential counts `(0, 2, 0, 1)`
+with `D = 3` give `S_D = {2}` and `L_2 = 1`; level 4 reserves nothing.
+
+Write `remaining_before` for the allowance at the start of level `t`. Reserve
+`e_t = remaining_before / L_t` when `t` is in `S_D`; otherwise `e_t = 0`.
+Keep this metadata-derived schedule fixed: runtime pruning, empty terms, or
+rejected candidates may leave a reservation unused but cannot create an
+additional allocation in that level. Count only the retained level bound `E_t`
+as spend, and set `remaining_after = remaining_before - E_t` at the level
+boundary. If every approximation is rejected and no contribution is dropped,
+`E_t = 0` and the entire reservation stays in `remaining_after`. Early stopping
+at `D` returns the resulting representation without spending leftover allowance.
 
 For each disjoint current output region `R`, let `n_R` bound the number of
 chargeable pair merges in any one output cell of this level. Tolerance mode
@@ -670,13 +686,23 @@ keeps at most one term per input-prefix item, so the input-parent groups give
 this bound: sum `group_size - 1` over the groups. Projecting or dropping terms
 can only reduce it. For `N_t = sum_R n_R > 0`, give region `R` the allocation
 `b_R = e_t * sqrt(n_R / N_t)`. A region with `n_R = 0` has no approximation
-budget; when `N_t = 0`, skip allocation entirely.
+budget; when `N_t = 0`, allocate no region budget, record `E_t = 0`, and
+carry the entire level reservation forward.
 
 Every candidate partition of `R` is an alternative use of the same `b_R`.
-For its `k` non-pruned children, give each child `b_R / sqrt(k)` and each
+For its `k` children remaining after metadata/output-selection pruning, give
+each child `b_R / sqrt(k)` and each
 possible merge there `d = b_R / (sqrt(k) * n_R)`. The unsplit candidate has
 `k = 1`; an empty candidate has no charges. Compute joint children as their own
 candidate partition, never by combining overlapping single-axis probes.
+Fix `n_R`, `k`, and the resulting allocations before executing that candidate.
+If a child executes `m < n_R` chargeable merges, its bound is at most `m * d`;
+the unexecuted charges and residual slack remain unused. Do not recompute `k`
+when a child vanishes during tensor work, increase another merge's `d`, or
+transfer slack to a sibling, later merge, or another region in the same level.
+Alternative probes derive their allocations from the same fixed `b_R`, not from
+slack observed in earlier probes. Unused allocation carries only at the level
+boundary through the measured `E_t`, preserving the original conservative bound.
 
 This allocation bounds each child's sum of measured drops/residuals by
 `b_R / sqrt(k)`, so the retained children combine to at most `b_R` in L2.
@@ -684,9 +710,10 @@ Disjoint parent regions then combine to at most `e_t`, because
 `sum_R b_R^2 = e_t^2`. Only the chosen partition enters the error ledger;
 discarded probes cost work but consume no approximation allowance. Across
 levels the components may overlap, so add their bounds by triangle inequality.
-Subtract the retained level bound from the remaining allowance, carrying unused
-budget forward. Earlier components are recorded once and are not charged again
-when restricted into descendants. Thus `E_app + sum_t E_t <= A`.
+Earlier components are recorded once and are not charged again when restricted
+into descendants. With `remaining_after = remaining_before - E_t`, unused
+allocation is already in the next level's allowance; do not add it again.
+Thus `E_app + sum_t E_t <= A`.
 
 Use the existing conservative per-edge cutoff in
 `truncate_toward_allowance`, and check the actual candidate residual against
@@ -698,8 +725,14 @@ operator-construction error, as the existing report does.
 ### Report and acceptance
 
 Record the selected `merge_policy` in `MergeRefineReport`. Add per-level
-records with the allocated allowance `e_t`, retained measured bound `E_t`,
-executed pair additions, truncation attempts, accepted truncations, and drops.
+records for every executed level with `merging_levels_left = L_t`, allocated
+allowance `e_t`, retained measured bound `E_t`, `remaining_before`,
+`remaining_after`, and `unused_allocation = e_t - E_t`, plus executed pair
+additions, truncation attempts, accepted truncations, and drops. This makes
+carry visible: a fully rejected level has `E_t = 0`, `unused_allocation = e_t`,
+and equal before/after allowance; the following level starts from that same
+amount. Inactive levels report zero allocation and spend. `unused_allocation`
+is an accounting view of the reservation, not a second credit to remaining.
 Work counters include discarded probes; `E_t` includes only kept components,
 combined over disjoint regions. Preserve the meaning of `error_bound`:
 `E_app + sum_t E_t`. Report leaf-application error separately from level spend.
