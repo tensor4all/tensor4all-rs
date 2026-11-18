@@ -62,6 +62,15 @@ fn external_patches_merge_recursively_back_into_one_patch() {
     assert_eq!(merged.partition.len(), 1);
     assert!(merged.partition.get(&Projector::new()).is_some());
     assert_eq!(merged.truncated_leaves, 0);
+    let record = merged.merge.merges.last().unwrap();
+    assert_eq!(
+        merged.patch_errors,
+        vec![certified(
+            &s,
+            &[],
+            record.members_rms + record.truncation_rms
+        )]
+    );
     assert_dense(
         &merged.partition,
         &dense(&s, |p| product_value(A, p)),
@@ -87,7 +96,13 @@ fn leaf_slack_share_truncates_patches_before_merging() {
         ])
         .unwrap()
     };
-    let bounds = || vec![certified(&s, &[0], 0.0), certified(&s, &[1], 2.0 * tau)];
+    let input_rms = 0.1 * tau;
+    let bounds = || {
+        vec![
+            certified(&s, &[0], input_rms),
+            certified(&s, &[1], 2.0 * tau),
+        ]
+    };
     let bond_of_first = |result: &SiblingPatchMergeResult<usize>| {
         result
             .partition
@@ -108,6 +123,7 @@ fn leaf_slack_share_truncates_patches_before_merging() {
     assert_eq!(kept.truncated_leaves, 0);
     assert_eq!(kept.merge.rejected_by_status, 1);
     assert_eq!(bond_of_first(&kept), 2);
+    assert_eq!(kept.patch_errors, bounds());
 
     let options = SiblingPatchMergeOptions::new(2).with_leaf_slack_share(0.5);
     let truncated = merge_sibling_patches(build(), bounds(), &s, tau, &0, &options).unwrap();
@@ -132,6 +148,14 @@ fn leaf_slack_share_truncates_patches_before_merging() {
     let actual = first.to_treetn().unwrap().to_dense().unwrap();
     let rms = actual.sub(&exact).unwrap().norm().unwrap() / 8.0_f64.sqrt();
     assert!(rms > 0.0 && rms <= 0.5 * tau, "rms error {rms:e}");
+    assert_eq!(truncated.patch_errors[0].projector, projector(&s, &[0]));
+    assert!(truncated.patch_errors[0].certified);
+    let accounted = truncated.patch_errors[0].rms;
+    assert!(
+        (accounted - (input_rms + rms)).abs() < 1e-12,
+        "accounted {accounted:e}, input {input_rms:e}, measured truncation {rms:e}"
+    );
+    assert_eq!(truncated.patch_errors[1], bounds()[1]);
 }
 
 #[test]
@@ -155,6 +179,10 @@ fn an_external_bound_above_tau_blocks_its_group() {
     assert!(merged.merge.merges.is_empty());
     assert_eq!(merged.merge.rejected_by_status, 1);
     assert_eq!(merged.partition.len(), 2);
+    assert_eq!(
+        merged.patch_errors,
+        vec![certified(&s, &[0], 2e-8), certified(&s, &[1], 0.0)]
+    );
 }
 
 #[test]
@@ -474,4 +502,193 @@ fn invalid_external_inputs_fail_before_any_merge() {
             source: PartitionedTreeTNError::InvalidCenter
         })
     ));
+}
+
+#[test]
+fn merged_bounds_keep_the_terms_rms_and_certification() {
+    let s = sites();
+    for certifications in [[true, true], [true, false], [false, false]] {
+        let partition = PartitionedTreeTN::from_subdomains(vec![
+            patch(&s, &[0], product(&s, A)),
+            patch(&s, &[1], product(&s, A)),
+        ])
+        .unwrap();
+        let bounds = vec![
+            certified(&s, &[0], 1e-5).with_certified(certifications[0]),
+            certified(&s, &[1], 2e-5).with_certified(certifications[1]),
+        ];
+        let merged = merge_sibling_patches(
+            partition,
+            bounds,
+            &s,
+            1e-3,
+            &0,
+            &SiblingPatchMergeOptions::new(2),
+        )
+        .unwrap();
+        assert_eq!(merged.merge.merges.len(), 1);
+        let record = &merged.merge.merges[0];
+        assert_eq!(
+            merged.patch_errors,
+            vec![PatchErrorBound::new(
+                record.region.clone(),
+                record.members_rms + record.truncation_rms,
+            )
+            .with_certified(certifications.iter().all(|&value| value))]
+        );
+    }
+}
+
+#[test]
+fn absent_zero_bounds_form_a_reusable_canonical_cut() {
+    let s = sites();
+    let tau = 1e-3;
+    // Keep both original and merged zero regions; their certification follows
+    // all input bounds, including bounds of networks in another region.
+    for merge_zeros in [false, true] {
+        for certifications in [[true, true], [false, true], [true, false]] {
+            let partition =
+                PartitionedTreeTN::from_subdomains(vec![patch(&s, &[0], product(&s, A))]).unwrap();
+            let zero_keys: Vec<&[usize]> = if merge_zeros {
+                vec![&[1, 0], &[1, 1]]
+            } else {
+                vec![&[1]]
+            };
+            let mut bounds: Vec<_> = zero_keys
+                .iter()
+                .map(|key| certified(&s, key, 1e-5).with_certified(certifications[1]))
+                .collect();
+            // Deliberately reverse the cut's order on input.
+            bounds.push(certified(&s, &[0], 2.0 * tau).with_certified(certifications[0]));
+            let result = merge_sibling_patches(
+                partition,
+                bounds,
+                &s,
+                tau,
+                &0,
+                &SiblingPatchMergeOptions::new(2),
+            )
+            .unwrap();
+            assert_eq!(result.partition.len(), 1);
+            assert_eq!(result.merge.merges.len(), usize::from(merge_zeros));
+            assert_eq!(result.patch_errors.len(), 2);
+            assert_eq!(result.patch_errors[0].projector, projector(&s, &[0]));
+            assert_eq!(result.patch_errors[0].rms, 2.0 * tau);
+            assert_eq!(result.patch_errors[0].certified, certifications[0]);
+            let zero = &result.patch_errors[1];
+            assert_eq!(zero.projector, projector(&s, &[1]));
+            assert!(result.partition.get(&zero.projector).is_none());
+            assert!((zero.rms - 1e-5).abs() < 1e-20);
+            assert_eq!(zero.certified, certifications.iter().all(|&value| value));
+            let expected = result.patch_errors.clone();
+            let chained = merge_sibling_patches(
+                result.partition,
+                result.patch_errors,
+                &s,
+                tau,
+                &0,
+                &SiblingPatchMergeOptions::new(2),
+            )
+            .unwrap();
+            assert_eq!(chained.patch_errors, expected);
+            assert_eq!(chained.merge.rejected_by_status, 1);
+        }
+    }
+}
+
+#[test]
+fn chaining_accounted_bounds_unblocks_a_tighter_budget() {
+    let mut s = sites();
+    // Distinct physical sites may share an ID while differing in prime level.
+    s[1] = s[0].prime();
+    let tau_1 = 1e-2;
+    let tau_2 = 1e-3;
+    // Stage 1 merges the two left quarters. The whole domain has rank two,
+    // so the strict cap of two keeps the left and right halves separate.
+    let partition = PartitionedTreeTN::from_subdomains(vec![
+        patch(&s, &[0, 0], product(&s, A)),
+        patch(&s, &[0, 1], product(&s, A)),
+        patch(&s, &[1], product(&s, B)),
+    ])
+    .unwrap();
+    let reference = partition.to_treetn().unwrap().to_dense().unwrap();
+    let bounds = [&[0, 0][..], &[0, 1][..], &[1][..]]
+        .iter()
+        .map(|key| certified(&s, key, 1e-5))
+        .collect();
+    let stage_1 = merge_sibling_patches(
+        partition,
+        bounds,
+        &s,
+        tau_1,
+        &0,
+        &SiblingPatchMergeOptions::new(2),
+    )
+    .unwrap();
+    assert_eq!(stage_1.merge.merges.len(), 1);
+    assert_eq!(stage_1.merge.merges[0].region, projector(&s, &[0]));
+    assert_eq!(stage_1.merge.rejected_by_cap, 1);
+    assert_eq!(stage_1.partition.len(), 2);
+    assert_eq!(stage_1.patch_errors.len(), 2);
+    let left_record = &stage_1.merge.merges[0];
+    assert_eq!(
+        stage_1.patch_errors[0],
+        certified(
+            &s,
+            &[0],
+            left_record.members_rms + left_record.truncation_rms
+        )
+    );
+    assert_eq!(stage_1.patch_errors[1], certified(&s, &[1], 1e-5));
+    let members: Vec<_> = stage_1
+        .patch_errors
+        .iter()
+        .map(|bound| bound.projector.clone())
+        .collect();
+    assert_eq!(members, vec![projector(&s, &[0]), projector(&s, &[1])]);
+    let conservative = stage_1
+        .patch_errors
+        .iter()
+        .map(|bound| PatchErrorBound::new(bound.projector.clone(), tau_1).with_certified(true))
+        .collect();
+    let options = SiblingPatchMergeOptions::new(3);
+    let blocked = merge_sibling_patches(
+        stage_1.partition.clone(),
+        conservative,
+        &s,
+        tau_2,
+        &0,
+        &options,
+    )
+    .unwrap();
+    // There is exactly one sibling group, the root. Assigning tau_1 to its
+    // members blocks that group by status and yields no merge record.
+    assert_eq!(blocked.partition.len(), 2);
+    assert_eq!(blocked.merge.rejected_by_status, 1);
+    assert!(blocked.merge.merges.is_empty());
+    let chained = merge_sibling_patches(
+        stage_1.partition,
+        stage_1.patch_errors,
+        &s,
+        tau_2,
+        &0,
+        &options,
+    )
+    .unwrap();
+    assert_eq!(chained.partition.len(), 1);
+    assert_eq!(chained.merge.rejected_by_status, 0);
+    assert_eq!(chained.merge.merges.len(), 1);
+    let record = &chained.merge.merges[0];
+    assert_eq!(record.region, Projector::new());
+    assert_eq!(record.members, members);
+    assert_eq!(
+        chained.patch_errors[0].rms,
+        record.members_rms + record.truncation_rms
+    );
+    let actual = chained.partition.to_treetn().unwrap().to_dense().unwrap();
+    let rms = actual.sub(&reference).unwrap().norm().unwrap() / 4.0;
+    assert!(
+        rms <= tau_2,
+        "chained RMS residual {rms:e} exceeds {tau_2:e}"
+    );
 }

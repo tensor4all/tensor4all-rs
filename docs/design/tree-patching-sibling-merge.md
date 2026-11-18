@@ -299,6 +299,21 @@ polynomials carry bonds far above what the tolerance needs, so without it a
 patch that never merges keeps those bonds. A share below one leaves the rest
 of the slack to the merges.
 
+`SiblingPatchMergeResult::patch_errors` returns the accounted RMS error of
+each final region, including zero regions absent from `partition`, in
+canonical split-path order. The bounds form a complete prefix-free cut and
+can be passed with the returned partition to another `merge_sibling_patches`
+call, including one with a tighter `tau`. They retain the surviving terms'
+input errors plus measured truncations rather than claiming the whole merge
+budget; an input above `tau` is reported without clamping. A network region
+is certified when all its inputs were certified. An absent zero region is
+certified only when every input bound of the call was certified.
+
+This output field is limited to `SiblingPatchMergeResult` (#1367).
+`SiblingMergeResult` retains its existing surface: its acceptance and audited
+estimates can differ, and choosing one public RMS value for chaining is
+deferred until a consumer needs that contract.
+
 ## Algebra outputs
 
 The roadmap's M6b outcome says "any `PartitionedTreeTN`". This record narrows

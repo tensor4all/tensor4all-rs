@@ -248,6 +248,14 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
 - `PatchSplitStrategy::{Sequential, ExactParameterGain}` — exact gain uses
   checked logical local tensor element counts after child truncation.
 - `add_with_patching(patches, &center, &options)` — split over-cap patches.
+- `adaptive_interpolation::merge_sibling_patches(partition, patch_errors,
+  &patch_order, tau, &center, &SiblingPatchMergeOptions)` — merge complete
+  sibling groups using caller-supplied per-region RMS errors. The returned
+  `SiblingPatchMergeResult::patch_errors` contains accounted errors for a
+  complete canonical cut, including absent zero regions; pass it with the
+  returned `partition` into a later merge, even under a tighter `tau`.
+  Network regions preserve their inputs' certification; absent zero regions
+  are certified only when every input bound of the call was certified.
 - `adaptive_interpolation::patched_interpolate(&engine, topology, node_sites,
   initial_pivots, &mut ctx, evaluate, &PatchedInterpolationOptions)` —
   sequential tree pQTCI. `ctx` is the run's `EvalContext` over a session the

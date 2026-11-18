@@ -12,12 +12,12 @@ use super::super::verify::{AuditedTerm, Term};
 use super::super::{invalid, PatchedInterpolationError};
 #[cfg(doc)]
 use super::merge_siblings;
-use super::{insert_leaf, merge_leaves, Leaf, SiblingMergeReport};
+use super::{insert_leaf, merge_leaves, partition_from_leaves, Leaf, SiblingMergeReport};
 use crate::reconstruction::truncate_toward_allowance;
 use crate::{DynIndex, PartitionedTreeTN, PartitionedTreeTNError, Projector, SubDomainTreeTN};
 
 /// The L2 error of one patch produced outside
-/// [`patched_interpolate`](super::patched_interpolate), the input of
+/// [`patched_interpolate`](crate::adaptive_interpolation::patched_interpolate), the input of
 /// [`merge_sibling_patches`].
 ///
 /// `rms` is the patch's error over its own points divided by the square root
@@ -156,6 +156,15 @@ where
 {
     /// The merged partition. Zero regions are absent.
     pub partition: PartitionedTreeTN<V>,
+    /// One error bound per final region, including zero regions absent from
+    /// `partition`, in canonical order over the split paths in `patch_order`.
+    /// Together these form a complete prefix-free cut and can be passed with
+    /// `partition` to [`merge_sibling_patches`] unchanged for another merge.
+    /// Each `rms` is the accounted input error plus measured truncations,
+    /// without clamping to `tau`. A network region is certified when all its
+    /// inputs were certified. An absent zero region is certified only when
+    /// every input bound of this call was certified.
+    pub patch_errors: Vec<PatchErrorBound>,
     /// The merges and the L2 error of the merged partition.
     pub merge: SiblingMergeReport,
     /// Input patches replaced by a truncation before merging (see
@@ -167,7 +176,7 @@ where
 /// per-patch L2 errors are known, without exceeding the RMS budget `tau`.
 ///
 /// This is [`merge_siblings`] for patches that did not come from
-/// [`patched_interpolate`](super::patched_interpolate), for example piecewise
+/// [`patched_interpolate`](crate::adaptive_interpolation::patched_interpolate), for example piecewise
 /// polynomial patches embedded as projected networks. The rule is the same:
 /// a complete group of siblings along `patch_order` is replaced by its sum,
 /// truncated toward the slack `tau * sqrt(|Q|) - sqrt(sum |P_i| rms_i^2)`, and
@@ -182,6 +191,9 @@ where
 /// Choose `tau` from a target relative L2 error `rtol` and the norm of the
 /// function as `tau = rtol * ||f|| / sqrt(N)`. Merges only spend what the
 /// patches leave unused, so patches built well below `tau` merge further.
+/// Pass the returned [`SiblingPatchMergeResult::patch_errors`] together with
+/// its `partition` into a later call to chain merges using the accounted
+/// per-region errors instead of assigning the whole previous budget to each.
 ///
 /// # Arguments
 ///
@@ -202,8 +214,9 @@ where
 ///
 /// # Returns
 ///
-/// The merged partition and the merge report, whose `error` is the L2 error
-/// of the merged partition assembled from the bounds and truncations.
+/// The merged partition, its per-region error bounds (including absent zero
+/// regions), and the merge report, whose `error` is the L2 error of the merged
+/// partition assembled from the bounds and truncations.
 ///
 /// # Errors
 ///
@@ -251,6 +264,14 @@ where
 /// assert_eq!(merged.merge.merges[0].max_bond_dim, 1);
 /// let norm = merged.partition.norm()?;
 /// assert!((norm - (5.0_f64 * 25.0 * 61.0).sqrt()).abs() < 1e-10);
+/// // Reuse the accounted bounds when merging again under a tighter budget.
+/// assert_eq!(merged.patch_errors.len(), 1);
+/// assert!(merged.patch_errors[0].certified);
+/// let chained = merge_sibling_patches(
+///     merged.partition, merged.patch_errors, &sites, 1e-11, &0, &options,
+/// )?;
+/// assert_eq!(chained.partition.len(), 1);
+/// assert!((chained.partition.norm()? - norm).abs() < 1e-10);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn merge_sibling_patches<V>(
@@ -402,7 +423,8 @@ where
             "the partition has patches without a PatchErrorBound",
         ));
     }
-    let (partition, merge) = merge_leaves(
+    let all_certified = leaves.values().all(|leaf| leaf.term.certified);
+    let (leaves, merge) = merge_leaves(
         leaves,
         patch_order,
         center,
@@ -411,8 +433,21 @@ where
         domain_points,
         None,
     )?;
+    let patch_errors = leaves
+        .iter()
+        .map(|leaf| PatchErrorBound {
+            projector: leaf.projector.clone(),
+            rms: leaf.term.rms,
+            certified: if leaf.network.is_some() {
+                leaf.term.certified
+            } else {
+                all_certified
+            },
+        })
+        .collect();
     Ok(SiblingPatchMergeResult {
-        partition,
+        partition: partition_from_leaves(leaves)?,
+        patch_errors,
         merge,
         truncated_leaves,
     })
