@@ -571,6 +571,156 @@ pre-PR format, clippy, release workspace tests, rustdoc, mdBook, API dump, and
 repository-rules review gates. Coverage is CI-owned; record an explicit coverage
 impact attestation in the worklog/PR body.
 
+## Merge-refine tolerance mode (proposal, #1130)
+
+Status: proposed design for review; no implementation or public API change in
+this change. As requested in the
+[scope decision](https://github.com/tensor4all/tensor4all-rs/issues/1130#issuecomment-6977139247),
+implementation follows in a separate PR after this note is reviewed.
+
+### Motivation and reported cap-32 results
+
+Exact merging preserves uncompressed direct sums; the
+[#1130 reproducer](https://github.com/tensor4all/tensor4all-rs/issues/1130)
+exhausts its 5 GiB address-space limit at six Fourier qubits. Goal mode can
+compress, but requires a rank chosen before the run. Its current allocator
+reserves allowance across all remaining levels and possible probes, including
+candidates that will not be retained (`schedule.rs`: `level_share` and
+`level_charge_bound`).
+
+The second workload is the patched 2D momentum Green's function in
+[#1373](https://github.com/tensor4all/tensor4all-rs/issues/1373): an `ell`
+spectator followed by interleaved `kx`/`ky` bits, input patch cap 32, output
+rank goal 64, `rtol = 1e-6`, and certified leaf application with share 0.5.
+The following numbers are existing results reported by the issue author at
+`e184b0d7`, release, one thread, with CLEAN `ai-run` runs; they were not rerun
+for this design note. The `R = 10` row and storage counts are reported in the
+[follow-up data](https://github.com/tensor4all/tensor4all-rs/issues/1130#issuecomment-6975971949).
+
+| Bits per axis `R` | Input patches | Transform | Peak memory | Retained bond (transient) |
+|---|---|---|---|---|
+| 8 | 36 | 286.4 s | 3.4 GB | 875 (1,455) |
+| 10 | 44 | 4,032.1 s | 9.2 GB | 1,623 (2,656) |
+
+| `R` | Stored parameters | After SVD: bond / parameters | Measured change | Remaining allowance |
+|---|---|---|---|---|
+| 8 | 2,675,746 | 378 / 993,942 | 2.0e-5 | 1.15e-4 |
+| 10 | 17,314,348 | 401 / 1,745,576 | 1.5e-4 | 4.32e-4 |
+
+The sweep used relative cutoff `1e-8`. These observations motivate spending
+allowance during merges; they do not establish a bound for the proposed mode.
+The reported changes use subtraction of squared norms and an overlap, with a
+relative cancellation floor around `8e-8`; implementation validation must
+measure the norm of an explicit tensor-network difference instead.
+
+### Mode and output policy
+
+Use `MergeRefineOptions::merge_policy: MergePolicy` with variants `Exact`
+(default), `RankGoal(NonZeroUsize)`, and `Tolerance`, replacing
+`target_bond_dim`. One enum makes the policies mutually exclusive; the
+alternative boolean would leave invalid combinations to runtime validation.
+This is an intentional early-development API break, with callers and usage
+documentation migrated in the implementation PR. Exact and rank-goal behavior,
+including goal-mode allocation and stopping decisions, stay unchanged. With
+default exact leaf application, `Exact` keeps `error_bound == 0`; explicitly
+requested measured/certified application retains its existing contract.
+
+Tolerance mode combines each input sibling pair into one term and truncates
+within its absolute allocation, without a rank cap. Accept a candidate only
+when its measured residual fits and it reduces logical stored parameters;
+a smaller maximum bond is sufficient only if storage also decreases. Otherwise
+keep the exact pair sum. A negligible merged contribution may instead be
+dropped, charging its measured norm; the drop and truncation are alternative
+outcomes of one merge.
+
+Refinement is adaptive per coordinate axis, using the existing `split_pays`
+criterion on truncated candidates: retain a split only when its children store
+no more parameters in total than the unsplit merged candidate. There is no
+rank-based stopping test. When several axes pass, also check the joint split's
+storage; if it is worse, use the cheapest passing single-axis split (ties use
+coordinate-group order). A stopped axis stays stopped while input siblings
+continue merging. Candidate keys and live-item limits are checked before tensor
+operations; do not enumerate every subset of refining axes.
+
+`output_depth` remains the maximum executed level. Nonempty output regions are
+disjoint and retain their spectator constraints. At full input-merge depth each
+region has one term and converts with `into_partition()`; an explicit early
+stop may retain several input-prefix terms in a region, as today. Empty regions
+may be omitted. Exact leaf application can still be large: this mode bounds
+accepted approximation error, not peak memory for arbitrary inputs.
+
+### Global allowance and per-level allocation
+
+Keep the fixed allowance `A = max(atol, rtol * reference_scale)` and the current
+input/operator-derived scale; do not measure a new relative scale from partial
+sums. Charge the original measured or certified leaf-application bound `E_app`
+once, before spectator/output restriction. Start with remaining allowance
+`A - E_app`, rejecting an application bound above `A`.
+
+For tolerance mode only, derive potentially merging levels from input-prefix
+metadata, up to `output_depth`, before tensor work. A level with no potential
+merges gets no budget. At level `t`, divide the remaining allowance by the
+number `L_t` of potentially merging levels left, including this one:
+`e_t = remaining / L_t`. Conservative overestimates of future active levels are
+safe, but trailing levels known to contain no merges reserve nothing.
+
+For each disjoint current output region `R`, let `n_R` bound the number of
+chargeable pair merges in any one output cell of this level. Tolerance mode
+keeps at most one term per input-prefix item, so the input-parent groups give
+this bound: sum `group_size - 1` over the groups. Projecting or dropping terms
+can only reduce it. For `N_t = sum_R n_R > 0`, give region `R` the allocation
+`b_R = e_t * sqrt(n_R / N_t)`. A region with `n_R = 0` has no approximation
+budget; when `N_t = 0`, skip allocation entirely.
+
+Every candidate partition of `R` is an alternative use of the same `b_R`.
+For its `k` non-pruned children, give each child `b_R / sqrt(k)` and each
+possible merge there `d = b_R / (sqrt(k) * n_R)`. The unsplit candidate has
+`k = 1`; an empty candidate has no charges. Compute joint children as their own
+candidate partition, never by combining overlapping single-axis probes.
+
+This allocation bounds each child's sum of measured drops/residuals by
+`b_R / sqrt(k)`, so the retained children combine to at most `b_R` in L2.
+Disjoint parent regions then combine to at most `e_t`, because
+`sum_R b_R^2 = e_t^2`. Only the chosen partition enters the error ledger;
+discarded probes cost work but consume no approximation allowance. Across
+levels the components may overlap, so add their bounds by triangle inequality.
+Subtract the retained level bound from the remaining allowance, carrying unused
+budget forward. Earlier components are recorded once and are not charged again
+when restricted into descendants. Thus `E_app + sum_t E_t <= A`.
+
+Use the existing conservative per-edge cutoff in
+`truncate_toward_allowance`, and check the actual candidate residual against
+`d` afterwards. Zero allowance keeps exact sums. All error amounts are absolute
+shares of `A`, so cancellation between branches does not change their meaning.
+The resulting bound remains a posteriori and excludes backend roundoff and
+operator-construction error, as the existing report does.
+
+### Report and acceptance
+
+Record the selected `merge_policy` in `MergeRefineReport`. Add per-level
+records with the allocated allowance `e_t`, retained measured bound `E_t`,
+executed pair additions, truncation attempts, accepted truncations, and drops.
+Work counters include discarded probes; `E_t` includes only kept components,
+combined over disjoint regions. Preserve the meaning of `error_bound`:
+`E_app + sum_t E_t`. Report leaf-application error separately from level spend.
+
+The implementation PR must demonstrate the original six-qubit reproducer under
+5 GiB, within its reported error bound, with peak RSS comparable to goal mode
+under the same conditions; cancellation between branches with pointwise error
+within the stated bound; unchanged exact/goal behavior; and an injected,
+reverted mutation that fails each new test. Cover inactive levels, zero budget,
+early stops, discarded probes, sparse/unequal prefixes, selected outputs,
+spectators, and multiple axes. New comparisons use CLEAN `ai-run measure`
+reports retained beside the results. The cap-32 workload is an additional
+diagnostic, not a promised rank target or a replacement for the original gate.
+
+Changing the SVD per-edge allowance to `d / sqrt(edges)` needs its own proof and
+validation and is outside this change. A final fitting/recompression pass is
+also outside this mode and does not replace compress-at-merge; see
+[#1129](https://github.com/tensor4all/tensor4all-rs/issues/1129) for the separate
+sum-fitting work. Output-norm estimation is a fallback requiring a
+separate design decision if this allocation proves insufficient.
+
 ## Deferred work
 
 - Adaptive interpolation (the M2 patch driver of the
