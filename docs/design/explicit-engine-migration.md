@@ -6,36 +6,41 @@
 **Status:** design and inventory only. Nothing in this document is implemented; no
 public signature, feature default, or numeric path changes.
 
-**Revision 2.** The first revision (#1388) kept an "owner token" model, in which a value
-resolves its engine from the context that created it. That model is withdrawn. A host
-value is readable by *every* CPU engine, so binding a value to one engine breaks
-programs that run several `CpuEngine`s (parallel lanes over disjoint cores, a 1-thread
-engine next to a many-thread one). This revision separates **where the data lives**
-(the tensor), **which engine computes** (the caller, per call) and **which runtime the
-value belongs to** (AD/eager identity), as tenferro does (§5, §6).
+**Revision 3.** This revision follows the cross-repository policy in tensor4all-meta
+[`core-boundary-and-execution-ownership.md`](https://github.com/tensor4all/tensor4all-meta/blob/main/docs/design/core-boundary-and-execution-ownership.md),
+whose scope includes tensor4all-rs, and tenferro #2206, which implements it. It replaces
+two earlier models.
 
-**Baseline:** `origin/main` at `20b42b0d`, read from a fresh worktree. Every table
-below names the command that regenerates it; every `path:line` is checked with a symbol
-grep at that revision (§10 rule 3). §3.9 carries a correction for the revision that cited
-enclosing-function lines instead of call sites. Re-derive before acting on a row — see §10.
+- **Revision 1 (#1388)** kept an *owner token*: a value resolved its engine from the
+  context that created it. That breaks programs with several `CpuEngine`s, because any CPU
+  engine can read any host value.
+- **Revision 2** separated placement, engine and runtime, but still passed the engine
+  wrapped in a locked `ExecutionContext` with `_in` / `_on_session` spellings. That
+  re-creates the *session* that tenferro removed, with its per-entry lock, its re-entry
+  error and its entry cost (§4.6).
+
+Revision 3 has **one concept, the engine**. Every computing operation takes
+`exec: &mut dyn ExecutionEngine` as an argument. There is no lock, no session and no
+context wrapper. The eager runtime is separate and shared.
 
 ## 0. The one-line problem
 
-`tensor4all-rs` already owns a caller-supplied execution context
+`tensor4all-rs` runs numerical work through a caller-supplied execution context
 (`CpuExecutionContext`, [explicit-cpu-execution-context.md](explicit-cpu-execution-context.md)),
-and `tenferro` has already deleted its own implicit entry points. Two problems remain.
+and `tenferro` has already deleted its own implicit entry points. Three problems remain.
 
 1. **The surface can still run without naming an engine.** There are eight distinct
-   shapes of this (§3), and one of them silently substitutes the process-global engine
-   *after* the caller passed a value that had an owner.
-2. **The context conflates three things.** A tensor4all execution context is the engine,
-   its caches, *and* the eager runtime its values belong to. As a result, a value is tied
-   to the engine that created it (§4.5). That is why the code has both an ITensor-style
-   "the tensor picks its engine" route and a tenferro-style "the caller passes the engine"
-   route, and why the two disagree.
+   shapes of this (§3), and one silently substitutes the process-global engine.
+2. **The context conflates the engine with the runtime.** Every context builds a private
+   eager runtime, so a value is tied to the engine that created it (§4.5).
+3. **The context is a session.** It wraps the engine in a `Mutex` with a re-entry guard,
+   and when the caller is a Rayon worker it silently swaps in a fresh serial engine
+   (§4.6). tenferro removed exactly this layer, because of its cost and its
+   ownership problems.
 
-The goal is not a new context abstraction. It is to make every computing operation name
-its engine, and to stop tying values to engines.
+The goal: every computing operation takes the engine by `&mut`, the caller owns its
+engines, values are not tied to engines, and nothing chooses an engine on the caller's
+behalf.
 
 ---
 
@@ -73,23 +78,21 @@ The issue's contract is one sentence: **an operation cannot silently choose a ba
 Five properties follow, and this document judges every call site by them.
 
 - **E1 — the engine parameter is mandatory.** A public operation that executes numerical
-  work takes the execution context (engine), or it cannot run. There is no exception for
-  operator overloads or value methods. `Option<&ExecutionContext>` with `None` meaning
-  "implicit" fails E1 by construction.
-- **E2 — no process-global resolution, not even as a fallback.** Reaching
-  `default_context()`, `default_eager_ctx()`, or `default_cpu_execution_context()`
-  anywhere inside an operation body fails E2.
-- **E3 — no silent adoption.** A value with no runtime may join a runtime only at an
-  operation whose caller named the context: the operands' runtime, or else the context's
-  own. It never joins the process-global runtime.
-- **E4 — one parameter shape per role.** There are exactly two roles. *Entry* (`_in`,
-  `&ExecutionContext`) enters the context once. *Composition* (`_on_session`,
-  `&mut explicit::Session`) runs inside a session that is already held. A third spelling,
-  or two spellings for the same role, fails E4 (§3.11, §6.2).
+  work takes `exec: &mut dyn ExecutionEngine`, or it cannot run. There is no exception for
+  operator overloads or value methods. An `Option` engine fails E1 by construction.
+- **E2 — nothing selects an engine for the caller.** That means no process-global context
+  (`default_context()`, `default_eager_ctx()`, `default_cpu_execution_context()`) and no
+  fallback. It also means no substitute engine, such as the fresh serial engine
+  `CpuExecutionContext` builds for a Rayon worker (§4.6).
+- **E3 — no silent adoption.** A value with no runtime joins a runtime only at an
+  operation whose caller supplied one: the operands' runtime, or else the runtime passed
+  with the engine (§6.3). It never joins a process-global runtime.
+- **E4 — one shape.** The engine is a plain `&mut` argument, last in the parameter list
+  as in tenferro's call grammar (`recv.op(operands…, exec)`). There is no session object,
+  no lock and no second spelling for the same operation.
 - **E5 — values are not bound to engines.** Any engine that can read an operand's
   placement may run the operation: a CPU engine reads any host value, and a CUDA engine
-  reads values in its own allocation domain. Operands must share one runtime. Neither
-  rule depends on which context *created* the value.
+  reads values in its own allocation domain. Operands must share one runtime.
 
 ---
 
@@ -335,8 +338,10 @@ grep -rhoE "pub fn [a-z_0-9]+" --include=*.rs crates/*/src | sed 's/pub fn //' \
 | factorization | `factorize_in(.., context: &ExecutionContext)` — `crates/tensor4all-core/src/defaults/factorize.rs:645` | `factorize_on_session(.., session: &mut explicit::Session<'_>)` — `:904` |
 | QR | `qr_with_in(.., context: &ExecutionContext)` — `crates/tensor4all-core/src/defaults/qr.rs:385` | `qr_with_on_session(.., session: &mut explicit::Session<'_>)` — `:523` |
 
-Two spellings of one explicit parameter is the E4 violation, and it is why §5 has to
-answer "which shape" rather than merely "add the parameter".
+Two spellings of one explicit parameter is an E4 violation. Both spellings also enter
+a locked context: the `_in` form directly, and the `_on_session` form through its
+caller. That is the session shape §4.6 describes. §6.2 replaces both with one plain
+`exec: &mut dyn ExecutionEngine` argument.
 
 ### 3.12 Summary of the eight families
 
@@ -375,7 +380,7 @@ helpers call it at `:63`, `:97`, `:131`. Core has no `global-defaults` cfg of it
 
 Dropping the requirement therefore needs two things. Stage B2 moves the re-exports
 and splits `mat_mul` (which already has `mat_mul_in`). Stage D2 deletes the `None` route,
-and with it core's only use of `with_runtime_engine`. Only after both does stage D3 drop
+and with it core's only use of `with_runtime_engine`. Only after both does stage D4 drop
 the requirement.
 
 ### 4.2 `treersi` enables `global-defaults` by default
@@ -400,7 +405,7 @@ deletion (§8).
 `explicit-context` only, yet `interpolation.rs:7` imports `default_cpu_execution_context`,
 which `tensorbackend/src/lib.rs:69-71` gates on `global-defaults`. The crate compiles only
 because `core` pins `global-defaults` (§4.1) and Cargo unifies features across the build.
-When stage D3 drops that pin, every crate in this situation fails to compile, and the
+When stage D4 drops that pin, every crate in this situation fails to compile, and the
 manifests do not show it. Before that step, run an explicit-only `cargo check` per crate,
 or `cargo hack check --each-feature`, so the list comes from the compiler rather than a
 grep.
@@ -427,6 +432,30 @@ Some(context), ..)` (`crates/tensor4all-core/src/defaults/eager_session.rs:58-63
 *value's* runtime on the *context's* engine. The coupling lives only in runtime
 construction and in validation. That is why this program can fix it without a new
 abstraction (§6.1, stage A2).
+
+### 4.6 `CpuExecutionContext` is a session
+
+`CpuExecutionContext::with_session` delegates to `EngineOwner::with_session`
+(`crates/tensor4all-tensorbackend/src/context.rs:1369-1389`). On every call it:
+
+- checks a per-thread **re-entry guard** and returns `CpuExecutionContextError::Reentered`
+  if this thread is already inside (`:1342-1347`);
+- **locks the engine** behind a `Mutex` (`begin_session`, `:1356-1362`);
+- when the calling thread is a Rayon worker, **builds a fresh `CpuEngine::serial()`**
+  instead, sharing only the plan cache (`:1373-1380`, tensor4all-rs#830). That silently
+  runs on a different engine than the one the caller supplied, and it fails E2.
+
+tenferro measured this kind of entry at about 5–8 µs of wrapper cost per single-op
+session (`tenferro-rs/docs/design/cpu-session-open-cost.md`). It then removed the session
+layer: arbiter, held session, re-entry errors and lease (tenferro #2206). The
+tensor4all-meta policy states the replacement. Exclusivity comes from `&mut engine`. A
+caller that shares an engine between threads wraps it in its own `Mutex`. Parallelism is
+expressed by holding more engines, each task carrying its engine as an argument, because
+finding an engine through a lock can deadlock when a waiting worker runs another task.
+
+Any API shaped as "pass a context, the callee enters it" therefore re-creates the session.
+The 41 `*_in(.., &ExecutionContext)` functions and the 32 `*_on_session` functions (§3.11)
+both have this shape.
 
 ---
 
@@ -548,156 +577,154 @@ for `8127d0d7`.
   `tenferro.cuda.default.v1` (`tenferro-gpu/src/cuda/engine.rs:48`), so one runtime holds
   at most one CUDA engine. This document does not design around that (§9).
 
+### 5.7 The tensor4all-meta execution-ownership policy
+
+[`core-boundary-and-execution-ownership.md`](https://github.com/tensor4all/tensor4all-meta/blob/main/docs/design/core-boundary-and-execution-ownership.md)
+fixes the cross-repository rules. Its scope names tensor4all-rs. The rules this program
+depends on:
+
+- **One concept, the engine.** Code that runs work takes `&mut dyn Engine` (or
+  `&mut E: Engine`). The former session concept is removed, and a set of engines for one
+  multi-engine run is an argument, "not a stored object, and it is not called a session".
+- **The caller owns the threads and the engines.** `CpuEngine::new(pool)` takes its pool
+  by value, and `CpuEngine::serial()` runs on the calling thread. tenferro never
+  subdivides a pool and never picks an engine.
+- **Runtimes hold what was prepared; engines hold what is mutable.** Graphs, compiled and
+  prepared programs, AD rules, values and gradients belong to the runtime. Pools, buffer
+  pools, scratch and plan caches belong to the engine.
+- **The caller's scheduler gives each task its engine as an argument.** A worker of one
+  pool may call an operation on another pool's engine.
+
 ---
 
 ## 6. Proposed tensor4all equivalent
 
-### 6.1 Three separate things: placement, engine context, runtime
+### 6.1 Two objects the caller holds: engines and a runtime
 
-| Concept | Owned by | Chosen by | tensor4all type |
+| Object | Holds | Owned by | Passed as |
 | --- | --- | --- | --- |
-| Placement (host, or a CUDA allocation domain) | the value | where the value was created or transferred | `IdxTensor` storage |
-| Engine context (engine plus graph and plan caches) | the caller | the caller, **per operation** | `ExecutionContext` / `CpuExecutionContext` / `CudaExecutionContext` |
-| Runtime (eager/AD identity of values) | shared by the values that may be combined | the caller, when contexts are built | `EagerRuntime`, held by `Arc` |
+| Engine (`CpuEngine`, `CudaEngine`) | pool, buffer pool, scratch, plan cache, stream, allocation domain | the caller, one per concurrent computation | `exec: &mut dyn ExecutionEngine`, per operation |
+| Runtime (tensor4all `Runtime`: tenferro `EagerRuntime` plus graph compiler and compiled-program cache) | AD rules, eager values, compiled and prepared programs | the caller, shared by `Arc` across engines | at value construction, and with the engine where an operation needs it (§6.3) |
+| Placement | host, or a CUDA allocation domain | the value | — |
 
-- **A context references a runtime; it does not have to own one.** Add
-  `CpuExecutionContext::from_backend_with_runtime(backend, Arc<EagerRuntime>)`, and the
-  CUDA equivalent. `from_backend` keeps creating a private runtime, which is right for a
-  program with one engine.
-- **Parallel lanes** build one runtime and N contexts that share it. Their values combine
-  freely, and each operation runs on the context its caller passes.
-- **The runtime is not a backend.** Sharing it chooses no engine, so a shared runtime does
-  not conflict with E2.
+- **`CpuExecutionContext` / `CudaExecutionContext` / `ExecutionContext` are deleted**, and
+  with them the engine lock, the re-entry guard, `Reentered` and the Rayon substitute
+  engine. Their two halves become the engine (caller-owned, `&mut`) and the `Runtime`
+  (`Arc`, no lock on the engine path).
+- **Plan caches may be shared between engines.** `CpuEngine::with_plan_cache` already
+  shares immutable prepared plans (`tenferro-cpu/src/engine.rs:151` at the pin).
+- **CPU or GPU at run time** is the caller's choice of which `&mut dyn ExecutionEngine` to
+  pass. tenferro's `Engine` is object-safe, so no CPU/CUDA union type is needed. A caller
+  that wants a closed set can keep its own enum or `Box<dyn ExecutionEngine>`.
+- **Layering.** `tensor4all-tensorbackend` re-exports `ExecutionEngine`, `CpuEngine` and
+  `CudaEngine` (it already re-exports `CpuEngine`, `lib.rs:167`), so downstream crates do
+  not take a direct `tenferro-*` dependency.
 
 ### 6.2 Parameter shape
 
-Every computing operation takes `&ExecutionContext`. Keep `ExecutionContext` as the
-public type: it is the CPU/CUDA union that #869 needs and the C API maps it to one
-handle; a bare `&mut dyn Engine` cannot carry the typed re-entry error
-(`ExecutionContextEntryError`, `crates/tensor4all-tensorbackend/src/context.rs:1231`); and
-it owns the graph and plan caches, which must outlive a session.
-
 ```rust
-pub fn svd_in(t: &IdxTensor, opts: &SvdOptions, context: &ExecutionContext) -> Result<..>;
-pub fn svd(t: &IdxTensor, opts: &SvdOptions) -> Result<..>;   // DELETE in phase D
+// tenferro call grammar: operands first, options, then the engine.
+pub fn svd_with(t: &IdxTensor, opts: &SvdOptions, exec: &mut dyn ExecutionEngine) -> Result<..>;
+pub fn contract(a: &IdxTensor, b: &IdxTensor, exec: &mut dyn ExecutionEngine) -> Result<IdxTensor>;
+let c = a.add(&b, exec)?;                      // value methods take the engine too
+let grads = loss.backward_in(exec)?;           // as in the tensor4all-meta sketch
 ```
 
-- `_in` is the single *entry* spelling.
-- `_on_session` stays as the single *composition* spelling. A caller that composes many
-  operations under one session entry (the TCI/RSI sweeps; `treersi/src/engine.rs:110-120`)
-  must not call an `_in` from inside it: that fails with
-  `CpuExecutionContextError::Reentered`, and even where it cannot fail it pays one entry
-  per operation.
-- Third spellings are renamed to `_on_session` (`inner_product_with_session`,
-  `simplett/src/contraction.rs:220`).
-- **Operator overloads that compute are removed**, as tenferro removed them (§5.4).
-  `AnyScalar`'s `Add`/`Sub`/`Mul`/... (`core/src/any_scalar.rs:1225+`) go through
-  `try_*` → `with_eager_session_typed(.., None, ..)` and have no parameter slot. They
-  become `add_in(&rhs, &context)` and so on.
-  - Pure host arithmetic on an untracked scalar may stay an overload, because it calls
-    no engine. Whether to keep that convenience is an open decision (§6.8).
-- Rejected: making every function generic over `E: Engine`. It duplicates tenferro's
-  trait and cannot express the union or the caches.
+- **One spelling.** There is no `_on_session` form, because the engine *is* the borrowed
+  resource. A loop that runs thousands of operations passes the same `exec` to each, at
+  no entry cost.
+- **Computing operator overloads are removed**, as tenferro removed them. `AnyScalar`'s
+  `Add`/`Sub`/`Mul`/... (`core/src/any_scalar.rs:1225+`) become methods taking `exec`. Pure
+  host arithmetic on an untracked scalar may stay an overload (open decision, §6.7).
+- **Names (open decision, §6.7).** The end state follows tenferro: the base name takes
+  `exec` last, with no suffix. During migration the implicit twin still holds the base
+  name, so the engine form needs a temporary name. The recommendation is to reuse `_in`
+  ("runs in this engine"), changing the 41 existing `_in(&ExecutionContext)` functions to
+  take `exec`, and to rename back to the base name in phase D only if the maintainer
+  wants tenferro's exact grammar.
+- **Parallel work.** The scheduler (rayon, `threadteam`, the patch and lane fan-out) gives
+  each task its own engine: `CpuEngine::serial()` for a task on a worker, or a pooled
+  engine per lane. This replaces the #830 substitute engine with an explicit choice by
+  the caller.
+- Rejected: making every function generic over `E: ExecutionEngine`. It would
+  monomorphise the whole surface per engine type, for no benefit over `dyn`, since
+  engine calls are coarse-grained.
 
-### 6.3 Validation: placement and runtime, not "created by"
+### 6.3 Runtime and validation
 
-`validate_context` is replaced by two checks at each operation boundary, made before any
-RNG draw or kernel launch.
+- **A value belongs to one `Runtime`.** Constructors that create values take the runtime
+  explicitly, for example `IdxTensor::from_dense(&rt, ..)`.
+- **Operations read the runtime from their operands.** All operands that have one must
+  share it, else typed `IdxTensorError::RuntimeMismatch`.
+- **The engine must be able to read every operand's placement.** A CPU engine reads host
+  values, and a CUDA engine reads values in its own allocation domain. Otherwise the
+  error is typed `IdxTensorError::PlacementMismatch`, and there is never an implicit
+  transfer. Both checks run at operation entry, before any RNG draw or kernel.
+- **Mapping errors at this boundary** also hides tenferro's per-path variant
+  inconsistency (§5.6) from tensor4all's callers.
+- **Runtime-less host values** (TCI materialisation, disk load) need an explicit runtime
+  wherever no operand supplies one. Operations that create values from nothing (TCI from
+  a function, `interpolativeqtt` builders, random initialisation) therefore take
+  `rt: &Runtime` as well as `exec`.
+- **Transfer.** `t.to_engine(exec)` copies a value to the engine's placement, explicitly,
+  and is a no-op when the placement already matches. The same runtime is kept.
 
-1. **Shared runtime.** Every operand with a runtime has the same one. A mismatch is a typed
-   `RuntimeMismatch`, with the remedy "share one runtime between these contexts".
-2. **Placement.** The context's engine can read every operand.
-   - A CPU context reads host values, from whichever context created them.
-   - A CUDA context reads values in its own allocation domain only.
-   - A mismatch is a typed `PlacementMismatch`, with the remedy "transfer explicitly".
-
-Mapping both checks to tensor4all's own error variants at this boundary also hides the
-upstream variant inconsistency (§5.6) from tensor4all's callers.
-
-**Runtime-less host values** (TCI materialisation, disk load, `from_dense_compact`) join
-a runtime at the first operation that needs one: the operands' shared runtime if there is
-one, else the passed context's. This replaces the 10 F5 adoptions into the global runtime
-(§3.7). `adopt_into` is no longer needed for host-to-CPU use, and remains only as the
-explicit host-to-device transfer.
-
-### 6.4 Choosing CPU or GPU at run time
-
-The caller picks the device by the context it passes, and data moves only when the caller
-says so.
+### 6.4 Engine, runtime and multiple engines in practice
 
 ```rust
-let cpu = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend_with_runtime(backend, rt.clone())));
-let gpu = ExecutionContext::Cuda(Arc::new(CudaExecutionContext::with_runtime(device, rt.clone())?));
-let a_dev = a.to_context(&gpu)?;          // explicit upload; same runtime, new placement
-let c = contract_in(&a_dev, &b_dev, &gpu)?;
-let c_host = c.to_context(&cpu)?;         // explicit download
+let rt = Runtime::new()?;                                   // shared, Arc inside
+let mut big = CpuEngine::new(Pool::builder().threads(8).build()?);
+let mut lanes: Vec<CpuEngine> = (0..4).map(|_| CpuEngine::serial()).collect();
+let a = IdxTensor::from_dense(&rt, idx, data)?;
+let b = lane_results(&rt, &mut lanes)?;                     // each lane task carries its engine
+let c = contract(&a, &b, &mut big)?;                        // same runtime, any CPU engine
+#[cfg(feature = "tenferro-cuda")] {
+    let mut gpu = CudaEngine::open(0)?;
+    let a_dev = a.to_engine(&mut gpu)?;                     // explicit upload
+    let d = contract(&a_dev, &a_dev, &mut gpu)?;
+}
 ```
-
-- A host operand passed to a CUDA context is `PlacementMismatch`, never an implicit
-  upload. This matches tenferro (§5.6).
-- `to_context` is the single transfer verb. It is a copy across placements and a no-op
-  when the placement already matches.
-- A CPU/CUDA shared runtime needs the CUDA extension modules registered on that runtime.
-  Stage A2 must verify this. Today each CUDA context builds its own runtime.
 
 ### 6.5 Error model
-
-Typed, non-`anyhow` variants, one per boundary:
 
 | New error | Replaces | At |
 | --- | --- | --- |
 | `IdxTensorError::RuntimeMismatch` | tenferro's `ContextMismatch` surfacing from inside a kernel | operation entry |
-| `IdxTensorError::PlacementMismatch` | "tensor belongs to a different CPU eager context" and the per-path upstream variants | operation entry |
-| `t4a_status_code::T4A_NO_CONTEXT` (new variant of `capi/src/lib.rs:53`) | n/a | C boundary, stage E1 |
+| `IdxTensorError::PlacementMismatch` | "tensor belongs to a different CPU eager context" and the upstream per-path variants | operation entry |
+| `t4a_status_code::T4A_NO_ENGINE` | n/a | C boundary, stage E1 |
 
-No `NoLiveOwner` is needed. The owner registry and `with_runtime_engine` are deleted
-outright (stage D2), because no operation resolves its engine from a value any more.
+`CpuExecutionContextError::Reentered` and `CudaExecutionContextError::Reentered` are
+deleted with the contexts. A `&mut` engine cannot be re-entered.
 
 ### 6.6 C API and bindings
 
-The ABI needs an opaque context handle, not a new parameter type on 87 functions:
-
 ```c
-/* proposed, stage E1 */
-typedef struct t4a_context t4a_context;
-t4a_status_code t4a_context_new(t4a_context **out);                                 /* CPU, own runtime */
-t4a_status_code t4a_context_new_with_threads(size_t, t4a_context **out);
-t4a_status_code t4a_context_new_sharing(const t4a_context *with, size_t threads, t4a_context **out); /* same runtime */
-void            t4a_context_release(t4a_context *ctx);
+typedef struct t4a_runtime t4a_runtime;   /* shared; clone = same runtime */
+typedef struct t4a_engine  t4a_engine;    /* exclusive; the caller must not use it from two threads at once */
+t4a_status_code t4a_runtime_new(t4a_runtime **out);
+t4a_status_code t4a_engine_new_cpu(size_t threads, t4a_engine **out);      /* 1 = serial */
+void            t4a_engine_release(t4a_engine *);
 
-t4a_status_code t4a_tensor_contract(const t4a_context *ctx, const t4a_tensor *a, ...);
+t4a_status_code t4a_tensor_contract(const t4a_tensor *a, const t4a_tensor *b,
+                                    t4a_engine *exec, t4a_tensor **out);
 ```
 
-- **A null context is `T4A_NULL_POINTER`, never "use the default".**
-- **A cloned handle shares the same context.** `ExecutionContext::Cpu` holds
-  `Arc<CpuExecutionContext>`, so cloning creates no second engine. Exposing
-  `t4a_context_clone` is a policy choice, not a constraint.
-- **No implicit global context remains reachable.** This is a breaking ABI change, which
-  the early-development policy ([AGENTS.md "Development Stage"](../../AGENTS.md)) permits.
-- **Python** wraps `Arc<CpuExecutionContext>` in a `Context` class and calls the Rust
-  `_in` entries directly.
+- A null engine or runtime is `T4A_NULL_POINTER`. There is no default.
+- An engine handle is not cloneable: it owns its pool. Julia and Python keep one engine
+  per concurrent task. A binding that shares one engine between threads wraps it in its
+  own lock, which the policy assigns to the caller.
+- This is a breaking ABI change, which the early-development policy
+  ([AGENTS.md "Development Stage"](../../AGENTS.md)) permits. Python wraps `Runtime` and
+  the engine in classes and calls the Rust API directly.
 
-### 6.7 Bindings impact summary
+### 6.7 Open decisions
 
-| Consumer | Impact | Work |
-| --- | --- | --- |
-| `Tensor4all.jl` (external) | breaking: every numerical call gains a context argument | one `t4a_context` per Julia session (more for lanes) |
-| Python (`tensor4all-py`) | breaking Python API | `Context(...)`; `Tensor.contract(other, ctx)` |
-| mdBook guide + tutorials | every snippet | mechanically add a context |
-| Doctests | ~all crate-level examples | build one context per example |
-
-Doctest churn is the largest single line count in this program. It is mechanical, but it
-is not free.
-
-### 6.8 Open decisions
-
-1. **Host-only scalar overloads.** Keep `+`/`*` on untracked host `AnyScalar` (no engine),
-   or remove every overload for uniformity.
-2. **Runtime ownership.** Is the runtime a separate public handle (`Runtime::new()`,
-   passed to `from_backend_with_runtime`), or only reachable through
-   `CpuExecutionContext::share_runtime()`? The second needs no new public type.
-3. **CPU/CUDA shared runtime.** Allow it in stage A2, or keep CPU and CUDA runtimes separate
-   and make `to_context` move a value between runtimes. Stage A2 verification decides.
+1. **Final names:** keep `_in` as the engine-taking suffix, or rename to tenferro's
+   suffix-free grammar in phase D.
+2. **Host-only scalar overloads:** keep `+`/`*` on untracked host `AnyScalar`, or remove
+   every overload.
+3. **CPU/CUDA shared runtime:** one `Runtime` serving both engine kinds, or separate
+   runtimes with `to_engine` moving values between them. Stage A2 verifies feasibility.
 
 ---
 
@@ -706,131 +733,107 @@ is not free.
 ### 7.0 Constraints from concurrent work
 
 Many PRs land on `main` in parallel with this program, and almost all of them touch the
-surface it changes. The staging is built around that.
+surface it changes.
 
-- **Add before migrate, migrate before remove.** Until the removal phase, the old and the
-  new forms coexist, so an open PR that calls the old form keeps compiling.
-- **One crate per migration PR.** Each PR is small, merges quickly, and conflicts with
-  only the PRs that touch the same crate. Order is leaf-first, so no PR waits on a
-  downstream crate.
-- **Stop new debt first.** A deterministic check rejects *added* implicit sites from the
-  first PR onward. Debt cannot grow while it is being paid down, and other authors find
-  out in review, not after a rebase.
-- **No `#[deprecated]`.** The workspace builds clippy with `-D warnings`, so a deprecation
-  would break every open PR that still calls the old form. The ratchet does the
-  deprecation's job without failing existing code.
-- **Removal PRs are breaking and announced.** Each removal PR is posted on #1376 before it
-  merges, so authors of open PRs can rebase onto it.
+- **Add before migrate, migrate before remove.** Old and new forms coexist until phase D.
+- **One crate per PR**, leaf-first.
+- **Stop new debt first** with the A1 ratchet.
+- **No `#[deprecated]`.** `-D warnings` would break every open PR.
+- **Removal PRs are breaking and announced** on #1376 before they merge.
+- **The one non-additive step before phase D** is changing the 41 `_in(&ExecutionContext)`
+  signatures to take `exec`. Each such PR changes one crate's `_in` functions *and every
+  workspace caller of them*, so it never leaves a caller broken.
 
-Each stage below is one or more separately reviewable PRs that leave the tree green.
+### Phase A — groundwork
 
-### Phase A — groundwork (additive, low conflict)
+- **A0 — this document.**
+- **A1 — ratchet** (#1392). Block *added*:
+  - literal-`None` context arguments;
+  - global accessors;
+  - `Option<&..ExecutionContext>` parameters;
+  - new `&ExecutionContext` parameters;
+  - new `.with_session(` / `with_concrete_session(` calls outside `tensor4all-tensorbackend`.
+- **A2 — `Runtime` and the engine-taking eager entry** (#1393). In `tensorbackend` and
+  `core` only:
+  - add the `Runtime` type: the eager runtime plus graph compiler and compiled-program
+    cache, with no engine and no engine lock;
+  - add `run_graph(&rt, exec, ..)` and an eager entry `with_eager(&rt, exec, f)` that
+    takes `&mut dyn ExecutionEngine` directly;
+  - add the `RuntimeMismatch` / `PlacementMismatch` validation;
+  - let `CpuExecutionContext` build its runtime from a shared `Runtime`, so existing code
+    keeps working on top of the new pieces.
 
-**A0 — this document.** No code.
+  Verify at the pin that one graph runtime can serve several engines of the same kind
+  (today the graph runtime is "derived from the engine" and lives under its lock,
+  `context.rs:1241-1246`). Also verify whether one runtime can serve CPU and CUDA
+  (§6.7-3).
+- **A3 — `treersi/src/engine.rs:118`** (#1379). The CUDA LUCI arm uses
+  `default_cpu_execution_context()`. Take a CPU engine from the caller, or return a typed
+  refusal.
 
-**A1 — ratchet against new implicit sites.** Add a delta-scoped, deterministic check to
-`scripts/repository-rules-review.py`, built on `added_lines_with_text` the way the existing
-`tenferro` dependency and doctest checks are. It blocks *added* lines that:
-- pass a literal `None` context to `with_{eager_session,eager_session_typed,engine,execution_engine}`;
-- call `default_context()`, `default_eager_ctx()` or `default_cpu_execution_context()`;
-- declare a new `Option<&..ExecutionContext>` parameter.
+### Phase B — engine-taking surface, one crate per PR, leaf-first
 
-Existing sites are not affected. The check needs a test in
-`scripts/test-repository-rules-review.py` and a route in `REPOSITORY_RULES.md`. No Rust
-code changes, so it conflicts with nothing.
+1. **`tensorbackend`**:
+   - engine-taking forms of the 10 engine-bearing bridge functions, the Hermitian
+     helpers and `IncrementalQr::{new, append}`;
+   - move host-only helpers and `capped_full_piv_lu` out of the `global-defaults` gate;
+   - change `explicit::Session` users to plain `exec` arguments;
+   - bridge/`Storage` visibility (#1380).
+2. **`core`**:
+   - move the `TensorElement` / `Matrix` re-exports (§4.1);
+   - change the `_in` functions to take `exec`, together with their callers;
+   - add `exec`-taking forms for every `IdxTensor` / `AnyScalar` method and computing
+     operator that reaches a literal-`None` site;
+   - make constructors take `&Runtime`.
+3. **Algorithm crates, one PR each** (`simplett`, `treetn`, `itensorlike`, `tensorci`,
+   `treetci`, `treersi`, `interpolativeqtt`, `aci`, `quanticstci`, others): change `_in`
+   to take `exec` and `_on_session` to take `exec`, and add engine-taking twins where
+   none exist. `interpolativeqtt`'s builders also take `&Runtime` (§3.4).
 
-**A2 — decouple runtime from engine.** This is §6.1 and §6.3, in `tensorbackend/src/context.rs`
-and `core/src/defaults/idx_tensor.rs` (`validate_context`) only.
-- Add `from_backend_with_runtime`.
-- Replace the runtime-identity check with the shared-runtime and placement checks.
-- Add `RuntimeMismatch` and `PlacementMismatch`.
-- Adopt runtime-less host values at operations that already take a context.
+### Phase C — migrate callers, one crate per PR
 
-Purely additive in behaviour: it turns some rejections into successes, and it fixes
-multi-engine CPU programs. Tests:
-- Two CPU contexts with different thread counts share a runtime, and a value from each
-  contracts on either context.
-- Values from unshared runtimes give `RuntimeMismatch`.
-- A host value passed to a CUDA context gives `PlacementMismatch`.
+- Internal callers, tests, examples, doctests and the tutorial chapter move to
+  engine-taking forms.
+- Parallel fan-out (`partitionedtreetn` patches, lanes, Rayon loops) gives each task its
+  engine explicitly, replacing the #830 substitute.
+- `Option<&..Context>` parameters become `exec` (ACI: #1382).
+- The implicit public entries stay as thin adapters.
 
-**A3 — `treersi/engine.rs:118` (F3c).** The CUDA LUCI arm takes the caller's CPU context or
-returns a typed refusal. One function.
+### Phase D — remove (breaking; announce on #1376 first)
 
-### Phase B — complete the explicit surface (additive, per crate)
-
-Add every missing `_in` / `_on_session` form next to the existing implicit one. Nothing
-is removed, so open PRs are unaffected. One PR per crate, leaf-first:
-
-1. **`tensor4all-tensorbackend`**: parity between `explicit::Session` and the 10
-   engine-bearing bridge functions (§3.9). Add `_in` twins for the Hermitian helpers and
-   `IncrementalQr::{new, append}`. Move host-only helpers and `capped_full_piv_lu` out of
-   the `global-defaults` gate.
-2. **`tensor4all-core`**:
-   - Move the `TensorElement`, `Matrix` and `ExecutionContext` re-exports to
-     `explicit-context` (§4.1).
-   - Add `_in` forms for every `IdxTensor` / `AnyScalar` value method and computing
-     operator that today reaches an F1 site. For example, `a.add_in(&b, &ctx)` coexists
-     with `a + b`.
-   - Add `_in` twins for the bridge-level owned and backend functions.
-3. **Algorithm crates**, one PR each: `simplett`, `treetn`, `itensorlike`, `tensorci`,
-   `treetci`, `treersi`, `interpolativeqtt` (builders, §3.4), `aci`, `quanticstci`, and
-   the rest. Rename third spellings to `_on_session` here; they are internal names and
-   conflict little.
-
-### Phase C — migrate callers (behaviour-preserving, per crate)
-
-Same crate order as phase B. In each crate, internal callers, tests, examples and doctests
-move to the explicit forms, and the F2 `Option<&..Context>` parameters become
-`&ExecutionContext`. The crate's implicit public entries **stay**, as thin adapters, so
-downstream crates and open PRs still compile.
-
-- Each PR lowers that crate's F1/F2/F3 counts (§3) and records the new numbers in its body.
-- Numeric parity (§8) is checked per crate.
-- Where a crate's tutorial chapter quotes the migrated API, the mdBook chapter moves in
-  the same PR (AGENTS.md "Online Tutorial Synchronization").
-
-### Phase D — remove (breaking, announced, per crate then global)
-
-1. **Per crate, leaf-last**, once no workspace caller of a crate's implicit entries
-   remains: delete its F3 adapters, F4 twins and computing operator overloads. Downstream
-   crates were migrated in phase C, so each PR touches one crate.
-2. **The `None` route**: delete `with_runtime_engine`, the owner registry
-   (`context.rs:1881-1893`) and the `None` arms in `eager_session.rs`. This removes core's
-   import of a `global-defaults`-only function (§4.1).
-3. **Globals and features**:
-   - Delete F6's global items and F7's module gate.
-   - Run the explicit-only per-crate check (§4.4).
-   - Flip the defaults (`default = ["tenferro-cpu-platform"]` in `tensorbackend` and
-     `treersi`) and drop `core`'s `global-defaults` requirement.
-   - Delete `backend-tenferro` and `global-defaults`.
-   - Delete the A1 ratchet, which has nothing left to guard.
+1. **Per crate, leaf-last**: delete the implicit adapters, the F4 twins and the
+   computing operator overloads.
+2. **Delete the `None` route** (#1378): `with_runtime_engine`, the owner registry
+   (`context.rs:1881-1893`) and the `None` arms in `eager_session.rs`.
+3. **Delete the contexts**: `CpuExecutionContext`, `CudaExecutionContext`,
+   `ExecutionContext`, `EngineOwner`, the re-entry guard and `explicit::Session` (if
+   nothing still needs it).
+4. **Delete the globals and flip the features** (#1377):
+   - delete F6 and the F7 gates;
+   - run an explicit-only `cargo check` per crate (§4.4);
+   - flip the defaults and drop `core`'s `global-defaults` pin;
+   - delete `backend-tenferro` / `global-defaults` and the A1 ratchet.
 
 ### Phase E — bindings and docs
 
-1. **C API**: the `t4a_context` handle and a non-null context argument on every
-   numerical entry (§6.6). Regenerate the header with `scripts/generate-capi-header.py`.
-   This lands in one PR because the ABI changes together. Coordinate it with a
-   `Tensor4all.jl` PR following the cross-repo procedure in AGENTS.md.
-2. **Python**: a `Context` type.
-3. **Remaining docs**: `README.md`, `llms.txt`, `skills/use-tensor4all-rs/`,
-   [explicit-cpu-execution-context.md](explicit-cpu-execution-context.md) and
-   [859-f7-consumer-inventory.md](859-f7-consumer-inventory.md), brought to their
-   post-removal state.
-
-Phase E1 can start once phase C has reached `tensor4all-treetn`. The C API only wraps
-`core` and `treetn` entries, so it does not have to wait for phase D.
+1. **C API** `t4a_runtime` / `t4a_engine` (§6.6), plus the Tensor4all.jl PR. It can start
+   once phase C reaches `treetn`.
+2. **Python classes.**
+3. **Remaining docs**: README, `llms.txt`, `skills/use-tensor4all-rs/`,
+   `explicit-cpu-execution-context.md` (rewritten or retired) and
+   `859-f7-consumer-inventory.md`.
 
 ### Mapping to the split issues
 
 | Stage | Issue |
 | --- | --- |
-| A1 (ratchet) | none yet: needs a new issue |
-| A2 (runtime/engine decoupling, placement validation) | none yet: needs a new issue |
-| A3 (`treersi/engine.rs:118`) and the phase B/C/D steps for `treetn` adapters and `interpolativeqtt` builders | #1379 |
-| D2 (`None` route deleted) and the phase C F1 migration in `core` | #1378. Its fix becomes "migrate, then delete the route", not "add `NoLiveOwner`". |
-| B2 re-exports and D3 (core's `global-defaults` requirement, tensorbackend's internal `default_context()` calls) | #1377 |
-| ACI `Option<&CpuExecutionContext>` (F2), phase C for `aci` | #1382 |
-| Bridge and `Storage` re-exports (F7), B1 | #1380 |
+| A1 | #1392 |
+| A2 | #1393 |
+| A3, and the phase B/C/D steps for `treetn` adapters and `interpolativeqtt` builders | #1379 |
+| D2 and the phase C F1 migration in `core` | #1378 (delete the route; no `NoLiveOwner`) |
+| B2 re-exports and D4 | #1377 |
+| phase C for `aci` | #1382 |
+| B1 bridge visibility | #1380 |
 
 ---
 
@@ -842,12 +845,16 @@ in that stage.
 
 Concretely:
 
-- **Same kernel, different selection.** Phase C replaces *which* context is used,
+- **Same kernel, different selection.** Phase C replaces *which* engine is used,
   not *what runs*. A migrated `IdxTensor::sum` must call the same
   `with_eager_session(.., Some(ctx), ..)` body it already had with `None`.
 - **Runtime sharing must not change results.** Stage A2 changes which runtime records a
-  value, not which kernel runs. A value computed on context A with a private runtime and
-  on context A with a shared runtime must be bit-identical.
+  value, not which kernel runs. The same engine with a private runtime and with a shared
+  runtime must give bit-identical results.
+- **The #830 substitute engine is a numeric path today.** A Rayon worker currently
+  computes on a fresh serial engine. When phase C makes the caller pass that engine, the
+  serial engine must stay serial, so that thread count and reduction order do not
+  change.
 - **The `is_global_default_cpu` branch is the one real numeric risk.** `context.rs:1076`
   selects the legacy host kernels for the global context, documented as
   "bitwise-identical numerics". Once the global route is gone, that branch is gone and
@@ -867,7 +874,8 @@ Concretely:
   advancement**". Deleting the implicit adapter must not move a validation across an RNG
   draw.
 - **Errors change, results do not.** Stages 1 and 3 legitimately change which calls
-  fail: stage A2 turns some rejections into successes (another CPU context's host value),
+  fail: stage A2 turns some rejections into successes (a host value created on another
+  CPU engine),
   and phase D turns silent successes into compile errors or typed errors. That is a behaviour change and must be stated in the PR body; it is
   not a numeric change. Any test that was passing *because* of the fallback should be
   rewritten to construct its context explicitly, not silenced.
