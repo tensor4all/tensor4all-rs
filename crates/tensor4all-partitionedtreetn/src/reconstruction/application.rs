@@ -38,11 +38,12 @@ pub(super) fn certified_failure(error: CertifiedApplyError) -> PartitionedTreeTN
     const OPERATION: &str = "certified operator application";
     match error {
         CertifiedApplyError::MemoryLimit {
-            estimated_bytes, ..
-        } => PartitionedTreeTNError::ResourceLimit {
+            estimated_bytes,
+            limit_bytes,
+        } => PartitionedTreeTNError::CertifiedMemoryLimit {
             operation: OPERATION,
-            limit: "memory_limit (bytes)",
-            value: estimated_bytes,
+            estimated_bytes,
+            limit_bytes,
         },
         CertifiedApplyError::BudgetUnreachable { .. } => PartitionedTreeTNError::InvalidOptions {
             operation: OPERATION,

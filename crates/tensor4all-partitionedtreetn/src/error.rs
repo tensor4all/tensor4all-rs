@@ -138,6 +138,34 @@ pub enum PartitionedTreeTNError {
         limit_bytes: usize,
     },
 
+    /// A certified operator application on one patch was refused because its
+    /// memory estimate exceeds the configured limit.
+    ///
+    /// Returned by
+    /// [`schedule_merge_refine`](crate::reconstruction::schedule_merge_refine)
+    /// under
+    /// [`OperatorApplication::Certified`](crate::reconstruction::OperatorApplication::Certified),
+    /// mapped from
+    /// [`CertifiedApplyError::MemoryLimit`](tensor4all_treetn::CertifiedApplyError::MemoryLimit),
+    /// which documents when each estimate is checked. Both numbers are kept, so
+    /// the estimate is never reported as the limit.
+    ///
+    /// # Remedy
+    /// Split the input into finer patches, whose bonds are smaller, or raise
+    /// `memory_limit` if the machine has the memory.
+    #[error(
+        "{operation} needs an estimated {estimated_bytes} bytes for one patch, above \
+         memory_limit = {limit_bytes} bytes; apply it to finer patches or raise the limit"
+    )]
+    CertifiedMemoryLimit {
+        /// Operation whose application was refused.
+        operation: &'static str,
+        /// The estimate that exceeded the limit, in bytes.
+        estimated_bytes: usize,
+        /// The configured `memory_limit`, in bytes.
+        limit_bytes: usize,
+    },
+
     /// The automatic refinement of differing patch layouts in
     /// [`PartitionedTreeTN::add`](crate::PartitionedTreeTN::add),
     /// [`PartitionedTreeTN::add_truncated`](crate::PartitionedTreeTN::add_truncated),
