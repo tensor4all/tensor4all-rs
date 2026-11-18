@@ -10,19 +10,25 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, ensure, Result};
 use num_complex::{Complex32, Complex64};
 use omeco::ScoreFunction;
+#[cfg(feature = "global-defaults")]
+use tenferro::TensorSessionOpsExt;
 use tenferro::{
     program::CoreSemanticOp, CompiledGraph, DType, GraphCompiler, Tensor as NativeTensor,
-    TensorRead, TensorScalar, TensorSessionOpsExt, TraceContext,
+    TensorRead, TensorScalar, TraceContext,
 };
 use tenferro_einsum::{
     ConcreteEinsumPlan, ContractionOptimizerOptions, ContractionTree, EinsumSubscripts, Subscripts,
     TraceContextEinsumExt,
 };
+#[cfg(feature = "global-defaults")]
 use tenferro_linalg::TensorLinalgExt;
 
+#[cfg(feature = "global-defaults")]
 use crate::any_scalar::promote_scalar_native;
+#[cfg(feature = "global-defaults")]
+pub(crate) use crate::einsum_ids::build_binary_einsum_ids;
 pub(crate) use crate::einsum_ids::{
-    build_binary_einsum_ids, checked_native_einsum_labels, common_dtype, convert_native_tensor_in,
+    checked_native_einsum_labels, common_dtype, convert_native_tensor_in,
 };
 /// Error returned by the storage/tensor bridge helpers.
 ///
@@ -57,14 +63,15 @@ fn native_tensor_from_vec<T: TensorScalar>(
         .map_err(|source| BridgeError::from(anyhow::Error::new(source)))
 }
 
-use crate::context::{
-    default_context, default_engine_buffer_pool_stats, reset_default_engine,
-    reset_default_engine_buffer_pool, with_default_graph_compiler, with_default_session,
-};
+use crate::context::CpuExecutionContext;
+#[cfg(feature = "global-defaults")]
+use crate::context::{default_context, with_default_session};
 use crate::memory::release_process_allocator_cached_memory;
 use crate::storage::{storage_dtype_dispatch, Storage, StorageScalar};
 use crate::tensor_element::TensorElement;
+#[cfg(feature = "global-defaults")]
 use crate::BackendScalar;
+use tenferro_cpu::BufferPoolStats;
 
 /// Read-only native tensor input that can either borrow external payload data
 /// or own a temporary materialized tensor.
@@ -104,7 +111,7 @@ impl<'a> NativeTensorReadInput<'a> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "global-defaults"))]
 use std::cell::Cell;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -162,13 +169,13 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "global-defaults"))]
 thread_local! {
     static FORCE_NATIVE_EINSUM_PROFILE: Cell<bool> = const { Cell::new(false) };
 }
 
 fn native_einsum_profile_enabled() -> bool {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "global-defaults"))]
     if FORCE_NATIVE_EINSUM_PROFILE.with(Cell::get) {
         return true;
     }
@@ -223,7 +230,7 @@ fn release_allocator_after_native_einsum_call() -> bool {
     env::var("T4A_RELEASE_ALLOCATOR_AFTER_NATIVE_EINSUM_CALL").is_ok()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "global-defaults"))]
 pub(crate) fn set_native_einsum_profile_enabled_for_tests(enabled: bool) {
     FORCE_NATIVE_EINSUM_PROFILE.with(|slot| slot.set(enabled));
 }
@@ -322,17 +329,17 @@ fn cached_concrete_einsum_plan(
     Ok(plan)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "global-defaults"))]
 fn reset_concrete_einsum_plan_cache() {
     CONCRETE_EINSUM_PLAN_CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "global-defaults"))]
 fn native_einsum_spec_cache_len() -> usize {
     NATIVE_EINSUM_SPEC_CACHE.with(|cache| cache.borrow().len())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "global-defaults"))]
 fn concrete_einsum_plan_cache_len() -> usize {
     CONCRETE_EINSUM_PLAN_CACHE.with(|cache| cache.borrow().len())
 }
@@ -662,9 +669,24 @@ pub fn print_and_reset_native_einsum_profile() {
     });
 }
 
-fn convert_tensor(tensor: &NativeTensor, to: DType) -> Result<NativeTensor> {
-    with_default_session(|session| convert_native_tensor_in(session, tensor, to))
+/// Convert `tensor` to dtype `to` in a session of the caller-supplied `ctx`.
+fn convert_tensor_in(
+    ctx: &CpuExecutionContext,
+    tensor: &NativeTensor,
+    to: DType,
+) -> Result<NativeTensor> {
+    ctx.with_session(|session| convert_native_tensor_in(session, tensor, to))
+        .map_err(|source| {
+            tenferro_tensor::Error::runtime_state_source("canonical session entry", source)
+        })
+        .and_then(std::convert::identity)
         .map_err(|e| anyhow::Error::new(e).context(format!("tensor conversion to {to:?} failed")))
+}
+
+/// [`convert_tensor_in`] on the process-global context.
+#[cfg(feature = "global-defaults")]
+fn convert_tensor(tensor: &NativeTensor, to: DType) -> Result<NativeTensor> {
+    convert_tensor_in(default_context(), tensor, to)
 }
 
 fn ids_to_subscript(ids: &[u32]) -> Result<String> {
@@ -741,22 +763,25 @@ fn compile_native_einsum_program(
         .map_err(|e| anyhow!("native einsum graph compilation failed: {e}"))
 }
 
+fn pool_stats(ctx: &CpuExecutionContext) -> Result<BufferPoolStats> {
+    ctx.graph_buffer_pool_stats().map_err(anyhow::Error::new)
+}
+
 fn run_cached_native_einsum(
+    ctx: &CpuExecutionContext,
     subscripts: &EinsumSubscripts,
     build: impl FnOnce(&mut GraphCompiler) -> Result<CompiledGraph>,
-    execute: impl FnOnce(&crate::context::CpuExecutionContext, &CompiledGraph) -> Result<NativeTensor>,
+    execute: impl FnOnce(&CpuExecutionContext, &CompiledGraph) -> Result<NativeTensor>,
 ) -> Result<NativeTensor> {
     let trace_pool = native_einsum_pool_trace_enabled();
-    let pool_before = trace_pool
-        .then(default_engine_buffer_pool_stats)
-        .transpose()?;
+    let pool_before = trace_pool.then(|| pool_stats(ctx)).transpose()?;
     // Compile under the compiler lock only; the graph then runs under the
     // context's engine lock. Holding both would make a compile wait for a graph
     // that is running.
-    let program = with_default_graph_compiler(build)?;
-    let result = execute(default_context(), &program)?;
+    let program = build(&mut ctx.lock_compiler())?;
+    let result = execute(ctx, &program)?;
     if trace_pool {
-        let pool_after = default_engine_buffer_pool_stats()?;
+        let pool_after = pool_stats(ctx)?;
         let output_bytes = native_tensor_bytes(&result);
         let retained_threshold = native_einsum_pool_trace_min_retained_bytes();
         if pool_after != pool_before.unwrap_or_default()
@@ -776,16 +801,14 @@ fn run_cached_native_einsum(
         }
     }
     if reset_native_einsum_engine_after_call() {
-        let before_reset = trace_pool
-            .then(default_engine_buffer_pool_stats)
-            .transpose()?;
-        reset_default_engine()?;
+        let before_reset = trace_pool.then(|| pool_stats(ctx)).transpose()?;
+        ctx.reset_graph_runtime().map_err(anyhow::Error::new)?;
         if trace_pool
             && before_reset.unwrap_or_default().capacity_bytes
                 >= native_einsum_pool_trace_min_retained_bytes()
         {
             let before = before_reset.unwrap_or_default();
-            let after = default_engine_buffer_pool_stats()?;
+            let after = pool_stats(ctx)?;
             eprintln!(
                 "native_einsum engine_reset before_buffers={} before_capacity={:.3} MiB after_buffers={} after_capacity={:.3} MiB",
                 before.buffers,
@@ -795,16 +818,14 @@ fn run_cached_native_einsum(
             );
         }
     } else if reset_native_einsum_buffer_pool_after_call() {
-        let before_clear = trace_pool
-            .then(default_engine_buffer_pool_stats)
-            .transpose()?;
-        reset_default_engine_buffer_pool()?;
+        let before_clear = trace_pool.then(|| pool_stats(ctx)).transpose()?;
+        ctx.reset_graph_buffer_pool().map_err(anyhow::Error::new)?;
         if trace_pool
             && before_clear.unwrap_or_default().capacity_bytes
                 >= native_einsum_pool_trace_min_retained_bytes()
         {
             let before = before_clear.unwrap_or_default();
-            let after = default_engine_buffer_pool_stats()?;
+            let after = pool_stats(ctx)?;
             eprintln!(
                 "native_einsum pool_reset before_buffers={} before_capacity={:.3} MiB after_buffers={} after_capacity={:.3} MiB",
                 before.buffers,
@@ -829,10 +850,12 @@ fn run_cached_native_einsum(
 }
 
 fn cached_einsum_native_tensors(
+    ctx: &CpuExecutionContext,
     inputs: &[&NativeTensor],
     subscripts: &EinsumSubscripts,
 ) -> Result<NativeTensor> {
     run_cached_native_einsum(
+        ctx,
         subscripts,
         |compiler| {
             compile_native_einsum_program(
@@ -851,14 +874,16 @@ fn cached_einsum_native_tensors(
 }
 
 fn cached_einsum_native_reads(
+    ctx: &CpuExecutionContext,
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
 ) -> Result<NativeTensor> {
     let einsum_subscripts = EinsumSubscripts::from(subscripts);
-    execute_native_einsum_reads(inputs, subscripts, &einsum_subscripts)
+    execute_native_einsum_reads(ctx, inputs, subscripts, &einsum_subscripts)
 }
 
 fn execute_native_einsum_reads(
+    ctx: &CpuExecutionContext,
     inputs: &[TensorRead<'_>],
     subscripts: &Subscripts,
     einsum_subscripts: &EinsumSubscripts,
@@ -871,7 +896,7 @@ fn execute_native_einsum_reads(
         // The plan reports `tenferro_einsum::Error`, so the session-entry
         // rejection is mapped here rather than through the tenferro-tensor-typed
         // session helper.
-        return default_context()
+        return ctx
             .with_session(|engine| plan.execute_read(inputs, engine))
             .map_err(|entry| {
                 anyhow::Error::new(entry).context("native einsum session entry failed")
@@ -880,6 +905,7 @@ fn execute_native_einsum_reads(
     }
 
     run_cached_native_einsum(
+        ctx,
         einsum_subscripts,
         |compiler| {
             compile_native_einsum_program(
@@ -956,7 +982,7 @@ pub fn dense_native_tensor_from_col_major_owned<T: TensorElement>(
 /// The returned input owns nothing: it is a [`TensorRead`] view over `data`, so
 /// a shared operand (a frame matrix, a weight matrix) reaches an einsum as a
 /// borrowed read instead of a full-size copy. Use it with
-/// [`einsum_native_tensor_reads`] on the compatibility frontend, or
+/// `einsum_native_tensor_reads` on the compatibility frontend, or
 /// [`NativeTensorReadInput::as_read`] to feed an explicit session's read route.
 ///
 /// # Arguments
@@ -978,14 +1004,17 @@ pub fn dense_native_tensor_from_col_major_owned<T: TensorElement>(
 ///
 /// ```
 /// use tensor4all_tensorbackend::{
-///     dense_native_tensor_read_input_from_col_major, einsum_native_tensor_reads,
+///     dense_native_tensor_read_input_from_col_major, einsum_native_tensor_reads_in, CpuBackend,
+///     CpuExecutionContext,
 /// };
 ///
+/// let ctx = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let lhs = [1.0_f64, 2.0, 3.0, 4.0];
 /// let rhs = [5.0_f64, 6.0];
 /// let lhs = dense_native_tensor_read_input_from_col_major(&lhs, &[2, 2])?;
 /// let rhs = dense_native_tensor_read_input_from_col_major(&rhs, &[2, 1])?;
-/// let product = einsum_native_tensor_reads(
+/// let product = einsum_native_tensor_reads_in(
+///     &ctx,
 ///     &[(&lhs, &[0, 1]), (&rhs, &[1, 2])],
 ///     &[0, 2],
 /// )?;
@@ -1276,6 +1305,7 @@ pub fn native_tensor_primal_to_dense_col_major<T: TensorElement>(
 /// # Ok(())
 /// # }
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn native_tensor_primal_to_diag<T: TensorElement>(
     tensor: &NativeTensor,
 ) -> std::result::Result<Vec<T>, BridgeError> {
@@ -1306,6 +1336,7 @@ pub fn native_tensor_primal_to_diag<T: TensorElement>(
 /// Fails with a `CpuExecutionContextError` when the default context's engine is
 /// already borrowed on this thread, or when the shape `logical_dims` and the
 /// element count of `tensor` do not match.
+#[cfg(feature = "global-defaults")]
 pub fn reshape_col_major_native_tensor(
     tensor: &NativeTensor,
     logical_dims: &[usize],
@@ -1319,6 +1350,7 @@ pub fn reshape_col_major_native_tensor(
 ///
 /// Returns a [`BridgeError`] when the context rejects the entry or when
 /// the QR factorization fails.
+#[cfg(feature = "global-defaults")]
 pub fn qr_native_tensor(
     tensor: &NativeTensor,
 ) -> std::result::Result<(NativeTensor, NativeTensor), BridgeError> {
@@ -1333,6 +1365,7 @@ pub fn qr_native_tensor(
 /// Fails with a `CpuExecutionContextError` when the default context's engine is
 /// already borrowed on this thread, or when the backend SVD reports a
 /// non-convergence failure.
+#[cfg(feature = "global-defaults")]
 pub fn svd_native_tensor(
     tensor: &NativeTensor,
 ) -> Result<(NativeTensor, NativeTensor, NativeTensor)> {
@@ -1347,6 +1380,7 @@ pub fn svd_native_tensor(
 /// Returns a [`BridgeError`] when the backend reduction fails, when the
 /// reduced result cannot read back its host slice, or when the scalar cannot
 /// be wrapped as a [`BackendScalar`].
+#[cfg(feature = "global-defaults")]
 pub fn sum_native_tensor(tensor: &NativeTensor) -> std::result::Result<BackendScalar, BridgeError> {
     let reduced = if tensor.shape().is_empty() {
         tensor
@@ -1374,6 +1408,7 @@ pub fn tangent_native_tensor(_tensor: &NativeTensor) -> Option<NativeTensor> {
 /// Returns a [`BridgeError`] when `tensor` or `scalar` cannot be promoted to a
 /// common dtype, when the dtype is integer, bool, or external, or when the
 /// backend rejects the scaled tensor.
+#[cfg(feature = "global-defaults")]
 pub fn scale_native_tensor(
     tensor: &NativeTensor,
     scalar: &BackendScalar,
@@ -1445,6 +1480,7 @@ pub fn scale_native_tensor(
 /// Returns a [`BridgeError`] when `lhs` and `rhs` have different shapes, when
 /// the operands cannot be promoted to a common dtype, when the dtype is
 /// integer, bool, or external, or when the backend rejects the result.
+#[cfg(feature = "global-defaults")]
 pub fn axpby_native_tensor(
     lhs: &NativeTensor,
     a: &BackendScalar,
@@ -1589,7 +1625,45 @@ pub fn axpby_native_tensor(
 /// # Ok(())
 /// # }
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn einsum_native_tensors_owned(
+    operands: Vec<(NativeTensor, Vec<usize>)>,
+    output_ids: &[usize],
+) -> Result<NativeTensor> {
+    einsum_native_tensors_owned_in(default_context(), operands, output_ids)
+}
+
+/// Execute a cached einsum over owned native tensors on a caller-supplied context.
+///
+/// Same kernel, validation and result as `einsum_native_tensors_owned`, entered
+/// through `ctx` instead of the process-global context.
+///
+/// # Errors
+///
+/// Returns an error under the same conditions as the process-global entry, or
+/// when `ctx` rejects the session entry.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{einsum_native_tensors_owned_in, CpuBackend, CpuExecutionContext};
+/// use tenferro::Tensor as NativeTensor;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let ctx = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let lhs = NativeTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])?;
+/// let rhs = NativeTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6])?;
+/// let result = einsum_native_tensors_owned_in(
+///     &ctx,
+///     vec![(lhs, vec![0, 1]), (rhs, vec![1, 2])],
+///     &[0, 2],
+/// )?;
+/// assert_eq!(result.as_slice::<f64>()?, &[3.0, 3.0, 3.0, 3.0]);
+/// # Ok(())
+/// # }
+/// ```
+pub fn einsum_native_tensors_owned_in(
+    ctx: &CpuExecutionContext,
+
     operands: Vec<(NativeTensor, Vec<usize>)>,
     output_ids: &[usize],
 ) -> Result<NativeTensor> {
@@ -1619,7 +1693,7 @@ pub fn einsum_native_tensors_owned(
         let tensor = if tensor.dtype() == target {
             tensor
         } else {
-            convert_tensor(&tensor, target)?
+            convert_tensor_in(ctx, &tensor, target)?
         };
         input_ids.push(checked_ids);
         converted.push(tensor);
@@ -1636,7 +1710,7 @@ pub fn einsum_native_tensors_owned(
         .collect::<Vec<_>>();
     maybe_trace_native_einsum_path(NativeEinsumPath::Owned, &trace_operands, &output_ids_u32);
     let started = Instant::now();
-    let result = cached_einsum_native_tensors(&input_refs, &subscripts)?;
+    let result = cached_einsum_native_tensors(ctx, &input_refs, &subscripts)?;
     record_native_einsum_profile(
         NativeEinsumPath::Owned,
         &trace_operands,
@@ -1683,7 +1757,41 @@ pub fn einsum_native_tensors_owned(
 /// # Ok(())
 /// # }
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn einsum_native_tensors(
+    operands: &[(&NativeTensor, &[usize])],
+    output_ids: &[usize],
+) -> Result<NativeTensor> {
+    einsum_native_tensors_in(default_context(), operands, output_ids)
+}
+
+/// Execute a cached einsum over borrowed native tensors on a caller-supplied context.
+///
+/// Same kernel, validation and result as `einsum_native_tensors`, entered
+/// through `ctx` instead of the process-global context.
+///
+/// # Errors
+///
+/// Returns an error under the same conditions as the process-global entry, or
+/// when `ctx` rejects the session entry.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{einsum_native_tensors_in, CpuBackend, CpuExecutionContext};
+/// use tenferro::Tensor as NativeTensor;
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let ctx = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let lhs = NativeTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])?;
+/// let rhs = NativeTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6])?;
+/// let result = einsum_native_tensors_in(&ctx, &[(&lhs, &[0, 1]), (&rhs, &[1, 2])], &[0, 2])?;
+/// assert_eq!(result.as_slice::<f64>()?, &[3.0, 3.0, 3.0, 3.0]);
+/// # Ok(())
+/// # }
+/// ```
+pub fn einsum_native_tensors_in(
+    ctx: &CpuExecutionContext,
+
     operands: &[(&NativeTensor, &[usize])],
     output_ids: &[usize],
 ) -> Result<NativeTensor> {
@@ -1715,7 +1823,7 @@ pub fn einsum_native_tensors(
         if tensor.dtype() == target {
             converted.push(None);
         } else {
-            converted.push(Some(convert_tensor(tensor, target)?));
+            converted.push(Some(convert_tensor_in(ctx, tensor, target)?));
             has_conversions = true;
         }
     }
@@ -1738,7 +1846,7 @@ pub fn einsum_native_tensors(
         .map(|(tensor, ids)| (*tensor, ids.as_slice()))
         .collect::<Vec<_>>();
     maybe_trace_native_einsum_path(trace_path, &trace_operands, &output_ids_u32);
-    let result = cached_einsum_native_tensors(&input_refs, &subscripts)?;
+    let result = cached_einsum_native_tensors(ctx, &input_refs, &subscripts)?;
     record_native_einsum_profile(
         trace_path,
         &trace_operands,
@@ -1806,6 +1914,7 @@ pub fn einsum_native_tensors(
 /// # Ok(())
 /// # }
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn einsum_native_subscripts(
     subscripts: &str,
     operands: &[&NativeTensor],
@@ -1828,13 +1937,14 @@ pub fn einsum_native_subscripts(
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tensorbackend::NativeEinsumPlan;
+/// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext, NativeEinsumPlan};
 /// use tenferro_tensor::{Tensor, TensorRead};
 /// # fn main() -> anyhow::Result<()> {
+/// let ctx = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
 /// let plan = NativeEinsumPlan::new("i->")?;
 /// for (data, expected) in [(vec![1.0_f64, 2.0], 3.0), (vec![1.0, 2.0, 3.0], 6.0)] {
 ///     let operand = Tensor::from_vec_col_major([data.len()], data)?;
-///     let sum = plan.execute_reads(&[TensorRead::from_tensor(&operand)])?;
+///     let sum = plan.execute_reads_in(&ctx, &[TensorRead::from_tensor(&operand)])?;
 ///     assert_eq!(sum.as_slice::<f64>()?, &[expected]);
 /// }
 /// # Ok(())
@@ -1891,7 +2001,44 @@ impl NativeEinsumPlan {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "global-defaults")]
     pub fn execute_reads(&self, inputs: &[TensorRead<'_>]) -> Result<NativeTensor> {
+        self.execute_reads_in(default_context(), inputs)
+    }
+
+    /// Execute the parsed expression on borrowed inputs through a caller-supplied context.
+    ///
+    /// Same kernel, validation and result as `NativeEinsumPlan::execute_reads`,
+    /// entered through `ctx` instead of the process-global context.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error under the same conditions as `execute_reads`, or when
+    /// `ctx` rejects the session entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext, NativeEinsumPlan};
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    /// # fn main() -> anyhow::Result<()> {
+    /// let ctx = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// let plan = NativeEinsumPlan::new("i,i->")?;
+    /// let lhs = Tensor::from_vec_col_major([2], vec![1.0_f64, 2.0])?;
+    /// let rhs = Tensor::from_vec_col_major([2], vec![3.0_f64, 4.0])?;
+    /// let dot = plan.execute_reads_in(
+    ///     &ctx,
+    ///     &[TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+    /// )?;
+    /// assert_eq!(dot.as_slice::<f64>()?, &[11.0]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn execute_reads_in(
+        &self,
+        ctx: &CpuExecutionContext,
+        inputs: &[TensorRead<'_>],
+    ) -> Result<NativeTensor> {
         ensure!(
             self.spec.subscripts.inputs.len() == inputs.len(),
             "einsum subscripts describe {} input term(s) but {} operand(s) were given",
@@ -1910,7 +2057,12 @@ impl NativeEinsumPlan {
                 tensor.shape()
             );
         }
-        execute_native_einsum_reads(inputs, &self.spec.subscripts, &self.spec.einsum_subscripts)
+        execute_native_einsum_reads(
+            ctx,
+            inputs,
+            &self.spec.subscripts,
+            &self.spec.einsum_subscripts,
+        )
     }
 }
 
@@ -1924,7 +2076,45 @@ impl NativeEinsumPlan {
 /// Returns an error when `operands` is empty, when a tensor rank does not
 /// match its id list length, when a label is out of bounds for the supported
 /// range, or when the backend einsum fails.
+#[cfg(feature = "global-defaults")]
 pub fn einsum_native_tensor_reads(
+    operands: &[(&NativeTensorReadInput<'_>, &[usize])],
+    output_ids: &[usize],
+) -> Result<NativeTensor> {
+    einsum_native_tensor_reads_in(default_context(), operands, output_ids)
+}
+
+/// Execute a cached einsum over borrowed read inputs on a caller-supplied context.
+///
+/// Same kernel, validation and result as `einsum_native_tensor_reads`, entered
+/// through `ctx` instead of the process-global context.
+///
+/// # Errors
+///
+/// Returns an error under the same conditions as the process-global entry, or
+/// when `ctx` rejects the session entry.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{
+///     dense_native_tensor_read_input_from_col_major, einsum_native_tensor_reads_in, CpuBackend,
+///     CpuExecutionContext,
+/// };
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let ctx = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let a = [1.0_f64, 2.0];
+/// let b = [3.0_f64, 4.0];
+/// let a = dense_native_tensor_read_input_from_col_major(&a, &[2])?;
+/// let b = dense_native_tensor_read_input_from_col_major(&b, &[2])?;
+/// let dot = einsum_native_tensor_reads_in(&ctx, &[(&a, &[0]), (&b, &[0])], &[])?;
+/// assert_eq!(dot.as_slice::<f64>()?, &[11.0]);
+/// # Ok(())
+/// # }
+/// ```
+pub fn einsum_native_tensor_reads_in(
+    ctx: &CpuExecutionContext,
+
     operands: &[(&NativeTensorReadInput<'_>, &[usize])],
     output_ids: &[usize],
 ) -> Result<NativeTensor> {
@@ -1952,7 +2142,7 @@ pub fn einsum_native_tensor_reads(
         inputs: input_ids,
         output: output_ids_u32,
     };
-    cached_einsum_native_reads(&read_inputs, &subscripts)
+    cached_einsum_native_reads(ctx, &read_inputs, &subscripts)
 }
 
 /// Permute axes of a native tensor.
@@ -1960,6 +2150,7 @@ pub fn einsum_native_tensor_reads(
 ///
 /// Returns a [`BridgeError`] when `perm` is not a permutation of `tensor`'s
 /// axes or when the backend transpose fails.
+#[cfg(feature = "global-defaults")]
 pub fn permute_native_tensor(
     tensor: &NativeTensor,
     perm: &[usize],
@@ -1975,6 +2166,7 @@ pub fn permute_native_tensor(
 /// Returns an error when `axes_a`/`axes_b` are out of bounds or have differing
 /// lengths, when the contracted dimensions do not match, or when the backend
 /// einsum fails.
+#[cfg(feature = "global-defaults")]
 pub fn contract_native_tensor(
     lhs: &NativeTensor,
     axes_a: &[usize],
@@ -1997,6 +2189,7 @@ pub fn contract_native_tensor(
 /// # Errors
 ///
 /// Returns a [`BridgeError`] when the underlying einsum contraction fails.
+#[cfg(feature = "global-defaults")]
 pub fn outer_product_native_tensor(
     lhs: &NativeTensor,
     rhs: &NativeTensor,
@@ -2044,6 +2237,7 @@ pub fn conj_native_tensor(tensor: &NativeTensor) -> std::result::Result<NativeTe
 ///
 /// Returns a [`BridgeError`] when the storage-to-native conversion, the
 /// permutation, or the native-to-storage conversion fails.
+#[cfg(feature = "global-defaults")]
 pub fn permute_storage_native(
     storage: &Storage,
     logical_dims: &[usize],
@@ -2059,6 +2253,7 @@ pub fn permute_storage_native(
 ///
 /// Returns a [`BridgeError`] when either storage-to-native conversion, the
 /// contraction, or the native-to-storage conversion fails.
+#[cfg(feature = "global-defaults")]
 pub fn contract_storage_native(
     storage_a: &Storage,
     dims_a: &[usize],
@@ -2079,6 +2274,7 @@ pub fn contract_storage_native(
 ///
 /// Returns a [`BridgeError`] when either storage-to-native conversion, the
 /// outer product, or the native-to-storage conversion fails.
+#[cfg(feature = "global-defaults")]
 pub fn outer_product_storage_native(
     lhs: &Storage,
     lhs_dims: &[usize],
@@ -2097,6 +2293,7 @@ pub fn outer_product_storage_native(
 ///
 /// Returns a [`BridgeError`] when the storage-to-native conversion, the
 /// scaling, or the native-to-storage conversion fails.
+#[cfg(feature = "global-defaults")]
 pub fn scale_storage_native(
     storage: &Storage,
     logical_dims: &[usize],
@@ -2112,6 +2309,7 @@ pub fn scale_storage_native(
 ///
 /// Returns a [`BridgeError`] when either storage-to-native conversion, the
 /// axpby, or the native-to-storage conversion fails.
+#[cfg(feature = "global-defaults")]
 pub fn axpby_storage_native(
     lhs: &Storage,
     lhs_dims: &[usize],
@@ -2126,5 +2324,5 @@ pub fn axpby_storage_native(
     native_tensor_primal_to_storage(&combined)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "global-defaults"))]
 mod tests;

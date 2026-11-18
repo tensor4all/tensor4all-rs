@@ -383,6 +383,19 @@ and splits `mat_mul` (which already has `mat_mul_in`). Stage D2 deletes the `Non
 and with it core's only use of `with_runtime_engine`. Only after both does stage D4 drop
 the requirement.
 
+**Status (#1377 stage 1).** The `explicit-context` feature of `tensor4all-tensorbackend` now
+compiles `matrix`, `storage`, `tensor_element`, `backend`, `any_scalar` and `tenferro_bridge`,
+and the six `explicit::Session` linalg methods; only the functions that resolve the
+process-global context stay behind `global-defaults`. `tensorbackend`'s default features are
+`explicit-context` plus the platform provider. The two internal global users are threaded:
+`hermitian_eigendecomposition` and the bridge einsum core take a caller `CpuExecutionContext`
+(`hermitian_eigendecomposition_in`, `einsum_native_tensors_in`, `einsum_native_tensors_owned_in`,
+`einsum_native_tensor_reads_in`, `NativeEinsumPlan::execute_reads_in`). `core`'s
+`global-defaults` pin is **deliberately kept**: dropping it was tried and fails to compile
+because core's ungated code calls `mat_mul`, `solve_matrix`, `capped_full_piv_lu`,
+`default_eager_ctx`, `with_runtime_engine`, `src_error_estimate` and
+`native_tensor_primal_to_diag`, so it stays a D4 step after B2 and D2 as described above.
+
 ### 4.2 `treersi` enables `global-defaults` by default
 
 `crates/tensor4all-treersi/Cargo.toml` has `default = ["tenferro-cpu-platform", "global-defaults"]`,

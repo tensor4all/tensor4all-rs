@@ -23,8 +23,9 @@ use anyhow::{ensure, Context, Result};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 use std::ops::{Index, IndexMut};
+use std::sync::Arc;
 use tenferro::{DType, Tensor, TensorScalar, TypedTensor};
-use tenferro_ad::EagerTensor;
+use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_linalg::EagerSessionLinalgExt;
 
 /// A dense 2D matrix in column-major layout.
@@ -184,7 +185,7 @@ impl From<anyhow::Error> for MatrixMulError {
     }
 }
 
-/// Error returned by [`lowest_hermitian_eigenpair`].
+/// Error returned by `lowest_hermitian_eigenpair`.
 ///
 /// The eigensolver is intended for small Rayleigh-Ritz projected matrices; it validates shape and Hermitian structure before calling the backend Hermitian
 /// eigendecomposition, symmetrizing only roundoff that is within the requested
@@ -264,7 +265,7 @@ pub enum HermitianEigenError {
     },
 }
 
-/// Small Hermitian eigenpair returned by [`lowest_hermitian_eigenpair`].
+/// Small Hermitian eigenpair returned by `lowest_hermitian_eigenpair`.
 ///
 /// `eigenvector` stores the Ritz vector coefficients in ordinary vector order.
 /// It has length equal to the input matrix dimension and is normalized according
@@ -286,10 +287,13 @@ pub struct HermitianEigenpair<T> {
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tensorbackend::{hermitian_eigendecomposition, Matrix};
+/// use tensor4all_tensorbackend::{
+///     hermitian_eigendecomposition_in, CpuBackend, CpuExecutionContext, Matrix,
+/// };
 ///
+/// let ctx = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
 /// let matrix = Matrix::from_col_major_vec(2, 2, vec![1.0, 0.0, 0.0, 2.0]);
-/// let decomp = hermitian_eigendecomposition(&matrix, 1.0e-12).unwrap();
+/// let decomp = hermitian_eigendecomposition_in(&ctx, &matrix, 1.0e-12).unwrap();
 /// assert_eq!(decomp.eigenvalues, vec![1.0, 2.0]);
 /// assert_eq!(decomp.eigenvectors.nrows(), 2);
 /// assert_eq!(decomp.eigenvectors.ncols(), 2);
@@ -302,7 +306,7 @@ pub struct HermitianEigendecomposition<T> {
     pub eigenvectors: Matrix<T>,
 }
 
-/// Scalar types supported by [`lowest_hermitian_eigenpair`].
+/// Scalar types supported by `lowest_hermitian_eigenpair`.
 ///
 /// The current backend path is used for `f64` and `Complex64`, which are the
 /// scalar types needed by tensor4all's Hermitian Krylov and DMRG algorithms.
@@ -536,6 +540,7 @@ impl<T> Matrix<T> {
     /// # Panics
     /// Panics in debug builds if `right`'s row count differs from `self`'s.
     /// Callers must guarantee matching row counts.
+    #[cfg(feature = "global-defaults")]
     pub(crate) fn append_columns(
         &mut self,
         right: &Matrix<T>,
@@ -733,6 +738,7 @@ impl<T> Matrix<T> {
 /// assert!((pair.eigenvalue - 1.0).abs() < 1.0e-12);
 /// assert_eq!(pair.eigenvector.len(), 2);
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn lowest_hermitian_eigenpair<T>(
     matrix: &Matrix<T>,
     hermitian_tol: f64,
@@ -740,8 +746,49 @@ pub fn lowest_hermitian_eigenpair<T>(
 where
     T: HermitianEigenScalar,
 {
-    let decomp = hermitian_eigendecomposition(matrix, hermitian_tol)?;
+    lowest_from_decomposition(hermitian_eigendecomposition(matrix, hermitian_tol)?)
+}
 
+/// Compute the lowest Hermitian eigenpair on a caller-supplied context.
+///
+/// Same validation, kernel and result as `lowest_hermitian_eigenpair`, run in
+/// `ctx` instead of the process-global context.
+///
+/// # Errors
+///
+/// Returns [`HermitianEigenError`] under the same conditions as
+/// `lowest_hermitian_eigenpair`, or when `ctx` cannot provide its eager
+/// runtime or session.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{
+///     lowest_hermitian_eigenpair_in, CpuBackend, CpuExecutionContext, Matrix,
+/// };
+///
+/// let ctx = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
+/// let matrix = Matrix::from_col_major_vec(2, 2, vec![2.0_f64, 1.0, 1.0, 2.0]);
+/// let pair = lowest_hermitian_eigenpair_in(&ctx, &matrix, 1.0e-12).unwrap();
+/// assert!((pair.eigenvalue - 1.0).abs() < 1.0e-12);
+/// ```
+pub fn lowest_hermitian_eigenpair_in<T>(
+    ctx: &crate::context::CpuExecutionContext,
+    matrix: &Matrix<T>,
+    hermitian_tol: f64,
+) -> std::result::Result<HermitianEigenpair<T>, HermitianEigenError>
+where
+    T: HermitianEigenScalar,
+{
+    lowest_from_decomposition(hermitian_eigendecomposition_in(ctx, matrix, hermitian_tol)?)
+}
+
+fn lowest_from_decomposition<T>(
+    decomp: HermitianEigendecomposition<T>,
+) -> std::result::Result<HermitianEigenpair<T>, HermitianEigenError>
+where
+    T: HermitianEigenScalar,
+{
     let (min_col, eigenvalue) = decomp
         .eigenvalues
         .iter()
@@ -793,7 +840,74 @@ where
 /// assert_eq!(decomp.eigenvalues, vec![3.0, 5.0]);
 /// assert_eq!(decomp.eigenvectors.as_col_major_slice().len(), 4);
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn hermitian_eigendecomposition<T>(
+    matrix: &Matrix<T>,
+    hermitian_tol: f64,
+) -> std::result::Result<HermitianEigendecomposition<T>, HermitianEigenError>
+where
+    T: HermitianEigenScalar,
+{
+    hermitian_eigendecomposition_with(
+        crate::context::default_context(),
+        || {
+            crate::default_eager_ctx().map_err(|source| HermitianEigenError::Backend {
+                source: Box::new(source),
+            })
+        },
+        matrix,
+        hermitian_tol,
+    )
+}
+
+/// Compute all eigenpairs of a small Hermitian projected matrix on a caller-supplied context.
+///
+/// Same validation, kernel and result as `hermitian_eigendecomposition`, run in
+/// the engine and eager runtime of `ctx` instead of the process-global context.
+///
+/// # Errors
+///
+/// Returns [`HermitianEigenError`] under the same conditions as
+/// `hermitian_eigendecomposition`, or when `ctx` cannot provide its eager
+/// runtime or session.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{
+///     hermitian_eigendecomposition_in, CpuBackend, CpuExecutionContext, Matrix,
+/// };
+///
+/// let ctx = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
+/// let matrix = Matrix::from_col_major_vec(2, 2, vec![3.0, 0.0, 0.0, 5.0]);
+/// let decomp = hermitian_eigendecomposition_in(&ctx, &matrix, 1.0e-12).unwrap();
+/// assert_eq!(decomp.eigenvalues, vec![3.0, 5.0]);
+/// ```
+pub fn hermitian_eigendecomposition_in<T>(
+    ctx: &crate::context::CpuExecutionContext,
+    matrix: &Matrix<T>,
+    hermitian_tol: f64,
+) -> std::result::Result<HermitianEigendecomposition<T>, HermitianEigenError>
+where
+    T: HermitianEigenScalar,
+{
+    hermitian_eigendecomposition_with(
+        ctx,
+        || {
+            ctx.eager_runtime()
+                .map_err(|source| HermitianEigenError::Backend {
+                    source: Box::new(source),
+                })
+        },
+        matrix,
+        hermitian_tol,
+    )
+}
+
+/// Shared body: `eager_runtime` resolves the eager runtime of `ctx` after validation.
+fn hermitian_eigendecomposition_with<T>(
+    ctx: &crate::context::CpuExecutionContext,
+    eager_runtime: impl FnOnce() -> std::result::Result<Arc<EagerRuntime>, HermitianEigenError>,
     matrix: &Matrix<T>,
     hermitian_tol: f64,
 ) -> std::result::Result<HermitianEigendecomposition<T>, HermitianEigenError>
@@ -809,17 +923,15 @@ where
                 source: Box::new(source),
             }
         })?;
-    let eager_ctx = crate::default_eager_ctx().map_err(|source| HermitianEigenError::Backend {
-        source: Box::new(source),
-    })?;
+    let eager_ctx = eager_runtime()?;
     let input = EagerTensor::from_tensor_in(input_tensor, eager_ctx.clone()).map_err(|source| {
         HermitianEigenError::Backend {
             source: Box::new(source),
         }
     })?;
-    // One entry on the process-global engine: the eager session runs the
+    // One entry on the context's engine: the eager session runs the
     // decomposition and the same engine materializes both results.
-    let (values, vectors) = crate::context::default_context()
+    let (values, vectors) = ctx
         .with_session(|engine| {
             let (values, vectors) =
                 eager_ctx.with_eager_session(engine, |session| session.eigh(&input))?;
@@ -891,6 +1003,7 @@ where
 /// assert!((column[0] - expected).norm() < 1.0e-12);
 /// assert!(column[1].norm() < 1.0e-12);
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn hermitian_exponential_first_column<T>(
     matrix: &Matrix<T>,
     exponent: Complex64,
@@ -899,7 +1012,65 @@ pub fn hermitian_exponential_first_column<T>(
 where
     T: HermitianEigenScalar,
 {
-    let decomp = hermitian_eigendecomposition(matrix, hermitian_tol)?;
+    exponential_first_column_from_decomposition(
+        hermitian_eigendecomposition(matrix, hermitian_tol)?,
+        exponent,
+    )
+}
+
+/// Compute the first column of `exp(exponent * A)` on a caller-supplied context.
+///
+/// Same validation, kernel and result as `hermitian_exponential_first_column`,
+/// run in `ctx` instead of the process-global context.
+///
+/// # Errors
+///
+/// Returns [`HermitianEigenError`] under the same conditions as
+/// `hermitian_exponential_first_column`, or when `ctx` cannot provide its
+/// eager runtime or session.
+///
+/// # Examples
+///
+/// ```
+/// use num_complex::Complex64;
+/// use tensor4all_tensorbackend::{
+///     hermitian_exponential_first_column_in, CpuBackend, CpuExecutionContext, Matrix,
+/// };
+///
+/// let ctx = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
+/// let matrix = Matrix::from_col_major_vec(2, 2, vec![1.0, 0.0, 0.0, 2.0]);
+/// let column = hermitian_exponential_first_column_in(
+///     &ctx,
+///     &matrix,
+///     Complex64::new(0.0, -0.5),
+///     1.0e-12,
+/// )
+/// .unwrap();
+/// let expected = Complex64::new(0.5_f64.cos(), -0.5_f64.sin());
+/// assert!((column[0] - expected).norm() < 1.0e-12);
+/// ```
+pub fn hermitian_exponential_first_column_in<T>(
+    ctx: &crate::context::CpuExecutionContext,
+    matrix: &Matrix<T>,
+    exponent: Complex64,
+    hermitian_tol: f64,
+) -> std::result::Result<Vec<Complex64>, HermitianEigenError>
+where
+    T: HermitianEigenScalar,
+{
+    exponential_first_column_from_decomposition(
+        hermitian_eigendecomposition_in(ctx, matrix, hermitian_tol)?,
+        exponent,
+    )
+}
+
+fn exponential_first_column_from_decomposition<T>(
+    decomp: HermitianEigendecomposition<T>,
+    exponent: Complex64,
+) -> std::result::Result<Vec<Complex64>, HermitianEigenError>
+where
+    T: HermitianEigenScalar,
+{
     let n = decomp.eigenvalues.len();
     let vectors = decomp.eigenvectors.as_col_major_slice();
     let mut result = vec![Complex64::new(0.0, 0.0); n];
@@ -1528,9 +1699,11 @@ pub fn submatrix_argmax<T: MatrixScalar>(
 /// (f64, f32, Complex64, Complex32). This trait is sealed — external
 /// types cannot implement it.
 pub trait BlasMul: Sized {
+    #[cfg(feature = "global-defaults")]
     #[doc(hidden)]
     fn blas_mat_mul(a: &Matrix<Self>, b: &Matrix<Self>) -> Result<Matrix<Self>>;
 
+    #[cfg(feature = "global-defaults")]
     #[doc(hidden)]
     fn blas_mat_mul_owned(a: Matrix<Self>, b: Matrix<Self>) -> Result<Matrix<Self>>;
 
@@ -1547,6 +1720,7 @@ pub trait BlasMul: Sized {
 }
 
 /// Multiply an owned operand pair on the process-global context.
+#[cfg(feature = "global-defaults")]
 fn dot_general_matrices<T>(
     a_tensor: Tensor,
     b_tensor: Tensor,
@@ -1634,6 +1808,7 @@ macro_rules! impl_blas_mul {
     ($($t:ty),*) => {
         $(
         impl BlasMul for $t {
+            #[cfg(feature = "global-defaults")]
             fn blas_mat_mul(a: &Matrix<Self>, b: &Matrix<Self>) -> Result<Matrix<Self>> {
                 let m = a.nrows();
                 let k = a.ncols();
@@ -1661,6 +1836,7 @@ macro_rules! impl_blas_mul {
                 dot_general_matrices_from::<$t>(c, m, n, expected_len)
             }
 
+            #[cfg(feature = "global-defaults")]
             fn blas_mat_mul_owned(a: Matrix<Self>, b: Matrix<Self>) -> Result<Matrix<Self>> {
                 let m = a.nrows();
                 let k = a.ncols();
@@ -1792,6 +1968,7 @@ impl MatrixScalar for Complex32 {
 /// assert!((c[[1, 0]] - 43.0).abs() < 1e-10);
 /// assert!((c[[1, 1]] - 50.0).abs() < 1e-10);
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn mat_mul<T: BlasMul>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>, MatrixMulError> {
     T::blas_mat_mul(a, b).map_err(MatrixMulError::from)
 }
@@ -1818,13 +1995,14 @@ pub fn mat_mul<T: BlasMul>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>, Ma
 /// let c = mat_mul_owned(a, b).unwrap();
 /// assert_eq!(c.as_col_major_slice(), &[19.0, 43.0, 22.0, 50.0]);
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn mat_mul_owned<T: BlasMul>(a: Matrix<T>, b: Matrix<T>) -> Result<Matrix<T>, MatrixMulError> {
     T::blas_mat_mul_owned(a, b).map_err(MatrixMulError::from)
 }
 
 /// Matrix multiplication `A * B` on a caller-held engine.
 ///
-/// Same kernel, shape validation and result container as [`mat_mul`], entered through
+/// Same kernel, shape validation and result container as `mat_mul`, entered through
 /// the given session instead of the process-global one.
 ///
 /// # Errors
@@ -1866,6 +2044,7 @@ pub fn mat_mul_in<T: BlasMul>(
 /// let out = batched_mat_mul_same_shape(1, 2, 2, 2, &a, &b).unwrap();
 /// assert_eq!(out, vec![19.0, 43.0, 22.0, 50.0]);
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn batched_mat_mul_same_shape<T>(
     batch: usize,
     m: usize,
@@ -1890,6 +2069,7 @@ where
 ///
 /// Returns an error if the input buffer lengths do not match the declared
 /// shapes or if the backend rejects the batched GEMM.
+#[cfg(feature = "global-defaults")]
 pub fn batched_mat_mul_same_shape_owned<T>(
     batch: usize,
     m: usize,
@@ -1942,6 +2122,7 @@ where
     Ok(data)
 }
 
+#[cfg(feature = "global-defaults")]
 fn validate_batched_mat_mul_inputs(
     batch: usize,
     m: usize,
@@ -1973,5 +2154,5 @@ fn validate_batched_mat_mul_inputs(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "global-defaults"))]
 mod tests;

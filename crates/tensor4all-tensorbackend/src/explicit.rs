@@ -847,17 +847,17 @@ impl<'session> Session<'session> {
 
     /// Solve `A X = B` for column-major matrices on this session.
     ///
-    /// Same kernel and validation as [`solve_matrix`](crate::solve_matrix), entered
+    /// Same kernel and validation as `solve_matrix`, entered
     /// through this session instead of the process-global one. `f64` and `Complex64`
     /// agree with that entry bit for bit; `f32` and `Complex32` are solved in their own
-    /// precision here, while [`solve_matrix`](crate::solve_matrix) promotes them to
+    /// precision here, while `solve_matrix` promotes them to
     /// `f64` / `Complex64` and narrows the result, so the narrow types can differ in
     /// the last bits (see [`solve_matrix_in`](crate::solve_matrix_in)).
     ///
     /// # Errors
     ///
     /// Returns [`BackendLinalgError`](crate::BackendLinalgError) under the same
-    /// conditions as [`solve_matrix`](crate::solve_matrix).
+    /// conditions as `solve_matrix`.
     ///
     /// # Examples
     ///
@@ -872,7 +872,6 @@ impl<'session> Session<'session> {
     /// assert_eq!(x.as_col_major_slice(), &[3.0, 2.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    #[cfg(feature = "global-defaults")]
     pub fn solve_matrix<T>(
         &mut self,
         a: &crate::matrix::Matrix<T>,
@@ -888,7 +887,7 @@ impl<'session> Session<'session> {
     /// Solve a triangular system for column-major matrices on this session.
     ///
     /// Same kernel, conversion and validation as
-    /// [`triangular_solve_matrix`](crate::triangular_solve_matrix), entered through this
+    /// `triangular_solve_matrix`, entered through this
     /// session instead of the process-global one: `f64` and `Complex64` are solved
     /// directly, `f32` and `Complex32` are promoted to `f64` / `Complex64` and the
     /// result narrowed, so both routes return bitwise identical results. `left_side`,
@@ -897,7 +896,7 @@ impl<'session> Session<'session> {
     /// # Errors
     ///
     /// Returns [`BackendLinalgError`](crate::BackendLinalgError) under the same
-    /// conditions as [`triangular_solve_matrix`](crate::triangular_solve_matrix).
+    /// conditions as `triangular_solve_matrix`.
     ///
     /// # Examples
     ///
@@ -914,7 +913,6 @@ impl<'session> Session<'session> {
     /// assert_eq!(x.as_col_major_slice(), &[2.0, 0.5]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    #[cfg(feature = "global-defaults")]
     #[allow(clippy::too_many_arguments)]
     pub fn triangular_solve_matrix<T>(
         &mut self,
@@ -942,13 +940,13 @@ impl<'session> Session<'session> {
     /// Complete-pivoting LU decomposition of a column-major matrix on this session.
     ///
     /// Same kernel and conversion as
-    /// [`full_piv_lu_matrix`](crate::full_piv_lu_matrix), entered through this session
+    /// `full_piv_lu_matrix`, entered through this session
     /// instead of the process-global one.
     ///
     /// # Errors
     ///
     /// Returns [`BackendLinalgError`](crate::BackendLinalgError) under the same
-    /// conditions as [`full_piv_lu_matrix`](crate::full_piv_lu_matrix).
+    /// conditions as `full_piv_lu_matrix`.
     ///
     /// # Examples
     ///
@@ -963,7 +961,6 @@ impl<'session> Session<'session> {
     /// assert_eq!(factors.q.ncols(), 2);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    #[cfg(feature = "global-defaults")]
     pub fn full_piv_lu_matrix<T>(
         &mut self,
         a: &crate::matrix::Matrix<T>,
@@ -976,13 +973,13 @@ impl<'session> Session<'session> {
 
     /// Thin/economy QR of a typed tensor on this session.
     ///
-    /// Same kernel and conversion as [`qr_backend`](crate::qr_backend), entered through
+    /// Same kernel and conversion as `qr_backend`, entered through
     /// this session instead of the process-global one.
     ///
     /// # Errors
     ///
     /// Returns [`BackendLinalgError`](crate::BackendLinalgError) under the same
-    /// conditions as [`qr_backend`](crate::qr_backend).
+    /// conditions as `qr_backend`.
     ///
     /// # Examples
     ///
@@ -998,7 +995,6 @@ impl<'session> Session<'session> {
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    #[cfg(feature = "global-defaults")]
     pub fn qr_backend<T>(
         &mut self,
         a: tenferro::TypedTensor<T>,
@@ -1027,13 +1023,13 @@ impl<'session> Session<'session> {
 
     /// Thin/economy SVD of a typed tensor on this session.
     ///
-    /// Same kernel and conversion as [`svd_backend`](crate::svd_backend), entered through
+    /// Same kernel and conversion as `svd_backend`, entered through
     /// this session instead of the process-global one.
     ///
     /// # Errors
     ///
     /// Returns [`BackendLinalgError`](crate::BackendLinalgError) under the same
-    /// conditions as [`svd_backend`](crate::svd_backend).
+    /// conditions as `svd_backend`.
     ///
     /// # Examples
     ///
@@ -1048,7 +1044,6 @@ impl<'session> Session<'session> {
     /// assert_eq!(factors.s().as_slice()?, &[3.0, 2.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    #[cfg(feature = "global-defaults")]
     pub fn svd_backend<T>(
         &mut self,
         a: &tenferro::TypedTensor<T>,
@@ -1079,7 +1074,7 @@ impl<'session> Session<'session> {
     /// Matrix multiplication `A * B` on this session.
     ///
     /// The same kernel and shape validation as
-    /// [`mat_mul`](crate::mat_mul), entered through this session instead of the
+    /// `mat_mul`, entered through this session instead of the
     /// process-global one, and returning the shared
     /// [`Matrix`](crate::Matrix) container.
     ///
@@ -1101,7 +1096,6 @@ impl<'session> Session<'session> {
     /// assert_eq!(c.as_col_major_slice(), &[1.0, 2.0, 3.0, 4.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    #[cfg(feature = "global-defaults")]
     pub fn mat_mul<T: crate::matrix::BlasMul>(
         &mut self,
         a: &crate::matrix::Matrix<T>,
