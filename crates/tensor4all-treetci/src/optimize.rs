@@ -40,20 +40,33 @@ pub enum TreeTciTermination {
     ///
     /// Errors use the running maximum sample magnitude as their scale only
     /// when `scale_tolerance` is enabled.
-    /// Disabled searches and the search skipped on the final iteration
-    /// contribute zero pivots; this reason does not certify an exhaustive
-    /// residual check or a global search after that final iteration.
+    /// Fresh discovery is skipped on the final iteration, but enabled
+    /// known-sample validation still runs there. This is a sampled criterion,
+    /// not an exhaustive bound over the full index domain.
     Converged,
     /// The maximum rank reached `max_bond_dim` in three trailing iterations.
     ///
-    /// This condition is checked before global search and convergence, so
-    /// it takes precedence even when the sampled error is below tolerance.
-    /// It does not imply that every edge has reached the cap.
+    /// This condition takes precedence over convergence even when the error
+    /// is below tolerance. An enabled validation that still measures an error
+    /// at or above tolerance returns `SampledErrorFloor { at_bond_cap: true }`
+    /// instead. It does not imply that every edge has reached the cap.
     MaxBondDimension,
     /// `max_iter` iterations completed without either earlier stopping condition.
     ///
     /// A low error in the last iteration alone is insufficient for convergence.
     MaxIterations,
+    /// Known sampled residuals remain at or above tolerance after local truncation
+    /// recovery, or a saturated bond cap prevents resolving a measured residual.
+    /// The final entry of `errors` records this sampled floor on the configured
+    /// scale. This is an observed stall, not a bound or proof of optimality.
+    SampledErrorFloor {
+        /// Whether the caller's bond cap prevented further rank growth.
+        at_bond_cap: bool,
+    },
+    /// The run could not retain a new oracle sample within
+    /// `TreeTciOptions::validation_cache_bytes`. Increase that budget and retry;
+    /// incomplete validation never counts as convergence.
+    ValidationBudgetExceeded,
     /// The convergence criterion of [`TreeTciTermination::Converged`] held on
     /// the recorded errors, but at least one edge could not measure its bond
     /// error in its most recent update.
@@ -108,8 +121,10 @@ pub struct TreeTciOptimizationResult {
     /// Maximum sampled local/global residual after each iteration, normalized when requested.
     ///
     /// Has the same length as `ranks`. Each value combines local bond
-    /// residuals with residuals measured by the global search; both are
-    /// sampled, so these are diagnostics, not bounds on the full-network error.
+    /// residuals, the current approximation's residual at every retained oracle
+    /// sample from this call, and new search observations. Known-sample
+    /// validation also runs on final and capped sweeps. These are sampled
+    /// diagnostics, not bounds on the full-network error.
     pub errors: Vec<f64>,
     /// The stopping condition evaluated by this call's optimization loop.
     pub termination: TreeTciTermination,
@@ -136,6 +151,7 @@ pub struct TreeTciOptimizationResult {
 /// | `max_nglobal_pivot`       | `5`           | Global pivots added per iteration                    |
 /// | `tol_margin_global_search`| `10.0`        | Global pivot discovery margin over `abs_tol`        |
 /// | `seed`                    | `None`        | RNG seed for the global pivot search                 |
+/// | `validation_cache_bytes`  | 32 MiB        | Budget for replaying known oracle samples            |
 ///
 /// # Examples
 ///
@@ -150,6 +166,7 @@ pub struct TreeTciOptimizationResult {
 /// assert!(opts.scale_tolerance);
 /// assert!(opts.enable_global_pivots);
 /// assert!(opts.global_search_starts.is_empty());
+/// assert_eq!(opts.validation_cache_bytes, 32 * 1024 * 1024);
 ///
 /// // Custom options for high-precision work
 /// let opts = TreeTciOptions {
@@ -164,6 +181,7 @@ pub struct TreeTciOptimizationResult {
 ///     tol_margin_global_search: 5.0,
 ///     seed: Some(42),
 ///     evaluation_cache_bytes: None,
+///     validation_cache_bytes: 32 * 1024 * 1024,
 /// };
 /// assert!((opts.tolerance - 1e-12).abs() < 1e-20);
 /// assert_eq!(opts.max_iter, 50);
@@ -181,6 +199,11 @@ pub struct TreeTciOptions {
     /// When `scale_tolerance` is true, this error is divided by the running
     /// maximum observed sample magnitude, so the stopping threshold is
     /// `tolerance * max_sample_value`. Recommended range: `1e-6` to `1e-12`.
+    /// With validation enabled, the initial local absolute truncation budget
+    /// is divided by the number of tree edges. A stable measured violation
+    /// triggers recovery without absolute truncation; the numerical relative
+    /// floor and `max_bond_dim` still apply. These local budgets are separate
+    /// from the unchanged stopping threshold and do not certify global error.
     /// Default: `1e-8`.
     pub tolerance: f64,
 
@@ -218,21 +241,26 @@ pub struct TreeTciOptions {
     /// `|f(idx) - tt(idx)|` is large, injecting the best finds via
     /// [`TreeTCI2::add_global_pivots`](crate::TreeTCI2::add_global_pivots).
     /// This recovers separated features that local pivot updates miss when
-    /// the initial pivots sit in a single basin. The search is skipped after
-    /// the `max_iter`-th sweep and after the sweep at which the loop stops
-    /// because the bond dimension saturated at `max_bond_dim`, so every
-    /// injected pivot is processed by a later sweep. Default: `true`.
+    /// the initial pivots sit in a single basin. Known samples are retained
+    /// within `validation_cache_bytes` and checked on every completed sweep.
+    /// Fresh discovery and injection are skipped on final or capped sweeps;
+    /// known-sample validation still runs. Disabling this option also disables
+    /// that history and its validation. Default: `true`.
     pub enable_global_pivots: bool,
 
     /// Number of random starting points for the global pivot search.
     ///
     /// Each starting point is locally optimized over all site coordinates.
     /// Larger values explore the index space more thoroughly at the cost of
-    /// more evaluations. At dimension-one endpoints, a search that finds no
-    /// pivot also uses up to this many retained-pair walks and this many
-    /// subtree-anchored restarts to check observed support. Zero disables
-    /// those confirmation walks. Drawn after [`Self::global_search_starts`]. Ignored
-    /// when `enable_global_pivots` is `false`. Default: `5`.
+    /// more evaluations. If no pivot qualifies and this is positive, the
+    /// finder also walks every distinct retained full point across all edges.
+    /// If none qualifies,
+    /// each edge with a dimension-one endpoint gets up to `nsearch` restarts
+    /// in each direction, preserving the other half of that retained point.
+    /// Zero disables fresh random and confirmation starts; enabled validation
+    /// of known samples still runs.
+    /// Drawn after [`Self::global_search_starts`]. Ignored when
+    /// `enable_global_pivots` is `false`. Default: `5`.
     pub nsearch: usize,
 
     /// Extra starting points for the global pivot search, walked before the
@@ -297,6 +325,18 @@ pub struct TreeTciOptions {
     /// bytes): the limit bounds those tables, not the transient per-call batch
     /// buffers (which grow with the points of one call), and not RSS overall.
     pub evaluation_cache_bytes: Option<usize>,
+    /// Accounted byte budget for known oracle samples used to validate the
+    /// current approximation. Default: 32 MiB; increase for larger sample sets.
+    /// Includes point/value payload and estimated table overhead, excluding
+    /// spare capacity and RSS. Independent of oracle memoization. The history
+    /// belongs to initialization and optimization of one call, is frozen
+    /// before returning the requested materialization, and is dropped at return.
+    /// As with interpolation itself, target values must be fixed during the
+    /// call. If it cannot retain a new
+    /// sample, the run stops with `ValidationBudgetExceeded` rather than
+    /// claiming convergence from incomplete validation. Must be positive when
+    /// `enable_global_pivots` is true; ignored otherwise.
+    pub validation_cache_bytes: usize,
 }
 
 impl TreeTciOptions {
@@ -304,6 +344,11 @@ impl TreeTciOptions {
         if !self.tolerance.is_finite() || self.tolerance < 0.0 {
             return Err(crate::TreeTciError::InvalidConfiguration {
                 message: "tolerance must be finite and nonnegative".to_string(),
+            });
+        }
+        if self.enable_global_pivots && self.validation_cache_bytes == 0 {
+            return Err(crate::TreeTciError::InvalidConfiguration {
+                message: "validation_cache_bytes must be positive".to_string(),
             });
         }
         if self.max_iter == 0 {
@@ -339,6 +384,7 @@ impl Default for TreeTciOptions {
             tol_margin_global_search: 10.0,
             seed: None,
             evaluation_cache_bytes: None,
+            validation_cache_bytes: 32 * 1024 * 1024,
         }
     }
 }
@@ -567,8 +613,14 @@ where
     V: EdgeVisitor,
     O: TreeTciObserver,
 {
-    let mut cached =
-        CachedExecution::new(execution, &state.local_dims, options.evaluation_cache_bytes)?;
+    let mut cached = CachedExecution::new(
+        execution,
+        &state.local_dims,
+        options.evaluation_cache_bytes,
+        options
+            .enable_global_pivots
+            .then_some(options.validation_cache_bytes),
+    )?;
     let mut result = optimize_with_streams(
         state,
         &mut cached,
@@ -863,6 +915,16 @@ where
     let mut errors = Vec::new();
     let mut nglobal_pivots_history: Vec<usize> = Vec::new();
     let mut termination = TreeTciTermination::MaxIterations;
+    let mut strict_recovery_start: Option<usize> = None;
+    // A pointwise residual can accumulate contributions from every bond.
+    // Share the requested tolerance across those bonds when validating the
+    // whole approximation. This is a local error budget, not a global bound;
+    // known-sample validation still decides whether the request was met.
+    let local_tolerance = if options.enable_global_pivots {
+        options.tolerance / (state.local_dims.len() - 1) as f64
+    } else {
+        options.tolerance
+    };
     const INNER_EDGE_PASSES: usize = 2;
     // Mirrors `tensor4all-tensorci`'s `TensorCI2Options::ncheck_history` default
     // (see `convergence_criterion` in tensorci2.rs, itself a port of Julia's
@@ -882,7 +944,15 @@ where
             };
             let kernel_options = RrLUOptions {
                 rel_tol: 1e-14,
-                abs_tol: options.tolerance * error_scale,
+                // Separate the stopping tolerance from local truncation.
+                // A stalled measured violation gets one recovery phase that
+                // disables absolute truncation; the numerical relative floor
+                // and the caller's bond cap still apply.
+                abs_tol: if strict_recovery_start.is_some() {
+                    0.0
+                } else {
+                    local_tolerance * error_scale
+                },
                 max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
                 left_orthogonal: true,
             };
@@ -917,8 +987,8 @@ where
         // sweeps cannot reduce the error, so waiting for it to also cross
         // `tolerance` would just burn the remaining `max_iter` sweeps.
         //
-        // This stop depends only on ranks already recorded, so it is decided
-        // *before* the global pivot search. Injected pivots are only
+        // The cap is known before discovery. We still validate known samples
+        // on the capped approximation, without injecting further pivots. Injected pivots are only
         // consistent once a sweep has processed them: the injection projects
         // each pivot onto both sides of every edge with per-side
         // deduplication, so the two sides of an edge can hold different
@@ -932,36 +1002,45 @@ where
                     .all(|&r| r >= cap)
             });
 
-        // Global pivot search: after each sweep, materialize the current
-        // approximation and inject pivots where |f - tt| is large, so
-        // separated features that the local pivot updates miss are sampled
-        // in the next sweep. Enabled by default; see
-        // `TreeTciOptions::enable_global_pivots`. The search is skipped on
-        // the final iteration: a pivot injected after the last sweep would
-        // never be processed by a subsequent sweep, so the recorded error
-        // and termination reason would not reflect it, and the unswept state
-        // would not be materializable (see above).
+        // Validate known samples on every completed approximation. Fresh
+        // discoveries can be injected only when another sweep will process
+        // them; final/capped/budget stops still measure the known-sample floor.
         let mut sampled_error = state.max_bond_error();
-        if !bond_dim_saturated && options.enable_global_pivots && iteration + 1 < options.max_iter {
+        let mut pending_pivots = Vec::new();
+        if options.enable_global_pivots {
             let error_scale = if options.scale_tolerance && state.max_sample_value > 0.0 {
                 state.max_sample_value
             } else {
                 1.0
             };
-            let abs_tol = options.tolerance * error_scale;
+            let can_insert = !bond_dim_saturated
+                && iteration + 1 < options.max_iter
+                && !execution.validation_exhausted();
             let search = find_global_pivots_erased(
                 state,
                 execution,
-                options.nsearch,
-                &options.global_search_starts,
-                options.max_nglobal_pivot,
+                if can_insert { options.nsearch } else { 0 },
+                if can_insert {
+                    &options.global_search_starts
+                } else {
+                    &[]
+                },
+                if can_insert {
+                    options.max_nglobal_pivot
+                } else {
+                    0
+                },
                 options.tol_margin_global_search,
-                abs_tol,
+                options.tolerance * error_scale,
                 streams.global(),
             )?;
             sampled_error = sampled_error.max(search.max_error);
-            state.add_global_pivots(&search.pivots)?;
-            nglobal_pivots_history.push(search.pivots.len());
+            if can_insert && !execution.validation_exhausted() {
+                nglobal_pivots_history.push(search.pivots.len());
+                pending_pivots = search.pivots;
+            } else {
+                nglobal_pivots_history.push(0);
+            }
         } else {
             nglobal_pivots_history.push(0);
         }
@@ -981,8 +1060,16 @@ where
             error: normalized_error,
             evaluation: &execution.stats(),
         });
+        if execution.validation_exhausted() {
+            termination = TreeTciTermination::ValidationBudgetExceeded;
+            break;
+        }
         if bond_dim_saturated {
-            termination = TreeTciTermination::MaxBondDimension;
+            termination = if options.enable_global_pivots && normalized_error >= options.tolerance {
+                TreeTciTermination::SampledErrorFloor { at_bond_cap: true }
+            } else {
+                TreeTciTermination::MaxBondDimension
+            };
             break;
         }
 
@@ -1002,6 +1089,19 @@ where
             let last_errors = &errors[n - NCHECK_HISTORY..];
             let last_ranks = &ranks[n - NCHECK_HISTORY..];
             let last_ngp = &nglobal_pivots_history[n - NCHECK_HISTORY..];
+            let measured_stall = options.enable_global_pivots
+                && last_errors.iter().all(|&e| e >= options.tolerance)
+                && last_ranks.iter().all(|&rank| rank == last_ranks[0]);
+            if measured_stall {
+                match strict_recovery_start {
+                    None => strict_recovery_start = Some(iteration + 1),
+                    Some(start) if iteration + 1 - start >= NCHECK_HISTORY => {
+                        termination = TreeTciTermination::SampledErrorFloor { at_bond_cap: false };
+                        break;
+                    }
+                    Some(_) => {}
+                }
+            }
             let errors_converged = last_errors.iter().all(|&e| e < options.tolerance);
             let no_global_pivots = last_ngp.iter().all(|&n| n == 0);
             let rank_stable = last_ranks.iter().min().copied().unwrap_or(0)
@@ -1019,6 +1119,10 @@ where
                 break;
             }
         }
+        // Only a continuing iteration may leave injected pivots for its next
+        // sweep. Floor and budget stops return the measured, materializable
+        // approximation rather than an unswept pivot state (#692).
+        state.add_global_pivots(&pending_pivots)?;
     }
 
     Ok(TreeTciOptimizationResult {

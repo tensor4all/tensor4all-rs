@@ -279,6 +279,7 @@ impl QtciOptions {
             seed: self.rng_seed,
             // The quantics evaluator owns its cache; avoid a second memo layer.
             evaluation_cache_bytes: None,
+            ..Default::default()
         }
     }
 }

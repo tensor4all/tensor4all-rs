@@ -313,7 +313,17 @@ where
                 &mut execution,
                 &state.local_dims,
                 options.evaluation_cache_bytes,
+                options
+                    .enable_global_pivots
+                    .then_some(options.validation_cache_bytes),
             )?;
+            if options.enable_global_pivots {
+                let points: Vec<_> = vertex_pivots.iter().flatten().copied().collect();
+                cached.record_initial_samples(
+                    GlobalIndexBatch::new(&points, state.local_dims.len(), vertex_pivots.len())?,
+                    &initial_values,
+                )?;
+            }
             optimize_with_streams(
                 &mut state,
                 &mut cached,
@@ -374,6 +384,15 @@ fn map_termination(
         TreeTciTermination::Converged => InterpolationTermination::Converged,
         TreeTciTermination::MaxBondDimension => InterpolationTermination::BondCapReached,
         TreeTciTermination::MaxIterations => InterpolationTermination::IterationLimit,
+        TreeTciTermination::SampledErrorFloor { at_bond_cap: true } => {
+            InterpolationTermination::BondCapReached
+        }
+        TreeTciTermination::SampledErrorFloor { at_bond_cap: false } => {
+            InterpolationTermination::SampledErrorFloor
+        }
+        TreeTciTermination::ValidationBudgetExceeded => {
+            InterpolationTermination::ValidationBudgetExceeded
+        }
         TreeTciTermination::DegenerateCandidateSet => InterpolationTermination::ErrorNotMeasured,
     }
 }

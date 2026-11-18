@@ -14,9 +14,10 @@ Computes tensor cross interpolation on tree-structured graphs, producing TreeTN 
   `tensor4all_treetn::interpolation::TreeInterpolator` contract
 - `TreeTciRunResult` — `treetn`, per-iteration `ranks` and `errors`, and `termination`
 - `TreeTciOptimizationResult` — diagnostics from optimizing a caller-owned state
-- `TreeTciTermination` — `Converged`, `MaxBondDimension`, `MaxIterations`, or
-  `DegenerateCandidateSet`
-- `TreeTciEvaluationStats` — oracle requests, successful evaluations and memo payload accounting
+- `TreeTciTermination` — `Converged`, resource limits, `SampledErrorFloor`,
+  `ValidationBudgetExceeded`, or `DegenerateCandidateSet`
+- `TreeTciEvaluationStats` — oracle requests, successful evaluations, memo
+  accounting and validation-history storage
 
 The entry points return named results rather than tuples. `Converged` means
 the sampled stopping criterion passed; it does not certify the full-network
@@ -25,11 +26,19 @@ for the convergence window, global-search behavior, and limit precedence.
 
 Global pivot search uses the retained-coordinate floating-zone walk from
 chain TCI, with one cached tree evaluator shared across starts and scans.
-When ordinary starts find no pivot, retained pivot pairs at dimension-one
-endpoints and subtree-anchored restarts check observed support; each extra
-family uses at most `nsearch` walks. Errors found by search contribute to the
-recorded iteration error, even below the discovery margin. The walk is greedy
-and can still miss unseen features, so sampled convergence remains a diagnostic.
+Known oracle samples are checked against every completed approximation without
+querying the target again, including final and capped sweeps. When ordinary
+starts find no pivot, every distinct retained full point across all edges seeds
+a confirmation walk. If those checks find none, each dimension-one endpoint
+edge gets up to `nsearch` subtree-anchored restarts in each direction.
+Measured residuals contribute to the recorded iteration error even below the
+discovery margin. The walk is greedy and can still miss unseen features.
+
+Validation has an independent `validation_cache_bytes` budget (32 MiB by
+default). If a new sample cannot fit, the run reports `ValidationBudgetExceeded`.
+An unresolved measured violation after local recovery or at a bond cap reports
+`SampledErrorFloor`; read its value from the last recorded error. Neither reason
+is convergence. Disabling global pivots disables known-sample validation too.
 
 ## Documentation
 
@@ -61,8 +70,9 @@ edge's pivots directly from `ijset`; no historical full pivot maps are copied.
 Custom proposers retaining that edge's previous pivots now read `ijset`.
 The former `ijset_history` field is removed.
 
-Each call starts its own diagnostics and convergence window and skips global
-search after its final iteration. Several calls therefore need not match one
+Each call starts its own diagnostics, validation history and convergence window.
+Its final iteration validates known samples without fresh discovery or injection.
+Several calls therefore need not match one
 longer run. Seeded calls restart RNGs; reuse a caller-owned RNG to advance its
 sequence across calls. See the [continuation contract](../../docs/design/treetci-termination.md#continued-optimization).
 

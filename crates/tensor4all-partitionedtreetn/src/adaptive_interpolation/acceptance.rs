@@ -164,3 +164,6 @@ where
         Ok(accepted(record, subdomain, context.patch_points))
     }
 }
+
+#[cfg(test)]
+mod tests;

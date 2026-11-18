@@ -10,8 +10,8 @@
 //! next sweep samples regions the local pivot updates missed.
 //!
 //! The search is enabled by default (`TreeTciOptions::enable_global_pivots`)
-//! and runs after every optimization sweep, except after the final sweep of a
-//! run that stops at `max_iter` or through the bond-dimension saturation stop.
+//! and explores after every continuing optimization sweep. Final/capped sweeps
+//! still validate retained oracle samples but do not inject unswept pivots.
 
 use crate::error::{Result as TreeTciResult, TreeTciError};
 use crate::evaluation::{BatchExecution, Compatibility};
@@ -22,6 +22,8 @@ use crate::{
 use anyhow::Result;
 use rand::{Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
+use std::collections::HashSet;
+use tensor4all_core::index_key::FlatIndexer;
 use tensor4all_core::MatrixLuciScalar as Scalar;
 use tensor4all_core::{floating_zone_walk, AnyScalar, ColMajorArrayRef, DynIndex, IdxTensor};
 use tensor4all_tensorbackend::FullPivLuScalar;
@@ -42,12 +44,15 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 ///    an error above `10 * abs_tol * tol_margin`, or 100 sweeps.
 /// 4. Prefer points above `abs_tol * tol_margin`. If none cross that margin,
 ///    keep observed errors above `abs_tol` instead.
-/// 5. If no point qualifies, confirm retained tail pivot pairs at edges with
-///    a dimension-one endpoint, then randomize their complementary subtrees
-///    while holding one observed subtree fixed. Each family adds at most
-///    `nsearch` walks, using `abs_tol` as its threshold. This helps a sparse
-///    target whose random starts fall on zero fibers.
-/// 6. Return at most `max_nglobal_pivot` distinct points.
+/// 5. If no point qualifies and `nsearch > 0`, walk every retained pivot pair
+///    on every edge, newest first, skipping duplicate full points. The number
+///    of confirmation walks is at most the sum of the bond ranks.
+/// 6. If confirmation also finds no pivot, each edge with a dimension-one
+///    endpoint gets up to `nsearch` restarts in each direction: hold one
+///    observed subtree fixed and randomize the other.
+///    Both confirmation stages use `abs_tol`. They help a sparse target
+///    whose random starts fall on zero fibers, but do not certify its error.
+/// 7. Return at most `max_nglobal_pivot` distinct points.
 ///
 /// Caller-supplied starts let a caller aim the search at a region it already
 /// suspects, such as a corner of a patch. A corner-localized feature otherwise
@@ -59,6 +64,11 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 /// environments. The held coordinate is not evaluated again in its own scan.
 /// Site-free junctions (`local_dims[site] == 1`) need no coordinate scan.
 ///
+/// Optimizer calls also replay all known oracle samples against this same
+/// approximation, in bounded batches without querying the oracle again. The
+/// standalone finder has no run history. These checks improve coverage but
+/// remain sampled diagnostics, not a bound on the full index domain.
+///
 /// The returned pivots are full-site multi-indices ready for
 /// [`TreeTCI2::add_global_pivots`].
 ///
@@ -69,8 +79,9 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 ///
 ///   [`optimize_with_proposer`](crate::optimize_with_proposer).
 /// * `nsearch` -- number of random starting points, drawn after the
-///   caller-supplied starts; also bounds each confirmation family at unit
-///   endpoints. Zero disables both random and confirmation starts.
+///   caller-supplied starts; also bounds restarts per direction of every
+///   unit-endpoint edge. When positive, enables confirmation of every retained
+///   pair on all edges. Zero disables random and confirmation starts.
 /// * `starts` -- caller-supplied starting points as full-site multi-indices,
 ///   walked before the random ones. Each must have one coordinate per site and
 ///   an in-range coordinate. An empty slice adds none.
@@ -259,69 +270,70 @@ pub(crate) struct GlobalPivotSearchResult {
     pub(crate) max_error: f64,
 }
 
+/// Borrowed pivot tables and topology for one edge confirmation.
 #[derive(Debug)]
-struct RetainedPivotStart {
-    point: MultiIndex,
-    varying_sites: SubtreeKey,
+struct RetainedPivotEdge<'a> {
+    left_sites: SubtreeKey,
+    right_sites: SubtreeKey,
+    left: &'a tensor4all_core::ColMajorArray<usize>,
+    right: &'a tensor4all_core::ColMajorArray<usize>,
+    rank: usize,
+    unit_endpoint: bool,
 }
 
-/// A bounded, spread-out set of retained pivot pairs at unit endpoints.
-fn retained_pivot_starts<T>(
-    state: &TreeTCI2<T>,
-    limit: usize,
-) -> TreeTciResult<Vec<RetainedPivotStart>> {
-    if limit == 0 {
-        return Ok(Vec::new());
+impl RetainedPivotEdge<'_> {
+    /// Assemble one paired pivot into the search's reusable full-site scratch.
+    fn write_point(&self, pair: usize, point: &mut [usize]) -> TreeTciResult<()> {
+        for (&site, &coordinate) in self
+            .left_sites
+            .as_slice()
+            .iter()
+            .zip(crate::column_2d(self.left, pair)?)
+        {
+            point[site] = coordinate;
+        }
+        for (&site, &coordinate) in self
+            .right_sites
+            .as_slice()
+            .iter()
+            .zip(crate::column_2d(self.right, pair)?)
+        {
+            point[site] = coordinate;
+        }
+        Ok(())
     }
-    let edges: Vec<_> = state
-        .graph
-        .edges()
-        .into_iter()
-        .filter(|edge| state.local_dims[edge.u()] == 1 || state.local_dims[edge.v()] == 1)
-        .collect();
-    if edges.is_empty() {
-        return Ok(Vec::new());
-    }
-    let stride = edges.len().div_ceil(limit);
-    let mut starts = Vec::with_capacity(edges.len().min(limit));
-    for edge in edges.into_iter().step_by(stride).take(limit) {
-        let (left_key, right_key) = state.graph.subregion_vertices(edge)?;
+}
+
+/// Retained pivot tables at every edge, including ordinary physical cuts.
+///
+/// Only topology metadata is owned here. Full-site points are assembled into
+/// reusable scratch, so visiting all retained pairs does not copy the pivot tables.
+fn retained_pivot_edges<T>(state: &TreeTCI2<T>) -> TreeTciResult<Vec<RetainedPivotEdge<'_>>> {
+    let mut retained = Vec::new();
+    for edge in state.graph.edges() {
+        let (left_sites, right_sites) = state.graph.subregion_vertices(edge)?;
         let left = state
-            .pivot_set(&left_key)
+            .pivot_set(&left_sites)
             .ok_or_else(|| anyhow::anyhow!("missing retained left pivots"))?;
         let right = state
-            .pivot_set(&right_key)
+            .pivot_set(&right_sites)
             .ok_or_else(|| anyhow::anyhow!("missing retained right pivots"))?;
         let rank = crate::ncols_2d(left)?;
-        let tail = rank
-            .checked_sub(1)
-            .ok_or_else(|| anyhow::anyhow!("empty retained pivot set"))?;
-        let mut point = vec![0; state.local_dims.len()];
-        for (&site, &coordinate) in left_key
-            .as_slice()
-            .iter()
-            .zip(crate::column_2d(left, tail)?)
-        {
-            point[site] = coordinate;
+        if rank == 0 || crate::ncols_2d(right)? != rank {
+            return Err(
+                anyhow::anyhow!("retained pivot sets must have equal nonzero ranks").into(),
+            );
         }
-        for (&site, &coordinate) in right_key
-            .as_slice()
-            .iter()
-            .zip(crate::column_2d(right, tail)?)
-        {
-            point[site] = coordinate;
-        }
-        let varying_sites = if state.local_dims[edge.u()] == 1 {
-            left_key
-        } else {
-            right_key
-        };
-        starts.push(RetainedPivotStart {
-            point,
-            varying_sites,
+        retained.push(RetainedPivotEdge {
+            left_sites,
+            right_sites,
+            left,
+            right,
+            rank,
+            unit_endpoint: state.local_dims[edge.u()] == 1 || state.local_dims[edge.v()] == 1,
         });
     }
-    Ok(starts)
+    Ok(retained)
 }
 
 /// Scalar parameters of one global pivot search, as passed to
@@ -470,7 +482,7 @@ where
         )
         .into());
     }
-    if nsearch == 0 && starts.is_empty() {
+    if nsearch == 0 && starts.is_empty() && execution.validation_len() == 0 {
         return Ok(GlobalPivotSearchResult::default());
     }
     let n_sites = state.local_dims.len();
@@ -492,7 +504,7 @@ where
             }
         }
     }
-    if max_nglobal_pivot == 0 || n_sites == 0 {
+    if (max_nglobal_pivot == 0 && execution.validation_len() == 0) || n_sites == 0 {
         return Ok(GlobalPivotSearchResult::default());
     }
 
@@ -546,6 +558,47 @@ where
     let acceptance_floor = abs_tol.min(threshold);
     let mut max_error = 0.0_f64;
     let mut best = Vec::with_capacity(starts.len().saturating_add(nsearch));
+    // Re-evaluate the current approximation at all known oracle samples,
+    // including points pruned from the pivot sets. Oracle values are retained
+    // by the run owner; replay needs only cached, batched approximation reads.
+    let known_count = execution.validation_len();
+    let mut expected = Vec::new();
+    let mut known_error = 0.0_f64;
+    let mut known_point = Vec::new();
+    for offset in (0..known_count).step_by(EVALUATION_CHUNK_POINTS) {
+        let count =
+            execution.validation_batch(offset, EVALUATION_CHUNK_POINTS, &mut flat, &mut expected);
+        let shape = [n_sites, count];
+        let points = ColMajorArrayRef::new(&flat, &shape).map_err(anyhow::Error::new)?;
+        let errors = read_batch_errors(
+            execution,
+            &mut cache,
+            &treetn,
+            &site_indices,
+            points,
+            None,
+            &expected,
+            &mut readout,
+            readout_on_session,
+        )?;
+        for (point, error) in flat.chunks_exact(n_sites).zip(errors) {
+            if error > known_error {
+                known_error = error;
+                known_point.clear();
+                known_point.extend_from_slice(point);
+            }
+        }
+    }
+    max_error = max_error.max(known_error);
+    if max_nglobal_pivot == 0 {
+        return Ok(GlobalPivotSearchResult {
+            pivots: Vec::new(),
+            max_error,
+        });
+    }
+    if known_error > acceptance_floor {
+        best.push((known_error, known_point));
+    }
     for provided in starts {
         let (error, point) = walk_from_start(
             state,
@@ -594,20 +647,25 @@ where
         best.retain(|(error, _)| *error > threshold);
     }
 
-    // Random walks can stay on an exactly zero fiber (e.g. a sparse branch
-    // factor). Retained pivot pairs stay on observed support and expose
-    // inconsistencies between neighboring updates. Probe the tail pivots,
-    // where a newly discovered direction is most easily lost, only when the
-    // ordinary search found no pivot. Confirmation uses the requested
-    // tolerance rather than the discovery margin. The loop runs at most
-    // nsearch times; each pass walks at most one retained pair and one
-    // subtree-anchored restart, so at most 2 * nsearch walks are added (a
-    // probe that finds an error skips its restart). Scratch is reused.
-    if best.is_empty() {
-        let retained = retained_pivot_starts(state, nsearch)?;
+    // A tail pivot can lie in a basin where all single-coordinate residuals
+    // vanish even though another retained pair exposes the missing direction.
+    // Confirm every retained pair on all edges, newest first, before
+    // falling back to random complementary-subtree restarts. The work is
+    // bounded by the sum of those bond ranks, not the full index domain.
+    if best.is_empty() && nsearch > 0 {
+        let retained = retained_pivot_edges(state)?;
+        let indexer = FlatIndexer::try_new(&state.local_dims).map_err(anyhow::Error::new)?;
+        // The same global pivot can occur on many cuts. Its deterministic
+        // walk needs to run only once on this unchanged approximation. Compact
+        // keys avoid copying full points; at most sum(bond ranks) are retained.
+        let mut walked = HashSet::new();
         let mut support_start = vec![0; n_sites];
-        for (probe, anchor) in retained.iter().cycle().take(nsearch).enumerate() {
-            if probe < retained.len() {
+        for anchor in &retained {
+            for pair in (0..anchor.rank).rev() {
+                anchor.write_point(pair, &mut support_start)?;
+                if !walked.insert(indexer.encode(&support_start).map_err(anyhow::Error::new)?) {
+                    continue;
+                }
                 let (error, point) = walk_from_start(
                     state,
                     execution,
@@ -616,7 +674,7 @@ where
                     &site_indices,
                     n_sites,
                     &mut flat,
-                    &anchor.point,
+                    &support_start,
                     abs_tol,
                     &mut readout,
                     readout_on_session,
@@ -624,32 +682,41 @@ where
                 max_error = max_error.max(error);
                 if error > abs_tol {
                     best.push((error, point));
-                    continue;
                 }
             }
-            // Keep an observed subtree intact while randomizing its
-            // complement. Coordinate walks alone cannot cross a zero fiber
-            // whose support requires several coordinates to change together.
-            support_start.copy_from_slice(&anchor.point);
-            for &site in anchor.varying_sites.as_slice() {
-                support_start[site] = rng.random_range(0..state.local_dims[site]);
-            }
-            let (error, point) = walk_from_start(
-                state,
-                execution,
-                &mut cache,
-                &treetn,
-                &site_indices,
-                n_sites,
-                &mut flat,
-                &support_start,
-                abs_tol,
-                &mut readout,
-                readout_on_session,
-            )?;
-            max_error = max_error.max(error);
-            if error > abs_tol {
-                best.push((error, point));
+        }
+        if best.is_empty() {
+            // Give each unit cut its own restart budget: sparse support on
+            // one branch must not starve confirmation on another branch.
+            for anchor in retained.iter().filter(|edge| edge.unit_endpoint) {
+                for _ in 0..nsearch {
+                    for varying in [&anchor.left_sites, &anchor.right_sites] {
+                        anchor.write_point(anchor.rank - 1, &mut support_start)?;
+                        // Restart each side separately. Holding the complement
+                        // intact preserves sparse factors on either side of the
+                        // cut, instead of always randomizing a sparse branch away.
+                        for &site in varying.as_slice() {
+                            support_start[site] = rng.random_range(0..state.local_dims[site]);
+                        }
+                        let (error, point) = walk_from_start(
+                            state,
+                            execution,
+                            &mut cache,
+                            &treetn,
+                            &site_indices,
+                            n_sites,
+                            &mut flat,
+                            &support_start,
+                            abs_tol,
+                            &mut readout,
+                            readout_on_session,
+                        )?;
+                        max_error = max_error.max(error);
+                        if error > abs_tol {
+                            best.push((error, point));
+                        }
+                    }
+                }
             }
         }
     }
@@ -725,52 +792,17 @@ where
             let values = ColMajorArrayRef::new(flat, &shape).map_err(|error| {
                 anyhow::anyhow!("failed to build candidate index array: {error}")
             })?;
-            let errors: Vec<f64> = match execution.session() {
-                Some(engine) => {
-                    let mut session = tensor4all_tensorbackend::explicit::Session::new(engine);
-                    let tt_values: Vec<T> = readout_on_session(
-                        cache,
-                        treetn,
-                        site_indices,
-                        values,
-                        scan_site,
-                        &mut session,
-                    )?;
-                    if tt_values.len() != points.len() {
-                        return Err(anyhow::anyhow!(
-                            "approximation readout returned {} values for {} global-pivot \
-                             candidates",
-                            tt_values.len(),
-                            points.len(),
-                        ));
-                    }
-                    f_values
-                        .into_iter()
-                        .zip(tt_values)
-                        .map(|(f, tt)| typed_interp_error(f, tt))
-                        .collect()
-                }
-                None => {
-                    let tt_values = readout(cache, treetn, site_indices, values, scan_site)?;
-                    if tt_values.len() != points.len() {
-                        return Err(anyhow::anyhow!(
-                            "approximation readout returned {} values for {} global-pivot \
-                             candidates",
-                            tt_values.len(),
-                            points.len(),
-                        ));
-                    }
-                    f_values
-                        .into_iter()
-                        .zip(tt_values)
-                        .map(|(f, tt)| interp_error(f, tt))
-                        .collect()
-                }
-            };
-            if errors.iter().any(|error| !error.is_finite()) {
-                return Err(anyhow::anyhow!("non-finite global pivot residual"));
-            }
-            Ok(errors)
+            read_batch_errors(
+                execution,
+                cache,
+                treetn,
+                site_indices,
+                values,
+                scan_site,
+                &f_values,
+                readout,
+                readout_on_session,
+            )
         },
     )
     .map_err(|error| match error {
@@ -780,6 +812,71 @@ where
         },
     })?;
     Ok((error, point))
+}
+
+// INVARIANT: both live-search scans and validation batches borrow the same
+// readout/cache/session owners. The arguments describe one bounded batch.
+#[allow(clippy::too_many_arguments)]
+fn read_batch_errors<T, R>(
+    execution: &mut dyn BatchExecution<T>,
+    cache: &mut TreeTNCachedEvaluator<'_, usize>,
+    treetn: &TreeTN<IdxTensor, usize>,
+    site_indices: &[DynIndex],
+    points: ColMajorArrayRef<'_, usize>,
+    hint: Option<usize>,
+    expected: &[T],
+    readout: &mut R,
+    readout_on_session: SessionReadout<T>,
+) -> Result<Vec<f64>>
+where
+    T: FullPivLuScalar + tensor4all_core::TensorElement + ScalarParts + Copy,
+    R: FnMut(
+        &mut TreeTNCachedEvaluator<'_, usize>,
+        &TreeTN<IdxTensor, usize>,
+        &[DynIndex],
+        ColMajorArrayRef<'_, usize>,
+        Option<usize>,
+    ) -> Result<Vec<AnyScalar>>,
+{
+    let errors: Vec<_> = match execution.session() {
+        Some(engine) => {
+            let mut session = tensor4all_tensorbackend::explicit::Session::new(engine);
+            let actual =
+                readout_on_session(cache, treetn, site_indices, points, hint, &mut session)?;
+            anyhow::ensure!(
+                actual.len() == expected.len(),
+                "approximation readout returned {} values for {} global-pivot candidates",
+                actual.len(),
+                expected.len()
+            );
+            expected
+                .iter()
+                .copied()
+                .zip(actual)
+                .map(|(f, tt)| typed_interp_error(f, tt))
+                .collect()
+        }
+        None => {
+            let actual = readout(cache, treetn, site_indices, points, hint)?;
+            anyhow::ensure!(
+                actual.len() == expected.len(),
+                "approximation readout returned {} values for {} global-pivot candidates",
+                actual.len(),
+                expected.len()
+            );
+            expected
+                .iter()
+                .copied()
+                .zip(actual)
+                .map(|(f, tt)| interp_error(f, tt))
+                .collect()
+        }
+    };
+    anyhow::ensure!(
+        errors.iter().all(|error| error.is_finite()),
+        "non-finite global pivot residual"
+    );
+    Ok(errors)
 }
 
 /// Real and imaginary parts of a scalar, used to estimate the interpolation

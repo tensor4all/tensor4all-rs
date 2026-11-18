@@ -36,6 +36,29 @@ fn check<T>(fixture: &str, seeds: &[u64], scale: T) -> Result<()>
 where
     T: MatrixLuciScalar + CommonScalar + FullPivLuScalar + TensorElement + ScalarParts,
 {
+    check_plane(
+        fixture,
+        seeds,
+        scale,
+        0,
+        &[],
+        TreeTciOptions::default().tolerance,
+        false,
+    )
+}
+
+fn check_plane<T>(
+    fixture: &str,
+    seeds: &[u64],
+    scale: T,
+    plane: usize,
+    starts: &[[usize; 3]],
+    tolerance: f64,
+    allow_floor: bool,
+) -> Result<()>
+where
+    T: MatrixLuciScalar + CommonScalar + FullPivLuScalar + TensorElement + ScalarParts,
+{
     let matrix: Vec<_> = fixture
         .split_whitespace()
         .map(|word| f64::from_bits(u64::from_str_radix(word, 16).unwrap()))
@@ -46,30 +69,45 @@ where
         .enumerate()
         .max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
         .unwrap();
-    let start_axes = [largest % N, 0, largest / N];
-    let start: Vec<_> = (0..=CENTRE)
-        .map(|site| {
-            if site == CENTRE {
-                0
-            } else {
-                (start_axes[site % 3] >> (R - 1 - site / 3)) & 1
-            }
-        })
-        .collect();
+    let initialize_at_maximum = starts.is_empty();
+    let default_start = [[largest % N, plane, largest / N]];
+    let starts: Vec<Vec<_>> = if starts.is_empty() {
+        &default_start[..]
+    } else {
+        starts
+    }
+    .iter()
+    .map(|start_axes| {
+        (0..=CENTRE)
+            .map(|site| {
+                if site == CENTRE {
+                    0
+                } else {
+                    (start_axes[site % 3] >> (R - 1 - site / 3)) & 1
+                }
+            })
+            .collect()
+    })
+    .collect();
     let value = |point: &[usize]| {
         let [a, b, c] = axes(point);
-        if b == 0 {
+        if b == plane {
             scale * T::from_f64(matrix[a + N * c])
         } else {
             T::zero()
         }
     };
+    let initial_scale = if initialize_at_maximum {
+        max_value.abs() * CommonScalar::abs_val(scale)
+    } else {
+        CommonScalar::abs_val(value(&starts[0]))
+    };
     for &seed in seeds {
         let mut dims = vec![2; CENTRE];
         dims.push(1);
         let mut state = TreeTCI2::<T>::new(dims, graph()?)?;
-        state.add_global_pivots(std::slice::from_ref(&start))?;
-        state.set_max_sample_value(max_value.abs() * CommonScalar::abs_val(scale));
+        state.add_global_pivots(&starts)?;
+        state.set_max_sample_value(initial_scale);
         let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<T>> {
             Ok(batch
                 .data()
@@ -78,6 +116,7 @@ where
                 .collect())
         };
         let options = TreeTciOptions {
+            tolerance,
             seed: Some(seed),
             ..Default::default()
         };
@@ -98,11 +137,20 @@ where
         let reference = IdxTensor::from_dense(indices.clone(), values)?;
         let difference = tn.to_dense()?.sub(&reference)?;
         let error = difference.maxabs()? / reference.maxabs()?;
-        // Every listed seed converges, and the dense comparison confirms it.
-        // Requiring `Converged` also catches a regression that gives up with
-        // a bad approximation instead of reporting a false convergence.
+        eprintln!(
+            "plane {plane} seed {seed}: {:?}, reported {:?}, dense {error:e}",
+            run.termination,
+            run.errors.last()
+        );
+        let accepted = match run.termination {
+            TreeTciTermination::Converged => error <= options.tolerance,
+            TreeTciTermination::SampledErrorFloor { .. } => {
+                allow_floor && run.errors.last().is_some_and(|&e| e >= options.tolerance)
+            }
+            _ => false,
+        };
         assert!(
-            run.termination == TreeTciTermination::Converged && error <= options.tolerance,
+            accepted,
             "seed {seed}: {:?} with reported {:?}, true residual {error:e}",
             run.termination,
             run.errors.last()
@@ -136,5 +184,35 @@ fn non_exhausted_three_branch_complex() -> Result<()> {
         include_str!("fixtures/issue1352_m14_bits.txt"),
         &[1, 2, 6],
         Complex64::new(1.0, 0.5),
+    )
+}
+
+// Frozen f64 bits of Simon's attached g[z][x], preserving exact zeros and
+// decimal-to-f64 rounding, without depending on a random target generator:
+// https://github.com/tensor4all/tensor4all-rs/issues/1352#issuecomment-6967309986
+// Original table: https://github.com/user-attachments/files/35004742/g.txt
+#[test]
+fn nonzero_sparse_plane_real() -> Result<()> {
+    check_plane(
+        include_str!("fixtures/issue1352_reopened_bits.txt"),
+        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+        1.0_f64,
+        N / 2,
+        &[[N / 2, N / 2, N / 2], [N / 2 - 1, N / 2, N / 2 - 1]],
+        1e-10,
+        true,
+    )
+}
+
+#[test]
+fn nonzero_sparse_plane_complex() -> Result<()> {
+    check_plane(
+        include_str!("fixtures/issue1352_reopened_bits.txt"),
+        &[4, 6],
+        Complex64::new(1.0, 0.5),
+        N / 2,
+        &[[N / 2, N / 2, N / 2], [N / 2 - 1, N / 2, N / 2 - 1]],
+        1e-10,
+        true,
     )
 }

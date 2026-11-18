@@ -346,3 +346,24 @@ for &(i, j) in &[(0usize, 0usize), (16, 32), (31, 49), (63, 63)] {
 # Ok(())
 # }
 ```
+
+## TreeTCI stopping diagnostics
+
+For interpolation on a general tree, `tensor4all-treetci` returns a
+`TreeTciTermination` together with its rank and error histories. Its enabled
+global search checks the current approximation against known oracle samples,
+including points removed from the current pivot sets. These checks still run
+on final and capped sweeps. The recorded maximum is sampled, not a bound over
+the entire index domain.
+
+`SampledErrorFloor` names a measured residual that the local recovery phase or
+the bond cap could not resolve. Read the final error with this reason; increasing
+`max_iter` alone need not help. The stopping tolerance is never silently relaxed.
+Known samples have an independent `validation_cache_bytes` budget (32 MiB by
+default). If a new sample cannot fit, `ValidationBudgetExceeded` asks the caller
+to increase that budget. Oracle memoization remains a separate option.
+
+The [TreeTCI stopping contract](https://github.com/tensor4all/tensor4all-rs/blob/main/docs/design/treetci-termination.md)
+describes the local truncation budget, sampled-floor recovery and per-edge
+support searches. These TreeTCI diagnostics are separate from the chain TCI
+options above.

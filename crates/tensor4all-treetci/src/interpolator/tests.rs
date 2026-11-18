@@ -18,6 +18,24 @@ fn with_context<R>(f: impl FnOnce(&mut EvalContext<'_>) -> R) -> R {
 fn map_termination_applies_the_cap_precedence() {
     let cap = NonZeroUsize::new(4);
     let cases = [
+        (
+            TreeTciTermination::SampledErrorFloor { at_bond_cap: true },
+            4,
+            cap,
+            InterpolationTermination::BondCapReached,
+        ),
+        (
+            TreeTciTermination::SampledErrorFloor { at_bond_cap: false },
+            2,
+            cap,
+            InterpolationTermination::SampledErrorFloor,
+        ),
+        (
+            TreeTciTermination::ValidationBudgetExceeded,
+            2,
+            cap,
+            InterpolationTermination::ValidationBudgetExceeded,
+        ),
         // The criterion met strictly below the cap is accepted.
         (
             TreeTciTermination::Converged,

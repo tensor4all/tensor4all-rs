@@ -31,6 +31,15 @@ use crate::batch::{assemble_candidate_points, candidate_entries};
 pub struct TreeTciEvaluationStats {
     /// Points requested by TreeTCI, including duplicates and cache hits.
     pub requested_points: usize,
+    /// Distinct oracle samples retained during initialization and optimization.
+    /// Returning the final materialized network does not extend this history.
+    pub validation_samples: usize,
+    /// Accounted bytes of validation history, including estimated table overhead.
+    /// Spare capacity and process RSS are not included.
+    pub validation_bytes: usize,
+    /// Whether a new sample could not fit the configured validation budget.
+    /// Such a run cannot report convergence based on an incomplete history.
+    pub validation_limit_reached: bool,
     /// Distinct misses successfully evaluated, or all points when memo is disabled.
     pub evaluated_points: usize,
     /// Persistent cache lookups served from retained values; zero when disabled.
@@ -82,6 +91,27 @@ pub(crate) enum CandidateSides {
 pub(crate) trait BatchExecution<T: FullPivLuScalar> {
     /// Evaluate one batch of global points.
     fn call(&mut self, batch: GlobalIndexBatch<'_>) -> anyhow::Result<Vec<T>>;
+
+    /// Number of known oracle samples available for independent validation.
+    fn validation_len(&self) -> usize {
+        0
+    }
+
+    /// Copy known points and values into reusable readout scratch.
+    fn validation_batch(
+        &self,
+        _start: usize,
+        _count: usize,
+        _points: &mut Vec<usize>,
+        _values: &mut Vec<T>,
+    ) -> usize {
+        0
+    }
+
+    /// Whether this run could not retain all its known samples.
+    fn validation_exhausted(&self) -> bool {
+        false
+    }
 
     /// Prepare the per-side keys of one edge candidate matrix.
     ///
@@ -273,6 +303,7 @@ where
 {
     source: &'a mut dyn BatchExecution<T>,
     cache: Option<MultiIndexCache<T>>,
+    validation: Option<crate::validation::SampleHistory<T>>,
     requested: usize,
     evaluated: usize,
 }
@@ -285,6 +316,7 @@ where
         source: &'a mut dyn BatchExecution<T>,
         local_dims: &[usize],
         limit: Option<usize>,
+        validation_limit: Option<usize>,
     ) -> TreeTciResult<Self> {
         let cache = limit
             .map(|bytes| MultiIndexCache::with_retained_byte_limit(local_dims, bytes))
@@ -304,6 +336,9 @@ where
         Ok(Self {
             source,
             cache,
+            validation: validation_limit
+                .map(|limit| crate::validation::SampleHistory::new(local_dims, limit))
+                .transpose()?,
             requested: 0,
             evaluated: 0,
         })
@@ -314,12 +349,38 @@ impl<T> CachedExecution<'_, T>
 where
     T: FullPivLuScalar + Clone + Send + Sync + 'static,
 {
+    /// Retain initialization values obtained before this execution owner was
+    /// constructed, without repeating the oracle request. The common adapter
+    /// reads its initial points in site order before building vertex-order state.
+    pub(crate) fn record_initial_samples(
+        &mut self,
+        batch: GlobalIndexBatch<'_>,
+        values: &[T],
+    ) -> anyhow::Result<()> {
+        if let Some(history) = &mut self.validation {
+            history.record(batch, values)?;
+        }
+        Ok(())
+    }
+
+    /// Freeze the validation set after the optimizer's final measured sweep.
+    /// Returning a requested materialization still uses oracle memoization and
+    /// evaluation accounting, without changing the completed validation set.
+    pub(crate) fn finish_validation(&mut self) {
+        if let Some(history) = &mut self.validation {
+            history.finish_recording();
+        }
+    }
+
     /// Forward one already-counted evaluator call to the run's owner and add the
     /// points it actually evaluated.
     fn evaluate_and_count(&mut self, batch: GlobalIndexBatch<'_>) -> anyhow::Result<Vec<T>> {
         let values = self.source.call(batch)?;
         if values.len() == batch.n_points() {
             self.evaluated = self.evaluated.saturating_add(batch.n_points());
+            if let Some(validation) = &mut self.validation {
+                validation.record(batch, &values)?;
+            }
         }
         Ok(values)
     }
@@ -329,6 +390,28 @@ impl<T> BatchExecution<T> for CachedExecution<'_, T>
 where
     T: FullPivLuScalar + Clone + Send + Sync + 'static,
 {
+    fn validation_len(&self) -> usize {
+        self.validation.as_ref().map_or(0, |history| history.len())
+    }
+
+    fn validation_batch(
+        &self,
+        start: usize,
+        count: usize,
+        points: &mut Vec<usize>,
+        values: &mut Vec<T>,
+    ) -> usize {
+        self.validation.as_ref().map_or(0, |history| {
+            history.copy_batch(start, count, points, values)
+        })
+    }
+
+    fn validation_exhausted(&self) -> bool {
+        self.validation
+            .as_ref()
+            .is_some_and(|history| history.exhausted())
+    }
+
     fn call(&mut self, batch: GlobalIndexBatch<'_>) -> anyhow::Result<Vec<T>> {
         self.requested = self.requested.saturating_add(batch.n_points());
         let shape = [batch.n_sites(), batch.n_points()];
@@ -337,6 +420,7 @@ where
         };
         let source = &mut self.source;
         let evaluated = &mut self.evaluated;
+        let validation = &mut self.validation;
         cache
             .evaluate_batched(ColMajorArrayRef::new(batch.data(), &shape)?, |misses| {
                 let batch =
@@ -349,6 +433,9 @@ where
                     batch.n_points()
                 );
                 *evaluated = evaluated.saturating_add(batch.n_points());
+                if let Some(validation) = validation {
+                    validation.record(batch, &values)?;
+                }
                 Ok(values)
             })
             .map_err(|error| match error {
@@ -408,6 +495,7 @@ where
                     candidate_entries(start, count, left_keys.len()).collect();
                 let source = &mut self.source;
                 let evaluated = &mut self.evaluated;
+                let validation = &mut self.validation;
                 cache
                     .evaluate_keyed(left_keys, right_keys, &requests, |misses| {
                         let data = assemble_candidate_points(
@@ -427,6 +515,9 @@ where
                             batch.n_points()
                         );
                         *evaluated = evaluated.saturating_add(batch.n_points());
+                        if let Some(validation) = validation {
+                            validation.record(batch, &values)?;
+                        }
                         Ok(values)
                     })
                     .map_err(|error| match error {
@@ -462,6 +553,12 @@ where
 
     fn stats(&self) -> TreeTciEvaluationStats {
         let mut stats = TreeTciEvaluationStats {
+            validation_samples: self.validation_len(),
+            validation_bytes: self
+                .validation
+                .as_ref()
+                .map_or(0, |history| history.retained_bytes()),
+            validation_limit_reached: self.validation_exhausted(),
             requested_points: self.requested,
             evaluated_points: self.evaluated,
             ..Default::default()

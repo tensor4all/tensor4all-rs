@@ -1,0 +1,53 @@
+--- a/crates/tensor4all-treetci/src/optimize.rs
++++ b/crates/tensor4all-treetci/src/optimize.rs
+@@ -915,16 +915,11 @@
+     let mut errors = Vec::new();
+     let mut nglobal_pivots_history: Vec<usize> = Vec::new();
+     let mut termination = TreeTciTermination::MaxIterations;
+-    let mut strict_recovery_start: Option<usize> = None;
+     // A pointwise residual can accumulate contributions from every bond.
+     // Share the requested tolerance across those bonds when validating the
+     // whole approximation. This is a local error budget, not a global bound;
+     // known-sample validation still decides whether the request was met.
+-    let local_tolerance = if options.enable_global_pivots {
+-        options.tolerance / (state.local_dims.len() - 1) as f64
+-    } else {
+-        options.tolerance
+-    };
++    let local_tolerance = options.tolerance;
+     const INNER_EDGE_PASSES: usize = 2;
+     // Mirrors `tensor4all-tensorci`'s `TensorCI2Options::ncheck_history` default
+     // (see `convergence_criterion` in tensorci2.rs, itself a port of Julia's
+@@ -948,11 +943,7 @@
+                 // A stalled measured violation gets one recovery phase that
+                 // disables absolute truncation; the numerical relative floor
+                 // and the caller's bond cap still apply.
+-                abs_tol: if strict_recovery_start.is_some() {
+-                    0.0
+-                } else {
+-                    local_tolerance * error_scale
+-                },
++                abs_tol: local_tolerance * error_scale,
+                 max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
+                 left_orthogonal: true,
+             };
+@@ -1089,19 +1080,6 @@
+             let last_errors = &errors[n - NCHECK_HISTORY..];
+             let last_ranks = &ranks[n - NCHECK_HISTORY..];
+             let last_ngp = &nglobal_pivots_history[n - NCHECK_HISTORY..];
+-            let measured_stall = options.enable_global_pivots
+-                && last_errors.iter().all(|&e| e >= options.tolerance)
+-                && last_ranks.iter().all(|&rank| rank == last_ranks[0]);
+-            if measured_stall {
+-                match strict_recovery_start {
+-                    None => strict_recovery_start = Some(iteration + 1),
+-                    Some(start) if iteration + 1 - start >= NCHECK_HISTORY => {
+-                        termination = TreeTciTermination::SampledErrorFloor { at_bond_cap: false };
+-                        break;
+-                    }
+-                    Some(_) => {}
+-                }
+-            }
+             let errors_converged = last_errors.iter().all(|&e| e < options.tolerance);
+             let no_global_pivots = last_ngp.iter().all(|&n| n == 0);
+             let rank_stable = last_ranks.iter().min().copied().unwrap_or(0)

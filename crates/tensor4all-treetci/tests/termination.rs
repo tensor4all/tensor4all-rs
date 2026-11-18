@@ -160,7 +160,12 @@ where
                     },
                     entry,
                 );
-                assert_eq!(result.termination, reason, "{entry:?}, cap {cap:?}");
+                let expected = if enable_global_pivots && cap == Some(1) && max_iter >= 3 {
+                    TreeTciTermination::SampledErrorFloor { at_bond_cap: true }
+                } else {
+                    reason
+                };
+                assert_eq!(result.termination, expected, "{entry:?}, cap {cap:?}");
                 assert_eq!(result.ranks, vec![cap.unwrap_or(3); iterations]);
                 assert_eq!(result.errors.len(), iterations);
 

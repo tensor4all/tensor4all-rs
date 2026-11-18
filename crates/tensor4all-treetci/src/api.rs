@@ -466,8 +466,14 @@ where
     let mut tci = TreeTCI2::<T>::new(local_dims, graph)?;
     tci.add_global_pivots(&pivots)?;
 
-    let mut evaluator =
-        CachedExecution::new(execution, &tci.local_dims, options.evaluation_cache_bytes)?;
+    let mut evaluator = CachedExecution::new(
+        execution,
+        &tci.local_dims,
+        options.evaluation_cache_bytes,
+        options
+            .enable_global_pivots
+            .then_some(options.validation_cache_bytes),
+    )?;
 
     // Initialize max_sample_value via batch evaluate
     let n_sites = tci.local_dims.len();
@@ -506,6 +512,7 @@ where
         observer,
         streams,
     )?;
+    evaluator.finish_validation();
     let treetn = to_treetn_chunked(&tci, &mut evaluator, center_site, EVALUATION_CHUNK_POINTS)?;
 
     Ok(TreeTciRunResult {

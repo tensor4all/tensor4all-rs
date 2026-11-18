@@ -91,7 +91,14 @@ macro_rules! continued_schedule {
                     &mut rng,
                 )
                 .unwrap();
-                assert_eq!(capped.termination, TreeTciTermination::MaxBondDimension);
+                assert_eq!(
+                    capped.termination,
+                    if global {
+                        TreeTciTermination::SampledErrorFloor { at_bond_cap: true }
+                    } else {
+                        TreeTciTermination::MaxBondDimension
+                    }
+                );
                 assert_eq!(state.max_bond_dim(), 4);
                 let capped_tn = to_treetn(&state, evaluate, None).unwrap();
                 let capped_dense = capped_tn.to_dense().unwrap();

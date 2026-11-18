@@ -353,9 +353,13 @@ fn keyed_candidate_matrix_serves_duplicate_entries_from_one_evaluation() {
             .collect())
     };
     let mut execution = crate::evaluation::Compatibility::new(&mut evaluate);
-    let mut memo =
-        crate::evaluation::CachedExecution::new(&mut execution, &local_dims, Some(1 << 20))
-            .unwrap();
+    let mut memo = crate::evaluation::CachedExecution::new(
+        &mut execution,
+        &local_dims,
+        Some(1 << 20),
+        Some(1 << 20),
+    )
+    .unwrap();
 
     // Two chunks of three entries: the matrix spans a chunk boundary, and each
     // chunk reuses the one pair of side keys prepared for the matrix. Each chunk
@@ -385,6 +389,7 @@ fn keyed_candidate_matrix_serves_duplicate_entries_from_one_evaluation() {
     assert_eq!(stats.cache_misses, 6);
     assert_eq!(stats.cache_hits, 0);
     assert_eq!(stats.cached_entries, 4);
+    assert_eq!(stats.validation_samples, 4);
 
     // The same matrix again is served entirely from the cache.
     let again = matrix(&mut memo);
