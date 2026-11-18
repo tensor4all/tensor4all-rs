@@ -383,6 +383,21 @@ fn retained_pivot_pairs_reach_support_that_random_starts_miss() {
         GlobalPivotSearchResult::default()
     );
 
+    // Left and right sets of different lengths have no defined last pair, so
+    // they are skipped too. Pairing the shorter set's tail with the same
+    // position of the longer one would walk from (0 | 3, 3) and (2, 3 | 0),
+    // both of which reach the maximum.
+    let unequal = with_sets(
+        vec![vec![vec![]], vec![vec![0], vec![2]], vec![vec![2, 3]]],
+        vec![vec![vec![3, 3]], vec![vec![0], vec![3]], vec![vec![]]],
+    );
+    assert_eq!(
+        finder
+            .find_global_pivots(&unequal, &f, 0.5, &mut ZeroStream)
+            .unwrap(),
+        GlobalPivotSearchResult::default()
+    );
+
     // A random walk that already finds an error above the tolerance makes
     // the confirmation unnecessary: only its own pivot is returned.
     let dense = |p: &Vec<usize>| (p[0] + p[1] + p[2]) as f64;

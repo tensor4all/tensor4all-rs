@@ -119,15 +119,18 @@ where
     (result.termination, recorded, max_diff / max_value)
 }
 
-/// Cases that reported a false `Converged` before the fix (dense relative
-/// error 9.7e-5, 4.4e-4, 7.1e-2, 1.9e-8 and 5.5e-7), and two controls that were
-/// already correct.
+/// All eight cases that reported a false `Converged` before the fix (dense
+/// relative error 9.7e-5, 4.4e-4, 7.1e-2, 1.9e-8, 1.9e-8, 5.5e-7, 1.9e-8 and
+/// 9.5e-8), and two controls that were already correct.
 const CASES: &[(&str, &str, Layout, u64)] = &[
     ("m12", M12, Layout::Abc, 4),
     ("m14", M14, Layout::Interleaved, 3),
     ("m14", M14, Layout::Interleaved, 5),
     ("m14", M14, Layout::Abc, 1),
+    ("m14", M14, Layout::Abc, 3),
     ("m14", M14, Layout::Abc, 4),
+    ("m14", M14, Layout::Abc, 5),
+    ("m14", M14, Layout::Abc, 6),
     ("m12", M12, Layout::Abc, 1),
     ("m14", M14, Layout::Acb, 1),
 ];
