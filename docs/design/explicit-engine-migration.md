@@ -23,6 +23,10 @@ Revision 3 has **one concept, the engine**. Every computing operation takes
 `exec: &mut dyn ExecutionEngine` as an argument. There is no lock, no session and no
 context wrapper. The eager runtime is separate and shared.
 
+**Names (revision 3.1).** The engine-taking form keeps the base name, as in tenferro:
+`contract(a, b, exec)`. There is no `_in` and no `_on_session`. Each function is changed in
+place, with every caller, and its suffixed twins are deleted in the same PR (§6.2, §7).
+
 ## 0. The one-line problem
 
 `tensor4all-rs` runs numerical work through a caller-supplied execution context
@@ -184,8 +188,8 @@ cheap. `treersi`'s adapter is behind `global-defaults`. `treetn`'s two sites
 the global context through them. `interpolativeqtt` has no explicit twin at all.
 `compress_train`'s three callers (`interpolate_single_scale_nd:146`,
 `interpolate_single_scale_sparse_nd:499`, `build_refined_qtt:1042`) are themselves
-context-free, so fixing that site needs `_in` twins for the public builders, not only a
-context parameter on `compress_train`. (`interpolate_chebyshev_patches` and
+context-free, so fixing that site needs the public builders themselves to take `exec`
+(and `&Runtime`), not only an engine parameter on `compress_train`. (`interpolate_chebyshev_patches` and
 `interpolate_patched_nd` already take a caller context and do not reach `compress_train`.)
 
 Verdict: **fails E2.** These are the sites that make `global-defaults` unremovable
@@ -379,7 +383,7 @@ un-gated modules. It understates the dependency, though. Core also **calls a
 helpers call it at `:63`, `:97`, `:131`. Core has no `global-defaults` cfg of its own.
 
 Dropping the requirement therefore needs two things. Stage B2 moves the re-exports
-and splits `mat_mul` (which already has `mat_mul_in`). Stage D2 deletes the `None` route,
+and switches `mat_mul` in place (deleting `mat_mul_in`). Stage D2 deletes the `None` route,
 and with it core's only use of `with_runtime_engine`. Only after both does stage D4 drop
 the requirement.
 
@@ -627,7 +631,7 @@ depends on:
 pub fn svd_with(t: &IdxTensor, opts: &SvdOptions, exec: &mut dyn ExecutionEngine) -> Result<..>;
 pub fn contract(a: &IdxTensor, b: &IdxTensor, exec: &mut dyn ExecutionEngine) -> Result<IdxTensor>;
 let c = a.add(&b, exec)?;                      // value methods take the engine too
-let grads = loss.backward_in(exec)?;           // as in the tensor4all-meta sketch
+let grads = loss.backward(exec)?;              // no suffix: the engine argument says it
 ```
 
 - **One spelling.** There is no `_on_session` form, because the engine *is* the borrowed
@@ -636,12 +640,13 @@ let grads = loss.backward_in(exec)?;           // as in the tensor4all-meta sket
 - **Computing operator overloads are removed**, as tenferro removed them. `AnyScalar`'s
   `Add`/`Sub`/`Mul`/... (`core/src/any_scalar.rs:1225+`) become methods taking `exec`. Pure
   host arithmetic on an untracked scalar may stay an overload (open decision, §6.7).
-- **Names (open decision, §6.7).** The end state follows tenferro: the base name takes
-  `exec` last, with no suffix. During migration the implicit twin still holds the base
-  name, so the engine form needs a temporary name. The recommendation is to reuse `_in`
-  ("runs in this engine"), changing the 41 existing `_in(&ExecutionContext)` functions to
-  take `exec`, and to rename back to the base name in phase D only if the maintainer
-  wants tenferro's exact grammar.
+- **No suffix.** The base name takes `exec` last, as in tenferro. A suffix would carry no
+  information, because there is only one call form. Rust has no overloading, so the base
+  name cannot hold the implicit form and the engine form at once. The migration therefore
+  changes each base-name function **in place** and deletes its `_in` / `_on_session`
+  twins in the same PR, instead of adding an engine form under a temporary name and
+  renaming it later (§7). Every caller is rewritten once, not twice.
+- **Value methods follow the same rule**: `a.add(&b, exec)`, `loss.backward(exec)`.
 - **Parallel work.** The scheduler (rayon, `threadteam`, the patch and lane fan-out) gives
   each task its own engine: `CpuEngine::serial()` for a task on a worker, or a pooled
   engine per lane. This replaces the #830 substitute engine with an explicit choice by
@@ -719,11 +724,11 @@ t4a_status_code t4a_tensor_contract(const t4a_tensor *a, const t4a_tensor *b,
 
 ### 6.7 Open decisions
 
-1. **Final names:** keep `_in` as the engine-taking suffix, or rename to tenferro's
-   suffix-free grammar in phase D.
-2. **Host-only scalar overloads:** keep `+`/`*` on untracked host `AnyScalar`, or remove
+Names are settled (revision 3.1): no suffix, changed in place (§6.2).
+
+1. **Host-only scalar overloads:** keep `+`/`*` on untracked host `AnyScalar`, or remove
    every overload.
-3. **CPU/CUDA shared runtime:** one `Runtime` serving both engine kinds, or separate
+2. **CPU/CUDA shared runtime:** one `Runtime` serving both engine kinds, or separate
    runtimes with `to_engine` moving values between them. Stage A2 verifies feasibility.
 
 ---
@@ -735,14 +740,28 @@ t4a_status_code t4a_tensor_contract(const t4a_tensor *a, const t4a_tensor *b,
 Many PRs land on `main` in parallel with this program, and almost all of them touch the
 surface it changes.
 
-- **Add before migrate, migrate before remove.** Old and new forms coexist until phase D.
-- **One crate per PR**, leaf-first.
+- **Change in place, with all callers.** A function switches to `exec` in one PR, which
+  also deletes its `_in` / `_on_session` twins and rewrites every workspace caller. No
+  caller is left broken, and no caller is rewritten twice.
+- **Small PRs, leaf-first.** One function family or one module per PR, not one crate,
+  so that each PR stays reviewable and conflicts with other open PRs stay local.
 - **Stop new debt first** with the A1 ratchet.
 - **No `#[deprecated]`.** `-D warnings` would break every open PR.
-- **Removal PRs are breaking and announced** on #1376 before they merge.
-- **The one non-additive step before phase D** is changing the 41 `_in(&ExecutionContext)`
-  signatures to take `exec`. Each such PR changes one crate's `_in` functions *and every
-  workspace caller of them*, so it never leaves a caller broken.
+- **Every switch PR is breaking and announced** on #1376 before it merges. An open PR
+  that calls the old form gets a compile error ("missing argument"), and the fix is
+  mechanical: pass the caller's engine, or wrap the call in a bridge (below).
+- **Transitional bridges stop the change from cascading.** A caller that has no engine
+  yet (an implicit public function, or code holding a `CpuExecutionContext`) cannot get
+  one without changing its own signature, which would force its callers to change, and
+  so on up the stack. Two `#[doc(hidden)]` bridges in `tensor4all_tensorbackend::legacy`
+  end the cascade at that caller:
+  - `ctx.with_engine(|rt, exec| ..)` for code that holds a context;
+  - `legacy::with_default(|rt, exec| ..)`, behind `global-defaults`, for implicit code.
+    It runs on the same global context the implicit path uses today, so it adds no new
+    global state.
+
+  The bridges are migration aids, not API. Phase C removes their call sites and phase D
+  deletes them, so a call left behind fails to compile.
 
 ### Phase A — groundwork
 
@@ -766,43 +785,53 @@ surface it changes.
   Verify at the pin that one graph runtime can serve several engines of the same kind
   (today the graph runtime is "derived from the engine" and lives under its lock,
   `context.rs:1241-1246`). Also verify whether one runtime can serve CPU and CUDA
-  (§6.7-3).
+  (§6.7-2).
 - **A3 — `treersi/src/engine.rs:118`** (#1379). The CUDA LUCI arm uses
   `default_cpu_execution_context()`. Take a CPU engine from the caller, or return a typed
   refusal.
 
-### Phase B — engine-taking surface, one crate per PR, leaf-first
+### Phase B — switch in place, small PRs, leaf-first
+
+Each PR switches one function family or one module:
+
+- the base-name function takes `exec` last (and `rt: &Runtime` where it creates values
+  from nothing, §6.3);
+- its `_in` / `_on_session` twins and its literal-`None` route are deleted;
+- every workspace caller is rewritten in the same PR: it passes its own `exec` if it has
+  one, and otherwise calls a bridge (§7.0).
+
+Order:
 
 1. **`tensorbackend`**:
-   - engine-taking forms of the 10 engine-bearing bridge functions, the Hermitian
-     helpers and `IncrementalQr::{new, append}`;
+   - the 10 engine-bearing bridge functions, the Hermitian helpers and
+     `IncrementalQr::{new, append}`;
    - move host-only helpers and `capped_full_piv_lu` out of the `global-defaults` gate;
-   - change `explicit::Session` users to plain `exec` arguments;
+   - replace `explicit::Session` parameters with `exec`;
+   - add the `legacy` bridges;
    - bridge/`Storage` visibility (#1380).
 2. **`core`**:
    - move the `TensorElement` / `Matrix` re-exports (§4.1);
-   - change the `_in` functions to take `exec`, together with their callers;
-   - add `exec`-taking forms for every `IdxTensor` / `AnyScalar` method and computing
-     operator that reaches a literal-`None` site;
-   - make constructors take `&Runtime`.
-3. **Algorithm crates, one PR each** (`simplett`, `treetn`, `itensorlike`, `tensorci`,
-   `treetci`, `treersi`, `interpolativeqtt`, `aci`, `quanticstci`, others): change `_in`
-   to take `exec` and `_on_session` to take `exec`, and add engine-taking twins where
-   none exist. `interpolativeqtt`'s builders also take `&Runtime` (§3.4).
+   - `IdxTensor` / `AnyScalar` methods and the factorizations (`factorize`, `qr_with`,
+     `svd_with`, ...), one family per PR;
+   - computing operator overloads become methods taking `exec` (§6.2);
+   - constructors take `&Runtime`.
+3. **Algorithm crates** (`simplett`, `treetn`, `itensorlike`, `tensorci`, `treetci`,
+   `treersi`, `interpolativeqtt`, `aci`, `quanticstci`, others), one module per PR.
+   `interpolativeqtt`'s builders also take `&Runtime` (§3.4).
 
-### Phase C — migrate callers, one crate per PR
+### Phase C — remove the bridge calls, top-down
 
-- Internal callers, tests, examples, doctests and the tutorial chapter move to
-  engine-taking forms.
+- Each bridge call is replaced by an engine taken from the caller. This reaches the
+  top of each call stack: tests, examples, doctests, the tutorial chapter, and the
+  C API layer.
 - Parallel fan-out (`partitionedtreetn` patches, lanes, Rayon loops) gives each task its
   engine explicitly, replacing the #830 substitute.
 - `Option<&..Context>` parameters become `exec` (ACI: #1382).
-- The implicit public entries stay as thin adapters.
 
 ### Phase D — remove (breaking; announce on #1376 first)
 
-1. **Per crate, leaf-last**: delete the implicit adapters, the F4 twins and the
-   computing operator overloads.
+1. **Delete the bridges** (`tensor4all_tensorbackend::legacy`) once phase C leaves no
+   call site.
 2. **Delete the `None` route** (#1378): `with_runtime_engine`, the owner registry
    (`context.rs:1881-1893`) and the `None` arms in `eager_session.rs`.
 3. **Delete the contexts**: `CpuExecutionContext`, `CudaExecutionContext`,
@@ -817,7 +846,7 @@ surface it changes.
 ### Phase E — bindings and docs
 
 1. **C API** `t4a_runtime` / `t4a_engine` (§6.6), plus the Tensor4all.jl PR. It can start
-   once phase C reaches `treetn`.
+   once phase B reaches `treetn`.
 2. **Python classes.**
 3. **Remaining docs**: README, `llms.txt`, `skills/use-tensor4all-rs/`,
    `explicit-cpu-execution-context.md` (rewritten or retired) and
@@ -829,8 +858,8 @@ surface it changes.
 | --- | --- |
 | A1 | #1392 |
 | A2 | #1393 |
-| A3, and the phase B/C/D steps for `treetn` adapters and `interpolativeqtt` builders | #1379 |
-| D2 and the phase C F1 migration in `core` | #1378 (delete the route; no `NoLiveOwner`) |
+| A3, and the phase B switch of `treetn` contraction and `interpolativeqtt` builders | #1379 |
+| D2 and the phase B switch of the F1 sites in `core` | #1378 (delete the route; no `NoLiveOwner`) |
 | B2 re-exports and D4 | #1377 |
 | phase C for `aci` | #1382 |
 | B1 bridge visibility | #1380 |
@@ -845,7 +874,7 @@ in that stage.
 
 Concretely:
 
-- **Same kernel, different selection.** Phase C replaces *which* engine is used,
+- **Same kernel, different selection.** Phases B and C replace *which* engine is used,
   not *what runs*. A migrated `IdxTensor::sum` must call the same
   `with_eager_session(.., Some(ctx), ..)` body it already had with `None`.
 - **Runtime sharing must not change results.** Stage A2 changes which runtime records a
@@ -871,7 +900,7 @@ Concretely:
 - **RNG streams must not shift.** `treetn/src/treetn/contraction.rs:3151` and `:3227`
   construct the global context *before* RNG advancement, and the SRC contract says
   "Mixed host/CUDA inputs and foreign CUDA contexts fail validation **before RNG
-  advancement**". Deleting the implicit adapter must not move a validation across an RNG
+  advancement**". Switching a function in place must not move a validation across an RNG
   draw.
 - **Errors change, results do not.** Stages 1 and 3 legitimately change which calls
   fail: stage A2 turns some rejections into successes (a host value created on another
