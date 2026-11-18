@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/tensor4all/tensor4all-meta/main/branding/logo/svg/tensor4all-wordmark-dark.svg">
+  <img alt="tensor4all" src="https://raw.githubusercontent.com/tensor4all/tensor4all-meta/main/branding/logo/svg/tensor4all-wordmark.svg" height="64">
+</picture>
+
 # tensor4all-rs
 
 [![CI](https://github.com/tensor4all/tensor4all-rs/actions/workflows/CI_rs.yml/badge.svg)](https://github.com/tensor4all/tensor4all-rs/actions/workflows/CI_rs.yml)
