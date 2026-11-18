@@ -32,10 +32,18 @@ This log records the decisions and what remains unverified.
 
 ## Verification conclusions and constraints
 
-- Every table's count was reproduced at `origin/main@20b42b0d` from a fresh worktree, and
-  every cited `path:line` was read at that revision. The counts are published next to the
-  commands that regenerate them, so a later reader can detect drift instead of trusting
-  them.
+- Every table's count was reproduced at `origin/main@20b42b0d` from a fresh worktree. The
+  counts are published next to the commands that regenerate them, so a later reader can
+  detect drift instead of trusting them.
+- **The first published revision mis-cited §3.9, and the correction method is now a rule
+  (§10 rule 3).** Sixteen cited lines in that one table were enclosing-function
+  declarations rather than the `with_default_session` call sites they were claimed to be
+  (`backend.rs` alone: eight published lines, twelve real sites), one row
+  (`native_tensor_from_vec`) was a false positive from a `use` clause, one `matrix.rs` row
+  attributed `with_default_session` to `submatrix_argmax`, which is host-only, and eight
+  tenferro citations were missing the `crates/` prefix so they did not resolve at the pinned
+  revision. All are fixed and re-checked symbol-by-symbol. The earlier claim that every
+  citation had been "content checked against the claim" was therefore wrong when written.
 - **Unverified: the number of tests and doctests that currently depend on the
   `with_runtime_engine` fallback.** Stage 1 must measure that before flipping the branch;
   the document says so and gives the split-into-two-commits escape hatch if the number is
