@@ -515,7 +515,10 @@ are missing: neither is mandatory, and tensor4all builds one runtime per engine 
 ### 5.6 Placement, engines and runtimes in tenferro
 
 Read at tenferro-rs `origin/main` `8127d0d7`, which is newer than the pinned `32a4e98c`.
-Paths are under `tenferro-rs/crates/`.
+This section deliberately cites the newer revision, because it describes upstream's
+current direction. That is an exception to §10 rule 4. The paths below are relative to
+`tenferro-rs/crates/`, and every one of them also exists at the pin. The line numbers are
+for `8127d0d7`.
 
 - **Placement is a property of the tensor.** `Placement` (`tenferro-tensor/src/types.rs:359-372`)
   carries the memory kind and an optional `DeviceId` (CPU, or a GPU kind plus ordinal).
