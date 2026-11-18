@@ -7,8 +7,9 @@
 public signature, feature default, or numeric path changes.
 
 **Baseline:** `origin/main` at `20b42b0d`, read from a fresh worktree. Every table
-below names the command that regenerates it, and every `path:line` was read at that
-revision. Re-derive before acting on a row — see §10.
+below names the command that regenerates it; every `path:line` is checked with a symbol
+grep at that revision (§10 rule 3). §3.9 carries a correction for the revision that cited
+enclosing-function lines instead of call sites. Re-derive before acting on a row — see §10.
 
 ## 0. The one-line problem
 
@@ -272,10 +273,10 @@ Nine modules are compiled only on the legacy route (`crates/tensor4all-tensorbac
 
 | Module | Public numerical content | Reaches the global engine? |
 | --- | --- | --- |
-| `backend.rs` | `svd_backend`, `qr_backend`, `solve_backend`, `triangular_solve_backend`, `solve_matrix{,_owned}`, `triangular_solve_matrix{,_owned}`, `full_piv_lu_backend`, `full_piv_lu_matrix{,_owned}`, `src_error_estimate{,_general}` | yes — direct `with_default_session` at `:755, :874, :1008, :1509, :1555, :1598, :1634, :1781` |
-| `matrix.rs` | `hermitian_eigendecomposition` (`:796`), `lowest_hermitian_eigenpair` (`:736`), `hermitian_exponential_first_column` (`:894`), `submatrix_argmax` (`:1484`), `mat_mul{,_owned}`, `batched_mat_mul_same_shape{,_owned}` | `hermitian_eigendecomposition` uses `default_eager_ctx()` **and** `default_context()`; `submatrix_argmax` uses `with_default_session`; `mat_mul` has `mat_mul_in` |
-| `tenferro_bridge.rs` | 33 public functions | `reshape_col_major_native_tensor:1309`, `qr_native_tensor:1322`, `svd_native_tensor:1336`, `sum_native_tensor:1350`, `permute_native_tensor:1963` use `with_default_session`; `native_tensor_from_vec:52` and `convert_tensor:665` too, and every einsum/contraction path goes through `run_cached_native_einsum:744` / `execute_native_einsum_reads:861`, which use `default_context()` |
-| `incremental_qr.rs` | `IncrementalQr::{new:196, append:253, q_columns:465, error_estimate:534}` | via `factorize_backend:545` → global |
+| `backend.rs` | `svd_backend`, `qr_backend`, `solve_backend`, `triangular_solve_backend`, `solve_matrix{,_owned}`, `triangular_solve_matrix{,_owned}`, `full_piv_lu_backend`, `full_piv_lu_matrix{,_owned}`, `src_error_estimate{,_general}` | yes — **12** direct `with_default_session` call sites, at `:263` (`solve_right_full_piv_lu`), `:816` (`solve_matrix_direct`), `:837` (`solve_matrix_direct_owned`), `:898` (`triangular_solve_matrix_direct`), `:949` (`triangular_solve_matrix_direct_owned`), `:1113` (`triangular_solve_matrix_widened`), `:1467` (`convert_for_typed`), `:1520` (`svd_backend` → `svd_backend_in`), `:1566` (`qr_backend` → `qr_backend_in`), `:1619` (`solve_backend`), `:1659` (`triangular_solve_backend`), `:1802` (`full_piv_lu_tensor` → `full_piv_lu_tensor_in`). Each global twin delegates to its `_in` sibling or to a private `_in` helper |
+| `matrix.rs` | `hermitian_eigendecomposition` (`:796`), `lowest_hermitian_eigenpair` (`:736`), `hermitian_exponential_first_column` (`:894`), `submatrix_argmax` (`:1484`), `mat_mul{,_owned}`, `batched_mat_mul_same_shape{,_owned}` | `hermitian_eigendecomposition` uses `default_eager_ctx()` `:812` **and** `default_context()` `:822`; `lowest_hermitian_eigenpair` and `hermitian_exponential_first_column` carry no direct call and delegate to it. The BLAS product path reaches the global engine through `dot_general_matrices` `with_default_session` at `:1563` and `blas_mat_mul` at `:1659`, so `mat_mul`/`mat_mul_owned`/`batched_mat_mul_same_shape{,_owned}` inherit it; `mat_mul` has `mat_mul_in`. **`submatrix_argmax` (`:1484`) is host-only** — no global call |
+| `tenferro_bridge.rs` | 33 public functions | `with_default_session` call sites at `:1313` (`reshape_col_major_native_tensor`), `:1325` (`qr_native_tensor`), `:1339` (`svd_native_tensor`), `:1357` (`sum_native_tensor`), `:1967` (`permute_native_tensor`), and `:666` (`convert_tensor`, which every dtype conversion goes through). Every einsum/contraction path goes through `run_cached_native_einsum` (`default_context()` at `:757`) or `execute_native_einsum_reads` (`default_context()` at `:874`). `native_tensor_from_vec` (`:52`) is **not** a global path — it is a plain `NativeTensor::from_vec_col_major` plus error mapping |
+| `incremental_qr.rs` | `IncrementalQr::{new:196, append:253, q_columns:465, error_estimate:534}` | via `factorize_backend` (`:545`), which calls the global twin `qr_backend` at `:551` |
 | `capped_full_piv_lu.rs` | `capped_full_piv_lu:245` | **no** — `factor_with_faer:260` is pure host faer; this module only needs an ungated home, not a context |
 | `storage.rs`, `any_scalar.rs`, `memory.rs`, `tensor_element.rs` | value types, elementwise arithmetic, allocator pressure relief | `any_scalar` arithmetic routes through `IdxTensor` (F1) |
 
@@ -286,7 +287,7 @@ removal plan can move it to `explicit-context` unchanged.
 
 | Binding | State | Evidence |
 | --- | --- | --- |
-| C (`tensor4all-capi`) | 87 `extern "C"` functions (`tensor.rs` 29, `treetn.rs` 32, `index.rs` 16, `quanticstransform.rs` 9, `lib.rs` 1). No context parameter, no context handle, no initialisation call. Every call runs on the global default. | `crates/tensor4all-capi/src/`; opaque handles only in `types.rs` |
+| C (`tensor4all-capi`) | 87 `extern "C"` functions (`tensor.rs` 29, `treetn.rs` 32, `index.rs` 15, `quanticstransform.rs` 10, `lib.rs` 1). No context parameter, no context handle, no initialisation call. Every call runs on the global default. | `crates/tensor4all-capi/src/`; opaque handles only in `types.rs` |
 | Python (`tensor4all-py`) | calls the implicit twins: `Tensor::contract` → context-free `contract` at `crates/tensor4all-py/src/tensor.rs:160`; `TreeTensorNetwork::contract` → `contraction::contract` at `crates/tensor4all-py/src/treetn.rs:157` | |
 
 ### 3.11 The explicit surface that already exists, and its shape problem
@@ -367,12 +368,12 @@ Anchored to the pinned revision
 ### 5.1 The engine trait and how it is obtained
 
 ```rust
-// tenferro-rs/tenferro-tensor/src/backend.rs:3606
+// tenferro-rs/crates/tenferro-tensor/src/backend.rs:3606
 pub trait Engine: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer { .. }
 ```
 
 `CpuEngine::new(pool: tenferro_cpu::Pool)` takes the caller's built pool by value
-(`tenferro-rs/tenferro-cpu/src/engine.rs:119`); `CpuEngine::serial()` runs on the calling thread.
+(`tenferro-rs/crates/tenferro-cpu/src/engine.rs:119`); `CpuEngine::serial()` runs on the calling thread.
 There is no `CpuEngine::from_env`, no process-wide engine and no engine registry:
 
 > "tenferro never subdivides a pool, keeps no process-wide engine registry and does not
@@ -385,22 +386,22 @@ Every operation takes the engine as a plain `&mut` argument on an extension trai
 call site reads as one fluent chain and there is no separate "session" object to build:
 
 ```rust
-// tenferro-rs/tenferro-einsum/src/concrete.rs:137
+// tenferro-rs/crates/tenferro-einsum/src/concrete.rs:137
 fn einsum(&self, subscripts: &str, session: &mut dyn Engine) -> Result<Tensor>;
 
-// tenferro-rs/tenferro-linalg/src/tensor_ext.rs:361 (doctest)
+// tenferro-rs/crates/tenferro-linalg/src/tensor_ext.rs:361 (doctest)
 let (_u, s, _vt) = a.svd(&mut host)?;
 ```
 
 Prepared programs are the same shape one level up: `ExecutionEngine: Engine`
-(`tenferro-rs/tenferro-runtime/src/runtime/engine.rs:150`) adds `target()`, extension-cache
+(`tenferro-rs/crates/tenferro-runtime/src/runtime/engine.rs:150`) adds `target()`, extension-cache
 borrowing and run retirement, and a run binds engine slot `i` to the `i`-th supplied
 engine for that call only.
 
 ### 5.3 The eager/AD layer takes the engine too
 
 ```rust
-// tenferro-rs/tenferro-ad/src/eager.rs:3143
+// tenferro-rs/crates/tenferro-ad/src/eager.rs:3143
 pub fn with_eager_session<T, E: From<Error>>(
     self: &Arc<Self>,
     engine: &mut dyn ExecutionEngine,
@@ -408,7 +409,7 @@ pub fn with_eager_session<T, E: From<Error>>(
 ) -> Result<T, E>
 ```
 
-`EagerTensor::to_tensor(&self, engine: &mut dyn Engine)` (`tenferro-rs/tenferro-ad/src/eager.rs:546`),
+`EagerTensor::to_tensor(&self, engine: &mut dyn Engine)` (`tenferro-rs/crates/tenferro-ad/src/eager.rs:546`),
 `detach(&self, engine: &mut dyn Engine)` (`:4822`). The runtime stores no engine; the
 engine stores no graph.
 
@@ -422,7 +423,7 @@ It removed the alternative rather than guarding it. From
 > runtime boundaries."
 
 Cross-context misuse is a typed error, `tenferro_ad::Error::ContextMismatch`
-(`tenferro-rs/tenferro-ad/src/eager.rs:927` and elsewhere), not a silent re-home.
+(`tenferro-rs/crates/tenferro-ad/src/eager.rs:927` and elsewhere), not a silent re-home.
 
 ### 5.5 Where tensor4all differs, and why it matters
 
@@ -721,7 +722,30 @@ Every table publishes the command that produced it. Two rules for the next reade
 2. **Re-derive the family counts before acting.** If a count in §3 changed, the row is
    out of date, and the PR that changed it must say which row moved and why.
 
+3. **Cite the line that contains the symbol, not the line that starts the enclosing
+   function.** The first published revision of this document got this wrong in §3.9: it
+   published function-declaration lines as if they were `with_default_session` call sites
+   (`backend.rs` alone: eight published lines, twelve real sites), one row
+   (`native_tensor_from_vec`) was a false positive from a `use` clause, and one `matrix.rs`
+   row attributed `with_default_session` to `submatrix_argmax`, which is host-only. Check a
+   citation with a symbol grep, never with a "which function does this line belong to"
+   sweep:
+
+   ```bash
+   grep -n "with_default_session"  crates/tensor4all-tensorbackend/src/backend.rs   # 12 call sites + 1 import
+   grep -nH "with_default_session" crates/tensor4all-tensorbackend/src/{matrix,tenferro_bridge}.rs
+   grep -nH "default_context\|default_eager_ctx" crates/tensor4all-tensorbackend/src/{matrix,tenferro_bridge}.rs
+   grep -n "qr_backend"            crates/tensor4all-tensorbackend/src/incremental_qr.rs
+   ```
+
 The `xtask api-dump` inventory
 (`cargo run -p xtask --release -- api-dump`) covers all 18 public crates and is the
 authoritative check that a public entry point exists or has been removed — it was used to
 build §3.2, §3.6 and §3.11.
+
+4. **An external tenferro citation must resolve at the pinned revision.** Check with
+   `git -C <tenferro-rs> cat-file -e 32a4e98c:<path>`. Tenferro's sources live under
+   `crates/`, so `tenferro-tensor/src/backend.rs` is a broken path and
+   `crates/tenferro-tensor/src/backend.rs` is the real one; its design records are at
+   `docs/design/` with no `crates/` prefix. The first revision got this wrong for eight
+   citations.
