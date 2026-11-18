@@ -329,11 +329,6 @@ where
         self.data.is_empty()
     }
 
-    /// Iterate over projector keys in unspecified hash-map order.
-    pub fn projectors(&self) -> impl Iterator<Item = &Projector> {
-        self.data.keys()
-    }
-
     /// Get the patch stored under an exact projector key.
     pub fn get(&self, projector: &Projector) -> Option<&SubDomainTreeTN<V>> {
         self.data.get(projector)
@@ -343,22 +338,120 @@ where
     pub fn contains(&self, projector: &Projector) -> bool {
         self.data.contains_key(projector)
     }
-
-    /// Iterate over immutable `(projector, patch)` pairs.
-    pub fn iter(&self) -> impl Iterator<Item = (&Projector, &SubDomainTreeTN<V>)> {
-        self.data.iter()
-    }
-
-    /// Iterate over immutable patches.
-    pub fn values(&self) -> impl Iterator<Item = &SubDomainTreeTN<V>> {
-        self.data.values()
-    }
 }
 
 impl<V> PartitionedTreeTN<V>
 where
     V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
+    /// Iterate over the projector keys in canonical patch order.
+    ///
+    /// The order is the one [`Self::iter`] documents: it depends only on the
+    /// stored patches, never on insertion order or hash-map state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let site = DynIndex::new_dyn(3);
+    /// let tree = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense(vec![site.clone()], vec![1.0_f64, 2.0, 3.0])?],
+    ///     vec![0usize],
+    /// )?;
+    /// let patches = (0..3)
+    ///     .map(|value| SubDomainTreeTN::new(tree.clone(), Projector::from_pairs([(site.clone(), value)])?))
+    ///     .collect::<Result<Vec<_>, _>>()?;
+    /// let partition = PartitionedTreeTN::from_subdomains(patches)?;
+    /// let values: Vec<usize> = partition
+    ///     .projectors()
+    ///     .map(|projector| projector.get(&site).ok_or("missing site"))
+    ///     .collect::<Result<_, _>>()?;
+    /// assert_eq!(values, vec![0, 1, 2]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn projectors(&self) -> impl Iterator<Item = &Projector> {
+        self.ordered_entries()
+            .into_iter()
+            .map(|(projector, _)| projector)
+    }
+
+    /// Iterate over immutable `(projector, patch)` pairs in canonical patch order.
+    ///
+    /// Patches are ordered by their index signature, then by their own projector
+    /// coordinates; a patch pair that ties on both is ordered by payload content.
+    /// The order depends only on the stored patches, so two partitions holding
+    /// the same patches iterate identically whatever order they were built in,
+    /// and so do repeated runs of the same program. Order-dependent downstream
+    /// steps, such as a truncated pairwise sum, are therefore reproducible.
+    /// Collecting the order costs one sort of the patch list per call.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let site = DynIndex::new_dyn(4);
+    /// let tree = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense(vec![site.clone()], vec![1.0_f64, 2.0, 3.0, 4.0])?],
+    ///     vec![0usize],
+    /// )?;
+    /// let patch = |value: usize| {
+    ///     SubDomainTreeTN::new(tree.clone(), Projector::from_pairs([(site.clone(), value)])?)
+    /// };
+    /// let forward = PartitionedTreeTN::from_subdomains((0..4).map(patch).collect::<Result<Vec<_>, _>>()?)?;
+    /// let backward =
+    ///     PartitionedTreeTN::from_subdomains((0..4).rev().map(patch).collect::<Result<Vec<_>, _>>()?)?;
+    /// let keys = |partition: &PartitionedTreeTN| -> Vec<Projector> {
+    ///     partition.iter().map(|(projector, _)| projector.clone()).collect()
+    /// };
+    /// assert_eq!(keys(&forward), keys(&backward));
+    /// assert_eq!(keys(&forward)[0], Projector::from_pairs([(site, 0)])?);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn iter(&self) -> impl Iterator<Item = (&Projector, &SubDomainTreeTN<V>)> {
+        self.ordered_entries().into_iter()
+    }
+
+    /// Iterate over immutable patches in canonical patch order.
+    ///
+    /// The order is the one [`Self::iter`] documents.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_core::{DynIndex, IdxTensor};
+    /// use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN};
+    /// use tensor4all_treetn::TreeTN;
+    ///
+    /// let site = DynIndex::new_dyn(2);
+    /// let tree = TreeTN::from_tensors(
+    ///     vec![IdxTensor::from_dense(vec![site.clone()], vec![1.0_f64, 2.0])?],
+    ///     vec![0usize],
+    /// )?;
+    /// let partition = PartitionedTreeTN::from_subdomains(vec![
+    ///     SubDomainTreeTN::new(tree.clone(), Projector::from_pairs([(site.clone(), 1)])?)?,
+    ///     SubDomainTreeTN::new(tree, Projector::from_pairs([(site.clone(), 0)])?)?,
+    /// ])?;
+    /// let first = partition.values().next().ok_or("empty partition")?;
+    /// assert_eq!(first.projector().get(&site), Some(0));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn values(&self) -> impl Iterator<Item = &SubDomainTreeTN<V>> {
+        self.ordered_patches().into_iter()
+    }
+
+    /// Stored `(projector, patch)` pairs in canonical patch order.
+    fn ordered_entries(&self) -> Vec<(&Projector, &SubDomainTreeTN<V>)> {
+        let mut entries: Vec<_> = self.data.iter().collect();
+        sort_entries::<_, _, V>(&mut entries);
+        entries
+    }
+
     /// Construct a partition from validated patches.
     ///
     /// Equal projector keys replace earlier patches in input order. Different
@@ -697,7 +790,7 @@ where
             return Err(PartitionedTreeTNError::OverlappingProjectors);
         }
         let mut patches = Vec::new();
-        for patch in self.data.values() {
+        for patch in self.ordered_patches() {
             for projector in layout {
                 let Some(projected) = patch.project(projector)? else {
                     continue;
@@ -1508,13 +1601,11 @@ where
             return Err(PartitionedTreeTNError::Empty);
         }
 
-        let mut patches: Vec<_> = self.data.iter().collect();
-        sort_by_patch_order(
-            &mut patches,
-            |(_, left), (_, right)| left.patch_order_key().cmp(right.patch_order_key()),
-            |(_, patch)| patch.content_digest(),
-        );
-        let data: Vec<_> = patches.into_iter().map(|(_, patch)| patch.data()).collect();
+        let data: Vec<_> = self
+            .ordered_entries()
+            .into_iter()
+            .map(|(_, patch)| patch.data())
+            .collect();
         TreeTN::exact_sum(&data, engine).map_err(PartitionedTreeTNError::from)
     }
 
@@ -1685,27 +1776,49 @@ fn truncation_options_from_contraction(options: &ContractionOptions) -> Truncati
     truncation
 }
 
+/// Sort `(projector, patch)` entries into canonical patch order.
+fn sort_entries<P, Q, V>(entries: &mut Vec<(P, Q)>)
+where
+    Q: std::borrow::Borrow<SubDomainTreeTN<V>>,
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    sort_by_patch_order(
+        entries,
+        |(_, left), (_, right)| {
+            left.borrow()
+                .patch_order_key()
+                .cmp(right.borrow().patch_order_key())
+        },
+        |(_, patch)| patch.borrow().content_digest(),
+    );
+}
+
+/// Consumes the partition, yielding its patches in canonical patch order (see
+/// [`PartitionedTreeTN::iter`]).
 impl<V> IntoIterator for PartitionedTreeTN<V>
 where
-    V: Clone + Hash + Eq + Send + Sync + Debug,
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     type Item = (Projector, SubDomainTreeTN<V>);
-    type IntoIter = std::collections::hash_map::IntoIter<Projector, SubDomainTreeTN<V>>;
+    type IntoIter = std::vec::IntoIter<(Projector, SubDomainTreeTN<V>)>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.data.into_iter()
+        let mut entries: Vec<_> = self.data.into_iter().collect();
+        sort_entries::<_, _, V>(&mut entries);
+        entries.into_iter()
     }
 }
 
+/// Borrows the patches in canonical patch order (see [`PartitionedTreeTN::iter`]).
 impl<'a, V> IntoIterator for &'a PartitionedTreeTN<V>
 where
-    V: Clone + Hash + Eq + Send + Sync + Debug,
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
 {
     type Item = (&'a Projector, &'a SubDomainTreeTN<V>);
-    type IntoIter = std::collections::hash_map::Iter<'a, Projector, SubDomainTreeTN<V>>;
+    type IntoIter = std::vec::IntoIter<(&'a Projector, &'a SubDomainTreeTN<V>)>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.data.iter()
+        self.ordered_entries().into_iter()
     }
 }
 
