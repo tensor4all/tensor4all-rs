@@ -151,9 +151,8 @@ pub enum PartitionedTreeTNError {
     /// the estimate is never reported as the limit.
     ///
     /// # Remedy
-    /// The estimate grows with the product of the patch's bonds and the
-    /// operator's. Split the input into finer patches, whose bonds are smaller,
-    /// or raise `memory_limit` if the machine has the memory.
+    /// Split the input into finer patches, whose bonds are smaller, or raise
+    /// `memory_limit` if the machine has the memory.
     #[error(
         "{operation} needs an estimated {estimated_bytes} bytes for one patch, above \
          memory_limit = {limit_bytes} bytes; apply it to finer patches or raise the limit"
