@@ -1079,21 +1079,8 @@ fn merge_refine_schedule_rejects_invalid_geometry() {
     .expect_err("work limit below the leaf count");
     assert!(error.to_string().contains("max_work_items"));
 
-    // A zero soft rank goal is invalid.
-    let error = schedule_merge_refine(
-        &preimage,
-        &0,
-        &operator,
-        &sites,
-        &SubsetOperatorOptions { unitary: true },
-        ReconstructionTolerance::default(),
-        &MergeRefineOptions {
-            target_bond_dim: Some(0),
-            ..Default::default()
-        },
-    )
-    .expect_err("zero rank goal");
-    assert!(error.to_string().contains("target_bond_dim"));
+    // MergePolicy::RankGoal cannot represent a zero rank.
+    assert!(std::num::NonZeroUsize::new(0).is_none());
 
     // A preimage that misses one dyadic leaf is not a coverage contract.
     let full = SubDomainTreeTN::from_treetn(tree.clone()).expect("subdomain");
@@ -1311,7 +1298,7 @@ fn schedule_rank_limited(
         &MergeRefineOptions {
             output_depth: None,
             max_work_items: 4 * leaves,
-            target_bond_dim: Some(target_bond_dim),
+            merge_policy: MergePolicy::RankGoal(target_bond_dim.try_into().unwrap()),
             ..Default::default()
         },
     )
@@ -1685,7 +1672,7 @@ fn merge_refine_schedule_rejects_a_term_budget_it_cannot_keep() {
         &MergeRefineOptions {
             output_depth: None,
             max_work_items: 16,
-            target_bond_dim: Some(1),
+            merge_policy: MergePolicy::RankGoal(1_usize.try_into().unwrap()),
             max_terms: 2,
             ..Default::default()
         },
@@ -2959,7 +2946,9 @@ fn merge_refine_schedule_stops_both_axes_when_the_merged_candidate_fits_the_goal
                 coordinate_groups: Some(groups.clone()),
                 output_depth: Some(depth),
                 max_work_items: 4096,
-                target_bond_dim: goal,
+                merge_policy: goal
+                    .map(|goal| MergePolicy::RankGoal(goal.try_into().unwrap()))
+                    .unwrap_or_default(),
                 ..Default::default()
             },
         )
@@ -3038,7 +3027,7 @@ fn merge_refine_schedule_stops_three_axes_when_the_merged_candidate_fits_the_goa
             coordinate_groups: Some(groups.clone()),
             output_depth: Some(2),
             max_work_items: 4096,
-            target_bond_dim: Some(64),
+            merge_policy: MergePolicy::RankGoal(64_usize.try_into().unwrap()),
             ..Default::default()
         },
     )
@@ -3072,3 +3061,6 @@ fn merge_refine_schedule_stops_three_axes_when_the_merged_candidate_fits_the_goa
         "L2 residual {residual:e} exceeds the bound {bound:e}"
     );
 }
+
+#[path = "qft_reconstruction/tolerance_merges.rs"]
+mod tolerance_merges;

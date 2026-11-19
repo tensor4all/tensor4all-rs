@@ -113,6 +113,15 @@
   without `global-defaults`. In every build, `From<anyhow::Error> for IdxTensorError`
   recovers a wrapped `ExecutionContextEntryError` as `IdxTensorError::EngineEntry`
   instead of `IdxTensorError::Operation`.
+- `tensor4all-partitionedtreetn`: replace
+  `MergeRefineOptions::target_bond_dim` with `merge_policy: MergePolicy`:
+  `Exact` (default), `RankGoal(NonZeroUsize)`, or `Tolerance` (#1130).
+  Tolerance-driven merges choose ranks and adaptive output splits within a fixed
+  global allowance. Reports now expose the selected policy, leaf-application
+  bound and per-level allocation, retained error and carried allowance. Exact
+  and rank-goal numerical decisions are unchanged. The greedy reconstructor's
+  `ReconstructionOptions::target_bond_dim` is unchanged.
+
 - `tensor4all-tensorbackend`: `global-defaults` is no longer enabled by the default
   features (#1377). The default is now `explicit-context` plus the platform CPU
   provider, which also exposes `Matrix`, `Storage`, `TensorElement`, the native

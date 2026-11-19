@@ -1,0 +1,23 @@
+   Compiling tensor4all-partitionedtreetn v0.3.0 (<worktree>/crates/tensor4all-partitionedtreetn)
+    Finished `test` profile [unoptimized] target(s) in 2.81s
+     Running unittests src/lib.rs (<cargo-target>/debug/deps/tensor4all_partitionedtreetn-8c418c16901016e1)
+
+running 1 test
+test reconstruction::schedule::tolerance::tests::tolerance_compression_reduces_other_bonds_when_the_maximum_stays_fixed ... FAILED
+
+failures:
+
+---- reconstruction::schedule::tolerance::tests::tolerance_compression_reduces_other_bonds_when_the_maximum_stays_fixed stdout ----
+
+thread 'reconstruction::schedule::tolerance::tests::tolerance_compression_reduces_other_bonds_when_the_maximum_stays_fixed' (2320310) panicked at crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/tolerance/tests.rs:288:9:
+assertion failed: crate::patching::logical_parameter_count(&candidate).unwrap() <
+    crate::patching::logical_parameter_count(&source).unwrap()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    reconstruction::schedule::tolerance::tests::tolerance_compression_reduces_other_bonds_when_the_maximum_stays_fixed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 215 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p tensor4all-partitionedtreetn --lib`

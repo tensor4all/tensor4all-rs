@@ -1,0 +1,23 @@
+   Compiling tensor4all-partitionedtreetn v0.3.0 (<worktree>/crates/tensor4all-partitionedtreetn)
+   Compiling tensor4all-quanticstransform v0.3.0 (<worktree>/crates/tensor4all-quanticstransform)
+    Finished `test` profile [unoptimized] target(s) in 2.58s
+     Running tests/qft_reconstruction.rs (<cargo-target>/debug/deps/qft_reconstruction-e61808e0d882eb12)
+
+running 1 test
+test tolerance_merges::tolerance_merges_compress_without_a_rank_goal ... FAILED
+
+failures:
+
+---- tolerance_merges::tolerance_merges_compress_without_a_rank_goal stdout ----
+
+thread 'tolerance_merges::tolerance_merges_compress_without_a_rank_goal' (2320935) panicked at crates/tensor4all-quanticstransform/tests/qft_reconstruction/tolerance_merges.rs:121:9:
+MergeRefineReport { reference_scale: 10.489630814423016, absolute_tolerance: 1.0489630814423017e-7, error_bound: 0.0, merge_policy: Tolerance, application_error_bound: 0.0, levels: [MergeRefineLevelReport { level: 1, merging_levels_left: Some(3), allocated_error: 3.4965436048076726e-8, error_bound: 0.0, remaining_before: 1.0489630814423017e-7, remaining_after: 1.0489630814423017e-7, budget_spent: 0.0, unused_allocation: 3.4965436048076726e-8, additions: 12, compression_attempts: 0, compressions: 0, dropped_terms: 0 }, MergeRefineLevelReport { level: 2, merging_levels_left: Some(2), allocated_error: 5.2448154072115085e-8, error_bound: 0.0, remaining_before: 1.0489630814423017e-7, remaining_after: 1.0489630814423017e-7, budget_spent: 0.0, unused_allocation: 5.2448154072115085e-8, additions: 2, compression_attempts: 0, compressions: 0, dropped_terms: 0 }, MergeRefineLevelReport { level: 3, merging_levels_left: Some(1), allocated_error: 1.0489630814423017e-7, error_bound: 0.0, remaining_before: 1.0489630814423017e-7, remaining_after: 1.0489630814423017e-7, budget_spent: 0.0, unused_allocation: 1.0489630814423017e-7, additions: 1, compression_attempts: 0, compressions: 0, dropped_terms: 0 }], level_count: 3, applied_operator_count: 8, additions: 15, projections: 60, dropped_terms: 0, dropped_error: 0.0, compression_attempts: 0, compressions: 0, work_items_per_level: [8, 4, 2, 1], peak_work_items: 8, refined_regions: 0, stopped_regions: 1, region_count: 1, term_count: 1, max_bond_dim: 32, max_transient_bond_dim: 32, logical_parameters: 6208 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tolerance_merges::tolerance_merges_compress_without_a_rank_goal
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 48 filtered out; finished in 0.78s
+
+error: test failed, to rerun pass `-p tensor4all-quanticstransform --test qft_reconstruction`

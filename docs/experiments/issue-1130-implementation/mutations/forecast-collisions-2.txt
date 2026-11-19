@@ -1,0 +1,25 @@
+   Compiling tensor4all-partitionedtreetn v0.3.0 (<worktree>/crates/tensor4all-partitionedtreetn)
+   Compiling tensor4all-quanticstransform v0.3.0 (<worktree>/crates/tensor4all-quanticstransform)
+    Finished `test` profile [unoptimized] target(s) in 2.79s
+     Running tests/qft_reconstruction.rs (<cargo-target>/debug/deps/qft_reconstruction-e61808e0d882eb12)
+
+running 1 test
+test tolerance_merges::tolerance_merges_report_inactive_levels_early_stops_and_zero_budget ... FAILED
+
+failures:
+
+---- tolerance_merges::tolerance_merges_report_inactive_levels_early_stops_and_zero_budget stdout ----
+
+thread 'tolerance_merges::tolerance_merges_report_inactive_levels_early_stops_and_zero_budget' (2319124) panicked at crates/tensor4all-quanticstransform/tests/qft_reconstruction/tolerance_merges.rs:236:13:
+assertion `left == right` failed
+  left: Some(0)
+ right: Some(1)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tolerance_merges::tolerance_merges_report_inactive_levels_early_stops_and_zero_budget
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 48 filtered out; finished in 0.31s
+
+error: test failed, to rerun pass `-p tensor4all-quanticstransform --test qft_reconstruction`

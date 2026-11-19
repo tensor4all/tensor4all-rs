@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_partitionedtreetn::{
     reconstruction::{
-        schedule_merge_refine, MergeRefineOptions, ReconstructionTarget, ReconstructionTolerance,
-        SubsetOperatorOptions,
+        schedule_merge_refine, MergePolicy, MergeRefineOptions, ReconstructionTarget,
+        ReconstructionTolerance, SubsetOperatorOptions,
     },
     PartitionedTreeTN, Projector, SubDomainTreeTN, TreeTN,
 };
@@ -61,10 +61,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
+    let operator = LinearOperator::new(mpo, input_mapping, output_mapping);
     let result = schedule_merge_refine(
         &preimage,
         &0,
-        &LinearOperator::new(mpo, input_mapping, output_mapping),
+        &operator,
         std::slice::from_ref(&site),
         &SubsetOperatorOptions { unitary: true },
         ReconstructionTolerance {
@@ -92,6 +93,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     assert!((region(0)? - 7.0 / 2.0_f64.sqrt()).abs() < 1e-12);
     assert!((region(1)? - 1.0 / 2.0_f64.sqrt()).abs() < 1e-12);
+    // With no rank goal, tolerance mode chooses storage rather than a fixed tiling.
+    let tolerant = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        std::slice::from_ref(&site),
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance {
+            rtol: 1e-12,
+            atol: 0.0,
+        },
+        &MergeRefineOptions {
+            merge_policy: MergePolicy::Tolerance,
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(tolerant.report().region_count, 1);
+    let dense = tolerant.into_partition()?.to_treetn()?.to_dense()?;
+    let values = dense.to_vec::<f64>()?;
+    assert!((values[0] - 7.0 / 2.0_f64.sqrt()).abs() < 1e-12);
+    assert!((values[1] + 1.0 / 2.0_f64.sqrt()).abs() < 1e-12);
     // ANCHOR_END: merge_refine
     Ok(())
 }

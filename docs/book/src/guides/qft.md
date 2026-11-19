@@ -191,17 +191,22 @@ to selected indices. The original application error is charged once globally,
 and later errors on disjoint output/spectator cells combine within each level.
 
 `PatchedFourierOptions` defaults to relative reconstruction tolerance `1e-6`
-and an exact full-depth schedule. Set `merge_refine.target_bond_dim` for adaptive
-compression, and use its output-depth/region and work/term limits as needed.
+and an exact full-depth schedule. Set `merge_refine.merge_policy` to
+`MergePolicy::RankGoal(NonZeroUsize)` for a soft goal or `MergePolicy::Tolerance`
+for compression without a rank target. Tolerance mode probes eligible axes and
+keeps the smallest-storage affordable candidate, with absolute per-level error
+shares exposed in `report().levels`. Use output-depth/region and work/term
+limits as needed.
 Leave `coordinate_groups` unset; the front end derives them from the axes.
 The returned `MergeRefineResult` keeps output regions and their retained terms
 lazy. `into_partition()` requires one final term per region. Requested output
 regions select intersecting schedule cells and can return coarser cells.
 Repeated exact transforms can grow intermediate bonds substantially. A rank
 goal is soft and does not bound the initial operator application, which is
-always performed exactly: its bonds are the input bond times the operator bond.
+exact by default: its bonds are the input bond times the operator bond. Select
+`merge_refine.application` for measured or certified leaf truncation.
 For large transforms set an appropriate output depth/region selection and a
-rank goal. The defaults preserve exact behavior and should not
+merge policy. The defaults preserve exact behavior and should not
 be treated as a scalable memory policy. The small round-trip example uses a
 rank goal with a tight reconstruction tolerance.
 
