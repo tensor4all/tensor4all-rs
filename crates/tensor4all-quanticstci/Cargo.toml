@@ -56,6 +56,9 @@ anyhow.workspace = true
 rand.workspace = true
 
 [dev-dependencies]
+# Tests, doctests and benches still exercise the context-free API, which needs
+# the process-global route (tensor4all-rs#1403); the library itself does not.
+tensor4all-core = { path = "../tensor4all-core", default-features = false, features = ["global-defaults"] }
 approx.workspace = true
 tenferro-cpu.workspace = true
 # Path-only dev-dependency so the QFT test can apply a real operator. Its

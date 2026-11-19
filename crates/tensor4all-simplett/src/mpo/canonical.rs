@@ -21,7 +21,7 @@ use super::factorize::SVDScalar;
 use super::mpo::MPO;
 use super::types::{Tensor4, Tensor4Ops};
 use tenferro_tensor::TypedTensor;
-use tensor4all_tensorbackend::qr_backend;
+use tensor4all_core::legacy::qr_backend;
 
 /// Bring `mpo` into right-canonical form without changing the operator it
 /// represents.

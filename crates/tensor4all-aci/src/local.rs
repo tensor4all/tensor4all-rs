@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 
 use crate::scalar::AciScalar;
 use crate::{AciError, ElementwiseBatch, ElementwiseProblem, Result};
+use tensor4all_core::legacy::{batched_mat_mul_same_shape_owned, mat_mul, mat_mul_owned};
 use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops};
-use tensor4all_tensorbackend::{batched_mat_mul_same_shape_owned, mat_mul, mat_mul_owned, Matrix};
+use tensor4all_tensorbackend::Matrix;
 
 type LocalOperator<'a, T> =
     dyn for<'batch> Fn(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()> + 'a;

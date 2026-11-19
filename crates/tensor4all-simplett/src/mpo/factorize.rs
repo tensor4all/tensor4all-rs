@@ -8,7 +8,8 @@ use super::Matrix2;
 use crate::einsum_helper::tensor_to_col_major_vec;
 use num_complex::{Complex64, ComplexFloat};
 use tenferro_tensor::{TensorScalar, TypedTensor};
-use tensor4all_tensorbackend::{svd_backend, BackendLinalgScalar};
+use tensor4all_core::legacy::svd_backend;
+use tensor4all_tensorbackend::BackendLinalgScalar;
 
 /// Factorization method to use
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

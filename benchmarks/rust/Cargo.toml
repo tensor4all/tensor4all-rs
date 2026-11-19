@@ -33,7 +33,8 @@ num-complex.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 serde_json.workspace = true
-tensor4all-core = { path = "../../crates/tensor4all-core" }
+# Exercises the context-free API, which needs the process-global route.
+tensor4all-core = { path = "../../crates/tensor4all-core", features = ["global-defaults"] }
 tensor4all-hdf5 = { path = "../../crates/tensor4all-hdf5", optional = true }
 tensor4all-itensorlike = { path = "../../crates/tensor4all-itensorlike", optional = true }
 tensor4all-partitionedtreetn = { path = "../../crates/tensor4all-partitionedtreetn" }

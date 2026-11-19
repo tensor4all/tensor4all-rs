@@ -2,11 +2,12 @@
 
 use crate::error::{Result, TCIError};
 use crate::TensorCI2;
+use tensor4all_core::legacy::mat_mul_owned;
 use tensor4all_core::{
     matrix_luci_factors_from_matrix, MatrixLuciScalar, MultiIndex, RrLUOptions, Scalar,
 };
 use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3, Tensor3Ops};
-use tensor4all_tensorbackend::{mat_mul_owned, BlasMul, Matrix};
+use tensor4all_tensorbackend::{BlasMul, Matrix};
 
 /// Options for constructing [`TensorCI2`] from a tensor train.
 ///

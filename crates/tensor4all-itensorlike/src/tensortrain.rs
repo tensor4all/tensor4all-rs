@@ -132,7 +132,6 @@ struct PackedSiteTensor<T> {
 }
 
 impl<T: Copy> PackedSiteTensor<T> {
-    #[cfg(any(test, not(feature = "backend-tenferro")))]
     fn get(&self, left: usize, physical: usize, right: usize) -> T {
         debug_assert!(left < self.left_dim);
         debug_assert!(physical < self.physical_dim);
@@ -1660,10 +1659,9 @@ impl TensorTrain {
         Ok(Some(sites))
     }
 
-    /// Reference implementation for differential tests and builds without a
-    /// process-global tensorbackend. Its nested loops are intentionally kept
-    /// out of the optimized default path.
-    #[cfg(any(test, not(feature = "backend-tenferro")))]
+    /// Reference implementation for differential tests and builds without the
+    /// process-global route (`tensor4all-core/global-defaults` off). Its nested
+    /// loops are intentionally kept out of the optimized default path.
     fn norm_squared_from_packed_sites_oracle<T: NormAccumScalar>(
         sites: &[PackedSiteTensor<T>],
     ) -> Result<f64> {
@@ -1711,8 +1709,22 @@ impl TensorTrain {
         Ok(current[0].into_nonnegative_real())
     }
 
-    #[cfg(feature = "backend-tenferro")]
+    /// Packed-site norm: the backend einsum on the process-global context when
+    /// `tensor4all-core` has that route, else the host reference. The choice
+    /// follows core's `global-defaults`, as it followed this crate's
+    /// `backend-tenferro` before the route became opt-in (#1403).
     fn norm_squared_from_packed_sites<T>(sites: Vec<PackedSiteTensor<T>>) -> Result<f64>
+    where
+        T: NormAccumScalar + tensor4all_tensorbackend::TensorElement,
+    {
+        if tensor4all_core::legacy::GLOBAL_DEFAULTS {
+            Self::norm_squared_from_packed_sites_backend(sites)
+        } else {
+            Self::norm_squared_from_packed_sites_oracle(&sites)
+        }
+    }
+
+    fn norm_squared_from_packed_sites_backend<T>(sites: Vec<PackedSiteTensor<T>>) -> Result<f64>
     where
         T: NormAccumScalar + tensor4all_tensorbackend::TensorElement,
     {
@@ -1772,7 +1784,7 @@ impl TensorTrain {
             let conjugated_site = conjugated_site.as_ref().unwrap_or(&site_tensor);
 
             // current[a,b] * A[b,p,r] -> mid[a,p,r]
-            let middle = tensor4all_tensorbackend::einsum_native_tensors(
+            let middle = tensor4all_core::legacy::einsum_native_tensors(
                 &[(&current, &[0, 1]), (&site_tensor, &[1, 2, 3])],
                 &[0, 2, 3],
             )
@@ -1784,7 +1796,7 @@ impl TensorTrain {
             })?;
 
             // conj(A[a,p,s]) * mid[a,p,r] -> next[s,r]
-            current = tensor4all_tensorbackend::einsum_native_tensors(
+            current = tensor4all_core::legacy::einsum_native_tensors(
                 &[(conjugated_site, &[0, 1, 2]), (&middle, &[0, 1, 3])],
                 &[2, 3],
             )
@@ -1826,14 +1838,6 @@ impl TensorTrain {
         Ok(value.into_nonnegative_real())
     }
 
-    #[cfg(not(feature = "backend-tenferro"))]
-    fn norm_squared_from_packed_sites<T: NormAccumScalar>(
-        sites: Vec<PackedSiteTensor<T>>,
-    ) -> Result<f64> {
-        Self::norm_squared_from_packed_sites_oracle(&sites)
-    }
-
-    #[cfg(any(test, not(feature = "backend-tenferro")))]
     fn checked_norm_square(dim: usize) -> Result<usize> {
         if dim == 0 {
             return Err(TensorTrainError::InvalidStructure {

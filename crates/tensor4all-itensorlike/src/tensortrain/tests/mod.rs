@@ -55,7 +55,6 @@ fn norm_squared_single_site_has_expected_value() {
     assert_eq!(tt.norm_squared().unwrap(), 25.0);
 }
 
-#[cfg(feature = "backend-tenferro")]
 fn make_norm_packed_sites<T>(
     specs: &[(usize, usize, usize)],
     mut value: impl FnMut(usize, usize) -> T,
@@ -78,13 +77,12 @@ fn make_norm_packed_sites<T>(
         .collect()
 }
 
-#[cfg(feature = "backend-tenferro")]
 fn assert_packed_norm_matches_oracle<T>(sites: Vec<PackedSiteTensor<T>>, label: &str)
 where
     T: NormAccumScalar + tensor4all_tensorbackend::TensorElement,
 {
     let expected = TensorTrain::norm_squared_from_packed_sites_oracle(&sites).unwrap();
-    let actual = TensorTrain::norm_squared_from_packed_sites(sites).unwrap();
+    let actual = TensorTrain::norm_squared_from_packed_sites_backend(sites).unwrap();
     let tolerance = 1.0e-10 * expected.abs().max(1.0);
     assert!(
         (actual - expected).abs() <= tolerance,
@@ -92,7 +90,6 @@ where
     );
 }
 
-#[cfg(feature = "backend-tenferro")]
 #[test]
 fn packed_norm_backend_matches_oracle_for_real_and_complex_layouts() {
     let cases: &[&[(usize, usize, usize)]] = &[

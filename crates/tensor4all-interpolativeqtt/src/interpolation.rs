@@ -1,12 +1,10 @@
 //! Interpolation constructors and analysis routines.
 
+use tensor4all_core::legacy::{default_cpu_execution_context, mat_mul};
 use tensor4all_core::{
     ColMajorArray, ColMajorArrayRef, CommonScalar, DynIndex, IdxTensor, IndexLike,
 };
-use tensor4all_tensorbackend::{
-    default_cpu_execution_context, explicit::Session, mat_mul, BlasMul, Matrix, StorageScalar,
-    TensorElement,
-};
+use tensor4all_tensorbackend::{explicit::Session, BlasMul, Matrix, StorageScalar, TensorElement};
 use tensor4all_treetn::TreeTN;
 
 use crate::basis::{
@@ -922,7 +920,14 @@ fn compress_train<T: InterpolativeScalar>(
         return Ok((tree, sites));
     }
 
-    let tree = default_cpu_execution_context()
+    // Legacy CPU-global boundary (design doc §3.4): the public QTT builders take
+    // no context yet, so without `tensor4all-core/global-defaults` compression
+    // refuses here instead of choosing an engine.
+    let context =
+        default_cpu_execution_context().map_err(|source| InterpolativeQttError::Execution {
+            source: Box::new(source),
+        })?;
+    let tree = context
         .with_session(|engine| {
             tree.compress_chain_on_session(
                 options.tolerance,

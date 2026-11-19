@@ -22,31 +22,23 @@ tenferro-cuda = [
 # The platform default: Apple Accelerate on macOS, faer elsewhere
 # (see the `tensor4all-cpu-platform` crate).
 tenferro-cpu-platform = [
-    "tensor4all-core/backend-tenferro",
     "tensor4all-core/tenferro-cpu-platform",
     "tensor4all-simplett?/tenferro-cpu-platform",
-    "tensor4all-tensorbackend/backend-tenferro",
     "tensor4all-tensorbackend/tenferro-cpu-platform",
 ]
 tenferro-cpu-faer = [
-    "tensor4all-core/backend-tenferro",
     "tensor4all-core/tenferro-cpu-faer",
     "tensor4all-simplett?/tenferro-cpu-faer",
-    "tensor4all-tensorbackend/backend-tenferro",
     "tensor4all-tensorbackend/tenferro-cpu-faer",
 ]
 tenferro-system-blas = [
-    "tensor4all-core/backend-tenferro",
     "tensor4all-core/tenferro-system-blas",
     "tensor4all-simplett?/tenferro-system-blas",
-    "tensor4all-tensorbackend/backend-tenferro",
     "tensor4all-tensorbackend/tenferro-system-blas",
 ]
 tenferro-provider-inject = [
-    "tensor4all-core/backend-tenferro",
     "tensor4all-core/tenferro-provider-inject",
     "tensor4all-simplett?/tenferro-provider-inject",
-    "tensor4all-tensorbackend/backend-tenferro",
     "tensor4all-tensorbackend/tenferro-provider-inject",
 ]
 diagnostics = []
@@ -66,6 +58,9 @@ rayon.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+# Tests, doctests and benches still exercise the context-free API, which needs
+# the process-global route (tensor4all-rs#1403); the library itself does not.
+tensor4all-core = { path = "../tensor4all-core", default-features = false, features = ["global-defaults"] }
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 tenferro.workspace = true
 tenferro-cpu.workspace = true

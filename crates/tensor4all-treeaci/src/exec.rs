@@ -11,6 +11,7 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 
+use tensor4all_core::legacy::{einsum_native_tensor_reads, mat_mul, mat_mul_owned};
 use tensor4all_core::{
     matrix_luci_factors_from_matrix_owned, matrix_luci_factors_from_matrix_owned_on_session,
     matrix_luci_factors_from_matrix_owned_with_rank_selection,
@@ -19,10 +20,7 @@ use tensor4all_core::{
     MatrixLuciFactors, RrLUOptions,
 };
 use tensor4all_tensorbackend::explicit::Session;
-use tensor4all_tensorbackend::{
-    einsum_native_tensor_reads, mat_mul, mat_mul_in, mat_mul_owned, Matrix, MatrixMulError,
-    NativeTensorReadInput,
-};
+use tensor4all_tensorbackend::{mat_mul_in, Matrix, MatrixMulError, NativeTensorReadInput};
 use tensor4all_treetn::{
     CanonicalizationOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator, TreeTNOperationError,
 };

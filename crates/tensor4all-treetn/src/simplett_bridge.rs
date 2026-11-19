@@ -1,13 +1,14 @@
 use crate::error::TreeTNOperationError;
 use anyhow::Result;
 
+use tensor4all_core::legacy::einsum_native_subscripts;
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike, TensorElement};
 use tensor4all_simplett::{
     tensor3_from_data, tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops,
 };
 use tensor4all_tensorbackend::{
     dense_native_tensor_from_col_major, dense_native_tensor_from_col_major_owned,
-    einsum_native_subscripts, native_tensor_primal_to_dense_col_major,
+    native_tensor_primal_to_dense_col_major,
 };
 
 use crate::TreeTN;
