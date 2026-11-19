@@ -662,8 +662,7 @@ tensor4all-rs does not implement quantum numbers, symmetry sectors or
 block-sparse QN tensors. Symmetric tensors are left to dedicated libraries
 such as [symtn](https://github.com/Ryo-wtnb11/symtn-rs) or other tensor network
 libraries. The dense layer may still provide symmetry-agnostic kernels those
-libraries can call (for example grouped GEMM over blocks of irregular shape),
-but no block-sparse tensor type lives in tensor4all-rs.
+libraries can call, but no block-sparse tensor type lives in tensor4all-rs.
 
 ### t4a-diag
 
@@ -892,7 +891,7 @@ JAX / PyTorch → Python wrapper → ctypes FFI → t4a-capi → Rust
 
 | Aspect | ITensor Julia | t4a | Notes |
 |---|---|---|---|
-| Sparse storage | DOK-of-Arrays | Single DataBuffer + offset map | t4a is GPU-friendly |
+| Sparse storage | DOK-of-Arrays | Not adopted (see Phase 5) | Symmetric tensors are delegated |
 | Axis fusion | FusionStyle dispatch | Out of scope | Quantum number tensors are delegated (see Phase 5) |
 | Lazy evaluation | MapBroadcast.jl | Not planned | Low priority |
 
