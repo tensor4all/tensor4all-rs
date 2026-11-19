@@ -79,22 +79,40 @@ fn child_keys_extend_only_the_listed_axes_by_one_bit() {
     };
     let root = prefix_key(vec![(0, 0), (0, 0)]);
     assert_eq!(
-        prefixes(geometry.child_keys(&root, &[1], None)),
+        prefixes(
+            geometry
+                .child_keys(&root, &[1], None, (usize::MAX, "max_work_items"))
+                .expect("children")
+        ),
         vec![vec![(0, 0), (1, 0)], vec![(0, 0), (1, 1)]]
     );
-    assert_eq!(geometry.child_keys(&root, &[0, 1], None).len(), 4);
+    assert_eq!(
+        geometry
+            .child_keys(&root, &[0, 1], None, (usize::MAX, "max_work_items"))
+            .expect("children")
+            .len(),
+        4
+    );
 
     // Axis 0 already stopped at depth 1: the children of axis 1 stay there.
     let lagging = prefix_key(vec![(1, 1), (1, 0)]);
     assert_eq!(
-        prefixes(geometry.child_keys(&lagging, &[1], None)),
+        prefixes(
+            geometry
+                .child_keys(&lagging, &[1], None, (usize::MAX, "max_work_items"))
+                .expect("children")
+        ),
         vec![vec![(1, 1), (2, 0)], vec![(1, 1), (2, 1)]]
     );
 
     // A requested region keeps one branch of a level.
     let wanted: Vec<InputKey> = vec![vec![(0, 0), (1, 1)]];
     assert_eq!(
-        prefixes(geometry.child_keys(&root, &[1], Some(&wanted))),
+        prefixes(
+            geometry
+                .child_keys(&root, &[1], Some(&wanted), (usize::MAX, "max_work_items"))
+                .expect("children")
+        ),
         vec![vec![(0, 0), (1, 1)]]
     );
 }

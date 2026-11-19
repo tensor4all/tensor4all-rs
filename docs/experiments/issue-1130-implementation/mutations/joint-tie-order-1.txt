@@ -1,0 +1,22 @@
+   Compiling tensor4all-partitionedtreetn v0.3.0 (<worktree>/crates/tensor4all-partitionedtreetn)
+    Finished `test` profile [unoptimized] target(s) in 2.68s
+     Running unittests src/lib.rs (<cargo-target>/debug/deps/tensor4all_partitionedtreetn-8c418c16901016e1)
+
+running 1 test
+test reconstruction::schedule::tolerance::tests::candidate_order_chooses_cheaper_singles_and_deterministic_ties ... FAILED
+
+failures:
+
+---- reconstruction::schedule::tolerance::tests::candidate_order_chooses_cheaper_singles_and_deterministic_ties stdout ----
+
+thread 'reconstruction::schedule::tolerance::tests::candidate_order_chooses_cheaper_singles_and_deterministic_ties' (2319422) panicked at crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/tolerance/tests.rs:40:5:
+assertion failed: prefers(40, Kind::Joint, 40, Kind::Single(0))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    reconstruction::schedule::tolerance::tests::candidate_order_chooses_cheaper_singles_and_deterministic_ties
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 215 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p tensor4all-partitionedtreetn --lib`

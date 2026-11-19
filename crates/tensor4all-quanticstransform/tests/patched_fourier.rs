@@ -1,4 +1,5 @@
 #![cfg(feature = "partitioned")]
+use tensor4all_partitionedtreetn::reconstruction::MergePolicy;
 mod support;
 use num_complex::Complex64;
 use std::collections::{HashMap, HashSet};
@@ -408,7 +409,8 @@ fn spectator_refinement_on_chains_and_degree_three_trees_matches_dft_and_bounds(
                 let mut policy = PatchedFourierOptions::default();
                 if adaptive {
                     policy.tolerance.rtol = 0.05;
-                    policy.merge_refine.target_bond_dim = Some(1);
+                    policy.merge_refine.merge_policy =
+                        MergePolicy::RankGoal(1_usize.try_into().unwrap());
                 }
                 let result = patched_fourier_transform(
                     &state,
@@ -553,7 +555,7 @@ fn reversed_axes_inverse_restores_input_and_same_order_does_not() {
     let state = partition(&tree, &asym(&axes));
     let mut bounded = PatchedFourierOptions::default();
     bounded.tolerance.rtol = 1e-12;
-    bounded.merge_refine.target_bond_dim = Some(4);
+    bounded.merge_refine.merge_policy = MergePolicy::RankGoal(4_usize.try_into().unwrap());
     let forward = patched_fourier_transform(&state, &0, &axes, FourierOptions::forward(), &bounded)
         .unwrap()
         .into_partition()
@@ -616,7 +618,7 @@ fn adaptive_bound_covers_constructed_operator_error() {
     let state = partition(&tree, &prefixes);
     let mut options = PatchedFourierOptions::default();
     options.tolerance.rtol = 0.3;
-    options.merge_refine.target_bond_dim = Some(2);
+    options.merge_refine.merge_policy = MergePolicy::RankGoal(2_usize.try_into().unwrap());
     let result =
         patched_fourier_transform(&state, &0, &axes, FourierOptions::forward(), &options).unwrap();
     let report = result.report();

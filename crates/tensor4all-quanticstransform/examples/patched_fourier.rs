@@ -3,6 +3,7 @@
 use num_complex::Complex64;
 use std::collections::HashSet;
 use tensor4all_core::{DynIndex, IdxTensor};
+use tensor4all_partitionedtreetn::reconstruction::MergePolicy;
 use tensor4all_partitionedtreetn::{PartitionedTreeTN, Projector, SubDomainTreeTN};
 use tensor4all_quanticstransform::{
     patched_fourier_transform, FourierOptions, PatchedFourierOptions,
@@ -52,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = PartitionedTreeTN::from_subdomains(patches)?;
     let mut reconstruction = PatchedFourierOptions::default();
     reconstruction.tolerance.rtol = 1e-12;
-    reconstruction.merge_refine.target_bond_dim = Some(4);
+    reconstruction.merge_refine.merge_policy = MergePolicy::RankGoal(4_usize.try_into()?);
     let result = patched_fourier_transform(
         &state,
         &0,

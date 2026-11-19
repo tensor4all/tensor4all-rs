@@ -15,7 +15,7 @@ use tensor4all_partitionedtreetn::{
 };
 use tensor4all_quanticstransform::{
     patched_fourier_transform, quantics_fourier_operator_multiaxis, AxisBit, FourierOptions,
-    PatchedFourierOptions,
+    MergePolicy, PatchedFourierOptions,
 };
 use tensor4all_treetn::{
     CachedEvaluatorOptions, EvaluationHint, RestructureOptions, SiteIndexNetwork, SwapOptions,
@@ -285,7 +285,7 @@ pub(crate) fn run_case(
     eprintln!("operator ready: bond={operator_bond}, seconds={operator_seconds}");
     let mut options = PatchedFourierOptions::default();
     options.tolerance.rtol = 1e-6;
-    options.merge_refine.target_bond_dim = Some(8);
+    options.merge_refine.merge_policy = MergePolicy::RankGoal(8_usize.try_into()?);
     options.merge_refine.output_depth = Some(1);
     options.merge_refine.max_terms = 256;
     if let Some(share) = certified_share {

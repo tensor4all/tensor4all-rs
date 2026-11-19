@@ -5,9 +5,10 @@
 Approved after maintainer decisions on tracking issue
 [#648](https://github.com/tensor4all/tensor4all-rs/issues/648). The rebased
 cross-model pre-implementation review gate passed on commit `bda6a58f`; this
-record is the implementation contract for the migration. That approval does not
-cover the [merge-refine tolerance proposal](#merge-refine-tolerance-mode-proposal-1130),
-which awaits a separate maintainer design decision.
+record is the implementation contract for the migration. The
+[merge-refine tolerance mode](#merge-refine-tolerance-mode-1130) follows the
+separate design review merged in #1394; its implementation acceptance is tracked
+in #1130.
 
 ## Goal
 
@@ -573,19 +574,22 @@ pre-PR format, clippy, release workspace tests, rustdoc, mdBook, API dump, and
 repository-rules review gates. Coverage is CI-owned; record an explicit coverage
 impact attestation in the worklog/PR body.
 
-## Merge-refine tolerance mode (proposal, #1130)
+<a id="merge-refine-tolerance-mode-proposal-1130"></a>
 
-This section proposes a design for review; it makes no implementation or public
-API change. As requested in the
-[scope decision](https://github.com/tensor4all/tensor4all-rs/issues/1130#issuecomment-6977139247),
-implementation follows in a separate PR after this note is reviewed.
+## Merge-refine tolerance mode (#1130)
+
+This section records the merge-policy implementation contract from
+[design review #1394](https://github.com/tensor4all/tensor4all-rs/pull/1394).
+The implementation and its numerical/performance acceptance are separate from
+the design-only change, as requested in the
+[scope decision](https://github.com/tensor4all/tensor4all-rs/issues/1130#issuecomment-6977139247).
 
 ### Motivation and reported cap-32 results
 
-Exact merging preserves uncompressed direct sums; the
+The motivating exact-mode baseline preserves uncompressed direct sums; the
 [#1130 reproducer](https://github.com/tensor4all/tensor4all-rs/issues/1130)
-exhausts its 5 GiB address-space limit at six Fourier qubits. Goal mode can
-compress, but requires a rank chosen before the run. Its current allocator
+exhausts its 5 GiB address-space limit at six Fourier qubits. Rank-goal mode can
+compress, but requires a rank chosen before the run. Its preserved allocator
 reserves allowance across all remaining levels and possible probes, including
 candidates that will not be retained (`schedule.rs`: `level_share` and
 `level_charge_bound`).
@@ -629,8 +633,8 @@ Use `MergeRefineOptions::merge_policy: MergePolicy` with variants `Exact`
 (default), `RankGoal(NonZeroUsize)`, and `Tolerance`, replacing
 `target_bond_dim`. One enum makes the policies mutually exclusive; the
 alternative boolean would leave invalid combinations to runtime validation.
-This is an intentional early-development API break, with callers and usage
-documentation migrated in the implementation PR. Exact and rank-goal behavior,
+This is an intentional early-development API break; callers and usage
+documentation use the enum instead of the removed field. Exact and rank-goal behavior,
 including goal-mode allocation and stopping decisions, stay unchanged. With
 default exact leaf application, `Exact` keeps `error_bound == 0`; explicitly
 requested measured/certified application retains its existing contract.
@@ -790,6 +794,12 @@ is an accounting view of the reservation, not a second credit to remaining.
 Work counters include discarded probes; `E_t` includes only kept components,
 combined over disjoint regions. Preserve the meaning of `error_bound`:
 `E_app + sum_t E_t`. Report leaf-application error separately from level spend.
+These carry identities describe tolerance mode. Rank-goal allocation keeps its
+historical charges for discarded probes: `budget_spent` reports that reservation
+cost, which may exceed retained `error_bound`, and `remaining_after` subtracts
+that cost. Its `unused_allocation` is therefore not a promise that all retained
+error slack is reusable. `merging_levels_left` is absent for the other policies,
+which do not compute the tolerance-only forecast.
 
 The implementation PR must demonstrate the original six-qubit reproducer under
 5 GiB, within its reported error bound, with peak RSS comparable to goal mode

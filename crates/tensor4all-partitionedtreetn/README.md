@@ -229,10 +229,11 @@ differ as long as the leaves form a prefix code; by default they must also cover
 `2^d` coordinate assignments, or a sparse subset under
 `CoverageContract::ZeroForMissingLeaves`, where an omitted leaf contributes exactly
 zero. `MergeRefineOptions` selects the output depth, the
-work limit, an optional soft rank goal, and the retained term budget;
+work limit, a `merge_policy`, and the retained term budget;
 `MergeRefineReport` records the structural counters plus the pinned allowance and
-the measured bound. With `target_bond_dim` unset the trajectory is uniform and
-exact (`error_bound` zero). With a goal it is adaptive: a region is merged without
+the measured bound. `MergePolicy::Exact` keeps uniform, exact merging
+(`error_bound` zero with default leaf application). `MergePolicy::RankGoal`
+is adaptive: a region is merged without
 splitting first and stops as soon as that candidate fits the goal, and a candidate
 above the goal is refined only when its children store no more parameters in total
 than the candidate they replace, because one split keeps one region per output child
@@ -245,7 +246,16 @@ with `dropped_terms` and `dropped_error` reporting it and a fully dropped region
 omitted while its measured norm still counts. Every measured component is recorded
 once, at the level and region where it was measured, so `error_bound` does not grow
 with the number of refined regions. Exceeding `max_terms` returns a
-resource-limit error. `MergeRefineOptions::application` chooses how each input
+resource-limit error. `MergePolicy::Tolerance` compresses without a rank target:
+every eligible axis is probed and minimum logical storage wins among unsplit,
+single-axis and joint candidates. Only an incumbent and one trial are retained.
+Absolute shares are allocated over potentially merging levels and disjoint
+regions; unused allowance carries only between levels. `report().levels` records
+allocation, retained error and before/after allowance; `application_error_bound`
+is charged once. Rank-goal reports also expose its legacy discarded-probe
+reservation cost through `budget_spent`.
+
+`MergeRefineOptions::application` chooses how each input
 leaf is transformed: exactly (the default); `OperatorApplication::Measured`, a
 truncating application whose measured deviation from the exact one is charged to
 the same bound; or `OperatorApplication::Certified`, a truncating application on
