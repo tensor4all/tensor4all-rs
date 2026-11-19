@@ -1661,6 +1661,9 @@ pub fn einsum_native_tensors_owned(
 /// # Ok(())
 /// # }
 /// ```
+/// # Errors
+///
+/// Returns an error if an operand shape or id set is invalid, the context is re-entered, or the engine fails.
 pub fn einsum_native_tensors_owned_in(
     ctx: &CpuExecutionContext,
 
@@ -1789,6 +1792,9 @@ pub fn einsum_native_tensors(
 /// # Ok(())
 /// # }
 /// ```
+/// # Errors
+///
+/// Returns an error if an operand shape or id set is invalid, the context is re-entered, or the engine fails.
 pub fn einsum_native_tensors_in(
     ctx: &CpuExecutionContext,
 
@@ -2034,7 +2040,10 @@ impl NativeEinsumPlan {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn execute_reads_in(
+    /// # Errors
+///
+/// Returns an error if a read window is out of bounds, the context is re-entered, or the engine fails.
+pub fn execute_reads_in(
         &self,
         ctx: &CpuExecutionContext,
         inputs: &[TensorRead<'_>],
@@ -2112,6 +2121,9 @@ pub fn einsum_native_tensor_reads(
 /// # Ok(())
 /// # }
 /// ```
+/// # Errors
+///
+/// Returns an error if a read window or id set is invalid, the context is re-entered, or the engine fails.
 pub fn einsum_native_tensor_reads_in(
     ctx: &CpuExecutionContext,
 
