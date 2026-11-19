@@ -235,7 +235,7 @@ fn run<P: Problem>(seed: u64, tolerance: f64, confirm: bool, timed: bool) -> Res
         result.evaluation.confirmation_pivots,
     ];
     println!(
-        "{{\"case\":\"{}\",\"seed\":{},\"tolerance\":{:.17e},\"confirm\":{},\"termination\":\"{:?}\",\"oracle_points\":{},\"requested_points\":{},\"reported_error\":{:.17e},\"reported_scale\":{:.17e},\"validation_relmax\":{:.17e},\"validation_rel_l2\":{:.17e},\"validation_points\":{},\"nsearch\":{},\"ranks\":{:?},\"error_bits\":{:?},\"confirmation_counts\":{:?},\"seconds\":{:.9}}}",
+        "{{\"case\":\"{}\",\"seed\":{},\"tolerance\":{:.17e},\"confirm\":{},\"termination\":\"{:?}\",\"oracle_points\":{},\"requested_points\":{},\"reported_error\":{:.17e},\"oracle_max_at_stop\":{:.17e},\"validation_relmax\":{:.17e},\"validation_rel_l2\":{:.17e},\"validation_points\":{},\"nsearch\":{},\"ranks\":{:?},\"error_bits\":{:?},\"confirmation_counts\":{:?},\"seconds\":{:.9}}}",
         P::NAME, seed, tolerance, confirm, result.termination,
         result.evaluation.evaluated_points, result.evaluation.requested_points,
         reported, observed.scale_at_stop, relmax, rel_l2, validation_points,
