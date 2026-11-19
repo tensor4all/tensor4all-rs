@@ -1,8 +1,7 @@
-//! Historical-pool and current-pivot validation for one global search.
+//! Historical-pool and current-pivot validation for one convergence confirmation.
 
-use super::{
-    read_batch_errors, retained_pivot_edges, RetainedPivotEdge, ScalarParts, SessionReadout,
-};
+use super::confirmation::{retained_pivot_edges, RetainedPivotEdge};
+use super::{read_batch_errors, ScalarParts, SessionReadout};
 use crate::error::Result as TreeTciResult;
 use crate::evaluation::BatchExecution;
 use crate::{batch::EVALUATION_CHUNK_POINTS, GlobalIndexBatch, MultiIndex, TreeTCI2};
@@ -17,7 +16,7 @@ use tensor4all_treetn::{TreeTN, TreeTNCachedEvaluator};
 pub(super) struct SampleValidation<'a> {
     pub(super) max_error: f64,
     pub(super) point: MultiIndex,
-    pub(super) retained: Option<Vec<RetainedPivotEdge<'a>>>,
+    pub(super) retained: Vec<RetainedPivotEdge<'a>>,
 }
 
 // INVARIANT: one validation stage borrows the search's execution, approximation,
@@ -68,14 +67,16 @@ where
             readout,
             readout_on_session,
         )?;
+        execution.observe_validation_residuals(
+            GlobalIndexBatch::new(flat, n_sites, count)?,
+            &expected,
+            &errors,
+        )?;
         update_max_sample(flat, n_sites, &errors, &mut known_error, &mut known_point);
     }
-    let validation_edges = if execution.validation_enabled() {
-        Some(retained_pivot_edges(state)?)
-    } else {
-        None
-    };
-    if let Some(retained) = &validation_edges {
+    let validation_edges = retained_pivot_edges(state)?;
+    {
+        let retained = &validation_edges;
         // Current pivot pairs must be checked even when history is tiny, zero,
         // or has evicted their old values. Pairs already replayed from the pool
         // need no second read. Batch missing distinct points through the same
@@ -189,6 +190,11 @@ where
         &values,
         readout,
         readout_on_session,
+    )?;
+    execution.observe_validation_residuals(
+        GlobalIndexBatch::new(flat, n_sites, count)?,
+        &values,
+        &errors,
     )?;
     update_max_sample(flat, n_sites, &errors, max_error, point);
     Ok(())

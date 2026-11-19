@@ -8,108 +8,81 @@ which also owns the materialized `TreeTN`. Both results expose `ranks`,
 
 ## Stopping contract
 
-The reasons describe the optimization loop, in its decision order:
+Default stopping is the current-main rule at `35174fdd`. The recorded error is
+`max(local bond residual, ordinary global-search sampled maximum)`, divided by
+`max_sample_value` when normalization is enabled and the scale is positive.
+The observer receives the recorded error and accounting after any confirmation.
 
 | Reason | Condition | Consequence |
 | --- | --- | --- |
-| `SampledErrorFloor { at_bond_cap: true }` | Three trailing maximum ranks reach the cap and a positive measured error fails the strict tolerance comparison. | The final error records the sampled floor. The state remains swept and materializable. |
-| `MaxBondDimension` | Three trailing maximum ranks reach the cap without the measured floor above. | Still takes precedence over convergence; not every edge need be saturated. |
-| `SampledErrorFloor { at_bond_cap: false }` | Three trailing completed-sweep pivot snapshots are equal while their positive measured errors fail the strict tolerance comparison. | The error records the measured stall, not a proof that no other approximation could improve it. |
-| `Converged` | Three trailing errors are strictly below `tolerance`, the final maximum rank equals the minimum in that window, and no global pivots were accepted in that window. | A sampled criterion, not an exhaustive bound over the full index domain. |
-| `DegenerateCandidateSet` | The convergence window holds, but an edge's most recent local update could not measure its bond error. | The approximation may be inaccurate. |
-| `MaxIterations` | The requested iterations completed without an earlier stop. | A small final error alone does not establish convergence. |
+| `MaxBondDimension` | Three trailing maximum ranks reach the cap. | Takes precedence over convergence. No confirmation runs. |
+| `Converged` | Three trailing errors are strictly below tolerance, final maximum rank equals the minimum in that window, no global pivots were accepted in the window, and every latest bond error is measured. | With `confirm_convergence`, confirmation must also pass. Still a sampled criterion. |
+| `DegenerateCandidateSet` | The ordinary convergence window holds but an edge's latest local error is unmeasured. | No confirmation runs. Accuracy is not established. |
+| `SampledErrorFloor` | Three opt-in failed confirmations have identical completed-sweep pivot snapshots (including order), each with a positive measured residual at or above tolerance. | Records an observed stall, not an optimality bound; returns without pending injection. |
+| `MaxIterations` | Iteration limit reached without an earlier stop, including failure of a final confirmation. | A small final error alone does not establish convergence. |
 
-The recorded error is the maximum of local bond residuals, residuals at the
-**bounded historical pool and all current retained pivot pairs**, and new
-global-search observations.
-Known points are checked against the current approximation even if they were
-pruned from the pivot sets. With normalization enabled and a positive sampled
-scale, divide this maximum by `max_sample_value`; otherwise use it unnormalized.
-The observer receives this same value and the evaluation accounting after the
-search. Pivot injection happens only if the loop will continue, so every
-returned state has completed a sweep since its last injection.
+Local LU truncation remains `tolerance * error_scale`. No per-edge tolerance
+allocation, absolute-cutoff removal or recovery phase is introduced. At zero
+tolerance, the strict ordinary convergence comparison cannot pass, so confirmation
+and its floor cannot run. An exact uncapped run reaches `MaxIterations`; a capped
+run can report `MaxBondDimension`.
 
-The uncapped floor window consists of snapshots `S_k = S_(k+1) = S_(k+2)`
-at the ends of three completed sweeps, with two equality comparisons between
-those snapshots. The first sweep may have changed its input pivot state; that
-new snapshot starts the count at one. The condition does not require three
-individually unchanged input-to-output sweeps.
+### Opt-in convergence confirmation
 
-### Local truncation and measured floors
+`TreeTciOptions::confirm_convergence` defaults to `false`. The off path has no
+history storage or replay and preserves ordinary errors, ranks, verdicts and
+oracle counts. Enable it to check only an approximation that would otherwise
+return `Converged`, independently of `enable_global_pivots`. Confirmation does
+not run on ordinary non-converged or capped stops, nor on every completed sweep.
+A sampled maximum that keeps the ordinary criterion above tolerance can prevent
+confirmation entirely. The per-bond / Julia-compatible alternative and #1371's
+cost issue remain separate work in #1405. `501ebb4a` is a historical cost
+reference, not the default behavior contract.
 
-Local LU truncation remains `tolerance * error_scale`, independently of
-`enable_global_pivots`. This correction does not divide that threshold by the
-number of edges, disable absolute truncation, or introduce a recovery phase.
-Those numerical strategies belong to the separate #1371 experiment.
+Each confirmation materializes one approximation and shares one cached evaluator
+across all checks. It replays the bounded historical pool and validates every
+current retained pivot pair; missing values are queried in bounded batches.
+Known values need no new target query. Zero history budget or zero `nsearch`
+still checks current pairs. If no violation is known and `nsearch > 0`, every
+distinct retained full point seeds a walk, newest first. If these find none,
+each unit-endpoint edge gets at most `nsearch` restarts in each direction,
+rotating retained anchor pairs while randomizing the complementary subtree.
+These finite searches improve coverage without certifying the full domain.
 
-If three consecutive completed-sweep pivot snapshots (including their order)
-are equal while their recorded errors are all positive and fail the strict
-tolerance comparison, the run reports `SampledErrorFloor`.
-The last recorded error is the measured stall. This is an observed lack of
-progress, not proof that no other approximation or future trajectory can improve
-it. The stopping tolerance and the numerical relative cutoff remain unchanged.
+A positive measured residual at or above the absolute tolerance rejects the
+candidate. Its maximum is recorded in that iteration's error. Unless the run
+stops, up to `max_nglobal_pivot` violators are injected and counted as accepted
+global pivots. The ordinary convergence window then requires three fresh sweeps;
+there is no one-sweep retry. Zero injection allowance still rejects a failed
+confirmation. A final failed confirmation returns `MaxIterations` before floor
+detection or injection. Otherwise, the third consecutive failed confirmation at
+an identical completed snapshot returns `SampledErrorFloor`. Snapshot comparison
+happens only at failed confirmations. Fixed rank alone does not imply a floor.
+Every returned state has completed a sweep since its last injection
+([#692](https://github.com/tensor4all/tensor4all-rs/issues/692)).
 
-At `tolerance = 0`, a zero recorded residual is neither strictly below tolerance
-nor a positive sampled violation. An exact uncapped run therefore reaches
-`MaxIterations`; an exact capped run can report `MaxBondDimension`. Positive
-residuals can still produce a floor at zero tolerance.
+### History ownership and accounting
 
-### Validation ownership and search coverage
+History belongs to one enabled initialization/optimization call, independently
+of oracle memoization. Its `validation_cache_bytes` budget defaults to 32 MiB of
+accounted point/value and table storage, excluding spare capacity, fixed indexing
+metadata and process RSS. Zero disables historical storage. The pool is frozen
+before the requested final materialization and dropped at return. Target values
+must remain fixed throughout the call.
 
-Historical validation belongs to one initialization/optimization call,
-independently of optional oracle memoization. Compact integer keys index a
-bounded pool of point/value payloads. The default `validation_cache_bytes` budget
-is 32 MiB of accounted sample storage, including both packed-key copies and
-estimated container overhead, excluding spare capacity, fixed indexing metadata
-and process RSS. Zero disables historical storage. The pool is frozen before the
-requested final materialization and dropped at return.
+At capacity, ordinary oracle traffic replaces old unprotected slots in rotating
+order, reusing point buffers. The strongest currently measured residual witness
+is protected until the next confirmation replays it; a stronger measured witness
+can replace it. Eviction limits historical coverage without stopping the run.
+`validation_samples`, `validation_bytes`, `validation_limit_reached` and
+`validation_evictions` report occupancy and pressure. `confirmation_checks`,
+`confirmation_failures` and `confirmation_pivots` report attempted checks, rejected
+candidates and points passed to injection. All history and confirmation counters
+are zero with confirmation disabled.
 
-At capacity, ordinary oracle traffic replaces old unprotected slots in rotating slot
-order, reusing their point buffers. The strongest residual witness measured on
-the current approximation is protected from ordinary insertion. Each new
-approximation first replays the retained pool, including the previous witness;
-a stronger newly measured point may replace it. This avoids silently discarding
-the largest observed violation while bounding retained memory. It is still a
-subset of historical samples, not a record of every oracle request ever made.
-
-Every current retained pivot pair is validated independently of that pool.
-Missing values are queried in bounded batches; pairs already replayed need no
-second read. This also runs with zero history budget, zero random starts, zero
-insertion allowance, and on final or capped sweeps. The budget limits historical
-coverage rather than terminating interpolation. `validation_samples`,
-`validation_bytes`, `validation_limit_reached` and `validation_evictions` expose
-the pool's occupancy and pressure. Target values must be fixed during a call.
-
-One cached tree evaluator serves historical replay, current pivots and fresh
-search. Replaying known values needs no oracle queries. The largest validation
-violation can become a global pivot, even below the discovery margin. Fresh
-search uses
-`tolerance * error_scale`, preferring discoveries above
-`tol_margin_global_search` times that threshold; when none cross the margin,
-observed tolerance violations still qualify.
-
-If no point qualifies and `nsearch > 0`, confirmation walks every current
-retained pair on every edge, newest first, walking duplicate full points only
-once. The walk count and compact deduplication set are bounded by the sum of
-bond ranks, with borrowed pivot tables and reusable full-site scratch. If
-confirmation finds no pivot, every edge with a dimension-one endpoint gets
-up to `nsearch` restarts in **each** direction: hold one observed subtree fixed
-and randomize the other. This preserves a sparse branch while exploring an
-independent branch. Those restarts total at most twice `nsearch` times the
-number of unit-endpoint edges. All stages share the cached approximation
-readout. They improve sampled coverage without enumerating the full domain.
-
-Fresh discovery and injection are skipped on final or saturated sweeps, but
-known-sample validation still runs. It also runs when `nsearch` or
-`max_nglobal_pivot` is zero. `enable_global_pivots = false` disables the history
-and all global checks. Immediate materialization after an unswept injection
-can have inconsistent bond ranks
-([#692](https://github.com/tensor4all/tensor4all-rs/issues/692)); floor stops therefore discard pending injections and return the measured state.
-
-The named `TreeInterpolator` adapter maps a cap-caused floor to
-`BondCapReached`, preserving the common contract's cap precedence. An uncapped
-floor maps to `InterpolationTermination::SampledErrorFloor`. MPI reports preserve
-that verdict.
+The named `TreeInterpolator` adapter maps `SampledErrorFloor` to the common
+`InterpolationTermination::SampledErrorFloor`; MPI reports preserve that verdict.
+Ordinary `MaxBondDimension` still maps to `BondCapReached`.
 
 ## Unmeasured bond errors
 
@@ -180,8 +153,9 @@ missing, duplicated, or unknown edge before that pass updates any state, so the
 stale-bond-error and false-convergence cases cannot arise from an invalid order.
 
 Each call starts fresh ranks/errors/global-pivot diagnostics, a new convergence
-window, bounded validation pool and iteration budget. Final
-iterations validate known samples without injecting new pivots on every call. Several calls need not reproduce
+window and iteration budget, plus a new bounded pool when confirmation is enabled.
+A final convergence candidate can be confirmed; a failed confirmation never
+injects at the iteration limit. Several calls need not reproduce
 one longer call, nor a fresh uncapped run's pivot trajectory or ranks at each
 iteration. Increasing a cap permits growth; it does not guarantee convergence
 or certify error over the whole network.

@@ -309,30 +309,42 @@ where
         state.max_sample_value = max_initial;
 
         let report = with_seeded_streams(&options, &DefaultProposer, |streams| {
-            let mut cached = CachedExecution::new(
+            let cached = CachedExecution::new(
                 &mut execution,
                 &state.local_dims,
                 options.evaluation_cache_bytes,
-                options
-                    .enable_global_pivots
-                    .then_some(options.validation_cache_bytes),
             )?;
-            if options.enable_global_pivots {
-                let points: Vec<_> = vertex_pivots.iter().flatten().copied().collect();
-                cached.record_initial_samples(
-                    GlobalIndexBatch::new(&points, state.local_dims.len(), vertex_pivots.len())?,
-                    &initial_values,
-                )?;
-            }
-            optimize_with_streams(
-                &mut state,
-                &mut cached,
-                &options,
-                &DefaultProposer,
-                &AllEdges,
-                &mut (),
-                streams,
-            )
+            let history = options
+                .confirm_convergence
+                .then(|| {
+                    crate::validation::SampleHistory::new(
+                        &state.local_dims,
+                        options.validation_cache_bytes,
+                    )
+                })
+                .transpose()?;
+            cached.with_confirmation(history, |cached| {
+                if options.confirm_convergence {
+                    let points: Vec<_> = vertex_pivots.iter().flatten().copied().collect();
+                    cached.record_initial_samples(
+                        GlobalIndexBatch::new(
+                            &points,
+                            state.local_dims.len(),
+                            vertex_pivots.len(),
+                        )?,
+                        &initial_values,
+                    )?;
+                }
+                optimize_with_streams(
+                    &mut state,
+                    cached,
+                    &options,
+                    &DefaultProposer,
+                    &AllEdges,
+                    &mut (),
+                    streams,
+                )
+            })
         })
         .map_err(classify)?;
         let network = to_named_treetn_chunked(
@@ -384,12 +396,7 @@ fn map_termination(
         TreeTciTermination::Converged => InterpolationTermination::Converged,
         TreeTciTermination::MaxBondDimension => InterpolationTermination::BondCapReached,
         TreeTciTermination::MaxIterations => InterpolationTermination::IterationLimit,
-        TreeTciTermination::SampledErrorFloor { at_bond_cap: true } => {
-            InterpolationTermination::BondCapReached
-        }
-        TreeTciTermination::SampledErrorFloor { at_bond_cap: false } => {
-            InterpolationTermination::SampledErrorFloor
-        }
+        TreeTciTermination::SampledErrorFloor => InterpolationTermination::SampledErrorFloor,
         TreeTciTermination::DegenerateCandidateSet => InterpolationTermination::ErrorNotMeasured,
     }
 }

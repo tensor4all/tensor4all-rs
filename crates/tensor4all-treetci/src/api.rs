@@ -466,60 +466,55 @@ where
     let mut tci = TreeTCI2::<T>::new(local_dims, graph)?;
     tci.add_global_pivots(&pivots)?;
 
-    let mut evaluator = CachedExecution::new(
-        execution,
-        &tci.local_dims,
-        options.evaluation_cache_bytes,
-        options
-            .enable_global_pivots
-            .then_some(options.validation_cache_bytes),
-    )?;
+    let evaluator =
+        CachedExecution::new(execution, &tci.local_dims, options.evaluation_cache_bytes)?;
+    let history = options
+        .confirm_convergence
+        .then(|| {
+            crate::validation::SampleHistory::new(&tci.local_dims, options.validation_cache_bytes)
+        })
+        .transpose()?;
+    evaluator.with_confirmation(history, |evaluator| {
+        // Initialize max_sample_value via batch evaluate
+        let n_sites = tci.local_dims.len();
+        let flat_len = checked_batch_len(n_sites, pivots.len())?;
+        let mut flat = Vec::with_capacity(flat_len);
+        for pivot in &pivots {
+            flat.extend_from_slice(pivot);
+        }
+        let batch = GlobalIndexBatch::new(&flat, n_sites, pivots.len())?;
+        let init_vals = evaluator.call(batch)?;
+        if init_vals.len() != pivots.len() {
+            return Err(anyhow::anyhow!(
+                "initial evaluator returned {} values for {} pivots",
+                init_vals.len(),
+                pivots.len()
+            )
+            .into());
+        }
+        tci.max_sample_value = init_vals
+            .iter()
+            .map(|v| CommonScalar::abs_val(*v))
+            .fold(0.0f64, f64::max);
+        if !matches!(
+            tci.max_sample_value.partial_cmp(&0.0),
+            Some(std::cmp::Ordering::Greater)
+        ) {
+            return Err(anyhow::anyhow!("initial pivots must not all evaluate to zero").into());
+        }
 
-    // Initialize max_sample_value via batch evaluate
-    let n_sites = tci.local_dims.len();
-    let flat_len = checked_batch_len(n_sites, pivots.len())?;
-    let mut flat = Vec::with_capacity(flat_len);
-    for pivot in &pivots {
-        flat.extend_from_slice(pivot);
-    }
-    let batch = GlobalIndexBatch::new(&flat, n_sites, pivots.len())?;
-    let init_vals = evaluator.call(batch)?;
-    if init_vals.len() != pivots.len() {
-        return Err(anyhow::anyhow!(
-            "initial evaluator returned {} values for {} pivots",
-            init_vals.len(),
-            pivots.len()
-        )
-        .into());
-    }
-    tci.max_sample_value = init_vals
-        .iter()
-        .map(|v| CommonScalar::abs_val(*v))
-        .fold(0.0f64, f64::max);
-    if !matches!(
-        tci.max_sample_value.partial_cmp(&0.0),
-        Some(std::cmp::Ordering::Greater)
-    ) {
-        return Err(anyhow::anyhow!("initial pivots must not all evaluate to zero").into());
-    }
+        let result = optimize_with_streams(
+            &mut tci, evaluator, options, proposer, &AllEdges, observer, streams,
+        )?;
+        evaluator.finish_validation();
+        let treetn = to_treetn_chunked(&tci, evaluator, center_site, EVALUATION_CHUNK_POINTS)?;
 
-    let result = optimize_with_streams(
-        &mut tci,
-        &mut evaluator,
-        options,
-        proposer,
-        &AllEdges,
-        observer,
-        streams,
-    )?;
-    evaluator.finish_validation();
-    let treetn = to_treetn_chunked(&tci, &mut evaluator, center_site, EVALUATION_CHUNK_POINTS)?;
-
-    Ok(TreeTciRunResult {
-        treetn,
-        ranks: result.ranks,
-        errors: result.errors,
-        termination: result.termination,
-        evaluation: evaluator.stats(),
+        Ok(TreeTciRunResult {
+            treetn,
+            ranks: result.ranks,
+            errors: result.errors,
+            termination: result.termination,
+            evaluation: evaluator.stats(),
+        })
     })
 }

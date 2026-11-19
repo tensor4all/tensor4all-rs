@@ -28,3 +28,5 @@ mod tree_interpolator;
 mod truncated_proposer_junction;
 
 mod issue1352_validation_budget;
+
+mod heavy_issue1352_confirmation;

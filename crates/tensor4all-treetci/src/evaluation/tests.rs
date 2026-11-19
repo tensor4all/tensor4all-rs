@@ -13,7 +13,7 @@ fn failed_batches_are_retryable_without_retaining_partial_results() {
             }
         };
         let mut source = Compatibility::new(&mut evaluate);
-        let mut evaluator = CachedExecution::new(&mut source, &[2], limit, Some(4096)).unwrap();
+        let mut evaluator = CachedExecution::new(&mut source, &[2], limit).unwrap();
         let batch = GlobalIndexBatch::new(&[1, 0, 1], 1, 3).unwrap();
         assert_eq!(
             evaluator.call(batch).unwrap_err().to_string(),
@@ -28,13 +28,10 @@ fn failed_batches_are_retryable_without_retaining_partial_results() {
         }
         assert_eq!(evaluator.stats().cached_entries, 0);
         assert_eq!(evaluator.stats().evaluated_points, 0);
-        assert_eq!(evaluator.stats().validation_samples, 0);
         assert_eq!(evaluator.call(batch).unwrap(), vec![10.0, 0.0, 10.0]);
         assert_eq!(evaluator.call(batch).unwrap(), vec![10.0, 0.0, 10.0]);
         let stats = evaluator.stats();
         assert_eq!(stats.requested_points, 12);
-        assert_eq!(stats.validation_samples, 2);
-        assert!(!stats.validation_limit_reached);
         assert_eq!(
             stats.evaluated_points,
             if limit.is_none() {
@@ -53,42 +50,12 @@ fn failed_batches_are_retryable_without_retaining_partial_results() {
 }
 
 #[test]
-fn initialization_samples_are_retained_without_repeating_the_oracle_request() {
-    for limit in [None, Some(4096)] {
-        let mut evaluate = |_: GlobalIndexBatch<'_>| -> anyhow::Result<Vec<f64>> {
-            panic!("already observed initialization values must not query the oracle again")
-        };
-        let mut source = Compatibility::new(&mut evaluate);
-        let mut evaluator = CachedExecution::new(&mut source, &[2, 2], None, limit).unwrap();
-        evaluator
-            .record_initial_samples(
-                GlobalIndexBatch::new(&[1, 0, 0, 1], 2, 2).unwrap(),
-                &[3.0, 5.0],
-            )
-            .unwrap();
-        let mut points = Vec::new();
-        let mut values = Vec::new();
-        let count = evaluator.validation_batch(0, 4, &mut points, &mut values);
-        if limit.is_some() {
-            assert_eq!(count, 2);
-            assert_eq!(points, [1, 0, 0, 1]);
-            assert_eq!(values, [3.0, 5.0]);
-        } else {
-            assert_eq!(count, 0);
-            assert!(points.is_empty() && values.is_empty());
-        }
-        assert_eq!(evaluator.stats().evaluated_points, 0);
-        assert_eq!(evaluator.stats().validation_samples, count);
-    }
-}
-
-#[test]
 fn invalid_memo_coordinates_do_not_call_the_oracle() {
     let mut evaluate = |_: GlobalIndexBatch<'_>| -> anyhow::Result<Vec<f64>> {
         panic!("invalid batch must not reach the target")
     };
     let mut source = Compatibility::new(&mut evaluate);
-    let mut evaluator = CachedExecution::new(&mut source, &[2], Some(1024), None).unwrap();
+    let mut evaluator = CachedExecution::new(&mut source, &[2], Some(1024)).unwrap();
     for batch in [
         GlobalIndexBatch::new(&[0, 2], 1, 2).unwrap(),
         GlobalIndexBatch::new(&[0, 0], 2, 1).unwrap(),
@@ -103,7 +70,7 @@ fn wide_index_spaces_remain_supported_when_memo_is_disabled() {
     let dims = vec![2; 1025];
     let mut evaluate = |batch: GlobalIndexBatch<'_>| Ok(vec![3.0; batch.n_points()]);
     let mut source = Compatibility::new(&mut evaluate);
-    let mut evaluator = CachedExecution::new(&mut source, &dims, None, None).unwrap();
+    let mut evaluator = CachedExecution::new(&mut source, &dims, None).unwrap();
     let indices = vec![0; 1025];
     assert_eq!(
         evaluator
@@ -114,5 +81,5 @@ fn wide_index_spaces_remain_supported_when_memo_is_disabled() {
 
     let mut empty = |_: GlobalIndexBatch<'_>| -> anyhow::Result<Vec<f64>> { Ok(vec![]) };
     let mut source = Compatibility::new(&mut empty);
-    assert!(CachedExecution::new(&mut source, &dims, Some(1024), None).is_err());
+    assert!(CachedExecution::new(&mut source, &dims, Some(1024)).is_err());
 }

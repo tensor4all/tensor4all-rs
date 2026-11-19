@@ -26,24 +26,25 @@ for the convergence window, global-search behavior, and limit precedence.
 
 Global pivot search uses the retained-coordinate floating-zone walk from
 chain TCI, with one cached tree evaluator shared across starts and scans.
-A bounded pool of recent oracle samples and its strongest residual witness are
-replayed against every completed approximation without querying the target
-again. All current retained pivot pairs are checked independently, including
-final and capped sweeps. When ordinary
-starts find no pivot, every distinct retained full point across all edges seeds
-a confirmation walk. If those checks find none, each dimension-one endpoint
-edge gets up to `nsearch` subtree-anchored restarts in each direction.
-Measured residuals contribute to the recorded iteration error even below the
-discovery margin. The walk is greedy and can still miss unseen features.
+The recorded error combines local bond residuals and ordinary search observations.
+Default stopping and oracle work preserve current-main behavior.
 
-Validation has an independent `validation_cache_bytes` budget (32 MiB by
-default). At capacity, old unprotected samples are evicted; the strongest
-currently measured residual witness is protected. Zero disables historical
-storage while current retained pairs are still checked. Pool pressure affects
-historical coverage and does not stop a run. An observed violation at three equal
-completed-sweep pivot snapshots, or at a saturated bond cap, reports `SampledErrorFloor`; read its value from the last recorded
-error. Local LU truncation remains the requested tolerance in both search modes.
-Disabling global pivots disables global validation too.
+Set `TreeTciOptions::confirm_convergence` to `true` to confirm an approximation
+only after the ordinary three-sweep convergence window passes. Confirmation
+checks all current retained pivot pairs and replays a bounded oracle history.
+It can also walk retained points and restart complementary subtrees on edges
+with a dimension-one endpoint. These remain sampled checks, not a global bound.
+Confirmation is independent of `enable_global_pivots` and does not run on a
+bond-cap stop or when ordinary convergence is never reached.
+
+`validation_cache_bytes` (32 MiB by default) limits opt-in historical storage;
+zero still permits current-pair checks. At capacity, old unprotected samples
+are evicted while the strongest measured residual witness is protected.
+A failed confirmation records its error, injects up to `max_nglobal_pivot`
+violators and requires three fresh sweeps. Three failures at identical completed
+pivot snapshots report `SampledErrorFloor`. A failure at the iteration limit
+returns `MaxIterations` without unswept injection. Read the final recorded error
+alongside these verdicts. Local LU truncation keeps the requested tolerance.
 
 ## Documentation
 
@@ -75,8 +76,9 @@ edge's pivots directly from `ijset`; no historical full pivot maps are copied.
 Custom proposers retaining that edge's previous pivots now read `ijset`.
 The former `ijset_history` field is removed.
 
-Each call starts its own diagnostics, validation history and convergence window.
-Its final iteration validates known samples without fresh discovery or injection.
+Each call starts its own diagnostics and convergence window, plus a new history
+when confirmation is enabled. A final ordinary convergence candidate can be
+confirmed, but a failed confirmation never injects at the iteration limit.
 Several calls therefore need not match one
 longer run. Seeded calls restart RNGs; reuse a caller-owned RNG to advance its
 sequence across calls. See the [continuation contract](../../docs/design/treetci-termination.md#continued-optimization).

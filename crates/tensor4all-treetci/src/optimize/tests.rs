@@ -35,13 +35,7 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         }
     }
 
-    for (enable_global_pivots, max_iter, tolerance) in [
-        (false, 4, 1e-12),
-        (true, 2, 1e-12),
-        (true, 10, 1e-12),
-        // Zero tolerance still permits a floor for a positive residual.
-        (true, 10, 0.0),
-    ] {
+    for enable_global_pivots in [false, true] {
         let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
         state.add_global_pivots(&[vec![0, 0]]).unwrap();
         state.max_sample_value = 1.0;
@@ -59,8 +53,8 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
                 .collect())
         };
         let options = TreeTciOptions {
-            tolerance,
-            max_iter,
+            tolerance: 1e-12,
+            max_iter: 4,
             enable_global_pivots,
             nsearch: 20,
             seed: Some(7),
@@ -78,14 +72,7 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         .unwrap();
         let (reason, iterations) = if enable_global_pivots {
             assert!(residual_points_seen.get() > 0);
-            if max_iter >= 3 {
-                (
-                    crate::TreeTciTermination::SampledErrorFloor { at_bond_cap: false },
-                    3,
-                )
-            } else {
-                (crate::TreeTciTermination::MaxIterations, max_iter)
-            }
+            (crate::TreeTciTermination::MaxIterations, 4)
         } else {
             assert_eq!(residual_points_seen.get(), 0);
             (crate::TreeTciTermination::DegenerateCandidateSet, 3)
@@ -93,8 +80,9 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         assert_eq!(result.termination, reason);
         assert_eq!(result.ranks, vec![1; iterations]);
         let expected_errors = if enable_global_pivots {
-            // Known residual one is validated even on the final iteration.
-            vec![1.0; iterations]
+            // The global search actually measured residual one. The final
+            // iteration skips search, so only its local zero is available.
+            vec![1.0, 1.0, 1.0, 0.0]
         } else {
             vec![0.0; iterations]
         };
@@ -109,25 +97,6 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         );
         assert_eq!(observed.0.last().unwrap().1, result.evaluation);
         assert_swept_pivot_sets(&state, usize::MAX);
-
-        // A legitimate floor preserves this inaccurate rank-1 approximation
-        // and reports its actual residual; it is not an accuracy certificate.
-        let tn = crate::to_treetn(&state, evaluate, Some(0)).unwrap();
-        let indices = (0..2)
-            .map(|site| tn.site_space(&site).unwrap().iter().next().unwrap().clone())
-            .collect();
-        let reference = IdxTensor::from_dense(indices, vec![1.0, 2.0, 2.0, 3.0]).unwrap();
-        let residual = tn
-            .to_dense()
-            .unwrap()
-            .sub(&reference)
-            .unwrap()
-            .maxabs()
-            .unwrap();
-        assert_eq!(residual, 1.0);
-        if enable_global_pivots {
-            assert_eq!(result.errors.last(), Some(&residual));
-        }
     }
 }
 
@@ -352,10 +321,7 @@ fn optimize_default_stops_early_when_bond_dim_saturated() {
     )
     .unwrap();
 
-    assert_eq!(
-        termination,
-        TreeTciTermination::SampledErrorFloor { at_bond_cap: true }
-    );
+    assert_eq!(termination, TreeTciTermination::MaxBondDimension);
 
     // Rank-3 identity capped at max_bond_dim = 1 can never reach the 1e-12
     // tolerance; without the bond-dim-saturation criterion this would run
@@ -477,10 +443,7 @@ fn run_capped_and_check<F>(
         termination,
         ..
     } = optimize_default(&mut tci, &evaluate, options).unwrap();
-    assert_eq!(
-        termination,
-        TreeTciTermination::SampledErrorFloor { at_bond_cap: true }
-    );
+    assert_eq!(termination, TreeTciTermination::MaxBondDimension);
 
     // The cap is below the function's rank, so the loop must have stopped
     // through the bond-dimension saturation stop, not through convergence or
@@ -957,3 +920,5 @@ fn optimize_rejects_invalid_global_search_starts_before_callback() {
         assert_eq!(calls.get(), 0);
     }
 }
+
+mod confirmation;

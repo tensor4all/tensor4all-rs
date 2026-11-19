@@ -863,8 +863,8 @@ pub enum InterpolationTermination {
     /// too small to reveal a residual). The result may be inaccurate.
     ErrorNotMeasured,
     /// Sampled residuals persist at or above tolerance through the engine's
-    /// stall window, or a resource cap prevents resolving them. The
-    /// outcome's `error_estimate` records the measured floor.
+    /// stall window. The outcome's `error_estimate` records the measured floor,
+    /// not a proof that no better approximation exists.
     SampledErrorFloor,
 }
 

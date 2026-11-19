@@ -30,6 +30,9 @@ pub(crate) struct SampleHistory<T> {
     limit_reached: bool,
     evictions: usize,
     recording: bool,
+    confirmations: usize,
+    failures: usize,
+    injected: usize,
 }
 
 impl<T: Clone> SampleHistory<T> {
@@ -59,6 +62,9 @@ impl<T: Clone> SampleHistory<T> {
             limit_reached: false,
             evictions: 0,
             recording: true,
+            confirmations: 0,
+            failures: 0,
+            injected: 0,
         })
     }
 
@@ -130,7 +136,16 @@ impl<T: Clone> SampleHistory<T> {
     /// Start a new approximation's residual pass, keeping the old witness
     /// protected until the retained pool has been replayed.
     pub(crate) fn begin_validation(&mut self) {
+        self.confirmations = self.confirmations.saturating_add(1);
         self.best_error = 0.0;
+    }
+
+    pub(crate) fn finish_confirmation(&mut self, failed: bool, pivots: usize) {
+        self.failures = self.failures.saturating_add(usize::from(failed));
+        self.injected = self.injected.saturating_add(pivots);
+    }
+    pub(crate) fn confirmation_counts(&self) -> (usize, usize, usize) {
+        (self.confirmations, self.failures, self.injected)
     }
 
     /// Protect the largest residual measured on this approximation. Ordinary

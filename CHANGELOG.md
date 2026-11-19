@@ -4,25 +4,6 @@
 
 ### Behavior changes
 
-- `tensor4all-treetci`: validate current retained pivot pairs and a bounded
-  historical sample pool on every completed sweep (#1352, #1372). The strongest
-  measured residual witness is protected from round-robin eviction. A full pool
-  limits historical coverage without terminating interpolation. Positive sampled
-  violations at three equal completed-sweep pivot snapshots, or at a saturated
-  bond cap, report `SampledErrorFloor`; local LU truncation is unchanged.
-  A run previously reported as `Converged` can now report `SampledErrorFloor` or
-  `MaxIterations` when the measured residual stays at or above tolerance. At zero
-  tolerance, zero residuals do not constitute a floor or satisfy strict
-  convergence: an exact uncapped run reaches `MaxIterations`, while an exact
-  capped run can report `MaxBondDimension`.
-  On Simon's independently measured smooth 60-site comb control (seeds 1–3,
-  tolerance 1e-8), PR A with original LU and default bounded history used
-  7.4–8.4x the oracle points of `501ebb4a` for similar sampled accuracy
-  ([reported comparison](https://github.com/tensor4all/tensor4all-rs/issues/1371#issuecomment-7003282954)).
-  On that control, sampled errors around 1.1–1.7x tolerance can now return
-  non-converged verdicts rather than `Converged`. These are target-specific oracle
-  counts and sampled errors, not elapsed-time ratios or a global accuracy guarantee. The opt-in Julia-compatible stopping follow-up is tracked
-  in #1405; it is not available in this release.
 - `tensor4all-tensorbackend`: `global-defaults` is no longer enabled by the default
   features (#1377). The default is now `explicit-context` plus the platform CPU
   provider, which also exposes `Matrix`, `Storage`, `TensorElement`, the native
@@ -122,6 +103,17 @@
   Such an operator is applied with `schedule_merge_refine` instead.
 
 ### Added
+
+- `tensor4all-treetci`: opt-in `TreeTciOptions::confirm_convergence` (default
+  `false`) checks retained pivot pairs and bounded oracle history only when the
+  ordinary rule would report convergence (#1352, #1372). Failed confirmation
+  records its measured error, injects violators and requires three fresh sweeps.
+  Three failures at identical completed pivot snapshots can report the new
+  `SampledErrorFloor`; final failures return `MaxIterations` without injection.
+  Confirmation counters expose checks, failures and injected points. Default
+  errors, ranks, termination and oracle work retain current-main semantics.
+  Local LU truncation is unchanged. Per-bond / Julia-compatible stopping and
+  the #1371 cost issue remain separate work in #1405.
 
 - `tensor4all-treetn` adds `TreeTN::estimate_exact_sum_bytes` (#1309), the
   size estimate of `TreeTN::exact_sum` taken before the sum is built.

@@ -100,6 +100,17 @@ where
     } else {
         CommonScalar::abs_val(value(&starts[0]))
     };
+    let values: Vec<_> = (0..1 << CENTRE)
+        .map(|flat| {
+            let mut point = [0; CENTRE + 1];
+            for (site, bit) in point[..CENTRE].iter_mut().enumerate() {
+                *bit = (flat >> site) & 1;
+            }
+            value(&point)
+        })
+        .collect();
+    let mut values = Some(values);
+    let mut reference: Option<IdxTensor> = None;
     for &seed in seeds {
         let mut dims = vec![2; CENTRE];
         dims.push(1);
@@ -115,6 +126,7 @@ where
         };
         let options = TreeTciOptions {
             tolerance,
+            confirm_convergence: true,
             seed: Some(seed),
             ..Default::default()
         };
@@ -123,22 +135,20 @@ where
         let indices: Vec<_> = (0..=CENTRE)
             .map(|site| tn.site_space(&site).unwrap().iter().next().unwrap().clone())
             .collect();
-        let values: Vec<_> = (0..1 << CENTRE)
-            .map(|flat| {
-                let mut point = [0; CENTRE + 1];
-                for (site, bit) in point[..CENTRE].iter_mut().enumerate() {
-                    *bit = (flat >> site) & 1;
-                }
-                value(&point)
-            })
-            .collect();
-        let reference = IdxTensor::from_dense(indices.clone(), values)?;
+        if reference.is_none() {
+            reference = Some(IdxTensor::from_dense(
+                indices.clone(),
+                values.take().unwrap(),
+            )?);
+        }
+        let stored = reference.as_ref().unwrap();
+        let reference = stored.replace_indices(stored.indices(), &indices)?;
         let difference = tn.to_dense()?.sub(&reference)?;
         let error = difference.maxabs()? / reference.maxabs()?;
         eprintln!(
-            "plane {plane} seed {seed}: {:?}, reported {:?}, dense {error:e}",
+            "plane {plane} seed {seed}: {:?}, reported {:?}, dense {error:e}, confirmations {} / failures {}",
             run.termination,
-            run.errors.last()
+            run.errors.last(), run.evaluation.confirmation_checks, run.evaluation.confirmation_failures
         );
         // These frozen low-rank fixtures must be reconstructed accurately;
         // an honest floor is a valid diagnostic, but does not pass this check.
@@ -191,24 +201,26 @@ fn non_exhausted_three_branch_complex() -> Result<()> {
 // decimal-to-f64 rounding, without depending on a random target generator:
 // https://github.com/tensor4all/tensor4all-rs/issues/1352#issuecomment-6967309986
 // Original table: https://github.com/user-attachments/files/35004742/g.txt
+// Main 35174fdd on Linux/faer falsely reports Converged for seed 4:
+// dense relative residual 6.33e-10 at tolerance 1e-10, for both scalar types.
 #[test]
 fn nonzero_sparse_plane_real() -> Result<()> {
-    check_plane(
-        include_str!("fixtures/issue1352_reopened_bits.txt"),
-        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        1.0_f64,
-        N / 2,
-        &[[N / 2, N / 2, N / 2], [N / 2 - 1, N / 2, N / 2 - 1]],
-        1e-10,
-    )
+    check_reopened(&[4], 1.0_f64)
 }
 
 #[test]
 fn nonzero_sparse_plane_complex() -> Result<()> {
+    check_reopened(&[4], Complex64::new(1.0, 0.5))
+}
+
+pub(super) fn check_reopened<T>(seeds: &[u64], scale: T) -> Result<()>
+where
+    T: MatrixLuciScalar + CommonScalar + FullPivLuScalar + TensorElement + ScalarParts,
+{
     check_plane(
         include_str!("fixtures/issue1352_reopened_bits.txt"),
-        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-        Complex64::new(1.0, 0.5),
+        seeds,
+        scale,
         N / 2,
         &[[N / 2, N / 2, N / 2], [N / 2 - 1, N / 2, N / 2 - 1]],
         1e-10,

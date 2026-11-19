@@ -87,13 +87,6 @@
 //! each), splits (5 and 9), terminations, bond dimensions, and node data are
 //! unchanged; dense scenario records are kept.
 
-//! Both TreeTCI scenarios were re-recorded for bounded retained-sample
-//! validation (#1372). Final/capped sweeps now validate the approximation too:
-//! cache hits become 31663 and 51349. Retained samples raise a few engine-call
-//! error estimates to at most 3.4e-16. Function evaluations, splits,
-//! terminations, bond dimensions and node data are unchanged. Dense scenario
-//! records and every comparison tolerance are kept.
-
 use crate::adaptive_common;
 
 use std::sync::Mutex;
@@ -740,10 +733,7 @@ fn check_close_tensor(
 fn compare_matches_golden(expected: &Value, actual: &Value) -> Result<(), String> {
     let name = expected["name"].as_str().unwrap();
     if expected["discrete"] != actual["discrete"] {
-        return Err(format!(
-            "scenario {name}: discrete outputs differ\nexpected: {}\nactual: {}",
-            expected["discrete"], actual["discrete"]
-        ));
+        return Err(format!("scenario {name}: discrete outputs differ"));
     }
     let (expected, actual) = (&expected["floating"], &actual["floating"]);
     check_close_scalar(

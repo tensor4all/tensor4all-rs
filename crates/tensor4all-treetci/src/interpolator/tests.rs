@@ -19,13 +19,7 @@ fn map_termination_applies_the_cap_precedence() {
     let cap = NonZeroUsize::new(4);
     let cases = [
         (
-            TreeTciTermination::SampledErrorFloor { at_bond_cap: true },
-            4,
-            cap,
-            InterpolationTermination::BondCapReached,
-        ),
-        (
-            TreeTciTermination::SampledErrorFloor { at_bond_cap: false },
+            TreeTciTermination::SampledErrorFloor,
             2,
             cap,
             InterpolationTermination::SampledErrorFloor,

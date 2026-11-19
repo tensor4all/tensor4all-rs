@@ -21,15 +21,15 @@ sequence must continue; high-level seeded calls restart their generators.
 
 There is no edge/rank/history hash in stream construction. The optimizer visits
 edges in its established order; random proposers draw in candidate-generation
-order, and global searches then draw their starts. If ordinary searches find
-no pivot, confirmation walks every distinct retained full point across all
-edges without draws.
-Only if those checks also find no pivot do unit-endpoint edges each draw up to
-`nsearch` restarts per direction, preserving one subtree while randomizing the
-other, from that same stream. Replaying known oracle samples consumes no draws,
-including on final or capped sweeps. Changing a proposer can
-therefore change later global starts on a shared caller stream. High-level
-separate streams isolate global starts from candidate draw consumption.
+order, and ordinary global searches then draw their starts. Their bounded
+unit-endpoint fallback retains current-main draw order. Opt-in confirmation
+consumes additional draws only when the ordinary rule would report convergence.
+Replaying history/current pairs and walking retained starts consume no draws;
+complementary-subtree restarts draw from the same global stream, rotating the
+retained anchor pair across restarts. Changing a proposer can therefore change
+later global starts on a shared caller stream. High-level separate streams
+isolate global starts from candidate draw consumption. Confirmation disabled
+preserves the ordinary stream; it never allocates a history or launches replay.
 
 Fixed-seed trajectories changed in #824 from the prior unstable
 `DefaultHasher`/`SmallRng` scheme. The named generator pins the algorithm;

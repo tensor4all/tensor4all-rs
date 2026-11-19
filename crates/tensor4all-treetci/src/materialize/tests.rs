@@ -323,7 +323,6 @@ fn memoized_fill_tensor_values_matches_the_plain_route() {
                 &mut source,
                 &state.local_dims,
                 Some(1 << 20),
-                None,
             )
             .unwrap();
             let cold = fill(&mut memo);

@@ -350,22 +350,26 @@ for &(i, j) in &[(0usize, 0usize), (16, 32), (31, 49), (63, 63)] {
 ## TreeTCI stopping diagnostics
 
 For interpolation on a general tree, `tensor4all-treetci` returns a
-`TreeTciTermination` together with its rank and error histories. Its enabled
-global search checks the current approximation against all current retained
-pivot pairs and a bounded pool of historical oracle samples. The strongest
-measured residual witness is protected within that pool. These checks still run
-on final and capped sweeps. The recorded maximum is sampled, not a bound over
-the entire index domain.
+`TreeTciTermination` with its rank and error histories. Default errors combine
+local bond residuals and ordinary global-search observations, preserving the
+current-main stopping rule.
 
-`SampledErrorFloor` names a measured residual that persists at three equal
-completed-sweep pivot snapshots or at a saturated bond cap. Read the final error
-with this reason; increasing `max_iter` alone need not help. The stopping tolerance is never silently relaxed.
-Known samples have an independent `validation_cache_bytes` budget (32 MiB by
-default). At capacity, unprotected old samples are evicted. This limits
-historical coverage without preventing convergence; current retained pairs are
-still checked. Oracle memoization remains a separate option.
+Enable `TreeTciOptions::confirm_convergence` (default `false`) to check all current
+retained pivot pairs and a bounded historical sample pool only when the ordinary
+three-sweep criterion would report convergence. Seeded walks can probe missed
+directions. These are sampled checks, not bounds over the full index domain.
+Confirmation is independent of ordinary global search. Bond-cap stops and runs
+that never meet the ordinary criterion do not run confirmation.
+
+A failed confirmation records its measured error and injects violators before
+three fresh sweeps. Three failures at identical completed pivot snapshots report
+`SampledErrorFloor`; a failure on the last iteration returns `MaxIterations`
+without injection. The stopping tolerance and local LU threshold are unchanged.
+`validation_cache_bytes` (default 32 MiB) bounds the opt-in historical pool with
+a protected residual witness. Zero storage still checks current retained pairs.
+Oracle memoization is a separate option.
 
 The [TreeTCI stopping contract](https://github.com/tensor4all/tensor4all-rs/blob/main/docs/design/treetci-termination.md)
-describes the unchanged local truncation threshold, measured floors and per-edge
-support searches. These TreeTCI diagnostics are separate from the chain TCI
-options above.
+describes confirmation and limit precedence. Per-bond / Julia-compatible stopping
+and #1371's default cost remain separate work in #1405. These TreeTCI options
+are separate from the chain TCI options above.
