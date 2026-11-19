@@ -262,18 +262,77 @@ fn iteration_limit_on_a_function_requiring_more_sweeps() {
     }
 }
 
+fn check_zero_tolerance<T>(scale: T)
+where
+    T: MatrixLuciScalar + CommonScalar + FullPivLuScalar + TensorElement + ScalarParts,
+{
+    for entry in ENTRY_POINTS {
+        for enable_global_pivots in [false, true] {
+            for cap in [None, Some(3), Some(1)] {
+                let result = run_identity(
+                    scale,
+                    TreeTciOptions {
+                        tolerance: 0.0,
+                        max_iter: 4,
+                        max_bond_dim: cap,
+                        enable_global_pivots,
+                        seed: Some(7),
+                        ..Default::default()
+                    },
+                    entry,
+                );
+                let expected = match cap {
+                    Some(1) if enable_global_pivots => {
+                        TreeTciTermination::SampledErrorFloor { at_bond_cap: true }
+                    }
+                    Some(_) => TreeTciTermination::MaxBondDimension,
+                    None => TreeTciTermination::MaxIterations,
+                };
+                assert_eq!(
+                    result.termination, expected,
+                    "{entry:?}, global {enable_global_pivots}, cap {cap:?}, errors {:?}",
+                    result.errors
+                );
+                let iterations = if cap.is_some() { 3 } else { 4 };
+                assert_eq!(result.errors.len(), iterations);
+                assert_eq!(result.ranks, vec![cap.unwrap_or(3); iterations]);
+                if cap == Some(1) {
+                    assert!(result.errors.iter().all(|&error| error > 0.0));
+                } else {
+                    assert_eq!(result.errors, vec![0.0; iterations]);
+                }
+
+                let values = (0..18)
+                    .map(|flat| {
+                        if flat % 3 == (flat / 3) % 3 {
+                            scale
+                        } else {
+                            T::zero()
+                        }
+                    })
+                    .collect();
+                let reference = dense_reference(&result, 3, values);
+                let residual = result
+                    .treetn
+                    .to_dense()
+                    .unwrap()
+                    .sub(&reference)
+                    .unwrap()
+                    .maxabs()
+                    .unwrap()
+                    / reference.maxabs().unwrap();
+                assert_eq!(residual, if cap == Some(1) { 1.0 } else { 0.0 });
+            }
+        }
+    }
+}
+
 #[test]
-fn zero_tolerance_requires_strictly_smaller_error() {
-    let result = run_identity(
-        1.0,
-        TreeTciOptions {
-            tolerance: 0.0,
-            max_iter: 4,
-            enable_global_pivots: false,
-            ..Default::default()
-        },
-        EntryPoint::Default,
-    );
-    assert_eq!(result.errors, vec![0.0; 4]);
-    assert_eq!(result.termination, TreeTciTermination::MaxIterations);
+fn zero_tolerance_requires_strictly_smaller_error_real() {
+    check_zero_tolerance(1.0_f64);
+}
+
+#[test]
+fn zero_tolerance_requires_strictly_smaller_error_complex() {
+    check_zero_tolerance(Complex64::new(1.0, 1.0));
 }

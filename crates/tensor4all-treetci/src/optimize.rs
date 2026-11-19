@@ -47,17 +47,17 @@ pub enum TreeTciTermination {
     /// The maximum rank reached `max_bond_dim` in three trailing iterations.
     ///
     /// This condition takes precedence over convergence even when the error
-    /// is below tolerance. An enabled validation that still measures an error
-    /// at or above tolerance returns `SampledErrorFloor { at_bond_cap: true }`
+    /// is below tolerance. An enabled validation that still measures a positive
+    /// error at or above tolerance returns `SampledErrorFloor { at_bond_cap: true }`
     /// instead. It does not imply that every edge has reached the cap.
     MaxBondDimension,
     /// `max_iter` iterations completed without either earlier stopping condition.
     ///
     /// A low error in the last iteration alone is insufficient for convergence.
     MaxIterations,
-    /// Sampled residuals stay at or above tolerance at three equal completed-sweep
-    /// pivot snapshots (including their order), or a saturated bond cap prevents
-    /// resolving a measured residual. The snapshots span two equality comparisons;
+    /// Positive sampled residuals stay at or above tolerance at three equal
+    /// completed-sweep pivot snapshots (including their order), or a saturated
+    /// bond cap prevents resolving a measured residual. The snapshots span two equality comparisons;
     /// the first sweep may have changed its input pivots.
     /// The final entry of `errors` records this sampled floor on the configured
     /// scale. This is an observed stall, not a bound or proof of optimality.
@@ -200,6 +200,9 @@ pub struct TreeTciOptions {
     /// Local LU truncation uses this same threshold in both global-search
     /// modes. A sampled violation with unchanged swept pivots reports a floor.
     /// The optimizer does not tighten or disable local truncation automatically.
+    /// Zero is allowed: a zero residual neither satisfies strict convergence
+    /// nor constitutes a sampled floor. An exact uncapped run then reaches
+    /// `max_iter`; an exact capped run can report `MaxBondDimension`.
     /// Default: `1e-8`.
     pub tolerance: f64,
 
@@ -1054,7 +1057,10 @@ where
             evaluation: &execution.stats(),
         });
         if bond_dim_saturated {
-            termination = if options.enable_global_pivots && normalized_error >= options.tolerance {
+            termination = if options.enable_global_pivots
+                && normalized_error > 0.0
+                && normalized_error >= options.tolerance
+            {
                 TreeTciTermination::SampledErrorFloor { at_bond_cap: true }
             } else {
                 TreeTciTermination::MaxBondDimension
@@ -1080,7 +1086,9 @@ where
             let last_ngp = &nglobal_pivots_history[n - NCHECK_HISTORY..];
             let measured_stall = options.enable_global_pivots
                 && unchanged_pivot_sweeps >= NCHECK_HISTORY
-                && last_errors.iter().all(|&e| e >= options.tolerance)
+                && last_errors
+                    .iter()
+                    .all(|&e| e > 0.0 && e >= options.tolerance)
                 && last_ranks.iter().all(|&rank| rank == last_ranks[0]);
             if measured_stall {
                 termination = TreeTciTermination::SampledErrorFloor { at_bond_cap: false };

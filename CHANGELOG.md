@@ -7,10 +7,22 @@
 - `tensor4all-treetci`: validate current retained pivot pairs and a bounded
   historical sample pool on every completed sweep (#1352, #1372). The strongest
   measured residual witness is protected from round-robin eviction. A full pool
-  limits historical coverage without terminating interpolation. Sampled violations
-  with unchanged swept pivots report `SampledErrorFloor`; local LU truncation
-  is unchanged.
-
+  limits historical coverage without terminating interpolation. Positive sampled
+  violations at three equal completed-sweep pivot snapshots, or at a saturated
+  bond cap, report `SampledErrorFloor`; local LU truncation is unchanged.
+  A run previously reported as `Converged` can now report `SampledErrorFloor` or
+  `MaxIterations` when the measured residual stays at or above tolerance. At zero
+  tolerance, zero residuals do not constitute a floor or satisfy strict
+  convergence: an exact uncapped run reaches `MaxIterations`, while an exact
+  capped run can report `MaxBondDimension`.
+  On Simon's independently measured smooth 60-site comb control (seeds 1–3,
+  tolerance 1e-8), PR A with original LU and default bounded history used
+  7.4–8.4x the oracle points of `501ebb4a` for similar sampled accuracy
+  ([reported comparison](https://github.com/tensor4all/tensor4all-rs/issues/1371#issuecomment-7003282954)).
+  On that control, sampled errors around 1.1–1.7x tolerance can now return
+  non-converged verdicts rather than `Converged`. These are target-specific oracle
+  counts and sampled errors, not elapsed-time ratios or a global accuracy guarantee. The opt-in Julia-compatible stopping follow-up is tracked
+  in #1405; it is not available in this release.
 - `tensor4all-tensorbackend`: `global-defaults` is no longer enabled by the default
   features (#1377). The default is now `explicit-context` plus the platform CPU
   provider, which also exposes `Matrix`, `Storage`, `TensorElement`, the native

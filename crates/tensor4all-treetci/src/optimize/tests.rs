@@ -35,7 +35,13 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         }
     }
 
-    for (enable_global_pivots, max_iter) in [(false, 4), (true, 2), (true, 10)] {
+    for (enable_global_pivots, max_iter, tolerance) in [
+        (false, 4, 1e-12),
+        (true, 2, 1e-12),
+        (true, 10, 1e-12),
+        // Zero tolerance still permits a floor for a positive residual.
+        (true, 10, 0.0),
+    ] {
         let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
         state.add_global_pivots(&[vec![0, 0]]).unwrap();
         state.max_sample_value = 1.0;
@@ -53,7 +59,7 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
                 .collect())
         };
         let options = TreeTciOptions {
-            tolerance: 1e-12,
+            tolerance,
             max_iter,
             enable_global_pivots,
             nsearch: 20,
