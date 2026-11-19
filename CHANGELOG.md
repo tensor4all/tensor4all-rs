@@ -140,8 +140,9 @@
 
 ### Breaking Rust API changes
 
-- `tensor4all-treetci`: `TreeTciOptions` adds `validation_cache_bytes` (32 MiB
-  by default; zero disables historical storage), and evaluation stats add
+- `tensor4all-treetci`: `TreeTciOptions` adds `confirm_convergence` (default
+  `false`) and `validation_cache_bytes` (32 MiB by default; zero disables
+  historical storage), and evaluation stats add confirmation counters and
   validation occupancy/eviction accounting. Complete struct literals must
   supply the new fields or use defaults. `TreeTciTermination` and the common
   `InterpolationTermination` add a measured-error-floor verdict, propagated by

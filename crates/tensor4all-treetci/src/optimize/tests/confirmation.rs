@@ -216,6 +216,17 @@ fn final_failed_confirmation_returns_measured_max_iterations_without_injection()
 }
 
 #[test]
+fn final_iteration_precedes_an_otherwise_detected_floor() {
+    let (result, _) = peak_run(enabled(9), false, false);
+    assert_eq!(result.termination, TreeTciTermination::MaxIterations);
+    assert_eq!(result.errors, vec![0.0, 0.0, 0.5].repeat(3));
+    assert_eq!(result.evaluation.confirmation_checks, 3);
+    assert_eq!(result.evaluation.confirmation_failures, 3);
+    assert_eq!(result.evaluation.confirmation_pivots, 2);
+    assert_eq!(peak_dense_error(&result), 0.5);
+}
+
+#[test]
 fn only_repeated_failed_confirmation_snapshots_report_a_floor() {
     for insertion_limit in [0, 5] {
         let (result, observed) = peak_run(
