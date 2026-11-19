@@ -193,7 +193,7 @@ fn run<P: Problem>(seed: u64, tolerance: f64, confirm: bool, timed: bool) -> Res
         |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
             let values = batch
                 .data()
-                .chunks_exact(P::SITES)
+                .chunks_exact(batch.n_sites())
                 .map(P::value)
                 .collect::<Vec<_>>();
             oracle_max.set(values.iter().fold(oracle_max.get(), |a, b| a.max(b.abs())));
