@@ -1359,7 +1359,8 @@ fn prefixes_overlap(key: &InputKey, other: &InputKey) -> bool {
 /// [`PartitionedTreeTNError::RefinementTooLarge`] when the varying spectator
 /// coordinate grid exceeds the work or term limit (before tensor operations);
 /// [`PartitionedTreeTNError::ResourceLimit`] when its refined leaf count exceeds
-/// those limits, and when a certified leaf's memory estimate exceeds its
+/// those limits; [`PartitionedTreeTNError::CertifiedMemoryLimit`], with the
+/// estimate and the limit, when a certified leaf's memory estimate exceeds its
 /// `memory_limit`, before that leaf is applied; and the operator-mapping,
 /// node-merging, application, projection, addition, and backend errors reported
 /// by the underlying TreeTN operations.

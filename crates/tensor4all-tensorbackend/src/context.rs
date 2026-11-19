@@ -1473,7 +1473,7 @@ impl CpuExecutionContext {
     /// written; rebuilding it costs nothing a compile would not pay for the next
     /// graph anyway. The poison is cleared after the rebuild so later compiles
     /// reuse the fresh compiler instead of rebuilding it on every access.
-    fn lock_compiler(&self) -> std::sync::MutexGuard<'_, GraphCompiler> {
+    pub(crate) fn lock_compiler(&self) -> std::sync::MutexGuard<'_, GraphCompiler> {
         match self.compiler.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
@@ -2034,32 +2034,6 @@ mod defaults {
             .and_then(std::convert::identity)
     }
 
-    /// Run `f` against the process-global graph compiler.
-    ///
-    /// The compiler lock is released before the caller runs the compiled graph,
-    /// so a compile never waits for a context engine that is busy running one.
-    pub(crate) fn with_default_graph_compiler<R>(f: impl FnOnce(&mut GraphCompiler) -> R) -> R {
-        f(&mut default_context().lock_compiler())
-    }
-
-    pub(crate) fn default_engine_buffer_pool_stats() -> anyhow::Result<BufferPoolStats> {
-        default_context()
-            .graph_buffer_pool_stats()
-            .map_err(anyhow::Error::new)
-    }
-
-    pub(crate) fn reset_default_engine_buffer_pool() -> anyhow::Result<()> {
-        default_context()
-            .reset_graph_buffer_pool()
-            .map_err(anyhow::Error::new)
-    }
-
-    pub(crate) fn reset_default_engine() -> anyhow::Result<()> {
-        default_context()
-            .reset_graph_runtime()
-            .map_err(anyhow::Error::new)
-    }
-
     /// Return the optional process-global eager context used by convenience APIs.
     ///
     /// # Errors
@@ -2123,16 +2097,13 @@ mod defaults {
 
 #[cfg(feature = "global-defaults")]
 pub(crate) use defaults::default_context;
+#[cfg(feature = "global-defaults")]
+pub(crate) use defaults::with_default_session;
 #[cfg(all(test, feature = "global-defaults"))]
 pub(crate) use defaults::with_forced_eager_context_failure;
 #[cfg(feature = "global-defaults")]
 pub use defaults::{
     default_cpu_execution_context, default_eager_ctx, with_default_backend, EagerContextError,
-};
-#[cfg(feature = "global-defaults")]
-pub(crate) use defaults::{
-    default_engine_buffer_pool_stats, reset_default_engine, reset_default_engine_buffer_pool,
-    with_default_graph_compiler, with_default_session,
 };
 
 #[cfg(test)]
