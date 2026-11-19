@@ -1557,7 +1557,7 @@ fn checked_dense_payload<T: StorageScalar>(
 }
 
 impl Storage {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "global-defaults"))]
     pub(crate) fn from_repr(repr: StorageRepr) -> Self {
         Self(repr)
     }
@@ -1602,7 +1602,7 @@ impl Storage {
         StorageError::from(err)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "global-defaults"))]
     pub(crate) fn repr(&self) -> &StorageRepr {
         &self.0
     }
@@ -3040,6 +3040,7 @@ pub fn min_dim(dims: &[usize]) -> usize {
 /// assert!((vals[0] - 9.0).abs() < 1e-10);
 /// assert!((vals[1] - 12.0).abs() < 1e-10);
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn contract_storage(
     storage_a: &Storage,
     dims_a: &[usize],
@@ -3060,6 +3061,7 @@ pub fn contract_storage(
     )
 }
 
+#[cfg(feature = "global-defaults")]
 fn try_contract_storage(
     storage_a: &Storage,
     dims_a: &[usize],
@@ -3186,5 +3188,5 @@ impl Mul<BackendScalar> for &Storage {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "global-defaults"))]
 mod tests;

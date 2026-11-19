@@ -4,11 +4,15 @@
 //! routing the actual work through the shared tenferro CPU backend.
 
 use anyhow::{anyhow, Result};
-use num_complex::{Complex32, Complex64, ComplexFloat};
+#[cfg(feature = "global-defaults")]
+use num_complex::ComplexFloat;
+use num_complex::{Complex32, Complex64};
 use tenferro::{DType, Tensor, TensorScalar, TensorSessionOpsExt, TypedTensor};
 use tenferro_linalg::TensorLinalgExt;
 
-use crate::context::{with_default_session, CpuExecutionContext};
+#[cfg(feature = "global-defaults")]
+use crate::context::with_default_session;
+use crate::context::CpuExecutionContext;
 use crate::matrix::Matrix;
 
 /// Result of SVD decomposition `A = U * diag(S) * Vt`.
@@ -16,11 +20,12 @@ use crate::matrix::Matrix;
 /// input matrix is complex.
 /// # Examples
 /// ```
-/// use tensor4all_tensorbackend::svd_backend;
-/// use tenferro::TypedTensor;
+/// use tensor4all_tensorbackend::{svd_backend_in, CpuBackend, CpuExecutionContext};
+/// use tenferro::Tensor;
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0])?;
-/// let result = svd_backend(&a)?;
+/// let ctx = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
+/// let result = ctx.with_session(|engine| svd_backend_in::<f64>(engine, a))??;
 /// assert_eq!(result.u().shape(), &[2, 2]);
 /// assert_eq!(result.s().shape(), &[2]);
 /// assert_eq!(result.vt().shape(), &[2, 2]);
@@ -135,9 +140,13 @@ impl<T: TensorScalar> Clone for FullPivLuResult<T> {
 /// `TypedTensor` conversion code.
 /// # Examples
 /// ```
-/// use tensor4all_tensorbackend::{from_vec2d, full_piv_lu_matrix};
+/// use tensor4all_tensorbackend::{from_vec2d, full_piv_lu_matrix_in, CpuBackend, CpuExecutionContext};
+/// let ctx = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
 /// let matrix = from_vec2d(vec![vec![0.0_f64, 1.0], vec![2.0, 3.0]]);
-/// let factors = full_piv_lu_matrix(&matrix).unwrap();
+/// let factors = ctx
+///     .with_session(|engine| full_piv_lu_matrix_in(engine, &matrix))
+///     .unwrap()
+///     .unwrap();
 /// assert_eq!(factors.u.nrows(), 2);
 /// assert_eq!(factors.u.ncols(), 2);
 /// ```
@@ -179,6 +188,7 @@ pub trait FullPivLuScalar: BackendLinalgScalar {
     /// (a shape mismatch), when the shapes are incompatible (`lhs_cols !=
     /// pivot_rows`, a shape mismatch), or when the backend full-pivot LU solve
     /// fails (a backend failure).
+    #[cfg(feature = "global-defaults")]
     fn solve_right_full_piv_lu(
         lhs_values: &[Self],
         lhs_rows: usize,
@@ -191,7 +201,7 @@ pub trait FullPivLuScalar: BackendLinalgScalar {
     /// Same solve, in a caller-owned execution context.
     ///
     /// The shapes and values are interpreted exactly as in
-    /// [`Self::solve_right_full_piv_lu`]; only the engine that performs the
+    /// `Self::solve_right_full_piv_lu`; only the engine that performs the
     /// solve is the caller's, so the work runs on the caller's backend instead
     /// of the process-global one. The context is entered after the operands are
     /// prepared and validated; a caller that must avoid an entry for a
@@ -220,7 +230,7 @@ pub trait FullPivLuScalar: BackendLinalgScalar {
     ///
     /// Neither this method nor the backend enters a context, and nothing
     /// consults the process-global one. The shapes and values are interpreted
-    /// exactly as in [`Self::solve_right_full_piv_lu`], and they are validated
+    /// exactly as in `Self::solve_right_full_piv_lu`, and they are validated
     /// before the engine is used.
     ///
     /// # Errors
@@ -243,6 +253,7 @@ pub trait FullPivLuScalar: BackendLinalgScalar {
 macro_rules! impl_full_piv_lu_scalar {
     ($t:ty) => {
         impl FullPivLuScalar for $t {
+            #[cfg(feature = "global-defaults")]
             fn solve_right_full_piv_lu(
                 lhs_values: &[Self],
                 lhs_rows: usize,
@@ -425,24 +436,30 @@ fn transpose_column_major<T: Copy + num_traits::Zero>(
 
 impl<T: TensorScalar> BackendLinalgScalar for T {}
 
-/// Scalar types supported by [`solve_matrix`].
+/// Scalar types supported by `solve_matrix`.
 /// `f64` and `Complex64` are solved directly. `f32` and `Complex32` are
 /// promoted to the corresponding 64-bit dtype for the backend solve and then
 /// converted back, because the current tenferro CPU LU solve is double
 /// precision only.
 /// # Examples
 /// ```
-/// use tensor4all_tensorbackend::{from_vec2d, solve_matrix};
+/// use tensor4all_tensorbackend::{from_vec2d, solve_matrix_in, CpuBackend, CpuExecutionContext};
+/// let ctx = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
 /// let a = from_vec2d(vec![vec![2.0_f32, 1.0], vec![1.0, 2.0]]);
 /// let b = from_vec2d(vec![vec![1.0_f32], vec![0.0]]);
-/// let x = solve_matrix(&a, &b).unwrap();
+/// let x = ctx
+///     .with_session(|engine| solve_matrix_in(engine, &a, &b))
+///     .unwrap()
+///     .unwrap();
 /// assert!((x[[0, 0]] - 2.0 / 3.0).abs() < 1.0e-6);
 /// ```
 pub trait MatrixSolveScalar: BackendLinalgScalar + crate::matrix::MatrixScalar {
     #[doc(hidden)]
+    #[cfg(feature = "global-defaults")]
     fn solve_matrix_impl(a: &Matrix<Self>, b: &Matrix<Self>) -> Result<Matrix<Self>>;
 
     #[doc(hidden)]
+    #[cfg(feature = "global-defaults")]
     fn solve_matrix_owned_impl(a: Matrix<Self>, b: Matrix<Self>) -> Result<Matrix<Self>> {
         Self::solve_matrix_impl(&a, &b)
     }
@@ -491,7 +508,7 @@ impl From<anyhow::Error> for BackendLinalgError {
     }
 }
 
-/// Scalar types supported by [`triangular_solve_matrix`] and
+/// Scalar types supported by `triangular_solve_matrix` and
 /// [`triangular_solve_matrix_in`].
 /// `f64` and `Complex64` are solved directly. `f32` and `Complex32` are
 /// promoted to the corresponding 64-bit dtype for the backend solve and then
@@ -500,15 +517,24 @@ impl From<anyhow::Error> for BackendLinalgError {
 /// promotion, so they return bitwise identical results for every scalar type.
 /// # Examples
 /// ```
-/// use tensor4all_tensorbackend::{from_vec2d, triangular_solve_matrix};
+/// use tensor4all_tensorbackend::{
+///     from_vec2d, triangular_solve_matrix_in, CpuBackend, CpuExecutionContext,
+/// };
+/// let ctx = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
 /// let a = from_vec2d(vec![vec![2.0_f64, 0.0], vec![1.0, 3.0]]);
 /// let b = from_vec2d(vec![vec![2.0_f64], vec![7.0]]);
-/// let x = triangular_solve_matrix(&a, &b, true, true, false, false).unwrap();
+/// let x = ctx
+///     .with_session(|engine| {
+///         triangular_solve_matrix_in(engine, &a, &b, true, true, false, false)
+///     })
+///     .unwrap()
+///     .unwrap();
 /// assert!((x[[0, 0]] - 1.0).abs() < 1.0e-12);
 /// assert!((x[[1, 0]] - 2.0).abs() < 1.0e-12);
 /// ```
 pub trait MatrixTriangularSolveScalar: BackendLinalgScalar + crate::matrix::MatrixScalar {
     #[doc(hidden)]
+    #[cfg(feature = "global-defaults")]
     fn triangular_solve_matrix_impl(
         a: &Matrix<Self>,
         b: &Matrix<Self>,
@@ -519,6 +545,7 @@ pub trait MatrixTriangularSolveScalar: BackendLinalgScalar + crate::matrix::Matr
     ) -> Result<Matrix<Self>>;
 
     #[doc(hidden)]
+    #[cfg(feature = "global-defaults")]
     fn triangular_solve_matrix_owned_impl(
         a: Matrix<Self>,
         b: Matrix<Self>,
@@ -562,10 +589,9 @@ pub trait MatrixTriangularSolveScalar: BackendLinalgScalar + crate::matrix::Matr
 /// # Examples
 ///
 /// ```
-/// use tensor4all_tensorbackend::{src_error_estimate, Matrix};
+/// use tensor4all_tensorbackend::SrcErrorEstimate;
 ///
-/// let r = Matrix::from_col_major_vec(1, 1, vec![2.0_f64]);
-/// let estimate = src_error_estimate(&r).unwrap();
+/// let estimate = SrcErrorEstimate { error: 2.0, norm: 2.0 };
 /// assert!((estimate.error - 2.0).abs() < 1.0e-12);
 /// assert!((estimate.norm - 2.0).abs() < 1.0e-12);
 /// ```
@@ -608,6 +634,7 @@ pub struct SrcErrorEstimate {
 /// assert!(estimate.error.is_finite());
 /// assert!(estimate.norm.is_finite());
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn src_error_estimate<T>(
     r: &Matrix<T>,
 ) -> std::result::Result<SrcErrorEstimate, BackendLinalgError>
@@ -639,6 +666,7 @@ where
 /// assert!(estimate.error.is_finite());
 /// assert!((estimate.norm - (14.0_f64 / 2.0).sqrt()).abs() < 1.0e-12);
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn src_error_estimate_general<T>(
     factor: &Matrix<T>,
 ) -> std::result::Result<SrcErrorEstimate, BackendLinalgError>
@@ -686,6 +714,7 @@ where
 /// estimator state once and then update it with the block formula from
 /// Appendix C.3 instead of solving the same triangular system after every
 /// appended sketch block.
+#[cfg(feature = "global-defaults")]
 pub(crate) fn src_inverse_adjoint<T>(
     r: &Matrix<T>,
 ) -> std::result::Result<Matrix<T>, BackendLinalgError>
@@ -752,6 +781,7 @@ where
 /// The inverse-adjoint argument is intentionally separate from
 /// [`src_error_estimate`] so incremental QR can reuse its updated triangular
 /// solve state. This helper performs only norm accumulation and validation.
+#[cfg(feature = "global-defaults")]
 pub(crate) fn src_error_estimate_from_inverse_adjoint<T>(
     r: &Matrix<T>,
     inverse_adjoint: &Matrix<T>,
@@ -808,6 +838,7 @@ where
     })
 }
 
+#[cfg(feature = "global-defaults")]
 fn solve_matrix_direct<T>(a: &Matrix<T>, b: &Matrix<T>) -> Result<Matrix<T>>
 where
     T: BackendLinalgScalar + Copy,
@@ -829,6 +860,7 @@ where
     solve_matrix_direct_owned_in(session, a.clone(), b.clone())
 }
 
+#[cfg(feature = "global-defaults")]
 fn solve_matrix_direct_owned<T>(a: Matrix<T>, b: Matrix<T>) -> Result<Matrix<T>>
 where
     T: BackendLinalgScalar + Copy,
@@ -860,17 +892,17 @@ where
 
 /// Solve `A X = B` on a caller-held engine.
 ///
-/// Same kernel and validation as [`solve_matrix`], entered through the given session
+/// Same kernel and validation as `solve_matrix`, entered through the given session
 /// instead of the process-global one. The scalar conversion differs for the narrow
 /// types: `f64` and `Complex64` are solved directly on both routes, so the results
 /// agree bit for bit, but this entry solves `f32` and `Complex32` in their own
-/// precision, while [`solve_matrix`] promotes them to `f64` / `Complex64` and narrows
+/// precision, while `solve_matrix` promotes them to `f64` / `Complex64` and narrows
 /// the result. For the narrow types the two routes can therefore differ in the last
 /// bits; [`MatrixSolveScalar`]'s session hook applies the global route's promotion.
 ///
 /// # Errors
 ///
-/// Returns [`BackendLinalgError`] under the same conditions as [`solve_matrix`].
+/// Returns [`BackendLinalgError`] under the same conditions as `solve_matrix`.
 pub fn solve_matrix_in<T>(
     session: &mut dyn tenferro_tensor::Engine,
     a: &Matrix<T>,
@@ -883,6 +915,7 @@ where
     solve_matrix_direct_in(session, a, b).map_err(BackendLinalgError::from)
 }
 
+#[cfg(feature = "global-defaults")]
 fn triangular_solve_matrix_direct<T>(
     a: &Matrix<T>,
     b: &Matrix<T>,
@@ -934,6 +967,7 @@ where
     )
 }
 
+#[cfg(feature = "global-defaults")]
 fn triangular_solve_matrix_direct_owned<T>(
     a: Matrix<T>,
     b: Matrix<T>,
@@ -994,7 +1028,7 @@ where
 
 /// Solve a triangular system on a caller-held engine.
 ///
-/// Same kernel, conversion and validation as [`triangular_solve_matrix`], entered
+/// Same kernel, conversion and validation as `triangular_solve_matrix`, entered
 /// through the given engine instead of the process-global context. Per scalar type:
 /// `f64` and `Complex64` are solved directly; `f32` and `Complex32` are promoted to
 /// `f64` / `Complex64`, solved, and narrowed back, exactly as on the global route.
@@ -1003,7 +1037,7 @@ where
 /// # Errors
 ///
 /// Returns [`BackendLinalgError`] under the same conditions as
-/// [`triangular_solve_matrix`].
+/// `triangular_solve_matrix`.
 #[allow(clippy::too_many_arguments)]
 pub fn triangular_solve_matrix_in<T>(
     session: &mut dyn tenferro_tensor::Engine,
@@ -1098,6 +1132,7 @@ where
 }
 
 /// [`triangular_solve_matrix_widened_in`] on the process-global session.
+#[cfg(feature = "global-defaults")]
 fn triangular_solve_matrix_widened<T>(
     a: &Matrix<T>,
     b: &Matrix<T>,
@@ -1125,6 +1160,7 @@ where
 }
 
 impl MatrixSolveScalar for f64 {
+    #[cfg(feature = "global-defaults")]
     fn solve_matrix_impl(a: &Matrix<Self>, b: &Matrix<Self>) -> Result<Matrix<Self>> {
         solve_matrix_direct(a, b)
     }
@@ -1137,12 +1173,14 @@ impl MatrixSolveScalar for f64 {
         solve_matrix_direct_in(session, a, b)
     }
 
+    #[cfg(feature = "global-defaults")]
     fn solve_matrix_owned_impl(a: Matrix<Self>, b: Matrix<Self>) -> Result<Matrix<Self>> {
         solve_matrix_direct_owned(a, b)
     }
 }
 
 impl MatrixTriangularSolveScalar for f64 {
+    #[cfg(feature = "global-defaults")]
     fn triangular_solve_matrix_impl(
         a: &Matrix<Self>,
         b: &Matrix<Self>,
@@ -1154,6 +1192,7 @@ impl MatrixTriangularSolveScalar for f64 {
         triangular_solve_matrix_direct(a, b, left_side, lower, transpose_a, unit_diagonal)
     }
 
+    #[cfg(feature = "global-defaults")]
     fn triangular_solve_matrix_owned_impl(
         a: Matrix<Self>,
         b: Matrix<Self>,
@@ -1187,6 +1226,7 @@ impl MatrixTriangularSolveScalar for f64 {
 }
 
 impl MatrixSolveScalar for Complex64 {
+    #[cfg(feature = "global-defaults")]
     fn solve_matrix_impl(a: &Matrix<Self>, b: &Matrix<Self>) -> Result<Matrix<Self>> {
         solve_matrix_direct(a, b)
     }
@@ -1199,12 +1239,14 @@ impl MatrixSolveScalar for Complex64 {
         solve_matrix_direct_in(session, a, b)
     }
 
+    #[cfg(feature = "global-defaults")]
     fn solve_matrix_owned_impl(a: Matrix<Self>, b: Matrix<Self>) -> Result<Matrix<Self>> {
         solve_matrix_direct_owned(a, b)
     }
 }
 
 impl MatrixTriangularSolveScalar for Complex64 {
+    #[cfg(feature = "global-defaults")]
     fn triangular_solve_matrix_impl(
         a: &Matrix<Self>,
         b: &Matrix<Self>,
@@ -1216,6 +1258,7 @@ impl MatrixTriangularSolveScalar for Complex64 {
         triangular_solve_matrix_direct(a, b, left_side, lower, transpose_a, unit_diagonal)
     }
 
+    #[cfg(feature = "global-defaults")]
     fn triangular_solve_matrix_owned_impl(
         a: Matrix<Self>,
         b: Matrix<Self>,
@@ -1249,6 +1292,7 @@ impl MatrixTriangularSolveScalar for Complex64 {
 }
 
 impl MatrixSolveScalar for f32 {
+    #[cfg(feature = "global-defaults")]
     fn solve_matrix_impl(a: &Matrix<Self>, b: &Matrix<Self>) -> Result<Matrix<Self>> {
         let a64 = Matrix::from_col_major_vec(
             a.nrows(),
@@ -1313,6 +1357,7 @@ impl MatrixSolveScalar for f32 {
 }
 
 impl MatrixTriangularSolveScalar for f32 {
+    #[cfg(feature = "global-defaults")]
     fn triangular_solve_matrix_impl(
         a: &Matrix<Self>,
         b: &Matrix<Self>,
@@ -1346,6 +1391,7 @@ impl MatrixTriangularSolveScalar for f32 {
 }
 
 impl MatrixSolveScalar for Complex32 {
+    #[cfg(feature = "global-defaults")]
     fn solve_matrix_impl(a: &Matrix<Self>, b: &Matrix<Self>) -> Result<Matrix<Self>> {
         let a64 = Matrix::from_col_major_vec(
             a.nrows(),
@@ -1410,6 +1456,7 @@ impl MatrixSolveScalar for Complex32 {
 }
 
 impl MatrixTriangularSolveScalar for Complex32 {
+    #[cfg(feature = "global-defaults")]
     fn triangular_solve_matrix_impl(
         a: &Matrix<Self>,
         b: &Matrix<Self>,
@@ -1459,12 +1506,18 @@ fn try_into_typed_result<T: TensorScalar>(
     })
 }
 
-fn convert_for_typed<T: TensorScalar>(op: &'static str, tensor: Tensor) -> Result<TypedTensor<T>> {
+/// Convert a backend result to `T`, on the caller's `session` when a dtype change is needed.
+fn convert_for_typed<T: TensorScalar>(
+    session: &mut dyn tenferro_tensor::Engine,
+    op: &'static str,
+    tensor: Tensor,
+) -> Result<TypedTensor<T>> {
     let expected = tensor_scalar_dtype::<T>();
     let tensor = if tensor.dtype() == expected {
         tensor
     } else {
-        with_default_session(|session| tensor.convert(expected, session))
+        tensor
+            .convert(expected, session)
             .map_err(|e| anyhow!("{op}: dtype conversion to {expected:?} failed: {e}"))?
     };
     try_into_typed_result::<T>(op, tensor)
@@ -1506,6 +1559,7 @@ fn require_host_linalg_tensor<T: TensorScalar>(
 /// Returns a [`BackendLinalgError`] when `a` is not host-backed, when the
 /// context rejects the entry, or when the backend SVD fails.
 ///
+#[cfg(feature = "global-defaults")]
 pub fn svd_backend<T>(a: &TypedTensor<T>) -> std::result::Result<SvdResult<T>, BackendLinalgError>
 where
     T: BackendLinalgScalar,
@@ -1525,7 +1579,7 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`BackendLinalgError`] under the same conditions as [`svd_backend`].
+/// Returns [`BackendLinalgError`] under the same conditions as `svd_backend`.
 pub fn svd_backend_in<T>(
     session: &mut dyn tenferro_tensor::Engine,
     tensor: Tensor,
@@ -1539,9 +1593,9 @@ where
         .svd(session)
         .map_err(|e| anyhow!("SVD computation failed via tenferro-tensor: {e}"))?;
     Ok(SvdResult {
-        u: require_host_linalg_tensor("svd", convert_for_typed::<T>("svd", u)?)?,
-        s: require_host_linalg_tensor("svd", convert_for_typed::<T::Real>("svd", s)?)?,
-        vt: require_host_linalg_tensor("svd", convert_for_typed::<T>("svd", vt)?)?,
+        u: require_host_linalg_tensor("svd", convert_for_typed::<T>(session, "svd", u)?)?,
+        s: require_host_linalg_tensor("svd", convert_for_typed::<T::Real>(session, "svd", s)?)?,
+        vt: require_host_linalg_tensor("svd", convert_for_typed::<T>(session, "svd", vt)?)?,
     })
 }
 
@@ -1552,6 +1606,7 @@ where
 /// Returns a [`BackendLinalgError`] when `a` is not host-backed, when the
 /// context rejects the entry, or when the backend QR fails.
 ///
+#[cfg(feature = "global-defaults")]
 pub fn qr_backend<T>(
     a: TypedTensor<T>,
 ) -> std::result::Result<(TypedTensor<T>, TypedTensor<T>), BackendLinalgError>
@@ -1571,7 +1626,7 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`BackendLinalgError`] under the same conditions as [`qr_backend`].
+/// Returns [`BackendLinalgError`] under the same conditions as `qr_backend`.
 pub fn qr_backend_in<T>(
     session: &mut dyn tenferro_tensor::Engine,
     tensor: Tensor,
@@ -1585,8 +1640,8 @@ where
         .qr(session)
         .map_err(|e| anyhow!("QR computation failed via tenferro-tensor: {e}"))?;
     Ok((
-        convert_for_typed::<T>("qr", q)?,
-        convert_for_typed::<T>("qr", r)?,
+        convert_for_typed::<T>(session, "qr", q)?,
+        convert_for_typed::<T>(session, "qr", r)?,
     ))
 }
 
@@ -1595,6 +1650,7 @@ where
 /// Returns a [`BackendLinalgError`] when `a` or `b` is not host-backed, when
 /// the context rejects the entry, or when the solve fails (for example a
 /// singular `a`).
+#[cfg(feature = "global-defaults")]
 pub fn solve_backend<T>(
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
@@ -1631,6 +1687,7 @@ where
 /// the context rejects the entry, or when the triangular solve fails
 /// (for example a singular `a` or inconsistent triangular flags).
 ///
+#[cfg(feature = "global-defaults")]
 pub fn triangular_solve_backend<T>(
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
@@ -1687,6 +1744,7 @@ where
 /// assert!((x[[0, 0]] - 2.0 / 3.0).abs() < 1.0e-12);
 /// assert!((x[[1, 0]] + 1.0 / 3.0).abs() < 1.0e-12);
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn solve_matrix<T>(
     a: &Matrix<T>,
     b: &Matrix<T>,
@@ -1715,6 +1773,7 @@ where
 /// assert!((x[[0, 0]] - 2.0 / 3.0).abs() < 1.0e-12);
 /// assert!((x[[1, 0]] + 1.0 / 3.0).abs() < 1.0e-12);
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn solve_matrix_owned<T>(
     a: Matrix<T>,
     b: Matrix<T>,
@@ -1744,6 +1803,7 @@ where
 /// assert!((x[[0, 0]] - 1.0).abs() < 1.0e-12);
 /// assert!((x[[0, 1]] - 2.0).abs() < 1.0e-12);
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn triangular_solve_matrix<T>(
     a: &Matrix<T>,
     b: &Matrix<T>,
@@ -1778,6 +1838,7 @@ where
 /// assert!((x[[0, 0]] - 1.0).abs() < 1.0e-12);
 /// assert!((x[[1, 0]] - 2.0).abs() < 1.0e-12);
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn triangular_solve_matrix_owned<T>(
     a: Matrix<T>,
     b: Matrix<T>,
@@ -1793,6 +1854,7 @@ where
         .map_err(BackendLinalgError::from)
 }
 
+#[cfg(feature = "global-defaults")]
 fn full_piv_lu_tensor<T>(
     tensor: Tensor,
 ) -> std::result::Result<FullPivLuResult<T>, BackendLinalgError>
@@ -1817,10 +1879,22 @@ where
         .full_piv_lu(session)
         .map_err(|e| anyhow!("complete-pivoting LU failed via tenferro-tensor: {e}"))?;
     Ok(FullPivLuResult {
-        p: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", p)?)?,
-        l: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", l)?)?,
-        u: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", u)?)?,
-        q: require_host_linalg_tensor("full_piv_lu", convert_for_typed::<T>("full_piv_lu", q)?)?,
+        p: require_host_linalg_tensor(
+            "full_piv_lu",
+            convert_for_typed::<T>(session, "full_piv_lu", p)?,
+        )?,
+        l: require_host_linalg_tensor(
+            "full_piv_lu",
+            convert_for_typed::<T>(session, "full_piv_lu", l)?,
+        )?,
+        u: require_host_linalg_tensor(
+            "full_piv_lu",
+            convert_for_typed::<T>(session, "full_piv_lu", u)?,
+        )?,
+        q: require_host_linalg_tensor(
+            "full_piv_lu",
+            convert_for_typed::<T>(session, "full_piv_lu", q)?,
+        )?,
     })
 }
 
@@ -1830,6 +1904,7 @@ where
 /// Returns a [`BackendLinalgError`] when `a` is not host-backed, when the
 /// context rejects the entry, or when the factorization fails.
 ///
+#[cfg(feature = "global-defaults")]
 pub fn full_piv_lu_backend<T>(
     a: &TypedTensor<T>,
 ) -> std::result::Result<FullPivLuResult<T>, BackendLinalgError>
@@ -1888,6 +1963,7 @@ where
 /// assert_eq!(factors.p.nrows(), 2);
 /// assert_eq!(factors.q.ncols(), 2);
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn full_piv_lu_matrix<T>(
     a: &Matrix<T>,
 ) -> std::result::Result<FullPivLuMatrixResult<T>, BackendLinalgError>
@@ -1906,13 +1982,13 @@ where
 
 /// Complete-pivoting LU for a column-major [`Matrix`] on a caller-held engine.
 ///
-/// Same kernel and conversion as [`full_piv_lu_matrix`], entered through the given
+/// Same kernel and conversion as `full_piv_lu_matrix`, entered through the given
 /// session instead of the process-global one.
 ///
 /// # Errors
 ///
 /// Returns [`BackendLinalgError`] under the same conditions as
-/// [`full_piv_lu_matrix`].
+/// `full_piv_lu_matrix`.
 pub fn full_piv_lu_matrix_in<T>(
     session: &mut dyn tenferro_tensor::Engine,
     a: &Matrix<T>,
@@ -1981,6 +2057,7 @@ where
 ///     }
 /// }
 /// ```
+#[cfg(feature = "global-defaults")]
 pub fn full_piv_lu_matrix_owned<T>(
     a: Matrix<T>,
 ) -> std::result::Result<FullPivLuMatrixResult<T>, BackendLinalgError>
@@ -1997,5 +2074,5 @@ where
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "global-defaults"))]
 mod tests;
