@@ -7,9 +7,9 @@
 
 use std::collections::TryReserveError;
 
-use tensor4all_tensorbackend::{
-    explicit::Session, mat_mul, Matrix, MatrixMulError, MatrixShapeError,
-};
+use tensor4all_tensorbackend::{explicit::Session, Matrix, MatrixMulError, MatrixShapeError};
+
+use crate::implicit_route::mat_mul;
 
 use crate::col_major_array::ColMajorArrayError;
 use crate::{

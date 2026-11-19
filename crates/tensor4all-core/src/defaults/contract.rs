@@ -31,9 +31,9 @@ use petgraph::algo::connected_components;
 use petgraph::prelude::*;
 use tenferro::TensorValue;
 use tenferro_einsum::{EagerSessionEinsumExt, EinsumSubscripts};
-use tensor4all_tensorbackend::{
-    einsum_native_tensor_reads, einsum_native_tensors_owned, NativeTensorReadInput,
-};
+use tensor4all_tensorbackend::NativeTensorReadInput;
+
+use crate::implicit_route::{einsum_native_tensor_reads, einsum_native_tensors_owned};
 
 #[cfg(test)]
 use crate::defaults::DynId;

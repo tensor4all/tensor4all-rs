@@ -9,7 +9,9 @@ use crate::matrixluci::source::CandidateMatrixSource;
 use crate::matrixluci::types::{PivotKernelOptions, PivotSelectionCore};
 use crate::matrixluci::Result;
 use num_complex::{Complex32, Complex64};
-use tensor4all_tensorbackend::{mat_mul, solve_matrix, Matrix};
+use tensor4all_tensorbackend::Matrix;
+
+use crate::implicit_route::{mat_mul, solve_matrix};
 
 /// Lazy pivot kernel based on residual row/column rook search.
 ///
