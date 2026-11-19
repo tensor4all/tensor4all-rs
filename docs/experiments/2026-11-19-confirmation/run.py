@@ -35,7 +35,7 @@ def deterministic(row):
 
 
 def main():
-    output, candidate, current, historical = map(Path, sys.argv[1:])
+    output, candidate, current, historical = (Path(arg).resolve() for arg in sys.argv[1:])
     output.mkdir(parents=True, exist_ok=False)
     arms = {'historical': (historical, 'off'), 'main': (current, 'off'),
             'off': (candidate, 'off'), 'on': (candidate, 'on')}
