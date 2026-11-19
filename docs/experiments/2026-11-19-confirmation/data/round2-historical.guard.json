@@ -1,0 +1,32 @@
+{
+  "mode": "measure",
+  "cmd": "/root/projects/tensor4all-rust/tensor4all-rs-1372-cost-reference/target/1372-reference/release/examples/confirmation_comparison comb60 off timed",
+  "cwd": "/root/projects/tensor4all-rust/tensor4all-rs-1372-cost-reference",
+  "label": null,
+  "unit": "ai-run-measure-2370365-1795102248.scope",
+  "cpus": "8-15",
+  "mem_limit": 6442450944,
+  "started": "2026-11-19T16:30:48+0100",
+  "pre_guard": {
+    "ok": true,
+    "mean_busy": 0.005,
+    "peak_busy": 0.05
+  },
+  "exit": 0,
+  "wall_sec": 12.67,
+  "mem_peak": 222199808,
+  "mem_peak_anon_sampled": 217964544,
+  "oom_kills": 0,
+  "verdict": "CLEAN",
+  "reasons": [],
+  "job_cpu_sec": 12.6,
+  "foreign_cpu_sec_on_measure_cpus": 0.41,
+  "foreign_frac": 0.0041,
+  "others_busy_cpus": 0.03,
+  "mem_stall_frac": 0.0,
+  "thresholds": {
+    "foreign_frac": 0.03,
+    "others_busy_cpus": 1.0,
+    "mem_stall_frac": 0.01
+  }
+}

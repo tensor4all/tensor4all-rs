@@ -54,4 +54,6 @@ INCONCLUSIVE. Retain every attempt. A CONTAMINATED campaign is rerun in full und
 the same protocol, per the machine policy; never selectively retry a case. No
 build, edit or commit while timing; observer commands stay on CPUs 0–7.
 
-Results and reproduction metadata will be linked here after the full campaign.
+[Complete results](RESULTS.md), [all checked cells](checked.csv),
+[raw timing samples](timed.csv) and [guard/source metadata](data/) record the
+completed campaign. All eight guards are CLEAN; no campaign attempt was discarded.

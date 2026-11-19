@@ -1,0 +1,32 @@
+{
+  "mode": "measure",
+  "cmd": "/root/projects/tensor4all-rust/tensor4all-rs-1352-reopened/target/1372-reference/release/examples/confirmation_comparison comb60 on timed",
+  "cwd": "/root/projects/tensor4all-rust/tensor4all-rs-1352-reopened",
+  "label": null,
+  "unit": "ai-run-measure-2369988-1795101949.scope",
+  "cpus": "8-15",
+  "mem_limit": 6442450944,
+  "started": "2026-11-19T16:25:49+0100",
+  "pre_guard": {
+    "ok": true,
+    "mean_busy": 0.0045,
+    "peak_busy": 0.04
+  },
+  "exit": 0,
+  "wall_sec": 99.7,
+  "mem_peak": 251052032,
+  "mem_peak_anon_sampled": 159096832,
+  "oom_kills": 0,
+  "verdict": "CLEAN",
+  "reasons": [],
+  "job_cpu_sec": 99.64,
+  "foreign_cpu_sec_on_measure_cpus": 3.45,
+  "foreign_frac": 0.0043,
+  "others_busy_cpus": 0.05,
+  "mem_stall_frac": 0.0,
+  "thresholds": {
+    "foreign_frac": 0.03,
+    "others_busy_cpus": 1.0,
+    "mem_stall_frac": 0.01
+  }
+}

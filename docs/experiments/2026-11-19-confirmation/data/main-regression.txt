@@ -1,0 +1,1 @@
+errors=[1.0, 1.0, 1.0, 0.0] ranks=[1, 1, 1, 1] termination=MaxIterations stats=TreeTciEvaluationStats { requested_points: 203, evaluated_points: 203, cache_hits: 0, cache_misses: 0, cached_entries: 0, retained_bytes: 0, dropped_inserts: 0, evicted_entries: 0, retained_byte_limit: None }

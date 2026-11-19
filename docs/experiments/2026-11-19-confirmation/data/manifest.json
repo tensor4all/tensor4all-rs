@@ -1,0 +1,63 @@
+{
+  "protocol": "/root/projects/tensor4all-rust/tensor4all-rs-1352-reopened/docs/experiments/2026-11-19-confirmation/README.md",
+  "observer_affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "uname": "Linux DESKTOP-E8DSDVE 6.18.58.1-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Tue Oct 27 00:24:11 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux",
+  "lscpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  16\nOn-line CPU(s) list:                     0-15\nVendor ID:                               AuthenticAMD\nModel name:                              AMD Ryzen 9 6900HX with Radeon Graphics\nCPU family:                              25\nModel:                                   68\nThread(s) per core:                      2\nCore(s) per socket:                      8\nSocket(s):                               1\nStepping:                                1\nBogoMIPS:                                6587.63\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology tsc_reliable nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext perfctr_core ssbd ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves clzero xsaveerptr arat npt nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold v_vmsave_vmload umip vaes vpclmulqdq rdpid fsrm\nVirtualization:                          AMD-V\nHypervisor vendor:                       Microsoft\nVirtualization type:                     full\nL1d cache:                               256 KiB (8 instances)\nL1i cache:                               256 KiB (8 instances)\nL2 cache:                                4 MiB (8 instances)\nL3 cache:                                16 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-15\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Vulnerable: Safe RET, no microcode\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Retpolines; IBPB conditional; IBRS_FW; STIBP always-on; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Vulnerable: No microcode\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Not affected",
+  "ai_run_sha256": "34eba7d7af492ec9c2c457d0386906b111d337b2bb4431921b9d92978c9af89f",
+  "thread_environment": {},
+  "arms": {
+    "historical": {
+      "checkout": "/root/projects/tensor4all-rust/tensor4all-rs-1372-cost-reference",
+      "head": "501ebb4a109c4f64386c6d2db7c15ef132c041c6",
+      "tracked_dirty": "",
+      "untracked": "crates/tensor4all-treetci/examples/confirmation_comparison.rs",
+      "source_sha256": "148282c53cdb4ce35428bc0f9b43743aa452f483c9cbb4c487b512a790dc49e4",
+      "binary": "/root/projects/tensor4all-rust/tensor4all-rs-1372-cost-reference/target/1372-reference/release/examples/confirmation_comparison",
+      "binary_sha256": "46e1550dd4de0bd1bbb7538613670d36c5bb5cc404a16b71c3da224a8ec7c0d1",
+      "lock_sha256": "f2ab5939bb64ccedf1807f24a5e5ea6271d72bfc870e71a29b42e4e65876d729",
+      "confirmation": "off"
+    },
+    "main": {
+      "checkout": "/root/projects/tensor4all-rust/tensor4all-rs-1372-main-reference",
+      "head": "35174fddbd7280cea4c07fb0dc27b59f57dc5880",
+      "tracked_dirty": "",
+      "untracked": "crates/tensor4all-treetci/examples/confirmation_comparison.rs\ncrates/tensor4all-treetci/examples/confirmation_off_baseline.rs\ncrates/tensor4all-treetci/examples/issue1352_confirmation_probe.rs\ncrates/tensor4all-treetci/tests/fixtures/issue1352_reopened_bits.txt",
+      "source_sha256": "148282c53cdb4ce35428bc0f9b43743aa452f483c9cbb4c487b512a790dc49e4",
+      "binary": "/root/projects/tensor4all-rust/tensor4all-rs-1372-main-reference/target/1372-reference/release/examples/confirmation_comparison",
+      "binary_sha256": "b5c0cc860ee35741c73298719d021af003626cd65dfeed9dfbda5dff6f074a88",
+      "lock_sha256": "658eb819ad5170bb4eb061fbe37a80de5c8815b175d0b679956bc0701232a376",
+      "confirmation": "off"
+    },
+    "off": {
+      "checkout": "/root/projects/tensor4all-rust/tensor4all-rs-1352-reopened",
+      "head": "ed000a66c7fde91e40a29a23c59dcc46d53b3596",
+      "tracked_dirty": "",
+      "untracked": "",
+      "source_sha256": "762d7b7db45dba86f075f1dec2fbf3e57a3b49f3c3e886e9d99097e74f59421d",
+      "binary": "/root/projects/tensor4all-rust/tensor4all-rs-1352-reopened/target/1372-reference/release/examples/confirmation_comparison",
+      "binary_sha256": "b246f422fc70048f0a293facc7d178aa7d560ccfa051924c44330571d7100a4a",
+      "lock_sha256": "658eb819ad5170bb4eb061fbe37a80de5c8815b175d0b679956bc0701232a376",
+      "confirmation": "off"
+    },
+    "on": {
+      "checkout": "/root/projects/tensor4all-rust/tensor4all-rs-1352-reopened",
+      "head": "ed000a66c7fde91e40a29a23c59dcc46d53b3596",
+      "tracked_dirty": "",
+      "untracked": "",
+      "source_sha256": "762d7b7db45dba86f075f1dec2fbf3e57a3b49f3c3e886e9d99097e74f59421d",
+      "binary": "/root/projects/tensor4all-rust/tensor4all-rs-1352-reopened/target/1372-reference/release/examples/confirmation_comparison",
+      "binary_sha256": "b246f422fc70048f0a293facc7d178aa7d560ccfa051924c44330571d7100a4a",
+      "lock_sha256": "658eb819ad5170bb4eb061fbe37a80de5c8815b175d0b679956bc0701232a376",
+      "confirmation": "on"
+    }
+  }
+}
