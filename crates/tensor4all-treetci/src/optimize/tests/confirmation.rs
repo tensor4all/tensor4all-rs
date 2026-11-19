@@ -219,7 +219,7 @@ fn final_failed_confirmation_returns_measured_max_iterations_without_injection()
 fn final_iteration_precedes_an_otherwise_detected_floor() {
     let (result, _) = peak_run(enabled(9), false, false);
     assert_eq!(result.termination, TreeTciTermination::MaxIterations);
-    assert_eq!(result.errors, vec![0.0, 0.0, 0.5].repeat(3));
+    assert_eq!(result.errors, [0.0, 0.0, 0.5].repeat(3));
     assert_eq!(result.evaluation.confirmation_checks, 3);
     assert_eq!(result.evaluation.confirmation_failures, 3);
     assert_eq!(result.evaluation.confirmation_pivots, 2);
