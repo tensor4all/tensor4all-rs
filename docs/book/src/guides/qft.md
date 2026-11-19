@@ -13,7 +13,7 @@ For a local checkout, the unpatched examples below use these dependencies.
 ```toml
 [dependencies]
 num-complex = "0.4"
-tensor4all-core = { path = "../tensor4all-rs/crates/tensor4all-core", default-features = false, features = ["tenferro-cpu-platform"] }
+tensor4all-core = { path = "../tensor4all-rs/crates/tensor4all-core", default-features = false, features = ["tenferro-cpu-platform", "global-defaults"] }
 tensor4all-treetn = { path = "../tensor4all-rs/crates/tensor4all-treetn", default-features = false, features = ["tenferro-cpu-platform"] }
 tensor4all-quanticstransform = { path = "../tensor4all-rs/crates/tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-platform"] }
 ```

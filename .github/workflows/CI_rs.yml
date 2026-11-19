@@ -40,6 +40,19 @@ jobs:
         run: |
           cargo check --locked -p tensor4all-tensorbackend --no-default-features --features explicit-context,tenferro-cpu-faer
           cargo doc --locked -p tensor4all-tensorbackend --no-deps --no-default-features --features explicit-context,tenferro-cpu-faer
+          cargo test --locked -p tensor4all-tensorbackend --no-default-features --features explicit-context,tenferro-cpu-faer --test explicit_context_surface
+
+      - name: Check explicit-only library crates (#1403)
+        # Library builds are explicit by default; only test/bench builds and the
+        # C API, Python and docs crates opt into `global-defaults`. Fail if a
+        # library dependency edge turns it back on for this set.
+        run: |
+          LIBS="-p tensor4all-tensorbackend -p tensor4all-core -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn"
+          if cargo tree --locked $LIBS -e normal,features -i tensor4all-tensorbackend | grep -F 'feature "global-defaults"'; then
+            echo "a library crate enables global-defaults by default" >&2
+            exit 1
+          fi
+          cargo clippy --locked --lib $LIBS -- -D warnings
 
       - name: Run clippy
         # The public-error-doc backlog is burned down; error/panic doc

@@ -11,14 +11,17 @@ If you have not set up a dependency yet, add `tensor4all-core` to your
 
 ```toml
 [dependencies]
-tensor4all-core = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-core" }
+tensor4all-core = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-core", features = ["global-defaults"] }
 ```
+
+`global-defaults` enables the context-free API used below, which runs on one
+process-global CPU context (see [Getting started](../getting-started.md)).
 
 Or use a path dependency when working from a local checkout:
 
 ```toml
 [dependencies]
-tensor4all-core = { path = "../tensor4all-rs/crates/tensor4all-core" }
+tensor4all-core = { path = "../tensor4all-rs/crates/tensor4all-core", features = ["global-defaults"] }
 ```
 
 ## Index

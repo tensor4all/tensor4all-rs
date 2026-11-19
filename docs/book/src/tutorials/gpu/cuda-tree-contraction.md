@@ -135,11 +135,12 @@ carries the same first-use caveat.
 
 ## Using it from another project
 
-The crates are not published to crates.io yet. Enable CUDA on both crates imported by the quickstart:
+The crates are not published to crates.io yet. Enable CUDA on both crates imported by the quickstart. The
+quickstart's CPU reference uses the context-free API, so `tensor4all-core` also enables `global-defaults`:
 
 ```toml
 [dependencies]
-tensor4all-core = { git = "https://github.com/tensor4all/tensor4all-rs", features = ["tenferro-cuda", "tenferro-cpu-faer"] }
+tensor4all-core = { git = "https://github.com/tensor4all/tensor4all-rs", features = ["tenferro-cuda", "tenferro-cpu-faer", "global-defaults"] }
 tensor4all-treetn = { git = "https://github.com/tensor4all/tensor4all-rs", features = ["tenferro-cuda", "tenferro-cpu-faer"] }
 ```
 

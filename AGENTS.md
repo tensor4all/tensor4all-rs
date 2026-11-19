@@ -269,9 +269,10 @@ fn test_op_c64() { test_op_generic::<Complex64>(); }
   abstractions for SVD, QR, einsum, and dense linear algebra, not local
   reimplementations.
 - Canonical integrations supply a configured `CpuBackend` to
-  `tensor4all_tensorbackend::CpuExecutionContext`; legacy convenience APIs may
-  use `with_default_backend` behind the `global-defaults` feature. Never create
-  an unconfigured fallback backend in downstream operation code.
+  `tensor4all_tensorbackend::CpuExecutionContext`; legacy convenience APIs reach
+  the process-global context only through `tensor4all_core::legacy` (opt-in
+  `tensor4all-core/global-defaults`), which refuses without the feature. Never
+  create an unconfigured fallback backend in downstream operation code.
 - `Tensor3Ops::slice_site`, `Tensor4Ops::slice_site`, and dense/full-tensor
   exports return column-major flat data.
 

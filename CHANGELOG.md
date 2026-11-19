@@ -4,6 +4,21 @@
 
 ### Behavior changes
 
+- `tensor4all-core` no longer pins `tensor4all-tensorbackend/global-defaults` and no
+  longer enables the process-global route by default (#1403). It has its own opt-in
+  `global-defaults` feature (`backend-tenferro` is an alias); its default is the
+  platform CPU provider only, and the provider features of the workspace crates no
+  longer imply it. Without it, a context-free operation that would have adopted an
+  owner-less value into the process-global eager runtime, or run on the process-global
+  engine, returns the new `ExecutionContextEntryError::NoContext` (inside
+  `IdxTensorError::EngineEntry` or the operation's own error) instead of choosing an
+  engine; values created through a caller-owned context keep running on that context's
+  engine. With `global-defaults` nothing changes. `tensor4all-treersi` drops
+  `global-defaults` from its defaults. Callers of the context-free API enable
+  `tensor4all-core/global-defaults`. Explicit callers of
+  `IdxTensor::src_error_estimate_in` and of structured contractions with host-only
+  operands now run the estimator solve and the native einsum on their own context's
+  engine instead of the process-global one. New: `src_error_estimate_general_in`.
 - `tensor4all-tensorbackend`: `global-defaults` is no longer enabled by the default
   features (#1377). The default is now `explicit-context` plus the platform CPU
   provider, which also exposes `Matrix`, `Storage`, `TensorElement`, the native

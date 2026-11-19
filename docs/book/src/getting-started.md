@@ -14,8 +14,9 @@ crates.io yet, so use git dependencies from an external project:
 # Basic tensor train construction and manipulation
 tensor4all-simplett = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-simplett" }
 
-# Indexed tensors and ITensors-like TensorTrain/TT-SVD
-tensor4all-core = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-core" }
+# Indexed tensors and ITensors-like TensorTrain/TT-SVD. `global-defaults` enables
+# the context-free API used throughout this book (see the note below).
+tensor4all-core = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-core", features = ["global-defaults"] }
 tensor4all-itensorlike = { git = "https://github.com/tensor4all/tensor4all-rs", package = "tensor4all-itensorlike" }
 
 # Tensor Cross Interpolation (TCI)
@@ -30,13 +31,20 @@ tensor4all-treetn = { git = "https://github.com/tensor4all/tensor4all-rs", packa
 
 You do not need to add all of them — only include the crates relevant to your use case.
 
+The examples in this book call the context-free API (`contract`, `svd`, `norm`, ...), which
+runs on one process-global CPU context. That route is the opt-in `global-defaults` feature
+of `tensor4all-core`; keep `tensor4all-core` in your dependencies with that feature even if
+you only import other tensor4all crates. Without it, a context-free operation returns an
+error that asks for an execution context instead of choosing one. Code that passes a
+caller-owned `CpuExecutionContext` to the `*_in` entry points does not need the feature.
+
 When working from a local checkout, use path dependencies instead. Paths are
 relative to your project's `Cargo.toml`; adjust `../tensor4all-rs` as needed:
 
 ```toml
 [dependencies]
 tensor4all-simplett = { path = "../tensor4all-rs/crates/tensor4all-simplett" }
-tensor4all-core = { path = "../tensor4all-rs/crates/tensor4all-core" }
+tensor4all-core = { path = "../tensor4all-rs/crates/tensor4all-core", features = ["global-defaults"] }
 tensor4all-itensorlike = { path = "../tensor4all-rs/crates/tensor4all-itensorlike" }
 tensor4all-tensorci = { path = "../tensor4all-rs/crates/tensor4all-tensorci" }
 tensor4all-quanticstci = { path = "../tensor4all-rs/crates/tensor4all-quanticstci" }
