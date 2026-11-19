@@ -1,8 +1,14 @@
 # Merge-policy acceptance comparison (#1130)
 
-Status: proposed plan; maximum slowdown limits await maintainer agreement.
-No timed candidate runs may begin until this plan is registered in the separate
-implementation PR and those limits have been agreed.
+Status: approved, before measurement. The maintainer fixed the hard maximum
+median paired wall-time ratio at **10.0x for each case** in the
+[2026-11-19 decision](https://github.com/tensor4all/tensor4all-rs/pull/1407#issuecomment-7025360934).
+This decision supersedes the earlier planning range. A ratio above 1.5x is a
+soft review trigger, not a stop condition. A case above 10.0x requires redesign;
+the hard limit will not be relaxed after timing results are known.
+
+Publish the commit containing this plan, the machine-specific protocol, and
+that decision URL in PR #1407 before starting any timed candidate run.
 
 ## Cases and arms
 
@@ -14,8 +20,8 @@ output depth, and identical work/term limits in both arms.
 
 | Case | Selected axes (zero-based site positions) | Baseline | Candidate | Maximum median paired wall-time ratio |
 |---|---|---|---|---|
-| Original six-qubit transform | `[0,1,2,3,4,5]` | `RankGoal(8)` | `Tolerance` | Pending maintainer agreement |
-| Two interleaved axes | `[0,2,4]`, `[1,3,5]` | `RankGoal(8)` | `Tolerance` | Pending maintainer agreement |
+| Original six-qubit transform | `[0,1,2,3,4,5]` | `RankGoal(8)` | `Tolerance` | 10.0x |
+| Two interleaved axes | `[0,2,4]`, `[1,3,5]` | `RankGoal(8)` | `Tolerance` | 10.0x |
 
 The baseline and candidate are policies of the same implementation revision
 and finished binary, so provider/dependency changes cannot bias the comparison.
@@ -59,7 +65,7 @@ numerical decisions are also covered by the unchanged exact/rank-goal tests.
 The cap-32 Green's-function workload remains a separate diagnostic, with time,
 RSS, and storage reported together if run. It is not substituted for either
 case above. Functional release checks through `ai-run build` may proceed while
-limits are pending, but their incidental timing/RSS is not comparison evidence.
+timing is gated, but their incidental timing/RSS is not comparison evidence.
 
 ## Harness
 
@@ -76,3 +82,45 @@ timing/RSS fields. After the gates above are satisfied, append `measure` and
 run the finished binary under `ai-run measure`, the stated affinity/thread
 settings, and the address-space limit. That mode primes the CPU and records
 only scheduler wall time, with the dense oracle outside the timed interval.
+
+## Registered host and execution details
+
+[`measurement-protocol.json`](measurement-protocol.json) fixes the hardware,
+source-code revision, CPU sets, environment, ordered case list, limits, and
+host-noise gates before measurement. Both policies use the finished binary
+built from this pre-registration commit; the runner resolves that commit through
+Git and records it as both baseline and candidate. The earlier code revision is
+also recorded. The runner and all Rust sources must remain committed and clean.
+
+The measurement CPU is logical CPU 8 (physical core 4); observer processes use
+CPUs 0-7 (physical cores 0-3). Each fresh process runs under its own exclusive
+`ai-run measure --mem 6G --cpus 8` gate. The controller remains on observer CPUs
+and holds a checkout-local lock across build and the complete paired suite.
+The original agent-process affinities are recorded and restored afterwards.
+Every process has a 5 GiB address-space limit. The runner builds once, copies the
+finished binary to an immutable path, checks its hash throughout, and performs
+no extra scheduler warmup calls.
+
+Both case medians must be at most 10.0x. Report all five paired ratios, their
+median, and a descriptive percentile bootstrap 95% interval (10,000 resamples,
+seed 1130); the interval does not replace or relax the median gate. For original
+case RSS, check each paired tolerance/goal ratio against 3.0 and report the
+worst pair, as well as each policy's maximum process RSS.
+
+A noise/validity failure makes the **whole paired experiment inconclusive**.
+Retain the failed attempt and rerun the complete suite once under the same
+protocol after the quiet gate; never replace selected samples. A second
+inconclusive attempt stops the campaign. A numerical or performance failure
+is retained and never retried to obtain a favorable result.
+
+Run the committed controller from observer CPUs, with the published registration
+comment URL and the commit resolved by Git:
+
+```bash
+taskset -c 0-7 python3 docs/experiments/issue-1130-implementation/run_acceptance.py \
+  --expected-head <published-pre-registration-commit> \
+  --registration-comment <PR-comment-URL> --output <new-scratch-directory>
+```
+
+The scratch directory must be outside the measured checkout. Copy its complete
+results into the experiment directory only after measurement has ended.
