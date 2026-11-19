@@ -1212,11 +1212,13 @@ impl TensorTrain {
     /// assert!(tt.max_bond_dim() <= 2);
     /// ```
     pub fn truncate(&mut self, options: &TruncateOptions) -> Result<()> {
+        // Validate before the single-site/empty no-op shortcut so that invalid
+        // options are rejected with the same typed error on every path.
+        validate_svd_truncation_options(options.max_bond_dim(), options.svd_policy())?;
+
         if self.len() <= 1 {
             return Ok(());
         }
-
-        validate_svd_truncation_options(options.max_bond_dim(), options.svd_policy())?;
 
         // Convert TruncateOptions to TruncationOptions
         let mut treetn_options = TruncationOptions::new();
