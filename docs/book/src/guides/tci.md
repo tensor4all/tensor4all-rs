@@ -357,10 +357,9 @@ measured residual witness is protected within that pool. These checks still run
 on final and capped sweeps. The recorded maximum is sampled, not a bound over
 the entire index domain.
 
-`SampledErrorFloor` names a measured residual that persists through a window of
-unchanged swept pivots or at the bond cap. Read the final error with this reason;
-increasing
-`max_iter` alone need not help. The stopping tolerance is never silently relaxed.
+`SampledErrorFloor` names a measured residual that persists at three equal
+completed-sweep pivot snapshots or at a saturated bond cap. Read the final error
+with this reason; increasing `max_iter` alone need not help. The stopping tolerance is never silently relaxed.
 Known samples have an independent `validation_cache_bytes` budget (32 MiB by
 default). At capacity, unprotected old samples are evicted. This limits
 historical coverage without preventing convergence; current retained pairs are

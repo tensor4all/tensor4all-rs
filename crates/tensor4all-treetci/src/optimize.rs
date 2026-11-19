@@ -55,9 +55,10 @@ pub enum TreeTciTermination {
     ///
     /// A low error in the last iteration alone is insufficient for convergence.
     MaxIterations,
-    /// Sampled residuals stay at or above tolerance through a window of unchanged
-    /// swept pivots (including their order), or a saturated bond cap prevents
-    /// resolving a measured residual.
+    /// Sampled residuals stay at or above tolerance at three equal completed-sweep
+    /// pivot snapshots (including their order), or a saturated bond cap prevents
+    /// resolving a measured residual. The snapshots span two equality comparisons;
+    /// the first sweep may have changed its input pivots.
     /// The final entry of `errors` records this sampled floor on the configured
     /// scale. This is an observed stall, not a bound or proof of optimality.
     SampledErrorFloor {
@@ -919,7 +920,8 @@ where
 
     // Equal maximum ranks alone do not imply a stall: replacing pivots at the
     // same rank can still discover an independent direction (#1352). Retain
-    // one exact pivot snapshot and require three unchanged swept states.
+    // one exact pivot snapshot and require three equal completed-sweep states
+    // (two equality comparisons). A changed snapshot starts a new window at one.
     let mut previous_pivots = options.enable_global_pivots.then(|| state.ijset.clone());
     let mut unchanged_pivot_sweeps = 0;
     for iteration in 0..options.max_iter {

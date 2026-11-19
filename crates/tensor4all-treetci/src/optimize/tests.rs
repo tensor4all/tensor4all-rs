@@ -103,6 +103,25 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         );
         assert_eq!(observed.0.last().unwrap().1, result.evaluation);
         assert_swept_pivot_sets(&state, usize::MAX);
+
+        // A legitimate floor preserves this inaccurate rank-1 approximation
+        // and reports its actual residual; it is not an accuracy certificate.
+        let tn = crate::to_treetn(&state, evaluate, Some(0)).unwrap();
+        let indices = (0..2)
+            .map(|site| tn.site_space(&site).unwrap().iter().next().unwrap().clone())
+            .collect();
+        let reference = IdxTensor::from_dense(indices, vec![1.0, 2.0, 2.0, 3.0]).unwrap();
+        let residual = tn
+            .to_dense()
+            .unwrap()
+            .sub(&reference)
+            .unwrap()
+            .maxabs()
+            .unwrap();
+        assert_eq!(residual, 1.0);
+        if enable_global_pivots {
+            assert_eq!(result.errors.last(), Some(&residual));
+        }
     }
 }
 

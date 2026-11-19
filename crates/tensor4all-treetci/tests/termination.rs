@@ -138,14 +138,15 @@ where
                 // A complete confirmation window may converge on the last sweep.
                 (3, None, TreeTciTermination::Converged, 3),
                 (20, Some(1), TreeTciTermination::MaxBondDimension, 3),
-                // Saturation takes precedence on the final sweep as well.
+                // The cap check precedes convergence on the final sweep too;
+                // a measured residual maps it to a cap-caused floor below.
                 (3, Some(1), TreeTciTermination::MaxBondDimension, 3),
                 (1, None, TreeTciTermination::MaxIterations, 1),
                 // Reaching the cap once does not complete its confirmation window.
                 (1, Some(1), TreeTciTermination::MaxIterations, 1),
                 // Even an exact approximation needs the convergence window.
                 (2, None, TreeTciTermination::MaxIterations, 2),
-                // A cap at the exact rank still reports saturation first.
+                // A cap at the exact rank still reports saturation before convergence.
                 (20, Some(3), TreeTciTermination::MaxBondDimension, 3),
             ] {
                 let result = run_identity(

@@ -40,8 +40,8 @@ Validation has an independent `validation_cache_bytes` budget (32 MiB by
 default). At capacity, old unprotected samples are evicted; the strongest
 currently measured residual witness is protected. Zero disables historical
 storage while current retained pairs are still checked. Pool pressure affects
-historical coverage and does not stop a run. An observed violation with unchanged swept pivots
-or a bond cap reports `SampledErrorFloor`; read its value from the last recorded
+historical coverage and does not stop a run. An observed violation at three equal
+completed-sweep pivot snapshots, or at a saturated bond cap, reports `SampledErrorFloor`; read its value from the last recorded
 error. Local LU truncation remains the requested tolerance in both search modes.
 Disabling global pivots disables global validation too.
 

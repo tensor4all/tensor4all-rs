@@ -43,7 +43,6 @@ where
         0,
         &[],
         TreeTciOptions::default().tolerance,
-        false,
     )
 }
 
@@ -54,7 +53,6 @@ fn check_plane<T>(
     plane: usize,
     starts: &[[usize; 3]],
     tolerance: f64,
-    allow_floor: bool,
 ) -> Result<()>
 where
     T: MatrixLuciScalar + CommonScalar + FullPivLuScalar + TensorElement + ScalarParts,
@@ -142,17 +140,19 @@ where
             run.termination,
             run.errors.last()
         );
-        let accepted = match run.termination {
-            TreeTciTermination::Converged => error <= options.tolerance,
-            TreeTciTermination::SampledErrorFloor { .. } => {
-                allow_floor && run.errors.last().is_some_and(|&e| e >= options.tolerance)
-            }
-            _ => false,
-        };
+        // These frozen low-rank fixtures must be reconstructed accurately;
+        // an honest floor is a valid diagnostic, but does not pass this check.
         assert!(
-            accepted,
-            "seed {seed}: {:?} with reported {:?}, true residual {error:e}",
+            error <= options.tolerance,
+            "seed {seed}: {:?} with reported {:?}, true residual {error:e} exceeds {}",
             run.termination,
+            run.errors.last(),
+            options.tolerance
+        );
+        assert_eq!(
+            run.termination,
+            TreeTciTermination::Converged,
+            "seed {seed}: reported {:?}, true residual {error:e}",
             run.errors.last()
         );
     }
@@ -200,7 +200,6 @@ fn nonzero_sparse_plane_real() -> Result<()> {
         N / 2,
         &[[N / 2, N / 2, N / 2], [N / 2 - 1, N / 2, N / 2 - 1]],
         1e-10,
-        true,
     )
 }
 
@@ -208,11 +207,10 @@ fn nonzero_sparse_plane_real() -> Result<()> {
 fn nonzero_sparse_plane_complex() -> Result<()> {
     check_plane(
         include_str!("fixtures/issue1352_reopened_bits.txt"),
-        &[4, 6],
+        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
         Complex64::new(1.0, 0.5),
         N / 2,
         &[[N / 2, N / 2, N / 2], [N / 2 - 1, N / 2, N / 2 - 1]],
         1e-10,
-        true,
     )
 }

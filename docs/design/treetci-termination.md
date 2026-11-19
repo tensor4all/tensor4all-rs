@@ -14,7 +14,7 @@ The reasons describe the optimization loop, in its decision order:
 | --- | --- | --- |
 | `SampledErrorFloor { at_bond_cap: true }` | Three trailing maximum ranks reach the cap and a measured error fails the strict tolerance comparison. | The final error records the sampled floor. The state remains swept and materializable. |
 | `MaxBondDimension` | Three trailing maximum ranks reach the cap without the measured floor above. | Still takes precedence over convergence; not every edge need be saturated. |
-| `SampledErrorFloor { at_bond_cap: false }` | Three trailing swept pivot sets are unchanged while their measured errors fail the strict tolerance comparison. | The error records the measured stall, not a proof that no other approximation could improve it. |
+| `SampledErrorFloor { at_bond_cap: false }` | Three trailing completed-sweep pivot snapshots are equal while their measured errors fail the strict tolerance comparison. | The error records the measured stall, not a proof that no other approximation could improve it. |
 | `Converged` | Three trailing errors are strictly below `tolerance`, the final maximum rank equals the minimum in that window, and no global pivots were accepted in that window. | A sampled criterion, not an exhaustive bound over the full index domain. |
 | `DegenerateCandidateSet` | The convergence window holds, but an edge's most recent local update could not measure its bond error. | The approximation may be inaccurate. |
 | `MaxIterations` | The requested iterations completed without an earlier stop. | A small final error alone does not establish convergence. |
@@ -29,6 +29,12 @@ The observer receives this same value and the evaluation accounting after the
 search. Pivot injection happens only if the loop will continue, so every
 returned state has completed a sweep since its last injection.
 
+The uncapped floor window consists of snapshots `S_k = S_(k+1) = S_(k+2)`
+at the ends of three completed sweeps, with two equality comparisons between
+those snapshots. The first sweep may have changed its input pivot state; that
+new snapshot starts the count at one. The condition does not require three
+individually unchanged input-to-output sweeps.
+
 ### Local truncation and measured floors
 
 Local LU truncation remains `tolerance * error_scale`, independently of
@@ -36,8 +42,9 @@ Local LU truncation remains `tolerance * error_scale`, independently of
 number of edges, disable absolute truncation, or introduce a recovery phase.
 Those numerical strategies belong to the separate #1371 experiment.
 
-If three consecutive swept pivot sets (including their order) are unchanged
-while their recorded errors all fail the strict tolerance comparison, the run reports `SampledErrorFloor`.
+If three consecutive completed-sweep pivot snapshots (including their order)
+are equal while their recorded errors all fail the strict tolerance comparison,
+the run reports `SampledErrorFloor`.
 The last recorded error is the measured stall. This is an observed lack of
 progress, not proof that no other approximation or future trajectory can improve
 it. The stopping tolerance and the numerical relative cutoff remain unchanged.

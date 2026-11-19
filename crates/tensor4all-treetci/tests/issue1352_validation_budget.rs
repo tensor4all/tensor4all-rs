@@ -41,6 +41,8 @@ fn a_tiny_history_budget_does_not_prevent_constant_convergence() -> Result<()> {
     Ok(())
 }
 
+// This fixture must converge below tolerance or complete the requested budget.
+// A premature floor must not hide a history-budget regression.
 #[test]
 fn the_32_site_seed_two_run_outlives_a_bounded_history() -> Result<()> {
     for budget in [32 * 1024 * 1024, 64 * 1024] {
@@ -75,11 +77,11 @@ fn the_32_site_seed_two_run_outlives_a_bounded_history() -> Result<()> {
         assert!(run.errors.len() >= 3);
         match run.termination {
             TreeTciTermination::Converged => assert!(reported < 1e-6),
-            TreeTciTermination::SampledErrorFloor { .. } => assert!(reported >= 1e-6),
-            TreeTciTermination::MaxIterations => {
-                // Changing pivot sets are not a proven stationary floor. The
-                // run must reach its requested limit rather than a cache stop.
-                assert_eq!(run.errors.len(), 30);
+            TreeTciTermination::SampledErrorFloor { at_bond_cap: false }
+            | TreeTciTermination::MaxIterations => {
+                // This unresolved fixture must complete the requested budget;
+                // a three-sweep floor is a regression, not a passing fallback.
+                assert_eq!(run.errors.len(), 30, "premature stop {:?}", run.termination);
                 assert!(reported >= 1e-6);
             }
             other => panic!("unexpected stop {other:?}, residual {reported:e}"),
