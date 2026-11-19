@@ -659,15 +659,37 @@ keys and resource limits are checked before tensor operations.
 
 Accept an axis's split only when its children store no more logical parameters
 in total than the unsplit candidate (`split_pays`). If none passes, retain the
-unsplit candidate; if one passes, retain its children. If several pass, probe
-their joint split as one alternative partition, and retain it if its total
-storage is no greater than the unsplit candidate. Otherwise retain the cheapest
-passing single-axis split, breaking ties by coordinate-group order. Do not
-probe every subset of eligible axes. An eligible axis absent from the retained
-split stops permanently, including passing axes not selected by the fallback;
-exhausted axes need no probes. Input siblings continue merging on later levels
-regardless of which output axes stopped. These rules apply only to `Tolerance`;
-`Exact` and `RankGoal` retain their existing split triggers.
+unsplit candidate. If several pass, also probe their joint split as one
+alternative partition, subject to the same acceptance test. Choose minimum
+storage over the unsplit candidate, all passing single-axis candidates, and
+the joint candidate if it passes. On equal storage, prefer the joint split,
+then a single-axis split in coordinate-group order, then the unsplit candidate.
+Thus a joint split cannot displace a cheaper single-axis split. Do not probe
+every subset of eligible axes. An eligible axis absent from the retained split
+stops permanently, including passing axes not selected by this minimum-storage
+rule; exhausted axes need no probes. Input siblings continue merging on later
+levels regardless of which output axes stopped. These rules apply only to
+`Tolerance`; `Exact` and `RankGoal` retain their existing split triggers.
+
+Process candidates serially. Initially the unsplit candidate is the incumbent;
+cache its scalar storage count, then probe one single-axis partition at a time.
+Retain only the incumbent and the current probe for the region being processed:
+promote a better probe and release the old incumbent, or release the losing
+probe before constructing another. Keep the retained-error ledger with its
+candidate and discard a losing ledger with its tensors. Keep only axis
+identifiers and scalar scores for other passing singles, so the joint probe is rebuilt from the original
+region inputs without retaining all single-axis tensors. Once superseded, the
+unsplit tensors are released; its scalar count suffices for `split_pays`.
+The same incumbent-versus-probe comparison selects the joint candidate. Assemble
+one probe's children sequentially, and check its full metadata-derived live-item
+and term bounds before allocation. For `a` eligible axes, execute at most one
+unsplit candidate, `a` single-axis probes, and one joint probe, not all subsets.
+
+This is a limit of two transient candidate partitions for the current region,
+not a whole-process memory bound: incoming terms, completed output regions, and
+one probe's addition/SVD/residual workspaces remain live as needed. No collection
+of all probe tensors or an extra unsplit tensor copy may be retained. Validate
+actual peak RSS and probe overhead with the acceptance comparisons below.
 
 `output_depth` remains the maximum executed level. Nonempty output regions are
 disjoint and retain their spectator constraints. At full input-merge depth each
@@ -724,6 +746,9 @@ each child `b_R / sqrt(k)` and each
 possible merge there `d = b_R / (sqrt(k) * n_R)`. The unsplit candidate has
 `k = 1`; an empty candidate has no charges. Compute joint children as their own
 candidate partition, never by combining overlapping single-axis probes.
+The tighter `b_R / sqrt(k)` per-child allowance intentionally biases the storage
+comparison against splitting: each alternative must fit the same regional L2
+budget, so do not equalize per-child and unsplit tolerances to remove that bias.
 Fix `n_R`, `k`, and the resulting allocations before executing that candidate.
 If a child executes `m < n_R` chargeable merges, its bound is at most `m * d`;
 the unexecuted charges and residual slack remain unused. Do not recompute `k`
@@ -773,8 +798,25 @@ within the stated bound; unchanged exact/goal behavior; and an injected,
 reverted mutation that fails each new test. Cover inactive levels, zero budget,
 early stops, discarded probes, sparse/unequal prefixes, selected outputs,
 spectators, and multiple axes. New comparisons use CLEAN `ai-run measure`
-reports retained beside the results. The cap-32 workload is an additional
-diagnostic, not a promised rank target or a replacement for the original gate.
+reports retained beside the results.
+
+Wall time is a separate acceptance gate, alongside memory and numerical error.
+Compare scheduler wall time (including leaf application, excluding shared input
+and operator construction and the dense oracle) with goal mode on the original
+six-qubit case using `RankGoal(8)`, and on a two-axis variant of the same input:
+transform the first six bits as two interleaved three-bit axes, leaving the same
+three spectators. Hold tolerance, leaf-application policy, maximum output depth,
+input seed, provider, and thread count fixed between policies. Run each case in
+a separate process using finished release binaries through `ai-run measure`.
+
+Before any timed candidate run, register the complete case list, revisions,
+repetition/warmup plan, median paired wall-time ratio `T_tolerance / T_goal`, and
+per-case maximum acceptable slowdown in the implementation PR, and obtain the
+maintainer's agreement on those limits. All registered cases must meet their
+limits; a memory improvement alone cannot pass a failed wall-time gate. No
+numerical slowdown limit or performance result is claimed by this design note.
+The cap-32 workload remains an additional diagnostic (report time and RSS
+alongside storage), not a promised rank target or a replacement for these gates.
 
 Changing the SVD per-edge allowance to `d / sqrt(edges)` needs its own proof and
 validation and is outside this change. A final fitting/recompression pass is
