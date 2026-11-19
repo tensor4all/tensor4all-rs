@@ -4,9 +4,7 @@
 //! routing the actual work through the shared tenferro CPU backend.
 
 use anyhow::{anyhow, Result};
-#[cfg(feature = "global-defaults")]
-use num_complex::ComplexFloat;
-use num_complex::{Complex32, Complex64};
+use num_complex::{Complex32, Complex64, ComplexFloat};
 use tenferro::{DType, Tensor, TensorScalar, TensorSessionOpsExt, TypedTensor};
 use tenferro_linalg::TensorLinalgExt;
 
@@ -673,6 +671,53 @@ pub fn src_error_estimate_general<T>(
 where
     T: MatrixSolveScalar + ComplexFloat,
 {
+    src_error_estimate_general_with(factor, |a, b| solve_matrix(a, b))
+}
+
+/// [`src_error_estimate_general`] on an engine the caller already holds.
+///
+/// The estimator is the same; only the small general solve `R† G = I` runs on
+/// `session` instead of the process-global context.
+///
+/// # Errors
+///
+/// Returns [`BackendLinalgError`] when `factor` is empty, non-square, singular,
+/// contains non-finite values, or when the solve on `session` fails.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_tensorbackend::{
+///     src_error_estimate_general_in, CpuBackend, CpuExecutionContext, Matrix,
+/// };
+///
+/// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+/// let factor = Matrix::from_col_major_vec(2, 2, vec![0.0_f64, 3.0, 2.0, 1.0]);
+/// let estimate = context.with_session(|engine| src_error_estimate_general_in(engine, &factor))??;
+/// assert!(estimate.error.is_finite());
+/// assert!((estimate.norm - (14.0_f64 / 2.0).sqrt()).abs() < 1.0e-12);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn src_error_estimate_general_in<T>(
+    session: &mut dyn tenferro_tensor::Engine,
+    factor: &Matrix<T>,
+) -> std::result::Result<SrcErrorEstimate, BackendLinalgError>
+where
+    T: MatrixSolveScalar + ComplexFloat,
+{
+    src_error_estimate_general_with(factor, |a, b| {
+        T::solve_matrix_in_impl(session, a, b).map_err(BackendLinalgError::from)
+    })
+}
+
+/// Shared body of the general SRC estimator; `solve` performs `R† G = I`.
+fn src_error_estimate_general_with<T>(
+    factor: &Matrix<T>,
+    solve: impl FnOnce(&Matrix<T>, &Matrix<T>) -> std::result::Result<Matrix<T>, BackendLinalgError>,
+) -> std::result::Result<SrcErrorEstimate, BackendLinalgError>
+where
+    T: MatrixSolveScalar + ComplexFloat,
+{
     let nrows = factor.nrows();
     let ncols = factor.ncols();
     if nrows != ncols {
@@ -702,7 +747,7 @@ where
         }
         identity[[col, col]] = T::one();
     }
-    let inverse_adjoint = solve_matrix(&adjoint, &identity).map_err(|error| {
+    let inverse_adjoint = solve(&adjoint, &identity).map_err(|error| {
         BackendLinalgError::from(anyhow!("SRC inverse-adjoint general solve failed: {error}"))
     })?;
     src_error_estimate_from_inverse_adjoint(factor, &inverse_adjoint)
@@ -781,7 +826,6 @@ where
 /// The inverse-adjoint argument is intentionally separate from
 /// [`src_error_estimate`] so incremental QR can reuse its updated triangular
 /// solve state. This helper performs only norm accumulation and validation.
-#[cfg(feature = "global-defaults")]
 pub(crate) fn src_error_estimate_from_inverse_adjoint<T>(
     r: &Matrix<T>,
     inverse_adjoint: &Matrix<T>,

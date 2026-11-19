@@ -18,7 +18,7 @@ mod any_scalar;
 #[cfg(feature = "explicit-context")]
 /// Backend dispatch for dense linear algebra operations.
 mod backend;
-#[cfg(feature = "global-defaults")]
+#[cfg(feature = "explicit-context")]
 /// Complete-pivoting LU of a square matrix stopped at a rank cap.
 mod capped_full_piv_lu;
 #[cfg(feature = "explicit-context")]
@@ -64,23 +64,23 @@ pub use backend::{
 };
 #[cfg(feature = "explicit-context")]
 pub use backend::{
-    full_piv_lu_matrix_in, qr_backend_in, solve_matrix_in, svd_backend_in,
-    triangular_solve_matrix_in, BackendLinalgError, BackendLinalgScalar, FullPivLuMatrixResult,
-    FullPivLuResult, FullPivLuScalar, MatrixSolveScalar, MatrixTriangularSolveScalar,
-    SrcErrorEstimate, SvdResult,
+    full_piv_lu_matrix_in, qr_backend_in, solve_matrix_in, src_error_estimate_general_in,
+    svd_backend_in, triangular_solve_matrix_in, BackendLinalgError, BackendLinalgScalar,
+    FullPivLuMatrixResult, FullPivLuResult, FullPivLuScalar, MatrixSolveScalar,
+    MatrixTriangularSolveScalar, SrcErrorEstimate, SvdResult,
 };
-#[cfg(feature = "global-defaults")]
+#[cfg(feature = "explicit-context")]
 pub use capped_full_piv_lu::{capped_full_piv_lu, CappedFullPivLu, CappedFullPivLuScalar};
 #[cfg(feature = "global-defaults")]
 pub use context::{
-    default_cpu_execution_context, default_eager_ctx, with_default_backend, with_runtime_engine,
-    EagerContextError, ExecutionContextEntryError,
+    default_cpu_execution_context, default_eager_ctx, with_default_backend, EagerContextError,
 };
 #[cfg(feature = "explicit-context")]
 pub use context::{
     default_cpu_wait_policy, set_default_cpu_threads, set_default_cpu_wait_policy,
-    AlreadyInitialized, CpuBackend, CpuExecutionContext, CpuExecutionContextError, CpuThreadError,
-    CpuWaitPolicy, ExecutionContext, WaitPolicyAlreadyInitialized,
+    with_runtime_engine, AlreadyInitialized, CpuBackend, CpuExecutionContext,
+    CpuExecutionContextError, CpuThreadError, CpuWaitPolicy, ExecutionContext,
+    ExecutionContextEntryError, WaitPolicyAlreadyInitialized,
 };
 #[cfg(feature = "tenferro-cuda")]
 pub use cuda::{

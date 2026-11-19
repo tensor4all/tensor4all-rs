@@ -496,7 +496,6 @@ impl CudaExecutionContext {
             .as_ref()
             .map(Arc::clone)
             .map_err(Clone::clone)?;
-        #[cfg(feature = "global-defaults")]
         crate::context::register_eager_runtime_owner(
             &runtime,
             crate::context::RuntimeOwner::Cuda(Arc::downgrade(&self.owner)),

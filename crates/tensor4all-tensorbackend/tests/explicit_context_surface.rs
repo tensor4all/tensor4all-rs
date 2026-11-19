@@ -74,3 +74,56 @@ fn hermitian_eigensolver_rejects_invalid_tolerance_before_the_context() {
     let matrix = Matrix::from_col_major_vec(1, 1, vec![1.0_f64]);
     assert!(hermitian_eigendecomposition_in(&ctx, &matrix, f64::NAN).is_err());
 }
+
+#[test]
+fn implicit_route_runs_on_the_owning_context_engine() {
+    use tenferro_cpu::CpuEngine;
+    use tensor4all_tensorbackend::with_runtime_engine;
+
+    let ctx = context();
+    let runtime = ctx.eager_runtime().unwrap();
+    let threads = with_runtime_engine(&runtime, |engine| {
+        engine
+            .as_any_mut()
+            .downcast_mut::<CpuEngine>()
+            .map(|engine| engine.num_threads())
+    })
+    .unwrap();
+    assert_eq!(threads, Some(1));
+}
+
+/// With no process-global context, a runtime whose owning context is gone has
+/// no engine to run on: the entry is refused instead of choosing one.
+#[cfg(not(feature = "global-defaults"))]
+#[test]
+fn implicit_route_refuses_a_runtime_without_a_live_owner() {
+    use tensor4all_tensorbackend::{with_runtime_engine, ExecutionContextEntryError};
+
+    let runtime = {
+        let ctx = context();
+        ctx.eager_runtime().unwrap()
+    };
+    let error = with_runtime_engine(&runtime, |_| ()).unwrap_err();
+    assert!(matches!(error, ExecutionContextEntryError::NoContext));
+    assert!(error.to_string().contains("no execution context"));
+}
+
+#[test]
+fn src_error_estimate_general_runs_on_the_caller_engine() {
+    use tensor4all_tensorbackend::src_error_estimate_general_in;
+
+    let ctx = context();
+    let factor = Matrix::from_col_major_vec(2, 2, vec![0.0_f64, 3.0, 2.0, 1.0]);
+    let estimate = ctx
+        .with_session(|engine| src_error_estimate_general_in(engine, &factor))
+        .unwrap()
+        .unwrap();
+    assert!(estimate.error.is_finite());
+    assert!((estimate.norm - (14.0_f64 / 2.0).sqrt()).abs() < 1.0e-12);
+
+    let singular = Matrix::from_col_major_vec(2, 2, vec![1.0_f64, 2.0, 2.0, 4.0]);
+    assert!(ctx
+        .with_session(|engine| src_error_estimate_general_in(engine, &singular))
+        .unwrap()
+        .is_err());
+}
