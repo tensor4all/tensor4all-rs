@@ -596,11 +596,10 @@ spectator followed by interleaved `kx`/`ky` bits, input patch cap 32, output
 rank goal 64, `rtol = 1e-6`, and certified leaf application with share 0.5.
 The following numbers are existing results reported by the issue author at
 `e184b0d7`, one thread, with CLEAN `ai-run` runs; they were not rerun for this
-design note. Issue #1373 explicitly reports release builds for its `R = 8`
-dataset. The `R = 10` row and storage counts come from the
-[follow-up data](https://github.com/tensor4all/tensor4all-rs/issues/1130#issuecomment-6975971949),
-which does not restate the build profile; no artifacts were inspected here to
-verify that profile.
+design note. The `R = 10` row and storage counts come from the
+[follow-up data](https://github.com/tensor4all/tensor4all-rs/issues/1130#issuecomment-6975971949).
+No build profile is asserted for either row: the follow-up does not state it,
+and no artifacts were inspected here to verify it.
 
 | Bits per axis `R` | Input patches | Transform | Peak memory | Retained bond (transient) |
 |---|---|---|---|---|
