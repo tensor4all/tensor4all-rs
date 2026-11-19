@@ -1640,8 +1640,10 @@ pub fn einsum_native_tensors_owned(
 ///
 /// # Errors
 ///
-/// Returns an error under the same conditions as the process-global entry, or
-/// when `ctx` rejects the session entry.
+/// Returns the same errors as [`einsum_native_tensors_owned`] (an empty operand
+/// list, an operand shape or id set mismatch, label generation out of range, or
+/// a backend contraction failure), plus an error when `ctx` rejects the session
+/// entry.
 ///
 /// # Examples
 ///
@@ -1661,9 +1663,6 @@ pub fn einsum_native_tensors_owned(
 /// # Ok(())
 /// # }
 /// ```
-/// # Errors
-///
-/// Returns an error if an operand shape or id set is invalid, the context is re-entered, or the engine fails.
 pub fn einsum_native_tensors_owned_in(
     ctx: &CpuExecutionContext,
 
@@ -1775,8 +1774,10 @@ pub fn einsum_native_tensors(
 ///
 /// # Errors
 ///
-/// Returns an error under the same conditions as the process-global entry, or
-/// when `ctx` rejects the session entry.
+/// Returns the same errors as [`einsum_native_tensors`] (an empty operand list,
+/// an operand shape or id set mismatch, label generation out of range, or a
+/// backend contraction failure), plus an error when `ctx` rejects the session
+/// entry.
 ///
 /// # Examples
 ///
@@ -1792,9 +1793,6 @@ pub fn einsum_native_tensors(
 /// # Ok(())
 /// # }
 /// ```
-/// # Errors
-///
-/// Returns an error if an operand shape or id set is invalid, the context is re-entered, or the engine fails.
 pub fn einsum_native_tensors_in(
     ctx: &CpuExecutionContext,
 
@@ -2019,8 +2017,9 @@ impl NativeEinsumPlan {
     ///
     /// # Errors
     ///
-    /// Returns an error under the same conditions as `execute_reads`, or when
-    /// `ctx` rejects the session entry.
+    /// Returns the same errors as [`NativeEinsumPlan::execute_reads`] (an empty
+    /// input list, a subscript or shape mismatch, or a backend failure), plus an
+    /// error when `ctx` rejects the session entry.
     ///
     /// # Examples
     ///
@@ -2040,9 +2039,6 @@ impl NativeEinsumPlan {
     /// # Ok(())
     /// # }
     /// ```
-    /// # Errors
-    ///
-    /// Returns an error if a read window is out of bounds, the context is re-entered, or the engine fails.
     pub fn execute_reads_in(
         &self,
         ctx: &CpuExecutionContext,
@@ -2100,8 +2096,9 @@ pub fn einsum_native_tensor_reads(
 ///
 /// # Errors
 ///
-/// Returns an error under the same conditions as the process-global entry, or
-/// when `ctx` rejects the session entry.
+/// Returns the same errors as [`einsum_native_tensor_reads`] (an empty operand
+/// list, an invalid read window or id set, a subscript or shape mismatch, or a
+/// backend failure), plus an error when `ctx` rejects the session entry.
 ///
 /// # Examples
 ///
@@ -2121,9 +2118,6 @@ pub fn einsum_native_tensor_reads(
 /// # Ok(())
 /// # }
 /// ```
-/// # Errors
-///
-/// Returns an error if a read window or id set is invalid, the context is re-entered, or the engine fails.
 pub fn einsum_native_tensor_reads_in(
     ctx: &CpuExecutionContext,
 
