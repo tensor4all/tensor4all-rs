@@ -2041,9 +2041,9 @@ impl NativeEinsumPlan {
     /// # }
     /// ```
     /// # Errors
-///
-/// Returns an error if a read window is out of bounds, the context is re-entered, or the engine fails.
-pub fn execute_reads_in(
+    ///
+    /// Returns an error if a read window is out of bounds, the context is re-entered, or the engine fails.
+    pub fn execute_reads_in(
         &self,
         ctx: &CpuExecutionContext,
         inputs: &[TensorRead<'_>],
