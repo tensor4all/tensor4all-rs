@@ -5,7 +5,9 @@
 Approved after maintainer decisions on tracking issue
 [#648](https://github.com/tensor4all/tensor4all-rs/issues/648). The rebased
 cross-model pre-implementation review gate passed on commit `bda6a58f`; this
-record is the implementation contract for the migration.
+record is the implementation contract for the migration. That approval does not
+cover the [merge-refine tolerance proposal](#merge-refine-tolerance-mode-proposal-1130),
+which awaits a separate maintainer design decision.
 
 ## Goal
 
@@ -573,8 +575,8 @@ impact attestation in the worklog/PR body.
 
 ## Merge-refine tolerance mode (proposal, #1130)
 
-Status: proposed design for review; no implementation or public API change in
-this change. As requested in the
+This section proposes a design for review; it makes no implementation or public
+API change. As requested in the
 [scope decision](https://github.com/tensor4all/tensor4all-rs/issues/1130#issuecomment-6977139247),
 implementation follows in a separate PR after this note is reviewed.
 
@@ -593,19 +595,28 @@ The second workload is the patched 2D momentum Green's function in
 spectator followed by interleaved `kx`/`ky` bits, input patch cap 32, output
 rank goal 64, `rtol = 1e-6`, and certified leaf application with share 0.5.
 The following numbers are existing results reported by the issue author at
-`e184b0d7`, release, one thread, with CLEAN `ai-run` runs; they were not rerun
-for this design note. The `R = 10` row and storage counts are reported in the
-[follow-up data](https://github.com/tensor4all/tensor4all-rs/issues/1130#issuecomment-6975971949).
+`e184b0d7`, one thread, with CLEAN `ai-run` runs; they were not rerun for this
+design note. Issue #1373 explicitly reports release builds for its `R = 8`
+dataset. The `R = 10` row and storage counts come from the
+[follow-up data](https://github.com/tensor4all/tensor4all-rs/issues/1130#issuecomment-6975971949),
+which does not restate the build profile; no artifacts were inspected here to
+verify that profile.
 
 | Bits per axis `R` | Input patches | Transform | Peak memory | Retained bond (transient) |
 |---|---|---|---|---|
 | 8 | 36 | 286.4 s | 3.4 GB | 875 (1,455) |
 | 10 | 44 | 4,032.1 s | 9.2 GB | 1,623 (2,656) |
 
-| `R` | Stored parameters | After SVD: bond / parameters | Measured change | Remaining allowance |
+| `R` | Stored parameters | After SVD: bond / parameters | Absolute change | Per-run remaining allowance |
 |---|---|---|---|---|
 | 8 | 2,675,746 | 378 / 993,942 | 2.0e-5 | 1.15e-4 |
 | 10 | 17,314,348 | 401 / 1,745,576 | 1.5e-4 | 4.32e-4 |
+
+Both change and remaining allowance are absolute, per-run values using that
+row's own `reference_scale`. A shared `rtol` does not imply a shared `A`;
+compare each change only with the remaining allowance in the same row. The
+sources do not supply `A` or `reference_scale` for every row, so the quoted
+remaining allowances cannot all be recomputed from this table alone.
 
 The sweep used relative cutoff `1e-8`. These observations motivate spending
 allowance during merges; they do not establish a bound for the proposed mode.
@@ -633,14 +644,31 @@ keep the exact pair sum. A negligible merged contribution may instead be
 dropped, charging its measured norm; the drop and truncation are alternative
 outcomes of one merge.
 
-Refinement is adaptive per coordinate axis, using the existing `split_pays`
-criterion on truncated candidates: retain a split only when its children store
-no more parameters in total than the unsplit merged candidate. There is no
-rank-based stopping test. When several axes pass, also check the joint split's
-storage; if it is worse, use the cheapest passing single-axis split (ties use
-coordinate-group order). A stopped axis stays stopped while input siblings
-continue merging. Candidate keys and live-item limits are checked before tensor
-operations; do not enumerate every subset of refining axes.
+Tolerance mode uses the following split trigger at **every executed level**
+`t`, independently for each current output region. First merge its input
+siblings at its existing output prefix to obtain the unsplit candidate. An
+axis is eligible exactly when its output-prefix depth is `t - 1` and it has at
+least `t` output bits, matching `ScheduleGeometry::refining_axes`. If no axis
+is eligible, retain the unsplit candidate and perform no split probes.
+
+Otherwise **always probe every eligible axis**, restricting to that axis's
+metadata-pruned children before merging/truncating their inputs. Probe even
+when the unsplit candidate compressed successfully, its rank is small, or the
+approximation allowance is zero. The trigger is not a rank test or a failed
+truncation test; zero allowance makes probes exact, not optional. Candidate
+keys and resource limits are checked before tensor operations.
+
+Accept an axis's split only when its children store no more logical parameters
+in total than the unsplit candidate (`split_pays`). If none passes, retain the
+unsplit candidate; if one passes, retain its children. If several pass, probe
+their joint split as one alternative partition, and retain it if its total
+storage is no greater than the unsplit candidate. Otherwise retain the cheapest
+passing single-axis split, breaking ties by coordinate-group order. Do not
+probe every subset of eligible axes. An eligible axis absent from the retained
+split stops permanently, including passing axes not selected by the fallback;
+exhausted axes need no probes. Input siblings continue merging on later levels
+regardless of which output axes stopped. These rules apply only to `Tolerance`;
+`Exact` and `RankGoal` retain their existing split triggers.
 
 `output_depth` remains the maximum executed level. Nonempty output regions are
 disjoint and retain their spectator constraints. At full input-merge depth each
@@ -665,7 +693,9 @@ input-prefix keys `K_g(0)`. At each level `s = 1..D`, apply the scheduler's
 prefix), group equal parent keys, and retain one key per group as `K_g(s)`.
 The potential pair count is `M_s = sum_g (|K_g(s-1)| - |K_g(s)|)`. Thus
 `S_D = {s in 1..D : M_s > 0}` is fixed before tensor work and
-`L_t = |{s in S_D : s >= t}|`. Never include a level beyond `D`, even if more
+`L_t = |{s in S_D : s >= t}|`. Output split/probe decisions do not change
+these metadata-derived `M_s` or `S_D`; pruning may reduce realized work.
+Never include a level beyond `D`, even if more
 input merges would occur in a full-depth run. For `D = 0`, `S_D` is empty and
 there are no level allocations. For example, potential counts `(0, 2, 0, 1)`
 with `D = 3` give `S_D = {2}` and `L_2 = 1`; level 4 reserves nothing.
