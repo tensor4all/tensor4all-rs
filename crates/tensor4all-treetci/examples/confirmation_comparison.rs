@@ -209,7 +209,11 @@ fn run<P: Problem>(seed: u64, tolerance: f64, confirm: bool, timed: bool) -> Res
         &mut observed,
         &context,
     )?;
-    let seconds = started.elapsed().as_secs_f64();
+    let seconds = if timed {
+        started.elapsed().as_secs_f64()
+    } else {
+        0.0
+    };
     ensure!(
         callback_points.get() == result.evaluation.evaluated_points,
         "oracle counter mismatch"
