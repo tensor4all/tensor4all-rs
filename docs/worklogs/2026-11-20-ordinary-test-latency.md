@@ -37,7 +37,9 @@
 - Independent fixture review found no actionable defects. The original broad
   oracle and exponential witnesses remain available to nightly execution.
 - The final dependency graph resolves all 14 SDK crates at one revision, with
-  package versions and checksums unchanged. The current upstream compiler passes
+  package versions and checksums unchanged. The isolated CUDA feature fixture
+  resolves the same SDK revision; the existing single-version guard rejects its
+  former lock and passes the synchronized one. The current upstream compiler passes
   94 checks and its strict local PR gate; its byte-identical downstream backport
   passes 93 checks in release mode. All 2,072 ordinary checks across the five
   affected crates and all eight moved heavy witnesses pass on the final pins.

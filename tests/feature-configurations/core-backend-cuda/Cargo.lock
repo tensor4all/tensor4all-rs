@@ -1294,7 +1294,7 @@ dependencies = [
 [[package]]
 name = "tenferro-ad"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
 dependencies = [
  "computegraph",
  "lru",
@@ -1311,12 +1311,12 @@ dependencies = [
 [[package]]
 name = "tenferro-core-ops"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
 
 [[package]]
 name = "tenferro-cpu"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
 dependencies = [
  "cpueinsum",
  "elem-simd-math",
@@ -1342,7 +1342,7 @@ dependencies = [
 [[package]]
 name = "tenferro-cpu-basic"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1354,7 +1354,7 @@ dependencies = [
 [[package]]
 name = "tenferro-cpu-fused"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1368,7 +1368,7 @@ dependencies = [
 [[package]]
 name = "tenferro-einsum"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
 dependencies = [
  "computegraph",
  "cpueinsum",
@@ -1389,7 +1389,7 @@ dependencies = [
 [[package]]
 name = "tenferro-gpu"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
 dependencies = [
  "cudarc",
  "libloading 0.8.9",
@@ -1409,7 +1409,7 @@ dependencies = [
 [[package]]
 name = "tenferro-internal-cpu-kernels"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1424,7 +1424,7 @@ dependencies = [
 [[package]]
 name = "tenferro-internal-extension-macros"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1434,7 +1434,7 @@ dependencies = [
 [[package]]
 name = "tenferro-internal-ops"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
 dependencies = [
  "computegraph",
  "num-complex",
@@ -1447,7 +1447,7 @@ dependencies = [
 [[package]]
 name = "tenferro-linalg"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
 dependencies = [
  "computegraph",
  "cudarc",
@@ -1471,7 +1471,7 @@ dependencies = [
 [[package]]
 name = "tenferro-runtime"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
 dependencies = [
  "computegraph",
  "lru",
@@ -1488,7 +1488,7 @@ dependencies = [
 [[package]]
 name = "tenferro-tensor"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
 dependencies = [
  "num-complex",
  "num-traits",
@@ -1501,7 +1501,7 @@ dependencies = [
 [[package]]
 name = "tenferro-tensor-core"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
 dependencies = [
  "num-complex",
  "strided-view",
