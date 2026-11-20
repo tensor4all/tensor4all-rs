@@ -199,6 +199,9 @@ pub(crate) fn row_vector_times_matrix<T: TTScalar>(
     // costs ~70 us even for a 2x2 product. TTCache's environment recursion
     // calls this thousands of times per global-pivot guard search, so the
     // mat-vec is computed inline.
+    // contraction-kernel-ok: einsum_tensors builds a new plan per call
+    // (~70 us even for a 2x2 product) and this runs per visited prefix and
+    // suffix in TTCache; a cached-plan route is tracked in #627.
     Ok((0..cols)
         .map(|c| {
             (0..rows)
@@ -237,6 +240,8 @@ pub(crate) fn matrix_times_col_vector<T: TTScalar>(
     // Direct loop, same rationale as `row_vector_times_matrix`: the einsum
     // dispatch recompiles the graph on every call, which dominates small
     // environment contractions.
+    // contraction-kernel-ok: same per-call plan cost as
+    // `row_vector_times_matrix`; a cached-plan route is tracked in #627.
     Ok((0..rows)
         .map(|r| {
             (0..cols)

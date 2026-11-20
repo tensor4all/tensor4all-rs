@@ -465,6 +465,9 @@ impl<T: TTScalar> TTCache<T> {
             });
         }
 
+        // contraction-kernel-ok: a 1-D dot over the two environments; the
+        // per-call einsum plan compile dominates at these widths (see
+        // `einsum_helper`), and the batched kernel is tracked in #627.
         let mut result = T::zero();
         for i in 0..left.len() {
             result = result + left[i] * right[i];
@@ -600,6 +603,8 @@ impl<T: TTScalar> TTCache<T> {
                 let left_env = &left_envs[il];
                 let right_env = &right_envs[ir];
                 // Inner product
+                // contraction-kernel-ok: same 1-D environment dot as
+                // `evaluate`; the batched kernel is tracked in #627.
                 left_env
                     .iter()
                     .zip(right_env.iter())
