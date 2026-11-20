@@ -27,7 +27,7 @@
 
 use crate::error::{MatrixCIError, Result};
 use crate::scalar::Scalar;
-use tensor4all_tensorbackend::{transpose, Matrix};
+use tensor4all_tensorbackend::{invariant_violated, transpose, Matrix};
 
 /// Rank-Revealing LU decomposition.
 ///
@@ -545,27 +545,30 @@ pub(crate) fn validate_owned_luci_input<T: Scalar>(
 
 #[inline]
 fn col_major_offset(nrows: usize, row: usize, col: usize) -> usize {
-    row + nrows * col
+    if row >= nrows {
+        invariant_violated("rrLU column-major index", "row out of bounds");
+    }
+    nrows
+        .checked_mul(col)
+        .and_then(|start| start.checked_add(row))
+        .unwrap_or_else(|| invariant_violated("rrLU column-major index", "offset overflow"))
 }
 
 #[inline]
 fn col_major_get<T: Copy>(data: &[T], nrows: usize, row: usize, col: usize) -> T {
     let offset = col_major_offset(nrows, row, col);
-    debug_assert!(row < nrows);
-    debug_assert!(offset < data.len());
-    // SAFETY: callers pass matrix-derived dimensions and prechecked ranges.
-    unsafe { *data.get_unchecked(offset) }
+    *data
+        .get(offset)
+        .unwrap_or_else(|| invariant_violated("rrLU column-major index", "offset out of bounds"))
 }
 
 #[inline]
 fn col_major_set<T>(data: &mut [T], nrows: usize, row: usize, col: usize, value: T) {
     let offset = col_major_offset(nrows, row, col);
-    debug_assert!(row < nrows);
-    debug_assert!(offset < data.len());
-    // SAFETY: callers pass matrix-derived dimensions and prechecked ranges.
-    unsafe {
-        *data.get_unchecked_mut(offset) = value;
-    }
+    *data
+        .get_mut(offset)
+        .unwrap_or_else(|| invariant_violated("rrLU column-major index", "offset out of bounds")) =
+        value;
 }
 
 fn submatrix_argmax_col_major<T: Scalar>(
@@ -577,11 +580,11 @@ fn submatrix_argmax_col_major<T: Scalar>(
     col_start: usize,
     col_end: usize,
 ) -> (usize, usize, T) {
-    debug_assert!(row_start < row_end);
-    debug_assert!(col_start < col_end);
-    debug_assert!(row_end <= nrows);
-    debug_assert!(col_end <= ncols);
-    debug_assert_eq!(data.len(), nrows * ncols);
+    if row_start >= row_end || col_start >= col_end || row_end > nrows || col_end > ncols {
+        invariant_violated("rrLU submatrix argmax", "invalid row or column range");
+    }
+    validate_col_major_matrix_len(nrows, ncols, data.len())
+        .unwrap_or_else(|error| invariant_violated("rrLU submatrix argmax", error));
 
     let first = col_major_get(data, nrows, row_start, col_start);
     let mut max_val = first.abs_sq();
@@ -589,10 +592,11 @@ fn submatrix_argmax_col_major<T: Scalar>(
     let mut max_col = col_start;
 
     for col in col_start..col_end {
-        let col_start_offset = col_major_offset(nrows, row_start, col);
-        for (offset, row) in (col_start_offset..).zip(row_start..row_end) {
-            // SAFETY: row and column loops stay within the prechecked region.
-            let value = unsafe { *data.get_unchecked(offset) };
+        let start = col_major_offset(nrows, row_start, col);
+        for (&value, row) in data[start..start + row_end - row_start]
+            .iter()
+            .zip(row_start..row_end)
+        {
             let value_abs = value.abs_sq();
             if value_abs > max_val {
                 max_val = value_abs;
@@ -632,44 +636,34 @@ fn submatrix_argmax_col_major<T: Scalar>(
 }
 
 fn swap_rows_col_major<T>(data: &mut [T], nrows: usize, ncols: usize, row_a: usize, row_b: usize) {
-    debug_assert!(row_a < nrows);
-    debug_assert!(row_b < nrows);
-    debug_assert_eq!(data.len(), nrows * ncols);
+    if row_a >= nrows || row_b >= nrows {
+        invariant_violated("rrLU row swap", "row out of bounds");
+    }
+    validate_col_major_matrix_len(nrows, ncols, data.len())
+        .unwrap_or_else(|error| invariant_violated("rrLU row swap", error));
     if row_a == row_b {
         return;
     }
 
-    let ptr = data.as_mut_ptr();
-    for col in 0..ncols {
-        let offset_a = col_major_offset(nrows, row_a, col);
-        let offset_b = col_major_offset(nrows, row_b, col);
-        // SAFETY: row_a/row_b are in range, and each column offset is within
-        // the matrix-sized backing slice.
-        unsafe {
-            std::ptr::swap(ptr.add(offset_a), ptr.add(offset_b));
-        }
+    for column in data.chunks_exact_mut(nrows) {
+        column.swap(row_a, row_b);
     }
 }
 
 fn swap_cols_col_major<T>(data: &mut [T], nrows: usize, ncols: usize, col_a: usize, col_b: usize) {
-    debug_assert!(col_a < ncols);
-    debug_assert!(col_b < ncols);
-    debug_assert_eq!(data.len(), nrows * ncols);
+    if col_a >= ncols || col_b >= ncols {
+        invariant_violated("rrLU column swap", "column out of bounds");
+    }
+    validate_col_major_matrix_len(nrows, ncols, data.len())
+        .unwrap_or_else(|error| invariant_violated("rrLU column swap", error));
     if col_a == col_b || nrows == 0 {
         return;
     }
 
-    let start_a = col_major_offset(nrows, 0, col_a);
-    let start_b = col_major_offset(nrows, 0, col_b);
-    // SAFETY: distinct columns are non-overlapping contiguous ranges of
-    // length nrows in column-major storage.
-    unsafe {
-        std::ptr::swap_nonoverlapping(
-            data.as_mut_ptr().add(start_a),
-            data.as_mut_ptr().add(start_b),
-            nrows,
-        );
-    }
+    let start_a = col_major_offset(nrows, 0, col_a.min(col_b));
+    let start_b = col_major_offset(nrows, 0, col_a.max(col_b));
+    let (before, after) = data.split_at_mut(start_b);
+    before[start_a..start_a + nrows].swap_with_slice(&mut after[..nrows]);
 }
 
 /// Select division once per pivot, preserving ordinary-scale arithmetic.
