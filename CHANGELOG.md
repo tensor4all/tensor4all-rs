@@ -19,6 +19,12 @@
   `IdxTensor::src_error_estimate_in` and of structured contractions with host-only
   operands now run the estimator solve and the native einsum on their own context's
   engine instead of the process-global one. New: `src_error_estimate_general_in`.
+  `TensorTrain::norm`/`norm_squared` run the packed-site backend kernel on the CPU
+  context that owns the chain (new `IdxTensor::with_owning_cpu_engine`) in every build;
+  only a chain with no CPU-owned value uses the process-global context (or refuses
+  without `global-defaults`). `IdxTensor::scale` places an untracked `AnyScalar` that has
+  no tensor of its own in the operand's runtime, so scaling context-owned values works
+  without `global-defaults`.
 - `tensor4all-tensorbackend`: `global-defaults` is no longer enabled by the default
   features (#1377). The default is now `explicit-context` plus the platform CPU
   provider, which also exposes `Matrix`, `Storage`, `TensorElement`, the native

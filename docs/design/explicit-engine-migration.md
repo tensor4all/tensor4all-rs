@@ -415,16 +415,20 @@ state only through one private module, `core/src/implicit_route.rs`:
 
 Downstream library code reaches the same items as the `#[doc(hidden)]`
 `tensor4all_core::legacy` bridge (§7.0), so a downstream crate and core always agree on
-whether the global route exists; code that selects an implementation by the route's
-availability reads `tensor4all_core::legacy::GLOBAL_DEFAULTS`, because a crate cannot `cfg`
-on another crate's feature. Where an explicit path had reached the global route, the
+whether the global route exists. No library code switches implementations on the route's
+availability: a context-free computation that needs an engine runs on the CPU engine of
+the context that owns its operands (`IdxTensor::with_owning_cpu_engine`, used by
+`itensorlike`'s packed-site norm) and takes the implicit route only when no operand has
+one. Where an explicit path had reached the global route, the
 caller's context is threaded instead: the host-operand route of
 `contract_structured_payloads_nary_in` and `src_error_estimate_in`'s host estimator
 (`src_error_estimate_general_in`). The host `IncrementalQr` probe path is only reachable on
 the global route and is gated on `global-defaults`. Every workspace library crate builds
 and passes `clippy -D warnings` without `global-defaults`; test, doctest and bench builds
 opt in through a dev-dependency, as do `tensor4all-capi`, `tensor4all-py`, the docs crates
-and the benchmarks. The remaining global-path call sites are listed by
+and the benchmarks. Because feature unification then turns the route on in every workspace
+test build, the explicit-only configuration's run-time behaviour is tested in the isolated
+package `tests/feature-configurations/explicit-only` (CI Lint job). The remaining global-path call sites are listed by
 `grep -rn "implicit_route::" crates/tensor4all-core/src` and
 `grep -rn "tensor4all_core::legacy" crates --include=*.rs`.
 

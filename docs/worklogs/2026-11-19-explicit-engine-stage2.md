@@ -32,20 +32,31 @@ Part of #1376. The durable record is the #1403 status note in
   result's runtime) and `src_error_estimate_in`'s host estimator
   (`src_error_estimate_general_in`). The CUDA-resident estimator readback has no caller
   CPU engine and stays on the bridge, like the treersi A3 arm.
-- **A crate-local feature that selected an implementation follows core's feature now.**
-  `tensor4all-itensorlike` chose its packed-site norm (backend einsum versus a host
-  reference loop) by its own `backend-tenferro`, which the provider features used to
-  enable. Dropping that implication silently switched default builds to the reference
-  loop, and a tiny-scale CG test broke down. The choice now reads
-  `tensor4all_core::legacy::GLOBAL_DEFAULTS`, so each configuration keeps the
-  implementation it had. No other workspace code keys an implementation on a feature
-  whose default changed.
+- **The packed-site norm keeps its backend kernel in every build** (review of #1404).
+  `tensor4all-itensorlike` chose between the backend einsum and a host reference loop by
+  its own `backend-tenferro`, which the provider features used to enable; dropping that
+  implication silently switched default builds to the reference loop. A first fix keyed
+  the choice on `legacy::GLOBAL_DEFAULTS`, which still sent the default (explicit-only)
+  build to the loop. Now the one kernel runs on an explicit `Session` over the CPU engine
+  of the context that owns the chain (new `IdxTensor::with_owning_cpu_engine`), and only a
+  chain with no CPU-owned value takes the implicit route (global context, or `NoContext`).
+  The loop is a `cfg(test)` oracle. On the global context the session kernel is bitwise
+  equal to the former graph einsum (30 f64/c64 chains, bond dimension up to 64; a
+  throwaway comparison, not committed).
+- **An untracked `AnyScalar` joins its operand's runtime.** Without `global-defaults` an
+  `AnyScalar` cannot create its own rank-0 tensor, so `IdxTensor::scale` (and with it
+  `TensorTrain::norm`) failed even on context-owned values. `scale` now places such a
+  scalar in the payload's runtime; a scalar with its own tensor is used as before.
+- **Explicit-only behaviour is tested in an isolated package**,
+  `tests/feature-configurations/explicit-only` (its own workspace, so no dev-dependency
+  can unify `global-defaults` back on). A `cfg(not(feature = "global-defaults"))` unit
+  test inside core never compiled, because core's dev-dependency enables the feature.
 - **Test, doctest and bench builds opt in through a dev-dependency** (a self
   dev-dependency in core and treersi). It is the only mechanism that also covers
   doctests; `required-features`/`cfg` gates would have dropped the 426 core doctests and
-  most downstream tests from the default `cargo test`. The explicit-only configuration is
-  proven by library builds, a CI guard on the normal dependency graph, and tensorbackend's
-  explicit-surface test.
+  most downstream tests from the default `cargo test`. `scripts/check-crate-boundaries.py`
+  allows exactly these two feature-only self edges and fails if either crate's sources
+  name it by its own extern path.
 
 ## Verification conclusions and constraints
 
@@ -55,7 +66,8 @@ Part of #1376. The durable record is the #1403 status note in
 - With `global-defaults` (every test build) the code path is unchanged except the two
   threaded explicit paths, which now run on the caller's engine (same kernel; thread count
   is the caller's). No parity harness was run for those two paths.
-- Unverified: run-time behaviour of the explicit-only build beyond tensorbackend's test
-  and the refusal unit tests, because every test build enables `global-defaults`.
-  `tensor4all-hdf5`, `book-tests` (no libhdf5 on the host) and CUDA execution were not
-  run.
+- The explicit-only build's run-time behaviour is covered by tensorbackend's
+  explicit-surface test and the isolated `explicit-only` package (bridge refusals, typed
+  `NoContext` on context-free construction and on a dropped context, context-owned
+  contraction and `TensorTrain` norm). Not run locally: `tensor4all-hdf5`, `book-tests`
+  (no libhdf5 on the host) and CUDA execution.
