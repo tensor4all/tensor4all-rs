@@ -1549,6 +1549,49 @@ fn test_truncate_single_site_noop() {
 }
 
 #[test]
+fn test_truncate_single_site_and_empty_reject_invalid_options() {
+    // #1412: the single-site/empty no-op shortcut must validate truncation
+    // options exactly like the multi-site path.
+    let s0 = idx(600, 4);
+    let t0 = make_tensor(vec![s0]);
+    let mut tt = TensorTrain::new(vec![t0]).unwrap();
+
+    let err = tt
+        .truncate(&TruncateOptions::svd().with_max_bond_dim(0))
+        .unwrap_err();
+    assert!(matches!(err, TensorTrainError::OperationError { .. }));
+
+    let err = tt
+        .truncate(
+            &TruncateOptions::svd()
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(-1.0)),
+        )
+        .unwrap_err();
+    assert!(matches!(err, TensorTrainError::OperationError { .. }));
+
+    let err = tt
+        .truncate(
+            &TruncateOptions::svd()
+                .with_svd_policy(tensor4all_core::SvdTruncationPolicy::new(f64::NAN)),
+        )
+        .unwrap_err();
+    assert!(matches!(err, TensorTrainError::OperationError { .. }));
+
+    // Valid options stay a no-op on a one-site train.
+    tt.truncate(&TruncateOptions::svd().with_max_bond_dim(2))
+        .unwrap();
+    assert_eq!(tt.len(), 1);
+
+    // The empty train takes the same fast path and must validate too.
+    let mut empty = TensorTrain::new(Vec::new()).unwrap();
+    let err = empty
+        .truncate(&TruncateOptions::svd().with_max_bond_dim(0))
+        .unwrap_err();
+    assert!(matches!(err, TensorTrainError::OperationError { .. }));
+    empty.truncate(&TruncateOptions::svd()).unwrap();
+}
+
+#[test]
 fn test_haslink() {
     let s0 = idx(0, 2);
     let l01 = idx(1, 3);
