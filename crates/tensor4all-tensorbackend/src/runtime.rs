@@ -138,17 +138,20 @@ pub struct Runtime {
 
 struct RuntimeInner {
     eager: Arc<EagerRuntime>,
-    /// The graph runtime, or `None` for an engine kind with no graph path
-    /// (CUDA). The lock is held only to clone or replace the handle, never
-    /// while a graph runs.
-    graph: Mutex<Option<GraphRuntime>>,
+    /// The graph path, or `None` for an engine kind with no graph path (CUDA).
+    graph: Option<GraphPath>,
     /// Held only while compiling.
     compiler: Mutex<GraphCompiler>,
     /// The one engine target this runtime has extension modules for.
     target: EngineTarget,
-    /// For a CPU runtime, that target's id and domain, used to rebuild the
-    /// graph runtime on reset.
-    cpu: Option<CpuTarget>,
+}
+
+/// A CPU graph runtime together with the target it was registered for, so a
+/// reset can always rebuild it.
+struct GraphPath {
+    cpu: CpuTarget,
+    /// Held only to clone or replace the handle, never while a graph runs.
+    runtime: Mutex<GraphRuntime>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -205,11 +208,11 @@ impl Runtime {
             .with_eager_session(&mut probe, |_| Ok::<(), tenferro_ad::Error>(()))
             .map_err(|source| RuntimeError::initialization("eager CPU engine", source))?;
         let graph = build_cpu_graph_runtime(&probe, engine_id)?;
-        let mut runtime = Self::from_parts(eager, Some(graph), target);
-        if let Some(inner) = Arc::get_mut(&mut runtime.inner) {
-            inner.cpu = Some(cpu.clone());
-        }
-        Ok(runtime)
+        let graph = GraphPath {
+            cpu: cpu.clone(),
+            runtime: Mutex::new(graph),
+        };
+        Ok(Self::from_parts(eager, Some(graph), target))
     }
 
     /// Build a runtime for one CUDA engine.
@@ -249,22 +252,28 @@ impl Runtime {
         Ok(Self::from_parts(eager, None, target))
     }
 
-    /// Wrap an already built eager runtime, and optionally a graph runtime, for
+    /// Wrap an already built eager runtime, and optionally a graph path, for
     /// engines with `target`.
-    pub(crate) fn from_parts(
+    fn from_parts(
         eager: Arc<EagerRuntime>,
-        graph: Option<GraphRuntime>,
+        graph: Option<GraphPath>,
         target: EngineTarget,
     ) -> Self {
         Self {
             inner: Arc::new(RuntimeInner {
                 eager,
-                graph: Mutex::new(graph),
+                graph,
                 compiler: Mutex::new(GraphCompiler::new()),
                 target,
-                cpu: None,
             }),
         }
+    }
+
+    /// Wrap an already built eager runtime with no graph path, for engines
+    /// with `target` (the CUDA context's runtime).
+    #[cfg(feature = "tenferro-cuda")]
+    pub(crate) fn eager_only(eager: Arc<EagerRuntime>, target: EngineTarget) -> Self {
+        Self::from_parts(eager, None, target)
     }
 
     /// Return this runtime's identity.
@@ -564,21 +573,21 @@ impl Runtime {
     ///
     /// The eager runtime, and with it every value of this runtime, is kept.
     pub(crate) fn reset_graph(&self) -> Result<(), RuntimeError> {
-        let fresh = match &self.inner.cpu {
-            Some(cpu) if self.graph_runtime().is_some() => {
-                let probe = cpu.probe();
-                let engine_id = ExecutionEngine::target(&probe).engine_id().clone();
-                Some(build_cpu_graph_runtime(&probe, engine_id)?)
-            }
-            _ => None,
-        };
-        *lock_ignoring_poison(&self.inner.graph) = fresh;
+        if let Some(graph) = &self.inner.graph {
+            let probe = graph.cpu.probe();
+            let engine_id = ExecutionEngine::target(&probe).engine_id().clone();
+            let fresh = build_cpu_graph_runtime(&probe, engine_id)?;
+            *lock_ignoring_poison(&graph.runtime) = fresh;
+        }
         *self.lock_compiler() = GraphCompiler::new();
         Ok(())
     }
 
     fn graph_runtime(&self) -> Option<GraphRuntime> {
-        lock_ignoring_poison(&self.inner.graph).clone()
+        self.inner
+            .graph
+            .as_ref()
+            .map(|graph| lock_ignoring_poison(&graph.runtime).clone())
     }
 }
 

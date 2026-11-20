@@ -112,17 +112,32 @@ fn is_cpu_engine(target: &EngineTarget) -> bool {
 
 /// Whether an engine with `target` reads `value` where it is placed.
 ///
-/// A CPU engine reads host memory outside any allocation domain, or inside its
-/// own; any other engine reads only values in its own allocation domain.
+/// This mirrors the input contracts the engines register with the pinned
+/// tenferro (`tenferro-cpu` `cpu_input_signature`, `tenferro-gpu`
+/// `cuda_input_signature`), so a value accepted here is not refused later by
+/// `prepare`:
+///
+/// - a CPU engine reads host memory with no backend family and no allocation
+///   domain, or host or managed memory a backend allocated in the engine's own
+///   domain;
+/// - any other engine reads only device memory a backend allocated in its own
+///   allocation domain. The domain identifies the engine's device, so the
+///   device ordinal needs no separate check.
 fn engine_reads(target: &EngineTarget, value: &TensorRead<'_>) -> bool {
     let domain = value.allocation_domain();
-    let own_domain = domain.is_some() && domain == target.allocation_domain();
+    let family = value.backend_family();
+    let in_own_domain = family.is_some()
+        && target.allocation_domain().is_some()
+        && domain == target.allocation_domain();
+    let memory_kind = &value.placement().memory_kind;
     if !is_cpu_engine(target) {
-        return own_domain;
+        return *memory_kind == MemoryKind::Device && in_own_domain;
     }
-    match value.placement().memory_kind {
-        MemoryKind::PinnedHost | MemoryKind::UnpinnedHost => domain.is_none() || own_domain,
-        MemoryKind::Managed => own_domain,
+    match memory_kind {
+        MemoryKind::PinnedHost | MemoryKind::UnpinnedHost => {
+            (family.is_none() && domain.is_none()) || in_own_domain
+        }
+        MemoryKind::Managed => in_own_domain,
         MemoryKind::Device | MemoryKind::Other(_) => false,
     }
 }

@@ -501,7 +501,7 @@ impl CudaExecutionContext {
             .runtime
             .get_or_init(|| {
                 build_eager_runtime(self.engine_id.clone())
-                    .map(|eager| crate::Runtime::from_parts(eager, None, self.target.clone()))
+                    .map(|eager| crate::Runtime::eager_only(eager, self.target.clone()))
             })
             .as_ref()
             .map(|runtime| Arc::clone(runtime.eager_runtime()))
