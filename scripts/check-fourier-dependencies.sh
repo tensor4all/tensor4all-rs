@@ -31,6 +31,7 @@ partitioned = ["tensor4all-quanticstransform/partitioned"]
 [[example]]
 name = "patched_fourier"
 path = "../../crates/tensor4all-quanticstransform/examples/patched_fourier.rs"
+required-features = ["partitioned"]
 
 [[test]]
 name = "multiaxis_fourier"
@@ -51,7 +52,8 @@ tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransfo
 # The shared tests build tensors and call the Fourier operators through the
 # context-free API, which still needs the process-global route
 # (tensor4all-rs#1403, #1376). Like the crate's own dev-dependency, this opts
-# the fixtures in; it does not claim the library works without the route.
+# the fixtures in; it does not claim the library works without the route. The
+# printed graph therefore lists `global-defaults` through this dev edge only.
 tensor4all-core = { path = "../../crates/tensor4all-core", default-features = false, features = ["tenferro-cpu-platform", "global-defaults"] }
 tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend", default-features = false, features = ["tenferro-cpu-platform"] }
 tensor4all-treetci = { path = "../../crates/tensor4all-treetci", default-features = false, features = ["tenferro-cpu-platform"] }
