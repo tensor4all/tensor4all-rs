@@ -1719,6 +1719,12 @@ impl TensorTrain {
     /// route: the process-global context with `tensor4all-core/global-defaults`,
     /// and a typed `ExecutionContextEntryError::NoContext` refusal without it
     /// (#1403). The kernel is the same on both routes; there is no host fallback.
+    ///
+    /// The owner is the first site whose value a CPU context owns; a chain mixes
+    /// contexts only if its caller built it that way. A caller that holds the
+    /// owning context's session on this thread gets that context's typed
+    /// re-entry refusal, as it already did from the packing step, which reads
+    /// every site on its owning engine.
     fn norm_squared_from_packed_sites<T>(&self, sites: Vec<PackedSiteTensor<T>>) -> Result<f64>
     where
         T: NormAccumScalar + tensor4all_tensorbackend::TensorElement,

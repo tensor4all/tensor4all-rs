@@ -196,6 +196,24 @@ fn packed_norm_runs_on_the_context_that_owns_the_chain() {
         }) => {}
         other => panic!("expected the owning context's re-entry refusal, got {other:?}"),
     }
+
+    // The public entry inside a held session is refused at the read step that
+    // packs the sites (unchanged from before #1403: every site value is read on
+    // its owning engine), so routing the kernel to the owner adds no new refusal.
+    let public = cpu.with_session(|_engine| tt.norm_squared()).unwrap();
+    assert!(
+        matches!(
+            public,
+            Err(TensorTrainError::IdxTensor {
+                source: IdxTensorError::EngineEntry {
+                    source: ExecutionContextEntryError::Cpu(CpuExecutionContextError::Reentered),
+                },
+            })
+        ),
+        "expected the read step's re-entry refusal, got {public:?}"
+    );
+    // Outside the session the same chain computes as before.
+    assert_eq!(tt.norm_squared().unwrap().to_bits(), actual.to_bits());
 }
 
 fn dense_tt_svd_round_trip<T: TensorElement>(data: Vec<T>, tolerance: f64) {
