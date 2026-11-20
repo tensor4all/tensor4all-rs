@@ -1729,12 +1729,11 @@ impl TensorTrain {
     where
         T: NormAccumScalar + tensor4all_tensorbackend::TensorElement,
     {
-        let mut pending = Some(sites);
         for site in 0..self.len() {
             let outcome = self.tensor(site)?.with_owning_cpu_engine(|engine| {
                 Self::norm_squared_from_packed_sites_on(
                     &mut tensor4all_tensorbackend::explicit::Session::new(engine),
-                    pending.take(),
+                    &sites,
                 )
             })?;
             if let Some(result) = outcome {
@@ -1746,27 +1745,19 @@ impl TensorTrain {
             .map_err(IdxTensorError::from)?;
         context
             .with_concrete_session(|session| {
-                Self::norm_squared_from_packed_sites_on(session, pending.take())
+                Self::norm_squared_from_packed_sites_on(session, &sites)
             })
             .map_err(IdxTensorError::from)?
     }
 
     /// The packed-site norm kernel on one explicit session's engine.
-    ///
-    /// `sites` is `None` only if a caller handed the same packed chain to two
-    /// engines, which [`Self::norm_squared_from_packed_sites`] never does.
     fn norm_squared_from_packed_sites_on<T>(
         session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
-        sites: Option<Vec<PackedSiteTensor<T>>>,
+        sites: &[PackedSiteTensor<T>],
     ) -> Result<f64>
     where
         T: NormAccumScalar + tensor4all_tensorbackend::TensorElement,
     {
-        let Some(sites) = sites else {
-            return Err(TensorTrainError::InvalidStructure {
-                message: "packed norm sites were already consumed by another engine".to_string(),
-            });
-        };
         if sites.is_empty() {
             return Ok(0.0);
         }
@@ -1792,8 +1783,8 @@ impl TensorTrain {
             }
 
             let site_shape = [site.left_dim, site.physical_dim, site.right_dim];
-            let site_tensor = tensor4all_tensorbackend::dense_native_tensor_from_col_major_owned(
-                site.data,
+            let site_tensor = tensor4all_tensorbackend::dense_native_tensor_from_col_major(
+                &site.data,
                 &site_shape,
             )
             .map_err(|error| {

@@ -425,7 +425,7 @@ caller's context is threaded instead: the host-operand route of
 (`src_error_estimate_general_in`). The host `IncrementalQr` probe path is only reachable on
 the global route and is gated on `global-defaults`. Every workspace library crate builds
 and passes `clippy -D warnings` without `global-defaults`; test, doctest and bench builds
-opt in through a dev-dependency, as do `tensor4all-capi`, `tensor4all-py`, the docs crates
+opt in through a dev-dependency, as do `tensor4all-capi`, `tensor4all-hdf5` (whose load API takes no context), `tensor4all-py`, the docs crates
 and the benchmarks. Because feature unification then turns the route on in every workspace
 test build, the explicit-only configuration's run-time behaviour is tested in the isolated
 package `tests/feature-configurations/explicit-only` (CI Lint job). The remaining global-path call sites are listed by

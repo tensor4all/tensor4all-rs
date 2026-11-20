@@ -46,11 +46,15 @@ jobs:
         # Library builds are explicit by default; only test/bench builds and the
         # C API, Python and docs crates opt into `global-defaults`. Fail if a
         # library dependency edge turns it back on for this set: every workspace
-        # library that depends on tensor4all-core (the tools under xtask/ and
-        # tools/ do not).
+        # library that depends on tensor4all-core except the context-free
+        # facades that opt in on purpose (tensor4all-capi, tensor4all-hdf5);
+        # the tools under xtask/ and tools/ do not depend on core.
         run: |
-          LIBS="-p tensor4all-tensorbackend -p tensor4all-core -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-hdf5"
-          if cargo tree --locked $LIBS -e normal,features -i tensor4all-tensorbackend | grep -F 'feature "global-defaults"'; then
+          LIBS="-p tensor4all-tensorbackend -p tensor4all-core -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn"
+          # Capture first, so a failing `cargo tree` fails the step instead of
+          # reading as "no match".
+          TREE=$(cargo tree --locked $LIBS -e normal,features -i tensor4all-tensorbackend)
+          if grep -F 'feature "global-defaults"' <<<"$TREE"; then
             echo "a library crate enables global-defaults by default" >&2
             exit 1
           fi

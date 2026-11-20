@@ -88,18 +88,9 @@ where
         let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
             tensor4all_tensorbackend::CpuBackend::with_threads(threads).unwrap(),
         );
-        let packed = sites
-            .iter()
-            .map(|site| PackedSiteTensor {
-                left_dim: site.left_dim,
-                physical_dim: site.physical_dim,
-                right_dim: site.right_dim,
-                data: site.data.clone(),
-            })
-            .collect::<Vec<_>>();
         let actual = context
             .with_concrete_session(|session| {
-                TensorTrain::norm_squared_from_packed_sites_on(session, Some(packed))
+                TensorTrain::norm_squared_from_packed_sites_on(session, &sites)
             })
             .unwrap()
             .unwrap();
