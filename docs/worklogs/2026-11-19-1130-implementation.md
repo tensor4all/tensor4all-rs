@@ -37,7 +37,8 @@
   region, which its existing contract permits. The harness sums all those terms
   for the oracle and storage count; only tolerance promises strict conversion
   at full input-merge depth.
-- No benchmark slowdown limit has been approved yet. The implementation PR
+- At the initial 2026-11-19 validation, no benchmark slowdown limit had been
+  approved yet. The implementation PR
   must register and obtain agreement on the complete paired benchmark plan
   before timed candidate runs, as required by the accepted design. Numerical
   checks that do not report timings can proceed through `ai-run build`.
@@ -93,3 +94,9 @@ thresholds were relaxed.
   Hosted CI, rules LLM review, macOS validation, and the agreed performance
   acceptance suite remain pending publication. No push or implementation PR
   creation has been performed.
+
+## Follow-up
+
+The maintainer subsequently fixed 10.0x for both cases. The
+[2026-11-20 acceptance worklog](2026-11-20-1130-performance-acceptance.md) records
+the completed paired experiment and its soft review triggers.
