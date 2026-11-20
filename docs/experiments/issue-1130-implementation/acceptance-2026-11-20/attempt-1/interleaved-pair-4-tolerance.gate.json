@@ -1,0 +1,32 @@
+{
+  "mode": "measure",
+  "cmd": "/usr/bin/python3 /root/projects/tensor4all-rust/tensor4all-rs-impl-1130/docs/experiments/issue-1130-implementation/run_acceptance.py _cell /tmp/tensor4all-issue1130-acceptance-d60f0751/benchmark_merge_policy_1130 interleaved tolerance",
+  "cwd": "/root/projects/tensor4all-rust/tensor4all-rs-impl-1130",
+  "label": "issue-1130-acceptance",
+  "unit": "ai-run-measure-2396281-1795132563.scope",
+  "cpus": "8",
+  "mem_limit": 6442450944,
+  "started": "2026-11-20T00:56:03+0100",
+  "pre_guard": {
+    "ok": true,
+    "mean_busy": 0.002,
+    "peak_busy": 0.01
+  },
+  "exit": 0,
+  "wall_sec": 2.17,
+  "mem_peak": 17379328,
+  "mem_peak_anon_sampled": 16891904,
+  "oom_kills": 0,
+  "verdict": "CLEAN",
+  "reasons": [],
+  "job_cpu_sec": 2.12,
+  "foreign_cpu_sec_on_measure_cpus": 0.02,
+  "foreign_frac": 0.0075,
+  "others_busy_cpus": 0.09,
+  "mem_stall_frac": 0.0,
+  "thresholds": {
+    "foreign_frac": 0.03,
+    "others_busy_cpus": 1.0,
+    "mem_stall_frac": 0.01
+  }
+}

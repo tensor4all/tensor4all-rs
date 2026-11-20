@@ -126,7 +126,7 @@ impl Case {
     /// The exact merge-refine trajectory, which the tests establish as the DFT.
     fn exact(&self, reference: &(Vec<DynIndex>, Vec<Complex64>)) -> Result<Value> {
         let options = MergeRefineOptions {
-            target_bond_dim: None,
+            merge_policy: MergePolicy::Exact,
             ..Default::default()
         };
         let (elapsed, result) = median_time(REPEATS, || {
@@ -152,7 +152,7 @@ impl Case {
         self.approximate_row(
             "merge_refine_adaptive",
             &MergeRefineOptions {
-                target_bond_dim: Some(GOAL),
+                merge_policy: MergePolicy::RankGoal(GOAL.try_into().unwrap()),
                 ..Default::default()
             },
             reference,
@@ -166,7 +166,7 @@ impl Case {
         self.approximate_row(
             "merge_refine_adaptive_truncated_apply",
             &MergeRefineOptions {
-                target_bond_dim: Some(GOAL),
+                merge_policy: MergePolicy::RankGoal(GOAL.try_into().unwrap()),
                 application: OperatorApplication::Measured(
                     ApplyOptions::zipup().with_max_bond_dim(GOAL),
                 ),
@@ -284,7 +284,7 @@ impl Case {
                 atol: 0.0,
             },
             &MergeRefineOptions {
-                target_bond_dim: None,
+                merge_policy: MergePolicy::Exact,
                 ..Default::default()
             },
         )?;

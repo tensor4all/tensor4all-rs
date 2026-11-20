@@ -1,0 +1,20 @@
+{
+  "allowance": 5.959933682156905e-06,
+  "case": "original",
+  "compression_attempts": 127,
+  "compressions": 127,
+  "error_bound": 5.253295304462644e-08,
+  "input_bond": 4,
+  "l2_error": 2.989798202397942e-08,
+  "logical_parameters": 712,
+  "max_abs_error": 5.031001423251064e-09,
+  "max_bond": 16,
+  "peak_rss_kib": null,
+  "policy": "tolerance",
+  "regions": 1,
+  "scheduler_seconds": null,
+  "seed": "0x5eed0006",
+  "spectators": 3,
+  "terms": 1,
+  "transient_bond": 32
+}

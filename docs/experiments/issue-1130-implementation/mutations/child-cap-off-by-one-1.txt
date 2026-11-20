@@ -1,0 +1,23 @@
+   Compiling tensor4all-partitionedtreetn v0.3.0 (<worktree>/crates/tensor4all-partitionedtreetn)
+    Finished `test` profile [unoptimized] target(s) in 4.13s
+     Running unittests src/lib.rs (<cargo-target>/debug/deps/tensor4all_partitionedtreetn-8c418c16901016e1)
+
+running 1 test
+test reconstruction::schedule::tolerance::tests::child_planning_bounds_allocation_and_prunes_before_expansion ... FAILED
+
+failures:
+
+---- reconstruction::schedule::tolerance::tests::child_planning_bounds_allocation_and_prunes_before_expansion stdout ----
+
+thread 'reconstruction::schedule::tolerance::tests::child_planning_bounds_allocation_and_prunes_before_expansion' (2319733) panicked at crates/tensor4all-partitionedtreetn/src/reconstruction/schedule/tolerance/tests.rs:72:5:
+assertion failed: matches!(error, PartitionedTreeTNError::ResourceLimit
+    { limit: "max_work_items", value: 3, .. })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    reconstruction::schedule::tolerance::tests::child_planning_bounds_allocation_and_prunes_before_expansion
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 215 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p tensor4all-partitionedtreetn --lib`

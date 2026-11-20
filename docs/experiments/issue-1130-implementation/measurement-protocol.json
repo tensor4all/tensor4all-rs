@@ -1,0 +1,77 @@
+{
+  "decision_url": "https://github.com/tensor4all/tensor4all-rs/pull/1407#issuecomment-7025360934",
+  "code_revision_before_registration": "459025844067ea3ae81816a53905ebb983db64de",
+  "baseline_policy": "goal8",
+  "candidate_policy": "tolerance",
+  "revision_policy": "both arms use the published pre-registration commit, resolved through Git before build",
+  "build": {
+    "package": "tensor4all-benchmarks",
+    "features": [
+      "fourier"
+    ],
+    "profile": "release",
+    "locked": true,
+    "cargo_jobs": 2
+  },
+  "hardware": {
+    "Architecture": "x86_64",
+    "CPU(s)": "16",
+    "Model name": "AMD Ryzen 9 6900HX with Radeon Graphics",
+    "Thread(s) per core": "2",
+    "Core(s) per socket": "8",
+    "Hypervisor vendor": "Microsoft",
+    "L3 cache": "16 MiB (1 instance)"
+  },
+  "measurement_cpu": 8,
+  "observer_cpus": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "thread_environment": {
+    "RAYON_NUM_THREADS": "1",
+    "BLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1"
+  },
+  "address_space_limit_bytes": 5368709120,
+  "gate_memory_cap": "6G",
+  "pairs": 5,
+  "cases": [
+    "original",
+    "interleaved"
+  ],
+  "first_pair_order": [
+    "goal8",
+    "tolerance"
+  ],
+  "alternate_order": true,
+  "hard_max_median_paired_ratio": {
+    "original": 10.0,
+    "interleaved": 10.0
+  },
+  "soft_review_ratio": 1.5,
+  "original_max_paired_rss_ratio": 3.0,
+  "absolute_roundoff_allowance": 1e-09,
+  "bootstrap": {
+    "resamples": 10000,
+    "seed": 1130,
+    "confidence": 0.95
+  },
+  "noise_thresholds": {
+    "guard_sec": 5,
+    "pre_mean_busy": 0.05,
+    "pre_peak_busy": 0.5,
+    "foreign_frac": 0.03,
+    "others_busy_cpus": 1.0,
+    "mem_stall_frac": 0.01
+  },
+  "noise_retry": "whole experiment once, preserving both attempts; no selective retry; numerical/performance failures are not retried",
+  "source_harness": "benchmarks/rust/benchmark_merge_policy_1130.rs"
+}

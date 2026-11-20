@@ -96,14 +96,14 @@ fn main() -> Result<()> {
             (
                 "merge_refine_exact",
                 MergeRefineOptions {
-                    target_bond_dim: None,
+                    merge_policy: MergePolicy::Exact,
                     ..Default::default()
                 },
             ),
             (
                 "merge_refine_adaptive",
                 MergeRefineOptions {
-                    target_bond_dim: Some(goal),
+                    merge_policy: MergePolicy::RankGoal(goal.try_into().unwrap()),
                     ..Default::default()
                 },
             ),

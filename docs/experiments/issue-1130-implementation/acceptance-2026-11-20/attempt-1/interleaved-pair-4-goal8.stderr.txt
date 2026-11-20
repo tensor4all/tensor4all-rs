@@ -1,0 +1,1 @@
+ai-run: measure done exit=0 wall=1.6s peak_mem=16M/6.0G (anon ~10M) verdict=CLEAN (foreign 0.0% on cpus 8, 0.1 busy CPUs elsewhere) report=/tmp/tensor4all-issue1130-acceptance-d60f0751/attempt-1/interleaved-pair-4-goal8.gate.json

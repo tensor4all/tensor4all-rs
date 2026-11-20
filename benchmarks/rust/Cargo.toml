@@ -99,6 +99,11 @@ path = "benchmark_merge_refine_intended_regime.rs"
 required-features = ["fourier"]
 
 [[example]]
+name = "benchmark_merge_policy_1130"
+path = "benchmark_merge_policy_1130.rs"
+required-features = ["fourier"]
+
+[[example]]
 name = "benchmark_tree_patch_representation"
 path = "benchmark_tree_patch_representation.rs"
 
