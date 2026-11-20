@@ -33,7 +33,8 @@
 - Recorder tests cover frozen-grid completeness, accurate-arm selection,
   process cleanup/raw streams/RSS, source and external build configuration
   changes, CPU/thread/SMT placement, clock/noise observations and saved-run
-  replay. Deliberate reverted faults exercise every new test.
+  replay. The cross-sample frequency regression rejects steady clock rates
+  that differ beyond the configured limit.
 - Runtime proof stores compact per-poll audit digests and worker placement,
   with full pre/post process snapshots. Audits still inspect every visible
   thread at every poll; trace size does not grow with a repeated full task
