@@ -1097,6 +1097,8 @@ impl IdxTensorStorage {
             // An untracked scalar without its own eager tensor (a build without
             // `global-defaults` has no runtime to create it in) joins the
             // payload's runtime, so a context-owned operand stays in its context.
+            // A `global-defaults` build keeps propagating the stored error.
+            #[cfg(not(feature = "global-defaults"))]
             Err(_) if !scalar.tracks_grad() => std::borrow::Cow::Owned(IdxTensor::untracked_inner(
                 scalar.host_native()?,
                 Arc::clone(payload.runtime()),
@@ -4001,6 +4003,10 @@ impl IdxTensor {
         &self,
         f: impl FnOnce(&mut tensor4all_tensorbackend::CpuEngine) -> R,
     ) -> std::result::Result<Option<R>, IdxTensorError> {
+        // A device-resident value has a CUDA owner: answer without entering it.
+        if self.is_cuda_resident() {
+            return Ok(None);
+        }
         let Some(runtime) = self.eager_runtime() else {
             return Ok(None);
         };

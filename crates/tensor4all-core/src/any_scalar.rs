@@ -319,6 +319,7 @@ impl AnyScalar {
     /// runtime itself: in a build without `global-defaults` an untracked
     /// `AnyScalar` has no eager tensor of its own (there is no process-global
     /// runtime to create it in), but its value is always available.
+    #[cfg(not(feature = "global-defaults"))]
     pub(crate) fn host_native(&self) -> Result<tenferro::Tensor> {
         use tensor4all_tensorbackend::dense_native_tensor_from_col_major as host;
         match self.value {

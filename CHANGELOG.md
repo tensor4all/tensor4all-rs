@@ -15,8 +15,9 @@
   engine; values created through a caller-owned context keep running on that context's
   engine. With `global-defaults` nothing changes. `tensor4all-treersi` drops
   `global-defaults` from its defaults (so `hadamard_many` needs it; `hadamard_many_in`
-  does not); its `tenferro-cuda` feature still implies it, because the CUDA arm's rank
-  decision runs on the process-global CPU context. `tensor4all-hdf5` enables it in its
+  does not); `tenferro-cuda` (in core, and so in every crate forwarding it) still implies it, because
+  CUDA execution keeps host steps with no caller CPU context (core's CUDA-resident SRC
+  readback, treersi's rank decision). `tensor4all-hdf5` enables it in its
   library, because its load API takes no context. Callers of the context-free API enable
   `tensor4all-core/global-defaults`. Explicit callers of
   `IdxTensor::src_error_estimate_in` and of structured contractions with host-only
@@ -27,7 +28,9 @@
   only a chain with no CPU-owned value uses the process-global context (or refuses
   without `global-defaults`). `IdxTensor::scale` places an untracked `AnyScalar` that has
   no tensor of its own in the operand's runtime, so scaling context-owned values works
-  without `global-defaults`.
+  without `global-defaults`. In every build, `From<anyhow::Error> for IdxTensorError`
+  recovers a wrapped `ExecutionContextEntryError` as `IdxTensorError::EngineEntry`
+  instead of `IdxTensorError::Operation`.
 - `tensor4all-tensorbackend`: `global-defaults` is no longer enabled by the default
   features (#1377). The default is now `explicit-context` plus the platform CPU
   provider, which also exposes `Matrix`, `Storage`, `TensorElement`, the native

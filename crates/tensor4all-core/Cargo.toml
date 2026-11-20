@@ -17,7 +17,11 @@ default = ["tenferro-cpu-platform"]
 global-defaults = ["tensor4all-tensorbackend/global-defaults"]
 # Compatibility alias for `global-defaults`.
 backend-tenferro = ["global-defaults"]
+# CUDA execution keeps host steps with no caller CPU context to run on (the
+# CUDA-resident SRC readback here, treersi's rank decision), so it implies the
+# process-global route, as `backend-tenferro` did before #1403.
 tenferro-cuda = [
+    "global-defaults",
     "tenferro-cpu-faer",
     "tensor4all-tensorbackend/tenferro-cuda",
     "tenferro-ad/cuda",
