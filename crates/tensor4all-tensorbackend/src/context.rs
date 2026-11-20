@@ -8,9 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Weak;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use tenferro::{
-    CompiledGraph, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead, TracedGraph,
-};
+use tenferro::{CompiledGraph, ExecutionEngine, GraphCompiler, Tensor, TensorRead, TracedGraph};
 use tenferro_ad::ContextId;
 use tenferro_ad::{AdContext, EagerRuntime};
 use tenferro_cpu::{BufferPoolStats, CpuEngine, Pool, PoolBuilder};
@@ -411,7 +409,10 @@ static DEFAULT_CPU_WAIT_POLICY: OnceLock<CpuWaitPolicy> = OnceLock::new();
 ///
 /// # Examples
 ///
-/// ```
+/// The example sets the process-wide default, so it runs in its own process
+/// (`standalone_crate`) instead of sharing one with the other doctests.
+///
+/// ```standalone_crate
 /// use tensor4all_tensorbackend::{
 ///     default_cpu_wait_policy, set_default_cpu_wait_policy, CpuWaitPolicy,
 ///     WaitPolicyAlreadyInitialized,
@@ -1181,24 +1182,22 @@ impl Drop for CanonicalSessionGuard {
     }
 }
 
-impl CpuExecutionContextError {
-    fn initialization(
-        component: &'static str,
-        source: impl std::error::Error + Send + Sync + 'static,
-    ) -> Self {
-        Self::Initialization {
-            component,
-            source: Arc::new(source),
-        }
-    }
-
-    fn graph(
-        operation: &'static str,
-        source: impl std::error::Error + Send + Sync + 'static,
-    ) -> Self {
-        Self::Graph {
-            operation,
-            source: Arc::new(source),
+impl From<crate::RuntimeError> for CpuExecutionContextError {
+    /// Keep the component or stage name, so a context reports the same message
+    /// it reported before it was built on a [`Runtime`](crate::Runtime).
+    fn from(error: crate::RuntimeError) -> Self {
+        match error {
+            crate::RuntimeError::Initialization { component, source } => {
+                Self::Initialization { component, source }
+            }
+            crate::RuntimeError::Graph { stage, source } => Self::Graph {
+                operation: stage,
+                source,
+            },
+            unsupported @ crate::RuntimeError::UnsupportedEngine { .. } => Self::Graph {
+                operation: "engine check",
+                source: Arc::new(unsupported),
+            },
         }
     }
 }
@@ -1248,35 +1247,17 @@ pub enum ExecutionContextEntryError {
     Cuda(#[from] crate::cuda::CudaExecutionContextError),
 }
 
-/// The engine a context owns, plus the graph runtime derived from it.
+/// The engine a context owns.
 ///
-/// The registration the graph runtime holds is derived from the engine, and
-/// `Runtime::run` needs `&mut engine`, so both live under one lock. The
-/// [`GraphCompiler`] is not here: it never touches the engine, so it has its own
-/// lock and a compile never waits for a running graph.
+/// The graph and eager runtimes are not here: they live in the context's
+/// engine-free [`Runtime`](crate::Runtime), which never needs the engine lock.
 struct EngineState {
     backend: CpuBackend,
-    runtime: Option<Runtime>,
 }
 
 impl EngineState {
     fn new(backend: CpuBackend) -> Self {
-        Self {
-            backend,
-            runtime: None,
-        }
-    }
-
-    /// The graph runtime of this context, built from the engine on first use.
-    fn runtime(&mut self) -> Result<&mut Runtime, CpuExecutionContextError> {
-        let Self { backend, runtime } = self;
-        match runtime {
-            Some(runtime) => Ok(runtime),
-            None => {
-                let built = build_graph_runtime(backend)?;
-                Ok(runtime.insert(built))
-            }
-        }
+        Self { backend }
     }
 }
 
@@ -1444,15 +1425,16 @@ impl DerefMut for EngineEntry<'_> {
 /// ```
 pub struct CpuExecutionContext {
     owner: Arc<EngineOwner>,
-    compiler: Mutex<GraphCompiler>,
-    eager: OnceLock<Result<Arc<EagerRuntime>, CpuExecutionContextError>>,
+    /// This context's private engine-free runtime, built on first use.
+    runtime: OnceLock<Result<crate::Runtime, CpuExecutionContextError>>,
 }
 
 impl std::fmt::Debug for CpuExecutionContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let initialized = self.runtime.get().is_some();
         f.debug_struct("CpuExecutionContext")
-            .field("graph_initialized", &self.engine_initialized())
-            .field("eager_initialized", &self.eager.get().is_some())
+            .field("graph_initialized", &initialized)
+            .field("eager_initialized", &initialized)
             .finish_non_exhaustive()
     }
 }
@@ -1465,34 +1447,39 @@ impl CpuExecutionContext {
     pub fn from_backend(backend: CpuBackend) -> Self {
         Self {
             owner: Arc::new(EngineOwner::new(backend)),
-            compiler: Mutex::new(GraphCompiler::new()),
-            eager: OnceLock::new(),
+            runtime: OnceLock::new(),
         }
     }
 
-    fn engine_initialized(&self) -> bool {
-        self.owner
-            .engine
-            .try_lock()
-            .is_ok_and(|state| state.runtime.is_some())
-    }
-
-    /// Lock the compiler, discarding one a panic left behind.
+    /// This context's private runtime, built on first use.
     ///
-    /// A `GraphCompiler` holds planning state that a panic may have left half
-    /// written; rebuilding it costs nothing a compile would not pay for the next
-    /// graph anyway. The poison is cleared after the rebuild so later compiles
-    /// reuse the fresh compiler instead of rebuilding it on every access.
-    pub(crate) fn lock_compiler(&self) -> std::sync::MutexGuard<'_, GraphCompiler> {
-        match self.compiler.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                let mut guard = poisoned.into_inner();
-                *guard = GraphCompiler::new();
-                self.compiler.clear_poison();
-                guard
-            }
-        }
+    /// The runtime is built for the context engine's own runtime id and
+    /// registers its eager runtime with the eager-runtime owner table once, when
+    /// it is built.
+    pub(crate) fn runtime(&self) -> Result<&crate::Runtime, CpuExecutionContextError> {
+        self.runtime
+            .get_or_init(|| {
+                let runtime = crate::Runtime::for_cpu_engine_id(self.owner.engine_id.clone())?;
+                register_eager_runtime_owner(
+                    runtime.eager_runtime(),
+                    RuntimeOwner::Cpu(Arc::downgrade(&self.owner)),
+                );
+                Ok(runtime)
+            })
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
+    /// Lock this context's graph compiler.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuExecutionContextError::Initialization`] when the context's
+    /// runtime cannot be built.
+    pub(crate) fn lock_compiler(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, GraphCompiler>, CpuExecutionContextError> {
+        Ok(self.runtime()?.lock_compiler())
     }
 
     /// Run a plain tensor operation with this context's engine.
@@ -1555,9 +1542,7 @@ impl CpuExecutionContext {
         &self,
         graph: &TracedGraph,
     ) -> Result<CompiledGraph, CpuExecutionContextError> {
-        self.lock_compiler()
-            .compile_traced_graph(graph)
-            .map_err(|source| CpuExecutionContextError::graph("compilation", source))
+        Ok(self.runtime()?.compile_graph(graph)?)
     }
 
     /// Execute a compiled graph in this context's runtime and prepared-plan cache.
@@ -1600,29 +1585,8 @@ impl CpuExecutionContext {
         inputs: &[TensorRead<'_>],
     ) -> Result<Vec<Tensor>, CpuExecutionContextError> {
         let mut state = self.owner.begin_session()?;
-        let EngineState { backend, runtime } = &mut *state;
-        let runtime = match runtime {
-            Some(runtime) => &*runtime,
-            None => &*runtime.insert(build_graph_runtime(backend)?),
-        };
-        let target = backend.engine().target();
-        let prepared = runtime
-            .prepare(graph, inputs, std::slice::from_ref(&target))
-            .map_err(|source| CpuExecutionContextError::graph("preparation", source))?;
-        let outputs = {
-            let mut engines: [&mut dyn ExecutionEngine; 1] = [backend.engine_mut()];
-            runtime
-                .run(&mut engines, &prepared, inputs)
-                .map_err(|source| CpuExecutionContextError::graph("execution", source))?
-        };
-        outputs
-            .into_iter()
-            .map(|output| {
-                output
-                    .into_tensor(backend.engine_mut())
-                    .map_err(|source| CpuExecutionContextError::graph("output", source))
-            })
-            .collect()
+        let runtime = self.runtime()?;
+        Ok(runtime.run_graph_reads(graph, inputs, state.backend.engine_mut())?)
     }
 
     /// Return this context's eager reverse-AD runtime.
@@ -1640,18 +1604,8 @@ impl CpuExecutionContext {
     /// Returns [`CpuExecutionContextError`] when linalg AD-rule or eager-runtime
     /// registration fails.
     pub fn eager_runtime(&self) -> Result<Arc<EagerRuntime>, CpuExecutionContextError> {
-        self.eager
-            .get_or_init(|| {
-                let runtime = build_eager_runtime(&self.owner.engine_id)?;
-                register_eager_runtime_owner(
-                    &runtime,
-                    RuntimeOwner::Cpu(Arc::downgrade(&self.owner)),
-                );
-                Ok(runtime)
-            })
-            .as_ref()
-            .map(Arc::clone)
-            .map_err(Clone::clone)
+        self.runtime()
+            .map(|runtime| Arc::clone(runtime.eager_runtime()))
     }
 
     /// Return statistics for this context's runtime-owned graph caches.
@@ -1665,11 +1619,10 @@ impl CpuExecutionContext {
     pub fn graph_cache_stats(
         &self,
     ) -> Result<tenferro::RuntimeCacheStats, CpuExecutionContextError> {
-        let mut state = self.owner.begin_session()?;
-        let runtime = state.runtime()?;
-        runtime
-            .cache_stats()
-            .map_err(|source| CpuExecutionContextError::graph("cache statistics", source))
+        // The statistics do not need the engine; the entry stays a session
+        // entry so a call from inside a session keeps reporting `Reentered`.
+        let _state = self.owner.begin_session()?;
+        Ok(self.runtime()?.graph_cache_stats()?)
     }
 
     /// Return retained-buffer statistics for this context's engine.
@@ -1763,40 +1716,13 @@ impl CpuExecutionContext {
     /// Returns [`CpuExecutionContextError::Reentered`] when this thread is
     /// already inside a session of this context.
     pub fn reset_graph_runtime(&self) -> Result<(), CpuExecutionContextError> {
-        {
-            let mut state = self.owner.begin_session()?;
-            state.runtime = None;
-            state.backend.engine_mut().reset_buffer_pool();
+        let mut state = self.owner.begin_session()?;
+        state.backend.engine_mut().reset_buffer_pool();
+        if let Some(runtime) = self.runtime.get() {
+            runtime.as_ref().map_err(Clone::clone)?.reset_graph()?;
         }
-        *self.lock_compiler() = GraphCompiler::new();
         Ok(())
     }
-}
-
-fn build_graph_runtime(backend: &CpuBackend) -> Result<Runtime, CpuExecutionContextError> {
-    // Register and extend the runtime under the engine's *own* runtime id: an
-    // engine built with `CpuEngine::with_runtime_engine_id` would not be found
-    // by a preparation targeting the canonical CPU id.
-    let engine_id = engine_runtime_id(backend.engine());
-    let mut builder = Runtime::builder();
-    builder
-        .register_engine(
-            tenferro_cpu::runtime_engine_registration_with_id(backend.engine(), engine_id.clone())
-                .map_err(|source| {
-                    CpuExecutionContextError::initialization("graph CPU engine", source)
-                })?,
-        )
-        .map_err(|source| CpuExecutionContextError::initialization("graph CPU engine", source))?;
-    builder
-        .install_extension_module(
-            tenferro_einsum::extension_module::<CpuEngine>(engine_id).map_err(|source| {
-                CpuExecutionContextError::initialization("einsum extension", source)
-            })?,
-        )
-        .map_err(|source| CpuExecutionContextError::initialization("einsum extension", source))?;
-    builder
-        .build()
-        .map_err(|source| CpuExecutionContextError::initialization("graph runtime", source))
 }
 
 /// Build an AD context with the built-in linalg semantic rules installed.
@@ -1812,34 +1738,6 @@ pub(crate) fn build_ad_context(
         Ok(context) => context,
         Err(never) => match never {},
     })
-}
-
-fn build_eager_runtime(
-    engine_id: &tenferro::EngineId,
-) -> Result<Arc<EagerRuntime>, CpuExecutionContextError> {
-    let ad_context = build_ad_context()
-        .map_err(|source| CpuExecutionContextError::initialization("linalg AD rules", source))?;
-    let runtime = EagerRuntime::with_ad_context(&ad_context)
-        .map_err(|source| CpuExecutionContextError::initialization("eager runtime", source))?;
-    // [AI Supplied] Install the built-in extension modules before publishing
-    // the shared context. Lazy first use reconfigures the runtime and advances
-    // its epoch; doing that after tensors have prepared AD derivatives can
-    // invalidate those prepared programs under parallel first use.
-    //
-    // The modules are installed under the *engine's own* runtime id: an engine
-    // built with `CpuEngine::with_runtime_engine_id` would otherwise not find
-    // its einsum/linalg extensions.
-    let einsum_module = tenferro_einsum::extension_module::<CpuEngine>(engine_id.clone())
-        .map_err(|source| CpuExecutionContextError::initialization("einsum extension", source))?;
-    runtime
-        .install_extension_module(einsum_module)
-        .map_err(|source| CpuExecutionContextError::initialization("einsum runtime", source))?;
-    let linalg_module = tenferro_linalg::extension_module::<CpuEngine>(engine_id.clone())
-        .map_err(|source| CpuExecutionContextError::initialization("linalg extension", source))?;
-    runtime
-        .install_extension_module(linalg_module)
-        .map_err(|source| CpuExecutionContextError::initialization("linalg runtime", source))?;
-    Ok(runtime)
 }
 
 /// A context that owns an eager runtime, held weakly by the process-wide table.

@@ -197,7 +197,12 @@ impl CudaEngineOwner {
 /// ```
 pub struct CudaExecutionContext {
     owner: Arc<CudaEngineOwner>,
-    eager: OnceLock<Result<Arc<EagerRuntime>, CudaExecutionContextError>>,
+    /// This context's private engine-free runtime, built on first use. It has
+    /// no graph path: CUDA work runs through the eager runtime only.
+    runtime: OnceLock<Result<crate::Runtime, CudaExecutionContextError>>,
+    /// The target of this context's engine, captured at construction so the
+    /// runtime can be built without taking the engine lock.
+    target: tenferro::EngineTarget,
     engine_id: tenferro::EngineId,
     device_name: String,
 }
@@ -209,7 +214,7 @@ impl fmt::Debug for CudaExecutionContext {
             .field("ordinal", &CUDA_ORDINAL)
             .field("device_name", &self.device_name)
             .field("engine_id", &self.engine_id)
-            .field("eager_initialized", &self.eager.get().is_some())
+            .field("eager_initialized", &self.runtime.get().is_some())
             .finish_non_exhaustive()
     }
 }
@@ -417,9 +422,11 @@ impl CudaExecutionContext {
             }
         })?;
         let engine_id = engine.runtime_engine_id().clone();
+        let target = ExecutionEngine::target(&engine);
         Ok(Self {
             owner: Arc::new(CudaEngineOwner::new(engine)),
-            eager: OnceLock::new(),
+            runtime: OnceLock::new(),
+            target,
             engine_id,
             device_name,
         })
@@ -491,10 +498,13 @@ impl CudaExecutionContext {
     /// eager-runtime registration fails.
     pub fn eager_runtime(&self) -> Result<Arc<EagerRuntime>, CudaExecutionContextError> {
         let runtime = self
-            .eager
-            .get_or_init(|| build_eager_runtime(self.engine_id.clone()))
+            .runtime
+            .get_or_init(|| {
+                build_eager_runtime(self.engine_id.clone())
+                    .map(|eager| crate::Runtime::from_parts(eager, None, self.target.clone()))
+            })
             .as_ref()
-            .map(Arc::clone)
+            .map(|runtime| Arc::clone(runtime.eager_runtime()))
             .map_err(Clone::clone)?;
         crate::context::register_eager_runtime_owner(
             &runtime,
@@ -816,43 +826,15 @@ impl CudaExecutionContext {
 fn build_eager_runtime(
     engine_id: tenferro::EngineId,
 ) -> Result<Arc<EagerRuntime>, CudaExecutionContextError> {
-    let ad_context = crate::context::build_ad_context().map_err(|source| {
-        CudaExecutionContextError::Initialization {
-            component: "linalg AD rules",
-            source: Arc::new(source),
+    crate::runtime::build_cuda_eager_runtime(engine_id).map_err(|error| match error {
+        crate::RuntimeError::Initialization { component, source } => {
+            CudaExecutionContextError::Initialization { component, source }
         }
-    })?;
-    let runtime = EagerRuntime::with_ad_context(&ad_context).map_err(|source| {
-        CudaExecutionContextError::Initialization {
+        other => CudaExecutionContextError::Initialization {
             component: "eager runtime",
-            source: Arc::new(source),
-        }
-    })?;
-    let einsum_module = tenferro_einsum::extension_module::<CudaEngine>(engine_id.clone())
-        .map_err(|source| CudaExecutionContextError::Initialization {
-            component: "einsum extension",
-            source: Arc::new(source),
-        })?;
-    runtime
-        .install_extension_module(einsum_module)
-        .map_err(|source| CudaExecutionContextError::Initialization {
-            component: "einsum runtime",
-            source: Arc::new(source),
-        })?;
-    let linalg_module =
-        tenferro_linalg::extension_module::<CudaEngine>(engine_id).map_err(|source| {
-            CudaExecutionContextError::Initialization {
-                component: "linalg extension",
-                source: Arc::new(source),
-            }
-        })?;
-    runtime
-        .install_extension_module(linalg_module)
-        .map_err(|source| CudaExecutionContextError::Initialization {
-            component: "linalg runtime",
-            source: Arc::new(source),
-        })?;
-    Ok(runtime)
+            source: Arc::new(other),
+        },
+    })
 }
 
 fn validate_host_placement_metadata(

@@ -505,6 +505,42 @@ pub enum IdxTensorError {
         /// Core feature that provides support for this context.
         required_feature: &'static str,
     },
+    /// An operand belongs to a different [`Runtime`](tensor4all_tensorbackend::Runtime)
+    /// than the operation's.
+    ///
+    /// All operands of one operation must share one runtime. The check runs at
+    /// operation entry, before any RNG draw or kernel; values are never moved
+    /// between runtimes implicitly.
+    #[error(
+        "IdxTensor {operation}: an operand belongs to runtime {found:?}, \
+         but the operation runs in runtime {expected:?}"
+    )]
+    RuntimeMismatch {
+        /// Operation that validated its operands.
+        operation: &'static str,
+        /// Identity of the operation's runtime.
+        expected: tenferro_ad::ContextId,
+        /// Identity of the operand's runtime.
+        found: tenferro_ad::ContextId,
+    },
+    /// The supplied engine cannot read an operand where it is placed.
+    ///
+    /// A CPU engine reads host values; a CUDA engine reads values in its own
+    /// allocation domain. There is no implicit transfer: move the value to the
+    /// engine's placement explicitly first. The check runs at operation entry,
+    /// before any RNG draw or kernel.
+    #[error(
+        "IdxTensor {operation}: engine `{engine_id}` cannot read an operand placed at \
+         {placement}; transfer it explicitly"
+    )]
+    PlacementMismatch {
+        /// Operation that validated its operands.
+        operation: &'static str,
+        /// The operand's placement (memory kind, device and allocation domain).
+        placement: String,
+        /// Runtime id of the engine that was supplied.
+        engine_id: String,
+    },
 }
 
 impl From<anyhow::Error> for IdxTensorError {
@@ -3945,6 +3981,13 @@ impl IdxTensor {
 
     #[cfg(feature = "tenferro-cuda")]
     pub(crate) fn cuda_eager_inner(&self) -> Option<&EagerTensor> {
+        self.eager_value()
+    }
+
+    /// Borrow this tensor's eager value, if it has one, without materializing.
+    ///
+    /// A tensor with no eager value is host data that belongs to no runtime.
+    pub(crate) fn eager_value(&self) -> Option<&EagerTensor> {
         self.storage
             .eager()
             .or_else(|| self.eager_cache.get().map(AsRef::as_ref))
@@ -9189,6 +9232,28 @@ impl IdxTensor {
             #[allow(unreachable_patterns)]
             _ => return Err(unsupported_execution_context_error()),
         };
+        Self::from_inner(indices, inner).map_err(IdxTensorError::from)
+    }
+
+    /// Create a dense host tensor in `runtime` (stage A2 test constructor).
+    ///
+    /// Constructors that take `&Runtime` become public in stage B2 of #1376;
+    /// until then this exists only for the A2 tests.
+    #[cfg(test)]
+    pub(crate) fn from_dense_on<T: TensorElement>(
+        runtime: &tensor4all_tensorbackend::Runtime,
+        indices: Vec<DynIndex>,
+        data: Vec<T>,
+    ) -> std::result::Result<Self, IdxTensorError> {
+        let dims = Self::expected_dims_from_indices(&indices);
+        Self::validate_indices(&indices)?;
+        Self::validate_dense_payload_len(data.len(), &dims)?;
+        let native = dense_native_tensor_from_col_major(&data, &dims)
+            .map_err(|error| IdxTensorError::operation("runtime construction", error))?;
+        let inner = IdxTensor::untracked_inner(native, Arc::clone(runtime.eager_runtime()))
+            .map_err(|error| {
+                IdxTensorError::operation("runtime eager wrapping", anyhow::Error::new(error))
+            })?;
         Self::from_inner(indices, inner).map_err(IdxTensorError::from)
     }
 

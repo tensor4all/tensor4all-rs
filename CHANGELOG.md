@@ -131,6 +131,19 @@
 
 ### Added
 
+- `tensor4all-tensorbackend` adds `Runtime`, an engine-free runtime that several
+  engines share (#1393, stage A2 of #1376). It holds the eager AD runtime, the graph
+  compiler and the compiled-program cache, and no engine or engine lock; clones are
+  the same runtime. `Runtime::with_eager(exec, f)` and
+  `Runtime::run_graph(graph, inputs, exec)` borrow the caller's
+  `exec: &mut dyn ExecutionEngine` for one call, so a value made on one `CpuEngine`
+  runs on any other `CpuEngine` the runtime supports. `Runtime::check_engine` refuses
+  an engine with another runtime id, engine type or allocation domain with
+  `RuntimeError::UnsupportedEngine` instead of registering it lazily. With
+  `tenferro-cuda`, `Runtime::for_cuda_engine` builds a CUDA runtime (no graph path),
+  and `CudaEngine`/`CudaDeviceId` are re-exported. `ExecutionEngine` is re-exported.
+  `CpuExecutionContext` and `CudaExecutionContext` are now built on a private
+  `Runtime` each; their behaviour and errors are unchanged.
 - `tensor4all-treetn` adds `TreeTN::estimate_exact_sum_bytes` (#1309), the
   size estimate of `TreeTN::exact_sum` taken before the sum is built.
 - `tensor4all-treetn` adds `LinearOperator::to_state_network` and
@@ -156,6 +169,10 @@
 
 ### Breaking Rust API changes
 
+- `tensor4all-core`: `IdxTensorError` has two new variants, `RuntimeMismatch` and
+  `PlacementMismatch` (#1393). The enum is not `#[non_exhaustive]`, so exhaustive
+  matches must add both arms. They are reported by the engine-taking operation entry
+  that stage B2 of #1376 makes public; no current public operation returns them yet.
 - `tensor4all-partitionedtreetn`: `PartitionedContractionOptions` has the new
   field `group_sum_limit_bytes` (#1316). Complete struct literals must add it.
   `contract` and `contract_selected` return `GroupSumLimit` before building a
