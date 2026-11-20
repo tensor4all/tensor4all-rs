@@ -3,7 +3,8 @@ name: Heavy tests
 # Scheduled home for the work that is too expensive for the push/PR pipeline
 # (see CONTRIBUTING.md, "CI time budget"):
 #
-#   - tests marked `#[ignore = "heavy: ..."]`, kept in `crates/*/tests/heavy_*.rs`;
+#   - tests marked `#[ignore = "heavy: ..."]`, kept in `tests/heavy_*.rs`
+#     or private `heavy_*` unit-test modules;
 #   - example and bench targets, which the default suite no longer builds.
 #
 # The default pipeline declares one total budget and fails when it is exceeded;
@@ -50,7 +51,7 @@ jobs:
       - name: Run heavy tests
         run: >-
           cargo nextest run --locked --cargo-profile ci --workspace
-          --run-ignored ignored-only -E 'test(/^heavy_/)'
+          --run-ignored ignored-only -E 'test(/(^|::)heavy_/)'
 
       - name: Report Cargo artifact size
         if: always()
@@ -84,7 +85,7 @@ jobs:
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           printf -v body '%s\n\n%s\n\n%s\n' \
             "The scheduled heavy suite failed in [run ${GITHUB_RUN_ID}](${run_url}) on \`${GITHUB_SHA:0:8}\`." \
-            "Reproduce locally: \`cargo nextest run --locked --cargo-profile ci -p tensor4all-treeaci --run-ignored ignored-only -E 'test(/^heavy_/)'\`" \
+            "Reproduce locally: \`cargo nextest run --locked --cargo-profile ci --workspace --run-ignored ignored-only -E 'test(/(^|::)heavy_/)'\`" \
             "Heavy tests run outside the push/PR pipeline on purpose (CONTRIBUTING.md, CI time budget). Treat this as a real regression in the heavy witness, or as a change that pushed it past this workflow's bound."
           number=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$label" --state open \
             --search "in:title \"$title\"" --limit 1 --json number --jq '.[0].number // empty')
