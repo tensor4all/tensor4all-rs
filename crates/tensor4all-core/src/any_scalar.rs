@@ -313,6 +313,24 @@ impl AnyScalar {
         }
     }
 
+    /// The scalar's value as a host rank-0 native tensor.
+    ///
+    /// For a caller that places an untracked scalar in its operand's eager
+    /// runtime itself: in a build without `global-defaults` an untracked
+    /// `AnyScalar` has no eager tensor of its own (there is no process-global
+    /// runtime to create it in), but its value is always available.
+    pub(crate) fn host_native(&self) -> Result<tenferro::Tensor> {
+        use tensor4all_tensorbackend::dense_native_tensor_from_col_major as host;
+        match self.value {
+            ScalarValue::F32(value) => host(&[value], &[]),
+            ScalarValue::F64(value) => host(&[value], &[]),
+            ScalarValue::C32(value) => host(&[value], &[]),
+            ScalarValue::C64(value) => host(&[value], &[]),
+            // Unreachable: see the invariant on `AnyScalar::value`.
+            other => Err(anyhow!("unsupported AnyScalar value {other:?}")),
+        }
+    }
+
     pub(crate) fn as_tensor(&self) -> Result<&IdxTensor> {
         self.tensor
             .as_ref()

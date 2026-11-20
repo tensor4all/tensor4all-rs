@@ -82,12 +82,34 @@ where
     T: NormAccumScalar + tensor4all_tensorbackend::TensorElement,
 {
     let expected = TensorTrain::norm_squared_from_packed_sites_oracle(&sites).unwrap();
-    let actual = TensorTrain::norm_squared_from_packed_sites_backend(sites).unwrap();
-    let tolerance = 1.0e-10 * expected.abs().max(1.0);
-    assert!(
-        (actual - expected).abs() <= tolerance,
-        "{label}: backend={actual:.16e}, oracle={expected:.16e}, tolerance={tolerance:.3e}"
-    );
+    // The kernel on a serial and on a multi-threaded engine: the reduction
+    // order may differ, the value must not (beyond rounding).
+    for threads in [1, 4] {
+        let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+            tensor4all_tensorbackend::CpuBackend::with_threads(threads).unwrap(),
+        );
+        let packed = sites
+            .iter()
+            .map(|site| PackedSiteTensor {
+                left_dim: site.left_dim,
+                physical_dim: site.physical_dim,
+                right_dim: site.right_dim,
+                data: site.data.clone(),
+            })
+            .collect::<Vec<_>>();
+        let actual = context
+            .with_concrete_session(|session| {
+                TensorTrain::norm_squared_from_packed_sites_on(session, Some(packed))
+            })
+            .unwrap()
+            .unwrap();
+        let tolerance = 1.0e-10 * expected.abs().max(1.0);
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "{label} ({threads} threads): backend={actual:.16e}, oracle={expected:.16e}, \
+             tolerance={tolerance:.3e}"
+        );
+    }
 }
 
 #[test]
@@ -110,6 +132,69 @@ fn packed_norm_backend_matches_oracle_for_real_and_complex_layouts() {
             Complex64::new(real, imag)
         });
         assert_packed_norm_matches_oracle(complex_sites, &format!("Complex64 case {case_index}"));
+    }
+}
+
+/// A chain built in a caller's context runs the packed norm kernel on that
+/// context's engine, not on the process-global one and not on a host loop
+/// (tensor4all-rs#1403).
+#[test]
+fn packed_norm_runs_on_the_context_that_owns_the_chain() {
+    use std::sync::Arc;
+    use tensor4all_core::ExecutionContext;
+    use tensor4all_tensorbackend::{
+        CpuBackend, CpuExecutionContext, CpuExecutionContextError, ExecutionContextEntryError,
+    };
+
+    let cpu = Arc::new(CpuExecutionContext::from_backend(
+        CpuBackend::with_threads(2).unwrap(),
+    ));
+    let context = ExecutionContext::Cpu(Arc::clone(&cpu));
+    let s0 = idx(9001, 2);
+    let s1 = idx(9002, 3);
+    let link = idx(9003, 2);
+    let a = IdxTensor::from_dense_in(
+        &context,
+        vec![s0.clone(), link.clone()],
+        vec![1.0_f64, -2.0, 0.5, 3.0],
+    )
+    .unwrap();
+    let b = IdxTensor::from_dense_in(
+        &context,
+        vec![link.clone(), s1.clone()],
+        vec![0.25_f64, 1.5, -1.0, 2.0, 0.75, -0.5],
+    )
+    .unwrap();
+    let tt = TensorTrain::new(vec![a, b]).unwrap();
+
+    let pack = || {
+        TensorTrain::pack_normalized_sites::<f64>(&tt)
+            .unwrap()
+            .expect("a simple f64 chain packs")
+    };
+    let expected = TensorTrain::norm_squared_from_packed_sites_oracle(&pack()).unwrap();
+    let actual = tt.norm_squared().unwrap();
+    assert!(
+        (actual - expected).abs() <= 1.0e-12 * expected,
+        "context-owned chain: {actual:.16e} vs oracle {expected:.16e}"
+    );
+
+    // Selection: with this thread already holding the owning context's engine,
+    // the kernel's entry is refused as a re-entry instead of running on the
+    // process-global engine. The sites are packed before the engine is held, so
+    // only the kernel's routing is observed.
+    let sites = pack();
+    let nested = cpu
+        .with_session(|_engine| tt.norm_squared_from_packed_sites(sites))
+        .unwrap();
+    match nested {
+        Err(TensorTrainError::IdxTensor {
+            source:
+                IdxTensorError::EngineEntry {
+                    source: ExecutionContextEntryError::Cpu(CpuExecutionContextError::Reentered),
+                },
+        }) => {}
+        other => panic!("expected the owning context's re-entry refusal, got {other:?}"),
     }
 }
 

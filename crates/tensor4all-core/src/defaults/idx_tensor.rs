@@ -509,11 +509,18 @@ pub enum IdxTensorError {
 
 impl From<anyhow::Error> for IdxTensorError {
     /// Recovers an `IdxTensorError` raised inside an `anyhow` helper, so a
-    /// typed rejection keeps its variant; any other error becomes
+    /// typed rejection keeps its variant, and an engine-entry refusal (for
+    /// example the explicit-only build's `NoContext`) as
+    /// [`IdxTensorError::EngineEntry`]; any other error becomes
     /// [`IdxTensorError::Operation`].
     fn from(source: anyhow::Error) -> Self {
         source
             .downcast::<Self>()
+            .or_else(|source| {
+                source
+                    .downcast::<tensor4all_tensorbackend::ExecutionContextEntryError>()
+                    .map(Self::from)
+            })
             .unwrap_or_else(|source| Self::operation("IdxTensor", source))
     }
 }
@@ -1085,7 +1092,18 @@ impl IdxTensorStorage {
             ),
             Self::Deferred { error, .. } => return Err(anyhow::Error::new((**error).clone())),
         };
-        let scalar_inner = scalar.as_tensor()?.try_materialized_inner()?;
+        let scalar_inner = match scalar.as_tensor() {
+            Ok(tensor) => std::borrow::Cow::Borrowed(tensor.try_materialized_inner()?),
+            // An untracked scalar without its own eager tensor (a build without
+            // `global-defaults` has no runtime to create it in) joins the
+            // payload's runtime, so a context-owned operand stays in its context.
+            Err(_) if !scalar.tracks_grad() => std::borrow::Cow::Owned(IdxTensor::untracked_inner(
+                scalar.host_native()?,
+                Arc::clone(payload.runtime()),
+            )?),
+            Err(error) => return Err(error),
+        };
+        let scalar_inner = scalar_inner.as_ref();
         let target_dtype = IdxTensor::scale_target_dtype(payload.dtype(), scalar_inner.dtype())?;
         let payload = if payload.dtype() == target_dtype {
             payload
@@ -3939,6 +3957,60 @@ impl IdxTensor {
             .eager()
             .or_else(|| self.eager_cache.get().map(AsRef::as_ref))
             .map(|inner| Arc::clone(inner.runtime()))
+    }
+
+    /// Run `f` on the CPU engine of the execution context that owns this
+    /// tensor's eager value.
+    ///
+    /// A context-free host computation over data read from this tensor (for
+    /// example a packed tensor-train reduction) uses this to run on the engine
+    /// the caller already chose when it created the tensor, instead of on a
+    /// process-global one. The engine is entered through the owning context's
+    /// normal session entry, so its thread policy and serialization apply.
+    ///
+    /// Returns `Ok(None)` without calling `f` when the tensor has no eager value
+    /// (host-only storage) or when its owner is not a CPU context (a CUDA
+    /// context); the caller then chooses its own route.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError::EngineEntry`] when the owning context rejects
+    /// the session entry: a nested entry on the same thread
+    /// ([`ExecutionContextEntryError::Cpu`](tensor4all_tensorbackend::ExecutionContextEntryError::Cpu)),
+    /// or [`ExecutionContextEntryError::NoContext`](tensor4all_tensorbackend::ExecutionContextEntryError::NoContext)
+    /// when the owning context was dropped in a build without `global-defaults`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
+    /// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
+    ///
+    /// let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
+    ///     CpuBackend::with_threads(1)?,
+    /// )));
+    /// let index = DynIndex::new_dyn(2);
+    /// let tensor = IdxTensor::from_dense_in(&context, vec![index], vec![1.0_f64, 2.0])?;
+    /// // The context's own single-threaded engine runs the closure.
+    /// let threads = tensor.with_owning_cpu_engine(|engine| engine.num_threads())?;
+    /// assert_eq!(threads, Some(1));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_owning_cpu_engine<R>(
+        &self,
+        f: impl FnOnce(&mut tensor4all_tensorbackend::CpuEngine) -> R,
+    ) -> std::result::Result<Option<R>, IdxTensorError> {
+        let Some(runtime) = self.eager_runtime() else {
+            return Ok(None);
+        };
+        tensor4all_tensorbackend::with_runtime_engine(&runtime, |engine| {
+            engine
+                .as_any_mut()
+                .downcast_mut::<tensor4all_tensorbackend::CpuEngine>()
+                .map(f)
+        })
+        .map_err(IdxTensorError::from)
     }
 
     /// Check whether this tensor's eager value is device-resident.
