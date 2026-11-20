@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tensor4all_core::{legacy, DynIndex, ExecutionContext, IdxTensor, IdxTensorError};
 use tensor4all_itensorlike::{TensorTrain, TensorTrainError};
 use tensor4all_tensorbackend::{
-    with_runtime_engine, CpuBackend, CpuExecutionContext, ExecutionContextEntryError,
+    with_runtime_engine, CpuBackend, CpuExecutionContext, ExecutionContextEntryError, Storage,
 };
 
 fn cpu_context(threads: usize) -> (Arc<CpuExecutionContext>, ExecutionContext) {
@@ -164,4 +164,45 @@ fn context_free_construction_and_contraction_refuse() {
     drop(cpu);
     let error = tensor4all_core::contract(&[&a, &b]).expect_err("the owning context is gone");
     assert!(refused_for_no_context(&error), "got {error:?}");
+}
+
+#[test]
+fn host_storage_chain_norm_refuses_at_the_read_step() {
+    // Host-only storage has no eager value and no owner. Reading it as a dense
+    // vector already needs the implicit route, so the chain norm refuses before
+    // any norm kernel is chosen: there is no host computation to fall back to.
+    let s0 = DynIndex::new_dyn(2);
+    let link = DynIndex::new_dyn(2);
+    let s1 = DynIndex::new_dyn(3);
+    let host = |indices: Vec<DynIndex>, data: Vec<f64>, dims: &[usize]| {
+        IdxTensor::from_storage(
+            indices,
+            Arc::new(Storage::from_dense_col_major(data, dims).unwrap()),
+        )
+        .unwrap()
+    };
+    let a = host(vec![s0, link.clone()], vec![1.0, -2.0, 0.5, 3.0], &[2, 2]);
+    let b = host(
+        vec![link, s1],
+        vec![0.25, 1.5, -1.0, 2.0, 0.75, -0.5],
+        &[2, 3],
+    );
+    let no_context = |error: &IdxTensorError| {
+        matches!(
+            error,
+            IdxTensorError::EngineEntry {
+                source: ExecutionContextEntryError::NoContext
+            }
+        )
+    };
+    let read = a
+        .to_vec::<f64>()
+        .expect_err("reading host storage needs a runtime");
+    assert!(no_context(&read), "got {read:?}");
+
+    let tt = TensorTrain::new(vec![a, b]).unwrap();
+    match tt.norm_squared() {
+        Err(TensorTrainError::IdxTensor { source }) if no_context(&source) => {}
+        other => panic!("expected the typed NoContext refusal, got {other:?}"),
+    }
 }

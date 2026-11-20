@@ -126,6 +126,79 @@ fn packed_norm_backend_matches_oracle_for_real_and_complex_layouts() {
     }
 }
 
+/// The pre-#1403 packed-norm route: graph einsums on the process-global context.
+fn packed_norm_via_global_graph_einsum<T>(sites: &[PackedSiteTensor<T>]) -> f64
+where
+    T: NormAccumScalar + tensor4all_tensorbackend::TensorElement,
+{
+    use tensor4all_tensorbackend as backend;
+    let mut current =
+        backend::dense_native_tensor_from_col_major_owned(vec![T::one()], &[1, 1]).unwrap();
+    for site in sites {
+        let shape = [site.left_dim, site.physical_dim, site.right_dim];
+        let tensor = backend::dense_native_tensor_from_col_major(&site.data, &shape).unwrap();
+        let conjugated = (TypeId::of::<T>() != TypeId::of::<f64>())
+            .then(|| backend::conj_native_tensor(&tensor).unwrap());
+        let conjugated = conjugated.as_ref().unwrap_or(&tensor);
+        let middle = tensor4all_core::legacy::einsum_native_tensors(
+            &[(&current, &[0, 1]), (&tensor, &[1, 2, 3])],
+            &[0, 2, 3],
+        )
+        .unwrap();
+        current = tensor4all_core::legacy::einsum_native_tensors(
+            &[(conjugated, &[0, 1, 2]), (&middle, &[0, 1, 3])],
+            &[2, 3],
+        )
+        .unwrap();
+    }
+    backend::native_tensor_primal_to_dense_col_major::<T>(&current).unwrap()[0]
+        .into_nonnegative_real()
+}
+
+/// On the process-global context the session kernel reproduces the former
+/// graph-einsum route bit for bit (#1403: no numeric change with
+/// `global-defaults`).
+#[test]
+fn packed_norm_session_kernel_is_bitwise_equal_to_the_former_global_route() {
+    let context = tensor4all_core::legacy::default_cpu_execution_context().unwrap();
+    let chains: &[&[(usize, usize, usize)]] = &[
+        &[(1, 4, 8), (8, 4, 16), (16, 4, 8), (8, 4, 1)],
+        &[(1, 2, 32), (32, 2, 64), (64, 2, 32), (32, 2, 1)],
+        &[(1, 3, 3), (3, 3, 1)],
+    ];
+    for (index, specs) in chains.iter().enumerate() {
+        for seed in 0..3 {
+            let value = move |site: usize, offset: usize| {
+                ((site * 7919 + offset * 104_729 + seed) % 1000) as f64 / 997.0 - 0.5
+            };
+            let real = make_norm_packed_sites(specs, value);
+            let complex = make_norm_packed_sites(specs, |site, offset| {
+                Complex64::new(value(site, offset), value(offset, site + 1))
+            });
+            let session_real = context
+                .with_concrete_session(|s| TensorTrain::norm_squared_from_packed_sites_on(s, &real))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                session_real.to_bits(),
+                packed_norm_via_global_graph_einsum(&real).to_bits(),
+                "f64 chain {index}, seed {seed}"
+            );
+            let session_complex = context
+                .with_concrete_session(|s| {
+                    TensorTrain::norm_squared_from_packed_sites_on(s, &complex)
+                })
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                session_complex.to_bits(),
+                packed_norm_via_global_graph_einsum(&complex).to_bits(),
+                "Complex64 chain {index}, seed {seed}"
+            );
+        }
+    }
+}
+
 /// A chain built in a caller's context runs the packed norm kernel on that
 /// context's engine, not on the process-global one and not on a host loop
 /// (tensor4all-rs#1403).

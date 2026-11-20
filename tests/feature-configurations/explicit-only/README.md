@@ -44,4 +44,7 @@ CI runs the same command in the Lint job of `.github/workflows/CI_rs.yml`.
 - `IdxTensor::with_owning_cpu_engine` lends the creating context's engine;
 - `TensorTrain::norm_squared`/`norm` of a chain built in a context run on that
   context and match a hand-computed value, and a chain whose context was dropped
-  refuses with `NoContext` instead of falling back to a host loop.
+  refuses with `NoContext` instead of falling back to a host loop;
+- a chain of host-only storage (`IdxTensor::from_storage`) refuses already at the
+  read step that packs its sites (`to_vec` needs a runtime), so there is no host
+  computation a norm fallback could use.
