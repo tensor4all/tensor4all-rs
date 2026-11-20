@@ -48,8 +48,10 @@ tensor4all-partitionedtreetn = { path = "../../crates/tensor4all-partitionedtree
 tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-platform"] }
 
 [dev-dependencies]
-# The fixtures build tensors with the context-free API, which needs the
-# process-global route (tensor4all-rs#1403); the library graph above does not.
+# The shared tests build tensors and call the Fourier operators through the
+# context-free API, which still needs the process-global route
+# (tensor4all-rs#1403, #1376). Like the crate's own dev-dependency, this opts
+# the fixtures in; it does not claim the library works without the route.
 tensor4all-core = { path = "../../crates/tensor4all-core", default-features = false, features = ["tenferro-cpu-platform", "global-defaults"] }
 tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend", default-features = false, features = ["tenferro-cpu-platform"] }
 tensor4all-treetci = { path = "../../crates/tensor4all-treetci", default-features = false, features = ["tenferro-cpu-platform"] }
