@@ -400,10 +400,43 @@ because core's ungated code calls `mat_mul`, `solve_matrix`, `capped_full_piv_lu
 `default_eager_ctx`, `with_runtime_engine`, `src_error_estimate` and
 `native_tensor_primal_to_diag`, so it stays a D4 step after B2 and D2 as described above.
 
+**Status (#1403 stage 2).** `core`'s pin is dropped. `tensor4all-core` depends on
+`explicit-context` and has its own opt-in `global-defaults` (alias `backend-tenferro`);
+its default is the platform provider only, and no provider feature implies it. The
+blockers listed above did not need B2 and D2 first, because core now reaches process-global
+state only through one private module, `core/src/implicit_route.rs`:
+
+- with `global-defaults` its items are the `tensorbackend` global functions themselves
+  (re-exported, so the global build runs the same code), plus `default_eager_ctx` for F5
+  adoption and `default_cpu_execution_context` for F3;
+- without it each item refuses with `ExecutionContextEntryError::NoContext` instead of
+  choosing an engine, and `with_runtime_engine` (now compiled under `explicit-context`)
+  refuses a runtime with no live owner the same way.
+
+Downstream library code reaches the same items as the `#[doc(hidden)]`
+`tensor4all_core::legacy` bridge (§7.0), so a downstream crate and core always agree on
+whether the global route exists. No library code switches implementations on the route's
+availability: a context-free computation that needs an engine runs on the CPU engine of
+the context that owns its operands (`IdxTensor::with_owning_cpu_engine`, used by
+`itensorlike`'s packed-site norm) and takes the implicit route only when no operand has
+one. Where an explicit path had reached the global route, the
+caller's context is threaded instead: the host-operand route of
+`contract_structured_payloads_nary_in` and `src_error_estimate_in`'s host estimator
+(`src_error_estimate_general_in`). The host `IncrementalQr` probe path is only reachable on
+the global route and is gated on `global-defaults`. Every workspace library crate builds
+and passes `clippy -D warnings` without `global-defaults`; test, doctest and bench builds
+opt in through a dev-dependency, as do `tensor4all-capi`, `tensor4all-hdf5` (whose load API takes no context), `tensor4all-py`, the docs crates
+and the benchmarks. Because feature unification then turns the route on in every workspace
+test build, the explicit-only configuration's run-time behaviour is tested in the isolated
+package `tests/feature-configurations/explicit-only` (CI Lint job). The remaining global-path call sites are listed by
+`grep -rn "implicit_route::" crates/tensor4all-core/src` and
+`grep -rn "tensor4all_core::legacy" crates --include=*.rs`.
+
 ### 4.2 `treersi` enables `global-defaults` by default
 
 `crates/tensor4all-treersi/Cargo.toml` has `default = ["tenferro-cpu-platform", "global-defaults"]`,
-and `treersi/src/api.rs:34` gates `hadamard_many` on it. `treetn`, `treetci`, `tensorci`
+and `treersi/src/api.rs:34` gates `hadamard_many` on it. (Since #1403 the default is the
+platform provider only and `global-defaults` forwards to `tensor4all-core/global-defaults`.) `treetn`, `treetci`, `tensorci`
 and the nine other crates do *not*, so a default workspace build enables the legacy route
 from three directions: `tensorbackend`'s own default, `core`'s hard requirement, and
 `treersi`'s default.

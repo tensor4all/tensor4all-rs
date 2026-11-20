@@ -4,9 +4,8 @@ use crate::error::{Result, SimpleTensorTrainError};
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 use tenferro_tensor::TensorValue;
-use tensor4all_tensorbackend::{
-    einsum_native_tensor_reads, invariant_violated, NativeEinsumPlan, NativeTensorReadInput,
-};
+use tensor4all_core::legacy::einsum_native_tensor_reads;
+use tensor4all_tensorbackend::{invariant_violated, NativeEinsumPlan, NativeTensorReadInput};
 
 /// A `(1, d, 1)` core cannot overflow and its strides are representable; only
 /// out-of-memory remains, which std also treats as fatal.
@@ -468,10 +467,12 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
                     "a core tensor has no readable view",
                 )
             });
-            environment = plan
-                .execute_reads(&[prefix_read, T::tensor_read(tensor.as_inner())])
-                .map(TensorValue::from_tensor)
-                .map_err(|error| backend_error(error.to_string()))?;
+            environment = tensor4all_core::legacy::native_einsum_plan_execute_reads(
+                &plan,
+                &[prefix_read, T::tensor_read(tensor.as_inner())],
+            )
+            .map(TensorValue::from_tensor)
+            .map_err(|error| backend_error(error.to_string()))?;
             stride = next_stride;
             bond_dim = right;
         }
@@ -525,7 +526,8 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// assert!((val - 3.0).abs() < 1e-12);
     /// ```
     pub fn partial_sum(&self, dims: &[usize]) -> Result<SimpleTensorTrain<T>> {
-        use tensor4all_tensorbackend::{mat_mul, Matrix};
+        use tensor4all_core::legacy::mat_mul;
+        use tensor4all_tensorbackend::Matrix;
 
         let n = self.len();
         if n == 0 {

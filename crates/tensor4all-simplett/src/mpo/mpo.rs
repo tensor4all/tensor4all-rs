@@ -8,9 +8,8 @@ use super::types::{tensor4_zeros, LocalIndex, Tensor4, Tensor4Ops};
 use crate::einsum_helper::{einsum_tensors, row_vector_times_matrix, tensor_to_col_major_vec};
 use crate::traits::TTScalar;
 use tenferro_tensor::TensorValue;
-use tensor4all_tensorbackend::{
-    einsum_native_tensor_reads, invariant_violated, NativeEinsumPlan, NativeTensorReadInput,
-};
+use tensor4all_core::legacy::einsum_native_tensor_reads;
+use tensor4all_tensorbackend::{invariant_violated, NativeEinsumPlan, NativeTensorReadInput};
 
 /// Matrix Product Operator representation
 /// An MPO represents a high-dimensional operator as a product of
@@ -513,10 +512,12 @@ impl<T: TTScalar> MPO<T> {
                     "a core tensor has no readable view",
                 )
             });
-            environment = plan
-                .execute_reads(&[prefix_read, T::tensor_read(tensor.as_inner())])
-                .map(TensorValue::from_tensor)
-                .map_err(|error| backend_error(error.to_string()))?;
+            environment = tensor4all_core::legacy::native_einsum_plan_execute_reads(
+                &plan,
+                &[prefix_read, T::tensor_read(tensor.as_inner())],
+            )
+            .map(TensorValue::from_tensor)
+            .map_err(|error| backend_error(error.to_string()))?;
             stride = next_stride;
             bond_dim = right;
         }

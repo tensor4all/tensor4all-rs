@@ -21,7 +21,8 @@ use tensor4all_tensorbackend::invariant_violated;
 /// The core has the shape of an existing core, which was representable; only
 /// out-of-memory remains, which std also treats as fatal.
 const SAME_SHAPE_AS_EXISTING_CORE: &str = "rebuilding a core with an existing core's shape";
-use tensor4all_tensorbackend::{mat_mul, svd_backend, BackendLinalgScalar, Matrix};
+use tensor4all_core::legacy::{mat_mul, svd_backend};
+use tensor4all_tensorbackend::{BackendLinalgScalar, Matrix};
 
 /// Compute QR decomposition
 fn qr_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> Result<(Matrix<T>, Matrix<T>)> {

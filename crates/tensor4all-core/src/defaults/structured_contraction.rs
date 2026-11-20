@@ -2,7 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, ensure, Result};
 use tenferro::Tensor as NativeTensor;
-use tensor4all_tensorbackend::{einsum_native_tensors, NativeTensorReadInput, Storage};
+use tensor4all_tensorbackend::{
+    einsum_native_tensors_in, CpuExecutionContext, NativeTensorReadInput, Storage,
+};
+
+use crate::implicit_route::einsum_native_tensors;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OperandLayout {
@@ -303,9 +307,14 @@ pub(crate) fn normalize_payload_for_roots(
     Ok((current_payload, current_roots))
 }
 
+/// Merge repeated root labels of one compact payload.
+///
+/// `context` runs the diagonal-extraction einsum on the caller's CPU engine;
+/// `None` is the context-free route.
 pub(crate) fn normalize_payload_read_for_roots<'a>(
     payload: NativeTensorReadInput<'a>,
     roots: &[usize],
+    context: Option<&CpuExecutionContext>,
 ) -> Result<(NativeTensorReadInput<'a>, Vec<usize>)> {
     ensure!(
         payload.shape().len() == roots.len(),
@@ -333,7 +342,11 @@ pub(crate) fn normalize_payload_read_for_roots<'a>(
             .filter_map(|(axis, &label)| (axis != axis_b).then_some(label))
             .collect();
 
-        current_payload = einsum_native_tensors(&[(&current_payload, &input_ids)], &output_ids)?;
+        let operand = [(&current_payload, input_ids.as_slice())];
+        current_payload = match context {
+            Some(context) => einsum_native_tensors_in(context, &operand, &output_ids)?,
+            None => einsum_native_tensors(&operand, &output_ids)?,
+        };
         current_roots.remove(axis_b);
     }
 

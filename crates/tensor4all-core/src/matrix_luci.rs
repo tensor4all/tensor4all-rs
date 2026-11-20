@@ -5,6 +5,7 @@
 //! via LU cross interpolation and implements [`AbstractMatrixCI`].
 
 use crate::error::{MatrixCIError, Result};
+use crate::implicit_route::{mat_mul_owned, triangular_solve_matrix_owned};
 use crate::matrixlu::{
     rrlu, rrlu_left_mut, rrlu_mut, validate_luci_options, validate_owned_luci_input, RrLU,
     RrLUOptions,
@@ -16,10 +17,7 @@ use crate::matrixluci::types::{PivotKernelOptions, PivotSelectionCore};
 use crate::matrixluci::PivotKernel;
 use crate::scalar::Scalar;
 use crate::traits::AbstractMatrixCI;
-use tensor4all_tensorbackend::{
-    explicit::Session, mat_mul_owned, submatrix, triangular_solve_matrix_owned,
-    CpuExecutionContext, Matrix,
-};
+use tensor4all_tensorbackend::{explicit::Session, submatrix, CpuExecutionContext, Matrix};
 
 /// Where MatrixLUCI factor assembly runs its matrix products and solves.
 ///

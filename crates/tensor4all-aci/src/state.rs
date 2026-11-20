@@ -5,6 +5,7 @@ use crate::scalar::AciScalar;
 use crate::{
     initial_guess_with_rng, AciError, AciOptions, ElementwiseBatch, LocalBlockEvaluator, Result,
 };
+use tensor4all_core::legacy::{batched_mat_mul_same_shape_owned, mat_mul, mat_mul_owned};
 use tensor4all_core::{
     matrix_luci_factors_from_matrix, matrix_luci_factors_from_matrix_owned,
     matrix_luci_factors_from_matrix_owned_in, RrLUOptions,
@@ -12,7 +13,7 @@ use tensor4all_core::{
 use tensor4all_simplett::{
     tensor3_from_data, AbstractTensorTrain, SimpleTensorTrain, TTCache, Tensor3, Tensor3Ops,
 };
-use tensor4all_tensorbackend::{batched_mat_mul_same_shape_owned, mat_mul, mat_mul_owned, Matrix};
+use tensor4all_tensorbackend::Matrix;
 
 #[cfg(test)]
 fn frame_batching_enabled() -> bool {

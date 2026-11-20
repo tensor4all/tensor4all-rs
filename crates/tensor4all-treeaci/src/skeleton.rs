@@ -1,4 +1,5 @@
-use tensor4all_tensorbackend::{solve_matrix_owned, Matrix};
+use tensor4all_core::legacy::solve_matrix_owned;
+use tensor4all_tensorbackend::Matrix;
 
 use crate::{
     problem::{checked_product, DirectedEdgeId, PreparedTreeProblem},

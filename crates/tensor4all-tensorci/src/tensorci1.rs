@@ -3,6 +3,7 @@
 use std::{any::TypeId, cell::RefCell};
 
 use crate::error::{validate_nonnegative_finite, validate_positive, Result, TCIError};
+use tensor4all_core::legacy::solve_matrix;
 use tensor4all_core::{
     rrlu_pivots, AbstractMatrixCI, IndexSet, MatrixACA, MatrixLuciScalar, MultiIndex, RrLUOptions,
     Scalar,
@@ -10,7 +11,7 @@ use tensor4all_core::{
 use tensor4all_simplett::{
     tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops,
 };
-use tensor4all_tensorbackend::{solve_matrix, submatrix, transpose, Matrix, MatrixSolveScalar};
+use tensor4all_tensorbackend::{submatrix, transpose, Matrix, MatrixSolveScalar};
 
 mod matrix_ci;
 

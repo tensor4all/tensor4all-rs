@@ -56,6 +56,9 @@ harness = false
 path = "benches/chebyshev_patches.rs"
 
 [dev-dependencies]
+# Tests, doctests and benches still exercise the context-free API, which needs
+# the process-global route (tensor4all-rs#1403); the library itself does not.
+tensor4all-core = { path = "../tensor4all-core", default-features = false, features = ["global-defaults"] }
 rayon.workspace = true
 approx.workspace = true
 num-complex.workspace = true

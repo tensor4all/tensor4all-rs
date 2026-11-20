@@ -10,9 +10,10 @@ use crate::error::{Result, SimpleTensorTrainError};
 use crate::tensortrain::SimpleTensorTrain;
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
+use tensor4all_core::legacy::mat_mul;
 use tensor4all_core::Scalar;
 use tensor4all_core::{rrlu, RrLUOptions};
-use tensor4all_tensorbackend::{mat_mul, transpose, Matrix};
+use tensor4all_tensorbackend::{transpose, Matrix};
 
 /// Compute QR decomposition using rank-revealing LU with left-orthogonal output
 fn qr_decomp<T: TTScalar + Scalar>(matrix: &Matrix<T>) -> Result<(Matrix<T>, Matrix<T>)> {

@@ -12,8 +12,9 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["backend-tenferro", "tenferro-cpu-platform"]
-backend-tenferro = ["tensor4all-tensorbackend/backend-tenferro"]
+default = ["tenferro-cpu-platform"]
+# Compatibility alias: opt into the process-global route.
+backend-tenferro = ["tensor4all-core/global-defaults"]
 # The platform default: Apple Accelerate on macOS, faer elsewhere
 # (see the `tensor4all-cpu-platform` crate).
 tenferro-cpu-platform = [
@@ -46,6 +47,9 @@ tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-featu
 tenferro-tensor.workspace = true
 
 [dev-dependencies]
+# Tests, doctests and benches still exercise the context-free API, which needs
+# the process-global route (tensor4all-rs#1403); the library itself does not.
+tensor4all-core = { path = "../tensor4all-core", default-features = false, features = ["global-defaults"] }
 approx.workspace = true
 rand_chacha.workspace = true
 criterion.workspace = true

@@ -181,6 +181,7 @@ pub(crate) mod contraction_diagnostics {
 
 use anyhow::{bail, ensure, Context, Result};
 use num_complex::{Complex32, Complex64};
+use tensor4all_core::legacy::{mat_mul, mat_mul_owned};
 use tensor4all_core::{
     contract_with_options, contract_with_options_on_session,
     index_key::{FlatIndexer, IndexKey, KeyBuilder},
@@ -189,9 +190,7 @@ use tensor4all_core::{
     IdxTensor, IndexLike, TensorIndex, TensorLike,
 };
 use tensor4all_tensorbackend::explicit::Session;
-use tensor4all_tensorbackend::{
-    mat_mul, mat_mul_owned, BlasMul, Matrix, StorageScalar, TensorElement,
-};
+use tensor4all_tensorbackend::{BlasMul, Matrix, StorageScalar, TensorElement};
 
 #[cfg(feature = "diagnostics")]
 use super::diagnostics;

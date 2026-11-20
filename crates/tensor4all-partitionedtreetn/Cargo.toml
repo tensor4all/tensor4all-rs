@@ -68,6 +68,9 @@ tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-featu
 tensor4all-treetn = { path = "../tensor4all-treetn", default-features = false }
 
 [dev-dependencies]
+# Tests, doctests and benches still exercise the context-free API, which needs
+# the process-global route (tensor4all-rs#1403); the library itself does not.
+tensor4all-core = { path = "../tensor4all-core", default-features = false, features = ["global-defaults"] }
 criterion.workspace = true
 tenferro-cpu.workspace = true
 num-complex.workspace = true

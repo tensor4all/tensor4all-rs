@@ -41,6 +41,7 @@ pub use col_major_array::{ColMajorArray, ColMajorArrayMut, ColMajorArrayRef};
 /// Dynamic scalar compatibility wrapper built on rank-0 `IdxTensor`.
 pub mod any_scalar;
 pub mod global_default;
+mod implicit_route;
 /// Bit-packed integer keys for multi-index maps.
 pub mod index_key;
 pub mod index_like;
@@ -149,6 +150,16 @@ pub use defaults::idx_tensor::{
 pub use defaults::IdxTensorCudaError;
 pub use tensor4all_tensorbackend::ExecutionContext;
 pub use tensor4all_tensorbackend::TensorElement;
+
+/// Transitional bridges for context-free library code in downstream crates.
+///
+/// Migration aid for tensor4all-rs#1376, not API: each call site is still on
+/// the process-global route and is removed with it. With `global-defaults` a
+/// bridge returns the process-global state; without it, it refuses.
+#[doc(hidden)]
+pub mod legacy {
+    pub use crate::implicit_route::*;
+}
 pub use tensor4all_tensorbackend::{
     print_and_reset_native_einsum_profile, reset_native_einsum_profile,
 };

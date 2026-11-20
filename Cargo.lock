@@ -2576,6 +2576,7 @@ dependencies = [
  "tenferro-linalg",
  "tenferro-runtime",
  "tenferro-tensor",
+ "tensor4all-core",
  "tensor4all-tensorbackend",
  "thiserror 2.0.20",
  "tinyvec",
@@ -2808,6 +2809,7 @@ dependencies = [
  "rand_distr",
  "tensor4all-core",
  "tensor4all-tensorbackend",
+ "tensor4all-treersi",
  "tensor4all-treetn",
  "thiserror 2.0.20",
 ]

@@ -55,7 +55,6 @@ fn norm_squared_single_site_has_expected_value() {
     assert_eq!(tt.norm_squared().unwrap(), 25.0);
 }
 
-#[cfg(feature = "backend-tenferro")]
 fn make_norm_packed_sites<T>(
     specs: &[(usize, usize, usize)],
     mut value: impl FnMut(usize, usize) -> T,
@@ -78,21 +77,32 @@ fn make_norm_packed_sites<T>(
         .collect()
 }
 
-#[cfg(feature = "backend-tenferro")]
 fn assert_packed_norm_matches_oracle<T>(sites: Vec<PackedSiteTensor<T>>, label: &str)
 where
     T: NormAccumScalar + tensor4all_tensorbackend::TensorElement,
 {
     let expected = TensorTrain::norm_squared_from_packed_sites_oracle(&sites).unwrap();
-    let actual = TensorTrain::norm_squared_from_packed_sites(sites).unwrap();
-    let tolerance = 1.0e-10 * expected.abs().max(1.0);
-    assert!(
-        (actual - expected).abs() <= tolerance,
-        "{label}: backend={actual:.16e}, oracle={expected:.16e}, tolerance={tolerance:.3e}"
-    );
+    // The kernel on a serial and on a multi-threaded engine: the reduction
+    // order may differ, the value must not (beyond rounding).
+    for threads in [1, 4] {
+        let context = tensor4all_tensorbackend::CpuExecutionContext::from_backend(
+            tensor4all_tensorbackend::CpuBackend::with_threads(threads).unwrap(),
+        );
+        let actual = context
+            .with_concrete_session(|session| {
+                TensorTrain::norm_squared_from_packed_sites_on(session, &sites)
+            })
+            .unwrap()
+            .unwrap();
+        let tolerance = 1.0e-10 * expected.abs().max(1.0);
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "{label} ({threads} threads): backend={actual:.16e}, oracle={expected:.16e}, \
+             tolerance={tolerance:.3e}"
+        );
+    }
 }
 
-#[cfg(feature = "backend-tenferro")]
 #[test]
 fn packed_norm_backend_matches_oracle_for_real_and_complex_layouts() {
     let cases: &[&[(usize, usize, usize)]] = &[
@@ -114,6 +124,160 @@ fn packed_norm_backend_matches_oracle_for_real_and_complex_layouts() {
         });
         assert_packed_norm_matches_oracle(complex_sites, &format!("Complex64 case {case_index}"));
     }
+}
+
+/// The pre-#1403 packed-norm route: graph einsums on the process-global context.
+fn packed_norm_via_global_graph_einsum<T>(sites: &[PackedSiteTensor<T>]) -> f64
+where
+    T: NormAccumScalar + tensor4all_tensorbackend::TensorElement,
+{
+    use tensor4all_tensorbackend as backend;
+    let mut current =
+        backend::dense_native_tensor_from_col_major_owned(vec![T::one()], &[1, 1]).unwrap();
+    for site in sites {
+        let shape = [site.left_dim, site.physical_dim, site.right_dim];
+        let tensor = backend::dense_native_tensor_from_col_major(&site.data, &shape).unwrap();
+        let conjugated = (TypeId::of::<T>() != TypeId::of::<f64>())
+            .then(|| backend::conj_native_tensor(&tensor).unwrap());
+        let conjugated = conjugated.as_ref().unwrap_or(&tensor);
+        let middle = tensor4all_core::legacy::einsum_native_tensors(
+            &[(&current, &[0, 1]), (&tensor, &[1, 2, 3])],
+            &[0, 2, 3],
+        )
+        .unwrap();
+        current = tensor4all_core::legacy::einsum_native_tensors(
+            &[(conjugated, &[0, 1, 2]), (&middle, &[0, 1, 3])],
+            &[2, 3],
+        )
+        .unwrap();
+    }
+    backend::native_tensor_primal_to_dense_col_major::<T>(&current).unwrap()[0]
+        .into_nonnegative_real()
+}
+
+/// On the process-global context the session kernel reproduces the former
+/// graph-einsum route bit for bit (#1403: no numeric change with
+/// `global-defaults`).
+#[test]
+fn packed_norm_session_kernel_is_bitwise_equal_to_the_former_global_route() {
+    let context = tensor4all_core::legacy::default_cpu_execution_context().unwrap();
+    let chains: &[&[(usize, usize, usize)]] = &[
+        &[(1, 4, 8), (8, 4, 16), (16, 4, 8), (8, 4, 1)],
+        &[(1, 2, 32), (32, 2, 64), (64, 2, 32), (32, 2, 1)],
+        &[(1, 3, 3), (3, 3, 1)],
+    ];
+    for (index, specs) in chains.iter().enumerate() {
+        for seed in 0..3 {
+            let value = move |site: usize, offset: usize| {
+                ((site * 7919 + offset * 104_729 + seed) % 1000) as f64 / 997.0 - 0.5
+            };
+            let real = make_norm_packed_sites(specs, value);
+            let complex = make_norm_packed_sites(specs, |site, offset| {
+                Complex64::new(value(site, offset), value(offset, site + 1))
+            });
+            let session_real = context
+                .with_concrete_session(|s| TensorTrain::norm_squared_from_packed_sites_on(s, &real))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                session_real.to_bits(),
+                packed_norm_via_global_graph_einsum(&real).to_bits(),
+                "f64 chain {index}, seed {seed}"
+            );
+            let session_complex = context
+                .with_concrete_session(|s| {
+                    TensorTrain::norm_squared_from_packed_sites_on(s, &complex)
+                })
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                session_complex.to_bits(),
+                packed_norm_via_global_graph_einsum(&complex).to_bits(),
+                "Complex64 chain {index}, seed {seed}"
+            );
+        }
+    }
+}
+
+/// A chain built in a caller's context runs the packed norm kernel on that
+/// context's engine, not on the process-global one and not on a host loop
+/// (tensor4all-rs#1403).
+#[test]
+fn packed_norm_runs_on_the_context_that_owns_the_chain() {
+    use std::sync::Arc;
+    use tensor4all_core::ExecutionContext;
+    use tensor4all_tensorbackend::{
+        CpuBackend, CpuExecutionContext, CpuExecutionContextError, ExecutionContextEntryError,
+    };
+
+    let cpu = Arc::new(CpuExecutionContext::from_backend(
+        CpuBackend::with_threads(2).unwrap(),
+    ));
+    let context = ExecutionContext::Cpu(Arc::clone(&cpu));
+    let s0 = idx(9001, 2);
+    let s1 = idx(9002, 3);
+    let link = idx(9003, 2);
+    let a = IdxTensor::from_dense_in(
+        &context,
+        vec![s0.clone(), link.clone()],
+        vec![1.0_f64, -2.0, 0.5, 3.0],
+    )
+    .unwrap();
+    let b = IdxTensor::from_dense_in(
+        &context,
+        vec![link.clone(), s1.clone()],
+        vec![0.25_f64, 1.5, -1.0, 2.0, 0.75, -0.5],
+    )
+    .unwrap();
+    let tt = TensorTrain::new(vec![a, b]).unwrap();
+
+    let pack = || {
+        TensorTrain::pack_normalized_sites::<f64>(&tt)
+            .unwrap()
+            .expect("a simple f64 chain packs")
+    };
+    let expected = TensorTrain::norm_squared_from_packed_sites_oracle(&pack()).unwrap();
+    let actual = tt.norm_squared().unwrap();
+    assert!(
+        (actual - expected).abs() <= 1.0e-12 * expected,
+        "context-owned chain: {actual:.16e} vs oracle {expected:.16e}"
+    );
+
+    // Selection: with this thread already holding the owning context's engine,
+    // the kernel's entry is refused as a re-entry instead of running on the
+    // process-global engine. The sites are packed before the engine is held, so
+    // only the kernel's routing is observed.
+    let sites = pack();
+    let nested = cpu
+        .with_session(|_engine| tt.norm_squared_from_packed_sites(sites))
+        .unwrap();
+    match nested {
+        Err(TensorTrainError::IdxTensor {
+            source:
+                IdxTensorError::EngineEntry {
+                    source: ExecutionContextEntryError::Cpu(CpuExecutionContextError::Reentered),
+                },
+        }) => {}
+        other => panic!("expected the owning context's re-entry refusal, got {other:?}"),
+    }
+
+    // The public entry inside a held session is refused at the read step that
+    // packs the sites (unchanged from before #1403: every site value is read on
+    // its owning engine), so routing the kernel to the owner adds no new refusal.
+    let public = cpu.with_session(|_engine| tt.norm_squared()).unwrap();
+    assert!(
+        matches!(
+            public,
+            Err(TensorTrainError::IdxTensor {
+                source: IdxTensorError::EngineEntry {
+                    source: ExecutionContextEntryError::Cpu(CpuExecutionContextError::Reentered),
+                },
+            })
+        ),
+        "expected the read step's re-entry refusal, got {public:?}"
+    );
+    // Outside the session the same chain computes as before.
+    assert_eq!(tt.norm_squared().unwrap().to_bits(), actual.to_bits());
 }
 
 fn dense_tt_svd_round_trip<T: TensorElement>(data: Vec<T>, tolerance: f64) {

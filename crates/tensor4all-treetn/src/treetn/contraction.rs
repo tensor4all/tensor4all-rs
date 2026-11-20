@@ -47,12 +47,13 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 
 use crate::algorithm::CanonicalForm;
+use tensor4all_core::legacy::default_cpu_execution_context;
 use tensor4all_core::{
     contract_pair_on_session, factorize_in, factorize_on_session, validate_svd_truncation_options,
     AnyScalar, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, PairwiseContractionOptions,
     SvdTruncationPolicy, TensorContractionLike, TensorFactorizationLike, TensorIndex, TensorLike,
 };
-use tensor4all_tensorbackend::{default_cpu_execution_context, ExecutionContext};
+use tensor4all_tensorbackend::ExecutionContext;
 
 use super::TreeTN;
 
@@ -3147,8 +3148,14 @@ where
             let mut rng = ChaCha8Rng::seed_from_u64(options.src_options.seed);
             // Legacy CPU-global compatibility boundary: host tensors built
             // through the global default validate against this exact context.
-            // CUDA-resident inputs fail validation with a typed error.
-            let context = ExecutionContext::Cpu(default_cpu_execution_context());
+            // CUDA-resident inputs fail validation with a typed error. Without
+            // `tensor4all-core/global-defaults` there is no such context and
+            // the arm refuses before any RNG draw; use `contract_in`.
+            let context = ExecutionContext::Cpu(
+                default_cpu_execution_context()
+                    .map_err(anyhow::Error::new)
+                    .context("contract: the SRC method needs an execution context")?,
+            );
             contract_src_with_rng_impl(tn_a, tn_b, center, &options, &mut rng, &context)
         }
     }
@@ -3224,7 +3231,11 @@ where
         .validate(options.max_bond_dim)
         .context("contract_src_with_rng: invalid SRC options")?;
     // Legacy CPU-global compatibility boundary (see `contract` Src arm).
-    let context = ExecutionContext::Cpu(default_cpu_execution_context());
+    let context = ExecutionContext::Cpu(
+        default_cpu_execution_context()
+            .map_err(anyhow::Error::new)
+            .context("contract_src_with_rng: the SRC method needs an execution context")?,
+    );
     contract_src_with_rng_impl(tn_a, tn_b, center, &options, rng, &context)
 }
 

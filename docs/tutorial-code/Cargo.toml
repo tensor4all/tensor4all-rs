@@ -5,7 +5,8 @@ edition = "2021"
 autotests = false
 
 [dependencies]
-tensor4all-core = { path = "../../crates/tensor4all-core" }
+# Exercises the context-free API, which needs the process-global route.
+tensor4all-core = { path = "../../crates/tensor4all-core", features = ["global-defaults"] }
 tensor4all-simplett = { path = "../../crates/tensor4all-simplett" }
 tensor4all-quanticstci = { path = "../../crates/tensor4all-quanticstci" }
 tensor4all-interpolativeqtt = { path = "../../crates/tensor4all-interpolativeqtt" }

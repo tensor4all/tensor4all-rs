@@ -106,8 +106,7 @@ pub(crate) fn einsum_tensors<T: TTScalar>(
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|error| backend(&error))?;
 
-    let result = plan
-        .execute_reads(&reads)
+    let result = tensor4all_core::legacy::native_einsum_plan_execute_reads(&plan, &reads)
         .map_err(|error| backend(&*error))?;
     let actual = result.dtype();
     T::into_typed(result).map_err(|error| EinsumHelperError::Backend {

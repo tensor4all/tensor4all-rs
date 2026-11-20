@@ -33,7 +33,8 @@ num-complex.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 serde_json.workspace = true
-tensor4all-core = { path = "../../crates/tensor4all-core" }
+# Exercises the context-free API, which needs the process-global route.
+tensor4all-core = { path = "../../crates/tensor4all-core", features = ["global-defaults"] }
 tensor4all-hdf5 = { path = "../../crates/tensor4all-hdf5", optional = true }
 tensor4all-itensorlike = { path = "../../crates/tensor4all-itensorlike", optional = true }
 tensor4all-partitionedtreetn = { path = "../../crates/tensor4all-partitionedtreetn" }
@@ -42,7 +43,7 @@ tensor4all-simplett = { path = "../../crates/tensor4all-simplett", optional = tr
 tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend" }
 tensor4all-tensorci = { path = "../../crates/tensor4all-tensorci", optional = true }
 tensor4all-treeaci = { path = "../../crates/tensor4all-treeaci" }
-tensor4all-treersi = { path = "../../crates/tensor4all-treersi" }
+tensor4all-treersi = { path = "../../crates/tensor4all-treersi", features = ["global-defaults"] }
 tensor4all-treetci = { path = "../../crates/tensor4all-treetci" }
 tensor4all-treetn = { path = "../../crates/tensor4all-treetn" }
 

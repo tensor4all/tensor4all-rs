@@ -1,19 +1,16 @@
 //! Explicit and optional process-global tenferro CPU execution contexts.
 
 use std::cell::RefCell;
-#[cfg(feature = "global-defaults")]
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(feature = "global-defaults")]
 use std::sync::Weak;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use tenferro::{
     CompiledGraph, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead, TracedGraph,
 };
-#[cfg(feature = "global-defaults")]
 use tenferro_ad::ContextId;
 use tenferro_ad::{AdContext, EagerRuntime};
 use tenferro_cpu::{BufferPoolStats, CpuEngine, Pool, PoolBuilder};
@@ -1226,12 +1223,25 @@ impl CpuExecutionContextError {
 ///     ExecutionContextEntryError::Cpu(CpuExecutionContextError::Reentered)
 /// ));
 /// ```
-#[cfg(feature = "global-defaults")]
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ExecutionContextEntryError {
     /// The owning CPU context rejected the session entry.
     #[error(transparent)]
     Cpu(#[from] CpuExecutionContextError),
+    /// The operation was called without an execution context, no live context
+    /// owns its operand, and this build has no process-global context to fall
+    /// back to.
+    ///
+    /// Only an explicit-only build (`explicit-context` without
+    /// `global-defaults`) reports this: the value was never published in a
+    /// caller-owned context, or that context has been dropped. Pass an
+    /// [`ExecutionContext`] to the operation's context-taking form instead, or
+    /// enable `global-defaults` to keep the legacy process-global route.
+    #[error(
+        "no execution context: the operation was called without one and no live context owns \
+         its operand; pass an explicit execution context or enable the `global-defaults` feature"
+    )]
+    NoContext,
     /// The owning CUDA context rejected the session entry.
     #[cfg(feature = "tenferro-cuda")]
     #[error(transparent)]
@@ -1633,7 +1643,6 @@ impl CpuExecutionContext {
         self.eager
             .get_or_init(|| {
                 let runtime = build_eager_runtime(&self.owner.engine_id)?;
-                #[cfg(feature = "global-defaults")]
                 register_eager_runtime_owner(
                     &runtime,
                     RuntimeOwner::Cpu(Arc::downgrade(&self.owner)),
@@ -1834,14 +1843,12 @@ fn build_eager_runtime(
 }
 
 /// A context that owns an eager runtime, held weakly by the process-wide table.
-#[cfg(feature = "global-defaults")]
 pub(crate) enum RuntimeOwner {
     Cpu(Weak<EngineOwner>),
     #[cfg(feature = "tenferro-cuda")]
     Cuda(Weak<crate::cuda::CudaEngineOwner>),
 }
 
-#[cfg(feature = "global-defaults")]
 impl RuntimeOwner {
     fn upgrade(&self) -> Option<LiveRuntimeOwner> {
         match self {
@@ -1861,7 +1868,6 @@ impl RuntimeOwner {
 }
 
 /// An upgraded [`RuntimeOwner`] that keeps its context alive for one session.
-#[cfg(feature = "global-defaults")]
 enum LiveRuntimeOwner {
     Cpu(Arc<EngineOwner>),
     #[cfg(feature = "tenferro-cuda")]
@@ -1872,12 +1878,11 @@ enum LiveRuntimeOwner {
 ///
 /// The entry holds a [`Weak`] handle: a context registers its runtime when it
 /// builds it, and the entry dangles when the context (the only strong owner) is
-/// dropped. Lookups prune the dead entry and fall back to the process-global
-/// context, so no background cleanup is needed.
-#[cfg(feature = "global-defaults")]
+/// dropped. Lookups prune the dead entry, so no background cleanup is needed.
+/// Only a `global-defaults` build falls back to the process-global context for a
+/// runtime without a live owner.
 static EAGER_RUNTIME_OWNERS: OnceLock<Mutex<HashMap<ContextId, RuntimeOwner>>> = OnceLock::new();
 
-#[cfg(feature = "global-defaults")]
 fn eager_runtime_owners() -> std::sync::MutexGuard<'static, HashMap<ContextId, RuntimeOwner>> {
     EAGER_RUNTIME_OWNERS
         .get_or_init(|| Mutex::new(HashMap::new()))
@@ -1885,7 +1890,6 @@ fn eager_runtime_owners() -> std::sync::MutexGuard<'static, HashMap<ContextId, R
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-#[cfg(feature = "global-defaults")]
 pub(crate) fn register_eager_runtime_owner(runtime: &EagerRuntime, owner: RuntimeOwner) {
     let mut owners = eager_runtime_owners();
     owners.retain(|_, owner| owner.is_live());
@@ -1911,13 +1915,16 @@ pub(crate) fn register_eager_runtime_owner(runtime: &EagerRuntime, owner: Runtim
 /// inline on a serial CPU engine that shares the context's prepared-plan cache;
 /// a CUDA context keeps its single engine and never opens a second one.
 /// When no live context owns `runtime` (for example after the context was
-/// dropped), the entry falls back to the process-global CPU context; the global
-/// context's own runtime resolves to itself.
+/// dropped), a `global-defaults` build falls back to the process-global CPU
+/// context (the global context's own runtime resolves to itself). An
+/// explicit-only build has no such context and refuses the entry instead of
+/// choosing an engine.
 ///
 /// # Errors
 ///
 /// Returns [`ExecutionContextEntryError`] when the owning context's session
-/// entry is rejected.
+/// entry is rejected, and [`ExecutionContextEntryError::NoContext`] when no live
+/// context owns `runtime` in a build without `global-defaults`.
 ///
 /// # Examples
 ///
@@ -1936,7 +1943,6 @@ pub(crate) fn register_eager_runtime_owner(runtime: &EagerRuntime, owner: Runtim
 /// assert_eq!(threads, Some(1));
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[cfg(feature = "global-defaults")]
 pub fn with_runtime_engine<R>(
     runtime: &EagerRuntime,
     f: impl FnOnce(&mut dyn ExecutionEngine) -> R,
@@ -1947,7 +1953,14 @@ pub fn with_runtime_engine<R>(
             Some(owner) => owner,
             None => {
                 owners.remove(&runtime.id());
-                LiveRuntimeOwner::Cpu(Arc::clone(&defaults::default_context().owner))
+                #[cfg(feature = "global-defaults")]
+                {
+                    LiveRuntimeOwner::Cpu(Arc::clone(&defaults::default_context().owner))
+                }
+                #[cfg(not(feature = "global-defaults"))]
+                {
+                    return Err(ExecutionContextEntryError::NoContext);
+                }
             }
         }
     };

@@ -9,6 +9,7 @@ use crate::globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivo
 use rand::SeedableRng;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use tensor4all_core::legacy::solve_matrix;
 use tensor4all_core::{
     matrix_luci_factors_from_blocks_seeded, matrix_luci_factors_from_matrix_owned,
     matrix_luci_factors_from_matrix_owned_on_session, MatrixLuciFactors, MatrixLuciScalar,
@@ -17,7 +18,7 @@ use tensor4all_core::{
 use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, TTScalar, Tensor3, Tensor3Ops};
 use tensor4all_tensorbackend::invariant_violated;
 use tensor4all_tensorbackend::{
-    explicit::Session, solve_matrix, transpose, BackendLinalgError, Matrix, MatrixSolveScalar,
+    explicit::Session, transpose, BackendLinalgError, Matrix, MatrixSolveScalar,
 };
 
 /// Configuration for the TCI2 algorithm ([`crossinterpolate2`]).

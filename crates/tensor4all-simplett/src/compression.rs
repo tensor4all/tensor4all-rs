@@ -6,11 +6,12 @@ use crate::tensor::{col_major_data_to_tensor, Tensor3};
 use crate::tensortrain::SimpleTensorTrain;
 use crate::traits::TTScalar;
 use tenferro_tensor::TensorScalar;
+use tensor4all_core::legacy::mat_mul;
 use tensor4all_core::{
     compress_chain_cores_mut, compress_chain_lu_mut, ChainCompressionError, ChainCore,
     ChainLuFactorization, ChainLuOptions, ColMajorArrayRef, Scalar,
 };
-use tensor4all_tensorbackend::{explicit::Session, mat_mul, BackendLinalgScalar, Matrix};
+use tensor4all_tensorbackend::{explicit::Session, BackendLinalgScalar, Matrix};
 
 /// Matrix decomposition method used during TT compression.
 ///
@@ -211,7 +212,7 @@ where
 
     let svd_result = match session {
         Some(session) => session.svd_backend(&a_tensor),
-        None => tensor4all_tensorbackend::svd_backend(&a_tensor),
+        None => tensor4all_core::legacy::svd_backend(&a_tensor),
     }
     .map_err(|e| crate::error::SimpleTensorTrainError::InvalidOperation {
         message: format!("SVD computation failed: {e:?}"),

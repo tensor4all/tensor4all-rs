@@ -180,7 +180,7 @@ impl<T: FullPivLuScalar> BatchExecution<T> for Compatibility<'_, T> {
         pivot_rows: usize,
         pivot_cols: usize,
     ) -> std::result::Result<Vec<T>, BackendLinalgError> {
-        T::solve_right_full_piv_lu(
+        tensor4all_core::legacy::solve_right_full_piv_lu(
             lhs_values,
             lhs_rows,
             lhs_cols,

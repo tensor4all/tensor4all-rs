@@ -34,9 +34,10 @@ methods are the canonical explicit integration surface.
 
 Eager tensors do not carry an engine. An implicit eager operation resolves the
 engine from its operand's eager runtime through the owner table
-(`with_runtime_engine`), which maps each runtime to the context that created it;
-runtimes outside any explicit context resolve to the process-global default
-context.
+(`with_runtime_engine`), which maps each runtime to the context that created it.
+A runtime with no live owning context resolves to the process-global default
+context only in a `global-defaults` build; an explicit-only build refuses with
+`ExecutionContextEntryError::NoContext` instead of choosing an engine.
 
 A session entry is closure-scoped: the engine borrow lasts for the whole
 closure. A nested entry on the same thread into the same context returns the
@@ -68,8 +69,15 @@ typed sources.
 ## Global convenience path
 
 The existing process-global helpers remain only behind the opt-in
-`global-defaults` Cargo feature. The normal workspace enables that feature for
-compatibility. An integration can depend on `tensor4all-tensorbackend` with
+`global-defaults` Cargo feature. Since tensor4all-rs#1403 no workspace library
+enables it by default: `tensor4all-core` has its own opt-in `global-defaults`
+(alias `backend-tenferro`), and core reaches process-global state only through
+its private `implicit_route` module, which downstream crates reach as the
+`#[doc(hidden)]` `tensor4all_core::legacy` bridge. Without the feature those
+entries refuse with `ExecutionContextEntryError::NoContext`. Test, doctest and
+bench builds, `tensor4all-capi`, the docs crates and the benchmarks opt in
+explicitly, because they still exercise the context-free API.
+An integration can depend on `tensor4all-tensorbackend` with
 `default-features = false` and select a CPU provider feature without compiling
 any `DEFAULT_*`, `from_env`, or global backend mutex path. The public context is
 re-exported from `tensor4all-tensorbackend`; no C API change is made.
@@ -87,13 +95,14 @@ implementation.
 integration API for plain backend borrowing, graph compile/run/cache, eager
 runtime access, and target-context reconstruction.
 
-`global-defaults` additionally compiles the legacy `any_scalar`, `backend`,
-`matrix`, `memory`, `storage`, `tenferro_bridge`, and `tensor_element` modules
-and their current re-exports. `backend-tenferro` remains a compatibility alias
-for `global-defaults`, and the crate's default features keep enabling it. This
-coarse module boundary is deliberate: it leaves no legacy operation that can
-reference a default in an explicit-only build and avoids scattered per-function
-cfg gates.
+Since tensor4all-rs#1397 the `any_scalar`, `backend`, `matrix`, `memory`,
+`storage`, `tenferro_bridge`, `tensor_element` and `capped_full_piv_lu` modules
+compile under `explicit-context`; only the functions that resolve the
+process-global context (and `incremental_qr`) are gated on `global-defaults`,
+which is opt-in. `backend-tenferro` remains a compatibility alias for
+`global-defaults`. The eager-runtime owner table and `with_runtime_engine`
+compile under `explicit-context`; only the fallback to the global context is
+gated.
 
 CI checks both isolated code and docs:
 

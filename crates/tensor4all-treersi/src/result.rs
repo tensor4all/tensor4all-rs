@@ -79,11 +79,14 @@ impl<V> TreeRsiDiagnostics<V> {
 /// # Examples
 /// ```
 /// use tensor4all_core::{DynIndex,IdxTensor};
+/// use tensor4all_tensorbackend::{CpuBackend,CpuExecutionContext,ExecutionContext};
 /// use tensor4all_treetn::TreeTN;
-/// use tensor4all_treersi::{hadamard_many,TreeRsiOptions};
-/// let t=TreeTN::from_tensors(vec![IdxTensor::from_dense(vec![DynIndex::new_dyn(1)],
+/// use tensor4all_treersi::{hadamard_many_in,TreeRsiOptions};
+/// let context=ExecutionContext::Cpu(CpuExecutionContext::from_backend(CpuBackend::new()).into());
+/// let t=TreeTN::from_tensors(vec![IdxTensor::from_dense_in(&context,vec![DynIndex::new_dyn(1)],
 ///     vec![3.0_f64])?],vec![0usize])?;
-/// let out=hadamard_many::<f64,_>(&[t.clone(),t],&TreeRsiOptions { max_bond_dim:Some(1),..Default::default() })?;
+/// let options=TreeRsiOptions { max_bond_dim:Some(1),..Default::default() };
+/// let out=hadamard_many_in::<f64,_>(&[t.clone(),t],&options,&context)?;
 /// assert_eq!(out.tree.to_dense()?.to_vec::<f64>()?,vec![9.0]);
 /// # Ok::<(),Box<dyn std::error::Error>>(())
 /// ```

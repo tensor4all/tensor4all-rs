@@ -1,4 +1,8 @@
 use crate::defaults::DynIndex;
+use crate::implicit_route::{
+    eager_runtime as default_eager_ctx, native_tensor_primal_to_diag,
+    src_error_estimate as backend_src_error_estimate,
+};
 use crate::index_like::IndexLike;
 use crate::index_ops::{common_ind_positions, prepare_contraction, prepare_contraction_pairs};
 use crate::tensor_like::LinearizationOrder;
@@ -21,15 +25,12 @@ use tenferro_ad::{extension::adopt_untracked_eager_value, EagerRuntime, EagerTen
 use tenferro_einsum::{EagerSessionEinsumExt, EinsumSubscripts};
 use tenferro_linalg::{EagerSessionLinalgExt, RankRevealingQrOptions};
 use tensor4all_tensorbackend::{
-    default_eager_ctx, dense_native_tensor_from_col_major,
-    dense_native_tensor_from_col_major_owned, diag_native_tensor_from_col_major,
-    native_tensor_primal_to_diag, storage_payload_native_read_input, storage_to_native_tensor,
+    dense_native_tensor_from_col_major, dense_native_tensor_from_col_major_owned,
+    diag_native_tensor_from_col_major, storage_payload_native_read_input, storage_to_native_tensor,
     ExecutionContext, NativeTensorReadInput, TensorElement,
 };
-use tensor4all_tensorbackend::{
-    src_error_estimate as backend_src_error_estimate,
-    src_error_estimate_general as backend_src_error_estimate_general, Matrix,
-};
+use tensor4all_tensorbackend::{CpuExecutionContext, Matrix};
+#[cfg(feature = "global-defaults")]
 use tensor4all_tensorbackend::{IncrementalQr, IncrementalQrScalar};
 use tensor4all_tensorbackend::{NonfiniteFlags, Storage, StorageKind, StorageScalar};
 
@@ -508,11 +509,18 @@ pub enum IdxTensorError {
 
 impl From<anyhow::Error> for IdxTensorError {
     /// Recovers an `IdxTensorError` raised inside an `anyhow` helper, so a
-    /// typed rejection keeps its variant; any other error becomes
+    /// typed rejection keeps its variant, and an engine-entry refusal (for
+    /// example the explicit-only build's `NoContext`) as
+    /// [`IdxTensorError::EngineEntry`]; any other error becomes
     /// [`IdxTensorError::Operation`].
     fn from(source: anyhow::Error) -> Self {
         source
             .downcast::<Self>()
+            .or_else(|source| {
+                source
+                    .downcast::<tensor4all_tensorbackend::ExecutionContextEntryError>()
+                    .map(Self::from)
+            })
             .unwrap_or_else(|source| Self::operation("IdxTensor", source))
     }
 }
@@ -531,6 +539,7 @@ impl From<tenferro_ad::Error> for IdxTensorError {
     }
 }
 
+#[cfg(feature = "global-defaults")]
 impl From<tensor4all_tensorbackend::EagerContextError> for IdxTensorError {
     fn from(source: tensor4all_tensorbackend::EagerContextError) -> Self {
         Self::Materialization {
@@ -1083,7 +1092,20 @@ impl IdxTensorStorage {
             ),
             Self::Deferred { error, .. } => return Err(anyhow::Error::new((**error).clone())),
         };
-        let scalar_inner = scalar.as_tensor()?.try_materialized_inner()?;
+        let scalar_inner = match scalar.as_tensor() {
+            Ok(tensor) => std::borrow::Cow::Borrowed(tensor.try_materialized_inner()?),
+            // An untracked scalar without its own eager tensor (a build without
+            // `global-defaults` has no runtime to create it in) joins the
+            // payload's runtime, so a context-owned operand stays in its context.
+            // A `global-defaults` build keeps propagating the stored error.
+            #[cfg(not(feature = "global-defaults"))]
+            Err(_) if !scalar.tracks_grad() => std::borrow::Cow::Owned(IdxTensor::untracked_inner(
+                scalar.host_native()?,
+                Arc::clone(payload.runtime()),
+            )?),
+            Err(error) => return Err(error),
+        };
+        let scalar_inner = scalar_inner.as_ref();
         let target_dtype = IdxTensor::scale_target_dtype(payload.dtype(), scalar_inner.dtype())?;
         let payload = if payload.dtype() == target_dtype {
             payload
@@ -2126,11 +2148,17 @@ impl IdxTensor {
                 inputs.push(NativeTensorReadInput::Borrowed(inner.tensor_read()));
             }
         }
+        // A caller-supplied CPU context runs the native einsum on its own
+        // engine; only the context-free route takes the implicit one.
+        let cpu_context = match context {
+            Some(ExecutionContext::Cpu(cpu)) => Some(cpu.as_ref()),
+            _ => None,
+        };
         let mut normalized = Vec::with_capacity(inputs.len());
         let mut labels = Vec::with_capacity(inputs.len());
         for (input, operand_plan) in inputs.into_iter().zip(plan.operand_plans.iter()) {
             let (input, roots) =
-                normalize_payload_read_for_roots(input, &operand_plan.class_roots)?;
+                normalize_payload_read_for_roots(input, &operand_plan.class_roots, cpu_context)?;
             normalized.push(input);
             labels.push(roots);
         }
@@ -2139,15 +2167,23 @@ impl IdxTensor {
             .zip(labels.iter())
             .map(|(input, labels)| (input, labels.as_slice()))
             .collect::<Vec<_>>();
-        let payload = tensor4all_tensorbackend::einsum_native_tensor_reads(
-            &refs,
-            &plan.output_payload_roots,
-        )?;
+        let payload = match cpu_context {
+            Some(cpu) => tensor4all_tensorbackend::einsum_native_tensor_reads_in(
+                cpu,
+                &refs,
+                &plan.output_payload_roots,
+            )?,
+            None => crate::implicit_route::einsum_native_tensor_reads(
+                &refs,
+                &plan.output_payload_roots,
+            )?,
+        };
         // Wrap the result in the operands' common eager runtime when they share
         // one, so explicit-context tensors (e.g. SVD factors) stay in their
-        // context instead of falling back to the process-global default.
-        // Mixed runtimes keep the legacy default wrap; rejecting them is #623
-        // scope, not this seam's.
+        // context. Otherwise (mixed runtimes or host-only operands) the result
+        // joins the caller's CPU context, or, on the context-free route, the
+        // implicit runtime; rejecting mixed runtimes is #623 scope, not this
+        // seam's.
         let mut common: Option<Arc<EagerRuntime>> = None;
         let mut mixed = false;
         for operand in operands {
@@ -2162,8 +2198,9 @@ impl IdxTensor {
                 }
             }
         }
-        let payload_inner = match (common, mixed) {
-            (Some(runtime), false) => IdxTensor::untracked_inner(payload, runtime)?,
+        let payload_inner = match (common, mixed, cpu_context) {
+            (Some(runtime), false, _) => IdxTensor::untracked_inner(payload, runtime)?,
+            (_, _, Some(cpu)) => IdxTensor::untracked_inner(payload, cpu.eager_runtime()?)?,
             _ => IdxTensor::untracked_inner(payload, default_eager_ctx()?)?,
         };
         Self::from_structured_payload_inner(
@@ -3922,6 +3959,64 @@ impl IdxTensor {
             .eager()
             .or_else(|| self.eager_cache.get().map(AsRef::as_ref))
             .map(|inner| Arc::clone(inner.runtime()))
+    }
+
+    /// Run `f` on the CPU engine of the execution context that owns this
+    /// tensor's eager value.
+    ///
+    /// A context-free host computation over data read from this tensor (for
+    /// example a packed tensor-train reduction) uses this to run on the engine
+    /// the caller already chose when it created the tensor, instead of on a
+    /// process-global one. The engine is entered through the owning context's
+    /// normal session entry, so its thread policy and serialization apply.
+    ///
+    /// Returns `Ok(None)` without calling `f` when the tensor has no eager value
+    /// (host-only storage) or when its owner is not a CPU context (a CUDA
+    /// context); the caller then chooses its own route.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdxTensorError::EngineEntry`] when the owning context rejects
+    /// the session entry: a nested entry on the same thread
+    /// ([`ExecutionContextEntryError::Cpu`](tensor4all_tensorbackend::ExecutionContextEntryError::Cpu)),
+    /// or [`ExecutionContextEntryError::NoContext`](tensor4all_tensorbackend::ExecutionContextEntryError::NoContext)
+    /// when the owning context was dropped in a build without `global-defaults`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tensor4all_core::{DynIndex, ExecutionContext, IdxTensor};
+    /// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
+    ///
+    /// let context = ExecutionContext::Cpu(Arc::new(CpuExecutionContext::from_backend(
+    ///     CpuBackend::with_threads(1)?,
+    /// )));
+    /// let index = DynIndex::new_dyn(2);
+    /// let tensor = IdxTensor::from_dense_in(&context, vec![index], vec![1.0_f64, 2.0])?;
+    /// // The context's own single-threaded engine runs the closure.
+    /// let threads = tensor.with_owning_cpu_engine(|engine| engine.num_threads())?;
+    /// assert_eq!(threads, Some(1));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_owning_cpu_engine<R>(
+        &self,
+        f: impl FnOnce(&mut tensor4all_tensorbackend::CpuEngine) -> R,
+    ) -> std::result::Result<Option<R>, IdxTensorError> {
+        // A device-resident value has a CUDA owner: answer without entering it.
+        if self.is_cuda_resident() {
+            return Ok(None);
+        }
+        let Some(runtime) = self.eager_runtime() else {
+            return Ok(None);
+        };
+        tensor4all_tensorbackend::with_runtime_engine(&runtime, |engine| {
+            engine
+                .as_any_mut()
+                .downcast_mut::<tensor4all_tensorbackend::CpuEngine>()
+                .map(f)
+        })
+        .map_err(IdxTensorError::from)
     }
 
     /// Check whether this tensor's eager value is device-resident.
@@ -6802,8 +6897,10 @@ impl TensorIndex for IdxTensor {
 // TensorLike implementation for IdxTensor
 // ============================================================================
 
+#[cfg(feature = "global-defaults")]
+use crate::tensor_like::IncrementalQrState;
 use crate::tensor_like::{
-    FactorizeError, FactorizeOptions, FactorizeResult, IncrementalQrState, TensorConstructionLike,
+    FactorizeError, FactorizeOptions, FactorizeResult, TensorConstructionLike,
     TensorContractionLike, TensorFactorizationLike, TensorVectorSpace,
 };
 
@@ -7062,15 +7159,48 @@ impl TensorFactorizationLike for IdxTensor {
         if context.is_global_default_cpu() {
             return TensorFactorizationLike::src_error_estimate(self);
         }
-        self.host_src_error_estimate_general()
+        match context {
+            ExecutionContext::Cpu(cpu) => self.host_src_error_estimate_general(Some(cpu)),
+            #[cfg(feature = "tenferro-cuda")]
+            ExecutionContext::Cuda(_) => self.resident_src_error_estimate(context),
+            // INVARIANT: reachable only in the mixed configuration of
+            // tensor4all-rs#869 (tensorbackend built with CUDA, core without).
+            #[cfg(not(feature = "tenferro-cuda"))]
+            #[allow(unreachable_patterns)]
+            _ => Err(FactorizeError::ComputationError(anyhow::Error::new(
+                unsupported_execution_context_error(),
+            ))),
+        }
     }
 }
 
 impl IdxTensor {
-    /// Evaluate the SRC estimator for an explicit CPU context's restored factor.
+    /// Evaluate the SRC estimator for a restored host factor.
+    ///
+    /// `context` is the caller's CPU context, whose engine runs the estimator's
+    /// small general solve. `None` is the CUDA-resident readback, which has no
+    /// caller CPU engine and takes the implicit route.
     fn host_src_error_estimate_general(
         &self,
+        context: Option<&CpuExecutionContext>,
     ) -> std::result::Result<tensor4all_tensorbackend::SrcErrorEstimate, FactorizeError> {
+        fn estimate<T>(
+            context: Option<&CpuExecutionContext>,
+            matrix: &Matrix<T>,
+        ) -> std::result::Result<tensor4all_tensorbackend::SrcErrorEstimate, FactorizeError>
+        where
+            T: tensor4all_tensorbackend::MatrixSolveScalar + num_complex::ComplexFloat,
+        {
+            let result = match context {
+                Some(context) => context
+                    .with_session(|engine| {
+                        tensor4all_tensorbackend::src_error_estimate_general_in(engine, matrix)
+                    })
+                    .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?,
+                None => crate::implicit_route::src_error_estimate_general(matrix),
+            };
+            result.map_err(|error| FactorizeError::ComputationError(anyhow::anyhow!(error)))
+        }
         let indices = self.indices();
         if indices.len() != 2 {
             return Err(FactorizeError::ComputationError(anyhow::anyhow!(
@@ -7087,7 +7217,7 @@ impl IdxTensor {
                 self.to_vec::<f64>()
                     .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?,
             );
-            backend_src_error_estimate_general(&matrix)
+            estimate(context, &matrix)?
         } else if self.is_c64() {
             let matrix = Matrix::from_col_major_vec(
                 nrows,
@@ -7095,13 +7225,13 @@ impl IdxTensor {
                 self.to_vec::<Complex64>()
                     .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?,
             );
-            backend_src_error_estimate_general(&matrix)
+            estimate(context, &matrix)?
         } else {
             return Err(FactorizeError::UnsupportedStorage(
                 "SRC adaptive estimation currently supports f64 and Complex64 QR factors",
             ));
         };
-        result.map_err(|error| FactorizeError::ComputationError(anyhow::anyhow!(error)))
+        Ok(result)
     }
 
     /// Resident batch-native probe factorization by full RRQR recompute.
@@ -7324,7 +7454,7 @@ impl IdxTensor {
             .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?;
         let restored = Self::from_native(self.indices().to_vec(), host_native)
             .map_err(FactorizeError::ComputationError)?;
-        restored.host_src_error_estimate_general()
+        restored.host_src_error_estimate_general(None)
     }
 
     /// Read the scalar integer rank returned by RRQR through its owning context.
@@ -7403,6 +7533,7 @@ impl IdxTensor {
     }
 }
 
+#[cfg(feature = "global-defaults")]
 // Provenance: the public seam mirrors the append contract in
 // `chriscamano/RandomMPOMPS/code/tensornetwork/incrementalqr.py::IncrementalQR.append`
 // and `incrementalqr.cpp::add_cols`; the tensor/index bridge and private state
@@ -7434,12 +7565,14 @@ fn factorize_probe_columns_incremental(
     }
 }
 
+#[cfg(feature = "global-defaults")]
 trait IncrementalQrStateScalar: IncrementalQrScalar + TensorElement {
     fn resume(previous: &FactorizeResult<IdxTensor>) -> Option<IncrementalQr<Self>>;
 
     fn store(state: IncrementalQr<Self>) -> IncrementalQrState;
 }
 
+#[cfg(feature = "global-defaults")]
 impl IncrementalQrStateScalar for f64 {
     fn resume(previous: &FactorizeResult<IdxTensor>) -> Option<IncrementalQr<Self>> {
         match previous.incremental_qr_state()? {
@@ -7453,6 +7586,7 @@ impl IncrementalQrStateScalar for f64 {
     }
 }
 
+#[cfg(feature = "global-defaults")]
 impl IncrementalQrStateScalar for Complex64 {
     fn resume(previous: &FactorizeResult<IdxTensor>) -> Option<IncrementalQr<Self>> {
         match previous.incremental_qr_state()? {
@@ -7466,6 +7600,7 @@ impl IncrementalQrStateScalar for Complex64 {
     }
 }
 
+#[cfg(feature = "global-defaults")]
 fn incremental_probe_factorize_from_matrices<S>(
     previous: Option<&FactorizeResult<IdxTensor>>,
     appended_is_empty: bool,
@@ -7619,6 +7754,7 @@ where
         .with_incremental_qr_state(S::store(state)))
 }
 
+#[cfg(feature = "global-defaults")]
 fn incremental_probe_factorize_typed<S>(
     previous: Option<&FactorizeResult<IdxTensor>>,
     all_columns: &[&IdxTensor],
@@ -7637,6 +7773,7 @@ where
     )
 }
 
+#[cfg(feature = "global-defaults")]
 fn incremental_probe_factorize_batch_typed<S>(
     previous: Option<&FactorizeResult<IdxTensor>>,
     batch_tensor: &IdxTensor,
@@ -7655,6 +7792,7 @@ where
     )
 }
 
+#[cfg(feature = "global-defaults")]
 fn factorize_probe_batch_incremental_impl(
     previous: Option<&FactorizeResult<IdxTensor>>,
     batch_tensor: &IdxTensor,
@@ -7682,6 +7820,7 @@ fn factorize_probe_batch_incremental_impl(
     }
 }
 
+#[cfg(feature = "global-defaults")]
 fn probe_columns_matrix<S>(
     columns: &[&IdxTensor],
     left_inds: &[DynIndex],
@@ -7715,6 +7854,7 @@ where
     ))
 }
 
+#[cfg(feature = "global-defaults")]
 /// Like [`probe_columns_matrix`], but for a tensor that already carries a
 /// batch axis (`batch_index`) instead of being split into separate column
 /// tensors — skips the `stack_along_new_index` call `probe_columns_matrix`
@@ -7746,6 +7886,36 @@ where
         ordered
             .to_vec::<S>()
             .map_err(|error| FactorizeError::ComputationError(anyhow::Error::new(error)))?,
+    ))
+}
+
+/// Explicit-only build: the host `IncrementalQr` path runs its QR and
+/// triangular solves on the process-global context, so the context-free
+/// incremental factorizations refuse instead. Use
+/// [`TensorFactorizationLike::factorize_probe_batch_incremental_in`] with a
+/// caller-owned context.
+#[cfg(not(feature = "global-defaults"))]
+fn factorize_probe_columns_incremental(
+    _previous: Option<&FactorizeResult<IdxTensor>>,
+    _all_columns: &[&IdxTensor],
+    _appended_columns: &[&IdxTensor],
+    _left_inds: &[DynIndex],
+) -> std::result::Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    Err(FactorizeError::ComputationError(
+        crate::implicit_route::refusal(),
+    ))
+}
+
+/// Explicit-only build: see [`factorize_probe_columns_incremental`].
+#[cfg(not(feature = "global-defaults"))]
+fn factorize_probe_batch_incremental_impl(
+    _previous: Option<&FactorizeResult<IdxTensor>>,
+    _batch_tensor: &IdxTensor,
+    _batch_index: &DynIndex,
+    _left_inds: &[DynIndex],
+) -> std::result::Result<FactorizeResult<IdxTensor>, FactorizeError> {
+    Err(FactorizeError::ComputationError(
+        crate::implicit_route::refusal(),
     ))
 }
 
