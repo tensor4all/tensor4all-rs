@@ -63,7 +63,6 @@ pub(crate) mod profile_debug_stats {
         pub(crate) global_injection: Duration,
         pub(crate) guard_candidate_clone: Duration,
         pub(crate) guard_projection: Duration,
-        pub(crate) guard_output_padding: Duration,
         pub(crate) guard_frame_extension: Duration,
         pub(crate) guard_input_evaluation: Duration,
         pub(crate) guard_output_evaluation: Duration,
@@ -146,6 +145,8 @@ pub(crate) struct TreeAciState<'a, T: TreeAciScalar, V: TreeAciNode> {
     pub(crate) algebraic_edge_bounds: Vec<usize>,
     pub(crate) edge_errors: Vec<f64>,
     pub(crate) edge_scales: Vec<f64>,
+    /// Running maximum of the committed `edge_scales`.
+    pub(crate) max_sample_magnitude: f64,
     pub(crate) generation: u64,
 }
 
@@ -159,7 +160,7 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
         // delegates, so initialization and the guard searches share it.
         let mut rng =
             <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(options.rng_seed);
-        Self::initialize_with_rng(inputs, options, &mut rng)
+        Self::initialize_with_rng(inputs, options, &mut rng, &mut crate::exec::Exec::Global)
     }
 
     /// Initializes the state on a caller-owned random stream.
@@ -171,6 +172,7 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
         inputs: &'a [TreeTN<IdxTensor, V>],
         options: &TreeAciOptions<V>,
         rng: &mut dyn rand::RngCore,
+        exec: &mut crate::exec::Exec<'_, '_>,
     ) -> Result<Self> {
         #[cfg(test)]
         let stage_started = std::time::Instant::now();
@@ -186,7 +188,7 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
             validate_initial_guess::<T, V>(guess, &inputs[0], &problem)?;
             guess.clone()
         } else {
-            build_random_output::<T, V>(&inputs[0], &problem, &initial_edge_ranks, rng)?
+            build_random_output::<T, V>(&inputs[0], &problem, &initial_edge_ranks, rng, exec)?
         };
         // A complete first directional pass replaces every core with CI
         // factors before `finalize_deferred_canonicalization` establishes the
@@ -225,7 +227,7 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
         profile_debug_stats::record(|stats| stats.bootstrap = stage_started.elapsed());
         #[cfg(test)]
         let stage_started = std::time::Instant::now();
-        let input_frames = InputFrameStore::from_samples(inputs, &problem, &sample_arena)?;
+        let input_frames = InputFrameStore::from_samples(inputs, &problem, &sample_arena, exec)?;
         #[cfg(test)]
         profile_debug_stats::record(|stats| stats.frames = stage_started.elapsed());
         let generation = candidates.generation;
@@ -242,6 +244,7 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
             algebraic_edge_bounds,
             edge_errors: vec![0.0; edge_count],
             edge_scales: vec![0.0; edge_count],
+            max_sample_magnitude: 0.0,
             generation,
         })
     }

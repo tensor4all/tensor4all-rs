@@ -12,7 +12,7 @@ use super::factorize::{factorize, FactorizeOptions, SVDScalar};
 use super::mpo::MPO;
 use super::types::{Tensor4, Tensor4Ops};
 use super::Matrix2;
-use crate::einsum_helper::{einsum_tensors, typed_tensor_reshape, EinsumScalar};
+use crate::einsum_helper::{einsum_tensors, typed_tensor_reshape};
 
 /// Perform naive contraction of two MPOs
 ///
@@ -41,7 +41,7 @@ use crate::einsum_helper::{einsum_tensors, typed_tensor_reshape, EinsumScalar};
 /// [`MPOError::FactorizationError`] when a site contraction or the optional
 /// compression fails.
 ///
-pub fn contract_naive<T: SVDScalar + EinsumScalar>(
+pub fn contract_naive<T: SVDScalar>(
     mpo_a: &MPO<T>,
     mpo_b: &MPO<T>,
     options: Option<ContractionOptions>,
@@ -105,10 +105,7 @@ where
 /// factorizations. Only then is the truncating left-to-right sweep run, so
 /// every local SVD truncation sees an orthonormal environment on both sides
 /// and discards the singular values that are actually smallest globally.
-fn compress_mpo<T: SVDScalar + EinsumScalar>(
-    mpo: &mut MPO<T>,
-    options: &ContractionOptions,
-) -> Result<()>
+fn compress_mpo<T: SVDScalar>(mpo: &mut MPO<T>, options: &ContractionOptions) -> Result<()>
 where
     <T as num_complex::ComplexFloat>::Real: Into<f64>,
 {

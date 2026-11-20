@@ -2,7 +2,9 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
-use anyhow::{anyhow, ensure, Result};
+#[cfg(feature = "global-defaults")]
+use anyhow::ensure;
+use anyhow::{anyhow, Result};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 use tenferro::{DType, Tensor as NativeTensor, TensorScalar};
@@ -187,6 +189,7 @@ fn scalar_value_from_storage(storage: &Storage) -> ScalarValue {
     }
 }
 
+#[cfg(feature = "global-defaults")]
 fn scalar_value_from_native(native: &NativeTensor) -> Result<ScalarValue> {
     ensure!(
         native.shape().is_empty(),
@@ -309,6 +312,7 @@ impl ScalarTensorElement for Complex64 {
     }
 }
 
+#[cfg(feature = "global-defaults")]
 pub(crate) fn promote_scalar_native(native: &NativeTensor, target: DType) -> Result<NativeTensor> {
     let promoted = match (scalar_value_from_native(native)?, target) {
         (ScalarValue::F32(value), DType::F32) => BackendScalar::from_value(value),
@@ -453,6 +457,7 @@ pub struct BackendScalar {
 }
 
 impl BackendScalar {
+    #[cfg(feature = "global-defaults")]
     fn wrap_native(native: NativeTensor) -> Result<Self> {
         if native.shape().is_empty() {
             let value = scalar_value_from_native(&native)?;
@@ -490,6 +495,7 @@ impl BackendScalar {
         }
     }
 
+    #[cfg(feature = "global-defaults")]
     pub(crate) fn from_native(value: NativeTensor) -> Result<Self> {
         Self::wrap_native(value)
     }
@@ -1270,5 +1276,5 @@ impl Clone for BackendScalar {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "global-defaults"))]
 mod tests;

@@ -9,11 +9,10 @@ on a single TreeTN-based interface.
 The workspace currently contains **two stacks**, each owning its tensor-train
 representation and its algorithm crates. The intended direction is a single
 interface: **`TreeTN` is the unified tensor-network type**, and the positional
-`SimpleTensorTrain` stack is being retired. That migration is not finished:
-TCI, quantics TCI and quantics transforms still produce or consume
-`SimpleTensorTrain` today. There is **no facade
-crate** that wraps everything: `tensor4all-capi` is a C FFI layer, not a Rust
-facade, and each crate can be used on its own.
+`SimpleTensorTrain` stack is being retired. TCI, parts of quantics TCI and
+non-Fourier quantics transforms still produce or consume
+`SimpleTensorTrain`. Each Rust crate can be used on its own.
+`tensor4all-capi` provides the C FFI layer.
 
 ```text
                         tensor4all-core (Index, Tensor, contraction, SVD/QR)
@@ -27,11 +26,13 @@ facade, and each crate can be used on its own.
      |-- tensor4all-treetci (tree TCI)            tensor4all-tensorci (TCI1/TCI2)
      |-- tensor4all-treeaci (tree ACI)            tensor4all-aci (chain ACI)
      |-- tensor4all-partitionedtreetn (TreeTN patches)
-     `-- tensor4all-treersi (experimental RSI products)
+     |-- tensor4all-treersi (experimental RSI products)
+     |-- tensor4all-interpolativeqtt (native interpolative chains)
+     `-- tensor4all-quanticstransform (Fourier; optional partitionedtreetn)
 
-   Crates that still use both stacks (crossing through treetn::simplett_bridge):
+   Crates that still use both stacks:
    tensor4all-quanticstci        (treetci + treetn + simplett)
-   tensor4all-quanticstransform  (treetn + simplett)
+   tensor4all-quanticstransform  (with the default simplett-transforms feature)
 
    tensor4all-capi  (C FFI for language bindings; depends on both stacks)
    tensor4all-hdf5  (MPS serialization, ITensors.jl-compatible)
@@ -41,7 +42,8 @@ facade, and each crate can be used on its own.
 
 While both stacks exist, the only sanctioned place where they convert into each
 other is `treetn::simplett_bridge`, a migration aid rather than a permanent
-layer:
+layer. It is available only with the explicit `simplett-bridge` feature;
+TreeTN's default features do not resolve SimpleTT:
 
 - `tensor_train_to_treetn` / `tensor_train_to_treetn_with_names` /
   `tensor_train_to_treetn_with_names_and_site_indices`: simplett
@@ -62,13 +64,18 @@ simplett, itensorlike, or TCI crates. Its adaptive interpolation driver sees
 interpolation engines only through the `TreeInterpolator` trait in
 `tensor4all-treetn`; engines such as `tensor4all-treetci` implement that trait.
 
-One deliberate exception exists: `tensor4all-quanticstransform` builds
-TreeTN-based `LinearOperator`s from simplett **MPO** data (two site indices
-per node) via `tensortrain_to_linear_operator`. That is operator construction,
-not a general stack conversion: the bridge stays MPS-shaped (one site index
-per node), and the transform layer keeps the MPO-specific index bookkeeping.
-No *new* ad hoc conversions may be added; MPO conversion belongs in the
-transform layer, and MPS conversion belongs in the bridge.
+The Fourier constructors in `tensor4all-quanticstransform` build operators
+directly as TreeTN. The optional `partitioned` feature adds a dependency on
+`tensor4all-partitionedtreetn` for the lazy reconstruction front end. The
+[QFT guide](guides/qft.md#cargo-features) shows how to select a CPU provider
+and build without SimpleTT or the TreeTN bridge.
+
+The default `simplett-transforms` feature retains non-Fourier operators and
+SimpleTT conversions in the transform crate. Its
+`tensortrain_to_linear_operator` converts SimpleTT **MPO** data with two
+site indices per node into a TreeTN-based `LinearOperator`. MPO-specific
+index bookkeeping belongs in the transform layer. The TreeTN bridge handles
+MPS-shaped chains with one site index per node.
 
 ### Which stack does a new feature crate target?
 
@@ -92,7 +99,7 @@ what keeps the public API stable while the kernels underneath are replaced.
 | Layer | Repositories and crates | Entry point from this workspace |
 | --- | --- | --- |
 | Frontends | [`Tensor4all.jl`](https://github.com/tensor4all/Tensor4all.jl); the `tensor4all-capi` (C FFI) and `tensor4all-py` crates in this workspace | this workspace is what they build on |
-| Algorithms | this repository; [`quanticsgrids-rs`](https://github.com/tensor4all/quanticsgrids-rs); [`hataori-rs`](https://github.com/tensor4all/hataori-rs) | `quanticsgrids` through `tensor4all-quanticstci`, `tensor4all-quanticstransform`, `tensor4all-treetci` and `tensor4all-interpolativeqtt`; `hataori` / `hataori-tenferro` through `tensor4all-partitionedtreetn` |
+| Algorithms | this repository; [`quanticsgrids-rs`](https://github.com/tensor4all/quanticsgrids-rs); [`hataori-rs`](https://github.com/tensor4all/hataori-rs) | `quanticsgrids` through `tensor4all-quanticstci`, `tensor4all-quanticstransform`, `tensor4all-treetci` and `tensor4all-interpolativeqtt`; `hataori` / `hataori-tenferro` through `tensor4all-partitionedtreetn` and the optional `parallel` feature of `tensor4all-interpolativeqtt` |
 | Tensor runtime | [`tenferro-rs`](https://github.com/tensor4all/tenferro-rs) (caller-owned engines); [`computegraph-rs`](https://github.com/tensor4all/computegraph-rs) | `tensor4all-tensorbackend` |
 | Kernel providers | [`cpueinsum-rs`](https://github.com/tensor4all/cpueinsum-rs), [`tcontract-rs`](https://github.com/tensor4all/tcontract-rs), [`tlinalg-rs`](https://github.com/tensor4all/tlinalg-rs) | none: reached inside tenferro-rs |
 | Foundation | [`strided-rs`](https://github.com/tensor4all/strided-rs), `t4a-faer` ([`faer` fork](https://github.com/tensor4all/faer)), BLAS/LAPACK | none: reached inside the kernel providers and t4a-faer |
@@ -189,7 +196,7 @@ aliases:
 | Capability | Purpose |
 |------------|---------|
 | `tensor4all_core::Scalar` | common value arithmetic and conversion |
-| `tensor4all_core::MatrixLuciScalar` | core `Scalar` plus MatrixLUCI backend dispatch |
+| `tensor4all_core::MatrixLuciScalar` | core `Scalar` plus MatrixLUCI backend dispatch; sealed to the four supported scalars |
 | `tensor4all_tensorbackend::TensorElement` | supported Rust scalar ↔ native tensor conversion |
 | `tensor4all_tensorbackend::StorageScalar` | compact storage construction |
 | tensorbackend matrix/linalg traits | individual backend kernel capabilities |
@@ -215,7 +222,7 @@ requirements onto unrelated generic code.
 
 | Crate | Description |
 |-------|-------------|
-| **treetn** | Tree tensor networks with arbitrary graph topology. Supports canonicalization, truncation, contraction, DMRG/TDVP, and hosts the sanctioned `simplett_bridge`. |
+| **treetn** | Tree tensor networks with arbitrary graph topology. Supports canonicalization, truncation, contraction, DMRG/TDVP, and the opt-in `simplett-bridge` migration feature. |
 | **itensorlike** | ITensors.jl-inspired `TensorTrain` (tree-based) with orthogonality tracking and multiple canonical forms. |
 | **partitionedtreetn** | TreeTN-native eagerly masked subdomains, strict partition algebra, volume-budgeted adaptive patching, sequential adaptive patched interpolation through any `TreeInterpolator` engine, reconstruction against a fixed global L2 tolerance, and level-coupled merge-refine QFT scheduling. |
 | **treersi** | Experimental CPU Hadamard products on TreeTN via recursive sketched interpolation; requires independent accuracy checks. |
@@ -234,8 +241,8 @@ requirements onto unrelated generic code.
 
 | Crate | Description |
 |-------|-------------|
-| **quanticstransform** | Quantics transformation operators: shift, flip, Fourier, affine, and more. Consumes simplett-stack data; constructs TreeTN-based `LinearOperator`s (see the bridge exception above). |
-| **interpolativeqtt** | Interpolative QTT construction on a coarse grid (simplett stack). See the [interpolative-QTT tutorial](tutorials/quantics-basics/interpolative-qtt.md). |
+| **quanticstransform** | Constructs TreeTN Fourier operators (including explicit multi-axis layouts). The optional `partitioned` feature provides lazy patched Fourier transforms on one tree path. The default `simplett-transforms` feature provides shift, flip, affine, and other transforms that use SimpleTT. |
+| **interpolativeqtt** | Native TreeTN interpolative QTT construction on a coarse grid, returning ordered physical indices. See the [interpolative-QTT tutorial](tutorials/quantics-basics/interpolative-qtt.md). |
 
 ### Applications
 
@@ -265,6 +272,7 @@ requirements onto unrelated generic code.
 | Subdomain decomposition on named TreeTNs | `tensor4all-partitionedtreetn` |
 | Adaptive patched interpolation of a function on a named tree | `tensor4all-partitionedtreetn::adaptive_interpolation` with an engine such as `tensor4all-treetci::TreeTciInterpolator` |
 | Reconstruct orthogonal patches or tensor products with a global L2 tolerance | `tensor4all-partitionedtreetn::reconstruction` |
+| Lazy patched Fourier transform on selected axes | `tensor4all-quanticstransform` with `partitioned` (see [QFT guide](guides/qft.md#patched-qft-on-an-index-subset)) |
 | Quantics transform operators | `tensor4all-quanticstransform` |
 | HDF5 I/O compatible with Julia | `tensor4all-hdf5` |
 | Interpolative QTT on a coarse grid | `tensor4all-interpolativeqtt` |

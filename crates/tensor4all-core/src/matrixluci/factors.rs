@@ -9,7 +9,9 @@ use crate::matrixluci::scalar::MatrixLuciScalar;
 use crate::matrixluci::source::CandidateMatrixSource;
 use crate::matrixluci::types::PivotSelectionCore;
 use crate::matrixluci::Result;
-use tensor4all_tensorbackend::{solve_matrix, transpose, Matrix};
+use tensor4all_tensorbackend::{transpose, Matrix};
+
+use crate::implicit_route::solve_matrix;
 
 /// Gather a dense column-major block from a source.
 pub(crate) fn load_block<T: MatrixLuciScalar, S: CandidateMatrixSource<T>>(

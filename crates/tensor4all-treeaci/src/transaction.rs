@@ -1,6 +1,6 @@
 //! Atomic proposal and commit of one directed edge update.
 
-use tensor4all_core::{DynIndex, IdxTensor};
+use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 
 use crate::{
     local_update::{materialize_and_factor_edge, LocalUpdateResult},
@@ -24,8 +24,9 @@ pub(crate) fn update_edge_transaction<T, V, F>(
     forward: DirectedEdgeId,
     options: &TreeAciOptions<V>,
     left_orthogonal: bool,
+    rank_hysteresis: bool,
     operator: &mut F,
-    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<EdgeCommitReport>
 where
     T: TreeAciScalar,
@@ -34,6 +35,18 @@ where
 {
     #[cfg(test)]
     let proposal_started = std::time::Instant::now();
+    let previous_rank = if rank_hysteresis {
+        Some(
+            *state
+                .edge_ranks
+                .get(forward / 2)
+                .ok_or(TreeAciError::InternalInvariant {
+                    message: "edge update references an unknown edge rank",
+                })?,
+        )
+    } else {
+        None
+    };
     let proposal = materialize_and_factor_edge(
         state.inputs,
         &state.problem,
@@ -42,20 +55,22 @@ where
         forward,
         options,
         left_orthogonal,
+        previous_rank,
         operator,
-        context,
+        exec,
     )?;
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {
         stats.proposals += proposal_started.elapsed();
     });
-    commit_edge_proposal(state, forward, proposal)
+    commit_edge_proposal(state, forward, proposal, exec)
 }
 
 fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     state: &mut TreeAciState<'_, T, V>,
     forward: DirectedEdgeId,
     proposal: LocalUpdateResult<T>,
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<EdgeCommitReport> {
     let LocalUpdateResult {
         row_samples,
@@ -119,7 +134,15 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     });
     #[cfg(test)]
     let replace_started = std::time::Instant::now();
-    replace_edge_cores(&mut proposed_output, &state.problem, forward, left, right)?;
+    replace_edge_cores(
+        &mut proposed_output,
+        &state.problem,
+        &state.candidates,
+        forward,
+        left,
+        right,
+        exec,
+    )?;
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {
         stats.output_replace += replace_started.elapsed();
@@ -154,7 +177,7 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
         let frames =
             state
                 .input_frames
-                .extend(state.inputs, &state.problem, &state.sample_arena)?;
+                .extend(state.inputs, &state.problem, &state.sample_arena, exec)?;
         #[cfg(test)]
         crate::state::profile_debug_stats::record(|stats| {
             stats.frame_extension += frames_started.elapsed();
@@ -199,6 +222,7 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
     state.edge_ranks[edge_number] = state.pivots.rank(edge_number);
     state.edge_errors[edge_number] = pivot_error;
     state.edge_scales[edge_number] = proposal.sampled_scale;
+    state.max_sample_magnitude = state.max_sample_magnitude.max(proposal.sampled_scale);
     state.generation = next_generation;
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| stats.commits += 1);
@@ -214,9 +238,11 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
 fn replace_edge_cores<T: TreeAciScalar, V: TreeAciNode>(
     output: &mut tensor4all_treetn::TreeTN<IdxTensor, V>,
     problem: &crate::problem::PreparedTreeProblem<V>,
+    candidates: &crate::samples::CandidateSets,
     forward: DirectedEdgeId,
     left: tensor4all_tensorbackend::Matrix<T>,
     right: tensor4all_tensorbackend::Matrix<T>,
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<()> {
     #[cfg(test)]
     let phase_started = std::time::Instant::now();
@@ -232,18 +258,99 @@ fn replace_edge_cores<T: TreeAciScalar, V: TreeAciNode>(
     });
     #[cfg(test)]
     let phase_started = std::time::Instant::now();
+    let needs_projection = |cut: usize, indices: &[DynIndex], offset: usize| {
+        problem.directed_edges[cut]
+            .incoming_to_from
+            .iter()
+            .enumerate()
+            .any(|(axis, &child)| candidates.ids[child].len() != indices[offset + axis].dim())
+    };
+    let left_offset = problem.physical[problem.node_positions[&directed.from]]
+        .indices
+        .len();
+    let right_offset = 1 + problem.physical
+        [problem.node_positions[&problem.directed_edges[reverse].from]]
+        .indices
+        .len();
+    let (left_values, right_values) = if needs_projection(forward, &left_indices, left_offset)
+        || needs_projection(reverse, &right_indices, right_offset)
+    {
+        let source_dims = |cut: usize| {
+            let edge = &problem.directed_edges[cut];
+            let mut dims = problem.physical[problem.node_positions[&edge.from]]
+                .dims
+                .clone();
+            dims.extend(
+                edge.incoming_to_from
+                    .iter()
+                    .map(|&child| candidates.ids[child].len()),
+            );
+            dims
+        };
+        let mut left_dims = source_dims(forward);
+        left_dims.push(new_bond.dim());
+        let mut right_dims = vec![new_bond.dim()];
+        right_dims.extend(source_dims(reverse));
+        let left_projection = crate::basis_projection::CandidateBasisProjection::new(
+            &left_dims,
+            &left_indices.iter().map(|i| i.dim()).collect::<Vec<_>>(),
+        )?;
+        let right_projection = crate::basis_projection::CandidateBasisProjection::new(
+            &right_dims,
+            &right_indices.iter().map(|i| i.dim()).collect::<Vec<_>>(),
+        )?;
+        for plan in [&left_projection, &right_projection] {
+            crate::problem::enforce_limit(
+                "core elements",
+                plan.target_len,
+                problem.max_core_elements,
+            )?;
+        }
+        if !left_projection.is_identity() || !right_projection.is_identity() {
+            let elements = left_projection
+                .source_len
+                .checked_add(right_projection.source_len)
+                .and_then(|n| {
+                    n.checked_add(if left_projection.is_identity() {
+                        0
+                    } else {
+                        left_projection.target_len
+                    })
+                })
+                .and_then(|n| {
+                    n.checked_add(if right_projection.is_identity() {
+                        0
+                    } else {
+                        right_projection.target_len
+                    })
+                })
+                .ok_or(TreeAciError::SizeOverflow {
+                    context: "candidate factor projection peak",
+                })?;
+            let bytes = elements.checked_mul(std::mem::size_of::<T>()).ok_or(
+                TreeAciError::SizeOverflow {
+                    context: "candidate factor projection bytes",
+                },
+            )?;
+            crate::problem::enforce_limit("working bytes", bytes, problem.max_working_bytes)?;
+        }
+        (
+            left_projection.project(left.into_col_major_vec())?,
+            right_projection.project(right.into_col_major_vec())?,
+        )
+    } else {
+        (left.into_col_major_vec(), right.into_col_major_vec())
+    };
     let left_tensor =
-        IdxTensor::from_dense(left_indices, left.into_col_major_vec()).map_err(|error| {
-            TreeAciError::Numerical {
+        exec.tensor(left_indices, left_values)
+            .map_err(|error| TreeAciError::Numerical {
                 message: error.to_string(),
-            }
-        })?;
+            })?;
     let right_tensor =
-        IdxTensor::from_dense(right_indices, right.into_col_major_vec()).map_err(|error| {
-            TreeAciError::Numerical {
+        exec.tensor(right_indices, right_values)
+            .map_err(|error| TreeAciError::Numerical {
                 message: error.to_string(),
-            }
-        })?;
+            })?;
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {
         stats.output_tensor_build += phase_started.elapsed();

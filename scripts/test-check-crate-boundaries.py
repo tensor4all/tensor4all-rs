@@ -5,7 +5,8 @@ Fixture manifests must cover: the tensorbackend normal tenferro route passes;
 a new feature crate with a normal tenferro dependency fails; a renamed
 ``package = "tenferro-*"`` dependency fails; a dev-only tenferro dependency is
 allowed; an acyclic dev graph passes; a dev cycle fails with the full path; a stale exception tuple
-fails.
+fails; a listed feature-only self dev-dependency passes, while an unlisted one or
+one whose sources name the crate's own extern path fails.
 """
 
 from __future__ import annotations
@@ -186,6 +187,52 @@ tensor4all-alpha = { path = "../tensor4all-alpha" }
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("tensor4all-alpha -> tensor4all-beta(dev)", result.stderr)
         self.assertIn("tensor4all-beta -> tensor4all-alpha(normal)", result.stderr)
+
+    def _self_dev_fixture(self, name: str, source: str) -> Path:
+        return write_fixture(
+            {
+                "crates/tensor4all-tensorbackend/Cargo.toml": TENSORBACKEND_MANIFEST,
+                f"crates/{name}/Cargo.toml": f"""\
+[package]
+name = "{name}"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tensor4all-tensorbackend = {{ path = "../tensor4all-tensorbackend" }}
+
+[dev-dependencies]
+{name} = {{ path = ".", features = ["global-defaults"] }}
+""",
+                f"crates/{name}/src/lib.rs": source,
+            }
+        )
+
+    def test_listed_feature_only_self_dev_dependency_passes(self) -> None:
+        root = self._self_dev_fixture(
+            "tensor4all-core",
+            "/// ```\n/// use tensor4all_core::Thing;\n/// ```\npub struct Thing;\n",
+        )
+        result = run_check(root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_unlisted_self_dev_dependency_fails(self) -> None:
+        root = self._self_dev_fixture("tensor4all-demo", "pub struct Thing;\n")
+        result = run_check(root)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("tensor4all-demo dev-depends on itself", result.stderr)
+
+    def test_self_dev_dependency_with_own_extern_path_fails(self) -> None:
+        # A unit test naming the crate by its extern path would meet a second
+        # build of the crate: the hazard a dev cycle carries.
+        root = self._self_dev_fixture(
+            "tensor4all-core",
+            "pub struct Thing;\n#[cfg(test)]\nmod tests {\n    use tensor4all_core::Thing;\n}\n",
+        )
+        result = run_check(root)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("src/lib.rs:4", result.stderr)
+        self.assertIn("must not name `tensor4all_core::`", result.stderr)
 
     def test_dev_cycle_survives_coexisting_pure_normal_cycle(self) -> None:
         # A pure-normal cycle must not suppress a dev-containing cycle with

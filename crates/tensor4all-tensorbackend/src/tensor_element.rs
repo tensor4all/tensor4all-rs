@@ -297,5 +297,5 @@ impl_tensor_element!(f64, DType::F64);
 impl_tensor_element!(Complex32, DType::C32);
 impl_tensor_element!(Complex64, DType::C64);
 
-#[cfg(test)]
+#[cfg(all(test, feature = "global-defaults"))]
 mod tests;

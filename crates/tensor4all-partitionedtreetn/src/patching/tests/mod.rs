@@ -1,4 +1,6 @@
 use super::*;
+mod layouts;
+mod lazy_contraction;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
@@ -126,6 +128,7 @@ fn adaptive_add_projects_original_addends_before_retrying() {
         patch_order: vec![site0.clone()],
         split_strategy: PatchSplitStrategy::Sequential,
         sum_engine: SumEngine::Binary,
+        group_sum_limit_bytes: crate::DEFAULT_GROUP_SUM_LIMIT_BYTES,
     };
 
     let result = add_with_patching(contributions, &0, &patching).unwrap();
@@ -174,6 +177,7 @@ fn exact_parameter_gain_can_choose_a_later_candidate() {
         patch_order: vec![site0.clone(), site1.clone()],
         split_strategy: PatchSplitStrategy::ExactParameterGain,
         sum_engine: SumEngine::Binary,
+        group_sum_limit_bytes: crate::DEFAULT_GROUP_SUM_LIMIT_BYTES,
     };
 
     assert_eq!(
@@ -389,15 +393,11 @@ fn run_group(
         patch_order,
         split_strategy,
         sum_engine: SumEngine::Binary,
+        group_sum_limit_bytes: crate::DEFAULT_GROUP_SUM_LIMIT_BYTES,
     };
-    let result = contract_group_project_first(
-        group.pairs.clone(),
-        None,
-        &group.center,
-        &contraction,
-        &patching,
-    )
-    .unwrap();
+    let result =
+        contract_group_project_first(group.pairs.clone(), &group.center, &contraction, &patching)
+            .unwrap();
     (result, DISCARDED_GROUP_PROBES.with(|count| count.get()))
 }
 

@@ -1211,3 +1211,49 @@ fn min_nonzero_abs_keeps_the_smallest_complex_subnormals_nonzero() {
         assert_eq!(value.log2().floor(), modulus.log2().floor(), "{entry:e}");
     }
 }
+
+/// A context-scoped structured contraction of host-only operands runs on the
+/// caller's context and returns a value owned by it, not by the process-global
+/// runtime (#1403); the values match the context-free route.
+#[test]
+fn structured_host_contraction_in_context_stays_in_that_context() {
+    use tensor4all_tensorbackend::CpuExecutionContext;
+
+    let backend = tensor4all_tensorbackend::CpuBackend::with_threads(1).expect("1T CPU backend");
+    let context = Arc::new(CpuExecutionContext::from_backend(backend));
+    let execution = ExecutionContext::Cpu(Arc::clone(&context));
+    let i = DynIndex::new_dyn(3);
+    let j = DynIndex::new_dyn(3);
+    let k = DynIndex::new_dyn(3);
+    let diag = |values: Vec<f64>| Arc::new(Storage::new_diag(values).unwrap());
+    let lhs =
+        IdxTensor::from_storage(vec![i.clone(), j.clone()], diag(vec![1.0, 2.0, 3.0])).unwrap();
+    let rhs =
+        IdxTensor::from_storage(vec![j.clone(), k.clone()], diag(vec![4.0, 5.0, 6.0])).unwrap();
+    assert!(
+        lhs.storage.eager().is_none() && rhs.storage.eager().is_none(),
+        "precondition: host-only compact operands take the native route"
+    );
+
+    let scoped = lhs
+        .try_contract_pairwise_default_with_options_in(
+            &rhs,
+            PairwiseContractionOptions::new(),
+            &execution,
+        )
+        .unwrap();
+    let runtime = scoped
+        .storage
+        .eager()
+        .expect("the result wraps an eager payload")
+        .runtime();
+    assert_eq!(runtime.id(), context.eager_runtime().unwrap().id());
+
+    let implicit = lhs
+        .try_contract_pairwise_default_with_options(&rhs, PairwiseContractionOptions::new())
+        .unwrap();
+    assert_eq!(
+        scoped.to_vec::<f64>().unwrap(),
+        implicit.to_vec::<f64>().unwrap()
+    );
+}

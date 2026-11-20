@@ -67,3 +67,16 @@ experimental/
 /benchmarks/tree-rsi/scratch/
 # Locally generated benchmark synopsis; raw run data stays under ignored target/.
 /benchmarks/tree-rsi/paper-coverage/results.md
+# Root-level markdown policy: keep only canonical project files here.
+# Design notes, worklogs and implementation plans belong under docs/.
+/*.md
+!/README.md
+!/CHANGELOG.md
+!/CONTRIBUTING.md
+!/CODE_OF_CONDUCT.md
+!/SECURITY.md
+!/AGENTS.md
+!/CLAUDE.md
+!/REPOSITORY_RULES.md
+!/SUPPORT.md
+!/PERFORMANCE_TIPS.md

@@ -9,7 +9,7 @@ use rand::Rng;
 use tensor4all_core::{floating_zone_walk, MultiIndex, Scalar};
 use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain, TTCache, TTScalar, Tensor3Ops};
 
-use crate::error::{Result, TCIError};
+use crate::error::{floating_zone_error, Result, TCIError};
 
 /// Estimate the true interpolation error by searching for worst-case indices.
 ///
@@ -107,10 +107,21 @@ where
     // Sort by descending error
     pivot_errors.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Remove duplicates (same pivot)
-    pivot_errors.dedup_by(|a, b| a.0 == b.0);
+    dedup_pivots(&mut pivot_errors);
 
     Ok(pivot_errors)
+}
+
+/// Remove repeated pivots, keeping the first (highest-error) occurrence.
+///
+/// The input is ordered by descending error, so a plain [`Vec::dedup_by`]
+/// would only collapse *adjacent* equal pivots: a pivot found from two starts
+/// survives whenever another pivot with exactly the same error sorts between
+/// the two copies. Deduplicating with a set keeps the contract independent of
+/// the error values.
+fn dedup_pivots(pivot_errors: &mut Vec<(MultiIndex, f64)>) {
+    let mut seen = std::collections::HashSet::with_capacity(pivot_errors.len());
+    pivot_errors.retain(|(pivot, _)| seen.insert(pivot.clone()));
 }
 
 /// Local search for the multi-index with the largest interpolation error.
@@ -227,7 +238,8 @@ where
                 .collect::<Vec<f64>>();
             Ok::<Vec<f64>, TCIError>(errors)
         },
-    )?;
+    )
+    .map_err(floating_zone_error)?;
 
     Ok((pivot, error))
 }

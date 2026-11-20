@@ -8,7 +8,7 @@ use crate::error::{PartitionedTreeTNError, Result};
 use crate::projector::Projector;
 use tensor4all_core::{
     validate_svd_truncation_options, DynIndex, IdxTensor, IndexLike, SvdTruncationOptionsError,
-    TagSetLike,
+    TagSetLike, TensorElement,
 };
 use tensor4all_treetn::{
     contraction::{self, ContractionMethod, ContractionOptions},
@@ -56,6 +56,15 @@ where
     order_key: PatchOrderKey<V>,
 }
 
+/// A crate-internal probe result; reports remain owned by the TreeTN layer.
+#[derive(Debug)]
+// INVARIANT: a probe returns the completed patch by value, without an extra heap allocation.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum SubDomainContractionOutcome<V: Clone + Hash + Eq + Send + Sync + Debug> {
+    Completed(SubDomainTreeTN<V>),
+    Saturated,
+}
+
 // This type cannot contain a DynIndex or its allocation ID. Content is not part
 // of it: the digest is only needed where two keys tie, and it is computed there.
 pub(crate) type PatchOrderKey<V> = (
@@ -69,6 +78,11 @@ thread_local! {
     /// Content digests computed for ordering, so a test can assert that an input
     /// without metadata ties computes none.
     pub(crate) static CONTENT_DIGEST_CALLS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+
+    /// Exact sums built (a single term counts as one), so a test can assert
+    /// that a refused group sum leaves no other group built first.
+    pub(crate) static EXACT_SUMS_BUILT: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
 
@@ -552,6 +566,81 @@ where
     /// term is returned as a clone. Which method ran is not reported; the
     /// routines that sum patches document that.
     pub(crate) fn exact_sum(terms: &[&Self], engine: SumEngine) -> Result<Self> {
+        let first = Self::validate_sum_terms(terms)?;
+        Self::build_exact_sum(first, terms, engine)
+    }
+
+    /// [`exact_sum`](Self::exact_sum), refused before anything is allocated
+    /// when [`ensure_exact_sum_within`](Self::ensure_exact_sum_within) refuses
+    /// it.
+    ///
+    /// A single term is returned as a clone without a check: it is already
+    /// held. `operation` names the caller in the error.
+    pub(crate) fn exact_sum_within(
+        terms: &[&Self],
+        engine: SumEngine,
+        limit_bytes: usize,
+        operation: &'static str,
+    ) -> Result<Self> {
+        let first = Self::validate_sum_terms(terms)?;
+        if terms.len() > 1 {
+            Self::check_sum_size(terms, limit_bytes, operation)?;
+        }
+        Self::build_exact_sum(first, terms, engine)
+    }
+
+    /// Return [`PartitionedTreeTNError::GroupSumLimit`] when the estimated
+    /// size of the exact sum of `terms`
+    /// ([`TreeTN::estimate_exact_sum_bytes`]) exceeds `limit_bytes`.
+    ///
+    /// The terms are first checked as [`exact_sum`](Self::exact_sum) checks
+    /// them. Only metadata is read, so a routine that sums several groups can
+    /// check every group before building any. Fewer than two terms pass
+    /// without a check: a single term is already held. `operation` names the
+    /// caller in the error.
+    pub(crate) fn ensure_exact_sum_within(
+        terms: &[&Self],
+        limit_bytes: usize,
+        operation: &'static str,
+    ) -> Result<()> {
+        if terms.len() < 2 {
+            return Ok(());
+        }
+        Self::validate_sum_terms(terms)?;
+        Self::check_sum_size(terms, limit_bytes, operation)
+    }
+
+    /// [`exact_sum`](Self::exact_sum) of terms that
+    /// [`ensure_exact_sum_within`](Self::ensure_exact_sum_within) has accepted,
+    /// without checking them a second time.
+    ///
+    /// Terms that were not checked first and cannot be summed still fail, in
+    /// [`TreeTN::exact_sum`], with a TreeTN error instead of the typed mismatch
+    /// error [`exact_sum`](Self::exact_sum) returns.
+    pub(crate) fn exact_sum_checked(terms: &[&Self], engine: SumEngine) -> Result<Self> {
+        let first = terms.first().ok_or(PartitionedTreeTNError::Empty)?;
+        Self::build_exact_sum(first, terms, engine)
+    }
+
+    /// Compare the estimated size of the exact sum of validated `terms` with
+    /// `limit_bytes`.
+    fn check_sum_size(terms: &[&Self], limit_bytes: usize, operation: &'static str) -> Result<()> {
+        let data: Vec<_> = terms.iter().map(|term| &term.data).collect();
+        let estimated_bytes = TreeTN::estimate_exact_sum_bytes(&data)?;
+        if estimated_bytes > limit_bytes {
+            return Err(PartitionedTreeTNError::GroupSumLimit {
+                operation,
+                terms: terms.len(),
+                estimated_bytes,
+                limit_bytes,
+            });
+        }
+        Ok(())
+    }
+
+    /// Check every term of an exact sum as [`add`](Self::add) checks its
+    /// operands and return the first.
+    fn validate_sum_terms<'a>(terms: &[&'a Self]) -> Result<&'a Self> {
         let (first, rest) = terms.split_first().ok_or(PartitionedTreeTNError::Empty)?;
         first.validate_invariants()?;
         let first_kind = first.scalar_kind()?;
@@ -563,7 +652,13 @@ where
                 return Err(PartitionedTreeTNError::ProjectorMismatch);
             }
         }
+        Ok(first)
+    }
 
+    /// Build the exact sum of validated `terms`, whose first term is `first`.
+    fn build_exact_sum(first: &Self, terms: &[&Self], engine: SumEngine) -> Result<Self> {
+        #[cfg(test)]
+        EXACT_SUMS_BUILT.with(|count| count.set(count.get() + 1));
         let data: Vec<_> = terms.iter().map(|term| &term.data).collect();
         let network = TreeTN::exact_sum(&data, engine)
             .map_err(PartitionedTreeTNError::from)?
@@ -665,7 +760,53 @@ where
         center: &V,
         options: ContractionOptions,
     ) -> Result<Option<Self>> {
-        validate_contraction_options(&options)?;
+        let Some(merged) = self.prepare_pair_contraction(other, center, &options)? else {
+            return Ok(None);
+        };
+        let data = contraction::contract(&self.data, &other.data, center, options)?;
+        self.finish_pair_contraction(data, merged).map(Some)
+    }
+
+    /// Probe a pair through the TreeTN outcome owner, retaining the ordinary
+    /// subdomain validation, projector and inherited-budget semantics.
+    pub(crate) fn contract_with_outcome(
+        &self,
+        other: &Self,
+        center: &V,
+        options: ContractionOptions,
+        threshold: std::num::NonZeroUsize,
+    ) -> Result<Option<SubDomainContractionOutcome<V>>> {
+        let Some(merged) = self.prepare_pair_contraction(other, center, &options)? else {
+            return Ok(None);
+        };
+        match contraction::contract_with_outcome(
+            &self.data,
+            &other.data,
+            center,
+            options,
+            Some(threshold),
+        )? {
+            contraction::ContractionOutcome::Completed { network, .. } => self
+                .finish_pair_contraction(network, merged)
+                .map(SubDomainContractionOutcome::Completed)
+                .map(Some),
+            contraction::ContractionOutcome::Saturated { .. } => {
+                Ok(Some(SubDomainContractionOutcome::Saturated))
+            }
+            // The upstream outcome enum is non-exhaustive.
+            _ => Err(PartitionedTreeTNError::tree(
+                "unsupported contraction outcome; update the partitioned adapter",
+            )),
+        }
+    }
+
+    fn prepare_pair_contraction(
+        &self,
+        other: &Self,
+        center: &V,
+        options: &ContractionOptions,
+    ) -> Result<Option<Projector>> {
+        validate_contraction_options(options)?;
         self.validate_invariants()?;
         other.validate_invariants()?;
         ensure_same_topology(&self.data, &other.data)?;
@@ -680,13 +821,19 @@ where
             .projector
             .intersection(&other.projector)
             .ok_or(PartitionedTreeTNError::ProjectorConflict)?;
-        let data = contraction::contract(&self.data, &other.data, center, options)
-            .map_err(PartitionedTreeTNError::from)?;
+        Ok(Some(merged_projector))
+    }
+
+    fn finish_pair_contraction(
+        &self,
+        data: TreeTN<IdxTensor, V>,
+        merged_projector: Projector,
+    ) -> Result<Self> {
         let (site_indices, _) = data
             .all_site_indices()
             .map_err(PartitionedTreeTNError::from)?;
         let projector = merged_projector.filter_indices(&site_indices);
-        Self::from_masked_data(data, projector, self.budget_squared).map(Some)
+        Self::from_masked_data(data, projector, self.budget_squared)
     }
 
     /// Compute the Frobenius norm without mutating the stored TreeTN.
@@ -1045,6 +1192,13 @@ impl ScalarKind {
     }
 }
 
+/// The scalar kind of the element type `T`, read from a one-element tensor
+/// of `T`, for checking that a partition holds the type a caller names.
+pub(crate) fn scalar_kind_of<T: TensorElement + Default>() -> Result<ScalarKind> {
+    let probe = IdxTensor::from_dense(vec![DynIndex::new_dyn(1)], vec![T::default()])?;
+    scalar_kind(&probe)
+}
+
 fn scalar_kind(tensor: &IdxTensor) -> Result<ScalarKind> {
     if tensor.is_f32() {
         Ok(ScalarKind::F32)
@@ -1094,7 +1248,7 @@ where
     Ok(dtype)
 }
 
-fn validate_projector_against_data<V>(
+pub(crate) fn validate_projector_against_data<V>(
     data: &TreeTN<IdxTensor, V>,
     projector: &Projector,
 ) -> Result<()>

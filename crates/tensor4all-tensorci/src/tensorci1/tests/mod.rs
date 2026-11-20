@@ -154,6 +154,30 @@ fn test_tensorci1_global_pivot_is_inserted_and_deduplicated() {
 }
 
 #[test]
+fn test_add_global_pivot_at_zero_tolerance_noops_when_already_interpolated() {
+    let f = asymmetric_global_pivot_target;
+    let mut tci = TensorCI1::from_function(&f, vec![3, 3, 3], vec![0, 0, 0]).unwrap();
+    tci.add_global_pivot(&f, vec![0, 1, 1], 0.0).unwrap();
+    let ranks = tci.link_dims();
+    // A pivot the train already interpolates exactly is a no-op at abstol=0,
+    // even when the bond is at its true full rank (issue #1346).
+    tci.add_global_pivot(&f, vec![1, 1, 1], 0.0).unwrap();
+    assert_eq!(tci.link_dims(), ranks);
+}
+
+#[test]
+fn test_add_global_pivot_inserts_at_positive_tolerance_boundary() {
+    let f = asymmetric_global_pivot_target;
+    let pivot = vec![0, 1, 1];
+    let mut tci = TensorCI1::from_function(&f, vec![3, 3, 3], vec![0, 0, 0]).unwrap();
+    assert_eq!(f(&pivot) - tci.evaluate(&pivot).unwrap(), 1.0);
+
+    tci.add_global_pivot(&f, pivot.clone(), 1.0).unwrap();
+    assert_eq!(tci.link_dims(), vec![2, 2]);
+    assert!((tci.evaluate(&pivot).unwrap() - f(&pivot)).abs() < 1e-12);
+}
+
+#[test]
 fn test_crossinterpolate1_forward_sweep_matches_manual_local_pivots() {
     let local_dims = vec![10; 5];
     let f = |idx: &MultiIndex| {
@@ -535,7 +559,7 @@ fn test_pivot_mutations_invalidate_the_cached_tensor_train() {
     assert_eq!(normalized_tensor_train_builds(), 1);
 
     tci.add_global_pivot(&f, vec![2, 3], 0.0).unwrap();
-    let build_count_after_mutation = normalized_tensor_train_builds();
+    assert_eq!(normalized_tensor_train_builds(), 2);
     let reference = uncached_tensor_train(&tci);
     let after = tci.evaluate(&[2, 3]).unwrap();
     assert!(
@@ -548,8 +572,8 @@ fn test_pivot_mutations_invalidate_the_cached_tensor_train() {
     );
     assert_eq!(
         normalized_tensor_train_builds(),
-        build_count_after_mutation + 1,
-        "exactly one rebuild is needed after a successful pivot insertion"
+        2,
+        "evaluation must reuse the train validated by global pivot insertion"
     );
 
     // add_pivot: a fresh state whose local sweep genuinely inserts a pivot.
@@ -776,4 +800,194 @@ fn test_update_site_tensor_from_matrix_decodes_left_and_right_fusions() {
     tci.update_site_tensor_from_matrix(1, &Matrix::from_col_major_vec(rows, cols, flat))
         .unwrap();
     assert_eq!(tci.t_tensors[1], expected);
+}
+
+fn asymmetric_global_pivot_target(idx: &MultiIndex) -> f64 {
+    1.0 + (idx[1] as f64) * ((idx[0] + idx[2] + 1) as f64)
+}
+
+#[test]
+fn test_add_global_pivot_pairs_asymmetric_bonds() {
+    let f = asymmetric_global_pivot_target;
+    for (pivot, expects_row) in [(vec![0, 1, 1], true), (vec![1, 1, 0], false)] {
+        let mut tci = TensorCI1::from_function(&f, vec![3, 3, 3], vec![0, 0, 0]).unwrap();
+        assert_eq!(tci.evaluate(&pivot).unwrap(), 2.0);
+
+        tci.add_global_pivot(&f, pivot.clone(), 0.0).unwrap();
+        let filler_set = if expects_row {
+            tci.i_set(1)
+        } else {
+            tci.j_set(1)
+        };
+        assert_eq!(filler_set, &[vec![0], vec![2]]);
+        for bond in 0..2 {
+            assert!(tci.i_set(bond + 1).contains(&pivot[..=bond].to_vec()));
+            assert!(tci.j_set(bond).contains(&pivot[bond + 1..].to_vec()));
+        }
+        let tt = tci.to_tensor_train().unwrap();
+        assert_eq!(tt.link_dims(), vec![2, 2]);
+        assert!((tt.evaluate(&pivot).unwrap() - 3.0).abs() < 1e-12);
+        assert!((tci.evaluate(&pivot).unwrap() - 3.0).abs() < 1e-12);
+        for bond in 0..2 {
+            tci.add_pivot(bond, &f, 1e-12).unwrap();
+        }
+        assert!((tci.evaluate(&pivot).unwrap() - 3.0).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn test_crossinterpolate1_inserts_asymmetric_additional_pivot_before_sweeping() {
+    let pivot = vec![0, 1, 1];
+    let (tci, ranks, _) = crossinterpolate1(
+        asymmetric_global_pivot_target,
+        vec![3, 3, 3],
+        vec![0, 0, 0],
+        TCI1Options {
+            additional_pivots: vec![pivot.clone()],
+            max_iter: 2,
+            ..TCI1Options::default()
+        },
+    )
+    .unwrap();
+    assert!(ranks.is_empty());
+    assert_eq!(tci.link_dims(), vec![2, 2]);
+    assert!(tci.j_set(0).contains(&vec![1, 1]));
+    assert!((tci.evaluate(&pivot).unwrap() - 3.0).abs() < 1e-12);
+}
+
+#[test]
+fn test_add_global_pivot_chooses_a_usable_partner_at_mixed_scales() {
+    let scale = (1_u64 << 50) as f64;
+    for delta in [0.5, 2.0] {
+        let f = |idx: &MultiIndex| {
+            if idx[1..] == [1, 1] {
+                [2.0, 2.0 * scale + delta, 0.25][idx[0]]
+            } else {
+                [1.0, scale, 0.0][idx[0]]
+            }
+        };
+        let mut tci = TensorCI1::from_function(&f, vec![3, 3, 3], vec![0, 0, 0]).unwrap();
+        tci.add_global_pivot(&f, vec![0, 1, 1], 0.0).unwrap();
+        assert_eq!(tci.i_set(1), &[vec![0], vec![2]], "delta = {delta}");
+        assert!((tci.evaluate(&[0, 1, 1]).unwrap() - 2.0).abs() < 1e-12);
+    }
+}
+
+#[test]
+fn test_add_global_pivot_accepts_independent_partner_at_different_scale() {
+    let scale = (1_u64 << 60) as f64;
+    let small_entry = [1, 1, 1];
+    for pivot in [vec![0, 1, 1], vec![1, 1, 0]] {
+        let f = |idx: &MultiIndex| {
+            if idx == &[0, 0, 0] || idx == &pivot {
+                scale
+            } else if idx == &small_entry {
+                1.0
+            } else {
+                0.0
+            }
+        };
+        let mut tci = TensorCI1::from_function(&f, vec![2, 2, 2], vec![0, 0, 0]).unwrap();
+
+        // The sole filler makes a triangular cross with scales 2^60 and 1.
+        tci.add_global_pivot(&f, pivot.clone(), 0.0).unwrap();
+        assert_eq!(tci.link_dims(), vec![2, 2]);
+        assert_eq!(tci.evaluate(&pivot).unwrap(), scale);
+        assert_eq!(tci.evaluate(&small_entry).unwrap(), 1.0);
+    }
+}
+
+fn assert_unusable_global_pivot_preserves_train<T>(
+    mut tci: TensorCI1<T>,
+    f: &impl Fn(&MultiIndex) -> T,
+) -> TCIError
+where
+    T: Scalar + TTScalar + MatrixLuciScalar + MatrixSolveScalar,
+{
+    let pivot = vec![0, 1, 1];
+    let before = tci.evaluate(&pivot).unwrap();
+    let error = tci.add_global_pivot(f, pivot.clone(), 0.0).unwrap_err();
+    assert_eq!(tci.to_tensor_train().unwrap().link_dims(), vec![1, 1]);
+    assert_eq!(tci.i_set(2), &[vec![0, 0]]);
+    assert_eq!(tci.j_set(0), &[vec![0, 0]]);
+    assert_eq!(Scalar::abs_val(tci.evaluate(&pivot).unwrap() - before), 0.0);
+    error
+}
+
+fn assert_scaled_singular_pivot_preserves_train<T>(first_dim: usize, offset: f64, interaction: f64)
+where
+    T: Scalar + TTScalar + MatrixLuciScalar + MatrixSolveScalar,
+{
+    let f = |idx: &MultiIndex| T::from_f64(offset + interaction * (idx[1] * idx[2]) as f64);
+    let tci = TensorCI1::from_function(&f, vec![first_dim, 3, 3], vec![0, 0, 0]).unwrap();
+    assert_unusable_global_pivot_preserves_train(tci, &f);
+}
+
+#[test]
+fn test_add_global_pivot_rejects_dependent_partner_above_aca_roundoff_cutoff() {
+    let f = |idx: &MultiIndex| {
+        if idx[1..] == [1, 1] {
+            [97.0_f64, 485.0][idx[0]]
+        } else {
+            [117.0, 585.0][idx[0]]
+        }
+    };
+    // The proposed row is exactly five times the retained row.
+    let tci = TensorCI1::from_function(&f, vec![2, 2, 2], vec![0, 0, 0]).unwrap();
+    let error = assert_unusable_global_pivot_preserves_train(tci, &f);
+    assert!(matches!(error, TCIError::InvalidPivot { message }
+        if message.contains("bond 0 has no usable partner")));
+}
+
+#[test]
+fn test_add_global_pivot_rolls_back_when_full_rank_candidates_cannot_pair_fixed_column() {
+    let f = |idx: &MultiIndex| {
+        let row = if idx[1..] == [1, 1] { 0 } else { idx[1] };
+        f64::from(idx[0] == row)
+    };
+    let tci = TensorCI1::from_function(&f, vec![3, 3, 3], vec![0, 0, 0]).unwrap();
+    // The original identity columns stay in the candidate matrix after
+    // extending its suffixes, so it has full row rank. The requested column
+    // duplicates the retained one, so no row can complete this particular pair.
+    assert_eq!(
+        tci.pi[0].as_col_major_slice(),
+        &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    );
+    let error = assert_unusable_global_pivot_preserves_train(tci, &f);
+    assert!(matches!(error, TCIError::InvalidPivot { message }
+        if message.contains("bond 0 has no usable partner")));
+}
+
+#[test]
+fn test_add_global_pivot_leaves_train_usable_without_a_viable_pair() {
+    // In the scaled cases, rounding can give identical rows an ACA pivot
+    // residual larger than machine epsilon.
+    for (first_dim, offset, interaction) in [
+        (1, 1.0, 1.0),
+        (3, 1.0, 1.0),
+        (3, 7.0, 22.0),
+        (3, 49.0, 15.0),
+    ] {
+        assert_scaled_singular_pivot_preserves_train::<f64>(first_dim, offset, interaction);
+    }
+}
+
+#[test]
+fn test_add_global_pivot_rejects_single_precision_roundoff() {
+    assert_scaled_singular_pivot_preserves_train::<f32>(3, 41.0, 13.0);
+    assert_scaled_singular_pivot_preserves_train::<num_complex::Complex32>(3, 41.0, 13.0);
+}
+
+#[test]
+fn test_rebuild_aca_rejects_unequal_row_and_col_index_sets() {
+    // Defense in depth for #1346: a desynchronized state must not be shortened
+    // silently by zipping the two index lists.
+    let f = |idx: &Vec<usize>| 1.0 / ((idx[0] + idx[1] + 2) as f64);
+    let mut tci = TensorCI1::<f64>::from_function(&f, vec![4, 4], vec![0, 0]).unwrap();
+    tci.i_set[1].push(vec![1]);
+
+    let error = tci.rebuild_aca(0).unwrap_err();
+    assert!(matches!(error, TCIError::DimensionMismatch { .. }));
+    assert!(error.to_string().contains("row indices but"));
+    assert!(error.to_string().contains("column indices"));
 }

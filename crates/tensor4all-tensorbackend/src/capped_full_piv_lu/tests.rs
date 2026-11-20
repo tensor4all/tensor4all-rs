@@ -1,5 +1,7 @@
 use super::capped_full_piv_lu;
-use crate::{full_piv_lu_matrix_owned, Matrix};
+use crate::{
+    full_piv_lu_matrix_in, CpuBackend, CpuExecutionContext, FullPivLuMatrixResult, Matrix,
+};
 use num_complex::{Complex32, Complex64};
 
 fn lcg(len: usize, seed: u64) -> Vec<f64> {
@@ -14,6 +16,15 @@ fn lcg(len: usize, seed: u64) -> Vec<f64> {
         .collect()
 }
 
+/// The backend's complete-pivoting LU on a caller-owned one-thread context.
+fn backend_full_piv_lu(matrix: Matrix<f64>) -> FullPivLuMatrixResult<f64> {
+    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
+    context
+        .with_session(|engine| full_piv_lu_matrix_in(engine, &matrix))
+        .unwrap()
+        .unwrap()
+}
+
 /// Row index of the single unit entry in each row of a permutation matrix.
 fn permutation_of(matrix: &Matrix<f64>) -> Vec<usize> {
     let n = matrix.nrows();
@@ -23,14 +34,14 @@ fn permutation_of(matrix: &Matrix<f64>) -> Vec<usize> {
 }
 
 /// Uncapped, the in-place factorization is the backend's complete-pivoting LU: the same row and
-/// column permutations and the same `U` diagonal, bit for bit, as `full_piv_lu_matrix_owned`.
+/// column permutations and the same `U` diagonal, bit for bit, as the backend's `full_piv_lu`.
 #[test]
 fn an_uncapped_run_is_the_backend_full_piv_lu() {
     for n in [1usize, 2, 8, 37] {
         let data = lcg(n * n, 3 + n as u64);
         let capped =
             capped_full_piv_lu(Matrix::from_col_major_vec(n, n, data.clone()), None).unwrap();
-        let full = full_piv_lu_matrix_owned(Matrix::from_col_major_vec(n, n, data)).unwrap();
+        let full = backend_full_piv_lu(Matrix::from_col_major_vec(n, n, data));
 
         assert_eq!(capped.rank(), n, "n={n}: every pivot is taken");
         assert_eq!(capped.row_perm(), permutation_of(&full.p), "n={n}: rows");

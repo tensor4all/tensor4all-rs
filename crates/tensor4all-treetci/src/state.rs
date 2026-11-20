@@ -74,11 +74,9 @@ pub struct TreeTCI2<T> {
     pub(crate) graph: TreeTciGraph,
     /// Error estimate per edge bipartition.
     pub(crate) bond_errors: BTreeMap<TreeTciEdge, f64>,
-    /// Edges whose most recent update could not measure a bond error: one
-    /// side of the candidate matrix held a single candidate although both
-    /// sides of the edge have more than one configuration, so the selected
-    /// pivot exhausted that side and the recorded error is zero by
-    /// construction (issue #1153).
+    /// Edges whose most recent update exhausted a single-candidate side or
+    /// a unit endpoint below the full rank available on both subtrees. Its zero
+    /// error is structural rather than measured (issues #1153 and #1352).
     pub(crate) unmeasured_bonds: BTreeSet<TreeTciEdge>,
     /// Permanent pivot candidates of the junction-side subtrees of the bonds
     /// around vertices of local dimension 1: the projections of the pivots

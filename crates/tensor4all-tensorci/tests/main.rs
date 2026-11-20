@@ -4,8 +4,11 @@
 //! state stay separate `[[test]]` targets in `Cargo.toml`.
 
 mod global_pivot_coordinate_search;
+mod issue1358_chain_global_residual;
 mod rng_stream_contract;
+mod rook_four_site_ridge;
 mod rook_zero_fibers;
 mod session_entry;
 mod small_values;
+mod smooth_ridge_tolerance;
 mod tci2_tolerance;

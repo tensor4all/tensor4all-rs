@@ -52,6 +52,7 @@ pub(crate) fn typed_evaluation_error(error: TreeTNOperationError) -> TreeAciErro
 /// ```
 pub trait TreeAciScalar:
     TensorElement
+    + tensor4all_tensorbackend::StorageScalar
     + tensor4all_core::Scalar
     + tensor4all_core::MatrixLuciScalar
     + tensor4all_tensorbackend::MatrixScalar
@@ -124,9 +125,9 @@ impl TreeAciScalar for Complex64 {
 /// accepts::<usize>();
 /// accepts::<String>();
 /// ```
-pub trait TreeAciNode: Clone + Debug + Eq + Hash + Ord + Send + Sync + 'static {}
+pub trait TreeAciNode: Clone + Debug + Eq + Hash + Ord + Send + Sync {}
 
-impl<V> TreeAciNode for V where V: Clone + Debug + Eq + Hash + Ord + Send + Sync + 'static {}
+impl<V> TreeAciNode for V where V: Clone + Debug + Eq + Hash + Ord + Send + Sync {}
 
 #[cfg(test)]
 mod tests;

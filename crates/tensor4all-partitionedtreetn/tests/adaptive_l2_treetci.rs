@@ -156,7 +156,14 @@ fn sampled_l2_error_is_audited_or_acceptance_only() {
         record.acceptance.as_ref().unwrap().method == MeasurementMethod::Sampled
             && record.audit.is_some()
     }));
-    assert!(report.audit_evaluations > 0);
+    // `audit_evaluations` counts only new function evaluations. It can be
+    // zero although the audit ran: since #1352 TreeTCI's global search
+    // confirms retained pivots, and here it has already evaluated every audit
+    // sample, which the memo then serves.
+    assert!(report.accepted.iter().all(|record| {
+        record.acceptance.as_ref().unwrap().method != MeasurementMethod::Sampled
+            || record.audit.is_some()
+    }));
     assert!(report.audit_evaluations <= report.measurement_evaluations);
 
     let delta = report.norm.delta().unwrap();

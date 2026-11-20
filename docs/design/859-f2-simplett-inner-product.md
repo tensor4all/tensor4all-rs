@@ -35,7 +35,7 @@ Nothing in the loop holds a session: each einsum enters and leaves the compatibi
 One opt-in entry point in the same module, with the existing one untouched:
 
 ```rust
-impl<T: TTScalar + Scalar + Default + EinsumScalar> SimpleTensorTrain<T> {
+impl<T: TTScalar> SimpleTensorTrain<T> {
     /// Compute the inner product with another train on a caller-held explicit session.
     pub fn inner_product_with_session(
         &self,

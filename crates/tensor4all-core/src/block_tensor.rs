@@ -457,6 +457,10 @@ impl<T: TensorLike> TensorVectorSpace for BlockTensor<T> {
             .any(TensorVectorSpace::is_single_precision)
     }
 
+    fn is_complex(&self) -> bool {
+        self.blocks.iter().any(TensorVectorSpace::is_complex)
+    }
+
     fn norm_squared(&self) -> std::result::Result<f64, Self::Error> {
         self.blocks.iter().try_fold(0.0, |sum, block| {
             let value = block

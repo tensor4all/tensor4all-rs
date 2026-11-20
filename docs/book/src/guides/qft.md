@@ -4,6 +4,28 @@ This guide demonstrates how to apply the quantics Fourier transform (QFT)
 operator to tensor trains. It corresponds to the Julia
 [Quantum Fourier Transform](https://tensor4all.org/T4APlutoExamples/qft.html) notebook.
 
+## Cargo features
+
+The Fourier constructors build TreeTN operators directly. To use them without
+SimpleTT, disable the transform crate's defaults and select a CPU provider.
+For a local checkout, the unpatched examples below use these dependencies.
+
+```toml
+[dependencies]
+num-complex = "0.4"
+tensor4all-core = { path = "../tensor4all-rs/crates/tensor4all-core", default-features = false, features = ["tenferro-cpu-platform", "global-defaults"] }
+tensor4all-treetn = { path = "../tensor4all-rs/crates/tensor4all-treetn", default-features = false, features = ["tenferro-cpu-platform"] }
+tensor4all-quanticstransform = { path = "../tensor4all-rs/crates/tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-platform"] }
+```
+
+For patched Fourier, also enable `partitioned` on
+`tensor4all-quanticstransform` and declare `tensor4all-partitionedtreetn` with
+the same provider and its defaults disabled when importing it directly. On
+macOS, use `tenferro-cpu-faer` on all these crates to select faer explicitly.
+TreeTN defaults leave `simplett-bridge` off; disabling them is needed only
+when selecting a different CPU provider. Enable `simplett-transforms` if you also use
+non-Fourier transforms or the transform crate's SimpleTT conversions.
+
 ## Background
 
 The QFT operator converts a function from position space to frequency space
@@ -19,11 +41,11 @@ Key properties:
 
 ## Simple QFT Example
 
-Before working with TCI-constructed states, here is a minimal example that
-creates a QFT operator and verifies its structure.
+`FTCore` prepares forward and inverse operators with the same options. The
+example verifies their node and index mappings.
 
 ```rust
-use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions, FTCore};
+use tensor4all_quanticstransform::{FourierOptions, FTCore};
 
 let r = 4;
 
@@ -47,68 +69,56 @@ for i in 0..r {
 
 ## 1D QFT Application
 
-This example applies the QFT to a product state |0> (the uniform function)
-and verifies that the result has uniform magnitude 1/sqrt(N) at all
-frequency components -- a well-known property of the DFT.
+This example applies the QFT to the product state |0>, which is one at the
+origin and zero elsewhere. Its Fourier coefficients all equal 1/sqrt(N).
 
 ```rust
 use num_complex::Complex64;
-use num_traits::{One, Zero};
-use tensor4all_core::TensorIndex;
-use tensor4all_simplett::{types::tensor3_zeros, AbstractTensorTrain, Tensor3Ops, SimpleTensorTrain};
-use tensor4all_treetn::{apply_linear_operator, ApplyOptions, tensor_train_to_treetn};
+use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
+use tensor4all_treetn::{apply_linear_operator, ApplyOptions, TreeTN};
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 
-let r = 3;
-let n = 1usize << r; // 8
+let r = 3usize;
+let n = 1usize << r;
+let qft_op = quantics_fourier_operator(r, FourierOptions::forward())?;
 
-// Create the |0> product state as a SimpleTensorTrain
-// |0> = |0> x |0> x ... x |0>  (all bits zero)
+// Each site uses its operator input index and shares a dimension-one bond
+// with each neighbor.
+let bonds: Vec<_> = (1..r).map(|_| DynIndex::new_dyn(1)).collect();
 let mut tensors = Vec::new();
-for _ in 0..r {
-    let mut t = tensor3_zeros(1, 2, 1).unwrap();
-    t.set3(0, 0, 0, Complex64::one()); // bit = 0
-    tensors.push(t);
-}
-let mps = SimpleTensorTrain::new(tensors).unwrap();
-
-// Convert MPS to TreeTN
-let (treetn, site_indices) = tensor_train_to_treetn(&mps).unwrap();
-
-// Create the forward QFT operator
-let qft_op = quantics_fourier_operator(r, FourierOptions::forward()).unwrap();
-
-// Replace TreeTN site indices with operator input indices
-let mut state = treetn;
 for i in 0..r {
-    let op_input = qft_op
+    let input = qft_op
         .get_input_mapping(&i)
-        .unwrap()
+        .ok_or("missing operator input mapping")?
         .true_index
         .clone();
-    state = state.replaceind(&site_indices[i], &op_input).unwrap();
+    let mut indices = vec![input];
+    if i > 0 {
+        indices.push(bonds[i - 1].clone());
+    }
+    if i + 1 < r {
+        indices.push(bonds[i].clone());
+    }
+    let zero_bit = vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 0.0)];
+    tensors.push(IdxTensor::from_dense(indices, zero_bit)?);
 }
+let state = TreeTN::from_tensors(tensors, (0..r).collect())?;
 
 // Apply the QFT with local exact naive apply. This can grow bond dimensions as
 // state/operator products, so use it for small exact/debug cases.
-let result = apply_linear_operator(&qft_op, &state, ApplyOptions::naive()).unwrap();
-
-// The result should exist and have the same number of nodes
-assert_eq!(result.node_count(), r);
+let result = apply_linear_operator(&qft_op, &state, ApplyOptions::naive())?;
 
 // This example is intentionally small, so dense verification is acceptable.
 // For production-size networks, prefer scalable residual norms or sampled
 // `evaluate()` checks rather than `contract_to_tensor()`.
-let dense = result.contract_to_tensor().unwrap();
-let data = dense.to_vec::<Complex64>().unwrap();
-
-// For |0> input, all Fourier coefficients should have magnitude 1/sqrt(N)
-let expected_mag = 1.0 / (n as f64).sqrt();
-for val in &data {
-    let mag = val.norm();
-    assert!((mag - expected_mag).abs() < 1e-6,
-        "Expected magnitude {}, got {}", expected_mag, mag);
-}
+let dense = result.contract_to_tensor()?;
+let coefficient = Complex64::new(1.0 / (n as f64).sqrt(), 0.0);
+let expected = IdxTensor::from_dense(dense.indices().to_vec(), vec![coefficient; n])?;
+let error = dense.sub(&expected)?.maxabs()?;
+assert!(error < 1e-6, "maximum coefficient error: {error}");
+# Ok(())
+# }
 ```
 
 ### Interpreting QFT Output
@@ -125,94 +135,156 @@ configuration (b_0, b_1, ..., b_{R-1}) corresponds to frequency index
 k = b_{R-1} * 2^{R-1} + ... + b_1 * 2 + b_0 (i.e., the bit-reversal of
 b_0 * 2^{R-1} + ... + b_{R-1}).
 
-## 2D QFT via Partial Apply
+## Multi-axis QFT
 
-A dedicated multivar Fourier API is not yet available. This example
-shows how to use partial apply to perform a 2D transform by applying a 1D
-Fourier operator to non-contiguous sites.
-
-For a 2D function in interleaved quantics encoding with R bits per variable,
-the TreeTN has 2R sites: `[x_1, y_1, x_2, y_2, ..., x_R, y_R]` (node names
-`0, 1, 2, 3, ..., 2R-1`).
-
-### Approach
-
-To apply a 1D Fourier transform to the x-variable:
-
-1. Build the 1D Fourier operator (R sites, node names 0..R-1)
-2. Rename operator nodes to match x-variable sites: 0 -> 0, 1 -> 2, 2 -> 4, ...
-3. Set input/output mappings from the state
-4. Call `apply_linear_operator` -- Steiner tree partial apply handles the gaps
-
-The Steiner tree mechanism automatically inserts identity tensors at the
-y-variable sites (1, 3, 5) so the operator acts only on the x-variable.
-The same approach works for applying the Fourier transform to the y-variable
-(rename operator nodes to 1, 3, 5 instead).
+`quantics_fourier_operator_multiaxis` builds a product transform with one
+abstract node per selected bit. `AxisBit { axis, bit }` specifies the axis and
+input significance (`bit = 0` is the MSB); axis and bit numbers start at zero
+without gaps. Each axis has at least two bits. For example, the layout
+`[(0,0), (1,0), (0,1), (1,1)]` interleaves two two-bit axes.
 
 ```rust
-use std::f64::consts::PI;
-use tensor4all_quanticstci::{
-    pointwise_index_batch,
-    quanticscrossinterpolate_discrete_batch, QtciOptions, UnfoldingScheme,
-};
-use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions};
-use tensor4all_treetci::materialize::to_treetn;
-use tensor4all_treetn::{apply_linear_operator, ApplyOptions};
-use tensor4all_treetn::Operator;
+use tensor4all_quanticstransform::{quantics_fourier_operator_multiaxis, AxisBit, FourierOptions};
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let layout = [AxisBit { axis: 0, bit: 0 }, AxisBit { axis: 1, bit: 0 },
+              AxisBit { axis: 0, bit: 1 }, AxisBit { axis: 1, bit: 1 }];
+let operator = quantics_fourier_operator_multiaxis(&layout, FourierOptions::forward())?;
+// The normalized 16-by-16 product has Frobenius norm sqrt(16).
+assert!((operator.mpo().clone().norm()? - 4.0).abs() < 1e-10);
+# Ok(())
+# }
+```
 
-let r = 3;
-let n = 1usize << r; // 8
+Bind the operator's node `j` to the desired selected state index using its
+input/output mappings and `apply_linear_operator_to_indices`. Node ordering
+is separate from bit significance: the layout can also be grouped or permuted.
+Each axis is built with `FourierOptions`. If some axis's bits are not monotone
+along the layout, the product is composed in separated axis order and
+restructured exactly by site swaps; its intermediate and final bonds can exceed
+the per-axis `max_bond_dim`, and reordering adds no intentional truncation.
 
-// f(x, y) = cos(2*pi*x/N), 0-indexed -- depends only on x
-let f = move |idx: &[usize]| -> f64 {
-    let x = idx[0] as f64;
-    (2.0 * PI * x / n as f64).cos()
-};
+When every axis's bits are monotone along the layout, as in grouped and
+interleaved layouts, the per-axis operators are embedded directly instead: each
+site passes the other axes' bonds through unchanged. This is exact and needs no
+site swaps; the bond at each cut is the product of the per-axis bonds there. Two
+interleaved axes at the default options therefore reach bond `12 * 12 = 144`,
+while a grouped layout keeps the per-axis bond `12`.
 
-// Build QTT with interleaved encoding
-let sizes = vec![n, n];
-let (qtci, _ranks, errors) = quanticscrossinterpolate_discrete_batch::<f64, _>(
-    &sizes, pointwise_index_batch(f), None,
-    QtciOptions::default()
-        .with_tolerance(1e-12)
-        .with_unfoldingscheme(UnfoldingScheme::Interleaved)).unwrap();
-assert!(*errors.last().unwrap() < 1e-10);
+## Patched QFT on an index subset
 
-// Convert to TreeTN (6 sites: 0,1,2,3,4,5)
-let tci_state = qtci.tci();
-let grid = qtci.inherent_grid().unwrap().clone();
-let batch_eval = move |batch: tensor4all_treetci::GlobalIndexBatch<'_>|
-    -> anyhow::Result<Vec<f64>>
-{
-    let mut values = Vec::with_capacity(batch.n_points());
-    let mut quantics = vec![0usize; batch.n_sites()];
-    for p in 0..batch.n_points() {
-        for (site, value) in quantics.iter_mut().enumerate() {
-            *value = batch.get(site, p).unwrap();
-        }
-        let grid_idx = grid.quantics_to_grididx(&quantics)?;
-        values.push((2.0 * PI * grid_idx[0] as f64 / n as f64).cos());
-    }
-    Ok(values)
-};
-let state = to_treetn(tci_state, batch_eval, Some(0)).unwrap();
+Enable `tensor4all-quanticstransform`'s optional `partitioned` feature to use
+`patched_fourier_transform`. Pass an existing `PartitionedTreeTN`, a center
+node, and each axis's full binary indices in MSB-first order. The selected
+indices must lie on one path; they may skip spectator nodes or share a node
+with other selected indices or spectators. Branching selections are rejected.
+State node names need not be integers.
 
-// Build 1D Fourier operator (nodes 0,1,2)
-let fourier_op = quantics_fourier_operator(
-    r, FourierOptions { normalize: true, ..Default::default() },
-).unwrap();
+The input patches must be dyadic leaves of the selected bits: each fixes a
+contiguous most-significant prefix of every axis. Spectator constraints may
+differ. The scheduler keeps disjoint spectator groups directly; overlapping
+constraints use a common coordinate grid of their varying spectator indices.
+The grid and refined leaf count are checked against `max_work_items` and
+`max_terms` before tensor operations. Each original patch is transformed once,
+then its image is restricted exactly to those cells. Output regions retain the
+spectator constraints. Complete selected-coordinate coverage is checked in each
+represented cell; omitted leaves require `ZeroForMissingLeaves`. Large common
+grids can be refused: raise the limits or restrict the producer's patch order
+to selected indices. The original application error is charged once globally,
+and later errors on disjoint output/spectator cells combine within each level.
 
-// Rename nodes to x-variable sites: 0->0, 1->2, 2->4
-let x_site_mapping: Vec<_> = (0..r).map(|i| (i, 2 * i)).collect();
-let mut fourier_op = fourier_op.rename_nodes(&x_site_mapping).unwrap();
+`PatchedFourierOptions` defaults to relative reconstruction tolerance `1e-6`
+and an exact full-depth schedule. Set `merge_refine.target_bond_dim` for adaptive
+compression, and use its output-depth/region and work/term limits as needed.
+Leave `coordinate_groups` unset; the front end derives them from the axes.
+The returned `MergeRefineResult` keeps output regions and their retained terms
+lazy. `into_partition()` requires one final term per region. Requested output
+regions select intersecting schedule cells and can return coarser cells.
+Repeated exact transforms can grow intermediate bonds substantially. A rank
+goal is soft and does not bound the initial operator application, which is
+always performed exactly: its bonds are the input bond times the operator bond.
+For large transforms set an appropriate output depth/region selection and a
+rank goal. The defaults preserve exact behavior and should not
+be treated as a scalable memory policy. The small round-trip example uses a
+rank goal with a tight reconstruction tolerance.
 
-// Match operator's true indices to state's site indices
-fourier_op.set_input_space_from_state(&state).unwrap();
-fourier_op.set_output_space_from_state(&state).unwrap();
+Output significance reverses **within each axis**. For a normalized inverse
+round trip use `axes_inv[a] = axes[a].iter().rev().cloned().collect()` with
+`FourierOptions::inverse()`. Reusing the forward axes unchanged is incorrect.
+With `normalize: false`, both directions omit scaling and the round trip
+multiplies by `2^total_selected_bits`.
 
-// Apply -- Steiner tree inserts identity at y-sites {1, 3, 5}
-let result = apply_linear_operator(
-    &fourier_op, &state, ApplyOptions::default(),
-).unwrap();
-assert_eq!(result.node_count(), 2 * r);
+`report().error_bound` measures reconstruction against the constructed
+operator, excluding operator construction error and backend roundoff. Test
+reconstruction with a stated roundoff allowance, and compare to a direct DFT
+separately. Neither `FourierOptions::tolerance` nor `normalize` certifies an
+exact-DFT error bound for the approximated operator.
+
+The runnable example transforms six k-space patches into 2D r-space
+regions, checks all sixteen values against a direct DFT, and verifies the
+reversed-axes inverse call. It intentionally uses a tiny dense input/oracle.
+
+```bash
+./scripts/check-fourier-dependencies.sh --run
+```
+
+The complete [example source](https://github.com/tensor4all/tensor4all-rs/blob/main/crates/tensor4all-quanticstransform/examples/patched_fourier.rs)
+is also executed by the guide doctest harness.
+
+Future input generators such as issue #1276 may return a TT over only a patch's
+remaining bits. Before forming `SubDomainTreeTN`, restore the fixed prefix bits
+as one-hot sites, split any fused levels, and use the same full index identities
+and named topology for every patch. A prefix projector alone cannot introduce
+missing site indices.
+
+## Large periodic-Gaussian validation
+
+`patched_fourier_large` builds shifted periodic Gaussians by single-scale
+interpolative QTT construction, cuts input prefix patches and transforms them
+without enumerating a dense grid. InterpolativeQTT returns the input as TreeTN
+chains, and the patched Fourier transform takes the resulting TreeTN patches
+without a SimpleTT conversion.
+
+The Gaussian is defined by a finite Fourier series with known discrete
+coefficients, so its DFT oracle has no continuous-FT
+quadrature or aliasing approximation. The 2D function is the product of the two
+shifted Gaussians. Inputs and outputs are checked at a fixed seeded set of
+random points, including nonzero low frequencies and both frequency signs.
+
+The example uses explicit input/layout rank policies, reconstruction tolerance
+and output depth. These are example choices, not a certified construction-error
+bound or a new default. Its output reports input/operator bond dimensions,
+operator construction time, isolated scheduler time, front-end time (which also
+includes operator/target construction), and sampled error alongside the
+reconstruction bound. The arguments are the bits per axis, the number of axes
+and the layout; a fourth argument `frontend-only` skips the isolated scheduler
+run. The small dense examples above remain the primary layout and
+bit-significance regression checks.
+
+```bash
+RAYON_NUM_THREADS=1 cargo run --release -p tensor4all-quanticstransform --features partitioned --example patched_fourier_large -- 10 1 grouped
+RAYON_NUM_THREADS=1 cargo run --release -p tensor4all-quanticstransform --features partitioned --example patched_fourier_large -- 10 2 grouped
+```
+
+A small R=10 1D smoke check runs in the ordinary suite. The full R=10/20 1D and
+2D grouped cases and the R=10 2D interleaved case live in
+`heavy_patched_fourier.rs` and run in the scheduled heavy-test workflow. Run
+them locally in release mode:
+
+```bash
+RAYON_NUM_THREADS=1 cargo test --release -p tensor4all-quanticstransform --features partitioned --test heavy -- --ignored --nocapture --test-threads=1
+```
+
+Two interleaved axes work at R=10 but are slow. The operator itself is cheap
+(bond 144, built in well under a second at R=20), but the scheduler applies it
+exactly to each input patch as its error reference. That application keeps
+every bond at its physical bound, at most 1024 for the R=10 interleaved
+Gaussian, and the case completes with a 2.4 GiB peak; it takes about 6
+minutes with one thread, almost all of it in those exact applications, which
+factorize by QR rather than SVD (issue #1285). At
+R=20 the exact application itself can be 50 x 144 = 7200 wide, so that case
+is still out of reach. Prefer a grouped layout for patched multi-axis
+transforms where the layout is free (issue #1279):
+
+```bash
+RAYON_NUM_THREADS=1 cargo run --release -p tensor4all-quanticstransform --features partitioned --example patched_fourier_large -- 10 2 interleaved frontend-only
 ```

@@ -13,6 +13,87 @@ use crate::subdomain_tree_tn::{ScalarKind, SubDomainTreeTN};
 /// Patch ids of one group, keyed by the values the group's rows are fixed to.
 type PatchLookup = HashMap<Vec<usize>, usize>;
 
+/// Finds the patch of a partition that covers a point, by hashing.
+///
+/// Patches are grouped by the rows (site positions) their projectors fix;
+/// within a group the fixed values identify the patch. A point is looked up
+/// once per group, hashing as many coordinates as the group fixes, until a
+/// group matches; the patches are disjoint, so at most one does. The cost per
+/// point is therefore at most the total size of the distinct fixed-site
+/// sets, independent of how many patches share a set: a layout whose patches
+/// all fix the same sites costs one lookup, while an irregular layout can
+/// have as many sets as patches.
+pub(crate) struct PatchLocator<'a, V>
+where
+    V: Clone + Hash + Eq + Send + Sync + Debug,
+{
+    patches: Vec<&'a SubDomainTreeTN<V>>,
+    groups: Vec<(Vec<usize>, PatchLookup)>,
+}
+
+impl<'a, V> PatchLocator<'a, V>
+where
+    V: Clone + Hash + Eq + Ord + Send + Sync + Debug,
+{
+    /// A locator over the patches of `partition` in canonical order, with
+    /// `positions` mapping each site index to its row in a point.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PartitionedTreeTNError::SiteIndexMismatch`] when a projector
+    /// fixes an index absent from `positions`.
+    pub(crate) fn new(
+        partition: &'a PartitionedTreeTN<V>,
+        positions: &HashMap<&DynIndex, usize>,
+    ) -> Result<Self> {
+        Self::from_patches(partition.ordered_patches(), positions)
+    }
+
+    fn from_patches(
+        patches: Vec<&'a SubDomainTreeTN<V>>,
+        positions: &HashMap<&DynIndex, usize>,
+    ) -> Result<Self> {
+        let mut groups: HashMap<Vec<usize>, PatchLookup> = HashMap::new();
+        for (patch_id, patch) in patches.iter().enumerate() {
+            let mut entries: Vec<(usize, usize)> = patch
+                .projector()
+                .iter()
+                .map(|(index, &value)| {
+                    positions
+                        .get(index)
+                        .map(|&row| (row, value))
+                        .ok_or(PartitionedTreeTNError::SiteIndexMismatch)
+                })
+                .collect::<Result<_>>()?;
+            entries.sort_unstable();
+            let (rows_fixed, fixed_values): (Vec<usize>, Vec<usize>) = entries.into_iter().unzip();
+            groups
+                .entry(rows_fixed)
+                .or_default()
+                .insert(fixed_values, patch_id);
+        }
+        let mut groups: Vec<(Vec<usize>, PatchLookup)> = groups.into_iter().collect();
+        groups.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(Self { patches, groups })
+    }
+
+    /// The id of the patch covering the point `column` (one value per row),
+    /// or `None` when no patch covers it.
+    pub(crate) fn owner(&self, column: &[usize]) -> Option<usize> {
+        let mut key = Vec::new();
+        self.groups.iter().find_map(|(rows_fixed, lookup)| {
+            key.clear();
+            key.extend(rows_fixed.iter().map(|&row| column[row]));
+            lookup.get(&key).copied()
+        })
+    }
+
+    /// The patch with id `patch_id`.
+    pub(crate) fn patch(&self, patch_id: usize) -> &'a SubDomainTreeTN<V> {
+        self.patches[patch_id]
+    }
+}
+
 fn invalid(reason: &'static str) -> PartitionedTreeTNError {
     PartitionedTreeTNError::InvalidOptions {
         operation: "PartitionedTreeTN::evaluate_batched",
@@ -131,41 +212,11 @@ where
             }
         }
 
-        // Group the patches by the rows their projectors fix; within a group,
-        // the fixed values identify the patch.
-        let mut groups: HashMap<Vec<usize>, PatchLookup> = HashMap::new();
-        for (patch_id, patch) in patches.iter().enumerate() {
-            let mut entries: Vec<(usize, usize)> = patch
-                .projector()
-                .iter()
-                .map(|(index, &value)| {
-                    positions
-                        .get(index)
-                        .map(|&row| (row, value))
-                        .ok_or(PartitionedTreeTNError::SiteIndexMismatch)
-                })
-                .collect::<Result<_>>()?;
-            entries.sort_unstable();
-            let (rows_fixed, fixed_values): (Vec<usize>, Vec<usize>) = entries.into_iter().unzip();
-            groups
-                .entry(rows_fixed)
-                .or_default()
-                .insert(fixed_values, patch_id);
-        }
-        let mut groups: Vec<(Vec<usize>, PatchLookup)> = groups.into_iter().collect();
-        groups.sort_by(|left, right| left.0.cmp(&right.0));
-
+        let locator = PatchLocator::from_patches(patches.clone(), &positions)?;
         let mut owned: Vec<Vec<usize>> = vec![Vec::new(); patches.len()];
-        let mut key = Vec::new();
         for point in 0..n_points {
-            let column = &data[point * rows..(point + 1) * rows];
-            for (rows_fixed, lookup) in &groups {
-                key.clear();
-                key.extend(rows_fixed.iter().map(|&row| column[row]));
-                if let Some(&patch_id) = lookup.get(&key) {
-                    owned[patch_id].push(point);
-                    break;
-                }
+            if let Some(patch_id) = locator.owner(&data[point * rows..(point + 1) * rows]) {
+                owned[patch_id].push(point);
             }
         }
 

@@ -1,0 +1,144 @@
+//! The reductions must not project away a non-unit leading bond of the first core.
+//!
+//! A tensor train whose first core has a leading bond above one is reachable through the public accessors
+//! (`site_tensors_mut`, `set_site_tensor`, `SiteTensorTrain::to_tensor_train`). Every reduction seeds its
+//! environment from the `l == 0` component of that core, so before this guard `evaluate`, `sum`, `norm2`, `norm`
+//! and `log_norm` returned the projection onto that component: a plausible but wrong scalar. This is the
+//! left-boundary sibling of #913. `MPO::sum` is the same surface for matrix-product operators: `MPO::new`
+//! checks the leading bond, but `site_tensors_mut` can replace the first core afterwards.
+
+use tensor4all_simplett::mpo::{tensor4_zeros, MPOError, Tensor4Ops, MPO};
+use tensor4all_simplett::{
+    tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, SimpleTensorTrainError, SiteTensorTrain,
+    Tensor3Ops,
+};
+
+/// A valid constant train, for the control assertions.
+fn valid() -> SimpleTensorTrain<f64> {
+    SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0)
+}
+
+/// The same train with its first core replaced through the public mutable accessor, so its leading bond is 2.
+///
+/// Every entry is set so that the wrong answer would be visible rather than accidentally equal: the `l == 0`
+/// component holds 1, the `l == 1` component holds 2.
+fn with_a_broken_leading_bond() -> SimpleTensorTrain<f64> {
+    let mut site = SiteTensorTrain::from_tensor_train(&valid(), 0).expect("site tensor train");
+    let cores = site.site_tensors_mut();
+    let mut core = tensor3_zeros::<f64>(2, 2, 1).unwrap();
+    for physical in 0..2 {
+        core.set3(0, physical, 0, 1.0);
+        core.set3(1, physical, 0, 2.0);
+    }
+    cores[0] = core;
+    site.to_tensor_train()
+}
+
+#[test]
+fn a_valid_train_still_reports_the_same_reductions() {
+    let tt = valid();
+    assert!((tt.sum().expect("sum") - 6.0).abs() < 1e-12);
+    assert!((tt.norm2().expect("norm2") - 6.0).abs() < 1e-12);
+    assert!((tt.norm().expect("norm") - 6.0_f64.sqrt()).abs() < 1e-12);
+    assert!((tt.log_norm().expect("log_norm") - 0.5 * 6.0_f64.ln()).abs() < 1e-12);
+    assert!((tt.evaluate(&[0, 0]).expect("evaluate") - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn the_reductions_refuse_a_broken_leading_bond_instead_of_projecting() {
+    let tt = with_a_broken_leading_bond();
+
+    assert!(matches!(
+        tt.evaluate(&[0, 0]),
+        Err(SimpleTensorTrainError::InvalidOperation { .. })
+    ));
+
+    for (name, result) in [
+        ("sum", tt.sum().map(|_| ())),
+        ("norm2", tt.norm2().map(|_| ())),
+        ("norm", tt.norm().map(|_| ())),
+        ("log_norm", tt.log_norm().map(|_| ())),
+    ] {
+        match result {
+            Err(SimpleTensorTrainError::InvalidOperation { message }) => {
+                assert!(
+                    message.contains("expected 1"),
+                    "{name} should say what it expected: {message}"
+                );
+            }
+            other => panic!("{name} must refuse a broken leading bond, got {other:?}"),
+        }
+    }
+}
+
+/// A valid one-site constant MPO, for the control assertion.
+fn valid_mpo() -> MPO<f64> {
+    MPO::<f64>::constant(&[(2, 2)], 1.0).expect("constant MPO")
+}
+
+/// The same MPO with its first core replaced through the public mutable accessor, so its leading bond is 2.
+///
+/// The `l == 0` component holds 1 and the `l == 1` component holds 2, so a silent projection would return 4
+/// instead of refusing the malformed operator.
+fn with_a_broken_mpo_leading_bond() -> MPO<f64> {
+    let mut mpo = valid_mpo();
+    let mut core = tensor4_zeros::<f64>(2, 2, 2, 1).unwrap();
+    for s1 in 0..2 {
+        for s2 in 0..2 {
+            core.set4(0, s1, s2, 0, 1.0);
+            core.set4(1, s1, s2, 0, 2.0);
+        }
+    }
+    mpo.site_tensors_mut()[0] = core;
+    mpo
+}
+
+#[test]
+fn a_valid_mpo_still_sums_every_entry() {
+    assert!((valid_mpo().sum().expect("sum") - 4.0).abs() < 1e-12);
+}
+
+#[test]
+fn mpo_sum_refuses_a_broken_leading_bond_instead_of_projecting() {
+    match with_a_broken_mpo_leading_bond().sum() {
+        Err(MPOError::InvalidOperation { message }) => {
+            assert!(
+                message.contains("expected 1"),
+                "sum should say what it expected: {message}"
+            );
+        }
+        other => panic!("sum must refuse a broken leading bond, got {other:?}"),
+    }
+}
+
+#[test]
+fn inner_product_refuses_a_broken_leading_bond_instead_of_summing_it() {
+    let broken = with_a_broken_leading_bond();
+    let other = valid();
+
+    // The self-product is mathematically `norm2`, which already refuses this object.
+    // The fixed `asr,ast->rt` first-site plan shares the leading label, so without a
+    // guard it sums every leading component and returns 30 instead of an error (#1340).
+    for (name, outcome) in [
+        ("self", broken.inner_product(&broken).map(|_| ())),
+        ("broken lhs", broken.inner_product(&other).map(|_| ())),
+        ("broken rhs", other.inner_product(&broken).map(|_| ())),
+        (
+            "free function",
+            tensor4all_simplett::contraction::inner_product(&broken, &other).map(|_| ()),
+        ),
+    ] {
+        match outcome {
+            Err(SimpleTensorTrainError::InvalidOperation { message }) => {
+                assert!(
+                    message.contains("expected 1"),
+                    "{name} should say what it expected: {message}"
+                );
+            }
+            other => panic!("{name} must refuse a broken leading bond, got {other:?}"),
+        }
+    }
+
+    // The control train is still accepted.
+    assert!((other.inner_product(&other).expect("valid") - 6.0).abs() < 1e-12);
+}

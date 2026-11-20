@@ -91,7 +91,7 @@ fn rank_ceiling_errors_include_the_next_residual() {
         max_bond_dim: 1,
         ..Default::default()
     };
-    let selection = dense_factorize(&rows, options.clone());
+    let selection = dense_factorize(&rows, options);
     assert_eq!(selection.rank, 1);
     assert_eq!(selection.pivot_errors, vec![1.0, 0.0]);
     assert_pivot_parity(

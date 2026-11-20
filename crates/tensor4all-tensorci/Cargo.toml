@@ -41,6 +41,9 @@ tensor4all-simplett = { path = "../tensor4all-simplett", default-features = fals
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false }
 
 [dev-dependencies]
+# Tests, doctests and benches still exercise the context-free API, which needs
+# the process-global route (tensor4all-rs#1403); the library itself does not.
+tensor4all-core = { path = "../tensor4all-core", default-features = false, features = ["global-defaults"] }
 approx.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true

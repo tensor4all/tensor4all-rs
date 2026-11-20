@@ -2,7 +2,8 @@
 use rand::{Rng as _, RngCore};
 use tensor4all_simplett::SimpleTensorTrain;
 use tensor4all_tensorci::{
-    DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput, TCIError,
+    DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivotSearchInput, GlobalPivotSearchResult,
+    TCIError,
 };
 
 // Supplies the all-zero starting point through the RNG-only search interface.
@@ -36,7 +37,8 @@ fn retains_coordinate_moves_to_find_the_above_threshold_corner() {
     assert_eq!([rng.random_range(0..4), rng.random_range(0..4)], [0, 0]);
     let pivots = DefaultGlobalPivotFinder::new(1, 1, 10.0)
         .find_global_pivots(&input(4), &|p| (p[0] + p[1]) as f64, 0.5, &mut rng)
-        .unwrap();
+        .unwrap()
+        .pivots;
     assert_eq!(pivots, vec![vec![3, 3]]);
 }
 
@@ -50,7 +52,8 @@ fn repeats_coordinate_sweeps_until_the_coupled_maximum_is_found() {
     };
     let pivots = DefaultGlobalPivotFinder::new(1, 1, 10.0)
         .find_global_pivots(&input(8), &f, 99.95, &mut ZeroStream)
-        .unwrap();
+        .unwrap()
+        .pivots;
     assert_eq!(pivots, vec![vec![3, 3]]);
 }
 
@@ -64,7 +67,8 @@ fn early_stop_is_checked_after_a_complete_sweep() {
     // but Julia still performs a complete sweep before checking it.
     let pivots = DefaultGlobalPivotFinder::new(1, 1, 10.0)
         .find_global_pivots(&input(8), &f, 1.0, &mut ZeroStream)
-        .unwrap();
+        .unwrap()
+        .pivots;
     assert_eq!(pivots, vec![vec![2, 2]]);
 }
 
@@ -87,7 +91,8 @@ fn searches_residual_magnitude_including_complex_values() {
             0.5,
             &mut ZeroStream,
         )
-        .unwrap();
+        .unwrap()
+        .pivots;
     assert_eq!(pivots, vec![vec![0, 0]]);
 }
 
@@ -95,25 +100,79 @@ fn searches_residual_magnitude_including_complex_values() {
 fn preserves_strict_threshold_and_pivot_cap() {
     let f = |p: &Vec<usize>| (p[0] + p[1]) as f64;
     let finder = DefaultGlobalPivotFinder::new(3, 2, 10.0);
+    // Residual 6 at (3, 3) is above the margin threshold 10 * 0.5 = 5.
     assert_eq!(
         finder
             .find_global_pivots(&input(4), &f, 0.5, &mut ZeroStream)
             .unwrap(),
-        vec![vec![3, 3]; 2]
+        GlobalPivotSearchResult {
+            pivots: vec![vec![3, 3]; 2],
+            max_sampled_error: 6.0,
+        }
     );
-    assert!(finder
-        .find_global_pivots(&input(4), &f, 0.6, &mut ZeroStream)
-        .unwrap()
-        .is_empty());
-    assert!(finder
-        .find_global_pivots(&input(4), &|_| 0.0, 0.0, &mut ZeroStream)
-        .unwrap()
-        .is_empty());
+    // Residual 6 is not above the margin threshold 6, but it violates the
+    // tolerance 0.6, so it is kept instead of dropped (#1358).
+    assert_eq!(
+        finder
+            .find_global_pivots(&input(4), &f, 0.6, &mut ZeroStream)
+            .unwrap(),
+        GlobalPivotSearchResult {
+            pivots: vec![vec![3, 3]; 2],
+            max_sampled_error: 6.0,
+        }
+    );
+    // The comparison stays strict: an exact zero residual at zero tolerance
+    // is not a pivot.
+    assert_eq!(
+        finder
+            .find_global_pivots(&input(4), &|_| 0.0, 0.0, &mut ZeroStream)
+            .unwrap(),
+        GlobalPivotSearchResult::default()
+    );
     // A finite acceptance threshold may have an infinite early-stop bound.
-    assert!(finder
+    let huge = finder
         .find_global_pivots(&input(4), &f, f64::MAX / 16.0, &mut ZeroStream)
-        .unwrap()
-        .is_empty());
+        .unwrap();
+    assert!(huge.pivots.is_empty());
+    assert_eq!(huge.max_sampled_error, 6.0);
+}
+
+#[test]
+fn reports_the_largest_walked_residual_below_the_tolerance() {
+    // Residual i + j peaks at 6, below abs_tol = 7: no pivot, but the
+    // measured residual is still reported for the recorded error.
+    let f = |p: &Vec<usize>| (p[0] + p[1]) as f64;
+    let search = DefaultGlobalPivotFinder::new(2, 2, 10.0)
+        .find_global_pivots(&input(4), &f, 7.0, &mut ZeroStream)
+        .unwrap();
+    assert!(search.pivots.is_empty());
+    assert_eq!(search.max_sampled_error, 6.0);
+}
+
+#[test]
+fn margin_discoveries_take_priority_over_tolerance_violations() {
+    use rand::SeedableRng;
+    // Two separated peaks on an 8 x 8 grid: residual 100 near (7, 7) and 2
+    // near (0, 0). With abs_tol = 1 and margin 10, only the first is a
+    // discovery; once one is found, the walks that stop at the small peak
+    // (above abs_tol, below the margin) are not returned.
+    let f = |p: &Vec<usize>| match (p[0], p[1]) {
+        (7, 7) => 100.0,
+        (0, 0) => 2.0,
+        _ => 0.0,
+    };
+    let finder = DefaultGlobalPivotFinder::new(64, 64, 10.0);
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(3);
+    let search = finder
+        .find_global_pivots(&input(8), &f, 1.0, &mut rng)
+        .unwrap();
+    assert!(!search.pivots.is_empty());
+    assert!(
+        search.pivots.iter().all(|p| p == &vec![7, 7]),
+        "{:?}",
+        search.pivots
+    );
+    assert_eq!(search.max_sampled_error, 100.0);
 }
 
 #[test]
@@ -122,10 +181,12 @@ fn disabled_search_validates_inputs_without_evaluating_the_oracle() {
         |_: &Vec<usize>| -> f64 { panic!("disabled or invalid search must not evaluate f") };
     for (nsearch, cap) in [(0, 1), (1, 0)] {
         let finder = DefaultGlobalPivotFinder::new(nsearch, cap, 10.0);
-        assert!(finder
-            .find_global_pivots(&input(4), &oracle, 0.5, &mut ZeroStream)
-            .unwrap()
-            .is_empty());
+        assert_eq!(
+            finder
+                .find_global_pivots(&input(4), &oracle, 0.5, &mut ZeroStream)
+                .unwrap(),
+            GlobalPivotSearchResult::default()
+        );
         for abs_tol in [-1.0, f64::NAN, f64::INFINITY, f64::MAX] {
             assert!(matches!(
                 finder.find_global_pivots(&input(4), &oracle, abs_tol, &mut ZeroStream),
@@ -184,7 +245,7 @@ fn optimizer_propagates_custom_finder_errors() {
             _: &F,
             _: f64,
             _: &mut dyn RngCore,
-        ) -> tensor4all_tensorci::Result<Vec<MultiIndex>>
+        ) -> tensor4all_tensorci::Result<GlobalPivotSearchResult>
         where
             T: Scalar + TTScalar,
             F: Fn(&MultiIndex) -> T,
@@ -257,6 +318,96 @@ fn retains_coordinate_moves_with_a_nontrivial_bond() {
     // Threshold 5: the axis-line best from (0, 0) is 3, the walk's optimum is 12.
     let pivots = DefaultGlobalPivotFinder::new(1, 1, 10.0)
         .find_global_pivots(&input, &f, 0.5, &mut ZeroStream)
-        .unwrap();
+        .unwrap()
+        .pivots;
     assert_eq!(pivots, vec![vec![3, 3]]);
+}
+
+/// Random starts that land on exactly zero entries cannot leave them one
+/// coordinate at a time. When they find nothing, the finder walks from the
+/// retained pivot pairs, which lie on observed support (#1358).
+#[test]
+fn retained_pivot_pairs_reach_support_that_random_starts_miss() {
+    // Nonzero only when sites 1 and 2 are both 3: from (0, 0, 0) every
+    // single-coordinate move sees 0. The maximum is f(3, 3, 3) = 4.
+    let f = |p: &Vec<usize>| {
+        if p[1] == 3 && p[2] == 3 {
+            (p[0] + 1) as f64
+        } else {
+            0.0
+        }
+    };
+    let with_sets =
+        |i_set: Vec<Vec<Vec<usize>>>, j_set: Vec<Vec<Vec<usize>>>| GlobalPivotSearchInput {
+            local_dims: vec![4, 4, 4],
+            current_tt: SimpleTensorTrain::constant(&[4, 4, 4], 0.0),
+            max_sample_value: 4.0,
+            i_set,
+            j_set,
+        };
+    let finder = DefaultGlobalPivotFinder::new(1, 2, 10.0);
+
+    // The retained pair (2 | 3, 3) at bond 0 and (2, 3 | 3) at bond 1 both
+    // walk to the maximum; abs_tol 0.5 keeps the error 4 below the margin 5.
+    let retained = with_sets(
+        vec![vec![vec![]], vec![vec![2]], vec![vec![2, 3]]],
+        vec![vec![vec![3, 3]], vec![vec![3]], vec![vec![]]],
+    );
+    assert_eq!(
+        finder
+            .find_global_pivots(&retained, &f, 0.5, &mut ZeroStream)
+            .unwrap(),
+        GlobalPivotSearchResult {
+            pivots: vec![vec![3, 3, 3]; 2],
+            max_sampled_error: 4.0,
+        }
+    );
+
+    // Without index sets there is nothing to confirm from.
+    assert_eq!(
+        finder
+            .find_global_pivots(&with_sets(vec![], vec![]), &f, 0.5, &mut ZeroStream)
+            .unwrap(),
+        GlobalPivotSearchResult::default()
+    );
+
+    // Index sets that do not match the grid are skipped, not trusted.
+    let mismatched = with_sets(
+        vec![vec![vec![]], vec![vec![2, 0]], vec![vec![2, 9]]],
+        vec![vec![vec![3]], vec![vec![3]], vec![vec![]]],
+    );
+    assert_eq!(
+        finder
+            .find_global_pivots(&mismatched, &f, 0.5, &mut ZeroStream)
+            .unwrap(),
+        GlobalPivotSearchResult::default()
+    );
+
+    // Left and right sets of different lengths have no defined last pair, so
+    // they are skipped too. Pairing the shorter set's tail with the same
+    // position of the longer one would walk from (0 | 3, 3) and (2, 3 | 0),
+    // both of which reach the maximum.
+    let unequal = with_sets(
+        vec![vec![vec![]], vec![vec![0], vec![2]], vec![vec![2, 3]]],
+        vec![vec![vec![3, 3]], vec![vec![0], vec![3]], vec![vec![]]],
+    );
+    assert_eq!(
+        finder
+            .find_global_pivots(&unequal, &f, 0.5, &mut ZeroStream)
+            .unwrap(),
+        GlobalPivotSearchResult::default()
+    );
+
+    // A random walk that already finds an error above the tolerance makes
+    // the confirmation unnecessary: only its own pivot is returned.
+    let dense = |p: &Vec<usize>| (p[0] + p[1] + p[2]) as f64;
+    assert_eq!(
+        finder
+            .find_global_pivots(&retained, &dense, 0.5, &mut ZeroStream)
+            .unwrap(),
+        GlobalPivotSearchResult {
+            pivots: vec![vec![3, 3, 3]],
+            max_sampled_error: 9.0,
+        }
+    );
 }

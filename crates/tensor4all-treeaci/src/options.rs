@@ -97,6 +97,22 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// Optional rank cap on every output edge. Default: no explicit cap.
     pub max_bond_dim: Option<usize>,
     /// Relative or absolute local error target. Default: `1e-12`.
+    ///
+    /// A local update keeps every pivot at or above this target. From the
+    /// third pass on, an edge also keeps pivots that fall below it, down to a
+    /// quarter of it, as long as the edge already had that many pivots. Ranks
+    /// then stop oscillating around the target, at the cost of slightly more
+    /// rank than a single truncation would keep.
+    ///
+    /// Known limitation: a pivot kept this way is dropped only once its error
+    /// falls below a quarter of the target, so on an edge whose pivot errors
+    /// sit close to the target the rank grows and rarely shrinks. A few such
+    /// edges can keep gaining a pivot for many passes. Each gain
+    /// restarts the [`min_sweeps`](Self::min_sweeps) window, so the run can
+    /// end with
+    /// [`TreeAciTermination::MaxSweeps`](crate::TreeAciTermination::MaxSweeps)
+    /// although its ranks no longer oscillate. See
+    /// [tensor4all-rs#1343](https://github.com/tensor4all/tensor4all-rs/issues/1343).
     pub tolerance: f64,
     /// Scale `tolerance` by sampled output magnitude. Default: `true`.
     ///
@@ -249,6 +265,64 @@ impl<V: TreeAciNode> Default for TreeAciOptions<V> {
 }
 
 impl<V: TreeAciNode> TreeAciOptions<V> {
+    /// These options for node type `W`, without an initial guess or a root,
+    /// the two fields that name nodes.
+    ///
+    /// The exhaustive destructuring makes a new field a compile error here
+    /// until it is carried over.
+    pub(crate) fn for_nodes<W: TreeAciNode>(&self) -> TreeAciOptions<W> {
+        let Self {
+            max_sweeps,
+            min_sweeps,
+            max_bond_dim,
+            tolerance,
+            scale_tolerance,
+            rng_seed,
+            enable_global_guard,
+            message_cache_max_bytes,
+            nsearch_global_pivots,
+            max_nglobal_pivots,
+            nsweeps_global_search,
+            global_tolerance_margin,
+            max_candidate_rows,
+            max_candidate_cols,
+            max_local_matrix_elements,
+            max_core_elements,
+            max_frame_elements,
+            max_frame_bytes,
+            max_sample_arena_bytes,
+            max_working_bytes,
+            traversal_strategy,
+            initial_guess: _,
+            root: _,
+        } = self;
+        TreeAciOptions {
+            max_sweeps: *max_sweeps,
+            min_sweeps: *min_sweeps,
+            max_bond_dim: *max_bond_dim,
+            tolerance: *tolerance,
+            scale_tolerance: *scale_tolerance,
+            rng_seed: *rng_seed,
+            enable_global_guard: *enable_global_guard,
+            message_cache_max_bytes: *message_cache_max_bytes,
+            nsearch_global_pivots: *nsearch_global_pivots,
+            max_nglobal_pivots: *max_nglobal_pivots,
+            nsweeps_global_search: *nsweeps_global_search,
+            global_tolerance_margin: *global_tolerance_margin,
+            max_candidate_rows: *max_candidate_rows,
+            max_candidate_cols: *max_candidate_cols,
+            max_local_matrix_elements: *max_local_matrix_elements,
+            max_core_elements: *max_core_elements,
+            max_frame_elements: *max_frame_elements,
+            max_frame_bytes: *max_frame_bytes,
+            max_sample_arena_bytes: *max_sample_arena_bytes,
+            max_working_bytes: *max_working_bytes,
+            traversal_strategy: *traversal_strategy,
+            initial_guess: None,
+            root: None,
+        }
+    }
+
     pub(crate) fn tolerance_policy(&self) -> TolerancePolicy {
         TolerancePolicy {
             tolerance: self.tolerance,

@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/tensor4all/tensor4all-meta/main/branding/logo/svg/tensor4all-wordmark-dark.svg">
+  <img alt="tensor4all" src="https://raw.githubusercontent.com/tensor4all/tensor4all-meta/main/branding/logo/svg/tensor4all-wordmark.svg" height="64">
+</picture>
+
 # tensor4all-rs
 
 [![CI](https://github.com/tensor4all/tensor4all-rs/actions/workflows/CI_rs.yml/badge.svg)](https://github.com/tensor4all/tensor4all-rs/actions/workflows/CI_rs.yml)
@@ -58,12 +63,15 @@ validated in CI. Longer runnable examples live in the
 | [tensor4all-treetn](crates/tensor4all-treetn/) | Tree tensor networks with arbitrary topology; one-site ALS and two-site MALS linear solves with GMRES, CG or BiCGSTAB local solvers |
 | [tensor4all-tensorci](crates/tensor4all-tensorci/) | Tensor Cross Interpolation (TCI2 primary, TCI1 legacy) |
 | [tensor4all-quanticstci](crates/tensor4all-quanticstci/) | High-level Quantics TCI interface |
-| [tensor4all-interpolativeqtt](crates/tensor4all-interpolativeqtt/) | Interpolative QTT construction |
-| [tensor4all-quanticstransform](crates/tensor4all-quanticstransform/) | Quantics transformation operators |
+| [tensor4all-interpolativeqtt](crates/tensor4all-interpolativeqtt/) | Interpolative QTT construction with adaptive dyadic patches and optional CPU lanes |
+| [tensor4all-quanticstransform](crates/tensor4all-quanticstransform/) | Quantics transformation operators, including [TreeTN Fourier transforms](docs/book/src/guides/qft.md) |
 | [tensor4all-treetci](crates/tensor4all-treetci/) | Tree-structured cross interpolation |
 | [tensor4all-partitionedtreetn](crates/tensor4all-partitionedtreetn/) | Partitioned TreeTNs with eager masking, adaptive patching, and adaptive patched interpolation |
 | [tensor4all-hdf5](crates/tensor4all-hdf5/) | ITensors.jl-compatible HDF5 serialization |
 | [tensor4all-capi](crates/tensor4all-capi/) | C FFI for language bindings |
+
+TreeTN's default features do not pull in SimpleTT. Enable its optional
+`simplett-bridge` feature explicitly when migrating between the two types.
 
 ## Documentation
 
@@ -74,6 +82,7 @@ validated in CI. Longer runnable examples live in the
 - **[Design Documents](docs/design/index.md)** — architecture and design decisions
 - **[Provenance and Citation Policy](docs/PROVENANCE_AND_CITATION_POLICY.md)** — which components build on which external projects, algorithm origins, and how to cite
 - **[Contributing](CONTRIBUTING.md)** — issue intake, development conventions, validation, and pull requests
+- **[Maintainers](docs/MAINTAINERS.md)** — project stewards and merge authority
 - **[Changelog](CHANGELOG.md)** — breaking API changes and release notes
 
 ## Agent Skill

@@ -8,6 +8,7 @@ use crate::error::QuanticsTransformError;
 use anyhow::Result;
 use num_complex::Complex64;
 use num_traits::{One, Zero};
+use tensor4all_core::DenseElementBudget;
 use tensor4all_simplett::{
     types::tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops,
 };
@@ -73,20 +74,31 @@ pub fn shift_operator(
 /// * `bc` - Boundary condition
 /// * `nvariables` - Total number of variables (must be at least 2)
 /// * `target_var` - Which variable to shift (0-indexed, must be < nvariables)
+/// * `budget` - Element-count budget for the embedded operator sites
 ///
 /// # Errors
 ///
 /// Returns [`QuanticsTransformError::Operation`] when `r` is zero, when
 /// `nvariables` or `target_var` is invalid, or when the MPO construction or
-/// operator conversion fails.
+/// operator conversion fails, and [`QuanticsTransformError::DenseBudget`] when
+/// the embedded operator exceeds `budget`.
 ///
 /// # Examples
 ///
 /// ```
 /// use tensor4all_quanticstransform::{shift_operator_multivar, BoundaryCondition};
+/// use tensor4all_core::DenseElementBudget;
 ///
 /// // Shift only the x-variable of a 2-variable function f(x, y) by 3
-/// let op = shift_operator_multivar(4, 3, BoundaryCondition::Periodic, 2, 0).unwrap();
+/// let op = shift_operator_multivar(
+///     4,
+///     3,
+///     BoundaryCondition::Periodic,
+///     2,
+///     0,
+///     DenseElementBudget::default(),
+/// )
+/// .unwrap();
 /// assert_eq!(op.mpo().node_count(), 4);
 /// ```
 pub fn shift_operator_multivar(
@@ -95,6 +107,7 @@ pub fn shift_operator_multivar(
     bc: BoundaryCondition,
     nvariables: usize,
     target_var: usize,
+    budget: DenseElementBudget,
 ) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     if r == 0 {
         return Err(anyhow::anyhow!("Number of sites must be positive").into());
@@ -102,7 +115,7 @@ pub fn shift_operator_multivar(
 
     let (dim_multi, _) = checked_multivar_dims(nvariables)?;
     let mpo = shift_mpo(r, offset, bc)?;
-    let embedded = embed_single_var_mpo(&mpo, nvariables, target_var)?;
+    let embedded = embed_single_var_mpo(&mpo, nvariables, target_var, budget)?;
     let mut dims = try_vec_with_capacity::<usize>("shift multivariable site dimensions", r)?;
     dims.resize(r, dim_multi);
     tensortrain_to_linear_operator_asymmetric(&embedded, &dims, &dims)

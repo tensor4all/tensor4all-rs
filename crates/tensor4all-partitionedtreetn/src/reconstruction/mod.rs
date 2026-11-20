@@ -23,14 +23,16 @@ use crate::{
     SubDomainTreeTN,
 };
 
+mod application;
 mod engine;
 mod schedule;
 mod target;
 
 pub use engine::reconstruct;
+pub(crate) use engine::truncate_toward_allowance;
 pub use schedule::{
     schedule_merge_refine, CoordinateGroup, CoverageContract, MergeRefineOptions,
-    MergeRefineReport, MergeRefineResult,
+    MergeRefineReport, MergeRefineResult, OperatorApplication,
 };
 pub use target::ReconstructionTarget;
 

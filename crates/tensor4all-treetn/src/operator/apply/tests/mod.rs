@@ -1,3 +1,5 @@
+mod identity_metadata;
+
 use super::*;
 use crate::random::{random_treetn, LinkSpace};
 use crate::treetn::contraction::SrcOptions;
@@ -2544,6 +2546,11 @@ fn apply_zipup_skips_the_nodes_its_operator_does_not_touch() {
     // still contracted and factorized.
     let skipped = zipup_identity_node_skips() - skipped_before;
     assert_eq!(skipped, 4, "untouched branch nodes skipped");
+    result.validate_ortho_consistency().unwrap();
+    assert_eq!(
+        result.canonical_region(),
+        &["hub".to_string()].into_iter().collect()
+    );
 
     for name in ["b0", "b1", "d0", "d1"] {
         assert_node_passed_through(&result, &state, name);
@@ -2869,7 +2876,8 @@ fn apply_zipup_never_skips_without_an_explicit_exact_policy() {
     );
 
     // An explicit zero threshold is the same request for exactness, and buys the
-    // skip.
+    // skip. Since #1285 the same request factorizes every other node by
+    // untruncated QR, so this is the fence for the skip under the QR form.
     let exact_options = ApplyOptions {
         center: Some("r".to_string()),
         svd_policy: Some(SvdTruncationPolicy::new(0.0)),
@@ -2882,6 +2890,11 @@ fn apply_zipup_never_skips_without_an_explicit_exact_policy() {
         1,
         "a zero threshold opts the untouched leaf into the pass-through"
     );
+
+    default_result.validate_ortho_consistency().unwrap();
+    exact_result.validate_ortho_consistency().unwrap();
+    assert!(exact_result.canonical_region().is_empty());
+    assert_eq!(exact_result.canonical_form(), None);
 
     // Both are exact against the naive apply, and the opted-in path is not less
     // accurate: skipping a node whose factorization cannot cut anything removes a
@@ -2901,6 +2914,16 @@ fn apply_zipup_never_skips_without_an_explicit_exact_policy() {
         exact_deviation <= default_deviation,
         "the pass-through ({exact_deviation:e}) must not be less accurate than the \
          factorized path ({default_deviation:e})"
+    );
+
+    // Under the QR form the pass-through is still a pure relabeling: the same
+    // exact request with the skip off factorizes `b` by QR as well and gives
+    // the same tensor.
+    let unskipped = apply_without_identity_skip(&operator, &state, "r", &exact_options);
+    let skip_deviation = dense_deviation(&exact_result, &unskipped);
+    assert!(
+        skip_deviation <= 1.0e-15,
+        "the pass-through changed the exact QR result by {skip_deviation:e}"
     );
 }
 
@@ -2989,4 +3012,48 @@ fn test_linear_operator_replace_indices_rejects_duplicate_and_occupied_targets()
         op.get_input_mapping(&"B".to_string()).unwrap().true_index,
         b
     );
+}
+
+#[test]
+fn extending_a_complex_operator_across_a_steiner_gap_keeps_one_dtype() {
+    use crate::operator::apply_linear_operator;
+    use tensor4all_core::AnyScalar;
+
+    // `i * I` on site0 and site2 of a four-site chain: site1 is a Steiner gap
+    // bridging the operator's bond, site3 an outer gap. Only the site0 tensor
+    // is complex, so the site2 tensor must be promoted as well.
+    let (state, sites) = build_chain_state();
+    let mut operator = build_bonded_identity_operator(&[sites[0].clone(), sites[2].clone()]);
+    let site0 = operator.mpo.node_index(&sites[0].0).unwrap();
+    let complex_core = operator
+        .mpo
+        .tensor(site0)
+        .unwrap()
+        .scale(AnyScalar::new_complex(0.0, 1.0))
+        .unwrap();
+    operator.mpo.replace_tensor(site0, complex_core).unwrap();
+
+    let (extended, _) = extend_operator_to_full_space(&operator, &state).unwrap();
+    assert_eq!(extended.mpo.node_count(), state.node_count());
+    for node in extended.mpo.node_indices() {
+        assert!(
+            extended.mpo.tensor(node).unwrap().is_complex(),
+            "node {node:?} is real"
+        );
+    }
+
+    let result = apply_linear_operator(&operator, &state, ApplyOptions::naive()).unwrap();
+    let expected = state
+        .to_dense()
+        .unwrap()
+        .scale(AnyScalar::new_complex(0.0, 1.0))
+        .unwrap();
+    let error = result
+        .to_dense()
+        .unwrap()
+        .sub(&expected)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    assert!(error < 1e-12, "i * I differs by {error}");
 }

@@ -1,15 +1,17 @@
 //! TensorCI1 - legacy one-site Tensor Cross Interpolation algorithm.
 
-use std::cell::RefCell;
+use std::{any::TypeId, cell::RefCell};
 
 use crate::error::{validate_nonnegative_finite, validate_positive, Result, TCIError};
+use tensor4all_core::legacy::solve_matrix;
 use tensor4all_core::{
-    AbstractMatrixCI, IndexSet, MatrixACA, MatrixLuciScalar, MultiIndex, Scalar,
+    rrlu_pivots, AbstractMatrixCI, IndexSet, MatrixACA, MatrixLuciScalar, MultiIndex, RrLUOptions,
+    Scalar,
 };
 use tensor4all_simplett::{
     tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, TTScalar, Tensor3Ops,
 };
-use tensor4all_tensorbackend::{solve_matrix, transpose, Matrix, MatrixSolveScalar};
+use tensor4all_tensorbackend::{submatrix, transpose, Matrix, MatrixSolveScalar};
 
 mod matrix_ci;
 
@@ -653,12 +655,24 @@ where
         }
 
         let mut cross = self.get_cross(bond)?;
-        self.add_pivot_col_with_cross(&mut cross, bond, new_col, f)?;
-        self.add_pivot_row_with_cross(&mut cross, bond, new_row, f)?;
+        self.aca[bond].add_pivot_col(&self.pi[bond], new_col)?;
+        self.insert_pivot_col(&mut cross, bond, new_col, f)?;
+        if bond > 0 {
+            self.rebuild_aca(bond - 1)?;
+        }
+        self.aca[bond].add_pivot_row(&self.pi[bond], new_row)?;
+        self.insert_pivot_row(&mut cross, bond, new_row, f)?;
+        if bond + 1 < self.len() - 1 {
+            self.rebuild_aca(bond + 1)?;
+        }
         Ok(())
     }
 
     /// Add a full multi-index as pivots across all bonds.
+    ///
+    /// When a bond gains only a prefix or suffix, try unused partners in order
+    /// of decreasing local ACA residual. A partner must pass a numerical
+    /// rank check on the enlarged pivot block after row and column scaling.
     ///
     /// # Arguments
     ///
@@ -668,33 +682,32 @@ where
     /// * `pivot` -- Zero-based global multi-index with one coordinate per
     ///
     ///   site.
-    /// * `abstol` -- Absolute error threshold. If the current approximation is
-    ///
-    ///   already within this threshold at `pivot`, no new pivots are inserted.
+    /// * `abstol` -- Absolute error threshold. No pivot is inserted when the
+    ///   error at `pivot` is zero or strictly below this threshold.
     ///
     /// # Returns
     ///
-    /// `Ok(())` after inserting any missing prefix/suffix pivots needed to
-    /// interpolate `pivot`.
+    /// `Ok(())` after inserting the missing prefix/suffix pivots and any
+    /// partners, or skipping insertion because the error is zero or below `abstol`.
     ///
     /// # Errors
     ///
     /// Returns [`TCIError::InvalidConfiguration`] when `abstol` is negative or
     /// non-finite. It also returns a [`TCIError`] if `pivot` is malformed or out
-    /// of range, if a pivot update fails, or if index sets become inconsistent.
+    /// of range, the state is uninitialized, no usable partner is found, or
+    /// an update or normalization fails. A failed update preserves the train.
     ///
     /// # Examples
     ///
     /// ```
     /// use tensor4all_tensorci::TensorCI1;
     ///
-    /// let f = |idx: &Vec<usize>| ((idx[0] + 1) * (idx[1] + 2) * (idx[2] + 3)) as f64;
+    /// let f = |idx: &Vec<usize>| (1 + idx[1] * (idx[0] + idx[2] + 1)) as f64;
     /// let mut tci = TensorCI1::<f64>::from_function(&f, vec![3, 3, 3], vec![0, 0, 0]).unwrap();
-    /// let pivot = vec![2, 1, 2];
-    /// tci.add_global_pivot(&f, pivot.clone(), 1e-12).unwrap();
+    /// tci.add_global_pivot(&f, vec![0, 1, 1], 0.0).unwrap();
     ///
-    /// assert!((tci.evaluate(&pivot).unwrap() - f(&pivot)).abs() < 1e-12);
-    /// assert!(tci.rank() >= 1);
+    /// assert!((tci.evaluate(&[0, 1, 1]).unwrap() - 3.0).abs() < 1e-12);
+    /// assert_eq!(tci.link_dims(), vec![2, 2]);
     /// ```
     pub fn add_global_pivot<F>(&mut self, f: &F, pivot: MultiIndex, abstol: f64) -> Result<()>
     where
@@ -704,45 +717,133 @@ where
         validate_first_pivot(&self.local_dims, &pivot)?;
         let exact = f(&pivot);
         let current = self.evaluate(&pivot)?;
-        if Scalar::abs_sq(exact - current).sqrt() < abstol {
+        let error = Scalar::abs_val(exact - current);
+        if error == 0.0 || error < abstol {
             return Ok(());
         }
 
-        for bond in 0..self.len() - 1 {
+        // The directional passes temporarily leave bonds unpaired. Keep the
+        // original train until the updates and normalization succeed.
+        let mut staged = self.clone();
+        staged.insert_global_pivot(f, &pivot)?;
+        if !Scalar::abs_val(staged.evaluate(&pivot)?).is_finite() {
+            return Err(TCIError::InvalidPivot {
+                message: "global pivot produced a non-finite interpolated value".to_string(),
+            });
+        }
+        *self = staged;
+        Ok(())
+    }
+
+    fn insert_global_pivot<F>(&mut self, f: &F, pivot: &[usize]) -> Result<()>
+    where
+        F: Fn(&MultiIndex) -> T,
+    {
+        let bonds = 0..self.len() - 1;
+
+        // Extend prefixes left to right and suffixes right to left so each
+        // outer index is available when the next site extends it.
+        for bond in bonds.clone() {
             let target = pivot[..bond + 1].to_vec();
             if !self.i_set[bond + 1].contains(&target) {
                 let row = self.position_in_pi_i(bond, &target)?;
                 let mut cross = self.get_cross(bond)?;
-                cross.add_pivot_row(&self.pi[bond], row)?;
-                self.i_set[bond + 1].push(self.pi_i_set[bond][row].clone());
-                self.update_site_tensor_from_matrix(bond + 1, cross.pivot_rows())?;
-                self.pivot_matrices_mut()[bond] = cross.pivot_matrix();
-                if bond + 1 < self.len() - 1 {
-                    self.refresh_pi_rows(bond + 1, f)?;
-                }
+                self.insert_pivot_row(&mut cross, bond, row, f)?;
             }
         }
 
-        for bond in (0..self.len() - 1).rev() {
+        for bond in bonds.clone().rev() {
             let target = pivot[bond + 1..].to_vec();
-            if !self.j_set[bond].contains(&target) {
-                let col = self.position_in_pi_j(bond + 1, &target)?;
-                let mut cross = self.get_cross(bond)?;
-                cross.add_pivot_col(&self.pi[bond], col)?;
-                self.j_set[bond].push(self.pi_j_set[bond + 1][col].clone());
-                self.update_site_tensor_from_matrix(bond, cross.pivot_cols())?;
-                self.pivot_matrices_mut()[bond] = cross.pivot_matrix();
-                if bond > 0 {
-                    self.refresh_pi_cols(bond - 1, f)?;
-                }
-            }
+            let col = if !self.j_set[bond].contains(&target) {
+                self.position_in_pi_j(bond + 1, &target)?
+            } else if self.i_set[bond + 1].len() > self.j_set[bond].len() {
+                self.find_global_pivot_pair(bond)?.1
+            } else {
+                continue;
+            };
+            let mut cross = self.get_cross(bond)?;
+            self.insert_pivot_col(&mut cross, bond, col, f)?;
         }
 
-        for bond in 0..self.len() - 1 {
+        // A filler row can now use the new target column and any filler
+        // prefixes already selected to its left.
+        for bond in bonds {
+            if self.i_set[bond + 1].len() < self.j_set[bond].len() {
+                let (row, _) = self.find_global_pivot_pair(bond)?;
+                let mut cross = self.get_cross(bond)?;
+                self.insert_pivot_row(&mut cross, bond, row, f)?;
+            }
             self.rebuild_aca(bond)?;
         }
 
         Ok(())
+    }
+
+    fn find_global_pivot_pair(&self, bond: usize) -> Result<(usize, usize)> {
+        let rows = self.i_set[bond + 1].values();
+        let cols = self.j_set[bond].values();
+        let rank = rows.len().min(cols.len());
+        let (rows, unpaired_rows) = rows.split_at(rank);
+        let (cols, unpaired_cols) = cols.split_at(rank);
+        let aca = self.aca_from_pivots(bond, rows, cols)?;
+        let (candidate_rows, candidate_cols) = match (unpaired_rows, unpaired_cols) {
+            ([row], []) => (
+                vec![self.position_in_pi_i(bond, row)?],
+                aca.available_cols(),
+            ),
+            ([], [col]) => (
+                aca.available_rows(),
+                vec![self.position_in_pi_j(bond + 1, col)?],
+            ),
+            _ => {
+                return Err(TCIError::DimensionMismatch {
+                    message: format!("bond {bond} must have exactly one unpaired global pivot"),
+                });
+            }
+        };
+        let epsilon = if TypeId::of::<T::Real>() == TypeId::of::<f32>() {
+            f64::from(f32::EPSILON)
+        } else {
+            f64::EPSILON
+        };
+        let pi = &self.pi[bond];
+        let mut candidates = Vec::new();
+        for row in candidate_rows {
+            for &col in &candidate_cols {
+                let exact = pi[[row, col]];
+                let approx = aca.evaluate(row, col);
+                let error = Scalar::abs_val(exact - approx);
+                // A dependent candidate can have a nonzero residual from rounding.
+                let scale = Scalar::abs_val(exact).max(Scalar::abs_val(approx));
+                if error.is_finite() && error > epsilon * scale {
+                    candidates.push((error, row, col));
+                }
+            }
+        }
+        // Test the actual cross in residual order; the ACA residual alone
+        // can overstate the rank even after the cheap roundoff screen.
+        candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let mut rows = aca.row_indices().to_vec();
+        let mut cols = aca.col_indices().to_vec();
+        rows.push(0);
+        cols.push(0);
+        let options = RrLUOptions {
+            // Allow for rounding in both scaling passes and elimination.
+            rel_tol: 4.0 * rows.len() as f64 * epsilon,
+            ..Default::default()
+        };
+        for (_, row, col) in candidates {
+            rows[rank] = row;
+            cols[rank] = col;
+            let mut cross = submatrix(pi, &rows, &cols);
+            equilibrate_cross(&mut cross);
+            if rrlu_pivots(cross, Some(options.clone()))?.rank == rows.len() {
+                return Ok((row, col));
+            }
+        }
+        Err(TCIError::InvalidPivot {
+            message: format!("bond {bond} has no usable partner for the global pivot"),
+        })
     }
 
     fn build_pi_i_set(&self, site: usize) -> Result<IndexSet<MultiIndex>> {
@@ -904,7 +1005,7 @@ where
         )
     }
 
-    fn add_pivot_col_with_cross<F>(
+    fn insert_pivot_col<F>(
         &mut self,
         cross: &mut matrix_ci::MatrixCI<T>,
         bond: usize,
@@ -914,18 +1015,17 @@ where
     where
         F: Fn(&MultiIndex) -> T,
     {
-        self.aca[bond].add_pivot_col(&self.pi[bond], new_col)?;
         cross.add_pivot_col(&self.pi[bond], new_col)?;
         self.j_set[bond].push(self.pi_j_set[bond + 1][new_col].clone());
         self.update_site_tensor_from_matrix(bond, cross.pivot_cols())?;
         self.pivot_matrices_mut()[bond] = cross.pivot_matrix();
         if bond > 0 {
-            self.update_pi_cols(bond - 1, f)?;
+            self.refresh_pi_cols(bond - 1, f)?;
         }
         Ok(())
     }
 
-    fn add_pivot_row_with_cross<F>(
+    fn insert_pivot_row<F>(
         &mut self,
         cross: &mut matrix_ci::MatrixCI<T>,
         bond: usize,
@@ -935,31 +1035,14 @@ where
     where
         F: Fn(&MultiIndex) -> T,
     {
-        self.aca[bond].add_pivot_row(&self.pi[bond], new_row)?;
         cross.add_pivot_row(&self.pi[bond], new_row)?;
         self.i_set[bond + 1].push(self.pi_i_set[bond][new_row].clone());
         self.update_site_tensor_from_matrix(bond + 1, cross.pivot_rows())?;
         self.pivot_matrices_mut()[bond] = cross.pivot_matrix();
         if bond + 1 < self.len() - 1 {
-            self.update_pi_rows(bond + 1, f)?;
+            self.refresh_pi_rows(bond + 1, f)?;
         }
         Ok(())
-    }
-
-    fn update_pi_rows<F>(&mut self, bond: usize, f: &F) -> Result<()>
-    where
-        F: Fn(&MultiIndex) -> T,
-    {
-        self.refresh_pi_rows(bond, f)?;
-        self.rebuild_aca(bond)
-    }
-
-    fn update_pi_cols<F>(&mut self, bond: usize, f: &F) -> Result<()>
-    where
-        F: Fn(&MultiIndex) -> T,
-    {
-        self.refresh_pi_cols(bond, f)?;
-        self.rebuild_aca(bond)
     }
 
     fn refresh_pi_rows<F>(&mut self, bond: usize, f: &F) -> Result<()>
@@ -981,15 +1064,37 @@ where
     }
 
     fn rebuild_aca(&mut self, bond: usize) -> Result<()> {
-        let row_indices = positions_in_set(&self.pi_i_set[bond], self.i_set[bond + 1].values())?;
-        let col_indices = positions_in_set(&self.pi_j_set[bond + 1], self.j_set[bond].values())?;
+        self.aca[bond] = self.aca_from_pivots(
+            bond,
+            self.i_set[bond + 1].values(),
+            self.j_set[bond].values(),
+        )?;
+        Ok(())
+    }
+
+    fn aca_from_pivots(
+        &self,
+        bond: usize,
+        rows: &[MultiIndex],
+        cols: &[MultiIndex],
+    ) -> Result<MatrixACA<T>> {
+        if rows.len() != cols.len() {
+            return Err(TCIError::DimensionMismatch {
+                message: format!(
+                    "rebuild_aca: bond {bond} has {} row indices but {} column indices",
+                    rows.len(),
+                    cols.len()
+                ),
+            });
+        }
+        let row_indices = positions_in_set(&self.pi_i_set[bond], rows)?;
+        let col_indices = positions_in_set(&self.pi_j_set[bond + 1], cols)?;
         let mut aca = MatrixACA::new(self.pi[bond].nrows(), self.pi[bond].ncols());
         for (&row, &col) in row_indices.iter().zip(col_indices.iter()) {
             aca.add_pivot_col(&self.pi[bond], col)?;
             aca.add_pivot_row(&self.pi[bond], row)?;
         }
-        self.aca[bond] = aca;
-        Ok(())
+        Ok(aca)
     }
 }
 
@@ -1163,6 +1268,30 @@ fn positions_in_set(set: &IndexSet<MultiIndex>, values: &[MultiIndex]) -> Result
             })
         })
         .collect()
+}
+
+// Rank screening should be insensitive to disparate row and column scales.
+fn equilibrate_cross<T: Scalar>(cross: &mut Matrix<T>) {
+    let size = cross.nrows();
+    for row in 0..size {
+        let scale = (0..size)
+            .map(|col| cross[[row, col]].abs_val())
+            .fold(0.0, f64::max);
+        if scale.is_finite() && scale > 0.0 {
+            for col in 0..size {
+                let entry = &mut cross[[row, col]];
+                *entry = entry.div_real(scale);
+            }
+        }
+    }
+    for col in cross.as_col_major_mut_slice().chunks_exact_mut(size) {
+        let scale = col.iter().copied().map(Scalar::abs_val).fold(0.0, f64::max);
+        if scale.is_finite() && scale > 0.0 {
+            for entry in col {
+                *entry = entry.div_real(scale);
+            }
+        }
+    }
 }
 
 fn right_solve<T>(a: &Matrix<T>, p: &Matrix<T>) -> Result<Matrix<T>>

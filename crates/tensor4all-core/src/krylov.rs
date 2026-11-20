@@ -38,9 +38,9 @@ use anyhow::Result;
 use num_complex::Complex64;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use tensor4all_tensorbackend::{
-    hermitian_exponential_first_column, lowest_hermitian_eigenpair, Matrix,
-};
+use tensor4all_tensorbackend::Matrix;
+
+use crate::implicit_route::{hermitian_exponential_first_column, lowest_hermitian_eigenpair};
 
 mod cg;
 mod vector_ops;

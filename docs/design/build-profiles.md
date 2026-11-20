@@ -153,8 +153,32 @@ link-time `hdf5-metno` API and therefore run only in a `link` build.
 The supported configurations, their exact Cargo selections, and where each is
 verified (PR CI, the nightly feature matrix, or locally) are declared in
 [CONTRIBUTING.md, "Supported feature configurations"](../../CONTRIBUTING.md#supported-feature-configurations).
-The per-crate feature inventory, including which crates expose which route
-features, is in [859-f7-consumer-inventory.md](./859-f7-consumer-inventory.md).
+The historical [#859 feature inventory](./859-f7-consumer-inventory.md) records
+earlier defaults. Current selections are declared in the manifests and the
+supported-configuration table linked above.
+
+### TreeTN interoperability and benchmark isolation
+
+TreeTN defaults select only the platform CPU provider. Its `simplett-bridge`
+feature is an explicit migration dependency; provider forwarding uses weak
+optional-dependency edges so selecting a provider cannot activate SimpleTT.
+Native partitioned contraction, sibling merging, and elementwise interpolation
+use TreeTN and do not require this bridge.
+
+The aggregate benchmark package defaults to the native TreeTN graph. Optional
+`fourier` enables the native Fourier constructors with `simplett-transforms`
+disabled. `legacy-comparisons` explicitly enables SimpleTT, TCI, and the bridge;
+`itensorlike` enables the ITensors-style facade benchmarks. Target
+`required-features` keep their examples out of unrelated builds. See the
+[benchmark feature table](../../benchmarks/README.md#cargo-feature-isolation).
+
+`scripts/check-m6-dependencies.py` guards resolved normal/build packages and
+activated features, using isolated downstream library roots and selecting only
+the benchmark package for harness graphs. It also checks benchmark dev edges.
+A whole-workspace graph may unify legacy features from other consumers; it is
+not evidence that an isolated M6 path depends on SimpleTT. These checks make no
+numerical or speedup claim. Fourier's numerical migration is owned by #1333;
+Interpolative QTT's native chain construction is owned by #1334.
 
 ## CI artifact reuse and guide verification
 

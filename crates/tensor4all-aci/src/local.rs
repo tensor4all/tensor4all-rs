@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 
 use crate::scalar::AciScalar;
 use crate::{AciError, ElementwiseBatch, ElementwiseProblem, Result};
+use tensor4all_core::legacy::{batched_mat_mul_same_shape_owned, mat_mul, mat_mul_owned};
 use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops};
-use tensor4all_tensorbackend::{batched_mat_mul_same_shape_owned, mat_mul, mat_mul_owned, Matrix};
+use tensor4all_tensorbackend::Matrix;
 
 type LocalOperator<'a, T> =
     dyn for<'batch> Fn(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()> + 'a;
@@ -265,10 +266,10 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
             checked_local_mul(n_inputs, n_missing, "local batch input value count")?;
         let mut input_values = vec![T::zero(); input_value_count];
         for (point, (&row, &col)) in missing_rows.iter().zip(&missing_cols).enumerate() {
-            for input in 0..n_inputs {
+            for (input, factors) in self.input_factors[..n_inputs].iter().enumerate() {
                 let offset = checked_local_mul(n_inputs, point, "local input offset")?;
                 let index = checked_local_add(input, offset, "local input offset")?;
-                input_values[index] = self.input_factors[input].value(row, col)?;
+                input_values[index] = factors.value(row, col)?;
             }
         }
 
@@ -345,8 +346,8 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
             return Ok(input_values);
         }
 
-        for input in 0..n_inputs {
-            let values = self.input_factors[input].materialize_values()?;
+        for (input, factors) in self.input_factors[..n_inputs].iter().enumerate() {
+            let values = factors.materialize_values()?;
             if values.len() != n_points {
                 return Err(AciError::InvalidInitialGuess {
                     message: format!(

@@ -10,7 +10,7 @@ keywords = ["tensor", "storage", "backend", "linear-algebra"]
 categories = ["science", "mathematics"]
 
 [features]
-default = ["backend-tenferro", "tenferro-cpu-platform"]
+default = ["explicit-context", "tenferro-cpu-platform"]
 # Compatibility alias for the legacy process-global operation surface.
 backend-tenferro = ["global-defaults"]
 # Canonical caller-supplied CPU context without process-global fallbacks.
@@ -103,4 +103,8 @@ required-features = ["global-defaults"]
 
 [[test]]
 name = "bench_einsum_native"
+required-features = ["global-defaults"]
+
+[[test]]
+name = "mat_mul_no_operand_copy"
 required-features = ["global-defaults"]

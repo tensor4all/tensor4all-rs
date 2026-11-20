@@ -77,6 +77,13 @@ pub enum SimpleTensorTrainError {
         message: String,
     },
 
+    /// The caller requested an algorithm unsupported by session compression.
+    #[error("session compression does not support {method:?}; use CompressionMethod::SVD")]
+    UnsupportedCompressionMethod {
+        /// Requested decomposition algorithm.
+        method: crate::CompressionMethod,
+    },
+
     /// Matrix CI error
     #[error("Matrix CI error: {0}")]
     MatrixCI(#[from] tensor4all_core::MatrixCIError),

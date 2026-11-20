@@ -58,3 +58,19 @@ fn test_estimate_true_error_sorted() {
         );
     }
 }
+
+#[test]
+fn test_dedup_pivots_ignores_interleaved_equal_errors() {
+    // A stable sort by descending error leaves equal-error entries in input
+    // order, so two copies of `p` can be separated by a distinct pivot `q`.
+    // `Vec::dedup_by` would keep both copies; the set-based dedup must not.
+    let p = vec![1usize, 2];
+    let q = vec![3usize, 4];
+    let mut entries = vec![(p.clone(), 1.0), (q.clone(), 1.0), (p.clone(), 1.0)];
+
+    dedup_pivots(&mut entries);
+
+    assert_eq!(entries.len(), 2, "duplicate pivot survived: {entries:?}");
+    assert_eq!(entries[0].0, p, "the first (highest-error) copy must win");
+    assert_eq!(entries[1].0, q);
+}

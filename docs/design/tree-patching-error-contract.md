@@ -781,7 +781,10 @@ pub enum L2ReferenceSource {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
-pub enum MaxReferenceSource { Given, ExactRoot, MaxOfRootCandidates }
+// `SearchedRootMaximum` replaced `MaxOfRootCandidates` (#1274): the
+// reference is the largest |f| a coordinate ascent reaches from the root's
+// candidates, not the largest candidate sample.
+pub enum MaxReferenceSource { Given, ExactRoot, SearchedRootMaximum }
 
 /// The global L2 error of a run, by what it can claim. RMS values are
 /// E / sqrt(|X|). Bitwise reproducible under the Determinism prerequisite,

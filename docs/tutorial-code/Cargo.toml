@@ -5,12 +5,16 @@ edition = "2021"
 autotests = false
 
 [dependencies]
-tensor4all-core = { path = "../../crates/tensor4all-core" }
+# Exercises the context-free API, which needs the process-global route.
+tensor4all-core = { path = "../../crates/tensor4all-core", features = ["global-defaults"] }
 tensor4all-simplett = { path = "../../crates/tensor4all-simplett" }
 tensor4all-quanticstci = { path = "../../crates/tensor4all-quanticstci" }
 tensor4all-interpolativeqtt = { path = "../../crates/tensor4all-interpolativeqtt" }
-tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform" }
-tensor4all-treetn = { path = "../../crates/tensor4all-treetn" }
+tensor4all-partitionedtreetn = { path = "../../crates/tensor4all-partitionedtreetn" }
+tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform", features = ["partitioned"] }
+# Legacy Quantics TCI tutorial states use the explicit migration bridge.
+tensor4all-treetn = { path = "../../crates/tensor4all-treetn", features = ["simplett-bridge"] }
+tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend" }
 num-complex.workspace = true
 
 [[test]]

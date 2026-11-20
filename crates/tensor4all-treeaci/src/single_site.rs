@@ -13,6 +13,7 @@ pub(crate) fn evaluate_single_site<T, V, F>(
     inputs: &[TreeTN<IdxTensor, V>],
     options: &TreeAciOptions<V>,
     operator: &mut F,
+    exec: &mut crate::exec::Exec<'_, '_>,
 ) -> Result<TreeAciResult<V>>
 where
     T: TreeAciScalar,
@@ -65,13 +66,14 @@ where
             .tensor(node_index)
             .ok_or(TreeAciError::InternalInvariant {
                 message: "prepared single-site input is missing its tensor",
-            })?
-            .permute_indices(&indices)
+            })?;
+        let tensor = exec
+            .permute(tensor, &indices)
             .map_err(|error| TreeAciError::Numerical {
                 message: error.to_string(),
             })?;
-        let values = tensor
-            .to_vec::<T>()
+        let values = exec
+            .values::<T>(&tensor)
             .map_err(|error| TreeAciError::ScalarKind {
                 message: error.to_string(),
             })?;
@@ -83,10 +85,14 @@ where
     let mut output_values = vec![T::default(); point_count];
     operator(batch, &mut output_values)?;
     crate::scalar::ensure_finite_values(&output_values, "single-node output")?;
+    let max_sample_magnitude = output_values
+        .iter()
+        .fold(0.0_f64, |scale, &value| scale.max(value.abs_val()));
     let output_tensor =
-        IdxTensor::from_dense(indices, output_values).map_err(|error| TreeAciError::Numerical {
-            message: error.to_string(),
-        })?;
+        exec.tensor(indices, output_values)
+            .map_err(|error| TreeAciError::Numerical {
+                message: error.to_string(),
+            })?;
     let tree = TreeTN::from_tensors(vec![output_tensor], vec![node.clone()])?;
     let evaluated_points = u64::try_from(point_count).map_err(|_| TreeAciError::SizeOverflow {
         context: "evaluated point count",
@@ -95,6 +101,7 @@ where
         tree,
         max_ranks: Vec::new(),
         max_errors: Vec::new(),
+        max_sample_magnitude,
         global_pivots_found: Vec::new(),
         termination: TreeAciTermination::Converged,
         diagnostics: TreeAciDiagnostics {

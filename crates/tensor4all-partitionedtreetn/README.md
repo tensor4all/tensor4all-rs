@@ -232,8 +232,12 @@ zero. `MergeRefineOptions` selects the output depth, the
 work limit, an optional soft rank goal, and the retained term budget;
 `MergeRefineReport` records the structural counters plus the pinned allowance and
 the measured bound. With `target_bond_dim` unset the trajectory is uniform and
-exact (`error_bound` zero). With a goal it is adaptive: a region is refined only
-when that lowers its maximum retained rank, a merged pair is combined only when
+exact (`error_bound` zero). With a goal it is adaptive: a region is merged without
+splitting first and stops as soon as that candidate fits the goal, and a candidate
+above the goal is refined only when its children store no more parameters in total
+than the candidate they replace, because one split keeps one region per output child
+(two in one axis, eight with three axes) and a projected child still keeps every
+output site axis, so a rank drop by one is not a gain. A merged pair is combined only when
 combining pays off, and merged items are truncated only within an equal share of
 the allowance, so the measured bound never exceeds it. A merged or unpaired
 contribution is dropped only when its measured norm fits its share of the allowance,
@@ -241,9 +245,12 @@ with `dropped_terms` and `dropped_error` reporting it and a fully dropped region
 omitted while its measured norm still counts. Every measured component is recorded
 once, at the level and region where it was measured, so `error_bound` does not grow
 with the number of refined regions. Exceeding `max_terms` returns a
-resource-limit error. `MergeRefineOptions::apply_options` opts into a
-truncating application whose measured deviation from the exact application is
-charged to the same bound, and an application error above the allowance is
+resource-limit error. `MergeRefineOptions::application` chooses how each input
+leaf is transformed: exactly (the default); `OperatorApplication::Measured`, a
+truncating application whose measured deviation from the exact one is charged to
+the same bound; or `OperatorApplication::Certified`, a truncating application on
+chain states that never forms the exact image and charges proved bounds within
+a required share of the allowance. An application error above the allowance is
 rejected. Several coordinate axes may be transformed in one synchronized level through
 `MergeRefineOptions::coordinate_groups`, each stating its own input and output order;
 the transform is never padded and its length never changes. Per-input-branch refinement

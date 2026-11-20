@@ -47,10 +47,12 @@ pub use error::{PartitionedTreeTNError, Result};
 pub use error_norm::{ErrorNorm, ErrorTolerance, L2Reference};
 pub use partitioned_tree_tn::{
     PartitionedContractionOptions, PartitionedTreeTN, AUTOMATIC_REFINEMENT_LIMIT,
+    DEFAULT_GROUP_SUM_LIMIT_BYTES,
 };
 pub use patching::{
-    add_with_patching, contract_adaptive, contract_adaptive_selected, truncate_adaptive,
-    BudgetAllocation, PatchSplitStrategy, PatchingOptions,
+    add_with_patching, add_with_patching_with_report, contract_adaptive,
+    contract_adaptive_selected, contract_adaptive_with_report, truncate_adaptive, BudgetAllocation,
+    PatchCapRecord, PatchSplitStrategy, PatchingOptions, PatchingReport,
 };
 pub use projector::Projector;
 pub use subdomain_tree_tn::SubDomainTreeTN;

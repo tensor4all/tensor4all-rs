@@ -39,6 +39,7 @@ fn nonfinite(value: f64) {
         &mut rng,
         &mut operator,
         &[],
+        &mut crate::exec::Exec::Global,
     );
     eprintln!("NONFINITE_GUARD value={value:?} report={report:?}");
     assert!(report.is_err(), "non-finite guard values must be rejected");
@@ -72,11 +73,12 @@ fn finite_control_preserves_pivot_coordinates() {
         &mut state,
         &options,
         crate::schedule::PassDirection::Forward,
+        false,
         &mut |_batch: TreeElementwiseBatch<'_, f64>, out: &mut [f64]| {
             out.fill(0.0);
             Ok(())
         },
-        None,
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     let mut evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
@@ -88,6 +90,7 @@ fn finite_control_preserves_pivot_coordinates() {
         &mut rng,
         &mut operator,
         &[],
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     assert_eq!(report.pivots, vec![vec![0, 0]]);
@@ -108,11 +111,12 @@ fn nonfinite_walk_target_after_a_finite_start_is_rejected() {
             &mut state,
             &options,
             crate::schedule::PassDirection::Forward,
+            false,
             &mut |_batch: TreeElementwiseBatch<'_, f64>, out: &mut [f64]| {
                 out.fill(0.0);
                 Ok(())
             },
-            None,
+            &mut crate::exec::Exec::Global,
         )
         .unwrap();
         let mut peek = rand_chacha::ChaCha8Rng::seed_from_u64(0);
@@ -139,6 +143,7 @@ fn nonfinite_walk_target_after_a_finite_start_is_rejected() {
             &mut rng,
             &mut operator,
             &[],
+            &mut crate::exec::Exec::Global,
         );
         assert!(
             calls > 2,
@@ -188,7 +193,8 @@ fn overflowing_guard_threshold_is_rejected() {
             &options,
             &mut rng,
             &mut operator,
-            &[]
+            &[],
+            &mut crate::exec::Exec::Global
         ),
         Err(crate::TreeAciError::NonFiniteValue {
             context: "guard threshold"

@@ -134,6 +134,10 @@ assert!(cf.num_cache_hits() > 0);
 
 ## Quantics transform: build + apply an operator
 
+The shift example uses the default `simplett-transforms` feature. Keep this
+feature if you disable defaults to choose a different provider and still need
+shifts or other non-Fourier transforms.
+
 ```rust
 use tensor4all_core::SvdTruncationPolicy;
 use tensor4all_quanticstransform::{quantics_fourier_operator, FourierOptions, shift_operator, BoundaryCondition};
@@ -372,3 +376,30 @@ use tensor4all_hdf5::{load_mps, save_mps};
 - Off-by-one at a boundary: all tensor4all-rs indices are 0-indexed — QuanticsTCI.jl scripts must subtract 1 from grid indices.
 - Tolerance mismatch with Julia: `rtol = sqrt(cutoff)`.
 - Running in a debug build (no `--release`): tensor linalg is orders of magnitude slower — always run TCI/DMRG in release.
+
+## Patched Fourier transforms
+
+For a Fourier transform of existing `PartitionedTreeTN` patches, enable the
+`partitioned` feature on `tensor4all-quanticstransform`. In a Fourier-only
+project disable defaults and select `tenferro-cpu-platform` or another CPU
+provider on the transform crate and any directly imported TreeTN crates.
+Call `patched_fourier_transform` with one MSB-first index vector per axis.
+Selected indices must lie on one tree path. Spectators retain their identities.
+Every input patch must fix a contiguous MSB prefix of each axis. Different spectator
+constraints are supported through disjoint cells; overlapping constraints use
+a common grid bounded by `merge_refine.max_work_items` and `max_terms` before
+tensor operations. Raise those limits or restrict the producer's patch order
+to selected indices if the grid is refused. Each original patch is transformed
+once, and output regions keep their spectator constraints. The
+result is lazy `MergeRefineResult`, and `into_partition()` requires one term per
+region. Leave `PatchedFourierOptions::merge_refine.coordinate_groups` unset.
+For repeated transforms, set a suitable `target_bond_dim` and reconstruction
+tolerance rather than allowing exact intermediate bonds to accumulate.
+
+The normalized inverse reverses each axis's index vector and uses
+`FourierOptions::inverse()`. Reconstruction error bounds exclude the Fourier
+operator's construction error and backend roundoff. For unpatched products use
+`quantics_fourier_operator_multiaxis` with an explicit `AxisBit` layout. Exact
+layouts multiply the per-axis bonds (about `12 * 12` for two interleaved axes),
+beyond the per-axis construction cap; grouped layouts keep the per-axis bond.
+See the [QFT guide](../../../docs/book/src/guides/qft.md) and its checked example.

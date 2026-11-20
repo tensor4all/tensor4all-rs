@@ -1200,20 +1200,24 @@ fn test_custom_global_pivot_finder() {
             _f: &F,
             _abs_tol: f64,
             rng: &mut dyn rand::RngCore,
-        ) -> Result<Vec<MultiIndex>>
+        ) -> Result<crate::GlobalPivotSearchResult>
         where
             T: tensor4all_core::Scalar + tensor4all_simplett::TTScalar,
             F: Fn(&MultiIndex) -> T,
         {
-            Ok((0..self.npivots)
-                .map(|_| {
-                    input
-                        .local_dims
-                        .iter()
-                        .map(|&d| rng.random_range(0..d))
-                        .collect()
-                })
-                .collect())
+            // Random pivots, no residual measured.
+            Ok(crate::GlobalPivotSearchResult {
+                pivots: (0..self.npivots)
+                    .map(|_| {
+                        input
+                            .local_dims
+                            .iter()
+                            .map(|&d| rng.random_range(0..d))
+                            .collect()
+                    })
+                    .collect(),
+                max_sampled_error: 0.0,
+            })
         }
     }
 
@@ -1272,7 +1276,8 @@ fn test_custom_global_pivot_finder() {
     let mut rng = <rand_chacha::ChaCha8Rng as rand::SeedableRng>::seed_from_u64(7);
     let pivots = finder
         .find_global_pivots(&input, &f, 1e-4, &mut rng)
-        .unwrap();
+        .unwrap()
+        .pivots;
 
     // Custom finder should return npivots random pivots
     assert_eq!(pivots.len(), 10);
@@ -1316,13 +1321,16 @@ fn test_optimize_with_finder_invokes_custom_finder() {
             _f: &F,
             _abs_tol: f64,
             _rng: &mut dyn rand::RngCore,
-        ) -> Result<Vec<MultiIndex>>
+        ) -> Result<crate::GlobalPivotSearchResult>
         where
             T: tensor4all_core::Scalar + tensor4all_simplett::TTScalar,
             F: Fn(&MultiIndex) -> T,
         {
             self.calls.set(self.calls.get() + 1);
-            Ok(vec![vec![input.local_dims[0] - 1, input.local_dims[1] - 1]])
+            Ok(crate::GlobalPivotSearchResult {
+                pivots: vec![vec![input.local_dims[0] - 1, input.local_dims[1] - 1]],
+                max_sampled_error: 0.0,
+            })
         }
     }
 
@@ -1415,4 +1423,67 @@ fn test_crossinterpolate2_numerically_zero_subdomain_issue598() {
     // outcome is a rank-1 (near-zero) tensor train, not a shape error.
     assert_eq!(tt.link_dims(), vec![1; R - PREFIX.len() - 1]);
     assert_eq!(result.termination, crate::TCI2Termination::Converged);
+}
+
+/// A bond's previous pivots become the rook search's seeds, expressed as
+/// positions in the combined candidate lists (`arrlu`'s `I0`/`J0`).
+///
+/// The halves of a pair come from two different lists, so a mapping that
+/// dropped one without the other would silently pair a pivot row with another
+/// wide column's index.
+#[test]
+fn seed_positions_pair_previous_pivots_by_position_in_the_combined_lists() {
+    let multi = |values: &[usize]| values.iter().map(|&v| vec![v]).collect::<Vec<_>>();
+    let previous_rows = multi(&[7, 3, 9]);
+    let previous_cols = multi(&[4, 8, 6]);
+    // The combined lists are the candidate rows and columns in their own order,
+    // not the previous pivot order.
+    let combined_rows = multi(&[1, 3, 5, 7, 9]);
+    let combined_cols = multi(&[8, 6, 4, 2]);
+
+    assert_eq!(
+        super::seed_positions(
+            &previous_rows,
+            &previous_cols,
+            &combined_rows,
+            &combined_cols
+        ),
+        vec![(3, 2), (1, 0), (4, 1)],
+        "pairs must follow the previous pivot order, not the combined order"
+    );
+
+    // A pivot whose row is gone loses its column too, so the remaining pairs
+    // stay aligned.
+    let combined_rows = multi(&[1, 3, 5, 9]);
+    assert_eq!(
+        super::seed_positions(
+            &previous_rows,
+            &previous_cols,
+            &combined_rows,
+            &combined_cols
+        ),
+        vec![(1, 0), (3, 1)]
+    );
+
+    // A candidate listed twice maps to its first position, as a linear scan
+    // would, so indexing the lists does not change which entry is seeded.
+    let duplicated_rows = multi(&[3, 7, 3, 9, 7]);
+    let duplicated_cols = multi(&[6, 4, 8, 4, 6]);
+    assert_eq!(
+        super::seed_positions(
+            &previous_rows,
+            &previous_cols,
+            &duplicated_rows,
+            &duplicated_cols
+        ),
+        vec![(1, 1), (0, 2), (3, 0)]
+    );
+
+    // Nothing to seed from on the first sweep, and a half-written state must
+    // not panic.
+    assert!(super::seed_positions(&[], &[], &combined_rows, &combined_cols).is_empty());
+    assert_eq!(
+        super::seed_positions(&previous_rows[..1], &[], &combined_rows, &combined_cols),
+        Vec::<(usize, usize)>::new()
+    );
 }

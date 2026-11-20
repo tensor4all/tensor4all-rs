@@ -1,4 +1,5 @@
 mod fresh;
+mod hysteresis;
 mod scaling;
 
 use std::cell::Cell;
@@ -63,7 +64,9 @@ fn local_entries_equal_direct_values_and_callback_layout_is_column_major() {
     let options = TreeAciOptions::default();
     let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
     let (arena, active) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
-    let frames = InputFrameStore::from_samples(&inputs, &problem, &arena).unwrap();
+    let frames =
+        InputFrameStore::from_samples(&inputs, &problem, &arena, &mut crate::exec::Exec::Global)
+            .unwrap();
     let calls = Cell::new(0);
     let mut operator = |batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]| {
         calls.set(calls.get() + 1);
@@ -87,8 +90,9 @@ fn local_entries_equal_direct_values_and_callback_layout_is_column_major() {
         0,
         &options,
         true,
-        &mut operator,
         None,
+        &mut operator,
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     assert_eq!(calls.get(), 1);
@@ -112,7 +116,13 @@ fn local_truncation_uses_relative_or_absolute_sampled_scale() {
         };
         let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
         let (arena, active) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
-        let frames = InputFrameStore::from_samples(&inputs, &problem, &arena).unwrap();
+        let frames = InputFrameStore::from_samples(
+            &inputs,
+            &problem,
+            &arena,
+            &mut crate::exec::Exec::Global,
+        )
+        .unwrap();
         let mut diagonal = |_batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]| {
             output.copy_from_slice(&[1.0e8, 0.0, 0.0, 1.0e-9]);
             Ok(())
@@ -127,8 +137,9 @@ fn local_truncation_uses_relative_or_absolute_sampled_scale() {
                 0,
                 &options,
                 left_orthogonal,
-                &mut diagonal,
                 None,
+                &mut diagonal,
+                &mut crate::exec::Exec::Global,
             )
             .unwrap();
 
@@ -165,7 +176,13 @@ fn luci_factors_reconstruct_rank_one_and_zero_targets() {
         let options = TreeAciOptions::default();
         let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
         let (arena, active) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
-        let frames = InputFrameStore::from_samples(&inputs, &problem, &arena).unwrap();
+        let frames = InputFrameStore::from_samples(
+            &inputs,
+            &problem,
+            &arena,
+            &mut crate::exec::Exec::Global,
+        )
+        .unwrap();
         let mut operator = |batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]| {
             for (point, value) in output.iter_mut().enumerate() {
                 *value = if zero { 0.0 } else { batch.get(0, point)? };
@@ -180,8 +197,9 @@ fn luci_factors_reconstruct_rank_one_and_zero_targets() {
             0,
             &options,
             true,
-            &mut operator,
             None,
+            &mut operator,
+            &mut crate::exec::Exec::Global,
         )
         .unwrap();
 
@@ -211,7 +229,13 @@ fn zero_local_matrix_keeps_the_pivot_identity_in_the_interpolating_factor() {
         let options = TreeAciOptions::default();
         let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
         let (arena, active) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
-        let frames = InputFrameStore::from_samples(&inputs, &problem, &arena).unwrap();
+        let frames = InputFrameStore::from_samples(
+            &inputs,
+            &problem,
+            &arena,
+            &mut crate::exec::Exec::Global,
+        )
+        .unwrap();
         let mut zero = |_batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]| {
             output.fill(0.0);
             Ok(())
@@ -224,8 +248,9 @@ fn zero_local_matrix_keeps_the_pivot_identity_in_the_interpolating_factor() {
             0,
             &options,
             left_orthogonal,
-            &mut zero,
             None,
+            &mut zero,
+            &mut crate::exec::Exec::Global,
         )
         .unwrap();
 
@@ -265,7 +290,9 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
     let options = TreeAciOptions::default();
     let problem = prepare_problem::<f64, _>(&inputs, &options).unwrap();
     let (arena, active) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
-    let frames = InputFrameStore::from_samples(&inputs, &problem, &arena).unwrap();
+    let frames =
+        InputFrameStore::from_samples(&inputs, &problem, &arena, &mut crate::exec::Exec::Global)
+            .unwrap();
     let mut failing = |_batch: crate::TreeElementwiseBatch<'_, f64>, _output: &mut [f64]| {
         Err(TreeAciError::Callback {
             message: "sentinel".into(),
@@ -273,7 +300,7 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
     };
     assert!(matches!(
         materialize_and_factor_edge(
-            &inputs, &problem, &active, &frames, 0, &options, true, &mut failing, None ),
+            &inputs, &problem, &active, &frames, 0, &options, true, None, &mut failing, &mut crate::exec::Exec::Global ),
         Err(TreeAciError::Callback { message }) if message == "sentinel"
     ));
 
@@ -300,8 +327,9 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
             0,
             &limited,
             true,
+            None,
             &mut unused,
-            None
+            &mut crate::exec::Exec::Global
         ),
         Err(TreeAciError::ResourceLimit {
             resource: "local matrix elements",
@@ -331,7 +359,8 @@ fn callback_error_and_matrix_budget_stop_before_factorization() {
             0,
             &working_limited,
             true,
-            &mut working_unused, None ),
+            None,
+            &mut working_unused, &mut crate::exec::Exec::Global ),
         Err(TreeAciError::ResourceLimit {
             resource: "working bytes",
             requested,
@@ -451,7 +480,9 @@ fn run_local_update_measurement(
     let options = crate::TreeAciOptions::default();
     let problem = crate::problem::prepare_problem::<f64, _>(&inputs, &options).unwrap();
     let (arena, active) = SampleArena::from_global_seeds(&problem, samples).unwrap();
-    let frames = InputFrameStore::from_samples(&inputs, &problem, &arena).unwrap();
+    let frames =
+        InputFrameStore::from_samples(&inputs, &problem, &arena, &mut crate::exec::Exec::Global)
+            .unwrap();
     let forward = problem
         .directed_edges
         .iter()
@@ -490,8 +521,9 @@ fn run_local_update_measurement(
             forward,
             &options,
             true,
-            &mut operator,
             None,
+            &mut operator,
+            &mut crate::exec::Exec::Global,
         )
         .unwrap();
         checksum.extend(update.local_values);
@@ -599,10 +631,23 @@ fn candidate_frames_batched_path_matches_scalar_path_on_a_chain() {
     // its own (empty) candidate cache cannot be pre-populated by the scalar
     // oracle below.
     let (arena_for_batched, _) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
-    let frames_batched =
-        InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena_for_batched).unwrap();
+    let frames_batched = InputFrameStore::<f64>::from_samples(
+        &inputs,
+        &problem,
+        &arena_for_batched,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
     let batched = frames_batched
-        .candidate_frames_for_edge(&inputs, &problem, 0, edge, &row_candidates, 0)
+        .candidate_frames_for_edge(
+            &inputs,
+            &problem,
+            0,
+            edge,
+            &row_candidates,
+            0,
+            &mut crate::exec::Exec::Global,
+        )
         .unwrap();
 
     // The scalar oracle: a second, independently built store, walked one
@@ -613,8 +658,13 @@ fn candidate_frames_batched_path_matches_scalar_path_on_a_chain() {
     // regression in the new batched math, not a comparison of the new path
     // to itself.
     let (arena_for_scalar, _) = SampleArena::from_global_seeds(&problem, &seeds).unwrap();
-    let frames_scalar =
-        InputFrameStore::<f64>::from_samples(&inputs, &problem, &arena_for_scalar).unwrap();
+    let frames_scalar = InputFrameStore::<f64>::from_samples(
+        &inputs,
+        &problem,
+        &arena_for_scalar,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
     let scalar = row_candidates
         .iter()
         .map(|candidate| {

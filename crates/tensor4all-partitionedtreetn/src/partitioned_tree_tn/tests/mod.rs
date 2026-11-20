@@ -13,6 +13,8 @@ use crate::PatchingOptions;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
+mod group_sum_limit;
+mod iteration_order;
 mod refinement_limit;
 
 const BRANCHES: usize = 3;
@@ -169,8 +171,8 @@ fn sorted(mut projectors: Vec<Projector>) -> Vec<Projector> {
     projectors
 }
 
-/// Run `operation` and return its result with the number of top-level pairs
-/// it contracted.
+/// Run `operation` and count numeric pair attempts. Adaptive calls include
+/// child attempts; the no-cap fixtures below have top-level pairs only.
 fn count_pairs<T>(operation: impl FnOnce() -> T) -> (T, usize) {
     CONTRACTED_PAIRS.with(|count| count.set(0));
     let result = operation();

@@ -28,6 +28,12 @@ pub struct ReadmeDoctests;
 
 pub mod prelude;
 
+pub mod chain_compression;
+pub use chain_compression::{
+    compress_chain_cores_mut, compress_chain_lu_mut, compress_chain_lu_on_session,
+    ChainCompressionError, ChainCore, ChainLuFactorization, ChainLuOptions,
+};
+
 pub mod col_major_array;
 pub use col_major_array::{ColMajorArray, ColMajorArrayMut, ColMajorArrayRef};
 
@@ -35,6 +41,7 @@ pub use col_major_array::{ColMajorArray, ColMajorArrayMut, ColMajorArrayRef};
 /// Dynamic scalar compatibility wrapper built on rank-0 `IdxTensor`.
 pub mod any_scalar;
 pub mod global_default;
+mod implicit_route;
 /// Bit-packed integer keys for multi-index maps.
 pub mod index_key;
 pub mod index_like;
@@ -44,6 +51,10 @@ pub mod smallstring;
 /// Tag set types for tensor metadata.
 pub mod tagset;
 pub mod truncation;
+
+/// Shared element-count budget for dense materialization in production paths.
+pub mod dense_budget;
+pub use dense_budget::{DenseBudgetError, DenseElementBudget, DEFAULT_MAX_DENSE_ELEMENTS};
 
 // TCI substrate absorbed from tensor4all-tcicore (dissolved, #639): matrix
 // cross interpolation (LU/LUCI/ACA), common scalar trait, floating-zone
@@ -71,12 +82,17 @@ pub use floating_zone::{
     floating_zone_walk, floating_zone_walk_with_initial_error, FloatingZoneError,
 };
 pub use indexset::{IndexSet, LocalIndex, MultiIndex};
+#[doc(hidden)]
+pub use matrix_luci::matrix_luci_factors_from_blocks_seeded;
 pub use matrix_luci::{
     matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix,
     matrix_luci_factors_from_matrix_owned, matrix_luci_factors_from_matrix_owned_in,
-    matrix_luci_factors_from_matrix_owned_on_session, matrix_luci_factors_working_bytes,
-    matrix_luci_row_interpolation_owned_in, matrix_luci_row_interpolation_owned_on_session,
-    MatrixLUCI, MatrixLuciFactors, MatrixLuciRowInterpolation,
+    matrix_luci_factors_from_matrix_owned_on_session,
+    matrix_luci_factors_from_matrix_owned_with_rank_selection,
+    matrix_luci_factors_from_matrix_owned_with_rank_selection_on_session,
+    matrix_luci_factors_working_bytes, matrix_luci_row_interpolation_owned_in,
+    matrix_luci_row_interpolation_owned_on_session, MatrixLUCI, MatrixLuciFactors,
+    MatrixLuciRowInterpolation,
 };
 pub use matrixaca::MatrixACA;
 pub use matrixlu::{rrlu, rrlu_mut, rrlu_pivots, RrLU, RrLUOptions, RrLUPivots};
@@ -134,6 +150,16 @@ pub use defaults::idx_tensor::{
 pub use defaults::IdxTensorCudaError;
 pub use tensor4all_tensorbackend::ExecutionContext;
 pub use tensor4all_tensorbackend::TensorElement;
+
+/// Transitional bridges for context-free library code in downstream crates.
+///
+/// Migration aid for tensor4all-rs#1376, not API: each call site is still on
+/// the process-global route and is removed with it. With `global-defaults` a
+/// bridge returns the process-global state; without it, it refuses.
+#[doc(hidden)]
+pub mod legacy {
+    pub use crate::implicit_route::*;
+}
 pub use tensor4all_tensorbackend::{
     print_and_reset_native_einsum_profile, reset_native_einsum_profile,
 };

@@ -2576,6 +2576,7 @@ dependencies = [
  "tenferro-linalg",
  "tenferro-runtime",
  "tenferro-tensor",
+ "tensor4all-core",
  "tensor4all-tensorbackend",
  "thiserror 2.0.20",
  "tinyvec",
@@ -2613,10 +2614,15 @@ name = "tensor4all-interpolativeqtt"
 version = "0.3.0"
 dependencies = [
  "approx 0.5.1",
+ "hataori",
+ "hataori-tenferro",
+ "num-complex 0.4.6",
  "quanticsgrids",
  "rand",
- "tensor4all-simplett",
+ "rayon",
+ "tensor4all-core",
  "tensor4all-tensorbackend",
+ "tensor4all-treetn",
  "thiserror 2.0.20",
 ]
 
@@ -2655,8 +2661,10 @@ dependencies = [
  "serde_json",
  "tenferro-cpu",
  "tensor4all-core",
- "tensor4all-quanticstransform",
+ "tensor4all-interpolativeqtt",
  "tensor4all-tensorbackend",
+ "tensor4all-treeaci",
+ "tensor4all-treersi",
  "tensor4all-treetci",
  "tensor4all-treetn",
  "thiserror 2.0.20",
@@ -2695,9 +2703,15 @@ dependencies = [
  "num-rational",
  "num-traits",
  "quanticsgrids",
+ "rand",
+ "rand_chacha",
  "sprs",
  "tensor4all-core",
+ "tensor4all-interpolativeqtt",
+ "tensor4all-partitionedtreetn",
  "tensor4all-simplett",
+ "tensor4all-tensorbackend",
+ "tensor4all-treetci",
  "tensor4all-treetn",
  "thiserror 2.0.20",
 ]
@@ -2770,6 +2784,7 @@ dependencies = [
 name = "tensor4all-treeaci"
 version = "0.3.0"
 dependencies = [
+ "anyhow",
  "criterion",
  "num-complex 0.4.6",
  "rand",
@@ -2787,12 +2802,14 @@ dependencies = [
 name = "tensor4all-treersi"
 version = "0.3.0"
 dependencies = [
+ "anyhow",
  "num-complex 0.4.6",
  "rand",
  "rand_chacha",
  "rand_distr",
  "tensor4all-core",
  "tensor4all-tensorbackend",
+ "tensor4all-treersi",
  "tensor4all-treetn",
  "thiserror 2.0.20",
 ]
@@ -2846,9 +2863,11 @@ dependencies = [
  "num-complex 0.4.6",
  "tensor4all-core",
  "tensor4all-interpolativeqtt",
+ "tensor4all-partitionedtreetn",
  "tensor4all-quanticstci",
  "tensor4all-quanticstransform",
  "tensor4all-simplett",
+ "tensor4all-tensorbackend",
  "tensor4all-treetn",
 ]
 

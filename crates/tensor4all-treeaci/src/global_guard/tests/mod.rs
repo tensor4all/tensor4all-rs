@@ -1,3 +1,4 @@
+mod candidate_closure;
 mod finite_values;
 mod known_pivots;
 mod start_residuals;
@@ -114,7 +115,7 @@ fn assert_guard_typed_evaluation<T: GuardTestScalar>() {
     let points = vec![vec![0usize, 0], vec![1, 0], vec![0, 1], vec![1, 1]];
 
     let actual = output_evaluator
-        .evaluate::<T>(&input_evaluators, &points)
+        .evaluate::<T>(&input_evaluators, &points, &mut crate::exec::Exec::Global)
         .unwrap();
     let coordinates = input_evaluators.expand_points(&points).unwrap();
     let indices = state
@@ -190,7 +191,9 @@ fn assert_guard_input_typed_matches_wrapper<T: GuardTestScalar>() {
         let coordinates = input_evaluators.expand_points(&points).unwrap();
         let expected =
             dense_guard_oracle::<T>(&state.inputs[0], &state.problem, &coordinates, points.len());
-        let actual = input_evaluators.evaluate::<T>(&points).unwrap();
+        let actual = input_evaluators
+            .evaluate::<T>(&points, &mut crate::exec::Exec::Global)
+            .unwrap();
         assert_eq!(actual.len(), expected.len());
         for (actual, expected) in actual.iter().zip(&expected) {
             let residual = tensor4all_core::Scalar::abs_val(*actual - *expected);
@@ -239,7 +242,9 @@ fn guard_output_evaluator_reuses_the_plan_when_output_tensors_change() {
             first.evaluator.plan().is_same_as(input_evaluators.plan()),
             "the output evaluator must share the retained input plan"
         );
-        let values = first.evaluate::<f64>(&input_evaluators, &points).unwrap();
+        let values = first
+            .evaluate::<f64>(&input_evaluators, &points, &mut crate::exec::Exec::Global)
+            .unwrap();
         let expected =
             dense_guard_oracle::<f64>(&state.output, &state.problem, &coordinates, points.len());
         assert_eq!(values, expected);
@@ -259,7 +264,9 @@ fn guard_output_evaluator_reuses_the_plan_when_output_tensors_change() {
         second.evaluator.plan().is_same_as(input_evaluators.plan()),
         "a changed output must reuse the plan rather than rebuild it"
     );
-    let second_values: Vec<f64> = second.evaluate(&input_evaluators, &points).unwrap();
+    let second_values: Vec<f64> = second
+        .evaluate(&input_evaluators, &points, &mut crate::exec::Exec::Global)
+        .unwrap();
     let second_expected =
         dense_guard_oracle::<f64>(&state.output, &state.problem, &coordinates, points.len());
     assert_eq!(second_values, second_expected);
@@ -281,7 +288,10 @@ fn typed_guard_evaluation_still_reports_a_scalar_kind_error_for_complex_inputs()
     let mut input_evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
 
     let error = input_evaluators
-        .evaluate::<f64>(&[vec![0usize, 0], vec![1, 0]])
+        .evaluate::<f64>(
+            &[vec![0usize, 0], vec![1, 0]],
+            &mut crate::exec::Exec::Global,
+        )
         .expect_err("a complex input tree cannot answer an f64 request");
 
     match error {
@@ -296,7 +306,10 @@ fn typed_guard_evaluation_still_reports_a_scalar_kind_error_for_complex_inputs()
 
     // The same evaluator still answers a complex request.
     let complex = input_evaluators
-        .evaluate::<Complex64>(&[vec![0usize, 0], vec![1, 0]])
+        .evaluate::<Complex64>(
+            &[vec![0usize, 0], vec![1, 0]],
+            &mut crate::exec::Exec::Global,
+        )
         .unwrap();
     assert_eq!(complex.len(), 2);
 }
@@ -350,7 +363,7 @@ fn guard_rejects_out_of_range_local_coordinates_instead_of_wrapping_them() {
     let mut evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
 
     assert!(matches!(
-        evaluators.evaluate::<f64>(&[vec![2, 0]]),
+        evaluators.evaluate::<f64>(&[vec![2, 0]], &mut crate::exec::Exec::Global),
         Err(crate::TreeAciError::PhysicalCoordinateOutOfBounds {
             node: 0,
             coordinate: 2,
@@ -395,6 +408,7 @@ fn global_search_rejects_the_start_batch_before_calling_the_operator() {
         &mut seeded_rng(),
         &mut operator,
         &[],
+        &mut crate::exec::Exec::Global,
     )
     .expect_err("the start vectors must be budgeted before allocation/evaluation");
 
@@ -444,6 +458,7 @@ fn floating_zone_finds_a_feature_missing_from_the_output() {
         &mut seeded_rng(),
         &mut identity,
         &[],
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
 
@@ -472,8 +487,9 @@ fn exact_output_has_no_global_pivot_and_injection_updates_every_cut() {
         &mut state,
         &options,
         PassDirection::Forward,
+        false,
         &mut identity,
-        None,
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     let exact = find_global_pivots(
@@ -483,6 +499,7 @@ fn exact_output_has_no_global_pivot_and_injection_updates_every_cut() {
         &mut seeded_rng(),
         &mut identity,
         &[],
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     assert!(exact.pivots.is_empty());
@@ -502,7 +519,13 @@ fn exact_output_has_no_global_pivot_and_injection_updates_every_cut() {
         .map(Vec::len)
         .collect::<Vec<_>>();
     let generation_before = injection_state.generation;
-    let injected = inject_global_pivots(&mut injection_state, &[vec![1, 1]], &[1]).unwrap();
+    let injected = inject_global_pivots(
+        &mut injection_state,
+        &[vec![1, 1]],
+        &[1],
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
     assert_eq!(injected, 1);
     assert!(injection_state
         .candidates
@@ -518,19 +541,31 @@ fn exact_output_has_no_global_pivot_and_injection_updates_every_cut() {
 /// This is the defect the candidate/pivot split exists to prevent: the old
 /// single `ActivePivotSets` let an injection push a repeated id onto the
 /// already-represented side of a cut, which put two identical rows in `P_e`.
-/// Candidate sets may carry that repeat harmlessly — the rank-revealing step
-/// simply declines to select it twice — but the pivot pairs must not.
+/// Query candidates must remain distinct without changing the pivot pairs.
 #[test]
 fn injection_leaves_pivot_pairs_untouched_and_keeps_bonds_in_step() {
     let (input, _, _) = delta_tree();
     let options = TreeAciOptions::default();
     let inputs = vec![input];
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let ranks_before = state.edge_ranks.clone();
     let pivots_before = state.pivots.clone();
 
-    inject_global_pivots(&mut state, &[vec![1, 1]], &[1]).unwrap();
+    inject_global_pivots(
+        &mut state,
+        &[vec![1, 1]],
+        &[1],
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
     let records_after_first = state.sample_arena.record_count();
-    inject_global_pivots(&mut state, &[vec![1, 1]], &[1]).unwrap();
+    inject_global_pivots(
+        &mut state,
+        &[vec![1, 1]],
+        &[1],
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
     assert_eq!(state.sample_arena.record_count(), records_after_first);
 
     assert_eq!(state.pivots, pivots_before);
@@ -546,16 +581,19 @@ fn injection_leaves_pivot_pairs_untouched_and_keeps_bonds_in_step() {
         );
     }
 
-    // INVARIANT: in the moving-centre representation an output core's incoming
-    // axes are reshaped over the candidate row space, so each bond dimension
-    // must equal both directed candidate-set sizes. This is what forces
-    // injection to pad the bond, and to grow both orientations together.
-    for edge_number in 0..state.edge_ranks.len() {
-        let forward = state.candidates.ids[2 * edge_number].len();
-        let reverse = state.candidates.ids[2 * edge_number + 1].len();
-        assert_eq!(forward, reverse, "cut {edge_number} grew asymmetrically");
-        assert_eq!(state.output.link_dims()[edge_number], forward);
-    }
+    // Query pools can grow independently in each orientation. Selected output
+    // dimensions continue to match the pivot basis, not query pool lengths.
+    assert_eq!(state.edge_ranks, ranks_before);
+    assert_eq!(state.output.link_dims(), ranks_before);
+    assert_eq!(
+        state
+            .candidates
+            .ids
+            .iter()
+            .map(Vec::len)
+            .collect::<Vec<_>>(),
+        vec![2, 2]
+    );
 }
 
 /// Gate 1 of the three growth gates inherited from train ACI: the guard offers
@@ -582,6 +620,7 @@ fn max_nglobal_pivots_caps_what_the_guard_offers() {
         &mut seeded_rng(),
         &mut identity,
         &[],
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
 
@@ -591,7 +630,7 @@ fn max_nglobal_pivots_caps_what_the_guard_offers() {
 /// Gate 3: a point already represented in every candidate set adds nothing.
 ///
 /// Gate 2, algebraic saturation, is covered by
-/// `injection_skips_saturated_cuts_but_retains_recursive_records`.
+/// `injection_retains_records_without_publishing_a_blocked_parent`.
 #[test]
 fn an_already_represented_point_adds_nothing() {
     let (input, _, _) = delta_tree();
@@ -601,14 +640,20 @@ fn an_already_represented_point_adds_nothing() {
     let seed_point = vec![0, 0];
     let generation_before = state.generation;
 
-    let injected = inject_global_pivots(&mut state, &[seed_point], &[1]).unwrap();
+    let injected = inject_global_pivots(
+        &mut state,
+        &[seed_point],
+        &[1],
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
 
     assert_eq!(injected, 0);
     assert_eq!(state.generation, generation_before);
 }
 
 #[test]
-fn injection_skips_saturated_cuts_but_retains_recursive_records() {
+fn injection_retains_records_without_publishing_a_blocked_parent() {
     let site0 = DynIndex::new_dyn(2);
     let site1 = DynIndex::new_dyn(2);
     let site2 = DynIndex::new_dyn(2);
@@ -639,31 +684,51 @@ fn injection_skips_saturated_cuts_but_retains_recursive_records() {
     let saturated_bond = state.output.bond_index(saturated_edge).unwrap().clone();
     let records_before = state.sample_arena.record_count();
 
-    let injected = inject_global_pivots(&mut state, &[vec![1, 1, 1]], &[0, 1]).unwrap();
+    let injected = inject_global_pivots(
+        &mut state,
+        &[vec![1, 1, 1]],
+        &[0, 1],
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
 
     assert_eq!(injected, 1);
     assert_eq!(state.candidates.ids[0].len(), before[0]);
     assert_eq!(state.candidates.ids[1].len(), before[1]);
-    assert_eq!(state.candidates.ids[2].len(), before[2] + 1);
+    assert_eq!(
+        state.candidates.ids[2].len(),
+        before[2],
+        "the blocked parent is not a useful candidate"
+    );
     assert_eq!(state.candidates.ids[3].len(), before[3] + 1);
-    assert_eq!(state.edge_ranks, vec![1, 2]);
-    assert_eq!(state.output.link_dims(), vec![1, 2]);
+    assert_eq!(state.edge_ranks, vec![1, 1]);
+    assert_eq!(state.output.link_dims(), vec![1, 1]);
     assert_eq!(
         state.output.bond_index(saturated_edge),
         Some(&saturated_bond),
-        "padding another cut must not replace an inactive bond"
+        "query activation must not replace a selected basis bond"
     );
     assert!(state.sample_arena.record_count() > records_before);
     run_directional_pass(
         &mut state,
         &options,
         PassDirection::Forward,
+        false,
         &mut identity,
-        None,
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     let edge_one_pivots_before = state.pivots.per_edge[1].clone();
-    update_edge_transaction(&mut state, 0, &options, true, &mut identity, None).unwrap();
+    update_edge_transaction(
+        &mut state,
+        0,
+        &options,
+        true,
+        false,
+        &mut identity,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
     assert_eq!(state.pivots.per_edge[1], edge_one_pivots_before);
     state.output.verify_internal_consistency().unwrap();
 }
@@ -685,11 +750,17 @@ fn injection_never_exceeds_the_remaining_cut_capacity() {
         .map(Vec::len)
         .collect::<Vec<_>>();
 
-    let injected = inject_global_pivots(&mut state, &[vec![1, 1], vec![0, 1]], &[1]).unwrap();
+    let injected = inject_global_pivots(
+        &mut state,
+        &[vec![1, 1], vec![0, 1]],
+        &[1],
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
 
     assert_eq!(injected, 1);
-    assert_eq!(state.edge_ranks, vec![2]);
-    assert_eq!(state.output.link_dims(), vec![2]);
+    assert_eq!(state.edge_ranks, vec![1]);
+    assert_eq!(state.output.link_dims(), vec![1]);
     assert!(state
         .candidates
         .ids
@@ -711,7 +782,10 @@ fn empty_global_pivot_injection_validates_capacity_without_mutating_state() {
     let generation_before = state.generation;
     let ranks_before = state.edge_ranks.clone();
 
-    assert_eq!(inject_global_pivots(&mut state, &[], &[1]).unwrap(), 0);
+    assert_eq!(
+        inject_global_pivots(&mut state, &[], &[1], &mut crate::exec::Exec::Global).unwrap(),
+        0
+    );
     assert_eq!(state.candidates, candidates_before);
     assert_eq!(state.pivots, pivots_before);
     assert_eq!(state.sample_arena.record_count(), records_before);
@@ -725,13 +799,13 @@ fn empty_global_pivot_injection_validates_capacity_without_mutating_state() {
         .unwrap());
 
     assert!(matches!(
-        inject_global_pivots(&mut state, &[], &[]),
+        inject_global_pivots(&mut state, &[], &[], &mut crate::exec::Exec::Global),
         Err(crate::TreeAciError::InternalInvariant { .. })
     ));
 }
 
 #[test]
-fn injection_rank_overflow_rolls_back_every_staged_state_change() {
+fn injection_candidate_limit_overflow_leaves_every_state_component_unchanged() {
     let (input, _, _) = delta_tree();
     let options = TreeAciOptions {
         max_bond_dim: Some(1),
@@ -752,13 +826,18 @@ fn injection_rank_overflow_rolls_back_every_staged_state_change() {
     state.edge_ranks[0] = usize::MAX;
     let ranks_before_injected_overflow = state.edge_ranks.clone();
 
-    let error = inject_global_pivots(&mut state, &[vec![1, 1]], &[1])
-        .expect_err("rank overflow must be reported before publication");
+    let error = inject_global_pivots(
+        &mut state,
+        &[vec![1, 1]],
+        &[1],
+        &mut crate::exec::Exec::Global,
+    )
+    .expect_err("candidate limit overflow must be reported before publication");
 
     assert!(matches!(
         error,
         crate::TreeAciError::SizeOverflow {
-            context: "global-pivot output rank"
+            context: "global-pivot candidate limit"
         }
     ));
     assert!(state
@@ -818,14 +897,22 @@ fn output_guard_evaluator_matches_exact_values_across_scan_centers() {
     // Warm the reusable output evaluator on a scan through site 0.
     let first_points = [vec![0, 0], vec![1, 0]];
     let _: Vec<f64> = output_evaluator
-        .evaluate(&input_evaluators, &first_points)
+        .evaluate(
+            &input_evaluators,
+            &first_points,
+            &mut crate::exec::Exec::Global,
+        )
         .unwrap();
 
     // The next guard scan varies site 1. Re-rooting around that site changes
     // contraction order only; exact values must remain unchanged.
     let second_points = [vec![0, 0], vec![0, 1]];
     let actual: Vec<f64> = output_evaluator
-        .evaluate(&input_evaluators, &second_points)
+        .evaluate(
+            &input_evaluators,
+            &second_points,
+            &mut crate::exec::Exec::Global,
+        )
         .unwrap();
 
     let values = [0usize, 0, 0, 1];
@@ -858,10 +945,21 @@ fn shared_guard_hint_preserves_input_and_output_values() {
     let coordinates = input_evaluators.expand_points(&points).unwrap();
     let hint = input_evaluators.hint_for_scan_site(Some(0));
     let input_values = input_evaluators
-        .evaluate_expanded::<f64>(&points, &coordinates, hint.clone())
+        .evaluate_expanded::<f64>(
+            &points,
+            &coordinates,
+            hint.clone(),
+            &mut crate::exec::Exec::Global,
+        )
         .unwrap();
     let output_values: Vec<f64> = output_evaluator
-        .evaluate_expanded(&input_evaluators, &points, &coordinates, hint)
+        .evaluate_expanded(
+            &input_evaluators,
+            &points,
+            &coordinates,
+            hint,
+            &mut crate::exec::Exec::Global,
+        )
         .unwrap();
 
     assert_eq!(input_values, vec![1.0, 0.0]);
@@ -904,18 +1002,10 @@ fn scan_site_selects_the_hinted_center() {
     assert_eq!(evaluators.hint_for_scan_site(Some(99)).center, None);
 }
 
-/// Padding rejects an over-budget request before allocating any padded core.
-///
-/// Sizing and allocation used to share one loop, with the aggregate
-/// `max_working_bytes` comparison after it, so every core was already allocated
-/// and retained by the time the caller was told the request was refused. The
-/// per-core `max_core_elements` bound did not help: N nodes each just under it
-/// still peak at N times that, whatever the working ceiling says.
-///
-/// The check now runs on the planned total, so a one-byte ceiling refuses the
-/// request outright.
+/// Candidate activation rejects an over-budget plan before projecting samples.
+/// Guard no longer allocates or pads output cores.
 #[test]
-fn padding_refuses_an_over_budget_request() {
+fn candidate_planning_refuses_an_over_budget_request() {
     let (input, _, _) = delta_tree();
     let options = TreeAciOptions {
         max_bond_dim: Some(1),
@@ -923,11 +1013,16 @@ fn padding_refuses_an_over_budget_request() {
     };
     let inputs = vec![input];
     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
-    // Tighten after preparation so this exercises the padding check rather than
+    // Tighten after preparation so this exercises the candidate planning check rather than
     // the preparation-time one, which would reject the run before injection.
     state.problem.max_working_bytes = 1;
-    let error = inject_global_pivots(&mut state, &[vec![1, 1]], &[1])
-        .expect_err("a one-byte working ceiling must refuse padding");
+    let error = inject_global_pivots(
+        &mut state,
+        &[vec![1, 1]],
+        &[1],
+        &mut crate::exec::Exec::Global,
+    )
+    .expect_err("a one-byte working ceiling must refuse candidate planning");
     assert!(
         matches!(
             error,
@@ -1010,11 +1105,17 @@ fn diagnostic_guard_batch_shape_on_the_high_rank_chain() {
         let mut per_start =
             InputEvaluators::new_with_message_cache_max_bytes(state.inputs, &state.problem, budget)
                 .unwrap();
-        per_start.evaluate::<f64>(&starts[..1]).unwrap();
+        per_start
+            .evaluate::<f64>(&starts[..1], &mut crate::exec::Exec::Global)
+            .unwrap();
         let started = Instant::now();
         let mut per_start_values = Vec::new();
         for points in &steps {
-            per_start_values.extend(per_start.evaluate::<f64>(points).unwrap());
+            per_start_values.extend(
+                per_start
+                    .evaluate::<f64>(points, &mut crate::exec::Exec::Global)
+                    .unwrap(),
+            );
         }
         let per_start_elapsed = started.elapsed();
 
@@ -1023,12 +1124,18 @@ fn diagnostic_guard_batch_shape_on_the_high_rank_chain() {
         let mut lockstep =
             InputEvaluators::new_with_message_cache_max_bytes(state.inputs, &state.problem, budget)
                 .unwrap();
-        lockstep.evaluate::<f64>(&starts[..1]).unwrap();
+        lockstep
+            .evaluate::<f64>(&starts[..1], &mut crate::exec::Exec::Global)
+            .unwrap();
         let started = Instant::now();
         let mut lockstep_values = Vec::new();
         for chunk in steps.chunks(NSEARCH) {
             let points = chunk.iter().flatten().cloned().collect::<Vec<_>>();
-            lockstep_values.extend(lockstep.evaluate::<f64>(&points).unwrap());
+            lockstep_values.extend(
+                lockstep
+                    .evaluate::<f64>(&points, &mut crate::exec::Exec::Global)
+                    .unwrap(),
+            );
         }
         let lockstep_elapsed = started.elapsed();
 
@@ -1125,7 +1232,9 @@ fn diagnostic_guard_call_cost_on_a_branched_tree() {
                     .collect()
             })
             .collect();
-        evaluators.evaluate::<f64>(&starts[..1]).unwrap();
+        evaluators
+            .evaluate::<f64>(&starts[..1], &mut crate::exec::Exec::Global)
+            .unwrap();
         let mut calls = 0usize;
         let started = Instant::now();
         for _sweep in 0..SWEEPS {
@@ -1138,7 +1247,9 @@ fn diagnostic_guard_call_cost_on_a_branched_tree() {
                             point
                         })
                         .collect();
-                    evaluators.evaluate::<f64>(&points).unwrap();
+                    evaluators
+                        .evaluate::<f64>(&points, &mut crate::exec::Exec::Global)
+                        .unwrap();
                     calls += 1;
                 }
             }
@@ -1160,7 +1271,12 @@ fn diagnostic_guard_call_cost_on_a_branched_tree() {
                     let coordinates = evaluators.expand_points(&points).unwrap();
                     let hint = tensor4all_treetn::EvaluationHint::around(site);
                     evaluators
-                        .evaluate_expanded::<f64>(&points, &coordinates, hint)
+                        .evaluate_expanded::<f64>(
+                            &points,
+                            &coordinates,
+                            hint,
+                            &mut crate::exec::Exec::Global,
+                        )
                         .unwrap();
                     single_calls += 1;
                 }
@@ -1198,16 +1314,29 @@ fn guard_candidates_survive_a_failed_pass_and_fresh_luci_can_reduce_rank() {
         &mut state,
         &options,
         PassDirection::Forward,
+        false,
         &mut identity,
-        None,
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     assert_eq!(
-        inject_global_pivots(&mut state, &[vec![1, 1]], &[1]).unwrap(),
+        inject_global_pivots(
+            &mut state,
+            &[vec![1, 1]],
+            &[1],
+            &mut crate::exec::Exec::Global
+        )
+        .unwrap(),
         1
     );
     assert_eq!(
-        inject_global_pivots(&mut state, &[vec![1, 1]], &[1]).unwrap(),
+        inject_global_pivots(
+            &mut state,
+            &[vec![1, 1]],
+            &[1],
+            &mut crate::exec::Exec::Global
+        )
+        .unwrap(),
         0
     );
     let injected_candidates = state.candidates.ids.clone();
@@ -1216,12 +1345,13 @@ fn guard_candidates_survive_a_failed_pass_and_fresh_luci_can_reduce_rank() {
         &mut state,
         &options,
         PassDirection::Reverse,
+        false,
         &mut |_, _| {
             Err(crate::TreeAciError::InternalInvariant {
                 message: "failed refresh pass fixture",
             })
         },
-        None
+        &mut crate::exec::Exec::Global
     )
     .is_err());
     assert_eq!(state.candidates.ids, injected_candidates);
@@ -1230,11 +1360,21 @@ fn guard_candidates_survive_a_failed_pass_and_fresh_luci_can_reduce_rank() {
         &mut state,
         &options,
         PassDirection::Reverse,
+        false,
         &mut identity,
-        None,
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     assert_eq!(state.edge_ranks, vec![1]);
-    assert_eq!(inject_global_pivots(&mut state, &[], &[1]).unwrap(), 0);
-    assert!(inject_global_pivots(&mut state, &[vec![1, 1]], &[]).is_err());
+    assert_eq!(
+        inject_global_pivots(&mut state, &[], &[1], &mut crate::exec::Exec::Global).unwrap(),
+        0
+    );
+    assert!(inject_global_pivots(
+        &mut state,
+        &[vec![1, 1]],
+        &[],
+        &mut crate::exec::Exec::Global
+    )
+    .is_err());
 }

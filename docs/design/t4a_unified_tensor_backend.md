@@ -57,7 +57,6 @@ t4a-rs/ (workspace)
 │                        #   User-facing API, delegates to t4a-mapreduce / t4a-omeinsum
 ├── t4a-linalg           # SVD, QR, eigen, polar (CPU: faer, GPU: cuSOLVER)
 ├── t4a-autograd         # TrackedTensor, DualTensor, VJP/JVP
-├── t4a-blocksparse      # BlockSparseTensor (single DataBuffer + block offsets)
 ├── t4a-diag             # DiagTensor (1D Tensor of diagonal elements)
 ├── t4a-capi             # C FFI (tensor ops + VJP/JVP for ChainRules.jl)
 └── burn-t4a             # Burn Backend bridge [OPTIONAL, for NN only]
@@ -88,8 +87,8 @@ t4a-mapreduce                 t4a-omeinsum
                    │
          ┌─────────┼───────────────┐
          ↓         ↓               ↓
-   t4a-linalg  t4a-autograd   t4a-blocksparse
-   (← faer)       │          t4a-diag
+   t4a-linalg  t4a-autograd   t4a-diag
+   (← faer)       │
                    ↓
                t4a-capi
 
@@ -111,7 +110,6 @@ burn-t4a ← t4a-tensor, burn-backend
 | t4a-tensor | New | Tensor<T> API over DataBuffer |
 | t4a-linalg | ndtensors-rs (linalg) | Port SVD/QR/eigen |
 | t4a-autograd | ndtensors-rs (autodiff) | Port TrackedTensor/DualTensor |
-| t4a-blocksparse | ndtensors-rs (blocksparse) | Port with single-buffer layout |
 | t4a-diag | ndtensors-rs (diag) | Port DiagTensor |
 | t4a-capi | ndtensors-rs (capi) + tensor4all-rs (capi) | Port C FFI |
 | burn-t4a | New | Burn Backend bridge |
@@ -126,12 +124,8 @@ t4a-buffer: DataBuffer<T>  ← 1D flat memory (CPU Vec<T> or GPU CudaSlice<T>)
 t4a-tensor: Tensor<T>     ← strides + sizes + offset over DataBuffer
     │                        = "Dense tensor". The fundamental primitive.
     │
-    ├── t4a-diag: DiagTensor<T>
-    │     diagonal elements stored as 1D Tensor<T>
-    │
-    └── t4a-blocksparse: BlockSparseTensor<T>
-          single DataBuffer + block offsets (ITensors.jl pattern)
-          each block is a Tensor<T> view into the shared buffer
+    └── t4a-diag: DiagTensor<T>
+          diagonal elements stored as 1D Tensor<T>
 ```
 
 ---
@@ -659,9 +653,16 @@ t4a_tensor_f64* t4a_contract_jvp_f64(
 
 ---
 
-## Phase 5: t4a-blocksparse + t4a-diag
+## Phase 5: t4a-diag
 
-Higher-level tensor types built on top of `Tensor<T>`.
+A higher-level tensor type built on top of `Tensor<T>`.
+
+**Out of scope: block-sparse and quantum-number (symmetric) tensors.**
+tensor4all-rs does not implement quantum numbers, symmetry sectors or
+block-sparse QN tensors. Symmetric tensors are left to dedicated libraries
+such as [symtn](https://github.com/Ryo-wtnb11/symtn-rs) or other tensor network
+libraries. The dense layer may still provide symmetry-agnostic kernels those
+libraries can call, but no block-sparse tensor type lives in tensor4all-rs.
 
 ### t4a-diag
 
@@ -671,27 +672,6 @@ pub struct DiagTensor<T: ScalarBase> {
     full_sizes: Vec<usize>,   // logical shape of the full tensor
 }
 ```
-
-### t4a-blocksparse
-
-Follows the **ITensors.jl/NDTensors pattern**: all blocks in a **single contiguous `DataBuffer`** with block offset mapping.
-
-```rust
-pub struct BlockSparseTensor<T: ScalarBase> {
-    buffer: DataBuffer<T>,
-    block_offsets: HashMap<BlockIndex, usize>,
-    block_sizes: HashMap<BlockIndex, Vec<usize>>,
-    full_sizes: Vec<usize>,
-}
-
-pub type BlockIndex = SmallVec<[usize; 4]>;
-```
-
-Each block accessed as a `Tensor<T>` view into the shared buffer (zero-copy).
-
-**Existing code to reuse**:
-- `ndtensors-rs/crates/ndtensors/src/operations/blocksparse.rs`
-- `ndtensors-rs/crates/ndtensors/src/contract/blocksparse.rs`
 
 ---
 
@@ -806,7 +786,7 @@ t4a-omeinsum dispatches backend based on algebra and scalar type:
 
 ### Replace tensor4all-rs's tensorbackend with t4a
 
-1. Replace `tensor4all-tensorbackend::Storage` with t4a types (`Tensor<T>`, `DiagTensor<T>`, `BlockSparseTensor<T>`)
+1. Replace `tensor4all-tensorbackend::Storage` with t4a types (`Tensor<T>`, `DiagTensor<T>`)
 2. Replace `DenseStorage<T>` (mdarray-based) with `Tensor<T>`
 3. Adapt `TensorLike` trait to use t4a Tensor
 4. Remove mdarray dependency from tensor4all-rs core
@@ -911,14 +891,14 @@ JAX / PyTorch → Python wrapper → ctypes FFI → t4a-capi → Rust
 
 | Aspect | ITensor Julia | t4a | Notes |
 |---|---|---|---|
-| Sparse storage | DOK-of-Arrays | Single DataBuffer + offset map | t4a is GPU-friendly |
-| Axis fusion | FusionStyle dispatch | Not yet designed | Critical for quantum number tensors |
+| Sparse storage | DOK-of-Arrays | Not adopted (see Phase 5) | Symmetric tensors are delegated |
+| Axis fusion | FusionStyle dispatch | Out of scope | Quantum number tensors are delegated (see Phase 5) |
 | Lazy evaluation | MapBroadcast.jl | Not planned | Low priority |
 
 Key takeaways:
-1. **FusionStyle hierarchy**: Needed for quantum number tensors (future). Keep blocksparse API extensible.
-2. **SparseArraysBase pattern**: Consider `SparseArray` trait for t4a-blocksparse and t4a-diag.
-3. **GradedArrays.jl**: Future `GradedTensor<T, S: Sector>` for symmetry-exploiting tensor networks.
+1. **SparseArraysBase pattern**: Consider a `SparseArray` trait for t4a-diag.
+2. **Symmetric tensors (FusionStyle, GradedArrays.jl)**: Not adopted. Quantum-number and
+   symmetric tensors are delegated to dedicated libraries such as symtn (see Phase 5).
 
 ---
 

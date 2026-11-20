@@ -2,7 +2,7 @@ use super::*;
 use crate::random::{random_treetn, LinkSpace};
 use rand::SeedableRng;
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::IdxTensor;
+use tensor4all_core::{IdxTensor, TensorContractionLike};
 
 type DynIndex = Index<DynId, TagSet>;
 
@@ -585,4 +585,121 @@ fn test_compose_gap_identity_tensor_is_diagonal() {
             want
         );
     }
+}
+
+/// A random operator on the subtree `nodes` (with `edges`) of the target,
+/// in `f64` or `Complex64`, mapping each node's target site index to itself.
+fn random_subtree_operator(
+    target: &SiteIndexNetwork<String, DynIndex>,
+    nodes: &[&str],
+    edges: &[(&str, &str)],
+    complex: bool,
+    seed: u64,
+) -> LinearOperator<IdxTensor, String> {
+    let mut net: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    for &node in nodes {
+        let name = node.to_string();
+        let site = target
+            .site_space(&name)
+            .and_then(|space| space.iter().next().cloned())
+            .unwrap();
+        let (internal_in, internal_out) = (site.sim(), site.sim());
+        net.add_node(
+            name.clone(),
+            [internal_in.clone(), internal_out.clone()]
+                .into_iter()
+                .collect::<HashSet<_>>(),
+        )
+        .unwrap();
+        inputs.push((name.clone(), site.clone(), internal_in));
+        outputs.push((name, site, internal_out));
+    }
+    for &(a, b) in edges {
+        net.add_edge(&a.to_string(), &b.to_string()).unwrap();
+    }
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed);
+    let link_space = LinkSpace::uniform(2);
+    let mpo = if complex {
+        random_treetn::<num_complex::Complex64, _, _>(&mut rng, &net, link_space)
+    } else {
+        random_treetn::<f64, _, _>(&mut rng, &net, link_space)
+    }
+    .unwrap();
+    create_linear_operator_from_treetn(mpo, &inputs, &outputs)
+}
+
+/// Compose operators on two disjoint subtrees of a tree whose center `C` has
+/// degree 3 (`A - C - B`, `C - D - E`): one on `{A}`, one on `{D, E}`, with
+/// identity gaps at `B` and `C`. Checks the composed dense operator and that
+/// every composed tensor has the expected scalar type.
+fn check_two_disjoint_subtrees(complex_a: bool, complex_de: bool) {
+    let mut target: SiteIndexNetwork<String, DynIndex> = SiteIndexNetwork::new();
+    for name in ["A", "B", "C", "D", "E"] {
+        target
+            .add_node(
+                name.to_string(),
+                [make_index(2)].into_iter().collect::<HashSet<_>>(),
+            )
+            .unwrap();
+    }
+    for (a, b) in [("A", "C"), ("B", "C"), ("C", "D"), ("D", "E")] {
+        target.add_edge(&a.to_string(), &b.to_string()).unwrap();
+    }
+    let op_a = random_subtree_operator(&target, &["A"], &[], complex_a, 11);
+    let op_de = random_subtree_operator(&target, &["D", "E"], &[("D", "E")], complex_de, 12);
+    let mut gaps: HashMap<String, Vec<(DynIndex, DynIndex)>> = HashMap::new();
+    for name in ["B", "C"] {
+        gaps.insert(name.to_string(), vec![(make_index(2), make_index(2))]);
+    }
+
+    let composed = compose_exclusive_linear_operators(&target, &[&op_a, &op_de], &gaps).unwrap();
+
+    let complex = complex_a || complex_de;
+    let mpo = &composed.mpo;
+    assert_eq!(mpo.node_count(), 5);
+    for node in mpo.node_indices() {
+        assert_eq!(
+            mpo.tensor(node).unwrap().is_complex(),
+            complex,
+            "node {node:?}"
+        );
+    }
+    let mut expected = op_a
+        .mpo
+        .to_dense()
+        .unwrap()
+        .outer_product(&op_de.mpo.to_dense().unwrap())
+        .unwrap();
+    for name in ["B", "C"] {
+        let (input, output) = gaps[name][0].clone();
+        expected = expected
+            .outer_product(&IdxTensor::delta(&[input], &[output]).unwrap())
+            .unwrap();
+    }
+    let error = mpo
+        .to_dense()
+        .unwrap()
+        .sub(&expected)
+        .unwrap()
+        .maxabs()
+        .unwrap();
+    assert!(error < 1e-12, "composed operator differs by {error}");
+}
+
+#[test]
+fn compose_keeps_complex_operators_on_disjoint_subtrees_complex() {
+    check_two_disjoint_subtrees(true, true);
+}
+
+#[test]
+fn compose_promotes_identity_gaps_when_any_operator_is_complex() {
+    check_two_disjoint_subtrees(false, true);
+    check_two_disjoint_subtrees(true, false);
+}
+
+#[test]
+fn compose_keeps_real_operators_real() {
+    check_two_disjoint_subtrees(false, false);
 }

@@ -4,9 +4,8 @@ use crate::error::{Result, SimpleTensorTrainError};
 use crate::traits::{AbstractTensorTrain, TTScalar};
 use crate::types::{tensor3_zeros, Tensor3, Tensor3Ops};
 use tenferro_tensor::TensorValue;
-use tensor4all_tensorbackend::{
-    einsum_native_tensor_reads, invariant_violated, NativeEinsumPlan, NativeTensorReadInput,
-};
+use tensor4all_core::legacy::einsum_native_tensor_reads;
+use tensor4all_tensorbackend::{invariant_violated, NativeEinsumPlan, NativeTensorReadInput};
 
 /// A `(1, d, 1)` core cannot overflow and its strides are representable; only
 /// out-of-memory remains, which std also treats as fatal.
@@ -66,6 +65,34 @@ pub struct SimpleTensorTrain<T: TTScalar> {
     tensors: Vec<Tensor3<T>>,
 }
 
+// Recheck the constructor contract after callers replace site tensors in place.
+pub(crate) fn validate_site_tensors<T: TTScalar>(tensors: &[Tensor3<T>]) -> Result<()> {
+    // Validate dimensions
+    for i in 0..tensors.len().saturating_sub(1) {
+        if tensors[i].right_dim() != tensors[i + 1].left_dim() {
+            return Err(SimpleTensorTrainError::DimensionMismatch { site: i });
+        }
+    }
+
+    // First tensor should have left_dim = 1
+    if !tensors.is_empty() && tensors[0].left_dim() != 1 {
+        return Err(SimpleTensorTrainError::InvalidOperation {
+            message: "First tensor must have left dimension 1".to_string(),
+        });
+    }
+
+    // Last tensor should have right_dim = 1
+    if let Some(last) = tensors.last()
+        && last.right_dim() != 1
+    {
+        return Err(SimpleTensorTrainError::InvalidOperation {
+            message: "Last tensor must have right dimension 1".to_string(),
+        });
+    }
+
+    Ok(())
+}
+
 impl<T: TTScalar> SimpleTensorTrain<T> {
     /// Create a new tensor train from a list of rank-3 core tensors.
     ///
@@ -103,29 +130,7 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// assert!((val - 30.0).abs() < 1e-12);
     /// ```
     pub fn new(tensors: Vec<Tensor3<T>>) -> Result<Self> {
-        // Validate dimensions
-        for i in 0..tensors.len().saturating_sub(1) {
-            if tensors[i].right_dim() != tensors[i + 1].left_dim() {
-                return Err(SimpleTensorTrainError::DimensionMismatch { site: i });
-            }
-        }
-
-        // First tensor should have left_dim = 1
-        if !tensors.is_empty() && tensors[0].left_dim() != 1 {
-            return Err(SimpleTensorTrainError::InvalidOperation {
-                message: "First tensor must have left dimension 1".to_string(),
-            });
-        }
-
-        // Last tensor should have right_dim = 1
-        if let Some(last) = tensors.last()
-            && last.right_dim() != 1
-        {
-            return Err(SimpleTensorTrainError::InvalidOperation {
-                message: "Last tensor must have right dimension 1".to_string(),
-            });
-        }
-
+        validate_site_tensors(&tensors)?;
         Ok(Self { tensors })
     }
 
@@ -462,10 +467,12 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
                     "a core tensor has no readable view",
                 )
             });
-            environment = plan
-                .execute_reads(&[prefix_read, T::tensor_read(tensor.as_inner())])
-                .map(TensorValue::from_tensor)
-                .map_err(|error| backend_error(error.to_string()))?;
+            environment = tensor4all_core::legacy::native_einsum_plan_execute_reads(
+                &plan,
+                &[prefix_read, T::tensor_read(tensor.as_inner())],
+            )
+            .map(TensorValue::from_tensor)
+            .map_err(|error| backend_error(error.to_string()))?;
             stride = next_stride;
             bond_dim = right;
         }
@@ -519,7 +526,8 @@ impl<T: TTScalar> SimpleTensorTrain<T> {
     /// assert!((val - 3.0).abs() < 1e-12);
     /// ```
     pub fn partial_sum(&self, dims: &[usize]) -> Result<SimpleTensorTrain<T>> {
-        use tensor4all_tensorbackend::{mat_mul, Matrix};
+        use tensor4all_core::legacy::mat_mul;
+        use tensor4all_tensorbackend::Matrix;
 
         let n = self.len();
         if n == 0 {

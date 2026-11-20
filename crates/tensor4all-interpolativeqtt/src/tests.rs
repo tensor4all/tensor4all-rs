@@ -1,14 +1,100 @@
 use approx::assert_relative_eq;
 use quanticsgrids::{DiscretizedGrid, UnfoldingScheme};
-use tensor4all_simplett::{Tensor3, Tensor3Ops};
+use tensor4all_core::{ColMajorArray, ColMajorArrayRef, IndexLike};
+use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator};
 
-use crate::interpolation::{checked_dim_add, dense_test_points, finest_level_scale, flatten_index};
+use crate::core_array::{core_at, core_from_fn, set_core};
+
+use crate::interpolation::{checked_dim_add, dense_test_points, flatten_index};
 use crate::interval::NInterval;
 
 use super::*;
 
-fn quantics_to_indices(quantics: &[usize]) -> Vec<usize> {
-    quantics.to_vec()
+mod complex;
+mod refined_batches;
+mod split;
+
+#[test]
+fn fused_tree_result_orders_levels_msb_first_and_axis_zero_fastest() {
+    let (tree, sites) = interpolate_single_scale_nd(
+        |x| 1.0 + x[0] + 2.0 * x[1],
+        &[0.0, 0.0],
+        &[1.0, 1.0],
+        3,
+        2,
+        &InterpolativeQttOptions::default(),
+    )
+    .unwrap();
+    // x = 4/8 and y = 2/8, with axis zero at weight one in each digit.
+    let value = tree.evaluate_point(&sites, &[1, 2, 0]).unwrap();
+    assert!((value.real() - 2.0).abs() < 1e-12);
+}
+
+#[test]
+fn inverse_rejects_mismatched_order_and_dtype() {
+    let (tree, sites) =
+        interpolate_single_scale(|x| 1.0 + x, 0.0, 1.0, 3, 2, &Default::default()).unwrap();
+    let basis = get_chebyshev_grid(2).unwrap();
+    let mut reversed = sites.clone();
+    reversed.reverse();
+    assert!(matches!(
+        invert_qtt::<f64>(&tree, &reversed, &basis, 1),
+        Err(InterpolativeQttError::Tree(_))
+    ));
+    assert!(matches!(
+        invert_qtt::<num_complex::Complex64>(&tree, &sites, &basis, 1),
+        Err(InterpolativeQttError::Tree(_))
+    ));
+}
+
+fn evaluate<T: InterpolativeScalar>(qtt: &InterpolativeQtt, index: &[usize]) -> T {
+    evaluate_many(qtt, index)[0]
+}
+
+fn evaluate_many<T: InterpolativeScalar>(
+    (tree, sites): &InterpolativeQtt,
+    indices: &[usize],
+) -> Vec<T> {
+    let shape = [sites.len(), indices.len() / sites.len()];
+    let values = ColMajorArrayRef::new(indices, &shape).unwrap();
+    TreeTNCachedEvaluator::new(tree, sites, CachedEvaluatorOptions::default())
+        .unwrap()
+        .evaluate_batched_typed(values, EvaluationHint::default())
+        .unwrap()
+}
+
+fn rank(qtt: &InterpolativeQtt) -> usize {
+    qtt.0.link_dims().into_iter().max().unwrap_or(1)
+}
+
+fn site_dims(qtt: &InterpolativeQtt) -> Vec<usize> {
+    qtt.1.iter().map(IndexLike::dim).collect()
+}
+
+fn invert<T: InterpolativeScalar>(
+    qtt: &InterpolativeQtt,
+    basis: &LagrangePolynomials,
+) -> Vec<tensor4all_tensorbackend::Matrix<T>> {
+    invert_qtt::<T>(&qtt.0, &qtt.1, basis, 1).unwrap()
+}
+
+fn finest_level_scale<T: InterpolativeScalar>(
+    qtt: &InterpolativeQtt,
+    basis: &LagrangePolynomials,
+) -> Result<Option<T>> {
+    crate::interpolation::finest_level_scale(&qtt.0.chain_cores::<T>(&qtt.1)?, basis)
+}
+
+fn rewrite_core(qtt: &mut InterpolativeQtt, level: usize, f: impl FnOnce(&mut ColMajorArray<f64>)) {
+    let mut cores = qtt.0.chain_cores(&qtt.1).unwrap();
+    f(&mut cores[level]);
+    *qtt = TreeTN::from_chain_cores(cores).unwrap();
+}
+
+fn scale_finest(qtt: &mut InterpolativeQtt, factor: f64) {
+    rewrite_core(qtt, qtt.1.len() - 1, |core| {
+        core.data_mut().iter_mut().for_each(|x| *x *= factor);
+    });
 }
 
 fn grid_1d(r: usize, a: f64, b: f64) -> DiscretizedGrid {
@@ -72,46 +158,35 @@ fn for_each_grid_index(ndims: usize, points_per_dim: usize, mut f: impl FnMut(&[
     }
 }
 
-fn assert_tt_matches_grid_1d(
-    tt: &SimpleTensorTrain<f64>,
+fn assert_tt_matches_grid_1d<T: InterpolativeScalar + std::fmt::Debug>(
+    tt: &InterpolativeQtt,
     grid: &DiscretizedGrid,
-    f: impl Fn(f64) -> f64,
+    f: impl Fn(f64) -> T,
     tol: f64,
 ) {
-    let n = 1usize << grid.rs()[0];
-    for i in 0..n {
-        let grid_idx = [i];
-        let quantics = grid.grididx_to_quantics(&grid_idx).unwrap();
-        let coords = grid.grididx_to_origcoord(&grid_idx).unwrap();
-        let value = tt.evaluate(&quantics_to_indices(&quantics)).unwrap();
-        let expected = f(coords[0]);
-        assert!(
-            (value - expected).abs() < tol,
-            "grid index {grid_idx:?}: value {value}, expected {expected}, diff {}",
-            (value - expected).abs()
-        );
-    }
+    assert_tt_matches_grid_nd(tt, grid, |coords| f(coords[0]), tol);
 }
 
-fn assert_tt_matches_grid_nd(
-    tt: &SimpleTensorTrain<f64>,
+fn assert_tt_matches_grid_nd<T: InterpolativeScalar + std::fmt::Debug>(
+    tt: &InterpolativeQtt,
     grid: &DiscretizedGrid,
-    f: impl Fn(&[f64]) -> f64,
+    f: impl Fn(&[f64]) -> T,
     tol: f64,
 ) {
-    let ndims = grid.ndims();
-    let n = 1usize << grid.rs()[0];
-    for_each_grid_index(ndims, n, |grid_idx| {
-        let quantics = grid.grididx_to_quantics(grid_idx).unwrap();
-        let coords = grid.grididx_to_origcoord(grid_idx).unwrap();
-        let value = tt.evaluate(&quantics_to_indices(&quantics)).unwrap();
-        let expected = f(&coords);
-        assert!(
-            (value - expected).abs() < tol,
-            "grid index {grid_idx:?}: value {value}, expected {expected}, diff {}",
-            (value - expected).abs()
-        );
+    let mut indices = Vec::new();
+    let mut expected = Vec::new();
+    for_each_grid_index(grid.ndims(), 1usize << grid.rs()[0], |idx| {
+        indices.extend(grid.grididx_to_quantics(idx).unwrap());
+        expected.push(f(&grid.grididx_to_origcoord(idx).unwrap()));
     });
+    let actual = evaluate_many::<T>(tt, &indices);
+    for (flat, (value, expected)) in actual.into_iter().zip(expected).enumerate() {
+        let error = (value - expected).abs_val();
+        assert!(
+            error < tol,
+            "grid offset {flat}: value {value:?}, expected {expected:?}, diff {error}"
+        );
+    }
 }
 
 #[test]
@@ -124,7 +199,7 @@ fn single_scale_interpolation_1d() {
 
     let tt =
         interpolate_single_scale(f, a, b, r, degree, &InterpolativeQttOptions::default()).unwrap();
-    assert!(tt.rank() <= degree + 1);
+    assert!(rank(&tt) <= degree + 1);
 
     let grid = grid_1d(r, a, b);
     assert_tt_matches_grid_1d(&tt, &grid, f, 1e-10);
@@ -147,7 +222,7 @@ fn single_scale_interpolation_nd_n1() {
         &InterpolativeQttOptions::default(),
     )
     .unwrap();
-    assert!(tt.rank() <= degree + 1);
+    assert!(rank(&tt) <= degree + 1);
 
     let grid = grid_1d(r, a, b);
     assert_tt_matches_grid_1d(&tt, &grid, |x| f(&[x]), 1e-10);
@@ -170,8 +245,8 @@ fn single_scale_interpolation_n2() {
         &InterpolativeQttOptions::default().with_tolerance(0.0),
     )
     .unwrap();
-    assert!(tt.rank() <= (degree + 1).pow(2));
-    assert_eq!(tt.len(), r);
+    assert!(rank(&tt) <= (degree + 1).pow(2));
+    assert_eq!(tt.1.len(), r);
 
     let grid = grid_nd(r, &lower, &upper);
     assert_tt_matches_grid_nd(&tt, &grid, f, 1e-10);
@@ -197,8 +272,8 @@ fn single_scale_interpolation_n3() {
         &InterpolativeQttOptions::default(),
     )
     .unwrap();
-    assert!(tt.rank() <= (degree + 1).pow(3));
-    assert_eq!(tt.len(), r);
+    assert!(rank(&tt) <= (degree + 1).pow(3));
+    assert_eq!(tt.1.len(), r);
 
     let grid = grid_nd(r, &lower, &upper);
     assert_tt_matches_grid_nd(&tt, &grid, f, 1e-7);
@@ -222,7 +297,7 @@ fn multiscale_interpolation_1d() {
         &InterpolativeQttOptions::default(),
     )
     .unwrap();
-    assert!(tt.rank() <= degree + 2);
+    assert!(rank(&tt) <= degree + 2);
 
     let grid = grid_1d(r, a, b);
     assert_tt_matches_grid_1d(&tt, &grid, f, 1e-12);
@@ -246,7 +321,7 @@ fn multiscale_interpolation_n2() {
         &InterpolativeQttOptions::default(),
     )
     .unwrap();
-    assert!(tt.rank() <= (degree + 2).pow(2));
+    assert!(rank(&tt) <= (degree + 2).pow(2));
 
     let grid = grid_nd(r, &lower, &upper);
     assert_tt_matches_grid_nd(&tt, &grid, f, 1e-10);
@@ -269,16 +344,27 @@ fn ninterval_split_matches_julia_order() {
 }
 
 #[test]
+fn fused_core_rejects_missing_or_invalid_axes() {
+    let wrong_rank = ColMajorArray::new(vec![0.0], vec![1, 1]).unwrap();
+    let empty_axis = ColMajorArray::new(vec![], vec![1, 0, 1]).unwrap();
+    for input in [vec![], vec![wrong_rank], vec![empty_axis]] {
+        assert!(matches!(
+            direct_product_core_tensors(&input),
+            Err(InterpolativeQttError::InvalidArgument { .. })
+        ));
+    }
+}
+
+#[test]
 fn direct_product_core_tensors_two_tensors() {
     let chi = 3;
-    let c1 = Tensor3::from_fn([chi, 2, chi], |[i, s, k]| (100 * i + 10 * s + k) as f64).unwrap();
-    let c2 =
-        Tensor3::from_fn([chi, 2, chi], |[i, s, k]| (1 + 100 * i + 10 * s + k) as f64).unwrap();
+    let c1 = core_from_fn([chi, 2, chi], |[i, s, k]| (100 * i + 10 * s + k) as f64).unwrap();
+    let c2 = core_from_fn([chi, 2, chi], |[i, s, k]| (1 + 100 * i + 10 * s + k) as f64).unwrap();
     let fused = direct_product_core_tensors(&[c1.clone(), c2.clone()]).unwrap();
 
-    assert_eq!(fused.left_dim(), chi * chi);
-    assert_eq!(fused.site_dim(), 4);
-    assert_eq!(fused.right_dim(), chi * chi);
+    assert_eq!(fused.shape()[0], chi * chi);
+    assert_eq!(fused.shape()[1], 4);
+    assert_eq!(fused.shape()[2], chi * chi);
     for i in 0..chi {
         for j in 0..chi {
             for k in 0..2 {
@@ -288,8 +374,8 @@ fn direct_product_core_tensors_two_tensors() {
                             let left = i + chi * j;
                             let site = k + 2 * l;
                             let right = m + chi * n;
-                            let expected = *c1.get3(i, k, m) * *c2.get3(j, l, n);
-                            assert_relative_eq!(*fused.get3(left, site, right), expected);
+                            let expected = core_at(&c1, i, k, m) * core_at(&c2, j, l, n);
+                            assert_relative_eq!(core_at(&fused, left, site, right), expected);
                         }
                     }
                 }
@@ -301,16 +387,14 @@ fn direct_product_core_tensors_two_tensors() {
 #[test]
 fn direct_product_core_tensors_three_tensors() {
     let chi = 3;
-    let c1 = Tensor3::from_fn([chi, 2, chi], |[i, s, k]| (100 * i + 10 * s + k) as f64).unwrap();
-    let c2 =
-        Tensor3::from_fn([chi, 2, chi], |[i, s, k]| (1 + 100 * i + 10 * s + k) as f64).unwrap();
-    let c3 =
-        Tensor3::from_fn([chi, 2, chi], |[i, s, k]| (2 + 100 * i + 10 * s + k) as f64).unwrap();
+    let c1 = core_from_fn([chi, 2, chi], |[i, s, k]| (100 * i + 10 * s + k) as f64).unwrap();
+    let c2 = core_from_fn([chi, 2, chi], |[i, s, k]| (1 + 100 * i + 10 * s + k) as f64).unwrap();
+    let c3 = core_from_fn([chi, 2, chi], |[i, s, k]| (2 + 100 * i + 10 * s + k) as f64).unwrap();
     let fused = direct_product_core_tensors(&[c1.clone(), c2.clone(), c3.clone()]).unwrap();
 
-    assert_eq!(fused.left_dim(), chi * chi * chi);
-    assert_eq!(fused.site_dim(), 8);
-    assert_eq!(fused.right_dim(), chi * chi * chi);
+    assert_eq!(fused.shape()[0], chi * chi * chi);
+    assert_eq!(fused.shape()[1], 8);
+    assert_eq!(fused.shape()[2], chi * chi * chi);
     for i in 0..chi {
         for j in 0..chi {
             for k in 0..chi {
@@ -323,11 +407,11 @@ fn direct_product_core_tensors_three_tensors() {
                                         let left = i + chi * j + chi * chi * k;
                                         let site = l + 2 * m + 4 * n;
                                         let right = o + chi * p + chi * chi * q;
-                                        let expected = *c1.get3(i, l, o)
-                                            * *c2.get3(j, m, p)
-                                            * *c3.get3(k, n, q);
+                                        let expected = core_at(&c1, i, l, o)
+                                            * core_at(&c2, j, m, p)
+                                            * core_at(&c3, k, n, q);
                                         assert_relative_eq!(
-                                            *fused.get3(left, site, right),
+                                            core_at(&fused, left, site, right),
                                             expected
                                         );
                                     }
@@ -387,10 +471,10 @@ fn high_degree_chebyshev_basis_stays_finite() {
     assert!(basis.evaluate(1, basis.grid()[0]).unwrap().abs() < 1.0e-12);
 
     let core = interpolation_tensor(&basis).unwrap();
-    for left in 0..core.left_dim() {
-        for site in 0..core.site_dim() {
-            for right in 0..core.right_dim() {
-                assert!(core.get3(left, site, right).is_finite());
+    for left in 0..core.shape()[0] {
+        for site in 0..core.shape()[1] {
+            for right in 0..core.shape()[2] {
+                assert!(core_at(&core, left, site, right).is_finite());
             }
         }
     }
@@ -403,8 +487,8 @@ fn high_degree_single_scale_compression_does_not_fail_svd() {
 
     let tt = interpolate_single_scale(f, 0.0, 1.0, 3, 600, &opts).unwrap();
 
-    assert_eq!(tt.len(), 3);
-    assert!(tt.link_dims().iter().all(|&dim| dim <= 601));
+    assert_eq!(tt.1.len(), 3);
+    assert!(tt.0.link_dims().iter().all(|&dim| dim <= 601));
 }
 
 #[test]
@@ -417,7 +501,7 @@ fn multiscale_interpolation_one_over_x() {
     let opts = InterpolativeQttOptions::default().with_tolerance(1e-12);
 
     let tt = interpolate_multi_scale(f, a, b, r, degree, &[0.0], &opts).unwrap();
-    assert!(tt.rank() <= degree + 2);
+    assert!(rank(&tt) <= degree + 2);
 
     let grid = grid_1d(r, a, b);
     let n = 1usize << r;
@@ -427,7 +511,7 @@ fn multiscale_interpolation_one_over_x() {
         let grid_idx = [i];
         let quantics = grid.grididx_to_quantics(&grid_idx).unwrap();
         let x = grid.grididx_to_origcoord(&grid_idx).unwrap()[0];
-        let value = tt.evaluate(&quantics_to_indices(&quantics)).unwrap();
+        let value = evaluate::<f64>(&tt, &quantics);
         let expected = f(x);
         diff_norm += (value - expected).powi(2);
         ref_norm += expected.powi(2);
@@ -493,12 +577,12 @@ fn invert_qtt_exact_finest_level_follows_truncation_not_the_function_rank() {
         let opts = InterpolativeQttOptions::default().with_tolerance(tolerance);
         let tt = interpolate_single_scale(f, a, b, r, degree, &opts).unwrap();
         assert_eq!(
-            finest_level_scale(&tt, &basis).unwrap().is_some(),
+            finest_level_scale::<f64>(&tt, &basis).unwrap().is_some(),
             exact,
             "tolerance {tolerance} with bonds {:?}",
-            tt.link_dims()
+            tt.0.link_dims()
         );
-        let s = &invert_qtt(&tt, &basis, 1).unwrap()[k_out - 1];
+        let s = &invert::<f64>(&tt, &basis)[k_out - 1];
         let mut max_rel = 0.0_f64;
         for i in 0..(1usize << k_out) {
             for beta in 0..=degree {
@@ -516,9 +600,7 @@ fn invert_qtt_exact_finest_level_follows_truncation_not_the_function_rank() {
     }
 }
 
-/// `SimpleTensorTrain::scale_mut` multiplies the last core only, which leaves every
-/// bond and the represented function's shape intact: a rescaled uncompressed train
-/// is still uncompressed and keeps the exact route, with the factor applied.
+/// Scaling the finest core keeps the exact route, including the overall factor.
 #[test]
 fn invert_qtt_rescaled_train_keeps_the_exact_finest_level() {
     let r = 8;
@@ -531,12 +613,12 @@ fn invert_qtt_rescaled_train_keeps_the_exact_finest_level() {
     let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
 
     let mut tt = interpolate_single_scale(f, a, b, r, degree, &opts).unwrap();
-    let before = tt.link_dims();
-    tt.scale_mut(2.0);
-    assert_eq!(tt.link_dims(), before, "scaling must not change a bond");
-    assert_eq!(finest_level_scale(&tt, &basis).unwrap(), Some(2.0));
+    let before = tt.0.link_dims();
+    scale_finest(&mut tt, 2.0);
+    assert_eq!(tt.0.link_dims(), before, "scaling must not change a bond");
+    assert_eq!(finest_level_scale::<f64>(&tt, &basis).unwrap(), Some(2.0));
 
-    let s = &invert_qtt(&tt, &basis, 1).unwrap()[k_out - 1];
+    let s = &invert::<f64>(&tt, &basis)[k_out - 1];
     let mut max_rel = 0.0_f64;
     for i in 0..(1usize << k_out) {
         for beta in 0..=degree {
@@ -564,17 +646,15 @@ fn invert_qtt_perturbed_finest_core_falls_back_to_the_blend() {
     let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
 
     let mut tt = interpolate_single_scale(f, a, b, r, degree, &opts).unwrap();
-    assert!(finest_level_scale(&tt, &basis).unwrap().is_some());
-    {
-        let cores = tt.site_tensors_mut();
-        let last = &mut cores[cores.len() - 1];
-        let perturbed = *last.get3(2, 0, 0) + 5.0e-13;
-        last.set3(2, 0, 0, perturbed);
-    }
-    assert_eq!(finest_level_scale(&tt, &basis).unwrap(), None);
+    assert!(finest_level_scale::<f64>(&tt, &basis).unwrap().is_some());
+    rewrite_core(&mut tt, r - 1, |last| {
+        let perturbed = core_at(last, 2, 0, 0) + 5.0e-13;
+        set_core(last, 2, 0, 0, perturbed);
+    });
+    assert_eq!(finest_level_scale::<f64>(&tt, &basis).unwrap(), None);
 
     // The route really changed: the blend is O(h^2) away from the parent interpolant.
-    let s = &invert_qtt(&tt, &basis, 1).unwrap()[k_out - 1];
+    let s = &invert::<f64>(&tt, &basis)[k_out - 1];
     let mut max_rel = 0.0_f64;
     for i in 0..(1usize << k_out) {
         for beta in 0..=degree {
@@ -604,17 +684,16 @@ fn invert_qtt_gauge_scaled_coefficient_column_does_not_reach_the_exact_route() {
     let mut tt = interpolate_single_scale(|_| 1.0, 0.0, 1.0, r, degree, &opts).unwrap();
     // Column `alpha = 2` of the first core: `L_2` vanishes at both sampled points
     // (`t = 0` and `t = 1/2`), so this is a sample-preserving gauge.
-    {
-        let cores = tt.site_tensors_mut();
-        for site in 0..cores[0].site_dim() {
-            let scaled = 2.0 * *cores[0].get3(0, site, 2);
-            cores[0].set3(0, site, 2, scaled);
+    rewrite_core(&mut tt, 0, |core| {
+        for site in 0..core.shape()[1] {
+            let scaled = 2.0 * core_at(core, 0, site, 2);
+            set_core(core, 0, site, 2, scaled);
         }
-    }
+    });
     // Every stored sample is unchanged.
     for cell in 0..(1usize << (r - 1)) {
         for sigma in 0..2 {
-            let value = tt.evaluate(&[cell, sigma]).unwrap();
+            let value = evaluate::<f64>(&tt, &[cell, sigma]);
             assert!(
                 (value - 1.0).abs() < 1.0e-15,
                 "cell {cell} sigma {sigma}: {value}"
@@ -622,7 +701,7 @@ fn invert_qtt_gauge_scaled_coefficient_column_does_not_reach_the_exact_route() {
         }
     }
     // The reconstructed finest level must still be the constant 1.
-    let fine = &invert_qtt(&tt, &basis, 1).unwrap()[r - 2];
+    let fine = &invert::<f64>(&tt, &basis)[r - 2];
     for cell in 0..fine.nrows() {
         for beta in 0..=degree {
             assert!(
@@ -651,20 +730,22 @@ fn invert_qtt_sample_preserving_interior_rewrite_is_documented_as_undetectable()
     let mut tt = interpolate_single_scale(|_| 1.0, 0.0, 1.0, r, degree, &opts).unwrap();
     // `L_1` vanishes at `0`, `1/2` and `1`, so doubling its coefficient is invisible
     // to every stored sample and to the boundary the check compares.
-    let before = *tt.site_tensor(0).get3(0, 0, 1);
-    tt.site_tensors_mut()[0].set3(0, 0, 1, 2.0 * before);
-    assert_eq!(tt.link_dims(), vec![degree + 1]);
-    assert!(finest_level_scale(&tt, &basis).unwrap().is_some());
+    rewrite_core(&mut tt, 0, |core| {
+        let before = core_at(core, 0, 0, 1);
+        set_core(core, 0, 0, 1, 2.0 * before);
+    });
+    assert_eq!(tt.0.link_dims(), vec![degree + 1]);
+    assert!(finest_level_scale::<f64>(&tt, &basis).unwrap().is_some());
     for cell in 0..(1usize << (r - 1)) {
         for sigma in 0..2 {
-            let value = tt.evaluate(&[cell, sigma]).unwrap();
+            let value = evaluate::<f64>(&tt, &[cell, sigma]);
             assert!(
                 (value - 1.0).abs() < 1.0e-15,
                 "cell {cell} sigma {sigma}: {value}"
             );
         }
     }
-    let fine = &invert_qtt(&tt, &basis, 1).unwrap()[r - 2];
+    let fine = &invert::<f64>(&tt, &basis)[r - 2];
     // The nodes the train does store are still right; the interior one follows the
     // rewritten coefficient, which is the documented consequence.
     for beta in [0, degree / 2, degree] {
@@ -681,7 +762,7 @@ fn invert_qtt_sample_preserving_interior_rewrite_is_documented_as_undetectable()
     );
 }
 
-/// `scale_mut` twice perturbs the finest core by a couple of ulps (the products do
+/// Scaling twice perturbs the finest core by a couple of ulps (the products do
 /// not associate), so the canonical comparison has to be proportional rather than
 /// bit-exact — otherwise a legitimately rescaled uncompressed train silently falls
 /// back to the `O(h^2)` blend (tensor4all-rs#1175, #1198 review).
@@ -693,13 +774,13 @@ fn invert_qtt_repeatedly_rescaled_train_keeps_the_exact_finest_level() {
     let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
     let f = |x: f64| 1.0 + x * x;
     let mut tt = interpolate_single_scale(f, 0.0, 1.0, r, degree, &opts).unwrap();
-    tt.scale_mut(0.1);
-    tt.scale_mut(0.1);
+    scale_finest(&mut tt, 0.1);
+    scale_finest(&mut tt, 0.1);
     assert!(
-        finest_level_scale(&tt, &basis).unwrap().is_some(),
+        finest_level_scale::<f64>(&tt, &basis).unwrap().is_some(),
         "a rescaled uncompressed train must keep the exact route"
     );
-    let fine = &invert_qtt(&tt, &basis, 1).unwrap()[r - 2];
+    let fine = &invert::<f64>(&tt, &basis)[r - 2];
     // The last cell spans [1/2, 1]; the train was scaled by 0.1 twice.
     let last = fine.nrows() - 1;
     for beta in 0..=degree {
@@ -729,10 +810,10 @@ fn invert_qtt_uncompressed_stage1() {
 
     let tt = interpolate_single_scale(f, a, b, r, degree, &opts).unwrap();
     assert!(
-        finest_level_scale(&tt, &basis).unwrap().is_some(),
+        finest_level_scale::<f64>(&tt, &basis).unwrap().is_some(),
         "an uncompressed train has to take the exact finest level"
     );
-    let result = invert_qtt(&tt, &basis, 1).unwrap();
+    let result = invert::<f64>(&tt, &basis);
 
     let k_out = r - 1;
     let s = &result[k_out - 1];
@@ -754,8 +835,10 @@ fn invert_qtt_uncompressed_stage1() {
     // nodes.
     let g = |x: f64| x * x + 1.0;
     let exact_tt = interpolate_single_scale(g, a, b, r, degree, &opts).unwrap();
-    assert!(finest_level_scale(&exact_tt, &basis).unwrap().is_some());
-    let exact = &invert_qtt(&exact_tt, &basis, 1).unwrap()[k_out - 1];
+    assert!(finest_level_scale::<f64>(&exact_tt, &basis)
+        .unwrap()
+        .is_some());
+    let exact = &invert::<f64>(&exact_tt, &basis)[k_out - 1];
     let mut max_rel = 0.0_f64;
     for i in 0..(1usize << k_out) {
         for beta in 0..=degree {
@@ -781,7 +864,7 @@ fn invert_qtt_compressed() {
     let opts = InterpolativeQttOptions::default().with_tolerance(1e-10);
 
     let tt = interpolate_single_scale(f, a, b, r, degree, &opts).unwrap();
-    let result = invert_qtt(&tt, &basis, 1).unwrap();
+    let result = invert::<f64>(&tt, &basis);
 
     let k_out = r - 1;
     let s = &result[k_out - 1];
@@ -795,75 +878,53 @@ fn invert_qtt_compressed() {
     assert!(max_err < 1.0e-6);
 }
 
-#[test]
-fn invert_qtt_round_trip_uncompressed() {
-    let r = 8;
-    let degree = 10;
-    let a = 0.0;
-    let b = 1.0;
-    let f = |x: f64| (-x * x).exp();
+/// The largest distance between the finest inverted level of `f`'s interpolant
+/// on `[0, 1)` and the train's own values at the two samples of each cell.
+fn invert_round_trip_error<T: InterpolativeScalar>(
+    f: impl Fn(f64) -> T,
+    r: usize,
+    degree: usize,
+    opts: &InterpolativeQttOptions,
+) -> f64 {
+    let (a, b) = (0.0, 1.0);
     let basis = get_chebyshev_grid(degree).unwrap();
-    let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
 
-    let tt = interpolate_single_scale(f, a, b, r, degree, &opts).unwrap();
-    let result = invert_qtt(&tt, &basis, 1).unwrap();
+    let tt = interpolate_single_scale(f, a, b, r, degree, opts).unwrap();
+    let result = invert::<T>(&tt, &basis);
     let s = &result[r - 2];
     let grid = grid_1d(r, a, b);
 
+    let indices: Vec<_> = (0..1usize << r)
+        .flat_map(|i| grid.grididx_to_quantics(&[i]).unwrap())
+        .collect();
+    let samples = evaluate_many::<T>(&tt, &indices);
+    let (pairs, remainder) = samples.as_chunks::<2>();
+    assert!(remainder.is_empty());
     let mut max_err = 0.0_f64;
-    for i in 0..(1usize << (r - 1)) {
-        let left_idx = [2 * i];
-        let right_idx = [2 * i + 1];
-        let left_q = grid.grididx_to_quantics(&left_idx).unwrap();
-        let right_q = grid.grididx_to_quantics(&right_idx).unwrap();
-        let tt_left = tt.evaluate(&quantics_to_indices(&left_q)).unwrap();
-        let tt_right = tt.evaluate(&quantics_to_indices(&right_q)).unwrap();
-
-        let mut v_left = 0.0;
-        let mut v_right = 0.0;
+    for (i, &[tt_left, tt_right]) in pairs.iter().enumerate() {
+        let mut v_left = T::zero();
+        let mut v_right = T::zero();
         for beta in 0..=degree {
-            v_left += basis.evaluate(beta, 0.0).unwrap() * s[[i, beta]];
-            v_right += basis.evaluate(beta, 0.5).unwrap() * s[[i, beta]];
+            v_left = v_left + T::from_f64(basis.evaluate(beta, 0.0).unwrap()) * s[[i, beta]];
+            v_right = v_right + T::from_f64(basis.evaluate(beta, 0.5).unwrap()) * s[[i, beta]];
         }
-        max_err = max_err.max((v_left - tt_left).abs());
-        max_err = max_err.max((v_right - tt_right).abs());
+        max_err = max_err.max((v_left - tt_left).abs_val());
+        max_err = max_err.max((v_right - tt_right).abs_val());
     }
+    max_err
+}
+
+#[test]
+fn invert_qtt_round_trip_uncompressed() {
+    let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
+    let max_err = invert_round_trip_error(|x: f64| (-x * x).exp(), 8, 10, &opts);
     assert!(max_err < 1.0e-11);
 }
 
 #[test]
 fn invert_qtt_round_trip_compressed() {
-    let r = 10;
-    let degree = 10;
-    let a = 0.0;
-    let b = 1.0;
-    let f = |x: f64| (-x * x).exp();
-    let basis = get_chebyshev_grid(degree).unwrap();
     let opts = InterpolativeQttOptions::default().with_tolerance(1e-8);
-
-    let tt = interpolate_single_scale(f, a, b, r, degree, &opts).unwrap();
-    let result = invert_qtt(&tt, &basis, 1).unwrap();
-    let s = &result[r - 2];
-    let grid = grid_1d(r, a, b);
-
-    let mut max_err = 0.0_f64;
-    for i in 0..(1usize << (r - 1)) {
-        let left_idx = [2 * i];
-        let right_idx = [2 * i + 1];
-        let left_q = grid.grididx_to_quantics(&left_idx).unwrap();
-        let right_q = grid.grididx_to_quantics(&right_idx).unwrap();
-        let tt_left = tt.evaluate(&quantics_to_indices(&left_q)).unwrap();
-        let tt_right = tt.evaluate(&quantics_to_indices(&right_q)).unwrap();
-
-        let mut v_left = 0.0;
-        let mut v_right = 0.0;
-        for beta in 0..=degree {
-            v_left += basis.evaluate(beta, 0.0).unwrap() * s[[i, beta]];
-            v_right += basis.evaluate(beta, 0.5).unwrap() * s[[i, beta]];
-        }
-        max_err = max_err.max((v_left - tt_left).abs());
-        max_err = max_err.max((v_right - tt_right).abs());
-    }
+    let max_err = invert_round_trip_error(|x: f64| (-x * x).exp(), 10, 10, &opts);
     assert!(max_err < 1.0e-6);
 }
 
@@ -878,7 +939,7 @@ fn invert_qtt_stage2_coarse_levels() {
     let opts = InterpolativeQttOptions::default().with_tolerance(0.0);
 
     let tt = interpolate_single_scale(f, a, b, r, degree, &opts).unwrap();
-    let result = invert_qtt(&tt, &basis, 1).unwrap();
+    let result = invert::<f64>(&tt, &basis);
 
     for (level, s) in result.iter().enumerate() {
         let k = level + 1;
@@ -898,7 +959,7 @@ fn sparse_and_adaptive_public_api_smoke_tests() {
     let opts = InterpolativeQttOptions::default();
 
     let sparse = interpolate_single_scale_sparse(|x| x.sin(), 0.0, 1.0, 4, 8, 2, &opts).unwrap();
-    assert_eq!(sparse.len(), 4);
+    assert_eq!(sparse.1.len(), 4);
 
     let sparse_nd = interpolate_single_scale_sparse_nd(
         |x| x[0] + x[1],
@@ -910,10 +971,10 @@ fn sparse_and_adaptive_public_api_smoke_tests() {
         &opts,
     )
     .unwrap();
-    assert_eq!(sparse_nd.site_dims(), vec![4, 4, 4]);
+    assert_eq!(site_dims(&sparse_nd), vec![4, 4, 4]);
 
     let adaptive = interpolate_adaptive(|x| x.sin(), 0.0, 1.0, 4, 6, 1e-8, &[], &opts).unwrap();
-    assert_eq!(adaptive.len(), 4);
+    assert_eq!(adaptive.1.len(), 4);
 
     let adaptive_nd = interpolate_adaptive_nd(
         |x| x[0] + x[1],
@@ -926,7 +987,7 @@ fn sparse_and_adaptive_public_api_smoke_tests() {
         &opts,
     )
     .unwrap();
-    assert_eq!(adaptive_nd.site_dims(), vec![4, 4, 4]);
+    assert_eq!(site_dims(&adaptive_nd), vec![4, 4, 4]);
 }
 
 #[test]
@@ -956,7 +1017,7 @@ fn invert_qtt_degree1_exact_at_every_node() {
     for tolerance in [0.0, 1.0e-12] {
         let opts = InterpolativeQttOptions::default().with_tolerance(tolerance);
         let tt = interpolate_single_scale(f, 0.0, 1.0, r, 1, &opts).unwrap();
-        let s = &invert_qtt(&tt, &basis, 1).unwrap()[r - 2];
+        let s = &invert::<f64>(&tt, &basis)[r - 2];
         for i in 0..(1usize << (r - 1)) {
             for beta in 0..=1 {
                 let x = (i as f64 + basis.grid()[beta]) / (1usize << (r - 1)) as f64;
@@ -980,12 +1041,15 @@ fn invert_qtt_degree2_exact_when_uncompressed_blend_when_compressed() {
     for (tolerance, exact) in [(0.0, true), (1.0e-12, false)] {
         let opts = InterpolativeQttOptions::default().with_tolerance(tolerance);
         let tt = interpolate_single_scale(f, 0.0, 1.0, r, degree, &opts).unwrap();
-        assert_eq!(finest_level_scale(&tt, &basis).unwrap().is_some(), exact);
-        let s = &invert_qtt(&tt, &basis, 1).unwrap()[r - 2];
+        assert_eq!(
+            finest_level_scale::<f64>(&tt, &basis).unwrap().is_some(),
+            exact
+        );
+        let s = &invert::<f64>(&tt, &basis)[r - 2];
         for i in 0..(1usize << (r - 1)) {
             let sample = |idx: usize| {
                 let q = grid.grididx_to_quantics(&[idx]).unwrap();
-                tt.evaluate(&quantics_to_indices(&q)).unwrap()
+                evaluate::<f64>(&tt, &q)
             };
             let (p0, p_half) = (sample(2 * i), sample(2 * i + 1));
             let h = 1.0 / (1usize << (r - 1)) as f64;

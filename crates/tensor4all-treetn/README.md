@@ -3,6 +3,17 @@
 Tree tensor networks with arbitrary graph topology. Supports canonicalization,
 truncation, naive/zip-up/fit/SRC contraction, and linear solving.
 
+## Cargo features
+
+The default selects `tenferro-cpu-platform` and does not depend on SimpleTT.
+Enable `simplett-bridge` explicitly to use the legacy
+`tensor_train_to_treetn*` / `treetn_to_tensor_train` conversions or the
+`insert_onehot_site_in_treetn_chain` / `weighted_remove_site_from_treetn_chain`
+helpers. The `cached_evaluator` comparison benchmark also requires this feature.
+Native chains can use `TreeTN::from_chain_cores`, `chain_cores`, and
+`compress_chain_on_session` without it. For an alternate CPU provider, disable
+defaults and select the same provider on each directly imported compute crate.
+
 ## Key Types
 
 - `TreeTN` — tree tensor network with named nodes and arbitrary tree structure
@@ -10,6 +21,9 @@ truncation, naive/zip-up/fit/SRC contraction, and linear solving.
 - `canonicalize()` — orthogonalize towards any center node
 - `truncate()` — bond dimension truncation with configurable tolerance
 - `to_dense()` — contract all bonds into a single dense tensor
+- `contraction::contract_with_outcome()` / `contract_with_outcome_in()` —
+  contract two networks and report the bond dimension of every output edge, or
+  return `Saturated` when an edge reaches a caller-given rank threshold
 
 ## Example
 

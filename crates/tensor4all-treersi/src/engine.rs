@@ -99,7 +99,9 @@ fn host_core_values<T: TreeRsiScalar>(
 /// On a session the solve runs on that session. A CUDA run has no device twin
 /// for it, so it keeps running on the process-global CPU context: host
 /// dependency 1 of 2 of a CUDA run (the other is the input-core readback in
-/// [`host_core_values`]). See #1158 step 2 for the device-resident sketch. The
+/// [`host_core_values`]). See #1158 step 2 for the device-resident sketch. A
+/// build without `tensor4all-core/global-defaults` has no such context and the
+/// CUDA arm refuses with a typed error instead. The
 /// session arm never takes that fallback, which is what lets the session entry
 /// run while another thread holds the process-global backend.
 fn row_interpolation<T: TreeRsiScalar>(
@@ -112,11 +114,13 @@ fn row_interpolation<T: TreeRsiScalar>(
             matrix_luci_row_interpolation_owned_on_session(matrix, Some(options), session)
         }
         #[cfg(feature = "tenferro-cuda")]
-        Exec::Cuda(_) => tensor4all_core::matrix_luci_row_interpolation_owned_in(
-            matrix,
-            Some(options),
-            &tensor4all_tensorbackend::default_cpu_execution_context(),
-        ),
+        Exec::Cuda(_) => {
+            // Without `tensor4all-core/global-defaults` there is no process-global
+            // CPU context, so the CUDA arm refuses instead (#1376 stage A3).
+            let context = tensor4all_core::legacy::default_cpu_execution_context()
+                .map_err(TreeRsiError::numerical)?;
+            tensor4all_core::matrix_luci_row_interpolation_owned_in(matrix, Some(options), &context)
+        }
     }
     .map_err(TreeRsiError::numerical)
 }

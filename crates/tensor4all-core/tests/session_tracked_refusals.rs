@@ -182,7 +182,7 @@ fn every_factorization_session_entry_refuses_a_tracked_operand() {
                 &options,
             ));
         }
-        for algorithm in [FactorizeAlg::QR, FactorizeAlg::SVD] {
+        for algorithm in [FactorizeAlg::QR, FactorizeAlg::SVD, FactorizeAlg::CI] {
             assert_factorize_refusal(factorize_full_rank_on_session(
                 &mut session,
                 &tracked,

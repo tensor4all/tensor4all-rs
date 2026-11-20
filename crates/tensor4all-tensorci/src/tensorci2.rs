@@ -9,15 +9,16 @@ use crate::globalpivot::{DefaultGlobalPivotFinder, GlobalPivotFinder, GlobalPivo
 use rand::SeedableRng;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use tensor4all_core::legacy::solve_matrix;
 use tensor4all_core::{
-    matrix_luci_factors_from_blocks, matrix_luci_factors_from_matrix_owned,
+    matrix_luci_factors_from_blocks_seeded, matrix_luci_factors_from_matrix_owned,
     matrix_luci_factors_from_matrix_owned_on_session, MatrixLuciFactors, MatrixLuciScalar,
     MultiIndex, RrLUOptions, Scalar,
 };
 use tensor4all_simplett::{tensor3_zeros, SimpleTensorTrain, TTScalar, Tensor3, Tensor3Ops};
 use tensor4all_tensorbackend::invariant_violated;
 use tensor4all_tensorbackend::{
-    explicit::Session, solve_matrix, transpose, BackendLinalgError, Matrix, MatrixSolveScalar,
+    explicit::Session, transpose, BackendLinalgError, Matrix, MatrixSolveScalar,
 };
 
 /// Configuration for the TCI2 algorithm ([`crossinterpolate2`]).
@@ -76,8 +77,9 @@ pub struct TCI2Options {
     /// Convergence tolerance (default: `1e-8`).
     ///
     /// When `normalize_error` is enabled (the default), this is the
-    /// *relative* threshold: the bond error is divided by the maximum
-    /// absolute function value seen so far. Typical choices are `1e-8` for
+    /// *relative* threshold: the recorded error (the larger of the bond error
+    /// and the residual measured by the global search) is divided by the
+    /// maximum absolute function value seen so far. Typical choices are `1e-8` for
     /// moderate accuracy and `1e-12` for high accuracy.
     /// With `normalize_error = false`, this is an absolute threshold.
     /// Each half-sweep fixes its absolute threshold before updating any bond;
@@ -97,10 +99,17 @@ pub struct TCI2Options {
     pub max_bond_dim: Option<usize>,
     /// Pivot search strategy (default: [`PivotSearchStrategy::Full`]).
     ///
-    /// `Full` materializes the entire candidate matrix and finds the best
-    /// pivot exactly. `Rook` uses lazy block-rook search and can reduce
-    /// evaluations for large local dimensions, but may miss some pivots.
-    /// Certifying an exactly zero residual can require all remaining entries.
+    /// `Full` is recommended. It materializes the entire candidate matrix,
+    /// picks each pivot as the exact residual maximum, and its bond error is
+    /// the maximum remaining residual over the candidate matrix, a certified
+    /// bound.
+    ///
+    /// `Rook` trades that guarantee for fewer evaluations: it finds each pivot
+    /// with an O(d) rook walk and stops a bond update when the current rook
+    /// pivot, and two more walks started from other columns, find nothing
+    /// above tolerance. Its bond errors are the last rook pivots, not
+    /// bounds, so [`TCI2Termination::Converged`] under `Rook` does not prove
+    /// the tolerance. See [`PivotSearchStrategy::Rook`].
     pub pivot_search: PivotSearchStrategy,
     /// Whether to normalize the bond error by the maximum observed sample
     /// value (default: `true`).
@@ -117,7 +126,10 @@ pub struct TCI2Options {
     /// Number of random starting points for global pivot search (default: `5`).
     ///
     /// Each starting point undergoes local optimization to find regions of
-    /// high interpolation error.
+    /// high interpolation error. When none finds an error above the absolute
+    /// tolerance, the default finder also walks once from the latest retained
+    /// pivot pair of every bond (see [`DefaultGlobalPivotFinder`]). Zero
+    /// disables the search, including those walks.
     pub nsearch: usize,
     /// Sweep strategy for 2-site sweeps (default: [`Sweep2Strategy::BackAndForth`]).
     pub sweep_strategy: Sweep2Strategy,
@@ -133,8 +145,10 @@ pub struct TCI2Options {
     pub strictly_nested: bool,
     /// Tolerance margin for global pivot search (default: `10.0`).
     ///
-    /// Global pivots are accepted when their error exceeds
-    /// `abs_tolerance * tol_margin_global_search`.
+    /// Global pivots found above `abs_tolerance * tol_margin_global_search`
+    /// take priority. When the search finds none, walked residuals above
+    /// `abs_tolerance` are added instead. Residuals below the margin still
+    /// enter the recorded error.
     pub tol_margin_global_search: f64,
     /// Random seed for reproducibility (default: `None` = OS entropy).
     ///
@@ -216,7 +230,14 @@ impl Default for TCI2Options {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TCI2Termination {
-    /// Bond error, global-pivot history, and rank stability all converged.
+    /// The recorded error (bond errors and residuals measured by the global
+    /// search), global-pivot history, and rank stability all converged.
+    ///
+    /// Under [`PivotSearchStrategy::Full`] the bond errors are residual
+    /// maxima over the sampled candidate rows and columns, not over the full
+    /// tensor. Under [`PivotSearchStrategy::Rook`] they are the last rook
+    /// pivots. Either way this variant is a sampled criterion and does not
+    /// prove the tolerance on unsampled entries.
     Converged,
     /// The recent rank history reached the configured maximum bond dimension.
     MaxBondDimension,
@@ -259,6 +280,11 @@ pub struct TCI2OptimizationResult<T: Scalar + TTScalar> {
     /// Bond dimension recorded after each half-sweep.
     pub ranks: Vec<usize>,
     /// Normalized or absolute error estimate recorded after each half-sweep.
+    ///
+    /// Each value is the larger of the maximum local bond error and the
+    /// largest residual the global pivot search measured on the swept
+    /// approximation. Both are sampled, so these are diagnostics, not bounds
+    /// on the full-tensor error.
     pub errors: Vec<f64>,
     /// Reason why optimization stopped.
     pub termination: TCI2Termination,
@@ -302,21 +328,38 @@ struct PivotUpdateContext<'a, B> {
 pub enum PivotSearchStrategy {
     /// Evaluate the entire candidate matrix and pick the best pivot.
     ///
-    /// Exact but costs O(D_left * d * d * D_right) evaluations per bond,
-    /// where d is the local dimension. This is the default and recommended
-    /// for most problems.
+    /// Exact and certified: each pivot is the maximum of the remaining
+    /// residual, and the bond error is the maximum residual left over the
+    /// candidate matrix, an upper bound. Costs O(D_left * d * d * D_right)
+    /// evaluations per bond, where d is the local dimension. This is the
+    /// default and recommended for most problems; use it whenever a certified
+    /// bound is required.
     #[default]
     Full,
-    /// Use lazy block-rook pivoting over partial matrix blocks.
+    /// Heuristic lazy block-rook pivoting over partial matrix blocks.
     ///
-    /// Avoids materializing the full candidate matrix. Exactly zero starting
-    /// residual columns are skipped; an all-zero residual can require all
-    /// remaining entries to be inspected, one column at a time. Nonzero local
-    /// maxima are still heuristic. Error normalization uses the maximum sample
-    /// value observed through lazy requests rather than a full-grid scan.
-    /// The per-edge evaluator memoizes sampled entries, so this strategy is
-    /// not a cache-memory cap: exhaustive zero certification can retain the
-    /// complete candidate grid even though requests remain partial batches.
+    /// Each pivot is found by an O(d)-sized rook walk that alternates residual
+    /// column and row maxima until they agree, so the full candidate matrix is
+    /// never materialized. A rook pivot is the largest entry of its own
+    /// residual row and column only.
+    ///
+    /// The stop is heuristic: when the current rook pivot is below tolerance,
+    /// two more walks start from columns spread over the remaining block, and
+    /// the bond update stops only if neither finds a pivot above tolerance.
+    /// This catches a walk that stopped on one small local maximum, but it
+    /// does **not** certify that the remaining residual is below tolerance. The bond error recorded in `pivot_errors`
+    /// and the sweep `errors` is that last rook pivot, not an upper bound, and
+    /// [`TCI2Termination::Converged`] under `Rook` is not a proof that the
+    /// tolerance holds. Use [`Full`](Self::Full) when a certified bound is
+    /// required.
+    ///
+    /// Exactly zero starting residual columns are skipped; an all-zero residual
+    /// can require all remaining entries to be inspected, one column at a time.
+    /// Error normalization uses the maximum sample value observed through lazy
+    /// requests rather than a full-grid scan. The per-edge evaluator memoizes
+    /// sampled entries, so this strategy is not a cache-memory cap: exhaustive
+    /// zero certification can retain the complete candidate grid even though
+    /// requests remain partial batches.
     Rook,
 }
 
@@ -2098,11 +2141,6 @@ where
         // Fill site tensors after sweep
         tci.fill_site_tensors_on_session(&f, linalg)?;
 
-        // Record error
-        let error = tci.max_bond_error();
-        let error_normalized = error / error_normalization;
-        errors.push(error_normalized);
-
         // Global pivot search
         let tt = tci.to_tensor_train()?;
         let input = GlobalPivotSearchInput {
@@ -2116,9 +2154,18 @@ where
         // Erase the caller's RNG type once, so the generic pipeline below the
         // public boundary is instantiated a single time.
         let mut stream: &mut R = &mut *rng;
-        let global_pivots = finder.find_global_pivots(&input, &f, abs_tol, &mut stream)?;
-        let n_global = global_pivots.len();
-        tci.add_global_pivots(&global_pivots)?;
+        let search = finder.find_global_pivots(&input, &f, abs_tol, &mut stream)?;
+        validate_nonnegative_finite("max_sampled_error", search.max_sampled_error)?;
+
+        // Record the larger of the local bond errors and the residual the
+        // global search actually measured on the swept approximation. Both
+        // are sampled, so this is a diagnostic, not a bound (#1358).
+        let error = tci.max_bond_error().max(search.max_sampled_error);
+        let error_normalized = error / error_normalization;
+        errors.push(error_normalized);
+
+        let n_global = search.pivots.len();
+        tci.add_global_pivots(&search.pivots)?;
         nglobal_pivots_history.push(n_global);
 
         ranks.push(tci.rank());
@@ -2280,12 +2327,18 @@ where
             context.batched_f,
             tci.max_sample_value,
         );
-        let factors_result = matrix_luci_factors_from_blocks(
+        // Start each rook walk on the pivot this bond had at the end of the
+        // previous sweep, as `arrlu` starts from its `I0`/`J0`, instead of
+        // rediscovering it from the first remaining column.
+        let seed_pivots =
+            seed_positions(&tci.i_set[b + 1], &tci.j_set[b], &i_combined, &j_combined);
+        let factors_result = matrix_luci_factors_from_blocks_seeded(
             i_combined.len(),
             j_combined.len(),
             |rows, cols, out: &mut [T]| {
                 evaluator.fill_block(rows, cols, out);
             },
+            &seed_pivots,
             RrLUOptions {
                 max_bond_dim: context.options.max_bond_dim.unwrap_or(usize::MAX),
                 abs_tol: context.abs_tol,
@@ -2375,6 +2428,47 @@ where
     }
 
     Ok(())
+}
+
+/// Positions in `combined_rows` / `combined_cols` of the pivot pairs a bond had
+/// at the end of the previous sweep.
+///
+/// These are `arrlu`'s `I0`/`J0`: the k-th pair is the k-th pivot the bond's
+/// last update accepted. A pair is dropped when either index is missing from the
+/// combined candidates, which a bond update on a neighbouring bond can cause by
+/// replacing the Kronecker list; dropping both halves keeps the pairs aligned.
+///
+/// Each combined list is indexed once, so a bond costs O(k + m) hash lookups
+/// for k previous pivots and m candidates rather than O(k * m) `MultiIndex`
+/// comparisons. If a candidate occurs more than once, its first position is
+/// used.
+fn seed_positions(
+    previous_rows: &[MultiIndex],
+    previous_cols: &[MultiIndex],
+    combined_rows: &[MultiIndex],
+    combined_cols: &[MultiIndex],
+) -> Vec<(usize, usize)> {
+    if previous_rows.is_empty() || previous_cols.is_empty() {
+        return Vec::new();
+    }
+    fn first_positions(list: &[MultiIndex]) -> HashMap<&MultiIndex, usize> {
+        let mut positions = HashMap::with_capacity(list.len());
+        for (pos, index) in list.iter().enumerate() {
+            positions.entry(index).or_insert(pos);
+        }
+        positions
+    }
+    let row_positions = first_positions(combined_rows);
+    let col_positions = first_positions(combined_cols);
+    previous_rows
+        .iter()
+        .zip(previous_cols)
+        .filter_map(|(row_index, col_index)| {
+            let row = *row_positions.get(row_index)?;
+            let col = *col_positions.get(col_index)?;
+            Some((row, col))
+        })
+        .collect()
 }
 
 fn update_max_sample_value<T: Scalar + TTScalar>(tci: &mut TensorCI2<T>, value: T) {

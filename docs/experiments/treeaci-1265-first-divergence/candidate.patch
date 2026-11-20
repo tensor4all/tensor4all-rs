@@ -1,0 +1,1814 @@
+diff --git a/crates/tensor4all-treeaci/src/global_guard.rs b/crates/tensor4all-treeaci/src/global_guard.rs
+index ee627cba..4501f2d4 100644
+--- a/crates/tensor4all-treeaci/src/global_guard.rs
++++ b/crates/tensor4all-treeaci/src/global_guard.rs
+@@ -1,10 +1,10 @@
+ //! Global floating-zone validation for locally sampled tree ACI sweeps.
+
+ use rand::Rng as _;
+-use std::{collections::HashMap, mem::size_of};
++use std::mem::size_of;
+
+ use tensor4all_core::floating_zone_walk_with_initial_error;
+-use tensor4all_core::{ColMajorArrayRef, DynIndex, IdxTensor, IndexLike};
++use tensor4all_core::{ColMajorArrayRef, IdxTensor};
+ use tensor4all_treetn::{
+     CachedEvaluatorOptions, CachedEvaluatorPlan, EvaluationHint, TreeTN, TreeTNCachedEvaluator,
+ };
+@@ -327,6 +327,27 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
+     if points.is_empty() {
+         return Ok(0);
+     }
++    let center =
++        state
++            .output
++            .canonical_region()
++            .iter()
++            .next()
++            .ok_or(TreeAciError::InternalInvariant {
++                message: "Guard output has no canonical center",
++            })?;
++    let mut required_closure = vec![false; state.problem.directed_edges.len()];
++    for &cut in &state.problem.directed_dependency_order {
++        let edge = &state.problem.directed_edges[cut];
++        required_closure[cut] = &edge.from == center
++            || edge
++                .incoming_to_from
++                .iter()
++                .any(|&child| required_closure[child]);
++    }
++    for contains_center in &mut required_closure {
++        *contains_center = !*contains_center;
++    }
+     let checkpoint = state.sample_arena.checkpoint();
+     #[cfg(test)]
+     let clone_started = std::time::Instant::now();
+@@ -336,71 +357,45 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
+         stats.guard_candidate_clone += clone_started.elapsed();
+     });
+     let mut injected = 0usize;
+-    let mut growth = vec![0usize; state.edge_ranks.len()];
++    let limits = state
++        .edge_ranks
++        .iter()
++        .zip(growth_capacity)
++        .map(|(&basis, &headroom)| {
++            basis
++                .checked_add(headroom)
++                .ok_or(TreeAciError::SizeOverflow {
++                    context: "global-pivot candidate limit",
++                })
++        })
++        .collect::<Result<Vec<_>>>()?;
+     let staged = (|| {
+         #[cfg(test)]
+         let projection_started = std::time::Instant::now();
+         for point in points {
+-            let activate_directed_cut = growth_capacity
+-                .iter()
+-                .zip(&growth)
+-                .flat_map(|(&capacity, &grown)| {
+-                    let active = grown < capacity;
+-                    [active, active]
+-                })
+-                .collect::<Vec<_>>();
+-            if !activate_directed_cut.iter().any(|active| *active) {
+-                break;
+-            }
+             let report = state.sample_arena.inject_global_point_masked(
+                 &mut proposed_active,
+                 &state.problem,
+                 point,
+-                &activate_directed_cut,
++                crate::samples::CandidateCapacity {
++                    limits: &limits,
++                    required_closure: &required_closure,
++                },
+             )?;
+             if report.total_added > 0 {
+                 injected = injected.checked_add(1).ok_or(TreeAciError::SizeOverflow {
+                     context: "injected global pivot count",
+                 })?;
+-                for (edge, added) in report.added_by_edge.as_chunks::<2>().0.iter().enumerate() {
+-                    if added[0] != added[1] {
+-                        return Err(TreeAciError::InternalInvariant {
+-                            message: "global pivot changed only one direction of a tree cut",
+-                        });
+-                    }
+-                    growth[edge] =
+-                        growth[edge]
+-                            .checked_add(added[0])
+-                            .ok_or(TreeAciError::SizeOverflow {
+-                                context: "global-pivot bond growth",
+-                            })?;
+-                }
+             }
+         }
+         #[cfg(test)]
+         crate::state::profile_debug_stats::record(|stats| {
+             stats.guard_projection += projection_started.elapsed();
+         });
+-        if growth
+-            .iter()
+-            .zip(growth_capacity)
+-            .any(|(&grown, &capacity)| grown > capacity)
+-        {
+-            return Err(TreeAciError::InternalInvariant {
+-                message: "global-pivot injection exceeded a cut's growth capacity",
+-            });
+-        }
+         if injected == 0 {
+             return Ok(None);
+         }
+         #[cfg(test)]
+-        let padding_started = std::time::Instant::now();
+-        let proposed_output = pad_output_bonds(state, &growth, exec)?;
+-        #[cfg(test)]
+-        crate::state::profile_debug_stats::record(|stats| {
+-            stats.guard_output_padding += padding_started.elapsed();
+-        });
+-        #[cfg(test)]
+         let frames_started = std::time::Instant::now();
+         let proposed_frames =
+             state
+@@ -410,9 +405,9 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
+         crate::state::profile_debug_stats::record(|stats| {
+             stats.guard_frame_extension += frames_started.elapsed();
+         });
+-        Ok(Some((proposed_output, proposed_frames)))
++        Ok(Some(proposed_frames))
+     })();
+-    let Some((proposed_output, proposed_frames)) = (match staged {
++    let Some(proposed_frames) = (match staged {
+         Ok(staged) => staged,
+         Err(error) => {
+             state.sample_arena.rollback(checkpoint)?;
+@@ -422,275 +417,14 @@ pub(crate) fn inject_global_pivots<'a, T: TreeAciScalar, V: TreeAciNode>(
+         state.sample_arena.rollback(checkpoint)?;
+         return Ok(0);
+     };
+-    // Validate the last fallible arithmetic before publishing any staged
+-    // state. The old order assigned `output`, `candidates`, and `input_frames`
+-    // first, then used `checked_add` while updating `edge_ranks`; a malformed
+-    // or test-injected rank overflow could therefore return an error with a
+-    // partially committed state. This precomputed vector makes the following
+-    // replacement block no-failure and preserves transaction atomicity.
+-    let next_edge_ranks = state
+-        .edge_ranks
+-        .iter()
+-        .zip(&growth)
+-        .map(|(&rank, &added)| {
+-            rank.checked_add(added).ok_or(TreeAciError::SizeOverflow {
+-                context: "global-pivot output rank",
+-            })
+-        })
+-        .collect::<Result<Vec<_>>>();
+-    let next_edge_ranks = match next_edge_ranks {
+-        Ok(ranks) => ranks,
+-        Err(error) => {
+-            state.sample_arena.rollback(checkpoint)?;
+-            return Err(error);
+-        }
+-    };
+-    state.output = proposed_output;
++    // Only query membership and input frames are published. The represented
++    // output, selected pivots and paired basis dimensions remain untouched.
+     state.candidates = proposed_active;
+     state.input_frames = proposed_frames;
+-    state.edge_ranks = next_edge_ranks;
+     state.generation = state.candidates.generation;
+     Ok(injected)
+ }
+
+-fn pad_output_bonds<T: TreeAciScalar, V: TreeAciNode>(
+-    state: &TreeAciState<'_, T, V>,
+-    growth: &[usize],
+-    exec: &mut crate::exec::Exec<'_, '_>,
+-) -> Result<tensor4all_treetn::TreeTN<IdxTensor, V>> {
+-    if growth.iter().all(|&amount| amount == 0) {
+-        return Ok(state.output.clone());
+-    }
+-    let mut replacement_edges = Vec::with_capacity(growth.len());
+-    let mut replacement_indices = HashMap::with_capacity(growth.len());
+-    for (edge_number, &amount) in growth.iter().enumerate() {
+-        if amount == 0 {
+-            continue;
+-        }
+-        let directed = &state.problem.directed_edges[2 * edge_number];
+-        let graph_edge = state
+-            .output
+-            .edge_between(&directed.from, &directed.to)
+-            .ok_or(TreeAciError::InternalInvariant {
+-                message: "global-pivot padding references a missing output edge",
+-            })?;
+-        let old = state
+-            .output
+-            .bond_index(graph_edge)
+-            .ok_or(TreeAciError::InternalInvariant {
+-                message: "global-pivot padding references an output edge without a bond",
+-            })?
+-            .clone();
+-        let dimension = old
+-            .dim()
+-            .checked_add(amount)
+-            .ok_or(TreeAciError::SizeOverflow {
+-                context: "global-pivot padded bond dimension",
+-            })?;
+-        let new = DynIndex::new_dyn(dimension);
+-        replacement_indices.insert(old, new.clone());
+-        replacement_edges.push((graph_edge, new));
+-    }
+-
+-    // Plan every affected core before allocating any of it. Sizing and
+-    // allocation used to share one loop, so the aggregate `max_working_bytes`
+-    // check only ran after every core was already allocated and retained: a
+-    // caller could set a small ceiling and still pay the full peak before being
+-    // told the request was rejected. Unaffected cores are deliberately omitted:
+-    // rebuilding them used to replace inactive bond identities and copy the
+-    // complete output even when the guard grew only one cut.
+-    // Holds the node name rather than its index: `TreeTN::node_index` returns
+-    // petgraph's `NodeIndex`, which treetn does not re-export, so naming it
+-    // here would mean depending on petgraph directly. Re-resolving the name is
+-    // a hash lookup and keeps the dependency boundary intact.
+-    struct PaddedCorePlan<V> {
+-        node: V,
+-        new_indices: Vec<DynIndex>,
+-        old_dims: Vec<usize>,
+-        new_strides: Vec<usize>,
+-        new_len: usize,
+-    }
+-
+-    let mut plans = Vec::with_capacity(state.problem.node_order.len());
+-    let mut working_elements = 0usize;
+-    let mut largest_source_core = 0usize;
+-    for node in &state.problem.node_order {
+-        let node_index = state
+-            .output
+-            .node_index(node)
+-            .ok_or(TreeAciError::InternalInvariant {
+-                message: "global-pivot padding references a missing output node",
+-            })?;
+-        let tensor = state
+-            .output
+-            .tensor(node_index)
+-            .ok_or(TreeAciError::InternalInvariant {
+-                message: "global-pivot padding references a missing output tensor",
+-            })?;
+-        let old_indices = tensor.indices();
+-        if !old_indices
+-            .iter()
+-            .any(|index| replacement_indices.contains_key(index))
+-        {
+-            continue;
+-        }
+-        let new_indices = old_indices
+-            .iter()
+-            .map(|index| {
+-                replacement_indices
+-                    .get(index)
+-                    .cloned()
+-                    .unwrap_or_else(|| index.clone())
+-            })
+-            .collect::<Vec<_>>();
+-        let old_dims = old_indices.iter().map(IndexLike::dim).collect::<Vec<_>>();
+-        let new_dims = new_indices.iter().map(IndexLike::dim).collect::<Vec<_>>();
+-        let old_len = old_dims.iter().try_fold(1usize, |product, &dimension| {
+-            product
+-                .checked_mul(dimension)
+-                .ok_or(TreeAciError::SizeOverflow {
+-                    context: "global-pivot source core elements",
+-                })
+-        })?;
+-        let new_len = new_dims.iter().try_fold(1usize, |product, &dimension| {
+-            product
+-                .checked_mul(dimension)
+-                .ok_or(TreeAciError::SizeOverflow {
+-                    context: "global-pivot padded core elements",
+-                })
+-        })?;
+-        let mut new_strides = Vec::with_capacity(new_dims.len());
+-        let mut new_stride = 1usize;
+-        for &dimension in &new_dims {
+-            new_strides.push(new_stride);
+-            new_stride = new_stride
+-                .checked_mul(dimension)
+-                .ok_or(TreeAciError::SizeOverflow {
+-                    context: "global-pivot padded core strides",
+-                })?;
+-        }
+-        if new_stride != new_len {
+-            return Err(TreeAciError::InternalInvariant {
+-                message: "global-pivot padded core length disagrees with its strides",
+-            });
+-        }
+-        if new_len > state.problem.max_core_elements {
+-            return Err(TreeAciError::ResourceLimit {
+-                resource: "core elements",
+-                requested: new_len,
+-                limit: state.problem.max_core_elements,
+-            });
+-        }
+-        working_elements =
+-            working_elements
+-                .checked_add(new_len)
+-                .ok_or(TreeAciError::SizeOverflow {
+-                    context: "global-pivot padding working elements",
+-                })?;
+-        largest_source_core = largest_source_core.max(old_len);
+-        plans.push(PaddedCorePlan {
+-            node: node.clone(),
+-            new_indices,
+-            old_dims,
+-            new_strides,
+-            new_len,
+-        });
+-    }
+-
+-    // `to_vec` materializes one source core while all already-built padded
+-    // cores and the current destination allocation are live. Charge the
+-    // largest such source buffer in addition to the final padded payload.
+-    let peak_elements =
+-        working_elements
+-            .checked_add(largest_source_core)
+-            .ok_or(TreeAciError::SizeOverflow {
+-                context: "global-pivot padding peak elements",
+-            })?;
+-    let planned_bytes =
+-        peak_elements
+-            .checked_mul(size_of::<T>())
+-            .ok_or(TreeAciError::SizeOverflow {
+-                context: "global-pivot padding working bytes",
+-            })?;
+-    if planned_bytes > state.problem.max_working_bytes {
+-        return Err(TreeAciError::ResourceLimit {
+-            resource: "working bytes",
+-            requested: planned_bytes,
+-            limit: state.problem.max_working_bytes,
+-        });
+-    }
+-
+-    let mut tensors = Vec::with_capacity(plans.len());
+-    for PaddedCorePlan {
+-        node,
+-        new_indices,
+-        old_dims,
+-        new_strides,
+-        new_len,
+-    } in plans
+-    {
+-        let node_index = state
+-            .output
+-            .node_index(&node)
+-            .ok_or(TreeAciError::InternalInvariant {
+-                message: "global-pivot padding references a missing output node",
+-            })?;
+-        let tensor = state
+-            .output
+-            .tensor(node_index)
+-            .ok_or(TreeAciError::InternalInvariant {
+-                message: "global-pivot padding references a missing output tensor",
+-            })?;
+-        let mut padded = vec![T::default(); new_len];
+-        let values = exec
+-            .values::<T>(tensor)
+-            .map_err(|error| TreeAciError::Numerical {
+-                message: error.to_string(),
+-            })?;
+-        for (old_linear, value) in values.into_iter().enumerate() {
+-            let mut quotient = old_linear;
+-            let mut new_linear = 0usize;
+-            for (&old_dim, &new_stride) in old_dims.iter().zip(&new_strides) {
+-                let coordinate = quotient % old_dim;
+-                quotient /= old_dim;
+-                let offset =
+-                    coordinate
+-                        .checked_mul(new_stride)
+-                        .ok_or(TreeAciError::SizeOverflow {
+-                            context: "global-pivot padded core offset",
+-                        })?;
+-                new_linear = new_linear
+-                    .checked_add(offset)
+-                    .ok_or(TreeAciError::SizeOverflow {
+-                        context: "global-pivot padded core offset",
+-                    })?;
+-            }
+-            let slot = padded
+-                .get_mut(new_linear)
+-                .ok_or(TreeAciError::InternalInvariant {
+-                    message: "global-pivot padded core offset is out of bounds",
+-                })?;
+-            *slot = value;
+-        }
+-        tensors.push((
+-            node_index,
+-            exec.tensor(new_indices, padded)
+-                .map_err(|error| TreeAciError::Numerical {
+-                    message: error.to_string(),
+-                })?,
+-        ));
+-    }
+-    let mut output = state.output.clone();
+-    for (edge, new) in &replacement_edges {
+-        output.replace_edge_bond(*edge, new.clone())?;
+-    }
+-    for (node, tensor) in tensors {
+-        output.replace_tensor(node, tensor)?;
+-    }
+-    output.verify_internal_consistency()?;
+-    Ok(output)
+-}
+-
+ pub(crate) struct InputEvaluators<'a, V: TreeAciNode> {
+     inputs: Vec<TreeTNCachedEvaluator<'a, V>>,
+     /// Immutable topology, directed-component key layouts, and traversal
+diff --git a/crates/tensor4all-treeaci/src/global_guard/tests/candidate_closure.rs b/crates/tensor4all-treeaci/src/global_guard/tests/candidate_closure.rs
+index 17960f89..10ad1757 100644
+--- a/crates/tensor4all-treeaci/src/global_guard/tests/candidate_closure.rs
++++ b/crates/tensor4all-treeaci/src/global_guard/tests/candidate_closure.rs
+@@ -1,8 +1,4 @@
+-//! Characterization fixtures for #1265, before the candidate abstraction fix.
+-//!
+-//! These tests identify the current defect, rather than treating it as an
+-//! accepted algorithmic contract. The fix will change the observed violations
+-//! into closure assertions while retaining the same fixture and invariants.
++//! The fixture-first #1265 cases now assert useful candidate closure.
+ use super::*;
+ use std::collections::HashSet;
+
+@@ -55,7 +51,7 @@ fn inward_holes(
+ }
+
+ #[test]
+-fn fixture_exposes_duplicate_padding_headroom_in_both_directions() {
++fn useful_query_candidates_grow_independently_of_the_selected_output_basis() {
+     for reflected in [false, true] {
+         let inputs = vec![chain(&[1, 1, 1])];
+         let options = TreeAciOptions {
+@@ -84,11 +80,8 @@ fn fixture_exposes_duplicate_padding_headroom_in_both_directions() {
+         );
+         assert!(inward_holes(&state, reflected).is_empty());
+         let child = if reflected { 5 } else { 0 };
+-        assert_eq!(
+-            state.edge_ranks[child / 2],
+-            state.algebraic_edge_bounds[child / 2]
+-        );
+-        assert_eq!(state.candidates.ids[child].len(), 2);
++        assert_eq!(state.edge_ranks[child / 2], 1);
++        assert_eq!(state.candidates.ids[child].len(), 1);
+         assert_eq!(
+             state.candidates.ids[child]
+                 .iter()
+@@ -101,20 +94,24 @@ fn fixture_exposes_duplicate_padding_headroom_in_both_directions() {
+             inject_global_pivots(
+                 &mut state,
+                 &[second],
+-                &[0, 2, 0],
++                &[1, 3, 1],
+                 &mut crate::exec::Exec::Global
+             )
+             .unwrap(),
+             1
+         );
+-        let parent = if reflected { 3 } else { 2 };
+-        assert!(
+-            inward_holes(&state, reflected)
++        assert!(inward_holes(&state, reflected).is_empty());
++        assert_eq!(state.candidates.ids[child].len(), 2);
++        assert_eq!(
++            state.candidates.ids[child]
+                 .iter()
+-                .any(|&(edge, _, incoming, _)| edge == parent && incoming == child),
+-            "fixture must expose the missing required child"
++                .copied()
++                .collect::<HashSet<_>>()
++                .len(),
++            2
+         );
+-        assert_eq!(state.edge_ranks, vec![2, 3, 2]);
++        assert_eq!(state.edge_ranks, vec![1, 1, 1]);
++        assert_eq!(state.output.link_dims(), vec![1, 1, 1]);
+         assert_eq!(state.pivots, pivots);
+         assert_eq!(
+             state
+@@ -131,7 +128,7 @@ fn fixture_exposes_duplicate_padding_headroom_in_both_directions() {
+ }
+
+ #[test]
+-fn fixture_exposes_a_genuinely_full_child_in_both_directions() {
++fn a_genuinely_full_child_cannot_publish_an_unusable_parent() {
+     for reflected in [false, true] {
+         let dims = if reflected {
+             vec![1, 1, 2, 1]
+@@ -186,19 +183,19 @@ fn fixture_exposes_a_genuinely_full_child_in_both_directions() {
+         assert_eq!(
+             inject_global_pivots(
+                 &mut state,
+-                &[point],
++                &[point.clone()],
+                 &capacities,
+                 &mut crate::exec::Exec::Global
+             )
+             .unwrap(),
+             1
+         );
++        assert!(inward_holes(&state, reflected).is_empty());
+         let parent = if reflected { 3 } else { 4 };
+-        assert!(
+-            inward_holes(&state, reflected)
+-                .iter()
+-                .any(|&(edge, _, incoming, _)| edge == parent && incoming == child),
+-            "fixture must expose activation past the full child"
++        assert_eq!(
++            state.candidates.ids[parent].len(),
++            1,
++            "the blocked parent must not become a useful candidate"
+         );
+         assert_eq!(state.pivots, pivots);
+         assert!(state.edge_ranks.iter().all(|&rank| rank <= 2));
+@@ -213,5 +210,239 @@ fn fixture_exposes_a_genuinely_full_child_in_both_directions() {
+                 .unwrap(),
+             0.0
+         );
++        let guard_options = TreeAciOptions {
++            nsearch_global_pivots: 1,
++            max_nglobal_pivots: 1,
++            nsweeps_global_search: 0,
++            ..options.clone()
++        };
++        let mut evaluators = InputEvaluators::new(state.inputs, &state.problem).unwrap();
++        let mut target = |_: crate::TreeElementwiseBatch<'_, f64>, out: &mut [f64]| {
++            out.fill(4096.0);
++            Ok(())
++        };
++        let pending = vec![point];
++        let found = find_global_pivots(
++            &state,
++            &mut evaluators,
++            &guard_options,
++            &mut seeded_rng(),
++            &mut target,
++            &pending,
++            &mut crate::exec::Exec::Global,
++        )
++        .unwrap();
++        assert_eq!(
++            found.pivots, pending,
++            "a partially blocked activation cannot resolve known residual evidence"
++        );
++    }
++}
++
++#[test]
++fn projection_and_frame_extension_failures_roll_back_staged_query_candidates() {
++    for frame_failure in [false, true] {
++        let inputs = vec![chain(&[1, 1, 1])];
++        let options = TreeAciOptions {
++            root: Some(3),
++            max_bond_dim: Some(4),
++            ..Default::default()
++        };
++        let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
++        inject_global_pivots(
++            &mut state,
++            &[vec![0, 1, 0, 0]],
++            &[1, 3, 1],
++            &mut crate::exec::Exec::Global,
++        )
++        .unwrap();
++        let before = state.candidates.clone();
++        let pivots = state.pivots.clone();
++        let ranks = state.edge_ranks.clone();
++        let generation = state.generation;
++        let records = state.sample_arena.record_count();
++        let bytes = state.sample_arena.retained_bytes();
++        let frames = state.input_frames.records();
++        let frame_bytes = state.input_frames.retained_bytes();
++        let expected = state.output.to_dense().unwrap();
++        let mut points = vec![vec![1, 1, 0, 0]];
++        if frame_failure {
++            state.problem.max_frame_bytes = 0;
++        } else {
++            points.push(vec![2, 0, 0, 0]);
++        }
++        let error = inject_global_pivots(
++            &mut state,
++            &points,
++            &[1, 3, 1],
++            &mut crate::exec::Exec::Global,
++        )
++        .unwrap_err();
++        if frame_failure {
++            assert!(
++                matches!(
++                    error,
++                    crate::TreeAciError::ResourceLimit {
++                        resource: "frame bytes",
++                        ..
++                    }
++                ),
++                "{error}"
++            );
++        }
++        assert_eq!(state.candidates, before);
++        assert_eq!(state.pivots, pivots);
++        assert_eq!(state.edge_ranks, ranks);
++        assert_eq!(state.generation, generation);
++        assert_eq!(state.sample_arena.record_count(), records);
++        assert_eq!(state.sample_arena.retained_bytes(), bytes);
++        assert_eq!(state.input_frames.records(), frames);
++        assert_eq!(state.input_frames.retained_bytes(), frame_bytes);
++        assert_eq!(
++            state
++                .output
++                .to_dense()
++                .unwrap()
++                .sub(&expected)
++                .unwrap()
++                .maxabs()
++                .unwrap(),
++            0.0
++        );
+     }
+ }
++
++/// Guard query pools must not become the selected child basis while sweeping.
++#[test]
++fn guard_proposals_preserve_selected_partial_nesting_at_every_chain_commit() {
++    for reflected in [false, true] {
++        let inputs = vec![chain(&[1, 1, 1])];
++        let options = TreeAciOptions {
++            root: Some(if reflected { 0 } else { 3 }),
++            max_bond_dim: Some(4),
++            ..Default::default()
++        };
++        let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
++        let mut point = vec![1, 1, 0, 0];
++        if reflected {
++            point.reverse();
++        }
++        inject_global_pivots(
++            &mut state,
++            &[point],
++            &[1, 3, 1],
++            &mut crate::exec::Exec::Global,
++        )
++        .unwrap();
++        let mut operator = |batch: crate::TreeElementwiseBatch<'_, f64>, out: &mut [f64]| {
++            for (point, value) in out.iter_mut().enumerate() {
++                *value = 1.0 / (1.0 + batch.get(0, point)?);
++            }
++            Ok(())
++        };
++        for direction in [PassDirection::Forward, PassDirection::Reverse] {
++            let phases = match direction {
++                PassDirection::Forward => state.problem.schedule.forward.clone(),
++                PassDirection::Reverse => state.problem.schedule.reverse.clone(),
++            };
++            for phase in phases.iter() {
++                for path in &phase.paths {
++                    for step in &path.steps {
++                        let cut = state
++                            .problem
++                            .directed_edges
++                            .iter()
++                            .find(|e| e.from == step.from && e.to == step.to)
++                            .unwrap()
++                            .id;
++                        update_edge_transaction(
++                            &mut state,
++                            cut,
++                            &options,
++                            true,
++                            &mut operator,
++                            &mut crate::exec::Exec::Global,
++                        )
++                        .unwrap();
++                        let center = *state.output.canonical_region().iter().next().unwrap();
++                        for edge in &state.problem.directed_edges {
++                            if edge.from.abs_diff(center) < edge.to.abs_diff(center) {
++                                continue;
++                            }
++                            for &(left, right) in &state.pivots.per_edge[edge.id / 2] {
++                                let id = if edge.id % 2 == 0 { left } else { right };
++                                for &(child, sample) in
++                                    &state.sample_arena.record(edge.id, id).unwrap().incoming
++                                {
++                                    let selected: Vec<_> = if child % 2 == 0 {
++                                        state.pivots.forward_ids(child / 2)
++                                    } else {
++                                        state.pivots.reverse_ids(child / 2)
++                                    };
++                                    assert!(
++                                        selected.contains(&sample),
++                                        "center={center}, cut={}, child={child}, sample={sample}",
++                                        edge.id
++                                    );
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        }
++    }
++}
++
++#[test]
++fn compact_candidates_reconstruct_a_nonlinear_target_over_the_complete_small_grid() {
++    let inputs = vec![chain(&[1, 1, 1])];
++    let options = TreeAciOptions {
++        root: Some(3),
++        max_bond_dim: Some(4),
++        ..Default::default()
++    };
++    let input = inputs[0].to_dense().unwrap();
++    let exact = IdxTensor::from_dense(
++        input.indices().to_vec(),
++        input
++            .to_vec::<f64>()
++            .unwrap()
++            .into_iter()
++            .map(|x| 1.0 / (1.0 + x))
++            .collect(),
++    )
++    .unwrap();
++    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
++    inject_global_pivots(
++        &mut state,
++        &[vec![0, 1, 0, 0], vec![1, 1, 0, 0]],
++        &[1, 3, 1],
++        &mut crate::exec::Exec::Global,
++    )
++    .unwrap();
++    let mut operator = |batch: crate::TreeElementwiseBatch<'_, f64>, out: &mut [f64]| {
++        for (point, value) in out.iter_mut().enumerate() {
++            *value = 1.0 / (1.0 + batch.get(0, point)?);
++        }
++        Ok(())
++    };
++    let history = crate::schedule::run_local_sweeps(
++        &mut state,
++        &options,
++        &mut operator,
++        &mut seeded_rng(),
++        &mut crate::exec::Exec::Global,
++    )
++    .unwrap();
++    assert_eq!(history.termination, crate::TreeAciTermination::Converged);
++    let error = state
++        .output
++        .to_dense()
++        .unwrap()
++        .sub(&exact)
++        .unwrap()
++        .maxabs()
++        .unwrap();
++    assert!(error < 1e-12, "full-grid residual={error:e}");
++}
+diff --git a/crates/tensor4all-treeaci/src/global_guard/tests/mod.rs b/crates/tensor4all-treeaci/src/global_guard/tests/mod.rs
+index 34d97df1..c7246c50 100644
+--- a/crates/tensor4all-treeaci/src/global_guard/tests/mod.rs
++++ b/crates/tensor4all-treeaci/src/global_guard/tests/mod.rs
+@@ -540,14 +540,14 @@ fn exact_output_has_no_global_pivot_and_injection_updates_every_cut() {
+ /// This is the defect the candidate/pivot split exists to prevent: the old
+ /// single `ActivePivotSets` let an injection push a repeated id onto the
+ /// already-represented side of a cut, which put two identical rows in `P_e`.
+-/// Candidate sets may carry that repeat harmlessly — the rank-revealing step
+-/// simply declines to select it twice — but the pivot pairs must not.
++/// Query candidates must remain distinct without changing the pivot pairs.
+ #[test]
+ fn injection_leaves_pivot_pairs_untouched_and_keeps_bonds_in_step() {
+     let (input, _, _) = delta_tree();
+     let options = TreeAciOptions::default();
+     let inputs = vec![input];
+     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
++    let ranks_before = state.edge_ranks.clone();
+     let pivots_before = state.pivots.clone();
+
+     inject_global_pivots(
+@@ -580,16 +580,19 @@ fn injection_leaves_pivot_pairs_untouched_and_keeps_bonds_in_step() {
+         );
+     }
+
+-    // INVARIANT: in the moving-centre representation an output core's incoming
+-    // axes are reshaped over the candidate row space, so each bond dimension
+-    // must equal both directed candidate-set sizes. This is what forces
+-    // injection to pad the bond, and to grow both orientations together.
+-    for edge_number in 0..state.edge_ranks.len() {
+-        let forward = state.candidates.ids[2 * edge_number].len();
+-        let reverse = state.candidates.ids[2 * edge_number + 1].len();
+-        assert_eq!(forward, reverse, "cut {edge_number} grew asymmetrically");
+-        assert_eq!(state.output.link_dims()[edge_number], forward);
+-    }
++    // Query pools can grow independently in each orientation. Selected output
++    // dimensions continue to match the pivot basis, not query pool lengths.
++    assert_eq!(state.edge_ranks, ranks_before);
++    assert_eq!(state.output.link_dims(), ranks_before);
++    assert_eq!(
++        state
++            .candidates
++            .ids
++            .iter()
++            .map(Vec::len)
++            .collect::<Vec<_>>(),
++        vec![2, 2]
++    );
+ }
+
+ /// Gate 1 of the three growth gates inherited from train ACI: the guard offers
+@@ -626,7 +629,7 @@ fn max_nglobal_pivots_caps_what_the_guard_offers() {
+ /// Gate 3: a point already represented in every candidate set adds nothing.
+ ///
+ /// Gate 2, algebraic saturation, is covered by
+-/// `injection_skips_saturated_cuts_but_retains_recursive_records`.
++/// `injection_retains_records_without_publishing_a_blocked_parent`.
+ #[test]
+ fn an_already_represented_point_adds_nothing() {
+     let (input, _, _) = delta_tree();
+@@ -649,7 +652,7 @@ fn an_already_represented_point_adds_nothing() {
+ }
+
+ #[test]
+-fn injection_skips_saturated_cuts_but_retains_recursive_records() {
++fn injection_retains_records_without_publishing_a_blocked_parent() {
+     let site0 = DynIndex::new_dyn(2);
+     let site1 = DynIndex::new_dyn(2);
+     let site2 = DynIndex::new_dyn(2);
+@@ -691,14 +694,18 @@ fn injection_skips_saturated_cuts_but_retains_recursive_records() {
+     assert_eq!(injected, 1);
+     assert_eq!(state.candidates.ids[0].len(), before[0]);
+     assert_eq!(state.candidates.ids[1].len(), before[1]);
+-    assert_eq!(state.candidates.ids[2].len(), before[2] + 1);
++    assert_eq!(
++        state.candidates.ids[2].len(),
++        before[2],
++        "the blocked parent is not a useful candidate"
++    );
+     assert_eq!(state.candidates.ids[3].len(), before[3] + 1);
+-    assert_eq!(state.edge_ranks, vec![1, 2]);
+-    assert_eq!(state.output.link_dims(), vec![1, 2]);
++    assert_eq!(state.edge_ranks, vec![1, 1]);
++    assert_eq!(state.output.link_dims(), vec![1, 1]);
+     assert_eq!(
+         state.output.bond_index(saturated_edge),
+         Some(&saturated_bond),
+-        "padding another cut must not replace an inactive bond"
++        "query activation must not replace a selected basis bond"
+     );
+     assert!(state.sample_arena.record_count() > records_before);
+     run_directional_pass(
+@@ -749,8 +756,8 @@ fn injection_never_exceeds_the_remaining_cut_capacity() {
+     .unwrap();
+
+     assert_eq!(injected, 1);
+-    assert_eq!(state.edge_ranks, vec![2]);
+-    assert_eq!(state.output.link_dims(), vec![2]);
++    assert_eq!(state.edge_ranks, vec![1]);
++    assert_eq!(state.output.link_dims(), vec![1]);
+     assert!(state
+         .candidates
+         .ids
+@@ -795,7 +802,7 @@ fn empty_global_pivot_injection_validates_capacity_without_mutating_state() {
+ }
+
+ #[test]
+-fn injection_rank_overflow_rolls_back_every_staged_state_change() {
++fn injection_candidate_limit_overflow_leaves_every_state_component_unchanged() {
+     let (input, _, _) = delta_tree();
+     let options = TreeAciOptions {
+         max_bond_dim: Some(1),
+@@ -822,12 +829,12 @@ fn injection_rank_overflow_rolls_back_every_staged_state_change() {
+         &[1],
+         &mut crate::exec::Exec::Global,
+     )
+-    .expect_err("rank overflow must be reported before publication");
++    .expect_err("candidate limit overflow must be reported before publication");
+
+     assert!(matches!(
+         error,
+         crate::TreeAciError::SizeOverflow {
+-            context: "global-pivot output rank"
++            context: "global-pivot candidate limit"
+         }
+     ));
+     assert!(state
+@@ -992,18 +999,10 @@ fn scan_site_selects_the_hinted_center() {
+     assert_eq!(evaluators.hint_for_scan_site(Some(99)).center, None);
+ }
+
+-/// Padding rejects an over-budget request before allocating any padded core.
+-///
+-/// Sizing and allocation used to share one loop, with the aggregate
+-/// `max_working_bytes` comparison after it, so every core was already allocated
+-/// and retained by the time the caller was told the request was refused. The
+-/// per-core `max_core_elements` bound did not help: N nodes each just under it
+-/// still peak at N times that, whatever the working ceiling says.
+-///
+-/// The check now runs on the planned total, so a one-byte ceiling refuses the
+-/// request outright.
++/// Candidate activation rejects an over-budget plan before projecting samples.
++/// Guard no longer allocates or pads output cores.
+ #[test]
+-fn padding_refuses_an_over_budget_request() {
++fn candidate_planning_refuses_an_over_budget_request() {
+     let (input, _, _) = delta_tree();
+     let options = TreeAciOptions {
+         max_bond_dim: Some(1),
+@@ -1011,7 +1010,7 @@ fn padding_refuses_an_over_budget_request() {
+     };
+     let inputs = vec![input];
+     let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+-    // Tighten after preparation so this exercises the padding check rather than
++    // Tighten after preparation so this exercises the candidate planning check rather than
+     // the preparation-time one, which would reject the run before injection.
+     state.problem.max_working_bytes = 1;
+     let error = inject_global_pivots(
+@@ -1020,7 +1019,7 @@ fn padding_refuses_an_over_budget_request() {
+         &[1],
+         &mut crate::exec::Exec::Global,
+     )
+-    .expect_err("a one-byte working ceiling must refuse padding");
++    .expect_err("a one-byte working ceiling must refuse candidate planning");
+     assert!(
+         matches!(
+             error,
+diff --git a/crates/tensor4all-treeaci/src/lib.rs b/crates/tensor4all-treeaci/src/lib.rs
+index b9bf852a..93588d42 100644
+--- a/crates/tensor4all-treeaci/src/lib.rs
++++ b/crates/tensor4all-treeaci/src/lib.rs
+@@ -45,6 +45,7 @@
+ //! benchmark when that distinction matters. This crate is the native choice
+ //! for genuinely branched trees.
+
++mod basis_projection;
+ mod batch;
+ #[cfg(feature = "diagnostics")]
+ pub mod branch_diagnostics;
+diff --git a/crates/tensor4all-treeaci/src/samples.rs b/crates/tensor4all-treeaci/src/samples.rs
+index c5ef30d8..0c0d4f6a 100644
+--- a/crates/tensor4all-treeaci/src/samples.rs
++++ b/crates/tensor4all-treeaci/src/samples.rs
+@@ -2,6 +2,10 @@
+
+ use std::{collections::HashMap, mem::size_of};
+
++mod activation;
++use activation::CandidateActivation;
++pub(crate) use activation::CandidateCapacity;
++
+ use crate::{
+     problem::{DirectedEdgeId, PreparedTreeProblem},
+     Result, TreeAciError, TreeAciNode,
+@@ -63,11 +67,10 @@ pub(crate) struct SampleArenaCheckpoint {
+
+ /// Candidate component samples per directed cut.
+ ///
+-/// These feed the candidate row and column spaces of *neighbouring* edges. They
+-/// are replaced when their own edge is updated and appended to by global pivot
+-/// injection. They are deliberately not the same thing as the pivot pairs that
+-/// set a bond's rank: a duplicate here is a harmless redundant candidate, while
+-/// a duplicate in a pivot list makes `P_e` singular.
++/// These feed neighbouring edges' search grids and may contain more samples
++/// than the current output bond has basis axes. Only distinct useful samples
++/// are stored. The selected child pivots occupy the unchanged prefix; local
++/// factor construction restricts an enlarged grid back to that child basis.
+ #[derive(Clone, Debug, Eq, PartialEq)]
+ pub(crate) struct CandidateSets {
+     pub(crate) generation: u64,
+@@ -343,13 +346,7 @@ impl SampleArena {
+         problem: &PreparedTreeProblem<V>,
+         point: &[usize],
+     ) -> Result<InjectionReport> {
+-        self.inject_global_point_impl(
+-            candidates,
+-            problem,
+-            point,
+-            &vec![true; problem.directed_edges.len()],
+-            false,
+-        )
++        self.inject_global_point_impl(candidates, problem, point, None)
+     }
+
+     pub(crate) fn inject_global_point_masked<V: TreeAciNode>(
+@@ -357,9 +354,9 @@ impl SampleArena {
+         candidates: &mut CandidateSets,
+         problem: &PreparedTreeProblem<V>,
+         point: &[usize],
+-        activate_directed_cut: &[bool],
++        budget: CandidateCapacity<'_>,
+     ) -> Result<InjectionReport> {
+-        self.inject_global_point_impl(candidates, problem, point, activate_directed_cut, true)
++        self.inject_global_point_impl(candidates, problem, point, Some(budget))
+     }
+
+     fn inject_global_point_impl<V: TreeAciNode>(
+@@ -367,8 +364,7 @@ impl SampleArena {
+         candidates: &mut CandidateSets,
+         problem: &PreparedTreeProblem<V>,
+         point: &[usize],
+-        activate_directed_cut: &[bool],
+-        pair_opposite_cuts: bool,
++        budget: Option<CandidateCapacity<'_>>,
+     ) -> Result<InjectionReport> {
+         self.validate_point(problem, point)?;
+         if candidates.ids.len() != problem.directed_edges.len() {
+@@ -376,17 +372,16 @@ impl SampleArena {
+                 message: "candidate-set count differs from directed edge count",
+             });
+         }
+-        if activate_directed_cut.len() != problem.directed_edges.len() {
+-            return Err(TreeAciError::InternalInvariant {
+-                message: "global-pivot activation mask differs from directed edge count",
+-            });
+-        }
++        let requested = match budget {
++            Some(budget) => budget.requested(problem, candidates)?,
++            None => vec![true; problem.directed_edges.len()],
++        };
+
+         // Projection appends immutable records. A checkpoint therefore gives
+         // the same failure atomicity as cloning the complete arena, without an
+         // O(retained records) copy for every global-pivot candidate.
+         let checkpoint = self.checkpoint();
+-        let projected = self.project_components(problem, point, activate_directed_cut);
++        let projected = self.project_components(problem, point, &requested);
+         let projected = match projected {
+             Ok(projected) => projected,
+             Err(error) => {
+@@ -394,35 +389,21 @@ impl SampleArena {
+                 return Err(error);
+             }
+         };
+-        let mut added_by_edge = vec![0; projected.len()];
+-        if pair_opposite_cuts {
+-            for forward in (0..projected.len()).step_by(2) {
+-                let reverse = problem.directed_edges[forward].reverse;
+-                if activate_directed_cut[forward]
+-                    && activate_directed_cut[reverse]
+-                    && (!candidates.ids[forward].contains(&projected[forward].ok_or(
+-                        TreeAciError::InternalInvariant {
+-                            message: "active directed cut has no projected component sample",
+-                        },
+-                    )?) || !candidates.ids[reverse].contains(&projected[reverse].ok_or(
+-                        TreeAciError::InternalInvariant {
+-                            message: "active reverse cut has no projected component sample",
+-                        },
+-                    )?))
+-                {
+-                    added_by_edge[forward] = 1;
+-                    added_by_edge[reverse] = 1;
+-                }
+-            }
+-        } else {
+-            for (edge, id) in projected.iter().copied().enumerate() {
+-                if let Some(id) = id {
+-                    if !candidates.ids[edge].contains(&id) {
+-                        added_by_edge[edge] = 1;
+-                    }
+-                }
+-            }
+-        }
++        let activation = match budget {
++            Some(budget) => CandidateActivation::plan(problem, candidates, &projected, budget),
++            None => CandidateActivation {
++                additions: projected
++                    .iter()
++                    .enumerate()
++                    .map(|(e, &id)| id.filter(|id| !candidates.ids[e].contains(id)))
++                    .collect(),
++            },
++        };
++        let added_by_edge: Vec<_> = activation
++            .additions
++            .iter()
++            .map(|id| usize::from(id.is_some()))
++            .collect();
+         let total_added = added_by_edge.iter().sum();
+         if total_added > 0 {
+             let next_generation =
+@@ -439,11 +420,9 @@ impl SampleArena {
+                     return Err(error);
+                 }
+             };
+-            for (edge, id) in projected.into_iter().enumerate() {
++            for (edge, id) in activation.additions.into_iter().enumerate() {
+                 if let Some(id) = id {
+-                    if added_by_edge[edge] == 1 {
+-                        candidates.ids[edge].push(id);
+-                    }
++                    candidates.ids[edge].push(id);
+                 }
+             }
+             candidates.generation = next_generation;
+diff --git a/crates/tensor4all-treeaci/src/samples/tests/mod.rs b/crates/tensor4all-treeaci/src/samples/tests/mod.rs
+index 7284b707..681d3a8c 100644
+--- a/crates/tensor4all-treeaci/src/samples/tests/mod.rs
++++ b/crates/tensor4all-treeaci/src/samples/tests/mod.rs
+@@ -238,7 +238,7 @@ fn projection_scratch_reuse_overwrites_stale_dependencies_and_recovers_after_err
+ #[test]
+ fn masked_injection_projects_only_active_cuts_and_their_dependencies() {
+     let problem = prepare(&[(0, 1), (0, 2), (0, 3)], 4);
+-    let point = [1, 1, 1, 1];
++    let point = [1, 1, 0, 0];
+     let forward = 0;
+     let reverse = problem.directed_edges[forward].reverse;
+
+@@ -266,7 +266,20 @@ fn masked_injection_projects_only_active_cuts_and_their_dependencies() {
+     active[forward] = true;
+     active[reverse] = true;
+     let report = actual
+-        .inject_global_point_masked(&mut candidates, &problem, &point, &active)
++        .inject_global_point_masked(
++            &mut candidates,
++            &problem,
++            &point,
++            super::CandidateCapacity {
++                limits: &active
++                    .as_chunks::<2>()
++                    .0
++                    .iter()
++                    .map(|pair| if pair[0] && pair[1] { 2 } else { 1 })
++                    .collect::<Vec<_>>(),
++                required_closure: &vec![true; problem.directed_edges.len()],
++            },
++        )
+         .unwrap();
+
+     assert_eq!(report.total_added, 2);
+diff --git a/crates/tensor4all-treeaci/src/state.rs b/crates/tensor4all-treeaci/src/state.rs
+index 67e19e3c..ca1744ba 100644
+--- a/crates/tensor4all-treeaci/src/state.rs
++++ b/crates/tensor4all-treeaci/src/state.rs
+@@ -63,7 +63,6 @@ pub(crate) mod profile_debug_stats {
+         pub(crate) global_injection: Duration,
+         pub(crate) guard_candidate_clone: Duration,
+         pub(crate) guard_projection: Duration,
+-        pub(crate) guard_output_padding: Duration,
+         pub(crate) guard_frame_extension: Duration,
+         pub(crate) guard_input_evaluation: Duration,
+         pub(crate) guard_output_evaluation: Duration,
+diff --git a/crates/tensor4all-treeaci/src/state/tests/mod.rs b/crates/tensor4all-treeaci/src/state/tests/mod.rs
+index 6d31d02a..e3e29798 100644
+--- a/crates/tensor4all-treeaci/src/state/tests/mod.rs
++++ b/crates/tensor4all-treeaci/src/state/tests/mod.rs
+@@ -371,12 +371,11 @@ fn profile_high_rank_chain_phases_and_candidate_cache() {
+             profile.output_metadata,
+         );
+         eprintln!(
+-            "high-rank chain chi={chi} global guard enabled={enable_global_guard}: search={:?}, injection={:?} {{candidate_clone={:?}, projection={:?}, output_padding={:?}, frame_extension={:?}}}, input_eval={:?}/{} calls/{} scalar results, output_eval={:?}/{} calls/{} scalar results",
++            "high-rank chain chi={chi} global guard enabled={enable_global_guard}: search={:?}, injection={:?} {{candidate_clone={:?}, projection={:?}, frame_extension={:?}}}, input_eval={:?}/{} calls/{} scalar results, output_eval={:?}/{} calls/{} scalar results",
+             profile.global_guard,
+             profile.global_injection,
+             profile.guard_candidate_clone,
+             profile.guard_projection,
+-            profile.guard_output_padding,
+             profile.guard_frame_extension,
+             profile.guard_input_evaluation,
+             profile.guard_input_calls,
+@@ -617,12 +616,11 @@ fn profile_unequal_incident_bonds_at_coordination_four() {
+             crate::frames::debug_stats::core_element_reads(),
+         );
+         eprintln!(
+-            "spider {name} global guard enabled={enable_global_guard}: search={:?}, injection={:?} {{candidate_clone={:?}, projection={:?}, output_padding={:?}, frame_extension={:?}}}, input_eval={:?}/{} calls/{} scalar results, output_eval={:?}/{} calls/{} scalar results",
++            "spider {name} global guard enabled={enable_global_guard}: search={:?}, injection={:?} {{candidate_clone={:?}, projection={:?}, frame_extension={:?}}}, input_eval={:?}/{} calls/{} scalar results, output_eval={:?}/{} calls/{} scalar results",
+             profile.global_guard,
+             profile.global_injection,
+             profile.guard_candidate_clone,
+             profile.guard_projection,
+-            profile.guard_output_padding,
+             profile.guard_frame_extension,
+             profile.guard_input_evaluation,
+             profile.guard_input_calls,
+diff --git a/crates/tensor4all-treeaci/src/transaction.rs b/crates/tensor4all-treeaci/src/transaction.rs
+index f8e47f63..1ee1ce33 100644
+--- a/crates/tensor4all-treeaci/src/transaction.rs
++++ b/crates/tensor4all-treeaci/src/transaction.rs
+@@ -1,6 +1,6 @@
+ //! Atomic proposal and commit of one directed edge update.
+
+-use tensor4all_core::{DynIndex, IdxTensor};
++use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
+
+ use crate::{
+     local_update::{materialize_and_factor_edge, LocalUpdateResult},
+@@ -123,6 +123,7 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
+     replace_edge_cores(
+         &mut proposed_output,
+         &state.problem,
++        &state.candidates,
+         forward,
+         left,
+         right,
+@@ -222,6 +223,7 @@ fn commit_edge_proposal<T: TreeAciScalar, V: TreeAciNode>(
+ fn replace_edge_cores<T: TreeAciScalar, V: TreeAciNode>(
+     output: &mut tensor4all_treetn::TreeTN<IdxTensor, V>,
+     problem: &crate::problem::PreparedTreeProblem<V>,
++    candidates: &crate::samples::CandidateSets,
+     forward: DirectedEdgeId,
+     left: tensor4all_tensorbackend::Matrix<T>,
+     right: tensor4all_tensorbackend::Matrix<T>,
+@@ -241,16 +243,99 @@ fn replace_edge_cores<T: TreeAciScalar, V: TreeAciNode>(
+     });
+     #[cfg(test)]
+     let phase_started = std::time::Instant::now();
+-    let left_tensor = exec
+-        .tensor(left_indices, left.into_col_major_vec())
+-        .map_err(|error| TreeAciError::Numerical {
+-            message: error.to_string(),
+-        })?;
+-    let right_tensor = exec
+-        .tensor(right_indices, right.into_col_major_vec())
+-        .map_err(|error| TreeAciError::Numerical {
+-            message: error.to_string(),
+-        })?;
++    let needs_projection = |cut: usize, indices: &[DynIndex], offset: usize| {
++        problem.directed_edges[cut]
++            .incoming_to_from
++            .iter()
++            .enumerate()
++            .any(|(axis, &child)| candidates.ids[child].len() != indices[offset + axis].dim())
++    };
++    let left_offset = problem.physical[problem.node_positions[&directed.from]]
++        .indices
++        .len();
++    let right_offset = 1 + problem.physical
++        [problem.node_positions[&problem.directed_edges[reverse].from]]
++        .indices
++        .len();
++    let (left_values, right_values) = if needs_projection(forward, &left_indices, left_offset)
++        || needs_projection(reverse, &right_indices, right_offset)
++    {
++        let source_dims = |cut: usize| {
++            let edge = &problem.directed_edges[cut];
++            let mut dims = problem.physical[problem.node_positions[&edge.from]]
++                .dims
++                .clone();
++            dims.extend(
++                edge.incoming_to_from
++                    .iter()
++                    .map(|&child| candidates.ids[child].len()),
++            );
++            dims
++        };
++        let mut left_dims = source_dims(forward);
++        left_dims.push(new_bond.dim());
++        let mut right_dims = vec![new_bond.dim()];
++        right_dims.extend(source_dims(reverse));
++        let left_projection = crate::basis_projection::CandidateBasisProjection::new(
++            &left_dims,
++            &left_indices.iter().map(|i| i.dim()).collect::<Vec<_>>(),
++        )?;
++        let right_projection = crate::basis_projection::CandidateBasisProjection::new(
++            &right_dims,
++            &right_indices.iter().map(|i| i.dim()).collect::<Vec<_>>(),
++        )?;
++        for plan in [&left_projection, &right_projection] {
++            crate::problem::enforce_limit(
++                "core elements",
++                plan.target_len,
++                problem.max_core_elements,
++            )?;
++        }
++        if !left_projection.is_identity() || !right_projection.is_identity() {
++            let elements = left_projection
++                .source_len
++                .checked_add(right_projection.source_len)
++                .and_then(|n| {
++                    n.checked_add(if left_projection.is_identity() {
++                        0
++                    } else {
++                        left_projection.target_len
++                    })
++                })
++                .and_then(|n| {
++                    n.checked_add(if right_projection.is_identity() {
++                        0
++                    } else {
++                        right_projection.target_len
++                    })
++                })
++                .ok_or(TreeAciError::SizeOverflow {
++                    context: "candidate factor projection peak",
++                })?;
++            let bytes = elements.checked_mul(std::mem::size_of::<T>()).ok_or(
++                TreeAciError::SizeOverflow {
++                    context: "candidate factor projection bytes",
++                },
++            )?;
++            crate::problem::enforce_limit("working bytes", bytes, problem.max_working_bytes)?;
++        }
++        (
++            left_projection.project(left.into_col_major_vec())?,
++            right_projection.project(right.into_col_major_vec())?,
++        )
++    } else {
++        (left.into_col_major_vec(), right.into_col_major_vec())
++    };
++    let left_tensor =
++        exec.tensor(left_indices, left_values)
++            .map_err(|error| TreeAciError::Numerical {
++                message: error.to_string(),
++            })?;
++    let right_tensor =
++        exec.tensor(right_indices, right_values)
++            .map_err(|error| TreeAciError::Numerical {
++                message: error.to_string(),
++            })?;
+     #[cfg(test)]
+     crate::state::profile_debug_stats::record(|stats| {
+         stats.output_tensor_build += phase_started.elapsed();
+diff --git a/crates/tensor4all-treeaci/src/basis_projection.rs b/crates/tensor4all-treeaci/src/basis_projection.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/tensor4all-treeaci/src/basis_projection.rs
+@@ -0,0 +1,101 @@
++//! Restrict an enlarged candidate grid to the unchanged selected child basis.
++use crate::{Result, TreeAciError, TreeAciScalar};
++
++pub(crate) struct CandidateBasisProjection {
++    pub(crate) source_len: usize,
++    pub(crate) target_len: usize,
++    run_len: usize,
++    outer_dims: Vec<usize>,
++    outer_strides: Vec<usize>,
++    rewind: Vec<usize>,
++}
++impl CandidateBasisProjection {
++    pub(crate) fn new(source: &[usize], basis: &[usize]) -> Result<Self> {
++        if source.len() != basis.len()
++            || source
++                .iter()
++                .zip(basis)
++                .any(|(&source, &basis)| basis > source)
++        {
++            return Err(TreeAciError::InternalInvariant {
++                message: "selected child basis must be a prefix of the candidate grid",
++            });
++        }
++        let product = |dims: &[usize]| {
++            dims.iter().try_fold(1usize, |n, &d| {
++                n.checked_mul(d).ok_or(TreeAciError::SizeOverflow {
++                    context: "candidate basis projection elements",
++                })
++            })
++        };
++        let source_len = product(source)?;
++        let target_len = product(basis)?;
++        let split = source
++            .iter()
++            .zip(basis)
++            .position(|(a, b)| a != b)
++            .map_or(source.len(), |axis| axis + 1);
++        let run_len = product(&basis[..split])?;
++        let mut stride = product(&source[..split])?;
++        let mut outer_strides = Vec::with_capacity(source.len() - split);
++        let mut rewind = Vec::with_capacity(source.len() - split);
++        for (&basis_dim, &source_dim) in basis[split..].iter().zip(&source[split..]) {
++            outer_strides.push(stride);
++            rewind.push(basis_dim.saturating_sub(1).checked_mul(stride).ok_or(
++                TreeAciError::SizeOverflow {
++                    context: "candidate basis projection stride",
++                },
++            )?);
++            stride = stride
++                .checked_mul(source_dim)
++                .ok_or(TreeAciError::SizeOverflow {
++                    context: "candidate basis projection stride",
++                })?;
++        }
++        Ok(Self {
++            source_len,
++            target_len,
++            run_len,
++            outer_dims: basis[split..].to_vec(),
++            outer_strides,
++            rewind,
++        })
++    }
++    pub(crate) fn is_identity(&self) -> bool {
++        self.source_len == self.target_len
++    }
++    pub(crate) fn project<T: TreeAciScalar>(&self, values: Vec<T>) -> Result<Vec<T>> {
++        if values.len() != self.source_len {
++            return Err(TreeAciError::InternalInvariant {
++                message: "candidate factor length disagrees with its grid",
++            });
++        }
++        if self.is_identity() {
++            return Ok(values);
++        }
++        if self.target_len == 0 {
++            return Ok(Vec::new());
++        }
++        let mut result = Vec::with_capacity(self.target_len);
++        let mut cursor = vec![0usize; self.outer_dims.len()];
++        let mut source = 0usize;
++        while result.len() < self.target_len {
++            // INVARIANT: the constructor validates a prefix hyperrectangle
++            // inside the candidate grid. Each contiguous run is copied once;
++            // every destination element is written, so zero-fill is unnecessary.
++            result.extend_from_slice(&values[source..source + self.run_len]);
++            for (axis, coordinate) in cursor.iter_mut().enumerate() {
++                *coordinate += 1;
++                if *coordinate < self.outer_dims[axis] {
++                    source += self.outer_strides[axis];
++                    break;
++                }
++                *coordinate = 0;
++                source -= self.rewind[axis];
++            }
++        }
++        Ok(result)
++    }
++}
++#[cfg(test)]
++mod tests;
+diff --git a/crates/tensor4all-treeaci/src/basis_projection/tests.rs b/crates/tensor4all-treeaci/src/basis_projection/tests.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/tensor4all-treeaci/src/basis_projection/tests.rs
+@@ -0,0 +1,70 @@
++use super::*;
++#[test]
++fn prefix_projection_has_known_values_and_an_unchanged_identity_buffer() {
++    assert_eq!(
++        CandidateBasisProjection::new(&[3, 3], &[2, 2])
++            .unwrap()
++            .project((1..=9).map(|x| x as f64).collect())
++            .unwrap(),
++        vec![1., 2., 4., 5.]
++    );
++    let values = vec![1., 2., 3., 4.];
++    let allocation = values.as_ptr();
++    let same = CandidateBasisProjection::new(&[2, 2], &[2, 2])
++        .unwrap()
++        .project(values)
++        .unwrap();
++    assert_eq!(same.as_ptr(), allocation);
++    assert_eq!(
++        CandidateBasisProjection::new(&[], &[])
++            .unwrap()
++            .project(vec![7.])
++            .unwrap(),
++        vec![7.]
++    );
++    assert!(CandidateBasisProjection::new(&[2], &[0])
++        .unwrap()
++        .project(vec![1., 2.])
++        .unwrap()
++        .is_empty());
++}
++#[test]
++fn small_three_axis_projections_match_independent_column_major_coordinates() {
++    for x in 1..=3 {
++        for y in 1..=3 {
++            for z in 1..=3 {
++                let basis = [x, y, z];
++                for mask in 0..8 {
++                    let source = [x + (mask & 1), y + ((mask >> 1) & 1), z + ((mask >> 2) & 1)];
++                    let values: Vec<f64> =
++                        (1..=source.iter().product()).map(|x| x as f64).collect();
++                    let mut expected = Vec::new();
++                    for k in 0..z {
++                        for j in 0..y {
++                            for i in 0..x {
++                                expected.push(values[i + source[0] * (j + source[1] * k)]);
++                            }
++                        }
++                    }
++                    assert_eq!(
++                        CandidateBasisProjection::new(&source, &basis)
++                            .unwrap()
++                            .project(values)
++                            .unwrap(),
++                        expected
++                    );
++                }
++            }
++        }
++    }
++}
++#[test]
++fn invalid_extents_and_lengths_are_rejected_before_copying() {
++    assert!(CandidateBasisProjection::new(&[1], &[2]).is_err());
++    assert!(CandidateBasisProjection::new(&[1], &[1, 1]).is_err());
++    assert!(CandidateBasisProjection::new(&[usize::MAX, 2], &[1, 1]).is_err());
++    assert!(CandidateBasisProjection::new(&[2], &[1])
++        .unwrap()
++        .project(vec![1.])
++        .is_err());
++}
+diff --git a/crates/tensor4all-treeaci/src/samples/activation.rs b/crates/tensor4all-treeaci/src/samples/activation.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/tensor4all-treeaci/src/samples/activation.rs
+@@ -0,0 +1,125 @@
++//! Query candidate membership is independent of the selected output basis.
++use super::{CandidateSets, SampleId};
++use crate::{
++    problem::{enforce_limit, PreparedTreeProblem},
++    Result, TreeAciError, TreeAciNode,
++};
++
++#[derive(Clone, Copy)]
++pub(crate) struct CandidateCapacity<'a> {
++    /// Maximum distinct useful samples per direction, independent of the output basis.
++    pub(crate) limits: &'a [usize],
++    /// Component directions whose child membership must be preserved.
++    pub(crate) required_closure: &'a [bool],
++}
++
++impl CandidateCapacity<'_> {
++    pub(super) fn requested<V: TreeAciNode>(
++        &self,
++        problem: &PreparedTreeProblem<V>,
++        candidates: &CandidateSets,
++    ) -> Result<Vec<bool>> {
++        let n = problem.directed_edges.len();
++        if self.limits.len().checked_mul(2) != Some(n) || self.required_closure.len() != n {
++            return Err(TreeAciError::InternalInvariant {
++                message: "candidate capacity differs from prepared topology",
++            });
++        }
++        let bytes = n
++            .checked_mul(
++                4 * std::mem::size_of::<usize>() + 2 * std::mem::size_of::<Option<usize>>() + 5,
++            )
++            .ok_or(TreeAciError::SizeOverflow {
++                context: "candidate activation planning bytes",
++            })?;
++        enforce_limit("working bytes", bytes, problem.max_working_bytes)?;
++        candidates
++            .ids
++            .iter()
++            .enumerate()
++            .map(|(edge, ids)| {
++                let limit = self.limits[edge / 2];
++                if ids.len() > limit {
++                    return Err(TreeAciError::InternalInvariant {
++                        message: "useful candidate count exceeds its pool limit",
++                    });
++                }
++                Ok(ids.len() < limit)
++            })
++            .collect()
++    }
++}
++
++pub(super) struct CandidateActivation {
++    pub(super) additions: Vec<Option<SampleId>>,
++}
++
++impl CandidateActivation {
++    pub(super) fn plan<V: TreeAciNode>(
++        problem: &PreparedTreeProblem<V>,
++        candidates: &CandidateSets,
++        projected: &[Option<SampleId>],
++        budget: CandidateCapacity<'_>,
++    ) -> Self {
++        let n = projected.len();
++        let present: Vec<_> = projected
++            .iter()
++            .enumerate()
++            .map(|(e, id)| id.is_some_and(|id| candidates.ids[e].contains(&id)))
++            .collect();
++        let mut additions: Vec<_> = projected
++            .iter()
++            .enumerate()
++            .map(|(e, &id)| {
++                if !present[e] && candidates.ids[e].len() < budget.limits[e / 2] {
++                    id
++                } else {
++                    None
++                }
++            })
++            .collect();
++        let mut available: Vec<_> = present
++            .iter()
++            .zip(&additions)
++            .map(|(&p, id)| p || id.is_some())
++            .collect();
++        let mut queued = vec![false; n];
++        let mut queue = Vec::with_capacity(n);
++        for edge in 0..n {
++            if budget.required_closure[edge]
++                && additions[edge].is_some()
++                && problem.directed_edges[edge]
++                    .incoming_to_from
++                    .iter()
++                    .any(|&child| !available[child])
++            {
++                queued[edge] = true;
++                queue.push(edge);
++            }
++        }
++        // INVARIANT: each addition is withdrawn at most once. Prepared reverse
++        // dependencies supply consumers, so no whole-tree rescans are needed.
++        while let Some(edge) = queue.pop() {
++            if additions[edge].take().is_none() {
++                continue;
++            }
++            available[edge] = false;
++            for &incoming in
++                &problem.directed_edges[problem.directed_edges[edge].reverse].incoming_to_from
++            {
++                let consumer = problem.directed_edges[incoming].reverse;
++                if budget.required_closure[consumer]
++                    && additions[consumer].is_some()
++                    && !queued[consumer]
++                {
++                    queued[consumer] = true;
++                    queue.push(consumer);
++                }
++            }
++        }
++        Self { additions }
++    }
++}
++
++#[cfg(test)]
++mod tests;
+diff --git a/crates/tensor4all-treeaci/src/samples/activation/tests.rs b/crates/tensor4all-treeaci/src/samples/activation/tests.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/tensor4all-treeaci/src/samples/activation/tests.rs
+@@ -0,0 +1,179 @@
++use super::*;
++use crate::{
++    problem::prepare_problem,
++    samples::SampleArena,
++    test_support::{random_decaying_tree, SplitMix},
++    TreeAciOptions,
++};
++use std::collections::HashSet;
++use tensor4all_core::DynIndex;
++
++fn problem(edges: &[(usize, usize)], n: usize) -> PreparedTreeProblem<usize> {
++    let physical: Vec<_> = (0..n).map(|_| DynIndex::new_dyn(2)).collect();
++    let input = random_decaying_tree::<f64>(edges, &physical, 1, 1.0, &mut SplitMix(1265));
++    prepare_problem::<f64, _>(&[input], &TreeAciOptions::default()).unwrap()
++}
++
++fn inward(problem: &PreparedTreeProblem<usize>, center: usize) -> Vec<bool> {
++    let mut neighbors = vec![vec![]; problem.node_order.len()];
++    for edge in &problem.directed_edges {
++        neighbors[edge.from].push(edge.to);
++    }
++    let mut distance = vec![usize::MAX; neighbors.len()];
++    distance[center] = 0;
++    let mut pending = vec![center];
++    while let Some(node) = pending.pop() {
++        for &next in &neighbors[node] {
++            if distance[next] == usize::MAX {
++                distance[next] = distance[node] + 1;
++                pending.push(next);
++            }
++        }
++    }
++    problem
++        .directed_edges
++        .iter()
++        .map(|edge| distance[edge.from] > distance[edge.to])
++        .collect()
++}
++
++#[test]
++fn every_small_point_capacity_mask_and_center_keep_distinct_useful_candidates_closed() {
++    for edges in [vec![(0, 1), (1, 2), (2, 3)], vec![(0, 1), (0, 2), (0, 3)]] {
++        let problem = problem(&edges, 4);
++        for center in 0..4 {
++            let closure = inward(&problem, center);
++            for with_extra in [false, true] {
++                let (mut arena, mut base) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
++                let mut limits = [1; 3];
++                if with_extra {
++                    arena
++                        .inject_global_point_masked(
++                            &mut base,
++                            &problem,
++                            &[0, 1, 0, 0],
++                            CandidateCapacity {
++                                limits: &[2; 3],
++                                required_closure: &closure,
++                            },
++                        )
++                        .unwrap();
++                    for (edge, limit) in limits.iter_mut().enumerate() {
++                        *limit = base.ids[2 * edge].len().max(base.ids[2 * edge + 1].len());
++                    }
++                }
++                for bits in 0..16 {
++                    let point: Vec<_> = (0..4).map(|bit| (bits >> bit) & 1).collect();
++                    for mask in 0..8 {
++                        let point_limits: Vec<_> = (0..3)
++                            .map(|edge| limits[edge] + usize::from(mask & (1 << edge) != 0))
++                            .collect();
++                        let mut actual = base.clone();
++                        let mut samples = arena.clone();
++                        let report = samples
++                            .inject_global_point_masked(
++                                &mut actual,
++                                &problem,
++                                &point,
++                                CandidateCapacity {
++                                    limits: &point_limits,
++                                    required_closure: &closure,
++                                },
++                            )
++                            .unwrap();
++                        for (cut, ids) in actual.ids.iter().enumerate() {
++                            assert!(ids.starts_with(&base.ids[cut]));
++                            assert_eq!(
++                                ids.iter().copied().collect::<HashSet<_>>().len(),
++                                ids.len()
++                            );
++                            assert_eq!(ids.len(), base.ids[cut].len() + report.added_by_edge[cut]);
++                            assert!(ids.len() <= point_limits[cut / 2]);
++                            if closure[cut] {
++                                for &id in ids {
++                                    for &(child, sample) in
++                                        &samples.record(cut, id).unwrap().incoming
++                                    {
++                                        assert!(actual.ids[child].contains(&sample));
++                                    }
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        }
++    }
++}
++
++#[test]
++fn query_headroom_admits_a_distinct_candidate_and_generation_overflow_rolls_back() {
++    let problem = problem(&[(0, 1)], 2);
++    let (mut arena, mut candidates) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
++    let before = candidates.clone();
++    let records = arena.record_count();
++    let budget = CandidateCapacity {
++        limits: &[2],
++        required_closure: &[true, false],
++    };
++    candidates.generation = u64::MAX;
++    let overflowing = candidates.clone();
++    assert!(matches!(
++        arena.inject_global_point_masked(&mut candidates, &problem, &[0, 1], budget),
++        Err(TreeAciError::SizeOverflow {
++            context: "sample generation"
++        })
++    ));
++    assert_eq!(candidates, overflowing);
++    assert_eq!(arena.record_count(), records);
++    candidates = before;
++    let report = arena
++        .inject_global_point_masked(&mut candidates, &problem, &[0, 1], budget)
++        .unwrap();
++    assert_eq!(report.total_added, 1);
++    assert_eq!(candidates.ids, vec![vec![0], vec![0, 1]]);
++}
++
++#[test]
++fn budget_shape_and_memory_fail_before_projection_or_candidate_mutation() {
++    let mut problem = problem(&[(0, 1)], 2);
++    let (mut arena, mut candidates) = SampleArena::from_global_seeds(&problem, &[]).unwrap();
++    let before = candidates.clone();
++    let records = arena.record_count();
++    for budget in [
++        CandidateCapacity {
++            limits: &[],
++            required_closure: &[true; 2],
++        },
++        CandidateCapacity {
++            limits: &[1],
++            required_closure: &[],
++        },
++        CandidateCapacity {
++            limits: &[0],
++            required_closure: &[true; 2],
++        },
++    ] {
++        assert!(arena
++            .inject_global_point_masked(&mut candidates, &problem, &[1, 1], budget)
++            .is_err());
++    }
++    problem.max_working_bytes = 1;
++    assert!(matches!(
++        arena.inject_global_point_masked(
++            &mut candidates,
++            &problem,
++            &[1, 1],
++            CandidateCapacity {
++                limits: &[1],
++                required_closure: &[true; 2]
++            }
++        ),
++        Err(TreeAciError::ResourceLimit {
++            resource: "working bytes",
++            ..
++        })
++    ));
++    assert_eq!(candidates, before);
++    assert_eq!(arena.record_count(), records);
++}

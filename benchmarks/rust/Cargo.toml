@@ -9,10 +9,21 @@ publish = false
 # become a runtime route for a library crate.
 [features]
 default = []
+# TreeTN Fourier construction only; the legacy SimpleTT transforms stay off.
+fourier = ["dep:tensor4all-quanticstransform"]
+# `patched_fourier_transform`, the lazy merge-refine front end (benchmark_m6a_fourier).
+patched-fourier = ["fourier", "tensor4all-quanticstransform/partitioned"]
+# Historical SimpleTT/TTCache/TCI comparisons, including the migration bridge.
+legacy-comparisons = [
+    "dep:tensor4all-simplett",
+    "dep:tensor4all-tensorci",
+    "tensor4all-treetn/simplett-bridge",
+]
+itensorlike = ["dep:tensor4all-itensorlike"]
 # `tensor4all-treeaci::branch_diagnostics` counters (benchmark_branch_cost).
 diagnostics = ["tensor4all-treeaci/diagnostics"]
 # HDF5 is optional so a default build of this package does not need libhdf5.
-hdf5 = ["dep:tensor4all-hdf5"]
+hdf5 = ["dep:tensor4all-hdf5", "itensorlike"]
 # CUDA execution of the treersi sketch (benchmark_treersi_cuda_step1).
 cuda = ["tensor4all-treersi/tenferro-cuda"]
 
@@ -22,16 +33,17 @@ num-complex.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 serde_json.workspace = true
-tensor4all-core = { path = "../../crates/tensor4all-core" }
+# Exercises the context-free API, which needs the process-global route.
+tensor4all-core = { path = "../../crates/tensor4all-core", features = ["global-defaults"] }
 tensor4all-hdf5 = { path = "../../crates/tensor4all-hdf5", optional = true }
-tensor4all-itensorlike = { path = "../../crates/tensor4all-itensorlike" }
+tensor4all-itensorlike = { path = "../../crates/tensor4all-itensorlike", optional = true }
 tensor4all-partitionedtreetn = { path = "../../crates/tensor4all-partitionedtreetn" }
-tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform" }
-tensor4all-simplett = { path = "../../crates/tensor4all-simplett" }
+tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-platform"], optional = true }
+tensor4all-simplett = { path = "../../crates/tensor4all-simplett", optional = true }
 tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend" }
-tensor4all-tensorci = { path = "../../crates/tensor4all-tensorci" }
+tensor4all-tensorci = { path = "../../crates/tensor4all-tensorci", optional = true }
 tensor4all-treeaci = { path = "../../crates/tensor4all-treeaci" }
-tensor4all-treersi = { path = "../../crates/tensor4all-treersi" }
+tensor4all-treersi = { path = "../../crates/tensor4all-treersi", features = ["global-defaults"] }
 tensor4all-treetci = { path = "../../crates/tensor4all-treetci" }
 tensor4all-treetn = { path = "../../crates/tensor4all-treetn" }
 
@@ -76,6 +88,7 @@ path = "benchmark_tdvp.rs"
 [[example]]
 name = "issue566_perf_candidates"
 path = "issue566_perf_candidates.rs"
+required-features = ["legacy-comparisons"]
 
 [[example]]
 name = "benchmark_m5_fixed_depth_partition"
@@ -84,6 +97,12 @@ path = "benchmark_m5_fixed_depth_partition.rs"
 [[example]]
 name = "benchmark_merge_refine"
 path = "benchmark_merge_refine.rs"
+required-features = ["fourier"]
+
+[[example]]
+name = "benchmark_merge_refine_intended_regime"
+path = "benchmark_merge_refine_intended_regime.rs"
+required-features = ["fourier"]
 
 [[example]]
 name = "benchmark_tree_patch_representation"
@@ -96,6 +115,7 @@ path = "benchmark_patching.rs"
 [[example]]
 name = "issue566_perf_candidates2"
 path = "issue566_perf_candidates2.rs"
+required-features = ["legacy-comparisons"]
 
 [[example]]
 name = "benchmark_branch_cost"
@@ -112,6 +132,7 @@ path = "benchmark_treetci_memo.rs"
 [[example]]
 name = "benchmark_tt_ops"
 path = "benchmark_tt_ops.rs"
+required-features = ["itensorlike"]
 
 [[example]]
 name = "benchmark_matrix_lu"
@@ -151,3 +172,12 @@ test = true
 name = "benchmark_treersi_cuda_step1"
 path = "benchmark_treersi_cuda_step1.rs"
 required-features = ["cuda"]
+
+[[example]]
+name = "benchmark_m6c_elementwise"
+path = "benchmark_m6c_elementwise.rs"
+
+[[example]]
+name = "benchmark_m6a_fourier"
+path = "benchmark_m6a_fourier.rs"
+required-features = ["patched-fourier"]

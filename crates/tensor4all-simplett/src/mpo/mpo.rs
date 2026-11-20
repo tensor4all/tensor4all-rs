@@ -5,14 +5,11 @@
 
 use super::error::{MPOError, Result};
 use super::types::{tensor4_zeros, LocalIndex, Tensor4, Tensor4Ops};
-use crate::einsum_helper::{
-    einsum_tensors, row_vector_times_matrix, tensor_to_col_major_vec, EinsumScalar,
-};
+use crate::einsum_helper::{einsum_tensors, row_vector_times_matrix, tensor_to_col_major_vec};
 use crate::traits::TTScalar;
 use tenferro_tensor::TensorValue;
-use tensor4all_tensorbackend::{
-    einsum_native_tensor_reads, invariant_violated, NativeEinsumPlan, NativeTensorReadInput,
-};
+use tensor4all_core::legacy::einsum_native_tensor_reads;
+use tensor4all_tensorbackend::{invariant_violated, NativeEinsumPlan, NativeTensorReadInput};
 
 /// Matrix Product Operator representation
 /// An MPO represents a high-dimensional operator as a product of
@@ -259,10 +256,7 @@ impl<T: TTScalar> MPO<T> {
     /// final contraction is not scalar; [`MPOError::Empty`] for an empty MPO;
     /// and [`MPOError::IndexOutOfBounds`] for an out-of-range physical index.
     ///
-    pub fn evaluate(&self, indices: &[LocalIndex]) -> Result<T>
-    where
-        T: EinsumScalar,
-    {
+    pub fn evaluate(&self, indices: &[LocalIndex]) -> Result<T> {
         if indices.len() != 2 * self.len() {
             return Err(MPOError::InvalidOperation {
                 message: format!(
@@ -336,7 +330,11 @@ impl<T: TTScalar> MPO<T> {
     /// # Errors
     ///
     /// Returns [`MPOError::InvalidOperation`] when a tenferro-backed reduction
-    /// or read fails, or when an internally constructed MPO is inconsistent.
+    /// or read fails, when an internally constructed MPO is inconsistent, or
+    /// when the first core has a leading bond other than one. The leading bond
+    /// is validated in [`MPO::new`], but [`MPO::site_tensors_mut`] can replace
+    /// the first core afterwards; the same malformed state is refused here
+    /// instead of being silently projected onto the `l == 0` component.
     ///
     /// # Examples
     ///
@@ -348,12 +346,21 @@ impl<T: TTScalar> MPO<T> {
     /// assert!((sum - 12.0).abs() < 1e-10);
     /// ```
     #[allow(clippy::needless_range_loop)]
-    pub fn sum(&self) -> Result<T>
-    where
-        T: EinsumScalar,
-    {
+    pub fn sum(&self) -> Result<T> {
         if self.is_empty() {
             return Ok(T::zero());
+        }
+
+        // The reduction seeds `current` from the `l == 0` component of the first
+        // core, so a leading bond above one would be silently projected away.
+        // `MPO::new` rejects that shape, but `site_tensors_mut` can reintroduce it.
+        if self.tensors[0].left_dim() != 1 {
+            return Err(MPOError::InvalidOperation {
+                message: format!(
+                    "Leading bond dimension is {}, expected 1",
+                    self.tensors[0].left_dim()
+                ),
+            });
         }
 
         // Start with sum over first tensor
@@ -435,10 +442,7 @@ impl<T: TTScalar> MPO<T> {
     /// # Errors
     /// Returns [`MPOError::InvalidOperation`] when the dense element count
     /// overflows or an evaluation fails.
-    pub fn full_tensor(&self) -> Result<(Vec<T>, Vec<usize>)>
-    where
-        T: EinsumScalar,
-    {
+    pub fn full_tensor(&self) -> Result<(Vec<T>, Vec<usize>)> {
         if self.is_empty() {
             return Ok((Vec::new(), Vec::new()));
         }
@@ -508,10 +512,12 @@ impl<T: TTScalar> MPO<T> {
                     "a core tensor has no readable view",
                 )
             });
-            environment = plan
-                .execute_reads(&[prefix_read, T::tensor_read(tensor.as_inner())])
-                .map(TensorValue::from_tensor)
-                .map_err(|error| backend_error(error.to_string()))?;
+            environment = tensor4all_core::legacy::native_einsum_plan_execute_reads(
+                &plan,
+                &[prefix_read, T::tensor_read(tensor.as_inner())],
+            )
+            .map(TensorValue::from_tensor)
+            .map_err(|error| backend_error(error.to_string()))?;
             stride = next_stride;
             bond_dim = right;
         }

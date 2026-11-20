@@ -70,12 +70,14 @@ fn result_value_types_preserve_history_and_diagnostics() {
         tree: tensor4all_treetn::TreeTN::new(),
         max_ranks: vec![2, 3],
         max_errors: vec![1.0e-2, 1.0e-6],
+        max_sample_magnitude: 4.0,
         global_pivots_found: vec![1, 0],
         termination: TreeAciTermination::Converged,
         diagnostics,
     };
 
     assert_eq!(result.max_ranks, vec![2, 3]);
+    assert_eq!(result.max_sample_magnitude, 4.0);
     assert_eq!(result.diagnostics.evaluated_points, 21);
     assert_eq!(result.diagnostics.sample_arena_records, 8);
     // Both caches report through one diagnostics struct, which is the

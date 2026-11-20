@@ -154,8 +154,9 @@ are supported.
 The QFT selection is independent of reconstruction's `patch_order`.
 Input bits are ordered from most to least significant. A full transform is
 the same interface with all desired axes selected. Multidimensional axes each
-carry their own ordered subset and are applied as separate calls; normalization
-is unitary on selected axes. The transform is never silently padded and its length
+carry their own ordered subset. They may be applied separately or composed with
+`quantics_fourier_operator_multiaxis` and supplied as one scheduled transform
+with a `CoordinateGroup` per axis. Normalization is unitary on selected axes. The transform is never silently padded and its length
 is never changed: the operator's input and output are the same selected indices, so a
 caller that needs a different output space owns that embedding outside this API.
 
@@ -260,12 +261,24 @@ separately, and adaptive stopping changes the counts.
 
 ### Geometry and provenance validation
 
-Selected indices must be binary and non-empty, and the preimage must already be
-partitioned into dyadic input leaves of those indices, sharing identical spectator
-constraints. A preimage that leaves a selected index free, repeats a
-selected-coordinate assignment, or disagrees on a spectator constraint is rejected
-before any operator is applied; a repair suggestion is required rather than an
-implicit normalization or padding step.
+Selected indices must be binary and non-empty, and every preimage patch must
+fix a contiguous prefix on each selected axis. Spectator constraints may differ.
+Preparation sorts and deduplicates spectator projectors by full index identity.
+If they are disjoint, they already define the spectator cells. Otherwise it
+keeps their common fixed coordinates and forms a Cartesian grid of only the
+varying spectator indices, excluding cells outside every input support. Both
+the candidate grid and the total leaf count after restriction obey the work
+and term limits, checked on metadata before tensor operations. The bounded grid
+may refuse a layout an adaptive refinement could handle; there is no silent
+fallback or unbounded refinement.
+
+The complete-coverage contract is checked separately in each represented
+spectator cell. Cells absent from the input support are outside its domain;
+missing selected leaves inside a cell still require `ZeroForMissingLeaves`.
+The operator is applied once per original patch, then its image is restricted
+exactly to the cells. Region keys include the spectator cell, so different
+cells never merge, and the returned output projectors include their spectator
+constraints. All cells participate in one schedule and resource ledger.
 
 Each leaf fixes a *contiguous prefix* of the selected indices, so the input tree may
 be nonuniform: leaf depths can differ as long as the leaves form a dyadic prefix
@@ -297,8 +310,9 @@ accepted truncation, and the measured norm of every dropped contribution.
 Every component is measured where it happens and recorded once, grouped by the level
 and the region that measured it:
 
-- an application error is measured before any split, so it belongs to level zero,
-  which has the single root region;
+- an original application error is measured before any selected or spectator
+  split, so it is charged once globally at level zero; restricting its image
+  into several cells does not charge it again;
 - a truncation residual or a dropped norm is measured inside the child region it is
   accepted in, so it belongs to that level and region.
 
@@ -307,9 +321,10 @@ supports, so their norms combine by the Euclidean norm. Two components of differ
 levels can be nested, so they add by the triangle inequality. The reported bound is
 
 ```text
-error_bound = sum over levels of
-              hypot over the regions of that level of
-              the components measured in that region at that level
+error_bound = sum of original patch application errors
+              + sum over later levels of
+                hypot over the selected-prefix/spectator regions of that level of
+                the components measured in that region at that level
 ```
 
 Counting the application error once at the root is the point: the same error network
@@ -358,23 +373,33 @@ input ancestry is never inferred from spectator-only projectors and no private
 target field is exposed downstream.
 
 With a rank goal the trajectory becomes adaptive, and the decision is made per
-output region so the final region set stays prefix-free:
+output region and per coordinate axis so the final region set stays prefix-free:
 
-- An output region is refined only when its retained terms exceed the goal *and*
-  refining strictly lowers its maximum retained rank. Without that gain the region
-  stops refining, so a rank-one object is not forced into a preset output tiling.
-  A stopped region keeps its output key and still merges its input siblings on every
-  later level; restricting it to its own region is a no-op, so it runs the merge
-  half of the level with the same ledger share. Its measured probe components are
-  charged, but only the merge it keeps contributes a reported component.
+- An output region is merged without splitting first, and it stops on every axis as
+  soon as that candidate fits the goal. For a candidate above the goal, each axis is
+  decided on its own: the axis is refined only when that axis' children store no more
+  parameters in total than the candidate they replace, because a split keeps one region
+  per output child and a projected child still keeps every output site axis, so a rank
+  drop by one is not a gain (#1327). The test is made against the merged, unsplit
+  candidate because that is exactly what a stopped region keeps; the unmerged input
+  siblings are not a fair baseline. Without that gain the axis stops, so a rank-one
+  object is not forced into a preset output tiling and a level splits into
+  `2^(refining axes)` children instead of `2^(coordinate axes)` (#1328). A stopped axis
+  keeps the region's shorter prefix for good while the region's other axes keep
+  refining. A region whose axes have all stopped keeps its output key and still merges
+  its input siblings on every later level; restricting it to its own region is a no-op,
+  so it runs the merge half of the level with the same ledger share. Its measured probe
+  components are charged, but only the merge it keeps contributes a reported component.
 - Merging a pair combines the two operands into one term when the candidate fits the
   goal or strictly lowers the bond dimension against the naive sum; otherwise both
   stay as separate terms, which keeps the retained ranks small at the cost of a
   longer term list.
-- Refinement stops are reported (`refined_regions`, `stopped_regions`), with a
-  stopped region counted once rather than once per remaining level, and the
-  retained term count is bounded by `max_terms`, whose exhaustion is an explicit
-  resource-limit error rather than a silent accuracy relaxation.
+- Refinement stops are reported: `refined_regions` counts a region and level once,
+  however many of its axes refined, `stopped_regions` counts one region-axis
+  decision that stopped (a single-axis run therefore still counts one per stopping
+  region) rather than once per remaining level, and the retained term count is
+  bounded by `max_terms`, whose exhaustion is an explicit resource-limit error
+  rather than a silent accuracy relaxation.
 - A merged or unpaired contribution is dropped only when its measured norm fits its
   share of the allowance. Dropping costs that norm plus the inherited bound it
   already carried, both of which stay in the region's report, and a region whose
@@ -431,7 +456,7 @@ operator and compares it against the two one-dimensional transforms applied in
 sequence.
 
 Approximate operator application is available as an opt-in on the schedule:
-`MergeRefineOptions::apply_options` applies the operator with the caller's
+`OperatorApplication::Measured` (formerly `MergeRefineOptions::apply_options`) applies the operator with the caller's
 truncating options *and* always applies it exactly, measures the per-leaf
 deviation `||exact - approximate||`, and charges that sum to the item bounds before
 any scheduling compression. The exact application is therefore the measured
@@ -444,3 +469,452 @@ out of the schedule: a later opt-in padding API must define the embedding, the
 extra bits per transformed coordinate, physical spacing and frequency grid,
 normalization, and output interpretation, and the selected transform length is
 never changed silently.
+
+### Exact application without product-width bonds (#1279)
+
+Status: implemented (#1279).
+
+The exact application that both `from_subset_operator` and the schedule perform
+(above) used `ApplyOptions::naive()`. The naive local product gives every site
+tensor of `A x` both bonds equal to input bond × operator bond, so a patched
+Fourier transform over two interleaved axes at R = 10 (input bond 50, operator
+bond 144) forms 7200-wide site tensors, about 1.7 GB each in complex f64, and
+fails with an allocation error under an 8 GiB or a 14 GiB limit. The product's
+rank at a bond is also bounded by the physical dimension of each side of it,
+which is at most 1024 there, so most of that width carries nothing.
+
+**Change.** `prepare_subset_images` applies the operator exactly with zip-up
+instead: `ApplyOptions::zipup()` with
+`svd_policy = Some(SvdTruncationPolicy::new(0.0))` and no `max_bond_dim`,
+centred at the balanced node, the node that minimizes the largest total
+`log2` site dimension of the subtrees around it (ties by node order). A
+threshold of zero discards no nonzero singular value, so the application is
+exact up to backend roundoff, as the naive path is. Since #1285 that request
+factorizes every zip-up block by untruncated QR instead of SVD; see
+[Exact zip-up by QR](#exact-zip-up-by-qr-1285). The threshold must be
+given: `svd_policy = None` resolves to the default relative cutoff of `1e-12`
+and is not exact. No path of `prepare_subset_images` keeps the naive
+application.
+
+**Why the bonds stay bounded, by tree shape.**
+
+- *Chains* (every node on one path, the QFT layouts): zip-up takes its chain
+  schedule. It first puts both operands in QR form at the first sweep site,
+  so each operand's bond toward the far end is bounded by the physical
+  dimension of the far side, and it then sweeps in one direction with an SVD
+  per site, so the swept bond is bounded by the physical dimension of the swept
+  side. Every block it factorizes is bounded on both sides although the sweep
+  runs one way; the final canonicalization to the centre leaves the image's
+  bonds at the smaller side's physical dimension. The centre changes the sweep
+  direction, not these bounds.
+- *Other trees* (spectator branches, multi-site nodes): zip-up processes the
+  nodes from the leaves towards the centre. The operands are not
+  pre-canonicalized there, so a block's parent side is the full product bond,
+  and only its processed side is bounded by that side's physical dimension;
+  the balanced centre keeps every processed side at most about half of the
+  total. A spectator subtree, one that holds no operator node and not the
+  centre, is emitted unchanged by the exact identity skip of zip-up (#1186)
+  and adds no work; a spectator node between operator nodes and the centre is
+  factorized like any other. On such trees the peak is therefore of order
+  `2^(half the site bits) × input bond × operator bond` rather than the
+  chain's two-sided bound, and the centre contracts the remainders of all its
+  branches at once, so three wide branches multiply; no QFT layout of the
+  front end has this shape and none of it has been measured. On a chain the
+  chain schedule factorizes every node, spectators included, within the chain
+  bounds above.
+
+**Guard on other trees.** Before any application, `prepare_subset_images`
+estimates the largest block of every term on a tree that is not a chain, by
+following the tree zip-up from the leaves to the centre: a node whose subtree
+holds no operator node is emitted and leaves only its state bond to its parent;
+every other node forms `(children's remainders × its site dimensions) ×
+(state bond × operator bond)` towards its parent and passes on the smaller
+factor, the operator's largest bond standing in for every operator bond; the
+centre forms the product of its remainders and site dimensions. A term whose
+estimate exceeds `2^28` elements, 4 GiB in complex `f64`, is refused with
+`ResourceLimit` instead of allocated; the limit is fixed, and the remedy is a
+chain layout or fewer selected sites. Chains are not checked, since their
+blocks are bounded. Three branches of 16 binary sites with bonds 128 already
+estimate `2^43` at the centre. The guard is an upper estimate of the block the
+factorization sees, not of every temporary the contraction planner forms.
+
+**Error accounting is unchanged.** Exact mode still reports
+`error_bound == 0`. With a measured application the schedule still
+applies the caller's truncating options as well and charges the measured
+`||exact - approximate||` of each leaf; the exact image this measurement needs
+is now affordable, and the difference network's bond is the sum of the two
+images' bonds. Charging the discarded weights of a canonical-form truncation
+instead, as first proposed on #1279, is not needed for the bound and is left
+out. Restricting the application to requested output regions (option 2 of
+#1279) is also left out: it cannot help a caller that requests the whole
+output, as the R = 10 interleaved case does, and is a separate optimization.
+
+**Measured** (R = 10, two interleaved axes, 20 binary sites, 4 input
+patches, release, one thread, `ulimit -v` 8 GiB, the front end only). The case
+completes in 827 s; the process peaks at 4.0 GiB RSS, and the sampled DFT
+error, 1.45e-13, is inside the reported bound, 1.66e-8. Every image has bonds
+`[2, 4, ..., 512, 1024, 512, ..., 4, 2]`, the physical bound on each side. The
+block the chain zip-up factorizes at each sweep site of the first image, in
+millions of elements (one element is 16 bytes), measured on the final code
+with a temporary probe; the two operands' bonds toward the far end are the
+second and fourth dimensions, the remainder's bond the first:
+
+| sweep site | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| block [M elements] | 0.38 | 1.8 | 3.1 | 5.9 | 10.0 | 17.1 | 20.4 | 7.7 | 1.8 | 0.28 |
+| dimensions | 64·31·2·96 | 128·49·2·144 | 256·42·2·144 | 512·40·2·144 | 1024·34·2·144 | 2048·29·2·144 | 4096·26·2·96 | 2496·24·2·64 | 1536·18·2·32 | 576·15·2·16 |
+
+Sites 0 to 5 and 16 to 17 are below 0.1M and the final two-site block has 64
+elements. The largest block over all four images is 21.2M elements
+(0.32 GiB), at site 12 of the third image. The remainder carries the swept
+side's physical dimension, up to 4096, while the operands' far-side bonds stay
+at most 49 and 144; the image's bonds are at most 1024 only after the closing
+canonicalization. On the prototype, the default centre (node 0, sweep from
+node 19) reached at least 28.9M elements (0.43 GiB) before its run hit a time
+limit after site 13, which is why the balanced centre is used.
+
+**The peak follows the physical bond, not the compressed rank.** The exact
+images keep every singular value and reach the physical bound (1024 here),
+although the compressed result has rank 8, so the rank goal does not bound the
+memory of the exact application. The 4.0 GiB peak is measured, not bounded;
+the heavy test therefore runs this case in a child process under an 8 GiB
+address-space ceiling and prints its peak RSS, so an allocation above the
+ceiling fails the test instead of leaving the runner's OOM killer to end the
+job.
+
+The cost is time: on the prototype each exact image took 180 to 197 s, 765 s
+of the schedule's 824 s, spent in SVDs of blocks up to 8192 × 2496. The exact
+images keep every singular value, including those at roundoff, which is why
+their bonds reach the physical bound although the compressed result has rank
+8. #1285 replaces those SVDs by QR; see
+[Exact zip-up by QR](#exact-zip-up-by-qr-1285).
+
+On the cases that already passed, the zip-up gives the naive path's result up
+to roundoff, faster and with less memory (release, one thread, single runs on
+one host; the naive column was measured before the change):
+
+| case | reported bound, naive / zip-up | sampled error, naive / zip-up | schedule [s], naive / zip-up | peak RSS [MB], naive / zip-up |
+|---|---|---|---|---|
+| R = 10, 1D | 7.912518e-9 / 7.912519e-9 | 4.11e-14 / 4.07e-14 | 0.033 / 0.025 | 40 / 31 |
+| R = 10, 2D grouped | 7.705055e-9 / 7.705055e-9 | 8.75e-14 / 9.32e-14 | 0.31 / 0.17 | 67 / 36 |
+| R = 20, 1D | 3.455769e-10 / 3.455768e-10 | 2.24e-13 / 2.21e-13 | 0.26 / 0.23 | 89 / 61 |
+| R = 20, 2D grouped | 6.853537e-9 / 6.853537e-9 | 4.23e-13 / 4.44e-13 | 1.57 / 1.23 | 121 / 102 |
+
+**Tests.**
+
+- `tests/subset_operator_exact.rs` (`tensor4all-partitionedtreetn`): the images
+  equal the dense product of the dense operator and the dense state, on a
+  chain whose balanced centre is a spectator node and on a branched tree with
+  a spectator branch and a node carrying two selected sites, for real and
+  complex data. A truncating threshold fails all four.
+- The `balanced_center` unit tests: chains, bits rather than node counts,
+  non-binary sites, a branched tree, ties. The guard's unit tests: no
+  estimate on a chain, a hand-computed estimate on a branched tree with and
+  without spectator subtrees, the deep three-branch tree above, and the
+  refusal only above the limit.
+- The existing schedule tests cover exact mode (`error_bound == 0`) and a
+  truncating measured application whose deviation is charged. One existing
+  test changed: in `subset_operator_scale_is_not_measured_under_destructive_interference`
+  the two images are negatives of each other. Whether their roundoff residual
+  cancels exactly depends on the platform's SVD: on Linux the zip-up images
+  merge into the zero function and no term stays, while on macOS (Accelerate)
+  both stay, as both naive images did. The test therefore asserts what holds
+  on every platform: nothing is charged, at most the two terms stay, and their
+  sum is zero to roundoff.
+- Heavy: `heavy_gaussian_2d_interleaved_r10` in
+  `tensor4all-quanticstransform/tests/heavy_patched_fourier.rs`. It runs the
+  front end only, one schedule (about 14 minutes here with one thread, 332 s
+  with four in the `ci` profile), not the separately timed direct schedule as
+  well, since the whole nightly heavy job has 60 minutes, 25 of them spent
+  building. It runs under the 8 GiB ceiling above; with the ceiling lowered to
+  2 GiB it fails with the backend's allocation error.
+
+**Out of scope.** R = 20 interleaved (40 sites): there the physical bound
+exceeds the product bond over the middle of the chain, so an exact image can
+really be 7200 wide; it needs truncation during the sweep with a proven bound
+and is a separate issue.
+
+### Exact zip-up by QR (#1285)
+
+**Problem.** The exact application above spends almost all of its time in
+SVDs whose singular values it never uses: with a zero threshold every value
+is kept, roundoff included, and the rank reduction happens later, in the
+compression.
+
+**Change.** An exact zip-up request (`Unitary`, a zero SVD threshold, no
+`max_bond_dim`; the predicate `zipup_is_exact` in
+`tensor4all-treetn/src/treetn/contraction.rs`) now factorizes every block by
+QR with `qr_rtol = 0`, on both schedules. Every row of `R` is retained, so each
+bond is `min(rows, cols)` of its block, the width the zero-threshold SVD
+keeps, and the memory picture of #1279 is unchanged. QR has only a
+left-canonical form, so the chain schedule factorizes its final two-site block
+with the last site's indices on the orthogonal side: `Q` goes to the last
+node, `R` to the penultimate one, and the numerical centre stays where the SVD
+schedule left it. The closing zero-threshold truncation of the chain schedule
+is unchanged; it costs about 8 s of each 75 s image below. A request that is
+not exact keeps the SVD schedule unchanged.
+
+**The identity skip (#1186, #1197).** The same predicate gates the
+pass-through of untouched leaves. Skipping a node is a relabeling of its
+parent's view only when no factorization of the schedule truncates; QR with a
+zero tolerance truncates nothing, as the zero-threshold SVD did, so the
+condition holds unchanged. The #1197 four-node counterexample is run under
+the exact request with the skip on and off, and both give the exact
+amplitudes.
+
+**Measured** (release, one thread pinned to one core, `ulimit -v` 8 GiB,
+single runs on one host; the SVD column is the #1279 branch tip measured on
+the same day):
+
+| case | quantity | SVD | QR |
+|---|---|---|---|
+| R = 10, two interleaved axes | front end [s] | 837 | 364 |
+| | schedule [s] | — | 364 |
+| | one exact image [s] | 180 to 197 (#1279 probe) | 73 to 77 |
+| | peak RSS [GiB] | 3.96 | 2.37 (front end only), 2.44 (schedule and front end) |
+| | sampled error / reported bound | 1.45e-13 / 1.66e-8 | 1.31e-13 / 1.66e-8 |
+| R = 10, 1D | schedule [s] | 0.028 | 0.024 |
+| R = 10, 2D grouped | schedule [s] | 0.18 | 0.16 |
+| R = 20, 1D | schedule [s] | 0.22 | 0.21 |
+| R = 20, 2D grouped | schedule [s] | 1.24 | 1.20 |
+
+The reported bounds of the four small cases agree to six or seven digits and
+their sampled errors to roundoff; their peak RSS is within 5 MB. The
+per-image time comes from a temporary timing probe that is not committed. Of
+each 73 to 77 s image, 47 to 49 s go into the QR factorizations, 18 to 20 s
+into the block contractions and about 8 s into the closing truncation; the
+four images take about 304 s of the 364-s front end. The remaining cost is
+the QR of the blocks up to 8192 × 3744 that the exact application forms at
+the physical bond, which is inherent to an exact image of that width.
+
+**Tests.**
+
+- `tensor4all-treetn`, `contraction/tests/exact_qr.rs`: an exact request
+  factorizes only by QR, and its result equals the untruncated SVD zip-up
+  (smallest positive threshold) and the dense product to `1e-12` relative, with
+  the same bond dimensions and the whole norm at the centre. It covers the
+  chain and a branched tree with two degree-three nodes, several centres, real
+  and complex data, and the process-global and context leaf routes.
+- `tests/subset_operator_exact.rs`: on the same shapes, `schedule_merge_refine`
+  with an untruncated SVD zip-up as its measured application measures each QR image
+  against its SVD image under `rtol = 1e-12`; a truncating threshold of `0.3`
+  fails all four.
+- `apply_zipup_never_skips_without_an_explicit_exact_policy` also compares the
+  exact result with the skip on and off.
+
+The general-tree schedule sets only the canonical region, not the edge
+orientations, for SVD and QR alike, so the tree cases check the isometries
+numerically (the centre carries the whole norm) rather than through
+`validate_ortho_consistency`.
+
+### Truncating application with a certified bound (#1286)
+
+Status: the API was agreed on
+[#1296](https://github.com/tensor4all/tensor4all-rs/pull/1296#issuecomment-6867000238)
+(see "Decisions" at the end of this section). The treetn kernel is implemented
+as `apply_linear_operator_certified`; "Implementation notes" records where it
+departs from the algorithm as first written.
+
+**Problem.** Two interleaved axes at R = 20 give 40 binary sites. Over the
+middle of the chain the exact image can be as wide as the product bond (input
+bond × operator bond), so the exact application of #1279/#1285 has no bounded
+intermediates there. The application has to truncate during its sweep. What it
+discards must be charged to the report as a proved bound, without ever forming
+the exact image.
+
+**Rejected certificates.** The small-case study on #1286 compared three
+candidates against the dense exact product
+([choice](https://github.com/tensor4all/tensor4all-rs/issues/1286#issuecomment-6844793567),
+[repair](https://github.com/tensor4all/tensor4all-rs/issues/1286#issuecomment-6845339762),
+[reproducer](https://github.com/tensor4all/tensor4all-rs/issues/1286#issuecomment-6845427962)):
+
+- `||Ax||^2 - 2 Re<Ax, y> + ||y||^2` evaluated by contraction cancels down to
+  a `sqrt(eps) ||Ax||` floor.
+- Density-matrix eigenvalue sums have the same floor. One case claimed 0
+  against a true 6.8e-12.
+- A truncating zip-up that picks each rank from the singular values of its own
+  block, charging `||D_k||_F sigma_k`, is valid. But the block spectrum is the
+  wrong one, so it kept 2–4× the optimal bonds, above even the exact product's.
+
+**The identity.** A chain zip-up replaces each block `C_k` by `P_k C_k`, where
+`P_k = U_k U_k^H` and `U_k` is an isometry. The projectors are nested: each new
+range lies in the previous range tensored with the next site. So the
+step errors are mutually orthogonal, and for any choice of isometries
+
+`||Ax - y||^2 = sum_k ||D_k M_k||_F^2 = sum_k ||D_k L_k||_F^2`.
+
+Here `D_k = (I - P_k) C_k` is the discarded block, and `M_k` the exact
+remaining part of `A x` on the unswept side, as a map from the joint bond
+(operator bond, state bond). `L_k` is a factor of its Gram matrix:
+`M_k = L_k Q_k`, with `Q_k` having orthonormal rows.
+
+**Algorithm** (chain only, sweeping from the last node to the first):
+
+1. *Factors.* The unswept side of step k is the left part, so `L_k` is built
+   from the left end by recursion. Contract the previous factor with the
+   operator and state tensors of site k, and keep the triangular factor of a
+   QR, exact and untruncated. `L_k` has `chi_A,k chi_x,k` rows and at most
+   `min(rows, 2^(k+1))` columns, because the physical dimension on the left
+   bounds its rank.
+2. *Memory gate.* Before the first QR, the factor sizes are computed from the
+   state's and the operator's actual bond dimensions. Above a budget (default
+   4 GiB) the application fails with a resource-limit error, before allocating
+   anything. The measured peak is reported. There is no silent fallback, either
+   to the block-spectrum truncation or to an unchecked run. Disk spill is the
+   extension for an input whose factors do not fit. Patches are applied one at
+   a time, so the worst single patch sets the gate.
+3. *Sweep.* At step k:
+   - Form the block `C_k` (the remainder times the site tensors).
+   - Take the projector from the SVD of `C_k L_k`. That is the actual Schmidt
+     spectrum of the current state at the cut, which is why the kept bonds were
+     optimal on every small case.
+   - Keep the smallest rank whose certified step error is within the step's
+     share of the budget.
+   - The remainder passed on is `U_k^H C_k`.
+4. *Certificate per step* (primary, linear):
+
+   `e_k <= fl(||D_k L_k||_F) (1 + gamma_{2m+2}) + gamma_{2n+2} ||D_k||_F ||L_k||_F`
+
+   with `n` the inner and `m` the output dimension of the product. The margin
+   is linear in the precision and scales with `||D_k||`, not `||Ax||`, so this
+   is not the density-matrix floor. Fallback, computed only when the linear
+   form exceeds the share: `e_k <= ||D_k||_F sigma_k`. Here `sigma_k` is
+   certified as `sqrt(t)` with `t >= lambda_max(L_k L_k^H)`, proved by a
+   floating-point Cholesky of `fl(t I - G) - c I` with Rump's margin
+   `c >= gamma/(1 - gamma) tr(A)` (BIT 46 (2006), Thm 2.3; `gamma_{2n+2}` for
+   complex data), plus the diagonal rounding of `t - g_ii`.
+5. *Bound.* `sqrt(sum_k e_k^2)`. The per-step budget share is
+   `budget / sqrt(N - 1)`, and a step that spends less leaves the rest to
+   later steps. The bound covers the sweep steps only. **The closing step is
+   the one place where nothing may be discarded:** it canonicalizes exactly
+   by QR and truncates nothing. A truncation added there would remove weight
+   that no `e_k` charges, and the reported bound would no longer hold.
+
+**What the certificate covers.** The norms and `lambda_max` of the *computed*
+`L_k` and `D_k`. The roundoff made while contracting and factorizing `L_k`
+and `C_k` is backend roundoff, which the report already excludes.
+
+**Measured basis.** For R = 20, as built by the heavy test:
+- **profile:** the operator bond is 144 over the middle and the input patch
+  bonds peak at 49, so only bond 7 reaches the 7056-row maximum;
+- **storage:** the left factors of one patch total 1.96 GiB, against 4.18 GiB
+  for the right factors of the opposite sweep;
+- **cost:** the largest QR (8192 × 3888) takes 22 s with one thread, and an
+  estimated 1.5–2 min builds one patch's factors
+  ([profile](https://github.com/tensor4all/tensor4all-rs/issues/1286#issuecomment-6846379023)).
+
+**Proposed API.**
+
+- `tensor4all-treetn`:
+  - `apply_linear_operator_certified` and its index-binding form, with
+    `CertifiedApplyOptions { budget, memory_limit }`. The budget is an absolute
+    error; the memory limit defaults to 4 GiB.
+  - The result is a `CertifiedApplication`: the network, the bound, the step
+    bounds, and the factor bytes (estimated and measured).
+  - Typed errors for a non-chain state (unsupported), the memory gate (resource
+    limit), and an unreachable budget. The last is reported, not relaxed.
+  - The kernel is a private chain zip-up variant that shares the existing
+    schedule. The exact and truncating zip-ups are unchanged.
+- `tensor4all-partitionedtreetn`: `MergeRefineOptions::application`, one enum
+  `OperatorApplication` replacing `apply_options`:
+  - `Exact` (the default, as today);
+  - `Certified { share, memory_limit }`, with `certified(share)` for the
+    default limit. `share` of the global allowance is split equally over the
+    input leaves; the images overlap, so their bounds add;
+  - `Measured(ApplyOptions)`, the former `apply_options`.
+
+  A certified image's bound is charged as its application error, in place of
+  the measured difference to an exact image that is never formed.
+  `SubsetOperatorOptions` keeps only the amplification flag: it is also taken
+  by `ReconstructionTarget::from_subset_operator`, whose target carries no
+  application error to charge, and `schedule_merge_refine` takes both option
+  sets, so a second application field there would be the combination of flags
+  the decision rules out.
+- `tensor4all-quanticstransform`: `PatchedFourierOptions` exposes the same
+  choice. The R = 20 interleaved heavy case opts in.
+
+**Validation plan.**
+- Small cases against the exact application, for real and complex data and
+  several centres: the bound is never below the true error, and the kept bonds
+  are within a stated factor of the optimal.
+- A test that the memory gate fails before allocating.
+- The R = 20 interleaved heavy case under the 8 GiB address-space ceiling,
+  reporting the measured peak, the per-step bounds and the total bound. Its
+  sampled DFT error must be inside the reported bound.
+
+**Implementation notes** (treetn kernel).
+- *No fallback certificate.* The `||D_k||_F sigma_k` fallback of step 4 is not
+  implemented, because it cannot pay off. Write `g_a = gamma_{2m+2}`,
+  `g_b = gamma_{2n+2}` and `s = ||L_k||_2 >= ||L_k||_F / sqrt(n)`. The product
+  error bound gives `fl(||D L||) <= (||D|| s + g_b ||D|| ||L||_F)(1 + g_a)`, so
+  the linear form is at most `||D|| s ((1 + g_a)^2 + 2 g_b (1 + g_a) sqrt(n))`.
+  The fallback is therefore smaller by at most a relative
+  `O(gamma_{2n+2} sqrt(n))`, about `3e-10` at the R = 20 maximum `n = 7056`,
+  and never enough to change a kept rank. A step whose linear form exceeds its
+  share keeps one more direction instead. The reported bound is therefore
+  slightly conservative: it can exceed the smaller of the two certificates by
+  at most that relative amount. The missing fallback is not a gap in the
+  certificate.
+- *Sweep direction.* The sweep runs in the direction whose estimate is
+  smaller. For R = 20 that is the "last to first" direction of step 2; the
+  choice now follows from the measured bonds instead of a fixed orientation.
+- *Memory gate in two parts.* Before anything is allocated, the gate counts
+  the stored factors plus the largest factor QR input and its `Q`, from the
+  input bond dimensions (which bound the canonicalized ones). The sweep's
+  working tensors (a block, its projection, its discarded part and the
+  weighted block) depend on the ranks the sweep keeps, so each step checks
+  them from the actual dimensions, with the factors still stored, before
+  forming the block, so a refusal there happens **with the factors still
+  resident**. An a-priori bound on the kept rank is the factor's
+  column count, thousands over the middle of R = 20, against kept ranks
+  below 50 at R = 10; with it, R = 20 was refused at 4.30 GB against a
+  4 GiB limit.
+- *Rounding of the margin and the sum.* The computed `||D_k||_F` and
+  `||L_k||_F` in the margin are rounded up by `1 + gamma_{2c+2}` (`c` entries),
+  and the total `sqrt(sum e_k^2)` by `1 + gamma_{N+1}`. The shares come from the
+  budget divided by that last factor, so the reported bound never exceeds the
+  budget.
+- *Rank search.* The first candidate is the smallest rank whose
+  exact-arithmetic tail plus the margin (with `||C_k||` for `||D_k||`) fits the
+  share; the certificate of the actual `D_k` then accepts it, or the rank grows
+  by one. At the largest rank the SVD offers, a step that still does not fit
+  reports `BudgetUnreachable`.
+
+**Decisions** (#1296, maintainer).
+1. Names as proposed: `apply_linear_operator_certified`,
+   `CertifiedApplyOptions { budget, memory_limit }`, `CertifiedApplication`.
+   In the partitioned options the application choice is one enum (exact,
+   certified with a share, measured), not a combination of flags.
+2. Explicit opt-in, no automatic choice: the reported error changes meaning
+   (measured difference vs. certified bound), and an automatic switch would
+   contradict the no-silent-fallback rule of the memory gate.
+3. The application's share of the allowance is a required argument with no
+   default, validated as a typed error outside `(0, 1]`.
+
+## Fourier front end and operator node names
+
+The subset reconstruction entry points accept independent state and operator
+node-name types. Sorted operator nodes bind positionally to the selected full
+indices; owner grouping, index binding and exact restructuring remain owned by
+`prepare_subset_images`. This supports abstract integer bit nodes even when
+state nodes use names or hold several selected indices.
+
+`tensor4all-quanticstransform` provides `quantics_fourier_operator_multiaxis`
+with an explicit axis/bit layout. When every axis is monotone along the path it
+embeds the per-axis trains directly, passing the other axes' bonds through, so
+the product is exact with bond equal to the product of per-axis bonds. Other
+layouts compose adjacent separated axes pairwise and restructure exactly by site
+swaps, which can grow intermediate bonds far beyond that product. The optional `partitioned`
+feature supplies `patched_fourier_transform`: it derives selection path order
+and coordinate groups and delegates to `schedule_merge_refine`, returning the
+lazy result directly. Branching selections remain unsupported.
+
+Fourier construction error and reconstruction error are separate. Exact layout
+restructuring can increase the bonds beyond the cap used per axis. A normalized
+inverse call reverses each axis's index vector to account for output bit
+reversal. See the [QFT guide](../book/src/guides/qft.md) for the checked example.
+
+Input generation is independent (#1276). A TT over only a patch's remaining
+bits must be extended with fixed prefix one-hot sites and assigned the shared
+full indices/topology before it can become a `SubDomainTreeTN`. Projectors mask
+existing sites; they never introduce missing indices.

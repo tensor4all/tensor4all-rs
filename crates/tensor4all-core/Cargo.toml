@@ -9,10 +9,19 @@ description = "Core tensor types, indices, and operations (SVD, QR, contraction)
 autotests = false
 
 [features]
-default = ["backend-tenferro", "tenferro-cpu-platform"]
-backend-tenferro = ["tensor4all-tensorbackend/backend-tenferro"]
+default = ["tenferro-cpu-platform"]
+# Opt-in legacy route: context-free operations fall back to one process-global
+# CPU context and eager runtime (see `src/implicit_route.rs`). Without it, a
+# context-free operation that would need that fallback returns
+# `ExecutionContextEntryError::NoContext` instead of choosing an engine.
+global-defaults = ["tensor4all-tensorbackend/global-defaults"]
+# Compatibility alias for `global-defaults`.
+backend-tenferro = ["global-defaults"]
+# CUDA execution keeps host steps with no caller CPU context to run on (the
+# CUDA-resident SRC readback here, treersi's rank decision), so it implies the
+# process-global route, as `backend-tenferro` did before #1403.
 tenferro-cuda = [
-    "backend-tenferro",
+    "global-defaults",
     "tenferro-cpu-faer",
     "tensor4all-tensorbackend/tenferro-cuda",
     "tenferro-ad/cuda",
@@ -55,10 +64,10 @@ tenferro-provider-inject = [
 ]
 
 [dependencies]
-# `global-defaults` is required in every configuration: this crate re-exports
-# `TensorElement` and uses `Matrix`/`ExecutionContext`/`mat_mul` in un-gated code.
-# It selects no provider, so the `tenferro-*` provider features stay independent.
-tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false, features = ["global-defaults"] }
+# The canonical explicit surface; the process-global route is this crate's opt-in
+# `global-defaults` feature. It selects no provider, so the `tenferro-*` provider
+# features stay independent.
+tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false, features = ["explicit-context"] }
 num-complex.workspace = true
 num-traits.workspace = true
 thiserror.workspace = true
@@ -80,6 +89,9 @@ tenferro-linalg.workspace = true
 tenferro-tensor.workspace = true
 
 [dev-dependencies]
+# Tests, doctests and benches still exercise the context-free API, which needs
+# the process-global route (tensor4all-rs#1403); the library itself does not.
+tensor4all-core = { path = ".", default-features = false, features = ["global-defaults"] }
 tenferro-tensor.workspace = true
 tenferro-cpu.workspace = true
 approx.workspace = true

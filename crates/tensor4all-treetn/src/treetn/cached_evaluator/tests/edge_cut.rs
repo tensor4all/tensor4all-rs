@@ -124,6 +124,7 @@ fn borrowed_cached_cut_matches_owned_assembly_for_all_scalar_kinds() {
                     &batches,
                     &environment,
                     &mut CachedEvaluationRoute::global(),
+                    Parallelism::Serial,
                 )
                 .unwrap()
                 .into_iter()
@@ -205,6 +206,7 @@ fn borrowed_cut_partial_hits_keep_legacy_cache_accounting() {
                 &batches,
                 &environment,
                 &mut CachedEvaluationRoute::global(),
+                Parallelism::Serial,
             )
             .unwrap()
             .into_iter()

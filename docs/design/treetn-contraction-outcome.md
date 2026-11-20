@@ -2,13 +2,13 @@
 
 ## Status
 
-Proposal, revised after two design reviews. Part of milestone M6 (adaptive
-patched contraction) of
+Implemented with milestone M6a (adaptive patched contraction) of
 [tree-adaptive-patching-roadmap.md](./tree-adaptive-patching-roadmap.md);
 background in section 1 of
-[tree-patching-findings.md](./tree-patching-findings.md). It adds public API
-to `tensor4all-treetn` and must be approved before implementation, which is
-scheduled with M6, not before the interpolation milestones.
+[tree-patching-findings.md](./tree-patching-findings.md). The text below is
+the proposal as revised after two design reviews;
+[Implementation notes](#implementation-notes) records where the code differs
+from it.
 
 ## Problem
 
@@ -46,8 +46,9 @@ canonicalization, and reindexing of both operands is always paid.
   PR #656, which restructures `fit.rs`.
 - Outcome variants of `partial_contract` and `hadamard`, and of the low-level
   SRC entry points `contract_src_with_rng` and `contract_src_with_rng_in`.
-  Patched element-wise products are an M6 item and will reuse the entry point
-  below.
+  The proposal expected patched element-wise products to reuse the entry
+  point below; since the roadmap decision of 2026-11-09 they are M6c and use
+  dedicated element-wise kernels instead.
 
 ## Public surface
 
@@ -153,7 +154,7 @@ would need a separate opt-in because it changes which contractions saturate.
 
 ## Adoption in `partitionedtreetn`
 
-This depends on #788 (PR #789) being merged.
+This depended on #788 (PR #789), which is merged.
 
 - Today `contract_adaptive` contracts all compatible pairs before grouping
   them by output projector, so no contraction can be skipped at the top
@@ -210,6 +211,25 @@ This depends on #788 (PR #789) being merged.
 - Drift check: `skills/use-tensor4all-rs/` and the TreeTN guide pages that
   mention contraction options.
 
+## Implementation notes
+
+- **Context-scoped entry.** `contract_with_outcome_in` takes an
+  `ExecutionContext`, as `contract_in` does for `contract`. It was not in the
+  proposal; the repository's execution-context rule requires it.
+- **`contract` and the shared loop.** `contract` does not call
+  `contract_with_outcome(..., None)`. Both run the same tree zip-up loop with
+  a statically dispatched completion policy, so `contract` keeps its return
+  type and allocates no report. Its results are unchanged.
+- **Early abort needs SVD factorization.** The tree zip-up path aborts early
+  only with `FactorizeAlg::SVD`. Every other method and factorization
+  algorithm evaluates saturation after completion.
+- **Overlapping adaptive layouts.** `contract_adaptive` and
+  `contract_adaptive_selected` refine operands whose predicted output
+  projectors overlap without being equal, bounded by
+  `AUTOMATIC_REFINEMENT_LIMIT`, so that grouping before contraction is well
+  defined. The proposal assumed equal-or-disjoint output projectors.
+
 ## Open questions for review
 
-1. Name: `abort_at_rank` versus `rank_budget` or `saturation_threshold`.
+1. Name: `abort_at_rank` versus `rank_budget` or `saturation_threshold`. The
+   implementation uses `abort_at_rank`; the question is still open.

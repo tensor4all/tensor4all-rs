@@ -1,0 +1,160 @@
+
+=== baseline.log ===
+bits=10 axes=1 interleaved=false ms=1.2482 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2]
+            13844480  maximum resident set size
+bits=10 axes=1 interleaved=false ms=1.0747 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2]
+            13844480  maximum resident set size
+bits=10 axes=1 interleaved=false ms=1.0471 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2]
+            13828096  maximum resident set size
+bits=10 axes=1 interleaved=false ms=1.0560 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2]
+            13811712  maximum resident set size
+bits=10 axes=1 interleaved=false ms=1.0570 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2]
+            13877248  maximum resident set size
+bits=10 axes=2 interleaved=false ms=2.2268 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 8, 4, 2]
+            14090240  maximum resident set size
+bits=10 axes=2 interleaved=false ms=5.1659 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 8, 4, 2]
+            14598144  maximum resident set size
+bits=10 axes=2 interleaved=false ms=3.1285 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 8, 4, 2]
+            14745600  maximum resident set size
+bits=10 axes=2 interleaved=false ms=3.9361 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 8, 4, 2]
+            14876672  maximum resident set size
+bits=10 axes=2 interleaved=false ms=2.3138 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 8, 4, 2]
+            14450688  maximum resident set size
+bits=10 axes=2 interleaved=true ms=5.5817 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+            33554432  maximum resident set size
+bits=10 axes=2 interleaved=true ms=6.2294 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+            45744128  maximum resident set size
+bits=10 axes=2 interleaved=true ms=6.6752 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+            48267264  maximum resident set size
+bits=10 axes=2 interleaved=true ms=7.3985 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+            50397184  maximum resident set size
+bits=10 axes=2 interleaved=true ms=6.9756 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+            50233344  maximum resident set size
+bits=20 axes=1 interleaved=false ms=4.6348 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            15826944  maximum resident set size
+bits=20 axes=1 interleaved=false ms=5.4506 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            15925248  maximum resident set size
+bits=20 axes=1 interleaved=false ms=5.1357 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            15925248  maximum resident set size
+bits=20 axes=1 interleaved=false ms=3.1558 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            15925248  maximum resident set size
+bits=20 axes=1 interleaved=false ms=2.7966 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            16007168  maximum resident set size
+bits=20 axes=2 interleaved=false ms=8.6666 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            16728064  maximum resident set size
+bits=20 axes=2 interleaved=false ms=8.4619 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            16859136  maximum resident set size
+bits=20 axes=2 interleaved=false ms=8.6928 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            16760832  maximum resident set size
+bits=20 axes=2 interleaved=false ms=5.8103 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            16711680  maximum resident set size
+bits=20 axes=2 interleaved=false ms=6.5055 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            16728064  maximum resident set size
+bits=20 axes=2 interleaved=true ms=29.8149 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+           136675328  maximum resident set size
+bits=20 axes=2 interleaved=true ms=32.3140 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+           153141248  maximum resident set size
+bits=20 axes=2 interleaved=true ms=31.8944 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+           140656640  maximum resident set size
+bits=20 axes=2 interleaved=true ms=28.9325 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+           141082624  maximum resident set size
+bits=20 axes=2 interleaved=true ms=38.0169 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+           144818176  maximum resident set size
+
+=== candidate.log ===
+bits=10 axes=1 interleaved=false ms=0.8655 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2]
+            14204928  maximum resident set size
+bits=10 axes=1 interleaved=false ms=0.5743 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2]
+            13516800  maximum resident set size
+bits=10 axes=1 interleaved=false ms=0.4679 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2]
+            13516800  maximum resident set size
+bits=10 axes=1 interleaved=false ms=0.4123 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2]
+            13631488  maximum resident set size
+bits=10 axes=1 interleaved=false ms=0.4159 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2]
+            13565952  maximum resident set size
+bits=10 axes=2 interleaved=false ms=0.8295 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 8, 4, 2]
+            13746176  maximum resident set size
+bits=10 axes=2 interleaved=false ms=0.8346 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 8, 4, 2]
+            13991936  maximum resident set size
+bits=10 axes=2 interleaved=false ms=0.8373 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 8, 4, 2]
+            13910016  maximum resident set size
+bits=10 axes=2 interleaved=false ms=0.8332 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 8, 4, 2]
+            13991936  maximum resident set size
+bits=10 axes=2 interleaved=false ms=0.8380 bonds=[2, 4, 8, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 8, 4, 2]
+            13844480  maximum resident set size
+bits=10 axes=2 interleaved=true ms=1.4273 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+            33243136  maximum resident set size
+bits=10 axes=2 interleaved=true ms=1.4294 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+            33112064  maximum resident set size
+bits=10 axes=2 interleaved=true ms=1.4522 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+            33030144  maximum resident set size
+bits=10 axes=2 interleaved=true ms=1.4279 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+            33259520  maximum resident set size
+bits=10 axes=2 interleaved=true ms=1.4194 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+            33226752  maximum resident set size
+bits=20 axes=1 interleaved=false ms=1.0229 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            14663680  maximum resident set size
+bits=20 axes=1 interleaved=false ms=1.0235 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            14680064  maximum resident set size
+bits=20 axes=1 interleaved=false ms=1.0246 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            14467072  maximum resident set size
+bits=20 axes=1 interleaved=false ms=1.0379 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            14696448  maximum resident set size
+bits=20 axes=1 interleaved=false ms=1.0215 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            14680064  maximum resident set size
+bits=20 axes=2 interleaved=false ms=2.0573 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            15253504  maximum resident set size
+bits=20 axes=2 interleaved=false ms=2.0488 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            15204352  maximum resident set size
+bits=20 axes=2 interleaved=false ms=2.0483 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            15302656  maximum resident set size
+bits=20 axes=2 interleaved=false ms=2.0518 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            15220736  maximum resident set size
+bits=20 axes=2 interleaved=false ms=2.0523 bonds=[2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2, 1, 2, 4, 8, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 8, 4, 2]
+            15384576  maximum resident set size
+bits=20 axes=2 interleaved=true ms=4.5817 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+            87343104  maximum resident set size
+bits=20 axes=2 interleaved=true ms=4.7345 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+            87408640  maximum resident set size
+bits=20 axes=2 interleaved=true ms=5.0587 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+            88784896  maximum resident set size
+bits=20 axes=2 interleaved=true ms=4.7549 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+            87408640  maximum resident set size
+bits=20 axes=2 interleaved=true ms=4.6822 bonds=[2, 4, 8, 16, 32, 64, 96, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 96, 64, 32, 16, 8, 4, 2]
+            87375872  maximum resident set size
+
+=== grouped-baseline.log ===
+input ready: R=10, dimensions=1, interleaved=false, bond=8
+operator ready: bond=12, seconds=0.002774292
+front end finished in 0.016479167 seconds
+bits=10,dimensions=1,interleaved=false,input_seconds=0.032673,operator_seconds=0.002774,schedule_seconds=skipped,frontend_seconds=0.016479,operator_bond=12,input_bond=8,samples=35,sample_error=3.570018e-14,reconstruction_bound=7.912518e-9,compressions=1,output_regions=1
+input ready: R=10, dimensions=2, interleaved=false, bond=8
+operator ready: bond=12, seconds=0.00255725
+front end finished in 0.054498 seconds
+bits=10,dimensions=2,interleaved=false,input_seconds=0.015468,operator_seconds=0.002557,schedule_seconds=skipped,frontend_seconds=0.054498,operator_bond=12,input_bond=8,samples=35,sample_error=7.309301e-14,reconstruction_bound=2.492751e-9,compressions=3,output_regions=1
+input ready: R=20, dimensions=1, interleaved=false, bond=8
+operator ready: bond=12, seconds=0.0028915
+front end finished in 0.136482 seconds
+bits=20,dimensions=1,interleaved=false,input_seconds=0.010916,operator_seconds=0.002891,schedule_seconds=skipped,frontend_seconds=0.136482,operator_bond=12,input_bond=8,samples=35,sample_error=9.556589e-14,reconstruction_bound=3.997983e-11,compressions=1,output_regions=1
+input ready: R=20, dimensions=2, interleaved=false, bond=8
+operator ready: bond=12, seconds=0.005591833
+front end finished in 0.523257917 seconds
+bits=20,dimensions=2,interleaved=false,input_seconds=0.028992,operator_seconds=0.005592,schedule_seconds=skipped,frontend_seconds=0.523258,operator_bond=12,input_bond=8,samples=35,sample_error=1.373180e-13,reconstruction_bound=2.550413e-9,compressions=3,output_regions=1
+
+=== grouped-candidate.log ===
+input ready: R=10, dimensions=1, interleaved=false, bond=8
+operator ready: bond=12, seconds=0.001664959
+front end finished in 0.016521333 seconds
+bits=10,dimensions=1,interleaved=false,input_seconds=0.016703,operator_seconds=0.001665,schedule_seconds=skipped,frontend_seconds=0.016521,operator_bond=12,input_bond=8,samples=35,sample_error=3.570018e-14,reconstruction_bound=7.912518e-9,compressions=1,output_regions=1
+input ready: R=10, dimensions=2, interleaved=false, bond=8
+operator ready: bond=12, seconds=0.001159541
+front end finished in 0.053154042 seconds
+bits=10,dimensions=2,interleaved=false,input_seconds=0.014579,operator_seconds=0.001160,schedule_seconds=skipped,frontend_seconds=0.053154,operator_bond=12,input_bond=8,samples=35,sample_error=7.309301e-14,reconstruction_bound=2.492751e-9,compressions=3,output_regions=1
+input ready: R=20, dimensions=1, interleaved=false, bond=8
+operator ready: bond=12, seconds=0.001394
+front end finished in 0.143533042 seconds
+bits=20,dimensions=1,interleaved=false,input_seconds=0.009835,operator_seconds=0.001394,schedule_seconds=skipped,frontend_seconds=0.143533,operator_bond=12,input_bond=8,samples=35,sample_error=9.556589e-14,reconstruction_bound=3.997983e-11,compressions=1,output_regions=1
+input ready: R=20, dimensions=2, interleaved=false, bond=8
+operator ready: bond=12, seconds=0.002460792
+front end finished in 0.553290417 seconds
+bits=20,dimensions=2,interleaved=false,input_seconds=0.028539,operator_seconds=0.002461,schedule_seconds=skipped,frontend_seconds=0.553290,operator_bond=12,input_bond=8,samples=35,sample_error=1.373180e-13,reconstruction_bound=2.550413e-9,compressions=3,output_regions=1

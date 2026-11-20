@@ -404,6 +404,33 @@ fn exact_sum_checks_the_terms_before_estimating() {
 }
 
 #[test]
+fn the_sum_estimate_matches_exact_sum_and_checks_the_terms() {
+    let sites = star_sites();
+    let terms = star_terms(&sites);
+    let refs: Vec<_> = terms.iter().collect();
+    assert_eq!(
+        TreeTN::estimate_exact_sum_bytes(&refs).unwrap(),
+        STAR_ESTIMATE
+    );
+
+    let single = TreeTN::<IdxTensor, usize>::from_tensors(
+        vec![IdxTensor::from_dense(vec![sites[0].clone()], vec![1.0, 2.0]).unwrap()],
+        vec![0],
+    )
+    .unwrap();
+    let no_terms = TreeTN::<IdxTensor, usize>::estimate_exact_sum_bytes(&[]).unwrap_err();
+    assert!(
+        format!("{no_terms:#}").contains("at least one term"),
+        "{no_terms:#}"
+    );
+    let mismatch = TreeTN::estimate_exact_sum_bytes(&[&terms[0], &single]).unwrap_err();
+    assert!(
+        format!("{mismatch:#}").contains("different topologies"),
+        "{mismatch:#}"
+    );
+}
+
+#[test]
 fn balanced_engine_builds_the_same_network() {
     let sites = star_sites();
     let terms = star_terms(&sites);

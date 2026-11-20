@@ -3,7 +3,7 @@
 //! Contracts two MPOs with on-the-fly compression at each step.
 //! This is more memory-efficient than naive contraction followed by compression.
 
-use crate::einsum_helper::{einsum_tensors, typed_tensor_reshape, EinsumScalar};
+use crate::einsum_helper::{einsum_tensors, typed_tensor_reshape};
 
 use super::contraction::ContractionOptions;
 use super::environment::mpo_helper_error;
@@ -45,7 +45,7 @@ use tenferro_tensor::TypedTensor;
 /// [`MPOError::FactorizationError`] when a site contraction or factorization
 /// fails.
 ///
-pub fn contract_zipup<T: SVDScalar + EinsumScalar>(
+pub fn contract_zipup<T: SVDScalar>(
     mpo_a: &MPO<T>,
     mpo_b: &MPO<T>,
     options: &ContractionOptions,

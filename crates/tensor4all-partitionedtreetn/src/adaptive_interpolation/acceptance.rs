@@ -9,7 +9,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use tensor4all_core::{CommonScalar, TensorElement};
-use tensor4all_treetn::interpolation::{EvalContext, InterpolationTermination, TreeInterpolator};
+use tensor4all_treetn::interpolation::{EvalContext, InterpolationTermination};
 
 use super::cache::PatchSampler;
 use super::options::{CappedPatches, PatchedInterpolationOptions};
@@ -77,7 +77,7 @@ impl<T, V, E> Plan<'_, T, V, E>
 where
     T: CommonScalar + TensorElement,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T>,
+    E: super::engine::PatchEngine<T, V>,
 {
     /// Retain a patch whose split the minimum blocked, with its last engine
     /// run. A run judged already keeps its verdict (no second measurement);

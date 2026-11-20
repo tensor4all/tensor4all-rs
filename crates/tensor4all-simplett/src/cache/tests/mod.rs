@@ -422,3 +422,80 @@ fn cache_allows_partial_evaluation_around_zero_dimension_site() {
         })
     ));
 }
+
+#[test]
+fn full_left_batch_preserves_order_duplicates_and_arithmetic() {
+    fn check<T: TTScalar<Real = f64> + PartialEq + std::fmt::Debug>(value: impl Fn(f64) -> T) {
+        let tensors = (0..5)
+            .map(|site| {
+                let l = if site == 0 { 1 } else { 3 };
+                let r = if site == 4 { 1 } else { 3 };
+                Tensor3::from_fn([l, 2, r], |[l, s, r]| {
+                    value(((1 + site + 3 * l + 5 * s + 7 * r) as f64).sin())
+                })
+                .unwrap()
+            })
+            .collect();
+        let tt = SimpleTensorTrain::new(tensors).unwrap();
+        let indices = vec![
+            vec![1, 1, 0, 1, 0],
+            vec![0, 1, 0, 0, 0],
+            vec![1, 1, 0, 1, 0],
+            vec![0, 0, 0, 0, 0],
+            vec![1, 1, 0, 1, 1],
+        ];
+        let expected: Vec<_> = indices
+            .iter()
+            .map(|i| T::zero() + tt.evaluate(i).unwrap() * T::one())
+            .collect();
+        let mut cache = TTCache::new(&tt);
+        for _ in 0..2 {
+            assert_eq!(
+                cache.evaluate_many(&indices, Some(tt.len())).unwrap(),
+                expected
+            );
+            assert!(cache.cache_left.iter().all(|c| c.is_empty()));
+            assert!(cache.cache_right.iter().all(|c| c.is_empty()));
+            cache.evaluate_left(&indices[0][..2]).unwrap();
+            assert_eq!(
+                cache.evaluate_many(&indices, Some(tt.len())).unwrap(),
+                expected
+            );
+            cache.clear_cache();
+        }
+    }
+    check(|x| x);
+    check(|x| num_complex::Complex64::new(x, x * 0.3));
+}
+
+#[test]
+fn full_left_batch_checks_single_site_and_malformed_bonds() {
+    let tt = SimpleTensorTrain::constant(&[3], -2.0_f64);
+    assert_eq!(
+        TTCache::new(&tt)
+            .evaluate_many(&[vec![2], vec![0], vec![2]], Some(1))
+            .unwrap(),
+        vec![-2.0; 3]
+    );
+    assert!(TTCache::new(&tt)
+        .evaluate_many(&[vec![3]], Some(1))
+        .is_err());
+    for tensors in [
+        vec![
+            tensor3_zeros(1, 2, 2).unwrap(),
+            tensor3_zeros(3, 2, 1).unwrap(),
+        ],
+        vec![tensor3_zeros(1, 2, 2).unwrap()],
+        vec![tensor3_zeros(2, 2, 1).unwrap()],
+    ] {
+        let mut tt = SimpleTensorTrain::<f64>::constant(&vec![2; tensors.len()], 1.0);
+        tt.site_tensors_mut().clone_from_slice(&tensors);
+        let error = TTCache::new(&tt)
+            .evaluate_many(&[vec![0; tensors.len()]], Some(tensors.len()))
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            SimpleTensorTrainError::InvalidOperation { .. }
+        ));
+    }
+}

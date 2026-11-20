@@ -86,7 +86,8 @@ use crate::error::{
     LinearOperatorTaggedApplyError,
 };
 use crate::operator::compose::{
-    compose_exclusive_linear_operators, compose_exclusive_linear_operators_unchecked,
+    any_complex_operator, compose_exclusive_linear_operators,
+    compose_exclusive_linear_operators_unchecked, identity_factor, in_common_dtype,
 };
 use crate::treetn::contraction::{
     contract, ContractionMethod, ContractionOptions, IdentityNodes, SrcOptions,
@@ -301,7 +302,8 @@ impl<V> ApplyOptions<V> {
 /// such a node through (`TreeTN::contract_zipup_skipping_identity_nodes`): its
 /// state tensor is emitted with the operator's output site indices and its bond
 /// dimensions are the ones it came in with, with no contraction and no
-/// factorization. An identity factor adds no rank, so factorizing such a node
+/// factorization, with ordinary real-to-complex promotion when the identity is
+/// complex. An identity factor adds no rank, so factorizing such a node
 /// emits the bond the state already has there; the skip keeps that bond instead
 /// of rebuilding it.
 ///
@@ -314,7 +316,15 @@ impl<V> ApplyOptions<V> {
 /// "no truncation" would let the skip change a caller's numerics without them
 /// asking. A non-zero threshold does not qualify either, even on a node the state
 /// certifies as isometric toward the centre: the isometry argument holds for that
-/// node, but it is not a property the caller requested.
+/// node, but it is not a property the caller requested. The same exact request
+/// also makes the zip-up factorize every node it does not pass through by
+/// untruncated QR instead of SVD, on both schedules.
+///
+/// A passed-through tensor retains its input canonical certificate only when
+/// the state records the unitary form and its bond points towards the requested
+/// centre. If any skipped tensor lacks that certificate, the result has an empty
+/// canonical region, no canonical form, and no edge orientations. Its values are
+/// still exact; canonicalize the result to establish a canonical centre.
 ///
 /// Consequently the untouched region is left at its input bond dimensions, which
 /// is what "exact" means here; compress the result afterwards if that region
@@ -1149,7 +1159,7 @@ where
 /// Returns the extended operator together with the gap nodes' site index pairs,
 /// so a zip-up can skip the nodes whose operator factor is that identity.
 #[allow(clippy::type_complexity)]
-fn extend_operator_to_full_space<T, V>(
+pub(super) fn extend_operator_to_full_space<T, V>(
     operator: &LinearOperator<T, V>,
     state: &TreeTN<T, V>,
 ) -> Result<(LinearOperator<T, V>, IdentityNodes<T::Index, V>)>
@@ -1159,9 +1169,30 @@ where
     <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
 {
-    let state_network = state.site_index_network();
+    extend_operator_on_network(operator, state.site_index_network(), &|name: &V| {
+        state.node_site_indices(name)
+    })
+}
+
+/// [`extend_operator_to_full_space`] on a site index network.
+///
+/// `site_order` lists a node's site indices in the order the gap identity at
+/// that node stores its legs; it must return every index of the node's site
+/// space.
+#[allow(clippy::type_complexity)]
+pub(crate) fn extend_operator_on_network<T, V>(
+    operator: &LinearOperator<T, V>,
+    state_network: &crate::site_index_network::SiteIndexNetwork<V, T::Index>,
+    site_order: &dyn Fn(&V) -> Option<Vec<T::Index>>,
+) -> Result<(LinearOperator<T, V>, IdentityNodes<T::Index, V>)>
+where
+    T: TensorLike,
+    T::Index: IndexLike + Clone + Hash + Eq + std::fmt::Debug,
+    <T::Index as IndexLike>::Id: Clone + Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    V: Clone + Hash + Eq + Ord + Send + Sync + std::fmt::Debug,
+{
     let op_nodes: HashSet<V> = operator.node_names();
-    let state_nodes: HashSet<V> = state.node_names().into_iter().collect();
+    let state_nodes: HashSet<V> = state_network.node_names().into_iter().cloned().collect();
     let mut op_node_indices: HashSet<petgraph::stable_graph::NodeIndex> = HashSet::new();
     for name in &op_nodes {
         let node_index = state_network.node_index(name).ok_or_else(|| {
@@ -1191,8 +1222,7 @@ where
     for gap_name in &gap_nodes {
         // Site legs in the state tensor's leg order, so the identity tensor's
         // layout does not depend on hash-set iteration order.
-        let site_space = state
-            .node_site_indices(gap_name)
+        let site_space = site_order(gap_name)
             .ok_or_else(|| anyhow::anyhow!("Gap node {:?} has no site space", gap_name))?;
 
         // For identity at gap nodes:
@@ -1276,6 +1306,8 @@ where
 {
     let op_nodes: HashSet<V> = operator.node_names();
     let mut tensors_by_node: HashMap<V, T> = HashMap::new();
+    // The composed network takes the operator's common scalar type.
+    let complex = any_complex_operator(&[operator]);
 
     let mut state_node_names: Vec<V> = state_network.node_names().into_iter().cloned().collect();
     state_node_names.sort();
@@ -1294,7 +1326,7 @@ where
                     node
                 )
             })?;
-            tensors_by_node.insert(node.clone(), tensor.clone());
+            tensors_by_node.insert(node.clone(), in_common_dtype(tensor.clone(), complex)?);
         } else {
             let index_pairs = gap_site_indices.get(node).ok_or_else(|| {
                 anyhow::anyhow!(
@@ -1305,18 +1337,13 @@ where
             let input_indices: Vec<T::Index> = index_pairs.iter().map(|(i, _)| i.clone()).collect();
             let output_indices: Vec<T::Index> =
                 index_pairs.iter().map(|(_, o)| o.clone()).collect();
-            let tensor = if input_indices.is_empty() {
-                T::delta(&[], &[]).context(
-                    "compose_operator_along_state_paths: failed to build scalar identity",
-                )?
-            } else {
-                T::delta(&input_indices, &output_indices).with_context(|| {
+            let tensor = identity_factor::<T>(&input_indices, &output_indices, complex)
+                .with_context(|| {
                     format!(
                         "compose_operator_along_state_paths: failed to build identity for gap {:?}",
                         node
                     )
-                })?
-            };
+                })?;
             tensors_by_node.insert(node.clone(), tensor);
         }
     }
@@ -1415,9 +1442,10 @@ where
                 .node_name(path[i])
                 .ok_or_else(|| anyhow::anyhow!("compose_operator_along_state_paths: missing mid"))?
                 .clone();
-            let delta = T::delta(
+            let delta = identity_factor::<T>(
                 std::slice::from_ref(&chain_bonds[i - 1]),
                 std::slice::from_ref(&chain_bonds[i]),
+                complex,
             )
             .with_context(|| {
                 format!(
@@ -1532,7 +1560,7 @@ where
 }
 
 /// Transform state's site indices to operator's input indices.
-fn transform_state_to_input<T, V>(
+pub(super) fn transform_state_to_input<T, V>(
     operator: &LinearOperator<T, V>,
     state: &TreeTN<T, V>,
 ) -> Result<TreeTN<T, V>>
@@ -1557,7 +1585,7 @@ where
 }
 
 /// Transform operator's output indices to true output indices.
-fn transform_output_to_true<T, V>(
+pub(super) fn transform_output_to_true<T, V>(
     operator: &LinearOperator<T, V>,
     mut result: TreeTN<T, V>,
 ) -> Result<TreeTN<T, V>>

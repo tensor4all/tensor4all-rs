@@ -1,10 +1,11 @@
 //! The sum engine of the routines that sum many patches: every engine gives
-//! the same result, and `to_treetn_with` reports the method that ran.
+//! the same result, and `to_treetn_with` reports the method that ran. The
+//! group-sum limit refuses a sum before it is formed.
 
 use tensor4all_core::{contract, DynIndex, IdxTensor, IndexLike};
 use tensor4all_partitionedtreetn::{
     add_with_patching, contract_adaptive, PartitionedContractionOptions, PartitionedTreeTN,
-    PatchingOptions, Projector, SubDomainTreeTN,
+    PartitionedTreeTNError, PatchingOptions, Projector, SubDomainTreeTN,
 };
 use tensor4all_treetn::{contraction::ContractionOptions, SumEngine, TreeTN};
 
@@ -55,11 +56,9 @@ fn contraction_case() -> (
     PartitionedTreeTN<usize>,
     IdxTensor,
 ) {
-    let (x, y, k) = (
-        DynIndex::new_dyn(2),
-        DynIndex::new_dyn(2),
-        DynIndex::new_dyn(3),
-    );
+    let x = DynIndex::new_dyn(2);
+    let y = x.prime();
+    let k = DynIndex::new_dyn(3);
     let left = chain(&x, &k, 0);
     let right = chain(&y, &k, 10);
     let reference = contract(&[&left.to_dense().unwrap(), &right.to_dense().unwrap()]).unwrap();
@@ -185,4 +184,147 @@ fn to_treetn_with_reports_the_method_and_the_estimate() {
                 < 1e-12
         );
     }
+}
+
+fn limited(limit_bytes: usize) -> PatchingOptions {
+    PatchingOptions {
+        group_sum_limit_bytes: limit_bytes,
+        ..PatchingOptions::default()
+    }
+}
+
+/// The fields of a `GroupSumLimit` error: operation, terms, estimate, limit.
+fn group_sum_limit(error: PartitionedTreeTNError) -> (&'static str, usize, usize, usize) {
+    let message = error.to_string();
+    match error {
+        PartitionedTreeTNError::GroupSumLimit {
+            operation,
+            terms,
+            estimated_bytes,
+            limit_bytes,
+        } => {
+            assert!(message.contains("schedule_merge_refine"), "{message}");
+            (operation, terms, estimated_bytes, limit_bytes)
+        }
+        other => panic!("expected GroupSumLimit, got {other}"),
+    }
+}
+
+#[test]
+fn partitioned_contract_refuses_a_group_sum_above_its_limit() {
+    let (left, right, reference) = contraction_case();
+    let wanted = [Projector::new()];
+    for selected in [false, true] {
+        let contract = |group_sum_limit_bytes| {
+            let options = PartitionedContractionOptions {
+                group_sum_limit_bytes,
+                ..PartitionedContractionOptions::default()
+            };
+            if selected {
+                left.contract_selected(&right, &0, options, &wanted)
+            } else {
+                left.contract(&right, &0, options)
+            }
+        };
+
+        let (operation, terms, estimate, limit) = group_sum_limit(contract(0).unwrap_err());
+        assert_eq!((operation, terms, limit), ("contract", 3, 0));
+        assert!(estimate > 0);
+        assert_eq!(
+            group_sum_limit(contract(estimate - 1).unwrap_err()),
+            ("contract", 3, estimate, estimate - 1)
+        );
+        let result = contract(estimate).unwrap();
+        let error = dense(&result).sub(&reference).unwrap().maxabs().unwrap();
+        assert!(error < 1e-10, "selected = {selected}: max error {error}");
+    }
+}
+
+/// Both operands are split on the contracted index `k`, as the patches of a
+/// global operator's input are: every pair keeps no output constraint, so the
+/// three pairs land in one group, which the limit checks before summing
+/// (tensor4all/tensor4all-rs#1309).
+#[test]
+fn contract_adaptive_refuses_a_group_sum_above_its_limit() {
+    let (left, right, reference) = contraction_case();
+    let contract = |limit| {
+        contract_adaptive(
+            &left,
+            &right,
+            &0,
+            &ContractionOptions::default(),
+            &limited(limit),
+        )
+    };
+
+    let (operation, terms, estimate, limit) = group_sum_limit(contract(0).unwrap_err());
+    assert_eq!((operation, terms, limit), ("contract_adaptive", 3, 0));
+    assert!(estimate > 0);
+
+    // The limit is inclusive: the estimate itself passes, one byte less fails.
+    let (_, _, again, limit) = group_sum_limit(contract(estimate - 1).unwrap_err());
+    assert_eq!((again, limit), (estimate, estimate - 1));
+    let result = contract(estimate).unwrap();
+    let error = dense(&result).distance(&reference).unwrap();
+    assert!(error < 1e-10, "error {error}");
+}
+
+#[test]
+fn add_with_patching_refuses_an_equal_key_sum_above_its_limit() {
+    let (x, z) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let projector = Projector::from_pairs([(x.clone(), 1)]).unwrap();
+    let terms: Vec<_> = (0..3)
+        .map(|seed| SubDomainTreeTN::new(chain(&x, &z, 20 * seed), projector.clone()).unwrap())
+        .collect();
+    // Summed bond 2 + 2 + 2 = 6: node 0 holds 2 x 6 and node 1 holds 6 x 2
+    // elements, 16 bytes each.
+    let estimate = (2 * 6 + 6 * 2) * 16;
+
+    let error = add_with_patching(terms.clone(), &0, &limited(estimate - 1)).unwrap_err();
+    assert_eq!(
+        group_sum_limit(error),
+        ("add_with_patching", 3, estimate, estimate - 1)
+    );
+    let result = add_with_patching(terms, &0, &limited(estimate)).unwrap();
+    assert_eq!(result.len(), 1);
+}
+
+/// A group of one patch is already held, so even a zero limit lets it pass.
+#[test]
+fn a_single_patch_group_is_not_checked() {
+    let (x, y) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let left = split(&chain(&x, &y, 0), &x);
+    let right = PartitionedTreeTN::from_subdomain(
+        SubDomainTreeTN::from_treetn(chain(&x.prime(), &y, 5)).unwrap(),
+    )
+    .unwrap();
+    // Each left patch fixes the output index `x`: one pair per output group.
+    let reference = contract(&[&dense(&left), &dense(&right)]).unwrap();
+    let options = PartitionedContractionOptions {
+        group_sum_limit_bytes: 0,
+        ..PartitionedContractionOptions::default()
+    };
+    let wanted: Vec<_> = left.projectors().cloned().collect();
+    let result = left.contract(&right, &0, options.clone()).unwrap();
+    let selected = left
+        .contract_selected(&right, &0, options, &wanted)
+        .unwrap();
+    for partition in [result, selected] {
+        assert_eq!(partition.len(), 2);
+        let error = dense(&partition).sub(&reference).unwrap().maxabs().unwrap();
+        assert!(error < 1e-10, "max error {error}");
+    }
+
+    let contracted = contract_adaptive(
+        &left,
+        &right,
+        &0,
+        &ContractionOptions::default(),
+        &limited(0),
+    )
+    .unwrap();
+    assert_eq!(contracted.len(), 2);
+
+    let added = add_with_patching(left.values().cloned().collect(), &0, &limited(0)).unwrap();
+    assert_eq!(added.len(), 2);
 }

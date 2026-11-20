@@ -60,7 +60,8 @@ Plain generic tensor train (`f32`, `f64`, `Complex32`, or `Complex64` where the 
 - `CompressionOptions { tolerance, max_bond_dim, .. }` — `tolerance` is the relative truncation threshold. Default ~1e-12 near-lossless; 1e-8..1e-6 for science.
 - `SiteTensorTrain` (center-canonical), `VidalTensorTrain` (Vidal form with singular values).
 - `Tensor3Ops` (`.left_dim()/.site_dim()/.right_dim()/.set3()`), `types::tensor3_zeros(l, s, r)`.
-- Bridge: `tensor_train_to_treetn(&mps) -> (TreeTN, site_indices)` (re-exported from `tensor4all-treetn`).
+- Bridge: `tensor_train_to_treetn(&mps) -> (TreeTN, site_indices)` (re-exported
+  from `tensor4all-treetn`; requires its explicit `simplett-bridge` feature).
 
 ## tensor4all-itensorlike — ITensors.jl-style TT
 
@@ -95,7 +96,7 @@ Shared interpolation plumbing includes `CachedFunction`, `MultiIndex`, packed as
 - `CachedFunction::new(f, &local_dims)` — memoize expensive evaluations across sweeps. `.eval(&idx)`, `.cache_size()`, `.num_cache_hits()`. Worth it only when `f` is expensive; cheap functions lose to overhead.
 - `MultiIndex` = `Vec<usize>`, the coordinate type threaded through `tensorci` and `treetci` callbacks.
 - `index_key::IndexKey::owned_heap_bytes()` reports the key's owned heap payload, including spare dynamic-limb capacity; excludes its inline struct and allocator metadata. Use this when estimating a cache containing packed assignment keys.
-- `floating_zone_walk_with_initial_error` reuses a previously evaluated starting residual, then follows the same scan order and stopping rule as `floating_zone_walk`. Its typed `FloatingZoneError` distinguishes invalid dimensions, starts, residuals, or stopping tolerances from callback failures. This avoids evaluating a batched guard start a second time.
+- `floating_zone_walk` returns a typed `FloatingZoneError` that distinguishes invalid dimensions, starts, and stopping tolerances from callback failures (`FloatingZoneError::Evaluation`). `floating_zone_walk_with_initial_error` reuses a previously evaluated starting residual, then follows the same scan order, stopping rule, and validation. This avoids evaluating a batched guard start a second time.
 
 `tensor4all-tensorbackend` is low-level infrastructure (`Matrix`, `CpuExecutionContext`, storage + linalg wrappers); prefer the higher-level crates and depend on it directly only for those building blocks.
 
@@ -131,12 +132,19 @@ Quantics encoding (binary bits across sites) often yields far lower bond dims. P
 
 Every constructor returns a `LinearOperator` (from `tensor4all-treetn`). All use **big-endian** bits; `r` = bits per variable (`2^r` grid points).
 
+- Fourier constructors and `FTCore` build TreeTN operators directly. For a
+  Fourier-only build, disable defaults and select a CPU provider such as
+  `tenferro-cpu-platform`. TreeTN defaults leave `simplett-bridge` off; disable
+  defaults on direct compute dependencies when selecting another provider. Add `partitioned`
+  for patched Fourier. The default `simplett-transforms` feature provides the
+  other transforms and SimpleTT conversions.
 - `flip_operator(r, BoundaryCondition)`, `shift_operator(r, offset, BoundaryCondition)`, `phase_rotation_operator(r, theta)`, `cumsum_operator(r)`, `quantics_fourier_operator(r, FourierOptions)`, `affine_operator(r, &AffineParams, &bc)`.
 - `_multivar` variants use interleaved encoding (site local dim `2^num_vars`).
 - `BoundaryCondition::{Periodic, Open}`. `FourierOptions::{forward, inverse, default}` (`normalize` default true = isometry). QFT output is **bit-reversed**.
 - `AffineParams::new(a: Vec<Rational64>, b: Vec<Rational64>, n_out, n_in)`.
 - `LinearOperator`: `.mpo()`, `.node_count()`, `.rename_nodes(&[(from, to)])`, `.set_input_space_from_state(&state)`, `.set_output_space_from_state(&state)`, `.get_input_mapping(&i)`, `.get_output_mapping(&i)`.
 - Apply via `tensor4all_treetn::apply_linear_operator(&op, &state, ApplyOptions)`. Partial apply (subset of sites) builds a Steiner tree automatically — no manual identity tensors.
+- `op.to_state_network(state.site_index_network()) -> StateOperatorNetwork`: the operator as a plain `TreeTN` on the state's whole tree (identity gaps, bonds routed along state paths, one scalar type), e.g. as a `contract_adaptive` operand. `.network()`, `.outputs()` = `(declared, leg)` pairs (legs are fresh where the declared output is a state index), `.into_parts()`.
 - Error conditions: `r == 0`; `r == 1` for cumsum/triangle/fourier; `r >= 64` for shift (overflow); NaN/Inf `theta`.
 
 ## tensor4all-treetn — tree tensor networks
@@ -144,7 +152,7 @@ Every constructor returns a `LinearOperator` (from `tensor4all-treetn`). All use
 Generic `TreeTN` over arbitrary tree topology (TT/MPS is the path-graph special case).
 
 - `TreeTN::<IdxTensor, V>::from_tensors(tensors, labels) -> Result` — topology inferred from shared bond indices; site indices appear once, bond indices appear twice. `V: Eq + Hash` labels vertices.
-- `.node_count()`, `.edge_count()`, `ttn[v]` access, `.norm()`, `.to_dense()` (test/small only), `.add(&b)` (same topology + matching site indices; bonds grow as direct sum), `TreeTN::exact_sum(&[&a, &b, &c], SumEngine)` (exact sum of many networks; default `Binary` add chain, opt-in `Nary` / `NaryWithin { limit_bytes }` one-pass direct sum, result reports `used_nary`), `TreeTN::add_many(&[&a, &b, &c])` (the N-ary pass itself), `.replaceind(&old, &new)`.
+- `.node_count()`, `.edge_count()`, `ttn[v]` access, `.norm()`, `.to_dense()` (test/small only), `.add(&b)` (same topology + matching site indices; bonds grow as direct sum), `TreeTN::exact_sum(&[&a, &b, &c], SumEngine)` (exact sum of many networks; default `Binary` add chain, opt-in `Nary` / `NaryWithin { limit_bytes }` one-pass direct sum, result reports `used_nary`), `TreeTN::estimate_exact_sum_bytes(&terms)` (the size of that sum, before building it), `TreeTN::add_many(&[&a, &b, &c])` (the N-ary pass itself), `.replaceind(&old, &new)`.
 - `.canonicalize([root], CanonicalizationOptions)`, `.truncate([root], TruncationOptions::default().with_max_bond_dim(n).with_rtol(t))`.
 - `TreeTN::density_matrix_sum(&refs, &center, cutoff, max_bond_dim)` builds a compressed sum without summed input bonds. Returns `DensityMatrixSumResult { network, discarded_weight }`: the weight bounds squared Frobenius error in exact arithmetic, including cap losses. Without a binding cap the relative bound is `sqrt((R - 1) * cutoff)`. Pair-overlap environments cost quadratic memory/work in the term count; density matrices square the singular spectrum, so roundoff and cancellation limit accuracy. Use `network` directly or as a `fit_sum_with_report` seed.
 - `TreeTN::pairwise_sum_fit(&terms, PairwiseSumOrder::{Sequential, Balanced}, PerAddCutoff { center, cutoff, max_bond_dim }, FitOptions)` builds a truncated seed and fits all original terms. Fit truncation/caps are independent; provide a larger fit cap or SVD policy to grow the seed. Returns `FitSumResult { network, truncations }`, with each fit region's absolute discarded norm, not an exact-sum error certificate. `fit_sum_with_report(&terms, &seed, &center, options)` accepts any caller-built seed; `fit_sum` keeps its network-only result. Zero sweeps preserve the seed.
@@ -153,11 +161,14 @@ Generic `TreeTN` over arbitrary tree topology (TT/MPS is the path-graph special 
   - `ApplyOptions::zipup().with_max_bond_dim(n).with_svd_policy(policy)` — default; single sweep, controllable.
   - `ApplyOptions::fit().with_max_bond_dim(n).with_nfullsweeps(k)` — iterative; best compression.
 - Sweep convention: `ApplyOptions::fit().with_nfullsweeps(k)` uses `nfullsweeps` (full = forward+back); `nfullsweeps = nhalfsweeps / 2`. The DMRG/TDVP option structs instead name the same full-sweep count `nsweeps` (no `full` prefix) — there is no `with_nfullsweeps` on `DmrgOptions`/`TdvpOptions`.
-- `tensor_train_to_treetn(&mps) -> (TreeTN, Vec<site_index>)` bridge from simplett.
+- `tensor_train_to_treetn(&mps) -> (TreeTN, Vec<site_index>)` bridge from simplett;
+  requires the explicit `simplett-bridge` feature (off by default). The reverse
+  conversion and the bridge's chain insertion/removal helpers require it too.
+  Native chains use `TreeTN::from_chain_cores` without SimpleTT.
 - Optimization sweeps (ground state + time evolution). All take a `LinearOperator` (or a bare MPO `TreeTN` via the `*_with_treetn_operator` wrappers), an initial `TreeTN` state, and a `center: &V` root node; the state is canonicalized at `center` first. v1: one input and one output site mapping per node. Build the mapping with `LinearOperator::from_mpo_and_state(mpo, &state)` when site indices are unambiguous, else hand-build `IndexMapping { true_index, internal_index }` input/output maps.
   - `dmrg(operator, init, center, DmrgOptions) -> Result<DmrgResult>` — two-site ground-state DMRG (Lanczos local solve; Rayleigh-quotient energy, no dense materialization). `DmrgOptions::default()` = `nsite 2, nsweeps 5, max_bond_dim None, svd_policy None, energy_tol None`. Builders: `with_nsweeps`, `with_max_bond_dim`, `with_svd_policy`, `with_energy_tol`, `with_lanczos_options`. `DmrgResult { state, energy, sweeps_completed, local_updates, converged, max_residual_norm }`. `nsite` must be 2.
   - `tdvp(operator, init, center, TdvpOptions) -> Result<TdvpResult>` — time-dependent variational principle via Krylov `exp(exponent_step·H)`. `exponent_step` is the Hamiltonian coefficient: real time `dt` → `Complex64::new(0.0, -dt)`; imaginary time `tau` → `-tau` (real negative). `TdvpOptions::default()` = `nsite 2, nsweeps 1, order 2, exponent_step -0.1i, max_bond_dim None, svd_policy None`. `order` ∈ {1,2,4} (Suzuki–Trotter/applyexp, ITensorNetworks.jl parity). `nsite 1` = fixed-rank one-site (rejects truncation options); `nsite 2` allows bond changes. For ITensors `cutoff` parity use `SvdTruncationPolicy::new(cutoff).with_squared_values().with_discarded_tail_sum()`. `TdvpResult { state, sweeps_completed, local_updates, max_error_estimate, max_krylov_iterations }`.
-  - `gse_tdvp(operator, init, center, GseTdvpOptions) -> Result<GseTdvpResult>` — Global Subspace Expansion: build Krylov references `H·ψ, H²·ψ, …` and expand bond bases between TDVP sweeps to grow rank where needed. `GseTdvpOptions { gse: GseOptions, tdvp: TdvpOptions }`; `GseOptions::default()` = `krylov_dim 0, density_weight_cutoff 1e-12, hermitian_tol 1e-12, normalize_references true, expand_before_first_sweep true`. Also `global_subspace_expand(operator, init, center, GseOptions)` and `global_subspace_expand_with_references(init, references, center, GseOptions)` for standalone expansion. v1: `IdxTensor` states, one state site index per node.
+  - `gse_tdvp(operator, init, center, GseTdvpOptions) -> Result<GseTdvpResult>` — Global Subspace Expansion: build Krylov references `H·ψ, H²·ψ, …` and expand bond bases between TDVP sweeps to grow rank where needed. `GseTdvpOptions { gse: GseOptions, tdvp: TdvpOptions }`; `GseOptions::default()` = `krylov_dim 0, density_weight_cutoff 1e-12, hermitian_tol 1e-12, dense_budget DenseElementBudget::default(), normalize_references true, expand_before_first_sweep true`. Also `global_subspace_expand(operator, init, center, GseOptions)` and `global_subspace_expand_with_references(init, references, center, GseOptions)` for standalone expansion. v1: `IdxTensor` states, one state site index per node.
 
 ## tensor4all-aci — elementwise TT operations
 
@@ -184,9 +195,12 @@ Ports TreeTCI.jl. Cross interpolation on tree-structured graphs → TreeTN.
 
 ## tensor4all-interpolativeqtt — interpolative QTT
 
-Ports InterpolativeQTT.jl; returns `SimpleTensorTrain<f64>`.
+Builds `TreeTN<IdxTensor, usize>` chains for real (`f64`) or complex (`Complex64`) functions.
 
-- `interpolate_single_scale(f, x_min, x_max, R, oversampling, &InterpolativeQttOptions::default())`.
+- `interpolate_single_scale(f, x_min, x_max, num_bits, polynomial_degree, &InterpolativeQttOptions::default())`, the multiscale constructors, and the adaptive constructors return `(tree, site_indices)`. Node names start at `0` and site indices run from the most-significant to least-significant bit level. At a fused level, axis zero varies fastest.
+- Evaluate at one point with `tree.evaluate_point(&site_indices, &bits)` or use `TreeTNCachedEvaluator` for batches.
+- `interpolate_patched_nd` takes a caller-owned CPU execution context. Each `InterpolativePatch` carries its `tree`, ordered `site_indices`, fixed dyadic `prefix`, and absolute per-value `error_estimate` from sampling.
+- Use `invert_qtt::<T>(&tree, &site_indices, &basis, q)` for one-dimensional inverse reconstruction.
 
 ## tensor4all-partitionedtreetn — named TreeTN subdomains + adaptive patching
 
@@ -203,17 +217,24 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   projectors in `wanted` and never contracts the pairs of other outputs; each
   returned patch equals the one `contract` returns under that key.
   `contract`/`contract_selected` take `impl Into<PartitionedContractionOptions>`
-  (a plain treetn `ContractionOptions` works and means `SumEngine::Binary`);
+  (a plain treetn `ContractionOptions` uses the partitioned defaults);
   `PartitionedContractionOptions::sum_engine` chooses how contributions to one
   output projector are summed (`Binary` default, opt-in `Nary` /
-  `NaryWithin { limit_bytes }`). `to_treetn_with(engine) -> ExactSum` reports
+  `NaryWithin { limit_bytes }`). `group_sum_limit_bytes` (default
+  `DEFAULT_GROUP_SUM_LIMIT_BYTES`, 4 GiB) caps the estimated size of each built
+  sum; every group is checked before any sum is built, and one above the cap
+  returns `GroupSumLimit`. `to_treetn_with(engine) -> ExactSum` reports
   `used_nary` and `estimated_nary_bytes`; `to_treetn()` is `Binary`.
   `evaluate_batched(&indices, values)` evaluates points with the
   `TreeTN::evaluate` layout; each point goes to the patch that covers it, and
   uncovered points are zero.
 - `PatchingOptions { cutoff, allocation, max_bond_dim, patch_order,
-  split_strategy, sum_engine }` — `sum_engine` (default `Binary`) builds the
-  equal-key and contribution sums of `add_with_patching` / `contract_adaptive`;
+  split_strategy, sum_engine, group_sum_limit_bytes }` — `sum_engine` (default
+  `Binary`) builds the equal-key and contribution sums of `add_with_patching` /
+  `contract_adaptive`; `group_sum_limit_bytes` (default
+  `DEFAULT_GROUP_SUM_LIMIT_BYTES`, 4 GiB) refuses such a sum
+  before it is formed with `GroupSumLimit` (a global operator such as a Fourier
+  transform puts every pair in one group: use `schedule_merge_refine`);
   `cutoff` is a non-negative discarded-weight budget shared
   across patches (ITensorMPS `cutoff` convention), not an SVD truncation-policy
   knob, and best effort (no global error bound). `allocation:
@@ -227,6 +248,14 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
 - `PatchSplitStrategy::{Sequential, ExactParameterGain}` — exact gain uses
   checked logical local tensor element counts after child truncation.
 - `add_with_patching(patches, &center, &options)` — split over-cap patches.
+- `adaptive_interpolation::merge_sibling_patches(partition, patch_errors,
+  &patch_order, tau, &center, &SiblingPatchMergeOptions)` — merge complete
+  sibling groups using caller-supplied per-region RMS errors. The returned
+  `SiblingPatchMergeResult::patch_errors` contains accounted errors for a
+  complete canonical cut, including absent zero regions; pass it with the
+  returned `partition` into a later merge, even under a tighter `tau`.
+  Network regions preserve their inputs' certification; absent zero regions
+  are certified only when every input bound of the call was certified.
 - `adaptive_interpolation::patched_interpolate(&engine, topology, node_sites,
   initial_pivots, &mut ctx, evaluate, &PatchedInterpolationOptions)` —
   sequential tree pQTCI. `ctx` is the run's `EvalContext` over a session the
@@ -288,7 +317,10 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   local cutoffs and drops patches at/below theirs, `Norm` truncates every patch
   relative to itself.
 - `contract_adaptive(&left, &right, &center, &contract_options, &patching_options)` —
-  contract and retruncate against the corrected output norm.
+  contract and retruncate against the corrected output norm. Pairs are grouped
+  by predicted output projector first; unequal overlapping outputs are refined
+  onto a disjoint grid (limited by `AUTOMATIC_REFINEMENT_LIMIT`), and a
+  `Sequential` group with a cap stops at its first saturated contribution.
   `contract_adaptive_selected(..., &wanted)` forms only the wanted output
   projectors (split outputs refine a wanted key); its `Volume` budget uses the
   totals of the selected outputs, so a block can be truncated differently than
@@ -323,17 +355,22 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
 - `reconstruction::schedule_merge_refine(&preimage, &center, &operator, &selection,
   &SubsetOperatorOptions, tolerance, &MergeRefineOptions)` — level-coupled
   input-merge/output-refine QFT schedule. The preimage must be the `2^d` dyadic
-  input leaves of the `d` selected binary indices with identical spectator
-  constraints. Each leaf fixes a contiguous prefix, so depths may differ as long as
-  the leaves form a prefix code; all `2^d` assignments by default, or a sparse subset
-  under `CoverageContract::ZeroForMissingLeaves`, where an omitted assignment is an
-  exact zero. Level `t` merges the input bit `k_(d-t+1)` and fixes the output
+  input leaves of the `d` selected binary indices. Spectator constraints may
+  differ: disjoint groups are kept directly and overlapping constraints use a
+  common grid bounded by work and term limits before tensor operations. Each
+  leaf fixes a contiguous prefix; complete selected coverage is checked per
+  represented spectator cell, or missing leaves are exact zeros under
+  `CoverageContract::ZeroForMissingLeaves`. Each original patch is transformed
+  once and its application error is charged once before spectator restriction.
+  Level `t` merges the input bit `k_(d-t+1)` and fixes the output
   bit `r_t`, restricting to the child region before adding, so no sum over the
   whole output domain is assembled and each object is reused by its descendants.
   `MergeRefineOptions::output_depth` stops early; `None` refines every selected
   bit. `target_bond_dim` is a soft rank goal: `None` keeps the trajectory uniform
-  and exact, and `Some(goal)` makes it adaptive, refining a region only when that
-  lowers its maximum retained rank. A region that stops refining keeps its output
+  and exact, and `Some(goal)` makes it adaptive — a region is merged without
+  splitting first and stops as soon as that candidate fits the goal, and a candidate
+  above the goal is refined only when the children store no more parameters in total
+  than the candidate they replace. A region that stops refining keeps its output
   key and still merges its input siblings on the remaining levels, and a merged
   pair is combined when it fits the goal or lowers the bond dimension (otherwise
   both operands stay as separate terms). A truncation is
@@ -347,10 +384,12 @@ engine implementing `tensor4all_treetn::interpolation::TreeInterpolator`
   four input children and produce four output children), and the transform is never
   padded. `error_bound` records every measured
   component once, at the level and region where it was measured, so it does not grow
-  with the number of refined regions. `MergeRefineOptions::apply_options` opts into a truncating operator
-  application: the schedule applies both exactly and with those options, measures
-  each leaf's deviation, and charges the sum before any compression, rejecting an
-  application error above the allowance. All other entry points apply exactly. The `MergeRefineReport` reports `level_count`,
+  with the number of refined regions. `MergeRefineOptions::application` opts into a truncating operator
+  application: `OperatorApplication::Measured` applies both exactly and with the
+  caller's options, measures each leaf's deviation, and charges the sum before any
+  compression, rejecting an application error above the allowance;
+  `OperatorApplication::certified(share)` (chain states only) never forms the exact
+  image and charges proved bounds within `share` of the allowance. All other entry points apply exactly. The `MergeRefineReport` reports `level_count`,
   `applied_operator_count`, `additions`, `projections`, `compression_attempts`,
   `compressions`, `work_items_per_level`, `peak_work_items`, `refined_regions`,
   `stopped_regions`, region/term counts, `max_bond_dim`,

@@ -53,8 +53,16 @@ fn one_edge_commit_materializes_the_exact_operator_tree() {
         }
         Ok(())
     };
-    let report =
-        update_edge_transaction(&mut state, 0, &options, true, &mut identity, None).unwrap();
+    let report = update_edge_transaction(
+        &mut state,
+        0,
+        &options,
+        true,
+        false,
+        &mut identity,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
 
     assert_eq!(report.forward, 0);
     assert_eq!(report.new_rank, 1);
@@ -82,8 +90,16 @@ fn commit_sets_pivot_pairs_and_replaces_candidate_sets() {
         }
         Ok(())
     };
-    let report =
-        update_edge_transaction(&mut state, 0, &options, true, &mut identity, None).unwrap();
+    let report = update_edge_transaction(
+        &mut state,
+        0,
+        &options,
+        true,
+        false,
+        &mut identity,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
 
     let edge_number = 0;
     assert_eq!(state.pivots.rank(edge_number), report.new_rank);
@@ -118,7 +134,16 @@ fn reverse_direction_commit_keeps_pivot_pairs_in_canonical_orientation() {
         Ok(())
     };
 
-    update_edge_transaction(&mut state, 1, &options, false, &mut identity, None).unwrap();
+    update_edge_transaction(
+        &mut state,
+        1,
+        &options,
+        false,
+        false,
+        &mut identity,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
 
     assert_eq!(
         state.pivots.forward_ids(0),
@@ -148,7 +173,15 @@ fn proposal_error_leaves_output_samples_and_generation_unchanged() {
             message: "stop".into(),
         })
     };
-    let result = update_edge_transaction(&mut state, 0, &options, true, &mut failing, None);
+    let result = update_edge_transaction(
+        &mut state,
+        0,
+        &options,
+        true,
+        false,
+        &mut failing,
+        &mut crate::exec::Exec::Global,
+    );
     assert!(matches!(result, Err(TreeAciError::Callback { .. })));
     assert!(state
         .output
@@ -181,7 +214,15 @@ fn frame_extension_error_rolls_back_interned_samples() {
         Ok(())
     };
 
-    let result = update_edge_transaction(&mut state, 0, &options, true, &mut identity, None);
+    let result = update_edge_transaction(
+        &mut state,
+        0,
+        &options,
+        true,
+        false,
+        &mut identity,
+        &mut crate::exec::Exec::Global,
+    );
 
     assert!(matches!(
         result,
@@ -229,7 +270,7 @@ fn invalid_factor_shape_is_rejected_before_any_commit_mutation() {
         local_values: Vec::new(),
     };
 
-    let error = commit_edge_proposal(&mut state, 0, proposal)
+    let error = commit_edge_proposal(&mut state, 0, proposal, &mut crate::exec::Exec::Global)
         .expect_err("incompatible factor shapes must be rejected");
 
     assert!(matches!(
@@ -269,8 +310,9 @@ fn incomplete_commit_metadata_is_rejected_before_staging() {
         0,
         &options,
         true,
-        &mut identity,
         None,
+        &mut identity,
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     let output_before = state.output.to_dense().unwrap();
@@ -278,7 +320,7 @@ fn incomplete_commit_metadata_is_rejected_before_staging() {
     let generation_before = state.generation;
     state.candidates.ids.pop();
 
-    let error = commit_edge_proposal(&mut state, 0, proposal)
+    let error = commit_edge_proposal(&mut state, 0, proposal, &mut crate::exec::Exec::Global)
         .expect_err("incomplete candidate metadata must be rejected");
 
     assert!(matches!(
@@ -294,5 +336,65 @@ fn incomplete_commit_metadata_is_rejected_before_staging() {
         .isapprox(&output_before, 0.0, 0.0)
         .unwrap());
     assert_eq!(state.sample_arena.record_count(), records_before);
+    assert_eq!(state.generation, generation_before);
+}
+
+#[test]
+fn rank_hysteresis_holds_the_edge_rank_the_state_already_has() {
+    // diag(1, 5e-4): the second pivot is below the threshold 1e-3 but above
+    // the lowered threshold, so only hysteresis keeps it.
+    let inputs = vec![matrix_tree(2, vec![1.0, 0.0, 0.0, 5.0e-4])];
+    let options = TreeAciOptions {
+        tolerance: 1.0e-3,
+        ..TreeAciOptions::default()
+    };
+    let mut identity = |batch: crate::TreeElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        for (point, value) in output.iter_mut().enumerate() {
+            *value = batch.get(0, point)?;
+        }
+        Ok(())
+    };
+    for (rank_hysteresis, expected_rank) in [(false, 1), (true, 2)] {
+        let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+        assert_eq!(state.edge_ranks, vec![2]);
+        let report = update_edge_transaction(
+            &mut state,
+            0,
+            &options,
+            true,
+            rank_hysteresis,
+            &mut identity,
+            &mut crate::exec::Exec::Global,
+        )
+        .unwrap();
+        assert_eq!(report.new_rank, expected_rank);
+        assert_eq!(state.edge_ranks, vec![expected_rank]);
+    }
+}
+
+#[test]
+fn rank_hysteresis_rejects_an_unknown_edge_before_any_update() {
+    let options = TreeAciOptions::default();
+    let inputs = vec![input_tree()];
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    let generation_before = state.generation;
+    let mut unused = |_batch: crate::TreeElementwiseBatch<'_, f64>, _output: &mut [f64]| {
+        panic!("no local update may run for an unknown edge")
+    };
+    let result = update_edge_transaction(
+        &mut state,
+        8,
+        &options,
+        true,
+        true,
+        &mut unused,
+        &mut crate::exec::Exec::Global,
+    );
+    assert!(matches!(
+        result,
+        Err(TreeAciError::InternalInvariant {
+            message: "edge update references an unknown edge rank"
+        })
+    ));
     assert_eq!(state.generation, generation_before);
 }

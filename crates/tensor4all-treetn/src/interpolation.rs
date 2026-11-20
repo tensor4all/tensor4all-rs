@@ -853,7 +853,9 @@ pub enum InterpolationTermination {
     /// criterion holds at a rank equal to the cap. The result may be
     /// inaccurate.
     BondCapReached,
-    /// The run stopped at the engine's iteration limit.
+    /// The run stopped without converging and below the cap: at the
+    /// engine's iteration limit, or at another limit of the engine's own
+    /// (for tree ACI, every inaccurate edge at its algebraic rank bound).
     IterationLimit,
     /// The engine's error criterion held on its recorded estimates, but some
     /// of those estimates were not measurements (for example a candidate set
@@ -1152,6 +1154,12 @@ pub trait TreeInterpolator<T> {
         V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
         F: FnMut(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>>;
 }
+
+mod elementwise;
+
+pub use elementwise::{
+    ElementwiseInterpolator, ElementwiseOperator, PointwiseElementwise, Product,
+};
 
 #[cfg(test)]
 mod tests;

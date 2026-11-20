@@ -100,16 +100,18 @@ fn path_pass_matches_train_endpoint_order_and_exact_reverse() {
         &mut state,
         &options,
         PassDirection::Forward,
+        false,
         &mut identity,
-        None,
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     let reverse = run_directional_pass(
         &mut state,
         &options,
         PassDirection::Reverse,
+        false,
         &mut identity,
-        None,
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
 
@@ -135,16 +137,18 @@ fn branched_topologies_cover_every_edge_with_optimal_retracing() {
             &mut state,
             &options,
             PassDirection::Forward,
+            false,
             &mut identity,
-            None,
+            &mut crate::exec::Exec::Global,
         )
         .unwrap();
         let reverse = run_directional_pass(
             &mut state,
             &options,
             PassDirection::Reverse,
+            false,
             &mut identity,
-            None,
+            &mut crate::exec::Exec::Global,
         )
         .unwrap();
         assert_eq!(forward.update_count(), expected_forward_updates);
@@ -177,8 +181,9 @@ fn failed_update_preserves_all_commits_before_the_failing_edge() {
         &mut state,
         &options,
         PassDirection::Forward,
+        false,
         &mut fail_after_one,
-        None,
+        &mut crate::exec::Exec::Global,
     );
 
     assert!(matches!(result, Err(TreeAciError::Callback { .. })));
@@ -310,7 +315,7 @@ fn local_sweeps_honor_convergence_and_rank_limit_dwell() {
         &converged_options,
         &mut identity,
         &mut seeded_rng(),
-        None,
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     assert_eq!(converged.termination, TreeAciTermination::Converged);
@@ -333,7 +338,7 @@ fn local_sweeps_honor_convergence_and_rank_limit_dwell() {
         &limited_options,
         &mut identity,
         &mut seeded_rng(),
-        None,
+        &mut crate::exec::Exec::Global,
     )
     .unwrap();
     assert_eq!(limited.termination, TreeAciTermination::RankLimited);
@@ -375,10 +380,28 @@ fn continuous_minimum_retracing_walk_preserves_pivot_gauges_on_binary_tree() {
     };
     let forward = [5, 6, 7, 1, 2, 10, 11, 8];
     for directed in forward {
-        update_edge_transaction(&mut state, directed, &options, true, &mut add, None).unwrap();
+        update_edge_transaction(
+            &mut state,
+            directed,
+            &options,
+            true,
+            false,
+            &mut add,
+            &mut crate::exec::Exec::Global,
+        )
+        .unwrap();
     }
     for directed in forward.into_iter().rev().map(|directed| directed ^ 1) {
-        update_edge_transaction(&mut state, directed, &options, true, &mut add, None).unwrap();
+        update_edge_transaction(
+            &mut state,
+            directed,
+            &options,
+            true,
+            false,
+            &mut add,
+            &mut crate::exec::Exec::Global,
+        )
+        .unwrap();
     }
     let actual = state
         .output

@@ -5,7 +5,7 @@ use std::hash::Hash;
 
 use tensor4all_treetn::interpolation::InterpolationTermination;
 
-use crate::{ErrorTolerance, PartitionedTreeTN, Projector};
+use crate::{DynIndex, ErrorTolerance, PartitionedTreeTN, Projector};
 
 /// Relative margin covering the floating-point rounding of the budget
 /// arithmetic: patch and domain sizes as `f64` (inexact above `2^53`), sums
@@ -371,11 +371,12 @@ pub struct PatchRecord {
     /// Projector of the patch (its fixed sites).
     pub projector: Projector,
     /// The engine's verdict of the run that was kept:
-    /// [`InterpolationTermination::Converged`], `BondCapReached` for a patch
-    /// accepted through
+    /// [`InterpolationTermination::Converged`], `ErrorNotMeasured` for a
+    /// patch accepted on its L2 measurement from an engine without an error
+    /// estimate (or retained), `BondCapReached` for a patch accepted through
     /// [`CappedPatches::AcceptUpTo`](super::CappedPatches::AcceptUpTo) or
-    /// retained by the minimum patch size, or `IterationLimit` or
-    /// `ErrorNotMeasured` for a retained patch.
+    /// retained by the minimum patch size, or `IterationLimit` for a retained
+    /// patch.
     pub termination: InterpolationTermination,
     /// The engine's raw error estimate in its own criterion's units (not an
     /// L2 error), `0` for an exactly evaluated patch.
@@ -398,6 +399,10 @@ pub struct PatchRecord {
     pub audit: Option<L2Measurement>,
     /// Whether the patch meets its allowance.
     pub status: PatchStatus,
+    /// `ln ||f~_P||`, the natural log of the patch network's L2 norm,
+    /// measured on the session that built the patch. `None` under
+    /// `SampledMax`, which measures no norm, or when the norm overflowed.
+    pub log_norm: Option<f64>,
 }
 
 /// The record of one zero patch: a region approximated by zero and left out
@@ -488,7 +493,7 @@ pub enum L2ReferenceSource {
 /// ```
 /// use tensor4all_partitionedtreetn::adaptive_interpolation::MaxReferenceSource;
 ///
-/// assert_ne!(MaxReferenceSource::Given, MaxReferenceSource::MaxOfRootCandidates);
+/// assert_ne!(MaxReferenceSource::Given, MaxReferenceSource::SearchedRootMaximum);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -497,8 +502,13 @@ pub enum MaxReferenceSource {
     Given,
     /// The largest exact value of a root patch with at most one site.
     ExactRoot,
-    /// The largest magnitude among the root patch's candidate samples.
-    MaxOfRootCandidates,
+    /// The largest magnitude a greedy coordinate ascent reached from the root
+    /// patch's candidate samples (#1274): from every candidate, each active
+    /// site in turn is set to the coordinate of largest `|f|` with the others
+    /// fixed, until a sweep changes nothing. Sites with a local dimension
+    /// above 4096 are not scanned. It is at least the largest candidate
+    /// sample, and a lower bound of `max |f|`.
+    SearchedRootMaximum,
 }
 
 /// The global L2 error `E = ||f - f~||` of a run, by what it can claim.
@@ -1062,7 +1072,46 @@ pub enum NormReport {
         source: MaxReferenceSource,
         /// The engine's absolute tolerance `max(atol, rtol * max_reference)`.
         engine_tolerance: f64,
+        /// The root search that pinned `max_reference`, when
+        /// `source` is [`MaxReferenceSource::SearchedRootMaximum`].
+        search: Option<MaxReferenceSearch>,
     },
+}
+
+/// The coordinate ascent that pinned a
+/// [`MaxReferenceSource::SearchedRootMaximum`] reference (#1274).
+///
+/// Points are in the run's site order, one coordinate per site. The search
+/// runs once, at the root patch, before any engine call; its evaluations are
+/// also part of the run's function evaluations and cache hits, and are
+/// reported here separately.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_partitionedtreetn::adaptive_interpolation::MaxReferenceSearch;
+///
+/// fn evaluations(search: &MaxReferenceSearch) -> usize {
+///     search.evaluations
+/// }
+/// let _ = evaluations;
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct MaxReferenceSearch {
+    /// The start points: the root patch's candidate samples.
+    pub starts: Vec<Vec<usize>>,
+    /// The point where the largest `|f|` was reached.
+    pub maximizer: Vec<usize>,
+    /// Sweeps run, the last of which moved no start (unless the sweep limit
+    /// was reached).
+    pub sweeps: usize,
+    /// Points the search sent to the function, after the cache.
+    pub evaluations: usize,
+    /// Points the search found in the cache.
+    pub cache_hits: usize,
+    /// Wall time of the search in seconds.
+    pub seconds: f64,
 }
 
 impl NormReport {
@@ -1295,6 +1344,15 @@ impl NormReport {
 pub struct PatchedInterpolationReport {
     /// The requested tolerance.
     pub tolerance: ErrorTolerance,
+    /// The order in which splits fix sites: the run's
+    /// [`PatchedInterpolationOptions::patch_order`](super::PatchedInterpolationOptions::patch_order),
+    /// or every site in the derived site order when that option is empty.
+    /// The patches form a prefix tree over this order: a patch fixes a
+    /// prefix of it.
+    pub patch_order: Vec<DynIndex>,
+    /// The run's bond cap,
+    /// [`PatchedInterpolationOptions::max_bond_dim`](super::PatchedInterpolationOptions::max_bond_dim).
+    pub max_bond_dim: usize,
     /// The norm, its reference and allowance, and under L2 the measured
     /// global error.
     pub norm: NormReport,

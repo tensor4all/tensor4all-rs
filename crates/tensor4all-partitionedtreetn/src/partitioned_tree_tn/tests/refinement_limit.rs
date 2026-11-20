@@ -5,6 +5,20 @@ use super::super::*;
 use tensor4all_core::{DynIndex, IdxTensor};
 use tensor4all_treetn::TreeTN;
 
+#[test]
+fn unlimited_grid_budgets_still_reject_overflowing_counts_and_vec_layouts() {
+    for indices in [
+        vec![DynIndex::new_dyn(usize::MAX), DynIndex::new_dyn(2)],
+        vec![DynIndex::new_dyn(usize::MAX)],
+        vec![DynIndex::new_dyn(isize::MAX as usize)],
+    ] {
+        assert!(matches!(
+            bounded_value_grid(&indices, usize::MAX),
+            Err(PartitionedTreeTNError::LogicalParameterCountOverflow)
+        ));
+    }
+}
+
 fn single_node(indices: &[DynIndex]) -> TreeTN<IdxTensor, usize> {
     let len = indices.iter().map(|index| index.dim).product();
     let values: Vec<f64> = (0..len).map(|value| 1.0 + value as f64).collect();
@@ -78,5 +92,28 @@ fn contract_refines_at_the_limit_and_rejects_one_atom_more() {
     assert!(matches!(
         left.refined_for_contract(&right, &0, 3),
         Err(PartitionedTreeTNError::RefinementTooLarge { atoms: 4, limit: 3 })
+    ));
+}
+
+#[test]
+fn bounded_output_grid_handles_empty_dimension_one_and_saturating_counts() {
+    assert_eq!(bounded_value_grid(&[], 1).unwrap(), vec![Projector::new()]);
+    assert!(matches!(
+        bounded_value_grid(&[], 0),
+        Err(PartitionedTreeTNError::RefinementTooLarge { atoms: 1, limit: 0 })
+    ));
+    let one = DynIndex::new_dyn(1);
+    assert_eq!(
+        bounded_value_grid(std::slice::from_ref(&one), 1).unwrap(),
+        vec![Projector::from_pairs([(one, 0)]).unwrap()]
+    );
+    let huge = DynIndex::new_dyn(usize::MAX);
+    let two = DynIndex::new_dyn(2);
+    assert!(matches!(
+        bounded_value_grid(&[huge, two], AUTOMATIC_REFINEMENT_LIMIT),
+        Err(PartitionedTreeTNError::RefinementTooLarge {
+            atoms: usize::MAX,
+            limit: AUTOMATIC_REFINEMENT_LIMIT
+        })
     ));
 }

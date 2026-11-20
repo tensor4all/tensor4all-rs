@@ -8,5 +8,6 @@ mod support;
 
 mod boundaries;
 mod cuda_products;
+mod interpolator;
 mod products;
 mod session_entry;

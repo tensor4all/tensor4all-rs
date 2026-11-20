@@ -47,12 +47,13 @@ use std::hash::Hash;
 use anyhow::{Context, Result};
 
 use crate::algorithm::CanonicalForm;
+use tensor4all_core::legacy::default_cpu_execution_context;
 use tensor4all_core::{
     contract_pair_on_session, factorize_in, factorize_on_session, validate_svd_truncation_options,
-    Canonical, FactorizeAlg, FactorizeOptions, IndexLike, PairwiseContractionOptions,
+    AnyScalar, Canonical, FactorizeAlg, FactorizeOptions, IndexLike, PairwiseContractionOptions,
     SvdTruncationPolicy, TensorContractionLike, TensorFactorizationLike, TensorIndex, TensorLike,
 };
-use tensor4all_tensorbackend::{default_cpu_execution_context, ExecutionContext};
+use tensor4all_tensorbackend::ExecutionContext;
 
 use super::TreeTN;
 
@@ -64,6 +65,13 @@ pub(super) enum ZipupTopologyMode {
 
 pub(super) mod randomized;
 pub use randomized::{contract_with_rng, contract_with_rng_in};
+pub(crate) mod certified;
+mod outcome;
+mod zipup_control;
+pub use outcome::{
+    contract_with_outcome, contract_with_outcome_in, ContractionOutcome, ContractionReport,
+    EdgeRank,
+};
 mod src_chain;
 mod src_probe;
 mod src_tree;
@@ -88,24 +96,34 @@ pub(crate) fn zipup_identity_node_skips() -> usize {
     ZIPUP_IDENTITY_NODE_SKIPS.with(std::cell::Cell::get)
 }
 
-/// Whether emitting `source` instead of contracting and factorizing it is exact.
+/// Whether the caller asked for an exact zip-up.
 ///
-/// The pass-through is an **opt-in for exactness**, never an inference from the
-/// caller's silence. It is allowed only when the caller asks for an SVD policy
-/// whose threshold is exactly zero (no truncation is possible anywhere in the
-/// zip-up) and sets no [`max_bond_dim`]. Anything else — an absent policy, which
-/// resolves to the process-wide default cutoff at the factorizer, or a cap, which
-/// truncates the block itself — keeps the ordinary contraction and factorization,
-/// so no caller's numerics change without them asking for it.
+/// Exactness is an **opt-in**, never an inference from the caller's silence. It
+/// is requested only by an SVD policy whose threshold is exactly zero (no
+/// truncation is possible anywhere in the zip-up) and no [`max_bond_dim`].
+/// Anything else — an absent policy, which resolves to the process-wide default
+/// cutoff at the factorizer, or a cap, which truncates the block itself — keeps
+/// the truncating SVD schedule, so no caller's numerics change without them
+/// asking for it.
+///
+/// An exact request has two consequences:
+///
+/// - every zip-up block is factorized by untruncated QR instead of SVD
+///   ([`zipup_block_options`], #1285);
+/// - a leaf whose second operand is the identity is emitted unchanged instead
+///   of being contracted and factorized (#1186). Skipping a node is a pure
+///   relabeling of the parent's view only because no factorization of the
+///   schedule truncates (#1197); that holds for QR with a zero tolerance as it
+///   did for the zero-threshold SVD.
 ///
 /// The earlier form of this guard derived exactness from `svd_policy.is_none()`,
 /// which is vacuous: `None` means "resolve the default", and the default is a
 /// relative `1e-12` cutoff (`core::defaults::svd`), itself a mutable global that
 /// another part of the program can change.
 ///
-/// `form` must be [`CanonicalForm::Unitary`]: the zip-up's own QR/LU forms do not
-/// emit a node as a plain relabeling.
-fn zipup_skip_is_exact(
+/// `form` must be [`CanonicalForm::Unitary`]: the LU and CI forms factorize by
+/// their own pivoted decompositions and keep them.
+fn zipup_is_exact(
     form: CanonicalForm,
     svd_policy: Option<SvdTruncationPolicy>,
     max_bond_dim: Option<usize>,
@@ -114,6 +132,35 @@ fn zipup_skip_is_exact(
         return false;
     }
     svd_policy.is_some_and(|policy| policy.threshold == 0.0)
+}
+
+/// Left-canonical factorization options for one zip-up block.
+///
+/// An exact request ([`zipup_is_exact`]) factorizes by QR with a zero row
+/// tolerance (#1285). Every row of `R` is retained, so each bond is
+/// `min(rows, cols)` of its block, the same width the zero-threshold SVD keeps,
+/// and the block is reproduced to roundoff. An exact factorization needs no
+/// singular values: rank reduction belongs to the later compression, and an
+/// SVD of every block (up to 8192 x 2496 for two interleaved axes at R = 10)
+/// spends almost all of the application's time computing values it never uses.
+///
+/// Every other request keeps `alg` with the caller's policy and cap.
+fn zipup_block_options(
+    alg: FactorizeAlg,
+    form: CanonicalForm,
+    svd_policy: Option<SvdTruncationPolicy>,
+    max_bond_dim: Option<usize>,
+) -> Result<FactorizeOptions> {
+    if zipup_is_exact(form, svd_policy, max_bond_dim) {
+        let options = FactorizeOptions::qr()
+            .with_canonical(Canonical::Left)
+            .with_qr_rtol(0.0);
+        options
+            .validate()
+            .context("invalid exact zipup factorization options")?;
+        return Ok(options);
+    }
+    zipup_factorize_options(alg, Canonical::Left, svd_policy, max_bond_dim)
 }
 
 /// Sum out the identity bonds of skipped nodes that the given block still
@@ -848,10 +895,18 @@ where
     /// networks' bond dimensions on that edge). For a cap
     /// at or near the final rank, use fit or SRC contraction instead.
     ///
+    /// An exact zip-up is requested with `Some(SvdTruncationPolicy::new(0.0))`
+    /// and no `max_bond_dim`; `None` resolves to the default cutoff and is not
+    /// exact. Such a request factorizes every block by untruncated QR rather
+    /// than SVD: each bond keeps the full `min(rows, cols)` width of its block,
+    /// and no singular values are computed. Compress the result afterwards to
+    /// reduce its rank.
+    ///
     /// # Arguments
     /// * `other` - The other TreeTN to contract with (must have same topology)
     /// * `center` - The center node name towards which to contract
-    /// * `svd_policy` - Optional SVD truncation policy
+    /// * `svd_policy` - Optional SVD truncation policy; a zero threshold with no
+    ///   cap requests the exact QR zip-up (see "Truncation")
     /// * `max_bond_dim` - Optional maximum bond dimension, applied to every
     ///   intermediate factorization (see "Truncation")
     ///
@@ -911,6 +966,8 @@ where
     /// * `form` - Canonical form (Unitary/LU/CI)
     /// * `svd_policy` - Optional SVD truncation policy; only valid with `Unitary`.
     ///   Use `None` for LU/CI or to keep the default SVD truncation behavior.
+    ///   With `Unitary`, a zero threshold and no `max_bond_dim` request an exact
+    ///   zip-up, which factorizes every block by untruncated QR instead of SVD.
     /// * `max_bond_dim` - Optional positive maximum bond dimension; `None` means no cap
     ///
     /// # Returns
@@ -975,7 +1032,8 @@ where
     /// cap is set) as an isometry times a remainder. Skipping it keeps the bond
     /// and the node's amplitudes bit for bit (issue #1186). Its own bond indices
     /// stay on the edges they came from, so the untouched region of the result
-    /// carries the first operand's tensors and bonds unchanged. A node that
+    /// carries the first operand's values and bonds unchanged, promoting a real
+    /// tensor to complex when its identity operand is complex. A node that
     /// receives a remainder from an operator-carrying child is contracted and
     /// factorized as usual.
     ///
@@ -1225,14 +1283,26 @@ where
             return Ok(result);
         }
 
-        let factorize_left =
-            zipup_factorize_options(FactorizeAlg::SVD, Canonical::Left, svd_policy, max_bond_dim)?;
+        let exact = zipup_is_exact(CanonicalForm::Unitary, svd_policy, max_bond_dim);
+        let factorize_left = zipup_block_options(
+            FactorizeAlg::SVD,
+            CanonicalForm::Unitary,
+            svd_policy,
+            max_bond_dim,
+        )?;
         let factorize_right = zipup_factorize_options(
             FactorizeAlg::SVD,
             Canonical::Right,
             svd_policy,
             max_bond_dim,
         )?;
+        // The Gram shortcut of `factorize_auto` serves SVD only; the exact QR
+        // blocks are factorized directly.
+        let factorize_block =
+            |tensor: &T, left: &[T::Index], options: &FactorizeOptions| match options.alg {
+                FactorizeAlg::SVD => leaves.factorize_auto(tensor, left, options),
+                _ => leaves.factorize(tensor, left, options),
+            };
         let mut remainder: Option<T> = None;
         let mut result_tensors: HashMap<V, T> = HashMap::new();
         let mut result_bonds: Vec<Option<T::Index>> = vec![None; node_count - 1];
@@ -1286,7 +1356,7 @@ where
             // dimension-one bond via the shared empty-side factorization.
             let factorized =
                 super::factorize_allowing_empty_side(&contracted, &left_inds, |tensor, left| {
-                    leaves.factorize_auto(tensor, left, &factorize_left)
+                    factorize_block(tensor, left, &factorize_left)
                 })
                 .context("contract_zipup: site factorization failed")?;
             result_bonds[site] = Some(factorized.bond_index.clone());
@@ -1372,6 +1442,24 @@ where
                 },
                 final_block,
             );
+        } else if exact {
+            // QR has no right-canonical form, so the final block is factorized
+            // with the last site's indices on the orthogonal side: `Q` goes to
+            // the last node and `R` to the penultimate one. The numerical
+            // center stays at the penultimate site, as in the SVD schedule.
+            let last_inds: Vec<T::Index> = final_indices
+                .iter()
+                .filter(|index| last_sites.contains(*index))
+                .cloned()
+                .collect();
+            let factorized =
+                super::factorize_allowing_empty_side(&final_block, &last_inds, |tensor, left| {
+                    factorize_block(tensor, left, &factorize_left)
+                })
+                .context("contract_zipup: final block factorization failed")?;
+            result_bonds[node_count - 2] = Some(factorized.bond_index);
+            result_tensors.insert(penultimate.clone(), factorized.right);
+            result_tensors.insert(last.clone(), factorized.left);
         } else {
             let factorized =
                 super::factorize_allowing_empty_side(&final_block, &left_inds, |tensor, left| {
@@ -1466,6 +1554,7 @@ where
         Ok(result)
     }
 
+    // INVARIANT: this owner-level entry passes the existing schedule and execution strategy intact.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn contract_zipup_impl(
         &self,
@@ -1483,13 +1572,44 @@ where
         <T::Index as IndexLike>::Id:
             Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
     {
+        self.contract_zipup_controlled(
+            other,
+            center,
+            form,
+            svd_policy,
+            max_bond_dim,
+            topology_mode,
+            identity_nodes,
+            leaves,
+            zipup_control::Complete,
+        )
+    }
+
+    // INVARIANT: the completion policy is static; the schedule and numerical leaves are shared.
+    #[allow(clippy::too_many_arguments)]
+    fn contract_zipup_controlled<C: zipup_control::ZipupControl<T, V>>(
+        &self,
+        other: &Self,
+        center: &V,
+        form: CanonicalForm,
+        svd_policy: Option<SvdTruncationPolicy>,
+        max_bond_dim: Option<usize>,
+        topology_mode: ZipupTopologyMode,
+        identity_nodes: &IdentityNodes<T::Index, V>,
+        leaves: &dyn LeafOps<T>,
+        control: C,
+    ) -> Result<C::Output>
+    where
+        V: Ord,
+        <T::Index as IndexLike>::Id:
+            Clone + std::hash::Hash + Eq + Ord + std::fmt::Debug + Send + Sync,
+    {
         let alg = match form {
             CanonicalForm::Unitary => FactorizeAlg::SVD,
             CanonicalForm::LU => FactorizeAlg::LU,
             CanonicalForm::CI => FactorizeAlg::CI,
         };
-        let factorize_options =
-            zipup_factorize_options(alg, Canonical::Left, svd_policy, max_bond_dim)?;
+        let factorize_options = zipup_block_options(alg, form, svd_policy, max_bond_dim)?;
 
         // 1. Verify topologies are compatible
         if !self.same_topology(other) {
@@ -1515,7 +1635,7 @@ where
                     // does not take `identity_nodes` into account; a chain-shaped
                     // first operand therefore keeps this schedule and factorizes
                     // every node.
-                    return self.contract_zipup_chain(
+                    let network = self.contract_zipup_chain(
                         other,
                         center,
                         &chain,
@@ -1523,7 +1643,8 @@ where
                         max_bond_dim,
                         topology_mode,
                         leaves,
-                    );
+                    )?;
+                    return control.finish(network);
                 }
             }
         }
@@ -1563,7 +1684,7 @@ where
             let mut result = TreeTN::new();
             result.add_tensor(node_name.clone(), contracted)?;
             result.set_canonical_region(std::iter::once(center.clone()))?;
-            return Ok(result);
+            return control.finish(result);
         }
 
         // 5. Initialize intermediate tensors storage: HashMap<node_name, Vec<intermediate_tensor>>
@@ -1589,6 +1710,11 @@ where
                 .ok_or_else(|| anyhow::anyhow!("Bond index not found for edge"))
                 .cloned()
         };
+
+        // A skipped tensor has not been factorized here. Certify the result
+        // only if every such tensor already has the requested canonical form
+        // towards its parent. Otherwise leave all canonical metadata unset.
+        let mut canonical_certified = true;
 
         // 8. Process edges from leaves towards root
         for (source_name, destination_name) in &edges {
@@ -1640,19 +1766,25 @@ where
             // differently scaled matrix and can drop a direction the untouched
             // subtree makes dominant — a leaf with `diag(1e-8, 1e8)` under a hub
             // with `diag(1, 1e-8)` then loses an amplitude of 1 at `rtol = 1e-6`.
-            // `zipup_skip_is_exact` decides; a node it rejects keeps the ordinary
+            // `zipup_is_exact` decides; a node it rejects keeps the ordinary
             // contraction and factorization, as does a node that receives a
             // remainder from an operator-bearing child.
             //
             // The parent's copy of the emitted node's identity bond is left
             // without a partner, so it is recorded and summed out when the parent
             // is processed.
-            if is_leaf && zipup_skip_is_exact(form, svd_policy, max_bond_dim) {
+            if is_leaf && zipup_is_exact(form, svd_policy, max_bond_dim) {
                 if let Some(pairs) = identity_nodes
                     .get(source_name)
                     .filter(|pairs| !pairs.is_empty())
                 {
                     let mut emitted = tensor_a.clone();
+                    // Skipping the identity contraction must preserve its scalar
+                    // promotion too: a complex identity times a real state is
+                    // complex, including on untouched spectator branches.
+                    if tensor_b.is_complex() && !emitted.is_complex() {
+                        emitted = emitted.scale(AnyScalar::new_complex(1.0, 0.0))?;
+                    }
                     for (input, output) in pairs {
                         emitted = emitted.replaceind(input, output).with_context(|| {
                             format!(
@@ -1660,6 +1792,14 @@ where
                             )
                         })?;
                     }
+                    // Consult the original operand: its bond indices own the
+                    // input certificates, before sim_internal_inds relabels them.
+                    let certified = self.canonical_form() == Some(form)
+                        && self
+                            .edge_between(source_name, destination_name)
+                            .and_then(|edge| self.ortho_towards_node(edge))
+                            == Some(destination_name);
+                    canonical_certified &= certified;
                     result_tensors.insert(source_name.clone(), emitted);
                     orphan_identity_legs
                         .entry(destination_name.clone())
@@ -1714,6 +1854,17 @@ where
                     leaves.factorize(tensor, left, &factorize_options)
                 })
                 .context("Failed to factorize")?;
+
+            #[cfg(test)]
+            zipup_control::tests::record_factorization();
+
+            // INVARIANT: pruning happens before this factorization. Its retained
+            // link is passed to the parent and never resized again on this path;
+            // see the tree-specific proof in treetn-contraction-outcome.md.
+            if let Some(output) = control.edge(source_name, destination_name, factorize_result.rank)
+            {
+                return Ok(output);
+            }
 
             // Store left factor as result tensor for source node
             result_tensors.insert(source_name.clone(), factorize_result.left);
@@ -1839,12 +1990,20 @@ where
             }
         }
 
-        // 11. Set canonical center
-        if result.node_index(center).is_some() {
+        // 11. Certify the canonical center and the surviving edges together.
+        // As in canonicalize_impl, directions describe the selected form:
+        // LU/CI left factors are unit-diagonal rather than isometric.
+        if canonical_certified && result.node_index(center).is_some() {
             result.set_canonical_region(std::iter::once(center.clone()))?;
+            result.set_canonical_form(Some(form));
+            for (source, destination) in &edges {
+                if let Some(edge) = result.edge_between(source, destination) {
+                    result.set_edge_ortho_towards(edge, Some(destination.clone()))?;
+                }
+            }
         }
 
-        Ok(result)
+        control.finish(result)
     }
 
     /// Contract two TreeTNs using naive full contraction.
@@ -2089,6 +2248,8 @@ where
     /// * `center` - The center node name towards which to contract
     /// * `form` - Canonical form (`Unitary` runs in `context`; `LU`/`CI` are refused)
     /// * `svd_policy` - Optional SVD truncation policy; only valid with `Unitary`.
+    ///   A zero threshold and no `max_bond_dim` request an exact zip-up, which
+    ///   factorizes every block by untruncated QR in `context` instead of SVD.
     /// * `max_bond_dim` - Optional positive maximum bond dimension; `None` means no cap
     /// * `context` - The caller-owned execution context the numerics run in
     ///
@@ -2987,8 +3148,14 @@ where
             let mut rng = ChaCha8Rng::seed_from_u64(options.src_options.seed);
             // Legacy CPU-global compatibility boundary: host tensors built
             // through the global default validate against this exact context.
-            // CUDA-resident inputs fail validation with a typed error.
-            let context = ExecutionContext::Cpu(default_cpu_execution_context());
+            // CUDA-resident inputs fail validation with a typed error. Without
+            // `tensor4all-core/global-defaults` there is no such context and
+            // the arm refuses before any RNG draw; use `contract_in`.
+            let context = ExecutionContext::Cpu(
+                default_cpu_execution_context()
+                    .map_err(anyhow::Error::new)
+                    .context("contract: the SRC method needs an execution context")?,
+            );
             contract_src_with_rng_impl(tn_a, tn_b, center, &options, &mut rng, &context)
         }
     }
@@ -3064,7 +3231,11 @@ where
         .validate(options.max_bond_dim)
         .context("contract_src_with_rng: invalid SRC options")?;
     // Legacy CPU-global compatibility boundary (see `contract` Src arm).
-    let context = ExecutionContext::Cpu(default_cpu_execution_context());
+    let context = ExecutionContext::Cpu(
+        default_cpu_execution_context()
+            .map_err(anyhow::Error::new)
+            .context("contract_src_with_rng: the SRC method needs an execution context")?,
+    );
     contract_src_with_rng_impl(tn_a, tn_b, center, &options, rng, &context)
 }
 

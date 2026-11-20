@@ -45,20 +45,24 @@
 //! benchmark when that distinction matters. This crate is the native choice
 //! for genuinely branched trees.
 
+mod basis_projection;
 mod batch;
 #[cfg(feature = "diagnostics")]
 pub mod branch_diagnostics;
 mod elementwise;
 mod error;
+mod exec;
 mod frames;
 mod global_guard;
 mod hadamard;
 mod initialize;
+mod interpolator;
 mod local_update;
 mod options;
 mod path_cover;
 pub mod prelude;
 mod problem;
+mod rank_hysteresis;
 mod result;
 mod samples;
 mod scalar;
@@ -80,10 +84,12 @@ mod validate;
 pub use batch::TreeElementwiseBatch;
 pub use elementwise::{
     tree_elementwise, tree_elementwise_batched, tree_elementwise_batched_with_rng,
-    tree_elementwise_batched_with_rng_in, tree_elementwise_with_rng,
+    tree_elementwise_batched_with_rng_in, tree_elementwise_batched_with_rng_on_session,
+    tree_elementwise_with_rng,
 };
 pub use error::{Result, TreeAciError};
 pub use hadamard::hadamard_many;
+pub use interpolator::TreeAciInterpolator;
 pub use options::TreeAciOptions;
 pub use result::{TreeAciDiagnostics, TreeAciResult, TreeAciTermination};
 pub use scalar::{TreeAciNode, TreeAciScalar};

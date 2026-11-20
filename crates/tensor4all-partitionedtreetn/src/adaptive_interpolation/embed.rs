@@ -75,6 +75,75 @@ where
     Ok(TreeTN::from_tensors(tensors, names)?)
 }
 
+/// Remove every fixed site from `network`, which carries every site of the
+/// layout, by contracting it with a one-hot vector at its coordinate: the
+/// inverse of [`embed_fixed_sites`]. The result has the layout's node names
+/// and only the active sites, as an engine's problem expects.
+///
+/// A masked patch network restricted to a region outside its own projector
+/// is exactly zero, since the one-hot vectors select coordinates the mask
+/// has zeroed. The contractions run on the caller's session and are
+/// published as compact host storage.
+pub(super) fn restrict_fixed_sites<T, V>(
+    network: &TreeTN<IdxTensor, V>,
+    layout: &SiteLayout<V>,
+    fixed: &[Option<usize>],
+    session: &mut Session<'_>,
+) -> Result<TreeTN<IdxTensor, V>>
+where
+    T: CommonScalar + TensorElement,
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+{
+    let mut names = Vec::with_capacity(layout.node_sites.len());
+    let mut tensors = Vec::with_capacity(layout.node_sites.len());
+    for (node, positions) in &layout.node_positions {
+        let tensor = network
+            .node_index(node)
+            .and_then(|index| network.tensor(index))
+            .ok_or_else(|| PartitionedTreeTNError::tree(format!("node {node:?} has no tensor")))?;
+        let mut tensor = tensor.clone();
+        for &position in positions {
+            if let Some(coordinate) = fixed[position] {
+                let factor = one_hot::<T>(&layout.sites[position], coordinate)?;
+                tensor = contract_pair_on_session(
+                    session,
+                    &tensor,
+                    &factor,
+                    PairwiseContractionOptions::new(),
+                )?;
+            }
+        }
+        names.push(node.clone());
+        tensors.push(tensor);
+    }
+    Ok(TreeTN::from_tensors(tensors, names)?)
+}
+
+/// A network with the node names and indices of `network` and every entry
+/// zero, in the scalar type `T`.
+pub(super) fn zeros_like<T, V>(network: &TreeTN<IdxTensor, V>) -> Result<TreeTN<IdxTensor, V>>
+where
+    T: CommonScalar + TensorElement,
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+{
+    let mut names = network.node_names();
+    names.sort();
+    let mut tensors = Vec::with_capacity(names.len());
+    for node in &names {
+        let tensor = network
+            .node_index(node)
+            .and_then(|index| network.tensor(index))
+            .ok_or_else(|| PartitionedTreeTNError::tree(format!("node {node:?} has no tensor")))?;
+        let indices = tensor.indices().to_vec();
+        let len = indices.iter().map(|index| index.dim).product();
+        tensors.push(IdxTensor::from_dense_compact(
+            indices,
+            vec![T::from_f64(0.0); len],
+        )?);
+    }
+    Ok(TreeTN::from_tensors(tensors, names)?)
+}
+
 /// Build the network of a patch with at most one active site from its exact
 /// values, over the active sites only, with dimension-one links.
 ///

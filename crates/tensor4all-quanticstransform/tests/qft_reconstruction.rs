@@ -1,3 +1,5 @@
+#![cfg(feature = "partitioned")]
+
 //! Subset QFT integration for orthogonal-target reconstruction.
 //!
 //! These tests bind a real `tensor4all_quanticstransform` Fourier operator to an
@@ -7,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 
 use num_complex::Complex64;
-use tensor4all_core::{DynIndex, IdxTensor};
+use tensor4all_core::{AnyScalar, DynIndex, IdxTensor};
 use tensor4all_partitionedtreetn::{
     reconstruction::*, PartitionedTreeTN, PartitionedTreeTNError, Projector, SubDomainTreeTN,
     TreeTN,
@@ -135,6 +137,13 @@ fn max_error(left: &[Complex64], right: &[Complex64]) -> f64 {
         .zip(right)
         .map(|(a, b)| (*a - *b).norm())
         .fold(0.0_f64, f64::max)
+}
+
+/// L2 norm of the difference of two equally shaped dense values.
+fn l2_error(left: &[Complex64], right: &[Complex64]) -> f64 {
+    assert_eq!(left.len(), right.len());
+    let residual: Vec<Complex64> = left.iter().zip(right).map(|(a, b)| *a - *b).collect();
+    norm_of(&residual)
 }
 
 /// Dense oracle for a subset DFT with the documented conventions: selected bits
@@ -561,10 +570,11 @@ fn subset_operator_scale_is_not_measured_under_destructive_interference() {
         norm_of(&applied)
     );
 
-    // Separate-term retention: preparation stores the two images independently,
-    // so reconstruction at zero tolerance keeps both. This observes the retained
-    // representation only; it cannot see a temporary network built and discarded
-    // during preparation.
+    // Preparation stores the two images independently. Whether their roundoff
+    // residual cancels exactly depends on the platform's SVD: on Linux the
+    // zip-up images merge into the zero function and no term or region stays,
+    // while on macOS (Accelerate) both terms stay (#1279). Either way nothing
+    // is charged and the output is the zero function to roundoff.
     let output = reconstruct(
         &target,
         &0,
@@ -578,9 +588,26 @@ fn subset_operator_scale_is_not_measured_under_destructive_interference() {
         },
     )
     .expect("reconstruction");
-    assert_eq!(output.report().term_count, 2);
-    assert_eq!(output.report().region_count, 1);
-    assert_eq!(output.report().reference_scale, target.reference_scale());
+    let report = output.report();
+    assert_eq!(report.error_bound, 0.0);
+    assert_eq!(report.reference_scale, target.reference_scale());
+    assert!(report.term_count <= 2, "term count {}", report.term_count);
+    let mut sum = tree.scale(AnyScalar::new_real(0.0)).expect("zero");
+    for (_, terms) in output.regions() {
+        for term in terms {
+            sum = sum.add(term.data()).expect("sum");
+        }
+    }
+    let dense = sum
+        .to_dense()
+        .expect("dense")
+        .to_vec::<Complex64>()
+        .expect("vector");
+    assert!(
+        norm_of(&dense) <= 1e-12 * report.reference_scale,
+        "output norm {}",
+        norm_of(&dense)
+    );
 }
 
 #[test]
@@ -1142,7 +1169,7 @@ fn merge_refine_schedule_rejects_invalid_geometry() {
 }
 
 #[test]
-fn merge_refine_schedule_rejects_leaf_spectator_mismatch() {
+fn merge_refine_schedule_checks_selected_coverage_in_each_spectator_cell() {
     let selected = DynIndex::new_dyn(2);
     let spectator = DynIndex::new_dyn(2);
     let values: Vec<Complex64> = (0..4)
@@ -1161,26 +1188,42 @@ fn merge_refine_schedule_rejects_leaf_spectator_mismatch() {
             .expect("nonzero leaf")
     };
     // The two input leaves disagree on the spectator coordinate.
-    let preimage = ReconstructionTarget::from_partition(
-        &PartitionedTreeTN::from_subdomains(vec![leaf(0, 0), leaf(1, 1)]).expect("partition"),
-    )
-    .expect("target");
+    let input =
+        PartitionedTreeTN::from_subdomains(vec![leaf(0, 0), leaf(1, 1)]).expect("partition");
+    let preimage = ReconstructionTarget::from_partition(&input).expect("target");
     let operator = one_site_matrix(&selected, [1.0, 0.0, 0.0, 1.0]);
 
     let error = schedule_merge_refine(
         &preimage,
         &0,
         &operator,
-        &[selected],
+        std::slice::from_ref(&selected),
         &SubsetOperatorOptions { unitary: true },
         ReconstructionTolerance::default(),
         &MergeRefineOptions::default(),
     )
-    .expect_err("spectator constraints must agree across leaves");
-    assert!(matches!(
-        error,
-        tensor4all_partitionedtreetn::PartitionedTreeTNError::ProjectorMismatch
-    ));
+    .expect_err("each spectator cell is missing a selected leaf");
+    assert!(error
+        .to_string()
+        .contains("cover every selected-coordinate"));
+    let result = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &[selected],
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance::default(),
+        &MergeRefineOptions {
+            coverage: CoverageContract::ZeroForMissingLeaves,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let (indices, values) = dense_of_regions(&result);
+    let actual = IdxTensor::from_dense(indices, values).unwrap();
+    let expected = input.to_treetn().unwrap().to_dense().unwrap();
+    assert!(actual.sub(&expected).unwrap().maxabs().unwrap() < 1e-12);
+    assert_eq!(result.report().error_bound, 0.0);
 }
 
 #[test]
@@ -1321,11 +1364,14 @@ fn merge_refine_schedule_truncates_within_the_global_allowance() {
     let limited = schedule_rank_limited(&preimage, &operator, &sites, 0.3, 2);
     let report = limited.report().clone();
 
-    // Truncation happened, respected the soft goal, and measured a residual that
-    // stayed inside the global allowance.
+    // Truncation happened and measured a residual that stayed inside the global
+    // allowance. The soft goal decides splitting, not truncation: this region's
+    // merged candidate already fits the goal, so the root stops and its later merges
+    // truncate toward the allowance, which can retain a rank above the goal.
     assert!(report.compression_attempts > 0, "{report:?}");
     assert!(report.compressions > 0, "{report:?}");
-    assert!(report.max_bond_dim <= 2, "{:?}", report.max_bond_dim);
+    assert_eq!(report.stopped_regions, 1, "{report:?}");
+    assert_eq!(report.region_count, 1, "{report:?}");
     assert!(
         report.max_transient_bond_dim > report.max_bond_dim,
         "transient {} retained {}",
@@ -1398,7 +1444,7 @@ fn merge_refine_schedule_keeps_exact_cancellation_with_a_rank_goal() {
 }
 
 #[test]
-fn merge_refine_schedule_stops_refinement_once_the_rank_goal_is_met() {
+fn merge_refine_schedule_stops_at_the_root_when_the_merged_candidate_fits_the_goal() {
     let r = 3usize;
     let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
     let values: Vec<Complex64> = (0..1usize << r)
@@ -1417,15 +1463,61 @@ fn merge_refine_schedule_stops_refinement_once_the_rank_goal_is_met() {
     let result = schedule_rank_limited(&preimage, &operator, &sites, 1e-3, 1);
     let report = result.report().clone();
 
-    // The refined plane wave reaches rank one after one level, so the schedule
-    // stops there instead of forcing the preset `2^r` output blocks.
-    assert_eq!(report.refined_regions, 1, "{report:?}");
-    assert!(report.stopped_regions >= 2, "{report:?}");
-    assert_eq!(report.region_count, 2);
+    // The candidate a stopped region keeps is the merged, unsplit plane wave, and
+    // it already fits the goal at the first level. The decision compares that
+    // candidate — not the pre-merge items — so the root stops without splitting and
+    // without probing a child, instead of forcing the preset `2^r` output blocks.
+    assert_eq!(report.refined_regions, 0, "{report:?}");
+    assert_eq!(report.stopped_regions, 1, "{report:?}");
+    assert_eq!(report.region_count, 1, "{report:?}");
+    assert_eq!(report.term_count, 1, "{report:?}");
     assert!(report.region_count < 1usize << r);
     assert_eq!(report.max_bond_dim, 1);
 
     // The retained superposition is still the exact normalized DFT.
+    let (indices, dense) = dense_of_regions(&result);
+    let expected = dft_oracle(&indices, &sites, &sites, &values);
+    let bound = report.error_bound;
+    assert!(
+        max_error(&dense, &expected) <= bound + 1e-12,
+        "coordinate residual exceeds the bound {bound:e}"
+    );
+    let residual = l2_error(&dense, &expected);
+    assert!(
+        residual <= bound + 1e-12,
+        "L2 residual {residual:e} exceeds the bound {bound:e}"
+    );
+}
+
+#[test]
+fn merge_refine_schedule_stops_above_the_goal_when_the_split_stores_more() {
+    // The merged candidate exceeds the goal, so the children are probed; their
+    // total stored parameters (two regions, each as large as the candidate) exceed
+    // the candidate's, so the split is refused and the region stays above the soft
+    // goal with one region instead of two.
+    let r = 4usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| Complex64::new(1.0 + (m as f64 * 0.7).sin(), (m as f64 * 0.3).cos()))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+
+    let result = schedule_rank_limited(&preimage, &operator, &sites, 1e-2, 1);
+    let report = result.report().clone();
+
+    assert_eq!(report.refined_regions, 0, "{report:?}");
+    assert_eq!(report.stopped_regions, 1, "{report:?}");
+    assert_eq!(report.region_count, 1, "{report:?}");
+    // The soft goal decides splitting, not truncation: a refused split leaves the
+    // region above the goal, and the work and term caps stay the backstop.
+    assert!(report.max_bond_dim > 1, "{report:?}");
+    assert!(
+        report.error_bound <= report.absolute_tolerance,
+        "{report:?}"
+    );
+
     let (indices, dense) = dense_of_regions(&result);
     let expected = dft_oracle(&indices, &sites, &sites, &values);
     let residual = max_error(&dense, &expected);
@@ -1628,7 +1720,7 @@ fn schedule_with_application(
         &MergeRefineOptions {
             output_depth: None,
             max_work_items: 4 * leaves,
-            apply_options: Some(apply_options),
+            application: OperatorApplication::Measured(apply_options),
             ..Default::default()
         },
     )
@@ -1744,6 +1836,116 @@ fn merge_refine_schedule_charges_a_truncating_application_to_the_bound() {
         "deviation {deviation:e} exceeds the bound {:e}",
         report.error_bound
     );
+}
+
+#[test]
+fn spectator_splits_charge_each_original_application_error_once() {
+    let sites: Vec<_> = (0..3).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<_> = (0..8)
+        .map(|m| Complex64::new(1.0 + (m as f64).sin(), (m as f64).cos()))
+        .collect();
+    let tree = mps(&sites, &values);
+    let partition = PartitionedTreeTN::from_subdomains(
+        [
+            vec![(sites[0].clone(), 0), (sites[1].clone(), 0)],
+            vec![(sites[0].clone(), 0), (sites[1].clone(), 1)],
+            vec![(sites[0].clone(), 1)],
+        ]
+        .into_iter()
+        .map(|pairs| {
+            SubDomainTreeTN::new(tree.clone(), Projector::from_pairs(pairs).unwrap()).unwrap()
+        })
+        .collect(),
+    )
+    .unwrap();
+    let preimage = ReconstructionTarget::from_partition(&partition).unwrap();
+    let selection = [sites[0].clone(), sites[2].clone()];
+    let operator = identity_plus_scaled_x_tensor(&selection, 0.1)
+        .rename_nodes(&[(0, 0), (1, 2)])
+        .unwrap();
+    let inputs: Vec<_> = selection
+        .iter()
+        .enumerate()
+        .map(|(j, index)| {
+            (
+                operator
+                    .get_input_mapping(&(2 * j))
+                    .unwrap()
+                    .true_index
+                    .clone(),
+                index.clone(),
+            )
+        })
+        .collect();
+    let outputs: Vec<_> = selection
+        .iter()
+        .enumerate()
+        .map(|(j, index)| {
+            (
+                operator
+                    .get_output_mapping(&(2 * j))
+                    .unwrap()
+                    .true_index
+                    .clone(),
+                index.clone(),
+            )
+        })
+        .collect();
+    let approximate = ApplyOptions::zipup().with_max_bond_dim(1);
+    let mut application_error = 0.0;
+    for patch in partition.values() {
+        let exact = apply_linear_operator_to_indices(
+            &operator,
+            patch.data(),
+            &inputs,
+            &outputs,
+            ApplyOptions {
+                center: Some(1),
+                svd_policy: Some(tensor4all_core::SvdTruncationPolicy::new(0.0)),
+                ..ApplyOptions::zipup()
+            },
+        )
+        .unwrap();
+        let rounded = apply_linear_operator_to_indices(
+            &operator,
+            patch.data(),
+            &inputs,
+            &outputs,
+            approximate.clone(),
+        )
+        .unwrap();
+        application_error += exact.axpby(1.0, &rounded, -1.0).unwrap().norm().unwrap();
+    }
+    assert!(application_error > 1e-6);
+    let (expected_indices, expected) = applied_dense(&operator, &tree, &selection);
+    for depth in 0..=2 {
+        let result = schedule_merge_refine(
+            &preimage,
+            &0,
+            &operator,
+            &selection,
+            &SubsetOperatorOptions { unitary: true },
+            ReconstructionTolerance {
+                rtol: 0.5,
+                atol: 0.0,
+            },
+            &MergeRefineOptions {
+                output_depth: Some(depth),
+                application: OperatorApplication::Measured(approximate.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let report = result.report();
+        assert_eq!(report.applied_operator_count, 3);
+        assert_eq!(report.work_items_per_level[0], 4);
+        assert!((report.error_bound - application_error).abs() < 1e-12);
+        assert!(report.error_bound <= report.absolute_tolerance);
+        let (indices, actual) = dense_of_regions(&result);
+        let oracle = IdxTensor::from_dense(expected_indices.clone(), expected.clone()).unwrap();
+        let actual = IdxTensor::from_dense(indices, actual).unwrap();
+        assert!(actual.sub(&oracle).unwrap().norm().unwrap() <= report.error_bound + 1e-12);
+    }
 }
 
 #[test]
@@ -2197,36 +2399,115 @@ fn axis_fourier_operator(nodes: &[usize], sites: &[DynIndex]) -> LinearOperator<
     bind_linear_operator_indices(&operator, &inputs, &outputs).expect("bind")
 }
 
+/// A chain network over `sites` with one node per site.
+fn chain_target(sites: &[DynIndex]) -> SiteIndexNetwork<usize, DynIndex> {
+    let mut target: SiteIndexNetwork<usize, DynIndex> = SiteIndexNetwork::new();
+    for (node, site) in sites.iter().enumerate() {
+        target.add_node(node, HashSet::new()).expect("target node");
+        target
+            .add_site_index(&node, site.clone())
+            .expect("site index");
+    }
+    for node in 0..sites.len().saturating_sub(1) {
+        target.add_edge(&node, &(node + 1)).expect("edge");
+    }
+    target
+}
+
+/// The product of the one-dimensional Fourier transforms of equal-length axis
+/// blocks, composed into one operator over the whole chain.
+fn chain_axis_fourier_operator(
+    axis_lengths: &[usize],
+    sites: &[DynIndex],
+) -> LinearOperator<IdxTensor, usize> {
+    assert_eq!(axis_lengths.iter().sum::<usize>(), sites.len());
+    let mut blocks = Vec::with_capacity(axis_lengths.len());
+    let mut start = 0usize;
+    for &length in axis_lengths {
+        blocks.push((
+            length,
+            axis_fourier_operator(
+                &(start..start + length).collect::<Vec<_>>(),
+                &sites[start..start + length],
+            ),
+        ));
+        start += length;
+    }
+    // The exclusivity check compares one representative node per operator, so a
+    // chain of three or more axes composes on its growing prefix instead of at
+    // once; every prefix is itself a chain over the leading sites.
+    let (length, mut composed) = blocks.remove(0);
+    let mut covered = length;
+    for (length, axis) in blocks {
+        covered += length;
+        composed = compose_exclusive_linear_operators(
+            &chain_target(&sites[..covered]),
+            &[&composed, &axis],
+            &HashMap::new(),
+        )
+        .expect("composition");
+    }
+    composed
+}
+
+/// Dense value of the product transform, applied one axis block at a time, in one
+/// canonical index order.
+fn axis_product_dense(
+    lengths: &[usize],
+    sites: &[DynIndex],
+    values: &[Complex64],
+) -> (Vec<DynIndex>, Vec<Complex64>) {
+    let mut tree = mps(sites, values);
+    let mut start = 0usize;
+    for &length in lengths {
+        let nodes: Vec<usize> = (start..start + length).collect();
+        let axis = axis_fourier_operator(&nodes, &sites[start..start + length]);
+        tree = apply_linear_operator_to_indices(&axis, &tree, &[], &[], ApplyOptions::naive())
+            .expect("reference apply");
+        start += length;
+    }
+    let dense = tree.to_dense().expect("dense");
+    (
+        dense.indices().to_vec(),
+        dense.to_vec::<Complex64>().expect("vector"),
+    )
+}
+
+/// One coordinate group per axis block of the chain.
+fn axis_groups(lengths: &[usize], sites: &[DynIndex]) -> Vec<CoordinateGroup> {
+    let mut groups = Vec::with_capacity(lengths.len());
+    let mut start = 0usize;
+    for &length in lengths {
+        groups.push(CoordinateGroup::new(sites[start..start + length].to_vec()));
+        start += length;
+    }
+    groups
+}
+
+/// Fixed leading output bits per axis of every region, in region order.
+fn axis_depths(result: &MergeRefineResult<usize>, groups: &[CoordinateGroup]) -> Vec<Vec<usize>> {
+    result
+        .regions()
+        .map(|(projector, _)| {
+            groups
+                .iter()
+                .map(|group| {
+                    group
+                        .outputs
+                        .iter()
+                        .take_while(|index| projector.get(index).is_some())
+                        .count()
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// The product of two one-dimensional Fourier transforms, composed into one
 /// operator over a four-node chain: axis `0` on `sites[0..2]`, axis `1` on
 /// `sites[2..4]`.
 fn two_axis_fourier_operator(sites: &[DynIndex]) -> LinearOperator<IdxTensor, usize> {
-    let axis_a = axis_fourier_operator(&[0, 1], &sites[0..2]);
-    let axis_b = axis_fourier_operator(&[2, 3], &sites[2..4]);
-    let mut target: SiteIndexNetwork<usize, DynIndex> = SiteIndexNetwork::new();
-    for (node, operator) in [(0usize, &axis_a), (1, &axis_a), (2, &axis_b), (3, &axis_b)] {
-        if !target.has_node(&node) {
-            target.add_node(node, HashSet::new()).expect("target node");
-        }
-        for mapping in operator.get_input_mappings(&node).expect("input mappings") {
-            target
-                .add_site_index(&node, mapping.internal_index.clone())
-                .expect("site index");
-        }
-        for mapping in operator
-            .get_output_mappings(&node)
-            .expect("output mappings")
-        {
-            target
-                .add_site_index(&node, mapping.internal_index.clone())
-                .expect("site index");
-        }
-    }
-    target.add_edge(&0usize, &1usize).expect("edge");
-    target.add_edge(&1usize, &2usize).expect("edge");
-    target.add_edge(&2usize, &3usize).expect("edge");
-    compose_exclusive_linear_operators(&target, &[&axis_a, &axis_b], &HashMap::new())
-        .expect("composition")
+    chain_axis_fourier_operator(&[2, 2], sites)
 }
 
 #[test]
@@ -2313,6 +2594,211 @@ fn merge_refine_schedule_transforms_two_coordinate_axes_in_one_level() {
     assert!(error < TOL, "max error {error:e}");
 }
 
+/// The projector fixing the first `depth` output indices of one `CoordinateGroup`.
+fn output_prefix_projector(group: &CoordinateGroup, depth: usize, prefix: usize) -> Projector {
+    let pairs = group
+        .outputs
+        .iter()
+        .take(depth)
+        .enumerate()
+        .map(|(position, index)| (index.clone(), (prefix >> (depth - 1 - position)) & 1));
+    Projector::from_pairs(pairs).expect("projector")
+}
+
+/// The dense values of `region`'s single term, reordered to the index order of
+/// `indices`.
+fn region_dense(
+    regions: &MergeRefineResult<usize>,
+    region: &Projector,
+    indices: &[DynIndex],
+) -> Vec<Complex64> {
+    let term = regions
+        .regions()
+        .find(|(output, _)| *output == region)
+        .expect("the region must be present")
+        .1[0]
+        .data()
+        .to_dense()
+        .expect("dense");
+    reorder(
+        &term.to_vec::<Complex64>().expect("vector"),
+        term.indices(),
+        indices,
+    )
+}
+
+#[test]
+fn merge_refine_schedule_computes_only_the_selected_output_regions() {
+    let r = 4usize;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..1usize << r)
+        .map(|m| Complex64::new((m as f64 * 0.8).sin() + 1.0, (m as f64 * 0.5).cos()))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+    let tolerance = ReconstructionTolerance {
+        rtol: 1e-12,
+        atol: 0.0,
+    };
+
+    // Unselected, the trajectory refines all 16 output coordinates and repeats the
+    // 8 + 4 + 2 + 1 input merges for every child of every level.
+    let all = schedule_exact(&preimage, &operator, &sites, None, 64);
+    assert_eq!(all.report().additions, 64);
+    assert_eq!(all.report().work_items_per_level, vec![16, 16, 16, 16, 16]);
+    assert_eq!(all.report().region_count, 16);
+
+    // The caller needs the one output coordinate with every bit zero, so one child
+    // per level keeps one path and merges the input siblings along it once.
+    let group = CoordinateGroup::new(sites.clone());
+    let wanted = output_prefix_projector(&group, r, 0);
+    let selected = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        tolerance,
+        &MergeRefineOptions {
+            output_regions: Some(vec![wanted.clone()]),
+            ..Default::default()
+        },
+    )
+    .expect("selected schedule");
+    let report = selected.report().clone();
+    assert_eq!(report.applied_operator_count, 16);
+    assert_eq!(report.additions, 15);
+    assert_eq!(report.work_items_per_level, vec![16, 8, 4, 2, 1]);
+    assert_eq!(report.region_count, 1);
+    assert_eq!(report.term_count, 1);
+    assert_eq!(report.error_bound, 0.0);
+
+    // The computed region is the same region, bit for bit, that the unselected
+    // trajectory returns among its 16.
+    let (indices, dense) = dense_of_regions(&selected);
+    let unselected = region_dense(&all, &wanted, &indices);
+    assert_eq!(
+        max_error(&dense, &unselected),
+        0.0,
+        "the selected region must equal the unselected one"
+    );
+}
+
+#[test]
+fn merge_refine_schedule_rejects_an_invalid_output_selection() {
+    let sites: Vec<DynIndex> = (0..2).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..4)
+        .map(|m| Complex64::new(1.0 + m as f64, 0.5 * m as f64))
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = quantics_fourier_operator(2, FourierOptions::default()).expect("fourier");
+    let tolerance = ReconstructionTolerance::default();
+    let run = |output_regions| {
+        schedule_merge_refine(
+            &preimage,
+            &0,
+            &operator,
+            &sites,
+            &SubsetOperatorOptions { unitary: true },
+            tolerance,
+            &MergeRefineOptions {
+                output_regions,
+                ..Default::default()
+            },
+        )
+    };
+
+    // Naming no region asks for nothing, so it is rejected instead of returning an
+    // empty result.
+    let error = run(Some(Vec::new())).expect_err("an empty selection is invalid");
+    assert!(error.to_string().contains("at least one region"));
+
+    // A region must fix a contiguous prefix per axis: the outputs are the reversed
+    // sites, so fixing the second output index alone leaves a free index before it.
+    let group = CoordinateGroup::new(sites.clone());
+    let gap = Projector::from_pairs([(group.outputs[1].clone(), 0usize)]).expect("projector");
+    let error = run(Some(vec![gap])).expect_err("a non-prefix region is invalid");
+    assert!(error.to_string().contains("contiguous prefix"));
+
+    // An index outside the selection would silently request the whole output.
+    let stray = Projector::from_pairs([(DynIndex::new_dyn(2), 0usize)]).expect("projector");
+    let error = run(Some(vec![stray])).expect_err("a foreign index is invalid");
+    assert!(error
+        .to_string()
+        .contains("must fix only output indices of the selection"));
+
+    // Index identity ignores the dimension, so a look-alike index of dimension
+    // three stores coordinate two in an equal projector. The binary level
+    // structure must reject it instead of encoding a corrupt prefix key.
+    let ternary = Projector::from_pairs([(DynIndex::new(group.outputs[0].id, 3), 2usize)])
+        .expect("projector");
+    let error = run(Some(vec![ternary])).expect_err("a ternary coordinate is invalid");
+    assert!(error.to_string().contains("binary output coordinates"));
+}
+
+#[test]
+fn merge_refine_schedule_selects_an_output_region_across_two_axes_with_sparse_input() {
+    let sites: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..16)
+        .map(|m| Complex64::new(1.0 + (m as f64 * 0.4).sin(), 0.1 * m as f64))
+        .collect();
+    let tree = mps(&sites, &values);
+    // Input leaf 7 is omitted and read as zero under the explicit contract.
+    let keep: Vec<usize> = (0..16).filter(|leaf| *leaf != 7).collect();
+    let preimage = sparse_input_leaves(&tree, &sites, &keep);
+    let operator = two_axis_fourier_operator(&sites);
+    let groups = vec![
+        CoordinateGroup::new(sites[0..2].to_vec()),
+        CoordinateGroup::new(sites[2..4].to_vec()),
+    ];
+    let tolerance = ReconstructionTolerance {
+        rtol: 1e-12,
+        atol: 0.0,
+    };
+    let run = |output_regions| {
+        schedule_merge_refine(
+            &preimage,
+            &0,
+            &operator,
+            &sites,
+            &SubsetOperatorOptions { unitary: true },
+            tolerance,
+            &MergeRefineOptions {
+                coordinate_groups: Some(groups.clone()),
+                coverage: CoverageContract::ZeroForMissingLeaves,
+                max_work_items: 64,
+                output_regions,
+                ..Default::default()
+            },
+        )
+    };
+
+    // One output coordinate of the product grid, so a two-axis level keeps one of
+    // its four children.
+    let wanted = output_prefix_projector(&groups[0], 2, 0b10)
+        .intersection(&output_prefix_projector(&groups[1], 2, 0b01))
+        .expect("the two axis regions fix disjoint indices");
+    let selected = run(Some(vec![wanted.clone()])).expect("selected schedule");
+    let all = run(None).expect("unselected schedule");
+    assert_eq!(all.report().region_count, 16);
+    assert_eq!(selected.report().region_count, 1);
+    assert_eq!(selected.report().applied_operator_count, 15);
+    assert_eq!(selected.report().error_bound, 0.0);
+    assert!(
+        selected.report().additions < all.report().additions,
+        "a selection must skip work: {} is not below {}",
+        selected.report().additions,
+        all.report().additions
+    );
+
+    // The selected region matches the same region of the unselected run exactly.
+    let (indices, dense) = dense_of_regions(&selected);
+    let unselected = region_dense(&all, &wanted, &indices);
+    assert_eq!(max_error(&dense, &unselected), 0.0);
+}
+
 #[test]
 fn merge_refine_schedule_rejects_inconsistent_coordinate_groups() {
     let sites: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
@@ -2358,4 +2844,231 @@ fn merge_refine_schedule_rejects_inconsistent_coordinate_groups() {
     assert!(error
         .to_string()
         .contains("assign every selected index exactly once"));
+}
+
+#[test]
+fn merge_refine_schedule_refines_when_the_split_stores_no_more_than_the_candidate() {
+    // The accept direction of the split guard, with every decision far from a
+    // rounding boundary.
+    //
+    // Input `w(x) = 1 + c e^{-2 pi i x / N}` has the exact normalized DFT
+    // `sqrt(N) (delta_0 + c delta_{N-1})`: two deltas whose output bit strings differ
+    // in every bit. Split into its two input halves (siblings at depth 1), the root's
+    // first level merges them, which compresses both the root candidate and each child.
+    //
+    // - Root candidate: the two deltas, exactly rank 2 across every bond with singular
+    //   values `sqrt(N)` and `|c| sqrt(N)`; dropping the second costs
+    //   `|c| sqrt(N) ~ 4.8`, against an allowance of `rtol * ||w|| ~ 1e-8`. So it
+    //   exceeds the goal of 1 under any arithmetic order.
+    // - Children: fixing any output bit keeps exactly one delta, so each child is
+    //   exactly rank 1; the second singular value is rounding noise, far below the
+    //   share it is compressed against.
+    // - Storage: one rank-1 child stores `2 r` = 12 parameters, two store 24, while
+    //   the rank-2 candidate stores `4 + 8 (r - 2) + 4` = 40, so the split pays by a
+    //   wide margin rather than by one parameter.
+    let r = 6usize;
+    let n = 1usize << r;
+    let sites: Vec<DynIndex> = (0..r).map(|_| DynIndex::new_dyn(2)).collect();
+    let c = Complex64::new(0.0, 0.6);
+    let values: Vec<Complex64> = (0..n)
+        .map(|x| {
+            Complex64::new(1.0, 0.0)
+                + c * Complex64::from_polar(1.0, -2.0 * std::f64::consts::PI * x as f64 / n as f64)
+        })
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = partitioned_target(&tree, &sites[0]);
+    let operator = quantics_fourier_operator(r, FourierOptions::default()).expect("fourier");
+
+    let result = schedule_rank_limited(&preimage, &operator, &sites, 1e-8, 1);
+    let report = result.report().clone();
+
+    // One split at the root, accepted; each child then fits the goal and stops.
+    assert_eq!(report.refined_regions, 1, "{report:?}");
+    assert_eq!(report.region_count, 2, "{report:?}");
+    assert_eq!(report.stopped_regions, 2, "{report:?}");
+    assert_eq!(report.max_bond_dim, 1, "{report:?}");
+    // The rank-2 candidate was formed before the split.
+    assert!(report.max_transient_bond_dim >= 2, "{report:?}");
+    assert!(
+        report.error_bound <= report.absolute_tolerance,
+        "{report:?}"
+    );
+
+    let (indices, dense) = dense_of_regions(&result);
+    let expected = dft_oracle(&indices, &sites, &sites, &values);
+
+    // Premise, from the oracle rather than the schedule: the exact DFT is the two
+    // deltas, with magnitudes `sqrt(N)` and `|c| sqrt(N)`, at dense positions that
+    // differ in every output bit.
+    let scale = (n as f64).sqrt();
+    let peaks: Vec<(usize, Complex64)> = expected
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, value)| value.norm() > 1e-9 * scale)
+        .collect();
+    assert_eq!(peaks.len(), 2, "{peaks:?}");
+    let mut magnitudes: Vec<f64> = peaks
+        .iter()
+        .map(|(_, value)| value.norm() / scale)
+        .collect();
+    magnitudes.sort_by(f64::total_cmp);
+    assert!((magnitudes[0] - c.norm()).abs() < 1e-12, "{magnitudes:?}");
+    assert!((magnitudes[1] - 1.0).abs() < 1e-12, "{magnitudes:?}");
+    assert_eq!(peaks[0].0 ^ peaks[1].0, n - 1, "{peaks:?}");
+
+    // The retained superposition is the exact normalized DFT within the bound.
+    let residual = max_error(&dense, &expected);
+    assert!(
+        residual <= report.error_bound + 1e-9,
+        "residual {residual:e} exceeds the bound {:e}",
+        report.error_bound
+    );
+}
+
+#[test]
+fn merge_refine_schedule_stops_both_axes_when_the_merged_candidate_fits_the_goal() {
+    let lengths = [2usize, 2];
+    let sites: Vec<DynIndex> = (0..4).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..16)
+        .map(|m| {
+            let (x, y) = (m >> 2, m & 3);
+            Complex64::new(
+                1.0 + (x as f64 * 0.9).sin() + 0.3 * y as f64,
+                0.2 * (x + 2 * y) as f64,
+            )
+        })
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = chain_axis_fourier_operator(&lengths, &sites);
+    let groups = axis_groups(&lengths, &sites);
+    let schedule = |goal: Option<usize>, depth: usize| {
+        schedule_merge_refine(
+            &preimage,
+            &0,
+            &operator,
+            &sites,
+            &SubsetOperatorOptions { unitary: true },
+            ReconstructionTolerance {
+                rtol: 1e-12,
+                atol: 0.0,
+            },
+            &MergeRefineOptions {
+                coordinate_groups: Some(groups.clone()),
+                output_depth: Some(depth),
+                max_work_items: 4096,
+                target_bond_dim: goal,
+                ..Default::default()
+            },
+        )
+        .expect("schedule")
+    };
+
+    // A rank goal above the root's merged candidate stops every refining axis
+    // without a probe (one stop per axis), so the level keeps the root region
+    // instead of splitting into `2^2` children and the next level merges those four
+    // groups at the same key.
+    let adaptive = schedule(Some(64), 2);
+    let report = adaptive.report().clone();
+    assert_eq!(report.refined_regions, 0, "{report:?}");
+    assert_eq!(report.stopped_regions, 2, "{report:?}");
+    assert_eq!(report.region_count, 1);
+    assert_eq!(report.work_items_per_level, vec![16, 4, 1]);
+    assert_eq!(axis_depths(&adaptive, &groups), vec![vec![0, 0]]);
+
+    // The same level without a rank goal splits both axes, which is the `2^2`
+    // children the per-axis decision avoids.
+    let uniform = schedule(None, 1);
+    assert_eq!(uniform.report().region_count, 4);
+    assert_eq!(uniform.report().error_bound, 0.0);
+    assert_eq!(axis_depths(&uniform, &groups), vec![vec![1, 1]; 4]);
+    assert_eq!(
+        report.work_items_per_level[1] * (1 << lengths.len()),
+        uniform.report().work_items_per_level[1]
+    );
+
+    let (reference_indices, reference_values) = axis_product_dense(&lengths, &sites, &values);
+    for result in [&adaptive, &uniform] {
+        let (indices, dense) = dense_of_regions(result);
+        let expected = reorder(&reference_values, &reference_indices, &indices);
+        let bound = result.report().error_bound;
+        assert!(
+            max_error(&dense, &expected) <= bound + 1e-12,
+            "coordinate residual exceeds the bound {bound:e}"
+        );
+        let residual = l2_error(&dense, &expected);
+        assert!(
+            residual <= bound + 1e-12,
+            "L2 residual {residual:e} exceeds the bound {bound:e}"
+        );
+    }
+}
+
+#[test]
+fn merge_refine_schedule_stops_three_axes_when_the_merged_candidate_fits_the_goal() {
+    let lengths = [2usize, 2, 2];
+    let sites: Vec<DynIndex> = (0..6).map(|_| DynIndex::new_dyn(2)).collect();
+    let values: Vec<Complex64> = (0..64)
+        .map(|m| {
+            let (x, y, z) = (m >> 4, (m >> 2) & 3, m & 3);
+            Complex64::new(
+                1.0 + (x as f64 * 0.9).sin() + 0.3 * y as f64 + 0.05 * z as f64,
+                0.2 * (x + 2 * y + 3 * z) as f64,
+            )
+        })
+        .collect();
+    let tree = mps(&sites, &values);
+    let preimage = dyadic_input_leaves(&tree, &sites);
+    let operator = chain_axis_fourier_operator(&lengths, &sites);
+    let groups = axis_groups(&lengths, &sites);
+
+    let result = schedule_merge_refine(
+        &preimage,
+        &0,
+        &operator,
+        &sites,
+        &SubsetOperatorOptions { unitary: true },
+        ReconstructionTolerance {
+            rtol: 1e-12,
+            atol: 0.0,
+        },
+        &MergeRefineOptions {
+            coordinate_groups: Some(groups.clone()),
+            output_depth: Some(2),
+            max_work_items: 4096,
+            target_bond_dim: Some(64),
+            ..Default::default()
+        },
+    )
+    .expect("schedule");
+    let report = result.report().clone();
+
+    // The rank goal is above the root's merged candidate, so all three refining axes
+    // stop without a probe (one stop per axis). The level therefore keeps the root region
+    // instead of splitting it into `2^3` children, which is why it holds one group
+    // of eight work items where a uniform level holds sixty-four, and the next level
+    // merges those eight at the same output key instead of freezing them.
+    assert_eq!(report.refined_regions, 0, "{report:?}");
+    assert_eq!(report.stopped_regions, 3, "{report:?}");
+    assert_eq!(report.region_count, 1);
+    assert_eq!(report.level_count, 2);
+    assert_eq!(report.work_items_per_level, vec![64, 8, 1]);
+    assert_eq!(axis_depths(&result, &groups), vec![vec![0, 0, 0]]);
+
+    // The coarse region still reproduces the product transform inside the bound.
+    let (reference_indices, reference_values) = axis_product_dense(&lengths, &sites, &values);
+    let (indices, dense) = dense_of_regions(&result);
+    let expected = reorder(&reference_values, &reference_indices, &indices);
+    let bound = report.error_bound;
+    assert!(
+        max_error(&dense, &expected) <= bound + 1e-12,
+        "coordinate residual exceeds the bound {bound:e}"
+    );
+    let residual = l2_error(&dense, &expected);
+    assert!(
+        residual <= bound + 1e-12,
+        "L2 residual {residual:e} exceeds the bound {bound:e}"
+    );
 }

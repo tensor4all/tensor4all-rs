@@ -463,3 +463,127 @@ fn update_edge_measures_bond_whose_side_has_one_configuration() {
     update_edge_default(&mut tci, edge, sum_plus_one, &no_truncation_options()).unwrap();
     assert!(!tci.unmeasured_bonds.contains(&edge));
 }
+
+#[test]
+fn exhausted_rank_two_candidates_are_unmeasured_on_either_side() {
+    // The middle unit site offers only two candidates out of four possible
+    // configurations. The two selected pivots exhaust that side (#1352).
+    for edge in [TreeTciEdge::new(1, 2), TreeTciEdge::new(2, 3)] {
+        let mut state =
+            TreeTCI2::<f64>::new(vec![2, 2, 1, 2, 2], TreeTciGraph::linear_chain(5).unwrap())
+                .unwrap();
+        state
+            .add_global_pivots(&[vec![0; 5], vec![1, 1, 0, 1, 1]])
+            .unwrap();
+        let identity = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+            Ok(batch
+                .data()
+                .as_chunks::<5>()
+                .0
+                .iter()
+                .map(|point| {
+                    if point[0] + 2 * point[1] == point[3] + 2 * point[4] {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                })
+                .collect())
+        };
+        let selected =
+            update_edge_default(&mut state, edge, identity, &no_truncation_options()).unwrap();
+        assert_eq!(selected.rank, 2);
+        assert_eq!(state.bond_errors()[&edge], 0.0);
+        assert!(state.unmeasured_bonds.contains(&edge), "edge {edge:?}");
+        // A genuinely rank-one function has a residual to inspect after its
+        // first pivot, even though the same side still has only two candidates.
+        update_edge_default(
+            &mut state,
+            edge,
+            |b| Ok(vec![1.0; b.n_points()]),
+            &no_truncation_options(),
+        )
+        .unwrap();
+        assert!(!state.unmeasured_bonds.contains(&edge), "edge {edge:?}");
+    }
+}
+
+#[test]
+fn exhausted_candidates_measure_a_complete_rank_two_side() {
+    // Both central bonds of this shorter chain have exact maximum rank two.
+    for edge in [TreeTciEdge::new(0, 1), TreeTciEdge::new(1, 2)] {
+        let mut state =
+            TreeTCI2::<f64>::new(vec![2, 1, 2], TreeTciGraph::linear_chain(3).unwrap()).unwrap();
+        state
+            .add_global_pivots(&[vec![0; 3], vec![1, 0, 1]])
+            .unwrap();
+        state.unmeasured_bonds.insert(edge);
+        let selected = update_edge_default(
+            &mut state,
+            edge,
+            |batch| {
+                Ok(batch
+                    .data()
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|p| if p[0] == p[2] { 1.0 } else { 0.0 })
+                    .collect())
+            },
+            &no_truncation_options(),
+        )
+        .unwrap();
+        assert_eq!(selected.rank, 2);
+        assert_eq!(state.bond_errors()[&edge], 0.0);
+        assert!(!state.unmeasured_bonds.contains(&edge));
+    }
+}
+
+#[test]
+fn subtree_configuration_counts_are_compared_without_overflow() {
+    let key = SubtreeKey::new(vec![0, 1]);
+    for (dims, rank, expected) in [
+        ([1, 1], 1, false),
+        ([1, 2], 1, true),
+        ([2, 2], 3, true),
+        ([2, 2], 4, false),
+        ([2, 2], 5, false),
+        ([usize::MAX, 1], usize::MAX, false),
+        ([usize::MAX, 2], usize::MAX, true),
+    ] {
+        assert_eq!(
+            super::subtree_has_more_configurations(&dims, &key, rank),
+            expected,
+            "dims {dims:?}, rank {rank}"
+        );
+    }
+}
+
+#[test]
+fn physical_endpoints_keep_the_sampled_stopping_criterion() {
+    let mut state =
+        TreeTCI2::<f64>::new(vec![2; 6], TreeTciGraph::linear_chain(6).unwrap()).unwrap();
+    state.add_global_pivots(&[vec![0; 6], vec![1; 6]]).unwrap();
+    let edge = TreeTciEdge::new(2, 3);
+    let selected = update_edge_default(
+        &mut state,
+        edge,
+        |batch| {
+            Ok(batch
+                .data()
+                .as_chunks::<6>()
+                .0
+                .iter()
+                .map(|point| {
+                    let encode = |bits: &[usize]| bits.iter().fold(0, |n, &bit| 2 * n + bit);
+                    1.0 / (1 + encode(&point[..3]) + encode(&point[3..])) as f64
+                })
+                .collect())
+        },
+        &no_truncation_options(),
+    )
+    .unwrap();
+    assert_eq!(selected.rank, 4);
+    assert_eq!(state.bond_errors()[&edge], 0.0);
+    assert!(!state.unmeasured_bonds.contains(&edge));
+}

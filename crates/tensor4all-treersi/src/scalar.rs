@@ -49,8 +49,8 @@ impl<T> TreeRsiScalar for T where
 /// fn sorted<V: TreeRsiNode>(mut nodes: Vec<V>) -> Vec<V> { nodes.sort(); nodes }
 /// assert_eq!(sorted(vec![2usize, 0, 1]), vec![0, 1, 2]);
 /// ```
-pub trait TreeRsiNode: Clone + Debug + Eq + Hash + Ord + Send + Sync + 'static {}
-impl<V: Clone + Debug + Eq + Hash + Ord + Send + Sync + 'static> TreeRsiNode for V {}
+pub trait TreeRsiNode: Clone + Debug + Eq + Hash + Ord + Send + Sync {}
+impl<V: Clone + Debug + Eq + Hash + Ord + Send + Sync> TreeRsiNode for V {}
 
 fn scale_real(mut x: f64, mut exponent: i64) -> f64 {
     if x == 0.0 {

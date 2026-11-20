@@ -19,7 +19,6 @@ use crate::truncation::{
     validate_svd_truncation_options, SvdTruncationOptionsError, SvdTruncationPolicy,
 };
 use crate::TensorElement;
-use num_complex::Complex64;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -554,13 +553,15 @@ pub struct FactorizeResult<T: TensorIndex> {
     /// with a dimension-one bond and an exactly zero product. The selected
     /// canonical factor keeps its unit diagonal; the other factor is zero.
     pub rank: usize,
+    #[cfg(feature = "global-defaults")]
     incremental_qr_state: Option<IncrementalQrState>,
 }
 
+#[cfg(feature = "global-defaults")]
 #[derive(Debug, Clone)]
 pub(crate) enum IncrementalQrState {
     F64(tensor4all_tensorbackend::IncrementalQr<f64>),
-    C64(tensor4all_tensorbackend::IncrementalQr<Complex64>),
+    C64(tensor4all_tensorbackend::IncrementalQr<num_complex::Complex64>),
 }
 
 impl<T: TensorIndex> FactorizeResult<T> {
@@ -603,15 +604,18 @@ impl<T: TensorIndex> FactorizeResult<T> {
             bond_index,
             singular_values,
             rank,
+            #[cfg(feature = "global-defaults")]
             incremental_qr_state: None,
         }
     }
 
+    #[cfg(feature = "global-defaults")]
     pub(crate) fn with_incremental_qr_state(mut self, state: IncrementalQrState) -> Self {
         self.incremental_qr_state = Some(state);
         self
     }
 
+    #[cfg(feature = "global-defaults")]
     pub(crate) fn incremental_qr_state(&self) -> Option<&IncrementalQrState> {
         self.incremental_qr_state.as_ref()
     }
@@ -793,6 +797,30 @@ pub trait TensorVectorSpace: TensorIndex {
     /// assert!(!double.is_single_precision());
     /// ```
     fn is_single_precision(&self) -> bool;
+
+    /// Returns whether entries are stored as complex numbers (`Complex32` or
+    /// `Complex64`).
+    ///
+    /// Code that builds new tensors to combine with existing ones, such as
+    /// identity factors, uses this to choose a matching scalar type: scaling a
+    /// real tensor by a complex one with [`scale`](Self::scale) makes it
+    /// complex. A container reports `true` when any of its parts is complex.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tensor4all_core::{DynIndex, IdxTensor, TensorVectorSpace};
+    ///
+    /// let i = DynIndex::new_dyn(2);
+    /// let real = IdxTensor::from_dense(vec![i.clone()], vec![1.0_f64, 2.0]).unwrap();
+    /// let complex =
+    ///     IdxTensor::from_dense(vec![i], vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, 1.0)])
+    ///         .unwrap();
+    /// assert!(!real.is_complex());
+    /// assert!(complex.is_complex());
+    /// ```
+    fn is_complex(&self) -> bool;
 
     /// Compute the Frobenius norm of the tensor.
     ///

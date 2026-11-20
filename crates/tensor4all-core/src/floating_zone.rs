@@ -11,9 +11,9 @@ use crate::MultiIndex;
 
 /// Invalid search inputs or an error from a floating-zone evaluator.
 ///
-/// [`floating_zone_walk_with_initial_error`] validates the supplied starting
-/// residual before evaluating any candidate. Callback failures retain their
-/// original type in [`Self::Evaluation`].
+/// [`floating_zone_walk`] and [`floating_zone_walk_with_initial_error`]
+/// validate their arguments before evaluating any candidate. Callback failures
+/// retain their original type in [`Self::Evaluation`].
 ///
 /// # Examples
 ///
@@ -113,13 +113,17 @@ pub enum FloatingZoneError<E> {
 ///
 /// # Errors
 ///
-/// Propagates the error returned by `eval_batch` unchanged - typically an
-/// operation failure or an index mismatch from the underlying evaluator.
+/// Returns [`FloatingZoneError`] before evaluating anything for a zero local
+/// dimension, a starting-point length or coordinate mismatch, a negative or
+/// NaN `early_stop_tol`, or an unrepresentable candidate allocation. Positive
+/// infinity is a valid stopping tolerance, and empty `local_dims` are valid
+/// with an empty starting point. Callback errors are wrapped in
+/// [`FloatingZoneError::Evaluation`] with their original value and type.
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_core::floating_zone_walk;
+/// use tensor4all_core::{floating_zone_walk, FloatingZoneError};
 ///
 /// // A separable error surface whose maximum is the all-last-coordinate
 /// // point, so a greedy coordinate walk must find it exactly.
@@ -142,7 +146,7 @@ pub enum FloatingZoneError<E> {
 /// // One point for the start, then `local_dims[site] - 1` per site scan: the
 /// // coordinate the pivot already holds is never re-evaluated.
 /// assert_eq!(evaluated, 1 + 2 * ((3 - 1) + (4 - 1) + (2 - 1)));
-/// # Ok::<(), std::convert::Infallible>(())
+/// # Ok::<(), FloatingZoneError<std::convert::Infallible>>(())
 /// ```
 pub fn floating_zone_walk<E, Err>(
     local_dims: &[usize],
@@ -150,14 +154,16 @@ pub fn floating_zone_walk<E, Err>(
     max_sweeps: usize,
     early_stop_tol: f64,
     mut eval_batch: E,
-) -> std::result::Result<(MultiIndex, f64), Err>
+) -> std::result::Result<(MultiIndex, f64), FloatingZoneError<Err>>
 where
     E: FnMut(Option<usize>, &[MultiIndex]) -> std::result::Result<Vec<f64>, Err>,
 {
+    validate_search(local_dims, init_p, max_sweeps, early_stop_tol)?;
     // Initial error at the starting point. This also seeds `pivot_error`,
     // which is what lets every site scan below skip the candidate the pivot
     // already holds.
-    let start_errors = eval_batch(None, std::slice::from_ref(init_p))?;
+    let start_errors =
+        eval_batch(None, std::slice::from_ref(init_p)).map_err(FloatingZoneError::Evaluation)?;
     floating_zone_walk_unchecked(
         local_dims,
         init_p,
@@ -166,6 +172,7 @@ where
         early_stop_tol,
         eval_batch,
     )
+    .map_err(FloatingZoneError::Evaluation)
 }
 
 /// Walk a floating-zone trajectory using an already evaluated starting error.
@@ -184,12 +191,13 @@ where
 /// # Errors
 ///
 /// Returns [`FloatingZoneError`] before evaluation for a zero local dimension,
-/// a starting-point length or coordinate mismatch, a negative or nonfinite
-/// `initial_error`, a negative or NaN `early_stop_tol`, or an unrepresentable
-/// candidate allocation. Positive infinity is a valid stopping tolerance.
-/// Empty `local_dims` are valid with an empty starting point. Validation also
-/// applies with zero sweeps. Callback errors are wrapped in
-/// [`FloatingZoneError::Evaluation`] with their original value and type.
+/// a starting-point length or coordinate mismatch, a negative or NaN
+/// `early_stop_tol`, or an unrepresentable candidate allocation. Positive
+/// infinity is a valid stopping tolerance. Empty `local_dims` are valid with an
+/// empty starting point. Validation also applies with zero sweeps. A negative
+/// or nonfinite `initial_error` is rejected after those checks. Callback errors
+/// are wrapped in [`FloatingZoneError::Evaluation`] with their original value
+/// and type.
 ///
 /// # Examples
 ///
@@ -219,6 +227,34 @@ pub fn floating_zone_walk_with_initial_error<E, Err>(
 where
     E: FnMut(Option<usize>, &[MultiIndex]) -> std::result::Result<Vec<f64>, Err>,
 {
+    validate_search(local_dims, init_p, max_sweeps, early_stop_tol)?;
+    if !initial_error.is_finite() || initial_error < 0.0 {
+        return Err(FloatingZoneError::InvalidInitialError {
+            value: initial_error,
+        });
+    }
+    floating_zone_walk_unchecked(
+        local_dims,
+        init_p,
+        initial_error,
+        max_sweeps,
+        early_stop_tol,
+        eval_batch,
+    )
+    .map_err(FloatingZoneError::Evaluation)
+}
+
+/// Checks every search argument the two public entry points share.
+///
+/// Runs before any evaluation or allocation so both entry points reject the
+/// same inputs with the same variants, and so the walk's unchecked index is
+/// never the first guard on caller-supplied metadata.
+fn validate_search<E>(
+    local_dims: &[usize],
+    init_p: &MultiIndex,
+    max_sweeps: usize,
+    early_stop_tol: f64,
+) -> std::result::Result<(), FloatingZoneError<E>> {
     if init_p.len() != local_dims.len() {
         return Err(FloatingZoneError::StartingPointLength {
             expected: local_dims.len(),
@@ -251,25 +287,12 @@ where
             }
         }
     }
-    if !initial_error.is_finite() || initial_error < 0.0 {
-        return Err(FloatingZoneError::InvalidInitialError {
-            value: initial_error,
-        });
-    }
     if early_stop_tol.is_nan() || early_stop_tol < 0.0 {
         return Err(FloatingZoneError::InvalidTolerance {
             value: early_stop_tol,
         });
     }
-    floating_zone_walk_unchecked(
-        local_dims,
-        init_p,
-        initial_error,
-        max_sweeps,
-        early_stop_tol,
-        eval_batch,
-    )
-    .map_err(FloatingZoneError::Evaluation)
+    Ok(())
 }
 
 fn floating_zone_walk_unchecked<E, Err>(

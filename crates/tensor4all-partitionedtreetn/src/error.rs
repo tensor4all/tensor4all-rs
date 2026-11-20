@@ -89,10 +89,89 @@ pub enum PartitionedTreeTNError {
         value: usize,
     },
 
+    /// The exact sum of one group of patches would exceed the configured limit.
+    ///
+    /// Returned before the sum is formed by
+    /// [`PartitionedTreeTN::contract`](crate::PartitionedTreeTN::contract) and
+    /// [`PartitionedTreeTN::contract_selected`](crate::PartitionedTreeTN::contract_selected)
+    /// using [`PartitionedContractionOptions::group_sum_limit_bytes`](crate::PartitionedContractionOptions::group_sum_limit_bytes).
+    /// [`contract_adaptive`](crate::contract_adaptive), its variants, and
+    /// [`add_with_patching`](crate::add_with_patching) use
+    /// [`PatchingOptions::group_sum_limit_bytes`](crate::PatchingOptions::group_sum_limit_bytes).
+    /// The size is the estimate of
+    /// [`TreeTN::estimate_exact_sum_bytes`](tensor4all_treetn::TreeTN::estimate_exact_sum_bytes).
+    ///
+    /// # Remedy
+    /// A group holds every contribution to one output: in a contraction, the
+    /// compatible patch pairs with one output projector; in
+    /// `add_with_patching`, the input patches with one key. Its summed bond is
+    /// the sum of the contribution bonds.
+    ///
+    /// - An operator that mixes every value of the indices the patches fix,
+    ///   such as a Fourier transform on patches of the transformed variable,
+    ///   puts every patch pair into one group. Apply such an operator with
+    ///   [`schedule_merge_refine`](crate::reconstruction::schedule_merge_refine)
+    ///   (or the patched Fourier transform of `tensor4all-quanticstransform`,
+    ///   built on it) instead of `contract` or `contract_adaptive`.
+    /// - [`PartitionedTreeTN::contract_selected`](crate::PartitionedTreeTN::contract_selected)
+    ///   and [`contract_adaptive_selected`](crate::contract_adaptive_selected)
+    ///   check and build only the groups of the wanted outputs, so an output
+    ///   that is not needed costs nothing.
+    /// - Otherwise raise the limit if the memory is available, leaving room for
+    ///   the truncation that follows the sum; see
+    ///   [`DEFAULT_GROUP_SUM_LIMIT_BYTES`](crate::DEFAULT_GROUP_SUM_LIMIT_BYTES)
+    ///   for a rule relating the limit to a memory budget.
+    #[error(
+        "{operation}: the exact sum of {terms} patches would take an estimated {estimated_bytes} \
+         bytes, above group_sum_limit_bytes = {limit_bytes}; raise the limit, form only the \
+         outputs you need, or, for an operator that mixes every value of the patched indices, \
+         apply it with schedule_merge_refine"
+    )]
+    GroupSumLimit {
+        /// Operation that would have formed the sum.
+        operation: &'static str,
+        /// Number of patches in the sum.
+        terms: usize,
+        /// Estimated size of the built sum, in bytes.
+        estimated_bytes: usize,
+        /// The limit it exceeds, in bytes.
+        limit_bytes: usize,
+    },
+
+    /// A certified operator application on one patch was refused because its
+    /// memory estimate exceeds the configured limit.
+    ///
+    /// Returned by
+    /// [`schedule_merge_refine`](crate::reconstruction::schedule_merge_refine)
+    /// under
+    /// [`OperatorApplication::Certified`](crate::reconstruction::OperatorApplication::Certified),
+    /// mapped from
+    /// [`CertifiedApplyError::MemoryLimit`](tensor4all_treetn::CertifiedApplyError::MemoryLimit),
+    /// which documents when each estimate is checked. Both numbers are kept, so
+    /// the estimate is never reported as the limit.
+    ///
+    /// # Remedy
+    /// Split the input into finer patches, whose bonds are smaller, or raise
+    /// `memory_limit` if the machine has the memory.
+    #[error(
+        "{operation} needs an estimated {estimated_bytes} bytes for one patch, above \
+         memory_limit = {limit_bytes} bytes; apply it to finer patches or raise the limit"
+    )]
+    CertifiedMemoryLimit {
+        /// Operation whose application was refused.
+        operation: &'static str,
+        /// The estimate that exceeded the limit, in bytes.
+        estimated_bytes: usize,
+        /// The configured `memory_limit`, in bytes.
+        limit_bytes: usize,
+    },
+
     /// The automatic refinement of differing patch layouts in
     /// [`PartitionedTreeTN::add`](crate::PartitionedTreeTN::add),
     /// [`PartitionedTreeTN::add_truncated`](crate::PartitionedTreeTN::add_truncated),
-    /// or [`PartitionedTreeTN::contract`](crate::PartitionedTreeTN::contract)
+    /// [`PartitionedTreeTN::contract`](crate::PartitionedTreeTN::contract),
+    /// [`contract_adaptive`](crate::contract_adaptive), or
+    /// [`contract_adaptive_selected`](crate::contract_adaptive_selected)
     /// needs more layout projectors than
     /// [`AUTOMATIC_REFINEMENT_LIMIT`](crate::AUTOMATIC_REFINEMENT_LIMIT).
     ///
@@ -107,7 +186,9 @@ pub enum PartitionedTreeTNError {
     RefinementTooLarge {
         /// Number of layout projectors the refinement needs, saturating at
         /// `usize::MAX`. For `contract` this is the larger of the two
-        /// operands' grids.
+        /// operands' grids; for adaptive contraction it is the full candidate
+        /// output grid after selecting original pair keys, including uncovered
+        /// cells.
         atoms: usize,
         /// The limit that `atoms` exceeds.
         limit: usize,

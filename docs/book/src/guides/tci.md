@@ -70,16 +70,18 @@ requires no recent global pivots and a stable rank history.
 The default global pivot finder walks the residual `|f - tt|` from random
 starts, retaining each maximizing coordinate for the next coordinate scan.
 It repeats full sweeps until the residual stops increasing, exceeds ten times
-the acceptance threshold, or reaches 100 sweeps. The acceptance threshold is
+the discovery threshold, or reaches 100 sweeps. The discovery threshold is
 `abs_tol * tol_margin_global_search`, where `abs_tol` includes the configured
-error normalization. Tensor-train evaluations use a shared cache and batches
-of coordinate candidates.
+error normalization. Points above it are returned as pivots; if no walk crosses
+it, walked residuals above `abs_tol` are returned instead, so a tolerance
+violation the search saw is not dropped. Tensor-train evaluations use a shared
+cache and batches of coordinate candidates.
 
-Custom `GlobalPivotFinder` implementations return `Result<Vec<MultiIndex>>`
-and require `T: Scalar + TTScalar + EinsumScalar`; use `Ok(pivots)` for a
-successful search. `optimize_with_finder` propagates search failures. The
-`EinsumScalar` bound also applies to `crossinterpolate2`, `integrate`, and
-the adaptive interpolation entry points that call them.
+Custom `GlobalPivotFinder` implementations return
+`Result<GlobalPivotSearchResult>` and declare `T: Scalar + TTScalar` on
+`find_global_pivots`. The result holds the pivots and `max_sampled_error`, the
+largest residual the search measured (`0.0` if it measured none).
+`optimize_with_finder` propagates search failures.
 
 ### Convergence diagnostics
 
@@ -88,8 +90,20 @@ sample magnitude known at its start (or uses `tolerance` directly when
 `normalize_error = false`). Full and Rook two-site updates use that fixed
 threshold; the local LU factorization retains its separate numerical relative
 cutoff. Global pivot search uses the same absolute threshold, multiplied by
-`tol_margin_global_search`. These local criteria are not a guaranteed uniform
-error bound over the entire tensor.
+`tol_margin_global_search` for discoveries. The error recorded for a half-sweep
+is the larger of the local bond errors and the largest residual the global
+search measured on the swept approximation, so `Converged` requires both to be
+below `tolerance`. These are sampled criteria, not a guaranteed uniform error
+bound over the entire tensor.
+
+Within one two-site update the strategies differ. `PivotSearchStrategy::Full`
+(the default) records the maximum remaining residual of the candidate matrix
+as the bond error, a certified bound for that matrix. `PivotSearchStrategy::Rook`
+finds each pivot with an O(d) rook walk and stops when the current rook pivot
+and two more walks from other columns all find nothing above the threshold; its
+bond error is that last rook pivot, not a bound, so
+`TCI2Termination::Converged` under `Rook` does not prove the tolerance. Use
+`Full` when a certified bound is required.
 
 The `errors` vector tracks the normalized bond error after each half-sweep. The algorithm converges when:
 

@@ -337,15 +337,16 @@ fn compress<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
 
 /// Truncate `source` toward the SVD allowance derived from `allowance`.
 ///
-/// Shared by the greedy reconstruction engine and the merge-refine schedule, so
-/// both measure a candidate residual the same way. Returns the candidate, which
+/// Shared by the greedy reconstruction engine, the merge-refine schedule, and
+/// the sibling merge of patched interpolation results, so all of them measure
+/// a candidate residual the same way. Returns the candidate, which
 /// is `source` itself when truncation is disabled, cannot pay for itself, or
 /// exceeds the allowance, together with the measured residual against
 /// `source`.
 ///
 /// # Errors
 /// Propagates canonicalization, SVD, remasking, and norm errors.
-pub(super) fn truncate_toward_allowance<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
+pub(crate) fn truncate_toward_allowance<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
     source: &SubDomainTreeTN<V>,
     center: &V,
     allowance: f64,
@@ -391,7 +392,12 @@ pub(super) fn checked_add(a: usize, b: usize) -> Result<usize> {
         .ok_or(PartitionedTreeTNError::LogicalParameterCountOverflow)
 }
 
-fn parameter_count<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
+/// Total stored parameters of a term list.
+///
+/// The region engine uses it to pick the cheapest of its candidate splits (it
+/// splits only when the children lower the retained rank); the merge-refine
+/// schedule uses it in its split guard, against the merged unsplit candidate.
+pub(super) fn parameter_count<V: Clone + Hash + Eq + Ord + Send + Sync + Debug>(
     terms: &[SubDomainTreeTN<V>],
 ) -> Result<usize> {
     terms.iter().try_fold(0, |total, term| {

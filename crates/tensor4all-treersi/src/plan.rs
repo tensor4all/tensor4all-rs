@@ -77,7 +77,7 @@ pub(crate) fn enforce_limit(resource: &'static str, requested: usize, limit: usi
     Ok(())
 }
 
-fn validate_options<V>(options: &TreeRsiOptions<V>) -> Result<()> {
+pub(crate) fn validate_options<V>(options: &TreeRsiOptions<V>) -> Result<()> {
     if options.max_bond_dim == Some(0) {
         return Err(TreeRsiError::InvalidOption {
             option: "max_bond_dim",

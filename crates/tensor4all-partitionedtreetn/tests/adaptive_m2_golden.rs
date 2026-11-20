@@ -43,6 +43,15 @@
 //! evaluations, terminations, bond dimensions, and every nonzero float are
 //! unchanged; 40 stored zeros changed sign (`-0.0` to `0.0`).
 //!
+//! `dense_exact_one_site_patches` was re-recorded when the `SampledMax`
+//! reference became a searched maximum (#1274). From its single root
+//! candidate, `f(1, 0) = 1`, the coordinate ascent reaches `f(1, 7) = 8`, so
+//! `reference_scale` is 8 instead of 1, and `cache_hits` is 48 instead of 26,
+//! because the search revisits cached points. Its splits, evaluations, patches
+//! and every stored float are unchanged. The other scenarios were kept as
+//! recorded: they give their reference, or their candidates already hold the
+//! maximum.
+//!
 //! `treetci_quantics_tree_recycled` was re-recorded again when TreeTCI began
 //! enriching the initial pivots around vertices of local dimension 1 (#1153;
 //! the junction `r` carries no site): 8188 cache hits became 8314, from
@@ -58,6 +67,25 @@
 //! their accepted patches) went from 0.0 to values of order 1e-17, and two
 //! other estimates moved within 1e-16. Function evaluations, terminations,
 //! bond dimensions, and node data are unchanged.
+//!
+//! Both TreeTCI scenarios were re-recorded for #1352: exhausting the
+//! candidates at a dimension-one endpoint below the full subtree rank now
+//! reports `ErrorNotMeasured`. The sampled-max driver splits those patches
+//! instead of accepting their structural zero residuals. Splits increase from
+//! 3 to 5 without pivot recycling and from 3 to 9 with it; cache hits become
+//! 13721 and 20551. Both runs still evaluate the same 128 target points and
+//! reproduce the function at the original accuracy tolerance. Dense scenario
+//! records and all comparison tolerances are unchanged.
+//!
+//! Both TreeTCI scenarios were re-recorded again when TreeTCI's recorded
+//! error started including the residuals its global search measured, and
+//! the search began confirming retained pivots at dimension-one endpoints
+//! (#1352, three-branch case). Cache hits went from 13721 to 16487 and from
+//! 20551 to 24879, from confirmation walks over points already in the
+//! evaluation memo. Engine-call error estimates that were 0 or below 1e-16
+//! became rounding-level values of at most 3.4e-16. Function evaluations (128
+//! each), splits (5 and 9), terminations, bond dimensions, and node data are
+//! unchanged; dense scenario records are kept.
 
 use crate::adaptive_common;
 
@@ -535,6 +563,14 @@ fn run_scenario(scenario: &Scenario) -> (Value, Vec<EngineCall>) {
         (Engine::TreeTci, Function::Real(f)) => {
             let engine = RecordingTreeTci::default();
             let result = run_typed(&engine, scenario, f.as_ref());
+            // Re-recording must preserve the target, not only the driver's
+            // discrete decisions. Check every entry at the existing tolerance.
+            assert_accurate(
+                &result,
+                &scenario.problem,
+                f.as_ref(),
+                scenario.options.tolerance.rtol,
+            );
             let calls = engine.calls.lock().unwrap().clone();
             (capture(scenario, &result, &calls), calls)
         }

@@ -19,7 +19,7 @@ pub(crate) trait PivotKernel<T: MatrixLuciScalar> {
     fn factorize<S: CandidateMatrixSource<T>>(
         &self,
         source: &S,
-        options: &PivotKernelOptions,
+        options: &PivotKernelOptions<'_>,
     ) -> crate::matrixluci::Result<PivotSelectionCore>;
 }
 

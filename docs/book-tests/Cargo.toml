@@ -11,12 +11,14 @@ publish = false
 # through `scripts/test-mdbook.sh`.
 
 [dependencies]
-tensor4all-core = { path = "../../crates/tensor4all-core" }
+# Exercises the context-free API, which needs the process-global route.
+tensor4all-core = { path = "../../crates/tensor4all-core", features = ["global-defaults"] }
 tensor4all-simplett = { path = "../../crates/tensor4all-simplett" }
 tensor4all-tensorci = { path = "../../crates/tensor4all-tensorci" }
-tensor4all-treetn = { path = "../../crates/tensor4all-treetn" }
+# The legacy-QTT tutorial snippets exercise SimpleTT state conversion.
+tensor4all-treetn = { path = "../../crates/tensor4all-treetn", features = ["simplett-bridge"] }
 tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend" }
-tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform" }
+tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform", features = ["partitioned"] }
 tensor4all-quanticstci = { path = "../../crates/tensor4all-quanticstci" }
 tensor4all-interpolativeqtt = { path = "../../crates/tensor4all-interpolativeqtt" }
 tensor4all-itensorlike = { path = "../../crates/tensor4all-itensorlike" }

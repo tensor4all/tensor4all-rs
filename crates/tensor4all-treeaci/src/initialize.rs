@@ -141,6 +141,7 @@ pub(crate) fn build_random_output<T: TreeAciScalar, V: TreeAciNode>(
     problem: &PreparedTreeProblem<V>,
     ranks: &[usize],
     rng: &mut dyn rand::RngCore,
+    exec: &crate::exec::Exec<'_, '_>,
 ) -> Result<TreeTN<IdxTensor, V>> {
     let output_bonds = ranks
         .iter()
@@ -199,11 +200,12 @@ pub(crate) fn build_random_output<T: TreeAciScalar, V: TreeAciNode>(
                 tensor4all_core::Scalar::from_f64(value)
             })
             .collect::<Vec<T>>();
-        tensors.push(IdxTensor::from_dense(indices, values).map_err(|error| {
-            TreeAciError::Numerical {
-                message: error.to_string(),
-            }
-        })?);
+        tensors.push(
+            exec.tensor(indices, values)
+                .map_err(|error| TreeAciError::Numerical {
+                    message: error.to_string(),
+                })?,
+        );
     }
     let output = TreeTN::from_tensors(tensors, problem.node_order.clone())?;
     output.verify_internal_consistency()?;

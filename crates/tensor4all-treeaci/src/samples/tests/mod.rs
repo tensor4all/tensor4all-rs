@@ -238,7 +238,7 @@ fn projection_scratch_reuse_overwrites_stale_dependencies_and_recovers_after_err
 #[test]
 fn masked_injection_projects_only_active_cuts_and_their_dependencies() {
     let problem = prepare(&[(0, 1), (0, 2), (0, 3)], 4);
-    let point = [1, 1, 1, 1];
+    let point = [1, 1, 0, 0];
     let forward = 0;
     let reverse = problem.directed_edges[forward].reverse;
 
@@ -266,7 +266,20 @@ fn masked_injection_projects_only_active_cuts_and_their_dependencies() {
     active[forward] = true;
     active[reverse] = true;
     let report = actual
-        .inject_global_point_masked(&mut candidates, &problem, &point, &active)
+        .inject_global_point_masked(
+            &mut candidates,
+            &problem,
+            &point,
+            super::CandidateCapacity {
+                limits: &active
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| if pair[0] && pair[1] { 2 } else { 1 })
+                    .collect::<Vec<_>>(),
+                required_closure: &vec![true; problem.directed_edges.len()],
+            },
+        )
         .unwrap();
 
     assert_eq!(report.total_added, 2);

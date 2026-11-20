@@ -6,8 +6,8 @@
 ///
 /// Controls rank truncation, tolerance thresholds, and the normalization
 /// convention (left-orthogonal vs. right-orthogonal).
-#[derive(Debug, Clone)]
-pub(crate) struct PivotKernelOptions {
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PivotKernelOptions<'a> {
     /// Relative tolerance.
     pub rel_tol: f64,
     /// Absolute tolerance.
@@ -16,6 +16,19 @@ pub(crate) struct PivotKernelOptions {
     pub max_bond_dim: usize,
     /// Whether the left factor is unit-diagonal.
     pub left_orthogonal: bool,
+    /// Pivots (as source row and column indices) selected by the previous
+    /// factorization of the same candidate matrix, in the order they were
+    /// accepted.
+    ///
+    /// The rook kernel starts the k-th walk from the k-th pair, as `arrlu`
+    /// starts from its `I0`/`J0`, so it does not rediscover the same rows and
+    /// columns on every sweep. Empty means "no previous factorization" and the
+    /// walk starts from the first remaining column. Other kernels ignore it.
+    ///
+    /// Borrowed rather than owned so the options stay `Copy`: kernels are
+    /// called in tight loops and every caller either has no seeds or has them
+    /// in hand.
+    pub seeds: &'a [(usize, usize)],
 }
 
 /// Result of pivot selection: chosen row/column indices, rank, and error history.
@@ -31,7 +44,7 @@ pub(crate) struct PivotSelectionCore {
     pub rank: usize,
 }
 
-impl PivotKernelOptions {
+impl PivotKernelOptions<'_> {
     /// Canonical options for dense no-truncation behavior.
     #[cfg(test)]
     pub fn no_truncation() -> Self {
@@ -40,17 +53,19 @@ impl PivotKernelOptions {
             abs_tol: 0.0,
             max_bond_dim: usize::MAX,
             left_orthogonal: true,
+            seeds: &[],
         }
     }
 }
 
-impl Default for PivotKernelOptions {
+impl Default for PivotKernelOptions<'_> {
     fn default() -> Self {
         Self {
             rel_tol: 1e-14,
             abs_tol: 0.0,
             max_bond_dim: usize::MAX,
             left_orthogonal: true,
+            seeds: &[],
         }
     }
 }

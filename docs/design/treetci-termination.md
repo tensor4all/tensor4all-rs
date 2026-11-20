@@ -17,10 +17,22 @@ The reasons describe the existing optimization loop, in its decision order:
 | `DegenerateCandidateSet` | The `Converged` condition holds on the recorded errors, but the most recent update of at least one edge could not measure its bond error. | The run stops where it would have reported `Converged`. The approximation may be inaccurate. |
 | `MaxIterations` | The requested iterations completed without either stopping condition. | A small final error alone does not establish convergence. |
 
-The error is `max_bond_error / max_sample_value` when normalization is enabled
-and the sampled scale is positive; otherwise it is the raw bond error. The
-global search uses `tolerance * max_sample_value` in normalized mode and
-`tolerance` otherwise, with `tol_margin_global_search` as its acceptance margin.
+The recorded error is the maximum of local bond residuals and residuals
+actually observed by the global search during that iteration. With a positive
+sampled scale and normalization enabled, divide that maximum by
+`max_sample_value`; otherwise use it unnormalized. The observer receives
+this same value after search, along with evaluation accounting including the
+search. New pivots are processed in the next sweep.
+
+Global search uses `tolerance * max_sample_value` in normalized mode and
+`tolerance` otherwise. Discoveries above `tol_margin_global_search` times that
+absolute tolerance take priority; when none cross the margin, already observed
+tolerance violations still qualify. If ordinary starts yield no pivot, edges
+with a dimension-one endpoint supply retained tail pivot pairs and restarts
+that preserve one observed subtree while randomizing its complement. Each
+extra family is bounded by `nsearch` walks. These checks can escape sparse
+support that uniform random starts miss; they do not exhaust the domain or
+turn sampled convergence into an error bound.
 
 Global search is skipped after the final requested iteration and at a
 bond-saturation stop. An injected pivot must be processed by a later sweep:
@@ -36,18 +48,30 @@ function.
 
 ## Unmeasured bond errors
 
-An edge update measures nothing when one side of its candidate matrix has a
-single candidate while both sides of the edge have more than one
-configuration: the first pivot exhausts that side and the LU stops with a zero
-residual whatever the function is. Around a vertex of local dimension 1 whose
-adjacent bonds have rank 1, the junction-side candidate set of each adjacent
-bond is the product of the other bonds' single pivots, so every one of those
-bonds is in this state and none can grow
-([#1153](https://github.com/tensor4all/tensor4all-rs/issues/1153)). Such an
-error does not count toward `Converged`; the run reports
-`DegenerateCandidateSet` instead. An edge whose one side has only one
-configuration (all its sites of local dimension 1) has rank 1 exactly and is
-measured.
+An edge update is marked unmeasured when a candidate side has only one entry,
+or the selected pivots exhaust the candidates at an endpoint of local dimension
+1, while both full subtrees admit more configurations than the stored rank.
+The dimension-one endpoint has no local variation to probe beyond the
+neighboring pivots. The LU then records a zero residual because no candidate
+row or column remains, even if unsampled configurations would increase the rank. Such an error does not count toward
+`Converged`; the run reports `DegenerateCandidateSet` instead. If the rank
+reaches the full configuration count of either subtree, candidate exhaustion
+is legitimate: the bond cannot grow further. A rank below both candidate counts
+also has a residual to measure. At endpoints of local dimension greater than
+one, exhausting the local expansion alone does not invalidate the ordinary
+sampled stopping criterion; this diagnostic is not a global error certificate.
+
+The rank-1 case occurs around a vertex of local dimension 1 whose adjacent
+bonds have rank 1: the junction-side candidates are the product of the other
+bonds' single pivots, so none of those bonds can grow
+([#1153](https://github.com/tensor4all/tensor4all-rs/issues/1153)). The same
+problem occurs at larger ranks on chains containing a dimension-1 site. Its
+neighbor-product candidates can stop at rank 14 even though the full
+bipartition admits rank 16; neither a zero local error nor a global search
+that finds no new pivots establishes convergence
+([#1352](https://github.com/tensor4all/tensor4all-rs/issues/1352)). The diagnostic
+qualifies the recorded error; it does not enrich candidates or guarantee that
+the returned approximation meets the requested tolerance.
 
 To let those bonds grow, each optimization call first enriches the pivots
 around vertices of local dimension 1, following xfac's

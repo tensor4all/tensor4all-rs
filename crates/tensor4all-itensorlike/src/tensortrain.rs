@@ -132,7 +132,7 @@ struct PackedSiteTensor<T> {
 }
 
 impl<T: Copy> PackedSiteTensor<T> {
-    #[cfg(any(test, not(feature = "backend-tenferro")))]
+    #[cfg(test)]
     fn get(&self, left: usize, physical: usize, right: usize) -> T {
         debug_assert!(left < self.left_dim);
         debug_assert!(physical < self.physical_dim);
@@ -1212,11 +1212,13 @@ impl TensorTrain {
     /// assert!(tt.max_bond_dim() <= 2);
     /// ```
     pub fn truncate(&mut self, options: &TruncateOptions) -> Result<()> {
+        // Validate before the single-site/empty no-op shortcut so that invalid
+        // options are rejected with the same typed error on every path.
+        validate_svd_truncation_options(options.max_bond_dim(), options.svd_policy())?;
+
         if self.len() <= 1 {
             return Ok(());
         }
-
-        validate_svd_truncation_options(options.max_bond_dim(), options.svd_policy())?;
 
         // Convert TruncateOptions to TruncationOptions
         let mut treetn_options = TruncationOptions::new();
@@ -1554,10 +1556,10 @@ impl TensorTrain {
         }
 
         if let Some(sites) = Self::pack_normalized_sites::<f64>(self)? {
-            return Ok(Some(Self::norm_squared_from_packed_sites(sites)?));
+            return Ok(Some(self.norm_squared_from_packed_sites(sites)?));
         }
         if let Some(sites) = Self::pack_normalized_sites::<Complex64>(self)? {
-            return Ok(Some(Self::norm_squared_from_packed_sites(sites)?));
+            return Ok(Some(self.norm_squared_from_packed_sites(sites)?));
         }
 
         Ok(None)
@@ -1658,10 +1660,9 @@ impl TensorTrain {
         Ok(Some(sites))
     }
 
-    /// Reference implementation for differential tests and builds without a
-    /// process-global tensorbackend. Its nested loops are intentionally kept
-    /// out of the optimized default path.
-    #[cfg(any(test, not(feature = "backend-tenferro")))]
+    /// Host reference for the packed-site norm, used only by differential tests
+    /// of the backend kernel. Its nested loops stay out of every library path.
+    #[cfg(test)]
     fn norm_squared_from_packed_sites_oracle<T: NormAccumScalar>(
         sites: &[PackedSiteTensor<T>],
     ) -> Result<f64> {
@@ -1709,8 +1710,51 @@ impl TensorTrain {
         Ok(current[0].into_nonnegative_real())
     }
 
-    #[cfg(feature = "backend-tenferro")]
-    fn norm_squared_from_packed_sites<T>(sites: Vec<PackedSiteTensor<T>>) -> Result<f64>
+    /// Packed-site norm on the backend einsum kernel.
+    ///
+    /// The kernel runs on the CPU engine of the execution context that owns this
+    /// chain's site tensors, so a chain built in a caller's context keeps that
+    /// context's engine and thread policy and needs no process-global route. A
+    /// chain with no CPU-owned eager value (host-only sites) takes the implicit
+    /// route: the process-global context with `tensor4all-core/global-defaults`,
+    /// and a typed `ExecutionContextEntryError::NoContext` refusal without it
+    /// (#1403). The kernel is the same on both routes; there is no host fallback.
+    ///
+    /// The owner is the first site whose value a CPU context owns; a chain mixes
+    /// contexts only if its caller built it that way. A caller that holds the
+    /// owning context's session on this thread gets that context's typed
+    /// re-entry refusal, as it already did from the packing step, which reads
+    /// every site on its owning engine.
+    fn norm_squared_from_packed_sites<T>(&self, sites: Vec<PackedSiteTensor<T>>) -> Result<f64>
+    where
+        T: NormAccumScalar + tensor4all_tensorbackend::TensorElement,
+    {
+        for site in 0..self.len() {
+            let outcome = self.tensor(site)?.with_owning_cpu_engine(|engine| {
+                Self::norm_squared_from_packed_sites_on(
+                    &mut tensor4all_tensorbackend::explicit::Session::new(engine),
+                    &sites,
+                )
+            })?;
+            if let Some(result) = outcome {
+                return result;
+            }
+        }
+
+        let context = tensor4all_core::legacy::default_cpu_execution_context()
+            .map_err(IdxTensorError::from)?;
+        context
+            .with_concrete_session(|session| {
+                Self::norm_squared_from_packed_sites_on(session, &sites)
+            })
+            .map_err(IdxTensorError::from)?
+    }
+
+    /// The packed-site norm kernel on one explicit session's engine.
+    fn norm_squared_from_packed_sites_on<T>(
+        session: &mut tensor4all_tensorbackend::explicit::Session<'_>,
+        sites: &[PackedSiteTensor<T>],
+    ) -> Result<f64>
     where
         T: NormAccumScalar + tensor4all_tensorbackend::TensorElement,
     {
@@ -1739,8 +1783,8 @@ impl TensorTrain {
             }
 
             let site_shape = [site.left_dim, site.physical_dim, site.right_dim];
-            let site_tensor = tensor4all_tensorbackend::dense_native_tensor_from_col_major_owned(
-                site.data,
+            let site_tensor = tensor4all_tensorbackend::dense_native_tensor_from_col_major(
+                &site.data,
                 &site_shape,
             )
             .map_err(|error| {
@@ -1756,42 +1800,42 @@ impl TensorTrain {
             let conjugated_site = if TypeId::of::<T>() == TypeId::of::<f64>() {
                 None
             } else {
-                Some(
-                    tensor4all_tensorbackend::conj_native_tensor(&site_tensor).map_err(
-                        |error| {
-                            TensorTrainError::operation_source(
-                                "failed to conjugate a packed norm site tensor",
-                                anyhow::Error::new(error),
-                            )
-                        },
-                    )?,
-                )
+                Some(session.conj(&site_tensor).map_err(|error| {
+                    TensorTrainError::operation_source(
+                        "failed to conjugate a packed norm site tensor",
+                        anyhow::Error::new(error),
+                    )
+                })?)
             };
             let conjugated_site = conjugated_site.as_ref().unwrap_or(&site_tensor);
 
             // current[a,b] * A[b,p,r] -> mid[a,p,r]
-            let middle = tensor4all_tensorbackend::einsum_native_tensors(
-                &[(&current, &[0, 1]), (&site_tensor, &[1, 2, 3])],
-                &[0, 2, 3],
-            )
-            .map_err(|error| {
-                TensorTrainError::operation_source(
-                    "failed to contract the norm environment with a site",
-                    error,
+            let middle = session
+                .einsum(
+                    &[&current, &site_tensor],
+                    &[&[0, 1], &[1, 2, 3]],
+                    &[0, 2, 3],
                 )
-            })?;
+                .map_err(|error| {
+                    TensorTrainError::operation_source(
+                        "failed to contract the norm environment with a site",
+                        anyhow::Error::new(error),
+                    )
+                })?;
 
             // conj(A[a,p,s]) * mid[a,p,r] -> next[s,r]
-            current = tensor4all_tensorbackend::einsum_native_tensors(
-                &[(conjugated_site, &[0, 1, 2]), (&middle, &[0, 1, 3])],
-                &[2, 3],
-            )
-            .map_err(|error| {
-                TensorTrainError::operation_source(
-                    "failed to close the norm environment at a site",
-                    error,
+            current = session
+                .einsum(
+                    &[conjugated_site, &middle],
+                    &[&[0, 1, 2], &[0, 1, 3]],
+                    &[2, 3],
                 )
-            })?;
+                .map_err(|error| {
+                    TensorTrainError::operation_source(
+                        "failed to close the norm environment at a site",
+                        anyhow::Error::new(error),
+                    )
+                })?;
         }
 
         if current.shape() != [1, 1] {
@@ -1824,14 +1868,7 @@ impl TensorTrain {
         Ok(value.into_nonnegative_real())
     }
 
-    #[cfg(not(feature = "backend-tenferro"))]
-    fn norm_squared_from_packed_sites<T: NormAccumScalar>(
-        sites: Vec<PackedSiteTensor<T>>,
-    ) -> Result<f64> {
-        Self::norm_squared_from_packed_sites_oracle(&sites)
-    }
-
-    #[cfg(any(test, not(feature = "backend-tenferro")))]
+    #[cfg(test)]
     fn checked_norm_square(dim: usize) -> Result<usize> {
         if dim == 0 {
             return Err(TensorTrainError::InvalidStructure {
@@ -2237,6 +2274,12 @@ impl TensorVectorSpace for TensorTrain {
         self.tensors()
             .into_iter()
             .any(TensorVectorSpace::is_single_precision)
+    }
+
+    fn is_complex(&self) -> bool {
+        self.tensors()
+            .into_iter()
+            .any(TensorVectorSpace::is_complex)
     }
 
     fn axpby(

@@ -36,6 +36,36 @@ macOS. Accelerate schedules its own threads, outside the tensor4all pool, and
 takes its thread limit from `VECLIB_MAXIMUM_THREADS`, so single-thread runs on
 macOS also set `VECLIB_MAXIMUM_THREADS=1`.
 
+### Cargo feature isolation
+
+The Rust benchmark package defaults to native TreeTN dependencies. M6a
+contraction, M6b sibling merging, and M6c elementwise library kernels do not
+require SimpleTT. The committed `benchmark_m6c_elementwise` harness builds with
+no extra feature. Input/operator generation is a separate dependency: #1333
+migrated Fourier construction, and #1334 migrated Interpolative QTT to TreeTN.
+The M6a Fourier harness `benchmark_m6a_fourier` needs the `patched-fourier`
+feature.
+
+| Feature | Targets / dependencies enabled |
+| --- | --- |
+| `fourier` | `benchmark_merge_refine`, `benchmark_merge_refine_intended_regime`; native `quanticstransform` Fourier construction with `simplett-transforms` disabled |
+| `patched-fourier` | `benchmark_m6a_fourier`; `fourier` plus `patched_fourier_transform` (`quanticstransform/partitioned`) |
+| `legacy-comparisons` | `issue566_perf_candidates`, `issue566_perf_candidates2`; explicit SimpleTT, TCI, and TreeTN bridge comparisons |
+| `itensorlike` | `benchmark_tt_ops`; TreeTN-backed ITensors-style facade |
+| `hdf5` | `inspect_mps_inputs`; HDF5 plus the ITensors-style facade |
+| `diagnostics` | TreeACI branch counters (no legacy dependencies) |
+| `cuda` | `benchmark_treersi_cuda_step1`; CUDA sketch execution |
+
+Select a feature with `--features <name>` when building the corresponding
+example. The TreeTN crate's separate `cached_evaluator` comparison benchmark
+requires `--features simplett-bridge`. Cargo unifies features across selected
+packages, so keep M6 builds separate from `legacy-comparisons` and from
+whole-workspace builds when auditing dependencies. Run
+`python3 scripts/check-m6-dependencies.py` to check resolved normal/build
+packages and activated features, including benchmark dev-dependencies.
+This packaging change preserves numerical tolerances and benchmark protocols;
+it makes no speedup claim.
+
 ### Rust
 
 #### ACI summation gate (#1127)
@@ -167,7 +197,7 @@ body lives in `rust/benchmark_merge_refine.rs`.
 
 ```bash
 T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
-  cargo build --release -p tensor4all-benchmarks --example benchmark_merge_refine
+  cargo build --release -p tensor4all-benchmarks --features fourier --example benchmark_merge_refine
 RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
   taskset -c 2 ./target/release/examples/benchmark_merge_refine
 ```
@@ -176,6 +206,41 @@ This is a single-revision comparison, not a baseline/candidate regression gate, 
 the paired protocol below does not apply; keep the thread variables and affinity
 pinned anyway so the timings are comparable. Recorded output:
 [`2026-09-16-merge-refine-schedule.md`](results/2026-09-16-merge-refine-schedule.md).
+
+#### Merge-refine in the intended regime (#777 item F4)
+
+`benchmark_merge_refine_intended_regime` runs the same schedule against the same
+whole-state application on a localized chirp input whose patch transforms are
+high rank, with few input patches and many output bits. It sweeps the output bit
+count, and it prints one JSON line per output depth so a per-level table costs no
+library instrumentation (each depth is a separate run of the prefix trajectory).
+The body lives in `rust/benchmark_merge_refine_intended_regime.rs`; one method per
+process keeps the `/usr/bin/time` peak RSS attributable to it, and
+`rust/collect_merge_refine_intended_regime.py` folds a directory of those
+per-process logs into one CSV.
+
+```bash
+T4A_BENCH_GIT_COMMIT=$(git rev-parse HEAD) \
+  cargo build --release -p tensor4all-benchmarks --features fourier --example benchmark_merge_refine_intended_regime
+# one cell is three invocations; this is the exact arm, writing the collector's pair
+RAYON_NUM_THREADS=8 OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 MKL_NUM_THREADS=8 VECLIB_MAXIMUM_THREADS=8 \
+  taskset -c 8-15 /usr/bin/time -f "wall_s %e cpu_pct %P maxrss_kb %M" \
+  ./target/release/examples/benchmark_merge_refine_intended_regime \
+  --bits 20 --input-depth 2 --output-depth 2 --goal 8 --rtol 1e-6 --repeats 1 \
+  --schedule-only --only exact > target/f4/r20.only-exact.jsonl 2> target/f4/r20.only-exact.err
+python3 benchmarks/rust/collect_merge_refine_intended_regime.py --dir target/f4 --out out.csv
+```
+
+`--baseline-only`, `--schedule-only --only exact|adaptive`, `--no-per-level` and
+`--no-deviation` select what one process measures. The input generator (a
+windowed chirp, `chirp()` in the harness) and the dense reference DFT are part of
+the harness, so `--no-deviation` drops the output reference and the dense
+per-term comparison; the dense input construction remains, so a cell's peak RSS is
+only a statement about the schedule up to that construction cost. Arguments are
+the bit count, the input patch depth, the output depth, the rank goal, the
+tolerance, the chirp rate and the repeat count; `--input-tol` sets the TT-SVD
+threshold that builds the input chain. Recorded output:
+[`2026-11-11-merge-refine-intended-regime.md`](results/2026-11-11-merge-refine-intended-regime.md).
 
 #### TreeACI branch cost attribution (#732)
 
@@ -319,6 +384,58 @@ cargo run --release -p tensor4all-benchmarks \
 The recorded runs, their matched-accuracy comparison, and their caveats are in
 [`2026-10-03-m5-fixed-depth-exploration.md`](results/2026-10-03-m5-fixed-depth-exploration.md).
 
+#### Patched momentum Fourier transform (M6a)
+
+`benchmark_m6a_fourier` applies the 2D momentum Fourier transform
+`G0(kx, ky, n) -> G(rx, ry, n)` to the gw-rs Matsubara G0 on the comb CTTN or
+`tt_nblock`, with one arm per route: `contract_adaptive` with the operator
+written on the state's whole tree by `LinearOperator::to_state_network`
+(`patched-contract`), `apply_linear_operator` with adaptive SRC on the
+unpatched G0 (`unpatched-src`), `patched_fourier_transform`
+(`patched-merge-refine`, optionally with the certified application through
+`--certified-share`, chains only), and SRC on every patch separately
+(`patched-src-each`, diagnostic). Accuracy is measured against the exact FFT
+on sampled Matsubara slices, drawn from `--ref-seed` (default 42)
+independently of the interpolation `--seed`, so every seed is scored on the
+same points; `--check-dense true` compares with the dense DFT
+on the whole grid instead and validates the conventions at small `R`. The
+source lives in `rust/benchmark_m6a_fourier.rs`; it shares the G0 grid
+(`rust/g0_grid.rs`) with the M6c harness.
+
+```bash
+cargo run --release -p tensor4all-benchmarks --features patched-fourier \
+  --example benchmark_m6a_fourier -- \
+  --r 4 --temperature 0.1 --topology cttn --arm patched-contract \
+  --g0-cap 16 --cap 16 --rtol 1e-6 --check-dense true
+```
+
+No measurement at production size is recorded yet.
+
+#### Patched element-wise operations (M6c)
+
+`benchmark_m6c_elementwise` runs `patched_elementwise` with the TreeACI kernel
+on the gw-rs Matsubara G0 (the Dyson map of three exact rank-2 inputs, its
+square, and the square of two differently partitioned G0) on the comb CTTN or
+`tt_nblock`, and compares it with unpatched TreeACI and B0. Errors are exact
+over the grid for `R <= 7` and importance-sampled otherwise. The source lives
+in `rust/benchmark_m6c_elementwise.rs`.
+
+```bash
+cargo run --release -p tensor4all-benchmarks \
+  --example benchmark_m6c_elementwise -- \
+  g0 patched-aci --r 6 --temperature 0.1 --cap 16 --exhaustive true \
+  --variants "rtol=1e-3;rtol=1e-3,engine-tol-factor=3"
+```
+
+The exploratory runs, the TreeACI kernel tolerance factor, the
+`tt_nblock` comparison (parameters, time and a traced breakdown), and the
+acceptance and stop-condition measurements of #1274 (diagnostic options
+`--audit`, `--error-norm`, `--max-reference`, `--trace-calls`,
+`--trace-history`) are in
+[`2026-11-11-m6c-elementwise.md`](results/2026-11-11-m6c-elementwise.md); its
+tables are generated from the raw output by
+`results/m6c-elementwise/report.py`.
+
 #### TreeTCI global pivot search (#792)
 
 `benchmark_global_search` runs the default TreeTCI loop (`DefaultProposer`,
@@ -389,7 +506,7 @@ product perform different final work even when they return identical values.
 ```bash
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 TENFERRO_NUM_THREADS=1 \
-  taskset -c 2 cargo bench -p tensor4all-treetn --bench cached_evaluator -- \
+  taskset -c 2 cargo bench -p tensor4all-treetn --features simplett-bridge --bench cached_evaluator -- \
   hiroshi_chain_evaluator_parity --warm-up-time 1 --measurement-time 1
 ```
 
@@ -504,7 +621,7 @@ RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tenso
 TensorTrain-level operations against ITensorMPS:
 
 ```bash
-RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --example benchmark_tt_ops --release -- --L 32 --zipup-L 10 --chis 4,8,16,32,64
+RAYON_NUM_THREADS=1 cargo run -p tensor4all-benchmarks --features itensorlike --example benchmark_tt_ops --release -- --L 32 --zipup-L 10 --chis 4,8,16,32,64
 ```
 
 TreeTN-aware adaptive patching on a deterministic sum of randomly placed

@@ -13,7 +13,7 @@
 //! # One engine per lane
 //!
 //! Every wave runs one patch per lane, whatever its size: a lane owns one
-//! fixed [`CpuEngine`](tenferro_cpu::CpuEngine) that the caller built and
+//! fixed `tenferro_cpu::CpuEngine` that the caller built and
 //! sized, and a patch runs on the engine of the lane that pulled it. A wave
 //! with fewer patches than lanes leaves the remaining lanes idle. The driver
 //! opens no child sessions and does not divide a pool between items, so the
@@ -45,6 +45,7 @@ use tensor4all_tensorbackend::explicit::Session;
 use tensor4all_treetn::interpolation::{EvalContext, Parallelism, TreeInterpolator};
 use tensor4all_treetn::NodeNameNetwork;
 
+use super::engine::{BlackBox, PatchEngine};
 use super::options::PatchedInterpolationOptions;
 use super::report::PatchedInterpolationResult;
 use super::{
@@ -64,7 +65,7 @@ impl<T, V, E, F> Waves<T, V, E> for LanesWaves<'_, F>
 where
     T: CommonScalar + TensorElement + Send,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T> + Sync,
+    E: PatchEngine<T, V> + Sync,
     F: Fn(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>> + Sync,
 {
     fn run_wave(
@@ -102,7 +103,7 @@ where
 /// # Arguments
 ///
 /// * `lanes` - The caller's lane executor, built from one
-///   [`CpuEngine`](tenferro_cpu::CpuEngine) per lane
+///   `tenferro_cpu::CpuEngine` per lane
 ///   ([`TenferroLanes::new`](hataori_tenferro::TenferroLanes::new)). Its lane
 ///   count is the fan-out width; the caller sizes each lane's engine, and a
 ///   one-lane executor runs every patch on that lane.
@@ -216,10 +217,27 @@ where
     E: TreeInterpolator<T> + Sync,
     F: Fn(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>> + Sync,
 {
-    let plan = Plan::validated(engine, topology, node_sites, initial_pivots, options)?;
+    let engine = BlackBox(engine);
+    let plan = Plan::validated(&engine, topology, node_sites, initial_pivots, options)?;
+    run_on_lanes(lanes, &plan, evaluate)
+}
+
+/// Run the waves of a validated plan on `lanes` and assemble the result: the
+/// body of every lanes entry.
+pub(super) fn run_on_lanes<T, V, E, F>(
+    lanes: &mut TenferroLanes,
+    plan: &Plan<'_, T, V, E>,
+    evaluate: F,
+) -> Result<PatchedInterpolationResult<V>, PatchedInterpolationError>
+where
+    T: CommonScalar + TensorElement + Send,
+    V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
+    E: PatchEngine<T, V> + Sync,
+    F: Fn(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>> + Sync,
+{
     let mut waves = LanesWaves { lanes, evaluate };
-    let merged = run_waves(&plan, &mut waves)?;
-    assemble(&plan, merged)
+    let merged = run_waves(plan, &mut waves)?;
+    assemble(plan, merged)
 }
 
 /// Run one patch per lane and keep each patch's typed error.
@@ -237,7 +255,7 @@ fn map_wave<T, V, E, F>(
 where
     T: CommonScalar + TensorElement + Send,
     V: Clone + Hash + Eq + Ord + Debug + Send + Sync,
-    E: TreeInterpolator<T> + Sync,
+    E: PatchEngine<T, V> + Sync,
     F: Fn(ColMajorArrayRef<'_, usize>, &mut EvalContext<'_>) -> anyhow::Result<Vec<T>> + Sync,
 {
     let errors: Mutex<Vec<Option<PatchedInterpolationError>>> =
@@ -247,7 +265,7 @@ where
         // One patch's view of the references: a copy per patch, written back
         // through the outcome, so a wave merge sees the pins of the root wave
         // in canonical order.
-        let mut references = start;
+        let mut references = start.clone();
         let pins = if root_wave {
             Pins::Root(&mut references)
         } else {

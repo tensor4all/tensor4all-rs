@@ -27,20 +27,27 @@
 //! ```
 
 mod apply;
+mod certified;
 mod compose;
 mod identity;
 mod index_mapping;
 mod linear_operator;
+mod state_network;
 
 pub use apply::{
     apply_linear_operator, apply_linear_operator_to_indices,
     apply_linear_operator_to_numbered_tags, bind_linear_operator_indices, ApplyOptions,
     ArcLinearOperator,
 };
+pub use certified::{
+    apply_linear_operator_certified, apply_linear_operator_certified_to_indices,
+    CertifiedApplication, CertifiedApplyOptions,
+};
 pub use compose::{are_exclusive_operators, compose_exclusive_linear_operators};
 pub use identity::build_identity_operator_tensor;
 pub use index_mapping::IndexMapping;
 pub use linear_operator::LinearOperator;
+pub use state_network::StateOperatorNetwork;
 
 use std::collections::HashSet;
 use std::fmt::Debug;

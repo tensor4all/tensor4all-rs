@@ -4,7 +4,7 @@
 //! ```rust
 //! use tensor4all_interpolativeqtt::prelude::*;
 //!
-//! let tt = interpolate_single_scale(
+//! let (tree, sites) = interpolate_single_scale(
 //!     |x| (-x * x).exp(),
 //!     -2.0,
 //!     2.0,
@@ -12,16 +12,21 @@
 //!     12,
 //!     &InterpolativeQttOptions::default(),
 //! ).unwrap();
-//! let value = tt.evaluate(&[0, 0, 0, 0, 0]).unwrap();
+//! let value = tree.evaluate_point(&sites, &[0, 0, 0, 0, 0]).unwrap().real();
 //! let expected = (-4.0_f64).exp();
 //! assert!((value - expected).abs() < 1e-10);
 //! ```
 
 pub use crate::{
     direct_product_core_tensors, estimate_interpolation_error, estimate_interpolation_error_nd,
-    get_chebyshev_grid, interpolate_adaptive, interpolate_adaptive_nd, interpolate_multi_scale,
-    interpolate_multi_scale_nd, interpolate_single_scale, interpolate_single_scale_nd,
-    interpolate_single_scale_sparse, interpolate_single_scale_sparse_nd, interpolation_tensor,
-    invert_qtt, AbstractTensorTrain, InterpolativeQttOptions, LagrangePolynomials,
-    SimpleTensorTrain,
+    get_chebyshev_grid, interpolate_adaptive, interpolate_adaptive_nd,
+    interpolate_chebyshev_patches, interpolate_multi_scale, interpolate_multi_scale_nd,
+    interpolate_single_scale, interpolate_single_scale_nd, interpolate_single_scale_sparse,
+    interpolate_single_scale_sparse_nd, interpolation_tensor, invert_qtt, ChebyshevPatch,
+    ChebyshevPatchOptions, ChebyshevPatches, ExtraValidation, InterpolativeQtt,
+    InterpolativeQttOptions, InterpolativeScalar, LagrangePolynomials,
 };
+
+#[cfg(feature = "parallel")]
+pub use crate::{interpolate_chebyshev_patches_on_lanes, interpolate_patched_nd_on_lanes};
+pub use crate::{interpolate_patched_nd, InterpolativePatch, PatchedInterpolativeOptions};

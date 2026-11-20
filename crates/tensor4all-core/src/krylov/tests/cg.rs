@@ -745,6 +745,10 @@ impl TensorVectorSpace for FaultyVector {
         false
     }
 
+    fn is_complex(&self) -> bool {
+        false
+    }
+
     fn validate(&self) -> std::result::Result<(), Self::Error> {
         self.check(FailingOp::Validate).map(|_| ())
     }

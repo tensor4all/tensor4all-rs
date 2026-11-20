@@ -6,9 +6,13 @@ use std::mem::size_of;
 
 use anyhow::Result;
 use num_complex::Complex64;
+#[cfg(feature = "simplett-transforms")]
 use num_traits::One;
 use tensor4all_core::index::{DynId, Index, TagSet};
-use tensor4all_core::IdxTensor;
+#[cfg(feature = "simplett-transforms")]
+use tensor4all_core::DenseElementBudget;
+use tensor4all_core::{ColMajorArray, IdxTensor, IndexLike};
+#[cfg(feature = "simplett-transforms")]
 use tensor4all_simplett::{
     tensor3_from_data, types::tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops,
 };
@@ -41,6 +45,7 @@ pub type DynIndex = Index<DynId, TagSet>;
 /// // Open: shift(7, 2) in 3-bit goes to 9 >= 8, produces zero
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg(feature = "simplett-transforms")]
 pub enum BoundaryCondition {
     /// Periodic boundary: operations wrap around mod 2^R.
     ///
@@ -66,6 +71,7 @@ pub enum BoundaryCondition {
 /// - **`LeftToRight`** (default): Carry propagates from MSB to LSB.
 /// - **`RightToLeft`**: Carry propagates from LSB to MSB.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg(feature = "simplett-transforms")]
 pub enum CarryDirection {
     /// Carry propagates from left (MSB) to right (LSB).
     #[default]
@@ -79,11 +85,11 @@ pub enum CarryDirection {
 /// # Examples
 /// ```
 /// use tensor4all_quanticstransform::{
-///     identity_mpo, tensortrain_to_linear_operator, QuanticsOperator,
+///     quantics_fourier_operator, FourierOptions, QuanticsOperator,
 /// };
-/// let mpo = identity_mpo(1).unwrap();
-/// let operator: QuanticsOperator = tensortrain_to_linear_operator(&mpo, &[2]).unwrap();
-/// assert_eq!(operator.mpo().node_count(), 1);
+/// let operator: QuanticsOperator = quantics_fourier_operator(3, FourierOptions::forward())?;
+/// assert_eq!(operator.mpo().link_dims(), vec![2, 2]);
+/// # Ok::<(), tensor4all_quanticstransform::QuanticsTransformError>(())
 /// ```
 pub type QuanticsOperator = LinearOperator<IdxTensor, usize>;
 
@@ -114,189 +120,12 @@ pub type QuanticsOperator = LinearOperator<IdxTensor, usize>;
 /// assert_eq!(operator.mpo().node_count(), 1);
 /// assert!(tensortrain_to_linear_operator(&mpo, &[2, 2]).is_err());
 /// ```
+#[cfg(feature = "simplett-transforms")]
 pub fn tensortrain_to_linear_operator(
     tt: &SimpleTensorTrain<Complex64>,
     site_dims: &[usize],
 ) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
-    let n = tt.len();
-    if n == 0 {
-        return Err(anyhow::anyhow!("Empty tensor train").into());
-    }
-    if site_dims.len() != n {
-        return Err(anyhow::anyhow!("Dimension array must have length {n}").into());
-    }
-    let bond_capacity = n
-        .checked_add(1)
-        .ok_or_else(|| anyhow::anyhow!("tensor-train bond count overflows usize"))?;
-    checked_allocation_len::<DynIndex>(&[n], "operator site indices")?;
-    checked_allocation_len::<DynIndex>(&[bond_capacity], "operator bond indices")?;
-    checked_allocation_len::<IdxTensor>(&[n], "operator tensor list")?;
-    checked_allocation_len::<usize>(&[n], "operator node-name list")?;
-    for (site, &dim) in site_dims.iter().enumerate() {
-        checked_allocation_len::<Complex64>(&[dim, dim], &format!("site {site}"))?;
-    }
-
-    // Create site indices for input and output
-    let mut site_in_indices = try_vec_with_capacity::<DynIndex>("operator input site indices", n)?;
-    let mut site_out_indices =
-        try_vec_with_capacity::<DynIndex>("operator output site indices", n)?;
-    let mut internal_in_indices =
-        try_vec_with_capacity::<DynIndex>("operator internal input indices", n)?;
-    let mut internal_out_indices =
-        try_vec_with_capacity::<DynIndex>("operator internal output indices", n)?;
-
-    for &dim in site_dims.iter() {
-        // True site indices (for state)
-        site_in_indices.push(Index::new_dyn(dim));
-        site_out_indices.push(Index::new_dyn(dim));
-        // Internal MPO indices
-        internal_in_indices.push(Index::new_dyn(dim));
-        internal_out_indices.push(Index::new_dyn(dim));
-    }
-
-    // Create bond indices
-    let mut bond_indices =
-        try_vec_with_capacity::<DynIndex>("operator bond indices", bond_capacity)?;
-
-    for i in 0..=n {
-        let dim = if i == 0 {
-            1
-        } else {
-            tt.site_tensor(i - 1).right_dim()
-        };
-        bond_indices.push(Index::new_dyn(dim));
-    }
-
-    // Build tensors for TreeTN
-    let mut tensors = try_vec_with_capacity::<IdxTensor>("operator tensor list", n)?;
-    let mut node_names = try_vec_with_capacity::<usize>("operator node-name list", n)?;
-
-    for i in 0..n {
-        let tensor = tt.site_tensor(i);
-        let left_dim = tensor.left_dim();
-        let site_dim = tensor.site_dim();
-        let right_dim = tensor.right_dim();
-
-        // Expected site_dim is product of input and output dimensions
-        let expected_site_dim = site_dims[i]
-            .checked_mul(site_dims[i])
-            .ok_or_else(|| anyhow::anyhow!("site {i} dimension product overflows usize"))?;
-        if site_dim != expected_site_dim {
-            return Err(anyhow::anyhow!(
-                "Site {} has dimension {} but expected {} ({}x{})",
-                i,
-                site_dim,
-                expected_site_dim,
-                site_dims[i],
-                site_dims[i]
-            )
-            .into());
-        }
-
-        // Create indices for this tensor: (left_bond, site_out, site_in, right_bond)
-        // For first tensor: (site_out, site_in, right_bond)
-        // For last tensor: (left_bond, site_out, site_in)
-        // For middle: (left_bond, site_out, site_in, right_bond)
-        let mut indices = try_vec_with_capacity::<DynIndex>("operator tensor indices", 4)?;
-        let mut dims_vec = try_vec_with_capacity::<usize>("operator tensor dimensions", 4)?;
-
-        if i > 0 {
-            indices.push(bond_indices[i].clone());
-            dims_vec.push(left_dim);
-        }
-        indices.push(internal_out_indices[i].clone());
-        dims_vec.push(site_dims[i]);
-        indices.push(internal_in_indices[i].clone());
-        dims_vec.push(site_dims[i]);
-        if i < n - 1 {
-            indices.push(bond_indices[i + 1].clone());
-            dims_vec.push(right_dim);
-        }
-
-        // Reshape tensor data: (left, site_out*site_in, right) -> (left, site_out, site_in, right)
-        // or appropriate variant for boundary tensors
-        let total_size = checked_allocation_len::<Complex64>(&dims_vec, &format!("site {i}"))?;
-        let mut data = try_vec_with_capacity::<Complex64>("operator site data", total_size)?;
-        data.resize(total_size, Complex64::new(0.0, 0.0));
-
-        // Map from TT format to TreeTN format
-        if i == 0 && n == 1 {
-            // Single tensor: (site_out, site_in)
-            for s_out in 0..site_dims[i] {
-                for s_in in 0..site_dims[i] {
-                    let s = s_out * site_dims[i] + s_in;
-                    let idx = s_out + site_dims[i] * s_in;
-                    data[idx] = *tensor.get3(0, s, 0);
-                }
-            }
-        } else if i == 0 {
-            // First tensor: (site_out, site_in, right_bond)
-            for s_out in 0..site_dims[i] {
-                for s_in in 0..site_dims[i] {
-                    for r in 0..right_dim {
-                        let s = s_out * site_dims[i] + s_in;
-                        let idx = s_out + site_dims[i] * (s_in + site_dims[i] * r);
-                        data[idx] = *tensor.get3(0, s, r);
-                    }
-                }
-            }
-        } else if i == n - 1 {
-            // Last tensor: (left_bond, site_out, site_in)
-            for l in 0..left_dim {
-                for s_out in 0..site_dims[i] {
-                    for s_in in 0..site_dims[i] {
-                        let s = s_out * site_dims[i] + s_in;
-                        let idx = l + left_dim * (s_out + site_dims[i] * s_in);
-                        data[idx] = *tensor.get3(l, s, 0);
-                    }
-                }
-            }
-        } else {
-            // Middle tensor: (left_bond, site_out, site_in, right_bond)
-            for l in 0..left_dim {
-                for s_out in 0..site_dims[i] {
-                    for s_in in 0..site_dims[i] {
-                        for r in 0..right_dim {
-                            let s = s_out * site_dims[i] + s_in;
-                            let idx =
-                                l + left_dim * (s_out + site_dims[i] * (s_in + site_dims[i] * r));
-                            data[idx] = *tensor.get3(l, s, r);
-                        }
-                    }
-                }
-            }
-        }
-
-        let tensor_dyn = IdxTensor::from_dense(indices, data)?;
-        tensors.push(tensor_dyn);
-        node_names.push(i);
-    }
-
-    // Build TreeTN from tensors
-    let treetn = TreeTN::from_tensors(tensors, node_names)?;
-
-    // Build index mappings
-    let mut input_mapping: HashMap<usize, IndexMapping<DynIndex>> = HashMap::new();
-    let mut output_mapping: HashMap<usize, IndexMapping<DynIndex>> = HashMap::new();
-
-    for i in 0..n {
-        input_mapping.insert(
-            i,
-            IndexMapping {
-                true_index: site_in_indices[i].clone(),
-                internal_index: internal_in_indices[i].clone(),
-            },
-        );
-        output_mapping.insert(
-            i,
-            IndexMapping {
-                true_index: site_out_indices[i].clone(),
-                internal_index: internal_out_indices[i].clone(),
-            },
-        );
-    }
-
-    Ok(LinearOperator::new(treetn, input_mapping, output_mapping))
+    tensortrain_to_linear_operator_asymmetric(tt, site_dims, site_dims)
 }
 
 /// Convert a SimpleTensorTrain (MPO form) to a LinearOperator with asymmetric dimensions.
@@ -326,194 +155,116 @@ pub fn tensortrain_to_linear_operator(
 /// assert_eq!(operator.mpo().node_count(), 1);
 /// assert!(tensortrain_to_linear_operator_asymmetric(&mpo, &[2], &[2]).is_err());
 /// ```
+#[cfg(feature = "simplett-transforms")]
 pub fn tensortrain_to_linear_operator_asymmetric(
     tt: &SimpleTensorTrain<Complex64>,
     input_dims: &[usize],
     output_dims: &[usize],
 ) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
     let n = tt.len();
+    if input_dims.len() != n || output_dims.len() != n {
+        return Err(anyhow::anyhow!("Dimension arrays must have length {n}").into());
+    }
+    chain_operator(
+        tt.site_tensors(),
+        input_dims.iter().copied().zip(output_dims.iter().copied()),
+        |core| Ok(*core.dims()),
+        |core, l, s, r| *core.get3(l, s, r),
+    )
+}
+
+pub(crate) fn binary_cores_to_operator(
+    cores: &[ColMajorArray<Complex64>],
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
+    chain_operator(
+        cores,
+        std::iter::repeat_n((2, 2), cores.len()),
+        |core| {
+            core.shape()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("Fourier core must have rank three").into())
+        },
+        |core, l, s, r| core.data()[l + core.shape()[0] * (s + core.shape()[1] * r)],
+    )
+}
+
+fn chain_operator<C>(
+    cores: &[C],
+    site_dims: impl Iterator<Item = (usize, usize)>,
+    shape: impl Fn(&C) -> std::result::Result<[usize; 3], QuanticsTransformError>,
+    value: impl Fn(&C, usize, usize, usize) -> Complex64,
+) -> std::result::Result<QuanticsOperator, QuanticsTransformError> {
+    let n = cores.len();
     if n == 0 {
         return Err(anyhow::anyhow!("Empty tensor train").into());
     }
-    if input_dims.len() != n || output_dims.len() != n {
-        return Err(anyhow::anyhow!("Dimension arrays must have length {}", n).into());
-    }
-    let bond_capacity = n
-        .checked_add(1)
-        .ok_or_else(|| anyhow::anyhow!("tensor-train bond count overflows usize"))?;
-    checked_allocation_len::<DynIndex>(&[n], "operator site indices")?;
-    checked_allocation_len::<DynIndex>(&[bond_capacity], "operator bond indices")?;
-    checked_allocation_len::<IdxTensor>(&[n], "operator tensor list")?;
-    checked_allocation_len::<usize>(&[n], "operator node-name list")?;
-    for i in 0..n {
-        checked_allocation_len::<Complex64>(
-            &[output_dims[i], input_dims[i]],
-            &format!("site {i}"),
-        )?;
-    }
-
-    // Create site indices for input and output
-    let mut site_in_indices = try_vec_with_capacity::<DynIndex>("operator input site indices", n)?;
-    let mut site_out_indices =
-        try_vec_with_capacity::<DynIndex>("operator output site indices", n)?;
-    let mut internal_in_indices =
-        try_vec_with_capacity::<DynIndex>("operator internal input indices", n)?;
-    let mut internal_out_indices =
-        try_vec_with_capacity::<DynIndex>("operator internal output indices", n)?;
-
-    for i in 0..n {
-        // True site indices (for state)
-        site_in_indices.push(Index::new_dyn(input_dims[i]));
-        site_out_indices.push(Index::new_dyn(output_dims[i]));
-        // Internal MPO indices
-        internal_in_indices.push(Index::new_dyn(input_dims[i]));
-        internal_out_indices.push(Index::new_dyn(output_dims[i]));
-    }
-
-    // Create bond indices
-    let mut bond_indices =
-        try_vec_with_capacity::<DynIndex>("operator bond indices", bond_capacity)?;
-
-    for i in 0..=n {
-        let dim = if i == 0 {
-            1
-        } else {
-            tt.site_tensor(i - 1).right_dim()
-        };
-        bond_indices.push(Index::new_dyn(dim));
-    }
-
-    // Build tensors for TreeTN
     let mut tensors = try_vec_with_capacity::<IdxTensor>("operator tensor list", n)?;
-    let mut node_names = try_vec_with_capacity::<usize>("operator node-name list", n)?;
-
-    for i in 0..n {
-        let tensor = tt.site_tensor(i);
-        let left_dim = tensor.left_dim();
-        let site_dim = tensor.site_dim();
-        let right_dim = tensor.right_dim();
-
-        let in_dim = input_dims[i];
-        let out_dim = output_dims[i];
-
-        // Expected site_dim is product of input and output dimensions
-        let expected_site_dim = in_dim
-            .checked_mul(out_dim)
-            .ok_or_else(|| anyhow::anyhow!("site {i} dimension product overflows usize"))?;
-        if site_dim != expected_site_dim {
+    let mut input_mapping = HashMap::new();
+    let mut output_mapping = HashMap::new();
+    let mut left_bond: Option<DynIndex> = None;
+    for (i, (core, (input, output))) in cores.iter().zip(site_dims).enumerate() {
+        let [left, site, right] = shape(core)?;
+        if left_bond.as_ref().map_or(1, IndexLike::dim) != left || (i + 1 == n && right != 1) {
+            return Err(anyhow::anyhow!("Site {i} has incompatible bond dimensions").into());
+        }
+        let expected =
+            checked_allocation_len::<Complex64>(&[output, input], "operator physical dimensions")?;
+        if site != expected {
             return Err(anyhow::anyhow!(
-                "Site {} has dimension {} but expected {} ({}x{})",
-                i,
-                site_dim,
-                expected_site_dim,
-                out_dim,
-                in_dim
+                "Site {i} has dimension {site} but expected {expected} ({output}x{input})"
             )
             .into());
         }
+        let total = checked_allocation_len::<Complex64>(
+            &[left, output, input, right],
+            "operator site data",
+        )?;
+        let input_index = Index::new_dyn(input);
+        let output_index = Index::new_dyn(output);
+        let right_bond = (i + 1 < n).then(|| Index::new_dyn(right));
+        let mut indices = Vec::with_capacity(4);
+        indices.extend(left_bond);
+        indices.extend([output_index.clone(), input_index.clone()]);
+        indices.extend(right_bond.iter().cloned());
 
-        // Create indices for this tensor: (left_bond, site_out, site_in, right_bond)
-        let mut indices = try_vec_with_capacity::<DynIndex>("operator tensor indices", 4)?;
-        let mut dims_vec = try_vec_with_capacity::<usize>("operator tensor dimensions", 4)?;
-
-        if i > 0 {
-            indices.push(bond_indices[i].clone());
-            dims_vec.push(left_dim);
-        }
-        indices.push(internal_out_indices[i].clone());
-        dims_vec.push(out_dim);
-        indices.push(internal_in_indices[i].clone());
-        dims_vec.push(in_dim);
-        if i < n - 1 {
-            indices.push(bond_indices[i + 1].clone());
-            dims_vec.push(right_dim);
-        }
-
-        // Reshape tensor data: (left, site_out*site_in, right) -> (left, site_out, site_in, right)
-        let total_size = checked_allocation_len::<Complex64>(&dims_vec, &format!("site {i}"))?;
-        let mut data = try_vec_with_capacity::<Complex64>("operator site data", total_size)?;
-        data.resize(total_size, Complex64::new(0.0, 0.0));
-
-        // Map from TT format to TreeTN format
-        // TT format has site index = s_out * in_dim + s_in (output major, input minor)
-        if i == 0 && n == 1 {
-            // Single tensor: (site_out, site_in)
-            for s_out in 0..out_dim {
-                for s_in in 0..in_dim {
-                    let s = s_out * in_dim + s_in;
-                    let idx = s_out + out_dim * s_in;
-                    data[idx] = *tensor.get3(0, s, 0);
-                }
-            }
-        } else if i == 0 {
-            // First tensor: (site_out, site_in, right_bond)
-            for s_out in 0..out_dim {
-                for s_in in 0..in_dim {
-                    for r in 0..right_dim {
-                        let s = s_out * in_dim + s_in;
-                        let idx = s_out + out_dim * (s_in + in_dim * r);
-                        data[idx] = *tensor.get3(0, s, r);
-                    }
-                }
-            }
-        } else if i == n - 1 {
-            // Last tensor: (left_bond, site_out, site_in)
-            for l in 0..left_dim {
-                for s_out in 0..out_dim {
-                    for s_in in 0..in_dim {
-                        let s = s_out * in_dim + s_in;
-                        let idx = l + left_dim * (s_out + out_dim * s_in);
-                        data[idx] = *tensor.get3(l, s, 0);
-                    }
-                }
-            }
-        } else {
-            // Middle tensor: (left_bond, site_out, site_in, right_bond)
-            for l in 0..left_dim {
-                for s_out in 0..out_dim {
-                    for s_in in 0..in_dim {
-                        for r in 0..right_dim {
-                            let s = s_out * in_dim + s_in;
-                            let idx = l + left_dim * (s_out + out_dim * (s_in + in_dim * r));
-                            data[idx] = *tensor.get3(l, s, r);
-                        }
+        // The source fuses input fastest. Emit output fastest for named
+        // column-major axes [left, output, input, right].
+        let mut data = try_vec_with_capacity::<Complex64>("operator site data", total)?;
+        if total != 0 {
+            for r in 0..right {
+                for s_in in 0..input {
+                    for s_out in 0..output {
+                        let s = s_out * input + s_in;
+                        data.extend((0..left).map(|l| value(core, l, s, r)));
                     }
                 }
             }
         }
-
-        let tensor_dyn = IdxTensor::from_dense(indices, data)?;
-        tensors.push(tensor_dyn);
-        node_names.push(i);
-    }
-
-    // Build TreeTN from tensors
-    let treetn = TreeTN::from_tensors(tensors, node_names)?;
-
-    // Build index mappings
-    let mut input_mapping: HashMap<usize, IndexMapping<DynIndex>> = HashMap::new();
-    let mut output_mapping: HashMap<usize, IndexMapping<DynIndex>> = HashMap::new();
-
-    for i in 0..n {
+        tensors.push(IdxTensor::from_dense(indices, data)?);
         input_mapping.insert(
             i,
             IndexMapping {
-                true_index: site_in_indices[i].clone(),
-                internal_index: internal_in_indices[i].clone(),
+                true_index: Index::new_dyn(input),
+                internal_index: input_index,
             },
         );
         output_mapping.insert(
             i,
             IndexMapping {
-                true_index: site_out_indices[i].clone(),
-                internal_index: internal_out_indices[i].clone(),
+                true_index: Index::new_dyn(output),
+                internal_index: output_index,
             },
         );
+        left_bond = right_bond;
     }
 
+    let mut node_names = try_vec_with_capacity::<usize>("operator node-name list", n)?;
+    node_names.extend(0..n);
+    let treetn = TreeTN::from_tensors(tensors, node_names)?;
     Ok(LinearOperator::new(treetn, input_mapping, output_mapping))
 }
 
+#[cfg(feature = "simplett-transforms")]
 pub(crate) fn checked_pow2(width: usize, name: &str) -> Result<usize> {
     let shift = u32::try_from(width)
         .map_err(|_| anyhow::anyhow!("{name} {width} exceeds usize shift width"))?;
@@ -550,6 +301,7 @@ pub(crate) fn try_vec_with_capacity<T>(name: &str, capacity: usize) -> Result<Ve
     Ok(values)
 }
 
+#[cfg(feature = "simplett-transforms")]
 pub(crate) fn checked_multivar_dims(nvariables: usize) -> Result<(usize, usize)> {
     if nvariables < 2 {
         anyhow::bail!("nvariables must be at least 2, got {nvariables}");
@@ -574,20 +326,45 @@ pub(crate) fn checked_multivar_dims(nvariables: usize) -> Result<(usize, usize)>
 /// * `mpo` - Single-variable MPO (R sites, site_dim = 4)
 /// * `nvariables` - Total number of variables (must be >= 2)
 /// * `target_var` - Which variable to apply the operator to (0-indexed)
+/// * `budget` - Element-count budget for the embedded sites, checked before
+///   any of them is allocated
+///
+/// # Errors
+///
+/// Returns [`QuanticsTransformError::Operation`] when `nvariables`,
+/// `target_var` or a site dimension is invalid or a tensor allocation fails,
+/// and [`QuanticsTransformError::DenseBudget`] when the embedded sites exceed
+/// `budget`.
+#[cfg(feature = "simplett-transforms")]
 pub(crate) fn embed_single_var_mpo(
     mpo: &SimpleTensorTrain<Complex64>,
     nvariables: usize,
     target_var: usize,
-) -> Result<SimpleTensorTrain<Complex64>> {
+    budget: DenseElementBudget,
+) -> std::result::Result<SimpleTensorTrain<Complex64>, QuanticsTransformError> {
     if target_var >= nvariables {
         return Err(anyhow::anyhow!(
             "target_var {} must be less than nvariables {}",
             target_var,
             nvariables
-        ));
+        )
+        .into());
     }
     let (dim_multi, site_dim_new) = checked_multivar_dims(nvariables)?;
     let r = mpo.len();
+    let mut site_shapes = try_vec_with_capacity::<[usize; 3]>("embedded MPO site shapes", r)?;
+    for i in 0..r {
+        let tensor = mpo.site_tensor(i);
+        let shape = [tensor.left_dim(), site_dim_new, tensor.right_dim()];
+        // Keep the structural byte-length error reachable for shapes that cannot be
+        // allocated at all; the budget is a policy limit, not an allocation limit.
+        checked_allocation_len::<Complex64>(&shape, "embedded MPO tensor")?;
+        site_shapes.push(shape);
+    }
+    budget.check_total(
+        "multivariable quantics embedded MPO",
+        site_shapes.iter().map(|shape| &shape[..]),
+    )?;
     let mut new_tensors = try_vec_with_capacity::<tensor4all_simplett::Tensor3<Complex64>>(
         "embedded MPO tensor list",
         r,
@@ -654,7 +431,7 @@ pub(crate) fn embed_single_var_mpo(
     }
 
     SimpleTensorTrain::new(new_tensors)
-        .map_err(|e| anyhow::anyhow!("Failed to create embedded MPO: {}", e))
+        .map_err(|e| anyhow::anyhow!("Failed to create embedded MPO: {}", e).into())
 }
 
 /// Create an identity MPO for `r` binary sites.
@@ -672,6 +449,7 @@ pub(crate) fn embed_single_var_mpo(
 /// assert_eq!(mpo.site_dims(), vec![4, 4]);
 /// assert!(identity_mpo(0).is_err());
 /// ```
+#[cfg(feature = "simplett-transforms")]
 pub fn identity_mpo(
     r: usize,
 ) -> std::result::Result<SimpleTensorTrain<Complex64>, QuanticsTransformError> {

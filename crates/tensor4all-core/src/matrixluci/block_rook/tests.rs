@@ -1,7 +1,7 @@
-use crate::matrixluci::block_rook::LazyBlockRookKernel;
+use crate::matrixluci::block_rook::{remaining_indices, LazyBlockRookKernel};
 use crate::matrixluci::dense::DenseLuKernel;
 use crate::matrixluci::kernel::PivotKernel;
-use crate::matrixluci::source::{DenseMatrixSource, LazyMatrixSource};
+use crate::matrixluci::source::{CandidateMatrixSource, DenseMatrixSource, LazyMatrixSource};
 use crate::matrixluci::types::PivotKernelOptions;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -162,12 +162,13 @@ fn lazy_block_rook_certifies_zero_without_materializing_matrix() {
     }
 }
 
-fn rank_cap_options(max_bond_dim: usize) -> PivotKernelOptions {
+fn rank_cap_options(max_bond_dim: usize) -> PivotKernelOptions<'static> {
     PivotKernelOptions {
         max_bond_dim,
         rel_tol: 0.0,
         abs_tol: 0.0,
         left_orthogonal: true,
+        seeds: &[],
     }
 }
 
@@ -210,11 +211,13 @@ fn lazy_rank_cap_error_matches_dense_kernel_across_shapes_and_caps() {
 
                 let dense_error = *dense_out.pivot_errors.last().unwrap();
                 let lazy_error = *lazy_out.pivot_errors.last().unwrap();
-                // Both kernels report the maximum magnitude of the remaining
-                // residual, but the dense kernel reads it off its LU diagonal
-                // and the lazy kernel subtracts A[:, J] A[I, J]^{-1} A[I, :],
-                // so agreement holds to rounding noise only (measured worst
-                // case: 1.3 ULP).
+                // On this diagonally dominant family the rook pivot a cap
+                // rejects is also the remaining maximum, so the two kernels
+                // agree. The dense kernel reads it off its LU diagonal and the
+                // lazy kernel subtracts A[:, J] A[I, J]^{-1} A[I, :], so
+                // agreement holds to rounding noise only (measured worst case:
+                // 1.3 ULP). That agreement is a property of these matrices; see
+                // `lazy_zero_rank_cap_reports_the_local_rook_pivot_not_the_matrix_maximum`.
                 let relative = (dense_error - lazy_error).abs() / dense_error.abs();
                 assert!(
                     relative <= 4.0 * f64::EPSILON,
@@ -226,9 +229,10 @@ fn lazy_rank_cap_error_matches_dense_kernel_across_shapes_and_caps() {
 }
 
 #[test]
-fn lazy_rank_cap_error_is_the_remaining_residual_maximum() {
+fn lazy_rank_cap_error_is_the_rejected_rook_pivot() {
     // A[0, 0] = 4 is the largest entry, so both kernels pivot there first and
-    // the remaining 2x2 Schur complement is exactly [[3, 0], [0, 1]].
+    // the remaining 2x2 Schur complement is exactly [[3, 0], [0, 1]]. The extra
+    // walk at the cap starts in its first column and finds 3.
     fn check<T>(four: f64, two: f64, three: f64, one: f64)
     where
         T: crate::MatrixLuciScalar,
@@ -264,7 +268,7 @@ fn lazy_rank_cap_error_is_the_remaining_residual_maximum() {
 
         assert_eq!(dense_out.pivot_errors, vec![four, three]);
         assert_eq!(lazy_out.pivot_errors, vec![four, three]);
-        // The buggy value was the last accepted pivot (4), not the residual (3).
+        // The #1089 value was the last accepted pivot (4), not the rejected one.
         assert_ne!(lazy_out.pivot_errors[0], lazy_out.pivot_errors[1]);
     }
     check::<f64>(4.0, 2.0, 3.0, 1.0);
@@ -293,7 +297,7 @@ fn lazy_rank_cap_error_ignores_the_last_accepted_pivot() {
 }
 
 #[test]
-fn lazy_zero_rank_cap_reports_the_whole_matrix_maximum() {
+fn lazy_zero_rank_cap_reports_a_rook_pivot() {
     let data = unique_pivot_test_matrix();
     let dense = DenseMatrixSource::from_column_major(&data, 4, 4);
     let lazy = dense_to_lazy(data.clone(), 4, 4);
@@ -302,8 +306,8 @@ fn lazy_zero_rank_cap_reports_the_whole_matrix_maximum() {
     let dense_out = DenseLuKernel.factorize(&dense, &options).unwrap();
     let lazy_out = LazyBlockRookKernel.factorize(&lazy, &options).unwrap();
 
-    // Nothing was accepted, so the whole matrix is residual and its maximum is
-    // the trailing entry. The previous lazy value here was NaN.
+    // Nothing was accepted, so the trailing entry is the pivot of one walk over
+    // the whole matrix; here it is also the maximum. The #1089 value was NaN.
     assert_eq!(lazy_out.rank, 0);
     assert_eq!(dense_out.pivot_errors, vec![9.0]);
     assert_eq!(lazy_out.pivot_errors, vec![9.0]);
@@ -332,7 +336,7 @@ fn full_rank_reports_zero_last_error_in_both_kernels() {
 }
 
 #[test]
-fn lazy_bond_error_reports_the_remaining_residual_at_a_rank_cap() {
+fn lazy_bond_error_reports_the_rejected_rook_pivot_at_a_rank_cap() {
     let data = unique_pivot_test_matrix();
     let factors = crate::matrix_luci_factors_from_blocks(
         4,
@@ -354,7 +358,7 @@ fn lazy_bond_error_reports_the_remaining_residual_at_a_rank_cap() {
     .unwrap();
 
     assert_eq!(factors.rank, 2);
-    // Downstream bond error: the largest discarded residual. Before the fix
+    // Downstream bond error: the rook pivot the cap rejected. Before #1090
     // this reported the last accepted pivot, 7.997777777777777.
     assert_eq!(
         factors.pivot_errors,
@@ -363,10 +367,10 @@ fn lazy_bond_error_reports_the_remaining_residual_at_a_rank_cap() {
 }
 
 #[test]
-fn lazy_zero_rank_cap_error_ignores_the_pivot_rule_difference() {
+fn lazy_zero_rank_cap_reports_the_local_rook_pivot_not_the_matrix_maximum() {
     // The rook search converges on the local maximum 3 at (1, 0) while complete
-    // pivoting reaches the global maximum 10 at (2, 2). The trailing entry is
-    // the maximum of the residual block, so both kernels still agree.
+    // pivoting reaches the global maximum 10 at (2, 2). Rook reports its own
+    // pivot, which is not a bound on the residual; Full reports the maximum.
     let data = vec![
         1.0_f64, 3.0, 0.0, // column 0
         2.0, 0.5, 0.0, // column 1
@@ -380,14 +384,13 @@ fn lazy_zero_rank_cap_error_ignores_the_pivot_rule_difference() {
     let lazy_out = LazyBlockRookKernel.factorize(&lazy, &options).unwrap();
 
     assert_eq!(dense_out.pivot_errors, vec![10.0]);
-    assert_eq!(lazy_out.pivot_errors, vec![10.0]);
+    assert_eq!(lazy_out.pivot_errors, vec![3.0]);
 }
 
 #[test]
-fn lazy_residual_scan_rejects_non_finite_residuals() {
-    // A zero cap never enters the search loop, so the trailing measurement has
-    // to report the non-finite residual itself.
+fn lazy_rook_walk_rejects_non_finite_residuals_it_visits() {
     for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        // A zero cap still walks once, so the walk sees the only entry.
         let lazy = dense_to_lazy(vec![invalid], 1, 1);
         let error = LazyBlockRookKernel
             .factorize(&lazy, &rank_cap_options(0))
@@ -397,9 +400,9 @@ fn lazy_residual_scan_rejects_non_finite_residuals() {
             crate::matrixluci::MatrixLuciError::NaNEncountered { .. }
         ));
 
-        // The pivot search only evaluates its own pivot row and column, so the
-        // trailing scan is what first sees this entry.
-        let data = vec![4.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, invalid];
+        // After the pivot at (0, 0) the walk at the cap starts in column 1 and
+        // meets the entry at (1, 1).
+        let data = vec![4.0, 0.0, 0.0, 0.0, invalid, 0.0, 0.0, 0.0, 1.0];
         let lazy = dense_to_lazy(data, 3, 3);
         let error = LazyBlockRookKernel
             .factorize(&lazy, &rank_cap_options(1))
@@ -409,4 +412,608 @@ fn lazy_residual_scan_rejects_non_finite_residuals() {
             crate::matrixluci::MatrixLuciError::NaNEncountered { .. }
         ));
     }
+}
+
+/// The heuristic contract also covers non-finite values: an entry outside the
+/// rows and columns the walks visit is never evaluated, so `Rook` cannot see
+/// it. Only `Full` evaluates every entry.
+#[test]
+fn rook_does_not_see_a_non_finite_entry_its_walks_never_visit() {
+    for invalid in [f64::NAN, f64::INFINITY] {
+        // After the pivot 4 at (0, 0), the walk at the cap starts in column 1,
+        // stops on the 1 at (1, 1) and never reads (2, 2).
+        let data = vec![4.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, invalid];
+        let out = LazyBlockRookKernel
+            .factorize(&dense_to_lazy(data, 3, 3), &rank_cap_options(1))
+            .unwrap();
+        assert_eq!(out.pivot_errors, vec![4.0, 1.0]);
+    }
+}
+
+/// Source wrapper that counts the entries a kernel asks for.
+///
+/// `requested` counts every entry copied out, reloads included; `unique`
+/// counts first touches, which is what a memoizing evaluator pays for.
+struct CountingSource<S> {
+    inner: S,
+    requested: std::cell::Cell<usize>,
+    touched: std::cell::RefCell<std::collections::HashSet<(usize, usize)>>,
+}
+
+impl<S> CountingSource<S> {
+    fn new(inner: S) -> Self {
+        Self {
+            inner,
+            requested: std::cell::Cell::new(0),
+            touched: std::cell::RefCell::new(std::collections::HashSet::new()),
+        }
+    }
+
+    fn requested(&self) -> usize {
+        self.requested.get()
+    }
+
+    fn unique(&self) -> usize {
+        self.touched.borrow().len()
+    }
+}
+
+impl<T: crate::MatrixLuciScalar, S: CandidateMatrixSource<T>> CandidateMatrixSource<T>
+    for CountingSource<S>
+{
+    fn nrows(&self) -> usize {
+        self.inner.nrows()
+    }
+
+    fn ncols(&self) -> usize {
+        self.inner.ncols()
+    }
+
+    fn get_block(&self, rows: &[usize], cols: &[usize], out: &mut [T]) {
+        self.requested
+            .set(self.requested.get() + rows.len() * cols.len());
+        let mut touched = self.touched.borrow_mut();
+        for &col in cols {
+            for &row in rows {
+                touched.insert((row, col));
+            }
+        }
+        self.inner.get_block(rows, cols, out);
+    }
+}
+
+/// `A = U Vᵀ` with `U`, `V` of shape `n × rank`, column-major.
+fn exact_rank_matrix(n: usize, rank: usize, seed: u64) -> Vec<f64> {
+    use rand::{Rng, SeedableRng};
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed);
+    let u: Vec<f64> = (0..n * rank).map(|_| rng.random::<f64>() - 0.5).collect();
+    let v: Vec<f64> = (0..n * rank).map(|_| rng.random::<f64>() - 0.5).collect();
+    let mut data = vec![0.0; n * n];
+    for col in 0..n {
+        for row in 0..n {
+            data[row + n * col] = (0..rank).map(|k| u[row + n * k] * v[col + n * k]).sum();
+        }
+    }
+    data
+}
+
+/// The rook walk as it was before #1247: every column and row block reloads
+/// `A[I, J]` and `A[rows, J]`, and every block reloads `A[I, cols]`. It is the
+/// oracle for the hoisted walk, which must perform the same arithmetic on the
+/// same values.
+fn reloading_rook_pivot<S: CandidateMatrixSource<f64>>(
+    source: &S,
+    remaining_rows: &[usize],
+    remaining_cols: &[usize],
+    selected_rows: &[usize],
+    selected_cols: &[usize],
+) -> (usize, usize, f64) {
+    use super::{argmax_abs, eliminate, load_block};
+    let block = |rows: &[usize], cols: &[usize]| {
+        let mut residual = load_block(source, rows, cols);
+        if selected_rows.is_empty() {
+            return residual;
+        }
+        let pivot = load_block(source, selected_rows, selected_cols);
+        let a_rj = load_block(source, rows, selected_cols);
+        let a_ic = load_block(source, selected_rows, cols);
+        eliminate(&mut residual, &pivot, &a_rj, &a_ic).unwrap();
+        residual
+    };
+
+    let mut columns = remaining_cols.iter().copied();
+    let (mut current_row, mut current_col, mut current_abs);
+    loop {
+        let Some(col) = columns.next() else {
+            return (remaining_rows[0], remaining_cols[0], 0.0);
+        };
+        current_col = col;
+        let (row_pos, _, best_abs) = argmax_abs(&block(remaining_rows, &[col]));
+        if best_abs != 0.0 {
+            current_row = remaining_rows[row_pos];
+            current_abs = best_abs;
+            break;
+        }
+    }
+    for _ in 0..remaining_rows.len() + remaining_cols.len() + 1 {
+        let (_, col_pos, best_abs) = argmax_abs(&block(&[current_row], remaining_cols));
+        let next_col = remaining_cols[col_pos];
+        if next_col == current_col || best_abs <= current_abs {
+            return (current_row, current_col, current_abs.max(best_abs));
+        }
+        current_col = next_col;
+        current_abs = best_abs;
+        let (row_pos, _, col_best_abs) = argmax_abs(&block(remaining_rows, &[current_col]));
+        if col_best_abs > current_abs {
+            current_row = remaining_rows[row_pos];
+            current_abs = col_best_abs;
+        }
+    }
+    let (_, col_pos, best_abs) = argmax_abs(&block(&[current_row], remaining_cols));
+    (current_row, remaining_cols[col_pos], best_abs)
+}
+
+#[test]
+fn lazy_rook_walk_loads_the_pivot_operands_once_and_selects_the_same_pivots() {
+    use super::rook_pivot;
+    // The shape measured on #1247: a binding cap below the exact rank.
+    let (n, exact_rank, cap) = (400usize, 30usize, 15usize);
+    let data = exact_rank_matrix(n, exact_rank, 1247);
+    let source = CountingSource::new(dense_to_lazy(data.clone(), n, n));
+
+    let out = LazyBlockRookKernel
+        .factorize(&source, &rank_cap_options(cap))
+        .unwrap();
+    assert_eq!(out.rank, cap);
+    // A rank-cap exit measures the rejected pivot with one more walk, never a
+    // scan of the remaining block: 16 walks touch 15,980 of the 160,000
+    // entries.
+    assert!(
+        source.unique() < n * n / 8,
+        "unique {} of {} entries: the rank-cap exit scanned the block",
+        source.unique(),
+        n * n
+    );
+
+    // Same pivots, same pivot magnitudes, bit for bit, as the reloading walk.
+    // Step `cap` is the extra walk whose pivot is the trailing entry.
+    let hoisted = CountingSource::new(dense_to_lazy(data.clone(), n, n));
+    let reloading = CountingSource::new(dense_to_lazy(data, n, n));
+    for step in 0..=cap {
+        let selected_rows = &out.row_indices[..step];
+        let selected_cols = &out.col_indices[..step];
+        let remaining_rows = remaining_indices(n, selected_rows);
+        let remaining_cols = remaining_indices(n, selected_cols);
+        let (row, col, abs) = rook_pivot(
+            &hoisted,
+            &remaining_rows,
+            &remaining_cols,
+            selected_rows,
+            selected_cols,
+            None,
+        )
+        .unwrap();
+        let (oracle_row, oracle_col, oracle_abs) = reloading_rook_pivot(
+            &reloading,
+            &remaining_rows,
+            &remaining_cols,
+            selected_rows,
+            selected_cols,
+        );
+        assert_eq!((row, col), (oracle_row, oracle_col), "step {step}");
+        assert_eq!(abs.to_bits(), oracle_abs.to_bits(), "step {step}");
+        if step < cap {
+            assert_eq!((row, col), (out.row_indices[step], out.col_indices[step]));
+        }
+        assert_eq!(
+            abs.to_bits(),
+            out.pivot_errors[step].to_bits(),
+            "step {step}"
+        );
+    }
+    // Reloading the walk invariants per column or row block requests 235,200
+    // entries over the 16 walks; loading them once per walk requests 122,242
+    // (1.92x fewer). The bound leaves ~7% headroom.
+    let ratio = reloading.requested() as f64 / hoisted.requested() as f64;
+    assert!(
+        ratio > 1.8,
+        "reloading {} / hoisted {} = {ratio:.3}",
+        reloading.requested(),
+        hoisted.requested()
+    );
+}
+
+/// Smooth ridge from tensor4all-rs#1256: a residual with several separated
+/// bumps, on which a rook walk ends at a local maximum far below the rest.
+fn smooth_ridge_matrix(n: usize) -> Vec<f64> {
+    let entry = |i: usize, j: usize| {
+        let x = i as f64 / n as f64;
+        let y = (j as f64 + 0.5) / n as f64;
+        (-(x - y) * (x - y) / 0.002).exp() + 0.3 * (3.0 * x * y).cos()
+    };
+    let mut data = vec![0.0; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            data[i + n * j] = entry(i, j);
+        }
+    }
+    data
+}
+
+/// `max |A - A[:, J] A[I, J]^{-1} A[I, :]|` over every entry of `A`, built
+/// densely and independently of the kernel's residual helpers.
+fn interpolation_max_error(data: &[f64], n: usize, rows: &[usize], cols: &[usize]) -> f64 {
+    use tensor4all_tensorbackend::{mat_mul, solve_matrix, Matrix};
+    let block = |rs: &[usize], cs: &[usize]| {
+        let mut out = Vec::with_capacity(rs.len() * cs.len());
+        for &c in cs {
+            for &r in rs {
+                out.push(data[r + n * c]);
+            }
+        }
+        Matrix::from_col_major_vec(rs.len(), cs.len(), out)
+    };
+    let all: Vec<usize> = (0..n).collect();
+    let solved = solve_matrix(&block(rows, cols), &block(rows, &all)).unwrap();
+    let approx = mat_mul(&block(&all, cols), &solved).unwrap();
+    let mut max_err = 0.0f64;
+    for j in 0..n {
+        for i in 0..n {
+            let err = (data[i + n * j] - approx[[i, j]]).abs();
+            assert!(
+                err.is_finite(),
+                "non-finite interpolation error at ({i}, {j})"
+            );
+            max_err = max_err.max(err);
+        }
+    }
+    max_err
+}
+
+fn ridge_options() -> PivotKernelOptions<'static> {
+    PivotKernelOptions {
+        rel_tol: 1e-8,
+        abs_tol: 0.0,
+        ..PivotKernelOptions::default()
+    }
+}
+
+#[test]
+fn dense_tolerance_stop_reports_the_true_interpolation_error() {
+    // The certified strategy on the tensor4all-rs#1256 ridge: Full's trailing
+    // entry is the maximum of the remaining residual, so it is the true
+    // interpolation error and below the tolerance.
+    let n = 200;
+    let options = ridge_options();
+    let data = smooth_ridge_matrix(n);
+    let dense = DenseLuKernel
+        .factorize(&DenseMatrixSource::from_column_major(&data, n, n), &options)
+        .unwrap();
+    let reported = *dense.pivot_errors.last().unwrap();
+    let first_pivot = dense.pivot_errors[0];
+    let true_err = interpolation_max_error(&data, n, &dense.row_indices, &dense.col_indices);
+    // The selected rows and columns carry only rounding error, so the reported
+    // remaining maximum and the true maximum agree closely.
+    assert!(
+        (reported - true_err).abs() <= 1e-3 * true_err + 1e-13 * first_pivot,
+        "reported error {reported:.3e} is not the true error {true_err:.3e}"
+    );
+    assert!(
+        true_err < options.rel_tol * first_pivot,
+        "stopped with true error {true_err:.3e} >= tolerance {:.3e}",
+        options.rel_tol * first_pivot
+    );
+}
+
+#[test]
+fn rook_stop_check_walks_keep_the_1256_ridge_within_tolerance() {
+    use super::stats;
+    // One walk stops this ridge at rank 63 on a rook pivot 2.5e-9 of the first
+    // pivot while the interpolant is off by 1.3e-6 (tensor4all-rs#1256). The
+    // stop-check walks from spread-out columns find the pivots that walk
+    // missed: rank 70, true error 4.5e-9, below the 1e-8 tolerance. This pins
+    // the improvement on this matrix; it is not a bound in general.
+    let n = 200;
+    let options = ridge_options();
+    let data = smooth_ridge_matrix(n);
+    stats::reset();
+    let rook = LazyBlockRookKernel
+        .factorize(&dense_to_lazy(data.clone(), n, n), &options)
+        .unwrap();
+    let reported = *rook.pivot_errors.last().unwrap();
+    let first_pivot = rook.pivot_errors[0];
+    let true_err = interpolation_max_error(&data, n, &rook.row_indices, &rook.col_indices);
+    assert!(
+        reported < options.rel_tol * first_pivot,
+        "rook did not stop on tolerance"
+    );
+    assert!(
+        stats::snapshot().stop_check_walks > 0,
+        "the tolerance stop ran no stop-check walk"
+    );
+    assert!(
+        true_err < options.rel_tol * first_pivot,
+        "true error {true_err:.3e} >= tolerance {:.3e}",
+        options.rel_tol * first_pivot
+    );
+}
+
+/// After the first pivot of diag(10, 0.01, 5) the first walk starts in column
+/// 1, whose only residual entry 0.01 passes the stopping test. A stop-check
+/// walk starts in column 2 and finds 5, so `Rook` takes it as `Full` does.
+#[test]
+fn rook_stop_check_walk_finds_the_entry_the_first_walk_missed() {
+    // diag(10, 0.01, 5), column-major.
+    let data = vec![
+        10.0, 0.0, 0.0, //
+        0.0, 0.01, 0.0, //
+        0.0, 0.0, 5.0, //
+    ];
+    let options = PivotKernelOptions {
+        rel_tol: 1e-2,
+        abs_tol: 0.0,
+        ..PivotKernelOptions::default()
+    };
+    let rook = LazyBlockRookKernel
+        .factorize(&dense_to_lazy(data.clone(), 3, 3), &options)
+        .unwrap();
+    let full = DenseLuKernel
+        .factorize(&DenseMatrixSource::from_column_major(&data, 3, 3), &options)
+        .unwrap();
+    for out in [&rook, &full] {
+        assert_eq!(out.rank, 2);
+        assert_eq!(out.col_indices, vec![0, 2]);
+        assert_eq!(out.pivot_errors, vec![10.0, 5.0, 0.01]);
+        assert_eq!(
+            interpolation_max_error(&data, 3, &out.row_indices, &out.col_indices),
+            0.01
+        );
+    }
+}
+
+/// The heuristic contract that remains: in diag(10, 0.01, 0.01, 0.01, 0.01, 5)
+/// the first walk starts in column 1 and the two stop-check walks in columns 2
+/// and 4, so no walk visits column 5. `Rook` stops after one pivot and reports
+/// 0.01, 500x below the true remaining error 5.
+#[test]
+fn rook_stops_on_a_small_local_pivot_when_no_walk_visits_the_larger_entry() {
+    let n = 6;
+    let mut data = vec![0.0; n * n];
+    for (i, value) in [10.0, 0.01, 0.01, 0.01, 0.01, 5.0].into_iter().enumerate() {
+        data[i + n * i] = value;
+    }
+    let options = PivotKernelOptions {
+        rel_tol: 1e-2,
+        abs_tol: 0.0,
+        ..PivotKernelOptions::default()
+    };
+    let rook = LazyBlockRookKernel
+        .factorize(&dense_to_lazy(data.clone(), n, n), &options)
+        .unwrap();
+    assert_eq!(rook.rank, 1);
+    assert_eq!(rook.pivot_errors, vec![10.0, 0.01]);
+    assert_eq!(
+        interpolation_max_error(&data, n, &rook.row_indices, &rook.col_indices),
+        5.0
+    );
+}
+
+#[test]
+fn rook_walk_does_not_cycle_on_a_roundoff_residual() {
+    use super::stats;
+    // Past the exact rank the residual is roundoff only, and the same entry
+    // computed from its row and from its column differs in the last bits. A
+    // walk that follows "the row maximum is in another column" without
+    // requiring a larger magnitude cycles until its step limit: 1,733 row
+    // steps for these 41 walks. Moving only to a strictly larger magnitude
+    // takes 83.
+    let (n, exact_rank, cap) = (200usize, 20usize, 40usize);
+    let data = exact_rank_matrix(n, exact_rank, 1);
+    stats::reset();
+    let out = LazyBlockRookKernel
+        .factorize(&dense_to_lazy(data, n, n), &rank_cap_options(cap))
+        .unwrap();
+    assert_eq!(out.rank, cap);
+    let steps = stats::snapshot().walk_steps;
+    assert!(
+        steps < 4 * (cap + 1),
+        "{steps} row steps for {} walks: the walk cycles on roundoff",
+        cap + 1
+    );
+}
+
+#[test]
+fn lazy_seeded_walk_requests_less_than_the_unseeded_walk() {
+    use super::stats;
+    // Seeding is what `arrlu` does with its `I0`/`J0`: the previous pivots are
+    // where the walks start. On the #1256 ridge the seeded revisit asks for
+    // 742,898 entries where the unseeded run asks for 945,422.
+    let n = 200;
+    let data = smooth_ridge_matrix(n);
+    let options = ridge_options();
+
+    stats::reset();
+    let unseeded_source = CountingSource::new(dense_to_lazy(data.clone(), n, n));
+    let unseeded = LazyBlockRookKernel
+        .factorize(&unseeded_source, &options)
+        .unwrap();
+    assert_eq!(stats::snapshot().seeded_starts, 0);
+
+    let seeds: Vec<(usize, usize)> = unseeded
+        .row_indices
+        .iter()
+        .copied()
+        .zip(unseeded.col_indices.iter().copied())
+        .collect();
+    let seeded_options = PivotKernelOptions {
+        seeds: &seeds,
+        ..options
+    };
+    stats::reset();
+    let seeded_source = CountingSource::new(dense_to_lazy(data.clone(), n, n));
+    let seeded = LazyBlockRookKernel
+        .factorize(&seeded_source, &seeded_options)
+        .unwrap();
+
+    // The seeds are used for the walks, not merely tolerated.
+    let seeded_starts = stats::snapshot().seeded_starts;
+    assert!(
+        seeded_starts > seeds.len() / 2,
+        "only {seeded_starts} of {} walks started on a seed",
+        seeds.len()
+    );
+    assert!(
+        seeded_source.requested() < unseeded_source.requested(),
+        "seeded walk requested {} entries, unseeded {}",
+        seeded_source.requested(),
+        unseeded_source.requested()
+    );
+
+    // The seeded run stops by the same heuristic rule: its trailing entry is
+    // the rejected rook pivot, below the tolerance (not a bound; see
+    // `rook_tolerance_stop_on_the_1256_ridge_underestimates_the_true_error`).
+    assert!(*seeded.pivot_errors.last().unwrap() < options.rel_tol * seeded.pivot_errors[0]);
+}
+
+/// The pivot sweep of `lazy_rank_cap_error_matches_dense_kernel_across_shapes_and_caps`,
+/// factorized a second time with the first run's pivots as seeds.
+///
+/// On this sweep the walk converges on the same pivots wherever it starts, so
+/// seeding has to change neither the selection nor the errors. That is a
+/// property of these matrices, not a promise of seeding in general: elsewhere a
+/// seed moves a walk to a different local rook (see
+/// `lazy_seeded_walk_requests_less_than_the_unseeded_walk`). Seeds never add an
+/// error guarantee.
+#[test]
+fn lazy_seeded_sweep_matches_the_unseeded_and_dense_kernels() {
+    for (nrows, ncols) in [(4usize, 4usize), (6, 6), (8, 5), (5, 8), (12, 12), (20, 10)] {
+        let full_rank = nrows.min(ncols);
+        for cap in 1..full_rank {
+            for seed in 1..=5u64 {
+                let data = decreasing_pivot_matrix(nrows, ncols, seed);
+                let dense_source = DenseMatrixSource::from_column_major(&data, nrows, ncols);
+                let lazy_source = dense_to_lazy(data.clone(), nrows, ncols);
+                let options = rank_cap_options(cap);
+
+                let dense_out = DenseLuKernel.factorize(&dense_source, &options).unwrap();
+                let unseeded = LazyBlockRookKernel
+                    .factorize(&lazy_source, &options)
+                    .unwrap();
+                let seeds: Vec<(usize, usize)> = unseeded
+                    .row_indices
+                    .iter()
+                    .copied()
+                    .zip(unseeded.col_indices.iter().copied())
+                    .collect();
+                let seeded = LazyBlockRookKernel
+                    .factorize(
+                        &dense_to_lazy(data, nrows, ncols),
+                        &PivotKernelOptions {
+                            seeds: &seeds,
+                            ..options
+                        },
+                    )
+                    .unwrap();
+
+                let case = format!("{nrows}x{ncols} cap {cap} seed {seed}");
+                assert_eq!(seeded.row_indices, unseeded.row_indices, "{case}");
+                assert_eq!(seeded.col_indices, unseeded.col_indices, "{case}");
+                assert_eq!(seeded.row_indices, dense_out.row_indices, "{case}");
+                assert_eq!(seeded.pivot_errors, unseeded.pivot_errors, "{case}");
+                let dense_error = *dense_out.pivot_errors.last().unwrap();
+                let seeded_error = *seeded.pivot_errors.last().unwrap();
+                let relative = (dense_error - seeded_error).abs() / dense_error.abs();
+                assert!(
+                    relative <= 4.0 * f64::EPSILON,
+                    "{case}: dense {dense_error:e} seeded {seeded_error:e}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn lazy_walk_ignores_seeds_that_do_not_lead_anywhere() {
+    // Seeds are a starting point, not a constraint. Nonsense seeds (pivots of
+    // something else, in reverse) change where the walks begin, but on an
+    // exact rank-6 matrix the factorization still finds rank 6 and
+    // reconstructs the matrix.
+    let (n, exact_rank) = (40usize, 6usize);
+    let data = exact_rank_matrix(n, exact_rank, 11);
+    let options = PivotKernelOptions {
+        rel_tol: 1e-10,
+        abs_tol: 0.0,
+        ..PivotKernelOptions::default()
+    };
+    let nonsense: Vec<(usize, usize)> = (0..n).rev().map(|index| (index, index)).collect();
+    let out = LazyBlockRookKernel
+        .factorize(
+            &dense_to_lazy(data.clone(), n, n),
+            &PivotKernelOptions {
+                seeds: &nonsense,
+                ..options
+            },
+        )
+        .unwrap();
+
+    assert_eq!(out.rank, exact_rank);
+    assert_eq!(out.row_indices.len(), exact_rank);
+    assert_eq!(out.col_indices.len(), exact_rank);
+    let scale = out.pivot_errors[0];
+    let error = interpolation_max_error(&data, n, &out.row_indices, &out.col_indices);
+    assert!(error < 1e-12 * scale, "reconstruction error {error:e}");
+}
+
+#[test]
+fn the_seeded_entry_point_forwards_the_seeds_to_the_kernel() {
+    // The kernel tests above call `LazyBlockRookKernel` directly. Callers reach
+    // it through `matrix_luci_factors_from_blocks` and its seeded sibling, so
+    // cover the forwarding as well: dropping the seeds on the way would leave
+    // every test above green.
+    use std::cell::Cell;
+    let n = 120;
+    let data = smooth_ridge_matrix(n);
+    let options = crate::RrLUOptions {
+        rel_tol: 1e-8,
+        abs_tol: 0.0,
+        ..crate::RrLUOptions::default()
+    };
+    let run = |seeds: &[(usize, usize)]| -> (usize, crate::MatrixLuciFactors<f64>) {
+        let requested = Cell::new(0usize);
+        let factors = crate::matrix_luci_factors_from_blocks_seeded(
+            n,
+            n,
+            |rows, cols, out: &mut [f64]| {
+                requested.set(requested.get() + rows.len() * cols.len());
+                for (j, &col) in cols.iter().enumerate() {
+                    for (i, &row) in rows.iter().enumerate() {
+                        out[i + rows.len() * j] = data[row + n * col];
+                    }
+                }
+            },
+            seeds,
+            options.clone(),
+        )
+        .unwrap();
+        (requested.get(), factors)
+    };
+
+    let (unseeded_requested, unseeded) = run(&[]);
+    let seeds: Vec<(usize, usize)> = unseeded
+        .row_indices
+        .iter()
+        .copied()
+        .zip(unseeded.col_indices.iter().copied())
+        .collect();
+    let (seeded_requested, seeded) = run(&seeds);
+
+    assert_eq!(unseeded.rank, seeded.rank);
+    assert!(
+        seeded_requested < unseeded_requested,
+        "seeded entry point requested {seeded_requested} entries, unseeded {unseeded_requested}"
+    );
+    assert!(
+        *seeded.pivot_errors.last().unwrap() < options.rel_tol * seeded.pivot_errors[0],
+        "the seeded factorization stopped above the tolerance"
+    );
 }

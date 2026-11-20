@@ -5,8 +5,10 @@
 
 mod ad_treetn;
 mod basic;
+mod batch_parallelism;
 mod bug_swap_values;
 mod cached_evaluator_determinism;
+mod chain_cores;
 mod context_adoption;
 mod cuda_component_transfer;
 mod cuda_pending_download;
@@ -31,6 +33,7 @@ mod randomized_factorization;
 mod repro_swap_truncation;
 mod session_cached_evaluator;
 mod session_factorization;
+#[cfg(feature = "simplett-bridge")]
 mod simplett_bridge;
 mod site_free_nodes;
 mod src_context_seam;

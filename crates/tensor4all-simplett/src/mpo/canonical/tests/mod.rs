@@ -7,7 +7,7 @@ const SEED: u64 = 0x2545_F491_4F6C_DD1D;
 
 fn assert_same_operator<T>(before: &MPO<T>, after: &MPO<T>, tol: f64)
 where
-    T: SVDScalar + EinsumScalar,
+    T: SVDScalar,
     <T as ComplexFloat>::Real: Into<f64>,
 {
     let (a, shape_a) = before.full_tensor().unwrap();
@@ -27,7 +27,7 @@ where
 /// Check `sum_{s1, s2, r} B[l, s1, s2, r] * conj(B[l', s1, s2, r]) = delta`.
 fn assert_right_orthogonal<T>(tensor: &Tensor4<T>, tol: f64)
 where
-    T: SVDScalar + EinsumScalar,
+    T: SVDScalar,
     <T as ComplexFloat>::Real: Into<f64>,
 {
     let left = tensor.left_dim();
@@ -52,7 +52,7 @@ where
 
 fn right_canonicalize_generic<T>(from_f64: impl Fn(f64) -> T)
 where
-    T: SVDScalar + EinsumScalar,
+    T: SVDScalar,
     <T as ComplexFloat>::Real: Into<f64>,
 {
     let bonds = [1, 3, 5, 4, 1];

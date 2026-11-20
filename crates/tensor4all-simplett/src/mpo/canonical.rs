@@ -13,7 +13,7 @@
 //! corresponding matricization. That makes it safe to run before any
 //! truncation policy is applied.
 
-use crate::einsum_helper::{einsum_tensors, typed_tensor_reshape, EinsumScalar};
+use crate::einsum_helper::{einsum_tensors, typed_tensor_reshape};
 
 use super::environment::mpo_helper_error;
 use super::error::Result;
@@ -21,7 +21,7 @@ use super::factorize::SVDScalar;
 use super::mpo::MPO;
 use super::types::{Tensor4, Tensor4Ops};
 use tenferro_tensor::TypedTensor;
-use tensor4all_tensorbackend::qr_backend;
+use tensor4all_core::legacy::qr_backend;
 
 /// Bring `mpo` into right-canonical form without changing the operator it
 /// represents.
@@ -34,7 +34,7 @@ use tensor4all_tensorbackend::qr_backend;
 /// so bond dimensions can shrink but no accuracy is lost.
 pub(crate) fn right_canonicalize<T>(mpo: &mut MPO<T>) -> Result<()>
 where
-    T: SVDScalar + EinsumScalar,
+    T: SVDScalar,
 {
     if mpo.len() <= 1 {
         return Ok(());

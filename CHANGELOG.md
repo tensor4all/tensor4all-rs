@@ -1,6 +1,277 @@
 # Changelog
 
+## Unreleased (next minor)
+
+### Behavior changes
+
+- `tensor4all-core` no longer pins `tensor4all-tensorbackend/global-defaults` and no
+  longer enables the process-global route by default (#1403). It has its own opt-in
+  `global-defaults` feature (`backend-tenferro` is an alias); its default is the
+  platform CPU provider only, and the provider features of the workspace crates no
+  longer imply it. Without it, a context-free operation that would have adopted an
+  owner-less value into the process-global eager runtime, or run on the process-global
+  engine, returns the new `ExecutionContextEntryError::NoContext` (inside
+  `IdxTensorError::EngineEntry` or the operation's own error) instead of choosing an
+  engine; values created through a caller-owned context keep running on that context's
+  engine. With `global-defaults` nothing changes. `tensor4all-treersi` drops
+  `global-defaults` from its defaults (so `hadamard_many` needs it; `hadamard_many_in`
+  does not); `tenferro-cuda` (in core, and so in every crate forwarding it) still implies it, because
+  CUDA execution keeps host steps with no caller CPU context (core's CUDA-resident SRC
+  readback, treersi's rank decision). `tensor4all-hdf5` enables it in its
+  library, because its load API takes no context. Callers of the context-free API enable
+  `tensor4all-core/global-defaults`. Explicit callers of
+  `IdxTensor::src_error_estimate_in` and of structured contractions with host-only
+  operands now run the estimator solve and the native einsum on their own context's
+  engine instead of the process-global one. New: `src_error_estimate_general_in`.
+  `TensorTrain::norm`/`norm_squared` run the packed-site backend kernel on the CPU
+  context that owns the chain (new `IdxTensor::with_owning_cpu_engine`) in every build;
+  only a chain with no CPU-owned value uses the process-global context (or refuses
+  without `global-defaults`). `IdxTensor::scale` places an untracked `AnyScalar` that has
+  no tensor of its own in the operand's runtime, so scaling context-owned values works
+  without `global-defaults`. In every build, `From<anyhow::Error> for IdxTensorError`
+  recovers a wrapped `ExecutionContextEntryError` as `IdxTensorError::EngineEntry`
+  instead of `IdxTensorError::Operation`.
+- `tensor4all-tensorbackend`: `global-defaults` is no longer enabled by the default
+  features (#1377). The default is now `explicit-context` plus the platform CPU
+  provider, which also exposes `Matrix`, `Storage`, `TensorElement`, the native
+  tensor bridge and the `*_in` linalg entries. Direct dependents that call a
+  process-global function (`mat_mul`, `solve_matrix`, `svd_backend`,
+  `einsum_native_tensors`, ...) enable `global-defaults` (or `backend-tenferro`).
+  `tensor4all-core` still enables it for its dependents. New caller-context entries:
+  `hermitian_eigendecomposition_in`, `lowest_hermitian_eigenpair_in`,
+  `hermitian_exponential_first_column_in`, `einsum_native_tensors_in`,
+  `einsum_native_tensors_owned_in`, `einsum_native_tensor_reads_in`,
+  `NativeEinsumPlan::execute_reads_in`.
+- `tensor4all-partitionedtreetn`: a certified operator application refused by its
+  memory gate is reported as the new `PartitionedTreeTNError::CertifiedMemoryLimit
+  { operation, estimated_bytes, limit_bytes }` (#1374). It was a `ResourceLimit`
+  whose `value` held the estimate and whose message called that estimate the
+  limit, so a 9.7 GB estimate against the 4 GiB default read as "limit of
+  9705853056". Callers matching `ResourceLimit { limit: "memory_limit (bytes)", .. }`
+  match the new variant instead.
+- `tensor4all-partitionedtreetn`: `PartitionedTreeTN::iter`, `values`, `projectors`
+  and both `IntoIterator` impls yield patches in canonical patch order (#1366):
+  by index signature, then by the patch's projector coordinates. The order no
+  longer depends on insertion order or hash-map state, so an order-dependent
+  step on the patches, such as a truncated pairwise sum, is reproducible across
+  runs. The `IntoIterator` impls now require `V: Ord` and return
+  `std::vec::IntoIter`; each call sorts the patch list once.
+- `tensor4all-treetn` no longer enables `simplett-bridge` by default (#1335).
+  Enable it explicitly for SimpleTT conversions and the bridge's chain helpers.
+  Native M6 benchmark builds also exclude legacy comparisons and Fourier
+  construction unless their benchmark features are explicitly selected.
+- `tensor4all-interpolativeqtt` returns TreeTN chains with ordered physical indices
+  for ordinary and patched interpolation (#1334). Pass the tree and its site
+  indices to `invert_qtt::<T>` for binary chains. The interpolation crate no longer
+  depends on SimpleTT.
+- `tensor4all-partitionedtreetn`: `MergeRefineOptions::target_bond_dim` decides
+  one coordinate axis at a time (#1328). A level previously probed the joint
+  product of every refining axis and then fixed an output bit on all of them or
+  on none; it now probes each axis on its own and fixes output bits only on the
+  axes whose own children store no more parameters in total than the region's
+  merged, unsplit candidate (the #1327 guard, applied per axis; a candidate that
+  already fits the goal stops every axis without a probe). A level of
+  an `N`-axis schedule therefore splits into `2^(refining axes)` children instead
+  of `2^N`, and the stopped axes keep their region's shorter prefix while the
+  region's input siblings keep merging on every axis. Single-axis runs are
+  unaffected; `MergeRefineReport::stopped_regions` now counts one region-axis
+  decision per stopped axis instead of one region, which is the same value for a
+  single axis. A region with several axes can now stop every axis at a coarse level
+  even though only the joint split would have paid, because no single axis pays on
+  its own.
+- `tensor4all-simplett`: `evaluate`, `sum`, `norm2`, `norm`, `log_norm`,
+  `inner_product`, and `inner_product_with_session` now refuse a tensor train
+  whose first core has a non-unit leading bond (#1303, #1340), the
+  left-boundary sibling of the trailing-bond guard from #913. They previously
+  read only the `l == 0` component and returned its projection; the
+  inner-product routes summed every leading component instead.
+- `tensor4all-partitionedtreetn`: `ErrorNorm::sampled_max()` pins its
+  reference to the largest `|f|` that a greedy coordinate ascent reaches from
+  the root patch's candidate samples (#1274), as `optfirstpivot` does in
+  TensorCrossInterpolation.jl. It used to take the largest candidate sample,
+  which for a peaked function was up to 2711 times too small. This changes
+  the tolerance of `sampled_max()` runs.
+  - A root whose candidate samples are all zero still fails as before.
+  - `sampled_max_with_reference` is unchanged.
+- `PivotSearchStrategy::Rook` runs two more rook walks, from columns spread
+  over the remaining block, before it accepts a tolerance stop, and takes the
+  first pivot they find above the threshold (#1257). On the #1256 ridge and a
+  4-site ridge without global pivots, single-walk stops returned `Converged`
+  with true errors of 1.3e-6 and 0.39; both now reach the tolerance. The stop
+  is still heuristic. A rook walk also moves only to a strictly larger
+  magnitude now: on a roundoff-level residual it used to cycle until its step
+  limit (rows + columns + 1 steps), because the same entry computed from its
+  row and from its column differs in the last bits.
+- `PivotSearchStrategy::Rook` is now documented and implemented as a heuristic
+  strategy (#1271, #1282). A bond update stops when the current rook pivot is
+  below tolerance, and the trailing `pivot_errors` entry (and so the TCI2 bond
+  error) is that last rook pivot, not an upper bound on the remaining residual;
+  `TCI2Termination::Converged` under `Rook` does not prove the tolerance. The
+  exact remaining-residual scan that v0.3.0 ran before every `Rook` tolerance
+  stop and at a rank cap (#1258, #1090) is removed, and `Rook` walks now start
+  from the bond's previous pivots. `PivotSearchStrategy::Full` stays the
+  default and remains certified; use it when a bound is required. The same
+  contract applies to `matrix_luci_factors_from_blocks`.
+- `tensor4all-treetn` composes operators in one scalar type (#1298).
+  `compose_exclusive_linear_operators`, and the extension of a partial operator
+  inside `apply_linear_operator`, built their identity gaps and bridges with
+  `T::delta`, which is real. A complex operator therefore became a network
+  mixing `f64` and `Complex64` tensors, which `PartitionedTreeTN` rejects. When
+  any operator tensor is complex, the identities and the real operator tensors
+  are now promoted to complex, an exact conversion; real operators are
+  unchanged.
+- `tensor4all-partitionedtreetn`: `contract_adaptive` and `add_with_patching`
+  check each exact group sum before forming it (#1309). A sum whose estimated
+  size exceeds `PatchingOptions::group_sum_limit_bytes` (default 4 GiB) returns
+  the new `PartitionedTreeTNError::GroupSumLimit` instead of being allocated.
+  A global operator, such as a Fourier transform on patches of the transformed
+  variable, puts every pair of `contract_adaptive` into one group whose summed
+  bond is the sum of all contribution bonds; it previously ran out of memory.
+  Such an operator is applied with `schedule_merge_refine` instead.
+
+### Added
+
+- `tensor4all-treetn` adds `TreeTN::estimate_exact_sum_bytes` (#1309), the
+  size estimate of `TreeTN::exact_sum` taken before the sum is built.
+- `tensor4all-treetn` adds `LinearOperator::to_state_network` and
+  `StateOperatorNetwork` (#1298): an operator on any subset of a state's nodes,
+  written as a plain `TreeTN` on the state's whole tree, with true input
+  indices, identity gaps, bonds routed along the state's paths, and one scalar
+  type. It is the operand a `PartitionedTreeTN` contraction such as
+  `contract_adaptive` needs, without rewriting indices or promoting dtypes by
+  hand.
+- `tensor4all-treetn` adds `apply_linear_operator_certified` and
+  `apply_linear_operator_certified_to_indices`, with `CertifiedApplyOptions`,
+  `CertifiedApplication` and `CertifiedApplyError` (#1286). On a chain state
+  they truncate during the zip-up sweep and return a proved bound on
+  `||A x - y||`, at most the caller's absolute budget, without forming the exact
+  image. The exact factors the certificate needs are estimated before they are
+  built, and an estimate above the memory limit (4 GiB by default) is refused.
+- `tensor4all-partitionedtreetn` adds `OperatorApplication::Certified`
+  (#1286): `schedule_merge_refine`, and so `patched_fourier_transform`, can apply
+  the operator to each input leaf with the certified truncation, given a
+  required share of the allowance, and charge the proved bounds instead of a
+  measured difference. The exact image is never formed, so two interleaved
+  axes at R = 20 now fit in memory.
+
+### Breaking Rust API changes
+
+- `tensor4all-partitionedtreetn`: `PartitionedContractionOptions` has the new
+  field `group_sum_limit_bytes` (#1316). Complete struct literals must add it.
+  `contract` and `contract_selected` return `GroupSumLimit` before building a
+  sum whose estimate exceeds the limit. The default is 4 GiB, including when
+  passing plain `ContractionOptions`. Use `usize::MAX` to disable the limit.
+- `tensor4all-partitionedtreetn`: the default group-sum limit is the crate-level
+  `DEFAULT_GROUP_SUM_LIMIT_BYTES`, shared by `PartitionedContractionOptions` and
+  `PatchingOptions`; `PatchingOptions::DEFAULT_GROUP_SUM_LIMIT_BYTES` is removed.
+  Where `usize` cannot represent 4 GiB, the default is `usize::MAX`.
+  `contract`, `contract_selected` and `add_with_patching` check every group
+  before building any group sum. The `GroupSumLimit` message also suggests
+  forming only the needed outputs.
+- `tensor4all-core`: `floating_zone_walk` returns `FloatingZoneError<Err>`
+  instead of the callback's own `Err`, and validates its arguments before
+  evaluating the starting point, as `floating_zone_walk_with_initial_error`
+  already did (#1320). A starting point whose length does not match
+  `local_dims` used to panic on an internal index; it now returns
+  `FloatingZoneError::StartingPointLength` without calling the evaluator. Call
+  sites recover the callback error from `FloatingZoneError::Evaluation`.
+- `tensor4all-partitionedtreetn`: `PatchingOptions` has the new field
+  `group_sum_limit_bytes` (#1309). A complete struct literal must add it; one
+  that ends in `..PatchingOptions::default()` is unaffected.
+- `tensor4all-partitionedtreetn`: `MergeRefineOptions::apply_options:
+  Option<ApplyOptions<V>>` is replaced by `MergeRefineOptions::application:
+  OperatorApplication<V>` (#1286). `None` becomes `OperatorApplication::Exact`
+  (the default) and `Some(options)` becomes
+  `OperatorApplication::Measured(options)`; the new `Certified` variant is the
+  third choice, so the three cannot be combined.
+- `tensor4all_core::MatrixLuciScalar` is sealed and
+  `matrix_luci_factors_from_blocks_seeded` is a required method (#1300). The
+  trait dispatches to crate-internal kernels, so a foreign implementation could
+  not produce MatrixLUCI factors; the supported scalar types stay `f32`, `f64`,
+  `Complex32`, and `Complex64`. Generic `T: MatrixLuciScalar` code is
+  unaffected.
+- `tensor4all-partitionedtreetn`: `MaxReferenceSource::MaxOfRootCandidates`
+  is replaced by `MaxReferenceSource::SearchedRootMaximum` (#1274).
+- `tensor4all-core` adds the required method `TensorVectorSpace::is_complex`
+  (#1298), the complex counterpart of `is_single_precision`. An implementor
+  outside this workspace must add it; a container reports `true` when any part
+  is complex.
+- `tensor4all-simplett` removes the `EinsumScalar` marker (#1283). Use
+  `TTScalar` in generic tensor-train code. The supported scalar types remain
+  `f32`, `f64`, `Complex32`, and `Complex64`.
+- `tensor4all-interpolativeqtt` constructors, `estimate_interpolation_error[_nd]`
+  and `invert_qtt` are generic over the function's value type
+  `T: InterpolativeScalar` (`f64` or `Complex64`) and return
+  `SimpleTensorTrain<T>` / `Matrix<T>` (#1276). Real results are bit-for-bit
+  unchanged and ordinary calls compile as before; only a call that names the
+  closure type with a turbofish (`::<F>`) has to add `T` (`::<f64, F>`).
+
+### Diagnostics
+
+- `schedule_merge_refine` and `patched_fourier_transform` accept differing
+  spectator constraints (#1299). Disjoint groups are retained directly;
+  overlapping constraints use a common spectator grid checked against work and
+  term limits before tensor operations. Each original patch is transformed
+  once. The obsolete `PartitionedTreeTNError::SpectatorMismatch` is removed.
+- Exact zip-up identity skips promote real spectator tensors when the identity
+  operand is complex, matching ordinary contraction's scalar promotion.
+
+### Performance
+
+- `tensor4all-partitionedtreetn` finds overlapping patch projectors through a
+  trie instead of pairwise loops (#1293). This covers partition validation,
+  `append`, `add`, `Projector::are_disjoint`, and the overlap check and pair
+  enumeration of `contract`. Results and pair order are unchanged. Two
+  operands whose patches split on different indices, contracted into 16,384
+  output patches, take 36 s instead of 106 s in `contract` (release, one
+  thread); at about 100 patches nothing changes measurably.
+- `tensor4all-partitionedtreetn` validates merge-refine input leaves through
+  that same projector trie instead of comparing every pair of selected prefixes
+  (#1325). The check, its `InvalidOptions` message, and the error order are
+  unchanged, and the cost drops from `O(N^2 d)` to `O(N d)` for `N` leaves of
+  `d` selected bits, which is linear in the geometry the caller already supplies.
+  16,384 full-depth dyadic leaves validate in under 120 ms instead of about
+  720 ms (release profile, one core; two pinned runs), and each doubling costs
+  2.3x-2.7x instead of 4.0x.
+
 ## v0.3.0
+
+### Patched Fourier transforms (#1275)
+
+- `tensor4all-quanticstransform` adds `AxisBit` and
+  `quantics_fourier_operator_multiaxis` for explicit axis/bit layouts. Layouts
+  whose axes are monotone along the chain (grouped, interleaved) are built
+  exactly without site swaps; their bond is the product of the per-axis bonds.
+  Its optional `partitioned` feature adds `patched_fourier_transform`,
+  `PatchedFourierOptions`, and the reconstruction option/result re-exports.
+  Input patches stay lazy output-region terms; inverse calls reverse each
+  axis's index order. Reconstruction error excludes operator construction
+  error and backend roundoff.
+- `schedule_merge_refine` and `ReconstructionTarget::from_subset_operator`
+  accept an independent `OperatorV` generic parameter. Explicit turbofish
+  call sites need an additional inferred `_` (for example,
+  `schedule_merge_refine::<V, _>`).
+- `schedule_merge_refine` and `ReconstructionTarget::from_subset_operator`
+  apply the operator exactly by zip-up with a zero SVD threshold, centred at
+  the node that balances the site bits, instead of the naive local product
+  (#1279). The naive product's bonds were input bond × operator bond, 7200 for
+  two interleaved axes at R = 10, which ran out of memory; the zip-up keeps
+  the images' bonds at their physical bound, and that case now completes with
+  a 4.0 GiB peak. Results are unchanged up to roundoff. On a tree that is not a
+  chain, a patch whose zip-up is estimated to form a block above `2^28`
+  elements is refused with `ResourceLimit` before any application. Two
+  interleaved axes at R = 20 remain out of reach.
+- An exact zip-up request in `tensor4all-treetn` (`CanonicalForm::Unitary`,
+  `svd_policy = Some(SvdTruncationPolicy::new(0.0))`, no `max_bond_dim`) now
+  factorizes every block by untruncated QR instead of SVD (#1285). Bonds and
+  results are unchanged up to roundoff; no singular values are computed. The
+  exact subset-operator application uses this path: two interleaved axes at
+  R = 10 take 364 s instead of 837 s with a 2.4 GiB instead of 4.0 GiB peak
+  (release, one thread).
+- `QuanticsTransformError` is now `#[non_exhaustive]`; exhaustive matches must
+  add a wildcard arm. The `partitioned` feature adds the typed `Reconstruction`
+  variant. Later feature unification or new variants do not require another
+  exhaustive-match migration.
 
 ### Breaking Rust API changes
 
@@ -73,6 +344,9 @@ literals, or named public types:
   `BackendScalar` and `AnyScalar` remain the two wrappers. The new public surface
   is additive; the removed core items were `pub(crate)`, so no external caller
   loses a path.
+- `tensor4all-treeaci`: `TreeAciResult` adds `max_sample_magnitude`, the
+  largest `|f|` among the samples the interpolation was built from (the global
+  guard's search samples excluded). Update complete struct literals.
 
 ### Fixed
 
@@ -89,6 +363,49 @@ literals, or named public types:
 - Dense fixed-rank RSVD, Gaussian range finding, caller-owned RNG entries,
   and RSVD selection in TreeTN Fit and Zipup. Supported scalar types are
   `f64` and `Complex64`; `f32` and `Complex32` are unsupported.
+- `MergeRefineOptions::output_regions` names the output regions a
+  `schedule_merge_refine` run must compute. `None`, the default, keeps the
+  previous behaviour of refining every region at `output_depth`; `Some(regions)`
+  prunes every output prefix that intersects none of them, so the result, the
+  report counters and `error_bound` cover the selected part of the output.
+- `tensor4all-treetn`: `contraction::contract_with_outcome` and
+  `contract_with_outcome_in` return a `ContractionOutcome`: a completed
+  contraction with a `ContractionReport` of its edge ranks (`EdgeRank`), or the
+  first edge that reached a rank threshold (`Saturated`).
+- `tensor4all-treetn`: the element-wise interpolation contract
+  `interpolation::ElementwiseInterpolator`, with `ElementwiseOperator`, the
+  binary `Product`, and `PointwiseElementwise`, which runs any
+  `TreeInterpolator` on point evaluations of the inputs.
+- `tensor4all-treeaci`: `TreeAciInterpolator`, tree ACI as an element-wise
+  engine. Its kernel runs at the problem's tolerance divided by a tolerance
+  factor (`with_tolerance_factor`, default 3). A `RankLimited` run is
+  `BondCapReached` at the cap and `IterationLimit` below it.
+- `tensor4all-treersi`: `TreeRsiInterpolator`, tree RSI as an element-wise
+  engine for products.
+- `tensor4all-partitionedtreetn`: `adaptive_interpolation::patched_elementwise`,
+  `patched_elementwise_on_lanes` and, with the MPI features,
+  `patched_elementwise_mpi` compute `f(x_1, ..., x_k)` of partitions on one
+  site space as a partition, under the L2 contract of `patched_interpolate`.
+- `tensor4all-partitionedtreetn`: `adaptive_interpolation::merge_siblings`
+  merges complete groups of sibling patches of a patched interpolation result
+  without breaking its L2 error contract (`SiblingMergeOptions`,
+  `SiblingMergeReport`).
+- `tensor4all-partitionedtreetn`: `contract_adaptive` groups compatible pairs by
+  predicted output projector before any numerical work and, with a cap and
+  `PatchSplitStrategy::Sequential`, stops a group at its first saturated
+  contribution instead of contracting every pair first. Layouts accepted
+  before give the same partition and values. Output projectors that overlap
+  without being equal, which used to return `OverlappingProjectors`, are now
+  refined onto a disjoint grid; a grid above `AUTOMATIC_REFINEMENT_LIMIT`
+  returns `RefinementTooLarge`. `contract_adaptive_selected` forms only the
+  pairs whose output key equals a wanted key, so a pair whose key overlaps a
+  wanted key without being equal to it is not formed.
+- `tensor4all-partitionedtreetn`: under the L2 error norm, the adaptive
+  interpolation driver now measures an engine run that ends with
+  `ErrorNotMeasured` below the cap, and can accept or retry it like a
+  converged run, where it used to split it. Besides tree RSI this covers
+  TreeTCI runs that end with `DegenerateCandidateSet` in
+  `patched_interpolate`.
 
 ### Public-API renames and removals since v0.2.0
 

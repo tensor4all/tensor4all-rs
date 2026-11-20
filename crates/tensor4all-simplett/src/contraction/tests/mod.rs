@@ -1,9 +1,10 @@
 use super::*;
 use crate::einsum_helper::{
     einsum_tensors, matrix_times_col_vector, row_vector_times_matrix, tensor_to_col_major_vec,
-    typed_tensor_from_col_major_slice, typed_tensor_reshape, EinsumScalar,
+    typed_tensor_from_col_major_slice, typed_tensor_reshape,
 };
 use crate::types::{tensor3_zeros, Tensor3};
+use tensor4all_core::Scalar;
 
 #[test]
 fn test_dot_constant() {
@@ -120,7 +121,7 @@ fn test_dot_empty() {
     assert!((result - 0.0).abs() < 1e-15);
 }
 
-fn test_dot_generic<T: TTScalar + tensor4all_core::Scalar + Default + EinsumScalar>() {
+fn test_dot_generic<T: TTScalar>() {
     let tt1 = SimpleTensorTrain::<T>::constant(&[2, 3], T::from_f64(2.0));
     let tt2 = SimpleTensorTrain::<T>::constant(&[2, 3], T::from_f64(3.0));
 
@@ -133,12 +134,10 @@ fn test_dot_generic<T: TTScalar + tensor4all_core::Scalar + Default + EinsumScal
 }
 
 #[test]
-fn test_dot_f64() {
+fn test_dot_all_scalar_types() {
+    test_dot_generic::<f32>();
     test_dot_generic::<f64>();
-}
-
-#[test]
-fn test_dot_c64() {
+    test_dot_generic::<num_complex::Complex32>();
     test_dot_generic::<num_complex::Complex64>();
 }
 
@@ -790,4 +789,57 @@ fn inner_product_in_fresh_session(
     context
         .with_concrete_session(|session| lhs.inner_product_with_session(rhs, session))
         .expect("session entry")
+}
+
+#[test]
+fn session_inner_product_refuses_a_broken_leading_bond() {
+    use crate::canonical::SiteTensorTrain;
+
+    let valid = SimpleTensorTrain::<f64>::constant(&[2, 3], 1.0);
+    let mut site = SiteTensorTrain::from_tensor_train(&valid, 0).expect("site tensor train");
+    let mut core = tensor3_zeros::<f64>(2, 2, 1).unwrap();
+    for physical in 0..2 {
+        core.set3(0, physical, 0, 1.0);
+        core.set3(1, physical, 0, 2.0);
+    }
+    site.site_tensors_mut()[0] = core;
+    let broken = site.to_tensor_train();
+
+    let context = session_context();
+    context
+        .with_concrete_session(|session| {
+            for (name, outcome) in [
+                (
+                    "self",
+                    broken
+                        .inner_product_with_session(&broken, session)
+                        .map(|_| ()),
+                ),
+                (
+                    "broken lhs",
+                    broken
+                        .inner_product_with_session(&valid, session)
+                        .map(|_| ()),
+                ),
+                (
+                    "broken rhs",
+                    valid
+                        .inner_product_with_session(&broken, session)
+                        .map(|_| ()),
+                ),
+            ] {
+                match outcome {
+                    Err(SimpleTensorTrainError::InvalidOperation { message }) => {
+                        assert!(
+                            message.contains("expected 1"),
+                            "{name} should say what it expected: {message}"
+                        );
+                    }
+                    other => panic!("{name} must refuse a broken leading bond, got {other:?}"),
+                }
+            }
+            Ok::<(), SimpleTensorTrainError>(())
+        })
+        .expect("session entry")
+        .expect("the guards are checked before any contraction");
 }
