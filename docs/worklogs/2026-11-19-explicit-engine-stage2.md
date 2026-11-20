@@ -62,7 +62,8 @@ Part of #1376. The durable record is the #1403 status note in
 
 - Library builds of tensorbackend, core and the twelve algorithm crates contain no
   `global-defaults` in the normal dependency graph and pass `clippy -D warnings`; CUDA
-  builds of core, treetn and treersi check in both configurations.
+  builds of core, treetn and treersi check. `tenferro-cuda` implies `global-defaults`
+  (review of #1404): CUDA execution keeps host steps with no caller CPU context.
 - With `global-defaults` (every test build) the code path is unchanged except the two
   threaded explicit paths, which now run on the caller's engine (same kernel; thread count
   is the caller's). No parity harness was run for those two paths.
