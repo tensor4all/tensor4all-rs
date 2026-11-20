@@ -267,3 +267,24 @@ fn reset_graph_keeps_the_eager_runtime() {
     let y = rt.with_eager(&mut exec, |session| session.neg(&x)).unwrap();
     assert_eq!(y.ctx_id(), rt.id());
 }
+
+/// A context's runtime is built for its engine's own target: an engine with
+/// an allocation domain is supported by the runtime built for it, and a
+/// domain-less engine is refused by that runtime.
+#[test]
+fn a_runtime_built_for_a_domain_engine_supports_that_engine() {
+    let domain: Arc<dyn SharedTensorAllocationDomain> = Arc::new(NeverAllocates {
+        id: AllocationDomainId::fresh(),
+    });
+    let engine = CpuEngine::serial().with_allocation_domain(Arc::clone(&domain));
+    let rt = Runtime::for_cpu_engine(&super::CpuTarget::of(&engine)).unwrap();
+    rt.check_engine(&engine)
+        .expect("the runtime supports the engine it was built for");
+    let same_domain = pooled(2).with_allocation_domain(domain);
+    rt.check_engine(&same_domain)
+        .expect("another engine with the same id and domain is supported");
+    assert!(matches!(
+        rt.check_engine(&CpuEngine::serial()),
+        Err(RuntimeError::UnsupportedEngine { .. })
+    ));
+}

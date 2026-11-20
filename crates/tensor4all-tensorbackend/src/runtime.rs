@@ -146,6 +146,9 @@ struct RuntimeInner {
     compiler: Mutex<GraphCompiler>,
     /// The one engine target this runtime has extension modules for.
     target: EngineTarget,
+    /// For a CPU runtime, that target's id and domain, used to rebuild the
+    /// graph runtime on reset.
+    cpu: Option<CpuTarget>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -182,17 +185,17 @@ impl Runtime {
     /// Returns [`RuntimeError::Initialization`] when an AD rule, an extension
     /// module or the CPU engine registration cannot be installed.
     pub fn new() -> Result<Self, RuntimeError> {
-        let engine_id = tenferro_cpu::runtime_engine_id()
-            .map_err(|source| RuntimeError::initialization("CPU engine id", source))?;
-        Self::for_cpu_engine_id(engine_id)
+        Self::for_cpu_engine(&CpuTarget::of(&CpuEngine::serial()))
     }
 
-    /// Build a runtime for CPU engines registered under `engine_id`.
+    /// Build a runtime for CPU engines with `cpu`'s runtime id and allocation
+    /// domain.
     ///
     /// Used by [`CpuExecutionContext`](crate::CpuExecutionContext), whose
-    /// engine may carry a non-canonical runtime id.
-    pub(crate) fn for_cpu_engine_id(engine_id: EngineId) -> Result<Self, RuntimeError> {
-        let mut probe = CpuEngine::serial().with_runtime_engine_id(engine_id.clone());
+    /// engine may carry a non-canonical runtime id or an allocation domain.
+    pub(crate) fn for_cpu_engine(cpu: &CpuTarget) -> Result<Self, RuntimeError> {
+        let mut probe = cpu.probe();
+        let engine_id = ExecutionEngine::target(&probe).engine_id().clone();
         let target = ExecutionEngine::target(&probe);
         let eager = build_cpu_eager_runtime(&engine_id)?;
         // Register the engine kind now: a lazy registration on first use would
@@ -202,7 +205,11 @@ impl Runtime {
             .with_eager_session(&mut probe, |_| Ok::<(), tenferro_ad::Error>(()))
             .map_err(|source| RuntimeError::initialization("eager CPU engine", source))?;
         let graph = build_cpu_graph_runtime(&probe, engine_id)?;
-        Ok(Self::from_parts(eager, Some(graph), target))
+        let mut runtime = Self::from_parts(eager, Some(graph), target);
+        if let Some(inner) = Arc::get_mut(&mut runtime.inner) {
+            inner.cpu = Some(cpu.clone());
+        }
+        Ok(runtime)
     }
 
     /// Build a runtime for one CUDA engine.
@@ -255,6 +262,7 @@ impl Runtime {
                 graph: Mutex::new(graph),
                 compiler: Mutex::new(GraphCompiler::new()),
                 target,
+                cpu: None,
             }),
         }
     }
@@ -556,12 +564,13 @@ impl Runtime {
     ///
     /// The eager runtime, and with it every value of this runtime, is kept.
     pub(crate) fn reset_graph(&self) -> Result<(), RuntimeError> {
-        let fresh = if self.graph_runtime().is_some() {
-            let engine_id = self.inner.target.engine_id().clone();
-            let probe = CpuEngine::serial().with_runtime_engine_id(engine_id.clone());
-            Some(build_cpu_graph_runtime(&probe, engine_id)?)
-        } else {
-            None
+        let fresh = match &self.inner.cpu {
+            Some(cpu) if self.graph_runtime().is_some() => {
+                let probe = cpu.probe();
+                let engine_id = ExecutionEngine::target(&probe).engine_id().clone();
+                Some(build_cpu_graph_runtime(&probe, engine_id)?)
+            }
+            _ => None,
         };
         *lock_ignoring_poison(&self.inner.graph) = fresh;
         *self.lock_compiler() = GraphCompiler::new();
@@ -570,6 +579,33 @@ impl Runtime {
 
     fn graph_runtime(&self) -> Option<GraphRuntime> {
         lock_ignoring_poison(&self.inner.graph).clone()
+    }
+}
+
+/// The part of a CPU engine's target that registrations read: its runtime id
+/// and its allocation domain.
+#[derive(Clone)]
+pub(crate) struct CpuTarget {
+    engine_id: EngineId,
+    domain: Option<Arc<dyn tenferro_tensor::SharedTensorAllocationDomain>>,
+}
+
+impl CpuTarget {
+    pub(crate) fn of(engine: &CpuEngine) -> Self {
+        Self {
+            engine_id: ExecutionEngine::target(engine).engine_id().clone(),
+            domain: engine.shared_allocation_domain().cloned(),
+        }
+    }
+
+    /// A serial engine with this target; it stands for every CPU engine with
+    /// the same target.
+    fn probe(&self) -> CpuEngine {
+        let probe = CpuEngine::serial().with_runtime_engine_id(self.engine_id.clone());
+        match &self.domain {
+            Some(domain) => probe.with_allocation_domain(Arc::clone(domain)),
+            None => probe,
+        }
     }
 }
 

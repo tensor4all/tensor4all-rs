@@ -1261,15 +1261,6 @@ impl EngineState {
     }
 }
 
-/// The runtime engine id `engine` is registered under.
-///
-/// An engine built by [`CpuEngine::with_runtime_engine_id`] runs under its own
-/// id, so every registration and extension module installed on its behalf must
-/// use that id rather than the canonical [`tenferro_cpu::runtime_engine_id`].
-fn engine_runtime_id(engine: &CpuEngine) -> tenferro::EngineId {
-    ExecutionEngine::target(engine).engine_id().clone()
-}
-
 /// The engine state one context owns, behind a handle that can also be reached
 /// through the eager-runtime owner table.
 ///
@@ -1278,12 +1269,6 @@ fn engine_runtime_id(engine: &CpuEngine) -> tenferro::EngineId {
 /// dropped instead of keeping the engine alive.
 pub(crate) struct EngineOwner {
     id: u64,
-    /// The engine's registered runtime id, captured once at construction.
-    ///
-    /// The eager runtime installs its extension modules under this id, and it is
-    /// read without taking the engine lock so building the eager runtime can
-    /// never wait for a running session.
-    engine_id: tenferro::EngineId,
     /// The engine's prepared-plan cache, captured once at construction.
     ///
     /// A session entered from a Rayon worker runs inline on a fresh serial
@@ -1291,6 +1276,9 @@ pub(crate) struct EngineOwner {
     /// here keeps that entry off the engine lock: the worker never waits for an
     /// engine its own pool may be holding.
     plans: tenferro_cpu::CpuPlanCache,
+    /// The engine's runtime id and allocation domain, captured once at
+    /// construction so the context's runtime is built without the engine lock.
+    cpu_target: crate::runtime::CpuTarget,
     engine: Mutex<EngineState>,
 }
 
@@ -1298,8 +1286,8 @@ impl EngineOwner {
     fn new(backend: CpuBackend) -> Self {
         Self {
             id: next_context_id(),
-            engine_id: engine_runtime_id(backend.engine()),
             plans: backend.engine().plan_cache().clone(),
+            cpu_target: crate::runtime::CpuTarget::of(backend.engine()),
             engine: Mutex::new(EngineState::new(backend)),
         }
     }
@@ -1459,7 +1447,7 @@ impl CpuExecutionContext {
     pub(crate) fn runtime(&self) -> Result<&crate::Runtime, CpuExecutionContextError> {
         self.runtime
             .get_or_init(|| {
-                let runtime = crate::Runtime::for_cpu_engine_id(self.owner.engine_id.clone())?;
+                let runtime = crate::Runtime::for_cpu_engine(&self.owner.cpu_target)?;
                 register_eager_runtime_owner(
                     runtime.eager_runtime(),
                     RuntimeOwner::Cpu(Arc::downgrade(&self.owner)),
