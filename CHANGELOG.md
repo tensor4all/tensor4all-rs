@@ -14,7 +14,9 @@
   `IdxTensorError::EngineEntry` or the operation's own error) instead of choosing an
   engine; values created through a caller-owned context keep running on that context's
   engine. With `global-defaults` nothing changes. `tensor4all-treersi` drops
-  `global-defaults` from its defaults. Callers of the context-free API enable
+  `global-defaults` from its defaults (so `hadamard_many` needs it; `hadamard_many_in`
+  does not); its `tenferro-cuda` feature still implies it, because the CUDA arm's rank
+  decision runs on the process-global CPU context. Callers of the context-free API enable
   `tensor4all-core/global-defaults`. Explicit callers of
   `IdxTensor::src_error_estimate_in` and of structured contractions with host-only
   operands now run the estimator solve and the native einsum on their own context's

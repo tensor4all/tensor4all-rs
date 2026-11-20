@@ -29,19 +29,22 @@ pub type Result<T> = std::result::Result<T, TreeRsiError>;
 ///
 /// ```
 /// use tensor4all_core::{DynIndex, IdxTensor};
-/// use tensor4all_treersi::{hadamard_many, TreeRsiError, TreeRsiOptions};
+/// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext, ExecutionContext};
+/// use tensor4all_treersi::{hadamard_many_in, TreeRsiError, TreeRsiOptions};
 /// use tensor4all_treetn::TreeTN;
 ///
+/// let context =
+///     ExecutionContext::Cpu(CpuExecutionContext::from_backend(CpuBackend::new()).into());
 /// let site = DynIndex::new_dyn(2);
 /// let tree = TreeTN::from_tensors(
-///     vec![IdxTensor::from_dense(vec![site], vec![1.0_f64, 2.0])?],
+///     vec![IdxTensor::from_dense_in(&context, vec![site], vec![1.0_f64, 2.0])?],
 ///     vec![0usize],
 /// )?;
 /// let options = TreeRsiOptions {
 ///     max_bond_dim: Some(0),
 ///     ..TreeRsiOptions::default()
 /// };
-/// let error = hadamard_many::<f64, _>(&[tree], &options).unwrap_err();
+/// let error = hadamard_many_in::<f64, _>(&[tree], &options, &context).unwrap_err();
 /// assert!(matches!(
 ///     error,
 ///     TreeRsiError::InvalidOption { option: "max_bond_dim", .. }

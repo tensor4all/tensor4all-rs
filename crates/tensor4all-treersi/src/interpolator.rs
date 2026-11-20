@@ -31,7 +31,7 @@ use crate::{
 /// for [`Product`] only: tree RSI computes the Hadamard product of its
 /// inputs and no other map. Use it where code is written against that
 /// contract, for example as the per-patch engine of a patched product; call
-/// [`hadamard_many`](crate::hadamard_many) directly for one unpatched product.
+/// [`hadamard_many_in`](crate::hadamard_many_in) directly for one unpatched product.
 ///
 /// Each run calls [`hadamard_many_with_rng_on_session`] on the session of the
 /// caller's [`EvalContext`], with the engine's [`TreeRsiOptions`] except that

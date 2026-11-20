@@ -15,6 +15,7 @@ global-defaults = ["tensor4all-core/global-defaults"]
 # CUDA execution of the sketch contractions. The rank decision stays on the
 # host CPU context, so this feature also requires the host default context.
 tenferro-cuda = [
+    "global-defaults",
     "tensor4all-core/tenferro-cuda",
     "tensor4all-treetn/tenferro-cuda",
     "tensor4all-tensorbackend/tenferro-cuda",
