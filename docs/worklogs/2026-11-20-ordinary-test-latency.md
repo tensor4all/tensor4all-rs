@@ -18,12 +18,12 @@
   sine interpolation. The nightly selector also reaches private heavy unit-test
   modules, which need internal measurement helpers.
 - The tiny GSE and coefficient-gradient fixtures remain unchanged. Profiling
-  located their latency in the dependency compiler: identity layout rewrites
+  located their latency in the tenferro compiler: identity layout rewrites
   scanned the whole graph, and conjugation handling repeatedly allocated slot
-  tables and copied shape metadata. Repair both at their owner and backport
-  only the compiler change onto the existing SDK version. A pin-only Hataori
-  backport keeps the adapter and direct SDK dependencies on one Rust type
-  identity without bringing unrelated Hataori changes into this branch.
+  tables and copied shape metadata. The repair belongs in tenferro-rs
+  (tensor4all/tenferro-rs#2678, with the matching Hataori pin in
+  tensor4all/hataori-rs#52). The SDK pins here stay at the revisions on `main`;
+  they move only to commits that are on the upstream default branches.
 
 ## Verification conclusions and constraints
 
@@ -36,19 +36,9 @@
   the historical error of approximately `7.72e-5`.
 - Independent fixture review found no actionable defects. The original broad
   oracle and exponential witnesses remain available to nightly execution.
-- The final dependency graph resolves all 14 SDK crates at one revision, with
-  package versions and checksums unchanged. The isolated CUDA feature fixture
-  resolves the same SDK revision; the existing single-version guard rejects its
-  former lock and passes the synchronized one. The current upstream compiler passes
-  94 checks and its strict local PR gate; its byte-identical downstream backport
-  passes 93 checks in release mode. All 2,072 ordinary checks across the five
-  affected crates and all eight moved heavy witnesses pass on the final pins.
-- A complete three-pair release rerun meets the original local primary and
-  load/noise checks: GSE falls from about 2.41 s to 0.34 s, and coefficient-AD
-  linsolve from about 1.29 s to 0.18 s. Both fixtures and all tolerances remain
-  unchanged. The first layout-only experiment remains inconclusive; complete
-  evidence is retained with the upstream compiler change. These unpinned macOS
-  measurements do not establish the upstream pinned-core host-validity gate.
+- `Cargo.toml`, `Cargo.lock`, and the CUDA feature fixture lock are identical
+  to `main`. On those pins, all 2,072 ordinary checks across the five affected
+  crates pass in release mode.
 - Strict local Clippy on Homebrew Rust 1.98 reports pre-existing
   `nonminimal_bool` diagnostics in unchanged core/treetn code. The focused
   changed-crate lint check passes with only that diagnostic allowed; no lint

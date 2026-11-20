@@ -151,7 +151,9 @@ pub(super) fn dense_suite<T: AuditScalar>(heavy: bool) {
     let mut cases = 0usize;
     for (name, edges, dims) in geometries {
         // The path, mixed-axes branch, and star4 retain 0/1/2/3 incoming-edge
-        // routes; larger stars, combs, and repeated seeds stay in the heavy audit.
+        // routes. Site-free nodes stay covered by the degree-3 interior node of
+        // mixed-axes and by all-site-free. Larger stars, combs, and repeated
+        // seeds stay in the heavy audit.
         if !heavy && matches!(name, "two-node" | "star5-site-free" | "comb") {
             continue;
         }

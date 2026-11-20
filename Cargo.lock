@@ -796,7 +796,7 @@ dependencies = [
 [[package]]
 name = "hataori"
 version = "0.1.0"
-source = "git+https://github.com/tensor4all/hataori-rs.git?rev=1205da509ac0e8d7677bc20260556aedc2879a12#1205da509ac0e8d7677bc20260556aedc2879a12"
+source = "git+https://github.com/tensor4all/hataori-rs.git?rev=9d65515706eb9c7b7414dd0d4d32644ec0c0674c#9d65515706eb9c7b7414dd0d4d32644ec0c0674c"
 dependencies = [
  "bincode",
  "libc",
@@ -809,7 +809,7 @@ dependencies = [
 [[package]]
 name = "hataori-tenferro"
 version = "0.1.0"
-source = "git+https://github.com/tensor4all/hataori-rs.git?rev=1205da509ac0e8d7677bc20260556aedc2879a12#1205da509ac0e8d7677bc20260556aedc2879a12"
+source = "git+https://github.com/tensor4all/hataori-rs.git?rev=9d65515706eb9c7b7414dd0d4d32644ec0c0674c#9d65515706eb9c7b7414dd0d4d32644ec0c0674c"
 dependencies = [
  "hataori",
  "tenferro-cpu",
@@ -2265,7 +2265,7 @@ dependencies = [
 [[package]]
 name = "tenferro-ad"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
 dependencies = [
  "computegraph",
  "lru",
@@ -2282,12 +2282,12 @@ dependencies = [
 [[package]]
 name = "tenferro-core-ops"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
 
 [[package]]
 name = "tenferro-cpu"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
 dependencies = [
  "blas-src",
  "cblas-inject",
@@ -2320,7 +2320,7 @@ dependencies = [
 [[package]]
 name = "tenferro-cpu-basic"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
 dependencies = [
  "num-complex 0.4.6",
  "num-traits",
@@ -2332,7 +2332,7 @@ dependencies = [
 [[package]]
 name = "tenferro-cpu-fused"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
 dependencies = [
  "num-complex 0.4.6",
  "num-traits",
@@ -2346,7 +2346,7 @@ dependencies = [
 [[package]]
 name = "tenferro-einsum"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
 dependencies = [
  "computegraph",
  "cpueinsum",
@@ -2368,7 +2368,7 @@ dependencies = [
 [[package]]
 name = "tenferro-gpu"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
 dependencies = [
  "cudarc",
  "libloading 0.8.9",
@@ -2388,7 +2388,7 @@ dependencies = [
 [[package]]
 name = "tenferro-internal-cpu-kernels"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
 dependencies = [
  "num-complex 0.4.6",
  "num-traits",
@@ -2403,7 +2403,7 @@ dependencies = [
 [[package]]
 name = "tenferro-internal-extension-macros"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2413,7 +2413,7 @@ dependencies = [
 [[package]]
 name = "tenferro-internal-ops"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
 dependencies = [
  "computegraph",
  "num-complex 0.4.6",
@@ -2426,7 +2426,7 @@ dependencies = [
 [[package]]
 name = "tenferro-linalg"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
 dependencies = [
  "cblas-inject",
  "cblas-sys",
@@ -2455,7 +2455,7 @@ dependencies = [
 [[package]]
 name = "tenferro-runtime"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
 dependencies = [
  "computegraph",
  "lru",
@@ -2472,7 +2472,7 @@ dependencies = [
 [[package]]
 name = "tenferro-tensor"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
 dependencies = [
  "num-complex 0.4.6",
  "num-traits",
@@ -2485,7 +2485,7 @@ dependencies = [
 [[package]]
 name = "tenferro-tensor-core"
 version = "0.10.0"
-source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=71b50235b21d9aeb79f971339d088b6213fa41f4#71b50235b21d9aeb79f971339d088b6213fa41f4"
+source = "git+https://github.com/tensor4all/tenferro-rs.git?rev=32a4e98c12f9dc36ffa85b5273b9247b44936959#32a4e98c12f9dc36ffa85b5273b9247b44936959"
 dependencies = [
  "num-complex 0.4.6",
  "strided-view",
