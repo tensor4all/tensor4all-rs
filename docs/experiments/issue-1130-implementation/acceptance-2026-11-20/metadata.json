@@ -1,0 +1,117 @@
+{
+  "created_utc": "2026-11-19T23:54:13.426845+00:00",
+  "baseline_commit": "d60f07514d574a059070e258bb641575947a7ba5",
+  "candidate_commit": "d60f07514d574a059070e258bb641575947a7ba5",
+  "dirty": false,
+  "registration_comment": "https://github.com/tensor4all/tensor4all-rs/pull/1407#issuecomment-7025598593",
+  "protocol": {
+    "decision_url": "https://github.com/tensor4all/tensor4all-rs/pull/1407#issuecomment-7025360934",
+    "code_revision_before_registration": "459025844067ea3ae81816a53905ebb983db64de",
+    "baseline_policy": "goal8",
+    "candidate_policy": "tolerance",
+    "revision_policy": "both arms use the published pre-registration commit, resolved through Git before build",
+    "build": {
+      "package": "tensor4all-benchmarks",
+      "features": [
+        "fourier"
+      ],
+      "profile": "release",
+      "locked": true,
+      "cargo_jobs": 2
+    },
+    "hardware": {
+      "Architecture": "x86_64",
+      "CPU(s)": "16",
+      "Model name": "AMD Ryzen 9 6900HX with Radeon Graphics",
+      "Thread(s) per core": "2",
+      "Core(s) per socket": "8",
+      "Hypervisor vendor": "Microsoft",
+      "L3 cache": "16 MiB (1 instance)"
+    },
+    "measurement_cpu": 8,
+    "observer_cpus": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "thread_environment": {
+      "RAYON_NUM_THREADS": "1",
+      "BLAS_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1"
+    },
+    "address_space_limit_bytes": 5368709120,
+    "gate_memory_cap": "6G",
+    "pairs": 5,
+    "cases": [
+      "original",
+      "interleaved"
+    ],
+    "first_pair_order": [
+      "goal8",
+      "tolerance"
+    ],
+    "alternate_order": true,
+    "hard_max_median_paired_ratio": {
+      "original": 10.0,
+      "interleaved": 10.0
+    },
+    "soft_review_ratio": 1.5,
+    "original_max_paired_rss_ratio": 3.0,
+    "absolute_roundoff_allowance": 1e-09,
+    "bootstrap": {
+      "resamples": 10000,
+      "seed": 1130,
+      "confidence": 0.95
+    },
+    "noise_thresholds": {
+      "guard_sec": 5,
+      "pre_mean_busy": 0.05,
+      "pre_peak_busy": 0.5,
+      "foreign_frac": 0.03,
+      "others_busy_cpus": 1.0,
+      "mem_stall_frac": 0.01
+    },
+    "noise_retry": "whole experiment once, preserving both attempts; no selective retry; numerical/performance failures are not retried",
+    "source_harness": "benchmarks/rust/benchmark_merge_policy_1130.rs"
+  },
+  "protocol_sha256": "01aaf8bf4518045a41238c233cf749f57fe73a045c3a57c64d5d5e10b69651ef",
+  "harness_sha256": "ca60a78f146010e88c4d1769108c07cdd7e4ee76826011d2c255aba68b8115c8",
+  "controller_sha256": "14d79e316fa90bd65b9885995ad03650b1651d6d3786c58846394f08d4cf52f7",
+  "binary_sha256": "31bd3782c2b0f761d90c74af3cf3da91b53004c1c963493cc07e13aeea8b37c4",
+  "cargo_lock_sha256": "658eb819ad5170bb4eb061fbe37a80de5c8815b175d0b679956bc0701232a376",
+  "ai_run_sha256": "34eba7d7af492ec9c2c457d0386906b111d337b2bb4431921b9d92978c9af89f",
+  "ai_run_noise_settings": {
+    "guard_sec": 5,
+    "pre_mean_busy": 0.05,
+    "pre_peak_busy": 0.5,
+    "foreign_frac": 0.03,
+    "others_busy_cpus": 1.0,
+    "mem_stall_frac": 0.01
+  },
+  "kernel": "6.18.58.1-microsoft-standard-WSL2",
+  "machine": "x86_64",
+  "hostname": "DESKTOP-E8DSDVE",
+  "build_command": [
+    "ai-run",
+    "build",
+    "--mem",
+    "6G",
+    "--jobs",
+    "2",
+    "--",
+    "bash",
+    "-c",
+    "cargo fmt --all -- --check && cargo build --locked --release -p tensor4all-benchmarks --features fourier --example benchmark_merge_policy_1130 && rustc --version --verbose"
+  ],
+  "build_rustflags": null,
+  "binary_libraries": "\tlinux-vdso.so.1 (0x00007afc77044000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007afc77013000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007afc76f2c000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007afc73600000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007afc77046000)\n",
+  "cpu_topology": "CPU CORE SOCKET ONLINE\n  0    0      0    yes\n  1    0      0    yes\n  2    1      0    yes\n  3    1      0    yes\n  4    2      0    yes\n  5    2      0    yes\n  6    3      0    yes\n  7    3      0    yes\n  8    4      0    yes\n  9    4      0    yes\n 10    5      0    yes\n 11    5      0    yes\n 12    6      0    yes\n 13    6      0    yes\n 14    7      0    yes\n 15    7      0    yes\n",
+  "cpu_provider": "platform default: faer on Linux"
+}
