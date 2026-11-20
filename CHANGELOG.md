@@ -144,10 +144,11 @@
   and `CudaEngine`/`CudaDeviceId` are re-exported. `ExecutionEngine` is re-exported.
   `CpuExecutionContext` and `CudaExecutionContext` are now built on a private
   `Runtime` each, with the same numerics and error messages. One difference: a CPU
-  context now builds its graph and eager runtimes together on first use, so a
-  graph-only context also installs the AD rules (`compile_graph` can report their
-  initialization failure), and its `Debug` output reports `graph_initialized` and
-  `eager_initialized` together.
+  context now builds its graph and eager runtimes together on first use. Any first
+  use (`compile_graph`, `run_graph`, `graph_cache_stats`, `eager_runtime`) can
+  therefore report an initialization failure of either half (for example
+  `eager_runtime` can report `graph CPU engine`), and the `Debug` output reports
+  `graph_initialized` and `eager_initialized` together.
 - `tensor4all-treetn` adds `TreeTN::estimate_exact_sum_bytes` (#1309), the
   size estimate of `TreeTN::exact_sum` taken before the sum is built.
 - `tensor4all-treetn` adds `LinearOperator::to_state_network` and

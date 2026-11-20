@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tenferro::program::{CoreSemanticOp, ProgramInputSpec};
-use tenferro::{DType, Tensor, TraceContext};
+use tenferro::{DType, ExecutionEngine, Tensor, TraceContext};
 use tenferro_ad::EagerTensor;
 use tenferro_cpu::CpuEngine;
 use tenferro_einsum::{EagerSessionEinsumExt, EinsumSubscripts};
@@ -287,4 +287,33 @@ fn a_runtime_built_for_a_domain_engine_supports_that_engine() {
         rt.check_engine(&CpuEngine::serial()),
         Err(RuntimeError::UnsupportedEngine { .. })
     ));
+}
+
+/// The work runs on the caller's `exec`, not on some other engine: a broken
+/// engine with the supported target refuses, while a healthy one computes.
+#[test]
+fn work_runs_on_the_engine_the_caller_passes() {
+    let rt = Runtime::new().unwrap();
+    let x = matrix(&rt, 2, 3, 0.0);
+    let trace = TraceContext::new();
+    let input = trace
+        .input(ProgramInputSpec::new(DType::F64, [2_usize.into()]))
+        .unwrap();
+    let output = trace.add_op(CoreSemanticOp::Neg, &[input]).unwrap()[0];
+    let compiled = rt.compile_graph(&trace.finish(&[output]).unwrap()).unwrap();
+    let values = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+
+    let mut broken = CpuEngine::serial();
+    broken.mark_broken();
+    rt.check_engine(&broken)
+        .expect("a broken engine still has the supported target");
+    rt.with_eager(&mut broken, |session| session.add(&x, &x))
+        .expect_err("eager work runs on the broken engine and is refused");
+    rt.run_graph(&compiled, &[&values], &mut broken)
+        .expect_err("graph work runs on the broken engine and is refused");
+
+    let mut healthy = CpuEngine::serial();
+    rt.with_eager(&mut healthy, |session| session.add(&x, &x))
+        .expect("the same work on a healthy engine computes");
+    rt.run_graph(&compiled, &[&values], &mut healthy).unwrap();
 }

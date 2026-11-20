@@ -27,6 +27,7 @@ mod shared_runtime {
 
     use rand::{RngCore, SeedableRng};
     use rand_chacha::ChaCha8Rng;
+    use tenferro::ExecutionEngine;
     use tenferro_ad::EagerTensor;
     use tenferro_einsum::{EagerSessionEinsumExt, EinsumSubscripts};
     use tensor4all_tensorbackend::{CpuBackend, CpuEngine, Runtime, RuntimeError};
@@ -186,6 +187,23 @@ mod shared_runtime {
             source.downcast_ref::<RuntimeError>(),
             Some(RuntimeError::UnsupportedEngine { .. })
         ));
+    }
+
+    /// The validated entry runs on the caller's engine: a broken engine with
+    /// the supported target passes validation and is then refused by the
+    /// kernel, while a healthy engine computes.
+    #[test]
+    fn the_validated_entry_runs_on_the_engine_the_caller_passes() {
+        let rt = Runtime::new().unwrap();
+        let (i, j) = (DynIndex::new_dyn(2), DynIndex::new_dyn(3));
+        let x = dense(&rt, &i, &j, 0.0);
+        let mut broken = CpuEngine::serial();
+        broken.mark_broken();
+        with_eager_on("double", &rt, &[&x], &mut broken, |session| {
+            session.add(eager(&x), eager(&x))
+        })
+        .expect_err("the broken engine is the one that runs, and it refuses");
+        computed_on(&rt, &mut CpuEngine::serial(), &x);
     }
 
     /// Host data with no eager value is readable by any CPU engine of the
