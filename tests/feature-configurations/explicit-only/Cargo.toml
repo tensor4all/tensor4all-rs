@@ -1,0 +1,30 @@
+[package]
+name = "explicit-only-config-check"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Isolated on purpose (tensor4all-rs#1403): inside the repository workspace every
+# library's dev-dependencies enable `tensor4all-core/global-defaults`, and Cargo
+# unifies features across a build, so no workspace test target can observe the
+# explicit-only configuration users get from the default features. Here core,
+# itensorlike and tensorbackend are built exactly as a downstream crate builds
+# them by default. See README.md.
+[workspace]
+resolver = "2"
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0
+
+[[test]]
+name = "explicit_only"
+path = "tests/explicit_only.rs"
+
+[dev-dependencies]
+# Default features only: the platform CPU provider, no `global-defaults`.
+tensor4all-core = { path = "../../../crates/tensor4all-core" }
+tensor4all-itensorlike = { path = "../../../crates/tensor4all-itensorlike" }
+tensor4all-tensorbackend = { path = "../../../crates/tensor4all-tensorbackend" }

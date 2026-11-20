@@ -10,6 +10,10 @@ Rules enforced here:
    a dependency beyond a crate's tuple, or a stale tuple all fail.
 2. Dev-dependency cycles are rejected with the full cycle path, e.g.
    a dev-depends on ``tensorci`` while ``tensorci`` depends on ``a``.
+3. A crate may dev-depend on itself only if it is listed in
+   ``SELF_FEATURE_DEV_DEPENDENCIES``, and then its sources must never name the
+   crate by its own extern path (``tensor4all_core::`` inside core), so the
+   unit-test build and the linked library never meet as two type identities.
 
 Dev-dependencies on tenferro-* are permitted (test fixtures). The Cargo.toml
 parser is stdlib-only (tomllib requires Python 3.11, while CI's runner python3
@@ -54,6 +58,50 @@ TENFERRO_EXCEPTIONS: dict[str, frozenset[str]] = {
     "tensor4all-simplett": frozenset({"tenferro-tensor"}),
     "tensor4all-treetci": frozenset({"tenferro-linalg", "tenferro-tensor"}),
 }
+
+
+# Crates whose dev-dependency on themselves only turns on a feature for their
+# own tests, doctests and benches. Cargo has no dev-only features, and a helper
+# crate would form a real dev cycle, so `tensor4all-core` and
+# `tensor4all-treersi` enable `global-defaults` this way (tensor4all-rs#1403).
+# The hazard a dev cycle carries, two builds of one crate meeting in a test, is
+# excluded mechanically by rule 3's source scan.
+SELF_FEATURE_DEV_DEPENDENCIES: frozenset[str] = frozenset(
+    {"tensor4all-core", "tensor4all-treersi"}
+)
+
+# Lines that are comments (including doc comments, whose examples link the
+# library once and are therefore safe) are not scanned.
+_COMMENT_LINE_RE = re.compile(r"^\s*//")
+
+
+def check_self_dev_dependencies(manifests: list[Path]) -> list[str]:
+    """Return violations of rule 3 (self dev-dependencies)."""
+    violations: list[str] = []
+    for manifest in manifests:
+        name = package_name(manifest)
+        _normal, dev = parse_dependencies(manifest)
+        if name not in dev:
+            continue
+        if name not in SELF_FEATURE_DEV_DEPENDENCIES:
+            violations.append(
+                f"{name} dev-depends on itself; only "
+                f"{sorted(SELF_FEATURE_DEV_DEPENDENCIES)} may (feature-only self edge)"
+            )
+            continue
+        extern = name.replace("-", "_") + "::"
+        for source in sorted((manifest.parent / "src").rglob("*.rs")):
+            for number, line in enumerate(
+                source.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                if extern in line and not _COMMENT_LINE_RE.match(line):
+                    relative = source.relative_to(manifest.parent.parent.parent)
+                    violations.append(
+                        f"{relative}:{number}: {name} dev-depends on itself, so its "
+                        f"sources must not name `{extern}` (a second type identity "
+                        "in unit tests)"
+                    )
+    return violations
 
 
 def _exceptions_from_env() -> dict[str, frozenset[str]]:
@@ -225,7 +273,8 @@ def find_dev_dependency_cycles(manifests: list[Path]) -> list[str]:
         normal, dev = parse_dependencies(manifest)
         for dep in sorted(dep for dep in normal if dep in names):
             adjacency[name].append((dep, "normal"))
-        for dep in sorted(dep for dep in dev if dep in names):
+        # A self edge is rule 3's, not a cycle between two crates.
+        for dep in sorted(dep for dep in dev if dep in names and dep != name):
             adjacency[name].append((dep, "dev"))
 
     reported: set[tuple[str, ...]] = set()
@@ -271,6 +320,7 @@ def main() -> int:
     violations = [
         *check_tenferro_boundaries(manifests),
         *find_dev_dependency_cycles(manifests),
+        *check_self_dev_dependencies(manifests),
     ]
     if violations:
         print("crate-boundary check failed:", file=sys.stderr)

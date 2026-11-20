@@ -73,10 +73,12 @@ pub fn default_cpu_execution_context(
 
 /// Whether this build of `tensor4all-core` has the process-global route.
 ///
-/// Downstream crates that select an implementation by the route's availability
-/// (for example a backend kernel on the global context versus a host-only
-/// reference) branch on this constant, because a crate cannot read another
-/// crate's Cargo features with `cfg`.
+/// A crate cannot read another crate's Cargo features with `cfg`, so a test or
+/// a downstream configuration check that must know which build of core it links
+/// reads this constant. Library code should not switch implementations on it:
+/// run on the engine that owns the operands (for example
+/// [`IdxTensor::with_owning_cpu_engine`](crate::IdxTensor::with_owning_cpu_engine))
+/// and take the implicit route only when no operand has one.
 ///
 /// # Examples
 ///
@@ -151,7 +153,7 @@ mod global {
     ///
     /// # Errors
     ///
-    /// Returns the plan's execution failure.
+    /// Returns the same errors as [`NativeEinsumPlan::execute_reads`].
     pub fn native_einsum_plan_execute_reads(
         plan: &NativeEinsumPlan,
         inputs: &[TensorRead<'_>],
@@ -198,7 +200,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn mat_mul<T: BlasMul>(
         _a: &Matrix<T>,
         _b: &Matrix<T>,
@@ -210,7 +213,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn mat_mul_owned<T: BlasMul>(
         _a: Matrix<T>,
         _b: Matrix<T>,
@@ -222,7 +226,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn batched_mat_mul_same_shape_owned<T: TensorScalar + Copy>(
         _batch: usize,
         _m: usize,
@@ -238,7 +243,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn solve_matrix<T: MatrixSolveScalar>(
         _a: &Matrix<T>,
         _b: &Matrix<T>,
@@ -250,7 +256,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn solve_matrix_owned<T: MatrixSolveScalar>(
         _a: Matrix<T>,
         _b: Matrix<T>,
@@ -262,7 +269,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn triangular_solve_matrix_owned<T: MatrixTriangularSolveScalar>(
         _a: Matrix<T>,
         _b: Matrix<T>,
@@ -278,7 +286,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn svd_backend<T: BackendLinalgScalar>(
         _a: &TypedTensor<T>,
     ) -> Result<SvdResult<T>, BackendLinalgError> {
@@ -289,7 +298,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn qr_backend<T: BackendLinalgScalar>(
         _a: TypedTensor<T>,
     ) -> Result<(TypedTensor<T>, TypedTensor<T>), BackendLinalgError> {
@@ -300,7 +310,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn src_error_estimate<T: MatrixTriangularSolveScalar + ComplexFloat>(
         _r: &Matrix<T>,
     ) -> Result<SrcErrorEstimate, BackendLinalgError> {
@@ -311,7 +322,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn src_error_estimate_general<T: MatrixSolveScalar + ComplexFloat>(
         _factor: &Matrix<T>,
     ) -> Result<SrcErrorEstimate, BackendLinalgError> {
@@ -322,7 +334,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn einsum_native_tensors(
         _operands: &[(&NativeTensor, &[usize])],
         _output_ids: &[usize],
@@ -334,7 +347,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn einsum_native_tensors_owned(
         _operands: Vec<(NativeTensor, Vec<usize>)>,
         _output_ids: &[usize],
@@ -346,7 +360,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn einsum_native_tensor_reads(
         _operands: &[(&NativeTensorReadInput<'_>, &[usize])],
         _output_ids: &[usize],
@@ -358,7 +373,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn einsum_native_subscripts(
         _subscripts: &str,
         _operands: &[&NativeTensor],
@@ -370,7 +386,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn solve_right_full_piv_lu<T: FullPivLuScalar>(
         _lhs_values: &[T],
         _lhs_rows: usize,
@@ -386,7 +403,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn native_einsum_plan_execute_reads(
         _plan: &NativeEinsumPlan,
         _inputs: &[TensorRead<'_>],
@@ -398,7 +416,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn native_tensor_primal_to_diag<T: TensorElement>(
         _tensor: &NativeTensor,
     ) -> Result<Vec<T>, BridgeError> {
@@ -409,7 +428,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn hermitian_eigendecomposition<T: HermitianEigenScalar>(
         _matrix: &Matrix<T>,
         _hermitian_tol: f64,
@@ -421,7 +441,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn lowest_hermitian_eigenpair<T: HermitianEigenScalar>(
         _matrix: &Matrix<T>,
         _hermitian_tol: f64,
@@ -433,7 +454,8 @@ mod refuse {
     ///
     /// # Errors
     ///
-    /// Always refuses: there is no process-global context.
+    /// Always refuses with `ExecutionContextEntryError::NoContext`, wrapped in the
+    /// returned error type: there is no process-global context.
     pub fn hermitian_exponential_first_column<T: HermitianEigenScalar>(
         _matrix: &Matrix<T>,
         _exponent: Complex64,

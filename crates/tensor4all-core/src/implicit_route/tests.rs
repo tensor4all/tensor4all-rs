@@ -38,15 +38,7 @@ fn global_build_resolves_the_process_global_state() {
     ));
 }
 
-#[cfg(not(feature = "global-defaults"))]
-#[test]
-fn explicit_only_build_refuses_instead_of_choosing_an_engine() {
-    assert!(matches!(
-        super::eager_runtime(),
-        Err(ExecutionContextEntryError::NoContext)
-    ));
-    assert!(matches!(
-        super::default_cpu_execution_context(),
-        Err(ExecutionContextEntryError::NoContext)
-    ));
-}
+// The explicit-only counterpart (bridges refuse with `NoContext`) cannot live
+// here: this crate's dev-dependency enables `global-defaults`, so a
+// `cfg(not(feature = "global-defaults"))` test never compiles in any test build.
+// It runs in the isolated package `tests/feature-configurations/explicit-only`.
