@@ -97,8 +97,9 @@ taskset -c 0-4 python3 scripts/run-sum-benchmark.py \
   --output target/sum-gate
 ```
 
-The runner builds the locked release example itself, records the actual
-commit, build command, default CPU provider, toolchain, source/lockfile and
+The runner builds the locked release example with the benchmark package’s
+`fourier` feature. It records the actual commit, build command, default CPU
+provider, toolchain, source/lockfile and
 binary hashes, and freezes the protocol before sampling. On Linux the default
 CPU provider is faer. Each operation runs in a fresh process with all seven
 CPU-library thread variables set to one. Identical time-based priming,

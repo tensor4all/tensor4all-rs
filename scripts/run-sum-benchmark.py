@@ -42,6 +42,11 @@ THREADS = ("RAYON_NUM_THREADS", "BLAS_NUM_THREADS", "OMP_NUM_THREADS",
            "TENFERRO_NUM_THREADS")
 METHODS = ("aci", "sequential", "balanced", "density", "exact", "exact_truncate")
 CHECKSUM_FIELDS = ("sum_re", "sum_im", "sum_sq", "maxabs", "weighted_re", "weighted_im")
+# Older saved runs predate the optional Fourier dependency.
+LEGACY_BUILD_COMMAND = ["cargo", "build", "--locked", "--release", "-p", "tensor4all-benchmarks",
+                        "--example", "sum_benchmark", "--message-format=json"]
+BUILD_COMMAND = [*LEGACY_BUILD_COMMAND, "--features", "fourier"]
+BUILD_FEATURES = ["default", "fourier"]
 
 
 def canonical(value):
@@ -582,11 +587,9 @@ def build_environment(inherited, commit):
 
 def build_worker(repo, output):
     source = clean_checkout(repo) | {"cargo_config_sha256": cargo_config_snapshot(repo)}
-    command = ["cargo", "build", "--locked", "--release", "-p", "tensor4all-benchmarks",
-               "--example", "sum_benchmark", "--message-format=json"]
     env, recorded_environment = build_environment(dict(os.environ), source["commit"])
     with (output / "build.stdout").open("x") as stdout, (output / "build.stderr").open("x") as stderr:
-        process = subprocess.run(command, cwd=repo, env=env, stdout=stdout, stderr=stderr, check=False)
+        process = subprocess.run(BUILD_COMMAND, cwd=repo, env=env, stdout=stdout, stderr=stderr, check=False)
     if process.returncode:
         raise ValueError(f"release build failed ({process.returncode}); see build.stderr")
     binaries = set()
@@ -606,7 +609,7 @@ def build_worker(repo, output):
     if clean_checkout(repo) | {"cargo_config_sha256": cargo_config_snapshot(repo)} != source:
         raise ValueError("checkout or Cargo configuration changed during release build")
     build = source | dict(profile="release", provider="faer (Linux tenferro-cpu-platform default)",
-                          features=["default"], build_command=command,
+                          features=BUILD_FEATURES, build_command=BUILD_COMMAND,
                           binary_sha256=digest(binary),
                           environment=recorded_environment, cargo_profile=cargo_profile,
                           build_stdout_sha256=digest(output / "build.stdout"),
@@ -786,9 +789,9 @@ def verify_saved_build(protocol, build):
     configs = provenance["cargo_config_sha256"]
     if not isinstance(configs, dict) or not configs or configs != build["cargo_config_sha256"]:
         raise ValueError("missing or inconsistent saved Cargo configuration hashes")
-    if (build["profile"] != "release" or not build["provider"] or build["features"] != ["default"]
-            or build["build_command"] != ["cargo", "build", "--locked", "--release", "-p", "tensor4all-benchmarks",
-                                          "--example", "sum_benchmark", "--message-format=json"]
+    build_mode = (build["features"], build["build_command"])
+    if (build["profile"] != "release" or not build["provider"]
+            or build_mode not in ((BUILD_FEATURES, BUILD_COMMAND), (["default"], LEGACY_BUILD_COMMAND))
             or build["cargo_profile"]["opt_level"] != "3"
             or build["cargo_profile"]["debug_assertions"] is not False
             or build["cargo_profile"]["overflow_checks"] is not False):

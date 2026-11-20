@@ -138,13 +138,18 @@ class AnalysisTests(unittest.TestCase):
             (root / "raw").mkdir()
             build = dict(commit="a" * 40, source_sha256="b" * 64, cargo_lock_sha256="c" * 64,
                          binary_sha256="d" * 64, cargo_config_sha256={"/fixture/.cargo/config.toml": None},
-                         profile="release", provider="faer", features=["default"],
+                         profile="release", provider="faer", features=["default", "fourier"],
                          build_command=["cargo", "build", "--locked", "--release", "-p", "tensor4all-benchmarks",
-                                        "--example", "sum_benchmark", "--message-format=json"],
+                                        "--example", "sum_benchmark", "--message-format=json", "--features", "fourier"],
                          cargo_profile=dict(opt_level="3", debug_assertions=False, overflow_checks=False))
             MODULE.write_json(root / "build.json", build)
             protocol["provenance"] |= {key: build[key] for key in ("source_sha256", "cargo_lock_sha256", "binary_sha256", "cargo_config_sha256")}
             protocol["provenance"]["build_sha256"] = MODULE.digest(root / "build.json")
+            MODULE.verify_saved_build(protocol, build)
+            legacy = build | {"features": ["default"], "build_command": build["build_command"][:-2]}
+            MODULE.verify_saved_build(protocol, legacy)
+            with self.assertRaises(ValueError):
+                MODULE.verify_saved_build(protocol, legacy | {"features": ["default", "fourier"]})
             audit = [dict(pid=100, tid=100, affinity=[0])]
             protocol["host"] = dict(measured_cpu=2, observer_cpus=[0], protected_cpus=[2, 3],
                                     initial_affinity=[0, 2], runner_affinity=[0], affinity_audit=audit,

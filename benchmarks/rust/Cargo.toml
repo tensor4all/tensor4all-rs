@@ -64,6 +64,7 @@ path = "density_sum_benchmark.rs"
 name = "sum_benchmark"
 path = "sum_benchmark.rs"
 test = true
+required-features = ["fourier"]
 
 [[example]]
 name = "benchmark_cached_batch_memory"
