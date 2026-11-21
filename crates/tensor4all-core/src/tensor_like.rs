@@ -1042,7 +1042,10 @@ pub trait TensorContractionLike: TensorIndex {
     ///
     /// Returns `Self::Error` when the summed index spaces are incompatible
     /// (an index-space mismatch) or the underlying construction reports a
-    /// failure.
+    /// failure. Implementations whose scalar storage supports mixed operands
+    /// promote them to their common type instead of refusing the sum;
+    /// `IdxTensor`, and so every `TreeTN` over it, promotes `f32`, `f64`,
+    /// `Complex32` and `Complex64` as the eager arithmetic does.
     fn direct_sum(
         &self,
         other: &Self,
