@@ -273,13 +273,15 @@ where
 
     /// Scale the tensor network by a complex scalar.
     ///
-    /// This multiplies a single node tensor, chosen deterministically as the
-    /// minimum-named node, so the represented state is scaled once rather than
-    /// applying `scalar^n` across all nodes.
+    /// When the network is canonicalized with a single-node orthogonalization
+    /// region, this multiplies the tensor at that centre and leaves the cached
+    /// canonical region, canonical form and orthogonality directions intact:
+    /// the other tensors remain isometries towards the same centre, so a
+    /// following `canonicalize`, `truncate` or `norm` does not re-sweep.
     ///
-    /// Scaling a non-center tensor generally invalidates any existing
-    /// canonicalization metadata, so this method clears the cached canonical
-    /// region and orthogonality directions after updating the tensor.
+    /// Otherwise it multiplies the minimum-named node (deterministically) and
+    /// clears the cached canonical region and orthogonality directions, because
+    /// scaling a non-centre tensor generally invalidates them.
     ///
     /// # Arguments
     /// * `scalar` - Scalar multiplier applied to the represented tensor network
@@ -314,38 +316,53 @@ where
         &mut self,
         scalar: AnyScalar,
     ) -> std::result::Result<(), TreeTNOperationError> {
-        let min_node = self
-            .node_names()
-            .into_iter()
-            .min()
-            .ok_or_else(|| anyhow::anyhow!("Cannot scale empty TreeTN"))
-            .context("scale: network must have at least one node")?;
+        // Scaling the single-site canonical centre keeps every other tensor an
+        // isometry towards that centre, so the cached gauge state stays valid.
+        // A multi-site region has no single centre to scale, so fall back to the
+        // old behaviour there and for networks that are not canonicalized.
+        let canonical_centre = if self.canonical_region().len() == 1 {
+            self.canonical_region().iter().next().cloned()
+        } else {
+            None
+        };
+        let scale_node = match &canonical_centre {
+            Some(node) => node.clone(),
+            None => self
+                .node_names()
+                .into_iter()
+                .min()
+                .ok_or_else(|| anyhow::anyhow!("Cannot scale empty TreeTN"))
+                .context("scale: network must have at least one node")?,
+        };
         let node_idx = self
-            .node_index(&min_node)
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", min_node))
+            .node_index(&scale_node)
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", scale_node))
             .context("scale: selected node must exist")?;
         let tensor = self
             .tensor(node_idx)
-            .ok_or_else(|| anyhow::anyhow!("Node tensor not found for {:?}", min_node))
+            .ok_or_else(|| anyhow::anyhow!("Node tensor not found for {:?}", scale_node))
             .context("scale: selected node tensor must exist")?
             .clone();
         let scaled = tensor
             .scale(scalar)
             .context("scale: tensor scaling failed")?;
         self.replace_tensor(node_idx, scaled)?
-            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", min_node))
+            .ok_or_else(|| anyhow::anyhow!("Node {:?} not found", scale_node))
             .context("scale: failed to replace scaled tensor")?;
 
-        self.clear_canonical_region();
-        self.ortho_towards.clear();
+        if canonical_centre.is_none() {
+            self.clear_canonical_region();
+            self.ortho_towards.clear();
+        }
 
         Ok(())
     }
 
     /// Return a scaled copy of this `TreeTN`.
     ///
-    /// The represented tensor network is multiplied by `scalar`; the
-    /// canonical region and orthogonality directions of the copy are reset.
+    /// The represented tensor network is multiplied by `scalar`; a copy that was
+    /// canonicalized keeps its canonical region and orthogonality directions
+    /// (see [`Self::scale_mut`]).
     ///
     /// # Arguments
     /// * `scalar` - Scalar multiplier applied to the represented tensor network

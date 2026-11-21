@@ -608,6 +608,58 @@ fn test_canonicalize_simple() {
 }
 
 #[test]
+fn scale_mut_keeps_the_canonical_centre_and_does_not_re_sweep() {
+    use tensor4all_core::AnyScalar;
+
+    let (mut tn, n1, n2, n3, _e12, _e23, _b12, _b23) = create_three_node_chain();
+    tn.canonicalize_mut([n2], CanonicalizationOptions::default())
+        .unwrap();
+    assert!(tn.is_canonicalized());
+    assert_eq!(tn.canonical_region(), &std::iter::once(n2).collect());
+    let form = tn.canonical_form();
+    assert_eq!(form, Some(CanonicalForm::Unitary));
+    assert!(tn.validate_ortho_consistency().is_ok());
+
+    let centre_before = tn.tensor(n2).unwrap().clone();
+    let left_before = tn.tensor(n1).unwrap().clone();
+    let right_before = tn.tensor(n3).unwrap().clone();
+    let dense_before = tn.contract_to_tensor().unwrap();
+    let old_norm = dense_before.norm().unwrap();
+
+    tn.scale_mut(AnyScalar::new_real(2.0)).unwrap();
+
+    // The metadata survives, and the two non-centre tensors are untouched
+    // (bit for bit): scaling the centre did not pay for a sweep.
+    assert!(tn.is_canonicalized());
+    assert_eq!(tn.canonical_region(), &std::iter::once(n2).collect());
+    assert_eq!(tn.canonical_form(), form);
+    assert!(tn.validate_ortho_consistency().is_ok());
+    assert!(tn.tensor(n1).unwrap().distance(&left_before).unwrap() <= 1.0e-15);
+    assert!(tn.tensor(n3).unwrap().distance(&right_before).unwrap() <= 1.0e-15);
+    assert!(tn.tensor(n2).unwrap().distance(&centre_before).unwrap() > 0.0);
+
+    // The represented state is scaled once.
+    let dense_after = tn.contract_to_tensor().unwrap();
+    let expected = dense_before.scale(AnyScalar::new_real(2.0)).unwrap();
+    assert!(dense_after.distance(&expected).unwrap() <= 1.0e-12 * old_norm.max(1.0));
+
+    // `norm()` takes the fast path for a single-site Unitary region: it must
+    // not replace any tensor.
+    let left_after_scale = tn.tensor(n1).unwrap().clone();
+    let centre_after_scale = tn.tensor(n2).unwrap().clone();
+    let n = tn.norm().unwrap();
+    assert!((n - 2.0 * old_norm).abs() <= 1.0e-12 * old_norm.max(1.0));
+    assert!(tn.tensor(n1).unwrap().distance(&left_after_scale).unwrap() <= 1.0e-15);
+    assert!(
+        tn.tensor(n2)
+            .unwrap()
+            .distance(&centre_after_scale)
+            .unwrap()
+            <= 1.0e-15
+    );
+}
+
+#[test]
 fn canonicalize_mut_preserves_network_when_form_validation_fails() {
     let (mut tn, n1, n2, _edge, _phys1, _bond, _phys2) = create_two_node_treetn();
     tn.canonicalize_mut([n1], CanonicalizationOptions::default())
