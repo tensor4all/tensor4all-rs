@@ -662,6 +662,25 @@ where
                     *tensor_b = new_tensor;
                 }
             }
+
+            // Keep the reverse lookups in step with the new bond index. A stale
+            // `link_index_network` entry makes the next operation that updates this
+            // bond (for example a zip-up) fail with "Index ... not found in
+            // link_index_network". `replace_index` only fails when the old index was
+            // not registered for this edge, in which case registering the new one is
+            // still the right repair.
+            if result
+                .link_index_network
+                .replace_index(&old_bond_idx, &new_bond_idx, edge)
+                .is_err()
+            {
+                result.link_index_network.insert(edge, &new_bond_idx);
+            }
+
+            // `ortho_towards` is keyed by bond index, so it needs the same rename.
+            if let Some(dir) = result.ortho_towards.remove(&old_bond_idx) {
+                result.ortho_towards.insert(new_bond_idx, dir);
+            }
         }
 
         result
