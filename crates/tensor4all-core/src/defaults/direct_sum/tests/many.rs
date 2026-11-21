@@ -224,17 +224,20 @@ fn direct_sum_many_rejects_extra_common_index_on_a_later_operand() {
 }
 
 #[test]
-fn direct_sum_many_rejects_mixed_dtypes_in_a_later_operand() {
+fn direct_sum_many_promotes_mixed_dtypes_in_a_later_operand() {
     let s = DynIndex::new_dyn(2);
     let l: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(1)).collect();
     let a = filled::<f64>(vec![s.clone(), l[0].clone()], 0);
     let b = filled::<f64>(vec![s.clone(), l[1].clone()], 10);
     let c = IdxTensor::from_dense(vec![s, l[2].clone()], vec![1.0_f32, 2.0]).unwrap();
 
-    let err = direct_sum_many(&[&a, &b, &c], &[l]).unwrap_err();
-    assert!(
-        format!("{err:#}").contains("same dense scalar type"),
-        "{err:#}"
+    let (result, _) = direct_sum_many(&[&a, &b, &c], &[l]).unwrap();
+    assert!(result.is_f64());
+    // One block per operand along the new index, column-major: (s0, s1) inside
+    // each block, then the operand's block.
+    assert_eq!(
+        result.to_vec::<f64>().unwrap(),
+        vec![1.0, 2.0, 11.0, 12.0, 1.0, 2.0]
     );
 }
 
@@ -313,16 +316,24 @@ fn direct_sum_many_equals_repeated_binary_direct_sum() {
 }
 
 #[test]
-fn direct_sum_many_rejects_mixed_complex_precision_in_a_later_operand() {
+fn direct_sum_many_promotes_mixed_complex_precision_in_a_later_operand() {
     let s = DynIndex::new_dyn(2);
     let l: Vec<DynIndex> = (0..3).map(|_| DynIndex::new_dyn(1)).collect();
     let a = filled::<Complex32>(vec![s.clone(), l[0].clone()], 0);
     let b = filled::<Complex32>(vec![s.clone(), l[1].clone()], 10);
     let c = filled::<Complex64>(vec![s, l[2].clone()], 20);
 
-    let err = direct_sum_many(&[&a, &b, &c], &[l]).unwrap_err();
-    assert!(
-        format!("{err:#}").contains("same dense scalar type"),
-        "{err:#}"
-    );
+    let (result, _) = direct_sum_many(&[&a, &b, &c], &[l]).unwrap();
+    assert!(result.is_c64());
+    let expected: Vec<Complex64> = [0usize, 1, 10, 11, 20, 21]
+        .iter()
+        .map(|&seed| match seed {
+            20 | 21 => Complex64::make(seed),
+            _ => {
+                let value = Complex32::make(seed);
+                Complex64::new(value.re as f64, value.im as f64)
+            }
+        })
+        .collect();
+    assert_eq!(result.to_vec::<Complex64>().unwrap(), expected);
 }

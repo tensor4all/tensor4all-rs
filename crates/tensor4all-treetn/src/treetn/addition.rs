@@ -355,7 +355,9 @@ where
     ///
     /// # Arguments
     /// * `terms` - The networks to sum; at least one. All must share the
-    ///   topology **and** the site index IDs of `terms[0]`, and one scalar type.
+    ///   topology **and** the site index IDs of `terms[0]`. Node tensors of
+    ///   different scalar types are promoted to their common type, as
+    ///   contraction does.
     ///
     /// # Returns
     /// The exact sum. Each node keeps `terms[0]`'s site legs in their order,
@@ -367,8 +369,8 @@ where
     ///
     /// Returns [`TreeTNOperationError`] when `terms` is empty, when a term has
     /// a different topology or site space than `terms[0]`, or when the
-    /// direct-sum construction of a node tensor (for example mixed scalar
-    /// types) or the resulting [`TreeTN`] fails.
+    /// direct-sum construction of a node tensor (for example a payload that is
+    /// not a supported dense scalar type) or the resulting [`TreeTN`] fails.
     ///
     /// # Examples
     ///

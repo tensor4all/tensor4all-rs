@@ -163,21 +163,83 @@ fn direct_sum_keeps_result_strides_for_operands_in_result_order() {
     assert_matches_reference::<f64>(&a, &b, &[(l0, l1), (r0, r1)]);
 }
 
-/// Operands of the same kind but different precision are rejected.
+/// Operands of the same kind but different precision promote to the wider
+/// type of that kind, and every copied value is exact there.
 #[test]
-fn direct_sum_rejects_mixed_precision() {
+fn direct_sum_promotes_mixed_precision() {
     let (l0, l1) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
     let pairs = [(l0.clone(), l1.clone())];
-    let f64_tensor = filled::<f64>(vec![l0.clone()], 0);
-    let f32_tensor = filled::<f32>(vec![l1.clone()], 0);
-    let c64_tensor = filled::<Complex64>(vec![l0.clone()], 0);
-    let c32_tensor = filled::<Complex32>(vec![l1.clone()], 0);
 
-    for (a, b) in [(&f64_tensor, &f32_tensor), (&c64_tensor, &c32_tensor)] {
-        let err = direct_sum(a, b, &pairs).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("same dense scalar type"),
-            "{err:#}"
-        );
-    }
+    let f64_tensor = IdxTensor::from_dense(vec![l0.clone()], vec![1.0_f64, 2.0]).unwrap();
+    let f32_tensor = IdxTensor::from_dense(vec![l1.clone()], vec![3.0_f32, 4.0]).unwrap();
+    let (real, _) = direct_sum(&f64_tensor, &f32_tensor, &pairs).unwrap();
+    assert!(real.is_f64());
+    assert_eq!(real.to_vec::<f64>().unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
+
+    let c64_tensor = IdxTensor::from_dense(
+        vec![l0.clone()],
+        vec![Complex64::new(1.0, 1.0), Complex64::new(2.0, 2.0)],
+    )
+    .unwrap();
+    let c32_tensor = IdxTensor::from_dense(
+        vec![l1.clone()],
+        vec![Complex32::new(3.0, -1.0), Complex32::new(4.0, -2.0)],
+    )
+    .unwrap();
+    let (complex, _) = direct_sum(&c64_tensor, &c32_tensor, &pairs).unwrap();
+    assert!(complex.is_c64());
+    assert_eq!(
+        complex.to_vec::<Complex64>().unwrap(),
+        vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+            Complex64::new(3.0, -1.0),
+            Complex64::new(4.0, -2.0),
+        ]
+    );
+}
+
+/// The real and complex kind cross the real precision boundary the way the
+/// eager arithmetic does: `f64 + Complex32 -> Complex64`, and `f32 + Complex64`
+/// keeps the complex value.
+#[test]
+fn direct_sum_promotes_across_the_real_complex_boundary() {
+    let (l0, l1) = (DynIndex::new_dyn(2), DynIndex::new_dyn(2));
+    let pairs = [(l0.clone(), l1.clone())];
+
+    let f64_tensor = IdxTensor::from_dense(vec![l0.clone()], vec![1.5_f64, 2.5]).unwrap();
+    let c32_tensor = IdxTensor::from_dense(
+        vec![l1.clone()],
+        vec![Complex32::new(3.5, 0.25), Complex32::new(4.5, -0.25)],
+    )
+    .unwrap();
+    let (mixed, _) = direct_sum(&f64_tensor, &c32_tensor, &pairs).unwrap();
+    assert!(mixed.is_c64());
+    assert_eq!(
+        mixed.to_vec::<Complex64>().unwrap(),
+        vec![
+            Complex64::new(1.5, 0.0),
+            Complex64::new(2.5, 0.0),
+            Complex64::new(3.5, 0.25),
+            Complex64::new(4.5, -0.25),
+        ]
+    );
+
+    let f32_tensor = IdxTensor::from_dense(vec![l0], vec![5.0_f32, 6.0]).unwrap();
+    let c64_tensor = IdxTensor::from_dense(
+        vec![l1],
+        vec![Complex64::new(7.0, 0.5), Complex64::new(8.0, -0.5)],
+    )
+    .unwrap();
+    let (wide, _) = direct_sum(&f32_tensor, &c64_tensor, &pairs).unwrap();
+    assert!(wide.is_c64());
+    assert_eq!(
+        wide.to_vec::<Complex64>().unwrap(),
+        vec![
+            Complex64::new(5.0, 0.0),
+            Complex64::new(6.0, 0.0),
+            Complex64::new(7.0, 0.5),
+            Complex64::new(8.0, -0.5),
+        ]
+    );
 }

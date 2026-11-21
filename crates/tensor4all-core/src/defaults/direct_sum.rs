@@ -6,6 +6,11 @@
 //! [`direct_sum`] combines two tensors; [`direct_sum_many`] combines any
 //! number in one pass.
 //!
+//! Operands of different dense scalar types are promoted to their common type
+//! before the block copy, with the same lattice the eager arithmetic uses:
+//! `f32 -> f64`, `f32 -> Complex32`, `f64 -> Complex64` and
+//! `Complex32 -> Complex64`.
+//!
 //! This module works with concrete types (`DynIndex`, `IdxTensor`) only.
 
 use crate::defaults::DynIndex;
@@ -42,9 +47,12 @@ use tensor4all_tensorbackend::TensorElement;
 /// operand is not a non-paired index of the other one (an index present on one
 /// side only, or matching only in id but not in prime level or tags), and
 /// [`IdxTensorError::Operation`] when `pairs` is empty, when a paired index is
-/// missing or a common index differs in dimension, when the operands do not
-/// share one dense scalar type (`f32`, `f64`, `Complex32` or `Complex64`), or
-/// when the backend construction fails.
+/// missing or a common index differs in dimension, when a payload is not one
+/// of `f32`, `f64`, `Complex32` or `Complex64`, or when the backend
+/// construction fails. Operands of different dense types among those four are
+/// promoted to their common type (`f32 + f64 -> f64`, `f32 + Complex32 ->
+/// Complex32`, `f64 + Complex64 -> Complex64`, `f64 + Complex32 -> Complex64`);
+/// the result has that promoted type.
 ///
 /// # Example
 ///
@@ -69,11 +77,11 @@ pub fn direct_sum(
     b: &IdxTensor,
     pairs: &[(DynIndex, DynIndex)],
 ) -> std::result::Result<(IdxTensor, Vec<DynIndex>), IdxTensorError> {
-    let Some(kind) = DenseKind::common(&[a, b]) else {
+    let Some(kind) = DenseKind::promoted(&[a, b]) else {
         return Err(IdxTensorError::Operation {
             operation: "direct_sum",
             source: std::sync::Arc::new(std::io::Error::other(
-                "direct_sum requires both tensors to have the same dense scalar type (f32, f64, Complex32 or Complex64)",
+                "direct_sum supports only f32, f64, Complex32 and Complex64 dense payloads",
             )),
         });
     };
@@ -100,8 +108,9 @@ pub fn direct_sum(
 ///
 /// # Arguments
 ///
-/// * `operands` - The tensors to combine; at least one. They must share one
-///   dense scalar type: `f32`, `f64`, `Complex32` or `Complex64`.
+/// * `operands` - The tensors to combine; at least one. Each payload must be
+///   `f32`, `f64`, `Complex32` or `Complex64`; differing types among those are
+///   promoted to their common type as in [`direct_sum`].
 /// * `groups` - The grouped indices; at least one group, each with exactly
 ///   `operands.len()` entries, entry `i` an index of operand `i`. An index of
 ///   an operand may appear in at most one group.
@@ -120,8 +129,8 @@ pub fn direct_sum(
 /// [`IdxTensorError::Operation`] when `operands` or `groups` is empty, when a
 /// group does not have one index per operand, when a grouped index is missing
 /// from its operand or appears in two groups, when a common index differs in
-/// dimension, when the operands do not share one dense scalar type, when an
-/// operand tracks gradients, or when the backend construction fails.
+/// dimension, when a payload is not `f32`, `f64`, `Complex32` or `Complex64`,
+/// when an operand tracks gradients, or when the backend construction fails.
 ///
 /// # Example
 ///
@@ -153,9 +162,9 @@ pub fn direct_sum_many(
             "direct_sum requires at least one operand"
         )));
     }
-    let Some(kind) = DenseKind::common(operands) else {
+    let Some(kind) = DenseKind::promoted(operands) else {
         return Err(IdxTensorError::from(anyhow::anyhow!(
-            "direct_sum requires every operand to have the same dense scalar type (f32, f64, Complex32 or Complex64)"
+            "direct_sum supports only f32, f64, Complex32 and Complex64 dense payloads"
         )));
     };
     if groups.is_empty() {
@@ -190,15 +199,138 @@ impl DenseKind {
         }
     }
 
-    /// The type every operand shares, or `None` when they differ (or one is
-    /// not a supported dense type). `operands` is non-empty.
-    fn common(operands: &[&IdxTensor]) -> Option<Self> {
-        let kind = Self::of(operands[0])?;
-        operands[1..]
-            .iter()
-            .all(|operand| Self::of(operand) == Some(kind))
-            .then_some(kind)
+    fn name(self) -> &'static str {
+        match self {
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+            Self::C32 => "Complex32",
+            Self::C64 => "Complex64",
+        }
     }
+
+    fn index(self) -> usize {
+        match self {
+            Self::F32 => 0,
+            Self::C32 => 1,
+            Self::F64 => 2,
+            Self::C64 => 3,
+        }
+    }
+
+    /// The type two operands promote to, the same lattice the eager
+    /// arithmetic uses: `f32 -> f64`, `f32 -> Complex32`, `f64 -> Complex64`
+    /// and `Complex32 -> Complex64`.
+    fn promote(self, other: Self) -> Self {
+        const LATTICE: [[DenseKind; 4]; 4] = [
+            [
+                DenseKind::F32,
+                DenseKind::C32,
+                DenseKind::F64,
+                DenseKind::C64,
+            ],
+            [
+                DenseKind::C32,
+                DenseKind::C32,
+                DenseKind::C64,
+                DenseKind::C64,
+            ],
+            [
+                DenseKind::F64,
+                DenseKind::C64,
+                DenseKind::F64,
+                DenseKind::C64,
+            ],
+            [
+                DenseKind::C64,
+                DenseKind::C64,
+                DenseKind::C64,
+                DenseKind::C64,
+            ],
+        ];
+        LATTICE[self.index()][other.index()]
+    }
+
+    /// The common type of every operand, or `None` when one of them is not a
+    /// supported dense type. `operands` is non-empty.
+    fn promoted(operands: &[&IdxTensor]) -> Option<Self> {
+        operands
+            .iter()
+            .try_fold(Self::of(operands[0])?, |kind, operand| {
+                Some(kind.promote(Self::of(operand)?))
+            })
+    }
+}
+
+/// The promoted form of `operand`, or `None` when it already has `target`.
+///
+/// Promotion is applied before the block copy, so each operand is read once in
+/// its own type and every copied value is exact in the target type. An operand
+/// that already holds `target` is borrowed in place; no payload is cloned.
+fn promoted_operand(operand: &IdxTensor, target: DenseKind) -> Result<Option<IdxTensor>> {
+    use num_complex::{Complex32, Complex64};
+
+    let source = DenseKind::of(operand).ok_or_else(|| {
+        anyhow::anyhow!("direct_sum supports only f32, f64, Complex32 and Complex64 dense payloads")
+    })?;
+    if source == target {
+        return Ok(None);
+    }
+    let indices = operand.indices().to_vec();
+    let promoted = match (source, target) {
+        (DenseKind::F32, DenseKind::F64) => IdxTensor::from_dense(
+            indices,
+            operand.with_dense_slice::<f32, _>(|values| {
+                values
+                    .iter()
+                    .map(|&value| value as f64)
+                    .collect::<Vec<f64>>()
+            })?,
+        )?,
+        (DenseKind::F32, DenseKind::C32) => IdxTensor::from_dense(
+            indices,
+            operand.with_dense_slice::<f32, _>(|values| {
+                values
+                    .iter()
+                    .map(|&value| Complex32::new(value, 0.0))
+                    .collect::<Vec<Complex32>>()
+            })?,
+        )?,
+        (DenseKind::F32, DenseKind::C64) => IdxTensor::from_dense(
+            indices,
+            operand.with_dense_slice::<f32, _>(|values| {
+                values
+                    .iter()
+                    .map(|&value| Complex64::new(value as f64, 0.0))
+                    .collect::<Vec<Complex64>>()
+            })?,
+        )?,
+        (DenseKind::F64, DenseKind::C64) => IdxTensor::from_dense(
+            indices,
+            operand.with_dense_slice::<f64, _>(|values| {
+                values
+                    .iter()
+                    .map(|&value| Complex64::new(value, 0.0))
+                    .collect::<Vec<Complex64>>()
+            })?,
+        )?,
+        (DenseKind::C32, DenseKind::C64) => IdxTensor::from_dense(
+            indices,
+            operand.with_dense_slice::<Complex32, _>(|values| {
+                values
+                    .iter()
+                    .map(|&value| Complex64::new(value.re as f64, value.im as f64))
+                    .collect::<Vec<Complex64>>()
+            })?,
+        )?,
+        (source, target) => {
+            return Err(anyhow::anyhow!(
+                "direct_sum cannot promote {} to {}",
+                source.name(),
+                target.name()
+            ));
+        }
+    };
+    Ok(Some(promoted))
 }
 
 /// Run the typed kernel for operands that share the dense type `kind`, with
@@ -208,11 +340,27 @@ fn direct_sum_dispatch(
     operands: &[&IdxTensor],
     groups: Groups<'_>,
 ) -> std::result::Result<(IdxTensor, Vec<DynIndex>), IdxTensorError> {
+    if operands.iter().any(|operand| operand.tracks_grad()) {
+        return Err(IdxTensorError::from(anyhow::anyhow!(
+            "direct_sum does not support tracked tensors until an AD-preserving block path is available"
+        )));
+    }
+    // Promote before the copy, and only the operands that need it: the common
+    // same-type call borrows every operand and allocates nothing extra.
+    let promoted = operands
+        .iter()
+        .map(|operand| promoted_operand(operand, kind))
+        .collect::<Result<Vec<_>>>()?;
+    let operands: Vec<&IdxTensor> = operands
+        .iter()
+        .zip(&promoted)
+        .map(|(operand, promoted)| promoted.as_ref().unwrap_or(operand))
+        .collect();
     match kind {
-        DenseKind::F32 => direct_sum_typed::<f32>(operands, groups),
-        DenseKind::F64 => direct_sum_typed::<f64>(operands, groups),
-        DenseKind::C32 => direct_sum_typed::<num_complex::Complex32>(operands, groups),
-        DenseKind::C64 => direct_sum_typed::<num_complex::Complex64>(operands, groups),
+        DenseKind::F32 => direct_sum_typed::<f32>(&operands, groups),
+        DenseKind::F64 => direct_sum_typed::<f64>(&operands, groups),
+        DenseKind::C32 => direct_sum_typed::<num_complex::Complex32>(&operands, groups),
+        DenseKind::C64 => direct_sum_typed::<num_complex::Complex64>(&operands, groups),
     }
     .map_err(IdxTensorError::from)
 }
@@ -447,11 +595,6 @@ fn direct_sum_typed<T: TensorElement + Zero>(
     operands: &[&IdxTensor],
     groups: Groups<'_>,
 ) -> Result<(IdxTensor, Vec<DynIndex>)> {
-    if operands.iter().any(|operand| operand.tracks_grad()) {
-        return Err(anyhow::anyhow!(
-            "direct_sum does not support tracked tensors until an AD-preserving block path is available"
-        ));
-    }
     let setup = setup_direct_sum(operands, groups)?;
     let result_strides = checked_strides(&setup.result_dims, "direct_sum result")?;
     // INVARIANT: the zero fill is semantic: every entry outside the diagonal

@@ -176,23 +176,35 @@ fn test_direct_sum_c64() {
 }
 
 #[test]
-fn test_direct_sum_mixed_types_error() {
-    // One f64 and one complex tensor should error
-    let i = DynIndex::new_dyn(2);
-    let j = DynIndex::new_dyn(3);
+fn test_direct_sum_mixed_types_promote() {
+    // f64 + Complex64 promotes to Complex64, as contraction already does.
+    let j = DynIndex::new_dyn(2);
     let k = DynIndex::new_dyn(3);
 
-    let a = IdxTensor::from_dense(vec![i.clone(), j.clone()], vec![1.0_f64; 6]).unwrap();
+    let a = IdxTensor::from_dense(vec![j.clone()], vec![1.0_f64, 2.0]).unwrap();
     let b = IdxTensor::from_dense(
-        vec![i.clone(), k.clone()],
-        vec![Complex64::new(1.0, 0.0); 6],
+        vec![k.clone()],
+        vec![
+            Complex64::new(3.0, 0.5),
+            Complex64::new(4.0, -0.5),
+            Complex64::new(5.0, 0.0),
+        ],
     )
     .unwrap();
 
-    let result = direct_sum(&a, &b, &[(j.clone(), k.clone())]);
-    assert!(result.is_err());
-    let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("same dense scalar type"));
+    let (result, new_indices) = direct_sum(&a, &b, &[(j, k)]).unwrap();
+    assert!(result.is_c64());
+    assert_eq!(new_indices[0].dim(), 5);
+    assert_eq!(
+        result.to_vec::<Complex64>().unwrap(),
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.5),
+            Complex64::new(4.0, -0.5),
+            Complex64::new(5.0, 0.0),
+        ]
+    );
 }
 
 #[test]

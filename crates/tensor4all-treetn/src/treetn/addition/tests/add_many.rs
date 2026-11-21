@@ -207,18 +207,54 @@ fn add_many_rejects_a_later_term_with_other_site_indices() {
     );
 }
 
+/// Mixed real and complex networks add: the node direct sums promote
+/// `f64 + Complex64` to `Complex64` (tensor4all-rs#1426), so a canonical
+/// network scaled by a complex scalar can be added to the real network it
+/// came from without converting every tensor first.
 #[test]
-fn add_many_rejects_mixed_scalar_types() {
+fn add_many_promotes_mixed_scalar_types() {
     let sites = star_sites();
     let a = star_term(&sites, [1, 1, 1], 0);
     let b = star_term(&sites, [1, 1, 1], 10);
     let complex = b.scale(AnyScalar::new_complex(0.0, 1.0)).unwrap();
 
-    let err = TreeTN::add_many(&[&a, &b, &complex]).unwrap_err();
-    assert!(
-        format!("{err:#}").contains("same dense scalar type"),
-        "{err:#}"
-    );
+    let a_dense = a.to_dense().unwrap();
+    let a_values = a_dense.to_vec::<f64>().unwrap();
+    let b_values = b.to_dense().unwrap().to_vec::<f64>().unwrap();
+    let promoted = |real: f64, imag: f64| num_complex::Complex64::new(real, imag);
+
+    // Pairwise: a + i b.
+    let pairwise = a.add(&complex).unwrap().to_dense().unwrap();
+    assert!(pairwise.is_c64());
+    let expected_pairwise = IdxTensor::from_dense(
+        a_dense.indices().to_vec(),
+        a_values
+            .iter()
+            .zip(&b_values)
+            .map(|(&real, &imag)| promoted(real, imag))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let error = pairwise.distance(&expected_pairwise).unwrap();
+    assert!(error < 1e-12, "pairwise dense error {error}");
+
+    // N-ary: a + b + i b.
+    let many = TreeTN::add_many(&[&a, &b, &complex])
+        .unwrap()
+        .to_dense()
+        .unwrap();
+    assert!(many.is_c64());
+    let expected_many = IdxTensor::from_dense(
+        a_dense.indices().to_vec(),
+        a_values
+            .iter()
+            .zip(&b_values)
+            .map(|(&real_a, &real_b)| promoted(real_a + real_b, real_b))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let error = many.distance(&expected_many).unwrap();
+    assert!(error < 1e-12, "many dense error {error}");
 }
 
 /// Networks with bonds in `f32` and `Complex32` add, pairwise and N-ary:
