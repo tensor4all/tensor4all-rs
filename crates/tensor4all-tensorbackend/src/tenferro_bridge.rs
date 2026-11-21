@@ -778,7 +778,7 @@ fn run_cached_native_einsum(
     // Compile under the compiler lock only; the graph then runs under the
     // context's engine lock. Holding both would make a compile wait for a graph
     // that is running.
-    let program = build(&mut ctx.lock_compiler())?;
+    let program = build(&mut *ctx.lock_compiler().map_err(anyhow::Error::new)?)?;
     let result = execute(ctx, &program)?;
     if trace_pool {
         let pool_after = pool_stats(ctx)?;
