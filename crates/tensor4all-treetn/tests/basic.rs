@@ -2374,3 +2374,18 @@ fn test_zipup_with_star_topology() {
     assert_eq!(result.node_count(), 4);
     assert!(result.canonical_region().contains(&"D".to_string()));
 }
+
+/// Regression for #1421: `sim_internal_inds` must also rekey `link_index_network`,
+/// or a later zip-up that updates a bond through the reverse lookup fails.
+#[test]
+fn test_sim_internal_inds_then_zipup() {
+    let (lhs, node1, _, _, _, _, _) = create_two_node_treetn();
+    let (rhs, _, _, _, _, _, _) = create_two_node_treetn();
+    let rhs = rhs.sim_internal_inds();
+
+    let out = lhs
+        .contract_zipup_with(&rhs, &node1, CanonicalForm::Unitary, None, None)
+        .unwrap();
+    assert_eq!(out.node_count(), 2);
+    assert_eq!(out.edge_count(), 1);
+}
