@@ -11,8 +11,8 @@ Checked entries are the top-level ``tests/*.rs`` files and the
 ``tests/<dir>/`` directories holding a ``main.rs`` or ``mod.rs``.
 
 A ``tests/heavy_*.rs`` file must be a module, not a target of its own: the
-heavy-tests workflow selects tests by name (``test(/^heavy_/)``), which only
-matches when the file name is the test path prefix.
+heavy-tests workflow selects paths with ``test(/(^|::)heavy_/)``, which matches
+when a heavy module name is part of the test path.
 """
 
 from __future__ import annotations
@@ -87,7 +87,7 @@ def main() -> int:
             failures.append(
                 f"{entry} ({package['name']}) is a test target of its own; "
                 "declare it as `mod` in the package's tests/main.rs so "
-                "`test(/^heavy_/)` selects it"
+                "`test(/(^|::)heavy_/)` selects it"
             )
 
     for failure in failures:

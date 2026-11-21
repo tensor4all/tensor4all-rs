@@ -8,7 +8,7 @@ use tensor4all_treeaci::{
 };
 use tensor4all_treetn::TreeTN;
 
-trait AuditScalar: TreeAciScalar {
+pub(super) trait AuditScalar: TreeAciScalar {
     fn value(re: f64, im: f64) -> Self;
     fn tolerance() -> f64;
 }
@@ -113,16 +113,17 @@ fn dense<T: AuditScalar>(tree: &TreeTN<IdxTensor, usize>, sites: &[DynIndex]) ->
         .unwrap()
 }
 
-fn dense_suite<T: AuditScalar>() {
+pub(super) fn dense_suite<T: AuditScalar>(heavy: bool) {
     type Geometry = (&'static str, Vec<(usize, usize)>, Vec<Vec<usize>>);
+    let path_nodes = if heavy { 5 } else { 3 };
     let geometries: Vec<Geometry> = vec![
         ("scalar", vec![], vec![vec![]]),
         ("single-multiple-axes", vec![], vec![vec![2, 3]]),
         ("two-node", vec![(0, 1)], vec![vec![2], vec![3]]),
         (
             "path",
-            vec![(0, 1), (1, 2), (2, 3), (3, 4)],
-            vec![vec![2]; 5],
+            (0..path_nodes - 1).map(|node| (node, node + 1)).collect(),
+            vec![vec![2]; path_nodes],
         ),
         (
             "star4",
@@ -149,6 +150,13 @@ fn dense_suite<T: AuditScalar>() {
     let mut failures = Vec::new();
     let mut cases = 0usize;
     for (name, edges, dims) in geometries {
+        // The path, mixed-axes branch, and star4 retain 0/1/2/3 incoming-edge
+        // routes. Site-free nodes stay covered by the degree-3 interior node of
+        // mixed-axes and by all-site-free. Larger stars, combs, and repeated
+        // seeds stay in the heavy audit.
+        if !heavy && matches!(name, "two-node" | "star5-site-free" | "comb") {
+            continue;
+        }
         let physical: Vec<Vec<_>> = dims
             .iter()
             .map(|ds| ds.iter().map(|&d| DynIndex::new_dyn(d)).collect())
@@ -160,7 +168,8 @@ fn dense_suite<T: AuditScalar>() {
                 tree::<T>(&edges, &physical, 2, 1, !reverse),
             ];
             let operands: Vec<_> = inputs.iter().map(|t| dense::<T>(t, &axes)).collect();
-            for seed in [0, 7, 42] {
+            let seeds: &[u64] = if heavy { &[0, 7, 42] } else { &[0] };
+            for &seed in seeds {
                 let options = TreeAciOptions {
                     tolerance: T::tolerance(),
                     global_tolerance_margin: 1.0,
@@ -220,19 +229,19 @@ fn dense_suite<T: AuditScalar>() {
 
 #[test]
 fn dense_oracle_f64() {
-    dense_suite::<f64>();
+    dense_suite::<f64>(false);
 }
 #[test]
 fn dense_oracle_f32() {
-    dense_suite::<f32>();
+    dense_suite::<f32>(false);
 }
 #[test]
 fn dense_oracle_c64() {
-    dense_suite::<Complex64>();
+    dense_suite::<Complex64>(false);
 }
 #[test]
 fn dense_oracle_c32() {
-    dense_suite::<Complex32>();
+    dense_suite::<Complex32>(false);
 }
 
 #[test]

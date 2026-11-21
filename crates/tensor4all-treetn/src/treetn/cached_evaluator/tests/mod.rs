@@ -12,6 +12,7 @@ mod components;
 mod edge_cut;
 mod evaluation;
 mod grouped_contraction;
+mod heavy_measurements;
 mod measurements;
 mod message_cache;
 mod parallelism;

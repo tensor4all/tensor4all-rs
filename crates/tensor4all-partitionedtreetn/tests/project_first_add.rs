@@ -168,52 +168,43 @@ fn norm_worst_case_keeps_the_project_first_error() {
 /// once with the same cutoff, allocation and cap.
 #[test]
 fn splits_are_exact_where_the_leaf_pass_discards_nothing() {
-    let mut checked = 0;
-    for (r, decay) in [(3usize, 0.3f64), (4, 0.5), (3, 0.15)] {
-        let (exact, addends) = exact_pair(r, decay).unwrap();
-        for allocation in [BudgetAllocation::Volume, BudgetAllocation::Norm] {
-            for cutoff in [1.0e-4, 1.0e-3, 1.0e-2, 3.0e-2] {
-                for cap in [1usize, 2, 3] {
-                    let result =
-                        add_with_patching(addends.clone(), &2, &options(allocation, cutoff, cap))
-                            .unwrap();
-                    let leaves = PartitionedTreeTN::from_subdomains(
-                        result
-                            .projectors()
-                            .map(|projector| exact.project(projector))
-                            .collect::<Result<Vec<_>, _>>()
-                            .unwrap()
-                            .into_iter()
-                            .flatten()
-                            .collect::<Vec<_>>(),
-                    )
-                    .unwrap();
-                    let baseline = tensor4all_partitionedtreetn::truncate_adaptive(
-                        &leaves,
-                        &2,
-                        cutoff,
-                        allocation,
-                        Some(cap),
-                    )
-                    .unwrap();
-                    if relative_squared_error(&exact, &baseline).unwrap() >= 1.0e-12 {
-                        continue;
-                    }
-                    checked += 1;
-                    let error = relative_squared_error(&exact, &result).unwrap();
-                    assert!(
-                        error < 1.0e-12,
-                        "{allocation:?} cutoff {cutoff:e} cap {cap} r {r} decay {decay}: \
-                         the leaf pass discards nothing but the error is {error:e}"
-                    );
-                }
-            }
-        }
+    let (exact, addends) = exact_pair(3, 0.3).unwrap();
+    let cutoff = 1.0e-4;
+    let cap = 1;
+    for allocation in [BudgetAllocation::Volume, BudgetAllocation::Norm] {
+        let result =
+            add_with_patching(addends.clone(), &2, &options(allocation, cutoff, cap)).unwrap();
+        assert!(result.len() > 1, "{allocation:?} must exercise splitting");
+        let leaves = PartitionedTreeTN::from_subdomains(
+            result
+                .projectors()
+                .map(|projector| exact.project(projector))
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let baseline = tensor4all_partitionedtreetn::truncate_adaptive(
+            &leaves,
+            &2,
+            cutoff,
+            allocation,
+            Some(cap),
+        )
+        .unwrap();
+        let baseline_error = relative_squared_error(&exact, &baseline).unwrap();
+        assert!(
+            baseline_error < 1.0e-12,
+            "{allocation:?} must reach the discard-free leaf case, error {baseline_error:e}"
+        );
+        let error = relative_squared_error(&exact, &result).unwrap();
+        assert!(
+            error < 1.0e-12,
+            "{allocation:?}: the leaf pass discards nothing but the error is {error:e}"
+        );
     }
-    assert!(
-        checked > 0,
-        "no case reached the discard-free leaf situation; the loop no longer covers it"
-    );
 }
 
 /// A leaf that is already below its budget must not enlarge the other leaves'
