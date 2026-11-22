@@ -5,7 +5,7 @@ use tenferro::program::{CoreSemanticOp, ProgramInputSpec};
 use tenferro::{DType, ExecutionEngine, Tensor, TraceContext};
 use tenferro_ad::EagerTensor;
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::{EagerSessionEinsumExt, EinsumSubscripts};
+use tenferro_einsum::{EagerEinsumOps, EinsumSubscripts};
 use tenferro_tensor::{AllocationDomainId, SharedTensorAllocationDomain};
 
 use super::{Runtime, RuntimeError};
@@ -21,11 +21,9 @@ fn matrix(rt: &Runtime, rows: usize, cols: usize, offset: f64) -> EagerTensor {
     let data = (0..rows * cols)
         .map(|k| ((k as f64 + offset) * 0.37).sin())
         .collect::<Vec<_>>();
-    EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![rows, cols], data).unwrap(),
-        Arc::clone(rt.eager_runtime()),
-    )
-    .unwrap()
+    Arc::clone(rt.eager_runtime())
+        .constant_from(Tensor::from_vec_col_major(vec![rows, cols], data).unwrap())
+        .unwrap()
 }
 
 /// A value computed on `exec`: the input doubled, so it is an engine result,
@@ -38,9 +36,7 @@ fn computed_on(rt: &Runtime, exec: &mut CpuEngine, input: &EagerTensor) -> Eager
 fn contract_on(rt: &Runtime, exec: &mut CpuEngine, a: &EagerTensor, b: &EagerTensor) -> Vec<f64> {
     let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
     let product = rt
-        .with_eager(exec, |session| {
-            session.einsum_subscripts(&[a, b], &subscripts)
-        })
+        .with_eager(exec, |session| session.einsum(&[a, b], &subscripts))
         .expect("contraction on the engine");
     let values = product.value().unwrap();
     values.as_slice::<f64>().unwrap().to_vec()

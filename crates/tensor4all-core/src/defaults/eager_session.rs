@@ -232,38 +232,39 @@ where
     result?.map_err(eager_error)
 }
 
-/// Run one execution-engine operation on the engine selected by `context`.
-///
-/// `backward` and the other derivative entry points need
-/// [`tenferro::ExecutionEngine`] rather than the narrower
-/// [`tenferro_tensor::Engine`]; the engine selection is otherwise identical to
-/// [`with_engine`].
-pub(crate) fn with_execution_engine<T, E>(
-    runtime: &Arc<EagerRuntime>,
-    context: Option<&ExecutionContext>,
-    f: impl FnOnce(&mut dyn ExecutionEngine) -> std::result::Result<T, E>,
-) -> std::result::Result<T, IdxTensorError>
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
-    let result = match context {
-        Some(ExecutionContext::Cpu(context)) => context
-            .with_session(|engine| f(engine))
-            .map_err(IdxTensorError::from),
-        #[cfg(feature = "tenferro-cuda")]
-        Some(ExecutionContext::Cuda(context)) => context
-            .with_session(|engine| f(engine))
-            .map_err(IdxTensorError::from),
-        None => with_runtime_engine(runtime, |engine| f(engine)).map_err(IdxTensorError::from),
-        // INVARIANT: reachable only in the mixed configuration of
-        // tensor4all-rs#869 (tensorbackend built with CUDA, core without), where
-        // `ExecutionContext::Cuda` exists but this build cannot execute in it; in
-        // every other configuration `Cpu` is the only variant.
-        #[cfg(not(feature = "tenferro-cuda"))]
-        #[allow(unreachable_patterns)]
-        Some(_) => Err(super::idx_tensor::unsupported_execution_context_error()),
+/// The tenferro `dot_general` options for per-operand conjugation flags.
+pub(crate) fn dot_general_conj_options(
+    lhs_conj: bool,
+    rhs_conj: bool,
+) -> tenferro_tensor::DotGeneralOptions {
+    let conj = |flag: bool| {
+        if flag {
+            tenferro_tensor::Conj::Yes
+        } else {
+            tenferro_tensor::Conj::No
+        }
     };
-    result?.map_err(eager_error)
+    tenferro_tensor::DotGeneralOptions::default()
+        .lhs(conj(lhs_conj))
+        .rhs(conj(rhs_conj))
+}
+
+/// One axis index as the signed axis tenferro's operations take.
+///
+/// # Errors
+///
+/// Returns an error for an index above `isize::MAX`, which no tensor rank reaches.
+pub(crate) fn signed_axis(axis: usize) -> anyhow::Result<isize> {
+    isize::try_from(axis).map_err(|_| anyhow::anyhow!("axis {axis} exceeds isize::MAX"))
+}
+
+/// Axis indices as the signed axes tenferro's operations take.
+///
+/// # Errors
+///
+/// Returns an error for an index above `isize::MAX`, which no tensor rank reaches.
+pub(crate) fn signed_axes(axes: &[usize]) -> anyhow::Result<Vec<isize>> {
+    axes.iter().map(|&axis| signed_axis(axis)).collect()
 }
 
 fn eager_error(error: impl std::error::Error + Send + Sync + 'static) -> IdxTensorError {

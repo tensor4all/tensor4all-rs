@@ -80,7 +80,7 @@ def check_graph(label, manifest, required, cargo_args=(), **expectations):
     print(f"check-m6-dependencies: {label} passed", flush=True)
 
 
-def consumer(directory, dependencies, *, provider=None, bridge=False):
+def consumer(directory, dependencies, *, no_default_features=False, bridge=False):
     """Seed a disposable downstream lock from the workspace's pinned resolution."""
     directory.mkdir()
     (directory / "src").mkdir()
@@ -94,9 +94,8 @@ def consumer(directory, dependencies, *, provider=None, bridge=False):
     for package in dependencies:
         options = [f"path = {json.dumps(str(ROOT / 'crates' / package))}"]
         features = []
-        if provider:
+        if no_default_features:
             options.append("default-features = false")
-            features.append(provider)
             if package == "tensor4all-treersi":
                 features.append("global-defaults")
         if bridge:
@@ -117,10 +116,10 @@ def main():
         for package in NATIVE:
             manifest = consumer(directory / package, [package])
             check_graph(f"default {package} consumer", manifest, [package, "tensor4all-treetn"])
-        for provider in ("tenferro-cpu-platform", "tenferro-cpu-faer",
-                         "tenferro-system-blas", "tenferro-provider-inject"):
-            manifest = consumer(directory / provider, NATIVE, provider=provider)
-            check_graph(f"combined M6 consumer ({provider})", manifest, NATIVE)
+        manifest = consumer(directory / "combined", NATIVE)
+        check_graph("combined M6 consumer", manifest, NATIVE)
+        manifest = consumer(directory / "combined-no-default", NATIVE, no_default_features=True)
+        check_graph("combined M6 consumer (no default features)", manifest, NATIVE)
         manifest = consumer(directory / "bridge", ["tensor4all-treetn"], bridge=True)
         check_graph("explicit legacy bridge consumer", manifest, ["tensor4all-treetn"], bridge=True)
 

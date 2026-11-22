@@ -92,63 +92,28 @@ records. Integration tests exercise the ordinary library through its public
 boundary; unit tests also cover private validation and error paths. Hosted
 workspace coverage and the unchanged per-file thresholds remain authoritative.
 
-## Backend provider features
+## Backend features
 
-Numerical backends are selected per crate through provider features. The CPU
-choices are mutually exclusive because tenferro rejects more than one CPU
-provider in a build, so `--all-features` is not a supported configuration.
+tenferro has one CPU backend: the faer-backed `tlinalg` linear algebra and the
+`cpueinsum`/`tcontract` contraction stack. tenferro-rs#2609 removed the vendor
+BLAS/LAPACK providers (OpenBLAS, MKL, Apple Accelerate) and the
+`provider-inject` seam, so no tensor4all crate has a CPU backend feature and
+every platform, macOS included, runs the same kernels. The former
+`tenferro-cpu-platform`, `tenferro-cpu-faer`, `tenferro-system-blas` and
+`tenferro-provider-inject` features and the wiring-only
+`tensor4all-cpu-platform` crate are deleted, not aliased (tensor4all-rs#1428).
+`tensor4all-tensorbackend` enables tenferro's `autodiff` einsum and linalg
+surfaces unconditionally; `tensor4all-core`, which always depends on it, gets
+them through Cargo feature unification and declares no feature of its own for
+them.
 
 | feature | meaning |
 | --- | --- |
-| `tenferro-cpu-platform` | the default for every compute crate: Apple Accelerate (tenferro `blas-accelerate`) on macOS, faer elsewhere |
-| `tenferro-cpu-faer` | pure-Rust faer CPU kernels |
-| `tenferro-system-blas` | system BLAS/LAPACK (OpenBLAS, MKL, Apple Accelerate) |
-| `tenferro-provider-inject` | caller-provided provider on the BLAS-linked tenferro surface |
-| `tenferro-cuda` | CUDA where exposed (`tensor4all-core`, `tensor4all-treetn` and `tensor4all-treersi`); implies `tenferro-cpu-faer` for host work |
+| `tenferro-cuda` | CUDA where exposed (`tensor4all-core`, `tensor4all-treetn` and `tensor4all-treersi`); host work runs on the CPU backend |
 
-`tenferro-cpu-platform` is resolved by target in the wiring-only crate
-`tensor4all-cpu-platform`: Cargo features cannot depend on the target, but its
-target-specific dependency tables enable `blas-accelerate` or `native` on
-`tenferro-linalg` and `tenferro-einsum`, which forward the choice to
-`tenferro-cpu` and `tenferro-ad`. Accelerate is linked through `accelerate-src`
-(`-framework Accelerate`), so the macOS default needs no link flags. It binds
-Accelerate's LAPACK 3.2.1 Fortran interface (LP64). tenferro calls only
-subroutines there (results through arguments) and reaches BLAS only through
-CBLAS, so the f2c return convention for scalar-valued functions does not apply.
-Accelerate schedules its own threads outside the tensor4all pool; its limit is
-`VECLIB_MAXIMUM_THREADS`.
-
-Convention:
-
-- Every compute crate exposes the CPU provider features together. A crate that
-exposes `tenferro-cpu-faer` and `tenferro-provider-inject` must also expose
-`tenferro-system-blas`.
-- Each provider feature forwards to the same provider feature on every
-tensor4all dependency that exposes it. Optional dependencies use weak
-forwarding (`tensor4all-simplett?/tenferro-system-blas`), so the feature does
-not switch the optional dependency on by itself.
-- Where a crate's existing CPU provider features forward a route feature (for
-example `tensor4all-core/backend-tenferro`), the new `tenferro-system-blas`
-feature forwards it identically. Provider selection does not change route
-selection.
-- A downstream user who wants a provider other than the platform default
-chooses exactly one CPU provider with `default-features = false` and enables
-that provider on every directly imported compute crate. Enabling two CPU
-providers in one build is not supported. On macOS this includes
-`tenferro-cpu-faer`: with the default features still on, it would combine faer
-with Accelerate.
-`tenferro-cuda` is not combined with `tenferro-system-blas` or
-`tenferro-provider-inject`.
-- `tenferro-system-blas` selects the BLAS/LAPACK-linked tenferro kernels but
-does not bundle a BLAS library. The final link must resolve those symbols, for
-example with `RUSTFLAGS="-L native=<prefix>/lib -l dylib=openblas"` (the
-benchmark commands in `benchmarks/README.md` show the macOS form) or through
-the embedding target's own link flags.
 - `tensor4all-hdf5` also needs one of its I/O features (`link` or
-`runtime-loading`), so its complete configurations are
-`link,tenferro-system-blas`, `link,tenferro-provider-inject` and
-`runtime-loading,tenferro-cpu-faer`. Its integration tests use the
-link-time `hdf5-metno` API and therefore run only in a `link` build.
+`runtime-loading`). Its integration tests use the link-time `hdf5-metno` API
+and therefore run only in a `link` build.
 
 The supported configurations, their exact Cargo selections, and where each is
 verified (PR CI, the nightly feature matrix, or locally) are declared in
@@ -159,9 +124,8 @@ supported-configuration table linked above.
 
 ### TreeTN interoperability and benchmark isolation
 
-TreeTN defaults select only the platform CPU provider. Its `simplett-bridge`
-feature is an explicit migration dependency; provider forwarding uses weak
-optional-dependency edges so selecting a provider cannot activate SimpleTT.
+TreeTN has no default features. Its `simplett-bridge` feature is an explicit
+migration dependency, so a default TreeTN build never activates SimpleTT.
 Native partitioned contraction, sibling merging, and elementwise interpolation
 use TreeTN and do not require this bridge.
 

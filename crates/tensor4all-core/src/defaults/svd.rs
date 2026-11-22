@@ -20,7 +20,7 @@ use num_complex::{Complex32, Complex64, ComplexFloat};
 use std::sync::Mutex;
 use tenferro::{DType, TensorScalar};
 use tenferro_ad::EagerTensor;
-use tenferro_linalg::EagerSessionLinalgExt;
+use tenferro_linalg::EagerLinalgOps;
 #[cfg(test)]
 use tensor4all_tensorbackend::native_tensor_primal_to_dense_col_major;
 use thiserror::Error;
@@ -355,11 +355,14 @@ fn svd_truncated_inner_scoped(
     .map_err(SvdError::ComputationError)?;
     let k = m.min(n);
 
-    let (mut u_inner, mut s_inner, mut vt_inner) =
-        with_eager_session(matrix_inner.runtime(), context, |session| {
-            session.svd(&matrix_inner)
-        })
-        .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
+    let tenferro_linalg::Svd {
+        u: mut u_inner,
+        s: mut s_inner,
+        vh: mut vt_inner,
+    } = with_eager_session(matrix_inner.runtime(), context, |session| {
+        session.svd(&matrix_inner)
+    })
+    .map_err(|e| SvdError::ComputationError(anyhow::anyhow!("{e}")))?;
     #[cfg(feature = "tenferro-cuda")]
     let s_full = if let Some(context) = context {
         if matches!(context, ExecutionContext::Cuda(_)) {

@@ -5,14 +5,13 @@ truncation, naive/zip-up/fit/SRC contraction, and linear solving.
 
 ## Cargo features
 
-The default selects `tenferro-cpu-platform` and does not depend on SimpleTT.
+The default build has no features and does not depend on SimpleTT.
 Enable `simplett-bridge` explicitly to use the legacy
 `tensor_train_to_treetn*` / `treetn_to_tensor_train` conversions or the
 `insert_onehot_site_in_treetn_chain` / `weighted_remove_site_from_treetn_chain`
 helpers. The `cached_evaluator` comparison benchmark also requires this feature.
 Native chains can use `TreeTN::from_chain_cores`, `chain_cores`, and
-`compress_chain_on_session` without it. For an alternate CPU provider, disable
-defaults and select the same provider on each directly imported compute crate.
+`compress_chain_on_session` without it.
 
 ## Key Types
 

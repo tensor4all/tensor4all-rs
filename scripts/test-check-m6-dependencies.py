@@ -10,9 +10,9 @@ from unittest.mock import patch
 
 CHECK = runpy.run_path(str(Path(__file__).with_name("check-m6-dependencies.py")))
 VERIFY = CHECK["verify_tree"]
-TREE = 'tensor4all-treetn v0.3.0 (/checkout/crates/treetn) features=[default,tenferro-cpu-platform]\n'
+TREE = 'tensor4all-treetn v0.3.0 (/checkout/crates/treetn) features=[default]\n'
 SIMPLETT = 'tensor4all-simplett v0.3.0 (/checkout/crates/simplett) features=[]\n'
-BRIDGE = TREE.replace('default,', 'default,simplett-bridge,') + SIMPLETT
+BRIDGE = TREE.replace('features=[default]', 'features=[default,simplett-bridge]') + SIMPLETT
 
 
 class GraphChecks(unittest.TestCase):
@@ -60,7 +60,7 @@ class GraphChecks(unittest.TestCase):
             VERIFY(tree, ["tensor4all-treetn"], bridge=True, fourier=True, comparisons=True)
 
     def test_native_fourier_and_itensorlike_opt_in(self):
-        tree = TREE + 'tensor4all-quanticstransform v0.3.0 features=[tenferro-cpu-platform]\n'
+        tree = TREE + 'tensor4all-quanticstransform v0.3.0 features=[]\n'
         tree += 'tensor4all-itensorlike v0.3.0 features=[default]\n'
         VERIFY(tree, ["tensor4all-treetn"], fourier=True, itensorlike=True)
 

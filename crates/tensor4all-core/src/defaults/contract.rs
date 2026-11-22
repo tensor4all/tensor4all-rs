@@ -25,12 +25,12 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::time::{Duration, Instant};
 
-use super::eager_session::{with_eager_session, with_engine};
+use super::eager_session::with_eager_session;
 use anyhow::Result;
 use petgraph::algo::connected_components;
 use petgraph::prelude::*;
 use tenferro::TensorValue;
-use tenferro_einsum::{EagerSessionEinsumExt, EinsumSubscripts};
+use tenferro_einsum::{EagerEinsumOps, EinsumSubscripts};
 use tensor4all_tensorbackend::NativeTensorReadInput;
 
 use crate::implicit_route::{einsum_native_tensor_reads, einsum_native_tensors_owned};
@@ -736,8 +736,8 @@ fn contract_owned_with_options_impl(
                     Ok((
                         {
                             let inner = tensor.as_inner()?;
-                            with_engine(inner.runtime(), None, |engine| {
-                                inner.duplicate_value(engine)
+                            with_eager_session(inner.runtime(), None, |session| {
+                                session.duplicate_value(inner)
                             })?
                         },
                         plan.input_ids[tensor_idx].clone(),
@@ -1070,7 +1070,7 @@ fn execute_contraction_plan(
             .map(|operand| operand.runtime())
             .ok_or_else(|| anyhow::anyhow!("No tensors to contract"))?;
         let result = with_eager_session(runtime, None, |session| {
-            session.einsum_subscripts(&operands, &subscripts)
+            session.einsum(&operands, &subscripts)
         })?;
         return IdxTensor::from_inner_with_axis_classes(
             plan.result_indices.clone(),
@@ -1120,7 +1120,7 @@ fn execute_contraction_plan(
             .map(|operand| operand.runtime())
             .ok_or_else(|| anyhow::anyhow!("No tensors to contract"))?;
         let result = with_eager_session(runtime, None, |session| {
-            session.einsum_subscripts(&operands, &subscripts)
+            session.einsum(&operands, &subscripts)
         })?;
         return IdxTensor::from_inner_with_axis_classes(
             plan.result_indices.clone(),

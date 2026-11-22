@@ -23,7 +23,7 @@
 //!
 //! # Cargo features
 //!
-//! The default selects `tenferro-cpu-platform` without a SimpleTT dependency.
+//! The default build has no features and no SimpleTT dependency.
 //! Enable `simplett-bridge` explicitly for legacy SimpleTT conversions and the
 //! chain insertion/removal helpers. Native chain construction and compression
 //! are available without the bridge.

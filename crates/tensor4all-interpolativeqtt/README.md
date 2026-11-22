@@ -38,10 +38,8 @@ functions.
 The optional `parallel` feature adds `interpolate_patched_nd_on_lanes` for
 caller-owned `hataori_tenferro::TenferroLanes`. Evaluator batches receive a
 `threadteam::Exec` token from the same engine used for algebra and compression.
-The feature builds with every CPU provider feature, including the platform
-default, but lane execution is tested on faer only. With a BLAS provider
-(Accelerate, system BLAS) each lane calls a library with its own threading,
-which can oversubscribe the cores.
+Each lane's linear algebra runs on tenferro's faer-backed CPU stack within its
+own thread budget.
 
 `interpolate_chebyshev_patches` builds a plain piecewise Chebyshev interpolant
 instead of a QTT: an accepted dyadic box keeps its Chebyshev-Lobatto node values

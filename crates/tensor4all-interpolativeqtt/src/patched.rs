@@ -187,13 +187,9 @@ where
 /// Floating-point backend roundoff can matter for a decision exactly on a
 /// threshold; choose tolerances with a margin above roundoff.
 ///
-/// The `parallel` feature adds only the lane executor and builds with any CPU
-/// provider, but lane execution is validated on native/faer only, where each
-/// lane's linear algebra stays within its `B` threads and results are
-/// bit-identical across lane layouts. With a BLAS provider (Accelerate, system
-/// BLAS) each of the `P` lanes calls a library that threads on its own, which
-/// can oversubscribe the cores and relies on the library's thread safety and
-/// determinism; that combination is not tested.
+/// The `parallel` feature adds only the lane executor. Each lane's linear
+/// algebra runs on tenferro's faer-backed CPU stack and stays within its `B`
+/// threads, and results are bit-identical across lane layouts.
 ///
 /// # Errors
 /// Returns the same errors as [`interpolate_patched_nd`], plus

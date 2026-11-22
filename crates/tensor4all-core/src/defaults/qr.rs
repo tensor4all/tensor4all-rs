@@ -10,7 +10,7 @@ use crate::{ExecutionContext, IdxTensor, TensorElement};
 use num_complex::{Complex64, ComplexFloat};
 use tenferro::DType;
 use tenferro_ad::EagerTensor;
-use tenferro_linalg::EagerSessionLinalgExt;
+use tenferro_linalg::EagerLinalgOps;
 use thiserror::Error;
 
 /// Error type for QR operations in tensor4all-linalg.
@@ -322,7 +322,10 @@ pub fn qr_with<T>(
         .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
         .map_err(QrError::ComputationError)?;
     let k = m.min(n);
-    let (q_inner, r_inner) = with_eager_session(matrix_inner.runtime(), None, |session| {
+    let tenferro_linalg::Qr {
+        q: q_inner,
+        r: r_inner,
+    } = with_eager_session(matrix_inner.runtime(), None, |session| {
         session.qr(&matrix_inner)
     })
     .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;
@@ -395,7 +398,10 @@ pub fn qr_with_in<T>(
             .map_err(|e| anyhow::anyhow!("Failed to unfold tensor: {}", e))
             .map_err(QrError::ComputationError)?;
     let k = m.min(n);
-    let (q_inner, r_inner) = with_eager_session(matrix_inner.runtime(), Some(context), |session| {
+    let tenferro_linalg::Qr {
+        q: q_inner,
+        r: r_inner,
+    } = with_eager_session(matrix_inner.runtime(), Some(context), |session| {
         session.qr(&matrix_inner)
     })
     .map_err(|e| QrError::ComputationError(anyhow::anyhow!("{e}")))?;

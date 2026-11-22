@@ -25,8 +25,8 @@ use num_traits::{One, Zero};
 use std::ops::{Index, IndexMut};
 use std::sync::Arc;
 use tenferro::{DType, Tensor, TensorScalar, TypedTensor};
-use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_linalg::EagerSessionLinalgExt;
+use tenferro_ad::EagerRuntime;
+use tenferro_linalg::{EagerLinalgOps, Eigh};
 
 /// A dense 2D matrix in column-major layout.
 ///
@@ -924,18 +924,23 @@ where
             }
         })?;
     let eager_ctx = eager_runtime()?;
-    let input = EagerTensor::from_tensor_in(input_tensor, eager_ctx.clone()).map_err(|source| {
-        HermitianEigenError::Backend {
-            source: Box::new(source),
-        }
-    })?;
+    let input =
+        eager_ctx
+            .constant_from(input_tensor)
+            .map_err(|source| HermitianEigenError::Backend {
+                source: Box::new(source),
+            })?;
     // One entry on the context's engine: the eager session runs the
     // decomposition and the same engine materializes both results.
     let (values, vectors) = ctx
         .with_session(|engine| {
-            let (values, vectors) =
-                eager_ctx.with_eager_session(engine, |session| session.eigh(&input))?;
-            Ok::<_, tenferro_ad::Error>((values.to_tensor(engine)?, vectors.to_tensor(engine)?))
+            eager_ctx.with_eager_session(engine, |session| {
+                let Eigh { values, vectors } = session.eigh(&input)?;
+                Ok::<_, tenferro_ad::Error>((
+                    session.duplicate_value(&values)?,
+                    session.duplicate_value(&vectors)?,
+                ))
+            })
         })
         .map_err(|source| HermitianEigenError::Backend {
             source: Box::new(source),
@@ -1732,7 +1737,7 @@ where
     T: TensorScalar,
 {
     use crate::context::with_default_session;
-    use tenferro::TensorSessionOpsExt;
+    use tenferro::CoreOps;
 
     let c = with_default_session(|session| a_tensor.matmul(&b_tensor, session))
         .context("matrix multiplication failed")?;
@@ -2087,7 +2092,7 @@ where
         .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
     let b_tensor = T::into_tensor(vec![k, n, batch], b)
         .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
-    // TensorSessionOpsExt exposes rank-2 matmul but not arbitrary batched dot.
+    // CoreOps exposes rank-2 matmul but not arbitrary batched dot.
     // Keep one backend execution by expressing [m,k,b] × [k,n,b] as einsum.
     let c = crate::tenferro_bridge::einsum_native_tensors_owned(
         vec![(a_tensor, vec![0, 1, 2]), (b_tensor, vec![1, 3, 2])],

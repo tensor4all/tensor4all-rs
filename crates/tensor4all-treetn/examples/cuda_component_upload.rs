@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! cargo run --release -p tensor4all-treetn --example cuda_component_upload \
-//!   --features tenferro-cuda,tenferro-cpu-faer -- --chain-length 6 --bond-dim 4
+//!   --features tenferro-cuda -- --chain-length 6 --bond-dim 4
 //! ```
 
 use std::error::Error;

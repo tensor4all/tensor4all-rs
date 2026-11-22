@@ -1,7 +1,7 @@
 //! The explicit-context surface runs numerical work on the caller's context.
 //!
 //! Compiled without `global-defaults` (`--no-default-features --features
-//! explicit-context,tenferro-cpu-faer`) these calls cannot reach a
+//! explicit-context`) these calls cannot reach a
 //! process-global context, because none exists in that build.
 
 use tenferro::Tensor as NativeTensor;

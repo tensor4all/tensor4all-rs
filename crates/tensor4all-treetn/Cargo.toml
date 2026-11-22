@@ -12,34 +12,11 @@ autotests = false
 features = ["simplett-bridge"]
 
 [features]
-default = ["tenferro-cpu-platform"]
 # Legacy interoperability is opt-in; native TreeTN consumers do not need SimpleTT.
 simplett-bridge = ["dep:tensor4all-simplett"]
 tenferro-cuda = [
     "tensor4all-core/tenferro-cuda",
     "tensor4all-tensorbackend/tenferro-cuda",
-]
-# The platform default: Apple Accelerate on macOS, faer elsewhere
-# (see the `tensor4all-cpu-platform` crate).
-tenferro-cpu-platform = [
-    "tensor4all-core/tenferro-cpu-platform",
-    "tensor4all-simplett?/tenferro-cpu-platform",
-    "tensor4all-tensorbackend/tenferro-cpu-platform",
-]
-tenferro-cpu-faer = [
-    "tensor4all-core/tenferro-cpu-faer",
-    "tensor4all-simplett?/tenferro-cpu-faer",
-    "tensor4all-tensorbackend/tenferro-cpu-faer",
-]
-tenferro-system-blas = [
-    "tensor4all-core/tenferro-system-blas",
-    "tensor4all-simplett?/tenferro-system-blas",
-    "tensor4all-tensorbackend/tenferro-system-blas",
-]
-tenferro-provider-inject = [
-    "tensor4all-core/tenferro-provider-inject",
-    "tensor4all-simplett?/tenferro-provider-inject",
-    "tensor4all-tensorbackend/tenferro-provider-inject",
 ]
 diagnostics = []
 
@@ -77,15 +54,15 @@ harness = false
 
 [[example]]
 name = "cuda_quickstart"
-required-features = ["tenferro-cuda", "tenferro-cpu-faer"]
+required-features = ["tenferro-cuda"]
 
 [[example]]
 name = "cuda_component_upload"
-required-features = ["tenferro-cuda", "tenferro-cpu-faer"]
+required-features = ["tenferro-cuda"]
 
 [[example]]
 name = "cuda_tree_contraction"
-required-features = ["tenferro-cuda", "tenferro-cpu-faer"]
+required-features = ["tenferro-cuda"]
 
 [[test]]
 name = "integration"

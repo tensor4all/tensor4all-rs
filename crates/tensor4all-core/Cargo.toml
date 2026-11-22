@@ -9,7 +9,6 @@ description = "Core tensor types, indices, and operations (SVD, QR, contraction)
 autotests = false
 
 [features]
-default = ["tenferro-cpu-platform"]
 # Opt-in legacy route: context-free operations fall back to one process-global
 # CPU context and eager runtime (see `src/implicit_route.rs`). Without it, a
 # context-free operation that would need that fallback returns
@@ -22,51 +21,16 @@ backend-tenferro = ["global-defaults"]
 # process-global route, as `backend-tenferro` did before #1403.
 tenferro-cuda = [
     "global-defaults",
-    "tenferro-cpu-faer",
     "tensor4all-tensorbackend/tenferro-cuda",
     "tenferro-ad/cuda",
     "tenferro-einsum/cuda",
     "tenferro-linalg/cuda",
 ]
-# The platform default: Apple Accelerate on macOS, faer elsewhere
-# (see the `tensor4all-cpu-platform` crate).
-tenferro-cpu-platform = [
-    "tensor4all-tensorbackend/tenferro-cpu-platform",
-    "tenferro-einsum/autodiff",
-    "tenferro-linalg/autodiff",
-]
-tenferro-cpu-faer = [
-    "tensor4all-tensorbackend/tenferro-cpu-faer",
-    "tenferro/native",
-    "tenferro-ad/native",
-    "tenferro-einsum/autodiff",
-    "tenferro-einsum/native",
-    "tenferro-linalg/autodiff",
-    "tenferro-linalg/native",
-]
-tenferro-system-blas = [
-    "tensor4all-tensorbackend/tenferro-system-blas",
-    "tenferro/blas",
-    "tenferro-ad/blas",
-    "tenferro-einsum/autodiff",
-    "tenferro-einsum/blas",
-    "tenferro-linalg/autodiff",
-    "tenferro-linalg/blas",
-]
-tenferro-provider-inject = [
-    "tensor4all-tensorbackend/tenferro-provider-inject",
-    "tenferro/blas",
-    "tenferro-ad/blas",
-    "tenferro-einsum/autodiff",
-    "tenferro-einsum/blas",
-    "tenferro-linalg/autodiff",
-    "tenferro-linalg/provider-inject",
-]
 
 [dependencies]
 # The canonical explicit surface; the process-global route is this crate's opt-in
-# `global-defaults` feature. It selects no provider, so the `tenferro-*` provider
-# features stay independent.
+# `global-defaults` feature. tensorbackend enables tenferro's `autodiff` einsum and
+# linalg surfaces unconditionally, which this crate's eager paths rely on.
 tensor4all-tensorbackend = { path = "../tensor4all-tensorbackend", default-features = false, features = ["explicit-context"] }
 num-complex.workspace = true
 num-traits.workspace = true

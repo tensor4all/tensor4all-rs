@@ -38,9 +38,9 @@ jobs:
 
       - name: Check explicit-context-only build
         run: |
-          cargo check --locked -p tensor4all-tensorbackend --no-default-features --features explicit-context,tenferro-cpu-faer
-          cargo doc --locked -p tensor4all-tensorbackend --no-deps --no-default-features --features explicit-context,tenferro-cpu-faer
-          cargo test --locked -p tensor4all-tensorbackend --no-default-features --features explicit-context,tenferro-cpu-faer --test explicit_context_surface
+          cargo check --locked -p tensor4all-tensorbackend --no-default-features --features explicit-context
+          cargo doc --locked -p tensor4all-tensorbackend --no-deps --no-default-features --features explicit-context
+          cargo test --locked -p tensor4all-tensorbackend --no-default-features --features explicit-context --test explicit_context_surface
 
       - name: Check explicit-only library crates (#1403)
         # Library builds are explicit by default; only test/bench builds and the
@@ -238,10 +238,11 @@ jobs:
           fi
 
   macos:
-    name: macOS (Accelerate)
-    # macOS is a supported host. Its default CPU backend is Apple Accelerate
-    # (`tensor4all-cpu-platform`), so this job runs the workspace tests and
-    # doctests on that backend. Its result is independent of the Linux jobs.
+    name: macOS
+    # macOS is a supported host: a second architecture and libc for the same
+    # faer-backed tenferro CPU stack (tenferro-rs#2609 removed the Accelerate
+    # provider). This job runs the workspace tests and doctests there; its result
+    # is independent of the Linux jobs.
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -259,12 +260,6 @@ jobs:
         with:
           cache-workspace-crates: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Check that the default backend is Accelerate
-        run: |
-          set -euo pipefail
-          tree=$(cargo tree --locked -p tensor4all-core -e features -i tenferro-cpu)
-          grep -q 'tenferro-cpu feature "blas-accelerate"' <<< "$tree"
 
       - name: Run workspace tests
         # The same suite budget as the Linux test job (CONTRIBUTING.md, CI time

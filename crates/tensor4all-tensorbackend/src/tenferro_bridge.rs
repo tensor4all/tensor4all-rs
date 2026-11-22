@@ -11,17 +11,17 @@ use anyhow::{anyhow, ensure, Result};
 use num_complex::{Complex32, Complex64};
 use omeco::ScoreFunction;
 #[cfg(feature = "global-defaults")]
-use tenferro::TensorSessionOpsExt;
+use tenferro::CoreOps;
 use tenferro::{
     program::CoreSemanticOp, CompiledGraph, DType, GraphCompiler, Tensor as NativeTensor,
     TensorRead, TensorScalar, TraceContext,
 };
 use tenferro_einsum::{
-    ConcreteEinsumPlan, ContractionOptimizerOptions, ContractionTree, EinsumSubscripts, Subscripts,
-    TraceContextEinsumExt,
+    ConcreteEinsumPlan, ContractionOptimizerOptions, ContractionTree, EinsumOptions,
+    EinsumSubscripts, Subscripts, TracedEinsumOps,
 };
 #[cfg(feature = "global-defaults")]
-use tenferro_linalg::TensorLinalgExt;
+use tenferro_linalg::LinalgOps;
 
 #[cfg(feature = "global-defaults")]
 use crate::any_scalar::promote_scalar_native;
@@ -315,7 +315,7 @@ fn cached_concrete_einsum_plan(
     }
 
     let plan = Arc::new(
-        ConcreteEinsumPlan::prepare_read_subscripts(inputs, einsum_subscripts)
+        ConcreteEinsumPlan::prepare(inputs, einsum_subscripts, &EinsumOptions::default())
             .map_err(|error| anyhow!("native einsum session plan preparation failed: {error}"))?,
     );
     CONCRETE_EINSUM_PLAN_CACHE.with(|cache| {
@@ -727,7 +727,7 @@ fn compile_native_einsum_program(
             .collect::<Vec<_>>()
             .as_slice(),
     );
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let trace_inputs = input_specs
         .into_iter()
         .map(|spec| {
@@ -752,11 +752,17 @@ fn compile_native_einsum_program(
                 .ok_or_else(|| anyhow!("native einsum promotion returned no output"))
         })
         .collect::<Result<Vec<_>>>()?;
+    let trace_inputs = trace_inputs
+        .into_iter()
+        .map(|value| trace.derive_tensor(value))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| anyhow!("native einsum input tracing failed: {e}"))?;
+    let trace_input_refs = trace_inputs.iter().collect::<Vec<_>>();
     let output = trace
-        .einsum_subscripts(&trace_inputs, subscripts)
+        .einsum(&trace_input_refs, subscripts)
         .map_err(|e| anyhow!("native einsum tracing failed: {e}"))?;
     let graph = trace
-        .finish(&[output])
+        .finish(&[output.trace_value()])
         .map_err(|e| anyhow!("native einsum graph finalization failed: {e}"))?;
     compiler
         .compile_traced_graph(&graph)
@@ -897,7 +903,7 @@ fn execute_native_einsum_reads(
         // rejection is mapped here rather than through the tenferro-tensor-typed
         // session helper.
         return ctx
-            .with_session(|engine| plan.execute_read(inputs, engine))
+            .with_session(|engine| plan.execute(inputs, engine))
             .map_err(|entry| {
                 anyhow::Error::new(entry).context("native einsum session entry failed")
             })?
@@ -1354,7 +1360,7 @@ pub fn reshape_col_major_native_tensor(
 pub fn qr_native_tensor(
     tensor: &NativeTensor,
 ) -> std::result::Result<(NativeTensor, NativeTensor), BridgeError> {
-    let (q, r) = with_default_session(|session| tensor.qr(session))
+    let tenferro_linalg::Qr { q, r } = with_default_session(|session| tensor.qr(session))
         .map_err(|e| anyhow!("native QR failed: {e}"))?;
     Ok((q, r))
 }
@@ -1369,7 +1375,7 @@ pub fn qr_native_tensor(
 pub fn svd_native_tensor(
     tensor: &NativeTensor,
 ) -> Result<(NativeTensor, NativeTensor, NativeTensor)> {
-    let (u, s, vt) = with_default_session(|session| tensor.svd(session))
+    let tenferro_linalg::Svd { u, s, vh: vt } = with_default_session(|session| tensor.svd(session))
         .map_err(|e| anyhow!("native SVD failed: {e}"))?;
     Ok((u, s, vt))
 }
@@ -1387,8 +1393,7 @@ pub fn sum_native_tensor(tensor: &NativeTensor) -> std::result::Result<BackendSc
             .duplicate()
             .map_err(|e| anyhow!("native scalar duplication failed: {e}"))?
     } else {
-        let axes: Vec<usize> = (0..tensor.shape().len()).collect();
-        with_default_session(|session| tensor.reduce_sum(Some(&axes), session))
+        with_default_session(|session| tensor.reduce_sum(None, session))
             .map_err(|e| anyhow!("native sum failed: {e}"))?
     };
     Ok(BackendScalar::from_native(reduced)?)
@@ -2161,7 +2166,9 @@ pub fn permute_native_tensor(
     tensor: &NativeTensor,
     perm: &[usize],
 ) -> std::result::Result<NativeTensor, BridgeError> {
-    with_default_session(|session| tensor.transpose(perm, session))
+    let perm = crate::einsum_ids::signed_axes("permute", perm)
+        .map_err(|e| anyhow!("native permute failed: {e}"))?;
+    with_default_session(|session| tensor.transpose(&perm, session))
         .map_err(|e| anyhow!("native permute failed: {e}"))
         .map_err(BridgeError::from)
 }

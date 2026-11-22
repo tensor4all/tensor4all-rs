@@ -5,9 +5,28 @@
 //! contraction labels through this one implementation.
 
 use anyhow::{anyhow, ensure, Result};
-use tenferro::TensorSessionOpsExt;
-use tenferro::{DType, Tensor as NativeTensor};
+use tenferro::{CoreOps, DType, Tensor as NativeTensor};
 use tenferro_tensor::Engine;
+
+/// Axis indices as the signed axes tenferro's core operations take.
+///
+/// # Errors
+///
+/// Returns [`tenferro_tensor::Error::Validation`] for an index above `isize::MAX`,
+/// which no tensor rank reaches.
+pub(crate) fn signed_axes(op: &'static str, axes: &[usize]) -> tenferro_tensor::Result<Vec<isize>> {
+    axes.iter()
+        .map(|&axis| {
+            isize::try_from(axis).map_err(|_| {
+                tenferro_tensor::Error::invalid_argument(
+                    op,
+                    "axes",
+                    format!("axis {axis} exceeds isize::MAX"),
+                )
+            })
+        })
+        .collect()
+}
 
 pub(crate) fn checked_native_einsum_labels(labels: &[usize]) -> Result<Vec<u32>> {
     labels

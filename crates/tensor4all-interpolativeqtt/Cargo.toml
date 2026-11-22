@@ -12,33 +12,7 @@ repository.workspace = true
 description = "Interpolative Quantics Tensor Train construction"
 
 [features]
-default = ["tenferro-cpu-platform"]
-# The platform default: Apple Accelerate on macOS, faer elsewhere
-# (see the `tensor4all-cpu-platform` crate).
-tenferro-cpu-platform = [
-    "tensor4all-core/tenferro-cpu-platform",
-    "tensor4all-treetn/tenferro-cpu-platform",
-    "tensor4all-tensorbackend/tenferro-cpu-platform",
-]
-tenferro-cpu-faer = [
-    "tensor4all-core/tenferro-cpu-faer",
-    "tensor4all-treetn/tenferro-cpu-faer",
-    "tensor4all-tensorbackend/tenferro-cpu-faer",
-]
-tenferro-system-blas = [
-    "tensor4all-core/tenferro-system-blas",
-    "tensor4all-treetn/tenferro-system-blas",
-    "tensor4all-tensorbackend/tenferro-system-blas",
-]
-tenferro-provider-inject = [
-    "tensor4all-core/tenferro-provider-inject",
-    "tensor4all-treetn/tenferro-provider-inject",
-    "tensor4all-tensorbackend/tenferro-provider-inject",
-]
-
-# Lane fan-out over caller-owned engines. It builds with any CPU provider the
-# default or an explicit `tenferro-*` feature selects; lane execution is tested
-# on faer only.
+# Lane fan-out over caller-owned engines.
 parallel = ["dep:hataori", "dep:hataori-tenferro"]
 
 [dependencies]

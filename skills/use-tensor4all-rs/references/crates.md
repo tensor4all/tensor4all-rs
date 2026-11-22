@@ -133,9 +133,8 @@ Quantics encoding (binary bits across sites) often yields far lower bond dims. P
 Every constructor returns a `LinearOperator` (from `tensor4all-treetn`). All use **big-endian** bits; `r` = bits per variable (`2^r` grid points).
 
 - Fourier constructors and `FTCore` build TreeTN operators directly. For a
-  Fourier-only build, disable defaults and select a CPU provider such as
-  `tenferro-cpu-platform`. TreeTN defaults leave `simplett-bridge` off; disable
-  defaults on direct compute dependencies when selecting another provider. Add `partitioned`
+  Fourier-only build, disable the transform crate's defaults. TreeTN defaults
+  leave `simplett-bridge` off. Add `partitioned`
   for patched Fourier. The default `simplett-transforms` feature provides the
   other transforms and SimpleTT conversions.
 - `flip_operator(r, BoundaryCondition)`, `shift_operator(r, offset, BoundaryCondition)`, `phase_rotation_operator(r, theta)`, `cumsum_operator(r)`, `quantics_fourier_operator(r, FourierOptions)`, `affine_operator(r, &AffineParams, &bc)`.

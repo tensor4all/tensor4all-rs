@@ -31,10 +31,11 @@ the pool again. The pool's workers are confined to the main thread's allowed
 CPU set snapshot on Linux; inline operations and scheduler lane threads are
 not moved.
 
-The default CPU backend is faer on Linux and Windows and Apple Accelerate on
-macOS. Accelerate schedules its own threads, outside the tensor4all pool, and
-takes its thread limit from `VECLIB_MAXIMUM_THREADS`, so single-thread runs on
-macOS also set `VECLIB_MAXIMUM_THREADS=1`.
+tenferro has one CPU backend, the faer-backed `tlinalg`/`cpueinsum`/`tcontract`
+stack, on every platform (tenferro-rs#2609 removed the vendor BLAS/LAPACK
+providers, Apple Accelerate included), so its threads are the tensor4all pool's.
+The vendor thread variables (`OPENBLAS_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS`,
+...) in the commands below are kept for runs that also start Julia.
 
 ### Cargo feature isolation
 
@@ -470,7 +471,7 @@ T4A_BENCH_GIT_COMMIT=$commit \
 python3 scripts/run-src-benchmark-gates.py \
   --candidate target/release/examples/benchmark_src \
   --candidate-commit "$commit" --suite quick --pairs 1 --reps 1 \
-  --expected-backend tenferro --expected-features tenferro-cpu-platform \
+  --expected-backend tenferro \
   --output /tmp/src-quick.json
 ```
 
@@ -487,11 +488,10 @@ thread counts are fixed to one. `T4A_BENCH_MAX_INPUT_BYTES` and
 `--max-rss-mib` and `--max-virtual-mib` separately control measured RSS and
 `RLIMIT_AS`.
 
-The required CPU lane uses the default CPU backend (faer on Linux). A paired
-comparison against a commit that predates `tenferro-cpu-platform` builds both
-binaries with `--no-default-features --features tenferro-cpu-faer` and passes
-`--expected-features tenferro-cpu-faer`, so both report the same feature set. Provider-injected
-and CUDA SRC are currently unsupported because the high-level SRC API does not
+The required CPU lane uses tenferro's CPU backend. `benchmark_src` reports the
+enabled backend features, which are empty except for `tenferro-cuda`; a binary
+built before tensor4all-rs#1428 reports `tenferro-cpu-platform`, so the runner
+rejects a pair that straddles that change. CUDA SRC is currently unsupported because the high-level SRC API does not
 own an execution context and constructs CPU probes. Do not infer SRC support
 from unrelated backend tests. On a CUDA host, verify the existing resident
 TreeTN contraction lane separately:
@@ -563,41 +563,23 @@ ACI elementwise TT chi scaling:
 RAYON_NUM_THREADS=1 cargo bench -p tensor4all-aci --bench elementwise_scaling -- --sample-size 10
 ```
 
-For Julia parity runs on macOS/Homebrew, build Rust against the same system
-OpenBLAS backend instead of the default backend (Accelerate on macOS):
+For Julia parity runs, pin both sides to one thread:
 
 ```bash
-OPENBLAS_ROOT=${OPENBLAS_ROOT:-$(brew --prefix openblas)}
-env \
-RUSTFLAGS="-L native=${OPENBLAS_ROOT}/lib -l dylib=openblas" \
-DYLD_LIBRARY_PATH="${OPENBLAS_ROOT}/lib:${DYLD_LIBRARY_PATH:-}" \
 RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
-cargo bench -p tensor4all-aci \
-  --no-default-features --features tenferro-system-blas \
-  --bench elementwise_scaling -- --sample-size 10
+cargo bench -p tensor4all-aci --bench elementwise_scaling -- --sample-size 10
 ```
 
-ACI local-step bucket timing with system OpenBLAS:
+ACI local-step bucket timing:
 
 ```bash
-OPENBLAS_ROOT=${OPENBLAS_ROOT:-$(brew --prefix openblas)}
-env \
-RUSTFLAGS="-L native=${OPENBLAS_ROOT}/lib -l dylib=openblas" \
-DYLD_LIBRARY_PATH="${OPENBLAS_ROOT}/lib:${DYLD_LIBRARY_PATH:-}" \
-RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
+RAYON_NUM_THREADS=1 \
 T4A_STEP_TIMING_REPEATS=50 T4A_STEP_TIMING_N_SITES=16 \
 T4A_STEP_TIMING_FIXED_SWEEPS=3 \
 T4A_STEP_TIMING_CHIS=16,32,64,128 \
 cargo test --release -p tensor4all-aci \
-  --no-default-features --features tenferro-system-blas \
   local_update_step_timing -- --ignored --nocapture
 ```
-
-When running Rust doctests with `tenferro-system-blas`, also set
-`RUSTDOCFLAGS="-L native=${OPENBLAS_ROOT}/lib"`. `RUSTFLAGS` is not enough for
-rustdoc's final link step.
 
 Optional long `chi = 32` case:
 
@@ -608,15 +590,9 @@ RAYON_NUM_THREADS=1 cargo bench -p tensor4all-aci --bench elementwise_scaling --
 MatrixLUCI Hilbert step timing:
 
 ```bash
-OPENBLAS_ROOT=${OPENBLAS_ROOT:-$(brew --prefix openblas)}
-env \
-RUSTFLAGS="-L native=${OPENBLAS_ROOT}/lib -l dylib=openblas" \
-DYLD_LIBRARY_PATH="${OPENBLAS_ROOT}/lib:${DYLD_LIBRARY_PATH:-}" \
-RAYON_NUM_THREADS=1 BLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
+RAYON_NUM_THREADS=1 \
 T4A_MATRIX_LUCI_REPEATS=20 T4A_MATRIX_LUCI_SIZES=16,32,64 \
 cargo test --release -p tensor4all-core \
-  --no-default-features --features tenferro-system-blas \
   matrix_luci_hilbert_timing -- --ignored --nocapture
 ```
 
@@ -629,9 +605,6 @@ OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
 T4A_MATRIX_LU_REPEATS=20 T4A_MATRIX_LU_SIZES=16,32,64,128 \
 cargo run --release -p tensor4all-benchmarks --example benchmark_matrix_lu
 ```
-
-MatrixLU itself does not call BLAS, so no system-BLAS feature is required for
-this standalone runner.
 
 Inspect Julia-dumped local linsolve inputs:
 
