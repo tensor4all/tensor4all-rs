@@ -22,6 +22,7 @@ use num_complex::Complex64;
 use tenferro::{DotGeneralConfig, Tensor};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
+use tenferro_tensor::{Conj, DotGeneralOptions};
 use tensor4all_core::{
     contract, contract_pair, print_and_reset_pairwise_contract_profile,
     reset_pairwise_contract_profile, AnyScalar, DynIndex, IdxTensor, SvdTruncationPolicy,
@@ -255,13 +256,22 @@ impl RawEagerInnerConfigs {
     }
 }
 
+/// tenferro's `dot_general` options for per-operand conjugation.
+fn conj_options(lhs: Conj, rhs: Conj) -> DotGeneralOptions {
+    DotGeneralOptions::default().lhs(lhs).rhs(rhs)
+}
+
 fn maybe_snapshot_output(
     tensor: &EagerTensor,
     engine: &mut CpuEngine,
     snapshot_outputs: bool,
 ) -> Result<()> {
     if snapshot_outputs {
-        black_box(tensor.duplicate_value(engine)?);
+        black_box(
+            tensor
+                .runtime()
+                .with_eager_session(engine, |session| session.duplicate_value(tensor))?,
+        );
     }
     Ok(())
 }
@@ -287,7 +297,12 @@ fn raw_eager_inner_t4a_shapes(
     let mut env = bra[0]
         .runtime()
         .with_eager_session(engine, |session| {
-            session.dot_general_with_conj(&bra[0], &ket[0], configs.first_site.clone(), true, false)
+            session.dot_general_with(
+                &bra[0],
+                &ket[0],
+                configs.first_site.clone(),
+                &conj_options(Conj::Yes, Conj::No),
+            )
         })
         .context("failed raw eager first-site contraction")?;
     maybe_snapshot_output(&env, engine, snapshot_outputs)?;
@@ -296,12 +311,11 @@ fn raw_eager_inner_t4a_shapes(
         env = env
             .runtime()
             .with_eager_session(engine, |session| {
-                session.dot_general_with_conj(
+                session.dot_general_with(
                     &env,
                     &bra[site],
                     configs.env_bra.clone(),
-                    false,
-                    true,
+                    &conj_options(Conj::No, Conj::Yes),
                 )
             })
             .with_context(|| format!("failed raw eager env-bra contraction at site {site}"))?;
@@ -310,12 +324,11 @@ fn raw_eager_inner_t4a_shapes(
         env = env
             .runtime()
             .with_eager_session(engine, |session| {
-                session.dot_general_with_conj(
+                session.dot_general_with(
                     &env,
                     &ket[site],
                     configs.tmp_ket.clone(),
-                    false,
-                    false,
+                    &conj_options(Conj::No, Conj::No),
                 )
             })
             .with_context(|| format!("failed raw eager tmp-ket contraction at site {site}"))?;

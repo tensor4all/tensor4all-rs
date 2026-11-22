@@ -50,6 +50,7 @@ tensor4all-treetn = { path = "../../crates/tensor4all-treetn" }
 tenferro.workspace = true
 tenferro-ad.workspace = true
 tenferro-cpu.workspace = true
+tenferro-tensor.workspace = true
 
 [[example]]
 name = "benchmark_randomized_factorization"

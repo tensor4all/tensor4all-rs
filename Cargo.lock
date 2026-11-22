@@ -2432,6 +2432,7 @@ dependencies = [
  "tenferro-ad",
  "tenferro-cpu",
  "tenferro-runtime",
+ "tenferro-tensor",
  "tensor4all-core",
  "tensor4all-hdf5",
  "tensor4all-itensorlike",
