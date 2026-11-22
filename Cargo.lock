@@ -786,7 +786,7 @@ dependencies = [
 [[package]]
 name = "hataori"
 version = "0.1.0"
-source = "git+https://github.com/tensor4all/hataori-rs.git?rev=434e306b6bf68888326530bbeb18b6f283a7fe1f#434e306b6bf68888326530bbeb18b6f283a7fe1f"
+source = "git+https://github.com/tensor4all/hataori-rs.git?rev=092eecdd949ca8a415085bb978d54b44cabaca67#092eecdd949ca8a415085bb978d54b44cabaca67"
 dependencies = [
  "bincode",
  "libc",
@@ -799,7 +799,7 @@ dependencies = [
 [[package]]
 name = "hataori-tenferro"
 version = "0.1.0"
-source = "git+https://github.com/tensor4all/hataori-rs.git?rev=434e306b6bf68888326530bbeb18b6f283a7fe1f#434e306b6bf68888326530bbeb18b6f283a7fe1f"
+source = "git+https://github.com/tensor4all/hataori-rs.git?rev=092eecdd949ca8a415085bb978d54b44cabaca67#092eecdd949ca8a415085bb978d54b44cabaca67"
 dependencies = [
  "hataori",
  "tenferro-cpu",

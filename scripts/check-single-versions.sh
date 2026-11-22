@@ -57,6 +57,13 @@ for lock in tests/feature-configurations/*/Cargo.lock; do
     report_missing "$lock" "$(comm -23 <(lock_entries "$lock") <(printf '%s\n' "$root_entries"))"
 done
 py_lock=crates/tensor4all-py/Cargo.lock
+# A missing lock must fail: `identity_entries` used to end in `|| true`, so an
+# unreadable file produced an empty comparison and the script reported success
+# while checking nothing.
+if [[ ! -f "$py_lock" ]]; then
+    echo "check-single-versions: $py_lock is missing; the nested identity check cannot run" >&2
+    exit 1
+fi
 report_missing "$py_lock" "$(comm -23 <(identity_entries "$py_lock") <(printf '%s\n' "$root_entries"))"
 if (( stale )); then
     echo "check-single-versions: a nested workspace lock has drifted from the root lock" >&2
