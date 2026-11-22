@@ -102,8 +102,10 @@ every platform, macOS included, runs the same kernels. The former
 `tenferro-cpu-platform`, `tenferro-cpu-faer`, `tenferro-system-blas` and
 `tenferro-provider-inject` features and the wiring-only
 `tensor4all-cpu-platform` crate are deleted, not aliased (tensor4all-rs#1428).
-`tensor4all-tensorbackend` and `tensor4all-core` enable tenferro's `autodiff`
-einsum and linalg surfaces unconditionally.
+`tensor4all-tensorbackend` enables tenferro's `autodiff` einsum and linalg
+surfaces unconditionally; `tensor4all-core`, which always depends on it, gets
+them through Cargo feature unification and declares no feature of its own for
+them.
 
 | feature | meaning |
 | --- | --- |
