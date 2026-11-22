@@ -6,15 +6,141 @@
 //! the process-global default CPU context only when that runtime has no live
 //! owner. This is the transitional implicit route, which coexists with the
 //! engine-explicit API and will be removed with it.
+//!
+//! [`with_eager_on`] is the engine-taking entry of stage A2 (#1393): it runs a
+//! caller-owned [`Runtime`] on the caller's `&mut` engine after validating the
+//! operands, with no context, lock or owner lookup.
 
 use std::sync::Arc;
 
-use tenferro::ExecutionEngine;
+use tenferro::{EngineTarget, ExecutionContextIdentity, ExecutionEngine};
 use tenferro_ad::{EagerRuntime, EagerSession};
-use tenferro_tensor::Engine;
-use tensor4all_tensorbackend::{with_runtime_engine, ExecutionContext};
+use tenferro_tensor::{Engine, MemoryKind, TensorRead};
+use tensor4all_tensorbackend::{with_runtime_engine, CpuEngine, ExecutionContext, Runtime};
 
-use crate::IdxTensorError;
+use crate::{IdxTensor, IdxTensorError};
+
+/// Run one eager session of `runtime` on the caller's engine, after validating
+/// the operands.
+///
+/// Validation runs before `f`, so before any RNG draw or kernel the operation
+/// performs, and in this order:
+///
+/// 1. every operand that carries an eager value belongs to `runtime`, else
+///    [`IdxTensorError::RuntimeMismatch`];
+/// 2. `runtime` supports `exec` ([`Runtime::check_engine`]), else
+///    [`IdxTensorError::Operation`] carrying the typed
+///    [`RuntimeError::UnsupportedEngine`](tensor4all_tensorbackend::RuntimeError::UnsupportedEngine);
+/// 3. `exec` can read every operand where it is placed, else
+///    [`IdxTensorError::PlacementMismatch`]. An operand with no eager value is
+///    host data, which only a CPU engine reads.
+///
+/// Nothing is transferred. Crate-private until stage B2 of #1376 gives the
+/// public operations their `exec` argument.
+// Stage A2: the first non-test callers arrive with stage B2 of #1376.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn with_eager_on<T, E>(
+    operation: &'static str,
+    runtime: &Runtime,
+    operands: &[&IdxTensor],
+    exec: &mut dyn ExecutionEngine,
+    f: impl FnOnce(&mut EagerSession<'_>) -> std::result::Result<T, E>,
+) -> std::result::Result<T, IdxTensorError>
+where
+    E: From<tenferro_ad::Error> + std::error::Error + Send + Sync + 'static,
+{
+    validate_operands(operation, runtime, operands, exec)?;
+    runtime.with_eager(exec, f).map_err(eager_error)
+}
+
+/// The entry validation of [`with_eager_on`], without running anything.
+fn validate_operands(
+    operation: &'static str,
+    runtime: &Runtime,
+    operands: &[&IdxTensor],
+    exec: &dyn ExecutionEngine,
+) -> std::result::Result<(), IdxTensorError> {
+    let expected = runtime.id();
+    for operand in operands {
+        if let Some(value) = operand.eager_value() {
+            let found = value.ctx_id();
+            if found != expected {
+                return Err(IdxTensorError::RuntimeMismatch {
+                    operation,
+                    expected,
+                    found,
+                });
+            }
+        }
+    }
+    let target = runtime
+        .check_engine(exec)
+        .map_err(|source| IdxTensorError::Operation {
+            operation,
+            source: Arc::new(source),
+        })?;
+    for operand in operands {
+        let readable = match operand.eager_value() {
+            Some(value) => engine_reads(&target, &value.tensor_read()),
+            None => is_cpu_engine(&target),
+        };
+        if !readable {
+            let placement = match operand.eager_value() {
+                Some(value) => {
+                    let read = value.tensor_read();
+                    format!(
+                        "{:?} (allocation domain {:?})",
+                        read.placement(),
+                        read.allocation_domain()
+                    )
+                }
+                None => "host memory (no eager value)".to_owned(),
+            };
+            return Err(IdxTensorError::PlacementMismatch {
+                operation,
+                placement,
+                engine_id: target.engine_id().as_str().to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn is_cpu_engine(target: &EngineTarget) -> bool {
+    target.context_identity() == ExecutionContextIdentity::of::<CpuEngine>()
+}
+
+/// Whether an engine with `target` reads `value` where it is placed.
+///
+/// This mirrors the input contracts the engines register with the pinned
+/// tenferro (`tenferro-cpu` `cpu_input_signature`, `tenferro-gpu`
+/// `cuda_input_signature`), so a value accepted here is not refused later by
+/// `prepare`:
+///
+/// - a CPU engine reads host memory with no backend family and no allocation
+///   domain, or host or managed memory a backend allocated in the engine's own
+///   domain;
+/// - any other engine reads only device memory a backend allocated in its own
+///   allocation domain. The domain identifies the engine's device, so the
+///   device ordinal needs no separate check.
+fn engine_reads(target: &EngineTarget, value: &TensorRead<'_>) -> bool {
+    let domain = value.allocation_domain();
+    let family = value.backend_family();
+    let in_own_domain = family.is_some()
+        && target.allocation_domain().is_some()
+        && domain == target.allocation_domain();
+    let memory_kind = &value.placement().memory_kind;
+    if !is_cpu_engine(target) {
+        return *memory_kind == MemoryKind::Device && in_own_domain;
+    }
+    match memory_kind {
+        MemoryKind::PinnedHost | MemoryKind::UnpinnedHost => {
+            (family.is_none() && domain.is_none()) || in_own_domain
+        }
+        MemoryKind::Managed => in_own_domain,
+        MemoryKind::Device | MemoryKind::Other(_) => false,
+    }
+}
 
 /// Run one eager session on the engine selected by `context`.
 ///

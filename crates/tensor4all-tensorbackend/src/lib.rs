@@ -46,6 +46,9 @@ mod matrix;
 /// Process-level memory pressure helpers.
 mod memory;
 #[cfg(feature = "explicit-context")]
+/// The engine-free shared runtime (`Runtime`) and its `&mut`-engine entries.
+mod runtime;
+#[cfg(feature = "explicit-context")]
 /// Tensor snapshot storage types and low-level dense/diagonal kernels.
 mod storage;
 #[cfg(feature = "explicit-context")]
@@ -106,6 +109,8 @@ pub use matrix::{
 };
 #[cfg(feature = "explicit-context")]
 pub use memory::{release_process_allocator_cached_memory, AllocatorPressureRelief};
+#[cfg(feature = "explicit-context")]
+pub use runtime::{Runtime, RuntimeError};
 #[cfg(feature = "global-defaults")]
 pub use storage::contract_storage;
 #[cfg(feature = "explicit-context")]
@@ -113,6 +118,9 @@ pub use storage::{
     make_mut_storage, min_dim, scale_target_dtype, NonfiniteFlags, Storage, StorageError,
     StorageKind, StorageResult, StorageScalar, StructuredStorage, SumFromStorage,
 };
+/// The engine trait every computing entry takes as `exec: &mut dyn ExecutionEngine`.
+#[cfg(feature = "explicit-context")]
+pub use tenferro::ExecutionEngine;
 #[cfg(feature = "global-defaults")]
 pub use tenferro_bridge::{
     axpby_native_tensor, axpby_storage_native, contract_native_tensor, contract_storage_native,
@@ -133,6 +141,9 @@ pub use tenferro_bridge::{
     storage_payload_native_read_input, storage_to_native_tensor, tangent_native_tensor,
     BridgeError, NativeEinsumPlan, NativeTensorReadInput,
 };
+/// The CUDA engine a caller opens and passes as `exec`, and its device id.
+#[cfg(feature = "tenferro-cuda")]
+pub use tenferro_gpu::cuda::{CudaDeviceId, CudaEngine};
 #[cfg(feature = "explicit-context")]
 pub use tensor_element::TensorElement;
 
