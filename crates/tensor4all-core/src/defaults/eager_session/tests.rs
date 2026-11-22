@@ -29,7 +29,7 @@ mod shared_runtime {
     use rand_chacha::ChaCha8Rng;
     use tenferro::ExecutionEngine;
     use tenferro_ad::EagerTensor;
-    use tenferro_einsum::{EagerSessionEinsumExt, EinsumSubscripts};
+    use tenferro_einsum::{EagerEinsumOps, EinsumSubscripts};
     use tensor4all_tensorbackend::{CpuBackend, CpuEngine, Runtime, RuntimeError};
 
     use super::super::with_eager_on;
@@ -76,7 +76,7 @@ mod shared_runtime {
     fn contract_on(rt: &Runtime, exec: &mut CpuEngine, a: &IdxTensor, b: &IdxTensor) -> Vec<u64> {
         let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
         let product = with_eager_on("contract", rt, &[a, b], exec, |session| {
-            session.einsum_subscripts(&[eager(a), eager(b)], &subscripts)
+            session.einsum(&[eager(a), eager(b)], &subscripts)
         })
         .unwrap();
         assert_eq!(product.ctx_id(), rt.id(), "the result joins the runtime");

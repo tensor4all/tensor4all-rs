@@ -320,13 +320,8 @@ fn main() -> Result<()> {
             return Err(format!("set {key}=1").into());
         }
     }
-    // This package forwards no backend feature, so it always builds the
-    // platform default of the tensor4all crates (`tensor4all-cpu-platform`).
-    const CPU_BACKEND: &str = if cfg!(target_os = "macos") {
-        "tenferro-blas-accelerate"
-    } else {
-        "tenferro-cpu-faer"
-    };
+    // tenferro has one CPU backend on every platform (tenferro-rs#2609).
+    const CPU_BACKEND: &str = "tenferro-cpu";
     let mut result = match args[3].as_str() {
         "f64" => run::<f64>(degree, profile, d, &args[4], batch, repeats)?,
         "c64" => run::<Complex64>(degree, profile, d, &args[4], batch, repeats)?,

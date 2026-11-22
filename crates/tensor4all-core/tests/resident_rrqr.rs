@@ -18,11 +18,13 @@ fn resident_probe_factorization_uses_upstream_rrqr_and_rank_only_readback() {
         .map(|offset| start + offset)
         .expect("next resident SRC function");
     let section = &source[start..end];
-    assert!(section.contains(".rank_revealing_qr("));
+    // tenferro 0.12 spells an explicit-options call `_with` (#2552).
+    assert!(section.contains(".rank_revealing_qr_with("));
     assert!(!section.contains(".qr()"));
     assert_eq!(section.matches("read_resident_rank(").count(), 1);
     assert!(!section.contains("read_decision_data("));
     assert!(!section.contains("column_permutation.to_tensor"));
+    assert!(!section.contains("duplicate_value(&column_permutation"));
 }
 
 fn explicit_cpu_context() -> ExecutionContext {

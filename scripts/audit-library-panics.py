@@ -11,11 +11,11 @@ combined with ``--config-name``, because a configuration audits a subset.
 
 Pass ``--config-name`` together with ``--package``/``-p``,
 ``--no-default-features``, and ``--features`` to audit one explicit feature
-configuration instead. The workspace's CPU backend features are mutually
-exclusive, so there is no single buildable ``--all-features`` selection; a
-configuration names the packages and Cargo feature selection worth auditing
-(for example ``--config-name system-blas -p tensor4all-core ...
---no-default-features --features tenferro-system-blas``). Because a
+configuration instead. hataori's two MPI backends are mutually exclusive, so
+there is no single buildable ``--all-features`` selection; a configuration
+names the packages and Cargo feature selection worth auditing (for example
+``--config-name opt-in-features -p tensor4all-core ... --no-default-features
+--features tensor4all-treersi/global-defaults``). Because a
 configuration selects a subset of the workspace, unmatched baseline entries are
 not reported as stale; newly uncovered findings and assertions whose reviewed
 text changed still fail the pass. The

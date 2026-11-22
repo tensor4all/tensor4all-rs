@@ -24,7 +24,7 @@ name = "explicit_only"
 path = "tests/explicit_only.rs"
 
 [dev-dependencies]
-# Default features only: the platform CPU provider, no `global-defaults`.
+# Default features only: no `global-defaults`.
 tensor4all-core = { path = "../../../crates/tensor4all-core" }
 tensor4all-itensorlike = { path = "../../../crates/tensor4all-itensorlike" }
 tensor4all-tensorbackend = { path = "../../../crates/tensor4all-tensorbackend" }

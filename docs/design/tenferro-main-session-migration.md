@@ -73,7 +73,7 @@ No new dependency is required for this phase.
 ### Core concrete operations
 
 Tenferro's final concrete surface is receiver-first through
-`TensorSessionOpsExt` and accepts `&mut dyn BackendSession`.
+`CoreOps` and accepts `&mut dyn BackendSession`.
 
 Before the migration, tensor4all may call a method on the session/backend:
 
@@ -98,7 +98,7 @@ existing compiled einsum runtime rather than reaching through to the low-level
 ### Linear algebra
 
 The removed backend-taking one-shot linalg surface must be replaced with
-`TensorLinalgExt` on the input tensor:
+`LinalgOps` on the input tensor:
 
 ```rust
 backend.with_backend_session(|session| tensor.svd(session))

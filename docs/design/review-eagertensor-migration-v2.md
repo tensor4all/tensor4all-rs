@@ -162,8 +162,8 @@ This is especially relevant for FFI-facing tensor handles.
 | `TypedTensor::qr(&self, ctx: &mut CpuBackend)` | OK |
 | `CpuContext::with_threads(n)` | OK |
 | `EagerContext::with_backend()` -> `Arc<Self>` | OK |
-| `EagerTensor::from_tensor_in(tensor, Arc<EagerContext<B>>)` | OK |
-| `EagerTensor::requires_grad_in(tensor, ctx)` | OK |
+| `(Arc<EagerContext<B>>).constant_from(tensor)` | OK |
+| `ctx.variable_from(tensor)` | OK |
 | `EagerTensor::tracks_grad()` | OK |
 | `EagerTensor::clear_grad()` | OK |
 | `EagerContext::clear_grads()` | OK |

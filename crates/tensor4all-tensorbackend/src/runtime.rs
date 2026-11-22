@@ -113,17 +113,15 @@ impl RuntimeError {
 /// Two engines with different thread counts share one runtime:
 ///
 /// ```
-/// use tenferro_ad::EagerTensor;
 /// use tensor4all_tensorbackend::{CpuBackend, CpuEngine, Runtime};
 ///
 /// let rt = Runtime::new()?;
 /// let mut serial = CpuEngine::serial();
 /// let mut pooled = CpuBackend::with_threads(2)?.into_engine();
 ///
-/// let x = EagerTensor::from_tensor_in(
-///     tenferro::Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?,
-///     rt.eager_runtime().clone(),
-/// )?;
+/// let x = rt
+///     .eager_runtime()
+///     .constant_from(tenferro::Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
 /// // Computed on the serial engine ...
 /// let y = rt.with_eager(&mut serial, |session| session.add(&x, &x))?;
 /// // ... and consumed on the pooled one.
@@ -298,21 +296,19 @@ impl Runtime {
 
     /// Borrow the eager runtime that values of this runtime carry.
     ///
-    /// Pass it to a value constructor (for example
-    /// [`EagerTensor::from_tensor_in`](tenferro_ad::EagerTensor::from_tensor_in))
+    /// Call a value constructor on it (for example
+    /// [`EagerRuntime::constant_from`](tenferro_ad::EagerRuntime::constant_from))
     /// to create a value in this runtime.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_ad::EagerTensor;
     /// use tensor4all_tensorbackend::Runtime;
     ///
     /// let rt = Runtime::new()?;
-    /// let x = EagerTensor::from_tensor_in(
-    ///     tenferro::Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?,
-    ///     rt.eager_runtime().clone(),
-    /// )?;
+    /// let x = rt
+    ///     .eager_runtime()
+    ///     .constant_from(tenferro::Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?)?;
     /// assert_eq!(x.ctx_id(), rt.id());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -377,14 +373,12 @@ impl Runtime {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_ad::EagerTensor;
     /// use tensor4all_tensorbackend::{CpuEngine, Runtime};
     ///
     /// let rt = Runtime::new()?;
-    /// let x = EagerTensor::from_tensor_in(
-    ///     tenferro::Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0])?,
-    ///     rt.eager_runtime().clone(),
-    /// )?;
+    /// let x = rt
+    ///     .eager_runtime()
+    ///     .constant_from(tenferro::Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0])?)?;
     /// let y = rt.with_eager(&mut CpuEngine::serial(), |session| session.neg(&x))?;
     /// assert_eq!(y.value()?.as_slice::<f64>()?, &[-1.0, 2.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())

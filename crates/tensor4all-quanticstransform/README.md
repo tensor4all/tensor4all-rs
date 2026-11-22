@@ -14,17 +14,16 @@ Quantics transformation operators for tensor train methods. Port of Quantics.jl.
 ## Cargo features
 
 Fourier operators, including `FTCore` and the multi-axis constructor, use
-TreeTN directly. For a Fourier-only build, disable default features and
-select a CPU provider such as `tenferro-cpu-platform`. Add `partitioned`
-for patched Fourier.
+TreeTN directly. For a Fourier-only build, disable default features. Add
+`partitioned` for patched Fourier.
 
 ```toml
 [dependencies]
-tensor4all-quanticstransform = { path = "../tensor4all-rs/crates/tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-platform", "partitioned"] }
+tensor4all-quanticstransform = { path = "../tensor4all-rs/crates/tensor4all-quanticstransform", default-features = false, features = ["partitioned"] }
 ```
 
-If you also import `tensor4all-treetn` directly, disable its defaults and
-select the same provider to keep its SimpleTT bridge disabled. The
+`tensor4all-treetn` has no default features, so importing it directly keeps
+its SimpleTT bridge disabled. The
 `simplett-transforms` feature is enabled by default and provides the
 non-Fourier transforms and SimpleTT conversion APIs.
 

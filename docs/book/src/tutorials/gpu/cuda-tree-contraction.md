@@ -7,7 +7,7 @@ This experimental path contracts a small dense `TreeTN<IdxTensor>` on one NVIDIA
 - A stable Rust toolchain; see [Getting Started](../../getting-started.md).
 - An NVIDIA GPU and CUDA driver/toolkit compatible with the CUDA versions used by the pinned tenferro GPU stack: `tenferro-gpu` drives `t4a-cuda-kernels` and `t4a-cuda-runtime` (cuBLAS / cuTENSOR). No wider version or compute-capability support matrix is currently promised.
 - The intended device must be visible as CUDA ordinal 0.
-- Build with the non-default `tenferro-cuda` feature. The commands also name the `tenferro-cpu-faer` feature explicitly because the quickstart computes a CPU reference alongside the CUDA contraction.
+- Build with the non-default `tenferro-cuda` feature. The quickstart also computes a CPU reference alongside the CUDA contraction, on tenferro's one CPU backend.
 
 Clone tensor4all-rs and run the checked quickstart:
 
@@ -15,7 +15,7 @@ Clone tensor4all-rs and run the checked quickstart:
 git clone https://github.com/tensor4all/tensor4all-rs.git
 cd tensor4all-rs
 cargo run --release -p tensor4all-treetn --example cuda_quickstart \
-  --features tenferro-cuda,tenferro-cpu-faer
+  --features tenferro-cuda
 ```
 
 The complete checked source is embedded below. It is rendered as text rather than an mdBook-tested Rust block because executing it requires CUDA hardware; the feature-gated example itself is compile-checked and run on CUDA.
@@ -49,7 +49,7 @@ figure would hide that this route is dominated by fixed costs rather than by the
 
 ```bash
 cargo run --release -p tensor4all-treetn --example cuda_tree_contraction \
-  --features tenferro-cuda,tenferro-cpu-faer -- --chain-length 6 --bond-dim 4 --iterations 10
+  --features tenferro-cuda -- --chain-length 6 --bond-dim 4 --iterations 10
 ```
 
 | phase (one run, cold: the first figure of each shape carries first-use initialisation) | time |
@@ -69,7 +69,7 @@ Two things follow, and both are the point of separating the phases:
 
   ```bash
   cargo run --release -p tensor4all-treetn --example cuda_component_upload \
-    --features tenferro-cuda,tenferro-cpu-faer -- --chain-length 6 --bond-dim 4
+    --features tenferro-cuda -- --chain-length 6 --bond-dim 4
   ```
 
   On the same machine it reports, for a six-node chain: the first per-node upload `427.42 ms` (that call carries
@@ -140,8 +140,8 @@ quickstart's CPU reference uses the context-free API, so `tensor4all-core` also 
 
 ```toml
 [dependencies]
-tensor4all-core = { git = "https://github.com/tensor4all/tensor4all-rs", features = ["tenferro-cuda", "tenferro-cpu-faer", "global-defaults"] }
-tensor4all-treetn = { git = "https://github.com/tensor4all/tensor4all-rs", features = ["tenferro-cuda", "tenferro-cpu-faer"] }
+tensor4all-core = { git = "https://github.com/tensor4all/tensor4all-rs", features = ["tenferro-cuda", "global-defaults"] }
+tensor4all-treetn = { git = "https://github.com/tensor4all/tensor4all-rs", features = ["tenferro-cuda"] }
 ```
 
 Create a binary project, put the dependency entries above under `[dependencies]` in `Cargo.toml`, and copy the embedded program to `src/main.rs`:
@@ -174,5 +174,5 @@ For timing, use the separate `cuda_tree_contraction` example, which reports cont
 
 ```bash
 cargo run --release -p tensor4all-treetn --example cuda_tree_contraction \
-  --features tenferro-cuda,tenferro-cpu-faer
+  --features tenferro-cuda
 ```

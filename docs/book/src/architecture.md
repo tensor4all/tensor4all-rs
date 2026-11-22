@@ -102,7 +102,7 @@ what keeps the public API stable while the kernels underneath are replaced.
 | Algorithms | this repository; [`quanticsgrids-rs`](https://github.com/tensor4all/quanticsgrids-rs); [`hataori-rs`](https://github.com/tensor4all/hataori-rs) | `quanticsgrids` through `tensor4all-quanticstci`, `tensor4all-quanticstransform`, `tensor4all-treetci` and `tensor4all-interpolativeqtt`; `hataori` / `hataori-tenferro` through `tensor4all-partitionedtreetn` and the optional `parallel` feature of `tensor4all-interpolativeqtt` |
 | Tensor runtime | [`tenferro-rs`](https://github.com/tensor4all/tenferro-rs) (caller-owned engines); [`computegraph-rs`](https://github.com/tensor4all/computegraph-rs) | `tensor4all-tensorbackend` |
 | Kernel providers | [`cpueinsum-rs`](https://github.com/tensor4all/cpueinsum-rs), [`tcontract-rs`](https://github.com/tensor4all/tcontract-rs), [`tlinalg-rs`](https://github.com/tensor4all/tlinalg-rs) | none: reached inside tenferro-rs |
-| Foundation | [`strided-rs`](https://github.com/tensor4all/strided-rs), `t4a-faer` ([`faer` fork](https://github.com/tensor4all/faer)), BLAS/LAPACK | none: reached inside the kernel providers and t4a-faer |
+| Foundation | [`strided-rs`](https://github.com/tensor4all/strided-rs), `colmat` ([`faer` fork](https://github.com/tensor4all/faer), formerly `t4a-faer`) | none: reached inside the kernel providers and colmat |
 
 The GPU path is the same picture one layer lower: `tenferro-gpu` pulls
 `t4a-cuda-kernels` and `t4a-cuda-runtime`, which call cuBLAS and cuTENSOR. No
@@ -116,13 +116,12 @@ caller-owned `CpuEngine` that `CpuBackend` in `tensor4all-tensorbackend` wraps.
 Two rules follow:
 
 - **No workspace crate depends directly on a kernel-provider or foundation
-  crate.** `cpueinsum`, `tcontract`, `tlinalg`, `t4a-faer`, `gemm`,
+  crate.** `cpueinsum`, `tcontract`, `tlinalg`, `colmat`, `gemm`,
   `t4a-private-gemm-x86` and the `strided-*` crates appear in `Cargo.lock` only
   as dependencies of tenferro and of each other.
 - **Tensor operations enter the runtime through `tensor4all-tensorbackend`.** It
-  owns the engine objects and the backend feature switches
-  (`tenferro-cpu-platform`, `tenferro-cpu-faer`, `tenferro-system-blas`,
-  `tenferro-cuda`, `tenferro-provider-inject`). A crate that only needs
+  owns the engine objects and the `tenferro-cuda` feature switch; the CPU
+  backend has no switch (tenferro-rs#2609 left one faer-backed stack). A crate that only needs
   tenferro's value types may name `tenferro-tensor` or `tenferro-cpu`, but a new
   *operation* belongs in `tensor4all-tensorbackend`, not in the algorithm crate
   that calls it.

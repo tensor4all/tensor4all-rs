@@ -22,7 +22,6 @@ import sys
 CORE = "tensor4all-core"
 BACKEND = "tensor4all-tensorbackend"
 CUDA = "tenferro-cuda"
-PROVIDER = "tenferro-cpu-faer"
 
 
 def fail(message: str) -> None:
@@ -63,8 +62,6 @@ def main() -> None:
     core_features = resolved.get(core["id"], set())
     backend_features = resolved.get(backend["id"], set())
 
-    if PROVIDER not in core_features:
-        fail(f"{CORE} is missing the {PROVIDER} feature: {sorted(core_features)}")
     if CUDA in core_features:
         fail(f"{CORE} has {CUDA} enabled, so the mixed configuration is not tested")
     if "default" in core_features:

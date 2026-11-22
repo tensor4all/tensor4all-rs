@@ -20,9 +20,7 @@ path = "tests/rejection.rs"
 
 [dev-dependencies]
 # core without CUDA, backend with CUDA: the mixed configuration of #869.
-tensor4all-core = { path = "../../../crates/tensor4all-core", default-features = false, features = [
-    "tenferro-cpu-faer",
-] }
+tensor4all-core = { path = "../../../crates/tensor4all-core", default-features = false }
 tensor4all-tensorbackend = { path = "../../../crates/tensor4all-tensorbackend", default-features = false, features = [
     "tenferro-cuda",
 ] }

@@ -9,7 +9,6 @@ repository.workspace = true
 autotests = false
 
 [features]
-default = ["tenferro-cpu-platform"]
 # Opt-in context-free `hadamard_many` on the process-global route.
 global-defaults = ["tensor4all-core/global-defaults"]
 # CUDA execution of the sketch contractions. The rank decision stays on the
@@ -19,24 +18,6 @@ tenferro-cuda = [
     "tensor4all-core/tenferro-cuda",
     "tensor4all-treetn/tenferro-cuda",
     "tensor4all-tensorbackend/tenferro-cuda",
-]
-# The platform default: Apple Accelerate on macOS, faer elsewhere
-# (see the `tensor4all-cpu-platform` crate).
-tenferro-cpu-platform = [
-    "tensor4all-treetn/tenferro-cpu-platform",
-    "tensor4all-tensorbackend/tenferro-cpu-platform",
-]
-tenferro-cpu-faer = [
-    "tensor4all-treetn/tenferro-cpu-faer",
-    "tensor4all-tensorbackend/tenferro-cpu-faer",
-]
-tenferro-system-blas = [
-    "tensor4all-treetn/tenferro-system-blas",
-    "tensor4all-tensorbackend/tenferro-system-blas",
-]
-tenferro-provider-inject = [
-    "tensor4all-treetn/tenferro-provider-inject",
-    "tensor4all-tensorbackend/tenferro-provider-inject",
 ]
 
 [dependencies]

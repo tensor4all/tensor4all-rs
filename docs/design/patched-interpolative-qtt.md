@@ -102,14 +102,10 @@ compare prefixes, error estimates and core values exactly across P/B layouts.
 Floating-point backend arithmetic remains subject to roundoff, especially for
 acceptance thresholds at machine precision.
 
-`parallel` enables only the lane executor (`hataori`, `hataori-tenferro`), both
-provider-neutral, so it builds with the platform default and every explicit
-provider feature. Lane execution is validated on native/faer only: there each
-lane's algebra stays within its B threads, and the nightly lane tests assert
-bit-identical results across layouts. With a BLAS provider such as Accelerate or
-system BLAS, each of the P lanes calls a library with its own threading, which
-can oversubscribe the cores and relies on the library's thread safety and
-determinism; CI only checks that combination compiles. MPI and automatic lane
+`parallel` enables only the lane executor (`hataori`, `hataori-tenferro`).
+tenferro has one faer-backed CPU stack (tenferro-rs#2609), so each lane's
+algebra stays within its B threads, and the nightly lane tests assert
+bit-identical results across layouts. MPI and automatic lane
 sizing remain outside this API.
 
 ## Downstream projector embedding

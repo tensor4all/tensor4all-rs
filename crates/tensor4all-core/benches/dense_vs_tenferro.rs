@@ -2,7 +2,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use tenferro_linalg::TensorLinalgExt;
+use tenferro_linalg::LinalgOps;
 use tenferro_tensor::Tensor;
 use tensor4all_core::{matrix_luci_factors_from_matrix, RrLUOptions};
 use tensor4all_tensorbackend::{with_default_backend, Matrix};

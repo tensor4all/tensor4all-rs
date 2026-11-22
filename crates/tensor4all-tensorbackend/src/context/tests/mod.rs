@@ -4,9 +4,8 @@ use std::time::Duration;
 
 use super::*;
 use tenferro::program::{CoreSemanticOp, ProgramInputSpec};
-use tenferro::{DType, TensorSessionOpsExt, TraceContext};
-use tenferro_ad::EagerTensor;
-use tenferro_einsum::{EagerSessionEinsumExt, EinsumSubscripts};
+use tenferro::{CoreOps, DType, TraceContext};
+use tenferro_einsum::{EagerEinsumOps, EinsumSubscripts};
 
 fn context() -> CpuExecutionContext {
     CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap())
@@ -169,16 +168,12 @@ fn explicit_plain_graph_and_eager_paths_share_only_the_supplied_backend() {
 fn separate_eager_contexts_reject_cross_context_operations() {
     let first = context().eager_runtime().unwrap();
     let second = context().eager_runtime().unwrap();
-    let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
-        first.clone(),
-    )
-    .unwrap();
-    let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
-        second,
-    )
-    .unwrap();
+    let a = first
+        .constant_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap())
+        .unwrap();
+    let b = second
+        .constant_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap())
+        .unwrap();
     let mut engine = CpuEngine::serial();
     let error = first
         .with_eager_session(&mut engine, |session| session.add(&a, &b))
@@ -434,21 +429,19 @@ fn a_custom_runtime_engine_id_runs_graphs_and_eager_operations() {
     // The eager route installs its einsum/linalg extension modules under the
     // same id, so an extension operation also finds this engine.
     let runtime = context.eager_runtime().expect("custom-id eager runtime");
-    let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
-        Arc::clone(&runtime),
-    )
-    .unwrap();
-    let rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0]).unwrap(),
-        Arc::clone(&runtime),
-    )
-    .unwrap();
+    let lhs = runtime
+        .constant_from(
+            Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
+        )
+        .unwrap();
+    let rhs = runtime
+        .constant_from(Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0]).unwrap())
+        .unwrap();
     let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
     let mut engine = CpuEngine::serial().with_runtime_engine_id(custom);
     let product = runtime
         .with_eager_session(&mut engine, |session| {
-            session.einsum_subscripts(&[&lhs, &rhs], &subscripts)
+            session.einsum(&[&lhs, &rhs], &subscripts)
         })
         .expect("the custom-id engine finds its einsum extension");
     assert_eq!(

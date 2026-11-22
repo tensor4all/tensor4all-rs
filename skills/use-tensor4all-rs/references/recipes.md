@@ -381,8 +381,7 @@ use tensor4all_hdf5::{load_mps, save_mps};
 
 For a Fourier transform of existing `PartitionedTreeTN` patches, enable the
 `partitioned` feature on `tensor4all-quanticstransform`. In a Fourier-only
-project disable defaults and select `tenferro-cpu-platform` or another CPU
-provider on the transform crate and any directly imported TreeTN crates.
+project disable the transform crate's defaults.
 Call `patched_fourier_transform` with one MSB-first index vector per axis.
 Selected indices must lie on one tree path. Spectators retain their identities.
 Every input patch must fix a contiguous MSB prefix of each axis. Different spectator

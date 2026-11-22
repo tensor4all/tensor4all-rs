@@ -1,10 +1,10 @@
 name: Feature matrix
 
 # Builds and audits the declared non-default Cargo feature configurations
-# (issue #915 D6). The CPU backend features are mutually exclusive
-# (tenferro-rs #2004), so `--all-features` is not a buildable target and PR CI
-# only builds each crate's default features (faer on Linux, Apple Accelerate in
-# the macOS job) plus the explicit-context Lint step.
+# (issue #915 D6). tenferro has one CPU backend since tenferro-rs#2609, so there
+# is no backend feature to select; `--all-features` is still not a buildable
+# target because hataori's two MPI backends are mutually exclusive. PR CI builds
+# each crate's default features plus the explicit-context Lint step.
 #
 # This workflow owns the rest, nightly, one job per configuration. Each matrix
 # entry lists its own packages explicitly: `--workspace --no-default-features`
@@ -41,23 +41,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # System BLAS: the alternate CPU backend. HDF5 needs `link` named
-          # explicitly once default features are off.
-          - name: system-blas
-            apt: libopenblas-dev libhdf5-dev
-            audit: true
-            check: |
-              -p tensor4all-core -p tensor4all-tensorbackend -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-capi --no-default-features --features tenferro-system-blas,tensor4all-quanticstransform/partitioned,tensor4all-quanticstransform/simplett-transforms,tensor4all-treetn/simplett-bridge,tensor4all-treersi/global-defaults
-              -p tensor4all-hdf5 --no-default-features --features link,tenferro-system-blas
-          # Provider injection: the caller supplies the execution provider.
-          # Check-only is enough: compiling tests does not run them, so no
-          # provider has to be registered.
-          - name: provider-inject
+          # The opt-in library features together, with every default off. HDF5
+          # needs `link` named explicitly once default features are off.
+          - name: opt-in-features
             apt: libhdf5-dev
             audit: true
             check: |
-              -p tensor4all-core -p tensor4all-tensorbackend -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-capi --no-default-features --features tenferro-provider-inject,tensor4all-quanticstransform/partitioned,tensor4all-quanticstransform/simplett-transforms,tensor4all-treetn/simplett-bridge,tensor4all-treersi/global-defaults
-              -p tensor4all-hdf5 --no-default-features --features link,tenferro-provider-inject
+              -p tensor4all-core -p tensor4all-tensorbackend -p tensor4all-simplett -p tensor4all-aci -p tensor4all-treetn -p tensor4all-treeaci -p tensor4all-treersi -p tensor4all-treetci -p tensor4all-tensorci -p tensor4all-interpolativeqtt -p tensor4all-quanticstci -p tensor4all-quanticstransform -p tensor4all-itensorlike -p tensor4all-partitionedtreetn -p tensor4all-capi --no-default-features --features tensor4all-quanticstransform/partitioned,tensor4all-quanticstransform/simplett-transforms,tensor4all-treetn/simplett-bridge,tensor4all-treersi/global-defaults
+              -p tensor4all-hdf5 --no-default-features --features link
           - name: fourier-without-simplett
             apt: ""
             audit: false
@@ -69,14 +60,12 @@ jobs:
             audit: true
             check: >
               -p tensor4all-partitionedtreetn --features hataori-mpi
-          # Lane fan-out is provider-neutral: it must compose with the platform
-          # default and with an explicit BLAS provider.
+          # Lane fan-out over caller-owned engines.
           - name: interpolativeqtt-parallel
-            apt: libopenblas-dev
+            apt: ""
             audit: true
-            check: |
+            check: >
               -p tensor4all-interpolativeqtt --features parallel
-              -p tensor4all-interpolativeqtt --no-default-features --features parallel,tenferro-system-blas
           # Diagnostics instrumentation stays additive to the default features.
           - name: diagnostics
             apt: ""
@@ -89,7 +78,7 @@ jobs:
             audit: true
             check: >
               -p tensor4all-hdf5 --no-default-features
-              --features runtime-loading,tenferro-cpu-faer
+              --features runtime-loading
           # CUDA: compile-only (tenferro loads CUDA dynamically, so no GPU or
           # toolkit is needed to check). CUDA *execution* is verified locally
           # on a GPU only.
@@ -129,8 +118,8 @@ jobs:
 
       - name: Test interpolative QTT lanes
         if: matrix.name == 'interpolativeqtt-parallel'
-        # Bit-identical lane layouts are asserted on the default provider (faer
-        # on Linux), whose kernels stay within each lane's thread budget.
+        # Bit-identical lane layouts are asserted on tenferro's CPU backend,
+        # whose kernels stay within each lane's thread budget.
         run: cargo test --locked -p tensor4all-interpolativeqtt --features parallel
 
       - name: Run Fourier regression suites without SimpleTT
@@ -141,7 +130,7 @@ jobs:
         if: matrix.name == 'fourier-without-simplett'
         # Unit tests, doctests and the integration tests whose required
         # features are met compile with the `simplett-transforms` cfg off.
-        run: cargo test --locked -p tensor4all-quanticstransform --no-default-features --features tenferro-cpu-platform,partitioned
+        run: cargo test --locked -p tensor4all-quanticstransform --no-default-features --features partitioned
 
       - name: Audit panic paths for the configuration
         # A configuration selects a subset of the workspace, so the audit keeps
@@ -183,7 +172,7 @@ jobs:
           printf -v body '%s\n\n%s\n\n%s\n' \
             "The scheduled feature-configuration matrix failed in [run ${GITHUB_RUN_ID}](${run_url}) on \`${GITHUB_SHA:0:8}\`." \
             "See CONTRIBUTING.md, \"Supported feature configurations\", for the failing row's local verification commands." \
-            "This matrix owns the non-default feature configurations that PR CI cannot build: CPU backends are mutually exclusive, so there is no \`--all-features\` pass."
+            "This matrix owns the non-default feature configurations that PR CI cannot build: hataori's MPI backends are mutually exclusive, so there is no \`--all-features\` pass."
           number=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$label" --state open \
             --search "in:title \"$title\"" --limit 1 --json number --jq '.[0].number // empty')
           if [ -n "$number" ]; then

@@ -5,8 +5,8 @@
 
 use anyhow::{anyhow, Result};
 use num_complex::{Complex32, Complex64, ComplexFloat};
-use tenferro::{DType, Tensor, TensorScalar, TensorSessionOpsExt, TypedTensor};
-use tenferro_linalg::TensorLinalgExt;
+use tenferro::{CoreOps, DType, Tensor, TensorScalar, TypedTensor};
+use tenferro_linalg::{FullPivLu, LinalgOps, Qr, Svd};
 
 #[cfg(feature = "global-defaults")]
 use crate::context::with_default_session;
@@ -923,8 +923,6 @@ where
     T: BackendLinalgScalar + Copy,
     Tensor: From<TypedTensor<T>>,
 {
-    use tenferro_linalg::TensorLinalgExt;
-
     let a_tensor: Tensor = a.into_typed_tensor().into();
     let b_tensor: Tensor = b.into_typed_tensor().into();
     let result = a_tensor
@@ -1038,6 +1036,30 @@ where
     .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?
 }
 
+/// The tenferro options for this crate's `(left_side, lower, transpose_a, unit_diagonal)`
+/// flags. `transpose_a` is a plain transpose, never an adjoint.
+pub(crate) fn triangular_solve_options(
+    left_side: bool,
+    lower: bool,
+    transpose_a: bool,
+    unit_diagonal: bool,
+) -> tenferro_linalg::TriangularSolveOptions {
+    use tenferro_linalg::{Diag, MatOp, Side, TriangularSolveOptions, Uplo};
+    TriangularSolveOptions::default()
+        .side(if left_side { Side::Left } else { Side::Right })
+        .uplo(if lower { Uplo::Lower } else { Uplo::Upper })
+        .op(if transpose_a {
+            MatOp::Transpose
+        } else {
+            MatOp::None
+        })
+        .diag(if unit_diagonal {
+            Diag::Unit
+        } else {
+            Diag::NonUnit
+        })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn triangular_solve_matrix_direct_owned_in<T>(
     session: &mut dyn tenferro_tensor::Engine,
@@ -1052,17 +1074,12 @@ where
     T: BackendLinalgScalar + Copy,
     Tensor: From<TypedTensor<T>>,
 {
-    use tenferro_linalg::TensorLinalgExt;
-
     let a_tensor: Tensor = a.into_typed_tensor().into();
     let b_tensor: Tensor = b.into_typed_tensor().into();
     let result = a_tensor
-        .triangular_solve(
+        .triangular_solve_with(
             &b_tensor,
-            left_side,
-            lower,
-            transpose_a,
-            unit_diagonal,
+            &triangular_solve_options(left_side, lower, transpose_a, unit_diagonal),
             session,
         )
         .map_err(|e| anyhow!("triangular solve failed via tenferro-tensor: {e}"))?;
@@ -1631,9 +1648,7 @@ pub fn svd_backend_in<T>(
 where
     T: BackendLinalgScalar,
 {
-    use tenferro_linalg::TensorLinalgExt;
-
-    let (u, s, vt) = tensor
+    let Svd { u, s, vh: vt } = tensor
         .svd(session)
         .map_err(|e| anyhow!("SVD computation failed via tenferro-tensor: {e}"))?;
     Ok(SvdResult {
@@ -1678,9 +1693,7 @@ pub fn qr_backend_in<T>(
 where
     T: BackendLinalgScalar,
 {
-    use tenferro_linalg::TensorLinalgExt;
-
-    let (q, r) = tensor
+    let Qr { q, r } = tensor
         .qr(session)
         .map_err(|e| anyhow!("QR computation failed via tenferro-tensor: {e}"))?;
     Ok((
@@ -1758,12 +1771,9 @@ where
     )
     .map_err(|e| anyhow!("triangular solve rhs tensor construction failed: {e}"))?;
     let result = with_default_session(|session| {
-        a_tensor.triangular_solve(
+        a_tensor.triangular_solve_with(
             &b_tensor,
-            left_side,
-            lower,
-            transpose_a,
-            unit_diagonal,
+            &triangular_solve_options(left_side, lower, transpose_a, unit_diagonal),
             session,
         )
     })
@@ -1917,9 +1927,7 @@ fn full_piv_lu_tensor_in<T>(
 where
     T: BackendLinalgScalar,
 {
-    use tenferro_linalg::TensorLinalgExt;
-
-    let (p, l, u, q, _parity) = tensor
+    let FullPivLu { p, l, u, q, .. } = tensor
         .full_piv_lu(session)
         .map_err(|e| anyhow!("complete-pivoting LU failed via tenferro-tensor: {e}"))?;
     Ok(FullPivLuResult {

@@ -176,7 +176,5 @@ executing engine's `Exec` token: ignore it for serial callbacks, use
 `for_ranges`/`fork`, or call external libraries inside `external`. Algebra and
 compression use the same lane engine; narrow waves leave lanes idle. Keep the
 callback pure and independent of thread count. Patches are merged and returned
-in canonical prefix order. The feature builds with every CPU provider, but lane
-execution is tested on faer only. With a BLAS provider such as Accelerate,
-every lane calls a library with its own threading, which can oversubscribe the
-cores; prefer faer for lanes.
+in canonical prefix order. Each lane's algebra runs on tenferro's faer-backed
+CPU stack within the lane's thread budget.

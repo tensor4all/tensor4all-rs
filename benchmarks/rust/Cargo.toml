@@ -8,7 +8,6 @@ publish = false
 # harness-only, so the tenferro crates stay in `[dev-dependencies]` and never
 # become a runtime route for a library crate.
 [features]
-default = []
 # TreeTN Fourier construction only; the legacy SimpleTT transforms stay off.
 fourier = ["dep:tensor4all-quanticstransform"]
 # `patched_fourier_transform`, the lazy merge-refine front end (benchmark_m6a_fourier).
@@ -38,7 +37,7 @@ tensor4all-core = { path = "../../crates/tensor4all-core", features = ["global-d
 tensor4all-hdf5 = { path = "../../crates/tensor4all-hdf5", optional = true }
 tensor4all-itensorlike = { path = "../../crates/tensor4all-itensorlike", optional = true }
 tensor4all-partitionedtreetn = { path = "../../crates/tensor4all-partitionedtreetn" }
-tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-platform"], optional = true }
+tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform", default-features = false, optional = true }
 tensor4all-simplett = { path = "../../crates/tensor4all-simplett", optional = true }
 tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend" }
 tensor4all-tensorci = { path = "../../crates/tensor4all-tensorci", optional = true }

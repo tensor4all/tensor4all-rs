@@ -120,8 +120,8 @@ They require `cargo-nextest`, mdBook 0.5.2, the HDF5 development library, and
 
 ```bash
 cargo fmt --all -- --check
-cargo check -p tensor4all-tensorbackend --no-default-features --features explicit-context,tenferro-cpu-faer
-cargo doc -p tensor4all-tensorbackend --no-deps --no-default-features --features explicit-context,tenferro-cpu-faer
+cargo check -p tensor4all-tensorbackend --no-default-features --features explicit-context
+cargo doc -p tensor4all-tensorbackend --no-deps --no-default-features --features explicit-context
 cargo clippy --workspace --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
 cargo nextest run --cargo-profile ci --workspace --exclude tensor4all-hdf5
 cargo test --profile ci -p tensor4all-hdf5
@@ -148,14 +148,16 @@ pins so a dependency's patch fix can be locked with `cargo update` instead of a
 pin bump through the whole chain; this check is the guard that keeps a range
 from silently splitting an identity. It also fails when a committed lock under
 `tests/feature-configurations/` resolves a registry or git package to anything
-not in the root `Cargo.lock`, so a pin bump must regenerate those locks too.
+not in the root `Cargo.lock`, or when `crates/tensor4all-py/Cargo.lock` (its own
+workspace root) resolves one of those identities differently, so a pin bump
+must regenerate those locks too.
 
 ### Supported feature configurations
 
-Cargo features here are not additive: `tenferro-cpu-platform` (the default:
-Apple Accelerate on macOS, faer elsewhere), `tenferro-cpu-faer` and
-`tenferro-system-blas` are mutually exclusive CPU backends (tenferro-rs #2004),
-so `--all-features` is not a valid build target. The repository declares the
+tenferro has one CPU backend (the faer-backed `tlinalg`/`cpueinsum`/`tcontract`
+stack; tenferro-rs#2609 removed the vendor BLAS/LAPACK providers), so no crate
+here has a backend feature. `--all-features` is still not a valid build target:
+`hataori-mpi` and `hataori-mpi-rsmpi-rt` select mutually exclusive MPI backends. The repository declares the
 configurations below and builds or audits exactly these. A configuration selects
 its packages explicitly; `--workspace --no-default-features` is never used,
 because the guide, tutorial, and benchmark packages are documented and built
@@ -163,17 +165,16 @@ with their default features.
 
 | Configuration | Cargo selection | Verified by |
 |---|---|---|
-| default | Each crate's default features (faer on Linux) | PR CI Test, Doctests, and Lint (`cargo clippy --workspace --all-targets`); PR CI panic audit; nightly heavy-tests |
-| default on macOS | Each crate's default features (Apple Accelerate) | PR CI `macOS (Accelerate)`: workspace tests and doctests |
-| explicit-context | `-p tensor4all-tensorbackend --no-default-features --features explicit-context,tenferro-cpu-faer` | PR CI Lint (`Check explicit-context-only build`) |
-| system-blas | Every compute crate with `--no-default-features --features tenferro-system-blas`. Enable `partitioned` and `simplett-transforms` on quanticstransform, `simplett-bridge` on treetn, and `global-defaults` on treersi for their test targets. HDF5 uses `link,tenferro-system-blas`. | Nightly `.github/workflows/feature-matrix.yml`, including a panic audit |
-| provider-inject | Same test features as system-blas with `tenferro-provider-inject` as the provider. HDF5 uses `link,tenferro-provider-inject`. | Nightly feature matrix, including a panic audit |
-| fourier-without-simplett | An isolated downstream build of `tensor4all-quanticstransform` with defaults disabled and `tenferro-cpu-platform,partitioned` enabled | PR CI Maintenance scripts checks the dependency graph, including the fixture's test dependencies. Nightly CI runs the Fourier layout and partitioned regression suites and the small patched example via `./scripts/check-fourier-dependencies.sh --run`, then `cargo test --locked -p tensor4all-quanticstransform --no-default-features --features tenferro-cpu-platform,partitioned` for the crate's own tests with `simplett-transforms` off. |
-| m6-without-simplett | Default direct TreeTN and isolated partitionedtreetn/treeaci/treetci/treersi consumers; combined consumers for each CPU provider; benchmark default/diagnostics/Fourier configurations | PR CI Maintenance scripts runs `python3 scripts/check-m6-dependencies.py` against resolved normal/build package and feature graphs (also dev edges for benchmarks), including positive checks for explicit bridge and legacy comparison features. Lint separately checks opt-in benchmark targets. See [benchmark features](benchmarks/README.md#cargo-feature-isolation). |
+| default | Each crate's default features | PR CI Test, Doctests, and Lint (`cargo clippy --workspace --all-targets`); PR CI panic audit; nightly heavy-tests |
+| default on macOS | Each crate's default features | PR CI `macOS`: workspace tests and doctests |
+| explicit-context | `-p tensor4all-tensorbackend --no-default-features --features explicit-context` | PR CI Lint (`Check explicit-context-only build`) |
+| opt-in-features | Every compute crate with `--no-default-features`, plus `partitioned` and `simplett-transforms` on quanticstransform, `simplett-bridge` on treetn, and `global-defaults` on treersi for their test targets. HDF5 uses `link`. | Nightly `.github/workflows/feature-matrix.yml`, including a panic audit |
+| fourier-without-simplett | An isolated downstream build of `tensor4all-quanticstransform` with defaults disabled and `partitioned` enabled | PR CI Maintenance scripts checks the dependency graph, including the fixture's test dependencies. Nightly CI runs the Fourier layout and partitioned regression suites and the small patched example via `./scripts/check-fourier-dependencies.sh --run`, then `cargo test --locked -p tensor4all-quanticstransform --no-default-features --features partitioned` for the crate's own tests with `simplett-transforms` off. |
+| m6-without-simplett | Default direct TreeTN and isolated partitionedtreetn/treeaci/treetci/treersi consumers; combined consumers with defaults on and off; benchmark default/diagnostics/Fourier configurations | PR CI Maintenance scripts runs `python3 scripts/check-m6-dependencies.py` against resolved normal/build package and feature graphs (also dev edges for benchmarks), including positive checks for explicit bridge and legacy comparison features. Lint separately checks opt-in benchmark targets. See [benchmark features](benchmarks/README.md#cargo-feature-isolation). |
 | mpi | `-p tensor4all-partitionedtreetn --features hataori-mpi` (the system-MPI backend of the adaptive patch driver; the `hataori-mpi-rsmpi-rt` runtime backend is covered by `scripts/check-mpi-smoke.sh`) | Nightly feature matrix, including a panic audit |
-| interpolativeqtt-parallel | `-p tensor4all-interpolativeqtt --features parallel` (default provider) and `--no-default-features --features parallel,tenferro-system-blas` | Nightly feature matrix, lane tests on the default provider, and a panic audit of both |
+| interpolativeqtt-parallel | `-p tensor4all-interpolativeqtt --features parallel` | Nightly feature matrix, lane tests, and a panic audit |
 | diagnostics | `-p tensor4all-treetn -p tensor4all-treeaci --features diagnostics` | Nightly feature matrix, including a panic audit |
-| hdf5-runtime-loading | `-p tensor4all-hdf5 --no-default-features --features runtime-loading,tenferro-cpu-faer` | Nightly feature matrix, including a panic audit |
+| hdf5-runtime-loading | `-p tensor4all-hdf5 --no-default-features --features runtime-loading` | Nightly feature matrix, including a panic audit |
 | cuda | `-p tensor4all-core -p tensor4all-treetn -p tensor4all-treersi --features tenferro-cuda` | Nightly feature matrix, compile only; CUDA execution is verified locally on a GPU only |
 
 The PR CI panic audit compares the default configuration against

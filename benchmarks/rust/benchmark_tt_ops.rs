@@ -218,7 +218,7 @@ fn make_native_mps_t4a_shapes(
 fn eager_mps_tensors(ctx: &Arc<EagerRuntime>, tensors: Vec<Tensor>) -> Result<Vec<EagerTensor>> {
     tensors
         .into_iter()
-        .map(|tensor| EagerTensor::from_tensor_in(tensor, Arc::clone(ctx)))
+        .map(|tensor| ctx.constant_from(tensor))
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(anyhow::Error::from)
 }

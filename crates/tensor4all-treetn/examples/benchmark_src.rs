@@ -430,22 +430,11 @@ fn run_case(
 }
 
 fn enabled_features() -> String {
-    [
-        (
-            "tenferro-cpu-platform",
-            cfg!(feature = "tenferro-cpu-platform"),
-        ),
-        ("tenferro-cpu-faer", cfg!(feature = "tenferro-cpu-faer")),
-        (
-            "tenferro-provider-inject",
-            cfg!(feature = "tenferro-provider-inject"),
-        ),
-        ("tenferro-cuda", cfg!(feature = "tenferro-cuda")),
-    ]
-    .into_iter()
-    .filter_map(|(name, enabled)| enabled.then_some(name))
-    .collect::<Vec<_>>()
-    .join(",")
+    [("tenferro-cuda", cfg!(feature = "tenferro-cuda"))]
+        .into_iter()
+        .filter_map(|(name, enabled)| enabled.then_some(name))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn main() {

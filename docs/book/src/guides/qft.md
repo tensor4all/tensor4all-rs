@@ -7,23 +7,21 @@ operator to tensor trains. It corresponds to the Julia
 ## Cargo features
 
 The Fourier constructors build TreeTN operators directly. To use them without
-SimpleTT, disable the transform crate's defaults and select a CPU provider.
+SimpleTT, disable the transform crate's defaults.
 For a local checkout, the unpatched examples below use these dependencies.
 
 ```toml
 [dependencies]
 num-complex = "0.4"
-tensor4all-core = { path = "../tensor4all-rs/crates/tensor4all-core", default-features = false, features = ["tenferro-cpu-platform", "global-defaults"] }
-tensor4all-treetn = { path = "../tensor4all-rs/crates/tensor4all-treetn", default-features = false, features = ["tenferro-cpu-platform"] }
-tensor4all-quanticstransform = { path = "../tensor4all-rs/crates/tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-platform"] }
+tensor4all-core = { path = "../tensor4all-rs/crates/tensor4all-core", default-features = false, features = ["global-defaults"] }
+tensor4all-treetn = { path = "../tensor4all-rs/crates/tensor4all-treetn", default-features = false }
+tensor4all-quanticstransform = { path = "../tensor4all-rs/crates/tensor4all-quanticstransform", default-features = false }
 ```
 
 For patched Fourier, also enable `partitioned` on
 `tensor4all-quanticstransform` and declare `tensor4all-partitionedtreetn` with
-the same provider and its defaults disabled when importing it directly. On
-macOS, use `tenferro-cpu-faer` on all these crates to select faer explicitly.
-TreeTN defaults leave `simplett-bridge` off; disabling them is needed only
-when selecting a different CPU provider. Enable `simplett-transforms` if you also use
+its defaults disabled when importing it directly. TreeTN defaults leave
+`simplett-bridge` off. Enable `simplett-transforms` if you also use
 non-Fourier transforms or the transform crate's SimpleTT conversions.
 
 ## Background

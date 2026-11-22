@@ -42,17 +42,17 @@ path = "../../crates/tensor4all-quanticstransform/tests/patched_fourier.rs"
 
 [dependencies]
 num-complex = "0.4"
-tensor4all-core = { path = "../../crates/tensor4all-core", default-features = false, features = ["tenferro-cpu-platform"] }
-tensor4all-treetn = { path = "../../crates/tensor4all-treetn", default-features = false, features = ["tenferro-cpu-platform"] }
-tensor4all-partitionedtreetn = { path = "../../crates/tensor4all-partitionedtreetn", default-features = false, features = ["tenferro-cpu-platform"] }
-tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform", default-features = false, features = ["tenferro-cpu-platform"] }
+tensor4all-core = { path = "../../crates/tensor4all-core", default-features = false }
+tensor4all-treetn = { path = "../../crates/tensor4all-treetn", default-features = false }
+tensor4all-partitionedtreetn = { path = "../../crates/tensor4all-partitionedtreetn", default-features = false }
+tensor4all-quanticstransform = { path = "../../crates/tensor4all-quanticstransform", default-features = false }
 
 [dev-dependencies]
 # The fixtures build tensors with the context-free API, which needs the
 # process-global route (tensor4all-rs#1403); the library graph above does not.
-tensor4all-core = { path = "../../crates/tensor4all-core", default-features = false, features = ["tenferro-cpu-platform", "global-defaults"] }
-tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend", default-features = false, features = ["tenferro-cpu-platform"] }
-tensor4all-treetci = { path = "../../crates/tensor4all-treetci", default-features = false, features = ["tenferro-cpu-platform"] }
+tensor4all-core = { path = "../../crates/tensor4all-core", default-features = false, features = ["global-defaults"] }
+tensor4all-tensorbackend = { path = "../../crates/tensor4all-tensorbackend", default-features = false }
+tensor4all-treetci = { path = "../../crates/tensor4all-treetci", default-features = false }
 EOF
 
 manifest="$consumer/Cargo.toml"

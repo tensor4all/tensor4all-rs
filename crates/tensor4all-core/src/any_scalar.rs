@@ -13,9 +13,7 @@ use tensor4all_tensorbackend::{
     BackendScalar, ScalarTensorElement, ScalarValue, Storage, SumFromStorage,
 };
 
-use crate::defaults::eager_session::{
-    with_eager_session_typed, with_engine, with_execution_engine,
-};
+use crate::defaults::eager_session::{with_eager_session, with_eager_session_typed};
 use crate::defaults::idx_tensor::IdxTensor;
 
 #[cfg(test)]
@@ -640,7 +638,7 @@ impl AnyScalar {
     /// ```
     pub fn backward(&self) -> std::result::Result<(), AnyScalarError> {
         let inner = self.as_tensor()?.as_inner()?;
-        with_execution_engine(inner.runtime(), None, |engine| inner.backward(engine))
+        with_eager_session(inner.runtime(), None, |session| session.backward(inner))
             .map(|_| ())
             .map_err(|error| AnyScalarError::from(anyhow::Error::new(error)))
     }
@@ -672,7 +670,7 @@ impl AnyScalar {
     pub fn detach(&self) -> std::result::Result<Self, AnyScalarError> {
         let tensor = self.as_tensor()?;
         let inner = tensor.as_inner()?;
-        let detached = with_engine(inner.runtime(), None, |engine| inner.detach(engine))
+        let detached = with_eager_session(inner.runtime(), None, |session| session.detach(inner))
             .map_err(|error| AnyScalarError::from(anyhow::Error::new(error)))?;
         Self::from_tensor(IdxTensor::from_inner(vec![], detached)?).map_err(AnyScalarError::from)
     }
