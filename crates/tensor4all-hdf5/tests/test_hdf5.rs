@@ -1386,8 +1386,9 @@ fn test_treetn_missing_child_group_error() {
 /// Regression for #606: the HDF5 C library is not thread-safe and its OS
 /// file locks can outlive H5Fclose, so concurrent crate calls used to fail
 /// intermittently with `H5Fopen(): unable to lock file, errno = 35`.
-/// The crate now serializes every public call through one process-wide lock
-/// and disables HDF5 file locking, so this must not happen.
+/// The crate serializes every public call through one process-wide lock; the
+/// test harness (`.cargo/config.toml` `[env]`) disables HDF5 file locking, as
+/// the crate itself no longer touches the environment (#1386).
 #[test]
 fn concurrent_save_load_roundtrips() {
     let dir = tempfile::tempdir().unwrap();

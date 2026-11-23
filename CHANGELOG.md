@@ -4,6 +4,13 @@
 
 ### Behavior changes
 
+- `tensor4all-hdf5` no longer sets `HDF5_USE_FILE_LOCKING=FALSE` on first use (#1386).
+  The library never touches the process environment now. If you save and then re-open
+  the same path in one process (or do so from several threads), set
+  `HDF5_USE_FILE_LOCKING=FALSE` yourself before the first HDF5 call in the process
+  (shell, service unit, Cargo `[env]`, or `main` before threads start); otherwise the
+  reopen can fail with `errno = 35`. Leaving it unset keeps HDF5's cross-process write
+  protection.
 - The tenferro pin moves to tenferro-rs `5df83672` (tenferro 0.13.0 on threadteam 0.6.1,
   colmat 0.34, cpueinsum 0.13.0, tlinalg 0.12.0, tcontract 0.13.0; #1428). tenferro now
   has one faer-backed CPU backend (tenferro-rs#2609), so the CPU backend features

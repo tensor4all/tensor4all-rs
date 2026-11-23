@@ -41,29 +41,6 @@ pub(crate) fn attribute_exists(group: &Group, name: &str) -> anyhow::Result<bool
     })
 }
 
-/// Disable HDF5's OS file locking once, before any HDF5 call the crate makes,
-/// unless the caller already set `HDF5_USE_FILE_LOCKING` explicitly.
-///
-/// The HDF5 C library is not thread-safe and its per-file OS locks have a
-/// release window that outlives `H5Fclose`, so even fully serialized calls can
-/// hit `errno = 35` (EAGAIN) when the same path is reopened immediately. With
-/// file locking disabled, a process-wide call lock (see [`hdf5_sync`]) is
-/// sufficient. The environment variable is process-global: it also affects any
-/// other HDF5 usage in the process. Callers who want locking keep control by
-/// setting `HDF5_USE_FILE_LOCKING` themselves (their value wins).
-static FILE_LOCKING_INIT: std::sync::Once = std::sync::Once::new();
-
-fn disable_file_locking_once() {
-    FILE_LOCKING_INIT.call_once(|| {
-        if std::env::var_os("HDF5_USE_FILE_LOCKING").is_none() {
-            // Safe on this crate's edition (2021). Runs before the first HDF5
-            // init/open the crate triggers, so it takes effect regardless of
-            // when the C library parses the variable.
-            std::env::set_var("HDF5_USE_FILE_LOCKING", "FALSE");
-        }
-    });
-}
-
 /// Run one whole public HDF5 operation under the backend's process-wide
 /// reentrant lock.
 ///
@@ -73,8 +50,12 @@ fn disable_file_locking_once() {
 /// nested HDF5 calls inside the operation are safe, and it also serializes
 /// against direct hdf5-metno/hdf5-rt usage elsewhere in the process that goes
 /// through the same lock.
+///
+/// This function never reads or writes the process environment. In
+/// particular it does not touch `HDF5_USE_FILE_LOCKING`: whether HDF5 uses OS
+/// file locking is the caller's decision, made before the first HDF5 call
+/// (see the crate-level "Thread safety" docs).
 pub(crate) fn hdf5_sync<T>(f: impl FnOnce() -> T) -> T {
-    disable_file_locking_once();
     #[cfg(all(feature = "link", not(feature = "runtime-loading")))]
     {
         hdf5_metno::sync::sync(f)

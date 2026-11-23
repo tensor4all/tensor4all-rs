@@ -1,5 +1,12 @@
 # Design: #606 — make tensor4all-hdf5 thread-safe by construction (central lock)
 
+> **Superseded in part by #1386.** The lazy `set_var("HDF5_USE_FILE_LOCKING", "FALSE")`
+> in `hdf5_sync` described below was removed: it mutated the process-global
+> environment from ordinary public calls (unsound with concurrent environment
+> readers, and it disabled locking for every other HDF5 user). The caller now
+> sets the variable before the first HDF5 call; the test harness sets it via
+> `.cargo/config.toml` `[env]`. The call lock (`hdf5_sync`) is unchanged.
+
 Status: user-approved direction (2026-08): "Rust 側で排他するのがいい" (internal
 Rust-side serialization) + "一括して管理" (one central mechanism, not ad hoc).
 Review by luna (read-only): design pre-review + diff post-review.

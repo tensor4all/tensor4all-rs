@@ -1,2 +1,10 @@
 [alias]
 xtask = "run --package xtask --"
+
+# tensor4all-hdf5 does not set HDF5_USE_FILE_LOCKING itself (#1386); the caller
+# chooses. Its same-path save-then-load tests need OS file locking off (a
+# writer's lock can outlive H5Fclose -> errno 35), so the test harness sets it
+# here, in the spawned process environment. `force = false` keeps a value the
+# developer exported themselves.
+[env]
+HDF5_USE_FILE_LOCKING = { value = "FALSE", force = false }

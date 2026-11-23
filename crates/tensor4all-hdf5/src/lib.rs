@@ -13,14 +13,36 @@
 //! construction** — even on distinct files. The lock covers the whole
 //! operation (open, read/write, close), not individual HDF5 calls.
 //!
-//! The crate also disables HDF5's OS file locking by setting
-//! `HDF5_USE_FILE_LOCKING=FALSE` once, before the first HDF5 call, unless the
-//! caller already set that variable (their value wins). This closes the
-//! same-path lock-release window (a writer's OS lock can outlive `H5Fclose`,
-//! so a serialized reopen of the same path could otherwise fail with
-//! `errno = 35`). The variable is process-global and affects any other HDF5
-//! usage in the process; callers who need cross-process write protection
-//! should set it themselves.
+//! # File locking (caller's responsibility)
+//!
+//! The crate never reads or writes the process environment. In particular it
+//! does **not** set `HDF5_USE_FILE_LOCKING`; earlier versions did so on first
+//! use, which is unsound while other threads read the environment and
+//! silently disabled file locking for every other HDF5 user in the process.
+//!
+//! HDF5 parses `HDF5_USE_FILE_LOCKING` once, when the C library initializes,
+//! so it is a **hard precondition the caller sets before the first HDF5 call
+//! in the process** (shell, service unit, `cargo` `[env]`, or `main` before
+//! any thread starts). It is a precondition rather than a constructor option
+//! because there is no per-call switch to expose: the per-file
+//! `H5Pset_file_locking` property is not available through `hdf5-rt`
+//! (`runtime-loading`) and is version-gated in `hdf5-metno`, and anything
+//! applied after library initialization has no effect on the variable.
+//!
+//! Which value to choose:
+//!
+//! - `HDF5_USE_FILE_LOCKING=FALSE` — required if you save and then re-open the
+//!   **same path** in one process back to back (or from several threads). A
+//!   writer's OS lock can outlive `H5Fclose`, so with locking enabled the
+//!   reopen can fail with `H5Fopen(): unable to lock file, errno = 35`
+//!   (EAGAIN). The crate's process-wide call lock makes this safe.
+//! - unset / `TRUE` — keeps HDF5's cross-process write protection, but then
+//!   same-path reopen can hit the `errno = 35` window above, so coordinate
+//!   access to shared paths yourself.
+//!
+//! The variable is process-global; setting it affects every HDF5 user in the
+//! process, which is why the choice belongs to the application, not to a
+//! library.
 //!
 //! New public functions that touch HDF5 MUST wrap their body in
 //! `backend::hdf5_sync` — the public boundary is the crate's single
