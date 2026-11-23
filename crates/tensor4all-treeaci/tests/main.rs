@@ -11,6 +11,7 @@ mod branch_degree;
 mod branch_diagnostics;
 mod f7_session_context;
 mod g0_convergence;
+mod heavy_audit_regressions;
 mod heavy_g0_convergence;
 mod interpolator;
 mod public_api;

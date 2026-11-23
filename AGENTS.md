@@ -195,7 +195,7 @@ See the [local validation table](CONTRIBUTING.md#validate-locally).
 
 CI carries one total time budget and one suite-execution budget; see
 [CONTRIBUTING.md](CONTRIBUTING.md#ci-time-budget-and-heavy-tests) for the current
-numbers, the `crates/*/tests/heavy_*.rs` plus `#[ignore]` convention, and the local
+numbers, the `heavy_*` test-module plus `#[ignore]` convention, and the local
 heavy-test command. Do not add a per-test or per-job timeout instead of moving a slow
 test to the scheduled heavy-tests workflow.
 

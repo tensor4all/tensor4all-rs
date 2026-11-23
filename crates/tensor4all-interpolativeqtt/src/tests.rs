@@ -11,6 +11,7 @@ use crate::interval::NInterval;
 use super::*;
 
 mod complex;
+mod heavy_single_scale;
 mod refined_batches;
 mod split;
 
@@ -254,17 +255,28 @@ fn single_scale_interpolation_n2() {
 
 #[test]
 fn single_scale_interpolation_n3() {
+    // Degree two represents this asymmetric, coupled polynomial exactly.
+    assert_single_scale_interpolation_n3(2, |x| {
+        1.0 + x[0]
+            + 2.0 * x[1] * x[1]
+            + 3.0 * x[2]
+            + x[0] * x[1]
+            + 2.0 * x[1] * x[2]
+            + 3.0 * x[0] * x[2]
+            + x[0] * x[1] * x[2]
+    });
+}
+
+fn assert_single_scale_interpolation_n3(degree: usize, f: impl Fn(&[f64]) -> f64) {
     // Three sites retain left, interior, and right cores while keeping the full
     // three-dimensional grid check to 8^3 points. The n2 fixture above retains
     // repeated interior cores (four sites).
     let r = 3;
-    let degree = 15;
     let lower = [-1.0, -1.0, 0.0];
     let upper = [2.0, 2.0, 1.0];
-    let f = |x: &[f64]| (-x[0] * x[0] - x[1].powi(3) - 2.0 * x[2] * x[2]).exp();
 
     let tt = interpolate_single_scale_nd(
-        f,
+        &f,
         &lower,
         &upper,
         r,

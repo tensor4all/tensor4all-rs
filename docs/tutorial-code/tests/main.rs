@@ -3,5 +3,6 @@
 //! their prefix (filter with `<file>::`). Files that install process-global
 //! state stay separate `[[test]]` targets in `Cargo.toml`.
 
+mod heavy_tutorial_binaries;
 mod tutorial_binaries;
 mod verification;

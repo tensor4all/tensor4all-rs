@@ -36,11 +36,12 @@ budget instead of per-test or per-job caps:
 Do not raise either number to accommodate a slow test. A test that needs more is a
 heavy test:
 
-- keep it in `crates/*/tests/heavy_*.rs`, declared as a module in that package's
-  `tests/main.rs` integration target, and mark it
+- keep it in `tests/heavy_*.rs`, declared as a module in that package's
+  `tests/main.rs` integration target, or in a private `heavy_*` unit-test module
+  when it needs internal helpers, and mark it
   `#[ignore = "heavy: runs in the scheduled heavy-tests workflow (see CONTRIBUTING.md)"]`;
 - [`.github/workflows/heavy-tests.yml`](.github/workflows/heavy-tests.yml) runs those
-  files nightly (`-E 'test(/^heavy_/)' --run-ignored ignored-only`), builds every
+  tests nightly (`-E 'test(/(^|::)heavy_/)' --run-ignored ignored-only`), builds every
   target for the compile check, and opens or updates a `ci-nightly` issue when it fails.
 
 Non-default feature configurations (system BLAS, provider injection, MPI,
@@ -55,7 +56,7 @@ Run the heavy suite locally with:
 ```bash
 cargo build --locked --profile ci --workspace --all-targets
 cargo nextest run --locked --cargo-profile ci --workspace \
-    --run-ignored ignored-only -E 'test(/^heavy_/)'
+    --run-ignored ignored-only -E 'test(/(^|::)heavy_/)'
 ```
 
 Example and bench targets stay out of the default suite for the same reason: they add

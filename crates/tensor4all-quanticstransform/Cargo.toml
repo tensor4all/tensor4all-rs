@@ -95,7 +95,7 @@ required-features = ["simplett-transforms"]
 name = "qft_reconstruction"
 path = "tests/qft_reconstruction.rs"
 
-# Heavy tests (`#[ignore]`, selected by `test(/^heavy_/)` in heavy-tests.yml).
+# Heavy tests (`#[ignore]`, selected by `test(/(^|::)heavy_/)` in heavy-tests.yml).
 [[test]]
 name = "heavy"
 path = "tests/main.rs"
