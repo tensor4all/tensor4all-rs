@@ -1,0 +1,99 @@
+name: macOS nightly
+
+# macOS is a supported host: a second architecture and libc for the same
+# faer-backed tenferro CPU stack (tenferro-rs#2609 removed the Accelerate
+# provider). This workflow runs the workspace tests and doctests there.
+#
+# It used to be the `macOS` job of CI_rs.yml and ran on every pull request and
+# push. macOS runners are the organization's most expensive Actions SKU
+# (November 2026: about $1,480 list price, 57% of all Actions minutes by cost,
+# most of it from this job), and the Team plan allows only five concurrent
+# macOS jobs across the whole organization, so per-PR runs here queued macOS
+# jobs in every other tensor4all repository. A macOS-only regression is now
+# found within a day instead of on the PR; dispatch this workflow on a branch
+# to check one before merging.
+
+on:
+  schedule:
+    # 21:23 UTC = 06:23 JST, after heavy-tests.yml (18:00), coverage.yml (19:00)
+    # and feature-matrix.yml (20:00); off the :00/:30 herd.
+    - cron: "23 21 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: macos-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CI_BUILD_DIAGNOSTICS: target/ci-build-diagnostics
+
+jobs:
+  macos:
+    name: macOS
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install HDF5
+        # hdf5-metno-sys finds the Homebrew bottle on its own.
+        run: brew install hdf5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@nextest
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-workspace-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Run workspace tests
+        # The same suite budget as the Linux test job (CONTRIBUTING.md, CI time
+        # budget). `--no-fail-fast` reports every macOS-only failure in one run.
+        run: python3 scripts/ci-build-diagnostics.py --budget-seconds 300 nextest -- cargo nextest run --locked --cargo-profile ci --workspace --lib --bins --tests --no-fail-fast --timings -v
+
+      - name: Run rustdoc tests
+        run: cargo test --locked --doc --profile ci --workspace
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics-${{ github.job }}
+          path: |
+            target/ci-build-diagnostics
+            target/cargo-timings
+          retention-days: 7
+
+  # A separate job, so a run that dies before its last step still reports. One
+  # rolling issue, as feature-matrix.yml, coverage.yml and heavy-tests.yml do.
+  # Manual dispatches on a branch report in the run only.
+  report:
+    name: Report a failing night
+    needs: macos
+    if: ${{ always() && github.event_name == 'schedule' && (needs.macos.result == 'failure' || needs.macos.result == 'cancelled') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: File or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          label=ci-nightly
+          title="Scheduled macOS nightly is failing"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          printf -v body '%s\n\n%s\n' \
+            "The scheduled macOS workspace tests failed in [run ${GITHUB_RUN_ID}](${run_url}) on \`${GITHUB_SHA:0:8}\`." \
+            "PR CI no longer runs on macOS; dispatch \`macos-nightly.yml\` on a fix branch to verify it."
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --label "$label" --state open \
+            --search "in:title \"$title\"" --limit 1 --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --label "$label" --title "$title" --body "$body"
+          fi
