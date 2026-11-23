@@ -5,7 +5,10 @@
 > environment from ordinary public calls (unsound with concurrent environment
 > readers, and it disabled locking for every other HDF5 user). The caller now
 > sets the variable before the first HDF5 call; the test harness sets it via
-> `.cargo/config.toml` `[env]`. The call lock (`hdf5_sync`) is unchanged.
+> `.cargo/config.toml` `[env]` (and `scripts/test-mdbook.sh` for the guide tests). The
+> call lock (`hdf5_sync`) is unchanged. Later hdf5-metno exposes a per-file
+> `FileAccessBuilder::file_locking`, but only behind HDF5 1.10.7/1.12.1 features and
+> not in hdf5-rt, so the env var stays the only portable mechanism.
 
 Status: user-approved direction (2026-08): "Rust 側で排他するのがいい" (internal
 Rust-side serialization) + "一括して管理" (one central mechanism, not ad hoc).
