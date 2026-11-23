@@ -2,8 +2,9 @@
 """Tests for the coverage threshold checker (tensor4all/tensor4all-rs#566 Task 12).
 
 Proves: default threshold pass/fail, exact per-file override, missing-file
-behavior (report files without a threshold entry use the default), and that
-top-level ``_comment_*`` rationale keys are ignored for enforcement.
+behavior (report files without a threshold entry use the default), excluded
+paths, and that top-level ``_comment_*`` rationale keys are ignored for
+enforcement.
 """
 
 from __future__ import annotations
@@ -96,6 +97,30 @@ class CoverageCheckTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 1)
         self.assertIn("coverage attestation file", result.stderr)
+
+    def test_excluded_prefix_skips_files(self) -> None:
+        # A path under an excluded prefix is skipped even at 0%; a sibling
+        # directory that only shares the prefix text is still enforced.
+        result = run_check(
+            {"default": 75, "exclude": ["docs/tutorial-code/"], "files": {}},
+            {
+                "docs/tutorial-code/src/bin/qtt_affine.rs": 0.0,
+                "docs/tutorial-code/README.md": 0.0,
+                "docs/tutorial-code-extra/src/main.rs": 10.0,
+            },
+        )
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("docs/tutorial-code-extra/src/main.rs: 10.0% < 75%", result.stdout)
+        self.assertNotIn("docs/tutorial-code/src/bin/qtt_affine.rs", result.stdout)
+        self.assertIn("Skipped 2 excluded files.", result.stdout)
+
+    def test_excluded_file_matches_exactly(self) -> None:
+        result = run_check(
+            {"default": 75, "exclude": ["xtask/src/main.rs"], "files": {}},
+            {"xtask/src/main.rs": 0.0, "crates/x.rs": 90.0},
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("Skipped 1 excluded files.", result.stdout)
 
     def test_comment_rationale_keys_are_ignored_for_enforcement(self) -> None:
         # Top-level _comment_* keys document rationale but never change numbers.
