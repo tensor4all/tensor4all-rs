@@ -167,7 +167,7 @@ with their default features.
 | Configuration | Cargo selection | Verified by |
 |---|---|---|
 | default | Each crate's default features | PR CI Test, Doctests, and Lint (`cargo clippy --workspace --all-targets`); PR CI panic audit; nightly heavy-tests |
-| default on macOS | Each crate's default features | PR CI `macOS`: workspace tests and doctests |
+| default on macOS | Each crate's default features | Nightly `.github/workflows/macos-nightly.yml`: workspace tests and doctests (dispatch it on a branch to check before merging) |
 | explicit-context | `-p tensor4all-tensorbackend --no-default-features --features explicit-context` | PR CI Lint (`Check explicit-context-only build`) |
 | opt-in-features | Every compute crate with `--no-default-features`, plus `partitioned` and `simplett-transforms` on quanticstransform, `simplett-bridge` on treetn, and `global-defaults` on treersi for their test targets. HDF5 uses `link`. | Nightly `.github/workflows/feature-matrix.yml`, including a panic audit |
 | fourier-without-simplett | An isolated downstream build of `tensor4all-quanticstransform` with defaults disabled and `partitioned` enabled | PR CI Maintenance scripts checks the dependency graph, including the fixture's test dependencies. Nightly CI runs the Fourier layout and partitioned regression suites and the small patched example via `./scripts/check-fourier-dependencies.sh --run`, then `cargo test --locked -p tensor4all-quanticstransform --no-default-features --features partitioned` for the crate's own tests with `simplett-transforms` off. |

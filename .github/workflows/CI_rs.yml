@@ -237,48 +237,6 @@ jobs:
             echo "target directory was not created"
           fi
 
-  macos:
-    name: macOS
-    # macOS is a supported host: a second architecture and libc for the same
-    # faer-backed tenferro CPU stack (tenferro-rs#2609 removed the Accelerate
-    # provider). This job runs the workspace tests and doctests there; its result
-    # is independent of the Linux jobs.
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install HDF5
-        # hdf5-metno-sys finds the Homebrew bottle on its own.
-        run: brew install hdf5
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - uses: taiki-e/install-action@nextest
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-workspace-crates: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Run workspace tests
-        # The same suite budget as the Linux test job (CONTRIBUTING.md, CI time
-        # budget). `--no-fail-fast` reports every macOS-only failure in one run.
-        run: python3 scripts/ci-build-diagnostics.py --budget-seconds 300 nextest -- cargo nextest run --locked --cargo-profile ci --workspace --lib --bins --tests --no-fail-fast --timings -v
-
-      - name: Run rustdoc tests
-        run: cargo test --locked --doc --profile ci --workspace
-
-      - name: Upload build diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-diagnostics-${{ github.job }}
-          path: |
-            target/ci-build-diagnostics
-            target/cargo-timings
-          retention-days: 7
-
   scripts:
     name: Maintenance scripts
     runs-on: ubuntu-22.04
@@ -378,7 +336,6 @@ jobs:
       - lint
       - test
       - doctest
-      - macos
       - scripts
     if: always()
     permissions:
