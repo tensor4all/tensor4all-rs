@@ -25,6 +25,10 @@ path = "tests/explicit_only.rs"
 
 [dev-dependencies]
 # Default features only: no `global-defaults`.
+tensor4all-aci = { path = "../../../crates/tensor4all-aci" }
 tensor4all-core = { path = "../../../crates/tensor4all-core" }
 tensor4all-itensorlike = { path = "../../../crates/tensor4all-itensorlike" }
+tensor4all-simplett = { path = "../../../crates/tensor4all-simplett" }
 tensor4all-tensorbackend = { path = "../../../crates/tensor4all-tensorbackend" }
+rand = "0.9"
+rand_chacha = "0.9"

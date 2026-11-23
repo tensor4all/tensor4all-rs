@@ -2127,7 +2127,6 @@ where
     Ok(data)
 }
 
-#[cfg(any(feature = "global-defaults", feature = "explicit-context"))]
 pub(crate) fn validate_batched_mat_mul_inputs(
     batch: usize,
     m: usize,

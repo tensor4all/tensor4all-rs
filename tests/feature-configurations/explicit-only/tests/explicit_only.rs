@@ -4,10 +4,16 @@
 //! engine (tensor4all-rs#1403).
 
 use std::error::Error;
+
+use rand::SeedableRng;
 use std::sync::Arc;
 
+use tensor4all_aci::{
+    elementwise_batched, elementwise_batched_with_rng_in, AciError, AciOptions, ElementwiseBatch,
+};
 use tensor4all_core::{legacy, DynIndex, ExecutionContext, IdxTensor, IdxTensorError};
 use tensor4all_itensorlike::{TensorTrain, TensorTrainError};
+use tensor4all_simplett::{AbstractTensorTrain, SimpleTensorTrain};
 use tensor4all_tensorbackend::{
     with_runtime_engine, CpuBackend, CpuExecutionContext, ExecutionContextEntryError, Storage,
 };
@@ -204,5 +210,65 @@ fn host_storage_chain_norm_refuses_at_the_read_step() {
     match tt.norm_squared() {
         Err(TensorTrainError::IdxTensor { source }) if no_context(&source) => {}
         other => panic!("expected the typed NoContext refusal, got {other:?}"),
+    }
+}
+
+/// The elementwise product of two ACI inputs, one value per point.
+fn aci_product(batch: ElementwiseBatch<'_, f64>, output: &mut [f64]) -> tensor4all_aci::Result<()> {
+    for (point, value) in output.iter_mut().enumerate().take(batch.n_points()) {
+        *value = batch.get(0, point)? * batch.get(1, point)?;
+    }
+    Ok(())
+}
+
+/// #1382: the context-free ACI entry needs the process-global context only for a run that sweeps.
+/// Validation errors keep their own variants and the single-site case (no products at all) still
+/// succeeds; a multi-site sweep refuses with `AciError::Backend` whose source is `NoContext`.
+#[test]
+fn aci_context_free_entry_refuses_only_runs_that_sweep() {
+    let options = AciOptions::<f64>::default();
+
+    let empty = elementwise_batched(aci_product, &[], &options).unwrap_err();
+    assert!(matches!(empty, AciError::EmptyInputs), "got {empty:?}");
+
+    let one_site = [
+        SimpleTensorTrain::<f64>::constant(&[3], 2.0),
+        SimpleTensorTrain::<f64>::constant(&[3], -1.5),
+    ];
+    let result = elementwise_batched(aci_product, &one_site, &options).unwrap();
+    for point in 0..3 {
+        assert_eq!(result.tensor_train.evaluate(&[point]).unwrap(), -3.0);
+    }
+
+    let three_sites = [
+        SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0),
+        SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 3.0),
+    ];
+    let error = elementwise_batched(aci_product, &three_sites, &options).unwrap_err();
+    assert!(matches!(error, AciError::Backend { .. }), "got {error:?}");
+    assert!(refused_for_no_context(&error), "got {error:?}");
+}
+
+/// #1382: with a caller context the ACI sweep runs in this build, where any step that fell back to
+/// the process-global route would have been refused.
+#[test]
+fn aci_context_entry_runs_without_the_global_route() {
+    let (cpu, _) = cpu_context(1);
+    let inputs = [
+        SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0),
+        SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 3.0),
+    ];
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(7);
+    let result = elementwise_batched_with_rng_in(
+        aci_product,
+        &inputs,
+        &AciOptions::default(),
+        &mut rng,
+        &cpu,
+    )
+    .unwrap();
+    for index in [[0, 0, 0], [1, 0, 1], [1, 1, 1]] {
+        let value = result.tensor_train.evaluate(&index).unwrap();
+        assert!((value - 6.0).abs() < 1e-12, "{index:?}: {value}");
     }
 }

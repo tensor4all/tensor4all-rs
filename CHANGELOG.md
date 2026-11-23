@@ -206,8 +206,9 @@
   now runs every factorization and matrix product of the workload on the caller's
   context, including the batched frame updates, local block setup and global-pivot
   environments that previously took the process-global route; the context-free entries
-  run the same code path on the process-global context, and return `AciError::Backend`
-  in a build without `global-defaults`.
+  run the same code path on the process-global context. In a build without
+  `global-defaults` they return `AciError::Backend` for a run that needs a sweep, after
+  input and option validation; the single-site case needs no context and still succeeds.
 
 - `tensor4all-core`: `IdxTensorError` has two new variants, `RuntimeMismatch` and
   `PlacementMismatch` (#1393). The enum is not `#[non_exhaustive]`, so exhaustive

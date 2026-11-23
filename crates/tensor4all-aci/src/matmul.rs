@@ -6,7 +6,9 @@
 //! the context-free public entry points resolve the process-global context once
 //! and hand it in, so one code path runs on whichever engine the caller chose
 //! (tensor4all-rs#1382). A failure is reported as [`AciError::Backend`] through
-//! [`frame_matmul_error`], never as an initial-guess error.
+//! [`frame_matmul_error`], never as an initial-guess error. The helper keeps the
+//! name the issue uses, although it now covers every product of the sweep, not
+//! only the frame updates.
 
 use crate::scalar::AciScalar;
 use crate::{AciError, Result};
@@ -84,7 +86,8 @@ pub(crate) fn batched_mat_mul_in<T: AciScalar>(
 ///
 /// The context-free entries have no caller context, so they take the
 /// process-global one here, once, and run the same context-taking code path as
-/// the `*_in` entries.
+/// the `*_in` entries. They call it only after validation and the single-site
+/// case, i.e. only for a run that multiplies.
 ///
 /// # Errors
 ///
