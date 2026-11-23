@@ -19,9 +19,13 @@ use crate::common::comb::{run, Target, TOLERANCE};
 use anyhow::Result;
 use tensor4all_treetci::{DefaultProposer, TreeTciTermination};
 
-/// `expected_junction_ranks` and `expected_iterations` pin the values
-/// measured on macOS after #1159 (unchanged from #1155): the permanent
-/// enrichment candidates must not change the non-separable result.
+/// `expected_junction_ranks` and `expected_iterations` pin the trajectory
+/// after #1352, which expands a unit junction only while its plain candidate
+/// product is below twice the edge's rank. On this comb that happens in the
+/// early, low-rank sweeps: `delta = 4` ends at [26, 26, 23] after 5
+/// iterations with 368788 distinct points (was [27, 27, 23], 6, 557502), and
+/// `delta = 1` at [12, 12, 11] after 5 iterations with 36884 points (was 4
+/// iterations, 42521 points).
 fn check(
     delta: f64,
     expected_junction_ranks: [usize; 3],
@@ -37,8 +41,8 @@ fn check(
         run.junction_ranks
     );
     // With the enriched initial pivots the local updates grow the junction
-    // bonds and the run converges near the tolerance (measured: 1.62e-6 for
-    // `delta = 4`, 1.20e-6 for `delta = 1`; the issue reported 1.68 / 1.32,
+    // bonds and the run converges near the tolerance (measured: 1.34e-6 for
+    // `delta = 4`, 1.10e-6 for `delta = 1`; the issue reported 1.68 / 1.32,
     // which the backward second pass of #1154 alone does not change).
     assert_eq!(run.result.termination, TreeTciTermination::Converged);
     assert!(
@@ -51,10 +55,10 @@ fn check(
 
 #[test]
 fn comb_junction_of_local_dimension_one_delta4() -> Result<()> {
-    check(4.0, [27, 27, 23], 6)
+    check(4.0, [26, 26, 23], 5)
 }
 
 #[test]
 fn comb_junction_of_local_dimension_one_delta1() -> Result<()> {
-    check(1.0, [12, 12, 11], 4)
+    check(1.0, [12, 12, 11], 5)
 }

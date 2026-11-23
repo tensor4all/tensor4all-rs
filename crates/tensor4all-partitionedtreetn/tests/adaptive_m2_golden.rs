@@ -86,6 +86,18 @@
 //! became rounding-level values of at most 3.4e-16. Function evaluations (128
 //! each), splits (5 and 9), terminations, bond dimensions, and node data are
 //! unchanged; dense scenario records are kept.
+//!
+//! Both TreeTCI scenarios were re-recorded once more when `DefaultProposer`
+//! began expanding a locked vertex of local dimension 1 (#1352): the junction
+//! `r` now offers candidates across itself while its plain product holds
+//! fewer than twice the edge's rank. The `ErrorNotMeasured` engine calls
+//! (2 and 6) become measured, so their patches are accepted instead of
+//! split. Splits return to 3 in both scenarios (from 5 and 9), with 4 accepted
+//! patches each (from 6 and 10), 7 engine calls (from 11 and 19), and cache
+//! hits 13917 and 13667 (from 16487 and 24879). Both still evaluate the same
+//! 128 target points, and every engine call ends `BondCapReached` or
+//! `Converged`. Dense scenario records and all comparison tolerances are
+//! unchanged.
 
 use crate::adaptive_common;
 

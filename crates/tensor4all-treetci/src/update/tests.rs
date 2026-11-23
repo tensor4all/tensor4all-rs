@@ -1,8 +1,11 @@
-use super::{evaluate_candidate_matrix, update_edge_default};
+use super::{evaluate_candidate_matrix, update_edge, update_edge_default};
 use crate::batch::EVALUATION_CHUNK_POINTS;
 use crate::evaluation::BatchExecution;
 use crate::test_support::assert_scalar_close;
-use crate::{GlobalIndexBatch, SubtreeKey, TreeTCI2, TreeTciEdge, TreeTciGraph};
+use crate::{
+    ncols_2d, DefaultProposer, GlobalIndexBatch, PivotCandidateProposer, SubtreeKey, TreeTCI2,
+    TreeTciEdge, TreeTciGraph,
+};
 use anyhow::Result;
 use std::cell::RefCell;
 use tensor4all_core::ColMajorArray;
@@ -429,14 +432,74 @@ fn sum_plus_one(batch: GlobalIndexBatch<'_>) -> Result<Vec<f64>> {
         .collect())
 }
 
+/// The default candidates with every unit-vertex side cut back to the plain
+/// product of its other bonds' pivots, the candidate set `DefaultProposer`
+/// offered before #1352. The default proposer now expands a locked unit
+/// vertex, so this proposer is how a custom proposer can still exhaust one.
+struct PlainUnitProduct;
+
+impl PivotCandidateProposer for PlainUnitProduct {
+    fn candidates_with_rng<T, R: rand::Rng + ?Sized>(
+        &self,
+        state: &TreeTCI2<T>,
+        edge: TreeTciEdge,
+        rng: &mut R,
+    ) -> crate::error::Result<(Vec<Vec<usize>>, Vec<Vec<usize>>)> {
+        let (mut left, mut right) = DefaultProposer.candidates_with_rng(state, edge, rng)?;
+        let (u, v) = state.graph.separate_vertices(edge)?;
+        for (vertex, side) in [(u, &mut left), (v, &mut right)] {
+            if state.local_dims[vertex] != 1 {
+                continue;
+            }
+            let adjacent = state.graph.adjacent_edges(vertex, &[edge]);
+            let mut product = 1;
+            for key in state.graph.edge_in_ij_keys(vertex, &adjacent)? {
+                product *= ncols_2d(&state.ijset[&key])?;
+            }
+            // The default proposer lists the plain product first.
+            side.truncate(product);
+        }
+        Ok((left, right))
+    }
+}
+
+fn update_edge_plain_unit<F>(state: &mut TreeTCI2<f64>, edge: TreeTciEdge, mut evaluate: F)
+where
+    F: FnMut(GlobalIndexBatch<'_>) -> Result<Vec<f64>>,
+{
+    use rand::SeedableRng;
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(0);
+    let mut execution = crate::evaluation::Compatibility::new(&mut evaluate);
+    update_edge(
+        state,
+        edge,
+        &mut execution,
+        &no_truncation_options(),
+        &PlainUnitProduct,
+        &mut rng,
+    )
+    .unwrap();
+}
+
 #[test]
-fn update_edge_marks_single_candidate_side_as_unmeasured() {
-    // Around a vertex of local dimension 1 with rank-1 neighbours, the
-    // junction side of each edge has one candidate: the zero error is not a
-    // measurement (#1153).
+fn update_edge_expands_a_locked_unit_vertex() {
+    // With rank 1 on every bond, the plain product at the unit vertex is one
+    // candidate. The default proposer expands it, so the update measures a
+    // real residual instead of an exhausted side (#1352).
     let mut tci = rank_one_star();
     let edge = TreeTciEdge::new(0, 1);
     update_edge_default(&mut tci, edge, sum_plus_one, &no_truncation_options()).unwrap();
+    assert!(!tci.unmeasured_bonds.contains(&edge));
+}
+
+#[test]
+fn update_edge_marks_single_candidate_side_as_unmeasured() {
+    // Around a vertex of local dimension 1 with rank-1 neighbours, the plain
+    // product leaves the junction side of each edge one candidate: the zero
+    // error is not a measurement (#1153).
+    let mut tci = rank_one_star();
+    let edge = TreeTciEdge::new(0, 1);
+    update_edge_plain_unit(&mut tci, edge, sum_plus_one);
     assert_eq!(tci.bond_errors()[&edge], 0.0);
     assert!(tci.unmeasured_bonds.contains(&edge));
 }
@@ -466,8 +529,9 @@ fn update_edge_measures_bond_whose_side_has_one_configuration() {
 
 #[test]
 fn exhausted_rank_two_candidates_are_unmeasured_on_either_side() {
-    // The middle unit site offers only two candidates out of four possible
-    // configurations. The two selected pivots exhaust that side (#1352).
+    // With the plain product, the middle unit site offers only two candidates
+    // out of four possible configurations. The two selected pivots exhaust
+    // that side (#1352).
     for edge in [TreeTciEdge::new(1, 2), TreeTciEdge::new(2, 3)] {
         let mut state =
             TreeTCI2::<f64>::new(vec![2, 2, 1, 2, 2], TreeTciGraph::linear_chain(5).unwrap())
@@ -490,20 +554,14 @@ fn exhausted_rank_two_candidates_are_unmeasured_on_either_side() {
                 })
                 .collect())
         };
-        let selected =
-            update_edge_default(&mut state, edge, identity, &no_truncation_options()).unwrap();
-        assert_eq!(selected.rank, 2);
+        update_edge_plain_unit(&mut state, edge, identity);
+        let (left_key, _) = state.graph.subregion_vertices(edge).unwrap();
+        assert_eq!(ncols_2d(&state.ijset[&left_key]).unwrap(), 2);
         assert_eq!(state.bond_errors()[&edge], 0.0);
         assert!(state.unmeasured_bonds.contains(&edge), "edge {edge:?}");
         // A genuinely rank-one function has a residual to inspect after its
         // first pivot, even though the same side still has only two candidates.
-        update_edge_default(
-            &mut state,
-            edge,
-            |b| Ok(vec![1.0; b.n_points()]),
-            &no_truncation_options(),
-        )
-        .unwrap();
+        update_edge_plain_unit(&mut state, edge, |b| Ok(vec![1.0; b.n_points()]));
         assert!(!state.unmeasured_bonds.contains(&edge), "edge {edge:?}");
     }
 }

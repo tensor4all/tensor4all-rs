@@ -191,8 +191,9 @@ fn star_state(junction_dim: usize, pivots: &[Vec<usize>]) -> TreeTCI2<f64> {
 #[test]
 fn truncated_default_proposer_lets_site_free_junction_grow() {
     // Rank 2 on every bond. On edge (0, 1) the junction side offers the
-    // product of the two other bonds' pivots (2 * 2 = 4 candidates); the old
-    // `local_dim * rank = 1 * 2` budget kept the bond at rank 2.
+    // product of the two other bonds' pivots (2 * 2 = 4 candidates, enough
+    // that the junction is not expanded); the old `local_dim * rank = 1 * 2`
+    // budget kept the bond at rank 2.
     let tci = star_state(1, &[vec![0, 0, 0, 0], vec![0, 1, 1, 1]]);
     let edge = TreeTciEdge::new(0, 1);
     let (ikey, _) = tci.graph.subregion_vertices(edge).unwrap();
@@ -359,23 +360,70 @@ fn deterministic_proposer_does_not_consume_caller_randomness() {
 }
 
 #[test]
+fn default_proposer_expands_a_locked_unit_junction() {
+    // Rank 1 on every bond around a junction of local dimension 1. The plain
+    // product of the other bonds' pivots is the single candidate (0, 0, 0),
+    // fewer than twice the edge's rank, so the junction expands the first of
+    // its equal-rank other bonds (to site 2) over that site's index (#1352).
+    let tci = star_state(1, &[vec![0, 0, 0, 0]]);
+    let edge = TreeTciEdge::new(0, 1);
+    let (junction, leaf) = DefaultProposer.candidates(&tci, edge).unwrap();
+    // Junction side key is (0, 2, 3): the plain product first, then site 2.
+    assert_eq!(
+        junction,
+        vec![vec![0, 0, 0], vec![0, 1, 0], vec![0, 2, 0], vec![0, 3, 0]]
+    );
+    assert_eq!(leaf, vec![vec![0], vec![1], vec![2], vec![3]]);
+}
+
+#[test]
+fn default_proposer_expands_the_largest_rank_bond_of_a_unit_junction() {
+    // Bonds to sites 1 and 2 have rank 2, the bond to site 3 rank 1. On edge
+    // (0, 1) the plain product offers 2 * 1 = 2 < 2 * 2 candidates, so the
+    // junction expands its larger-rank other bond, the one to site 2.
+    let tci = star_state(1, &[vec![0, 0, 0, 0], vec![0, 1, 1, 0]]);
+    let edge = TreeTciEdge::new(0, 1);
+    let (junction_key, _) = tci.graph.subregion_vertices(edge).unwrap();
+    assert_eq!(ncols_2d(&tci.ijset[&junction_key]).unwrap(), 2);
+    let (junction, _) = DefaultProposer.candidates(&tci, edge).unwrap();
+    assert_eq!(
+        junction,
+        vec![vec![0, 0, 0], vec![0, 1, 0], vec![0, 2, 0], vec![0, 3, 0]]
+    );
+}
+
+#[test]
+fn default_proposer_keeps_the_plain_product_of_an_unlocked_unit_junction() {
+    // Rank 2 on every bond: the plain product offers 2 * 2 = 4 candidates,
+    // twice the edge's rank, so the junction is not expanded.
+    let tci = star_state(1, &[vec![0, 0, 0, 0], vec![0, 1, 1, 1]]);
+    let edge = TreeTciEdge::new(0, 1);
+    let (junction, _) = DefaultProposer.candidates(&tci, edge).unwrap();
+    assert_eq!(
+        junction,
+        vec![vec![0, 0, 0], vec![0, 0, 1], vec![0, 1, 0], vec![0, 1, 1]]
+    );
+}
+
+#[test]
 fn default_proposer_offers_enrichment_candidates_of_the_junction_side() {
-    // Rank 1 on every bond around a junction of local dimension 1: without
-    // the recorded candidates the junction side of edge (0, 1) would hold
-    // the single product pivot (#1159).
+    // Recorded candidates are appended after the junction's own candidates,
+    // deduplicated against them (#1159).
     let mut tci = star_state(1, &[vec![0, 0, 0, 0]]);
     let edge = TreeTciEdge::new(0, 1);
     let (junction_key, _) = tci.graph.subregion_vertices(edge).unwrap();
     let (before, _) = DefaultProposer.candidates(&tci, edge).unwrap();
-    assert_eq!(before, vec![vec![0, 0, 0]]);
+    assert_eq!(before.len(), 4);
 
     tci.enrichment_candidates.insert(
         junction_key,
         ColMajorArray::new(vec![0, 0, 0, 0, 3, 2], vec![3, 2]).unwrap(),
     );
     let (after, leaf) = DefaultProposer.candidates(&tci, edge).unwrap();
-    // Deduplicated against the product candidate, appended in order.
-    assert_eq!(after, vec![vec![0, 0, 0], vec![0, 3, 2]]);
+    // (0, 0, 0) is already present; (0, 3, 2) is new and appended.
+    let mut expected = before;
+    expected.push(vec![0, 3, 2]);
+    assert_eq!(after, expected);
     // The leaf side has no recorded candidates and is unchanged.
     assert_eq!(leaf, vec![vec![0], vec![1], vec![2], vec![3]]);
 }
