@@ -73,6 +73,28 @@ that finds no new pivots establishes convergence
 qualifies the recorded error; it does not enrich candidates or guarantee that
 the returned approximation meets the requested tolerance.
 
+The diagnostic fires only when the candidates are fully used. A unit vertex can
+also lock its bonds while a few spare candidates remain. In the three-branch
+table of #1352, the centre has local dimension 1, and the x and z bonds into it
+capped each other at rank 11 (or 10) below the true rank 12. The bond into the
+third branch had rank 1, so each side offered only the other bond's pivots.
+The #1159 candidates kept the count just above the rank. Every retained pivot
+pair had residual near 1e-16, and the run stopped `Converged` with a dense error
+of 6.3e-10 at tolerance 1e-10.
+
+`DefaultProposer` therefore makes a unit vertex transparent while it is locked.
+On the unit side of an edge, let r be the edge's current rank. If the product of
+the other bonds' pivots holds fewer than 2r candidates, the side also offers a
+second set: the other bond with the most pivots has those pivots replaced by its
+neighbour's own side candidates, expanded over the neighbour's local index. This
+is what a two-site update across the unit vertex would see.
+
+- The threshold 2r is the slack a binary site would add. It is not tuned.
+- The largest-rank bond is the one entangled with the edge. A nearly separable
+  bond has small rank and cannot carry the missing direction.
+- Above the threshold, the plain product is used. High-rank junctions, such as
+  the #1153 comb, therefore pay nothing extra after their first sweeps.
+
 To let those bonds grow, each optimization call first enriches the pivots
 around vertices of local dimension 1, following xfac's
 `TensorTreeCI::addPivotsAllBonds(enrich_pivot1())`: it collects the vertices of

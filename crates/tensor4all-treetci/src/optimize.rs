@@ -71,8 +71,10 @@ pub enum TreeTciTermination {
     /// [`crate::TruncatedDefaultProposer`] keep the pivots enriched there as
     /// permanent candidates, so an exactly rank-1 bond is measured and can be
     /// reported `Converged` (issue #1159); a custom proposer that drops them
-    /// can reach this state. Higher-rank bonds can still exhaust their
-    /// candidates even with the built-in proposers. The approximation may be
+    /// can reach this state. At higher rank the built-in proposers expand
+    /// such a vertex while its candidates are locked (issue #1352), so a
+    /// custom proposer that offers only the plain product of the other bonds'
+    /// pivots is the usual way to exhaust them. The approximation may be
     /// inaccurate; enabling the global pivot search, supplying more initial
     /// pivots, or offering more candidates on that side can let the bonds grow.
     DegenerateCandidateSet,

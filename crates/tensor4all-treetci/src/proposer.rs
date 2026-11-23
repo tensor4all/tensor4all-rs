@@ -110,6 +110,14 @@ pub trait PivotCandidateProposer {
 /// subtrees with a Kronecker expansion over the local dimension of
 /// the edge endpoints. This is the recommended proposer for most use cases.
 ///
+/// An endpoint of local dimension 1 has no index to expand, so its side
+/// offers only the product of its other bonds' pivots. While that product
+/// holds fewer than twice the edge's current rank, the bonds through the
+/// vertex could cap each other below the true rank (issue #1352). The side
+/// then also offers the candidates of a two-site update across the vertex:
+/// the largest-rank other bond's pivots are replaced by its neighbour's own
+/// side candidates. Larger products are used unchanged.
+///
 /// # Examples
 ///
 /// ```
@@ -137,17 +145,8 @@ impl PivotCandidateProposer for DefaultProposer {
         let (vp, vq) = state.graph.separate_vertices(edge)?;
         let (ikey, jkey) = state.graph.subregion_vertices(edge)?;
 
-        let adjacent_vp = state.graph.adjacent_edges(vp, &[edge]);
-        let in_ikeys = state.graph.edge_in_ij_keys(vp, &adjacent_vp)?;
-        let ipivots = pivot_set(&state.ijset, &in_ikeys, &ikey)?;
-        let isite_index = subtree_position(&ikey, vp)?;
-        let iset = kronecker(&ipivots, isite_index, state.local_dims[vp])?;
-
-        let adjacent_vq = state.graph.adjacent_edges(vq, &[edge]);
-        let in_jkeys = state.graph.edge_in_ij_keys(vq, &adjacent_vq)?;
-        let jpivots = pivot_set(&state.ijset, &in_jkeys, &jkey)?;
-        let jsite_index = subtree_position(&jkey, vq)?;
-        let jset = kronecker(&jpivots, jsite_index, state.local_dims[vq])?;
+        let iset = side_candidates(state, vp, edge, &ikey)?;
+        let jset = side_candidates(state, vq, edge, &jkey)?;
 
         let pivots = &state.ijset;
         let icombined = union_with_pivots(iset, pivots, &ikey)?;
@@ -442,6 +441,114 @@ fn union_with_pivots(
         }
     }
     Ok(unique)
+}
+
+/// Candidates for the side `key` of `edge` whose endpoint is `vertex`.
+///
+/// A vertex with a site expands the product of its incoming pivot sets over
+/// its local index. A vertex of local dimension 1 has no index to expand, so
+/// it offers only the product of its other bonds' pivots. When that product
+/// is small against the edge's own rank, two bonds through the same unit
+/// vertex cap each other below the true rank (#1352). The unit vertex is then
+/// made transparent for its largest-rank other bond: that bond's pivots are
+/// replaced by the neighbour's own side candidates, expanded over the
+/// neighbour's local index, as a two-site update across the unit vertex would
+/// see them. The largest-rank bond is the one entangled with `edge`; a nearly
+/// separable bond has small rank and cannot carry the missing direction.
+///
+/// The expansion happens only while the product offers fewer than twice the
+/// edge's current rank, the slack a binary site would add. Above that, the
+/// unit vertex keeps the plain product, so high-rank junctions pay nothing
+/// extra. A unit leaf has no other bond and keeps its single candidate.
+fn side_candidates<T>(
+    state: &TreeTCI2<T>,
+    vertex: usize,
+    edge: TreeTciEdge,
+    key: &SubtreeKey,
+) -> Result<Vec<MultiIndex>> {
+    let adjacent = state.graph.adjacent_edges(vertex, &[edge]);
+    let in_keys = state.graph.edge_in_ij_keys(vertex, &adjacent)?;
+    let pivots = pivot_set(&state.ijset, &in_keys, key)?;
+    let position = subtree_position(key, vertex)?;
+    if state.local_dims[vertex] != 1 || adjacent.is_empty() {
+        return kronecker(&pivots, position, state.local_dims[vertex]);
+    }
+    let rank = state.ijset.get(key).map_or(Ok(0), ncols_2d)?;
+    if pivots.len() >= 2 * rank.max(1) {
+        return kronecker(&pivots, position, 1);
+    }
+
+    // Expand the other bond with the most pivots; ties keep the first.
+    let mut expanded = 0;
+    let mut expanded_rank = 0;
+    for (index, in_key) in in_keys.iter().enumerate() {
+        let bond_rank = state.ijset.get(in_key).map_or(Ok(0), ncols_2d)?;
+        if bond_rank > expanded_rank {
+            expanded = index;
+            expanded_rank = bond_rank;
+        }
+    }
+    let incoming = adjacent[expanded];
+    let neighbour = if incoming.u() == vertex {
+        incoming.v()
+    } else {
+        incoming.u()
+    };
+    let parts = in_keys
+        .iter()
+        .enumerate()
+        .map(|(index, in_key)| {
+            if index == expanded {
+                let local = side_candidates(state, neighbour, incoming, in_key)?;
+                union_with_pivots(local, &state.ijset, in_key)
+            } else {
+                pivot_set(&state.ijset, std::slice::from_ref(in_key), in_key)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut candidates = pivots;
+    candidates.extend(product_over_keys(&parts, &in_keys, key)?);
+    // The caller deduplicates and adds the edge's own pivots.
+    Ok(candidates)
+}
+
+/// Every combination of one entry per part, scattered into `out_key` order.
+/// Sites outside the parts' keys (a unit vertex) stay at coordinate 0.
+fn product_over_keys(
+    parts: &[Vec<MultiIndex>],
+    keys: &[SubtreeKey],
+    out_key: &SubtreeKey,
+) -> Result<Vec<MultiIndex>> {
+    let mut product = vec![vec![0; out_key.as_slice().len()]];
+    for (part, key) in parts.iter().zip(keys) {
+        let positions = key
+            .as_slice()
+            .iter()
+            .map(|&site| subtree_position(out_key, site))
+            .collect::<Result<Vec<_>>>()?;
+        let capacity = product
+            .len()
+            .checked_mul(part.len())
+            .ok_or_else(|| anyhow::anyhow!("unit-vertex candidate count overflowed usize"))?;
+        let mut next = Vec::with_capacity(capacity);
+        for base in &product {
+            for entry in part {
+                ensure!(
+                    entry.len() == positions.len(),
+                    "candidate length {} does not match subtree key length {}",
+                    entry.len(),
+                    positions.len()
+                );
+                let mut merged = base.clone();
+                for (&position, &value) in positions.iter().zip(entry) {
+                    merged[position] = value;
+                }
+                next.push(merged);
+            }
+        }
+        product = next;
+    }
+    Ok(product)
 }
 
 fn pivot_set(
