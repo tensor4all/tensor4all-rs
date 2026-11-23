@@ -70,5 +70,42 @@ class HeavyTargetTests(unittest.TestCase):
             self.assertEqual(MODULE.heavy_targets(tests, {main}), [])
 
 
+class HeavySourceModuleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.src = Path(self._tmp.name) / "src"
+        self.src.mkdir()
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def write(self, rel: str, text: str = "") -> Path:
+        path = self.src / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path
+
+    def test_declared_heavy_modules_pass(self) -> None:
+        self.write("lib.rs", "#[cfg(test)]\nmod tests;\n#[cfg(test)] mod heavy_root;\n")
+        self.write("heavy_root.rs")
+        self.write("tests.rs", "mod heavy_file;\n")
+        self.write("tests/heavy_file.rs")
+        self.write("a/tests/mod.rs", "pub(crate) mod heavy_dir;\n")
+        self.write("a/tests/heavy_dir/mod.rs")
+        self.assertEqual(MODULE.undeclared_heavy_modules(self.src), [])
+
+    def test_undeclared_heavy_modules_fail(self) -> None:
+        self.write("lib.rs", "mod tests;\n")
+        self.write("tests.rs", "mod ordinary;\n")
+        forgotten = self.write("tests/heavy_forgotten.rs")
+        self.write("a/tests/mod.rs")
+        self.write("a/tests/heavy_dir/mod.rs")
+        self.write("heavy_notes.txt")
+        self.assertEqual(
+            MODULE.undeclared_heavy_modules(self.src),
+            [(self.src / "a/tests/heavy_dir").resolve(), forgotten.resolve()],
+        )
+
+
 if __name__ == "__main__":
     sys.exit(unittest.main())

@@ -13,6 +13,11 @@ Checked entries are the top-level ``tests/*.rs`` files and the
 A ``tests/heavy_*.rs`` file must be a module, not a target of its own: the
 heavy-tests workflow selects paths with ``test(/(^|::)heavy_/)``, which matches
 when a heavy module name is part of the test path.
+
+Private ``heavy_*`` unit-test modules under ``src/`` are checked too: each
+``heavy_*.rs`` file, or ``heavy_*/`` directory holding a ``mod.rs``, must be
+declared as ``mod heavy_<name>;`` in its parent module file. An undeclared one
+is never compiled, so its tests would silently run in no tier.
 """
 
 from __future__ import annotations
@@ -23,7 +28,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-MOD_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;", re.M)
+MOD_RE = re.compile(
+    r"^\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;", re.M
+)
 
 
 def undeclared(tests_dir: Path, roots: set[Path]) -> list[Path]:
@@ -60,6 +67,31 @@ def heavy_targets(tests_dir: Path, roots: set[Path]) -> list[Path]:
     )
 
 
+def undeclared_heavy_modules(src_dir: Path) -> list[Path]:
+    """Return ``heavy_*`` modules under ``src_dir`` that no parent declares."""
+    src_dir = src_dir.resolve()
+    missing = []
+    for path in sorted(src_dir.rglob("heavy_*")):
+        if path.is_file() and path.suffix == ".rs":
+            name = path.stem
+        elif path.is_dir() and (path / "mod.rs").is_file():
+            name = path.name
+        else:
+            continue
+        directory = path.parent
+        if directory == src_dir:
+            parents = [src_dir / "lib.rs", src_dir / "main.rs"]
+        else:
+            parents = [directory / "mod.rs", directory.with_suffix(".rs")]
+        declared: set[str] = set()
+        for parent in parents:
+            if parent.is_file():
+                declared.update(MOD_RE.findall(parent.read_text(encoding="utf-8")))
+        if name not in declared:
+            missing.append(path)
+    return missing
+
+
 def main() -> int:
     meta = json.loads(
         subprocess.run(
@@ -71,6 +103,13 @@ def main() -> int:
     )
     failures = []
     for package in meta["packages"]:
+        src_dir = Path(package["manifest_path"]).parent / "src"
+        if src_dir.is_dir():
+            for entry in undeclared_heavy_modules(src_dir):
+                failures.append(
+                    f"{entry} ({package['name']}) is not declared as `mod` in "
+                    "its parent module, so its heavy tests are never compiled"
+                )
         tests_dir = Path(package["manifest_path"]).parent / "tests"
         if not tests_dir.is_dir():
             continue

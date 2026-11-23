@@ -71,7 +71,7 @@ fn chain(sites: &[DynIndex], r: usize, decay: f64, seed: u64) -> Fallible<SubDom
 
 /// Relative squared error of a partition against the exact sum, from inner
 /// products only.
-fn relative_squared_error(
+pub(super) fn relative_squared_error(
     exact: &SubDomainTreeTN<usize>,
     result: &PartitionedTreeTN<usize>,
 ) -> Fallible<f64> {
@@ -104,7 +104,7 @@ fn dense_relative_squared_error(
 
 /// Two random addends with the same key over the six-site chain, and their
 /// exact sum.
-fn exact_pair(
+pub(super) fn exact_pair(
     r: usize,
     decay: f64,
 ) -> Fallible<(SubDomainTreeTN<usize>, Vec<SubDomainTreeTN<usize>>)> {
@@ -114,7 +114,7 @@ fn exact_pair(
     Ok((exact, addends))
 }
 
-fn options(allocation: BudgetAllocation, cutoff: f64, cap: usize) -> PatchingOptions {
+pub(super) fn options(allocation: BudgetAllocation, cutoff: f64, cap: usize) -> PatchingOptions {
     PatchingOptions {
         cutoff,
         allocation,
@@ -165,7 +165,9 @@ fn norm_worst_case_keeps_the_project_first_error() {
 /// is exact to round-off; the pre-#1131 routine loses weight at the split
 /// levels there. The comparison is the leaf-wise project-first baseline: project
 /// the exact sum onto the routine's own final leaves and truncate that partition
-/// once with the same cutoff, allocation and cap.
+/// once with the same cutoff, allocation and cap. This test pins one
+/// configuration that exercises splitting; `heavy_project_first_add` runs the
+/// full grid of bond dimensions, decays, cutoffs and caps.
 #[test]
 fn splits_are_exact_where_the_leaf_pass_discards_nothing() {
     let (exact, addends) = exact_pair(3, 0.3).unwrap();

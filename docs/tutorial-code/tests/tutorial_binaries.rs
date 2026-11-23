@@ -116,7 +116,12 @@ fn qtt_r_sweep_depth_override_validates_bounds() -> Result<(), Box<dyn Error>> {
         let x = index as f64 / 4.0;
         let exact = (30.0 * x).sin();
         assert_eq!(fields[3].parse::<f64>()?, x);
-        assert_eq!(fields[4], format!("{exact:.16}"));
+        // The binary prints 16 decimals; allow rounding and libm differences.
+        let printed = fields[4].parse::<f64>()?;
+        assert!(
+            (printed - exact).abs() < 1e-15,
+            "index {index}: printed exact value {printed} != {exact}"
+        );
         let qtt = fields[5].parse::<f64>()?;
         // Same accuracy bound as the binary and the live bit-depth tutorial.
         assert!(
