@@ -35,6 +35,7 @@ mod global_guard;
 // Local evaluator conveniences are kept for the unit tests that exercise them.
 #[cfg_attr(not(test), allow(dead_code))]
 mod local;
+mod matmul;
 mod options;
 // `initial_guess` is kept for the unit tests that exercise it directly.
 #[cfg_attr(not(test), allow(dead_code))]

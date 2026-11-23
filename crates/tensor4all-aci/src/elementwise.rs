@@ -130,7 +130,10 @@ where
 /// # Errors
 /// Returns [`AciError`](crate::AciError) when options or inputs are invalid,
 /// initial guess construction fails, the operator callback fails, or a local
-/// matrix-CI update fails.
+/// matrix-CI update fails. Returns [`AciError::Backend`](crate::AciError::Backend)
+/// when a matrix product of the sweep fails, or when this build has no
+/// process-global CPU context (`tensor4all-core`'s `global-defaults` feature
+/// off); use [`elementwise_batched_with_rng_in`] with an explicit context then.
 pub fn elementwise_batched_with_rng<T, F, R>(
     op: F,
     inputs: &[SimpleTensorTrain<T>],
@@ -142,22 +145,22 @@ where
     F: for<'batch> FnMut(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
     R: rand::Rng + ?Sized,
 {
+    // No caller context: resolve the process-global one once and run the same
+    // context-taking path as `elementwise_batched_with_rng_in`.
+    let context = crate::matmul::default_context()?;
     // Erase the caller's RNG type once so the run below is instantiated once
     // per scalar type instead of once per (scalar, RNG) pair.
     let mut stream: &mut R = rng;
-    elementwise_batched_erased(op, inputs, options, &mut stream, None)
+    elementwise_batched_erased(op, inputs, options, &mut stream, &context)
 }
 
 /// Batched elementwise ACI whose factorizations run in a caller-owned CPU context.
 ///
 /// The same algorithm, options and result as [`elementwise_batched_with_rng`]; what differs is where the ACI
-/// factorizations run. Without a context they are assembled through the process-global CPU context; with one,
-/// every MatrixLUCI factorization of this workload goes through `context`.
-///
-/// Both kinds of session-bound work follow the context: the MatrixLUCI factorizations and the frame products that
-/// update the input frames during a sweep. The batched frame updates and the caller's own operator are unchanged and
-/// keep their existing routes, which is recorded in
-/// `docs/design/859-f7-consumer-inventory.md`.
+/// numerics run. [`elementwise_batched_with_rng`] runs this same code path on the process-global CPU context; here
+/// every MatrixLUCI factorization and every matrix product of the workload (frame updates, batched or not, local
+/// input factors and block materialization, solution core updates and global-pivot environments) runs on
+/// `context`, and nothing falls back to the process-global context. The caller's own operator is not touched.
 ///
 /// # Errors
 ///
@@ -165,8 +168,10 @@ where
 /// [`crate::AciError::SiteDimMismatch`] for inputs that do not agree on their site dimensions,
 /// [`crate::AciError::InvalidOptions`] for invalid options, [`crate::AciError::InvalidInitialGuess`] when the
 /// initial guess is degenerate, [`crate::AciError::Operator`] when the caller's operator callback fails,
-/// [`crate::AciError::OperatorOutputLength`] when it writes the wrong number of values, and
-/// [`crate::AciError::MatrixCI`] when a factorization fails - including one the caller's context refuses.
+/// [`crate::AciError::OperatorOutputLength`] when it writes the wrong number of values,
+/// [`crate::AciError::MatrixCI`] when a factorization fails - including one the caller's context refuses - and
+/// [`crate::AciError::Backend`] when a matrix product fails, for example because `context` refuses the session or
+/// its engine rejects the product.
 pub fn elementwise_batched_with_rng_in<T, F, R>(
     op: F,
     inputs: &[SimpleTensorTrain<T>],
@@ -180,7 +185,7 @@ where
     R: rand::Rng + ?Sized,
 {
     let mut stream: &mut R = rng;
-    elementwise_batched_erased(op, inputs, options, &mut stream, Some(context))
+    elementwise_batched_erased(op, inputs, options, &mut stream, context)
 }
 
 fn elementwise_batched_erased<T, F>(
@@ -188,7 +193,7 @@ fn elementwise_batched_erased<T, F>(
     inputs: &[SimpleTensorTrain<T>],
     options: &AciOptions<T>,
     rng: &mut dyn rand::RngCore,
-    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    context: &tensor4all_tensorbackend::CpuExecutionContext,
 ) -> Result<AciResult<T>>
 where
     T: AciScalar + PartialEq,
@@ -249,7 +254,7 @@ where
             && !rank_capped
         {
             let pivots = find_global_pivots(&mut problem, &mut op, options, rng)?;
-            let _added = problem.add_global_pivots(&pivots)?;
+            let _added = problem.add_global_pivots(&pivots, context)?;
             nglobal_pivots_history.push(pivots.len());
         } else {
             nglobal_pivots_history.push(0);

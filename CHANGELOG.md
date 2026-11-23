@@ -150,6 +150,10 @@
 
 ### Added
 
+- `tensor4all_tensorbackend::explicit::Session::batched_mat_mul_same_shape_owned`: the session
+  twin of the process-global batched same-shape GEMM, one einsum on the session's engine
+  (#1382).
+
 - `tensor4all-tensorbackend` adds `Runtime`, an engine-free runtime that several
   engines share (#1393, stage A2 of #1376). It holds the eager AD runtime, the graph
   compiler and the compiled-program cache, and no engine or engine lock; clones are
@@ -192,6 +196,18 @@
   axes at R = 20 now fit in memory.
 
 ### Breaking Rust API changes
+
+- `tensor4all-aci`: `AciError` has a new `Backend { operation, source }` variant (#1382).
+  A matrix product of the ACI sweep that the execution context refuses (for example a
+  reentrant session), that the engine rejects, or whose operand shapes disagree is now
+  reported as `AciError::Backend` with the original error as `source`, instead of
+  `AciError::InvalidInitialGuess`, which is kept for problems with the initial guess.
+  An exhaustive `match` on `AciError` needs the new arm. `elementwise_batched_with_rng_in`
+  now runs every factorization and matrix product of the workload on the caller's
+  context, including the batched frame updates, local block setup and global-pivot
+  environments that previously took the process-global route; the context-free entries
+  run the same code path on the process-global context, and return `AciError::Backend`
+  in a build without `global-defaults`.
 
 - `tensor4all-core`: `IdxTensorError` has two new variants, `RuntimeMismatch` and
   `PlacementMismatch` (#1393). The enum is not `#[non_exhaustive]`, so exhaustive
