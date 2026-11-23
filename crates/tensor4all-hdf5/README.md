@@ -5,12 +5,12 @@ HDF5 serialization for tensor4all-rs, compatible with ITensors.jl / ITensorMPS.j
 **Thread safety.** The HDF5 C library is not thread-safe. All public
 `save_*` / `append_*` / `load_*` calls are serialized through one
 process-wide lock, so the crate is safe to call concurrently by construction
-(even on distinct files). The crate also disables HDF5 OS file locking
-(`HDF5_USE_FILE_LOCKING=FALSE`, set once unless you set it yourself) because
-the OS lock can outlive `H5Fclose` and a serialized reopen of the same path
-would otherwise fail with `errno = 35`. This environment variable is
-process-global; set it yourself if you need cross-process write locking.
-Direct use of the re-exported low-level hdf5-rt passthroughs bypasses the
+(even on distinct files). The crate never touches the process environment. HDF5 OS file locking is
+**your** choice, made before the first HDF5 call in the process: set
+`HDF5_USE_FILE_LOCKING=FALSE` if you re-open a just-written path in the same
+process (otherwise the OS lock can outlive `H5Fclose` and the reopen can fail
+with `errno = 35`); leave it unset to keep cross-process write protection. See
+the crate docs, "File locking". Direct use of the re-exported low-level hdf5-rt passthroughs bypasses the
 crate lock.
 
 ## Key Types

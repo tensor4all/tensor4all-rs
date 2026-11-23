@@ -98,16 +98,22 @@ public `save_*` / `append_*` / `load_*` call through one process-wide lock
 concurrently by construction** — including on distinct files. The lock covers
 the whole operation (open, write/read, close), not individual HDF5 calls.
 
-In addition, the crate disables HDF5's OS file locking by setting
-`HDF5_USE_FILE_LOCKING=FALSE` once, before the first HDF5 call, unless you
-already set that variable (your value wins). This is needed because a writer's
-exclusive OS file lock can outlive `H5Fclose`, so a serialized reopen of the
-*same* path can otherwise still fail with `errno = 35` (EAGAIN). The
-environment variable is process-global: it also affects any other HDF5 usage
-in the process. If you need cross-process write protection, set
-`HDF5_USE_FILE_LOCKING` yourself (e.g. `TRUE`) — but then concurrent
-same-path open-after-close within one process may fail again, so coordinate
-access to shared paths.
+File locking is **your** choice: the crate never reads or writes the
+process environment (in particular it does not set `HDF5_USE_FILE_LOCKING`).
+HDF5 parses that variable once, when the C library initializes, so set it
+before the first HDF5 call in the process (shell, service unit, Cargo's
+`[env]`, or `main` before any thread starts).
+
+- `HDF5_USE_FILE_LOCKING=FALSE` is needed if you save and then re-open the
+  *same* path in one process, because a writer's exclusive OS file lock can
+  outlive `H5Fclose` and the reopen can otherwise fail with `errno = 35`
+  (EAGAIN). The call lock above makes this safe.
+- Unset (or `TRUE`) keeps HDF5's cross-process write protection, but
+  same-path open-after-close within one process may then fail, so coordinate
+  access to shared paths.
+
+The variable is process-global: it affects every HDF5 user in the process,
+which is why the application, not a library, must choose it.
 
 Direct use of the re-exported low-level HDF5 passthroughs (hdf5-rt's
 `hdf5_init` etc.) bypasses the crate's lock and is outside this guarantee.

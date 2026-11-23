@@ -85,4 +85,9 @@ chmod +x "$rustdoc_wrapper_dir/rustdoc"
 
 echo "mdBook preparation: $((SECONDS - preparation_started)) seconds"
 echo "mdBook chapter tests begin"
+# tensor4all-hdf5 never sets HDF5_USE_FILE_LOCKING itself (#1386). The HDF5 guide
+# snippets save and re-open one path, and rustdoc is not a child of cargo here, so
+# `.cargo/config.toml` [env] does not reach it: choose it for this harness. An
+# exported value wins.
+export HDF5_USE_FILE_LOCKING="${HDF5_USE_FILE_LOCKING:-FALSE}"
 PATH="$rustdoc_wrapper_dir:$PATH" mdbook test docs/book -L "$repo_root/target/$cargo_profile/deps" "$@"
