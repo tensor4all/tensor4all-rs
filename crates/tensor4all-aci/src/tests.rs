@@ -18,11 +18,21 @@ use crate::{
 use num_complex::Complex64;
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
-use tensor4all_core::{matrix_luci_factors_from_matrix_owned, RrLUOptions};
+use tensor4all_core::{matrix_luci_factors_from_matrix_owned_in, RrLUOptions};
 use tensor4all_simplett::{
     tensor3_from_data, tensor3_zeros, AbstractTensorTrain, SimpleTensorTrain, Tensor3Ops,
 };
-use tensor4all_tensorbackend::Matrix;
+use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext, Matrix};
+
+/// The caller-owned context the crate-internal unit tests run ACI's numerics on.
+pub(crate) fn ctx() -> &'static CpuExecutionContext {
+    static CONTEXT: std::sync::OnceLock<CpuExecutionContext> = std::sync::OnceLock::new();
+    CONTEXT.get_or_init(|| {
+        CpuExecutionContext::from_backend(
+            CpuBackend::with_threads(1).expect("one-thread CPU backend for the ACI unit tests"),
+        )
+    })
+}
 
 fn tensor_train_with_link_dims(site_dims: &[usize], link_dims: &[usize]) -> SimpleTensorTrain<f64> {
     assert_eq!(link_dims.len(), site_dims.len().saturating_sub(1));
@@ -120,7 +130,7 @@ fn local_test_problem() -> ElementwiseProblem<f64> {
     ])
     .unwrap();
     let mut problem =
-        ElementwiseProblem::new(vec![input_a, input_b], AciOptions::default(), None).unwrap();
+        ElementwiseProblem::new(vec![input_a, input_b], AciOptions::default(), ctx()).unwrap();
     for input in 0..problem.n_inputs() {
         problem.left_frames[input][1] =
             Some(Matrix::from_col_major_vec(2, 2, vec![1.0, 2.0, 10.0, 20.0]));
@@ -596,7 +606,7 @@ fn elementwise_batch_rejects_out_of_range_point_index() {
 fn elementwise_problem_initializes_boundary_frames() {
     let a = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
-    let problem = ElementwiseProblem::new(vec![a, b], AciOptions::default(), None).unwrap();
+    let problem = ElementwiseProblem::new(vec![a, b], AciOptions::default(), ctx()).unwrap();
     assert_eq!(problem.len(), 3);
     assert_eq!(problem.n_inputs(), 2);
     assert_eq!(problem.left_frame_shape(0, 0), Some((1, 1)));
@@ -633,7 +643,7 @@ fn sweep_forward_once(problem: &mut ElementwiseProblem<f64>, options: &AciOption
     };
     for bond in 0..problem.len() - 1 {
         problem
-            .local_update(bond, true, options, &mut op, None)
+            .local_update(bond, true, options, &mut op, ctx())
             .unwrap();
     }
 }
@@ -652,6 +662,61 @@ fn algebraic_bond_bounds(site_dims: &[usize]) -> Vec<usize> {
         .collect()
 }
 
+/// #1382: the environments of an injected global pivot are products on the caller's context. With a session
+/// of that context held on this thread the first environment product is refused, and the refusal surfaces
+/// as `AciError::Backend`; a product on the process-global route would have succeeded instead. The
+/// end-to-end held-global test cannot reach this step, because its fixture converges without injecting.
+#[test]
+fn global_pivot_environments_run_on_the_callers_context() {
+    let site_dims = [2usize, 2, 2, 2, 2];
+    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
+    let options = AciOptions::default();
+    let mut problem = ElementwiseProblem::new(
+        vec![
+            separable_tt(&site_dims, 0.25),
+            separable_tt(&site_dims, 0.5),
+        ],
+        options.clone(),
+        &context,
+    )
+    .unwrap();
+    let mut op = |batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        for (point, value) in output.iter_mut().enumerate().take(batch.n_points()) {
+            *value = batch.get(0, point)? * batch.get(1, point)?;
+        }
+        Ok(())
+    };
+    for bond in 0..problem.len() - 1 {
+        problem
+            .local_update(bond, true, &options, &mut op, &context)
+            .unwrap();
+    }
+    let pivot = vec![vec![1, 0, 1, 0, 1]];
+
+    let refused = context
+        .with_concrete_session(|_held| problem.add_global_pivots(&pivot, &context))
+        .unwrap();
+    let error = refused.expect_err("an environment product on a held context must be refused");
+    let AciError::Backend { operation, source } = error else {
+        panic!("expected AciError::Backend, got {error:?}");
+    };
+    assert_eq!(operation, "left environment contraction at site 0");
+    assert!(matches!(
+        source.downcast_ref::<tensor4all_tensorbackend::CpuExecutionContextError>(),
+        Some(tensor4all_tensorbackend::CpuExecutionContextError::Reentered)
+    ));
+
+    // Released, the same injection runs on the same context and grows a bond.
+    let before = problem.solution.link_dims();
+    assert_eq!(problem.add_global_pivots(&pivot, &context).unwrap(), 1);
+    assert!(problem
+        .solution
+        .link_dims()
+        .iter()
+        .zip(&before)
+        .any(|(after, before)| after > before));
+}
+
 #[test]
 fn global_pivot_injection_stays_within_the_algebraic_bond_bounds() {
     // Five sites of dimension two: the bounds are [2, 4, 4, 2], so a run that
@@ -662,7 +727,7 @@ fn global_pivot_injection_stays_within_the_algebraic_bond_bounds() {
     let a = separable_tt(&site_dims, 0.25);
     let b = separable_tt(&site_dims, 0.5);
     let options = AciOptions::default();
-    let mut problem = ElementwiseProblem::new(vec![a, b], options.clone(), None).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![a, b], options.clone(), ctx()).unwrap();
     sweep_forward_once(&mut problem, &options);
 
     let pivots: Vec<Vec<usize>> = (0..8)
@@ -672,7 +737,7 @@ fn global_pivot_injection_stays_within_the_algebraic_bond_bounds() {
     let shapes_before: Vec<Option<(usize, usize)>> = (1..site_dims.len())
         .map(|bond| problem.right_frame_shape(0, bond))
         .collect();
-    problem.add_global_pivots(&pivots).unwrap();
+    problem.add_global_pivots(&pivots, ctx()).unwrap();
 
     let bounds = algebraic_bond_bounds(&site_dims);
     let link_dims = problem.solution.link_dims();
@@ -716,16 +781,16 @@ fn global_pivot_injection_skips_pivots_already_represented() {
     let a = separable_tt(&site_dims, 0.25);
     let b = separable_tt(&site_dims, 0.5);
     let options = AciOptions::default();
-    let mut problem = ElementwiseProblem::new(vec![a, b], options.clone(), None).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![a, b], options.clone(), ctx()).unwrap();
     sweep_forward_once(&mut problem, &options);
 
     let pivot = vec![vec![1usize, 0, 1, 0, 1, 0]];
-    assert_eq!(problem.add_global_pivots(&pivot).unwrap(), 1);
+    assert_eq!(problem.add_global_pivots(&pivot, ctx()).unwrap(), 1);
     let after_first = problem.solution.link_dims();
 
     // The same pivot a second time is a duplicate at every bond, so nothing
     // grows and the injection count is zero.
-    assert_eq!(problem.add_global_pivots(&pivot).unwrap(), 0);
+    assert_eq!(problem.add_global_pivots(&pivot, ctx()).unwrap(), 0);
     assert_eq!(problem.solution.link_dims(), after_first);
 }
 
@@ -733,7 +798,7 @@ fn global_pivot_injection_skips_pivots_already_represented() {
 fn elementwise_problem_initializes_all_rank_one_right_frames() {
     let a = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
-    let problem = ElementwiseProblem::new(vec![a, b], AciOptions::default(), None).unwrap();
+    let problem = ElementwiseProblem::new(vec![a, b], AciOptions::default(), ctx()).unwrap();
 
     for input in 0..problem.n_inputs() {
         assert_eq!(
@@ -750,7 +815,7 @@ fn elementwise_problem_initializes_all_rank_one_right_frames() {
 #[test]
 fn elementwise_problem_handles_one_site_input() {
     let input = SimpleTensorTrain::<f64>::constant(&[2], 3.0);
-    let problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
+    let problem = ElementwiseProblem::new(vec![input], AciOptions::default(), ctx()).unwrap();
     assert_eq!(problem.len(), 1);
     assert_eq!(problem.left_frame_shape(0, 0), Some((1, 1)));
     assert_eq!(problem.right_frame_shape(0, 1), Some((1, 1)));
@@ -770,7 +835,7 @@ fn elementwise_problem_preserves_initial_guess_values() {
         ..AciOptions::default()
     };
 
-    let problem = ElementwiseProblem::new(vec![input], options, None).unwrap();
+    let problem = ElementwiseProblem::new(vec![input], options, ctx()).unwrap();
 
     for indices in [[0, 0], [0, 1], [1, 0], [1, 1]] {
         assert!(
@@ -783,9 +848,9 @@ fn elementwise_problem_preserves_initial_guess_values() {
 #[test]
 fn elementwise_problem_updates_left_frame_for_selected_rows() {
     let input = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
-    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), ctx()).unwrap();
 
-    problem.update_left_frame(0, 0, &[0, 1], None).unwrap();
+    problem.update_left_frame(0, 0, &[0, 1], ctx()).unwrap();
 
     assert_eq!(problem.left_frame_shape(0, 1), Some((2, 1)));
 }
@@ -797,9 +862,9 @@ fn elementwise_problem_updates_left_frame_values() {
         tensor3_from_data(vec![3.0, 4.0, 5.0, 6.0], 2, 2, 1).unwrap(),
     ])
     .unwrap();
-    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), ctx()).unwrap();
 
-    problem.update_left_frame(0, 0, &[0, 1], None).unwrap();
+    problem.update_left_frame(0, 0, &[0, 1], ctx()).unwrap();
 
     assert_eq!(problem.left_frame_shape(0, 1), Some((2, 2)));
     assert_eq!(problem.left_frame_value(0, 1, 0, 0), Some(1.0));
@@ -816,20 +881,111 @@ fn elementwise_problem_updates_left_frame_values() {
 fn elementwise_problem_updates_all_left_frames_for_selected_rows() {
     let a = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
     let b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
-    let mut problem = ElementwiseProblem::new(vec![a, b], AciOptions::default(), None).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![a, b], AciOptions::default(), ctx()).unwrap();
 
-    problem.update_left_frames(0, &[0, 1], None).unwrap();
+    problem.update_left_frames(0, &[0, 1], ctx()).unwrap();
 
     assert_eq!(problem.left_frame_shape(0, 1), Some((2, 1)));
     assert_eq!(problem.left_frame_shape(1, 1), Some((2, 1)));
 }
 
+/// The `AciError::Backend` source of a refused product, checked to be the context's reentrancy refusal.
+fn assert_reentrant_backend_error(result: crate::Result<()>, operation: &str) {
+    let error = result.expect_err("a product on a held context must be refused");
+    assert!(
+        !matches!(error, AciError::InvalidInitialGuess { .. }),
+        "a refused product must not be reported as an initial-guess error: {error}"
+    );
+    let AciError::Backend {
+        operation: reported,
+        source,
+    } = error
+    else {
+        panic!("expected AciError::Backend, got {error:?}");
+    };
+    assert_eq!(reported, operation);
+    assert!(
+        matches!(
+            source.downcast_ref::<tensor4all_tensorbackend::CpuExecutionContextError>(),
+            Some(tensor4all_tensorbackend::CpuExecutionContextError::Reentered)
+        ),
+        "the backend error must keep the context's refusal as its source, got {source:?}"
+    );
+}
+
+/// #1382: a frame product the caller's context refuses is a backend failure, and it is the caller's context that
+/// refuses it. Holding a session of `context` on this thread makes every further entry into `context` a typed
+/// `Reentered` refusal, so the products below fail exactly when they go through `context`; a product that took
+/// the process-global route instead would succeed and fail this test.
+#[test]
+fn refused_frame_products_surface_as_backend_errors_not_initial_guess_errors() {
+    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
+    let a = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
+    let b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 2.0);
+    let mut problem = ElementwiseProblem::new(vec![a, b], AciOptions::default(), &context).unwrap();
+
+    let (single, batched) = context
+        .with_concrete_session(|_held| {
+            let single = problem.update_left_frame(0, 0, &[0, 1], &context);
+            let batched = problem.update_left_frames(0, &[0, 1], &context);
+            (single, batched)
+        })
+        .unwrap();
+    assert_reentrant_backend_error(single, "left frame update at input 0, site 0");
+    assert_reentrant_backend_error(batched, "batched left frame update at site 0");
+
+    // Once the session is released, the same updates succeed on the same context.
+    problem.update_left_frame(0, 0, &[0, 1], &context).unwrap();
+    problem.update_left_frames(0, &[0, 1], &context).unwrap();
+    assert_eq!(problem.left_frame_shape(1, 1), Some((2, 1)));
+}
+
+/// #1382: the matrix-product helper reports a shape mismatch as a backend/shape failure, not as a bad guess.
+#[test]
+fn mismatched_product_shapes_surface_as_backend_errors() {
+    let left = Matrix::<f64>::zeros(2, 3);
+    let right = Matrix::<f64>::zeros(2, 2);
+    let error = crate::matmul::mat_mul_in(ctx(), &left, &right, || "probe product".to_string())
+        .expect_err("a 2x3 by 2x2 product must be refused");
+    let AciError::Backend { operation, source } = error else {
+        panic!("expected AciError::Backend, got {error:?}");
+    };
+    assert_eq!(operation, "probe product");
+    assert_eq!(
+        source.to_string(),
+        "incompatible matrix shapes: left (2, 3), right (2, 2)"
+    );
+}
+
+/// #1382: a batched product the engine rejects (here, a buffer shorter than its declared shape) is a backend
+/// failure that keeps the engine's diagnostic as its source.
+#[test]
+fn rejected_batched_product_surfaces_as_backend_error() {
+    let error = crate::matmul::batched_mat_mul_in(
+        ctx(),
+        (2, 2, 2, 2),
+        vec![1.0_f64; 7],
+        vec![1.0_f64; 8],
+        || "probe batched product".to_string(),
+    )
+    .expect_err("a 7-value left batch for a 2x2x2 shape must be refused");
+    let AciError::Backend { operation, source } = error else {
+        panic!("expected AciError::Backend, got {error:?}");
+    };
+    assert_eq!(operation, "probe batched product");
+    assert_eq!(
+        source.to_string(),
+        "matrix multiplication failed: batched matrix multiplication left buffer has length 7, \
+         expected 8"
+    );
+}
+
 #[test]
 fn elementwise_problem_updates_right_frame_for_selected_columns() {
     let input = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
-    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), ctx()).unwrap();
 
-    problem.update_right_frame(0, 2, &[0, 1], None).unwrap();
+    problem.update_right_frame(0, 2, &[0, 1], ctx()).unwrap();
 
     assert_eq!(problem.right_frame_shape(0, 2), Some((1, 2)));
 }
@@ -841,9 +997,9 @@ fn elementwise_problem_updates_right_frame_values() {
         tensor3_from_data(vec![3.0, 30.0, 4.0, 40.0], 2, 2, 1).unwrap(),
     ])
     .unwrap();
-    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), ctx()).unwrap();
 
-    problem.update_right_frame(0, 1, &[0, 1], None).unwrap();
+    problem.update_right_frame(0, 1, &[0, 1], ctx()).unwrap();
 
     assert_eq!(problem.right_frame_shape(0, 1), Some((2, 2)));
     assert_eq!(problem.right_frame_value(0, 1, 0, 0), Some(3.0));
@@ -859,13 +1015,13 @@ fn elementwise_problem_updates_right_frame_values() {
 #[test]
 fn elementwise_problem_rejects_invalid_frame_selection_indices() {
     let input = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
-    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
+    let mut problem = ElementwiseProblem::new(vec![input], AciOptions::default(), ctx()).unwrap();
 
-    let left_err = problem.update_left_frame(0, 0, &[2], None).unwrap_err();
+    let left_err = problem.update_left_frame(0, 0, &[2], ctx()).unwrap_err();
     assert!(matches!(left_err, AciError::InvalidInitialGuess { .. }));
     assert!(left_err.to_string().contains("row index"));
 
-    let right_err = problem.update_right_frame(0, 2, &[2], None).unwrap_err();
+    let right_err = problem.update_right_frame(0, 2, &[2], ctx()).unwrap_err();
     assert!(matches!(right_err, AciError::InvalidInitialGuess { .. }));
     assert!(right_err.to_string().contains("column index"));
 }
@@ -876,11 +1032,11 @@ fn elementwise_problem_one_bond_local_update_matches_dense_product_left_orthogon
     let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2], 3.0);
     let options = AciOptions::<f64>::default();
     let mut problem =
-        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), None).unwrap();
+        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), ctx()).unwrap();
     let mut operator = multiply_batch;
 
     problem
-        .local_update(0, true, &options, &mut operator, None)
+        .local_update(0, true, &options, &mut operator, ctx())
         .unwrap();
 
     for indices in [[0, 0], [1, 0], [0, 1], [1, 1]] {
@@ -898,14 +1054,14 @@ fn elementwise_problem_one_bond_local_update_matches_dense_product_right_orthogo
     let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2], 3.0);
     let options = AciOptions::<f64>::default();
     let mut problem =
-        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), None).unwrap();
+        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), ctx()).unwrap();
     for input in 0..problem.n_inputs() {
         problem.right_frames[input][1] = None;
     }
     let mut operator = multiply_batch;
 
     problem
-        .local_update(0, false, &options, &mut operator, None)
+        .local_update(0, false, &options, &mut operator, ctx())
         .unwrap();
 
     for indices in [[0, 0], [1, 0], [0, 1], [1, 1]] {
@@ -923,7 +1079,7 @@ fn elementwise_problem_one_bond_local_update_returns_operator_error_side_channel
     let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2], 3.0);
     let options = AciOptions::<f64>::default();
     let mut problem =
-        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), None).unwrap();
+        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), ctx()).unwrap();
     let mut operator = |_batch: ElementwiseBatch<'_, f64>, _output: &mut [f64]| {
         Err(AciError::Operator {
             message: "side-channel operator failure".to_string(),
@@ -931,7 +1087,7 @@ fn elementwise_problem_one_bond_local_update_returns_operator_error_side_channel
     };
 
     let err = problem
-        .local_update(0, true, &options, &mut operator, None)
+        .local_update(0, true, &options, &mut operator, ctx())
         .unwrap_err();
 
     assert!(matches!(err, AciError::Operator { .. }));
@@ -944,11 +1100,11 @@ fn elementwise_problem_one_bond_zero_update_keeps_left_frames_nonzero_dimensiona
     let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 3.0);
     let options = AciOptions::<f64>::default();
     let mut problem =
-        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), None).unwrap();
+        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), ctx()).unwrap();
     let mut operator = zero_batch;
 
     problem
-        .local_update(0, true, &options, &mut operator, None)
+        .local_update(0, true, &options, &mut operator, ctx())
         .unwrap();
 
     assert_solution_is_zero_on_binary_three_site_grid(&problem);
@@ -957,7 +1113,7 @@ fn elementwise_problem_one_bond_zero_update_keeps_left_frames_nonzero_dimensiona
     assert!(problem.local_input_value(0, 1, 0, 0).is_ok());
 
     problem
-        .local_update(1, true, &options, &mut operator, None)
+        .local_update(1, true, &options, &mut operator, ctx())
         .unwrap();
     assert_solution_is_zero_on_binary_three_site_grid(&problem);
 }
@@ -968,15 +1124,15 @@ fn elementwise_problem_one_bond_zero_update_keeps_right_frames_nonzero_dimension
     let input_b = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 3.0);
     let options = AciOptions::<f64>::default();
     let mut problem =
-        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), None).unwrap();
-    problem.update_left_frames(0, &[0], None).unwrap();
+        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), ctx()).unwrap();
+    problem.update_left_frames(0, &[0], ctx()).unwrap();
     for input in 0..problem.n_inputs() {
         problem.right_frames[input][2] = None;
     }
     let mut operator = zero_batch;
 
     problem
-        .local_update(1, false, &options, &mut operator, None)
+        .local_update(1, false, &options, &mut operator, ctx())
         .unwrap();
 
     assert_solution_is_zero_on_binary_three_site_grid(&problem);
@@ -985,7 +1141,7 @@ fn elementwise_problem_one_bond_zero_update_keeps_right_frames_nonzero_dimension
     assert!(problem.local_input_value(0, 0, 0, 0).is_ok());
 
     problem
-        .local_update(0, false, &options, &mut operator, None)
+        .local_update(0, false, &options, &mut operator, ctx())
         .unwrap();
     assert_solution_is_zero_on_binary_three_site_grid(&problem);
 }
@@ -1004,7 +1160,7 @@ fn local_input_value_matches_explicit_two_site_contraction() {
 #[test]
 fn local_input_factors_match_explicit_two_site_contraction_for_all_inputs() {
     let problem = local_test_problem();
-    let factors = crate::local::local_input_factors_for_problem(&problem, 1).unwrap();
+    let factors = crate::local::local_input_factors_for_problem(&problem, 1, ctx()).unwrap();
 
     assert_eq!(factors.len(), problem.n_inputs());
     for (input, factors) in factors.iter().enumerate().take(problem.n_inputs()) {
@@ -1027,7 +1183,7 @@ fn local_input_factors_match_explicit_two_site_contraction_for_all_inputs() {
 #[test]
 fn local_input_factors_report_bounds_errors_and_record_timing() {
     let problem = local_test_problem();
-    let factors = crate::local::local_input_factors_for_problem(&problem, 1).unwrap();
+    let factors = crate::local::local_input_factors_for_problem(&problem, 1, ctx()).unwrap();
     let (nrows, ncols) = problem.local_input_shape(0, 1).unwrap();
 
     let row_err = match factors[0].value(nrows, 0) {
@@ -1043,8 +1199,9 @@ fn local_input_factors_report_bounds_errors_and_record_timing() {
     assert!(col_err.to_string().contains("local column index"));
 
     let mut timing = LocalInputSetupTiming::default();
-    let timed = crate::local::local_input_factors_for_problem_with_timing(&problem, 1, &mut timing)
-        .unwrap();
+    let timed =
+        crate::local::local_input_factors_for_problem_with_timing(&problem, 1, ctx(), &mut timing)
+            .unwrap();
 
     assert_eq!(timed.len(), factors.len());
 }
@@ -1119,7 +1276,7 @@ fn local_block_evaluator_uses_matrix_luci_point_order_and_batch_layout() {
         }
         Ok(())
     };
-    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator).unwrap();
+    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator, ctx()).unwrap();
 
     evaluator.fill_local_block(&rows, &cols, &mut out).unwrap();
 
@@ -1154,7 +1311,7 @@ fn local_block_evaluator_materializes_full_matrix_in_column_major_order() {
         }
         Ok(())
     };
-    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator).unwrap();
+    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator, ctx()).unwrap();
     let matrix = evaluator.materialize_local_matrix().unwrap();
     let rows = (0..evaluator.nrows()).collect::<Vec<_>>();
     let cols = (0..evaluator.ncols()).collect::<Vec<_>>();
@@ -1185,7 +1342,7 @@ fn local_block_evaluator_serves_duplicate_entries_from_cache() {
         }
         Ok(())
     };
-    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator).unwrap();
+    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator, ctx()).unwrap();
 
     evaluator
         .fill_local_block(&rows, &cols, &mut first)
@@ -1212,7 +1369,7 @@ fn local_block_evaluator_cache_can_be_cleared() {
         output[0] = batch.get(0, 0).unwrap();
         Ok(())
     };
-    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator).unwrap();
+    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator, ctx()).unwrap();
 
     evaluator.fill_local_block(&rows, &cols, &mut out).unwrap();
     evaluator.clear_cache();
@@ -1238,8 +1395,8 @@ fn local_block_evaluators_with_different_operators_have_separate_caches() {
         Ok(())
     };
 
-    let first_evaluator = LocalBlockEvaluator::new(&problem, 1, &first_operator).unwrap();
-    let second_evaluator = LocalBlockEvaluator::new(&problem, 1, &second_operator).unwrap();
+    let first_evaluator = LocalBlockEvaluator::new(&problem, 1, &first_operator, ctx()).unwrap();
+    let second_evaluator = LocalBlockEvaluator::new(&problem, 1, &second_operator, ctx()).unwrap();
 
     first_evaluator
         .fill_local_block(&rows, &cols, &mut first)
@@ -1264,7 +1421,7 @@ fn local_block_evaluator_or_zero_records_operator_error_once() {
             message: format!("operator failed on call {}", calls.get()),
         })
     };
-    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator).unwrap();
+    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator, ctx()).unwrap();
 
     evaluator.fill_local_block_or_zero(&rows, &cols, &mut out);
     assert_eq!(out, vec![0.0]);
@@ -1286,7 +1443,7 @@ fn local_block_evaluator_or_zero_records_local_error_once() {
         output[0] = 1.0;
         Ok(())
     };
-    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator).unwrap();
+    let evaluator = LocalBlockEvaluator::new(&problem, 1, &operator, ctx()).unwrap();
 
     evaluator.fill_local_block_or_zero(&rows, &cols, &mut out);
 
@@ -1319,7 +1476,7 @@ fn local_input_value_rejects_out_of_range_indices() {
 #[test]
 fn local_input_value_rejects_missing_frames() {
     let input = SimpleTensorTrain::<f64>::constant(&[2, 2, 2], 1.0);
-    let problem = ElementwiseProblem::new(vec![input], AciOptions::default(), None).unwrap();
+    let problem = ElementwiseProblem::new(vec![input], AciOptions::default(), ctx()).unwrap();
 
     let err = problem.local_input_value(0, 1, 0, 0).unwrap_err();
 
@@ -1568,7 +1725,7 @@ fn initial_guess_zero_initializes_nonzero_dimensional_right_frames() {
     };
 
     let mut problem =
-        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), None).unwrap();
+        ElementwiseProblem::new(vec![input_a, input_b], options.clone(), ctx()).unwrap();
 
     assert_solution_is_zero_on_binary_three_site_grid(&problem);
     for input in 0..problem.n_inputs() {
@@ -1576,12 +1733,12 @@ fn initial_guess_zero_initializes_nonzero_dimensional_right_frames() {
         assert_eq!(problem.right_frame_shape(input, 2), Some((1, 1)));
         assert_eq!(problem.right_frame_shape(input, 3), Some((1, 1)));
     }
-    problem.update_left_frames(0, &[0], None).unwrap();
+    problem.update_left_frames(0, &[0], ctx()).unwrap();
     assert!(problem.local_input_value(0, 1, 0, 0).is_ok());
 
     let mut operator = zero_batch;
     problem
-        .local_update(1, false, &options, &mut operator, None)
+        .local_update(1, false, &options, &mut operator, ctx())
         .unwrap();
     assert_solution_is_zero_on_binary_three_site_grid(&problem);
 }
@@ -1857,6 +2014,7 @@ where
             problem,
             bond,
             &operator,
+            ctx(),
             &mut setup_timing,
         )?;
         timing.setup += start.elapsed();
@@ -1875,7 +2033,7 @@ where
         let sampled_scale = evaluator.max_output_abs();
 
         let start = Instant::now();
-        let factors = matrix_luci_factors_from_matrix_owned(
+        let factors = matrix_luci_factors_from_matrix_owned_in(
             local_matrix,
             Some(RrLUOptions {
                 max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
@@ -1891,6 +2049,7 @@ where
                 },
                 left_orthogonal,
             }),
+            ctx(),
         )?;
         timing.matrix_luci += start.elapsed();
         (factors, sampled_scale)
@@ -1939,9 +2098,9 @@ where
 
     let start = Instant::now();
     if left_orthogonal {
-        problem.update_left_frames(bond, &row_indices, None)?;
+        problem.update_left_frames(bond, &row_indices, ctx())?;
     } else {
-        problem.update_right_frames(bond + 1, &col_indices, None)?;
+        problem.update_right_frames(bond + 1, &col_indices, ctx())?;
     }
     problem.pivot_errors[bond] = pivot_error;
     problem.pivot_scales[bond] = sampled_scale;
@@ -1969,7 +2128,7 @@ fn timed_aci_run(
         )),
         ..AciOptions::default()
     };
-    let mut problem = ElementwiseProblem::new(inputs, options.clone(), None).unwrap();
+    let mut problem = ElementwiseProblem::new(inputs, options.clone(), ctx()).unwrap();
     let mut timing = LocalStepTiming::default();
     let mut op = step_timing_multiply_batch;
     let mut ranks = Vec::new();

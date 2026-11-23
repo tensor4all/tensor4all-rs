@@ -3,7 +3,7 @@
 Isolated test package for the configuration a downstream crate gets from the
 default features since
 [tensor4all-rs#1403](https://github.com/tensor4all/tensor4all-rs/issues/1403):
-`tensor4all-core`, `tensor4all-itensorlike` and `tensor4all-tensorbackend` built
+`tensor4all-aci`, `tensor4all-core`, `tensor4all-itensorlike` and `tensor4all-tensorbackend` built
 with the platform CPU provider and **without** `global-defaults`, so there is no
 process-global execution context.
 

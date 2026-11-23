@@ -3,11 +3,11 @@ use std::collections::HashMap;
 #[cfg(test)]
 use std::time::{Duration, Instant};
 
+use crate::matmul::{batched_mat_mul_in, mat_mul_in};
 use crate::scalar::AciScalar;
 use crate::{AciError, ElementwiseBatch, ElementwiseProblem, Result};
-use tensor4all_core::legacy::{batched_mat_mul_same_shape_owned, mat_mul, mat_mul_owned};
 use tensor4all_simplett::{AbstractTensorTrain, Tensor3Ops};
-use tensor4all_tensorbackend::Matrix;
+use tensor4all_tensorbackend::{CpuExecutionContext, Matrix};
 
 type LocalOperator<'a, T> =
     dyn for<'batch> Fn(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()> + 'a;
@@ -42,6 +42,8 @@ fn local_materialize_batching_enabled() -> bool {
 pub(crate) struct LocalBlockEvaluator<'a, T: AciScalar> {
     problem: &'a ElementwiseProblem<T>,
     operator: &'a LocalOperator<'a, T>,
+    /// The caller's context; every product of this local block runs on it.
+    context: &'a CpuExecutionContext,
     nrows: usize,
     ncols: usize,
     input_factors: Vec<LocalInputFactors<T>>,
@@ -103,13 +105,14 @@ impl<T: AciScalar> LocalInputFactors<T> {
         Ok(value)
     }
 
-    fn materialize_values(&self) -> Result<Vec<T>> {
+    fn materialize_values(&self, context: &CpuExecutionContext) -> Result<Vec<T>> {
         let left =
             Matrix::from_col_major_vec(self.nrows, self.middle_dim, self.left_values.clone());
         let right =
             Matrix::from_col_major_vec(self.middle_dim, self.ncols, self.right_values.clone());
-        let product = mat_mul_owned(left, right)
-            .map_err(|err| local_factor_error("local input materialization matmul", err))?;
+        let product = mat_mul_in(context, &left, &right, || {
+            "local input materialization".to_string()
+        })?;
         Ok(product.into_col_major_vec())
     }
 
@@ -145,6 +148,7 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
         problem: &'a ElementwiseProblem<T>,
         bond: usize,
         operator: &'a F,
+        context: &'a CpuExecutionContext,
     ) -> Result<Self>
     where
         F: for<'batch> Fn(ElementwiseBatch<'batch, T>, &mut [T]) -> Result<()> + 'a,
@@ -154,11 +158,12 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
         }
 
         let (nrows, ncols) = validate_local_shapes(problem, bond)?;
-        let input_factors = local_input_factors_for_problem(problem, bond)?;
+        let input_factors = local_input_factors_for_problem(problem, bond, context)?;
 
         Ok(Self {
             problem,
             operator,
+            context,
             nrows,
             ncols,
             input_factors,
@@ -173,6 +178,7 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
         problem: &'a ElementwiseProblem<T>,
         bond: usize,
         operator: &'a F,
+        context: &'a CpuExecutionContext,
         timing: &mut LocalInputSetupTiming,
     ) -> Result<Self>
     where
@@ -186,11 +192,13 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
         let (nrows, ncols) = validate_local_shapes(problem, bond)?;
         timing.shape_validation += start.elapsed();
 
-        let input_factors = local_input_factors_for_problem_with_timing(problem, bond, timing)?;
+        let input_factors =
+            local_input_factors_for_problem_with_timing(problem, bond, context, timing)?;
 
         Ok(Self {
             problem,
             operator,
+            context,
             nrows,
             ncols,
             input_factors,
@@ -324,15 +332,13 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
                 left_batch.extend_from_slice(&factors.left_values);
                 right_batch.extend_from_slice(&factors.right_values);
             }
-            let values = batched_mat_mul_same_shape_owned(
-                n_inputs,
-                self.nrows,
-                middle_dim,
-                self.ncols,
+            let values = batched_mat_mul_in(
+                self.context,
+                (n_inputs, self.nrows, middle_dim, self.ncols),
                 left_batch,
                 right_batch,
-            )
-            .map_err(|err| local_factor_error("batched local input materialization", err))?;
+                || "batched local input materialization".to_string(),
+            )?;
             for input in 0..n_inputs {
                 let offset = checked_local_mul(input, n_points, "local batched input offset")?;
                 for point in 0..n_points {
@@ -347,7 +353,7 @@ impl<'a, T: AciScalar> LocalBlockEvaluator<'a, T> {
         }
 
         for (input, factors) in self.input_factors[..n_inputs].iter().enumerate() {
-            let values = factors.materialize_values()?;
+            let values = factors.materialize_values(self.context)?;
             if values.len() != n_points {
                 return Err(AciError::InvalidInitialGuess {
                     message: format!(
@@ -445,21 +451,23 @@ struct LocalInputFactorDims {
 pub(crate) fn local_input_factors_for_problem<T: AciScalar>(
     problem: &ElementwiseProblem<T>,
     bond: usize,
+    context: &CpuExecutionContext,
 ) -> Result<Vec<LocalInputFactors<T>>> {
     let dims = local_input_factor_dims_for_problem(problem, bond)?;
-    build_local_input_factors_from_dims(problem, bond, &dims)
+    build_local_input_factors_from_dims(problem, bond, &dims, context)
 }
 
 #[cfg(test)]
 pub(crate) fn local_input_factors_for_problem_with_timing<T: AciScalar>(
     problem: &ElementwiseProblem<T>,
     bond: usize,
+    context: &CpuExecutionContext,
     timing: &mut LocalInputSetupTiming,
 ) -> Result<Vec<LocalInputFactors<T>>> {
     let start = Instant::now();
     let dims = local_input_factor_dims_for_problem(problem, bond)?;
     timing.dims += start.elapsed();
-    build_local_input_factors_from_dims_with_timing(problem, bond, &dims, timing)
+    build_local_input_factors_from_dims_with_timing(problem, bond, &dims, context, timing)
 }
 
 fn local_input_factor_dims_for_problem<T: AciScalar>(
@@ -498,14 +506,15 @@ fn build_local_input_factors_from_dims_with_timing<T: AciScalar>(
     problem: &ElementwiseProblem<T>,
     bond: usize,
     dims: &[LocalInputFactorDims],
+    context: &CpuExecutionContext,
     timing: &mut LocalInputSetupTiming,
 ) -> Result<Vec<LocalInputFactors<T>>> {
     let start = Instant::now();
-    let left_values = build_left_factors(problem, bond, dims)?;
+    let left_values = build_left_factors(problem, bond, dims, context)?;
     timing.left_factor += start.elapsed();
 
     let start = Instant::now();
-    let right_values = build_right_factors(problem, bond, dims)?;
+    let right_values = build_right_factors(problem, bond, dims, context)?;
     timing.right_factor += start.elapsed();
 
     assemble_local_input_factors(dims, left_values, right_values)
@@ -515,9 +524,10 @@ fn build_local_input_factors_from_dims<T: AciScalar>(
     problem: &ElementwiseProblem<T>,
     bond: usize,
     dims: &[LocalInputFactorDims],
+    context: &CpuExecutionContext,
 ) -> Result<Vec<LocalInputFactors<T>>> {
-    let left_values = build_left_factors(problem, bond, dims)?;
-    let right_values = build_right_factors(problem, bond, dims)?;
+    let left_values = build_left_factors(problem, bond, dims, context)?;
+    let right_values = build_right_factors(problem, bond, dims, context)?;
     assemble_local_input_factors(dims, left_values, right_values)
 }
 
@@ -571,6 +581,7 @@ fn build_left_factors<T: AciScalar>(
     problem: &ElementwiseProblem<T>,
     bond: usize,
     dims: &[LocalInputFactorDims],
+    context: &CpuExecutionContext,
 ) -> Result<Vec<Vec<T>>> {
     if local_setup_batching_enabled()
         && let Some(shared) = shared_input_factor_dims(dims)
@@ -598,15 +609,13 @@ fn build_left_factors<T: AciScalar>(
                     .as_col_major_slice(),
             );
         }
-        let values = batched_mat_mul_same_shape_owned(
-            n_inputs,
-            shared.left_rows,
-            shared.input_left_dim,
-            left_cols,
+        let values = batched_mat_mul_in(
+            context,
+            (n_inputs, shared.left_rows, shared.input_left_dim, left_cols),
             frame_batch,
             core_batch,
-        )
-        .map_err(|err| local_factor_error("batched left factor matmul", err))?;
+            || format!("batched left factor at bond {bond}"),
+        )?;
         let item_len = checked_mul(shared.left_rows, left_cols, "ACI left factor item")?;
         let factors = (0..n_inputs)
             .map(|input| {
@@ -619,7 +628,7 @@ fn build_left_factors<T: AciScalar>(
     }
 
     (0..dims.len())
-        .map(|input| build_left_factor(problem, input, bond))
+        .map(|input| build_left_factor(problem, input, bond, context))
         .collect()
 }
 
@@ -627,6 +636,7 @@ fn build_right_factors<T: AciScalar>(
     problem: &ElementwiseProblem<T>,
     bond: usize,
     dims: &[LocalInputFactorDims],
+    context: &CpuExecutionContext,
 ) -> Result<Vec<Vec<T>>> {
     if local_setup_batching_enabled()
         && let Some(shared) = shared_input_factor_dims(dims)
@@ -654,15 +664,18 @@ fn build_right_factors<T: AciScalar>(
             frame_batch
                 .extend_from_slice(local_right_frame(problem, input, bond)?.as_col_major_slice());
         }
-        let values = batched_mat_mul_same_shape_owned(
-            n_inputs,
-            right_rows,
-            shared.input_right_dim,
-            shared.right_cols,
+        let values = batched_mat_mul_in(
+            context,
+            (
+                n_inputs,
+                right_rows,
+                shared.input_right_dim,
+                shared.right_cols,
+            ),
             core_batch,
             frame_batch,
-        )
-        .map_err(|err| local_factor_error("batched right factor matmul", err))?;
+            || format!("batched right factor at bond {bond}"),
+        )?;
         let item_len = checked_mul(right_rows, shared.right_cols, "ACI right factor item")?;
         let factors = (0..n_inputs)
             .map(|input| {
@@ -675,7 +688,7 @@ fn build_right_factors<T: AciScalar>(
     }
 
     (0..dims.len())
-        .map(|input| build_right_factor(problem, input, bond))
+        .map(|input| build_right_factor(problem, input, bond, context))
         .collect()
 }
 
@@ -683,11 +696,13 @@ fn build_left_factor<T: AciScalar>(
     problem: &ElementwiseProblem<T>,
     input: usize,
     bond: usize,
+    context: &CpuExecutionContext,
 ) -> Result<Vec<T>> {
     let frame = local_left_frame(problem, input, bond)?;
     let core_matrix = problem.input_core_left_matrix(input, bond);
-    let product =
-        mat_mul(frame, core_matrix).map_err(|err| local_factor_error("left factor matmul", err))?;
+    let product = mat_mul_in(context, frame, core_matrix, || {
+        format!("left factor at input {input}, bond {bond}")
+    })?;
     Ok(product.as_col_major_slice().to_vec())
 }
 
@@ -695,11 +710,13 @@ fn build_right_factor<T: AciScalar>(
     problem: &ElementwiseProblem<T>,
     input: usize,
     bond: usize,
+    context: &CpuExecutionContext,
 ) -> Result<Vec<T>> {
     let frame = local_right_frame(problem, input, bond)?;
     let core_matrix = problem.input_core_right_matrix(input, bond + 1);
-    let product = mat_mul(core_matrix, frame)
-        .map_err(|err| local_factor_error("right factor matmul", err))?;
+    let product = mat_mul_in(context, core_matrix, frame, || {
+        format!("right factor at input {input}, bond {bond}")
+    })?;
     Ok(product.as_col_major_slice().to_vec())
 }
 
@@ -751,12 +768,6 @@ fn local_right_frame<T: AciScalar>(
         .ok_or_else(|| AciError::InvalidInitialGuess {
             message: format!("missing right frame at input {input}, site {site}"),
         })
-}
-
-fn local_factor_error(context: &str, err: impl std::fmt::Display) -> AciError {
-    AciError::InvalidInitialGuess {
-        message: format!("{context} failed: {err}"),
-    }
 }
 
 fn validate_indices(kind: &'static str, indices: &[usize], len: usize) -> Result<()> {

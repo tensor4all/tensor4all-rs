@@ -73,7 +73,9 @@ use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTr
 ///
 /// Returns [`AciError`](crate::AciError) when options or inputs are invalid,
 /// initial guess construction fails, the operator callback fails, or a local
-/// matrix-CI update fails.
+/// matrix-CI update fails, and [`AciError::Backend`](crate::AciError::Backend)
+/// when a matrix product of the sweep fails or a run that needs a sweep finds
+/// no process-global CPU context (see [`elementwise_batched_with_rng`]).
 ///
 /// # Panics
 ///
@@ -130,7 +132,13 @@ where
 /// # Errors
 /// Returns [`AciError`](crate::AciError) when options or inputs are invalid,
 /// initial guess construction fails, the operator callback fails, or a local
-/// matrix-CI update fails.
+/// matrix-CI update fails. Returns [`AciError::Backend`](crate::AciError::Backend)
+/// when a matrix product of the sweep fails, or when a run that needs one (two
+/// or more sites, valid inputs and options) finds no process-global CPU
+/// context in this build (`tensor4all-core`'s `global-defaults` feature off);
+/// use [`elementwise_batched_with_rng_in`] with an explicit context then.
+/// Input and option validation and the single-site case come first and need
+/// no context.
 pub fn elementwise_batched_with_rng<T, F, R>(
     op: F,
     inputs: &[SimpleTensorTrain<T>],
@@ -145,19 +153,16 @@ where
     // Erase the caller's RNG type once so the run below is instantiated once
     // per scalar type instead of once per (scalar, RNG) pair.
     let mut stream: &mut R = rng;
-    elementwise_batched_erased(op, inputs, options, &mut stream, None)
+    elementwise_batched_erased(op, inputs, options, &mut stream, RunContext::ProcessGlobal)
 }
 
 /// Batched elementwise ACI whose factorizations run in a caller-owned CPU context.
 ///
 /// The same algorithm, options and result as [`elementwise_batched_with_rng`]; what differs is where the ACI
-/// factorizations run. Without a context they are assembled through the process-global CPU context; with one,
-/// every MatrixLUCI factorization of this workload goes through `context`.
-///
-/// Both kinds of session-bound work follow the context: the MatrixLUCI factorizations and the frame products that
-/// update the input frames during a sweep. The batched frame updates and the caller's own operator are unchanged and
-/// keep their existing routes, which is recorded in
-/// `docs/design/859-f7-consumer-inventory.md`.
+/// numerics run. [`elementwise_batched_with_rng`] runs this same code path on the process-global CPU context; here
+/// every MatrixLUCI factorization and every matrix product of the workload (frame updates, batched or not, local
+/// input factors and block materialization, solution core updates and global-pivot environments) runs on
+/// `context`, and nothing falls back to the process-global context. The caller's own operator is not touched.
 ///
 /// # Errors
 ///
@@ -165,8 +170,10 @@ where
 /// [`crate::AciError::SiteDimMismatch`] for inputs that do not agree on their site dimensions,
 /// [`crate::AciError::InvalidOptions`] for invalid options, [`crate::AciError::InvalidInitialGuess`] when the
 /// initial guess is degenerate, [`crate::AciError::Operator`] when the caller's operator callback fails,
-/// [`crate::AciError::OperatorOutputLength`] when it writes the wrong number of values, and
-/// [`crate::AciError::MatrixCI`] when a factorization fails - including one the caller's context refuses.
+/// [`crate::AciError::OperatorOutputLength`] when it writes the wrong number of values,
+/// [`crate::AciError::MatrixCI`] when a factorization fails - including one the caller's context refuses - and
+/// [`crate::AciError::Backend`] when a matrix product fails, for example because `context` refuses the session or
+/// its engine rejects the product.
 pub fn elementwise_batched_with_rng_in<T, F, R>(
     op: F,
     inputs: &[SimpleTensorTrain<T>],
@@ -180,7 +187,24 @@ where
     R: rand::Rng + ?Sized,
 {
     let mut stream: &mut R = rng;
-    elementwise_batched_erased(op, inputs, options, &mut stream, Some(context))
+    elementwise_batched_erased(
+        op,
+        inputs,
+        options,
+        &mut stream,
+        RunContext::Caller(context),
+    )
+}
+
+/// Where the sweep's numerics run.
+///
+/// Both variants run the same code path; they differ only in which context it is handed.
+enum RunContext<'a> {
+    /// The caller's context (`*_in` entries).
+    Caller(&'a tensor4all_tensorbackend::CpuExecutionContext),
+    /// The process-global context, resolved only once a sweep is actually needed, so validation
+    /// errors and the context-free single-site case do not depend on the global route existing.
+    ProcessGlobal,
 }
 
 fn elementwise_batched_erased<T, F>(
@@ -188,7 +212,7 @@ fn elementwise_batched_erased<T, F>(
     inputs: &[SimpleTensorTrain<T>],
     options: &AciOptions<T>,
     rng: &mut dyn rand::RngCore,
-    context: Option<&tensor4all_tensorbackend::CpuExecutionContext>,
+    run_context: RunContext<'_>,
 ) -> Result<AciResult<T>>
 where
     T: AciScalar + PartialEq,
@@ -200,6 +224,15 @@ where
     if inputs[0].len() == 1 {
         return elementwise_batched_one_site(op, inputs);
     }
+
+    let process_global;
+    let context = match run_context {
+        RunContext::Caller(context) => context,
+        RunContext::ProcessGlobal => {
+            process_global = crate::matmul::default_context()?;
+            &*process_global
+        }
+    };
 
     let mut problem =
         ElementwiseProblem::new_with_rng(inputs.to_vec(), options.clone(), rng, context)?;
@@ -249,7 +282,7 @@ where
             && !rank_capped
         {
             let pivots = find_global_pivots(&mut problem, &mut op, options, rng)?;
-            let _added = problem.add_global_pivots(&pivots)?;
+            let _added = problem.add_global_pivots(&pivots, context)?;
             nglobal_pivots_history.push(pivots.len());
         } else {
             nglobal_pivots_history.push(0);
@@ -360,7 +393,9 @@ where
 ///
 /// Returns [`AciError`](crate::AciError) when options or inputs are invalid,
 /// batch extraction fails, initial guess construction fails, or a local
-/// matrix-CI update fails.
+/// matrix-CI update fails, and [`AciError::Backend`](crate::AciError::Backend)
+/// when a matrix product of the sweep fails or a run that needs a sweep finds
+/// no process-global CPU context (see [`elementwise_batched_with_rng`]).
 ///
 /// # Panics
 ///
@@ -408,7 +443,9 @@ where
 /// # Errors
 /// Returns [`AciError`](crate::AciError) when options or inputs are invalid,
 /// batch extraction fails, initial guess construction fails, or a local
-/// matrix-CI update fails.
+/// matrix-CI update fails, and [`AciError::Backend`](crate::AciError::Backend)
+/// when a matrix product of the sweep fails or a run that needs a sweep finds
+/// no process-global CPU context (see [`elementwise_batched_with_rng`]).
 pub fn elementwise_with_rng<T, F, R>(
     mut op: F,
     inputs: &[SimpleTensorTrain<T>],

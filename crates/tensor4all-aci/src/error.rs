@@ -33,6 +33,16 @@ pub type Result<T> = std::result::Result<T, AciError>;
 ///     len: 3,
 /// };
 /// assert!(err.to_string().contains("input index out of bounds"));
+///
+/// let err = AciError::Backend {
+///     operation: "left frame update at input 0, site 1".to_string(),
+///     source: "engine refused the product".into(),
+/// };
+/// assert!(err.to_string().contains("left frame update at input 0, site 1"));
+/// assert_eq!(
+///     std::error::Error::source(&err).map(ToString::to_string).as_deref(),
+///     Some("engine refused the product")
+/// );
 /// ```
 #[derive(Debug, Error)]
 pub enum AciError {
@@ -83,6 +93,24 @@ pub enum AciError {
     InvalidInitialGuess {
         /// Description of the incompatible initial guess.
         message: String,
+    },
+
+    /// The execution backend could not carry out a matrix product of the sweep.
+    ///
+    /// Raised when the CPU execution context refuses a session (for example a
+    /// reentrant entry, or a build without a process-global context reached
+    /// through a context-free entry point), when the engine rejects the
+    /// product, or when the product's operand shapes disagree. It reports a
+    /// backend or shape failure, not a problem with the initial guess; that one
+    /// is [`AciError::InvalidInitialGuess`]. The original error is kept as
+    /// `source`.
+    #[error("ACI backend failure in {operation}: {source}")]
+    Backend {
+        /// The product that failed, such as `"left frame update at input 0, site 1"`.
+        operation: String,
+        /// The backend, session or shape error that stopped it.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
     /// An elementwise operator returned a buffer with the wrong length.

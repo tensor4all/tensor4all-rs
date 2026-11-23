@@ -1113,6 +1113,78 @@ impl<'session> Session<'session> {
         crate::mat_mul_in(self.engine, a, b)
     }
 
+    /// Batched matrix multiplication of `batch` same-shape column-major pairs on this session's engine.
+    ///
+    /// Computes `C[p] = A[p] * B[p]` for `p in 0..batch`, where `a` holds `batch` consecutive `m x k`
+    /// column-major matrices and `b` holds `batch` consecutive `k x n` ones. The result holds `batch`
+    /// consecutive `m x n` column-major outputs. This is the session twin of the process-global
+    /// `batched_mat_mul_same_shape_owned`: one einsum on this session's engine, with no global fallback.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MatrixMulError`](crate::matrix::MatrixMulError) when a buffer length disagrees with the declared
+    /// shape, a shape product overflows, or the engine rejects the product.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_tensorbackend::{CpuBackend, CpuExecutionContext};
+    ///
+    /// let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1)?);
+    /// // Two 2x2 products: [[1,2],[3,4]] * I and [[1,0],[0,1]] * [[5,6],[7,8]].
+    /// let a = vec![1.0_f64, 3.0, 2.0, 4.0, 1.0, 0.0, 0.0, 1.0];
+    /// let b = vec![1.0_f64, 0.0, 0.0, 1.0, 5.0, 7.0, 6.0, 8.0];
+    /// let c = context.with_concrete_session(|session| {
+    ///     session.batched_mat_mul_same_shape_owned(2, 2, 2, 2, a, b)
+    /// })??;
+    /// assert_eq!(c, vec![1.0, 3.0, 2.0, 4.0, 5.0, 7.0, 6.0, 8.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn batched_mat_mul_same_shape_owned<T: tenferro::TensorScalar + Copy>(
+        &mut self,
+        batch: usize,
+        m: usize,
+        k: usize,
+        n: usize,
+        a: Vec<T>,
+        b: Vec<T>,
+    ) -> Result<Vec<T>, crate::matrix::MatrixMulError> {
+        use crate::matrix::MatrixMulError;
+
+        crate::matrix::validate_batched_mat_mul_inputs(batch, m, k, n, a.len(), b.len())?;
+        let expected_len = batch
+            .checked_mul(m)
+            .and_then(|value| value.checked_mul(n))
+            .ok_or_else(|| {
+                MatrixMulError::from(anyhow::anyhow!(
+                    "batched matrix multiplication output shape overflows"
+                ))
+            })?;
+        let a = T::into_tensor(vec![m, k, batch], a)
+            .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
+        let b = T::into_tensor(vec![k, n, batch], b)
+            .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
+        // [m,k,p] x [k,n,p] -> [m,n,p] as one einsum, the same expression as the global route.
+        let c = self
+            .einsum(&[&a, &b], &[&[0, 1, 2], &[1, 3, 2]], &[0, 3, 2])
+            .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
+        let c = T::into_typed(c).map_err(|error| {
+            MatrixMulError::from(anyhow::anyhow!(
+                "batched matrix multiplication returned wrong dtype: {error}"
+            ))
+        })?;
+        let (_shape, data) = c
+            .into_vec_col_major()
+            .map_err(|error| MatrixMulError::from(anyhow::Error::new(error)))?;
+        if data.len() != expected_len {
+            return Err(MatrixMulError::from(anyhow::anyhow!(
+                "batched matrix multiplication returned {} values for expected shape {m}x{n}x{batch}",
+                data.len()
+            )));
+        }
+        Ok(data)
+    }
+
     /// Thin/economy QR decomposition.
     ///
     /// # Errors
