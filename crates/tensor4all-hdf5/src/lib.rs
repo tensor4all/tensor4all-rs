@@ -44,6 +44,10 @@
 //! process, which is why the choice belongs to the application, not to a
 //! library.
 //!
+//! The examples in this crate's documentation save and then reload one path,
+//! so they assume `HDF5_USE_FILE_LOCKING=FALSE` (this repository's test
+//! harness exports it); copy that setting along with them.
+//!
 //! New public functions that touch HDF5 MUST wrap their body in
 //! `backend::hdf5_sync` — the public boundary is the crate's single
 //! thread-safety choke point; internal helpers never lock on their own, they

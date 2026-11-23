@@ -75,8 +75,8 @@ thread safety).
 
 - `lib.rs` module doc + crate README: thread-safe by construction — all
   public calls are serialized process-wide (I/O-bound, contention negligible);
-  HDF5 OS file locking is disabled by default (`HDF5_USE_FILE_LOCKING=FALSE`),
-  set once lazily unless the caller set it explicitly; the explicit-env-var
+  HDF5 OS file locking was disabled by default (`HDF5_USE_FILE_LOCKING=FALSE`),
+  set once lazily unless the caller set it explicitly (REMOVED in #1386: the caller sets it); the explicit-env-var
   note (callers who set it keep their value; multi-process writers should set
   it themselves); rule: every new public function must go through
   `hdf5_sync`.
@@ -105,8 +105,9 @@ Keep iterations modest (I/O-bound; HDF5 tests run in a dedicated CI job).
   parking_lot ReentrantMutex — reentrancy makes nested `sync::sync` safe).
   hdf5-rt (git tensor4all/hdf5-rt#19fb644) has the identical sync::sync +
   ReentrantMutex LOCK design.
-- No FAPL-level file-locking control is exposed by the high-level APIs
-  (FileAccessBuilder has no setters) → the env var is the only central
+- No portable FAPL-level file-locking control (hdf5-metno 0.12.6's
+  `FileAccessBuilder::file_locking` exists only behind HDF5 1.10.7/1.12.1 features;
+  hdf5-rt has none; and the env var overrides the property, H5Fint.c) → the env var is the only central
   mechanism. Ordering guarantee: `hdf5_sync` sets HDF5_USE_FILE_LOCKING at
   its very top, BEFORE calling the backend `sync::sync` (whose first act is
   to force library init / H5open), so the variable is in place before any

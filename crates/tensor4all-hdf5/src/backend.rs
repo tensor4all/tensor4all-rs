@@ -54,7 +54,7 @@ pub(crate) fn attribute_exists(group: &Group, name: &str) -> anyhow::Result<bool
 /// This function never reads or writes the process environment. In
 /// particular it does not touch `HDF5_USE_FILE_LOCKING`: whether HDF5 uses OS
 /// file locking is the caller's decision, made before the first HDF5 call
-/// (see the crate-level "Thread safety" docs).
+/// (see the crate-level "File locking" docs).
 pub(crate) fn hdf5_sync<T>(f: impl FnOnce() -> T) -> T {
     #[cfg(all(feature = "link", not(feature = "runtime-loading")))]
     {

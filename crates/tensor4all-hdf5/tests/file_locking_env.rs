@@ -20,28 +20,51 @@ fn env_snapshot() -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
     vars
 }
 
-/// Save-then-load roundtrips; returns the final roundtrip data. With
-/// `same_path` every iteration reuses one file (needs locking off to be
-/// reliable); otherwise each iteration gets its own file, so the result does
-/// not depend on OS file-locking behaviour.
+fn tensor_for(i: usize) -> (IdxTensor, Vec<f64>) {
+    let data: Vec<f64> = (0..4).map(|k| (i * 10 + k) as f64).collect();
+    let tensor = IdxTensor::from_dense(
+        vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)],
+        data.clone(),
+    )
+    .unwrap();
+    (tensor, data)
+}
+
+/// Exercises the public save and load operations; returns the last data read.
+///
+/// With `same_path` each iteration saves and immediately re-opens one file
+/// (the pattern that needs locking off to be reliable). Otherwise no path is
+/// ever re-opened right after it was closed: every file is written once under
+/// its own name, and the files are only read back after all writes, so the
+/// result does not depend on OS file-locking behaviour.
 fn roundtrips(dir: &std::path::Path, same_path: bool) -> Vec<f64> {
     let mut last = Vec::new();
-    for i in 0..20 {
-        let file = dir.join(if same_path {
-            "probe.h5".to_string()
-        } else {
-            format!("probe{i}.h5")
-        });
+    if same_path {
+        let file = dir.join("probe.h5");
         let file = file.to_str().unwrap();
-        let data: Vec<f64> = (0..4).map(|k| (i * 10 + k) as f64).collect();
-        let tensor = IdxTensor::from_dense(
-            vec![DynIndex::new_dyn(2), DynIndex::new_dyn(2)],
-            data.clone(),
-        )
-        .unwrap();
-        save_itensor(file, "t", &tensor).unwrap();
-        last = load_itensor(file, "t").unwrap().to_vec::<f64>().unwrap();
-        assert_eq!(last, data);
+        for i in 0..20 {
+            let (tensor, data) = tensor_for(i);
+            save_itensor(file, "t", &tensor).unwrap();
+            last = load_itensor(file, "t").unwrap().to_vec::<f64>().unwrap();
+            assert_eq!(last, data);
+        }
+        return last;
+    }
+    let name = |i: usize| {
+        dir.join(format!("probe{i}.h5"))
+            .to_str()
+            .unwrap()
+            .to_string()
+    };
+    for i in 0..20 {
+        save_itensor(&name(i), "t", &tensor_for(i).0).unwrap();
+    }
+    for i in 0..20 {
+        last = load_itensor(&name(i), "t")
+            .unwrap()
+            .to_vec::<f64>()
+            .unwrap();
+        assert_eq!(last, tensor_for(i).1);
     }
     last
 }
