@@ -662,6 +662,61 @@ fn algebraic_bond_bounds(site_dims: &[usize]) -> Vec<usize> {
         .collect()
 }
 
+/// #1382: the environments of an injected global pivot are products on the caller's context. With a session
+/// of that context held on this thread the first environment product is refused, and the refusal surfaces
+/// as `AciError::Backend`; a product on the process-global route would have succeeded instead. The
+/// end-to-end held-global test cannot reach this step, because its fixture converges without injecting.
+#[test]
+fn global_pivot_environments_run_on_the_callers_context() {
+    let site_dims = [2usize, 2, 2, 2, 2];
+    let context = CpuExecutionContext::from_backend(CpuBackend::with_threads(1).unwrap());
+    let options = AciOptions::default();
+    let mut problem = ElementwiseProblem::new(
+        vec![
+            separable_tt(&site_dims, 0.25),
+            separable_tt(&site_dims, 0.5),
+        ],
+        options.clone(),
+        &context,
+    )
+    .unwrap();
+    let mut op = |batch: ElementwiseBatch<'_, f64>, output: &mut [f64]| {
+        for (point, value) in output.iter_mut().enumerate().take(batch.n_points()) {
+            *value = batch.get(0, point)? * batch.get(1, point)?;
+        }
+        Ok(())
+    };
+    for bond in 0..problem.len() - 1 {
+        problem
+            .local_update(bond, true, &options, &mut op, &context)
+            .unwrap();
+    }
+    let pivot = vec![vec![1, 0, 1, 0, 1]];
+
+    let refused = context
+        .with_concrete_session(|_held| problem.add_global_pivots(&pivot, &context))
+        .unwrap();
+    let error = refused.expect_err("an environment product on a held context must be refused");
+    let AciError::Backend { operation, source } = error else {
+        panic!("expected AciError::Backend, got {error:?}");
+    };
+    assert_eq!(operation, "left environment contraction at site 0");
+    assert!(matches!(
+        source.downcast_ref::<tensor4all_tensorbackend::CpuExecutionContextError>(),
+        Some(tensor4all_tensorbackend::CpuExecutionContextError::Reentered)
+    ));
+
+    // Released, the same injection runs on the same context and grows a bond.
+    let before = problem.solution.link_dims();
+    assert_eq!(problem.add_global_pivots(&pivot, &context).unwrap(), 1);
+    assert!(problem
+        .solution
+        .link_dims()
+        .iter()
+        .zip(&before)
+        .any(|(after, before)| after > before));
+}
+
 #[test]
 fn global_pivot_injection_stays_within_the_algebraic_bond_bounds() {
     // Five sites of dimension two: the bounds are [2, 4, 4, 2], so a run that

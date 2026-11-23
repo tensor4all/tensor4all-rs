@@ -166,7 +166,13 @@ fn context_entry_runs_while_the_process_global_backend_is_held() -> TestResult {
         });
         match done_rx.recv_timeout(Duration::from_secs(120)) {
             Ok(()) => worker.join().expect("ACI worker thread panicked"),
-            Err(_) => panic!(
+            // The worker dropped its sender without sending: it panicked. Re-raise that panic rather
+            // than blaming the global route for it.
+            Err(mpsc::RecvTimeoutError::Disconnected) => match worker.join() {
+                Ok(result) => result,
+                Err(payload) => std::panic::resume_unwind(payload),
+            },
+            Err(mpsc::RecvTimeoutError::Timeout) => panic!(
                 "elementwise_batched_with_rng_in did not finish while the process-global backend was held: a \
                  factorization or matrix product of the ACI sweep still took the process-global route \
                  instead of the caller's context (tensor4all-rs#1382)"

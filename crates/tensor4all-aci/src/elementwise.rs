@@ -73,7 +73,9 @@ use tensor4all_simplett::{tensor3_from_data, AbstractTensorTrain, SimpleTensorTr
 ///
 /// Returns [`AciError`](crate::AciError) when options or inputs are invalid,
 /// initial guess construction fails, the operator callback fails, or a local
-/// matrix-CI update fails.
+/// matrix-CI update fails, and [`AciError::Backend`](crate::AciError::Backend)
+/// when a matrix product of the sweep fails or a run that needs a sweep finds
+/// no process-global CPU context (see [`elementwise_batched_with_rng`]).
 ///
 /// # Panics
 ///
@@ -391,7 +393,9 @@ where
 ///
 /// Returns [`AciError`](crate::AciError) when options or inputs are invalid,
 /// batch extraction fails, initial guess construction fails, or a local
-/// matrix-CI update fails.
+/// matrix-CI update fails, and [`AciError::Backend`](crate::AciError::Backend)
+/// when a matrix product of the sweep fails or a run that needs a sweep finds
+/// no process-global CPU context (see [`elementwise_batched_with_rng`]).
 ///
 /// # Panics
 ///
@@ -439,7 +443,9 @@ where
 /// # Errors
 /// Returns [`AciError`](crate::AciError) when options or inputs are invalid,
 /// batch extraction fails, initial guess construction fails, or a local
-/// matrix-CI update fails.
+/// matrix-CI update fails, and [`AciError::Backend`](crate::AciError::Backend)
+/// when a matrix product of the sweep fails or a run that needs a sweep finds
+/// no process-global CPU context (see [`elementwise_batched_with_rng`]).
 pub fn elementwise_with_rng<T, F, R>(
     mut op: F,
     inputs: &[SimpleTensorTrain<T>],
