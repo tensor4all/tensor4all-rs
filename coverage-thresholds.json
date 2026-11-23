@@ -6,9 +6,10 @@
   "_comment_reference_crates": "crates/tensor4all-core/src/tensor_index.rs, crates/mdarray-einsum/src/typed_tensor.rs, crates/tensor4all-itensorlike/src/linsolve.rs: legacy/reference surfaces whose release coverage reflects integration-test exercise (tensor_index via contract tests, typed_tensor via mdarray-einsum tests, itensorlike linsolve via tests/linsolve.rs). Thresholds record measured values (0/45/0). Remove when dedicated unit tests reach the default.",
   "_comment_boundary_modules": "crates/tensor4all-tensorbackend/src/storage.rs (72) and crates/tensor4all-hdf5/src/compat.rs (62): internals partially exercised only through higher-level consumers in the workspace nextest run and crates/tensor4all-hdf5/tests/test_hdf5.rs (which runs under cargo test, excluded from nextest). Remove when dedicated unit tests cover the internal paths.",
   "_comment_dmrg_release_only": "crates/tensor4all-treetn/src/dmrg/mod.rs: release-only deficit — debug measures 77.2% (debug_assert paths compiled out in release), release 72.4%; DMRG sweep paths are exercised by tests/tdvp.rs and the dmrg/gse integration tests. Pinned at 72. Remove when release-mode path tests bring it to the default.",
-  "_comment_coverage_machine_variance": "crates/tensor4all-partitionedtreetn/src/adaptive_interpolation/options.rs (73), crates/tensor4all-treetn/src/tdvp/mod.rs (74), crates/tensor4all-tensorbackend/src/lib.rs (71) and crates/tensor4all-treetn/src/gse.rs (74): every one of these sits on the 75% boundary and measures on both sides of it, so which of them land under the default depends on the runner (the hosted runner reports the first two, a local release run the last two). Pinned at the lower observation; the same reason the tutorial-code entry above records. Remove when dedicated unit tests clear the boundary.",
+  "_comment_coverage_machine_variance": "crates/tensor4all-partitionedtreetn/src/adaptive_interpolation/options.rs (73), crates/tensor4all-treetn/src/tdvp/mod.rs (74), crates/tensor4all-tensorbackend/src/lib.rs (71) and crates/tensor4all-treetn/src/gse.rs (74): every one of these sits on the 75% boundary and measures on both sides of it, so which of them land under the default depends on the runner (the hosted runner reports the first two, a local release run the last two). Pinned at the lower observation. Remove when dedicated unit tests clear the boundary.",
   "_comment_split_inline_tests": "crates/tensor4all-tensorbackend/src/lib.rs (71) and crates/tensor4all-treetn/src/gse.rs (74): moving their inline #[cfg(test)] modules out (#953) removed the test module's own lines from those files' denominators, so release coverage now measures the production lines only (71.4% and 74.2%). Pinned at the measured floor; remove when dedicated unit tests reach the default.",
   "default": 75,
+  "exclude": ["docs/tutorial-code/"],
   "files": {
     "tools/api-dump/src/main.rs": 0,
     "tools/library-panic-audit/src/main.rs": 0,
@@ -29,9 +30,8 @@
     "crates/tensor4all-hdf5/src/compat.rs": 62,
     "crates/tensor4all-treetn/src/dmrg/mod.rs": 72,
     "crates/tensor4all-treetn/src/gse.rs": 74,
-    "crates/tensor4all-partitionedtreetn/src/adaptive_interpolation/options.rs": 73,
-    "docs/tutorial-code/src/qtt_interval_common.rs": 74
+    "crates/tensor4all-partitionedtreetn/src/adaptive_interpolation/options.rs": 73
   },
   "_comment_hdf5": "crates/tensor4all-hdf5/src/compat.rs (62): HDF5 I/O internals are exercised by crates/tensor4all-hdf5/tests/test_hdf5.rs under `cargo test` (dlopen-based tests cannot run under nextest or llvm-cov); release llvm-cov cannot attribute them. Remove when the HDF5 suite runs under a coverage-compatible harness.",
-  "_comment_tutorial_code": "docs/tutorial-code/src/qtt_interval_common.rs: shared helper for the tutorial binaries; release coverage is CI-variant (74.4% on the hosted runner, >=75 locally) because the long-running tutorial binaries (docs/tutorial-code/src/bin/*) exercise different path sets per run. The tutorials themselves are the deterministic artifact; pinned at 74. Remove when tutorial-code gains a stable unit suite."
+  "_comment_exclude": "docs/tutorial-code/: the full tutorial binary runs moved to the heavy-tests workflow (#1415), and the ordinary suite keeps only a smoke test, so the nightly coverage run sees every tutorial binary at 0% by construction (#1437). The tutorials are exercised by heavy-tests and the smoke test in CI_rs; their deterministic artifact is the generated plots, not line coverage."
 }

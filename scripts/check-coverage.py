@@ -14,6 +14,7 @@ def main():
         config = json.load(f)
     default_threshold = config.get("default", 80)
     file_thresholds = config.get("files", {})
+    excluded = config.get("exclude", [])
 
     if parser.coverage:
         cov_path = Path(parser.coverage)
@@ -40,6 +41,7 @@ def main():
 
     failures = []
     passed = 0
+    skipped = 0
 
     for entry in files:
         abs_path = entry["filename"]
@@ -47,6 +49,10 @@ def main():
             rel_path = abs_path[len(root_str):]
         else:
             rel_path = abs_path
+
+        if _is_excluded(rel_path, excluded):
+            skipped += 1
+            continue
 
         lines = entry["summary"]["lines"]
         percent = lines["percent"]
@@ -59,6 +65,8 @@ def main():
 
     total = passed + len(failures)
     print(f"Coverage check: {passed}/{total} files passed\n")
+    if skipped:
+        print(f"Skipped {skipped} excluded files.\n")
 
     if failures:
         print("FAILED files:")
@@ -68,6 +76,15 @@ def main():
         sys.exit(1)
     else:
         print("All files meet their coverage thresholds.")
+
+
+def _is_excluded(rel_path: str, excluded: list[str]) -> bool:
+    """True when `rel_path` matches an entry or sits under an excluded prefix."""
+    for entry in excluded:
+        prefix = entry.rstrip("/")
+        if rel_path == prefix or rel_path.startswith(prefix + "/"):
+            return True
+    return False
 
 
 def _argparse():
