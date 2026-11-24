@@ -172,9 +172,9 @@ pub enum StopRule {
 /// | `max_bond_dim`            | `None`        | Maximum bond dimension (no cap by default)           |
 /// | `scale_tolerance`         | `true`        | Scale tolerance by running max sample magnitude      |
 /// | `enable_global_pivots`    | `true`        | Run automatic global pivot search after each sweep   |
-/// | `nsearch`                 | `5`           | Random starting points for the global pivot search   |
+/// | `nsearch`                 | `5`           | Random starts of the global pivot search; also bounds the retained-pair walks, the restarts and the #1433 enumeration anchors (zero disables all of them) |
 /// | `global_search_starts`    | empty         | Extra caller-supplied starting points, walked first  |
-/// | `max_nglobal_pivot`       | `5`           | Global pivots added per iteration                    |
+/// | `max_nglobal_pivot`       | `5`           | Global pivots added per iteration; zero skips the search entirely |
 /// | `tol_margin_global_search`| `10.0`        | Global pivot discovery margin over `abs_tol`        |
 /// | `seed`                    | `None`        | RNG seed for the global pivot search                 |
 ///
