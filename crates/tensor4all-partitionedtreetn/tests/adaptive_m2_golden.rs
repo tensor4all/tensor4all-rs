@@ -129,8 +129,15 @@ use tensor4all_treetn::interpolation::{
 /// Committed golden outputs.
 const GOLDEN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/adaptive_m2.json");
 
-/// Environment variable that allows `record_m2_golden` to overwrite
-/// [`GOLDEN_PATH`].
+/// Committed golden outputs of the TreeTCI scenarios under the default
+/// [`StopRule::PerBond`] (#1405). [`GOLDEN_PATH`] pins `StopRule::Sampled`.
+const PER_BOND_GOLDEN_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/golden/adaptive_m2_per_bond.json"
+);
+
+/// Environment variable that allows `record_m2_golden` and
+/// `record_m2_per_bond_golden` to overwrite their golden files.
 const RECORD_ENV: &str = "T4A_RECORD_M2_GOLDEN";
 
 /// Relative tolerance of the floating golden outputs: per tensor, relative to
@@ -583,8 +590,8 @@ where
 }
 
 /// Run one scenario and capture its golden record; also return the engine
-/// calls of a TreeTCI scenario.
-fn run_scenario(scenario: &Scenario) -> (Value, Vec<EngineCall>) {
+/// calls of a TreeTCI scenario, whose engine runs under `stop_rule`.
+fn run_scenario(scenario: &Scenario, stop_rule: StopRule) -> (Value, Vec<EngineCall>) {
     match (scenario.engine, &scenario.function) {
         (Engine::Dense(fault), Function::Real(f)) => {
             let result = run_typed(&DenseEngine::with_fault(fault), scenario, f.as_ref());
@@ -595,9 +602,7 @@ fn run_scenario(scenario: &Scenario) -> (Value, Vec<EngineCall>) {
             (capture(scenario, &result, &[]), Vec::new())
         }
         (Engine::TreeTci, Function::Real(f)) => {
-            // The committed golden was recorded under the sampled stop
-            // (#1352, #1356, #1434); it pins `StopRule::Sampled` (#1405).
-            let engine = RecordingTreeTci::new(StopRule::Sampled);
+            let engine = RecordingTreeTci::new(stop_rule);
             let result = run_typed(&engine, scenario, f.as_ref());
             // Re-recording must preserve the target, not only the driver's
             // discrete decisions. Check every entry at the existing tolerance.
@@ -850,9 +855,9 @@ fn assert_matches_golden(expected: &Value, actual: &Value) {
     }
 }
 
-fn load_golden() -> Vec<Value> {
-    let text = std::fs::read_to_string(GOLDEN_PATH)
-        .unwrap_or_else(|error| panic!("cannot read {GOLDEN_PATH}: {error}"));
+fn load_golden(path: &str) -> Vec<Value> {
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|error| panic!("cannot read {path}: {error}"));
     serde_json::from_str::<Value>(&text).unwrap()["scenarios"]
         .as_array()
         .unwrap()
@@ -877,14 +882,13 @@ fn golden_trees_are_genuinely_branched() {
     }
 }
 
-#[test]
-fn m2_golden_outputs_are_reproduced() {
-    let golden = load_golden();
-    let scenarios = all_scenarios();
+/// Compare `scenarios` under `stop_rule` with the golden file at `path`.
+fn assert_reproduces_golden(path: &str, scenarios: &[Scenario], stop_rule: StopRule) {
+    let golden = load_golden(path);
     assert_eq!(golden.len(), scenarios.len(), "scenario count");
-    for (expected, scenario) in golden.iter().zip(&scenarios) {
+    for (expected, scenario) in golden.iter().zip(scenarios) {
         assert_eq!(expected["name"], scenario.name);
-        let (actual, calls) = run_scenario(scenario);
+        let (actual, calls) = run_scenario(scenario, stop_rule);
         assert_screened(scenario.name, &calls);
         // Parse the actual record through the same text round trip as the
         // committed one, so that the JSON float parser cannot add a
@@ -892,6 +896,24 @@ fn m2_golden_outputs_are_reproduced() {
         let actual: Value = serde_json::from_str(&actual.to_string()).unwrap();
         assert_matches_golden(expected, &actual);
     }
+}
+
+#[test]
+fn m2_golden_outputs_are_reproduced() {
+    // Recorded under the sampled stop (#1352, #1356, #1434); pinned to
+    // `StopRule::Sampled` since the default changed (#1405).
+    assert_reproduces_golden(GOLDEN_PATH, &all_scenarios(), StopRule::Sampled);
+}
+
+#[test]
+fn m2_per_bond_golden_outputs_are_reproduced() {
+    // The TreeTCI scenarios under the default stop rule (#1405). The dense
+    // scenarios do not depend on it and stay in `GOLDEN_PATH` only.
+    assert_reproduces_golden(
+        PER_BOND_GOLDEN_PATH,
+        &treetci_scenarios(),
+        StopRule::PerBond,
+    );
 }
 
 /// The comparator keeps the represented function's sign: a per-node sign gauge
@@ -958,14 +980,26 @@ fn golden_comparator_keeps_the_represented_function_sign() {
 #[test]
 #[ignore = "re-records the committed golden outputs; run explicitly with T4A_RECORD_M2_GOLDEN=1"]
 fn record_m2_golden() {
+    record_golden(GOLDEN_PATH, all_scenarios(), StopRule::Sampled);
+}
+
+#[test]
+#[ignore = "re-records the committed per-bond golden outputs; run explicitly with T4A_RECORD_M2_GOLDEN=1"]
+fn record_m2_per_bond_golden() {
+    record_golden(PER_BOND_GOLDEN_PATH, treetci_scenarios(), StopRule::PerBond);
+}
+
+/// Run `scenarios` under `stop_rule`, screen them and write the golden file
+/// at `path`.
+fn record_golden(path: &str, scenarios: Vec<Scenario>, stop_rule: StopRule) {
     assert!(
         std::env::var_os(RECORD_ENV).is_some(),
-        "set {RECORD_ENV}=1 to overwrite {GOLDEN_PATH}"
+        "set {RECORD_ENV}=1 to overwrite {path}"
     );
     let mut records = Vec::new();
     let mut screened = Vec::new();
-    for scenario in all_scenarios() {
-        let (record, calls) = run_scenario(&scenario);
+    for scenario in scenarios {
+        let (record, calls) = run_scenario(&scenario, stop_rule);
         let ratios: Vec<f64> = calls.iter().map(decision_ratio).collect();
         eprintln!("{}: error/tolerance per call {ratios:?}", scenario.name);
         screened.push((scenario.name, calls));
@@ -979,6 +1013,6 @@ fn record_m2_golden() {
         "scenarios": records,
     }))
     .unwrap();
-    std::fs::create_dir_all(std::path::Path::new(GOLDEN_PATH).parent().unwrap()).unwrap();
-    std::fs::write(GOLDEN_PATH, text + "\n").unwrap();
+    std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap()).unwrap();
+    std::fs::write(path, text + "\n").unwrap();
 }

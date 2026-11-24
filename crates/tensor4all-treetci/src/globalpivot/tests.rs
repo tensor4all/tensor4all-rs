@@ -1135,6 +1135,40 @@ fn full_runs_reproduce_recorded_ranks_and_errors() {
 }
 
 #[test]
+fn full_runs_per_bond_reproduce_recorded_ranks_errors_and_points() {
+    // The default stop rule (#1405), recorded on its first implementation.
+    // The chain repeats the recording of 501ebb4a (before #1352) to the bit:
+    // the bond errors are the per-bond record, and the 10x margin rejects
+    // the sampled residuals between 1e-8 and 1.6e-8 that kept `Sampled`
+    // going for two more iterations (22073 points there).
+    let (ranks, errors, evaluated_points, _) = chain_fixture().full_run(StopRule::PerBond);
+    assert_eq!(ranks, vec![4, 8, 8, 8]);
+    assert_eq!(evaluated_points, 12720, "chain evaluated points");
+    let recorded = [
+        2.5205315287054708e-9,
+        6.416958743885642e-9,
+        9.666884024209921e-9,
+        9.666884024209921e-9,
+    ];
+    assert_eq!(errors.len(), recorded.len());
+    for (error, expected) in errors.iter().zip(recorded) {
+        assert!(
+            (error - expected).abs() <= 1e-9 * expected,
+            "chain errors {errors:?}, recorded {recorded:?}"
+        );
+    }
+
+    // The branched fixture takes the same path as under `Sampled`; only the
+    // first error differs, the bond error instead of the 0.446 residual the
+    // search measured. The dense check of the Sampled test covers the result.
+    let (ranks, errors, evaluated_points, _) = branched_fixture().full_run(StopRule::PerBond);
+    assert_eq!(ranks, vec![8, 16, 16, 16]);
+    assert_eq!(evaluated_points, 161713, "branched evaluated points");
+    assert_eq!(errors.len(), 4);
+    assert!(errors.iter().all(|&error| error <= 1e-14), "{errors:?}");
+}
+
+#[test]
 fn equal_errors_keep_generation_order_and_duplicates_collapse() {
     // Each injected start has error level 1, 2 or 3. Site 0 has tied
     // candidates, so its lowest value wins; all other coordinates have a

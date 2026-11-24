@@ -9,7 +9,7 @@
 use anyhow::Result;
 use tensor4all_core::IdxTensor;
 use tensor4all_treetci::{
-    crossinterpolate2, DefaultProposer, GlobalIndexBatch, TreeTciEdge, TreeTciGraph,
+    crossinterpolate2, DefaultProposer, GlobalIndexBatch, StopRule, TreeTciEdge, TreeTciGraph,
     TreeTciOptions, TreeTciTermination,
 };
 
@@ -98,7 +98,7 @@ impl BoxTarget {
     ///
     /// The target never fails. An inexact or non-converged run panics through
     /// the assertion rather than returning an error.
-    pub fn assert_exact(&self, seeds: &[u64]) -> Result<()> {
+    pub fn assert_exact(&self, seeds: &[u64], stop_rule: StopRule) -> Result<()> {
         let centre = self.centre();
         let start: Vec<usize> = (0..=centre)
             .map(|site| {
@@ -133,6 +133,7 @@ impl BoxTarget {
             };
             let options = TreeTciOptions {
                 tolerance: TOLERANCE,
+                stop_rule,
                 max_iter: 40,
                 seed: Some(seed),
                 enable_global_pivots: true,
@@ -170,7 +171,7 @@ impl BoxTarget {
             let error = run.treetn.to_dense()?.sub(&target)?.maxabs()?;
             assert!(
                 run.termination == TreeTciTermination::Converged && error <= TOLERANCE,
-                "box r = {} seed {seed}: {:?} after {} iterations, dense error {error:e}",
+                "box r = {} seed {seed}, {stop_rule:?}: {:?} after {} iterations, dense error {error:e}",
                 self.r,
                 run.termination,
                 run.errors.len(),

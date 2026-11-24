@@ -12,17 +12,22 @@
 //! faces on three axes, seed 3 on two) and two control seeds at `R = 6`:
 //! seed 1, whose trajectory the enumeration leaves unchanged, and seed 2,
 //! where it finds the first pivots. All 11 seeds of both boxes run in
-//! `heavy_issue1433_box`.
+//! `heavy_issue1433_box`. Every case runs under both stop rules (#1405).
 
 use crate::common::box_target::{BOX_R6, BOX_R7};
 use anyhow::Result;
+use tensor4all_treetci::StopRule;
 
 #[test]
 fn width_32_box_is_exact() -> Result<()> {
-    BOX_R7.assert_exact(&[2, 3])
+    [StopRule::Sampled, StopRule::PerBond]
+        .into_iter()
+        .try_for_each(|rule| BOX_R7.assert_exact(&[2, 3], rule))
 }
 
 #[test]
 fn width_16_control_box_stays_exact() -> Result<()> {
-    BOX_R6.assert_exact(&[1, 2])
+    [StopRule::Sampled, StopRule::PerBond]
+        .into_iter()
+        .try_for_each(|rule| BOX_R6.assert_exact(&[1, 2], rule))
 }
