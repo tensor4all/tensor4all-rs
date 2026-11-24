@@ -35,9 +35,9 @@ either, a third stage enumerates around the same retained tail pivots: every
 configuration of each maximal edge side with at most 32 local configurations,
 the other sites held at the pivot, without random draws
 ([#1433](https://github.com/tensor4all/tensor4all-rs/issues/1433)). The points
-are evaluated in batches of at most 2^20 index entries (points times sites),
-which bounds the index buffer on large trees and changes neither the residuals
-nor the selected pivots. A walk
+are evaluated in batches of at most 2^20 index entries (points times sites;
+a batch always holds at least one point), which bounds the index buffer on
+large trees and changes neither the residuals nor the selected pivots. A walk
 needs a nonzero residual one coordinate move from its start; the enumeration
 reaches a defect several moves away as long as it lies in such a side. On
 binary quantics chains that side is the aligned block of width at most 32

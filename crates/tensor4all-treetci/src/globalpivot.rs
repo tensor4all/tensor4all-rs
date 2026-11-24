@@ -52,14 +52,15 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 ///    of local dimensions is between 2 and 32, keeping the maximal such sides,
 ///    evaluate every configuration of the side with the other sites held at
 ///    the pivot, in batches of at most 2^20 index entries (`points *
-///    n_sites`); the batching changes neither the residuals, their order nor
-///    the result. Points qualify against the same threshold as those
+///    n_sites`, but at least one point per batch); the batching changes
+///    neither the residuals, their order nor the result. Points qualify against the same threshold as those
 ///    families, `abs_tol`. There is no walk and no random draw. On binary
 ///    quantics chains with the least significant bit at the leaf, this
 ///    exhaustively covers the aligned block of width at most 32 around each
-///    pivot's value of one variable, and nothing wider. The stage has no
-///    anchors, and so does not run, when `nsearch` is zero or the tree has no
-///    dimension-one vertex.
+///    pivot's value of one variable, and nothing wider. The stage does not
+///    run when `nsearch` is zero or the tree has no dimension-one vertex (no
+///    anchors), when no edge side has 2 to 32 configurations, or when
+///    `max_nglobal_pivot` is zero (the search returns before any stage).
 /// 7. Return at most `max_nglobal_pivot` distinct points.
 ///
 /// Caller-supplied starts let a caller aim the search at a region it already
@@ -796,10 +797,12 @@ where
                 let sides = maximal_enumeration_sides(state, LEAF_SIDE_ENUMERATION_BUDGET)?;
                 enumeration_points(&anchors, &sides, &state.local_dims)
             };
-            // Chunked so that the index buffer stays bounded on large trees;
+            // Chunked so that the index buffer stays bounded on large trees.
+            // `batch_residuals` computes each residual from its own point, so
             // the residuals, their order and the returned set are the same as
-            // for one batch (checked by
-            // `enumeration_chunk_length_does_not_change_the_search`).
+            // for one batch. `enumeration_chunk_length_does_not_change_the_search`
+            // checks the evaluated point sequence, the batch sizes, the
+            // returned pivots and `max_error` for several chunk lengths.
             for chunk in points.chunks(enumeration_chunk_len.max(1)) {
                 let errors = batch_residuals(
                     execution,
