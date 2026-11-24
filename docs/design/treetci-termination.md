@@ -30,9 +30,24 @@ absolute tolerance take priority; when none cross the margin, already observed
 tolerance violations still qualify. If ordinary starts yield no pivot, edges
 with a dimension-one endpoint supply retained tail pivot pairs and restarts
 that preserve one observed subtree while randomizing its complement. Each
-extra family is bounded by `nsearch` walks. These checks can escape sparse
-support that uniform random starts miss; they do not exhaust the domain or
-turn sampled convergence into an error bound.
+extra family is bounded by `nsearch` walks. If those families find nothing
+either, a third stage enumerates around the same retained tail pivots: every
+configuration of each maximal edge side with at most 32 local configurations,
+the other sites held at the pivot, in one batch and without random draws
+([#1433](https://github.com/tensor4all/tensor4all-rs/issues/1433)). A walk
+needs a nonzero residual one coordinate move from its start; the enumeration
+reaches a defect several moves away as long as it lies in such a side. On
+binary quantics chains that side is the aligned block of width at most 32
+around the pivot's value of one variable; wider blocks are not searched. These
+checks can escape sparse support that uniform random starts miss; they do not
+exhaust the domain or turn sampled convergence into an error bound.
+
+The third stage runs in every search that finds no pivot, and `Converged`
+needs three trailing iterations without an accepted global pivot. So when
+those three iterations all searched, none of their searches saw a residual
+above the tolerance inside an enumerated side around a retained tail pivot.
+This is a bounded guarantee: it says nothing about blocks wider than 32, and
+an iteration whose search was skipped (see below) contributes no search.
 
 Global search is skipped after the final requested iteration and at a
 bond-saturation stop. An injected pivot must be processed by a later sweep:

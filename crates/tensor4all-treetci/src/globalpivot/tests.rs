@@ -1,7 +1,8 @@
 use super::{
     branch_slice_cache_max_bytes, cached_walk_readout, cached_walk_readout_on_session,
-    find_global_pivots, materialized_tree_bytes, retained_pivot_starts, search_with_readout,
-    ScalarParts, SearchParams,
+    enumeration_points, find_global_pivots, materialized_tree_bytes, maximal_enumeration_sides,
+    retained_pivot_starts, search_with_readout, ScalarParts, SearchParams,
+    LEAF_SIDE_ENUMERATION_BUDGET,
 };
 use crate::{
     materialize::to_treetn, optimize_with_proposer, AllEdges, DefaultProposer, GlobalIndexBatch,
@@ -1512,5 +1513,312 @@ fn branch_slice_cache_cap_tracks_the_tree_above_the_default_floor() {
     assert_eq!(
         branch_slice_cache_max_bytes::<Complex64>(&tree),
         tree_bytes * 2
+    );
+}
+
+/// A state on `graph` with `local_dims`, for the side-selection tests, which
+/// read only the graph and the local dimensions.
+fn shape_state(local_dims: Vec<usize>, graph: TreeTciGraph) -> TreeTCI2<f64> {
+    TreeTCI2::<f64>::new(local_dims, graph).unwrap()
+}
+
+/// Selected sides, each sorted, in sorted order.
+fn sorted_sides(state: &TreeTCI2<f64>, limit: usize) -> Vec<Vec<usize>> {
+    let mut sides: Vec<Vec<usize>> = maximal_enumeration_sides(state, limit)
+        .unwrap()
+        .into_iter()
+        .map(|mut side| {
+            side.sort_unstable();
+            side
+        })
+        .collect();
+    sides.sort();
+    sides
+}
+
+/// The #1433 box tree: three binary chains of `r` sites joined at a unit
+/// centre, bit `i` of axis `j` at site `3 i + j`, the least significant bit at
+/// the leaf.
+fn three_branch_state(r: usize) -> TreeTCI2<f64> {
+    let centre = 3 * r;
+    let mut edges: Vec<TreeTciEdge> = (0..3)
+        .flat_map(|j| (0..r - 1).map(move |i| TreeTciEdge::new(3 * i + j, 3 * (i + 1) + j)))
+        .collect();
+    edges.extend((0..3).map(|j| TreeTciEdge::new(3 * (r - 1) + j, centre)));
+    let mut dims = vec![2; centre];
+    dims.push(1);
+    shape_state(dims, TreeTciGraph::new(centre + 1, &edges).unwrap())
+}
+
+#[test]
+fn enumeration_sides_are_the_low_bits_of_each_branch() {
+    let state = three_branch_state(7);
+    // The low `bits` bits of each axis: sites j, j + 3, ..., j + 3 (bits - 1).
+    let low_bits = |bits: usize| -> Vec<Vec<usize>> {
+        (0..3)
+            .map(|j| (0..bits).map(|i| 3 * i + j).collect())
+            .collect()
+    };
+    assert_eq!(LEAF_SIDE_ENUMERATION_BUDGET, 32);
+    // The budget is inclusive: 32 admits five bits, 31 only four.
+    assert_eq!(
+        sorted_sides(&state, LEAF_SIDE_ENUMERATION_BUDGET),
+        low_bits(5)
+    );
+    assert_eq!(sorted_sides(&state, 31), low_bits(4));
+    assert_eq!(sorted_sides(&state, 33), low_bits(5));
+    assert_eq!(sorted_sides(&state, 16), low_bits(4));
+    assert_eq!(sorted_sides(&state, 64), low_bits(6));
+    // A budget below two configurations selects nothing.
+    assert!(sorted_sides(&state, 1).is_empty());
+}
+
+#[test]
+fn enumeration_sides_on_a_chain_and_a_star() {
+    // Chain: the sides are prefixes and suffixes; the longest that fit win.
+    let chain = shape_state(vec![2; 6], TreeTciGraph::linear_chain(6).unwrap());
+    assert_eq!(sorted_sides(&chain, 8), vec![vec![0, 1, 2], vec![3, 4, 5]]);
+    assert_eq!(sorted_sides(&chain, 7), vec![vec![0, 1], vec![4, 5]]);
+
+    // Star with a unit centre: each leaf alone (2 configurations) or the
+    // centre with the three other leaves (8).
+    let edges: Vec<_> = (1..=4).map(|site| TreeTciEdge::new(0, site)).collect();
+    let star = shape_state(vec![1, 2, 2, 2, 2], TreeTciGraph::new(5, &edges).unwrap());
+    assert_eq!(
+        sorted_sides(&star, 4),
+        vec![vec![1], vec![2], vec![3], vec![4]]
+    );
+    assert_eq!(
+        sorted_sides(&star, 8),
+        vec![
+            vec![0, 1, 2, 3],
+            vec![0, 1, 2, 4],
+            vec![0, 1, 3, 4],
+            vec![0, 2, 3, 4]
+        ]
+    );
+}
+
+#[test]
+fn enumeration_sides_use_the_product_of_local_dimensions() {
+    // Sides of the chain [3, 3, 4]: {0} 3, {0, 1} 9, {2} 4, {1, 2} 12.
+    let state = shape_state(vec![3, 3, 4], TreeTciGraph::linear_chain(3).unwrap());
+    assert_eq!(sorted_sides(&state, 8), vec![vec![0], vec![2]]);
+    assert_eq!(sorted_sides(&state, 9), vec![vec![0, 1], vec![2]]);
+    assert_eq!(sorted_sides(&state, 11), vec![vec![0, 1], vec![2]]);
+    assert_eq!(sorted_sides(&state, 12), vec![vec![0, 1], vec![1, 2]]);
+}
+
+#[test]
+fn enumeration_sides_exclude_sides_of_unit_vertices_only() {
+    // {0} and {0, 1} have one configuration; {2} is inside {1, 2}.
+    let state = shape_state(vec![1, 1, 2], TreeTciGraph::linear_chain(3).unwrap());
+    assert_eq!(sorted_sides(&state, 32), vec![vec![1, 2]]);
+    let units = shape_state(vec![1, 1], TreeTciGraph::linear_chain(2).unwrap());
+    assert!(sorted_sides(&units, 32).is_empty());
+}
+
+#[test]
+fn enumeration_points_cover_every_side_configuration_once() {
+    let dims = [3, 3, 4];
+    let sides = vec![vec![0, 1], vec![2]];
+    let anchor = vec![1, 1, 1];
+    // The anchor is reached from both sides, and a repeated anchor adds
+    // nothing: 9 + 4 - 1 points.
+    let points = enumeration_points(&[anchor.clone(), anchor.clone()], &sides, &dims);
+    let mut expected: Vec<Vec<usize>> = (0..3)
+        .flat_map(|a| (0..3).map(move |b| vec![a, b, 1]))
+        .chain((0..4).map(|c| vec![1, 1, c]))
+        .collect();
+    expected.sort();
+    expected.dedup();
+    assert_eq!(expected.len(), 12);
+    assert_eq!(points, expected);
+
+    // Two anchors that agree outside the side give the same points once.
+    let block = enumeration_points(&[vec![1, 1, 1], vec![0, 2, 1]], &[vec![0, 1]], &dims);
+    assert_eq!(block.len(), 9);
+    assert!(block.iter().all(|point| point[2] == 1));
+    // Two anchors that differ outside it give two blocks.
+    let two = enumeration_points(&[vec![1, 1, 1], vec![1, 1, 2]], &[vec![0, 1]], &dims);
+    assert_eq!(two.len(), 18);
+    assert!(enumeration_points(&[anchor], &[], &dims).is_empty());
+    assert!(enumeration_points(&[], &sides, &dims).is_empty());
+}
+
+/// A stream whose every draw is zero, so each random start and each restart
+/// coordinate of the stage-3 fixture is known.
+struct ZeroRng;
+
+impl rand::RngCore for ZeroRng {
+    fn next_u32(&mut self) -> u32 {
+        0
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        0
+    }
+
+    fn fill_bytes(&mut self, dst: &mut [u8]) {
+        dst.fill(0);
+    }
+}
+
+/// What one search on the stage-3 fixture returned and asked the target for.
+struct StageRun {
+    pivots: Vec<crate::MultiIndex>,
+    max_error: f64,
+    evaluated: Vec<Vec<usize>>,
+    batch_sizes: Vec<usize>,
+}
+
+/// The retained pivot of the stage-3 fixture.
+const STAGE_ANCHOR: [usize; 7] = [1, 1, 1, 0, 1, 1, 1];
+/// Stage-3 targets, at least two coordinate moves from every walk start.
+const STAGE_Q: [usize; 7] = [1, 0, 0, 0, 1, 0, 1];
+const STAGE_Q2: [usize; 7] = [1, 0, 1, 0, 0, 1, 1];
+const STAGE_Q3: [usize; 7] = [1, 1, 0, 0, 0, 1, 0];
+/// One move from the anchor, found by a retained-pivot probe.
+const PROBE_HIT: [usize; 7] = [1, 1, 1, 0, 1, 1, 0];
+/// One move from the first restart start [1, 1, 1, 0, 0, 0, 0].
+const RESTART_HIT: [usize; 7] = [1, 1, 1, 0, 1, 0, 0];
+/// One move from the uniform start, all zeros under [`ZeroRng`].
+const UNIFORM_HIT: [usize; 7] = [0, 0, 0, 0, 0, 0, 1];
+
+/// Search the chain `local_dims` (seven sites) holding the pivot
+/// [`STAGE_ANCHOR`], with residual `errors` at the listed points and zero
+/// elsewhere.
+///
+/// The target is `1 + error` and the readout is 1, so each residual is
+/// exactly its listed error. Two uniform walks start at the origin; with a
+/// unit site 3 the probes start at the anchor and the restarts at
+/// [1, 1, 1, 0, 0, 0, 0] and [0, 0, 0, 0, 1, 1, 1]. `abs_tol` is 1, and an
+/// error of 100 stops a walk at once. With `fail_batch_readout`, the readout
+/// fails on any unhinted batch of more than one point, which only stage 3
+/// asks for.
+fn stage_search(
+    local_dims: Vec<usize>,
+    errors: &[([usize; 7], f64)],
+    fail_batch_readout: bool,
+) -> crate::error::Result<StageRun> {
+    assert_eq!(rand::Rng::random_range(&mut ZeroRng, 0..2usize), 0);
+    let mut state =
+        TreeTCI2::<f64>::new(local_dims, TreeTciGraph::linear_chain(7).unwrap()).unwrap();
+    let anchor = STAGE_ANCHOR.to_vec();
+    state.add_global_pivots(&[anchor]).unwrap();
+    let evaluated = RefCell::new(Vec::new());
+    let batch_sizes = RefCell::new(Vec::new());
+    let mut target = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        batch_sizes.borrow_mut().push(batch.n_points());
+        Ok(batch
+            .data()
+            .chunks(batch.n_sites())
+            .map(|point| {
+                evaluated.borrow_mut().push(point.to_vec());
+                1.0 + errors
+                    .iter()
+                    .find(|(at, _)| at.as_slice() == point)
+                    .map_or(0.0, |&(_, error)| error)
+            })
+            .collect())
+    };
+    let readout = |_: &mut TreeTNCachedEvaluator<'_, usize>,
+                   _: &TreeTN<IdxTensor, usize>,
+                   _: &[DynIndex],
+                   points: ColMajorArrayRef<'_, usize>,
+                   site: Option<usize>|
+     -> Result<Vec<AnyScalar>> {
+        let n = points.shape()[1];
+        if fail_batch_readout && site.is_none() && n > 1 {
+            return Err(anyhow::anyhow!("stage-3 readout failure"));
+        }
+        Ok(vec![AnyScalar::new_real(1.0); n])
+    };
+    let mut execution = crate::evaluation::Compatibility::new(&mut target);
+    let result = search_with_readout(
+        &state,
+        &mut execution,
+        SearchParams {
+            nsearch: 2,
+            max_nglobal_pivot: 5,
+            tol_margin: 1.0,
+            abs_tol: 1.0,
+        },
+        &[],
+        &mut ZeroRng,
+        readout,
+        cached_walk_readout_on_session,
+    )?;
+    Ok(StageRun {
+        pivots: result.pivots,
+        max_error: result.max_error,
+        evaluated: evaluated.into_inner(),
+        batch_sizes: batch_sizes.into_inner(),
+    })
+}
+
+/// The stage-3 fixture's local dimensions: a binary chain with a unit site 3.
+fn unit_chain() -> Vec<usize> {
+    vec![2, 2, 2, 1, 2, 2, 2]
+}
+
+#[test]
+fn enumeration_runs_when_probes_and_restarts_find_nothing() {
+    let run = stage_search(unit_chain(), &[(STAGE_Q, 2.0)], false).unwrap();
+    assert_eq!(run.pivots, vec![STAGE_Q.to_vec()]);
+    assert_eq!(run.max_error, 2.0);
+    // The sides {1, ..., 6} and {0, ..., 5} around the anchor hold 32
+    // configurations each and share the 16 with sites 0 and 6 at the anchor.
+    assert_eq!(run.batch_sizes.iter().filter(|&&n| n == 48).count(), 1);
+    assert_eq!(
+        run.evaluated
+            .iter()
+            .filter(|point| **point == STAGE_Q)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn enumeration_returns_points_above_abs_tol_strongest_first() {
+    let errors = [(STAGE_Q, 2.0), (STAGE_Q2, 3.0), (STAGE_Q3, 0.5)];
+    let run = stage_search(unit_chain(), &errors, false).unwrap();
+    // 0.5 is a sampled residual below `abs_tol`: recorded, not returned.
+    assert_eq!(run.pivots, vec![STAGE_Q2.to_vec(), STAGE_Q.to_vec()]);
+    assert_eq!(run.max_error, 3.0);
+    assert!(run.evaluated.contains(&STAGE_Q3.to_vec()));
+}
+
+#[test]
+fn enumeration_is_skipped_when_an_earlier_stage_finds_a_pivot() {
+    for (hit, label) in [
+        (PROBE_HIT, "probe"),
+        (RESTART_HIT, "restart"),
+        (UNIFORM_HIT, "uniform walk"),
+    ] {
+        let run = stage_search(unit_chain(), &[(hit, 100.0), (STAGE_Q, 1000.0)], false).unwrap();
+        assert_eq!(run.pivots, vec![hit.to_vec()], "{label}");
+        assert!(!run.evaluated.contains(&STAGE_Q.to_vec()), "{label}");
+        assert!(!run.batch_sizes.contains(&48), "{label}");
+    }
+}
+
+#[test]
+fn enumeration_needs_a_unit_vertex_for_its_anchors() {
+    // The same chain with a binary site 3 has no retained-pivot anchors, so
+    // neither the probes nor the enumeration run.
+    let run = stage_search(vec![2; 7], &[(STAGE_Q, 2.0)], false).unwrap();
+    assert!(run.pivots.is_empty());
+    assert_eq!(run.max_error, 0.0);
+    assert!(!run.evaluated.contains(&STAGE_Q.to_vec()));
+    assert!(run.batch_sizes.iter().all(|&n| n < 48));
+}
+
+#[test]
+fn enumeration_propagates_readout_failures() {
+    let error = stage_search(unit_chain(), &[], true).err().unwrap();
+    assert!(
+        error.to_string().contains("stage-3 readout failure"),
+        "{error}"
     );
 }
