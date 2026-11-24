@@ -1147,16 +1147,23 @@ fn full_runs_reproduce_recorded_ranks_and_errors() {
     // The evaluated point counts were recorded on `main` 050eb4ba (#1405), so
     // that a change of the stop rule shows up in the cost as well as in the
     // ranks and errors.
+    //
+    // Re-recorded once more when the local truncation threshold of the
+    // sampled stop path started tightening after iterations whose recorded
+    // error fails the tolerance (#1371): the first iteration's 0.0128 halves
+    // it, and the chain now converges in four iterations. The prior recording
+    // (#1352) was ranks [4, 8, 8, 8, 8, 8], 22073 evaluated points, errors
+    // [0.012773153086831206, 1.0025709087768116e-8, 1.5404162097480518e-8,
+    // 9.492341846461125e-9, 9.314919862766571e-9, 9.549166222994594e-9]. The
+    // branched recording is unchanged.
     let (ranks, errors, evaluated_points, _) = chain_fixture().full_run(StopRule::Sampled);
-    assert_eq!(ranks, vec![4, 8, 8, 8, 8, 8]);
-    assert_eq!(evaluated_points, 22073, "chain evaluated points");
+    assert_eq!(ranks, vec![4, 8, 8, 8]);
+    assert_eq!(evaluated_points, 13754, "chain evaluated points");
     let recorded = [
         0.012773153086831206,
-        1.0025709087768116e-8,
-        1.5404162097480518e-8,
-        9.492341846461125e-9,
-        9.314919862766571e-9,
-        9.549166222994594e-9,
+        3.1243394479261807e-9,
+        3.308901600676769e-9,
+        3.292748132379448e-9,
     ];
     assert_eq!(errors.len(), recorded.len());
     // Errors are normalized to the sampled scale (about 1). Since #1352 some
