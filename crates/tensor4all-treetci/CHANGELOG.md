@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased — adaptive local threshold under the sampled stop rule (behaviour change)
+
+Under `StopRule::Sampled`, the local rrLU truncation threshold of each edge
+update now starts at the absolute tolerance and is halved after each iteration
+whose recorded error is not below `tolerance`, down to `1 / E` of it for E tree
+edges (#1371). The search acceptance and the stop tolerance are unchanged.
+
+- **Added**: `TreeTciTermination::LocalThresholdFloor`, reported under
+  `Sampled` when three trailing sweeps at the `1 / E` floor all fail the
+  tolerance. It is armed only for trees with at least two edges: with one
+  edge or none the floor would be `1.0`, the threshold cannot descend, and
+  the run ends `MaxIterations` or `Converged` as before.
+- **Breaking**: `TreeTciOptimizationResult` and `TreeTciRunResult` have a new
+  public field `local_threshold_factor`, the factor the last sweep applied
+  (`1.0` under `PerBond` and for trees with fewer than two edges). Struct
+  literals and destructuring patterns without `..` must add it.
+- **Changed**: `Sampled` runs whose recorded error fails the tolerance in some
+  iteration follow a different trajectory, so `Sampled` is no longer exactly
+  the behaviour before #1405. On the full-run chain golden it now takes 13754
+  evaluations, 1.08x the per-bond stop (1.74x in the entry below). This
+  includes `TreeTciInterpolator`, which always runs `Sampled`.
+- **Not changed**: under the default `StopRule::PerBond` the factor stays
+  exactly `1.0`, `LocalThresholdFloor` is never reported, and runs are the
+  previous ones. The pinned `PerBond` runs match in termination, ranks and
+  points exactly and in the recorded errors within 1e-9 relative (bit-identical
+  in local measurements on Linux x86_64).
+
 ## Unreleased — per-bond stop rule as default (behaviour change)
 
 `TreeTciOptions::stop_rule` selects how the optimizer records its error and

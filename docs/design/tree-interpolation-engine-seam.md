@@ -230,9 +230,10 @@ and reported as `InvalidProblem`.
 
 1. **Termination report.** `optimize_with_proposer` returns a report with
    `ranks`, `errors`, and a reason (`Converged`, `MaxBondDimension`,
-   `MaxIterations`, `DegenerateCandidateSet`), mapped to
+   `MaxIterations`, `DegenerateCandidateSet`, `LocalThresholdFloor`), mapped to
    `InterpolationTermination` with the precedence above
-   (`DegenerateCandidateSet` maps to `ErrorNotMeasured`, #1153). `crossinterpolate2` keeps its current signature. The other caller of
+   (`DegenerateCandidateSet` maps to `ErrorNotMeasured`, #1153;
+   `LocalThresholdFloor` maps to `IterationLimit`, #1371). `crossinterpolate2` keeps its current signature. The other caller of
    `optimize_with_proposer`, `tensor4all-quanticstci`, is updated in the same
    M1 PR. The implementation runs with `scale_tolerance = false` and requires
    `max_iter >= 3`, because convergence needs three sweeps of history.
@@ -322,7 +323,8 @@ side adds `TreeTciInterpolator`, `TreeTciOptimizationResult`, and
 
 - **Report from both optimizers.** `optimize_default`, the thin wrapper of
   `optimize_with_proposer` with `DefaultProposer`, returns the same
-  `TreeTciOptimizationResult { ranks, errors, termination, evaluation }`.
+  `TreeTciOptimizationResult { ranks, errors, termination,
+  local_threshold_factor, evaluation }`.
   `TreeTciTermination` is `#[non_exhaustive]`.
 - **Cap precedence in TreeTCI.** The saturation stop is checked before the
   convergence criterion, ranks never exceed the cap after a sweep, and

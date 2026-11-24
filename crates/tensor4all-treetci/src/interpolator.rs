@@ -384,7 +384,9 @@ fn map_termination(
         }
         TreeTciTermination::Converged => InterpolationTermination::Converged,
         TreeTciTermination::MaxBondDimension => InterpolationTermination::BondCapReached,
-        TreeTciTermination::MaxIterations => InterpolationTermination::IterationLimit,
+        TreeTciTermination::MaxIterations | TreeTciTermination::LocalThresholdFloor => {
+            InterpolationTermination::IterationLimit
+        }
         TreeTciTermination::DegenerateCandidateSet => InterpolationTermination::ErrorNotMeasured,
     }
 }

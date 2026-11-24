@@ -56,6 +56,19 @@ fn map_termination_applies_the_cap_precedence() {
             None,
             InterpolationTermination::IterationLimit,
         ),
+        // The local threshold floor (#1371) is a limit of the engine's own.
+        (
+            TreeTciTermination::LocalThresholdFloor,
+            2,
+            cap,
+            InterpolationTermination::IterationLimit,
+        ),
+        (
+            TreeTciTermination::LocalThresholdFloor,
+            2,
+            None,
+            InterpolationTermination::IterationLimit,
+        ),
         // An unmeasured error is never accepted, below the cap or not.
         (
             TreeTciTermination::DegenerateCandidateSet,

@@ -122,6 +122,7 @@ where
                 ranks: result.ranks,
                 errors: result.errors,
                 termination: result.termination,
+                local_threshold_factor: result.local_threshold_factor,
             }
         }
     }
