@@ -571,8 +571,9 @@ impl Fixture {
     }
 
     /// Full default optimization (global search on, fixed seed). Returns the
-    /// rank and error histories and the final state.
-    fn full_run(&self) -> (Vec<usize>, Vec<f64>, TreeTCI2<f64>) {
+    /// rank and error histories, the evaluated point count and the final
+    /// state.
+    fn full_run(&self) -> (Vec<usize>, Vec<f64>, usize, TreeTCI2<f64>) {
         let mut tci = self.seeded_state();
         let options = TreeTciOptions {
             seed: Some(1),
@@ -587,7 +588,12 @@ impl Fixture {
             &mut (),
         )
         .unwrap();
-        (report.ranks, report.errors, tci)
+        (
+            report.ranks,
+            report.errors,
+            report.evaluation.evaluated_points,
+            tci,
+        )
     }
 }
 
@@ -971,8 +977,13 @@ fn full_runs_reproduce_recorded_ranks_and_errors() {
     // order): chain ranks [4, 8, 8, 8], errors [4.210785455368414e-9,
     // 7.104994852102056e-9, 6.760951106568071e-9, 6.850685368779623e-9];
     // branched ranks [4, 16, 16, 16].
-    let (ranks, errors, _) = chain_fixture().full_run();
+    //
+    // The evaluated point counts were recorded on `main` 050eb4ba (#1405), so
+    // that a change of the stop rule shows up in the cost as well as in the
+    // ranks and errors.
+    let (ranks, errors, evaluated_points, _) = chain_fixture().full_run();
     assert_eq!(ranks, vec![4, 8, 8, 8, 8, 8]);
+    assert_eq!(evaluated_points, 22073, "chain evaluated points");
     let recorded = [
         0.012773153086831206,
         1.0025709087768116e-8,
@@ -996,8 +1007,9 @@ fn full_runs_reproduce_recorded_ranks_and_errors() {
     }
 
     let fixture = branched_fixture();
-    let (ranks, errors, state) = fixture.full_run();
+    let (ranks, errors, evaluated_points, state) = fixture.full_run();
     assert_eq!(ranks, vec![8, 16, 16, 16]);
+    assert_eq!(evaluated_points, 161713, "branched evaluated points");
     // The first iteration's rank-8 approximation is not exact. Its error now
     // includes the residual the global search measured (#1352), instead of
     // only the rounding-level local bond error recorded before.
