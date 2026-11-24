@@ -139,8 +139,15 @@ Also run maintenance checks relevant to changed public APIs or crate boundaries:
 python3 scripts/audit-library-panics.py
 python3 scripts/check-public-error-docs.py
 python3 scripts/check-crate-boundaries.py
+python3 scripts/check-implicit-engine-sites.py
 ./scripts/check-single-versions.sh
 ```
+
+`check-implicit-engine-sites.py` is the #1376 ratchet. It takes a few
+seconds and fails on a new implicit execution-engine site under `crates/*/src`.
+A PR that removes sites shrinks `scripts/implicit-engine-sites-baseline.json`
+with `--update-baseline`. See
+[Explicit Execution Engine Ratchet](REPOSITORY_RULES.md#explicit-execution-engine-ratchet).
 
 `check-single-versions.sh` fails when a crate whose types cross a boundary (the
 CPU provider stack, the one faer identity, tenferro and hataori) resolves to two

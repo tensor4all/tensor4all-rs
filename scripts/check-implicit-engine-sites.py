@@ -19,8 +19,12 @@ the remaining code:
 ``global-accessor``
     a call of ``default_context()``, ``default_eager_ctx()``,
     ``default_cpu_execution_context()``, ``with_default_session(``,
-    ``with_default_backend(`` or ``with_default_graph_compiler(`` (their
-    ``fn`` definitions are not sites).
+    ``with_default_backend(``, ``with_default_graph_compiler(``, the
+    ``None``-route fallback ``with_runtime_engine(`` (their ``fn``
+    definitions are not sites), and every naming of the global
+    ``implicit_route::eager_runtime`` / ``legacy::eager_runtime`` path (the
+    ``context.eager_runtime()`` method is explicit and not a site). A
+    renaming import (``use ..::default_context as ctx;``) is a site too.
 ``option-context-param``
     an ``Option<&ExecutionContext>`` / ``Option<&CpuExecutionContext>`` /
     ``Option<&CudaExecutionContext>`` type, with or without a path prefix or
@@ -56,7 +60,9 @@ accepted.
 
 The remedy for a new site is design doc section 6.2: take
 ``exec: &mut dyn ExecutionEngine`` and pass it on, or, for a caller with no
-engine yet, call a ``tensor4all_tensorbackend::legacy`` bridge.
+engine yet, call an existing ``legacy`` bridge (``tensor4all_core::legacy``
+today). Bridge operations such as ``legacy::mat_mul`` are deliberately not
+sites: the #1376 rules use them to stop the signature cascade during phase B.
 
 This check is deleted in stage D4 of #1376, once nothing is left to guard.
 """
@@ -78,7 +84,7 @@ TENSORBACKEND_PREFIX = "crates/tensor4all-tensorbackend/"
 REMEDY = (
     "take `exec: &mut dyn ExecutionEngine` and pass it on "
     "(docs/design/explicit-engine-migration.md section 6.2); a caller with no "
-    "engine yet uses a `tensor4all_tensorbackend::legacy` bridge (#1376)."
+    "engine yet calls an existing `legacy` bridge instead (#1376)."
 )
 PATTERNS = (
     "none-context-arg",
@@ -99,7 +105,8 @@ NONE_ROUTE_RE = re.compile(
 )
 GLOBAL_ACCESSOR_RE = re.compile(
     r"\b(default_context|default_eager_ctx|default_cpu_execution_context"
-    r"|with_default_session|with_default_backend|with_default_graph_compiler)"
+    r"|with_default_session|with_default_backend|with_default_graph_compiler"
+    r"|with_runtime_engine)"
     r"\s*(?:::\s*<[^;{}]*?>\s*)?\("
 )
 CONTEXT_TYPE = r"(?:[A-Za-z_]\w*\s*::\s*)*(?:Cpu|Cuda)?ExecutionContext\b"
@@ -112,6 +119,16 @@ CONTEXT_REF_RE = re.compile(
 )
 SESSION_CALL_RE = re.compile(r"(\.\s*with_session|\bwith_concrete_session)\s*\(")
 FN_DEF_BEFORE_RE = re.compile(r"\bfn\s+$")
+GLOBAL_EAGER_RUNTIME_RE = re.compile(
+    r"\b(?P<module>implicit_route|legacy)\s*::\s*(?:\{[^}]*?)?\b(?P<name>eager_runtime)\b"
+)
+# `use ..::default_context as ctx;` would hide later `ctx()` calls, so the
+# renaming import is itself a site.
+ACCESSOR_ALIAS_RE = re.compile(
+    r"\b(default_context|default_eager_ctx|default_cpu_execution_context"
+    r"|with_default_session|with_default_backend|with_default_graph_compiler"
+    r"|with_runtime_engine)\s+as\s+([A-Za-z_]\w*)"
+)
 BRACE_RE = re.compile(r"[{};]")
 ITEM_RE = re.compile(r"\b(fn|struct|enum|trait)\s+([A-Za-z_]\w*)")
 
@@ -256,8 +273,7 @@ def normalise(text: str) -> str:
 
 
 # A file without any of these words cannot hold a site; skip lexing it.
-PREFILTER = ("with_e", "default_", "ExecutionContext", "with_session",
-             "with_concrete_session")
+PREFILTER = ("with_", "default_", "ExecutionContext", "eager_runtime")
 
 
 def scan_source(rel_path: str, source: str) -> list[Site]:
@@ -279,6 +295,15 @@ def scan_source(rel_path: str, source: str) -> list[Site]:
         if FN_DEF_BEFORE_RE.search(code[max(0, m.start() - 8):m.start()]):
             continue
         raw.append((m.start(), "global-accessor", f"{m.group(1)}()"))
+
+    # The global `implicit_route::eager_runtime()` (also `legacy::eager_runtime`)
+    # is counted where its path is named, in a call or a `use`, because a bare
+    # `eager_runtime()` is usually the explicit `context.eager_runtime()` method.
+    for m in GLOBAL_EAGER_RUNTIME_RE.finditer(code):
+        raw.append((m.start("name"), "global-accessor", f"{m.group('module')}::eager_runtime"))
+
+    for m in ACCESSOR_ALIAS_RE.finditer(code):
+        raw.append((m.start(), "global-accessor", f"{m.group(1)} as {m.group(2)}"))
 
     for m in OPTION_CONTEXT_RE.finditer(code):
         raw.append((m.start(), "option-context-param", normalise(m.group(0))))

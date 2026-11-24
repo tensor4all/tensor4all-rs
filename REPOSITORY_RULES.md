@@ -276,17 +276,21 @@
   - a literal `None` context passed to `with_eager_session`,
     `with_eager_session_typed`, `with_engine` or `with_execution_engine`;
   - a call of `default_context()`, `default_eager_ctx()`,
-    `default_cpu_execution_context()` or the `with_default_*` helpers;
+    `default_cpu_execution_context()`, the `with_default_*` helpers or the
+    `None`-route fallback `with_runtime_engine`, or a naming of
+    `implicit_route::eager_runtime` / `legacy::eager_runtime`;
   - an `Option<&ExecutionContext>`-shaped parameter (also `Cpu`/`Cuda`);
   - a new `&ExecutionContext` / `&CpuExecutionContext` /
     `&CudaExecutionContext` parameter;
   - `.with_session(` / `with_concrete_session(` outside
     `tensor4all-tensorbackend`.
-- `scripts/check-implicit-engine-sites.py` (CI job `scripts`) enumerates these
-  sites from source and compares them with
+- `scripts/check-implicit-engine-sites.py` (CI job `scripts`, required
+  through `rollup-rs`) enumerates these sites from source, with comments and
+  doc examples excluded, and compares them with
   `scripts/implicit-engine-sites-baseline.json`. A new site fails with its
-  `path:line` and pattern. A caller that has no engine yet uses a
-  `tensor4all_tensorbackend::legacy` bridge instead of a new site.
+  `path:line` and pattern. A caller that has no engine yet calls an existing
+  `legacy` bridge operation (`tensor4all_core::legacy::mat_mul`, ...) instead
+  of adding a site.
 - A PR that removes a site shrinks the baseline in the same PR:
   `python3 scripts/check-implicit-engine-sites.py --update-baseline`. Growing
   it needs `--allow-growth` and a justification in the PR body.

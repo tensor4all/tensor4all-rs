@@ -69,6 +69,36 @@ class PatternTests(unittest.TestCase):
                 import_only = f"use tensor4all_tensorbackend::{name};\n"
                 self.assertEqual(patterns(import_only), [])
 
+    def test_none_route_fallback_and_global_eager_runtime(self) -> None:
+        source = "fn f(rt: &R) { tensor4all_tensorbackend::with_runtime_engine(rt, |e| g(e)); }\n"
+        self.assertEqual(patterns(source), ["global-accessor"])
+        for text in (
+            "use crate::implicit_route::eager_runtime;\n",
+            "use crate::implicit_route::{\n    eager_runtime as rt, mat_mul,\n};\n",
+            "fn f() { let r = tensor4all_core::legacy::eager_runtime(); }\n",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(patterns(text), ["global-accessor"])
+        explicit = (
+            "fn f(context: Ctx, eager_runtime: impl FnOnce() -> R) {\n"
+            "    let a = context.eager_runtime();\n"
+            "    let b = eager_runtime();\n"
+            "}\n"
+        )
+        self.assertEqual(patterns(explicit), [])
+
+    def test_renaming_import_of_an_accessor_is_a_site(self) -> None:
+        source = "use tensor4all_core::legacy::default_cpu_execution_context as cpu;\n"
+        [site] = MODULE.scan_source(CORE, source)
+        self.assertEqual(site.text, "default_cpu_execution_context as cpu")
+
+    def test_legacy_bridge_operations_are_not_sites(self) -> None:
+        source = (
+            "use tensor4all_core::legacy::{mat_mul, svd_backend};\n"
+            "fn f() { let c = tensor4all_core::legacy::mat_mul(&a, &b); }\n"
+        )
+        self.assertEqual(patterns(source), [])
+
     def test_option_context_parameter_spellings(self) -> None:
         for ty in (
             "Option<&ExecutionContext>",
