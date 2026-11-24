@@ -19,17 +19,21 @@ Computes tensor cross interpolation on tree-structured graphs, producing TreeTN 
 - `TreeTciEvaluationStats` — oracle requests, successful evaluations and memo payload accounting
 
 The entry points return named results rather than tuples. `Converged` means
-the sampled stopping criterion passed; it does not certify the full-network
-error. See the [stopping contract](../../docs/design/treetci-termination.md)
+the stopping criterion of `TreeTciOptions::stop_rule` passed: by default
+(`StopRule::PerBond`) the largest bond pivot error stayed below `tolerance`;
+`StopRule::Sampled` also counts residuals measured by the global search. It
+does not certify the full-network error. See the [stopping contract](../../docs/design/treetci-termination.md)
 for the convergence window, global-search behavior, and limit precedence.
 
 Global pivot search uses the retained-coordinate floating-zone walk from
 chain TCI, with one cached tree evaluator shared across starts and scans.
 When ordinary starts find no pivot, retained pivot pairs at dimension-one
 endpoints and subtree-anchored restarts check observed support; each extra
-family uses at most `nsearch` walks. Errors found by search contribute to the
-recorded iteration error, even below the discovery margin. The walk is greedy
-and can still miss unseen features, so sampled convergence remains a diagnostic.
+family uses at most `nsearch` walks. Under the default `PerBond` rule a find
+becomes a pivot only above `tolerance * tol_margin_global_search`; under
+`Sampled`, errors found by search also contribute to the recorded iteration
+error, even below the discovery margin. The walk is greedy and can still miss
+unseen features, so convergence remains a diagnostic.
 
 ## Documentation
 

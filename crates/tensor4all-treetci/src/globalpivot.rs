@@ -17,7 +17,7 @@ use crate::error::{Result as TreeTciResult, TreeTciError};
 use crate::evaluation::{BatchExecution, Compatibility};
 use crate::{
     batch::EVALUATION_CHUNK_POINTS, materialize::to_treetn_chunked, GlobalIndexBatch, MultiIndex,
-    SubtreeKey, TreeTCI2,
+    StopRule, SubtreeKey, TreeTCI2,
 };
 use anyhow::Result;
 use rand::{Rng, RngCore, SeedableRng};
@@ -41,21 +41,30 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 ///    coordinate between site scans and repeating sweeps until no improvement,
 ///    an error above `10 * abs_tol * tol_margin`, or 100 sweeps.
 /// 4. Prefer points above `abs_tol * tol_margin`. If none cross that margin,
-///    keep observed errors above `abs_tol` instead.
+///    keep observed errors above `abs_tol` instead. This is the acceptance of
+///    [`StopRule::Sampled`](crate::StopRule::Sampled); the optimizer under the
+///    default [`StopRule::PerBond`](crate::StopRule::PerBond) accepts only
+///    points above `abs_tol * tol_margin`, here and in steps 5 and 6.
 /// 5. If no point qualifies, confirm retained tail pivot pairs at edges with
 ///    a dimension-one endpoint, then randomize their complementary subtrees
 ///    while holding one observed subtree fixed. Each family adds at most
-///    `nsearch` walks, using `abs_tol` as its threshold. This helps a sparse
-///    target whose random starts fall on zero fibers.
+///    `nsearch` walks. These functions, like the optimizer under
+///    [`StopRule::Sampled`](crate::StopRule::Sampled), accept a point above
+///    `abs_tol`; under [`StopRule::PerBond`](crate::StopRule::PerBond) the
+///    optimizer accepts only above `abs_tol * tol_margin`. Each walk stops
+///    after the first sweep above ten times its walk threshold: `abs_tol`,
+///    or `abs_tol * max(1, tol_margin / 10)` under `PerBond`.
+///    This helps a sparse target whose random starts fall on zero fibers.
 /// 6. If both of those families also found nothing, enumerate around the same
 ///    retained tail pivots (deduplicated): for every edge side whose product
 ///    of local dimensions is between 2 and 32, keeping the maximal such sides,
 ///    evaluate every configuration of the side with the other sites held at
 ///    the pivot, in batches of at most 2^20 index entries (`points *
 ///    n_sites`, but at least one point per batch); the batching changes
-///    neither the residuals, their order nor the result. Points qualify against the same threshold as those
-///    families, `abs_tol`. There is no walk and no random draw. On binary
-///    quantics chains with the least significant bit at the leaf, this
+///    neither the residuals, their order nor the result. Points qualify
+///    against the same acceptance threshold as those families: `abs_tol`
+///    here and under `Sampled`, `abs_tol * tol_margin` under `PerBond`. There
+///    is no walk and no random draw. On binary quantics chains with the least significant bit at the leaf, this
 ///    exhaustively covers the aligned block of width at most 32 around each
 ///    pivot's value of one variable, and nothing wider. The stage does not
 ///    run when `nsearch` is zero or the tree has no dimension-one vertex (no
@@ -217,6 +226,8 @@ where
     let mut stream: &mut R = rng;
     let mut evaluate = evaluate;
     let mut execution = Compatibility::new(&mut evaluate);
+    // The public finders keep the `Sampled` acceptance (#1405): observed
+    // errors above `abs_tol` qualify when no discovery crosses the margin.
     find_global_pivots_erased(
         state,
         &mut execution,
@@ -225,6 +236,7 @@ where
         max_nglobal_pivot,
         tol_margin,
         abs_tol,
+        StopRule::Sampled,
         &mut stream,
     )
     .map(|result| result.pivots)
@@ -246,6 +258,7 @@ pub(crate) fn find_global_pivots_erased<T>(
     max_nglobal_pivot: usize,
     tol_margin: f64,
     abs_tol: f64,
+    stop_rule: StopRule,
     rng: &mut dyn RngCore,
 ) -> TreeTciResult<GlobalPivotSearchResult>
 where
@@ -257,6 +270,7 @@ where
         tol_margin,
         abs_tol,
         enumeration_chunk_len: enumeration_chunk_points(state.local_dims.len()),
+        stop_rule,
     };
     search_with_readout(
         state,
@@ -267,6 +281,28 @@ where
         cached_walk_readout,
         cached_walk_readout_on_session::<T>,
     )
+}
+
+/// The thresholds of one search under `stop_rule`, as
+/// `(acceptance_floor, fallback_threshold, fallback_walk_threshold)`.
+///
+/// `acceptance_floor` qualifies the ordinary walks; `fallback_threshold` is
+/// the one acceptance threshold of every fallback stage (the probes, the
+/// restarts and the stage-3 enumeration of #1433); the probe and restart
+/// walks stop after the first sweep above ten times `fallback_walk_threshold`.
+/// `PerBond` accepts only discoveries above the margin; `Sampled` keeps
+/// observed errors above `abs_tol` (#1352).
+// INVARIANT: the only place the stop rule enters the search (#1405).
+fn search_thresholds(stop_rule: StopRule, abs_tol: f64, tol_margin: f64) -> (f64, f64, f64) {
+    let threshold = abs_tol * tol_margin;
+    match stop_rule {
+        // With `abs_tol` as walk threshold, a margin above 10 would end every
+        // fallback walk below `threshold` (review of #1446). INVARIANT: the
+        // factor is exactly 1.0 for any margin up to 10, so the walk
+        // threshold is `abs_tol` bit for bit there, as on `main`.
+        StopRule::PerBond => (threshold, threshold, abs_tol * (tol_margin / 10.0).max(1.0)),
+        StopRule::Sampled => (abs_tol.min(threshold), abs_tol, abs_tol),
+    }
 }
 
 /// Pivots plus the largest actual residual sampled by a search.
@@ -458,6 +494,8 @@ struct SearchParams {
     /// read as one. Production passes [`enumeration_chunk_points`] of the
     /// site count; tests pass smaller values to split the enumeration.
     enumeration_chunk_len: usize,
+    /// Which acceptance applies (see [`StopRule`]).
+    stop_rule: StopRule,
 }
 
 /// A session-taking approximation readout for runs that own an [`EvalContext`].
@@ -585,6 +623,7 @@ where
         tol_margin,
         abs_tol,
         enumeration_chunk_len,
+        stop_rule,
     } = params;
     if !abs_tol.is_finite() || abs_tol < 0.0 {
         return Err(
@@ -670,7 +709,8 @@ where
     let mut flat = Vec::with_capacity(flat_capacity);
     let mut start = Vec::with_capacity(n_sites);
     let threshold = abs_tol * tol_margin;
-    let acceptance_floor = abs_tol.min(threshold);
+    let (acceptance_floor, fallback_threshold, fallback_walk_threshold) =
+        search_thresholds(stop_rule, abs_tol, tol_margin);
     let mut max_error = 0.0_f64;
     let mut best = Vec::with_capacity(starts.len().saturating_add(nsearch));
     for provided in starts {
@@ -725,14 +765,13 @@ where
     // factor). Retained pivot pairs stay on observed support and expose
     // inconsistencies between neighboring updates. Probe the tail pivots,
     // where a newly discovered direction is most easily lost, only when the
-    // ordinary search found no pivot. Confirmation uses the requested
-    // tolerance rather than the discovery margin. The loop runs at most
-    // nsearch times; each pass walks at most one retained pair and one
-    // subtree-anchored restart, so at most 2 * nsearch walks are added (a
-    // probe that finds an error skips its restart). Scratch is reused.
-    // One acceptance threshold for every fallback stage below: the probes,
-    // the restarts and the enumeration all qualify a point against it.
-    let fallback_threshold = abs_tol;
+    // ordinary search found no pivot. Their walks stop early on
+    // `fallback_walk_threshold`; what they find is accepted above
+    // `fallback_threshold`. The
+    // loop runs at most nsearch times; each pass walks at most one retained
+    // pair and one subtree-anchored restart, so at most 2 * nsearch walks are
+    // added (a probe that finds an error skips its restart). Scratch is
+    // reused.
     if best.is_empty() {
         let retained = retained_pivot_starts(state, nsearch)?;
         let mut support_start = vec![0; n_sites];
@@ -747,7 +786,7 @@ where
                     n_sites,
                     &mut flat,
                     &anchor.point,
-                    fallback_threshold,
+                    fallback_walk_threshold,
                     &mut readout,
                     readout_on_session,
                 )?;
@@ -773,7 +812,7 @@ where
                 n_sites,
                 &mut flat,
                 &support_start,
-                fallback_threshold,
+                fallback_walk_threshold,
                 &mut readout,
                 readout_on_session,
             )?;

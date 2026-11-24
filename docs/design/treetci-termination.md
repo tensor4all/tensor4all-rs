@@ -12,28 +12,54 @@ The reasons describe the existing optimization loop, in its decision order:
 
 | Reason | Condition | Consequence |
 | --- | --- | --- |
-| `MaxBondDimension` | The maximum rank is at the configured cap throughout three trailing iterations. | Checked before global search and convergence, even if the sampled error is small. It does not mean all edges are saturated. |
-| `Converged` | Three trailing errors are strictly below `tolerance`, the final maximum rank equals the minimum in that window, and no global pivots were accepted in that window. | Describes the sampled criterion, not an exhaustive error bound. |
+| `MaxBondDimension` | The maximum rank is at the configured cap throughout three trailing iterations. | Checked before global search and convergence, even if the recorded error is small. It does not mean all edges are saturated. |
+| `Converged` | Three trailing errors are strictly below `tolerance`, the final maximum rank equals the minimum in that window, and no global pivots were accepted in that window. | Describes the recorded-error criterion of the stop rule, not an exhaustive error bound. |
 | `DegenerateCandidateSet` | The `Converged` condition holds on the recorded errors, but the most recent update of at least one edge could not measure its bond error. | The run stops where it would have reported `Converged`. The approximation may be inaccurate. |
 | `MaxIterations` | The requested iterations completed without either stopping condition. | A small final error alone does not establish convergence. |
 
-The recorded error is the maximum of local bond residuals and residuals
-actually observed by the global search during that iteration. With a positive
-sampled scale and normalization enabled, divide that maximum by
-`max_sample_value`; otherwise use it unnormalized. The observer receives
-this same value after search, along with evaluation accounting including the
-search. New pivots are processed in the next sweep.
+### Stop rules
 
-Global search uses `tolerance * max_sample_value` in normalized mode and
-`tolerance` otherwise. Discoveries above `tol_margin_global_search` times that
-absolute tolerance take priority; when none cross the margin, already observed
-tolerance violations still qualify. If ordinary starts yield no pivot, edges
-with a dimension-one endpoint supply retained tail pivot pairs and restarts
-that preserve one observed subtree while randomizing its complement. Each
-extra family is bounded by `nsearch` walks. If those families find nothing
-either, a third stage enumerates around the same retained tail pivots: every
-configuration of each maximal edge side with at most 32 local configurations,
-the other sites held at the pivot, without random draws
+`TreeTciOptions::stop_rule` selects what is recorded and what the global
+search accepts ([#1405](https://github.com/tensor4all/tensor4all-rs/issues/1405)).
+Global search uses the absolute tolerance `abs_tol = tolerance *
+max_sample_value` in normalized mode and `tolerance` otherwise, and the margin
+`threshold = abs_tol * tol_margin_global_search`.
+
+| | `PerBond` (default) | `Sampled` |
+| --- | --- | --- |
+| Recorded error | Largest bond pivot error | Largest of the bond pivot errors and the residuals the global search measured in that iteration ([#1352](https://github.com/tensor4all/tensor4all-rs/issues/1352)) |
+| Ordinary walks accepted | Above `threshold` | Above `threshold` first; when none cross it, above `abs_tol` |
+| Fallback stages accepted (probes, restarts, stage-3 enumeration) | Above `threshold` | Above `abs_tol` |
+
+`PerBond` is the rule of TensorCrossInterpolation.jl, TreeTCI.jl and xfac:
+`tolerance` is a per-bond pivot threshold. `Sampled` adds a pointwise check on
+the sampled points; on smooth targets it stops later, because truncation,
+search acceptance and the stop share one threshold while the pointwise error
+behaves like a sum of bond residuals that are each below it
+([#1371](https://github.com/tensor4all/tensor4all-rs/issues/1371)). Neither
+rule bounds the pointwise error. The rule enters the loop at one place, where
+the search residual is or is not folded into the recorded error, and the
+search at one binding that computes the acceptance floor of the ordinary walks
+and the one threshold of every fallback stage; the walks, the enumeration and
+the preference for discoveries above `threshold` are the same on both rules. The
+public `find_global_pivots*` functions keep the `Sampled` acceptance.
+
+With a positive sampled scale and normalization enabled, the recorded error is
+divided by `max_sample_value`; otherwise it is used unnormalized. The observer
+receives this same value after search, along with evaluation accounting
+including the search. New pivots are processed in the next sweep.
+
+If ordinary starts yield no pivot, edges with a dimension-one endpoint supply
+retained tail pivot pairs and restarts that preserve one observed subtree
+while randomizing its complement, on both rules. Each extra family is bounded
+by `nsearch` walks. A walk ends after the first sweep whose error exceeds ten
+times its threshold; for these walks that threshold is `abs_tol` under
+`Sampled` and `abs_tol * max(1, tol_margin_global_search / 10)` under
+`PerBond`, which is `abs_tol` bit for bit up to a margin of 10 and keeps a
+larger margin reachable. If those families find
+nothing either, a third stage enumerates around the same retained tail
+pivots: every configuration of each maximal edge side with at most 32 local
+configurations, the other sites held at the pivot, without random draws
 ([#1433](https://github.com/tensor4all/tensor4all-rs/issues/1433)). The points
 are evaluated in batches of at most 2^20 index entries (points times sites;
 a batch always holds at least one point), which bounds the index buffer on
@@ -43,7 +69,10 @@ reaches a defect several moves away as long as it lies in such a side. On
 binary quantics chains that side is the aligned block of width at most 32
 around the pivot's value of one variable; wider blocks are not searched. These
 checks can escape sparse support that uniform random starts miss; they do not
-exhaust the domain or turn sampled convergence into an error bound.
+exhaust the domain or turn convergence into an error bound. Under `PerBond` a
+walk error between `abs_tol` and `threshold` qualifies nothing, so the
+fallback stages run in iterations where `Sampled` would have kept that error
+instead.
 
 The third stage runs in a search that finds no pivot only when all of the
 following hold:
@@ -59,10 +88,12 @@ following hold:
 
 `Converged` needs three trailing iterations without an accepted global pivot.
 So when those three iterations all searched with the stage enabled, none of
-their searches saw a residual above the tolerance inside an enumerated side
-around a retained tail pivot. This is a bounded guarantee: it says nothing
-about blocks wider than 32, it does not hold in the configurations above, and
-an iteration whose search was skipped (see below) contributes no search.
+their searches saw a residual above the fallback threshold of the rule
+(`threshold` under `PerBond`, `abs_tol` under `Sampled`) inside an enumerated
+side around a retained tail pivot. This is a bounded guarantee: it says
+nothing about blocks wider than 32, it does not hold in the configurations
+above, and an iteration whose search was skipped (see below) contributes no
+search.
 
 Global search is skipped after the final requested iteration and at a
 bond-saturation stop. An injected pivot must be processed by a later sweep:
@@ -89,7 +120,7 @@ reaches the full configuration count of either subtree, candidate exhaustion
 is legitimate: the bond cannot grow further. A rank below both candidate counts
 also has a residual to measure. At endpoints of local dimension greater than
 one, exhausting the local expansion alone does not invalidate the ordinary
-sampled stopping criterion; this diagnostic is not a global error certificate.
+stopping criterion; this diagnostic is not a global error certificate.
 
 The rank-1 case occurs around a vertex of local dimension 1 whose adjacent
 bonds have rank 1: the junction-side candidates are the product of the other

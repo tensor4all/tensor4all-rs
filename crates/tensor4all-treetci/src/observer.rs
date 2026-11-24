@@ -19,7 +19,7 @@ pub struct TreeTciIteration<'a> {
     pub iteration: usize,
     /// Maximum bond dimension after the iteration, `ranks[iteration]` of the result.
     pub max_bond_dim: usize,
-    /// Maximum sampled local/global residual of the iteration, `errors[iteration]` of the result.
+    /// Recorded error of the iteration (see [`crate::StopRule`]), `errors[iteration]` of the result.
     ///
     /// Sampled, not a bound on the full-network error.
     pub error: f64,

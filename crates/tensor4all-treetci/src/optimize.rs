@@ -107,16 +107,54 @@ pub enum TreeTciTermination {
 pub struct TreeTciOptimizationResult {
     /// Maximum bond dimension after each completed iteration.
     pub ranks: Vec<usize>,
-    /// Maximum sampled local/global residual after each iteration, normalized when requested.
+    /// Recorded error after each iteration, normalized when requested.
     ///
-    /// Has the same length as `ranks`. Each value combines local bond
-    /// residuals with residuals measured by the global search; both are
-    /// sampled, so these are diagnostics, not bounds on the full-network error.
+    /// Has the same length as `ranks`. Under [`StopRule::PerBond`] each value
+    /// is the largest bond pivot error; under [`StopRule::Sampled`] it also
+    /// includes residuals measured by the global search. Both are sampled,
+    /// so these are diagnostics, not bounds on the full-network error.
     pub errors: Vec<f64>,
     /// The stopping condition evaluated by this call's optimization loop.
     pub termination: TreeTciTermination,
     /// Oracle evaluation and optional memo accounting for this optimization call.
     pub evaluation: crate::TreeTciEvaluationStats,
+}
+
+/// How [`optimize_with_proposer`] records its per-iteration error and
+/// decides [`TreeTciTermination::Converged`].
+///
+/// Neither rule bounds the pointwise error of the result; both compare
+/// sampled quantities with [`TreeTciOptions::tolerance`].
+///
+/// - [`StopRule::PerBond`] (default) is the rule of TensorCrossInterpolation.jl,
+///   TreeTCI.jl and xfac: `tolerance` is a per-bond pivot threshold. The
+///   recorded error is the largest bond pivot error, and the global search
+///   accepts a pivot only above `tolerance * tol_margin_global_search`
+///   (absolute when `scale_tolerance` is false).
+/// - [`StopRule::Sampled`] also records the residuals the global search
+///   measured, and the search keeps observed errors above `tolerance`
+///   (issue #1352). It stops later on smooth targets (2.18 to 3.37 times the
+///   evaluations on a Gaussian chain, issue #1371), for a pointwise check on
+///   the sampled points.
+///
+/// # Examples
+///
+/// ```
+/// use tensor4all_treetci::{StopRule, TreeTciOptions};
+///
+/// assert_eq!(TreeTciOptions::default().stop_rule, StopRule::PerBond);
+/// let sampled = TreeTciOptions { stop_rule: StopRule::Sampled, ..Default::default() };
+/// assert_eq!(sampled.stop_rule, StopRule::Sampled);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StopRule {
+    /// Record the largest bond pivot error; accept global pivots only above
+    /// the search margin.
+    #[default]
+    PerBond,
+    /// Record the largest of the bond pivot errors and the residuals measured
+    /// by the global search; accept observed search errors above the tolerance.
+    Sampled,
 }
 
 /// MVP optimization options for TreeTCI.
@@ -128,21 +166,22 @@ pub struct TreeTciOptimizationResult {
 ///
 /// | Field                     | Default       | Description                                         |
 /// |---------------------------|---------------|-----------------------------------------------------|
-/// | `tolerance`               | `1e-8`        | Stopping tolerance on the sampled local/global error |
+/// | `tolerance`               | `1e-8`        | Stopping tolerance, see `stop_rule`                  |
+/// | `stop_rule`               | `PerBond`     | Which error is recorded and compared with `tolerance` |
 /// | `max_iter`                | `20`          | Maximum number of edge-order iterations              |
 /// | `max_bond_dim`            | `None`        | Maximum bond dimension (no cap by default)           |
 /// | `scale_tolerance`         | `true`        | Scale tolerance by running max sample magnitude      |
 /// | `enable_global_pivots`    | `true`        | Run automatic global pivot search after each sweep   |
-/// | `nsearch`                 | `5`           | Random starting points for the global pivot search   |
+/// | `nsearch`                 | `5`           | Random starts of the global pivot search; also bounds the retained-pair walks, the restarts and the #1433 enumeration anchors (zero disables all of them) |
 /// | `global_search_starts`    | empty         | Extra caller-supplied starting points, walked first  |
-/// | `max_nglobal_pivot`       | `5`           | Global pivots added per iteration                    |
+/// | `max_nglobal_pivot`       | `5`           | Global pivots added per iteration; zero skips the search entirely |
 /// | `tol_margin_global_search`| `10.0`        | Global pivot discovery margin over `abs_tol`        |
 /// | `seed`                    | `None`        | RNG seed for the global pivot search                 |
 ///
 /// # Examples
 ///
 /// ```
-/// use tensor4all_treetci::TreeTciOptions;
+/// use tensor4all_treetci::{StopRule, TreeTciOptions};
 ///
 /// // Default options
 /// let opts = TreeTciOptions::default();
@@ -156,6 +195,7 @@ pub struct TreeTciOptimizationResult {
 /// // Custom options for high-precision work
 /// let opts = TreeTciOptions {
 ///     tolerance: 1e-12,
+///     stop_rule: StopRule::PerBond,
 ///     max_iter: 50,
 ///     max_bond_dim: Some(100),
 ///     scale_tolerance: true,
@@ -176,15 +216,26 @@ pub struct TreeTciOptimizationResult {
 /// ```
 #[derive(Clone, Debug)]
 pub struct TreeTciOptions {
-    /// Stopping tolerance on the sampled local/global residual.
+    /// Stopping tolerance on the recorded error.
     ///
-    /// The optimization loop monitors the maximum bond error across all edges
-    /// and the largest residual observed by the enabled global search.
+    /// The optimization loop monitors the maximum bond pivot error across all
+    /// edges and, under [`StopRule::Sampled`], also the largest residual
+    /// observed by the enabled global search (see [`Self::stop_rule`]).
     /// When `scale_tolerance` is true, this error is divided by the running
     /// maximum observed sample magnitude, so the stopping threshold is
     /// `tolerance * max_sample_value`. Recommended range: `1e-6` to `1e-12`.
     /// Default: `1e-8`.
     pub tolerance: f64,
+
+    /// Which error is recorded and compared with `tolerance`, and which
+    /// global-search finds are accepted.
+    ///
+    /// [`StopRule::PerBond`] (default) records the largest bond pivot error
+    /// and accepts global pivots only above
+    /// `abs_tol * tol_margin_global_search`. [`StopRule::Sampled`] also
+    /// records the residuals measured by the global search. See
+    /// [`StopRule`] for the trade-off. Default: [`StopRule::PerBond`].
+    pub stop_rule: StopRule,
 
     /// Maximum number of edge-order iterations (outer sweeps).
     ///
@@ -268,9 +319,12 @@ pub struct TreeTciOptions {
 
     /// Tolerance margin for the global pivot search.
     ///
-    /// Exploratory candidates above `abs_tol * tol_margin_global_search`
-    /// take priority. When none cross that margin, observed errors above
-    /// `abs_tol` still qualify; unit-endpoint confirmation also uses
+    /// Under [`StopRule::PerBond`] (default), a global pivot is accepted only
+    /// above `abs_tol * tol_margin_global_search`, from the random and
+    /// supplied starts and from the unit-endpoint confirmation walks alike.
+    /// Under [`StopRule::Sampled`], candidates above that margin take
+    /// priority; when none cross it, observed errors above `abs_tol` still
+    /// qualify, and unit-endpoint confirmation accepts errors above
     /// `abs_tol`. Here `abs_tol` is the sweep's
     /// absolute tolerance (`tolerance * max_sample_value` when
     /// `scale_tolerance` is enabled). The value is always validated (it must
@@ -339,6 +393,7 @@ impl Default for TreeTciOptions {
     fn default() -> Self {
         Self {
             tolerance: 1e-8,
+            stop_rule: StopRule::PerBond,
             max_iter: 20,
             max_bond_dim: None,
             scale_tolerance: true,
@@ -967,9 +1022,14 @@ where
                 options.max_nglobal_pivot,
                 options.tol_margin_global_search,
                 abs_tol,
+                options.stop_rule,
                 streams.global(),
             )?;
-            sampled_error = sampled_error.max(search.max_error);
+            // The only difference between the stop rules in this loop (#1405).
+            match options.stop_rule {
+                StopRule::PerBond => {}
+                StopRule::Sampled => sampled_error = sampled_error.max(search.max_error),
+            }
             state.add_global_pivots(&search.pivots)?;
             nglobal_pivots_history.push(search.pivots.len());
         } else {

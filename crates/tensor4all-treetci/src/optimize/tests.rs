@@ -1,4 +1,6 @@
-use super::{optimize_default, TreeTciOptimizationResult, TreeTciOptions, TreeTciTermination};
+use super::{
+    optimize_default, StopRule, TreeTciOptimizationResult, TreeTciOptions, TreeTciTermination,
+};
 use crate::test_support::assert_scalar_close;
 use crate::{
     AllEdges, DefaultProposer, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer, TreeTCI2,
@@ -14,6 +16,9 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
     // rank-1 approximation (1+i)(1+j). Global search must keep the run open.
     // Without it, the zero error comes from a 1 x 1 candidate matrix and is
     // not a measurement, so the run must not report `Converged` (#1153).
+    // Under `Sampled` the recorded error includes the residual the search
+    // measured (#1352); under `PerBond` it is the bond error alone, and the
+    // accepted pivots keep the run open (#1405).
     struct InitialCrossOnly;
 
     impl crate::PivotCandidateProposer for InitialCrossOnly {
@@ -35,7 +40,12 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         }
     }
 
-    for enable_global_pivots in [false, true] {
+    for (stop_rule, enable_global_pivots) in [
+        (StopRule::Sampled, false),
+        (StopRule::Sampled, true),
+        (StopRule::PerBond, false),
+        (StopRule::PerBond, true),
+    ] {
         let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
         state.add_global_pivots(&[vec![0, 0]]).unwrap();
         state.max_sample_value = 1.0;
@@ -54,6 +64,7 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         };
         let options = TreeTciOptions {
             tolerance: 1e-12,
+            stop_rule,
             max_iter: 4,
             enable_global_pivots,
             nsearch: 20,
@@ -79,14 +90,14 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         };
         assert_eq!(result.termination, reason);
         assert_eq!(result.ranks, vec![1; iterations]);
-        let expected_errors = if enable_global_pivots {
+        let expected_errors = if enable_global_pivots && stop_rule == StopRule::Sampled {
             // The global search actually measured residual one. The final
             // iteration skips search, so only its local zero is available.
             vec![1.0, 1.0, 1.0, 0.0]
         } else {
             vec![0.0; iterations]
         };
-        assert_eq!(result.errors, expected_errors);
+        assert_eq!(result.errors, expected_errors, "{stop_rule:?}");
         assert_eq!(
             observed
                 .0
@@ -918,5 +929,149 @@ fn optimize_rejects_invalid_global_search_starts_before_callback() {
             crate::TreeTciError::InvalidConfiguration { .. }
         ));
         assert_eq!(calls.get(), 0);
+    }
+}
+
+/// Seeded capped run with default options otherwise; returns ranks, errors,
+/// termination and evaluated points.
+fn capped_run<F>(
+    local_dims: Vec<usize>,
+    graph: TreeTciGraph,
+    initial_pivots: &[Vec<usize>],
+    evaluate: F,
+    options: &TreeTciOptions,
+) -> (Vec<usize>, Vec<f64>, TreeTciTermination, usize)
+where
+    F: Fn(GlobalIndexBatch<'_>) -> Result<Vec<f64>>,
+{
+    let mut tci = TreeTCI2::<f64>::new(local_dims, graph).unwrap();
+    tci.add_global_pivots(initial_pivots).unwrap();
+    let n_sites = tci.local_dims.len();
+    let flat: Vec<usize> = initial_pivots.iter().flatten().copied().collect();
+    let batch = GlobalIndexBatch::new(&flat, n_sites, initial_pivots.len()).unwrap();
+    tci.max_sample_value = evaluate(batch)
+        .unwrap()
+        .iter()
+        .fold(0.0_f64, |acc, v| acc.max(v.abs()));
+    let result = optimize_default(&mut tci, &evaluate, options).unwrap();
+    (
+        result.ranks,
+        result.errors,
+        result.termination,
+        result.evaluation.evaluated_points,
+    )
+}
+
+/// The sparse chain of #692 (seed 1, cap 8) and the star tree (seed 0, cap 2)
+/// under default options.
+fn capped_fixture_runs() -> [(Vec<usize>, Vec<f64>, TreeTciTermination, usize); 2] {
+    const N_SITES: usize = 5;
+    let pivots: Vec<Vec<usize>> = std::iter::successors(Some(1u64), |&key| Some(mix64(key).max(1)))
+        .skip(1)
+        .map(|key| {
+            (0..N_SITES)
+                .map(|site| ((key >> (2 * site)) % 4) as usize)
+                .collect::<Vec<_>>()
+        })
+        .filter(|point| sparse_value(point) != 0.0)
+        .take(16)
+        .collect();
+    let sparse = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        Ok(batch
+            .data()
+            .chunks_exact(batch.n_sites())
+            .map(sparse_value)
+            .collect())
+    };
+    let chain = capped_run(
+        vec![4; N_SITES],
+        TreeTciGraph::linear_chain(N_SITES).unwrap(),
+        &pivots,
+        sparse,
+        &TreeTciOptions {
+            tolerance: 1e-12,
+            max_iter: 10,
+            max_bond_dim: Some(8),
+            nsearch: 10,
+            max_nglobal_pivot: 10,
+            seed: Some(1),
+            ..Default::default()
+        },
+    );
+    let star_graph = TreeTciGraph::new(
+        4,
+        &[
+            TreeTciEdge::new(0, 1),
+            TreeTciEdge::new(1, 2),
+            TreeTciEdge::new(1, 3),
+        ],
+    )
+    .unwrap();
+    let star_value = |point: &[usize]| {
+        let phase: f64 = [0.3, 0.5, 0.7, 0.9]
+            .iter()
+            .zip(point)
+            .map(|(weight, &coordinate)| weight * coordinate as f64)
+            .sum();
+        phase.cos() + 0.1
+    };
+    let star = capped_run(
+        vec![2, 4, 4, 4],
+        star_graph,
+        &[vec![0, 0, 0, 0]],
+        |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+            Ok(batch
+                .data()
+                .chunks_exact(batch.n_sites())
+                .map(star_value)
+                .collect())
+        },
+        &TreeTciOptions {
+            tolerance: 1e-10,
+            max_bond_dim: Some(2),
+            seed: Some(0),
+            ..Default::default()
+        },
+    );
+    [chain, star]
+}
+
+// Capped runs under the default `PerBond` (#1405): the recorded error is the
+// bond error, which stays above `tolerance` while the cap binds, so the
+// saturation stop ends both runs. Recorded on the first implementation; the
+// worklog compares them with 501ebb4a.
+#[test]
+fn capped_runs_per_bond_reproduce_recorded_values() {
+    let recorded = [
+        (
+            vec![8, 8, 8],
+            [0.9979861412184439, 0.9979861412184439, 0.9975496837919332],
+            10299,
+        ),
+        (
+            vec![2, 2, 2],
+            [
+                0.25932399324609984,
+                0.25932399324609984,
+                0.25932399324609984,
+            ],
+            1374,
+        ),
+    ];
+    for (
+        (ranks, errors, termination, points),
+        (expected_ranks, expected_errors, expected_points),
+    ) in capped_fixture_runs().into_iter().zip(recorded)
+    {
+        assert_eq!(termination, TreeTciTermination::MaxBondDimension);
+        assert_eq!(ranks, expected_ranks);
+        assert_eq!(points, expected_points);
+        assert_eq!(errors.len(), expected_errors.len());
+        for (error, expected) in errors.iter().zip(expected_errors) {
+            assert!(
+                (error - expected).abs() <= 1e-9 * expected,
+                "errors {errors:?}, recorded {expected_errors:?}"
+            );
+        }
     }
 }

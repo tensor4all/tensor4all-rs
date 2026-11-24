@@ -9,8 +9,8 @@ use num_complex::Complex64;
 use tensor4all_core::{CommonScalar, IdxTensor, MatrixLuciScalar, TensorElement};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetci::{
-    globalpivot::ScalarParts, optimize_default, to_treetn, GlobalIndexBatch, TreeTCI2, TreeTciEdge,
-    TreeTciGraph, TreeTciOptions, TreeTciTermination,
+    globalpivot::ScalarParts, optimize_default, to_treetn, GlobalIndexBatch, StopRule, TreeTCI2,
+    TreeTciEdge, TreeTciGraph, TreeTciOptions, TreeTciTermination,
 };
 
 const R: usize = 5;
@@ -120,7 +120,12 @@ where
             .collect::<Vec<_>>(),
     );
     let mut reference: Option<IdxTensor> = None;
-    for &seed in seeds {
+    // Both stop rules must avoid a false `Converged` here (#1405): the fix
+    // is structural (#1434), not a property of the sampled stop.
+    let runs = seeds
+        .iter()
+        .flat_map(|&seed| [StopRule::Sampled, StopRule::PerBond].map(|rule| (seed, rule)));
+    for (seed, stop_rule) in runs {
         let mut dims = vec![2; CENTRE];
         dims.push(1);
         let mut state = TreeTCI2::<T>::new(dims, graph()?)?;
@@ -135,6 +140,7 @@ where
         };
         let options = TreeTciOptions {
             tolerance,
+            stop_rule,
             seed: Some(seed),
             ..Default::default()
         };
@@ -158,7 +164,7 @@ where
         // a bad approximation instead of reporting a false convergence.
         assert!(
             run.termination == TreeTciTermination::Converged && error <= tolerance,
-            "seed {seed}: {:?} with reported {:?}, true residual {error:e}",
+            "seed {seed}, {stop_rule:?}: {:?} with reported {:?}, true residual {error:e}",
             run.termination,
             run.errors.last()
         );

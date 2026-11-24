@@ -5,8 +5,8 @@ use num_complex::Complex64;
 use tensor4all_core::{ColMajorArrayRef, CommonScalar, IdxTensor, MatrixLuciScalar, TensorElement};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetci::{
-    crossinterpolate2, globalpivot::ScalarParts, DefaultProposer, GlobalIndexBatch, TreeTciGraph,
-    TreeTciOptions, TreeTciTermination,
+    crossinterpolate2, globalpivot::ScalarParts, DefaultProposer, GlobalIndexBatch, StopRule,
+    TreeTciGraph, TreeTciOptions, TreeTciTermination,
 };
 use tensor4all_treetn::{EvaluationHint, TreeTNCachedEvaluator};
 
@@ -49,7 +49,13 @@ where
     } else {
         &[4, 2, 5, 1, 3, 8]
     };
-    for enable_global_pivots in [true, false] {
+    // Without the global search both stop rules record the same error, so
+    // `PerBond` adds only the searched case (#1405).
+    for (stop_rule, enable_global_pivots) in [
+        (StopRule::Sampled, true),
+        (StopRule::Sampled, false),
+        (StopRule::PerBond, true),
+    ] {
         for &seed in seeds {
             let run = crossinterpolate2(
                 |batch: GlobalIndexBatch<'_>| -> Result<Vec<T>> {
@@ -64,6 +70,7 @@ where
                 vec![vec![1, 1, 1, 1, 0, 1, 1, 1, 1]],
                 TreeTciOptions {
                     seed: Some(seed),
+                    stop_rule,
                     enable_global_pivots,
                     ..Default::default()
                 },
@@ -102,7 +109,7 @@ where
                 let cached_dense = IdxTensor::from_dense(indices.clone(), cached_values)?;
                 let readout_error = dense.sub(&cached_dense)?.maxabs()? / target_scale;
                 assert!(readout_error <= 1e-12,
-                    "site {site}, seed {seed}, global {enable_global_pivots}: cached residual {readout_error:e}");
+                    "site {site}, seed {seed}, global {enable_global_pivots}, {stop_rule:?}: cached residual {readout_error:e}");
             }
             // Floating-point pivot ties can change the trajectory by scalar
             // type. Exact full-rank results may converge; inaccurate exhausted
@@ -110,13 +117,13 @@ where
             if run.termination == TreeTciTermination::Converged {
                 assert!(
                     relative_error <= 1e-12,
-                    "seed {seed}, global {enable_global_pivots}: residual {relative_error:e}"
+                    "seed {seed}, global {enable_global_pivots}, {stop_rule:?}: residual {relative_error:e}"
                 );
             } else {
                 assert_eq!(
                     run.termination,
                     TreeTciTermination::DegenerateCandidateSet,
-                    "seed {seed}, global {enable_global_pivots}: residual {relative_error:e}"
+                    "seed {seed}, global {enable_global_pivots}, {stop_rule:?}: residual {relative_error:e}"
                 );
             }
         }

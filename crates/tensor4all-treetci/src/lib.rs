@@ -119,7 +119,8 @@ pub use materialize::{to_treetn, to_treetn_in};
 pub use observer::{TreeTciIteration, TreeTciObserver};
 pub use optimize::{
     optimize_default, optimize_with_proposer, optimize_with_proposer_in,
-    optimize_with_proposer_with_rng, TreeTciOptimizationResult, TreeTciOptions, TreeTciTermination,
+    optimize_with_proposer_with_rng, StopRule, TreeTciOptimizationResult, TreeTciOptions,
+    TreeTciTermination,
 };
 pub use proposer::{
     DefaultProposer, PivotCandidateProposer, SimpleProposer, TruncatedDefaultProposer,

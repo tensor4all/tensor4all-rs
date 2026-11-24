@@ -299,3 +299,31 @@ def test_max_bond_dim_caps_the_rank():
 
     _, ranks, _ = t4a.crossinterpolate(evaluate, [2, 2], max_bond_dim=1, seed=0)
     assert max(ranks) <= 1
+
+
+# ---------------------------------------------------------------------------
+# Stop rule (tensor4all-rs#1405)
+# ---------------------------------------------------------------------------
+
+
+def test_stop_rule_per_bond_is_accepted_and_exact():
+    network, _, errors = t4a.crossinterpolate(
+        linear_function, LINEAR_DIMS, initial_pivots=[[0, 0, 1]], seed=0, stop_rule="per_bond"
+    )
+    assert np.allclose(network.contract_to_tensor().to_numpy(), linear_reference())
+    assert errors[-1] < 1e-10
+
+
+def test_stop_rule_sampled_is_accepted_and_exact():
+    network, _, errors = t4a.crossinterpolate(
+        linear_function, LINEAR_DIMS, initial_pivots=[[0, 0, 1]], seed=0, stop_rule="sampled"
+    )
+    assert np.allclose(network.contract_to_tensor().to_numpy(), linear_reference())
+    assert errors[-1] < 1e-10
+
+
+def test_stop_rule_rejects_other_values():
+    with pytest.raises(ValueError, match="per_bond.*sampled"):
+        t4a.crossinterpolate(
+            linear_function, LINEAR_DIMS, initial_pivots=[[0, 0, 1]], seed=0, stop_rule="sample"
+        )
