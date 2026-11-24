@@ -33,8 +33,11 @@ that preserve one observed subtree while randomizing its complement. Each
 extra family is bounded by `nsearch` walks. If those families find nothing
 either, a third stage enumerates around the same retained tail pivots: every
 configuration of each maximal edge side with at most 32 local configurations,
-the other sites held at the pivot, in one batch and without random draws
-([#1433](https://github.com/tensor4all/tensor4all-rs/issues/1433)). A walk
+the other sites held at the pivot, without random draws
+([#1433](https://github.com/tensor4all/tensor4all-rs/issues/1433)). The points
+are evaluated in batches of at most 2^20 index entries (points times sites),
+which bounds the index buffer on large trees and changes neither the residuals
+nor the selected pivots. A walk
 needs a nonzero residual one coordinate move from its start; the enumeration
 reaches a defect several moves away as long as it lies in such a side. On
 binary quantics chains that side is the aligned block of width at most 32
@@ -42,11 +45,23 @@ around the pivot's value of one variable; wider blocks are not searched. These
 checks can escape sparse support that uniform random starts miss; they do not
 exhaust the domain or turn sampled convergence into an error bound.
 
-The third stage runs in every search that finds no pivot, and `Converged`
-needs three trailing iterations without an accepted global pivot. So when
-those three iterations all searched, none of their searches saw a residual
-above the tolerance inside an enumerated side around a retained tail pivot.
-This is a bounded guarantee: it says nothing about blocks wider than 32, and
+The third stage runs in a search that finds no pivot only when all of the
+following hold:
+
+- `nsearch > 0`. `nsearch` bounds the retained tail pivots used as anchors, so
+  `nsearch = 0` leaves no anchor and disables the stage, even when
+  `global_search_starts` are supplied and walked.
+- `max_nglobal_pivot > 0`. With zero the search returns before evaluating
+  anything, so no stage runs.
+- The tree has a vertex of local dimension 1. The anchors are retained tail
+  pivots at edges with such an endpoint; without one there is no anchor.
+- Some edge side has a product of local dimensions between 2 and 32.
+
+`Converged` needs three trailing iterations without an accepted global pivot.
+So when those three iterations all searched with the stage enabled, none of
+their searches saw a residual above the tolerance inside an enumerated side
+around a retained tail pivot. This is a bounded guarantee: it says nothing
+about blocks wider than 32, it does not hold in the configurations above, and
 an iteration whose search was skipped (see below) contributes no search.
 
 Global search is skipped after the final requested iteration and at a

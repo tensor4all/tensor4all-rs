@@ -141,6 +141,7 @@ fn sampled_residuals_are_preserved_below_the_discovery_margin() {
                 max_nglobal_pivot: 1,
                 abs_tol: 1.0,
                 tol_margin: 10.0,
+                enumeration_chunk_len: enumeration_chunk_points(state.local_dims.len()),
             },
             &[vec![0, 0]],
             &mut seeded_rng(1),
@@ -676,6 +677,7 @@ fn search_params<T>(state: &TreeTCI2<T>) -> SearchParams {
         max_nglobal_pivot: 5,
         tol_margin: 1.0,
         abs_tol: 1e-8 * state.max_sample_value,
+        enumeration_chunk_len: enumeration_chunk_points(state.local_dims.len()),
     }
 }
 
@@ -1092,6 +1094,7 @@ fn equal_errors_keep_generation_order_and_duplicates_collapse() {
             max_nglobal_pivot,
             tol_margin: 1.0,
             abs_tol: 0.5,
+            enumeration_chunk_len: enumeration_chunk_points(state.local_dims.len()),
         };
         let mut rng = seeded_rng(5);
         run_search(&state, constant, params, &[], &mut rng, leveled_readout).unwrap()
@@ -1281,6 +1284,7 @@ fn coordinate_walk_honors_early_stop_and_sweep_bound() {
             max_nglobal_pivot: 1,
             tol_margin: 1.0,
             abs_tol: threshold,
+            enumeration_chunk_len: enumeration_chunk_points(state.local_dims.len()),
         };
         let pivots = run_search(
             &state,
@@ -1695,11 +1699,27 @@ const UNIFORM_HIT: [usize; 7] = [0, 0, 0, 0, 0, 0, 1];
 /// [1, 1, 1, 0, 0, 0, 0] and [0, 0, 0, 0, 1, 1, 1]. `abs_tol` is 1, and an
 /// error of 100 stops a walk at once. With `fail_batch_readout`, the readout
 /// fails on any unhinted batch of more than one point, which only stage 3
-/// asks for.
+/// asks for. Stage 3 uses the production chunk length, which holds the whole
+/// enumeration in one batch.
 fn stage_search(
     local_dims: Vec<usize>,
     errors: &[([usize; 7], f64)],
     fail_batch_readout: bool,
+) -> crate::error::Result<StageRun> {
+    stage_search_chunked(
+        local_dims,
+        errors,
+        fail_batch_readout,
+        enumeration_chunk_points(7),
+    )
+}
+
+/// [`stage_search`] with stage 3 evaluated in batches of `chunk_len` points.
+fn stage_search_chunked(
+    local_dims: Vec<usize>,
+    errors: &[([usize; 7], f64)],
+    fail_batch_readout: bool,
+    chunk_len: usize,
 ) -> crate::error::Result<StageRun> {
     assert_eq!(rand::Rng::random_range(&mut ZeroRng, 0..2usize), 0);
     let mut state =
@@ -1743,6 +1763,7 @@ fn stage_search(
             max_nglobal_pivot: 5,
             tol_margin: 1.0,
             abs_tol: 1.0,
+            enumeration_chunk_len: chunk_len,
         },
         &[],
         &mut ZeroRng,
@@ -1833,4 +1854,49 @@ fn enumeration_chunks_bound_the_index_entries_per_batch() {
     assert_eq!(enumeration_chunk_points(1 << 20), 1);
     assert_eq!(enumeration_chunk_points((1 << 20) + 1), 1);
     assert_eq!(enumeration_chunk_points(0), 1 << 20);
+}
+
+#[test]
+fn enumeration_chunk_length_does_not_change_the_search() {
+    // Three stage-3 residuals, one below `abs_tol`, so the comparison covers
+    // the returned order, the filter and `max_error`.
+    let errors = [(STAGE_Q, 2.0), (STAGE_Q2, 3.0), (STAGE_Q3, 0.5)];
+    let single = stage_search(unit_chain(), &errors, false).unwrap();
+    // The production chunk holds the 48 enumeration points in the last batch.
+    assert_eq!(single.batch_sizes.last(), Some(&48));
+    let earlier_batches = single.batch_sizes.len() - 1;
+    assert_eq!(single.pivots, vec![STAGE_Q2.to_vec(), STAGE_Q.to_vec()]);
+    assert_eq!(single.max_error, 3.0);
+
+    // 1 and 48 bracket the range; 5 and 47 leave a short last batch; 0 is
+    // read as 1.
+    for (chunk_len, stage_batches) in [
+        (0, vec![1; 48]),
+        (1, vec![1; 48]),
+        (5, [vec![5; 9], vec![3]].concat()),
+        (47, vec![47, 1]),
+        (48, vec![48]),
+    ] {
+        let run = stage_search_chunked(unit_chain(), &errors, false, chunk_len).unwrap();
+        // The evaluator sees the same points in the same order, so with this
+        // deterministic target and constant readout every residual and its
+        // position agree with the single batch.
+        assert_eq!(run.evaluated, single.evaluated, "chunk {chunk_len}");
+        assert_eq!(
+            run.batch_sizes[..earlier_batches],
+            single.batch_sizes[..earlier_batches],
+            "chunk {chunk_len}"
+        );
+        assert_eq!(
+            run.batch_sizes[earlier_batches..],
+            stage_batches[..],
+            "chunk {chunk_len}"
+        );
+        assert_eq!(run.pivots, single.pivots, "chunk {chunk_len}");
+        assert_eq!(
+            run.max_error.to_bits(),
+            single.max_error.to_bits(),
+            "chunk {chunk_len}"
+        );
+    }
 }
