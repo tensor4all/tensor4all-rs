@@ -98,6 +98,15 @@
 //! 128 target points, and every engine call ends `BondCapReached` or
 //! `Converged`. Dense scenario records and all comparison tolerances are
 //! unchanged.
+//!
+//! Both TreeTCI scenarios were re-recorded when the global search gained a
+//! third stage (#1433): when the walks, probes and restarts find nothing, it
+//! enumerates every configuration of the maximal edge sides with at most 32
+//! configurations around the retained pivots at the junction `r`. Cache hits
+//! went from 13917 to 14717 and from 13667 to 14467: every enumerated point
+//! was already in the evaluation memo. Function evaluations (128 each),
+//! splits, terminations, error estimates, bond dimensions, and node data are
+//! unchanged; dense scenario records are kept.
 
 use crate::adaptive_common;
 
