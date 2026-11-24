@@ -83,7 +83,10 @@ assert np.allclose(network.contract_to_tensor().to_numpy(), reference)
   imaginary component. Rust panics inside TreeTCI surface as `RuntimeError`.
 - **Errors**: Python exceptions raised by `evaluate` propagate unchanged. Not
   converging is not an error; inspect `errors`.
-- **Options**: `tolerance`, `max_iter`, `max_bond_dim`, `seed`. `seed=None`
+- **Options**: `tolerance`, `max_iter`, `max_bond_dim`, `seed`. `tolerance`
+  is a per-bond threshold (Rust's default `StopRule::PerBond`): the run stops
+  when the largest normalized bond pivot error stays below it, and the global
+  pivot search accepts pivots only above ten times it. `seed=None`
   (the default) seeds the global pivot search from OS entropy, so pass a seed
   for reproducible runs. The default initial pivot is the all-zero point, which
   must not evaluate to zero.

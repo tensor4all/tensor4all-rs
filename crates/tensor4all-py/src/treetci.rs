@@ -94,7 +94,10 @@ where
 ///     initial_pivots: Optional starting points, each listing one site value
 ///         per site. Defaults to the all-zero point, which must not evaluate to
 ///         zero.
-///     tolerance: Relative stopping tolerance on the normalized bond error.
+///     tolerance: Relative stopping tolerance on the largest normalized bond
+///         pivot error (the per-bond stop rule, Rust's default
+///         ``StopRule::PerBond``). The global pivot search accepts a pivot only
+///         above ten times this tolerance. Neither bounds the pointwise error.
 ///     max_iter: Maximum number of edge-order sweeps.
 ///     max_bond_dim: Optional cap on the number of pivots per edge.
 ///     seed: Optional seed for the global pivot search. ``None`` (the default)
@@ -105,7 +108,8 @@ where
 ///     ``(network, ranks, errors)``: the interpolated
 ///     :class:`TreeTensorNetwork` (node ``k`` is site ``k`` and its site leg is
 ///     the first index of ``network.tensor(k)``), the maximum bond dimension
-///     after each sweep, and the normalized bond error after each sweep.
+///     after each sweep, and the largest normalized bond pivot error after
+///     each sweep (residuals measured by the global search are not included).
 ///     Not converging is not an error; inspect ``errors``.
 #[pyfunction]
 #[pyo3(signature = (evaluate, local_dims, edges=None, initial_pivots=None,
