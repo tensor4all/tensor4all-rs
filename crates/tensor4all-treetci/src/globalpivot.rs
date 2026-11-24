@@ -48,9 +48,13 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 /// 5. If no point qualifies, confirm retained tail pivot pairs at edges with
 ///    a dimension-one endpoint, then randomize their complementary subtrees
 ///    while holding one observed subtree fixed. Each family adds at most
-///    `nsearch` walks, using `abs_tol` as its walk threshold and as its
-///    acceptance threshold. This helps a sparse target whose random starts
-///    fall on zero fibers.
+///    `nsearch` walks. These functions, like the optimizer under
+///    [`StopRule::Sampled`](crate::StopRule::Sampled), accept a point above
+///    `abs_tol`; under [`StopRule::PerBond`](crate::StopRule::PerBond) the
+///    optimizer accepts only above `abs_tol * tol_margin`. Each walk stops
+///    after the first sweep above ten times its walk threshold: `abs_tol`,
+///    or `abs_tol * max(1, tol_margin / 10)` under `PerBond`.
+///    This helps a sparse target whose random starts fall on zero fibers.
 /// 6. If both of those families also found nothing, enumerate around the same
 ///    retained tail pivots (deduplicated): for every edge side whose product
 ///    of local dimensions is between 2 and 32, keeping the maximal such sides,
@@ -58,9 +62,9 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 ///    the pivot, in batches of at most 2^20 index entries (`points *
 ///    n_sites`, but at least one point per batch); the batching changes
 ///    neither the residuals, their order nor the result. Points qualify
-///    against the same acceptance threshold as those families, `abs_tol`.
-///    There is no walk and no random draw. On binary
-///    quantics chains with the least significant bit at the leaf, this
+///    against the same acceptance threshold as those families: `abs_tol`
+///    here and under `Sampled`, `abs_tol * tol_margin` under `PerBond`. There
+///    is no walk and no random draw. On binary quantics chains with the least significant bit at the leaf, this
 ///    exhaustively covers the aligned block of width at most 32 around each
 ///    pivot's value of one variable, and nothing wider. The stage does not
 ///    run when `nsearch` is zero or the tree has no dimension-one vertex (no

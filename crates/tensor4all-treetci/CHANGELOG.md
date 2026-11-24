@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — per-bond stop rule as default (behaviour change)
+
+`TreeTciOptions::stop_rule` selects how the optimizer records its error and
+decides `Converged` (#1405). The default is `StopRule::PerBond` again, the rule
+of TensorCrossInterpolation.jl, TreeTCI.jl and xfac: the recorded error is the
+largest bond pivot error, and the global search accepts a pivot only above
+`tolerance * tol_margin_global_search`, also in its fallback stages.
+`StopRule::Sampled` is the previous behaviour (#1357): the recorded error also
+includes the residuals the global search measured.
+
+- **Changed**: with the global search enabled, default runs can stop earlier
+  and record different `errors` than the previous release at the same options
+  and seed. To keep the previous behaviour, set `StopRule::Sampled` (Python:
+  `stop_rule="sampled"`).
+- **Not changed**: `TreeTciInterpolator` always runs `StopRule::Sampled`,
+  because the adaptive drivers accept a patch on its error estimate; the
+  public `find_global_pivots*` functions keep the sampled acceptance.
+- **Effect**: on the 16-site quantics chain of the full-run golden the sampled
+  stop takes 1.74x the evaluations of the per-bond stop (22073 against 12720).
+
 ## Unreleased — the default edge visitor alternates direction (behaviour change)
 
 `AllEdges`, the default `EdgeVisitor`, now sweeps the sorted edges forward on
