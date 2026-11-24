@@ -17,7 +17,7 @@ use crate::error::{Result as TreeTciResult, TreeTciError};
 use crate::evaluation::{BatchExecution, Compatibility};
 use crate::{
     batch::EVALUATION_CHUNK_POINTS, materialize::to_treetn_chunked, GlobalIndexBatch, MultiIndex,
-    SubtreeKey, TreeTCI2,
+    StopRule, SubtreeKey, TreeTCI2,
 };
 use anyhow::Result;
 use rand::{Rng, RngCore, SeedableRng};
@@ -41,7 +41,10 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 ///    coordinate between site scans and repeating sweeps until no improvement,
 ///    an error above `10 * abs_tol * tol_margin`, or 100 sweeps.
 /// 4. Prefer points above `abs_tol * tol_margin`. If none cross that margin,
-///    keep observed errors above `abs_tol` instead.
+///    keep observed errors above `abs_tol` instead. This is the acceptance of
+///    [`StopRule::Sampled`](crate::StopRule::Sampled); the optimizer under the
+///    default [`StopRule::PerBond`](crate::StopRule::PerBond) accepts only
+///    points above `abs_tol * tol_margin`, here and in step 5.
 /// 5. If no point qualifies, confirm retained tail pivot pairs at edges with
 ///    a dimension-one endpoint, then randomize their complementary subtrees
 ///    while holding one observed subtree fixed. Each family adds at most
@@ -217,6 +220,8 @@ where
     let mut stream: &mut R = rng;
     let mut evaluate = evaluate;
     let mut execution = Compatibility::new(&mut evaluate);
+    // The public finders keep the `Sampled` acceptance (#1405): observed
+    // errors above `abs_tol` qualify when no discovery crosses the margin.
     find_global_pivots_erased(
         state,
         &mut execution,
@@ -225,6 +230,7 @@ where
         max_nglobal_pivot,
         tol_margin,
         abs_tol,
+        StopRule::Sampled,
         &mut stream,
     )
     .map(|result| result.pivots)
@@ -246,6 +252,7 @@ pub(crate) fn find_global_pivots_erased<T>(
     max_nglobal_pivot: usize,
     tol_margin: f64,
     abs_tol: f64,
+    stop_rule: StopRule,
     rng: &mut dyn RngCore,
 ) -> TreeTciResult<GlobalPivotSearchResult>
 where
@@ -257,6 +264,7 @@ where
         tol_margin,
         abs_tol,
         enumeration_chunk_len: enumeration_chunk_points(state.local_dims.len()),
+        stop_rule,
     };
     search_with_readout(
         state,
@@ -458,6 +466,8 @@ struct SearchParams {
     /// read as one. Production passes [`enumeration_chunk_points`] of the
     /// site count; tests pass smaller values to split the enumeration.
     enumeration_chunk_len: usize,
+    /// Which acceptance applies (see [`StopRule`]).
+    stop_rule: StopRule,
 }
 
 /// A session-taking approximation readout for runs that own an [`EvalContext`].
@@ -585,6 +595,7 @@ where
         tol_margin,
         abs_tol,
         enumeration_chunk_len,
+        stop_rule: _,
     } = params;
     if !abs_tol.is_finite() || abs_tol < 0.0 {
         return Err(

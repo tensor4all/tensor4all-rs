@@ -1,4 +1,6 @@
-use super::{optimize_default, TreeTciOptimizationResult, TreeTciOptions, TreeTciTermination};
+use super::{
+    optimize_default, StopRule, TreeTciOptimizationResult, TreeTciOptions, TreeTciTermination,
+};
 use crate::test_support::assert_scalar_close;
 use crate::{
     AllEdges, DefaultProposer, EdgeVisitor, GlobalIndexBatch, PivotCandidateProposer, TreeTCI2,
@@ -14,6 +16,9 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
     // rank-1 approximation (1+i)(1+j). Global search must keep the run open.
     // Without it, the zero error comes from a 1 x 1 candidate matrix and is
     // not a measurement, so the run must not report `Converged` (#1153).
+    // Under `Sampled` the recorded error includes the residual the search
+    // measured (#1352); under `PerBond` it is the bond error alone, and the
+    // accepted pivots keep the run open (#1405).
     struct InitialCrossOnly;
 
     impl crate::PivotCandidateProposer for InitialCrossOnly {
@@ -35,7 +40,12 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         }
     }
 
-    for enable_global_pivots in [false, true] {
+    for (stop_rule, enable_global_pivots) in [
+        (StopRule::Sampled, false),
+        (StopRule::Sampled, true),
+        (StopRule::PerBond, false),
+        (StopRule::PerBond, true),
+    ] {
         let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
         state.add_global_pivots(&[vec![0, 0]]).unwrap();
         state.max_sample_value = 1.0;
@@ -54,6 +64,7 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         };
         let options = TreeTciOptions {
             tolerance: 1e-12,
+            stop_rule,
             max_iter: 4,
             enable_global_pivots,
             nsearch: 20,
@@ -79,14 +90,14 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
         };
         assert_eq!(result.termination, reason);
         assert_eq!(result.ranks, vec![1; iterations]);
-        let expected_errors = if enable_global_pivots {
+        let expected_errors = if enable_global_pivots && stop_rule == StopRule::Sampled {
             // The global search actually measured residual one. The final
             // iteration skips search, so only its local zero is available.
             vec![1.0, 1.0, 1.0, 0.0]
         } else {
             vec![0.0; iterations]
         };
-        assert_eq!(result.errors, expected_errors);
+        assert_eq!(result.errors, expected_errors, "{stop_rule:?}");
         assert_eq!(
             observed
                 .0

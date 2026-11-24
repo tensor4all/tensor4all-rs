@@ -120,7 +120,7 @@ use tensor4all_partitionedtreetn::adaptive_interpolation::{
     PatchedInterpolationOptions, PatchedInterpolationResult,
 };
 use tensor4all_partitionedtreetn::ErrorNorm;
-use tensor4all_treetci::TreeTciInterpolator;
+use tensor4all_treetci::{StopRule, TreeTciInterpolator, TreeTciOptions};
 use tensor4all_treetn::interpolation::{
     EvalContext, InterpolationError, InterpolationOutcome, InterpolationProblem,
     InterpolationTermination, TreeInterpolator,
@@ -382,10 +382,23 @@ struct EngineCall {
 
 /// Delegates every call to [`TreeTciInterpolator`] and records the absolute
 /// tolerance, the termination, and the error estimate of each call.
-#[derive(Default)]
 struct RecordingTreeTci {
     inner: TreeTciInterpolator,
     calls: Mutex<Vec<EngineCall>>,
+}
+
+impl RecordingTreeTci {
+    /// An engine with default options under `stop_rule`.
+    fn new(stop_rule: StopRule) -> Self {
+        let options = TreeTciOptions {
+            stop_rule,
+            ..TreeTciOptions::default()
+        };
+        Self {
+            inner: TreeTciInterpolator::new(options).unwrap(),
+            calls: Mutex::default(),
+        }
+    }
 }
 
 impl TreeInterpolator<f64> for RecordingTreeTci {
@@ -582,7 +595,9 @@ fn run_scenario(scenario: &Scenario) -> (Value, Vec<EngineCall>) {
             (capture(scenario, &result, &[]), Vec::new())
         }
         (Engine::TreeTci, Function::Real(f)) => {
-            let engine = RecordingTreeTci::default();
+            // The committed golden was recorded under the sampled stop
+            // (#1352, #1356, #1434); it pins `StopRule::Sampled` (#1405).
+            let engine = RecordingTreeTci::new(StopRule::Sampled);
             let result = run_typed(&engine, scenario, f.as_ref());
             // Re-recording must preserve the target, not only the driver's
             // discrete decisions. Check every entry at the existing tolerance.

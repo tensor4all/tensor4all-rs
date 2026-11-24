@@ -1,7 +1,7 @@
 //! Options for Quantics TCI interpolation.
 
 use quanticsgrids::UnfoldingScheme;
-use tensor4all_treetci::TreeTciOptions;
+use tensor4all_treetci::{StopRule, TreeTciOptions};
 
 /// Options for Quantics TCI interpolation.
 ///
@@ -18,6 +18,7 @@ use tensor4all_treetci::TreeTciOptions;
 /// | `n_random_init_pivot` | `5` | `3` .. `20` | Random initial pivots added |
 /// | `unfolding_scheme` | `Interleaved` | — | How quantics bits are arranged |
 /// | `scale_tolerance` | `true` | — | Scale convergence tolerance by running max \|f\| |
+/// | `stop_rule` | `PerBond` | — | Which error is compared with `tolerance` |
 /// | `verbosity` | `0` | `0` .. `2` | Logging verbosity |
 ///
 /// # Examples
@@ -123,6 +124,15 @@ pub struct QtciOptions {
     /// Default: `true`.
     pub scale_tolerance: bool,
 
+    /// Which error the TreeTCI loop records and compares with `tolerance`.
+    ///
+    /// Forwarded to [`TreeTciOptions::stop_rule`]. The quantics path runs
+    /// without the global pivot search, so both rules record the bond pivot
+    /// error there and give the same run.
+    ///
+    /// Default: [`StopRule::PerBond`].
+    pub stop_rule: StopRule,
+
     /// Verbosity level. `0` = silent, `1` = progress summary,
     /// `2` = per-sweep details.
     ///
@@ -140,6 +150,7 @@ impl Default for QtciOptions {
             rng_seed: None,
             unfolding_scheme: UnfoldingScheme::Interleaved,
             scale_tolerance: true,
+            stop_rule: StopRule::PerBond,
             verbosity: 0,
         }
     }
@@ -236,6 +247,21 @@ impl QtciOptions {
         self
     }
 
+    /// Set the stop rule forwarded to TreeTCI.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tensor4all_quanticstci::{QtciOptions, StopRule};
+    /// let opts = QtciOptions::default().with_stop_rule(StopRule::Sampled);
+    /// assert_eq!(opts.stop_rule, StopRule::Sampled);
+    /// assert_eq!(opts.to_treetci_options().stop_rule, StopRule::Sampled);
+    /// ```
+    pub fn with_stop_rule(mut self, stop_rule: StopRule) -> Self {
+        self.stop_rule = stop_rule;
+        self
+    }
+
     /// Set the verbosity level.
     ///
     /// # Examples
@@ -268,6 +294,7 @@ impl QtciOptions {
     pub fn to_treetci_options(&self) -> TreeTciOptions {
         TreeTciOptions {
             tolerance: self.tolerance,
+            stop_rule: self.stop_rule,
             max_iter: self.max_iter,
             max_bond_dim: self.max_bond_dim,
             scale_tolerance: self.scale_tolerance,
