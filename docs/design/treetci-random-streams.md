@@ -23,7 +23,9 @@ There is no edge/rank/history hash in stream construction. The optimizer visits
 edges in its established order; random proposers draw in candidate-generation
 order, and global searches then draw their starts. If ordinary searches find
 no pivot, unit-endpoint confirmation draws complementary-subtree restarts
-from that same stream; the retained-pair checks themselves consume no draws. Changing a proposer can
+from that same stream; the retained-pair checks themselves, and the
+enumeration around retained pivots that follows when both find nothing
+(#1433), consume no draws. Changing a proposer can
 therefore change later global starts on a shared caller stream. High-level
 separate streams isolate global starts from candidate draw consumption.
 
