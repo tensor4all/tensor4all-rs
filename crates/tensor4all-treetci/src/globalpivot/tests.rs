@@ -1,8 +1,8 @@
 use super::{
     branch_slice_cache_max_bytes, cached_walk_readout, cached_walk_readout_on_session,
     enumeration_chunk_points, enumeration_points, find_global_pivots, materialized_tree_bytes,
-    maximal_enumeration_sides, retained_pivot_starts, search_with_readout, ScalarParts,
-    SearchParams, LEAF_SIDE_ENUMERATION_BUDGET,
+    maximal_enumeration_sides, retained_pivot_starts, search_thresholds, search_with_readout,
+    ScalarParts, SearchParams, LEAF_SIDE_ENUMERATION_BUDGET,
 };
 use crate::{
     materialize::to_treetn, optimize_with_proposer, AllEdges, DefaultProposer, GlobalIndexBatch,
@@ -223,6 +223,96 @@ fn per_bond_fallback_walks_accept_only_above_the_discovery_margin() {
         "the fallback walks must have run: {fallback_calls} vs {ordinary_calls} readouts"
     );
     assert_eq!(search(StopRule::Sampled, 1.5).0, 1);
+}
+
+#[test]
+fn per_bond_fallback_walks_reach_errors_above_a_margin_over_ten() {
+    // Review of #1446: with `tol_margin = 20` the `PerBond` fallback accepts
+    // only above `20 abs_tol`, so its walks must not stop at the first sweep
+    // that ends above `10 abs_tol`. The landscape is visible only to the walk
+    // that starts at the retained tail pivot [0, 0, 1] (the probe); every
+    // other readout (the ordinary walk, the restart, the enumeration) sees a
+    // constant error of 1.5. From [0, 0, 1] the first sweep reaches 15 at
+    // [0, 0, 0] (site 0 is scanned before site 2), the second reaches 25 at
+    // [1, 0, 0].
+    let mut state =
+        TreeTCI2::<f64>::new(vec![2, 1, 3], TreeTciGraph::linear_chain(3).unwrap()).unwrap();
+    let anchor = vec![0, 0, 1];
+    state
+        .add_global_pivots(std::slice::from_ref(&anchor))
+        .unwrap();
+    let landscape = |point: &[usize]| match (point[0], point[2]) {
+        (1, 0) => 25.0,
+        (0, 0) => 15.0,
+        _ => 1.5,
+    };
+    let search = |stop_rule: StopRule| {
+        let in_probe = std::cell::Cell::new(false);
+        let mut target = |batch: GlobalIndexBatch<'_>| Ok(vec![1.0; batch.n_points()]);
+        let mut execution = crate::evaluation::Compatibility::new(&mut target);
+        let readout = |_: &mut TreeTNCachedEvaluator<'_, usize>,
+                       _: &TreeTN<IdxTensor, usize>,
+                       _: &[DynIndex],
+                       points: ColMajorArrayRef<'_, usize>,
+                       scan_site: Option<usize>| {
+            let points: Vec<&[usize]> = points.data().chunks(points.shape()[0]).collect();
+            // A readout without a scan site starts a walk (or is the
+            // enumeration batch); only the probe starts at the anchor.
+            if scan_site.is_none() {
+                in_probe.set(points == [anchor.as_slice()]);
+            }
+            Ok(points
+                .into_iter()
+                .map(|point| {
+                    let error = if in_probe.get() {
+                        landscape(point)
+                    } else {
+                        1.5
+                    };
+                    AnyScalar::new_real(1.0 - error)
+                })
+                .collect())
+        };
+        search_with_readout(
+            &state,
+            &mut execution,
+            SearchParams {
+                nsearch: 1,
+                max_nglobal_pivot: 1,
+                abs_tol: 1.0,
+                tol_margin: 20.0,
+                enumeration_chunk_len: enumeration_chunk_points(state.local_dims.len()),
+                stop_rule,
+            },
+            &[],
+            &mut seeded_rng(1),
+            readout,
+            cached_walk_readout_on_session,
+        )
+        .unwrap()
+    };
+    let per_bond = search(StopRule::PerBond);
+    assert_eq!(per_bond.max_error, 25.0);
+    assert_eq!(per_bond.pivots, vec![vec![1, 0, 0]]);
+    // Up to a margin of 10 the walk threshold is `abs_tol` bit for bit; a
+    // non-round value catches `(abs_tol * 10) / 10`, one ulp off for some.
+    let abs_tol = 0.0034036185232215435;
+    for stop_rule in [StopRule::PerBond, StopRule::Sampled] {
+        for margin in [1.0, 10.0] {
+            let (_, _, walk) = search_thresholds(stop_rule, abs_tol, margin);
+            assert_eq!(
+                walk.to_bits(),
+                abs_tol.to_bits(),
+                "{stop_rule:?}, margin {margin}"
+            );
+        }
+    }
+    assert_eq!(
+        search_thresholds(StopRule::PerBond, abs_tol, 20.0).2,
+        2.0 * abs_tol
+    );
+    // `Sampled` keeps the constant 1.5 of the ordinary walk.
+    assert_eq!(search(StopRule::Sampled).pivots.len(), 1);
 }
 
 /// Batch evaluator for a two-peak function on a 10-site chain.

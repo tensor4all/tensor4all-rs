@@ -279,6 +279,28 @@ where
     )
 }
 
+/// The thresholds of one search under `stop_rule`, as
+/// `(acceptance_floor, fallback_threshold, fallback_walk_threshold)`.
+///
+/// `acceptance_floor` qualifies the ordinary walks; `fallback_threshold` is
+/// the one acceptance threshold of every fallback stage (the probes, the
+/// restarts and the stage-3 enumeration of #1433); the probe and restart
+/// walks stop after the first sweep above ten times `fallback_walk_threshold`.
+/// `PerBond` accepts only discoveries above the margin; `Sampled` keeps
+/// observed errors above `abs_tol` (#1352).
+// INVARIANT: the only place the stop rule enters the search (#1405).
+fn search_thresholds(stop_rule: StopRule, abs_tol: f64, tol_margin: f64) -> (f64, f64, f64) {
+    let threshold = abs_tol * tol_margin;
+    match stop_rule {
+        // With `abs_tol` as walk threshold, a margin above 10 would end every
+        // fallback walk below `threshold` (review of #1446). INVARIANT: the
+        // factor is exactly 1.0 for any margin up to 10, so the walk
+        // threshold is `abs_tol` bit for bit there, as on `main`.
+        StopRule::PerBond => (threshold, threshold, abs_tol * (tol_margin / 10.0).max(1.0)),
+        StopRule::Sampled => (abs_tol.min(threshold), abs_tol, abs_tol),
+    }
+}
+
 /// Pivots plus the largest actual residual sampled by a search.
 #[derive(Debug, Default)]
 pub(crate) struct GlobalPivotSearchResult {
@@ -683,16 +705,8 @@ where
     let mut flat = Vec::with_capacity(flat_capacity);
     let mut start = Vec::with_capacity(n_sites);
     let threshold = abs_tol * tol_margin;
-    // INVARIANT: the only place the stop rule enters the search (#1405).
-    // `acceptance_floor` qualifies the ordinary walks; `fallback_threshold`
-    // is the one acceptance threshold of every fallback stage (the probes,
-    // the restarts and the stage-3 enumeration of #1433). `PerBond` accepts
-    // only discoveries above the margin; `Sampled` keeps observed errors
-    // above `abs_tol` (#1352).
-    let (acceptance_floor, fallback_threshold) = match stop_rule {
-        StopRule::PerBond => (threshold, threshold),
-        StopRule::Sampled => (abs_tol.min(threshold), abs_tol),
-    };
+    let (acceptance_floor, fallback_threshold, fallback_walk_threshold) =
+        search_thresholds(stop_rule, abs_tol, tol_margin);
     let mut max_error = 0.0_f64;
     let mut best = Vec::with_capacity(starts.len().saturating_add(nsearch));
     for provided in starts {
@@ -747,8 +761,9 @@ where
     // factor). Retained pivot pairs stay on observed support and expose
     // inconsistencies between neighboring updates. Probe the tail pivots,
     // where a newly discovered direction is most easily lost, only when the
-    // ordinary search found no pivot. Their walks stop early on the requested
-    // tolerance; what they find is accepted above `fallback_threshold`. The
+    // ordinary search found no pivot. Their walks stop early on
+    // `fallback_walk_threshold`; what they find is accepted above
+    // `fallback_threshold`. The
     // loop runs at most nsearch times; each pass walks at most one retained
     // pair and one subtree-anchored restart, so at most 2 * nsearch walks are
     // added (a probe that finds an error skips its restart). Scratch is
@@ -767,7 +782,7 @@ where
                     n_sites,
                     &mut flat,
                     &anchor.point,
-                    abs_tol,
+                    fallback_walk_threshold,
                     &mut readout,
                     readout_on_session,
                 )?;
@@ -793,7 +808,7 @@ where
                 n_sites,
                 &mut flat,
                 &support_start,
-                abs_tol,
+                fallback_walk_threshold,
                 &mut readout,
                 readout_on_session,
             )?;

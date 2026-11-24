@@ -4,10 +4,11 @@
 
 - `StopRule { PerBond, Sampled }` lives in `TreeTciOptions` next to `tolerance`; `PerBond` is the default. The contract is in [treetci-termination.md](../design/treetci-termination.md#stop-rules).
 - The rule enters the optimizer at one `match`, where the search residual is or is not folded into the recorded error; nothing else feeds the search residual into the stop.
-- The search computes, in one binding, the acceptance floor of the ordinary walks and `fallback_threshold`, the one acceptance threshold of every fallback stage (probes, restarts and the stage-3 enumeration of #1433, rebased onto `8c277c48`). The walks, their early stop on `abs_tol`, the enumeration, and the preference for discoveries above the margin are unchanged on both rules.
+- The search computes, in one binding, the acceptance floor of the ordinary walks and `fallback_threshold`, the one acceptance threshold of every fallback stage (probes, restarts and the stage-3 enumeration of #1433, rebased onto `8c277c48`). The walks (with the early-stop exception below), the enumeration, and the preference for discoveries above the margin are unchanged on both rules.
 - The public `find_global_pivots*` signatures are unchanged and keep the `Sampled` acceptance; a rule argument would collide with #1433's edits in the same file.
 - Existing goldens and regressions pin `Sampled` explicitly; `PerBond` has its own goldens. The #1352 regressions and the #1433 box tests run under both rules.
 - `TreeTciInterpolator` always runs `Sampled` (review of #1446): the adaptive drivers accept a patch on its `error_estimate` without verification, and only `Sampled` folds the measured search residuals into it. So `partitionedtreetn` behaves as on `main`, and its M2 golden stays the check of that; the separate `PerBond` M2 golden was removed.
+- Under `PerBond` the probe and restart walks use `abs_tol * max(1, margin / 10)` as their walk threshold, so they stop after the first sweep above ten times that (review of #1446): with a margin above 10, a stop at `10 abs_tol` would end every walk below the `PerBond` acceptance threshold. The factor is exactly 1 up to a margin of 10, so the threshold is `abs_tol` bit for bit, as on `main`, and no measured number changes; `max(abs_tol, abs_tol * 10 / 10)` would not be, since `(x * 10) / 10` is one ulp off for some `x`. Under `Sampled` it is `abs_tol`.
 
 ## Verification conclusions and constraints
 

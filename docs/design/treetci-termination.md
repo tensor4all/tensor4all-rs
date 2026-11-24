@@ -52,7 +52,11 @@ including the search. New pivots are processed in the next sweep.
 If ordinary starts yield no pivot, edges with a dimension-one endpoint supply
 retained tail pivot pairs and restarts that preserve one observed subtree
 while randomizing its complement, on both rules. Each extra family is bounded
-by `nsearch` walks, which stop early on `abs_tol`. If those families find
+by `nsearch` walks. A walk ends after the first sweep whose error exceeds ten
+times its threshold; for these walks that threshold is `abs_tol` under
+`Sampled` and `abs_tol * max(1, tol_margin_global_search / 10)` under
+`PerBond`, which is `abs_tol` bit for bit up to a margin of 10 and keeps a
+larger margin reachable. If those families find
 nothing either, a third stage enumerates around the same retained tail
 pivots: every configuration of each maximal edge side with at most 32 local
 configurations, the other sites held at the pivot, without random draws
