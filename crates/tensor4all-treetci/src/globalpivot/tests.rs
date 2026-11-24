@@ -1,8 +1,8 @@
 use super::{
     branch_slice_cache_max_bytes, cached_walk_readout, cached_walk_readout_on_session,
-    enumeration_points, find_global_pivots, materialized_tree_bytes, maximal_enumeration_sides,
-    retained_pivot_starts, search_with_readout, ScalarParts, SearchParams,
-    LEAF_SIDE_ENUMERATION_BUDGET,
+    enumeration_chunk_points, enumeration_points, find_global_pivots, materialized_tree_bytes,
+    maximal_enumeration_sides, retained_pivot_starts, search_with_readout, ScalarParts,
+    SearchParams, LEAF_SIDE_ENUMERATION_BUDGET,
 };
 use crate::{
     materialize::to_treetn, optimize_with_proposer, AllEdges, DefaultProposer, GlobalIndexBatch,
@@ -1821,4 +1821,16 @@ fn enumeration_propagates_readout_failures() {
         error.to_string().contains("stage-3 readout failure"),
         "{error}"
     );
+}
+
+#[test]
+fn enumeration_chunks_bound_the_index_entries_per_batch() {
+    // 2^20 entries per batch, at least one point.
+    assert_eq!(enumeration_chunk_points(16), 1 << 16);
+    assert_eq!(enumeration_chunk_points(22), (1 << 20) / 22);
+    assert_eq!(enumeration_chunk_points(1001), 1047);
+    assert!(enumeration_chunk_points(1001) * 1001 <= 1 << 20);
+    assert_eq!(enumeration_chunk_points(1 << 20), 1);
+    assert_eq!(enumeration_chunk_points((1 << 20) + 1), 1);
+    assert_eq!(enumeration_chunk_points(0), 1 << 20);
 }

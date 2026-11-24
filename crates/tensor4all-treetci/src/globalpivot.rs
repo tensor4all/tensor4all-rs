@@ -351,6 +351,25 @@ fn retained_pivot_starts<T>(
 /// error certificate.
 const LEAF_SIDE_ENUMERATION_BUDGET: usize = 32;
 
+/// Index entries (`points * n_sites`) sent to the evaluator in one batch of
+/// the third-stage enumeration.
+///
+/// The enumeration has at most `anchors * sum(side configurations)` points,
+/// with at most `nsearch` anchors and up to `2 (n_sites - 1)` maximal sides of
+/// at most [`LEAF_SIDE_ENUMERATION_BUDGET`] configurations each. On a star of
+/// `k` five-site binary chains joined at a dimension-one centre, for example,
+/// that is about `31 k` points per anchor, each `5 k + 1` sites long. Chunking
+/// keeps the batch buffer at 2^20 entries (8 MiB) whatever the tree; the
+/// deduplicated point set itself still holds every point.
+const ENUMERATION_CHUNK_ENTRIES: usize = 1 << 20;
+
+/// Points per evaluation batch of the third-stage enumeration: the largest
+/// count whose index entries fit [`ENUMERATION_CHUNK_ENTRIES`], and at least
+/// one point.
+fn enumeration_chunk_points(n_sites: usize) -> usize {
+    (ENUMERATION_CHUNK_ENTRIES / n_sites.max(1)).max(1)
+}
+
 /// Edge sides that the third-stage enumeration visits exhaustively.
 ///
 /// Takes every side of every edge (either side) whose product of local
@@ -767,7 +786,10 @@ where
                 let sides = maximal_enumeration_sides(state, LEAF_SIDE_ENUMERATION_BUDGET)?;
                 enumeration_points(&anchors, &sides, &state.local_dims)
             };
-            if !points.is_empty() {
+            // Chunked so that the index buffer stays bounded on large trees;
+            // the residuals, their order and the returned set are the same as
+            // for one batch.
+            for chunk in points.chunks(enumeration_chunk_points(n_sites)) {
                 let errors = batch_residuals(
                     execution,
                     &mut cache,
@@ -775,15 +797,15 @@ where
                     &site_indices,
                     n_sites,
                     &mut flat,
-                    &points,
+                    chunk,
                     None,
                     &mut readout,
                     readout_on_session,
                 )?;
-                for (error, point) in errors.into_iter().zip(points) {
+                for (error, point) in errors.into_iter().zip(chunk) {
                     max_error = max_error.max(error);
                     if error > fallback_threshold {
-                        best.push((error, point));
+                        best.push((error, point.clone()));
                     }
                 }
             }
