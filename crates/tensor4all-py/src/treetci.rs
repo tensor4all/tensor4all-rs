@@ -25,12 +25,24 @@ use num_complex::Complex64;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use tensor4all_treetci::{
-    crossinterpolate2, DefaultProposer, GlobalIndexBatch, TreeTciEdge, TreeTciGraph, TreeTciOptions,
+    crossinterpolate2, DefaultProposer, GlobalIndexBatch, StopRule, TreeTciEdge, TreeTciGraph,
+    TreeTciOptions,
 };
 
 use crate::batch::{extract_values, probe_dtype, ValueDtype};
 use crate::batch::{index_batch_to_numpy, panic_error, stash, take_error, unexpected_result};
 use crate::treetn::PyTreeTensorNetwork;
+
+/// The Python spelling of [`StopRule`], mapped once at the boundary.
+fn parse_stop_rule(name: &str) -> PyResult<StopRule> {
+    match name {
+        "per_bond" => Ok(StopRule::PerBond),
+        "sampled" => Ok(StopRule::Sampled),
+        other => Err(PyValueError::new_err(format!(
+            "stop_rule must be \"per_bond\" or \"sampled\", got {other:?}"
+        ))),
+    }
+}
 
 /// Initial evaluator result, which fixes the value type of the whole run.
 enum ProbeValues {
@@ -94,26 +106,33 @@ where
 ///     initial_pivots: Optional starting points, each listing one site value
 ///         per site. Defaults to the all-zero point, which must not evaluate to
 ///         zero.
-///     tolerance: Relative stopping tolerance on the largest normalized bond
-///         pivot error (the per-bond stop rule, Rust's default
-///         ``StopRule::PerBond``). The global pivot search accepts a pivot only
-///         above ten times this tolerance. Neither bounds the pointwise error.
+///     tolerance: Relative stopping tolerance. Under ``stop_rule="per_bond"``
+///         it bounds the largest normalized bond pivot error, and the global
+///         pivot search accepts a pivot only above ten times it; under
+///         ``"sampled"`` the recorded error also includes the residuals the
+///         search measured. Neither bounds the pointwise error.
 ///     max_iter: Maximum number of edge-order sweeps.
 ///     max_bond_dim: Optional cap on the number of pivots per edge.
 ///     seed: Optional seed for the global pivot search. ``None`` (the default)
 ///         seeds from OS entropy, so runs are not reproducible unless a seed is
 ///         given.
+///     stop_rule: ``"per_bond"`` (the default) or ``"sampled"``; Rust's
+///         ``StopRule``. ``"sampled"`` keeps the stop of tensor4all-rs before
+///         #1405, at a higher evaluation cost on smooth targets. Any other
+///         value raises ``ValueError``.
 ///
 /// Returns:
 ///     ``(network, ranks, errors)``: the interpolated
 ///     :class:`TreeTensorNetwork` (node ``k`` is site ``k`` and its site leg is
 ///     the first index of ``network.tensor(k)``), the maximum bond dimension
-///     after each sweep, and the largest normalized bond pivot error after
-///     each sweep (residuals measured by the global search are not included).
+///     after each sweep, and the normalized recorded error after each sweep
+///     (the largest bond pivot error, plus under ``"sampled"`` the residuals
+///     the global search measured).
 ///     Not converging is not an error; inspect ``errors``.
 #[pyfunction]
 #[pyo3(signature = (evaluate, local_dims, edges=None, initial_pivots=None,
-                    tolerance=1e-8, max_iter=20, max_bond_dim=None, seed=None))]
+                    tolerance=1e-8, max_iter=20, max_bond_dim=None, seed=None,
+                    stop_rule="per_bond"))]
 #[allow(clippy::too_many_arguments)]
 fn crossinterpolate(
     py: Python<'_>,
@@ -125,7 +144,9 @@ fn crossinterpolate(
     max_iter: usize,
     max_bond_dim: Option<usize>,
     seed: Option<u64>,
+    stop_rule: &str,
 ) -> PyResult<(PyTreeTensorNetwork, Vec<usize>, Vec<f64>)> {
+    let stop_rule = parse_stop_rule(stop_rule)?;
     let n_sites = local_dims.len();
     let graph = match edges {
         Some(edges) => {
@@ -141,6 +162,7 @@ fn crossinterpolate(
         max_iter,
         max_bond_dim,
         seed,
+        stop_rule,
         ..Default::default()
     };
 

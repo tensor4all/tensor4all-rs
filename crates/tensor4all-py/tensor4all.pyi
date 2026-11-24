@@ -1,6 +1,6 @@
 """Type stubs for the tensor4all PyO3 extension module."""
 
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Literal, Sequence
 
 import numpy as np
 import numpy.typing as npt
@@ -79,6 +79,7 @@ def crossinterpolate(
     max_iter: int = 20,
     max_bond_dim: int | None = None,
     seed: int | None = None,
+    stop_rule: Literal["per_bond", "sampled"] = "per_bond",
 ) -> tuple[TreeTensorNetwork, list[int], list[float]]: ...
 
 class QuanticsTCI:
