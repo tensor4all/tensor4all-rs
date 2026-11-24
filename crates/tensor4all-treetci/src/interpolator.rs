@@ -27,8 +27,8 @@ use crate::globalpivot::ScalarParts;
 use crate::materialize::to_named_treetn_chunked;
 use crate::optimize::{optimize_with_streams, with_seeded_streams};
 use crate::{
-    column_2d, ncols_2d, AllEdges, DefaultProposer, GlobalIndexBatch, MultiIndex, TreeTCI2,
-    TreeTciEdge, TreeTciError, TreeTciGraph, TreeTciOptions, TreeTciTermination,
+    column_2d, ncols_2d, AllEdges, DefaultProposer, GlobalIndexBatch, MultiIndex, StopRule,
+    TreeTCI2, TreeTciEdge, TreeTciError, TreeTciGraph, TreeTciOptions, TreeTciTermination,
 };
 
 /// Tree interpolation engine backed by TreeTCI.
@@ -52,6 +52,14 @@ use crate::{
 /// - `seed` (the problem's seed, the only source of randomness), and
 /// - `global_search_starts` (the problem's extra global pivot search starts,
 ///   replacing the engine's).
+///
+/// The stop rule is always [`StopRule::Sampled`](crate::StopRule::Sampled),
+/// whatever the engine's options say: the adaptive drivers accept a patch on
+/// the reported `error_estimate` (the last recorded error), which they read as
+/// a pointwise estimate. Only `Sampled` folds the residuals the global search
+/// measured into that error; under `PerBond` it would be the bond pivot error
+/// alone, and a run could report a small estimate next to a larger measured
+/// residual (#1405).
 ///
 /// The remaining options (`max_iter`, the global pivot search budget settings,
 /// and `evaluation_cache_bytes`) come from the engine. The optional target memo
@@ -165,7 +173,8 @@ impl TreeTciInterpolator {
     }
 
     /// The options of one run: the engine's options with the problem's
-    /// tolerance, cap, and seed, and `scale_tolerance` disabled.
+    /// tolerance, cap, and seed, `scale_tolerance` disabled, and the
+    /// [`StopRule::Sampled`] stop rule.
     fn run_options(
         &self,
         absolute_tolerance: f64,
@@ -177,6 +186,8 @@ impl TreeTciInterpolator {
             max_bond_dim: cap.map(NonZeroUsize::get),
             scale_tolerance: false,
             seed: Some(seed),
+            // The drivers accept on this run's error estimate; see the type docs.
+            stop_rule: StopRule::Sampled,
             ..self.options.clone()
         }
     }
