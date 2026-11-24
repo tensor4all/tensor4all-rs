@@ -118,8 +118,9 @@ where
 ///         given.
 ///     stop_rule: ``"per_bond"`` (the default) or ``"sampled"``; Rust's
 ///         ``StopRule``. ``"sampled"`` keeps the stop of tensor4all-rs before
-///         #1405, at a higher evaluation cost on smooth targets. Any other
-///         value raises ``ValueError``.
+///         #1405 and also tightens the local truncation threshold while the
+///         recorded error fails ``tolerance`` (#1371), at a higher evaluation
+///         cost on smooth targets. Any other value raises ``ValueError``.
 ///
 /// Returns:
 ///     ``(network, ranks, errors)``: the interpolated

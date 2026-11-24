@@ -128,7 +128,10 @@ pub struct QtciOptions {
     ///
     /// Forwarded to [`TreeTciOptions::stop_rule`]. The quantics path runs
     /// without the global pivot search, so both rules record the bond pivot
-    /// error there and give the same run.
+    /// error there. They give the same run while that error stays below
+    /// `tolerance`; when it does not (for example under a `max_bond_dim`
+    /// cap), [`StopRule::Sampled`] also tightens the local truncation
+    /// threshold (#1371) and the runs can differ.
     ///
     /// Default: [`StopRule::PerBond`].
     pub stop_rule: StopRule,

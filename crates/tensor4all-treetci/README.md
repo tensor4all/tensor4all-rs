@@ -12,17 +12,19 @@ Computes tensor cross interpolation on tree-structured graphs, producing TreeTN 
 - `TreeTciGraph` — graph structure definition
 - `TreeTciInterpolator` — TreeTCI engine for the engine-independent
   `tensor4all_treetn::interpolation::TreeInterpolator` contract
-- `TreeTciRunResult` — `treetn`, per-iteration `ranks` and `errors`, and `termination`
+- `TreeTciRunResult` — `treetn`, per-iteration `ranks` and `errors`, `termination`,
+  and the final `local_threshold_factor` (always `1.0` under `StopRule::PerBond`)
 - `TreeTciOptimizationResult` — diagnostics from optimizing a caller-owned state
-- `TreeTciTermination` — `Converged`, `MaxBondDimension`, `MaxIterations`, or
-  `DegenerateCandidateSet`
+- `TreeTciTermination` — `Converged`, `MaxBondDimension`, `MaxIterations`,
+  `DegenerateCandidateSet`, or `LocalThresholdFloor` (`StopRule::Sampled` only)
 - `TreeTciEvaluationStats` — oracle requests, successful evaluations and memo payload accounting
 
 The entry points return named results rather than tuples. `Converged` means
 the stopping criterion of `TreeTciOptions::stop_rule` passed: by default
 (`StopRule::PerBond`) the largest bond pivot error stayed below `tolerance`;
-`StopRule::Sampled` also counts residuals measured by the global search. It
-does not certify the full-network error. See the [stopping contract](../../docs/design/treetci-termination.md)
+`StopRule::Sampled` also counts residuals measured by the global search, and
+tightens the local truncation threshold while that error fails `tolerance`
+(#1371). It does not certify the full-network error. See the [stopping contract](../../docs/design/treetci-termination.md)
 for the convergence window, global-search behavior, and limit precedence.
 
 Global pivot search uses the retained-coordinate floating-zone walk from

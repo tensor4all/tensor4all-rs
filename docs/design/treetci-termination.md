@@ -4,7 +4,8 @@
 `optimize_with_proposer_with_rng` return `TreeTciOptimizationResult`.
 `crossinterpolate2` and `crossinterpolate2_with_rng` return `TreeTciRunResult`,
 which also owns the materialized `TreeTN`. Both results expose `ranks`,
-`errors`, and `termination`; callers use fields rather than tuple destructuring.
+`errors`, `termination` and `local_threshold_factor`; callers use fields
+rather than tuple destructuring.
 
 ## Stopping contract
 
@@ -15,7 +16,8 @@ The reasons describe the existing optimization loop, in its decision order:
 | `MaxBondDimension` | The maximum rank is at the configured cap throughout three trailing iterations. | Checked before global search and convergence, even if the recorded error is small. It does not mean all edges are saturated. |
 | `Converged` | Three trailing errors are strictly below `tolerance`, the final maximum rank equals the minimum in that window, and no global pivots were accepted in that window. | Describes the recorded-error criterion of the stop rule, not an exhaustive error bound. |
 | `DegenerateCandidateSet` | The `Converged` condition holds on the recorded errors, but the most recent update of at least one edge could not measure its bond error. | The run stops where it would have reported `Converged`. The approximation may be inaccurate. |
-| `MaxIterations` | The requested iterations completed without either stopping condition. | A small final error alone does not establish convergence. |
+| `LocalThresholdFloor` | `Sampled` only, trees with E >= 2 edges only: the local threshold factor was tightened to its floor `1 / E` and stayed there in all three trailing sweeps, and all three recorded errors are at or above `tolerance`. | Never reported under `PerBond`, nor with E <= 1, where the floor would be 1 and the threshold cannot descend. Checked after `MaxBondDimension` and before the convergence test, and before that iteration's pivots are injected, so the returned state is swept. The approximation may be inaccurate. |
+| `MaxIterations` | The requested iterations completed without any earlier stopping condition. | A small final error alone does not establish convergence. |
 
 ### Stop rules
 
@@ -30,16 +32,20 @@ max_sample_value` in normalized mode and `tolerance` otherwise, and the margin
 | Recorded error | Largest bond pivot error | Largest of the bond pivot errors and the residuals the global search measured in that iteration ([#1352](https://github.com/tensor4all/tensor4all-rs/issues/1352)) |
 | Ordinary walks accepted | Above `threshold` | Above `threshold` first; when none cross it, above `abs_tol` |
 | Fallback stages accepted (probes, restarts, stage-3 enumeration) | Above `threshold` | Above `abs_tol` |
+| Local truncation threshold | `abs_tol` in every sweep (factor exactly 1) | `abs_tol` times a factor that halves after each iteration whose recorded error fails `tolerance`, down to `1 / E` ([#1371](https://github.com/tensor4all/tensor4all-rs/issues/1371), see below) |
+| `LocalThresholdFloor` | Never reported | Reported when three sweeps at `1 / E` all fail `tolerance`, for E >= 2 only |
 
 `PerBond` is the rule of TensorCrossInterpolation.jl, TreeTCI.jl and xfac:
 `tolerance` is a per-bond pivot threshold. `Sampled` adds a pointwise check on
-the sampled points; on smooth targets it stops later, because truncation,
-search acceptance and the stop share one threshold while the pointwise error
-behaves like a sum of bond residuals that are each below it
-([#1371](https://github.com/tensor4all/tensor4all-rs/issues/1371)). Neither
-rule bounds the pointwise error. The rule enters the loop at one place, where
-the search residual is or is not folded into the recorded error, and the
-search at one binding that computes the acceptance floor of the ordinary walks
+the sampled points. With one shared threshold for truncation, search
+acceptance and the stop, it stopped late on smooth targets, because the
+pointwise error behaves like a sum of bond residuals that are each below that
+threshold ([#1371](https://github.com/tensor4all/tensor4all-rs/issues/1371));
+the adaptive local threshold below is `Sampled`'s answer to that. Neither
+rule bounds the pointwise error. The rule enters the loop at two places: where
+the search residual is or is not folded into the recorded error, and where the
+local threshold factor is created (adaptive under `Sampled`, fixed at 1 under
+`PerBond`). It enters the search at one binding that computes the acceptance floor of the ordinary walks
 and the one threshold of every fallback stage; the walks, the enumeration and
 the preference for discoveries above `threshold` are the same on both rules. The
 public `find_global_pivots*` functions keep the `Sampled` acceptance.
@@ -106,6 +112,63 @@ The same applies when search is enabled but `nsearch` or `max_nglobal_pivot`
 is zero. If the convergence window is not yet available, the result is
 `MaxIterations`, including a one-iteration call on an exactly representable
 function.
+
+## Adaptive local threshold on the sampled stop path
+
+This section applies to `StopRule::Sampled` only. Under `PerBond` (the
+default) the factor below stays exactly 1, so every sweep truncates at the
+absolute tolerance, `local_threshold_factor` is reported as `1.0`, and
+`LocalThresholdFloor` is never reported: that rule's trajectory is the one it
+had without the adaptation. The reason is that `PerBond` records the bond
+pivot error alone. With a `max_bond_dim` cap that error can stay above
+`tolerance`, and keying the factor on it would tighten capped runs whose
+error the local updates cannot reduce.
+
+The local rrLU truncation of each edge update, the global-search acceptance
+and the stop all start from the same absolute tolerance,
+`tolerance * max_sample_value` (or `tolerance`). A point whose error is
+spread over several bonds can then sit above `tolerance` while each of its
+per-bond Schur residuals is below it. The local updates drop such a point on
+every sweep, the search finds it again, and the run reaches a fixed point that
+stops only when three consecutive random searches miss every such point
+([#1371](https://github.com/tensor4all/tensor4all-rs/issues/1371)).
+
+Only the local truncation threshold adapts:
+
+- Each optimization call starts with factor 1, so the local threshold is the
+  absolute tolerance.
+- After each iteration whose recorded error fails the stop comparison (it is
+  not strictly below `tolerance`), the factor is halved. It never grows again
+  and never drops below `1 / E`, where E is the number of tree edges. The
+  inference behind the floor is that the pointwise error behaves like a sum of
+  up to E bond residuals.
+- The search acceptance and the stop tolerance keep the untightened value.
+  There is no extra walk, recovery pass, retained-pivot validation or sample
+  history; the next scheduled sweep uses the new factor.
+- A run whose recorded error stays below `tolerance` keeps factor 1 and takes
+  the same path as without adaptation. With `tolerance == 0` the factor is not
+  used.
+- If the three trailing sweeps all ran at `1 / E` and all three recorded
+  errors fail the tolerance, the run ends with `LocalThresholdFloor` instead
+  of continuing to `MaxIterations`. That iteration's search pivots are not
+  injected. The recorded error history is in `errors`.
+- The floor stop is armed only for E >= 2, where the floor `1 / E` is below 1
+  and reaching it takes at least one halving. With one edge (a two-node tree)
+  or none (a single node) the floor would be 1: the threshold cannot descend,
+  the factor stays 1, and three failing sweeps are not a reason to stop. Such
+  a run ends with `MaxIterations` or `Converged` exactly as without the
+  adaptation, and keeps injecting its search pivots until the final
+  iteration.
+
+`local_threshold_factor` on both result types reports the factor applied by
+the last sweep. `1.0` always means the untightened threshold: under `PerBond`,
+under `Sampled` before any failing iteration, and with E <= 1. For E >= 2 it
+equals `1.0 / E as f64` exactly when that sweep ran at the floor. Under `Sampled` the recorded error
+includes the global-search residual, which is what can fail `tolerance` while
+every bond residual is below the local threshold; a `Sampled` run whose bond
+residuals and search residuals both stay below `tolerance` leaves the factor
+at 1. The skipped search on the final iteration is unchanged.
+`TreeTciInterpolator` always runs `Sampled`, so the adaptation applies to it.
 
 ## Unmeasured bond errors
 

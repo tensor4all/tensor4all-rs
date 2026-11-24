@@ -88,7 +88,8 @@ assert np.allclose(network.contract_to_tensor().to_numpy(), reference)
   `tolerance` is a per-bond threshold: the run stops when the largest
   normalized bond pivot error stays below it, and the global pivot search
   accepts pivots only above ten times it. `stop_rule="sampled"` also records
-  the residuals the search measured, as before #1405. `seed=None`
+  the residuals the search measured, as before #1405, and tightens the local
+  truncation threshold while that error fails `tolerance` (#1371). `seed=None`
   (the default) seeds the global pivot search from OS entropy, so pass a seed
   for reproducible runs. The default initial pivot is the all-zero point, which
   must not evaluate to zero.

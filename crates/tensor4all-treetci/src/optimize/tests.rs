@@ -9,6 +9,25 @@ use crate::{
 use anyhow::Result;
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 
+/// A proposer that offers only the all-zero cross on each side, so local
+/// updates can never grow a bond past rank 1.
+struct InitialCrossOnly;
+
+impl crate::PivotCandidateProposer for InitialCrossOnly {
+    fn candidates_with_rng<T, R: rand::Rng + ?Sized>(
+        &self,
+        state: &TreeTCI2<T>,
+        edge: TreeTciEdge,
+        _rng: &mut R,
+    ) -> crate::TreeTciResult<(Vec<Vec<usize>>, Vec<Vec<usize>>)> {
+        let (left, right) = state.graph.subregion_vertices(edge)?;
+        Ok((
+            vec![vec![0; left.as_slice().len()]],
+            vec![vec![0; right.as_slice().len()]],
+        ))
+    }
+}
+
 #[test]
 fn accepted_global_pivots_prevent_sampled_convergence() {
     // Deliberately restrict local updates to the initial cross. Its local
@@ -19,19 +38,6 @@ fn accepted_global_pivots_prevent_sampled_convergence() {
     // Under `Sampled` the recorded error includes the residual the search
     // measured (#1352); under `PerBond` it is the bond error alone, and the
     // accepted pivots keep the run open (#1405).
-    struct InitialCrossOnly;
-
-    impl crate::PivotCandidateProposer for InitialCrossOnly {
-        fn candidates_with_rng<T, R: rand::Rng + ?Sized>(
-            &self,
-            _state: &TreeTCI2<T>,
-            _edge: TreeTciEdge,
-            _rng: &mut R,
-        ) -> crate::TreeTciResult<(Vec<Vec<usize>>, Vec<Vec<usize>>)> {
-            Ok((vec![vec![0]], vec![vec![0]]))
-        }
-    }
-
     #[derive(Default)]
     struct Observed(Vec<(f64, crate::TreeTciEvaluationStats)>);
     impl crate::TreeTciObserver for Observed {
@@ -1074,4 +1080,194 @@ fn capped_runs_per_bond_reproduce_recorded_values() {
             );
         }
     }
+}
+
+#[test]
+fn local_threshold_floor_ends_a_run_the_local_updates_cannot_fix() {
+    // Four sites, so E = 3 and the floor is 1/3. f = 1 + i + j + k + l has
+    // rank 2 across every bond, but the proposer keeps every bond at the
+    // rank-1 initial cross, so the global search measures the same residual
+    // in every iteration and no local threshold can remove it (#1371).
+    let mut state =
+        TreeTCI2::<f64>::new(vec![2; 4], TreeTciGraph::linear_chain(4).unwrap()).unwrap();
+    state.add_global_pivots(&[vec![0; 4]]).unwrap();
+    state.max_sample_value = 1.0;
+    let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        Ok(batch
+            .data()
+            .chunks_exact(batch.n_sites())
+            .map(|point| (1 + point.iter().sum::<usize>()) as f64)
+            .collect())
+    };
+    let options = TreeTciOptions {
+        tolerance: 1e-12,
+        max_iter: 20,
+        nsearch: 20,
+        seed: Some(7),
+        stop_rule: StopRule::Sampled,
+        ..Default::default()
+    };
+    let result = crate::optimize_with_proposer(
+        &mut state,
+        evaluate,
+        &options,
+        &InitialCrossOnly,
+        &crate::AllEdges,
+        &mut (),
+    )
+    .unwrap();
+    assert_eq!(result.termination, TreeTciTermination::LocalThresholdFloor);
+    // Sweeps at factors 1 and 1/2, then three at the floor 1/3; the factor is
+    // clamped there rather than halved to 1/4.
+    assert_eq!(result.ranks, vec![1; 5]);
+    assert_eq!(result.local_threshold_factor, 1.0 / 3.0);
+    assert!(result
+        .errors
+        .iter()
+        .all(|&error| error >= options.tolerance));
+    // The floor stop does not inject that iteration's pivots: the state is
+    // swept and materializes.
+    assert_swept_pivot_sets(&state, usize::MAX);
+    let network = crate::to_treetn(&state, evaluate, None).unwrap();
+    assert_eq!(network.node_count(), 4);
+}
+
+#[test]
+fn single_edge_sampled_run_keeps_injecting_until_max_iter() {
+    // The run of `accepted_global_pivots_prevent_sampled_convergence` under
+    // `Sampled`, with a longer `max_iter`. One edge puts the floor of the
+    // local threshold at 1.0, so the threshold cannot descend and the floor
+    // stop is not armed (#1371): three failing iterations must not end the
+    // run. It runs to `max_iter`, and every iteration but the last injects
+    // the residual pivot its search found, which the next sweep sees.
+    struct RecordingCross(std::cell::RefCell<Vec<usize>>);
+    impl PivotCandidateProposer for RecordingCross {
+        fn candidates_with_rng<T, R: rand::Rng + ?Sized>(
+            &self,
+            state: &TreeTCI2<T>,
+            edge: TreeTciEdge,
+            rng: &mut R,
+        ) -> crate::TreeTciResult<(Vec<Vec<usize>>, Vec<Vec<usize>>)> {
+            let (left, _) = state.graph.subregion_vertices(edge)?;
+            let pivots = crate::ncols_2d(&state.ijset[&left]).unwrap();
+            self.0.borrow_mut().push(pivots);
+            InitialCrossOnly.candidates_with_rng(state, edge, rng)
+        }
+    }
+
+    const MAX_ITER: usize = 8;
+    let mut state = TreeTCI2::<f64>::new(vec![2, 2], two_site_graph()).unwrap();
+    state.add_global_pivots(&[vec![0, 0]]).unwrap();
+    state.max_sample_value = 1.0;
+    let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        Ok(batch
+            .data()
+            .chunks_exact(batch.n_sites())
+            .map(|point| (1 + point[0] + point[1]) as f64)
+            .collect())
+    };
+    let options = TreeTciOptions {
+        tolerance: 1e-12,
+        stop_rule: StopRule::Sampled,
+        max_iter: MAX_ITER,
+        nsearch: 20,
+        seed: Some(7),
+        ..Default::default()
+    };
+    let proposer = RecordingCross(Default::default());
+    let result = crate::optimize_with_proposer(
+        &mut state,
+        evaluate,
+        &options,
+        &proposer,
+        &crate::AllEdges,
+        &mut (),
+    )
+    .unwrap();
+    assert_eq!(result.termination, TreeTciTermination::MaxIterations);
+    assert_eq!(result.ranks, vec![1; MAX_ITER]);
+    // The search measures residual one in every iteration but the last,
+    // which skips it.
+    let mut expected_errors = vec![1.0; MAX_ITER - 1];
+    expected_errors.push(0.0);
+    assert_eq!(result.errors, expected_errors);
+    assert_eq!(result.local_threshold_factor.to_bits(), 1.0_f64.to_bits());
+    // Two passes over the one edge per iteration. The first pass of every
+    // iteration after the first sees the initial pivot plus the injected one.
+    let seen = proposer.0.into_inner();
+    assert_eq!(seen.len(), 2 * MAX_ITER);
+    let first_pass: Vec<usize> = seen.iter().step_by(2).copied().collect();
+    let mut expected_first_pass = vec![2; MAX_ITER];
+    expected_first_pass[0] = 1;
+    assert_eq!(first_pass, expected_first_pass);
+}
+
+#[test]
+fn bond_cap_takes_precedence_over_the_local_threshold_floor() {
+    // A three-site chain (E = 2, floor 1/2) with a generic rank-3 target,
+    // capped at 2. The first iteration offers only the initial cross, so the
+    // ranks are [1, 2, 2, 2]: the cap window and the floor window (iteration
+    // 0 at factor 1, iterations 1 to 3 at the floor) both complete at
+    // iteration 3, and the cap is reported (#1371).
+    use rand::{Rng, SeedableRng};
+
+    struct CrossFirst(std::cell::Cell<usize>);
+    impl PivotCandidateProposer for CrossFirst {
+        fn candidates_with_rng<T, R: rand::Rng + ?Sized>(
+            &self,
+            state: &TreeTCI2<T>,
+            edge: TreeTciEdge,
+            rng: &mut R,
+        ) -> crate::TreeTciResult<(Vec<Vec<usize>>, Vec<Vec<usize>>)> {
+            // Two passes over two edges make the first iteration.
+            let calls = self.0.get();
+            self.0.set(calls + 1);
+            if calls < 4 {
+                InitialCrossOnly.candidates_with_rng(state, edge, rng)
+            } else {
+                DefaultProposer.candidates_with_rng(state, edge, rng)
+            }
+        }
+    }
+
+    let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(3);
+    let table: Vec<f64> = (0..27).map(|_| rng.random_range(1.0..2.0)).collect();
+    let evaluate = |batch: GlobalIndexBatch<'_>| -> Result<Vec<f64>> {
+        Ok(batch
+            .data()
+            .chunks_exact(batch.n_sites())
+            .map(|point| table[point[0] + 3 * point[1] + 9 * point[2]])
+            .collect())
+    };
+    let mut state =
+        TreeTCI2::<f64>::new(vec![3; 3], TreeTciGraph::linear_chain(3).unwrap()).unwrap();
+    state.add_global_pivots(&[vec![0; 3]]).unwrap();
+    state.max_sample_value = 1.0;
+    let options = TreeTciOptions {
+        tolerance: 1e-8,
+        stop_rule: StopRule::Sampled,
+        max_iter: 30,
+        max_bond_dim: Some(2),
+        seed: Some(1),
+        ..Default::default()
+    };
+    let result = crate::optimize_with_proposer(
+        &mut state,
+        evaluate,
+        &options,
+        &CrossFirst(Default::default()),
+        &crate::AllEdges,
+        &mut (),
+    )
+    .unwrap();
+    assert_eq!(result.termination, TreeTciTermination::MaxBondDimension);
+    assert_eq!(result.ranks, vec![1, 2, 2, 2]);
+    assert!(result
+        .errors
+        .iter()
+        .all(|&error| error >= options.tolerance));
+    // The last three sweeps ran at the floor, so the floor window was
+    // complete too.
+    assert_eq!(result.local_threshold_factor, 0.5);
+    assert_swept_pivot_sets(&state, 2);
 }

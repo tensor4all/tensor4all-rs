@@ -15,6 +15,8 @@ use tensor4all_core::{MatrixLuciScalar as Scalar, RrLUOptions};
 use tensor4all_tensorbackend::FullPivLuScalar;
 use tensor4all_treetn::interpolation::EvalContext;
 
+mod local_threshold;
+
 /// The stopping condition reached by a TreeTCI optimization call.
 ///
 /// Like the chain TCI's `TCI2Termination`, this distinguishes convergence
@@ -78,6 +80,39 @@ pub enum TreeTciTermination {
     /// inaccurate; enabling the global pivot search, supplying more initial
     /// pivots, or offering more candidates on that side can let the bonds grow.
     DegenerateCandidateSet,
+    /// The local truncation threshold was tightened down to its floor and the
+    /// recorded error stayed at or above `tolerance` for the three trailing
+    /// iterations at that floor (issue #1371). Reported only under
+    /// [`StopRule::Sampled`], and only for trees with at least two edges.
+    ///
+    /// Under [`StopRule::Sampled`] each local edge update truncates at
+    /// `factor * tolerance * max_sample_value` (or `factor * tolerance`
+    /// without scaling). The factor starts at `1.0` and is halved after each
+    /// iteration whose recorded error is not strictly below `tolerance`, down
+    /// to `1 / E`, where E is the number of tree edges; see
+    /// [`TreeTciOptimizationResult::local_threshold_factor`]. This reason is
+    /// reported when the three trailing iterations all swept with the factor
+    /// at `1 / E` and all recorded errors failed the tolerance. The stop is
+    /// armed only for E >= 2, where reaching the floor takes at least one
+    /// halving. With one edge (or none) the floor would be `1.0`, the
+    /// threshold cannot descend, and such a run ends with
+    /// [`TreeTciTermination::MaxIterations`] or
+    /// [`TreeTciTermination::Converged`] as it would without the adaptive
+    /// threshold. The search
+    /// acceptance and the stop tolerance are not tightened, so the remaining
+    /// error is one that the local updates do not pick up even at that
+    /// threshold. The recorded errors are in
+    /// [`TreeTciOptimizationResult::errors`]; the approximation may be
+    /// inaccurate. Pivots found by that iteration's search are not injected,
+    /// so the returned state is swept. [`TreeTciTermination::MaxBondDimension`]
+    /// takes precedence. With `tolerance == 0` the factor is not used and this
+    /// reason is never reported.
+    ///
+    /// Under [`StopRule::PerBond`] (the default) the factor stays `1.0` and this
+    /// reason is never reported: that rule records the bond pivot error alone,
+    /// which a `max_bond_dim` cap can keep above `tolerance`, so tightening on
+    /// it would change capped runs (#1405).
+    LocalThresholdFloor,
 }
 
 /// Iteration diagnostics and stopping reason from optimizing a TreeTCI state.
@@ -101,6 +136,8 @@ pub enum TreeTciTermination {
 /// assert_eq!(result.termination, TreeTciTermination::Converged);
 /// assert_eq!(result.ranks, vec![1; 3]);
 /// assert_eq!(result.errors, vec![0.0; 3]);
+/// // No recorded error reached the tolerance, so the threshold was not tightened.
+/// assert_eq!(result.local_threshold_factor, 1.0);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Clone, Debug)]
@@ -116,6 +153,23 @@ pub struct TreeTciOptimizationResult {
     pub errors: Vec<f64>,
     /// The stopping condition evaluated by this call's optimization loop.
     pub termination: TreeTciTermination,
+    /// Factor that the last sweep of this call applied to the local
+    /// truncation threshold.
+    ///
+    /// Local edge updates truncate at `factor * tolerance * max_sample_value`
+    /// (or `factor * tolerance` without scaling). Under [`StopRule::PerBond`]
+    /// (the default) the factor is not adapted and this field is always exactly
+    /// `1.0`. Under [`StopRule::Sampled`] each call starts at `1.0`;
+    /// the factor is halved after each iteration whose recorded error is not
+    /// strictly below `tolerance` and never drops below `1 / E`, where E is the
+    /// number of tree edges. `1.0` always means the last sweep used the
+    /// untightened threshold. For E >= 2, a value equal to `1.0 / E as f64`
+    /// means it ran at the floor (see
+    /// [`TreeTciTermination::LocalThresholdFloor`]). For a tree with one edge
+    /// or none the floor would be `1.0`: the factor cannot descend, stays
+    /// `1.0`, and the floor stop is not armed. The global search acceptance
+    /// and the stop tolerance do not use this factor.
+    pub local_threshold_factor: f64,
     /// Oracle evaluation and optional memo accounting for this optimization call.
     pub evaluation: crate::TreeTciEvaluationStats,
 }
@@ -133,9 +187,14 @@ pub struct TreeTciOptimizationResult {
 ///   (absolute when `scale_tolerance` is false).
 /// - [`StopRule::Sampled`] also records the residuals the global search
 ///   measured, and the search keeps observed errors above `tolerance`
-///   (issue #1352). It stops later on smooth targets (2.18 to 3.37 times the
-///   evaluations on a Gaussian chain, issue #1371), for a pointwise check on
-///   the sampled points.
+///   (issue #1352), for a pointwise check on the sampled points. It also
+///   tightens the local truncation threshold after each iteration whose
+///   recorded error fails `tolerance`, down to `1 / E` of it for E tree edges,
+///   and, for E >= 2, stops with [`TreeTciTermination::LocalThresholdFloor`]
+///   when three sweeps at that floor all fail (issue #1371; see
+///   [`TreeTciOptimizationResult::local_threshold_factor`]). On the Gaussian
+///   chain of issue #1371 it takes 1.02 to 1.25 times the evaluations of
+///   `PerBond`. Under `PerBond` the local threshold is never tightened.
 ///
 /// # Examples
 ///
@@ -153,7 +212,9 @@ pub enum StopRule {
     #[default]
     PerBond,
     /// Record the largest of the bond pivot errors and the residuals measured
-    /// by the global search; accept observed search errors above the tolerance.
+    /// by the global search; accept observed search errors above the tolerance;
+    /// tighten the local truncation threshold while the recorded error fails
+    /// the tolerance (#1371).
     Sampled,
 }
 
@@ -225,6 +286,15 @@ pub struct TreeTciOptions {
     /// maximum observed sample magnitude, so the stopping threshold is
     /// `tolerance * max_sample_value`. Recommended range: `1e-6` to `1e-12`.
     /// Default: `1e-8`.
+    ///
+    /// The same absolute value is the local truncation threshold of each edge
+    /// update. Under [`StopRule::Sampled`] it is multiplied by a factor that
+    /// starts at `1.0` and is halved, down to `1 / E` for E tree edges, after
+    /// each iteration whose recorded error is not below `tolerance`; the global
+    /// search acceptance keeps the untightened value. Under
+    /// [`StopRule::PerBond`] the factor stays `1.0`. See
+    /// [`TreeTciOptimizationResult::local_threshold_factor`] and
+    /// [`TreeTciTermination::LocalThresholdFloor`].
     pub tolerance: f64,
 
     /// Which error is recorded and compared with `tolerance`, and which
@@ -233,7 +303,8 @@ pub struct TreeTciOptions {
     /// [`StopRule::PerBond`] (default) records the largest bond pivot error
     /// and accepts global pivots only above
     /// `abs_tol * tol_margin_global_search`. [`StopRule::Sampled`] also
-    /// records the residuals measured by the global search. See
+    /// records the residuals measured by the global search and tightens the
+    /// local truncation threshold while that error fails `tolerance`. See
     /// [`StopRule`] for the trade-off. Default: [`StopRule::PerBond`].
     pub stop_rule: StopRule,
 
@@ -937,6 +1008,14 @@ where
     // global pivots: an iteration that injected pivots has not yet swept them,
     // so its error estimate is stale with respect to those pivots.
     const NCHECK_HISTORY: usize = 3;
+    // Adaptive local threshold of #1371, on the sampled stop path only: under
+    // `StopRule::PerBond` the factor stays exactly 1.0 and the floor stop never
+    // fires (#1405), so that rule's trajectory is unchanged.
+    let mut local_threshold = local_threshold::LocalThreshold::new(
+        state.graph.edges().len(),
+        options.tolerance,
+        options.stop_rule,
+    );
 
     for iteration in 0..options.max_iter {
         for pass in 0..INNER_EDGE_PASSES {
@@ -947,7 +1026,7 @@ where
             };
             let kernel_options = RrLUOptions {
                 rel_tol: 1e-14,
-                abs_tol: options.tolerance * error_scale,
+                abs_tol: options.tolerance * error_scale * local_threshold.factor(),
                 max_bond_dim: options.max_bond_dim.unwrap_or(usize::MAX),
                 left_orthogonal: true,
             };
@@ -1007,6 +1086,7 @@ where
         // and termination reason would not reflect it, and the unswept state
         // would not be materializable (see above).
         let mut sampled_error = state.max_bond_error();
+        let mut new_pivots = None;
         if !bond_dim_saturated && options.enable_global_pivots && iteration + 1 < options.max_iter {
             let error_scale = if options.scale_tolerance && state.max_sample_value > 0.0 {
                 state.max_sample_value
@@ -1025,13 +1105,14 @@ where
                 options.stop_rule,
                 streams.global(),
             )?;
-            // The only difference between the stop rules in this loop (#1405).
+            // The only difference between the stop rules in this loop (#1405),
+            // apart from the local threshold factor (#1371, see above).
             match options.stop_rule {
                 StopRule::PerBond => {}
                 StopRule::Sampled => sampled_error = sampled_error.max(search.max_error),
             }
-            state.add_global_pivots(&search.pivots)?;
             nglobal_pivots_history.push(search.pivots.len());
+            new_pivots = Some(search.pivots);
         } else {
             nglobal_pivots_history.push(0);
         }
@@ -1051,9 +1132,22 @@ where
             error: normalized_error,
             evaluation: &execution.stats(),
         });
+        // Sampled stop path (#1371): tighten only the local threshold after an
+        // iteration that fails the stop comparison. A no-op under `PerBond`.
+        local_threshold.record(normalized_error, options.tolerance);
         if bond_dim_saturated {
             termination = TreeTciTermination::MaxBondDimension;
             break;
+        }
+        // At the floor, stop before injecting, so no unswept pivot is left.
+        // Never true under `PerBond`, nor for a tree with fewer than two
+        // edges, whose floor 1.0 is not a tightening.
+        if local_threshold.floor_window_failed(&errors, options.tolerance, NCHECK_HISTORY) {
+            termination = TreeTciTermination::LocalThresholdFloor;
+            break;
+        }
+        if let Some(pivots) = new_pivots {
+            state.add_global_pivots(&pivots)?;
         }
 
         // This Rust loop applies an early-convergence break rather than
@@ -1095,6 +1189,7 @@ where
         ranks,
         errors,
         termination,
+        local_threshold_factor: local_threshold.last_applied(),
         evaluation: Default::default(),
     })
 }

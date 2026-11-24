@@ -48,6 +48,9 @@ pub struct TreeTciRunResult {
     pub errors: Vec<f64>,
     /// The stopping condition evaluated by the optimization loop.
     pub termination: TreeTciTermination,
+    /// Factor that the last sweep applied to the local truncation threshold;
+    /// see [`crate::TreeTciOptimizationResult::local_threshold_factor`].
+    pub local_threshold_factor: f64,
     /// Oracle evaluation and optional memo accounting, including final materialization.
     pub evaluation: crate::TreeTciEvaluationStats,
 }
@@ -513,6 +516,7 @@ where
         ranks: result.ranks,
         errors: result.errors,
         termination: result.termination,
+        local_threshold_factor: result.local_threshold_factor,
         evaluation: evaluator.stats(),
     })
 }
