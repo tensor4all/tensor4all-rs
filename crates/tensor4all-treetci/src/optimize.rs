@@ -232,8 +232,12 @@ pub struct TreeTciOptions {
     /// Larger values explore the index space more thoroughly at the cost of
     /// more evaluations. At dimension-one endpoints, a search that finds no
     /// pivot also uses up to this many retained-pair walks and this many
-    /// subtree-anchored restarts to check observed support. Zero disables
-    /// those confirmation walks. Drawn after [`Self::global_search_starts`]. Ignored
+    /// subtree-anchored restarts to check observed support, and, if those
+    /// also find nothing, enumerates the small edge sides around up to this
+    /// many retained tail pivots (#1433). Zero disables the confirmation walks
+    /// and that enumeration, even when [`Self::global_search_starts`] are
+    /// walked, so a `Converged` result then says nothing about the
+    /// enumerated sides. Drawn after [`Self::global_search_starts`]. Ignored
     /// when `enable_global_pivots` is `false`. Default: `5`.
     pub nsearch: usize,
 
@@ -245,17 +249,21 @@ pub struct TreeTciOptions {
     /// to aim the search at a region the local pivot updates miss, such as a
     /// corner or edge of a patch; from a random start such a feature can look
     /// like a flat zero fiber, where the greedy walk stalls. A supplied start
-    /// is walked even when `nsearch` is zero. Invalid entries are rejected
-    /// before any evaluation: a wrong length or an out-of-range coordinate is
-    /// a [`crate::TreeTciError::InvalidConfiguration`] from the optimizer and
-    /// a [`crate::TreeTciError::Operation`] from a direct search call.
+    /// is walked even when `nsearch` is zero, but with zero `nsearch` the
+    /// search runs no confirmation walk and no enumeration after the supplied
+    /// starts. Invalid entries are rejected before any evaluation: a wrong
+    /// length or an out-of-range coordinate is a
+    /// [`crate::TreeTciError::InvalidConfiguration`] from the optimizer and a
+    /// [`crate::TreeTciError::Operation`] from a direct search call.
     /// Ignored (but still validated) when `enable_global_pivots` is `false`.
     /// Default: empty.
     pub global_search_starts: Vec<MultiIndex>,
 
     /// Maximum number of global pivots added per iteration.
     ///
-    /// Ignored when `enable_global_pivots` is `false`. Default: `5`.
+    /// Zero skips the search entirely: nothing is evaluated, no stage runs and
+    /// no pivot is added. Ignored when `enable_global_pivots` is `false`.
+    /// Default: `5`.
     pub max_nglobal_pivot: usize,
 
     /// Tolerance margin for the global pivot search.

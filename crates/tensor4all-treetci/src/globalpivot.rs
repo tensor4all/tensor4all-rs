@@ -51,12 +51,15 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 ///    retained tail pivots (deduplicated): for every edge side whose product
 ///    of local dimensions is between 2 and 32, keeping the maximal such sides,
 ///    evaluate every configuration of the side with the other sites held at
-///    the pivot, in one batch. Points qualify against the same threshold as
-///    those families, `abs_tol`. There is no walk and no random draw. On binary quantics chains with the least
-///    significant bit at the leaf, this exhaustively covers the aligned block
-///    of width at most 32 around each pivot's value of one variable, and
-///    nothing wider. A tree without a dimension-one vertex has no such pivots
-///    and skips this stage.
+///    the pivot, in batches of at most 2^20 index entries (`points *
+///    n_sites`); the batching changes neither the residuals, their order nor
+///    the result. Points qualify against the same threshold as those
+///    families, `abs_tol`. There is no walk and no random draw. On binary
+///    quantics chains with the least significant bit at the leaf, this
+///    exhaustively covers the aligned block of width at most 32 around each
+///    pivot's value of one variable, and nothing wider. The stage has no
+///    anchors, and so does not run, when `nsearch` is zero or the tree has no
+///    dimension-one vertex.
 /// 7. Return at most `max_nglobal_pivot` distinct points.
 ///
 /// Caller-supplied starts let a caller aim the search at a region it already
@@ -85,7 +88,8 @@ use tensor4all_treetn::{CachedEvaluatorOptions, EvaluationHint, TreeTN, TreeTNCa
 /// * `starts` -- caller-supplied starting points as full-site multi-indices,
 ///   walked before the random ones. Each must have one coordinate per site and
 ///   an in-range coordinate. An empty slice adds none.
-/// * `max_nglobal_pivot` -- maximum number of pivots returned.
+/// * `max_nglobal_pivot` -- maximum number of pivots returned. Zero returns
+///   no pivot without evaluating anything, so none of the stages above runs.
 /// * `tol_margin` -- discovery margin over `abs_tol`; when no discovery
 ///   crosses it, observed tolerance violations can still be returned.
 /// * `abs_tol` -- absolute interpolation-error threshold.
@@ -251,6 +255,7 @@ where
         max_nglobal_pivot,
         tol_margin,
         abs_tol,
+        enumeration_chunk_len: enumeration_chunk_points(state.local_dims.len()),
     };
     search_with_readout(
         state,
@@ -441,13 +446,17 @@ fn enumeration_points(
 }
 
 /// Scalar parameters of one global pivot search, as passed to
-/// [`find_global_pivots`].
+/// [`find_global_pivots`], plus the third-stage chunk length.
 #[derive(Clone, Copy, Debug)]
 struct SearchParams {
     nsearch: usize,
     max_nglobal_pivot: usize,
     tol_margin: f64,
     abs_tol: f64,
+    /// Points per evaluation batch of the third-stage enumeration; zero is
+    /// read as one. Production passes [`enumeration_chunk_points`] of the
+    /// site count; tests pass smaller values to split the enumeration.
+    enumeration_chunk_len: usize,
 }
 
 /// A session-taking approximation readout for runs that own an [`EvalContext`].
@@ -574,6 +583,7 @@ where
         max_nglobal_pivot,
         tol_margin,
         abs_tol,
+        enumeration_chunk_len,
     } = params;
     if !abs_tol.is_finite() || abs_tol < 0.0 {
         return Err(
@@ -788,8 +798,9 @@ where
             };
             // Chunked so that the index buffer stays bounded on large trees;
             // the residuals, their order and the returned set are the same as
-            // for one batch.
-            for chunk in points.chunks(enumeration_chunk_points(n_sites)) {
+            // for one batch (checked by
+            // `enumeration_chunk_length_does_not_change_the_search`).
+            for chunk in points.chunks(enumeration_chunk_len.max(1)) {
                 let errors = batch_residuals(
                     execution,
                     &mut cache,
