@@ -371,7 +371,14 @@ checks run before and independently of the LLM:
 | Added inline `#[cfg(test)] mod tests { ... }` block | Unit Test Organization (shared rules) | Empty: #1105 moved the last inline block into `src/<module>/tests.rs` |
 
 The rule checks are delta-scoped: new violations fail, the recorded backlog
-does not. The tenferro check parses Cargo.toml table context, so `tenferro-*`
+does not.
+
+The #1376 implicit-engine ratchet is a CI check, not a rules-review check:
+`python3 scripts/check-implicit-engine-sites.py` scans `crates/*/src` against
+`scripts/implicit-engine-sites-baseline.json` and fails on a new
+default-context, literal-`None`, `Option<&..Context>`, `&..Context` or session
+site. A PR that removes sites shrinks the baseline with `--update-baseline`.
+See [Explicit Execution Engine Ratchet](REPOSITORY_RULES.md#explicit-execution-engine-ratchet). The tenferro check parses Cargo.toml table context, so `tenferro-*`
 **feature** names are not mistaken for dependencies and `dev-dependencies` are
 out of scope.
 

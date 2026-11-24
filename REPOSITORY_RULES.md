@@ -266,6 +266,32 @@
 - Line count decides where to inspect first; responsibility, change frequency,
   API boundaries, and human navigation decide whether and how to split.
 
+## Explicit Execution Engine Ratchet
+
+- #1376 makes the execution engine an explicit argument of every numerical
+  operation (`exec: &mut dyn ExecutionEngine`, last; design doc
+  `docs/design/explicit-engine-migration.md` §6.2). Until the migration ends,
+  do not add new implicit-engine sites under `crates/*/src` (test sources and
+  benches excluded):
+  - a literal `None` context passed to `with_eager_session`,
+    `with_eager_session_typed`, `with_engine` or `with_execution_engine`;
+  - a call of `default_context()`, `default_eager_ctx()`,
+    `default_cpu_execution_context()` or the `with_default_*` helpers;
+  - an `Option<&ExecutionContext>`-shaped parameter (also `Cpu`/`Cuda`);
+  - a new `&ExecutionContext` / `&CpuExecutionContext` /
+    `&CudaExecutionContext` parameter;
+  - `.with_session(` / `with_concrete_session(` outside
+    `tensor4all-tensorbackend`.
+- `scripts/check-implicit-engine-sites.py` (CI job `scripts`) enumerates these
+  sites from source and compares them with
+  `scripts/implicit-engine-sites-baseline.json`. A new site fails with its
+  `path:line` and pattern. A caller that has no engine yet uses a
+  `tensor4all_tensorbackend::legacy` bridge instead of a new site.
+- A PR that removes a site shrinks the baseline in the same PR:
+  `python3 scripts/check-implicit-engine-sites.py --update-baseline`. Growing
+  it needs `--allow-growth` and a justification in the PR body.
+- The ratchet is deleted in #1376 stage D4, when nothing is left to guard.
+
 ## Language Bindings
 
 - New Julia/Python-facing features that need Rust support should land in

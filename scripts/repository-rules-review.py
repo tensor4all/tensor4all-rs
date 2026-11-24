@@ -200,6 +200,13 @@ SECTION_TRIGGERS: tuple[tuple[re.Pattern[str], frozenset[str]], ...] = (
         frozenset({"File Growth Dry Run"}),
     ),
     (
+        re.compile(
+            r"^crates/[^/]+/src/.*\.rs$|implicit-engine-sites"
+            r"|explicit-engine-migration"
+        ),
+        frozenset({"Explicit Execution Engine Ratchet"}),
+    ),
+    (
         re.compile(r"tensor4all-capi|/capi|\.h$|cbindgen|_capi"),
         frozenset(
             {

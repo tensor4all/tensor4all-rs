@@ -282,6 +282,14 @@ jobs:
       - name: Test the repository-rules review script
         run: python3 scripts/test-repository-rules-review.py
 
+      - name: Test the implicit-engine-site ratchet
+        run: python3 scripts/test-check-implicit-engine-sites.py
+
+      - name: Check no new implicit-engine sites (#1376 ratchet)
+        # Whole-tree source scan against scripts/implicit-engine-sites-baseline.json;
+        # about one second. See REPOSITORY_RULES.md "Explicit Execution Engine Ratchet".
+        run: python3 scripts/check-implicit-engine-sites.py
+
       - name: Test the review waiver verifier
         run: node --test scripts/test-review-waiver.js
 
