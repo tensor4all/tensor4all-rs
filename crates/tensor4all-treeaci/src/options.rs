@@ -93,6 +93,12 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// the baseline pass. Default: `2`. A growing cut restarts this window
     /// even if the network's maximum rank stays constant; rank decreases are
     /// allowed. The local error and global-guard criteria must also pass.
+    ///
+    /// The global guard searches at most once per pass, and a
+    /// [`TreeAciTermination::Converged`](crate::TreeAciTermination::Converged)
+    /// stop needs it to find no pivot in each of the last `min_sweeps` passes.
+    /// With `min_sweeps = 1` that stop therefore rests on a single randomized
+    /// guard search and is not a dense-error certificate.
     pub min_sweeps: usize,
     /// Optional rank cap on every output edge. Default: no explicit cap.
     pub max_bond_dim: Option<usize>,
