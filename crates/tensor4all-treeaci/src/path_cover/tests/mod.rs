@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::{PathPhase, SweepPlan, TreeAciTraversalStrategy};
+use super::{validate_pass, OrientedEdgeStep, PathPhase, SweepPlan, TreeAciTraversalStrategy};
 
 fn plan(node_count: usize, edges: &[(usize, usize)]) -> SweepPlan {
     SweepPlan::for_strategy(
@@ -181,6 +181,100 @@ fn rejects_non_trees_before_planning() {
     assert!(SweepPlan::for_strategy(strategy, 3, &[(0, 1), (1, 2), (2, 0)], None).is_err());
     assert!(SweepPlan::for_strategy(strategy, 2, &[(0, 2)], None).is_err());
     assert!(SweepPlan::for_strategy(strategy, 2, &[(0, 0)], None).is_err());
+}
+
+/// Spine 0-1-2-3 (start 0, end 3) with the branch 1-4-{5, 6} and the leaf
+/// 2-7; every node has degree at most 3.
+const RECOMMIT_TREE: [(usize, usize); 7] = [(0, 1), (1, 2), (2, 3), (1, 4), (4, 5), (4, 6), (2, 7)];
+
+fn rooted_plan(edges: &[(usize, usize)], start: usize) -> SweepPlan {
+    SweepPlan::for_strategy(
+        TreeAciTraversalStrategy::MinimumRetracingWalk,
+        edges.len() + 1,
+        edges,
+        Some(start),
+    )
+    .unwrap()
+}
+
+/// Recommit predicate selecting exactly the directed `(from, to)` bonds.
+fn grown(bonds: &[(usize, usize)]) -> impl FnMut(OrientedEdgeStep) -> Result<bool, ()> + '_ {
+    move |step| Ok(bonds.contains(&(step.from, step.to)))
+}
+
+#[test]
+fn return_walk_recommits_grown_off_spine_bonds_children_first() {
+    let plan = rooted_plan(&RECOMMIT_TREE, 0);
+    assert_eq!(reverse_steps(&plan), vec![(2, 3, 2), (1, 2, 1), (0, 1, 0)]);
+
+    // 4 -> 1, its child 5 -> 4 and 7 -> 2 grew; 6 -> 4 did not.
+    let extended = plan
+        .reverse_with_recommits(grown(&[(4, 1), (5, 4), (7, 2)]))
+        .unwrap();
+    assert_eq!(
+        pass_steps(&extended),
+        vec![
+            (2, 3, 2),
+            (6, 2, 7),
+            (6, 7, 2),
+            (1, 2, 1),
+            (3, 1, 4),
+            (4, 4, 5),
+            (4, 5, 4),
+            (3, 4, 1),
+            (0, 1, 0),
+        ]
+    );
+    validate_pass(&extended, &RECOMMIT_TREE).unwrap();
+}
+
+#[test]
+fn return_walk_is_the_stored_spine_when_no_read_bond_grew() {
+    let plan = rooted_plan(&RECOMMIT_TREE, 0);
+    // Nothing grew.
+    let unchanged = plan.reverse_with_recommits(grown(&[])).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&unchanged, &plan.reverse));
+    // 5 -> 4 grew, but 4 -> 1 did not: no commit of the pass reads 5 -> 4.
+    let unchanged = plan.reverse_with_recommits(grown(&[(5, 4)])).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&unchanged, &plan.reverse));
+    // Spine bonds and bonds pointing away from the spine are never selected.
+    let unchanged = plan
+        .reverse_with_recommits(grown(&[(1, 2), (2, 1), (1, 4), (2, 7)]))
+        .unwrap();
+    assert!(std::sync::Arc::ptr_eq(&unchanged, &plan.reverse));
+}
+
+#[test]
+fn return_walk_leaves_the_last_spine_node_without_excursions() {
+    // From root 1 the spine is 1-2-3, and the walk ends at 1, whose off-spine
+    // bonds 0 -> 1 and 4 -> 1 no commit of the pass reads as rows.
+    let plan = rooted_plan(&RECOMMIT_TREE, 1);
+    assert_eq!(reverse_steps(&plan), vec![(2, 3, 2), (1, 2, 1)]);
+    let extended = plan
+        .reverse_with_recommits(grown(&[(0, 1), (4, 1), (7, 2)]))
+        .unwrap();
+    assert_eq!(
+        pass_steps(&extended),
+        vec![(2, 3, 2), (6, 2, 7), (6, 7, 2), (1, 2, 1)]
+    );
+    validate_pass(&extended, &RECOMMIT_TREE).unwrap();
+}
+
+#[test]
+fn return_walk_propagates_the_recommit_predicate_error() {
+    let plan = rooted_plan(&RECOMMIT_TREE, 0);
+    let mut queried = Vec::new();
+    let result = plan.reverse_with_recommits(|step| {
+        queried.push((step.from, step.to));
+        if step.from == 7 {
+            Err("unknown edge")
+        } else {
+            Ok(false)
+        }
+    });
+    assert_eq!(result.unwrap_err(), "unknown edge");
+    // Only off-spine bonds into the spine are queried, in walk order.
+    assert_eq!(queried, vec![(7, 2)]);
 }
 
 #[test]

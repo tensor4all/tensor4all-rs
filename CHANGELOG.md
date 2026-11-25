@@ -261,9 +261,9 @@
   1.58. Measured on the #1449 reproducers (the full and the reduced tree, Guard
   on and off, 11 seeds each; see #1453), no run now stops at a false
   `Converged`; the committed regression test pins the reduced tree with the
-  Guard off and seed 1. This is not established in general, since a reverse cleanup pass that consumes
-  Guard-injected candidates can still return a tree outside the pivot basis
-  (#1450). An initial guess's canonical form is cleared at
+  Guard off and seed 1. This is not established in general: a reverse cleanup
+  pass that consumed Guard-injected candidates could still return a tree
+  outside the pivot basis (#1450, fixed in the entry below). An initial guess's canonical form is cleared at
   initialization instead of being passed through to the result. Callers that
   need a canonical form canonicalize the result themselves. The rustdoc of
   `TreeAciResult::max_errors` and `TreeAciOptions::tolerance` now states what
@@ -271,6 +271,17 @@
   over that commit's local matrix, while the bonds it reads are in that basis)
   and what it does not bound (the dense error, later commits, pass-1
   residuals).
+- `tensor4all-treeaci`: the return pass also re-commits, children first, every
+  off-spine bond whose candidate set a Guard injection enlarged, before the
+  spine commit that reads it (#1450). Before, it re-committed only the spine,
+  so a spine commit could select an injected candidate that its factor then
+  dropped, and that bond left the pivot basis (bond axis `k` = the `k`-th
+  retained candidate). With `max_sweeps = min_sweeps = 1` the cleanup return
+  pass returned such a tree: on G0 r = 5 (comb tree, seed 42, tolerance 1e-3)
+  max|M - I| was 0.76 and is now 0, at 9,196 oracle points instead of 3,556.
+  Runs whose Guard injects after a forward pass change their trajectory; on the
+  G0 r = 5-8 comb and swap workloads the median oracle points at matched
+  accuracy changed by 1.00-1.17x per workload. Runs without such an injection are unchanged.
 
 ### Added
 

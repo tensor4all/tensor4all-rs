@@ -31,6 +31,9 @@ pub(crate) struct SweepPlan {
     // state without copying every path and edge step on each directional pass.
     pub(crate) forward: Arc<[PathPhase]>,
     pub(crate) reverse: Arc<[PathPhase]>,
+    /// Sorted `(neighbor, edge)` lists per node, for the re-commit excursions
+    /// of [`Self::reverse_with_recommits`].
+    adjacency: Arc<[Vec<(usize, usize)>]>,
 }
 
 #[derive(Debug, Error)]
@@ -74,6 +77,7 @@ impl SweepPlan {
                 start: 0,
                 forward: Arc::from([]),
                 reverse: Arc::from([]),
+                adjacency: Arc::from([]),
             });
         }
         let adjacency = adjacency(node_count, edges);
@@ -106,6 +110,7 @@ impl SweepPlan {
             start,
             forward: forward.into(),
             reverse: reverse.into(),
+            adjacency: adjacency.into(),
         };
         plan.validate(node_count, edges)?;
         Ok(plan)
@@ -117,6 +122,51 @@ impl SweepPlan {
         validate_pass(&self.reverse, edges)?;
         validate_round(&self.forward, &self.reverse, edges)?;
         Ok(())
+    }
+
+    /// The return pass, with a re-commit excursion for every off-path bond
+    /// whose candidate set must be re-committed before a return commit reads
+    /// it.
+    ///
+    /// A return step `a -> b` reads, as rows, the candidate set of every
+    /// incoming bond of `a`: the step that reached `a` (just re-committed) and
+    /// each off-path bond `c -> a`. Before that step, every off-path `c -> a`
+    /// for which `needs_recommit` holds is re-committed by the retracing
+    /// excursion `a -> c`, then the same excursion below `c` for each such
+    /// child bond of `c`, then `c -> a`. Children come before their parent, as
+    /// in the forward walk, so each upward commit reads child bonds that were
+    /// already re-committed. Each excursion starts and ends at `a`, the current
+    /// canonical centre, so the walk stays continuous. The last node of the
+    /// path receives no excursion: no commit of the pass reads its off-path
+    /// bonds as rows.
+    ///
+    /// When `needs_recommit` holds for no off-path bond, the stored return
+    /// pass is returned unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error of `needs_recommit`.
+    pub(crate) fn reverse_with_recommits<E>(
+        &self,
+        mut needs_recommit: impl FnMut(OrientedEdgeStep) -> Result<bool, E>,
+    ) -> Result<Arc<[PathPhase]>, E> {
+        let mut extended = Vec::with_capacity(self.reverse.len());
+        let mut changed = false;
+        for phase in self.reverse.iter() {
+            let mut paths = Vec::with_capacity(phase.paths.len());
+            for path in &phase.paths {
+                let steps =
+                    with_recommit_excursions(&self.adjacency, &path.steps, &mut needs_recommit)?;
+                changed |= steps.len() != path.steps.len();
+                paths.push(OrientedPath { steps });
+            }
+            extended.push(PathPhase { paths });
+        }
+        Ok(if changed {
+            extended.into()
+        } else {
+            Arc::clone(&self.reverse)
+        })
     }
 }
 
@@ -270,6 +320,79 @@ fn reverse_spine(
             })
         })
         .collect()
+}
+
+/// `steps` with a re-commit excursion inserted before each step for every
+/// off-path bond into the step's source that `needs_recommit` selects.
+fn with_recommit_excursions<E>(
+    adjacency: &[Vec<(usize, usize)>],
+    steps: &[OrientedEdgeStep],
+    needs_recommit: &mut impl FnMut(OrientedEdgeStep) -> Result<bool, E>,
+) -> Result<Vec<OrientedEdgeStep>, E> {
+    let on_path: HashSet<usize> = steps.iter().flat_map(|step| [step.from, step.to]).collect();
+    let mut result = Vec::with_capacity(steps.len());
+    for step in steps {
+        for &(neighbor, edge) in &adjacency[step.from] {
+            if on_path.contains(&neighbor) {
+                continue;
+            }
+            let upward = OrientedEdgeStep {
+                edge,
+                from: neighbor,
+                to: step.from,
+            };
+            if needs_recommit(upward)? {
+                push_recommit_excursion(adjacency, upward, needs_recommit, &mut result)?;
+            }
+        }
+        result.push(*step);
+    }
+    Ok(result)
+}
+
+/// Appends `upward.to -> upward.from`, the excursions below `upward.from`
+/// that `needs_recommit` selects (in neighbour order), and `upward` itself.
+fn push_recommit_excursion<E>(
+    adjacency: &[Vec<(usize, usize)>],
+    upward: OrientedEdgeStep,
+    needs_recommit: &mut impl FnMut(OrientedEdgeStep) -> Result<bool, E>,
+    result: &mut Vec<OrientedEdgeStep>,
+) -> Result<(), E> {
+    enum Visit {
+        Enter(OrientedEdgeStep),
+        Leave(OrientedEdgeStep),
+    }
+    // An explicit stack keeps deep branches off the call stack.
+    let mut stack = vec![Visit::Enter(upward)];
+    while let Some(visit) = stack.pop() {
+        match visit {
+            Visit::Enter(upward) => {
+                result.push(OrientedEdgeStep {
+                    edge: upward.edge,
+                    from: upward.to,
+                    to: upward.from,
+                });
+                stack.push(Visit::Leave(upward));
+                let mut children = Vec::new();
+                for &(neighbor, edge) in &adjacency[upward.from] {
+                    if neighbor == upward.to {
+                        continue;
+                    }
+                    let child = OrientedEdgeStep {
+                        edge,
+                        from: neighbor,
+                        to: upward.from,
+                    };
+                    if needs_recommit(child)? {
+                        children.push(child);
+                    }
+                }
+                stack.extend(children.into_iter().rev().map(Visit::Enter));
+            }
+            Visit::Leave(upward) => result.push(upward),
+        }
+    }
+    Ok(())
 }
 
 fn validate_pass(phases: &[PathPhase], edges: &[(usize, usize)]) -> Result<(), PathPlanError> {

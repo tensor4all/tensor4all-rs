@@ -22,10 +22,11 @@ The implementation follows these invariants:
 - A deterministic minimum-retracing forward walk keeps consecutive local
   updates on adjacent edges. With an automatic root it starts at a diameter
   endpoint and has the graph-theoretically optimal open-walk length
-  `2|E| - |P|`, where `P` is the selected spine. The return pass traverses only
-  `P` in reverse order; the complete forward/return round therefore has
-  exactly `2|E|` directed edge updates and is an Euler tour of the bidirected
-  tree.
+  `2|E| - |P|`, where `P` is the selected spine. The return pass traverses
+  `P` in reverse order, plus a re-commit excursion for each off-spine bond
+  whose candidate set a Guard injection enlarged (below). Without such bonds
+  the complete forward/return round has exactly `2|E|` directed edge updates
+  and is an Euler tour of the bidirected tree.
 - Traversal selection is a public, non-exhaustive strategy enum, while every
   strategy lowers into one internal `SweepPlan`. A common validator checks edge
   references, orientation, walk continuity, complete-round coverage, and the
@@ -62,6 +63,25 @@ dense relative error of 1.58. The result carries the canonical region of the
 last commit and no canonical form (`canonical_form()` is `None`); an initial
 guess's form is cleared at initialization, because the run does not establish
 it.
+
+A Guard injection appends candidates to `candidates.ids` and leaves every bond
+basis as it is. A later commit that reads an enlarged set as rows may select an
+appended candidate, which its factor then drops (the prefix projection), so
+that commit's bond leaves the pivot basis unless the enlarged bond was
+re-committed first. A forward pass re-commits every bond child-first, so it
+needs nothing more. The return pass re-commits, before each spine commit, every
+off-spine bond into the commit's source node whose candidate set outgrew its
+basis: a retracing excursion that re-commits that bond's enlarged child bonds
+first, in neighbour order, and ends at the spine node, which stays the walk's
+canonical centre. Bonds no commit of the pass reads as rows keep their basis:
+an enlarged bond below a bond that did not grow, and the off-spine bonds of the
+walk's last node. The next forward pass re-commits them. Before #1450 the
+return pass re-committed only the spine; on G0 r = 5 (comb tree, seed 42,
+tolerance 1e-3, one pass) the cleanup return pass then returned a tree with
+max|M - I| = 0.76, where `M[c -> p]` is the `c`-side subtree evaluated at the
+retained candidates of `c -> p`. The invariant is required on every returned
+tree. A unit-test helper checks it; the library does not, because the check
+evaluates every retained candidate.
 
 Discontinuous minimum path covers and parallel paths remain mathematically
 possible, but require sample-aware gauge transport or snapshot/merge semantics.
@@ -167,9 +187,9 @@ commit time. It does not bound:
 - the dense error away from the local matrices;
 - the output after later commits, which change it on the same points;
 - the output at all for pass-1 residuals: pass-1 commits read bonds that still
-  carry the initial cores. Because the return pass revisits only the spine, a
-  run that stops after pass 2 still gates on the pass-1 residuals of the
-  off-spine edges. This is accepted (#1449); a stop window that excludes pass 1
+  carry the initial cores. Because the return pass revisits only the spine
+  and the off-spine bonds a Guard injection enlarged, a run that stops after
+  pass 2 can still gate on the pass-1 residuals of the other off-spine edges. This is accepted (#1449); a stop window that excludes pass 1
   would add a forward pass to such runs and has not been measured.
 
 The local values come from the input frames, not from the output, so the
