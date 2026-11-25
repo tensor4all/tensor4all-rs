@@ -186,6 +186,10 @@ class AnalysisTests(unittest.TestCase):
             MODULE.verify_saved_host(protocol, [low, at_frequency(aci, "2000000")], completion)
             with self.assertRaisesRegex(ValueError, "frequency drift"):
                 MODULE.verify_saved_host(protocol, [low, at_frequency(aci, "2500000")], completion)
+            # Arms that agree with each other must still agree with the frozen host observation.
+            MODULE.verify_saved_host(protocol, [at_frequency(baseline, "2500000"), at_frequency(aci, "2500000")], completion)
+            with self.assertRaisesRegex(ValueError, "frequency drift"):
+                MODULE.verify_saved_host(protocol, [at_frequency(baseline, "1500000"), at_frequency(aci, "1500000")], completion)
             for limit in (float("nan"), 10**310):
                 with self.subTest(limit=limit):
                     (root / "protocol.json").write_text(json.dumps(protocol | {"max_frequency_ratio": limit}))

@@ -470,6 +470,17 @@ def frequency_values(snapshot, protected):
     return current
 
 
+def frozen_frequency_bounds(host):
+    """Per-CPU frequency range seeded with the frozen preflight observation.
+
+    Every sample endpoint is folded into this range, so the declared
+    `max_frequency_ratio` applies across all compared arms and to the host
+    observation recorded before sampling.
+    """
+    protected = set(host["protected_cpus"])
+    return {core: (value, value) for core, value in frequency_values(host["frequencies"], protected).items()}
+
+
 def host_noise_failures(record, protocol, frequency_bounds):
     protected = set(protocol["host"]["protected_cpus"])
     cpu = protocol["host"]["measured_cpu"]
@@ -744,8 +755,7 @@ def verify_saved_host(protocol, records, completion):
 
     audit(host["affinity_audit"])
     audit(completion["final_affinity_audit"])
-    frequency_values(host["frequencies"], protected)
-    frequency_bounds = {}
+    frequency_bounds = frozen_frequency_bounds(host)
     for record in records:
         if record.get("error"):
             continue
@@ -895,7 +905,7 @@ def main(argv=None):
                             provenance=provenance(repo, binary, manifest))
             write_json(output / "protocol.json", protocol)
             frozen_protocol_hash = digest(output / "protocol.json")
-            frequency_bounds = {}
+            frequency_bounds = frozen_frequency_bounds(host)
             with (output / "samples.jsonl").open("x") as samples:
                 if not args.prepare_only:
                     for index, (repetition, config) in enumerate(schedule(protocol)):
