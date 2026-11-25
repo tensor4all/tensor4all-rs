@@ -258,9 +258,10 @@
   axis `k` = the `k`-th retained candidate), and the spine-only return pass then
   committed against them: on the #1449 reproducer a run stopped `Converged` at
   the true ranks with a recorded error of 4.4e-16 and a dense relative error of
-  1.58. On the #1449 reproducers (the full and the reduced tree, Guard on and
-  off, 11 seeds each) no run now stops at a false `Converged`; this is not
-  established in general, since a reverse cleanup pass that consumes
+  1.58. Measured on the #1449 reproducers (the full and the reduced tree, Guard
+  on and off, 11 seeds each; see #1453), no run now stops at a false
+  `Converged`; the committed regression test pins the reduced tree with the
+  Guard off and seed 1. This is not established in general, since a reverse cleanup pass that consumes
   Guard-injected candidates can still return a tree outside the pivot basis
   (#1450). An initial guess's canonical form is cleared at
   initialization instead of being passed through to the result. Callers that
