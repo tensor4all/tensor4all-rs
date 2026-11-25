@@ -1121,6 +1121,36 @@ fn global_search_pivots_match_pointwise_reference_on_chain_and_branched_tree() {
     }
 }
 
+/// Evaluated points of the branched full runs, recorded on x86_64 Linux
+/// (`main` 050eb4ba, #1405; re-pinned by 319979e2 for #1439).
+const BRANCHED_EVALUATED_POINTS: usize = 161_713;
+
+/// Relative band around [`BRANCHED_EVALUATED_POINTS`] (#1447).
+const BRANCHED_EVALUATED_POINTS_BAND: f64 = 1e-3;
+
+/// The branched fixture's cost is pinned to a band, not to the exact count.
+///
+/// The fixture is exactly representable at rank 16, so after the first
+/// iteration the residuals the global search compares are rounding noise
+/// (about 1e-15, against the 1e-8 threshold). `floating_zone_walk` takes the
+/// greedy argmax of those residuals and stops on exact equality of the running
+/// maximum, so the number of walk evaluations follows the rounding of the
+/// approximation readout, which differs between CPU architectures. Measured:
+/// x86_64 Linux 161713; aarch64 macOS (Accelerate) and aarch64 Linux 161674,
+/// 39 (0.024%) fewer, from the second iteration on (38465 vs 38452 points).
+/// Ranks, pivots, errors above the noise and the dense residual agree. The
+/// band keeps a change of the stop rule or the search visible as a change of
+/// cost (22073 vs 13754 points on the chain in #1371) while tolerating that
+/// platform difference. Do not re-pin the number to one platform.
+fn assert_branched_evaluated_points(evaluated_points: usize) {
+    let recorded = BRANCHED_EVALUATED_POINTS as f64;
+    assert!(
+        (evaluated_points as f64 - recorded).abs() <= BRANCHED_EVALUATED_POINTS_BAND * recorded,
+        "branched evaluated points {evaluated_points}, recorded {BRANCHED_EVALUATED_POINTS} \
+         within {BRANCHED_EVALUATED_POINTS_BAND}"
+    );
+}
+
 #[test]
 fn full_runs_reproduce_recorded_ranks_and_errors() {
     // Pinned under `StopRule::Sampled`, the rule these values were recorded
@@ -1182,7 +1212,7 @@ fn full_runs_reproduce_recorded_ranks_and_errors() {
     let fixture = branched_fixture();
     let (ranks, errors, evaluated_points, state) = fixture.full_run(StopRule::Sampled);
     assert_eq!(ranks, vec![8, 16, 16, 16]);
-    assert_eq!(evaluated_points, 161713, "branched evaluated points");
+    assert_branched_evaluated_points(evaluated_points);
     // The first iteration's rank-8 approximation is not exact. Its error now
     // includes the residual the global search measured (#1352), instead of
     // only the rounding-level local bond error recorded before.
@@ -1260,7 +1290,7 @@ fn full_runs_per_bond_reproduce_recorded_ranks_errors_and_points() {
     // search measured. The dense check of the Sampled test covers the result.
     let (ranks, errors, evaluated_points, _) = branched_fixture().full_run(StopRule::PerBond);
     assert_eq!(ranks, vec![8, 16, 16, 16]);
-    assert_eq!(evaluated_points, 161713, "branched evaluated points");
+    assert_branched_evaluated_points(evaluated_points);
     assert_eq!(errors.len(), 4);
     assert!(errors.iter().all(|&error| error <= 1e-14), "{errors:?}");
 }
