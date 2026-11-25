@@ -104,9 +104,11 @@ pub struct TreeAciDiagnostics<V> {
 pub struct TreeAciResult<V: TreeAciNode> {
     /// Interpolated output with the prepared input topology and site indices.
     pub tree: TreeTN<IdxTensor, V>,
-    /// Maximum output edge rank after each sweep.
+    /// Maximum output edge rank after each pass (one entry per forward or
+    /// return pass).
     pub max_ranks: Vec<usize>,
-    /// Maximum normalized local error after each sweep.
+    /// Maximum normalized local error after each pass (one entry per forward
+    /// or return pass).
     ///
     /// Each entry is the largest recorded per-edge residual after that pass:
     /// for every edge, the LUCI residual of the latest commit on that edge,
