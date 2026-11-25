@@ -14,6 +14,9 @@
   explicitly with `CpuExecutionContext::reset_graph_runtime`,
   `CpuExecutionContext::reset_graph_buffer_pool`, and
   `release_process_allocator_cached_memory` instead.
+- `TreeTN::inner` returns `1.0` instead of `0.0` for two empty networks,
+  following the empty-product convention and matching `TensorTrain::inner`
+  (#1383). Passing exactly one empty network still returns an error.
 - TreeTCI's default stop rule is the per-bond rule again (#1405), the one of
   TensorCrossInterpolation.jl, TreeTCI.jl and xfac: the recorded error is the largest
   bond pivot error, and the global search accepts a pivot only above
