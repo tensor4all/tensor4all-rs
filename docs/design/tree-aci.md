@@ -47,6 +47,22 @@ the current LUCI gauge invariant: a bond axis is ordered by its active
 component samples, while a generic TreeTN canonicalization can change that
 basis without updating the sample order.
 
+That invariant is the **pivot basis**: each bond has one basis shared by both
+adjacent cores, and bond axis `k` denotes the `k`-th retained candidate of
+that bond. A commit writes `A[:, J] A[I, J]^-1` and `A[I, :]` on the existing
+incoming bonds of its two cores and assumes every bond it reads is in this
+basis; nothing records the basis, so a violation is not detected. The output is
+therefore never canonicalized numerically, neither at initialization nor
+between passes. A CI canonicalization of the whole output keeps the dense
+tensor but re-selects its own pivots from the core values, which moves bonds
+out of the pivot basis; the spine-only return pass then commits against them
+and never rewrites the off-spine bonds. #1449 measured this after pass 1: a
+run stopped `Converged` at the true ranks with a recorded error of 4e-16 and a
+dense relative error of 1.58. The result carries the canonical region of the
+last commit and no canonical form (`canonical_form()` is `None`); an initial
+guess's form is cleared at initialization, because the run does not establish
+it.
+
 Discontinuous minimum path covers and parallel paths remain mathematically
 possible, but require sample-aware gauge transport or snapshot/merge semantics.
 They must not be enabled by simply canonicalizing between paths: a binary-tree
@@ -61,12 +77,12 @@ does not remove this requirement, but it keeps the rank exponent bounded in the
 intended workloads.
 
 Initialization deliberately leaves both generated outputs and explicit initial
-guesses numerically uncanonicalized until the first directional pass. Bootstrap
-uses only validated bond dimensions and component coordinates; it does not read
-the guess's gauge. The first pass replaces every core with CI factors and then
-canonicalizes the lower-rank result. Canonicalizing a high-rank explicit guess
-before that pass is redundant and makes setup scale with a gauge that ACI
-immediately discards.
+guesses numerically uncanonicalized. Bootstrap uses only validated bond
+dimensions and component coordinates; it does not read the guess's gauge. The
+first pass replaces every core with interpolative factors in the pivot basis;
+no canonicalization follows it. Canonicalizing a high-rank explicit guess
+before that pass would be redundant and would make setup scale with a gauge
+that ACI immediately discards.
 
 For a node with one incoming component, all local physical slices are stacked
 into one `(outgoing × local) × incoming` matrix. One backend multiplication then
@@ -120,7 +136,7 @@ Schur-complement growth lifts a pivot above the largest entry. Normalization
 divides complex components by a real scalar rather than forming a complex
 divisor's squared norm, avoiding overflow or underflow from squaring a
 representable normalizer.
-CI canonicalization preserves all four supported scalar dtypes end to end.
+The output keeps all four supported scalar dtypes end to end.
 When a rank ceiling ends rrLU, the reported local error is the remaining Schur
 complement maximum, rather than the last accepted pivot. Thus a saturated cut
 whose local matrix is already exact does not by itself imply `RankLimited`.
@@ -139,6 +155,24 @@ full-grid maximum error: the tolerance controls edge-local residuals, and the
 guard performs bounded randomized coordinate searches with its configured
 acceptance margin. Independent validation remains necessary. Exhaustive
 checks belong only in small tests or explicit diagnostic programs.
+
+The recorded error (`max_errors`, and the local criterion of the stop) is the
+per-edge LUCI residual of each edge's latest commit. Its contract is narrow.
+When every bond a commit reads is in the pivot basis, the output at every point
+of that commit's local matrix is exactly the product of the two new factors, so
+the residual is the output's largest error over the whole local matrix at
+commit time. It does not bound:
+
+- the dense error away from the local matrices;
+- the output after later commits, which change it on the same points;
+- the output at all for pass-1 residuals: pass-1 commits read bonds that still
+  carry the initial cores. Because the return pass revisits only the spine, a
+  run that stops after pass 2 still gates on the pass-1 residuals of the
+  off-spine edges. This is accepted (#1449); a stop window that excludes pass 1
+  would add a forward pass to such runs and has not been measured.
+
+The local values come from the input frames, not from the output, so the
+residual cannot detect an output whose bonds left the pivot basis.
 
 ### Fresh local crosses and tolerance-boundary cycling
 

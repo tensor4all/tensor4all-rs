@@ -12,9 +12,8 @@
 //!   release-mode comparison.
 //!
 //! Since #1235 the context route enters one session and runs the
-//! session-scoped entry, so the frame contractions, the guard evaluations and
-//! the final canonicalization run in the context as well
-//! (docs/design/859-f7-consumer-inventory.md).
+//! session-scoped entry, so the frame contractions and the guard evaluations
+//! run in the context as well (docs/design/859-f7-consumer-inventory.md).
 
 use crate::g0;
 

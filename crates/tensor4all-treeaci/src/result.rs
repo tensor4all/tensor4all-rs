@@ -18,7 +18,10 @@ use crate::TreeAciNode;
 pub enum TreeAciTermination {
     /// The local error target, per-edge rank stability, and enabled global
     /// guard criteria were satisfied. Local residuals and randomized guard
-    /// searches are not a certificate of the full-grid maximum error.
+    /// searches are not a certificate of the full-grid maximum error: the
+    /// local error target is checked on the recorded per-edge residuals, each
+    /// of which measures the output only at commit time and only over its own
+    /// local matrix (see [`TreeAciResult::max_errors`]).
     Converged,
     /// An inaccurate edge reached its algebraic/configured rank cap, or the
     /// guard found an unresolved residual while all cuts were saturated.
@@ -104,6 +107,30 @@ pub struct TreeAciResult<V: TreeAciNode> {
     /// Maximum output edge rank after each sweep.
     pub max_ranks: Vec<usize>,
     /// Maximum normalized local error after each sweep.
+    ///
+    /// Each entry is the largest recorded per-edge residual after that pass:
+    /// for every edge, the LUCI residual of the latest commit on that edge,
+    /// over that commit's local matrix and in the units of
+    /// [`TreeAciOptions::tolerance`](crate::TreeAciOptions::tolerance)
+    /// (relative to the local matrix's largest `|f|` when
+    /// [`scale_tolerance`](crate::TreeAciOptions::scale_tolerance) is on).
+    ///
+    /// What a residual measures: the largest error of the output itself, at
+    /// commit time, over every point of that commit's local matrix (not only
+    /// its pivots). This holds when every bond the commit reads is in the pivot
+    /// basis, that is, each bond has one basis shared by both adjacent cores
+    /// and bond axis `k` denotes the `k`-th retained candidate of that bond.
+    ///
+    /// What a residual does **not** bound:
+    ///
+    /// - the error of the dense output away from the local matrices;
+    /// - the output after later commits, which change it on the same points;
+    /// - the output at all for residuals recorded in pass 1, whose commits read
+    ///   bonds that still carry the initial cores. The return pass revisits
+    ///   only the spine, so a run that stops after pass 2 still gates on the
+    ///   pass-1 residuals of the edges off the spine.
+    ///
+    /// See [`TreeAciTermination::Converged`].
     pub max_errors: Vec<f64>,
     /// Largest `|f|` among the operator values of the local matrices the run
     /// committed, or among all values on the exact single-node path.

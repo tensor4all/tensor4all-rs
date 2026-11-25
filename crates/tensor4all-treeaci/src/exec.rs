@@ -2,11 +2,11 @@
 //!
 //! Every numerical step that leaves this crate's own loops goes through
 //! [`Exec`]: matrix products, the pivoted LU, the construction and readback of
-//! tensors, the evaluation of networks at points, and the final
-//! canonicalization. [`Exec::Global`] is the compatibility route of the plain
-//! entry points, unchanged; [`Exec::Session`] runs every step on a caller's
-//! explicit session and publishes tensors as compact host storage, so a run
-//! enters no process-global or thread-local runtime.
+//! tensors, and the evaluation of networks at points. [`Exec::Global`] is the
+//! compatibility route of the plain entry points, unchanged; [`Exec::Session`]
+//! runs every step on a caller's explicit session and publishes tensors as
+//! compact host storage, so a run enters no process-global or thread-local
+//! runtime.
 
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -21,9 +21,7 @@ use tensor4all_core::{
 };
 use tensor4all_tensorbackend::explicit::Session;
 use tensor4all_tensorbackend::{mat_mul_in, Matrix, MatrixMulError, NativeTensorReadInput};
-use tensor4all_treetn::{
-    CanonicalizationOptions, EvaluationHint, TreeTN, TreeTNCachedEvaluator, TreeTNOperationError,
-};
+use tensor4all_treetn::{EvaluationHint, TreeTNCachedEvaluator, TreeTNOperationError};
 
 use crate::TreeAciScalar;
 
@@ -185,22 +183,6 @@ impl<'s> Exec<'_, 's> {
             Self::Session(session) => {
                 evaluator.evaluate_batched_typed_on_session::<T>(session, values, hint)
             }
-        }
-    }
-
-    /// Canonicalize `tree` in place toward `region`.
-    pub(crate) fn canonicalize_mut<V>(
-        &mut self,
-        tree: &mut TreeTN<IdxTensor, V>,
-        region: Vec<V>,
-        options: CanonicalizationOptions,
-    ) -> Result<(), TreeTNOperationError>
-    where
-        V: Clone + Eq + Hash + Ord + Debug + Send + Sync,
-    {
-        match self {
-            Self::Global => tree.canonicalize_mut(region, options),
-            Self::Session(session) => tree.canonicalize_mut_on_session(region, options, session),
         }
     }
 }

@@ -219,9 +219,10 @@ fn luci_factors_reconstruct_rank_one_and_zero_targets() {
 
 /// A zero local matrix commits the pivot pair `(0, 0)`, so the factor that
 /// interpolates must carry the identity on that pivot exactly like the
-/// rank-`r` LUCI factors do. An all-zero interpolating factor left a core that
-/// the deferred CI canonicalization could only factor into a zero-dimensional
-/// bond, and the whole run failed.
+/// rank-`r` LUCI factors do. An all-zero interpolating factor breaks the pivot
+/// basis of the committed bond; while runs still canonicalized between passes,
+/// it also left a core that the CI canonicalization could only factor into a
+/// zero-dimensional bond, and the whole run failed.
 #[test]
 fn zero_local_matrix_keeps_the_pivot_identity_in_the_interpolating_factor() {
     for left_orthogonal in [true, false] {
