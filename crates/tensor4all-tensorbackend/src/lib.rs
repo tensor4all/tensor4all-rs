@@ -28,6 +28,8 @@ mod context;
 /// Explicit visible-ordinal-0 CUDA execution and transfer boundaries.
 mod cuda;
 #[cfg(feature = "explicit-context")]
+mod diagnostics;
+#[cfg(feature = "explicit-context")]
 /// Einsum label helpers shared by both frontends.
 mod einsum_ids;
 #[cfg(feature = "explicit-context")]

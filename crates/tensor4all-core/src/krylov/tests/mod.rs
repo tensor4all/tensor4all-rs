@@ -10,31 +10,8 @@ use std::sync::Mutex;
 mod bicgstab;
 mod cg;
 
-static GMRES_PROFILE_ENV_LOCK: Mutex<()> = Mutex::new(());
-
-struct GmresProfileEnvGuard;
-
-impl GmresProfileEnvGuard {
-    fn set() -> Self {
-        unsafe {
-            std::env::set_var("T4A_GMRES_OP_PROFILE", "1");
-        }
-        Self
-    }
-}
-
-impl Drop for GmresProfileEnvGuard {
-    fn drop(&mut self) {
-        unsafe {
-            std::env::remove_var("T4A_GMRES_OP_PROFILE");
-        }
-    }
-}
-
-fn with_gmres_profile_env<R>(f: impl FnOnce() -> R) -> R {
-    let _lock = GMRES_PROFILE_ENV_LOCK.lock().unwrap();
-    let _guard = GmresProfileEnvGuard::set();
-    f()
+fn with_gmres_profile<R>(f: impl FnOnce() -> R) -> R {
+    crate::diagnostics::with_test_diagnostics(|config| config.gmres_profile = true, f)
 }
 
 #[derive(Debug, Clone)]
@@ -1796,7 +1773,7 @@ fn gmres_affine_profile_and_zero_rhs_paths() {
         check_true_residual: false,
     };
 
-    let result = with_gmres_profile_env(|| {
+    let result = with_gmres_profile(|| {
         gmres_affine(
             |x: &IdxTensor| Ok(x.clone()),
             &b,
@@ -1846,7 +1823,7 @@ fn gmres_affine_profile_covers_nonconverged_restart_and_final_paths() {
         check_true_residual: false,
     };
 
-    let result = with_gmres_profile_env(|| {
+    let result = with_gmres_profile(|| {
         gmres_affine(
             |x: &IdxTensor| scale_vector_f64(x, &[2.0, 5.0]),
             &b,
@@ -1870,7 +1847,7 @@ fn gmres_affine_profile_covers_scalar_shortcut() {
     let x0 = make_vector_with_index(vec![0.0, 0.0], &idx);
     let options = GmresOptions::default();
 
-    let result = with_gmres_profile_env(|| {
+    let result = with_gmres_profile(|| {
         gmres_affine(
             |x: &IdxTensor| Ok(x.clone()),
             &b,
@@ -2004,7 +1981,7 @@ fn gmres_affine_profile_covers_true_residual_rejection_and_lucky_breakdown() {
     };
 
     let calls = Cell::new(0usize);
-    let checked = with_gmres_profile_env(|| {
+    let checked = with_gmres_profile(|| {
         gmres_affine(
             |x: &IdxTensor| {
                 let call = calls.get();
@@ -2032,7 +2009,7 @@ fn gmres_affine_profile_covers_true_residual_rejection_and_lucky_breakdown() {
         rtol: 0.0,
         ..checked_options
     };
-    let lucky = with_gmres_profile_env(|| {
+    let lucky = with_gmres_profile(|| {
         gmres_affine(
             |x: &IdxTensor| Ok(x.clone()),
             &b,
@@ -2200,7 +2177,7 @@ fn gmres_affine_profile_covers_the_closed_form() {
     let x0 = make_vector_with_index(vec![0.0], &idx);
     let options = GmresOptions::default();
 
-    let result = with_gmres_profile_env(|| {
+    let result = with_gmres_profile(|| {
         gmres_affine(
             |x: &IdxTensor| Ok(x.clone()),
             &b,

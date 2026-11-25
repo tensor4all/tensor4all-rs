@@ -22,7 +22,6 @@
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::time::{Duration, Instant};
 
 use super::eager_session::with_eager_session;
@@ -67,7 +66,7 @@ thread_local! {
 }
 
 fn contract_profile_enabled() -> bool {
-    env::var("T4A_PROFILE_CONTRACT").is_ok()
+    crate::diagnostics::core_diagnostics().contract_profile
 }
 
 fn record_contract_profile(signature: ContractSignature, elapsed: Duration) {
