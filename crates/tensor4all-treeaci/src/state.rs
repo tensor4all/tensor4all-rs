@@ -26,7 +26,6 @@ pub(crate) mod profile_debug_stats {
         pub(crate) frames: Duration,
         pub(crate) proposals: Duration,
         pub(crate) schedule_acquire: Duration,
-        pub(crate) deferred_canonicalization: Duration,
         pub(crate) local_preparation: Duration,
         pub(crate) local_input_frames: Duration,
         // [AI Supplied] Diagnostic-only decomposition of `local_input_frames`.
@@ -190,13 +189,17 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
         } else {
             build_random_output::<T, V>(&inputs[0], &problem, &initial_edge_ranks, rng, exec)?
         };
-        // A complete first directional pass replaces every core with CI
-        // factors before `finalize_deferred_canonicalization` establishes the
-        // numerical form. Doing a full-rank CI canonicalization here is both
-        // redundant and pathological for a high-rank explicit guess. The
-        // generated-output path has always deferred this work; explicit
-        // guesses follow the same state transition because bootstrap depends
-        // only on their validated bond dimensions, not on their gauge.
+        // The output is never canonicalized numerically. The first
+        // directional pass replaces every core with interpolative factors
+        // whose bond axes denote the retained candidates (the pivot basis);
+        // a full-rank CI canonicalization here would be redundant and
+        // pathological for a high-rank explicit guess, and one between
+        // passes would break the pivot basis later commits rely on (#1449).
+        // Bootstrap depends only on the guess's validated bond dimensions, not
+        // on its gauge. A guess may carry a canonical form from an earlier
+        // computation; the run does not establish that form, so it is
+        // cleared and the result reports none. Commits move the region.
+        output.set_canonical_form(None);
         output.set_canonical_region([problem.root.clone()])?;
         #[cfg(test)]
         profile_debug_stats::record(|stats| stats.output = stage_started.elapsed());

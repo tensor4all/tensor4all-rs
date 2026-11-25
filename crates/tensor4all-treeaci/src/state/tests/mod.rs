@@ -1,5 +1,7 @@
+use std::collections::HashSet;
+
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
-use tensor4all_treetn::TreeTN;
+use tensor4all_treetn::{CanonicalForm, TreeTN};
 
 use super::TreeAciState;
 use crate::initialize::{algebraic_edge_bounds, build_random_output, initial_edge_ranks};
@@ -221,6 +223,42 @@ fn rank_deficient_initial_guess_defers_rank_reduction_to_the_first_sweep() {
     assert_eq!(state.output.canonical_form(), None);
 }
 
+/// A guess may carry a canonical form from an earlier computation. A run never
+/// establishes a canonical form (#1449), so initialization clears the guess's
+/// form while keeping its values.
+#[test]
+fn initial_guess_canonical_form_is_cleared_at_initialization() {
+    for form in [CanonicalForm::Unitary, CanonicalForm::CI] {
+        let sites = [DynIndex::new_dyn(2), DynIndex::new_dyn(2)];
+        let input = two_node_tree(sites.clone(), 2, 1.0);
+        let mut guess = two_node_tree(sites, 1, 11.0);
+        guess.set_canonical_region([0]).unwrap();
+        guess.set_canonical_form(Some(form));
+        let expected = guess.to_dense().unwrap();
+        let inputs = vec![input];
+        let state = TreeAciState::<f64, usize>::initialize(
+            &inputs,
+            &TreeAciOptions {
+                initial_guess: Some(guess),
+                ..TreeAciOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(state.output.canonical_form(), None, "{form:?}");
+        assert_eq!(
+            state.output.canonical_region(),
+            &HashSet::from([state.problem.root])
+        );
+        assert!(state
+            .output
+            .to_dense()
+            .unwrap()
+            .isapprox(&expected, 1.0e-12, 0.0)
+            .unwrap());
+    }
+}
+
 #[test]
 fn full_rank_chain_initial_guess_is_accepted_and_preserved() {
     let guess = full_rank_chain_guess(16, 128);
@@ -355,8 +393,8 @@ fn profile_high_rank_chain_phases_and_candidate_cache() {
             crate::frames::debug_stats::memo_hit_copies(),
         );
         eprintln!(
-            "high-rank chain chi={chi} pass metadata: schedule_acquire={:?}, deferred_canonicalization={:?}",
-            profile.schedule_acquire, profile.deferred_canonicalization,
+            "high-rank chain chi={chi} pass metadata: schedule_acquire={:?}",
+            profile.schedule_acquire,
         );
         eprintln!(
             "high-rank chain chi={chi} retained frame payload: base={base_frame_bytes} bytes, candidate_cache={candidate_cache_entries} entries/{candidate_cache_bytes} bytes"

@@ -1,7 +1,5 @@
 //! Deterministic execution of directional tree ACI passes.
 
-use tensor4all_treetn::{CanonicalForm, CanonicalizationOptions};
-
 use crate::{
     global_guard::{
         find_global_pivots, inject_global_pivots, per_evaluator_message_cache_budget,
@@ -31,9 +29,10 @@ pub(crate) struct PassReport {
     pub(crate) evaluated_points: u64,
 }
 
+/// The directed edges a pass committed, in order. Recorded only in test
+/// builds, where `PassReport::updated_edges` exposes them.
 #[derive(Debug, Default)]
 struct UpdateTrace {
-    any: bool,
     #[cfg(test)]
     ordered: Vec<DirectedEdgeId>,
 }
@@ -41,14 +40,12 @@ struct UpdateTrace {
 impl UpdateTrace {
     fn with_capacity(_capacity: usize) -> Self {
         Self {
-            any: false,
             #[cfg(test)]
             ordered: Vec::with_capacity(_capacity),
         }
     }
 
     fn record(&mut self, _edge: DirectedEdgeId) {
-        self.any = true;
         #[cfg(test)]
         self.ordered.push(_edge);
     }
@@ -262,8 +259,14 @@ where
     let mut update_trace = UpdateTrace::with_capacity(state.problem.directed_edges.len() / 2);
     let mut evaluated_points = 0u64;
 
+    // A pass leaves the output as its commits wrote it. No canonicalization
+    // runs between passes: each bond axis k must keep denoting the k-th
+    // retained candidate of that bond on both adjacent cores, because the
+    // next commit writes its two cores on the incoming bonds in that basis. A
+    // generic canonicalization re-selects its own pivots and breaks that link
+    // (#1449).
     for phase in phases.iter() {
-        if let Err(error) = run_phase_serial(
+        run_phase_serial(
             state,
             options,
             phase,
@@ -272,15 +275,8 @@ where
             &mut update_trace,
             &mut evaluated_points,
             exec,
-        ) {
-            if update_trace.any {
-                finalize_deferred_canonicalization(state, exec)?;
-            }
-            return Err(error);
-        }
+        )?;
     }
-
-    finalize_deferred_canonicalization(state, exec)?;
 
     let max_rank = state.edge_ranks.iter().copied().max().unwrap_or(1);
     let tolerance = options.tolerance_policy();
@@ -298,32 +294,6 @@ where
         max_error,
         evaluated_points,
     })
-}
-
-fn finalize_deferred_canonicalization<T: TreeAciScalar, V: TreeAciNode>(
-    state: &mut TreeAciState<'_, T, V>,
-    exec: &mut crate::exec::Exec<'_, '_>,
-) -> Result<()> {
-    #[cfg(test)]
-    let canonicalization_started = std::time::Instant::now();
-    if state.output.canonical_form().is_none() {
-        let center = state
-            .output
-            .canonical_region()
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
-        exec.canonicalize_mut(
-            &mut state.output,
-            center,
-            CanonicalizationOptions::default().with_form(CanonicalForm::CI),
-        )?;
-    }
-    #[cfg(test)]
-    crate::state::profile_debug_stats::record(|stats| {
-        stats.deferred_canonicalization += canonicalization_started.elapsed();
-    });
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

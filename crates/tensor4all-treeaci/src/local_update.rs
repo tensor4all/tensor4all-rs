@@ -519,9 +519,10 @@ pub(crate) fn reserved_working_bytes<T: TreeAciScalar>(
 /// form the identity, and otherwise the right factor carries the identity on
 /// the pivot columns. The zero approximation keeps that identity on its single
 /// pivot and puts the zero in the other factor. An all-zero interpolating
-/// factor would instead leave a core that no CI factorization can represent
-/// with a nonzero bond, so the deferred CI canonicalization at the end of the
-/// pass could not accept it.
+/// factor would instead break the pivot basis of the committed bond: its axis
+/// would no longer evaluate to the retained candidate on the interpolating
+/// side, and a later commit that reads the bond writes its cores on the
+/// assumption that it does.
 ///
 /// # Arguments
 ///

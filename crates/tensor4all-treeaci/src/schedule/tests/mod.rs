@@ -1,7 +1,7 @@
 use std::{cell::Cell, collections::HashSet};
 
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
-use tensor4all_treetn::{CanonicalForm, TreeTN};
+use tensor4all_treetn::TreeTN;
 
 use super::{
     convergence_criterion, current_state_is_rank_limited, global_injection_capacities,
@@ -120,7 +120,7 @@ fn path_pass_matches_train_endpoint_order_and_exact_reverse() {
     assert_eq!(forward.update_count(), 3);
     assert_eq!(reverse.update_count(), 3);
     assert_eq!(state.output.canonical_region(), &HashSet::from([3]));
-    assert_eq!(state.output.canonical_form(), Some(CanonicalForm::CI));
+    assert_eq!(state.output.canonical_form(), None);
 }
 
 #[test]
@@ -189,7 +189,7 @@ fn failed_update_preserves_all_commits_before_the_failing_edge() {
     assert!(matches!(result, Err(TreeAciError::Callback { .. })));
     assert_eq!(state.generation, generation_before + 1);
     assert_eq!(state.output.canonical_region(), &HashSet::from([2]));
-    assert_eq!(state.output.canonical_form(), Some(CanonicalForm::CI));
+    assert_eq!(state.output.canonical_form(), None);
     state.output.verify_internal_consistency().unwrap();
 }
 

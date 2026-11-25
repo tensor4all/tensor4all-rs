@@ -142,15 +142,12 @@ fn a_single_node_runs_on_the_session() {
 }
 
 #[test]
-fn the_guard_and_the_final_canonicalization_ran_on_the_session() {
+fn the_guard_ran_on_the_session_and_the_result_claims_no_canonical_form() {
     let (_sites, inputs) = g0::fixture(3, "cttn").unwrap();
     let result = on_session(&inputs);
-    // The global guard ran (it is on by default) and the output was put into
-    // CI form on the session.
+    // The global guard ran (it is on by default). The run never canonicalizes
+    // its output (#1449), so the result reports no canonical form.
     assert!(options().enable_global_guard);
     assert!(!result.global_pivots_found.is_empty());
-    assert_eq!(
-        result.tree.canonical_form(),
-        Some(tensor4all_treetn::CanonicalForm::CI)
-    );
+    assert_eq!(result.tree.canonical_form(), None);
 }

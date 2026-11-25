@@ -104,6 +104,13 @@ pub struct TreeAciOptions<V: TreeAciNode> {
     /// then stop oscillating around the target, at the cost of slightly more
     /// rank than a single truncation would keep.
     ///
+    /// The local stop criterion compares the recorded per-edge residuals with
+    /// this target. A residual is the output's error at commit time over that
+    /// commit's local matrix, provided every bond the commit reads is in the
+    /// pivot basis; it does not bound the dense error, the output after later
+    /// commits, or the output at all for residuals recorded in pass 1. See
+    /// [`TreeAciResult::max_errors`](crate::TreeAciResult::max_errors).
+    ///
     /// Known limitation: a pivot kept this way is dropped only once its error
     /// falls below a quarter of the target, so on an edge whose pivot errors
     /// sit close to the target the rank grows and rarely shrinks. A few such

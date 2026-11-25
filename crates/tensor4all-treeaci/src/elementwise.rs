@@ -130,8 +130,8 @@ where
 ///
 /// The same algorithm, options, stopping rule, diagnostics, and random stream
 /// as [`tree_elementwise_batched_with_rng`], with every numerical step - the
-/// frame contractions, the candidate-matrix products, the pivoted LU, the
-/// guard evaluations, and the final canonicalization - running on `session`.
+/// frame contractions, the candidate-matrix products, the pivoted LU, and the
+/// guard evaluations - running on `session`.
 /// The result's tensors are published as compact host storage, so the result
 /// outlives the session, and the run enters no process-global or thread-local
 /// runtime. This is the entry for a caller that already holds a session, such

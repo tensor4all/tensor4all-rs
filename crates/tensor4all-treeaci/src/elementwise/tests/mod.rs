@@ -286,8 +286,8 @@ fn site_product_tree<T: crate::TreeAciScalar>(
 
 /// Local matrices built from the bootstrap samples can be negligible: exactly
 /// zero, or with every entry below the LUCI pivot floor. Such an edge commits
-/// a rank-one zero approximation, which must survive the pass-end CI
-/// canonicalization so that the global guard can recover the feature later.
+/// a rank-one zero approximation, which must survive the following passes so
+/// that the global guard can recover the feature later.
 fn hadamard_many_survives_negligible_local_matrices<T: crate::TreeAciScalar>() {
     let cases = [
         ("identically zero", [0.0, 0.0]),

@@ -249,6 +249,23 @@
   tolerance in some iteration change, including the pinned 16-site chain in
   `full_runs_reproduce_recorded_ranks_and_errors` (4 iterations and 13,754
   points instead of 6 and 22,073; `PerBond` takes 4 and 12,720).
+- `tensor4all-treeaci`: a run no longer canonicalizes its output (#1449), so
+  `tree_elementwise`, `tree_elementwise_batched*`, `hadamard_many` and
+  `TreeAciInterpolator` results now report `tree.canonical_form() == None`
+  instead of `Some(CanonicalForm::CI)`; the canonical region is still the node
+  of the last commit. The CI canonicalization after the first pass re-selected
+  its own pivots and moved bonds out of the basis that later commits read (bond
+  axis `k` = the `k`-th retained candidate), and the spine-only return pass then
+  committed against them: on the #1449 reproducer a run stopped `Converged` at
+  the true ranks with a recorded error of 4.4e-16 and a dense relative error of
+  1.58. Such runs are now exact. An initial guess's canonical form is cleared at
+  initialization instead of being passed through to the result. Callers that
+  need a canonical form canonicalize the result themselves. The rustdoc of
+  `TreeAciResult::max_errors` and `TreeAciOptions::tolerance` now states what
+  the recorded per-edge residual measures (the output's error at commit time
+  over that commit's local matrix, while the bonds it reads are in that basis)
+  and what it does not bound (the dense error, later commits, pass-1
+  residuals).
 
 ### Added
 
