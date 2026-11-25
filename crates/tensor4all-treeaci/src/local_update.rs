@@ -70,26 +70,56 @@ impl LocalMatrixScale {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn materialize_and_factor_edge<T, V, F>(
+/// Shape and budget charges of one directed edge's local matrix, planned
+/// before any of its values is evaluated.
+///
+/// Rows are the source node's local coordinate times the candidate sets of
+/// its other incoming bonds; columns are the same for the target node. The
+/// plan depends only on the candidate sets, so two trees evaluated on the same
+/// candidates (the inputs and the output) share one shape.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LocalMatrixPlan {
+    forward: DirectedEdgeId,
+    reverse: DirectedEdgeId,
+    pub(crate) row_count: usize,
+    pub(crate) col_count: usize,
+    pub(crate) point_count: usize,
+    input_value_elements: usize,
+    metadata_bytes: usize,
+    reserved_bytes: usize,
+}
+
+/// Plans the local matrix of `forward` for `inputs` and charges every budget
+/// its evaluation needs, before anything is allocated.
+///
+/// # Arguments
+///
+/// * `frames` - the frame store of `inputs` (not necessarily of the problem's
+///   inputs: the residual refresh plans the output's values with the output's
+///   own store).
+/// * `held_bytes` - bytes the caller keeps live while these values are
+///   evaluated, charged on top of the evaluation's own buffers. `0` for a
+///   commit.
+///
+/// # Errors
+///
+/// Returns [`TreeAciError::NoInputs`] for no tree,
+/// [`TreeAciError::ResourceLimit`] when a candidate, element or working-byte
+/// limit is exceeded, and [`TreeAciError::SizeOverflow`] or
+/// [`TreeAciError::InternalInvariant`] on inconsistent metadata.
+pub(crate) fn plan_local_matrix<T, V>(
     inputs: &[TreeTN<IdxTensor, V>],
     problem: &PreparedTreeProblem<V>,
     candidates: &CandidateSets,
     frames: &InputFrameStore<T>,
     forward: DirectedEdgeId,
     options: &TreeAciOptions<V>,
-    left_orthogonal: bool,
-    previous_rank: Option<usize>,
-    operator: &mut F,
-    exec: &mut crate::exec::Exec<'_, '_>,
-) -> Result<LocalUpdateResult<T>>
+    held_bytes: usize,
+) -> Result<LocalMatrixPlan>
 where
     T: TreeAciScalar,
     V: TreeAciNode,
-    F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
 {
-    #[cfg(test)]
-    let preparation_started = std::time::Instant::now();
     if inputs.is_empty() {
         return Err(TreeAciError::NoInputs);
     }
@@ -156,6 +186,7 @@ where
         max_cut_rank,
     )?
     .checked_add(metadata_bytes)
+    .and_then(|bytes| bytes.checked_add(held_bytes))
     .ok_or(TreeAciError::SizeOverflow {
         context: "local frame reservation bytes",
     })?;
@@ -187,6 +218,46 @@ where
             context: "local matrix working bytes",
         })?;
     enforce_limit("working bytes", working_bytes, options.max_working_bytes)?;
+    Ok(LocalMatrixPlan {
+        forward,
+        reverse,
+        row_count,
+        col_count,
+        point_count,
+        input_value_elements,
+        metadata_bytes,
+        reserved_bytes,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn materialize_and_factor_edge<T, V, F>(
+    inputs: &[TreeTN<IdxTensor, V>],
+    problem: &PreparedTreeProblem<V>,
+    candidates: &CandidateSets,
+    frames: &InputFrameStore<T>,
+    forward: DirectedEdgeId,
+    options: &TreeAciOptions<V>,
+    left_orthogonal: bool,
+    previous_rank: Option<usize>,
+    operator: &mut F,
+    exec: &mut crate::exec::Exec<'_, '_>,
+) -> Result<LocalUpdateResult<T>>
+where
+    T: TreeAciScalar,
+    V: TreeAciNode,
+    F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
+{
+    #[cfg(test)]
+    let preparation_started = std::time::Instant::now();
+    let plan = plan_local_matrix(inputs, problem, candidates, frames, forward, options, 0)?;
+    let LocalMatrixPlan {
+        row_count,
+        col_count,
+        input_value_elements,
+        metadata_bytes,
+        ..
+    } = plan;
     let factor_rank_bound = options
         .max_bond_dim
         .unwrap_or(usize::MAX)
@@ -228,14 +299,128 @@ where
             context: "local factor working bytes",
         })?;
     enforce_limit("working bytes", factor_bytes, options.max_working_bytes)?;
-    let row_candidates = materialize_candidates(problem, candidates, forward, row_layout.count);
-    let col_candidates = materialize_candidates(problem, candidates, reverse, col_layout.count);
-
-    let mut input_values = vec![T::default(); input_value_elements];
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {
         stats.local_preparation += preparation_started.elapsed();
     });
+    let (row_candidates, col_candidates, local_values) =
+        evaluate_local_matrix(inputs, problem, candidates, frames, &plan, operator, exec)?;
+    let sampled_scale = local_values.iter().copied().fold(0.0_f64, |scale, value| {
+        scale.max(tensor4all_core::Scalar::abs_val(value))
+    });
+    #[cfg(test)]
+    let retained_local_values = local_values.clone();
+    // Use the same numeric tolerance in RRLU as the selected matrix units:
+    // relative mode normalizes the matrix, while absolute mode leaves it raw.
+    let tolerance = options.tolerance_policy();
+    let local_scale = LocalMatrixScale::new(tolerance.local_normalizer(sampled_scale));
+    let mut matrix = Matrix::from_col_major_vec(row_count, col_count, local_values);
+    local_scale.normalize(&mut matrix);
+    #[cfg(test)]
+    let luci_started = std::time::Instant::now();
+    let threshold = tolerance.local_threshold();
+    let max_bond_dim = options.max_bond_dim.unwrap_or(usize::MAX);
+    let mut factors = match previous_rank {
+        None => exec.luci_factors(
+            matrix,
+            RrLUOptions {
+                max_bond_dim,
+                rel_tol: 0.0,
+                abs_tol: threshold,
+                left_orthogonal,
+            },
+        )?,
+        // Search down to the lowered threshold once, then keep the prefix the
+        // hysteresis rule allows (#784).
+        Some(previous_rank) => exec.luci_factors_with_rank_selection(
+            matrix,
+            RrLUOptions {
+                max_bond_dim,
+                rel_tol: 0.0,
+                abs_tol: threshold / RANK_HYSTERESIS_FACTOR,
+                left_orthogonal,
+            },
+            |pivot_errors| kept_rank(pivot_errors, threshold, previous_rank),
+        )?,
+    };
+    #[cfg(test)]
+    crate::state::profile_debug_stats::record(|stats| {
+        stats.luci += luci_started.elapsed();
+    });
+    // Only the factor holding raw pivot rows/columns carries the magnitude;
+    // the interpolative factor `A[:, J] A[I, J]^-1` (or its transpose) is
+    // invariant under relative-mode normalization.
+    let magnitude_factor = if left_orthogonal {
+        &mut factors.right
+    } else {
+        &mut factors.left
+    };
+    local_scale.restore(magnitude_factor, &mut factors.pivot_errors);
+    let (left, right, row_indices, col_indices) = if factors.rank == 0 {
+        let (left, right) = zero_rank_one_skeleton(row_count, col_count, left_orthogonal)?;
+        (left, right, vec![0], vec![0])
+    } else {
+        (
+            factors.left,
+            factors.right,
+            factors.row_indices,
+            factors.col_indices,
+        )
+    };
+    let row_samples = select_pivot_samples(row_indices, &row_candidates)?;
+    let col_samples = select_pivot_samples(col_indices, &col_candidates)?;
+    Ok(LocalUpdateResult {
+        row_samples,
+        col_samples,
+        left,
+        right,
+        pivot_errors: factors.pivot_errors,
+        sampled_scale,
+        row_count,
+        col_count,
+        #[cfg(test)]
+        local_values: retained_local_values,
+    })
+}
+
+/// Evaluates every input on every point of a planned local matrix, as
+/// `values[input + inputs.len() * (row + row_count * col)]`.
+///
+/// # Errors
+///
+/// Propagates frame-kernel failures and returns
+/// [`TreeAciError::InternalInvariant`] when the packed frames disagree with
+/// the plan.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn local_input_values<T, V>(
+    inputs: &[TreeTN<IdxTensor, V>],
+    problem: &PreparedTreeProblem<V>,
+    frames: &InputFrameStore<T>,
+    plan: &LocalMatrixPlan,
+    row_candidates: &[ComponentSample],
+    col_candidates: &[ComponentSample],
+    exec: &mut crate::exec::Exec<'_, '_>,
+) -> Result<Vec<T>>
+where
+    T: TreeAciScalar,
+    V: TreeAciNode,
+{
+    let LocalMatrixPlan {
+        forward,
+        reverse,
+        row_count,
+        col_count,
+        point_count,
+        input_value_elements,
+        reserved_bytes,
+        ..
+    } = *plan;
+    if row_candidates.len() != row_count || col_candidates.len() != col_count {
+        return Err(TreeAciError::InternalInvariant {
+            message: "local matrix candidates disagree with their plan",
+        });
+    }
+    let mut input_values = vec![T::default(); input_value_elements];
     #[cfg(test)]
     let input_frames_started = std::time::Instant::now();
     // Per input, `input_values[.., point] = row_frames[row] . col_frames[col]`
@@ -255,7 +440,7 @@ where
                 problem,
                 input,
                 forward,
-                &row_candidates,
+                row_candidates,
                 reserved_bytes,
                 exec,
             )?;
@@ -270,7 +455,7 @@ where
                 problem,
                 input,
                 reverse,
-                &col_candidates,
+                col_candidates,
                 reserved_bytes,
                 exec,
             )?;
@@ -376,6 +561,42 @@ where
     crate::state::profile_debug_stats::record(|stats| {
         stats.local_input_frames += input_frames_started.elapsed();
     });
+    Ok(input_values)
+}
+
+/// Materializes the candidates of a planned local matrix and evaluates the
+/// operator on every point, returning `(rows, columns, values)` with the
+/// values column-major.
+///
+/// # Errors
+///
+/// Propagates [`local_input_values`] and operator failures.
+pub(crate) fn evaluate_local_matrix<T, V, F>(
+    inputs: &[TreeTN<IdxTensor, V>],
+    problem: &PreparedTreeProblem<V>,
+    candidates: &CandidateSets,
+    frames: &InputFrameStore<T>,
+    plan: &LocalMatrixPlan,
+    operator: &mut F,
+    exec: &mut crate::exec::Exec<'_, '_>,
+) -> Result<(Vec<ComponentSample>, Vec<ComponentSample>, Vec<T>)>
+where
+    T: TreeAciScalar,
+    V: TreeAciNode,
+    F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
+{
+    let point_count = plan.point_count;
+    let row_candidates = materialize_candidates(problem, candidates, plan.forward, plan.row_count);
+    let col_candidates = materialize_candidates(problem, candidates, plan.reverse, plan.col_count);
+    let input_values = local_input_values(
+        inputs,
+        problem,
+        frames,
+        plan,
+        &row_candidates,
+        &col_candidates,
+        exec,
+    )?;
     let batch = TreeElementwiseBatch::new(&input_values, inputs.len(), point_count)?;
     let mut local_values = vec![T::default(); point_count];
     #[cfg(test)]
@@ -385,82 +606,7 @@ where
     crate::state::profile_debug_stats::record(|stats| {
         stats.operator += operator_started.elapsed();
     });
-    let sampled_scale = local_values.iter().copied().fold(0.0_f64, |scale, value| {
-        scale.max(tensor4all_core::Scalar::abs_val(value))
-    });
-    #[cfg(test)]
-    let retained_local_values = local_values.clone();
-    // Use the same numeric tolerance in RRLU as the selected matrix units:
-    // relative mode normalizes the matrix, while absolute mode leaves it raw.
-    let tolerance = options.tolerance_policy();
-    let local_scale = LocalMatrixScale::new(tolerance.local_normalizer(sampled_scale));
-    let mut matrix = Matrix::from_col_major_vec(row_count, col_count, local_values);
-    local_scale.normalize(&mut matrix);
-    #[cfg(test)]
-    let luci_started = std::time::Instant::now();
-    let threshold = tolerance.local_threshold();
-    let max_bond_dim = options.max_bond_dim.unwrap_or(usize::MAX);
-    let mut factors = match previous_rank {
-        None => exec.luci_factors(
-            matrix,
-            RrLUOptions {
-                max_bond_dim,
-                rel_tol: 0.0,
-                abs_tol: threshold,
-                left_orthogonal,
-            },
-        )?,
-        // Search down to the lowered threshold once, then keep the prefix the
-        // hysteresis rule allows (#784).
-        Some(previous_rank) => exec.luci_factors_with_rank_selection(
-            matrix,
-            RrLUOptions {
-                max_bond_dim,
-                rel_tol: 0.0,
-                abs_tol: threshold / RANK_HYSTERESIS_FACTOR,
-                left_orthogonal,
-            },
-            |pivot_errors| kept_rank(pivot_errors, threshold, previous_rank),
-        )?,
-    };
-    #[cfg(test)]
-    crate::state::profile_debug_stats::record(|stats| {
-        stats.luci += luci_started.elapsed();
-    });
-    // Only the factor holding raw pivot rows/columns carries the magnitude;
-    // the interpolative factor `A[:, J] A[I, J]^-1` (or its transpose) is
-    // invariant under relative-mode normalization.
-    let magnitude_factor = if left_orthogonal {
-        &mut factors.right
-    } else {
-        &mut factors.left
-    };
-    local_scale.restore(magnitude_factor, &mut factors.pivot_errors);
-    let (left, right, row_indices, col_indices) = if factors.rank == 0 {
-        let (left, right) = zero_rank_one_skeleton(row_count, col_count, left_orthogonal)?;
-        (left, right, vec![0], vec![0])
-    } else {
-        (
-            factors.left,
-            factors.right,
-            factors.row_indices,
-            factors.col_indices,
-        )
-    };
-    let row_samples = select_pivot_samples(row_indices, &row_candidates)?;
-    let col_samples = select_pivot_samples(col_indices, &col_candidates)?;
-    Ok(LocalUpdateResult {
-        row_samples,
-        col_samples,
-        left,
-        right,
-        pivot_errors: factors.pivot_errors,
-        sampled_scale,
-        row_count,
-        col_count,
-        #[cfg(test)]
-        local_values: retained_local_values,
-    })
+    Ok((row_candidates, col_candidates, local_values))
 }
 
 /// Bytes of `max_working_bytes` that stay live for the whole candidate-frame
@@ -624,7 +770,7 @@ fn candidate_layout<V: TreeAciNode>(
 }
 
 #[cfg(test)]
-fn enumerate_candidates<V: TreeAciNode>(
+pub(crate) fn enumerate_candidates<V: TreeAciNode>(
     problem: &PreparedTreeProblem<V>,
     candidate_sets: &CandidateSets,
     edge: DirectedEdgeId,
