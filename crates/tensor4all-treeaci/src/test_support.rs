@@ -76,6 +76,34 @@ pub(crate) fn random_decaying_tree<T: crate::TreeAciScalar>(
     TreeTN::from_tensors(tensors, (0..physical.len()).collect()).unwrap()
 }
 
+/// Edges of a seven-node tree whose nodes 1 and 3 have degree 3.
+pub(crate) const BRANCHED_EDGES: [(usize, usize); 6] =
+    [(0, 1), (1, 2), (1, 3), (3, 4), (3, 5), (5, 6)];
+
+/// Two deterministic rank-3 inputs on [`BRANCHED_EDGES`] with binary sites.
+///
+/// Their elementwise product ([`product_of_two`]) needs bond rank 9 on most
+/// cuts, so a rank cap below that leaves an inexact output.
+pub(crate) fn branched_product_inputs() -> (Vec<DynIndex>, Vec<TreeTN<IdxTensor, usize>>) {
+    let sites = (0..7).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let mut rng = SplitMix(1451);
+    let inputs = (0..2)
+        .map(|_| random_decaying_tree::<f64>(&BRANCHED_EDGES, &sites, 3, 0.5, &mut rng))
+        .collect();
+    (sites, inputs)
+}
+
+/// Batched elementwise product of the first two inputs.
+pub(crate) fn product_of_two(
+    batch: crate::TreeElementwiseBatch<'_, f64>,
+    output: &mut [f64],
+) -> crate::Result<()> {
+    for (point, value) in output.iter_mut().enumerate() {
+        *value = batch.get(0, point)? * batch.get(1, point)?;
+    }
+    Ok(())
+}
+
 /// Largest `|M - I|` of the pivot-basis invariant on a state's output.
 ///
 /// For every directed edge `c -> p` toward the output's canonical centre,

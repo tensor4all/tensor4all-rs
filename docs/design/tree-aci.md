@@ -187,13 +187,76 @@ commit time. It does not bound:
 - the dense error away from the local matrices;
 - the output after later commits, which change it on the same points;
 - the output at all for pass-1 residuals: pass-1 commits read bonds that still
-  carry the initial cores. Because the return pass revisits only the spine
-  and the off-spine bonds a Guard injection enlarged, a run that stops after
-  pass 2 can still gate on the pass-1 residuals of the other off-spine edges. This is accepted (#1449); a stop window that excludes pass 1
-  would add a forward pass to such runs and has not been measured.
+  carry the initial cores (the return pass revisits only the spine and the
+  off-spine bonds a Guard injection enlarged).
 
 The local values come from the input frames, not from the output, so the
 residual cannot detect an output whose bonds left the pivot basis.
+
+#### Re-measuring stale residuals before a stop (#1451)
+
+Every commit rewrites the two cores of its edge, and every output value
+contracts every core, so any commit can change the output on the points of
+every earlier residual. The walk starts each commit where the previous one
+ended (`run_phase_serial` checks the canonical centre), so after a pass every
+edge except the one committed last is stale in this sense; "an adjacent core
+was rewritten" selects the same edges. The state counts core-rewriting commits
+(`output_revision`) and stores, per edge, the revision its residual was
+measured on; a residual is stale when the two differ. Guard injection changes
+candidate sets only and does not count.
+
+#1451 showed what a stale residual hides. G0, r = 5, tolerance 1e-3,
+`min_sweeps = 1`, seed 1 on `29baf4a9`: the pass-3 commit of edge 0 (x side)
+recorded 2.2e-13, the next commit (0 to 3) rewrote core 0 and added the
+candidates whose low x bits are `0000`, and the stop read the old residual,
+so the run returned `Converged` with dense error 4.73 on the plane x = 16.
+
+On a pass that meets every other stop condition (the local target on the
+recorded residuals, rank stability, no Guard pivot in the window), the stop
+now re-measures every stale residual first: the operator and the current output
+are evaluated on the edge's current local matrix (the matrix its next commit
+would read; the output through a frame store of the output), and the residual
+becomes `max |f - output|` there. `max_errors` of that pass holds the
+re-measured maximum, and the stop is refused when it exceeds the tolerance.
+The rank-limit flag of the pass is not recomputed from re-measured residuals:
+an edge at its algebraic bound reproduces its local matrix exactly on its next
+commit, so a re-measured error there is not a rank limit. The re-measurement
+touches only the stale edges and only their current local matrices; it does
+not revisit retained pivots, Guard points or earlier matrices (#1372). Its cost
+is one operator evaluation per entry of those local matrices, about one forward
+pass, on each pass that reaches the stop test. A refused stop continues the
+sweep, whose commits replace the re-measured residuals. A stop is accepted
+only after Guard searches that found no pivot, so it never needs a cleanup pass,
+and the cleanup pass does not re-measure.
+
+Measured on G0 r = 5, tolerance 1e-3, seeds 1-400 per layout (#1451):
+
+| layout | `min_sweeps` | `Converged` above 1e-2, before / after | largest dense error of a `Converged` run, before / after | oracle points, after / before |
+|---|---|---|---|---|
+| cttn | 1 | 13 / 0 | 12.4 / 1.18e-3 | 2.11x |
+| swap | 1 | 6 / 0 | 12.4 / 6.0e-4 | 1.60x |
+| nblock | 1 | 32 / 0 | 8.9e-2 / 1.9e-3 | 2.81x |
+| cttn | 2 | 0 / 0 | 9.5e-4 / 9.5e-4 | 1.04x |
+| swap | 2 | 0 / 0 | 6.0e-4 / 6.0e-4 | 1.37x |
+| nblock | 2 | 0 / 0 | 3.4e-3 / 1.7e-3 | 1.33x |
+
+On runs whose trajectory did not change, the re-measurement costs 1.21-1.61x
+(median per layout). The rest is extra passes: with `min_sweeps = 1`, 34 cttn,
+6 swap and 369 nblock runs no longer stop where they did, and 9 of the cttn runs
+now end `MaxSweeps` at 50 passes on the known local-error plateau near 1.01e-3
+(dense error 1.01e-3) instead of stopping at up to 5.8e-3. With the default
+`min_sweeps = 2` every cttn and swap run keeps its termination, passes and dense
+error.
+
+Two alternatives were measured and rejected. Marking stale residuals as
+uncertifiable makes `Converged` unreachable, since every pass ends with all
+edges but one stale: all 44 runs of the 11-seed table ended `MaxSweeps` at 50
+passes. Re-measuring the output on each edge's commit-time local matrix (cached
+operator values, no new evaluations) does not see the error: on the diagnosed
+run it gave 8.1e-4 after pass 3, and it removed none of the 19 wrong cttn and
+swap stops below. Re-measuring after every pass instead of only at a stop gave
+the same terminations, passes and dense errors on all 1,200 `min_sweeps = 1`
+runs at 1.27-1.51 times the evaluations of re-measuring at a stop.
 
 ### Fresh local crosses and tolerance-boundary cycling
 

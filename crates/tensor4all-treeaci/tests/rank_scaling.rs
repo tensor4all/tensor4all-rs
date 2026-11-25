@@ -62,10 +62,11 @@ fn binary_tree_rank_scaling_stays_bounded() {
         maximum_rank <= 2,
         "maximum rank {maximum_rank} exceeded bound"
     );
-    // Guard-on observed 122 points with two starts and four coordinate walks;
-    // the earlier guard-off rank-only baseline was 76 points. Keep modest
-    // headroom while catching accidental dense or repeated evaluation.
-    const GUARD_EVALUATION_BUDGET: u64 = 140;
+    // Guard-on observed 225 points: 113 for the pass and its Guard search,
+    // plus 112 for re-measuring the stale residuals before the stop (#1451).
+    // Keep modest headroom while catching accidental dense or repeated
+    // evaluation.
+    const GUARD_EVALUATION_BUDGET: u64 = 250;
     assert!(
         result.diagnostics.evaluated_points < GUARD_EVALUATION_BUDGET,
         "guard evaluated {} points, budget {GUARD_EVALUATION_BUDGET}",

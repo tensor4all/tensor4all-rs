@@ -7,6 +7,7 @@ use crate::{
     },
     path_cover::{OrientedEdgeStep, PathPhase},
     problem::DirectedEdgeId,
+    residual_refresh::refresh_stale_residuals,
     state::TreeAciState,
     transaction::update_edge_transaction,
     Result, TreeAciError, TreeAciNode, TreeAciOptions, TreeAciScalar, TreeAciTermination,
@@ -170,14 +171,42 @@ where
         };
         global_pivots.push(found);
         let completed = pass + 1;
-        if convergence_criterion(
+        let mut converged = convergence_criterion(
             completed,
             stable_rank_passes,
             &max_errors,
             &global_pivots,
             options.min_sweeps,
             options.tolerance,
-        ) {
+        );
+        if converged {
+            // A recorded residual describes the output its commit left. Every
+            // later commit rewrote two cores, so at the end of a pass every
+            // edge but the last one committed holds a residual of an output
+            // that no longer exists. Re-measure those on the current output
+            // and current local matrices before a stop can rest on them
+            // (#1451). Only a pass that passes every other stop condition
+            // pays for this; a failed re-measurement just continues the
+            // sweep, whose next commits replace the re-measured residuals.
+            let refresh = refresh_stale_residuals(state, options, operator, exec)?;
+            if refresh.refreshed_edges > 0 {
+                evaluated_points = evaluated_points
+                    .checked_add(refresh.evaluated_points)
+                    .ok_or(TreeAciError::SizeOverflow {
+                        context: "sweep evaluated point count",
+                    })?;
+                max_errors[pass] = recorded_max_error(state, options);
+                converged = convergence_criterion(
+                    completed,
+                    stable_rank_passes,
+                    &max_errors,
+                    &global_pivots,
+                    options.min_sweeps,
+                    options.tolerance,
+                );
+            }
+        }
+        if converged {
             termination = TreeAciTermination::Converged;
             break;
         }
@@ -270,13 +299,7 @@ where
     }
 
     let max_rank = state.edge_ranks.iter().copied().max().unwrap_or(1);
-    let tolerance = options.tolerance_policy();
-    let max_error = state
-        .edge_errors
-        .iter()
-        .zip(&state.edge_scales)
-        .map(|(&error, &scale)| tolerance.error_metric(error, scale))
-        .fold(0.0, f64::max);
+    let max_error = recorded_max_error(state, options);
     Ok(PassReport {
         direction,
         #[cfg(test)]
@@ -285,6 +308,21 @@ where
         max_error,
         evaluated_points,
     })
+}
+
+/// Largest recorded per-edge residual, in the units of
+/// [`TreeAciOptions::tolerance`].
+fn recorded_max_error<T: TreeAciScalar, V: TreeAciNode>(
+    state: &TreeAciState<'_, T, V>,
+    options: &TreeAciOptions<V>,
+) -> f64 {
+    let tolerance = options.tolerance_policy();
+    state
+        .edge_errors
+        .iter()
+        .zip(&state.edge_scales)
+        .map(|(&error, &scale)| tolerance.error_metric(error, scale))
+        .fold(0.0, f64::max)
 }
 
 #[allow(clippy::too_many_arguments)]
