@@ -45,6 +45,11 @@
 //! benchmark when that distinction matters. This crate is the native choice
 //! for genuinely branched trees.
 
+// Lets unit tests include the integration tests' G0 fixture
+// (`tests/support/g0.rs`), which names this crate by its public path.
+#[cfg(test)]
+extern crate self as tensor4all_treeaci;
+
 mod basis_projection;
 mod batch;
 #[cfg(feature = "diagnostics")]

@@ -268,29 +268,8 @@ where
         return evaluate_single_site(inputs, options, &mut operator, &mut exec);
     }
     let mut state = TreeAciState::<T, V>::initialize_with_rng(inputs, options, rng, &mut exec)?;
-    let history = run_local_sweeps(&mut state, options, &mut operator, rng, &mut exec)?;
-    let mut evaluated_points = history.evaluated_points;
-    if history.needs_cleanup {
-        let direction = if history.max_ranks.len() % 2 == 0 {
-            PassDirection::Forward
-        } else {
-            PassDirection::Reverse
-        };
-        // The cleanup is the pass after the last recorded one.
-        let cleanup = run_directional_pass(
-            &mut state,
-            options,
-            direction,
-            crate::rank_hysteresis::applies_to_pass(history.max_ranks.len() + 1),
-            &mut operator,
-            &mut exec,
-        )?;
-        evaluated_points = evaluated_points
-            .checked_add(cleanup.evaluated_points)
-            .ok_or(crate::TreeAciError::SizeOverflow {
-                context: "final evaluated point count",
-            })?;
-    }
+    let (history, evaluated_points) =
+        run_sweeps_and_cleanup(&mut state, options, &mut operator, rng, &mut exec)?;
     state.output.verify_internal_consistency()?;
     let edge_ranks = state
         .edge_ranks
@@ -438,6 +417,53 @@ where
         &mut stream,
         Exec::Global,
     )
+}
+
+/// Runs the local sweeps and, when the last pass's Guard injected
+/// candidates, one cleanup pass, leaving `state.output` as the result tree.
+///
+/// Returns the sweep history and the evaluated points of the sweeps, their
+/// Guard searches and the cleanup.
+///
+/// The cleanup is the pass after the last recorded one: a return pass after
+/// an odd count, which re-commits the off-spine bonds the injection enlarged
+/// before reading them (#1450), or a forward pass after an even count, which
+/// re-commits every bond child-first.
+fn run_sweeps_and_cleanup<T, V, F>(
+    state: &mut TreeAciState<'_, T, V>,
+    options: &TreeAciOptions<V>,
+    operator: &mut F,
+    rng: &mut dyn rand::RngCore,
+    exec: &mut Exec<'_, '_>,
+) -> Result<(crate::schedule::SweepHistory, u64)>
+where
+    T: TreeAciScalar,
+    V: TreeAciNode,
+    F: for<'batch> FnMut(TreeElementwiseBatch<'batch, T>, &mut [T]) -> Result<()>,
+{
+    let history = run_local_sweeps(state, options, operator, rng, exec)?;
+    let mut evaluated_points = history.evaluated_points;
+    if history.needs_cleanup {
+        let direction = if history.max_ranks.len() % 2 == 0 {
+            PassDirection::Forward
+        } else {
+            PassDirection::Reverse
+        };
+        let cleanup = run_directional_pass(
+            state,
+            options,
+            direction,
+            crate::rank_hysteresis::applies_to_pass(history.max_ranks.len() + 1),
+            operator,
+            exec,
+        )?;
+        evaluated_points = evaluated_points
+            .checked_add(cleanup.evaluated_points)
+            .ok_or(crate::TreeAciError::SizeOverflow {
+                context: "final evaluated point count",
+            })?;
+    }
+    Ok((history, evaluated_points))
 }
 
 #[cfg(test)]

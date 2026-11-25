@@ -479,3 +479,104 @@ fn rank_limit_and_capacity_policy_preserve_mixed_cut_and_tolerance_semantics() {
     state.edge_errors.fill(0.0);
     assert!(!current_state_is_rank_limited(&state, &saturated));
 }
+
+/// Directed edge `from -> to` of a prepared problem with `usize` node names.
+fn directed_between(state: &TreeAciState<'_, f64, usize>, from: usize, to: usize) -> usize {
+    state
+        .problem
+        .directed_edges
+        .iter()
+        .position(|edge| edge.from == from && edge.to == to)
+        .unwrap()
+}
+
+#[test]
+fn return_pass_recommits_off_spine_bonds_the_guard_enlarged() {
+    // Spine 0-1-2-3 from root 0, with the branch 1-4-{5, 6} and the leaf 2-7.
+    let edges = [(0, 1), (1, 2), (2, 3), (1, 4), (4, 5), (4, 6), (2, 7)];
+    let physical = (0..8).map(|_| DynIndex::new_dyn(2)).collect::<Vec<_>>();
+    let inputs = vec![crate::test_support::random_decaying_tree::<f64>(
+        &edges,
+        &physical,
+        2,
+        0.5,
+        &mut crate::test_support::SplitMix(5),
+    )];
+    let options = TreeAciOptions {
+        root: Some(0),
+        tolerance: 0.3,
+        ..TreeAciOptions::default()
+    };
+    let mut state = TreeAciState::<f64, usize>::initialize(&inputs, &options).unwrap();
+    run_directional_pass(
+        &mut state,
+        &options,
+        PassDirection::Forward,
+        false,
+        &mut identity,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+    assert_eq!(crate::test_support::pivot_basis_deviation(&state), 0.0);
+    let capacities = global_injection_capacities(&state, &options);
+    let injected = crate::global_guard::inject_global_pivots(
+        &mut state,
+        &[vec![0, 1, 0, 1, 1, 1, 0, 1]],
+        &capacities,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+    assert_eq!(injected, 1);
+    let step = |from, to| directed_between(&state, from, to);
+    let grown = |state: &TreeAciState<'_, f64, usize>, from, to| {
+        state
+            .candidate_set_outgrew_basis(directed_between(state, from, to))
+            .unwrap()
+    };
+    // The injection enlarged the off-spine bonds 4 -> 1 and 5 -> 4, but not
+    // 6 -> 4 or 7 -> 2.
+    assert!(grown(&state, 4, 1) && grown(&state, 5, 4));
+    assert!(!grown(&state, 6, 4) && !grown(&state, 7, 2));
+    let expected = vec![
+        step(3, 2),
+        step(2, 1),
+        step(1, 4),
+        step(4, 5),
+        step(5, 4),
+        step(4, 1),
+        step(1, 0),
+    ];
+
+    // The stored spine-only walk (`main` before #1450) breaks the pivot basis.
+    let mut spine_only = state.clone();
+    for phase in spine_only.problem.schedule.reverse.clone().iter() {
+        super::run_phase_serial(
+            &mut spine_only,
+            &options,
+            phase,
+            false,
+            &mut identity,
+            &mut Vec::new(),
+            &mut 0,
+            &mut crate::exec::Exec::Global,
+        )
+        .unwrap();
+    }
+    let broken = crate::test_support::pivot_basis_deviation(&spine_only);
+    assert!(broken > 0.5, "spine-only max|M - I| = {broken:e}");
+
+    let reverse = run_directional_pass(
+        &mut state,
+        &options,
+        PassDirection::Reverse,
+        false,
+        &mut identity,
+        &mut crate::exec::Exec::Global,
+    )
+    .unwrap();
+    assert_eq!(reverse.updated_edges, expected);
+    let deviation = crate::test_support::pivot_basis_deviation(&state);
+    assert!(deviation <= 1e-12, "max|M - I| = {deviation:e}");
+    assert!(!grown(&state, 4, 1) && !grown(&state, 5, 4));
+    assert_eq!(state.output.canonical_region(), &HashSet::from([0]));
+}

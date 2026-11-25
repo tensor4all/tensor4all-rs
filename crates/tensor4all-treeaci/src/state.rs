@@ -251,6 +251,34 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
             generation,
         })
     }
+
+    /// Whether the candidate set of `directed` holds candidates outside its
+    /// bond basis.
+    ///
+    /// A commit replaces both candidate sets of its edge by exactly the
+    /// selected pivots, one per bond axis. After the edge's first commit a
+    /// longer set therefore holds candidates the global Guard appended
+    /// (`inject_global_pivots`) since the last commit. A commit that reads
+    /// such a set as rows may select an appended candidate, which its factor
+    /// then drops (the prefix projection of `replace_edge_cores`), so the bond
+    /// must be re-committed first (#1450).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::TreeAciError::InternalInvariant`] for an unknown edge.
+    pub(crate) fn candidate_set_outgrew_basis(
+        &self,
+        directed: crate::problem::DirectedEdgeId,
+    ) -> Result<bool> {
+        let ids = self.candidates.ids.get(directed);
+        let rank = self.edge_ranks.get(directed / 2);
+        match (ids, rank) {
+            (Some(ids), Some(&rank)) => Ok(ids.len() > rank),
+            _ => Err(crate::TreeAciError::InternalInvariant {
+                message: "candidate basis check references an unknown edge",
+            }),
+        }
+    }
 }
 
 #[cfg(test)]

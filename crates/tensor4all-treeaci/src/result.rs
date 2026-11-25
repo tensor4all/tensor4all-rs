@@ -138,8 +138,9 @@ pub struct TreeAciResult<V: TreeAciNode> {
     /// - the output after later commits, which change it on the same points;
     /// - the output at all for residuals recorded in pass 1, whose commits read
     ///   bonds that still carry the initial cores. The return pass revisits
-    ///   only the spine, so a run that stops after pass 2 still gates on the
-    ///   pass-1 residuals of the edges off the spine.
+    ///   only the spine and the off-spine bonds a Guard injection enlarged, so
+    ///   a run that stops after pass 2 can still gate on the pass-1 residuals
+    ///   of the other edges off the spine.
     ///
     /// See [`TreeAciTermination::Converged`].
     pub max_errors: Vec<f64>,

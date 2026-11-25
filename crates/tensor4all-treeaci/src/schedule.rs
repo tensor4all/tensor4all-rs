@@ -228,7 +228,16 @@ where
     let schedule_acquire_started = std::time::Instant::now();
     let phases = match direction {
         PassDirection::Forward => state.problem.schedule.forward.clone(),
-        PassDirection::Reverse => state.problem.schedule.reverse.clone(),
+        // The return walk revisits the spine. A spine commit also reads the
+        // candidate set of every off-spine bond into its source node, and a
+        // Guard injection since the forward pass may have enlarged it. Such a
+        // bond is re-committed first, children first, or the spine commit can
+        // select an injected candidate its factor then drops, and the bond
+        // leaves the pivot basis (#1450). Without enlarged sets this is the
+        // stored spine walk.
+        PassDirection::Reverse => state.problem.schedule.reverse_with_recommits(|step| {
+            state.candidate_set_outgrew_basis(directed_edge_for_step(state, &step)?)
+        })?,
     };
     #[cfg(test)]
     crate::state::profile_debug_stats::record(|stats| {
@@ -341,7 +350,8 @@ where
 }
 
 // A stable maximum can hide growth on a smaller cut, particularly when the
-// forward walk visits side branches but the return visits only the spine.
+// forward walk visits side branches but the return visits only the spine
+// (and the side bonds a Guard injection enlarged).
 // Keep one rank per cut, updated in place once per pass: O(edges) storage and
 // work, with no extra contractions, samples, or per-pass allocations.
 fn track_rank_stability(previous: &mut [usize], current: &[usize], stable: usize) -> usize {

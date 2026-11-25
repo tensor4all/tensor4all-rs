@@ -1,4 +1,5 @@
-//! Deterministic random tree fixtures shared by unit tests and diagnostics.
+//! Deterministic random tree fixtures and invariant checks shared by unit
+//! tests and diagnostics.
 
 use tensor4all_core::{DynIndex, IdxTensor, IndexLike};
 use tensor4all_treetn::TreeTN;
@@ -73,4 +74,166 @@ pub(crate) fn random_decaying_tree<T: crate::TreeAciScalar>(
         })
         .collect();
     TreeTN::from_tensors(tensors, (0..physical.len()).collect()).unwrap()
+}
+
+/// Largest `|M - I|` of the pivot-basis invariant on a state's output.
+///
+/// For every directed edge `c -> p` toward the output's canonical centre,
+/// `M[c -> p]` is the `c`-side subtree of the output evaluated at the first
+/// `r` retained candidates `candidates.ids[c -> p]`, where `r` is the bond
+/// dimension: row `k` is the subtree's vector over the bond at the `k`-th
+/// candidate's configuration. The invariant (#1449, #1450) is `M = I` on
+/// every such edge. Test-only: it evaluates every retained candidate, which a
+/// production run must not pay for.
+pub(crate) fn pivot_basis_deviation<T: crate::TreeAciScalar, V: crate::TreeAciNode>(
+    state: &crate::state::TreeAciState<'_, T, V>,
+) -> f64 {
+    let region = state.output.canonical_region();
+    assert_eq!(region.len(), 1, "the output has no single canonical centre");
+    let centre = state.problem.node_positions[region.iter().next().unwrap()];
+    let mut deviation: f64 = 0.0;
+    for edge in 0..state.problem.directed_edges.len() {
+        if side_contains(&state.problem, edge, centre) {
+            continue;
+        }
+        let rank = bond_dim(state, edge);
+        let ids = &state.candidates.ids[edge];
+        assert!(
+            ids.len() >= rank,
+            "fewer retained candidates than bond axes"
+        );
+        for (k, &id) in ids[..rank].iter().enumerate() {
+            let mut coordinates = vec![None; state.problem.node_order.len()];
+            component_coordinates(state, edge, id, &mut coordinates);
+            let row = subtree_vector(state, edge, &coordinates);
+            for (j, value) in row.into_iter().enumerate() {
+                let target = if j == k { T::one() } else { T::zero() };
+                deviation = deviation.max(tensor4all_core::Scalar::abs_val(value - target));
+            }
+        }
+    }
+    deviation
+}
+
+/// Whether `node` lies on the `from` side of `edge`.
+fn side_contains<V: crate::TreeAciNode>(
+    problem: &crate::problem::PreparedTreeProblem<V>,
+    edge: crate::problem::DirectedEdgeId,
+    node: usize,
+) -> bool {
+    let directed = &problem.directed_edges[edge];
+    problem.node_positions[&directed.from] == node
+        || directed
+            .incoming_to_from
+            .iter()
+            .any(|&incoming| side_contains(problem, incoming, node))
+}
+
+fn bond_dim<T: crate::TreeAciScalar, V: crate::TreeAciNode>(
+    state: &crate::state::TreeAciState<'_, T, V>,
+    edge: crate::problem::DirectedEdgeId,
+) -> usize {
+    let directed = &state.problem.directed_edges[edge];
+    let graph_edge = state
+        .output
+        .edge_between(&directed.from, &directed.to)
+        .unwrap();
+    state.output.bond_index(graph_edge).unwrap().dim()
+}
+
+/// Local coordinate of every node on the `from` side of `edge` in sample `id`.
+fn component_coordinates<T: crate::TreeAciScalar, V: crate::TreeAciNode>(
+    state: &crate::state::TreeAciState<'_, T, V>,
+    edge: crate::problem::DirectedEdgeId,
+    id: crate::samples::SampleId,
+    coordinates: &mut [Option<usize>],
+) {
+    let directed = &state.problem.directed_edges[edge];
+    let record = state.sample_arena.record(edge, id).unwrap();
+    coordinates[state.problem.node_positions[&directed.from]] = Some(record.local_coordinate);
+    for &(incoming, sample) in &record.incoming {
+        component_coordinates(state, incoming, sample, coordinates);
+    }
+}
+
+/// The `from`-side subtree of `edge`, evaluated at `coordinates`, as a vector
+/// over the bond of `edge`.
+fn subtree_vector<T: crate::TreeAciScalar, V: crate::TreeAciNode>(
+    state: &crate::state::TreeAciState<'_, T, V>,
+    edge: crate::problem::DirectedEdgeId,
+    coordinates: &[Option<usize>],
+) -> Vec<T> {
+    let problem = &state.problem;
+    let output = &state.output;
+    let directed = &problem.directed_edges[edge];
+    let position = problem.node_positions[&directed.from];
+    let plan = &problem.physical[position];
+    let local = coordinates[position].unwrap();
+    let bond_of = |from: &V, to: &V| {
+        output
+            .bond_index(output.edge_between(from, to).unwrap())
+            .unwrap()
+            .clone()
+    };
+    let outgoing = bond_of(&directed.from, &directed.to);
+    let children = directed
+        .incoming_to_from
+        .iter()
+        .map(|&incoming| {
+            let child = &problem.directed_edges[incoming];
+            (
+                bond_of(&child.from, &child.to),
+                subtree_vector(state, incoming, coordinates),
+            )
+        })
+        .collect::<Vec<_>>();
+    enum Axis {
+        Site(usize),
+        Child(usize),
+        Outgoing,
+    }
+    let core = output
+        .tensor(output.node_index(&directed.from).unwrap())
+        .unwrap();
+    let axes = core
+        .indices()
+        .iter()
+        .map(|index| {
+            if let Some(k) = plan.indices.iter().position(|site| site == index) {
+                Axis::Site((local / plan.strides[k]) % plan.dims[k])
+            } else if let Some(k) = children.iter().position(|(bond, _)| bond == index) {
+                Axis::Child(k)
+            } else {
+                assert!(*index == outgoing, "unexpected core index");
+                Axis::Outgoing
+            }
+        })
+        .collect::<Vec<_>>();
+    let dims = core.indices().iter().map(|i| i.dim()).collect::<Vec<_>>();
+    let mut result = vec![T::zero(); outgoing.dim()];
+    // Column-major traversal of the core.
+    let mut multi = vec![0usize; dims.len()];
+    for value in core.to_vec::<T>().unwrap() {
+        let mut factor = value;
+        let mut slot = 0;
+        let mut on_site = true;
+        for (axis, &m) in axes.iter().zip(&multi) {
+            match axis {
+                Axis::Site(c) => on_site &= m == *c,
+                Axis::Child(k) => factor = factor * children[*k].1[m],
+                Axis::Outgoing => slot = m,
+            }
+        }
+        if on_site {
+            result[slot] = result[slot] + factor;
+        }
+        for (m, &d) in multi.iter_mut().zip(&dims) {
+            *m += 1;
+            if *m < d {
+                break;
+            }
+            *m = 0;
+        }
+    }
+    result
 }
