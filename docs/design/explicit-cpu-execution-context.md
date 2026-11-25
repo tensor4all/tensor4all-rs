@@ -135,6 +135,19 @@ serialization and MPI transport.
 
 ## Errors and lifecycle
 
+Native einsum diagnostics and core operation profiling resolve their environment
+settings into separate immutable `OnceLock` configurations on first use in each
+crate. Configure the relevant `T4A_PROFILE_*`, `T4A_TRACE_NATIVE_EINSUM_*`, and
+`T4A_GMRES_OP_PROFILE` variables before that first use; subsequent operations do
+not reread the environment. Flags retain their presence-based meaning (including
+empty values), and malformed trace limits retain their defaults.
+
+Contractions do not implicitly reset engines, clear buffer pools, or trim the
+process allocator. The context owner chooses when to call `reset_graph_runtime`
+or `reset_graph_buffer_pool`; process-wide allocator trimming is an explicit
+`release_process_allocator_cached_memory` call. The former per-einsum cleanup
+environment switches are removed (#1387).
+
 Construction and graph execution use crate-local typed errors with original
 tenferro errors retained as sources. Dropping the last context owner drops its
 engine, graph runtime/cache, and eager runtime; the engine was moved into the

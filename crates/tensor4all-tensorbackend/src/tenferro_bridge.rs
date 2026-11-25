@@ -3,7 +3,6 @@
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -66,7 +65,7 @@ fn native_tensor_from_vec<T: TensorScalar>(
 use crate::context::CpuExecutionContext;
 #[cfg(feature = "global-defaults")]
 use crate::context::{default_context, with_default_session};
-use crate::memory::release_process_allocator_cached_memory;
+use crate::diagnostics::native_einsum_diagnostics;
 use crate::storage::{storage_dtype_dispatch, Storage, StorageScalar};
 use crate::tensor_element::TensorElement;
 #[cfg(feature = "global-defaults")]
@@ -179,55 +178,7 @@ fn native_einsum_profile_enabled() -> bool {
     if FORCE_NATIVE_EINSUM_PROFILE.with(Cell::get) {
         return true;
     }
-    env::var("T4A_PROFILE_NATIVE_EINSUM").is_ok()
-}
-
-fn native_einsum_path_trace_enabled() -> bool {
-    env::var("T4A_TRACE_NATIVE_EINSUM_PATHS").is_ok()
-}
-
-fn native_einsum_path_trace_min_bytes() -> usize {
-    env::var("T4A_TRACE_NATIVE_EINSUM_MIN_BYTES")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0)
-}
-
-fn native_einsum_path_trace_max_signatures() -> usize {
-    env::var("T4A_TRACE_NATIVE_EINSUM_MAX_SIGNATURES")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(64)
-}
-
-fn native_einsum_pool_trace_enabled() -> bool {
-    env::var("T4A_TRACE_NATIVE_EINSUM_POOL").is_ok()
-}
-
-fn native_einsum_pool_trace_min_output_bytes() -> usize {
-    env::var("T4A_TRACE_NATIVE_EINSUM_POOL_MIN_OUTPUT_BYTES")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0)
-}
-
-fn native_einsum_pool_trace_min_retained_bytes() -> usize {
-    env::var("T4A_TRACE_NATIVE_EINSUM_POOL_MIN_RETAINED_BYTES")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0)
-}
-
-fn reset_native_einsum_engine_after_call() -> bool {
-    env::var("T4A_RESET_NATIVE_EINSUM_ENGINE_AFTER_CALL").is_ok()
-}
-
-fn reset_native_einsum_buffer_pool_after_call() -> bool {
-    env::var("T4A_RESET_NATIVE_EINSUM_BUFFER_POOL_AFTER_CALL").is_ok()
-}
-
-fn release_allocator_after_native_einsum_call() -> bool {
-    env::var("T4A_RELEASE_ALLOCATOR_AFTER_NATIVE_EINSUM_CALL").is_ok()
+    native_einsum_diagnostics().profile
 }
 
 #[cfg(all(test, feature = "global-defaults"))]
@@ -566,14 +517,13 @@ fn maybe_trace_native_einsum_path(
     operands: &[(&NativeTensor, &[u32])],
     output_ids: &[u32],
 ) {
-    if !native_einsum_path_trace_enabled() {
+    let diagnostics = native_einsum_diagnostics();
+    if !diagnostics.trace_paths {
         return;
     }
     let signature = native_einsum_signature(path, operands, output_ids);
     let report = match native_einsum_time_optimized_plan_report(&signature) {
-        Ok(report) if report.peak_intermediate_bytes >= native_einsum_path_trace_min_bytes() => {
-            report
-        }
+        Ok(report) if report.peak_intermediate_bytes >= diagnostics.path_min_bytes => report,
         Ok(_) => return,
         Err(err) => {
             eprintln!("native_einsum path trace failed: {err:#}");
@@ -581,7 +531,7 @@ fn maybe_trace_native_einsum_path(
         }
     };
 
-    let max_signatures = native_einsum_path_trace_max_signatures();
+    let max_signatures = diagnostics.path_max_signatures;
     let should_trace = NATIVE_EINSUM_TRACE_STATE.with(|state| {
         let mut state = state.borrow_mut();
         if state.len() >= max_signatures || state.contains(&signature) {
@@ -609,7 +559,7 @@ fn maybe_trace_native_einsum_path(
     for line in report.lines {
         eprintln!("{line}");
     }
-    if env::var("T4A_TRACE_NATIVE_EINSUM_COMPARE_BALANCED").is_ok() {
+    if diagnostics.compare_balanced {
         match native_einsum_balanced_plan_report(&signature) {
             Ok(balanced) => {
                 for line in balanced.lines {
@@ -779,7 +729,8 @@ fn run_cached_native_einsum(
     build: impl FnOnce(&mut GraphCompiler) -> Result<CompiledGraph>,
     execute: impl FnOnce(&CpuExecutionContext, &CompiledGraph) -> Result<NativeTensor>,
 ) -> Result<NativeTensor> {
-    let trace_pool = native_einsum_pool_trace_enabled();
+    let diagnostics = native_einsum_diagnostics();
+    let trace_pool = diagnostics.trace_pool;
     let pool_before = trace_pool.then(|| pool_stats(ctx)).transpose()?;
     // Compile under the compiler lock only; the graph then runs under the
     // context's engine lock. Holding both would make a compile wait for a graph
@@ -789,10 +740,10 @@ fn run_cached_native_einsum(
     if trace_pool {
         let pool_after = pool_stats(ctx)?;
         let output_bytes = native_tensor_bytes(&result);
-        let retained_threshold = native_einsum_pool_trace_min_retained_bytes();
+        let retained_threshold = diagnostics.pool_min_retained_bytes;
         if pool_after != pool_before.unwrap_or_default()
             && pool_after.capacity_bytes >= retained_threshold
-            || output_bytes >= native_einsum_pool_trace_min_output_bytes()
+            || output_bytes >= diagnostics.pool_min_output_bytes
         {
             let before = pool_before.unwrap_or_default();
             eprintln!(
@@ -803,52 +754,6 @@ fn run_cached_native_einsum(
                 pool_after.capacity_bytes as f64 / (1024.0 * 1024.0),
                 result.shape(),
                 output_bytes as f64 / (1024.0 * 1024.0),
-            );
-        }
-    }
-    if reset_native_einsum_engine_after_call() {
-        let before_reset = trace_pool.then(|| pool_stats(ctx)).transpose()?;
-        ctx.reset_graph_runtime().map_err(anyhow::Error::new)?;
-        if trace_pool
-            && before_reset.unwrap_or_default().capacity_bytes
-                >= native_einsum_pool_trace_min_retained_bytes()
-        {
-            let before = before_reset.unwrap_or_default();
-            let after = pool_stats(ctx)?;
-            eprintln!(
-                "native_einsum engine_reset before_buffers={} before_capacity={:.3} MiB after_buffers={} after_capacity={:.3} MiB",
-                before.buffers,
-                before.capacity_bytes as f64 / (1024.0 * 1024.0),
-                after.buffers,
-                after.capacity_bytes as f64 / (1024.0 * 1024.0),
-            );
-        }
-    } else if reset_native_einsum_buffer_pool_after_call() {
-        let before_clear = trace_pool.then(|| pool_stats(ctx)).transpose()?;
-        ctx.reset_graph_buffer_pool().map_err(anyhow::Error::new)?;
-        if trace_pool
-            && before_clear.unwrap_or_default().capacity_bytes
-                >= native_einsum_pool_trace_min_retained_bytes()
-        {
-            let before = before_clear.unwrap_or_default();
-            let after = pool_stats(ctx)?;
-            eprintln!(
-                "native_einsum pool_reset before_buffers={} before_capacity={:.3} MiB after_buffers={} after_capacity={:.3} MiB",
-                before.buffers,
-                before.capacity_bytes as f64 / (1024.0 * 1024.0),
-                after.buffers,
-                after.capacity_bytes as f64 / (1024.0 * 1024.0),
-            );
-        }
-    }
-    if release_allocator_after_native_einsum_call() {
-        let report = release_process_allocator_cached_memory();
-        if trace_pool && (report.released_bytes.unwrap_or(0) > 0 || report.success == Some(true)) {
-            eprintln!(
-                "native_einsum allocator_pressure_relief supported={} released_bytes={:?} success={:?}",
-                report.supported,
-                report.released_bytes,
-                report.success,
             );
         }
     }
