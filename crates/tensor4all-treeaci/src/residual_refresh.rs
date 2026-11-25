@@ -33,7 +33,11 @@ pub(crate) struct ResidualRefreshReport {
 ///
 /// For each such edge the operator is evaluated on the edge's current local
 /// matrix (the same points its next commit would read), and the output on the
-/// same points through a frame store of the output. `edge_errors` receives
+/// same points through a frame store of the output. A commit across a vertex
+/// of local dimension 1 also reads the candidates its unit-vertex expansion
+/// adds for that one commit (`crate::unit_vertex`); the refresh does not: it
+/// measures the plain local matrix of the current candidate sets, which no
+/// expansion outlives. `edge_errors` receives
 /// `max |f - output|` over those points and `edge_scales` the largest `|f|`
 /// there, in the raw units a commit records. Fresh edges are untouched. The
 /// state is updated only after every stale edge was measured, so a failure

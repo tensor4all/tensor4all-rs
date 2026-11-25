@@ -62,8 +62,8 @@ pub(crate) mod profile_debug_stats {
         pub(crate) global_injection: Duration,
         pub(crate) guard_candidate_clone: Duration,
         pub(crate) guard_projection: Duration,
-        // Frame extension of a staged candidate growth
-        // (`TreeAciState::grow_candidate_sets`).
+        // Frame extension of a staged candidate growth: Guard injection and
+        // the unit-vertex expansion (`TreeAciState::grow_candidate_sets`).
         pub(crate) candidate_growth_frame_extension: Duration,
         pub(crate) guard_input_evaluation: Duration,
         pub(crate) guard_output_evaluation: Duration,
@@ -325,8 +325,8 @@ impl<'a, T: TreeAciScalar, V: TreeAciNode> TreeAciState<'a, T, V> {
     /// the arena is rolled back and the state is unchanged. Bond ranks,
     /// selected pivots and the output are never touched.
     ///
-    /// Guard injection (`inject_global_pivots`) grows candidate sets this
-    /// way.
+    /// Guard injection (`inject_global_pivots`) and the unit-vertex expansion
+    /// (`crate::unit_vertex`) both grow candidate sets this way.
     ///
     /// # Errors
     ///
