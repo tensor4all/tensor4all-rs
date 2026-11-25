@@ -23,7 +23,8 @@ tensor4all-quanticstci = { path = "../../crates/tensor4all-quanticstci" }
 tensor4all-interpolativeqtt = { path = "../../crates/tensor4all-interpolativeqtt" }
 tensor4all-itensorlike = { path = "../../crates/tensor4all-itensorlike" }
 tensor4all-partitionedtreetn = { path = "../../crates/tensor4all-partitionedtreetn" }
-tensor4all-treersi = { path = "../../crates/tensor4all-treersi" }
+# The RSI guide's executable example exercises the context-free API.
+tensor4all-treersi = { path = "../../crates/tensor4all-treersi", features = ["global-defaults"] }
 tensor4all-treetci = { path = "../../crates/tensor4all-treetci" }
 tensor4all-hdf5 = { path = "../../crates/tensor4all-hdf5" }
 anyhow = { workspace = true }

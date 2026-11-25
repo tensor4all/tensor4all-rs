@@ -23,7 +23,7 @@ no scalar conversion or dense fallback is introduced. Elementwise extrema are
 unsupported. Finiteness means finite stored core components, not a bound on
 the contracted tensor's values or dynamic range.
 
-See the [user guide](../book/src/guides/tree-tn.md#krylov-solvers-over-tree-vectors)
+See the [user guide](../book/src/guides/tree-krylov.md)
 and its executable example for the supported GMRES workflow. This boundary
 does not promise the elementwise range analysis needed by every affine-GMRES
 overflow-recovery path.

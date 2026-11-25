@@ -260,7 +260,7 @@ where
 /// - `V`: Node name type for named nodes (default: NodeIndex for backward compatibility)
 /// # Construction
 /// - `TreeTN::new()`: Create an empty network, then use `add_tensor()` and `connect()` to build.
-/// - `TreeTN::from_tensors(tensors, node_names)`: Create from tensors with auto-connection by matching index IDs.
+/// - `TreeTN::from_tensors(tensors, node_names)`: Create from tensors with auto-connection by matching full bond indices.
 ///
 /// # Krylov vectors
 ///

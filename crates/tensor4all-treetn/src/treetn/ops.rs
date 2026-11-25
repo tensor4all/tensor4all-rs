@@ -402,7 +402,8 @@ where
     ///
     /// Computes `<self | other>` = sum over all indices of `conj(self) * other`.
     ///
-    /// Both TreeTNs must have the same site indices (same IDs).
+    /// Both TreeTNs must have the same full site indices, including prime levels
+    /// and tags.
     /// Link indices may differ between the two TreeTNs.
     ///
     /// Two empty networks have inner product `1.0`, following the empty-product

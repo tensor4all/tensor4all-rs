@@ -41,6 +41,10 @@ mod tci_advanced {}
 #[doc = include_str!("../../book/src/guides/tree-tn.md")]
 mod tree_tn {}
 
+// The Krylov guide shares its executable source with the TreeTN example.
+#[doc = concat!("```rust\n", include_str!("../../../crates/tensor4all-treetn/examples/gmres_tree.rs"), "\n```")]
+mod tree_krylov {}
+
 #[doc = include_str!("../../book/src/guides/hdf5-serialization.md")]
 mod hdf5_serialization {}
 

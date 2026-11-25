@@ -199,6 +199,19 @@ fn unsupported_elementwise_metrics_and_invalid_vectors_return_errors() {
         TensorVectorSpace::validate(&empty),
         Err(TreeTNOperationError::InvalidGraph { .. })
     ));
+    let apply_called = Cell::new(false);
+    let rejected = gmres_with_truncation(
+        |tree: &Tree| {
+            apply_called.set(true);
+            Ok(tree.clone())
+        },
+        &empty,
+        &empty,
+        &GmresOptions::default(),
+        |_tree| Ok(()),
+    );
+    assert!(rejected.is_err());
+    assert!(!apply_called.get());
     assert!(TensorVectorSpace::norm(&empty).is_err());
     assert!(TensorVectorSpace::scale(&empty, AnyScalar::new_real(0.0)).is_err());
     let mut disconnected = tree.clone();

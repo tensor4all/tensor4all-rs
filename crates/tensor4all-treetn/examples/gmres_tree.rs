@@ -63,7 +63,7 @@ fn main() -> anyhow::Result<()> {
         ..Default::default()
     };
     let result = gmres_with_truncation(apply, &rhs, &initial, &options, |tree| {
-        Ok(tree.truncate_mut_in([0], truncation.clone(), &context)?)
+        Ok(tree.truncate_mut_in([0], truncation, &context)?)
     })?;
 
     // A bounded, explicit dense reference: x = |0000> + 2|1111>.

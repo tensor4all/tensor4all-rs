@@ -77,16 +77,16 @@ where
     }
 
     fn is_single_precision(&self) -> bool {
-        self.node_indices()
-            .into_iter()
-            .filter_map(|node| self.tensor(node))
+        self.graph
+            .graph()
+            .node_weights()
             .any(TensorVectorSpace::is_single_precision)
     }
 
     fn is_complex(&self) -> bool {
-        self.node_indices()
-            .into_iter()
-            .filter_map(|node| self.tensor(node))
+        self.graph
+            .graph()
+            .node_weights()
             .any(TensorVectorSpace::is_complex)
     }
 
@@ -103,12 +103,7 @@ where
     }
 
     fn is_all_finite(&self) -> Result<bool, Self::Error> {
-        for node in self.node_indices() {
-            let tensor = self.tensor(node).ok_or_else(|| {
-                TreeTNOperationError::invalid_graph(anyhow::anyhow!(
-                    "missing TreeTN core at node {node:?}"
-                ))
-            })?;
+        for tensor in self.graph.graph().node_weights() {
             if !tensor.is_all_finite().map_err(anyhow::Error::new)? {
                 return Ok(false);
             }
@@ -124,12 +119,7 @@ where
         }
         self.verify_internal_consistency()?;
         self.validate_ortho_consistency()?;
-        for node in self.node_indices() {
-            let tensor = self.tensor(node).ok_or_else(|| {
-                TreeTNOperationError::invalid_graph(anyhow::anyhow!(
-                    "missing TreeTN core at node {node:?}"
-                ))
-            })?;
+        for tensor in self.graph.graph().node_weights() {
             TensorVectorSpace::validate(tensor).map_err(anyhow::Error::new)?;
         }
         Ok(())
