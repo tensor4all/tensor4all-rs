@@ -14,6 +14,7 @@ mod g0_convergence;
 mod heavy_audit_regressions;
 mod heavy_g0_convergence;
 mod interpolator;
+mod pivot_basis_regressions;
 mod public_api;
 mod rank_scaling;
 mod resource_limits;
